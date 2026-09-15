@@ -1,0 +1,45 @@
+{
+  "app": {
+    "name": "AI Workbench",
+    "tagline": "Developer productivity toolbox"
+  },
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add",
+    "apply": "Apply",
+    "confirm": "Confirm",
+    "close": "Close",
+    "copy": "Copy",
+    "refresh": "Refresh"
+  },
+  "status": {
+    "loading": "Loading...",
+    "success": "Success",
+    "error": "Error",
+    "empty": "No data"
+  },
+  "validation": {
+    "required": "This field is required",
+    "invalidEmail": "Invalid email format"
+  },
+  "trayMinimizedHint": "Minimized to system tray — the app is still running",
+  "errors": {
+    "INVALID_ACCOUNT_ID": "Invalid account ID",
+    "CURSOR_NOT_FOUND": "Cursor installation not found",
+    "CURSOR_DB_TOO_LARGE": "Cursor database too large, skipping read",
+    "BACKUP_INCOMPLETE": "Backup is incomplete",
+    "AUTH_MISSING": "Missing login credentials",
+    "AI_MODEL_NOT_CONFIGURED": "AI model Base URL or model name not configured",
+    "AI_EMPTY_PROMPT": "Please enter content",
+    "AI_EMPTY_RESPONSE": "Model returned no valid text",
+    "AI_REQUEST_CANCELLED": "Cancelled",
+    "DSH_NOT_INSTALLED": "DeepSeek Harness not installed, please install first",
+    "DSH_START_FAILED": "Failed to start DeepSeek",
+    "DSH_INSTALL_FAILED": "Failed to install DeepSeek",
+    "INVALID_INPUT": "Invalid input",
+    "INTERNAL_ERROR": "Internal error, please try again later"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "title": "Settings",
+  "general": {
+    "title": "General",
+    "language": "Language",
+    "theme": "Theme",
+    "themeIce": "Ice Blue",
+    "themeSilver": "Cool Silver",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System",
+    "themeGlass": "Champagne",
+    "autoStart": "Auto Start",
+    "autoStartReadFailed": "Failed to read auto-start: {{error}}",
+    "autoStartUpdateFailed": "Failed to update auto-start: {{error}}"
+  },
+  "appearance": {
+    "title": "Appearance",
+    "sidebarCollapsed": "Collapse Sidebar"
+  },
+  "quickAsk": {
+    "title": "Quick Ask",
+    "shortcut": "Global shortcut",
+    "shortcutHint": "e.g. Ctrl+Alt+K. Change if it conflicts.",
+    "shortcutApply": "Apply shortcut",
+    "shortcutOk": "Shortcut registered: {{shortcut}}",
+    "shortcutFail": "Failed to register shortcut: {{error}}",
+    "pasteClipboard": "Allow clipboard fill on open",
+    "bubble": "Desktop floating button",
+    "bubbleHint": "Always-on-top button (bottom-right). Click to open Quick Ask; drag to move; right-click to hide. Shortcut and tray still work."
+  },
+  "data": {
+    "title": "Data",
+    "export": "Export data",
+    "import": "Import data",
+    "exportWarn": "Export contains plaintext API keys / tokens. Do not share or upload.",
+    "importWarn": "Import will overwrite all local data. This cannot be undone.",
+    "exportOk": "Exported to {{path}}",
+    "importOk": "Imported from {{path}}",
+    "failed": "Failed: {{error}}",
+    "confirmImport": "Import and overwrite all data?"
+  },
+  "about": {
+    "title": "About",
+    "version": "Version",
+    "license": "License",
+    "github": "GitHub",
+    "checkUpdate": "Check for Updates",
+    "checking": "Checking…",
+    "upToDate": "You are up to date ({{version}})",
+    "updateAvailable": "Update available: {{remote}} (current {{local}})",
+    "openReleases": "Open Releases",
+    "checkFailed": "Update check failed: {{error}}",
+    "privacyNote": "API keys are stored in local SQLite only — do not share the database file"
+  }
+}

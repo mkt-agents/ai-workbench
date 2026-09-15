@@ -1,0 +1,39 @@
+{
+  "title": "Quick Ask",
+  "loading": "Loading…",
+  "close": "Close",
+  "noModel": "Configure an AI model in the main window first",
+  "emptyInput": "Enter a question",
+  "placeholder": "Ask… (Enter to send, Shift+Enter for newline)",
+  "send": "Send",
+  "stop": "Stop",
+  "copy": "Copy answer",
+  "copied": "Copied",
+  "regenerate": "Regenerate",
+  "newChat": "New chat",
+  "openDeepseek": "Open DeepSeek",
+  "pasteClipboard": "Paste clipboard",
+  "snippets": "Snippets",
+  "snippetSearch": "Search snippets…",
+  "snippetEmpty": "No matching snippets",
+  "truncated": "Context truncated",
+  "showContext": "Show context",
+  "hideContext": "Hide context",
+  "fillParams": "Fill parameters",
+  "insertSnippet": "Insert into input",
+  "cancel": "Cancel",
+  "streamFailed": "Streaming failed",
+  "bubbleTip": "Quick Ask · click to open · drag to move · right-click to hide",
+  "task": {
+    "none": "General",
+    "debug": "Debug error",
+    "explain": "Explain",
+    "polish": "Polish text"
+  },
+  "chip": {
+    "workspace": "Workspace",
+    "git": "Git identity",
+    "dirty": "Dirty summary",
+    "clipboard": "Clipboard"
+  }
+}

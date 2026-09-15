@@ -1,0 +1,56 @@
+{
+  "title": "设置",
+  "general": {
+    "title": "通用",
+    "language": "语言",
+    "theme": "主题",
+    "themeIce": "冰蓝",
+    "themeSilver": "冷银",
+    "themeLight": "浅色",
+    "themeDark": "深色",
+    "themeSystem": "跟随系统",
+    "themeGlass": "香槟金",
+    "autoStart": "开机自启",
+    "autoStartReadFailed": "读取开机自启状态失败: {{error}}",
+    "autoStartUpdateFailed": "更新开机自启失败: {{error}}"
+  },
+  "appearance": {
+    "title": "外观",
+    "sidebarCollapsed": "侧边栏折叠"
+  },
+  "quickAsk": {
+    "title": "快问",
+    "shortcut": "全局快捷键",
+    "shortcutHint": "例如 Ctrl+Alt+K。冲突时请更换。",
+    "shortcutApply": "应用快捷键",
+    "shortcutOk": "快捷键已注册：{{shortcut}}",
+    "shortcutFail": "快捷键注册失败：{{error}}",
+    "pasteClipboard": "唤起时允许填入剪贴板",
+    "bubble": "桌面悬浮钮",
+    "bubbleHint": "右下角置顶小按钮，点击打开快问；可拖动，右键隐藏。也可用快捷键或托盘。"
+  },
+  "data": {
+    "title": "数据管理",
+    "export": "导出数据",
+    "import": "导入数据",
+    "exportWarn": "导出文件含 API Key / Token 明文，请勿分享、上传或放在公共目录。",
+    "importWarn": "导入将覆盖本机现有数据，此操作不可撤销。",
+    "exportOk": "已导出到 {{path}}",
+    "importOk": "已从 {{path}} 导入",
+    "failed": "操作失败：{{error}}",
+    "confirmImport": "确认导入并覆盖全部数据？"
+  },
+  "about": {
+    "title": "关于",
+    "version": "版本",
+    "license": "许可证",
+    "github": "GitHub",
+    "checkUpdate": "检查更新",
+    "checking": "检查中…",
+    "upToDate": "已是最新版本（{{version}}）",
+    "updateAvailable": "发现新版本 {{remote}}（当前 {{local}}）",
+    "openReleases": "打开发布页",
+    "checkFailed": "检查更新失败: {{error}}",
+    "privacyNote": "API Key 仅保存在本机 SQLite，请勿分享数据库文件"
+  }
+}

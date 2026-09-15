@@ -1,0 +1,255 @@
+export interface GitAccount {
+  id: string;
+  name: string;
+  email: string;
+  color: string;
+  /** Optional label e.g. work / personal */
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GitRepoConfig {
+  path: string;
+  name: string;
+  userName: string;
+  email: string;
+  accountId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecentProject {
+  id: number;
+  path: string;
+  name?: string;
+  lastOpenedAt: string;
+}
+
+/** Parent folder that groups multiple git repos (e.g. D:\\d_project\\tct\\p3) */
+export interface GitWorkspace {
+  id: number;
+  path: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface GitScannedRepo {
+  path: string;
+  name: string;
+}
+
+export type AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver';
+
+export interface QuickAskChips {
+  workspace: boolean;
+  git: boolean;
+  dirty: boolean;
+  clipboard: boolean;
+}
+
+export interface AppSettings {
+  theme: AppTheme;
+  language: 'zh-CN' | 'en-US';
+  sidebarCollapsed: boolean;
+  autoStart: boolean;
+  /** Last selected git repo path for workbench/commit */
+  currentGitRepo?: string;
+  /** Global shortcut for quick-ask (e.g. Ctrl+Alt+K) */
+  quickAskShortcut?: string;
+  /** When opening quick-ask, offer clipboard fill */
+  quickAskPasteClipboard?: boolean;
+  /** Persisted context chip toggles for quick-ask */
+  quickAskChips?: QuickAskChips;
+  /** Show desktop floating bubble for quick-ask */
+  quickAskBubbleEnabled?: boolean;
+  /** Physical screen position of the bubble */
+  quickAskBubblePos?: { x: number; y: number };
+  /** One-shot tip after first close-to-tray */
+  trayHintShown?: boolean;
+}
+
+export interface Snippet {
+  id: string;
+  name: string;
+  content: string;
+  tags: string;
+  /** JSON array of param names or comma-separated */
+  params: string;
+  useCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GitRepoSummary {
+  path: string;
+  name: string;
+  branch: string;
+  dirtyCount: number;
+  ahead: number;
+  behind: number;
+  hasUpstream: boolean;
+  userName: string;
+  userEmail: string;
+  isGit: boolean;
+  error?: string | null;
+}
+
+export interface GitStatusEntry {
+  path: string;
+  indexStatus: string;
+  workTreeStatus: string;
+  group: 'staged' | 'unstaged' | 'untracked' | string;
+}
+
+export interface GlobalState {
+  settings: AppSettings;
+  git: {
+    accounts: GitAccount[];
+    repoConfigs: GitRepoConfig[];
+  };
+  recentProjects: RecentProject[];
+  gitWorkspaces: GitWorkspace[];
+  webPlugins: WebPlugin[];
+  hostProfiles: HostProfile[];
+  cursorAccounts: CursorAccount[];
+  aiModels: AIModelConfig[];
+  cloudflaredProfiles: CloudflaredNamedProfile[];
+  snippets: Snippet[];
+}
+
+export interface HostProfile {
+  id: string;
+  name: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebPlugin {
+  id: string;
+  name: string;
+  url: string;
+  addedAt: string;
+  group: string;
+  tags: string;
+  order: number;
+  lastOpenedAt: string;
+  openCount: number;
+  hotkey: string;
+  isPreset: boolean;
+}
+
+export interface CursorAccount {
+  id: string;
+  name: string;
+  email: string;
+  color: string;
+  backupPath: string;
+  profileDir?: string;
+  profileInitialized?: boolean;
+  gitUserName?: string;
+  gitEmail?: string;
+  /** Local memo only — not used for auto-login */
+  password?: string;
+  notes?: string;
+  isLoggedIn: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CloudflaredNamedProfile {
+  id: string;
+  name: string;
+  hostname: string;
+  localUrl: string;
+  /** token | config — how to authenticate the named tunnel */
+  authMode: "token" | "config";
+  /** Required when authMode is token */
+  token?: string;
+  /** Required when authMode is config — path to config.yml */
+  configPath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AuthType = 'api' | 'token_plan';
+
+export interface AIModelConfig {
+  id: string;
+  name: string;
+  provider:
+    | 'openai'
+    | 'anthropic'
+    | 'deepseek'
+    | 'ollama'
+    | 'longcat'
+    | 'agnes'
+    | 'openrouter'
+    | 'google'
+    | 'groq'
+    | 'mistral'
+    | 'xai'
+    | 'moonshot'
+    | 'mimo'
+    | 'zhipu'
+    | 'qwen'
+    | 'siliconflow'
+    | 'together'
+    | 'custom';
+  apiKey: string;
+  authType: AuthType;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DshInstance {
+  pid: number;
+  port: number;
+  auth_url?: string;
+  auth_patch_warning?: string;
+}
+
+export type RuntimeKind = "node" | "jdk";
+
+export interface RuntimeVersion {
+  kind: string;
+  version: string;
+  path: string;
+  binPath: string;
+  source: string;
+  active: boolean;
+  custom: boolean;
+  onMachinePath?: boolean;
+}
+
+export interface RuntimeSwitchPlan {
+  needsElevation: boolean;
+  reason?: string | null;
+}
+
+export interface RuntimeSwitchResult {
+  message: string;
+  version: string;
+  verified: boolean;
+  verifiedVersion?: string | null;
+  elevated: boolean;
+}
+
+/** A runtime release that can be downloaded and installed by the app. */
+export interface InstallableVersion {
+  version: string;
+  lts: boolean;
+  installed: boolean;
+}
+
+export interface GlobalStore {
+  getState: () => GlobalState;
+  setState: (partial: Partial<GlobalState> | ((state: GlobalState) => GlobalState)) => void;
+  subscribe: (listener: (state: GlobalState) => void) => () => void;
+}

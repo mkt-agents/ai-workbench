@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Workbench 项目参考手册</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background: #f8f9fa;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        
+        h2 {
+            color: #34495e;
+            font-size: 1.8em;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            color: #2980b9;
+        }
+        
+        h3 {
+            color: #7f8c8d;
+            font-size: 1.3em;
+            margin-top: 25px;
+            margin-bottom: 10px;
+        }
+        
+        p {
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+        
+        .code-block {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            overflow-x: auto;
+            margin: 20px 0;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+        
+        .section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #3498db;
+        }
+        
+        .section.green {
+            border-left-color: #27ae60;
+        }
+        
+        .section.orange {
+            border-left-color: #f39c12;
+        }
+        
+        .section.purple {
+            border-left-color: #9b59b6;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .badge {
+            display: inline-block;
+            background: #3498db;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 500;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .badge.green {
+            background: #27ae60;
+        }
+        
+        .badge.orange {
+            background: #f39c12;
+        }
+        
+        .badge.purple {
+            background: #9b59b6;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Workbench 项目参考手册</h1>
+        
+        <p>这是 AI Workbench 项目的快速参考手册，包含关键信息和常用命令。</p>
+        
+        <h2>技术栈</h2>
+        <div class="section">
+            <p><strong>前端:</strong> React 18 + TypeScript + Vite</p>
+            <p><strong>后端:</strong> Tauri v2 + Rust</p>
+            <p><strong>状态管理:</strong> Zustand + localStorage</p>
+            <p><strong>样式:</strong> 纯 CSS（无 Tailwind）</p>
+            <p><strong>图标:</strong> Lucide React</p>
+        </div>
+        
+        <h2>常用命令</h2>
+        <div class="code-block">
+# 安装依赖
+npm install
+
+# 开发模式
+npm run dev
+
+# 构建生产版本
+npm run build
+
+# 运行调试版本
+Start-Process "D:\ai_project\ai-workbench\src-tauri\target\debug\ai-workbench.exe"
+
+# 构建 Rust 后端（在 src-tauri 目录）
+cargo build --release
+        </div>
+        
+        <h2>目录结构</h2>
+        <div class="section">
+            <p><strong>src/</strong> - 前端源码</p>
+            <p><strong>src-tauri/</strong> - Rust 后端</p>
+            <p><strong>dist/</strong> - 构建产物</p>
+            <p><strong>node_modules/</strong> - 依赖包</p>
+        </div>
+        
+        <h2>核心模块</h2>
+        <table>
+            <tr>
+                <th>模块</th>
+                <th>路径</th>
+                <th>功能</th>
+            </tr>
+            <tr>
+                <td>状态管理</td>
+                <td>src/core/store.ts</td>
+                <td>Zustand store，管理所有应用状态</td>
+            </tr>
+            <tr>
+                <td>类型定义</td>
+                <td>src/core/types.ts</td>
+                <td>TypeScript 类型定义</td>
+            </tr>
+            <tr>
+                <td>数据库</td>
+                <td>src/core/sqlite.ts</td>
+                <td>SQLite 模块（预留）</td>
+            </tr>
+            <tr>
+                <td>存储工具</td>
+                <td>src/core/storage.ts</td>
+                <td>存储相关工具函数</td>
+            </tr>
+        </table>
+        
+        <h2>主要组件</h2>
+        <table>
+            <tr>
+                <th>组件</th>
+                <th>路径</th>
+                <th>功能</th>
+            </tr>
+            <tr>
+                <td>AccountManager</td>
+                <td>src/components/AccountManager.tsx</td>
+                <td>Git 账号管理</td>
+            </tr>
+            <tr>
+                <td>QuickSwitch</td>
+                <td>src/components/QuickSwitch.tsx</td>
+                <td>快速切换 Git 配置</td>
+            </tr>
+            <tr>
+                <td>RepoConfig</td>
+                <td>src/components/RepoConfig.tsx</td>
+                <td>仓库配置管理</td>
+            </tr>
+            <tr>
+                <td>HostsManager</td>
+                <td>src/components/HostsManager.tsx</td>
+                <td>系统 hosts 文件管理</td>
+            </tr>
+            <tr>
+                <td>PluginBrowser</td>
+                <td>src/components/PluginBrowser.tsx</td>
+                <td>插件浏览器</td>
+            </tr>
+            <tr>
+                <td>CursorManager</td>
+                <td>src/components/CursorManager.tsx</td>
+                <td>Cursor 账号管理</td>
+            </tr>
+            <tr>
+                <td>AIAssistant</td>
+                <td>src/components/AIAssistant.tsx</td>
+                <td>AI 助手聊天界面</td>
+            </tr>
+        </table>
+        
+        <h2>Rust 后端命令</h2>
+        <div class="section green">
+            <p><strong>Git 相关:</strong></p>
+            <ul>
+                <li>set_git_config(scope, name, email)</li>
+                <li>set_repo_git_config(repo_path, name, email)</li>
+                <li>get_git_config(scope?)</li>
+            </ul>
+        </div>
+        
+        <div class="section orange">
+            <p><strong>Hosts 相关:</strong></p>
+            <ul>
+                <li>read_system_hosts()</li>
+                <li>is_admin()</li>
+                <li>backup_hosts()</li>
+                <li>write_system_hosts(content)</li>
+                <li>list_host_backups()</li>
+                <li>restore_host_backup(path)</li>
+            </ul>
+        </div>
+        
+        <div class="section purple">
+            <p><strong>Plugin 相关:</strong></p>
+            <ul>
+                <li>download_web_plugin(url, id)</li>
+                <li>read_plugin_file(path)</li>
+                <li>delete_plugin_file(path)</li>
+            </ul>
+        </div>
+        
+        <h2>数据存储</h2>
+        <div class="section">
+            <p><strong>持久化:</strong> localStorage（通过 Zustand persist 中间件）</p>
+            <p><strong>存储键:</strong></p>
+            <ul>
+                <li>git-accounts: Git 账号列表</li>
+                <li>git-repo-configs: 仓库配置列表</li>
+                <li>web-plugins: 插件列表</li>
+                <li>plugin-states: 插件状态</li>
+                <li>recent-projects: 最近项目</li>
+                <li>workbench-settings: 应用设置</li>
+            </ul>
+        </div>
+        
+        <div class="footer">
+            <p>AI Workbench 项目参考手册</p>
+            <p>最后更新: 2026年8月24日</p>
+        </div>
+    </div>
+</body>
+</html>

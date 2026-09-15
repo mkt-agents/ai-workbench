@@ -1,0 +1,45 @@
+{
+  "app": {
+    "name": "AI Workbench",
+    "tagline": "开发者效能工具箱"
+  },
+  "actions": {
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "add": "添加",
+    "apply": "应用",
+    "confirm": "确认",
+    "close": "关闭",
+    "copy": "复制",
+    "refresh": "刷新"
+  },
+  "status": {
+    "loading": "加载中...",
+    "success": "成功",
+    "error": "错误",
+    "empty": "暂无数据"
+  },
+  "validation": {
+    "required": "此字段为必填",
+    "invalidEmail": "邮箱格式不正确"
+  },
+  "trayMinimizedHint": "已最小化到系统托盘，应用仍在后台运行",
+  "errors": {
+    "INVALID_ACCOUNT_ID": "无效的账号 ID",
+    "CURSOR_NOT_FOUND": "找不到 Cursor 安装路径",
+    "CURSOR_DB_TOO_LARGE": "Cursor 数据库过大，跳过读取",
+    "BACKUP_INCOMPLETE": "备份不完整",
+    "AUTH_MISSING": "缺少登录凭证",
+    "AI_MODEL_NOT_CONFIGURED": "AI 模型 Base URL 或模型名未配置",
+    "AI_EMPTY_PROMPT": "请输入内容",
+    "AI_EMPTY_RESPONSE": "模型未返回有效文本",
+    "AI_REQUEST_CANCELLED": "已取消",
+    "DSH_NOT_INSTALLED": "DeepSeek Harness 未安装，请先安装",
+    "DSH_START_FAILED": "启动 DeepSeek 失败",
+    "DSH_INSTALL_FAILED": "安装 DeepSeek 失败",
+    "INVALID_INPUT": "输入无效",
+    "INTERNAL_ERROR": "内部错误，请稍后重试"
+  }
+}

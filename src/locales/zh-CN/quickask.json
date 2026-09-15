@@ -1,0 +1,39 @@
+{
+  "title": "快问",
+  "loading": "加载中…",
+  "close": "关闭",
+  "noModel": "请先在主窗口配置 AI 模型",
+  "emptyInput": "请输入问题",
+  "placeholder": "问一句…（Enter 发送，Shift+Enter 换行）",
+  "send": "发送",
+  "stop": "停止",
+  "copy": "复制回答",
+  "copied": "已复制",
+  "regenerate": "重新生成",
+  "newChat": "新对话",
+  "openDeepseek": "打开 DeepSeek",
+  "pasteClipboard": "填入剪贴板",
+  "snippets": "片段",
+  "snippetSearch": "搜索片段…",
+  "snippetEmpty": "无匹配片段",
+  "truncated": "上下文已截断",
+  "showContext": "上下文预览",
+  "hideContext": "收起上下文",
+  "fillParams": "填写参数",
+  "insertSnippet": "插入输入框",
+  "cancel": "取消",
+  "streamFailed": "流式生成失败",
+  "bubbleTip": "快问 · 左键打开 · 拖动移动 · 右键隐藏",
+  "task": {
+    "none": "普通问答",
+    "debug": "报错诊断",
+    "explain": "解释说明",
+    "polish": "润色文案"
+  },
+  "chip": {
+    "workspace": "工作区",
+    "git": "Git 身份",
+    "dirty": "Dirty 摘要",
+    "clipboard": "剪贴板"
+  }
+}
