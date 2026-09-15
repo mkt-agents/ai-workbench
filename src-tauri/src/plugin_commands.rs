@@ -373,6 +373,15 @@ pub async fn open_browser_window_with_toolbar(
     // host. This avoids the need for an IPC bridge (which Tauri does not
     // inject into external-URL webviews).
     let app_handle_for_nav = app.clone();
+
+    // Inherit the main window's theme so the new browser window's title bar
+    // matches the app's current light/dark setting instead of always
+    // falling back to the OS default (which on Windows renders as black
+    // when the Mica effect is not applied).
+    let inherited_theme = app
+        .get_webview_window("main")
+        .and_then(|w| w.theme().ok());
+
     let win = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
         .title(title)
         .inner_size(w, h)
@@ -380,6 +389,7 @@ pub async fn open_browser_window_with_toolbar(
         .resizable(true)
         .decorations(true)
         .focused(true)
+        .theme(inherited_theme)
         .initialization_script(BROWSER_TOOLBAR_INIT_JS)
         .on_navigation(move |url: &Url| {
             if url.host_str() == Some(SHELL_OPEN_TRIGGER_HOST) {
