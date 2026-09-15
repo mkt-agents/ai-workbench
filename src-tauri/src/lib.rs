@@ -226,7 +226,17 @@ pub fn run() {
                 if let Err(e) = tray::init_tray(app.handle()) {
                     eprintln!("[tray] init failed: {e}");
                 }
-                let _ = tray::ensure_quick_ask_window(app.handle());
+                // Startup builds TWO webviews: the main window and the desktop bubble
+                // (the orb has to be on screen from the beginning). The quick-ask window
+                // is deliberately NOT built here — it is created on demand by the tray
+                // item and the global shortcut (both go through toggle_quick_ask ->
+                // ensure_quick_ask_window), which keeps a cold first launch after install
+                // from initialising three WebView2 instances at once.
+                //
+                // NOTE: never create a webview outside setup() on a delay — neither from
+                // a worker thread nor via run_on_main_thread. Creation needs the message
+                // loop to pump, so doing it from a callback stalls the loop and the main
+                // window freezes ("not responding").
                 // Create+show bubble once; do not call ensure then visible separately
                 // (ensure used to mis-detect !CONTENT_READY as stale and block the UI).
                 let _ = tray::set_quick_ask_bubble_visible_inner(app.handle(), true, None, None);

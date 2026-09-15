@@ -200,6 +200,9 @@ function DeepSeekHarness() {
   }, [isRunning, iframeKey, serviceUrl, clearIframeTimers, remountIframe]);
 
   useEffect(() => {
+    // Nothing here gates rendering: the toolbar/empty state already fall back to
+    // "detecting" until the store resolves, and the checks themselves run off the
+    // main thread (spawn_blocking), so they cannot freeze the window.
     loadDshStatus();
     // Refresh version / update badge when entering the page
     const refreshTimer = setTimeout(() => {

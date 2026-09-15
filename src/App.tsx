@@ -95,10 +95,15 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+
+    // Immediately render the UI; load data in background. This avoids blocking the
+    // message pump on first launch (WebView2 env creation + SQLite setup), which was
+    // preventing the OS from marking the window as "Not Responding".
+    setIsReady(true);
+
     bootApp()
       .then(async () => {
         if (cancelled) return;
-        setIsReady(true);
         const s = useGlobalStore.getState().settings;
         const result = await registerQuickAskShortcut(s.quickAskShortcut);
         if (!result.ok) {

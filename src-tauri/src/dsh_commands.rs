@@ -571,6 +571,7 @@ fn kill_pid(pid: u32) {
     #[cfg(target_os = "windows")]
     let _ = Command::new("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     #[cfg(not(target_os = "windows"))]
     let _ = Command::new("kill").arg(pid.to_string()).output();
