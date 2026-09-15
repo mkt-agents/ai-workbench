@@ -920,30 +920,31 @@ export const useGlobalStore = create<StoreState>()(
         if (get()._dshStatusPromise) return;
 
         const promise = (async () => {
-          try {
-            const installed = await get().invokeCheckNodejs();
-            set((state) => ({ ...state, dshNodejsInstalled: installed }));
-          } catch {
-            set((state) => ({ ...state, dshNodejsInstalled: false }));
-          }
+          // Fast check — resolves immediately, update UI without waiting
+          get()
+            .invokeCheckNodejs()
+            .then((installed) => set({ dshNodejsInstalled: installed }))
+            .catch(() => set({ dshNodejsInstalled: false }));
 
-          let version = '';
-          try {
-            const v = await get().invokeGetDshVersion();
-            version = v || '';
-            set((state) => ({ ...state, dshVersion: version }));
-          } catch {
-            set((state) => ({ ...state, dshVersion: '' }));
-          }
+          // Slow checks run in parallel (npm list + npm view)
+          const [versionRes, latestRes] = await Promise.allSettled([
+            get().invokeGetDshVersion(),
+            get().invokeGetDshLatestVersion(),
+          ]);
 
-          try {
-            const latest = await get().invokeGetDshLatestVersion();
-            const latestVersion = latest || '';
-            const hasUpdate = version && latestVersion ? isOlderVersion(version, latestVersion) : false;
-            set((state) => ({ ...state, dshLatestVersion: latestVersion, dshHasUpdate: hasUpdate, dshStatusChecked: true }));
-          } catch {
-            set((state) => ({ ...state, dshLatestVersion: '', dshHasUpdate: false, dshStatusChecked: true }));
-          }
+          const version =
+            versionRes.status === "fulfilled" ? versionRes.value || "" : "";
+          const latestVersion =
+            latestRes.status === "fulfilled" ? latestRes.value || "" : "";
+          const hasUpdate =
+            version && latestVersion ? isOlderVersion(version, latestVersion) : false;
+
+          set({
+            dshVersion: version,
+            dshLatestVersion: latestVersion,
+            dshHasUpdate: hasUpdate,
+            dshStatusChecked: true,
+          });
         })();
 
         set((state) => ({ ...state, _dshStatusPromise: promise }));

@@ -46,7 +46,11 @@ pub fn run() {
     // UI thread (window shows "(Not Responding)" while the first instance
     // keeps running). single-instance forwards the launch to the running
     // app and exits the new process before any webview is created.
-    #[cfg(desktop)]
+    //
+    // Skipped in dev so the installed app and `tauri dev` can run side by side
+    // for debugging — they share the same identifier, which would otherwise
+    // make them mutually exclusive.
+    #[cfg(all(desktop, not(debug_assertions)))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
         use tauri::Manager;
         if let Some(win) = app.get_webview_window("main") {
