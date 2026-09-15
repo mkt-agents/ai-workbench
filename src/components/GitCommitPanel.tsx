@@ -124,7 +124,11 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     dirtyScopePaths.includes(repoPath) &&
     !identityMatches(author, currentPreset);
 
-  const undoBlockedRemote = Boolean(summary?.hasUpstream && summary.ahead === 0);
+  /**
+   * Tip already on the remote: undo becomes an IntelliJ-style revert (a new inverse
+   * commit) instead of resetting history, so the button stays usable after a push.
+   */
+  const undoIsRevert = Boolean(summary?.hasUpstream && summary.ahead === 0);
 
   const onDirtyScopeChange = useCallback((paths: string[]) => {
     setDirtyScopePaths(paths);
@@ -174,14 +178,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
 
   const handleUndoLastCommit = async () => {
     if (!repoPath || undoing) return;
-    if (undoBlockedRemote) {
-      showMsg("error", t("commit.undoLastBlockedRemote"));
-      return;
-    }
     const ok = await confirm({
-      title: t("commit.undoLastTitle"),
-      message: t("commit.undoLastConfirm"),
-      warning: t("commit.undoLastWarn"),
+      title: undoIsRevert ? t("commit.undoLastRevertTitle") : t("commit.undoLastTitle"),
+      message: undoIsRevert ? t("commit.undoLastRevertConfirm") : t("commit.undoLastConfirm"),
+      warning: undoIsRevert ? t("commit.undoLastRevertWarn") : t("commit.undoLastWarn"),
       confirmText: t("commit.undoLast"),
       icon: "warning",
     });
@@ -312,8 +312,8 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
         refreshNonce={refreshNonce}
         onRefreshed={onChangelistRefreshed}
         onUndoLastCommit={repoPath ? () => void handleUndoLastCommit() : undefined}
-        undoDisabled={!repoPath || undoBlockedRemote}
-        undoTitle={undoBlockedRemote ? t("commit.undoLastBlockedRemote") : t("commit.undoLast")}
+        undoDisabled={!repoPath}
+        undoTitle={undoIsRevert ? t("commit.undoLastRevertHint") : t("commit.undoLast")}
         undoing={undoing}
       />
 

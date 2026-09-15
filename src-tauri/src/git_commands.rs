@@ -783,27 +783,56 @@ fn git_discard_sync(
     Ok("已丢弃工作区改动".into())
 }
 
+/// Undo the last commit, IntelliJ-style: the strategy adapts to whether the tip is
+/// already on the remote.
+///
+/// * not pushed (no upstream, or `ahead > 0`) -> `reset --soft HEAD~1`: the commit
+///   disappears and its changes return to the index, ready to be amended.
+/// * already on the remote -> `revert --no-edit HEAD`: a new commit that undoes the
+///   tip is created. History is never rewritten, so the result can be pushed normally
+///   instead of needing a force-push.
 fn git_undo_last_commit_sync(repo_path: String) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
 
-    // Refuse when tip is already on the remote (ahead == 0 with upstream).
+    // "ahead == 0 with upstream" means the tip is already published.
+    let mut published = false;
     if has_upstream(&repo_path) {
-        match git_stdout(
+        if let Ok(s) = git_stdout(
             &repo_path,
             &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
         ) {
-            Ok(s) => {
-                let mut parts = s.split_whitespace();
-                let _behind: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-                let ahead: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-                if ahead == 0 {
-                    return Err(
-                        "当前提交已与远程同步，无法在本页回滚（避免需要 force-push）。".into(),
-                    );
-                }
-            }
-            Err(_) => {}
+            let mut parts = s.split_whitespace();
+            let _behind: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+            let ahead: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+            published = ahead == 0;
         }
+    }
+
+    if git_stdout(&repo_path, &["rev-parse", "--verify", "HEAD"]).is_err() {
+        return Err("仓库还没有任何提交，无法回滚。".into());
+    }
+
+    if published {
+        // Revert keeps the remote history intact. It refuses to run when the index or
+        // worktree is dirty — that restriction is intentional (nothing gets clobbered).
+        let output = git_output(&repo_path, &["revert", "--no-edit", "HEAD"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            // A conflicted revert leaves the repo mid-revert; roll it back so the user
+            // can decide what to do instead of being stuck in REVERT_HEAD.
+            let _ = git_output(&repo_path, &["revert", "--abort"]);
+            let lower = stderr.to_lowercase();
+            return Err(if lower.contains("local changes") || lower.contains("would be overwritten") {
+                "工作区有未提交的改动，请先提交或暂存后再回滚已推送的提交。".into()
+            } else if lower.contains("conflict") {
+                "反向提交产生冲突，已自动取消；请手动处理该提交。".into()
+            } else if stderr.is_empty() {
+                "生成回滚提交失败".into()
+            } else {
+                stderr
+            });
+        }
+        return Ok("已生成反向提交撤销该改动（历史未被改写，可直接推送）".into());
     }
 
     // Ensure HEAD~1 exists
