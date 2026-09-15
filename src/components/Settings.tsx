@@ -322,7 +322,12 @@ function Settings() {
             </button>
             <button
               className="btn btn-secondary btn-small"
-              onClick={() => window.open(updateUrl || APP_RELEASES_URL, "_blank")}
+              onClick={() => {
+                const url = updateUrl || APP_RELEASES_URL;
+                // window.open is silently swallowed in the Tauri webview — open the
+                // URL in the system browser via our http(s)-validated command instead.
+                invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
+              }}
             >
               {updateUrl ? t("about.openReleases") : t("about.github")}
             </button>
