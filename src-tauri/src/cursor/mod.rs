@@ -1385,6 +1385,290 @@ fn shared_state_vscdb() -> Result<PathBuf, String> {
     Ok(shared_global_storage_dir()?.join("state.vscdb"))
 }
 
+// ============================================================================
+// Composer session history sharing (composerHeaders + cursorDiskKV tables).
+//
+// Prior sync logic only copied ItemTable. Cursor's actual Composer session
+// list lives in two other tables inside the same state.vscdb:
+//   - composerHeaders: one row per Composer session (sidebar list source)
+//   - cursorDiskKV keys `composerData:<uuid>` and `composer.content.<hash>`:
+//     full session content blobs
+// Without syncing these, a profile launched via `--user-data-dir` starts with
+// an empty sidebar and any new session created inside it never flows back to
+// the default Cursor dir or other profiles. The three functions below wire
+// the same default → shared → profile pipeline used for ItemTable.
+// ============================================================================
+
+/// One row of the `composerHeaders` table. Types mirror the live schema; the
+/// value column is preserved as raw bytes so JSON content is not mutated.
+struct ComposerHeaderRow {
+    composer_id: String,
+    workspace_id: String,
+    created_at: rusqlite::types::Value,
+    last_updated_at: rusqlite::types::Value,
+    is_archived: rusqlite::types::Value,
+    is_subagent: rusqlite::types::Value,
+    recency: rusqlite::types::Value,
+    checkpoint_at: rusqlite::types::Value,
+    value: rusqlite::types::Value,
+    subagent_type_name: rusqlite::types::Value,
+}
+
+fn export_composer_headers(src_db: &Path) -> Result<Vec<ComposerHeaderRow>, String> {
+    if !src_db.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = open_sqlite_ro(src_db)
+        .or_else(|_| Connection::open(src_db).map_err(|e| format!("打开数据库失败: {}", e)))?;
+    // composerHeaders may not exist on a fresh profile — treat as empty.
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='composerHeaders'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if table_exists == 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, \
+             isSubagent, recency, checkpointAt, value, subagentTypeName \
+             FROM composerHeaders",
+        )
+        .map_err(|e| format!("准备查询 composerHeaders 失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ComposerHeaderRow {
+                composer_id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                created_at: row.get(2)?,
+                last_updated_at: row.get(3)?,
+                is_archived: row.get(4)?,
+                is_subagent: row.get(5)?,
+                recency: row.get(6)?,
+                checkpoint_at: row.get(7)?,
+                value: row.get(8)?,
+                subagent_type_name: row.get(9)?,
+            })
+        })
+        .map_err(|e| format!("查询 composerHeaders 失败: {}", e))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("读取 composerHeaders 行失败: {}", e))?);
+    }
+    Ok(out)
+}
+
+fn import_composer_headers(dst_db: &Path, rows: &[ComposerHeaderRow]) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = dst_db.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    let conn = Connection::open(dst_db).map_err(|e| format!("打开数据库失败: {}", e))?;
+    let _ = conn.execute_batch(
+        "PRAGMA busy_timeout=8000;
+         PRAGMA synchronous=NORMAL;
+         CREATE TABLE IF NOT EXISTS composerHeaders (\
+             composerId TEXT PRIMARY KEY, \
+             workspaceId TEXT, \
+             createdAt INTEGER, \
+             lastUpdatedAt INTEGER, \
+             isArchived INTEGER, \
+             isSubagent INTEGER, \
+             recency INTEGER, \
+             checkpointAt INTEGER, \
+             value TEXT, \
+             subagentTypeName TEXT\
+         ) WITHOUT ROWID;",
+    );
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启事务失败: {}", e))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR REPLACE INTO composerHeaders \
+                 (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, \
+                  recency, checkpointAt, value, subagentTypeName) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(|e| format!("准备写入 composerHeaders 失败: {}", e))?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.composer_id,
+                r.workspace_id,
+                &r.created_at,
+                &r.last_updated_at,
+                &r.is_archived,
+                &r.is_subagent,
+                &r.recency,
+                &r.checkpoint_at,
+                &r.value,
+                &r.subagent_type_name,
+            ])
+            .map_err(|e| format!("写入 composerHeaders 失败 ({}): {}", r.composer_id, e))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("提交 composerHeaders 同步失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    Ok(())
+}
+
+/// Prefixes inside cursorDiskKV that should be shared across profiles.
+/// - `composerData:<uuid>`: full Composer session payload
+/// - `composer.content.<hash>`: content fragments referenced by Composer
+/// Other prefixes (agentKv, bubbleId, checkpointId, inlineDiff, ...) are
+/// skipped: they either may carry account-bound state or are bulky temporaries
+/// that don't affect the sidebar session list.
+const SHARED_CURSOR_KV_PREFIXES: &[&str] = &["composerData:", "composer.content."];
+
+fn export_cursor_disk_kv(src_db: &Path) -> Result<HashMap<String, rusqlite::types::Value>, String> {
+    if !src_db.exists() {
+        return Ok(HashMap::new());
+    }
+    let conn = open_sqlite_ro(src_db)
+        .or_else(|_| Connection::open(src_db).map_err(|e| format!("打开数据库失败: {}", e)))?;
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if table_exists == 0 {
+        return Ok(HashMap::new());
+    }
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM cursorDiskKV")
+        .map_err(|e| format!("查询 cursorDiskKV 失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, rusqlite::types::Value>(1)?))
+        })
+        .map_err(|e| format!("读取 cursorDiskKV 失败: {}", e))?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (key, value) = row.map_err(|e| format!("读取 cursorDiskKV 行失败: {}", e))?;
+        if SHARED_CURSOR_KV_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+        {
+            out.insert(key, value);
+        }
+    }
+    Ok(out)
+}
+
+fn import_cursor_disk_kv(
+    dst_db: &Path,
+    map: &HashMap<String, rusqlite::types::Value>,
+) -> Result<(), String> {
+    if map.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = dst_db.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    let conn = Connection::open(dst_db).map_err(|e| format!("打开数据库失败: {}", e))?;
+    let _ = conn.execute_batch(
+        "PRAGMA busy_timeout=8000;
+         PRAGMA synchronous=NORMAL;
+         CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID;",
+    );
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启事务失败: {}", e))?;
+    {
+        let mut stmt = tx
+            .prepare("INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?, ?)")
+            .map_err(|e| format!("准备写入 cursorDiskKV 失败: {}", e))?;
+        for (key, value) in map {
+            stmt.execute(rusqlite::params![key, value])
+                .map_err(|e| format!("写入 cursorDiskKV 失败 ({}): {}", key, e))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("提交 cursorDiskKV 同步失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    Ok(())
+}
+
+/// Pull Composer headers + cursorDiskKV entries from the default Cursor dir
+/// into the shared layer. Idempotent — every profile launch re-runs this so
+/// manually-launched sessions keep flowing into shared across launches.
+fn sync_default_composer_to_shared() -> Result<(), String> {
+    let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
+    let shared_db = shared_state_vscdb()?;
+    if !default_db.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = shared_db.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
+    }
+    let headers = export_composer_headers(&default_db)?;
+    if !headers.is_empty() {
+        import_composer_headers(&shared_db, &headers)?;
+    }
+    let kv = export_cursor_disk_kv(&default_db)?;
+    if !kv.is_empty() {
+        import_cursor_disk_kv(&shared_db, &kv)?;
+    }
+    Ok(())
+}
+
+/// Push profile's Composer state back into the shared layer. Captures sessions
+/// created inside this profile so the next profile launch (or a manual launch)
+/// can see them. Per-row INSERT OR REPLACE gives last-write-wins per
+/// composerId/key — same-session updates from different accounts overlay, which
+/// matches the user expectation that the most recent edit wins.
+fn sync_profile_composer_to_shared(profile: &Path) -> Result<(), String> {
+    let profile_db = live_state_vscdb_in(profile);
+    if !profile_db.exists() {
+        return Ok(());
+    }
+    let shared_db = shared_state_vscdb()?;
+    if let Some(parent) = shared_db.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
+    }
+    let headers = export_composer_headers(&profile_db)?;
+    if !headers.is_empty() {
+        import_composer_headers(&shared_db, &headers)?;
+    }
+    let kv = export_cursor_disk_kv(&profile_db)?;
+    if !kv.is_empty() {
+        import_cursor_disk_kv(&shared_db, &kv)?;
+    }
+    Ok(())
+}
+
+/// Pull shared Composer state into a profile before launch. After this, the
+/// profile's sidebar will show sessions from the default Cursor dir and from
+/// every other profile that has synced into shared.
+fn sync_shared_composer_to_profile(profile: &Path) -> Result<(), String> {
+    let shared_db = shared_state_vscdb()?;
+    if !shared_db.exists() {
+        return Ok(());
+    }
+    let profile_db = live_state_vscdb_in(profile);
+    if let Some(parent) = profile_db.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建 profile 目录失败: {}", e))?;
+    }
+    let headers = export_composer_headers(&shared_db)?;
+    if !headers.is_empty() {
+        import_composer_headers(&profile_db, &headers)?;
+    }
+    let kv = export_cursor_disk_kv(&shared_db)?;
+    if !kv.is_empty() {
+        import_cursor_disk_kv(&profile_db, &kv)?;
+    }
+    Ok(())
+}
+
 fn sync_shared_state_to_profile(profile: &Path) -> Result<(), String> {
     let shared_db = shared_state_vscdb()?;
     if !shared_db.exists() {
@@ -3507,6 +3791,64 @@ pub fn run_cursor_switch_self_test(personal_id: &str, company_id: &str) -> Resul
 
     log("全部通过 ✓".to_string());
     Ok(lines.join("\n"))
+}
+
+// ============================================================================
+// Debug-only commands for investigating Composer session storage in state.vscdb.
+// To be removed after the fix is verified.
+// ============================================================================
+
+fn resolve_target_state_db(target: Option<&str>) -> Result<PathBuf, String> {
+    match target {
+        None | Some("") | Some("active") => Ok(live_state_vscdb()),
+        Some("default") => Ok(default_user_dir().join("globalStorage").join("state.vscdb")),
+        Some("shared") => shared_state_vscdb(),
+        Some(s) if s.starts_with("profile:") => {
+            let account_id = s.trim_start_matches("profile:");
+            validate_account_id(account_id)?;
+            let profile = cursor_profile_dir(account_id)?;
+            Ok(live_state_vscdb_in(&profile))
+        }
+        Some(other) => Err(format!("未知 target: {other}（可选: active|default|shared|profile:<id>）")),
+    }
+}
+
+#[tauri::command]
+pub fn dump_state_keys(target: Option<String>) -> Result<Vec<String>, String> {
+    let db_path = resolve_target_state_db(target.as_deref())?;
+    if !db_path.exists() {
+        return Err(format!("数据库不存在: {}", db_path.display()));
+    }
+    let conn = open_sqlite_ro(&db_path)
+        .or_else(|_| Connection::open(&db_path).map_err(|e| format!("打开数据库失败: {}", e)))?;
+    let mut stmt = conn
+        .prepare("SELECT key FROM ItemTable ORDER BY key")
+        .map_err(|e| format!("准备查询失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("查询失败: {}", e))?;
+    let mut keys = Vec::new();
+    for row in rows {
+        keys.push(row.map_err(|e| format!("读取行失败: {}", e))?);
+    }
+    Ok(keys)
+}
+
+#[tauri::command]
+pub fn dump_state_value(target: Option<String>, key: String) -> Result<String, String> {
+    let db_path = resolve_target_state_db(target.as_deref())?;
+    if !db_path.exists() {
+        return Err(format!("数据库不存在: {}", db_path.display()));
+    }
+    let value = read_state_value(&db_path, &key)?;
+    match value {
+        None => Ok("<NULL>".to_string()),
+        Some(rusqlite::types::Value::Text(t)) => Ok(t),
+        Some(rusqlite::types::Value::Blob(b)) => {
+            String::from_utf8(b).map_err(|e| format!("Blob 不是 UTF-8: {}", e))
+        }
+        Some(other) => Ok(format!("{:?}", other)),
+    }
 }
 
 #[cfg(test)]

@@ -90,31 +90,6 @@ export async function focusBrowser(): Promise<void> {
   await focusWindow(win);
 }
 
-function waitForWindowReady(win: WebviewWindow): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = window.setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error("创建窗口超时"));
-    }, 15000);
-
-    const done = (err?: unknown) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      if (err !== undefined) reject(err instanceof Error ? err : new Error(String(err)));
-      else resolve();
-    };
-
-    win.once("tauri://created", () => done());
-    win.once("tauri://error", (event) => {
-      const payload = (event as { payload?: unknown }).payload;
-      done(payload ?? "创建窗口失败");
-    });
-  });
-}
-
 async function createBrowserWindow(url: string, width: number, height: number, mapKey: string) {
   const label = toWindowLabel(mapKey);
 
@@ -131,27 +106,20 @@ async function createBrowserWindow(url: string, width: number, height: number, m
     return preexisting;
   }
 
-  const win = new WebviewWindow(label, {
+  // Delegate window creation to Rust so the webview is built with an
+  // initialization_script — that script re-runs on every page navigation,
+  // which keeps the floating nav toolbar alive across in-page links. A plain
+  // `new WebviewWindow()` + `eval()` would lose the toolbar on the next load.
+  await invoke<string>("open_browser_window_with_toolbar", {
     url,
     width,
     height,
-    minWidth: 640,
-    minHeight: 480,
-    title: titleFromUrl(url),
-    resizable: true,
-    decorations: true,
-    focus: true,
+    label,
   });
 
-  try {
-    await waitForWindowReady(win);
-  } catch (e) {
-    try {
-      await win.close();
-    } catch {
-      /* ignore */
-    }
-    throw e;
+  const win = await WebviewWindow.getByLabel(label);
+  if (!win) {
+    throw new Error("窗口创建后无法获取实例");
   }
 
   windows.set(mapKey, win);

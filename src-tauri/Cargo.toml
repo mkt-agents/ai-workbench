@@ -45,3 +45,7 @@ windows = { version = "0.61", features = [
 [[bin]]
 name = "cursor_switch_test"
 path = "src/bin/cursor_switch_test.rs"
+
+[[bin]]
+name = "dump_state"
+path = "src/bin/dump_state.rs"
