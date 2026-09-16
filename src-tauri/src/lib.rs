@@ -240,6 +240,9 @@ pub fn run() {
                 // Create+show bubble once; do not call ensure then visible separately
                 // (ensure used to mis-detect !CONTENT_READY as stale and block the UI).
                 let _ = tray::set_quick_ask_bubble_visible_inner(app.handle(), true, None, None);
+                // Materialise the quick-ask window off the startup path: it cannot be
+                // built from the toggle command (see tray::bubble::prebuild_quick_ask_window).
+                tray::bubble::prebuild_quick_ask_window(app.handle());
             }
 
             Ok(())
@@ -320,6 +323,7 @@ pub fn run() {
             tool_commands::pick_text_file,
             tray::open_quick_ask_with_text,
             tray::tray_toggle_quick_ask,
+            tray::hide_quick_ask,
             tray::open_main_deepseek,
             tray::set_quick_ask_bubble_visible,
             tray::set_quick_ask_bubble_position,

@@ -301,10 +301,17 @@ function QuickAskApp() {
   }, [setSettings]);
 
   const hide = async () => {
+    // Go through Rust: tao resolves hide() via its cached visibility flag, which can
+    // desync from the real window (see tray/bubble.rs `vis`) and turn this into a
+    // no-op. Fall back to the JS API if the command is unavailable.
     try {
-      await getCurrentWindow().hide();
+      await invoke("hide_quick_ask");
     } catch {
-      /* ignore */
+      try {
+        await getCurrentWindow().hide();
+      } catch {
+        /* ignore */
+      }
     }
   };
 

@@ -11,6 +11,73 @@ use tauri::{
     AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
+/// Real (Win32) window visibility helpers.
+///
+/// tao drives visibility through a *diff of its cached window flags* and ultimately
+/// calls `ShowWindow` (see `tao::platform_impl::windows::window_state::apply_diff`).
+/// When the OS ignores that call the cached flag desynchronises from the real window,
+/// so every later `show()`/`hide()` short-circuits on an empty diff and the window can
+/// never be shown again — this is exactly what parked the on-demand quick-ask window
+/// in a permanently hidden state while the bubble (created at startup) kept working.
+/// So read and drive the real window state instead of trusting tao's cache.
+#[cfg(windows)]
+pub(crate) mod vis {
+    use tauri::{Runtime, WebviewWindow};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsWindowVisible, SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SWP_SHOWWINDOW,
+    };
+
+    fn hwnd_of<R: Runtime>(win: &WebviewWindow<R>) -> Option<HWND> {
+        win.hwnd().ok().map(|h| HWND(h.0 as *mut _))
+    }
+
+    /// True on-screen visibility, bypassing tao's cached flag.
+    pub fn really_visible<R: Runtime>(win: &WebviewWindow<R>) -> Option<bool> {
+        let hwnd = hwnd_of(win)?;
+        Some(unsafe { IsWindowVisible(hwnd).as_bool() })
+    }
+
+    /// Force real visibility with `SetWindowPos`, which still works where `ShowWindow`
+    /// is silently ignored. Returns `false` when the window could not be updated.
+    pub fn force_visible<R: Runtime>(win: &WebviewWindow<R>, visible: bool) -> bool {
+        let Some(hwnd) = hwnd_of(win) else {
+            eprintln!("[tray] force_visible: window handle unavailable");
+            return false;
+        };
+        let mut flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER;
+        flags |= if visible {
+            SWP_SHOWWINDOW
+        } else {
+            SWP_HIDEWINDOW
+        };
+        match unsafe { SetWindowPos(hwnd, None, 0, 0, 0, 0, flags) } {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!(
+                    "[tray] force_visible(visible={visible}, hwnd=0x{:X}) failed: {e}",
+                    hwnd.0 as isize
+                );
+                false
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) mod vis {
+    use tauri::{Runtime, WebviewWindow};
+
+    pub fn really_visible<R: Runtime>(_win: &WebviewWindow<R>) -> Option<bool> {
+        None
+    }
+
+    pub fn force_visible<R: Runtime>(_win: &WebviewWindow<R>, _visible: bool) -> bool {
+        false
+    }
+}
+
 pub const QUICK_ASK_LABEL: &str = "quick-ask";
 pub(crate) const QUICK_ASK_BUBBLE_LABEL: &str = "quick-ask-bubble";
 pub(crate) const MAIN_LABEL: &str = "main";
@@ -43,6 +110,30 @@ pub fn ensure_quick_ask_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Prepare the quick-ask window shortly after startup, on the main thread.
+///
+/// `setup` is the one place where building a window is known-good (that is how the
+/// desktop bubble is created), so the window is materialised here instead of from the
+/// toggle path. It runs in the background after a short delay so the cold start is not
+/// blocked by a second WebView2.
+pub fn prebuild_quick_ask_window<R: Runtime>(app: &AppHandle<R>) {
+    if app.get_webview_window(QUICK_ASK_LABEL).is_some() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        let inner = app.clone();
+        if let Err(e) = app.run_on_main_thread(move || {
+            if let Err(e) = ensure_quick_ask_window(&inner) {
+                eprintln!("[tray] prebuild quick-ask failed: {e}");
+            }
+        }) {
+            eprintln!("[tray] prebuild dispatch failed: {e}");
+        }
+    });
 }
 
 pub(crate) fn default_bubble_position<R: Runtime>(app: &AppHandle<R>) -> (i32, i32) {
@@ -114,6 +205,8 @@ fn park_bubble_window<R: Runtime>(win: &WebviewWindow<R>) {
     let _ = win.set_ignore_cursor_events(true);
     let _ = win.set_always_on_top(false);
     let _ = win.hide();
+    // `hide()` can be a silent no-op (see `vis`); park for real.
+    let _ = vis::force_visible(win, false);
     let _ = win.set_position(tauri::PhysicalPosition::new(BUBBLE_PARK_POS.0, BUBBLE_PARK_POS.1));
 }
 
@@ -130,6 +223,8 @@ fn reveal_bubble_window<R: Runtime>(
     apply_circular_region(win);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
+    // `show()` can be a silent no-op (see `vis`); show for real.
+    let _ = vis::force_visible(win, true);
     // Enable hit-testing only after the window is shown at a safe position.
     let _ = win.set_ignore_cursor_events(false);
     Ok(())
@@ -258,39 +353,91 @@ pub fn quick_ask_bubble_ready(app: AppHandle) -> Result<(), String> {
 
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window(MAIN_LABEL) {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-    }
-}
-
-pub fn toggle_quick_ask<R: Runtime>(app: &AppHandle<R>) {
-    if let Err(e) = ensure_quick_ask_window(app) {
-        eprintln!("[tray] ensure quick-ask failed: {e}");
-        return;
-    }
-    if let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) {
-        match win.is_visible() {
-            Ok(true) => {
-                let _ = win.hide();
-            }
-            _ => {
-                let _ = win.show();
-                let _ = win.set_focus();
-                let _ = app.emit("quick-ask-shown", ());
-            }
+        if let Err(e) = win.show() {
+            eprintln!("[tray] show main failed: {e}");
+        }
+        if let Err(e) = win.unminimize() {
+            eprintln!("[tray] unminimize main failed: {e}");
+        }
+        if let Err(e) = win.set_focus() {
+            eprintln!("[tray] focus main failed: {e}");
+        }
+        // Tray click / second launch must always bring the window back: apply the real
+        // visibility last so nothing above can undo it.
+        if !vis::force_visible(&win, true) {
+            eprintln!("[tray] main window still hidden after force_visible");
         }
     }
 }
 
-pub fn show_quick_ask<R: Runtime>(app: &AppHandle<R>) {
-    if let Err(e) = ensure_quick_ask_window(app) {
-        eprintln!("[tray] ensure quick-ask failed: {e}");
+pub fn toggle_quick_ask<R: Runtime>(app: &AppHandle<R>) {
+    // Never build the window from this path: `WebviewWindowBuilder::build()` does NOT
+    // return when it runs on a command thread — it creates the HWND and then blocks
+    // forever, so the window stayed permanently hidden and every entry point (bubble
+    // click, tray item, Ctrl+Alt+K) looked dead. The window is prepared on the main
+    // thread at startup by `prebuild_quick_ask_window`; this path only toggles it.
+    let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) else {
+        // Not materialised yet — schedule the prebuild and let the next click toggle it
+        // instead of blocking here (see the note above).
+        prebuild_quick_ask_window(app);
         return;
-    }
-    if let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) {
-        let _ = win.show();
-        let _ = win.set_focus();
+    };
+    // Judge from the real window, not from `is_visible()` — tao's cached flag desyncs
+    // when `ShowWindow` is ignored, which made this toggle a permanent no-op.
+    let visible = vis::really_visible(&win).unwrap_or_else(|| win.is_visible().unwrap_or(false));
+    if visible {
+        if let Err(e) = win.hide() {
+            eprintln!("[tray] hide quick-ask failed: {e}");
+        }
+        let _ = vis::force_visible(&win, false);
+    } else {
+        if let Err(e) = win.show() {
+            eprintln!("[tray] show quick-ask failed: {e}");
+        }
+        if let Err(e) = win.unminimize() {
+            eprintln!("[tray] unminimize quick-ask failed: {e}");
+        }
+        if let Err(e) = win.set_focus() {
+            eprintln!("[tray] focus quick-ask failed: {e}");
+        }
+        // tao's own calls can be dropped silently, so force the real visibility last.
+        if !vis::force_visible(&win, true) {
+            eprintln!("[tray] quick-ask still hidden after force_visible");
+        }
         let _ = app.emit("quick-ask-shown", ());
+    }
+}
+
+pub fn show_quick_ask<R: Runtime>(app: &AppHandle<R>) {
+    // Same rule as `toggle_quick_ask`: never build from here (see the comment there).
+    let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) else {
+        prebuild_quick_ask_window(app);
+        return;
+    };
+    if let Err(e) = win.show() {
+        eprintln!("[tray] show quick-ask failed: {e}");
+    }
+    if let Err(e) = win.unminimize() {
+        eprintln!("[tray] unminimize quick-ask failed: {e}");
+    }
+    if let Err(e) = win.set_focus() {
+        eprintln!("[tray] focus quick-ask failed: {e}");
+    }
+    if !vis::force_visible(&win, true) {
+        eprintln!("[tray] quick-ask still hidden after force_visible");
+    }
+    let _ = app.emit("quick-ask-shown", ());
+}
+
+/// Hide the quick-ask window for real. The frontend used `getCurrentWindow().hide()`,
+/// which tao resolves through its cached flag diff — once that cache desyncs (because
+/// the real window was shown with `SetWindowPos`) the call becomes a no-op, so Esc /
+/// the close button could not dismiss the window. Route it through Rust instead.
+pub fn hide_quick_ask<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) {
+        if let Err(e) = win.hide() {
+            eprintln!("[tray] hide quick-ask failed: {e}");
+        }
+        vis::force_visible(&win, false);
     }
 }

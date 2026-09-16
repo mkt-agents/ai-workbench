@@ -1,6 +1,6 @@
 [package]
 name = "ai_workbench"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI Workbench - AI-powered developer toolbox"
 authors = ["you"]
 edition = "2021"
@@ -41,12 +41,22 @@ windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Storage_FileSystem",
+  "Win32_UI_WindowsAndMessaging",
 ] }
+
+[features]
+# Diagnostic binaries under `src/bin/` are opt-in: without this feature they are not
+# part of `cargo build --bins`, so the bundler no longer ships them inside the
+# installer (they used to land next to the app as cursor_switch_test.exe /
+# dump_state.exe). Build them with `cargo build --features dev-tools`.
+dev-tools = []
 
 [[bin]]
 name = "cursor_switch_test"
 path = "src/bin/cursor_switch_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "dump_state"
 path = "src/bin/dump_state.rs"
+required-features = ["dev-tools"]

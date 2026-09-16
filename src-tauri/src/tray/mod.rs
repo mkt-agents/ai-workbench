@@ -6,7 +6,9 @@
 
 pub mod bubble;
 
-pub use bubble::{ensure_quick_ask_window, set_quick_ask_bubble_visible_inner};
+// `ensure_quick_ask_window` stays internal to `bubble` — it is called on demand by the
+// toggle/show paths, never from the app setup.
+pub use bubble::set_quick_ask_bubble_visible_inner;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -280,6 +282,12 @@ pub fn open_quick_ask_with_text(app: AppHandle, text: String) -> Result<(), Stri
 #[tauri::command]
 pub fn tray_toggle_quick_ask(app: AppHandle) -> Result<(), String> {
     bubble::toggle_quick_ask(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_quick_ask(app: AppHandle) -> Result<(), String> {
+    bubble::hide_quick_ask(&app);
     Ok(())
 }
 
