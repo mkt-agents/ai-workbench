@@ -125,10 +125,11 @@ Start-Process .\src-tauri\target\debug\ai_workbench.exe
 | 文件 | 字段 |
 |------|------|
 | `package.json` | `"version"` |
+| `package-lock.json` | `"version"`（2 处，随 `npm install` 写入） |
 | `src-tauri/tauri.conf.json` | `"version"` |
-| `src-tauri/Cargo.toml` | `version` |
+| `src-tauri/Cargo.toml` | `version`（`src-tauri/Cargo.lock` 未被 git 跟踪，构建时自动更新） |
 
-当前版本：`0.1.0`（设置页通过 Tauri `getVersion()` 读取）。
+当前版本：`0.1.1`（设置页通过 Tauri `getVersion()` 读取）。
 
 ### 构建
 
@@ -180,6 +181,8 @@ ai-workbench/
 ```
 
 后端命令按模块拆分于 `src-tauri/src/*_commands.rs`，完整列表以 `src-tauri/src/lib.rs` 注册为准。
+
+`src-tauri/src/bin/` 下是内部诊断工具（`cursor_switch_test`、`dump_state`）。它们由 `dev-tools` 特性门控，**默认不参与构建**，因此不会被打进安装包；需要时用 `cargo build --features dev-tools` 单独编译。
 
 ## 已知限制
 
