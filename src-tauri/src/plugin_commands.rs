@@ -52,6 +52,13 @@ pub fn navigate_browser_window(app: tauri::AppHandle, url: String) -> Result<boo
 /// we fall back to copying the URL so the user can paste it into their
 /// system browser.
 const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
+  // WebView2 runs initialization scripts in EVERY frame (top-level + all
+  // iframes). Pages with embedded iframes (e.g. QR-code login widgets) would
+  // get one toolbar per iframe, each fixed to the iframe's own viewport and
+  // stacked over the page content. Only the top-level frame gets a toolbar.
+  // Comparing window.top/window.self is safe cross-origin (unlike reading
+  // top.location), so no try/catch needed.
+  if (window.top !== window.self) return;
   if (window.__aiWorkbenchToolbarInjected) return;
   Object.defineProperty(window, '__aiWorkbenchToolbarInjected', {
     value: true,
