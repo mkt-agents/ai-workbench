@@ -54,7 +54,10 @@
     "clear": "Clear",
     "copy": "Copy result",
     "copied": "Copied",
-    "sample": "Type text to encode/decode…"
+    "sample": "Type text to encode/decode…",
+    "swap": "Swap input and output",
+    "chars": "chars",
+    "bytes": "bytes"
   },
   "timestamp": {
     "title": "Timestamp",
@@ -87,7 +90,12 @@
     "uppercase": "Uppercase",
     "copyAll": "Copy all",
     "copied": "Copied",
-    "clear": "Clear"
+    "clear": "Clear",
+    "copyAsJson": "Copy as JSON",
+    "validate": "Validate",
+    "validatePlaceholder": "Paste UUID to validate…",
+    "validUuid": "Valid UUID",
+    "invalidUuid": "Invalid UUID"
   },
   "jwt": {
     "title": "JWT",
@@ -100,7 +108,14 @@
     "invalid": "Invalid JWT (must be three Base64Url segments)",
     "clear": "Clear",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "placeholder": "Paste JWT Token…",
+    "expiredBadge": "Expired {{time}} ago",
+    "expiresInBadge": "Expires in {{time}}",
+    "expiredAt": "Expired {{time}} ago",
+    "expiresAt": "Expires in {{time}}",
+    "active": "Active",
+    "notYetActive": "Not yet active"
   },
   "regex": {
     "title": "Regex",
@@ -120,7 +135,11 @@
     "invalid": "Invalid regular expression",
     "clear": "Clear",
     "copy": "Copy result",
-    "copied": "Copied"
+    "copied": "Copied",
+    "replace": "Replace",
+    "replaceWith": "Replace with",
+    "replacePlaceholder": "Use $1, $2 for groups",
+    "replaceResult": "Replace result"
   },
   "hash": {
     "title": "Hash",
@@ -136,7 +155,11 @@
     "clear": "Clear",
     "copy": "Copy result",
     "copied": "Copied",
-    "sample": "Type text to hash…"
+    "sample": "Type text to hash…",
+    "compare": "Compare hash",
+    "comparePlaceholder": "Paste hash to compare…",
+    "match": "Match",
+    "mismatch": "Mismatch"
   },
   "ports": {
     "title": "Ports / Processes",
@@ -217,6 +240,8 @@
     "copied": "Copied",
     "error": "Error",
     "success": "Success",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "search": "Search tools…",
+    "recent": "Recent"
   }
 }

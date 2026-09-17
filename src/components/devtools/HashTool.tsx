@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Eraser, Key } from "lucide-react";
+import { Check, ClipboardCopy, Eraser, Key, FileCheck } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 type Algo = "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512";
@@ -37,6 +37,8 @@ function HashTool() {
   const [encoding, setEncoding] = useState<Encoding>("hex");
   const [multiAlgo, setMultiAlgo] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [compareHash, setCompareHash] = useState("");
+  const [compareResult, setCompareResult] = useState<boolean | null>(null);
 
   const [hashed, setHashed] = useState("");
   const [multiHashes, setMultiHashes] = useState<Record<Algo, string>>({
@@ -73,6 +75,21 @@ function HashTool() {
     };
   }, [input, algo, encoding, multiAlgo]);
 
+  // Compare hash
+  useEffect(() => {
+    if (!compareHash.trim()) {
+      setCompareResult(null);
+      return;
+    }
+    const currentHash = multiAlgo ? multiHashes[algo] : hashed;
+    if (!currentHash) {
+      setCompareResult(null);
+      return;
+    }
+    // Case-insensitive comparison, trim whitespace
+    setCompareResult(currentHash.toLowerCase() === compareHash.trim().toLowerCase());
+  }, [compareHash, hashed, multiHashes, multiAlgo, algo]);
+
   const outputLength = useMemo(() => {
     if (multiAlgo) {
       const first = Object.values(multiHashes).find((v) => v);
@@ -84,6 +101,21 @@ function HashTool() {
   const handleCopy = async (text: string) => {
     try {
       await copy(text);
+      setMessage({ type: "success", text: t("hash.copied") });
+      setTimeout(() => setMessage(null), 2000);
+    } catch (e) {
+      setMessage({ type: "error", text: String(e) });
+    }
+  };
+
+  const handleCopyAll = async () => {
+    try {
+      if (multiAlgo) {
+        const lines = ALGOS.filter((a) => multiHashes[a]).map((a) => `${a}: ${multiHashes[a]}`);
+        await copy(lines.join("\n"));
+      } else {
+        await copy(hashed);
+      }
       setMessage({ type: "success", text: t("hash.copied") });
       setTimeout(() => setMessage(null), 2000);
     } catch (e) {
@@ -137,7 +169,7 @@ function HashTool() {
         <button
           type="button"
           className="btn btn-secondary btn-small"
-          onClick={() => handleCopy(multiAlgo ? Object.values(multiHashes).join("\n") : hashed)}
+          onClick={handleCopyAll}
           disabled={!outputLength}
         >
           <ClipboardCopy size={14} />
@@ -170,7 +202,35 @@ function HashTool() {
             rows={6}
             spellCheck={false}
           />
+
+          {/* Hash comparison */}
+          <div className="hash-compare">
+            <label className="devtools-label">{t("hash.compare")}</label>
+            <input
+              className="devtools-input"
+              value={compareHash}
+              onChange={(e) => setCompareHash(e.target.value)}
+              placeholder={t("hash.comparePlaceholder")}
+              spellCheck={false}
+            />
+            {compareResult !== null && (
+              <div className={`hash-compare-result ${compareResult ? "match" : "mismatch"}`}>
+                {compareResult ? (
+                  <>
+                    <FileCheck size={14} />
+                    <span>{t("hash.match")}</span>
+                  </>
+                ) : (
+                  <>
+                    <Key size={14} />
+                    <span>{t("hash.mismatch")}</span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
+
         <div className="devtools-io-pane">
           <div className="io-header">
             <label className="devtools-label">

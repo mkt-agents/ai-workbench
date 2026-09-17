@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Eraser, Regex } from "lucide-react";
+import { Check, ClipboardCopy, Eraser, Regex, Replace } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 interface RegexMatch {
@@ -15,6 +15,8 @@ function RegexTool() {
 
   const [pattern, setPattern] = useState("(\\d{4})-(\\d{2})-(\\d{2})");
   const [testStr, setTestStr] = useState("Date: 2026-09-17, 2025-12-31");
+  const [replaceStr, setReplaceStr] = useState("");
+  const [showReplace, setShowReplace] = useState(false);
   const [flags, setFlags] = useState({ g: true, i: false, m: false, s: false, u: false, y: false });
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -48,6 +50,25 @@ function RegexTool() {
     }
     return { ok: true as const, error: "", matches };
   }, [pattern, testStr, flags]);
+
+  // Compute replacement result
+  const replaceResult = useMemo(() => {
+    if (!result.ok || !showReplace) return null;
+    try {
+      const flagStr =
+        (flags.g ? "g" : "") +
+        (flags.i ? "i" : "") +
+        (flags.m ? "m" : "") +
+        (flags.s ? "s" : "") +
+        (flags.u ? "u" : "") +
+        (flags.y ? "y" : "");
+      const re = new RegExp(pattern, flagStr);
+      const replaced = testStr.replace(re, replaceStr);
+      return replaced;
+    } catch {
+      return null;
+    }
+  }, [result.ok, showReplace, pattern, testStr, flags, replaceStr]);
 
   const toggleFlag = (key: keyof typeof flags) => {
     setFlags({ ...flags, [key]: !flags[key] });
@@ -86,9 +107,39 @@ function RegexTool() {
     return parts;
   }, [result, testStr]);
 
+  // Common regex patterns
+  const commonPatterns = [
+    { label: "Email", pattern: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}" },
+    { label: "URL", pattern: "https?://[\\w.-]+(?:/[\\w.-]*)*" },
+    { label: "IPv4", pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b" },
+    { label: "Phone (CN)", pattern: "1[3-9]\\d{9}" },
+    { label: "Date", pattern: "\\d{4}-\\d{2}-\\d{2}" },
+  ];
+
   return (
     <div className="devtools-tool">
       <div className="devtools-actions">
+        <div className="regex-presets">
+          {commonPatterns.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => setPattern(preset.pattern)}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <div className="devtools-actions-spacer" />
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={() => setShowReplace(!showReplace)}
+        >
+          <Replace size={14} />
+          {t("regex.replace")}
+        </button>
         <button
           type="button"
           className="btn btn-secondary btn-small"
@@ -130,6 +181,20 @@ function RegexTool() {
               </label>
             ))}
           </div>
+
+          {/* Replace input */}
+          {showReplace && (
+            <>
+              <label className="devtools-label">{t("regex.replaceWith")}</label>
+              <input
+                className="devtools-input"
+                value={replaceStr}
+                onChange={(e) => setReplaceStr(e.target.value)}
+                placeholder={t("regex.replacePlaceholder")}
+                spellCheck={false}
+              />
+            </>
+          )}
 
           <label className="devtools-label">{t("regex.test")}</label>
           <textarea
@@ -200,6 +265,27 @@ function RegexTool() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Replace result */}
+          {replaceResult && (
+            <div className="regex-replace-result">
+              <label className="devtools-label">{t("regex.replaceResult")}</label>
+              <div className="regex-replace-preview">
+                <pre className="devtools-pre">{replaceResult}</pre>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={() => {
+                    copy(replaceResult);
+                    flash("success", t("regex.copied"));
+                  }}
+                >
+                  <ClipboardCopy size={12} />
+                  {t("regex.copy")}
+                </button>
+              </div>
             </div>
           )}
         </div>

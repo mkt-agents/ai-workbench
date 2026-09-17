@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Copy, Eraser, Shuffle } from "lucide-react";
+import { Check, ClipboardCopy, Copy, Eraser, Shuffle, CheckCircle, XCircle } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function UuidTool() {
   const { t } = useTranslation("devtools");
@@ -18,6 +20,8 @@ function UuidTool() {
   });
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [validateInput, setValidateInput] = useState("");
+  const [validateResult, setValidateResult] = useState<{ valid: boolean; version?: number } | null>(null);
 
   const generate = () => {
     const n = Math.max(1, Math.min(100, count || 1));
@@ -50,6 +54,37 @@ function UuidTool() {
     } catch (e) {
       setMessage({ type: "error", text: String(e) });
     }
+  };
+
+  const handleCopyAsArray = async () => {
+    try {
+      const json = JSON.stringify(items, null, 2);
+      await copy(json);
+      setMessage({ type: "success", text: t("uuid.copied") });
+      setTimeout(() => setMessage(null), 2000);
+    } catch (e) {
+      setMessage({ type: "error", text: String(e) });
+    }
+  };
+
+  const handleValidate = () => {
+    const input = validateInput.trim();
+    if (!input) {
+      setValidateResult(null);
+      return;
+    }
+
+    // Check basic format
+    if (!UUID_REGEX.test(input)) {
+      setValidateResult({ valid: false });
+      return;
+    }
+
+    // Detect version (char at position 14)
+    const versionChar = input.replace(/-/g, "")[12];
+    const version = parseInt(versionChar, 16);
+
+    setValidateResult({ valid: true, version: version >= 1 && version <= 8 ? version : undefined });
   };
 
   return (
@@ -88,6 +123,15 @@ function UuidTool() {
           <ClipboardCopy size={14} />
           {t("uuid.copyAll")}
         </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={handleCopyAsArray}
+          disabled={items.length === 0}
+        >
+          <Copy size={14} />
+          {t("uuid.copyAsJson")}
+        </button>
         <button type="button" className="btn btn-secondary btn-small" onClick={() => setItems([])}>
           <Eraser size={14} />
           {t("uuid.clear")}
@@ -101,6 +145,7 @@ function UuidTool() {
         </div>
       )}
 
+      {/* UUID List */}
       {items.length > 0 && (
         <div className="devtools-uuid-list">
           {items.map((u, i) => (
@@ -124,6 +169,51 @@ function UuidTool() {
           {t("uuid.count")}: {items.length} · {items[0].length} chars
         </div>
       )}
+
+      {/* UUID Validator */}
+      <div className="uuid-validator">
+        <label className="devtools-label">{t("uuid.validate")}</label>
+        <div className="uuid-validate-input">
+          <input
+            className="devtools-input"
+            value={validateInput}
+            onChange={(e) => {
+              setValidateInput(e.target.value);
+              setValidateResult(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleValidate();
+            }}
+            placeholder={t("uuid.validatePlaceholder")}
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={handleValidate}
+          >
+            {t("uuid.validate")}
+          </button>
+        </div>
+        {validateResult && (
+          <div className={`uuid-validate-result ${validateResult.valid ? "valid" : "invalid"}`}>
+            {validateResult.valid ? (
+              <>
+                <CheckCircle size={14} />
+                <span>{t("uuid.validUuid")}</span>
+                {validateResult.version && (
+                  <span className="uuid-version">v{validateResult.version}</span>
+                )}
+              </>
+            ) : (
+              <>
+                <XCircle size={14} />
+                <span>{t("uuid.invalidUuid")}</span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

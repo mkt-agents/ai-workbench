@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Eraser, Lock } from "lucide-react";
+import { Check, ClipboardCopy, Eraser, Lock, AlertCircle } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 const SAMPLE_JWT =
@@ -10,6 +10,15 @@ function b64UrlDecode(s: string): string {
   const pad = "=".repeat((4 - (s.length % 4)) % 4);
   const norm = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
   return atob(norm);
+}
+
+/** Format seconds into human-readable duration. */
+function formatDuration(seconds: number): string {
+  const abs = Math.abs(seconds);
+  if (abs < 60) return `${abs}s`;
+  if (abs < 3600) return `${Math.floor(abs / 60)}m ${abs % 60}s`;
+  if (abs < 86400) return `${Math.floor(abs / 3600)}h ${Math.floor((abs % 3600) / 60)}m`;
+  return `${Math.floor(abs / 86400)}d ${Math.floor((abs % 86400) / 3600)}h`;
 }
 
 function JwtTool() {
@@ -59,7 +68,28 @@ function JwtTool() {
       exp,
       expired: diff < 0,
       in: diff,
+      formatted: formatDuration(diff),
     };
+  }, [parsed]);
+
+  // Check for nbf (not before)
+  const nbfInfo = useMemo(() => {
+    if (!parsed || "error" in parsed) return null;
+    const nbf = (parsed as any).payloadObj?.nbf;
+    if (!nbf) return null;
+    const now = Math.floor(Date.now() / 1000);
+    const diff = now - nbf;
+    return {
+      valid: diff >= 0,
+      nbf,
+      formatted: formatDuration(diff),
+    };
+  }, [parsed]);
+
+  // Get algorithm info
+  const algoInfo = useMemo(() => {
+    if (!parsed || "error" in parsed) return null;
+    return (parsed as any).headerObj?.alg || null;
   }, [parsed]);
 
   return (
@@ -94,7 +124,7 @@ function JwtTool() {
             className="devtools-textarea"
             value={token}
             onChange={(e) => setToken(e.target.value)}
-            placeholder={t("token")}
+            placeholder={t("jwt.placeholder")}
             rows={5}
             spellCheck={false}
           />
@@ -110,6 +140,27 @@ function JwtTool() {
 
           {parsed && !("error" in parsed) && (
             <div className="jwt-result">
+              {/* Status badges */}
+              <div className="jwt-badges">
+                {algoInfo && (
+                  <span className="jwt-badge jwt-badge-algo">
+                    {algoInfo}
+                  </span>
+                )}
+                {expInfo && (
+                  <span className={`jwt-badge ${expInfo.expired ? "jwt-badge-expired" : "jwt-badge-valid"}`}>
+                    {expInfo.expired
+                      ? t("jwt.expiredBadge", { time: expInfo.formatted })
+                      : t("jwt.expiresInBadge", { time: expInfo.formatted })}
+                  </span>
+                )}
+                {nbfInfo && (
+                  <span className={`jwt-badge ${nbfInfo.valid ? "jwt-badge-valid" : "jwt-badge-expired"}`}>
+                    {nbfInfo.valid ? t("jwt.active") : t("jwt.notYetActive")}
+                  </span>
+                )}
+              </div>
+
               <div className="jwt-section">
                 <div className="jwt-section-header">
                   <span className="jwt-section-tag tag-tcp">{t("jwt.header")}</span>
@@ -147,16 +198,19 @@ function JwtTool() {
 
               {expInfo && (
                 <div className={`jwt-expiry ${expInfo.expired ? "expired" : "valid"}`}>
-                  {expInfo.expired
-                    ? `⏰ Expired ${Math.abs(expInfo.in)}s ago`
-                    : `⏰ Expires in ${expInfo.in}s`}
+                  <AlertCircle size={14} />
+                  <span>
+                    {expInfo.expired
+                      ? t("jwt.expiredAt", { time: expInfo.formatted })
+                      : t("jwt.expiresAt", { time: expInfo.formatted })}
+                  </span>
                 </div>
               )}
             </div>
           )}
 
           {!parsed && (
-            <div className="runtime-empty">{t("jwt.sample")}</div>
+            <div className="runtime-empty">{t("jwt.placeholder")}</div>
           )}
         </div>
       </div>

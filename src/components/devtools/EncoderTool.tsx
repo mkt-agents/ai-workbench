@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Code2, Eraser } from "lucide-react";
+import { Check, ClipboardCopy, Code2, Eraser, ArrowRightLeft } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
-type Mode = "base64" | "url";
+type Mode = "base64" | "url" | "base64url";
 type Direction = "encode" | "decode";
 
 function encodeBase64(text: string): string {
@@ -17,6 +17,22 @@ function encodeBase64(text: string): string {
 function decodeBase64(text: string): string {
   const cleaned = text.replace(/\s+/g, "");
   const raw = atob(cleaned);
+  return decodeURIComponent(
+    raw
+      .split("")
+      .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+      .join(""),
+  );
+}
+
+function encodeBase64Url(text: string): string {
+  return encodeBase64(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeBase64Url(text: string): string {
+  let b64 = text.replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4) b64 += "=";
+  const raw = atob(b64);
   return decodeURIComponent(
     raw
       .split("")
@@ -44,10 +60,13 @@ function EncoderTool() {
       if (mode === "base64") {
         return direction === "encode" ? encodeBase64(input) : decodeBase64(input);
       }
+      if (mode === "base64url") {
+        return direction === "encode" ? encodeBase64Url(input) : decodeBase64Url(input);
+      }
       return direction === "encode"
         ? encodeURIComponent(input)
         : decodeURIComponent(input);
-    } catch (e) {
+    } catch {
       return "";
     }
   }, [input, mode, direction]);
@@ -68,6 +87,8 @@ function EncoderTool() {
     setDirection(direction === "encode" ? "decode" : "encode");
   };
 
+  const inputBytes = useMemo(() => new Blob([input]).size, [input]);
+
   return (
     <div className="devtools-tool">
       <div className="devtools-row">
@@ -78,6 +99,13 @@ function EncoderTool() {
             onClick={() => setMode("base64")}
           >
             {t("encoder.base64")}
+          </button>
+          <button
+            type="button"
+            className={`segmented-item ${mode === "base64url" ? "active" : ""}`}
+            onClick={() => setMode("base64url")}
+          >
+            Base64URL
           </button>
           <button
             type="button"
@@ -103,8 +131,13 @@ function EncoderTool() {
             {t("encoder.decode")}
           </button>
         </div>
-        <button type="button" className="btn btn-secondary btn-small" onClick={swap}>
-          ⇅
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={swap}
+          title={t("encoder.swap")}
+        >
+          <ArrowRightLeft size={14} />
         </button>
         <button type="button" className="btn btn-secondary btn-small" onClick={handleCopy}>
           <ClipboardCopy size={14} />
@@ -131,7 +164,12 @@ function EncoderTool() {
 
       <div className="devtools-io">
         <div className="devtools-io-pane">
-          <label className="devtools-label">{t("encoder.input")}</label>
+          <div className="io-header">
+            <label className="devtools-label">{t("encoder.input")}</label>
+            <span className="json-stats">
+              {input.length} {t("encoder.chars")} · {inputBytes} {t("encoder.bytes")}
+            </span>
+          </div>
           <textarea
             className="devtools-textarea"
             value={input}
@@ -141,7 +179,14 @@ function EncoderTool() {
           />
         </div>
         <div className="devtools-io-pane">
-          <label className="devtools-label">{t("encoder.output")}</label>
+          <div className="io-header">
+            <label className="devtools-label">{t("encoder.output")}</label>
+            {output && (
+              <span className="json-stats">
+                {output.length} {t("encoder.chars")}
+              </span>
+            )}
+          </div>
           <textarea
             className="devtools-textarea"
             value={output}

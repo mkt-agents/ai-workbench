@@ -32,6 +32,11 @@ function relativeTime(msDiff: number, t: (k: string) => string): string {
   return future ? `${text} ${t("timestamp.future")}` : `${text} ${t("timestamp.past")}`;
 }
 
+/** Format a date in RFC 2822 style. */
+function toRFC2822(d: Date): string {
+  return d.toUTCString();
+}
+
 function TimestampTool() {
   const { t } = useTranslation("devtools");
   const copy = useGlobalStore((s) => s.invokeCopyToClipboard);
@@ -57,15 +62,15 @@ function TimestampTool() {
   const dateFromTs = useMemo(() => {
     const n = Number(tsInput);
     if (!Number.isFinite(n) || tsInput.trim() === "")
-      return { ok: false as const, result: "", local: "", ms: 0 };
+      return { ok: false as const, result: "", local: "", ms: 0, date: null as Date | null };
     // Interpret based on the selected unit
     let ms: number;
     if (unit === "microseconds") ms = n / 1000;
     else if (unit === "milliseconds") ms = n;
     else ms = n * 1000;
     const d = new Date(ms);
-    if (isNaN(d.getTime())) return { ok: false as const, result: "", local: "", ms: 0 };
-    return { ok: true as const, result: d.toISOString(), local: d.toLocaleString(), ms };
+    if (isNaN(d.getTime())) return { ok: false as const, result: "", local: "", ms: 0, date: null };
+    return { ok: true as const, result: d.toISOString(), local: d.toLocaleString(), ms, date: d };
   }, [tsInput, unit]);
 
   const tsFromDate = useMemo(() => {
@@ -211,6 +216,25 @@ function TimestampTool() {
                 )}
               </div>
             </div>
+
+            {/* RFC 2822 format */}
+            {dateFromTs.ok && dateFromTs.date && (
+              <div className="ts-output-row">
+                <span className="ts-output-label">RFC 2822</span>
+                <div className="ts-output-value-wrap">
+                  <code className="ts-output-value">
+                    {toRFC2822(dateFromTs.date)}
+                  </code>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small icon-only"
+                    onClick={() => handleCopy(toRFC2822(dateFromTs.date!))}
+                  >
+                    <ClipboardCopy size={11} />
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="ts-output-row">
               <span className="ts-output-label">
