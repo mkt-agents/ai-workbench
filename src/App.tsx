@@ -21,6 +21,7 @@ import {
   FileText,
   PanelLeftClose,
   PanelLeftOpen,
+  Wrench,
 } from "lucide-react";
 import HostsManager from "./components/HostsManager";
 import PluginBrowser from "./components/PluginBrowser";
@@ -31,6 +32,7 @@ import PromptOptimizer from "./components/PromptOptimizer";
 import VersionSwitcher from "./components/VersionSwitcher";
 import CloudflaredManager from "./components/CloudflaredManager";
 import SnippetsManager from "./components/SnippetsManager";
+import DevTools from "./components/DevTools";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
 import { useGlobalStore } from "./core/store";
@@ -53,7 +55,8 @@ type Tab =
   | "ai-prompt"
   | "runtime"
   | "cloudflared"
-  | "snippets";
+  | "snippets"
+  | "devtools";
 
 type NavLeaf = { id: Tab; labelKey: string; icon: React.ReactNode };
 type NavGroup = {
@@ -216,6 +219,7 @@ function App() {
         { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
         { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
         { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
+        { id: "devtools", labelKey: "devtools", icon: <Wrench size={16} /> },
       ],
     },
   ];
@@ -457,6 +461,7 @@ function App() {
               {activeTab === "snippets" && <SnippetsManager />}
               {activeTab === "plugins" && <PluginBrowser />}
               {activeTab === "cloudflared" && <CloudflaredManager />}
+              {activeTab === "devtools" && <DevTools />}
               {activeTab === "settings" && <SettingsPage />}
               {trayToast && (
                 <div className="toast toast-success" role="status">

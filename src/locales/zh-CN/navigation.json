@@ -20,5 +20,6 @@
   "plugins": "网页工具",
   "cloudflared": "内网穿透",
   "snippets": "片段库",
+  "devtools": "小工具",
   "loading": "正在加载..."
 }

@@ -267,6 +267,44 @@ export interface InstallableVersion {
   installed: boolean;
 }
 
+export interface DevtoolsPortEntry {
+  proto: string;
+  local_addr: string;
+  local_port: number;
+  remote_addr: string;
+  remote_port: number;
+  state: string;
+  pid: number;
+}
+
+export interface DevtoolsProcessInfo {
+  pid: number;
+  name: string;
+  memory: string;
+  path: string;
+  services: string;
+}
+
+export interface DevtoolsHeaderPair {
+  key: string;
+  value: string;
+}
+
+export interface DevtoolsHttpRequest {
+  method: string;
+  url: string;
+  headers?: DevtoolsHeaderPair[];
+  body?: string;
+  timeout_sec?: number;
+}
+
+export interface DevtoolsHttpResponse {
+  status: number;
+  duration_ms: number;
+  headers: DevtoolsHeaderPair[];
+  body: string;
+}
+
 export interface GlobalStore {
   getState: () => GlobalState;
   setState: (partial: Partial<GlobalState> | ((state: GlobalState) => GlobalState)) => void;

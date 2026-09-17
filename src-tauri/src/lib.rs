@@ -7,6 +7,7 @@ mod ai_commands;
 mod dsh_commands;
 mod runtime_commands;
 mod cloudflared_commands;
+mod devtools_commands;
 pub mod tool_commands;
 mod tray;
 pub mod config;
@@ -370,6 +371,11 @@ pub fn run() {
             cloudflared_commands::cloudflared_stop_all_tunnels,
             cloudflared_commands::cloudflared_tunnel_status,
             cloudflared_commands::cloudflared_setup_new_domain,
+            devtools_commands::devtools_list_ports,
+            devtools_commands::devtools_process_name,
+            devtools_commands::devtools_resolve_processes,
+            devtools_commands::devtools_kill_process,
+            devtools_commands::devtools_http_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

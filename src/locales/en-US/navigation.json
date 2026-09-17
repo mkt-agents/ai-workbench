@@ -20,5 +20,6 @@
   "plugins": "Web Tools",
   "cloudflared": "Tunnel",
   "snippets": "Snippet Library",
+  "devtools": "Dev Tools",
   "loading": "Loading..."
 }
