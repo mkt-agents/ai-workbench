@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
@@ -6,9 +6,13 @@ import {
   Code2,
   Eraser,
   FileJson,
+  History,
   Route,
+  Trash2,
 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
+import { storage } from "../../core/storage";
+import type { JsonToolHistoryItem } from "../../core/types";
 
 const SAMPLE_JSON = `{
   "name": "ai-workbench",
@@ -21,6 +25,21 @@ const SAMPLE_JSON = `{
   },
   "tags": []
 }`;
+
+const SAMPLE_JSON_2 = `{
+  "name": "ai-workbench",
+  "version": "2.0.0-beta",
+  "active": true,
+  "themes": ["dark", "light", "ice", "silver", "glass"],
+  "stats": {
+    "users": 3520,
+    "uptime": 99.99
+  },
+  "features": ["json", "hash", "regex", "jwt"]
+}`;
+
+let historyId = 1;
+const HISTORY_MAX = 20;
 
 /** Minimal JSONPath: supports $.a.b[0].c style paths. */
 function evalJsonPath(obj: unknown, path: string): unknown {
@@ -50,15 +69,169 @@ function countNodes(value: unknown): number {
   return 1;
 }
 
+/**
+ * Attempt to repair common JSON syntax problems.
+ *
+ * Tries a pipeline of increasingly aggressive normalizations; the first one
+ * that yields valid JSON wins. Returns null if nothing worked.
+ *
+ * Handled cases:
+ *  1. JSON string literal wrapping an object or array (unwrap and unescape)
+ *  2. Single quotes to double quotes
+ *  3. Trailing commas before } or ]
+ *  4. Unquoted keys to quoted keys
+ *  5. JavaScript literals such as undefined or NaN to null
+ *  6. Line and block comments (JSONC style)
+ *  7. Hex literals to decimal
+ *  8. Wrapped JSON string literal (strip outer quotes and unescape)
+ */
 function tryRepairJson(input: string): string | null {
-  let s = input.replace(/(^|[^\\])'/g, '$1"');
-  s = s.replace(/,(\s*[}\]])/g, "$1");
-  s = s.replace(/([{,]\s*)([A-Za-z_][\w-]*)\s*:/g, '$1"$2":');
+  const attempts: Array<(s: string) => string> = [
+    // 0) No-op: maybe it's already valid after the caller's preprocessing
+    (s) => s,
+
+    // 1) Wrapped string literal: {"a":1} -> {"a":1}
+    (s) => {
+      const t = s.trim();
+      if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+        try {
+          const inner = JSON.parse(t);
+          if (typeof inner === "string") return inner;
+        } catch { /* not a string literal */ }
+      }
+      return s;
+    },
+
+    // 2) Single quotes -> double quotes (ignore escaped ')
+    (s) => s.replace(/(^|[^\\])'/g, '$1"'),
+
+    // 3) Trailing commas: ,} -> }  and  ,] -> ]
+    (s) => s.replace(/,(\s*[}\]])/g, '$1'),
+
+    // 4) Unquoted object keys:  {a:1}  ->  {"a":1}
+    (s) => s.replace(/([{,]\s*)([A-Za-z_$][\w$-]*)\s*:/g, '$1"$2":'),
+
+    // 5) JavaScript-only literals -> null
+    (s) => s.replace(
+      /(?<=[\s:,[])(?:undefined|NaN|Infinity|-Infinity)(?=[\s,}\]])/g,
+      "null"
+    ),
+
+    // 6) Strip JSONC comments (line and block)
+    (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n\r]*/g, ""),
+
+    // 7) Hex literals -> decimal
+    (s) => s.replace(/(?<=[\s:,[])(0x[0-9a-fA-F]+)(?=[\s,}\]])/g, (_m, n) =>
+      String(parseInt(n, 16))
+    ),
+
+    // 8) Wrapped JSON string literal: strip outer quotes + unescape
+    (s) => {
+      const t = s.trim();
+      if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+        try {
+          const inner = JSON.parse(t);
+          if (typeof inner === "string") return inner;
+        } catch { /* not a string literal */ }
+      }
+      return s;
+    },
+  ];
+
+  // Try each repair pass in order. Each pass builds on the result of the
+  // previous one, so fixes compose (e.g. single quotes + trailing comma).
+  let current = input;
+  for (const repair of attempts) {
+    current = repair(current);
+    try {
+      JSON.parse(current);
+      return current;
+    } catch { /* try next */ }
+  }
+
+  return null;
+}
+
+/**
+ * Escape raw control characters *inside* JSON string literals only.
+ *
+ * When users paste a JSON object that has been "stringified" (wrapped in quotes),
+ * raw newlines/tabs inside the string are illegal in JSON - they must appear as
+ * \n / \t. This walks the raw text and escapes any raw control char that occurs
+ * between an unescaped pair of double quotes, leaving the rest untouched.
+ */
+function escapeControlsInJsonStrings(raw: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) {
+        out += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        out += ch;
+        inString = false;
+        continue;
+      }
+      if (ch === "\n") { out += "\\n"; continue; }
+      if (ch === "\r") { out += "\\r"; continue; }
+      if (ch === "\t") { out += "\\t"; continue; }
+      if (ch === "\b") { out += "\\b"; continue; }
+      if (ch === "\f") { out += "\\f"; continue; }
+      if (ch.charCodeAt(0) < 0x20) {
+        out += "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0");
+        continue;
+      }
+      out += ch;
+    } else {
+      if (ch === '"') inString = true;
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Strip invisible/problematic characters: BOM, zero-width spaces, soft hyphen,
+ * non-breaking space -> regular space, stray C0 control chars outside strings.
+ */
+function cleanInput(raw: string): string {
+  return raw
+    .replace(/[﻿​-‍⁠­]/g, "")
+    .replace(/ /g, " ")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
+/** Full pre-process pipeline for lenient JSON parsing. */
+function preprocessJsonInput(raw: string): string {
+  return cleanInput(escapeControlsInJsonStrings(raw));
+}
+
+function truncate(text: string, max = 60): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? oneLine.slice(0, max) + "…" : oneLine;
+}
+
+/** Pretty-print JSON text for display; returns the original if it isn't valid JSON. */
+function prettyForDisplay(text: string, maxChars = 1000): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
   try {
-    JSON.parse(s);
-    return s;
+    const parsed = JSON.parse(trimmed);
+    const formatted = JSON.stringify(parsed, null, 2);
+    return formatted.length > maxChars ? formatted.slice(0, maxChars) + "…" : formatted;
   } catch {
-    return null;
+    // Not valid JSON (e.g. an error message) - just truncate the raw text
+    return trimmed.length > maxChars ? trimmed.slice(0, maxChars) + "…" : trimmed;
   }
 }
 
@@ -72,16 +245,88 @@ function JsonTool() {
     type: "success" | "error";
     text: string;
   } | null>(null);
+  const [history, setHistory] = useState<JsonToolHistoryItem[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [compareId, setCompareId] = useState<number | null>(null);
+
+  // Load persisted history from SQLite on mount
+  useEffect(() => {
+    let cancelled = false;
+    storage.jsonToolHistory.load().then((saved) => {
+      if (cancelled) return;
+      setHistory(saved.slice(0, HISTORY_MAX));
+      const maxId = saved.reduce((m, h) => Math.max(m, h.id), 0);
+      if (maxId > historyId) historyId = maxId + 1;
+    }).catch(() => {/* ignore */});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Persist history to SQLite whenever it changes
+  useEffect(() => {
+    if (history.length > 0) {
+      storage.jsonToolHistory.save(history).catch(() => {/* ignore */});
+    }
+  }, [history]);
 
   const parsed = useMemo(() => {
-    if (!input.trim())
-      return { ok: false as const, result: "", value: null as unknown, error: "" };
-    try {
-      const obj = JSON.parse(input);
-      return { ok: true as const, result: JSON.stringify(obj, null, 2), value: obj, error: "" };
-    } catch (e) {
-      return { ok: false as const, result: "", value: null, error: String(e) };
+    const raw = preprocessJsonInput(input).trim();
+    if (!raw)
+      return { ok: false as const, result: "", value: null as unknown, error: "", unwrapped: false, cleaned: false };
+
+    const tryParse = (text: string) => {
+      try {
+        return { ok: true as const, value: JSON.parse(text) };
+      } catch (e) {
+        return { ok: false as const, error: String(e) };
+      }
+    };
+
+    // 1) Direct parse
+    const direct = tryParse(raw);
+    if (direct.ok) {
+      // If it's a plain string, it might be a wrapped JSON object/array - try unwrapping.
+      if (typeof direct.value === "string") {
+        const inner = tryParse(direct.value);
+        if (inner.ok && inner.value && typeof inner.value === "object") {
+          return {
+            ok: true as const,
+            result: JSON.stringify(inner.value, null, 2),
+            value: inner.value,
+            error: "",
+            unwrapped: true,
+            cleaned: raw !== input,
+          };
+        }
+      }
+      return {
+        ok: true as const,
+        result: JSON.stringify(direct.value, null, 2),
+        value: direct.value,
+        error: "",
+        unwrapped: false,
+        cleaned: raw !== input,
+      };
     }
+
+    // 2) Not valid JSON - check if it's a JSON string literal wrapping an object/array.
+    if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+      const inner = tryParse(raw);
+      if (inner.ok && typeof inner.value === "string") {
+        const obj = tryParse(inner.value);
+        if (obj.ok && obj.value && typeof obj.value === "object") {
+          return {
+            ok: true as const,
+            result: JSON.stringify(obj.value, null, 2),
+            value: obj.value,
+            error: "",
+            unwrapped: true,
+            cleaned: raw !== input,
+          };
+        }
+      }
+    }
+
+    return { ok: false as const, result: "", value: null, error: direct.error, unwrapped: false, cleaned: raw !== input };
   }, [input]);
 
   const queryResult = useMemo(() => {
@@ -116,15 +361,59 @@ function JsonTool() {
       ? parsed.result
       : parsed.error;
 
+  // Compare item
+  const compareItem = compareId
+    ? history.find((h) => h.id === compareId)
+    : null;
+
+  const compareOutput = useMemo(() => {
+    if (!compareItem) return "";
+    if (compareItem.path) {
+      try {
+        const obj = JSON.parse(compareItem.input);
+        const result = evalJsonPath(obj, compareItem.path);
+        return typeof result === "string"
+          ? result
+          : result === undefined
+            ? t("json.empty")
+            : JSON.stringify(result, null, 2);
+      } catch {
+        return "";
+      }
+    }
+    return compareItem.output;
+  }, [compareItem, t]);
+
   const flash = (type: "success" | "error", text: string) => {
     setMessage({ type, text });
     setTimeout(() => setMessage(null), 2500);
   };
 
+  const saveToHistory = useCallback(() => {
+    if (!input.trim()) return;
+    const item: JsonToolHistoryItem = {
+      id: historyId++,
+      timestamp: Date.now(),
+      input,
+      output: parsed.ok ? parsed.result : parsed.error,
+      path,
+      ok: parsed.ok,
+      nodes: stats?.nodes ?? 0,
+      chars: stats?.chars ?? 0,
+    };
+    setHistory((prev) => [item, ...prev].slice(0, HISTORY_MAX));
+  }, [input, path, parsed, stats]);
+
   const handleFormat = () => {
     if (parsed.ok) {
+      saveToHistory();
       setInput(parsed.result);
-      flash("success", t("json.valid"));
+      const msg = parsed.unwrapped
+        ? t("json.unwrapped")
+        : parsed.cleaned
+          ? t("json.cleaned")
+          : t("json.valid");
+      flash("success", msg);
     } else {
       flash("error", `${t("json.invalid")}: ${parsed.error}`);
     }
@@ -132,6 +421,7 @@ function JsonTool() {
 
   const handleCompress = () => {
     if (parsed.ok) {
+      saveToHistory();
       setInput(JSON.stringify(parsed.value));
       flash("success", t("json.valid"));
     } else {
@@ -142,6 +432,7 @@ function JsonTool() {
   const handleRepair = () => {
     const repaired = tryRepairJson(input);
     if (repaired) {
+      saveToHistory();
       setInput(JSON.stringify(JSON.parse(repaired), null, 2));
       flash("success", t("json.valid"));
     } else {
@@ -151,6 +442,7 @@ function JsonTool() {
 
   const handleEscape = () => {
     if (!input.trim()) return;
+    saveToHistory();
     setInput(JSON.stringify(input).slice(1, -1));
     flash("success", t("json.valid"));
   };
@@ -160,6 +452,7 @@ function JsonTool() {
     if (!trimmed) return;
     const wrapped = trimmed.startsWith('"') ? trimmed : `"${trimmed}"`;
     try {
+      saveToHistory();
       setInput(JSON.parse(wrapped));
       flash("success", t("json.valid"));
     } catch (e) {
@@ -185,8 +478,30 @@ function JsonTool() {
     }
   };
 
+  const loadFromHistory = (item: JsonToolHistoryItem) => {
+    setInput(item.input);
+    setPath(item.path);
+    setCompareId(null);
+    setShowHistory(false);
+  };
+
+  const deleteHistory = (id: number) => {
+    setHistory((prev) => prev.filter((h) => h.id !== id));
+    if (compareId === id) setCompareId(null);
+  };
+
+  const clearHistory = () => {
+    setHistory([]);
+    setCompareId(null);
+  };
+
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  };
+
   return (
-    <div className="devtools-tool">
+    <div className="devtools-tool json-tool-with-history">
       {/* Toolbar */}
       <div className="devtools-actions">
         <button type="button" className="btn btn-secondary btn-small" onClick={handleFormat}>
@@ -212,7 +527,23 @@ function JsonTool() {
           <FileJson size={14} />
           {t("json.sample")}
         </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={() => setInput(SAMPLE_JSON_2)}
+        >
+          <FileJson size={14} />
+          {t("json.sample2")}
+        </button>
         <div className="devtools-actions-spacer" />
+        <button
+          type="button"
+          className={`btn btn-small ${showHistory ? "btn-primary" : "btn-secondary"}`}
+          onClick={() => setShowHistory(!showHistory)}
+        >
+          <History size={14} />
+          {t("json.history")} ({history.length})
+        </button>
         <button type="button" className="btn btn-secondary btn-small" onClick={handleCopyInput}>
           <ClipboardCopy size={14} />
           {t("json.copyInput")}
@@ -259,7 +590,7 @@ function JsonTool() {
         {path && (
           <button
             type="button"
-            className="btn btn-secondary btn-small"
+            className="btn btn-secondary btn-small icon-only"
             onClick={() => setPath("")}
           >
             <Eraser size={12} />
@@ -267,40 +598,145 @@ function JsonTool() {
         )}
       </div>
 
-      {/* IO panes */}
-      <div className="devtools-io">
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">{t("json.input")}</label>
-            {stats && (
-              <span className="json-stats">
-                {t("json.stats")
-                  .replace("{{chars}}", String(stats.chars))
-                  .replace("{{nodes}}", String(stats.nodes))}
+      {/* Main area: IO panes + optional history sidebar */}
+      <div className="json-main-area">
+        <div className={`json-io-area ${showHistory ? "with-sidebar" : ""}`}>
+          {/* IO panes */}
+          <div className="devtools-io">
+            <div className="devtools-io-pane">
+              <div className="io-header">
+                <label className="devtools-label">{t("json.input")}</label>
+                {stats && (
+                  <span className="json-stats">
+                    {t("json.stats")
+                      .replace("{{chars}}", String(stats.chars))
+                      .replace("{{nodes}}", String(stats.nodes))}
+                  </span>
+                )}
+              </div>
+              <textarea
+                className="devtools-textarea"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={t("json.samplePlaceholder")}
+                spellCheck={false}
+              />
+            </div>
+            <div className="devtools-io-pane">
+              <div className="io-header">
+                <label className="devtools-label">
+                  {queryResult ? `${t("json.output")} · ${t("json.path")}` : t("json.output")}
+                </label>
+                {parsed.ok && queryResult && (
+                  <span className="json-stats tag tag-tcp">JSONPath</span>
+                )}
+              </div>
+              <pre className={`devtools-pre json-output ${parsed.ok ? "ok" : input.trim() ? "err" : ""}`}>
+                <code>{outputText}</code>
+              </pre>
+            </div>
+          </div>
+
+          {/* Compare panel */}
+          {compareItem && (
+            <div className="json-compare-panel">
+              <div className="json-compare-header">
+                <span className="json-compare-title">
+                  <History size={12} />
+                  {t("json.comparing")}: #{compareItem.id} · {formatTime(compareItem.timestamp)}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small icon-only"
+                  onClick={() => setCompareId(null)}
+                >
+                  <Eraser size={12} />
+                </button>
+              </div>
+              <div className="devtools-io">
+                <div className="devtools-io-pane">
+                  <label className="devtools-label">{t("json.input")}</label>
+                  <pre className="devtools-pre json-output ok compare-pre">
+                    <code>{prettyForDisplay(compareItem.input)}</code>
+                  </pre>
+                </div>
+                <div className="devtools-io-pane">
+                  <label className="devtools-label">{t("json.output")}</label>
+                  <pre className="devtools-pre json-output ok compare-pre">
+                    <code>{prettyForDisplay(compareOutput)}</code>
+                  </pre>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* History sidebar */}
+        {showHistory && (
+          <div className="json-history-panel">
+            <div className="json-history-header">
+              <span className="json-history-title">
+                <History size={13} />
+                {t("json.history")}
               </span>
+              {history.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small icon-only"
+                  onClick={clearHistory}
+                  title={t("json.clearHistory")}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
+            {history.length === 0 ? (
+              <div className="json-history-empty">{t("json.noHistory")}</div>
+            ) : (
+              <div className="json-history-list">
+                {history.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`json-history-item ${compareId === item.id ? "comparing" : ""}`}
+                  >
+                    <div className="json-history-item-main" onClick={() => loadFromHistory(item)}>
+                      <div className="json-history-meta">
+                        <span className="json-history-id">#{item.id}</span>
+                        <span className="json-history-time">{formatTime(item.timestamp)}</span>
+                        <span className={`json-history-status ${item.ok ? "ok" : "err"}`}>
+                          {item.ok ? "✓" : "✗"}
+                        </span>
+                      </div>
+                      <div className="json-history-preview">{truncate(item.input, 40)}</div>
+                      <div className="json-history-stats">
+                        {item.chars} chars · {item.nodes} nodes
+                        {item.path && ` · ${item.path}`}
+                      </div>
+                    </div>
+                    <div className="json-history-item-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small icon-only"
+                        onClick={() => setCompareId(compareId === item.id ? null : item.id)}
+                        title={t("json.compare")}
+                      >
+                        <Code2 size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small icon-only"
+                        onClick={() => deleteHistory(item.id)}
+                        title={t("json.delete")}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-          <textarea
-            className="devtools-textarea"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={t("json.samplePlaceholder")}
-            spellCheck={false}
-          />
-        </div>
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">
-              {queryResult ? `${t("json.output")} · ${t("json.path")}` : t("json.output")}
-            </label>
-            {parsed.ok && queryResult && (
-              <span className="json-stats tag tag-tcp">JSONPath</span>
-            )}
-          </div>
-          <pre className={`devtools-pre json-output ${parsed.ok ? "ok" : input.trim() ? "err" : ""}`}>
-            <code>{outputText}</code>
-          </pre>
-        </div>
+        )}
       </div>
     </div>
   );

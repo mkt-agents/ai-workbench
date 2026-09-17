@@ -29,7 +29,16 @@
     "copied": "已复制",
     "samplePlaceholder": "粘贴 JSON 到此处…",
     "pathError": "JSONPath 求值失败",
-    "empty": "（空）"
+    "empty": "（空）",
+    "unwrapped": "已解码 JSON 字符串并格式化",
+    "cleaned": "已清除无效字符并格式化",
+    "sample2": "示例数据 v2",
+    "history": "历史记录",
+    "noHistory": "暂无记录，执行格式化/压缩等操作后自动保存",
+    "clearHistory": "清空记录",
+    "comparing": "对比",
+    "compare": "对比",
+    "delete": "删除"
   },
   "encoder": {
     "title": "编解码",

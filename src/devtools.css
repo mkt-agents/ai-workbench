@@ -1203,3 +1203,255 @@
     padding: 16px;
   }
 }
+
+/* ---------- JSON tool with history sidebar ---------- */
+
+.json-tool-with-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  max-width: none;
+  min-height: 0;
+  flex: 1;
+}
+
+.json-main-area {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+.json-io-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  min-height: 0;
+  padding-bottom: 4px;
+}
+
+/* IO 区：上下堆叠布局（小窗口友好） */
+.json-io-area .devtools-io {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.json-io-area .devtools-io-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.io-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.json-io-area .devtools-textarea {
+  flex: 1;
+  min-height: 120px;
+}
+
+.json-io-area .json-output {
+  flex: 1;
+  min-height: 120px;
+  max-height: none;
+}
+
+/* Compare panel */
+.json-compare-panel {
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent, #58a6ff) 30%, var(--border-subtle, #21262d));
+  border-radius: 8px;
+  background: var(--bg-1, #161b22);
+  overflow: hidden;
+}
+
+.json-compare-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--accent, #58a6ff) 8%, transparent);
+  border-bottom: 1px solid var(--border-subtle, #21262d);
+}
+
+.json-compare-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent, #58a6ff);
+}
+
+.json-compare-panel .devtools-io {
+  gap: 10px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.compare-pre {
+  min-height: 80px;
+  max-height: 200px;
+  margin: 0;
+  font-size: 11.5px;
+  height: auto;
+}
+
+/* History sidebar */
+.json-history-panel {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle, #21262d);
+  border-radius: 8px;
+  background: var(--bg-1, #161b22);
+  overflow: hidden;
+}
+
+.json-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle, #21262d);
+  background: var(--bg-0, #0d1117);
+}
+
+.json-history-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0, #e6edf3);
+}
+
+.json-history-empty {
+  padding: 24px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3, #6e7681);
+  line-height: 1.5;
+}
+
+.json-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 120px;
+}
+
+.json-history-item {
+  display: flex;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.json-history-item:hover {
+  background: var(--bg-hover, #1c2128);
+}
+
+.json-history-item.comparing {
+  border-color: color-mix(in srgb, var(--accent, #58a6ff) 40%, transparent);
+  background: color-mix(in srgb, var(--accent, #58a6ff) 8%, transparent);
+}
+
+.json-history-item-main {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.json-history-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-3, #6e7681);
+}
+
+.json-history-id {
+  font-weight: 600;
+  color: var(--accent, #58a6ff);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.json-history-time {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.json-history-status {
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.json-history-status.ok {
+  color: var(--green, #3fb950);
+}
+
+.json-history-status.err {
+  color: var(--red, #f85149);
+}
+
+.json-history-preview {
+  margin-top: 3px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-1, #c9d1d9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.json-history-stats {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-3, #6e7681);
+}
+
+.json-history-item-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 4px;
+  justify-content: flex-start;
+}
+
+@media (max-width: 900px) {
+  .json-main-area {
+    flex-direction: column;
+  }
+  .json-history-panel {
+    width: 100%;
+    max-height: 200px;
+  }
+  .json-history-list {
+    max-height: 140px;
+  }
+  .json-io-area .devtools-textarea {
+    min-height: 180px;
+  }
+}

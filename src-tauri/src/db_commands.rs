@@ -23,6 +23,7 @@ pub enum DbTable {
     Snippets,
     WebPluginHistory,
     QuickAskSessions,
+    JsonToolHistory,
 }
 
 pub fn table_from_key(key: &str) -> Option<DbTable> {
@@ -40,6 +41,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "snippets" => Some(DbTable::Snippets),
         "web_plugin_history" => Some(DbTable::WebPluginHistory),
         "quick_ask_sessions" => Some(DbTable::QuickAskSessions),
+        "json_tool_history" => Some(DbTable::JsonToolHistory),
         _ => None,
     }
 }
@@ -59,6 +61,7 @@ fn load_sql(table: DbTable) -> &'static str {
         DbTable::Snippets => "SELECT * FROM snippets ORDER BY use_count DESC, updated_at DESC",
         DbTable::WebPluginHistory => "SELECT * FROM web_plugin_history ORDER BY opened_at DESC LIMIT 100",
         DbTable::QuickAskSessions => "SELECT * FROM quick_ask_sessions ORDER BY updated_at DESC LIMIT 30",
+        DbTable::JsonToolHistory => "SELECT * FROM json_tool_history ORDER BY id DESC LIMIT 20",
     }
 }
 
@@ -77,6 +80,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::Snippets => "DELETE FROM snippets",
         DbTable::WebPluginHistory => "DELETE FROM web_plugin_history",
         DbTable::QuickAskSessions => "DELETE FROM quick_ask_sessions",
+        DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
     }
 }
 
@@ -316,6 +320,20 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_opt_str(obj, "turns").unwrap_or_else(|| "[]".to_string()),
                     json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::JsonToolHistory => {
+            tx.execute(
+                "INSERT INTO json_tool_history (input, output, path, ok, nodes, chars, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    json_str(obj, "input")?,
+                    json_str(obj, "output")?,
+                    json_opt_str(obj, "path").unwrap_or_default(),
+                    json_bool_as_i64(obj, "ok")?,
+                    json_i64(obj, "nodes", 0),
+                    json_i64(obj, "chars", 0),
+                    json_str(obj, "created_at")?,
                 ],
             ).map_err(|e| e.to_string())?;
         }

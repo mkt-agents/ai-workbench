@@ -29,7 +29,16 @@
     "copied": "Copied",
     "samplePlaceholder": "Paste JSON here…",
     "pathError": "JSONPath evaluation failed",
-    "empty": "(empty)"
+    "empty": "(empty)",
+    "unwrapped": "Decoded JSON string and formatted",
+    "cleaned": "Stripped invalid characters and formatted",
+    "sample2": "Sample data v2",
+    "history": "History",
+    "noHistory": "No records yet — operations are saved automatically",
+    "clearHistory": "Clear history",
+    "comparing": "Comparing",
+    "compare": "Compare",
+    "delete": "Delete"
   },
   "encoder": {
     "title": "Encoder",

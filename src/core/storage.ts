@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, HostProfile, WebPlugin, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn } from './types';
+import type { GitAccount, GitRepoConfig, HostProfile, WebPlugin, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -38,7 +38,8 @@ type DbTable =
   | 'ai_models'
   | 'cloudflared_profiles'
   | 'snippets'
-  | 'quick_ask_sessions';
+  | 'quick_ask_sessions'
+  | 'json_tool_history';
 
 async function loadRows(table: DbTable): Promise<Record<string, unknown>[]> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -360,6 +361,35 @@ export const storage = {
           turns: JSON.stringify(item.turns ?? []),
           created_at: item.createdAt,
           updated_at: item.updatedAt,
+        }))
+      );
+    },
+  },
+  jsonToolHistory: {
+    load: async (): Promise<JsonToolHistoryItem[]> => {
+      const rows = await loadRows('json_tool_history');
+      return rows.map((r) => ({
+        id: Number(r['id'] ?? 0),
+        timestamp: Number(r['created_at'] ?? 0),
+        input: (r['input'] as string) || '',
+        output: (r['output'] as string) || '',
+        path: (r['path'] as string) || '',
+        ok: ((r['ok'] as number) || 0) === 1,
+        nodes: Number(r['nodes'] ?? 0),
+        chars: Number(r['chars'] ?? 0),
+      }));
+    },
+    save: async (items: JsonToolHistoryItem[]): Promise<void> => {
+      await saveRows(
+        'json_tool_history',
+        items.map((item) => ({
+          input: item.input,
+          output: item.output,
+          path: item.path || '',
+          ok: item.ok ? 1 : 0,
+          nodes: item.nodes ?? 0,
+          chars: item.chars ?? 0,
+          created_at: new Date(item.timestamp).toISOString(),
         }))
       );
     },

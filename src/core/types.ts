@@ -99,6 +99,18 @@ export interface QuickAskSession {
   updatedAt: string;
 }
 
+/** A persisted JSON tool history record (input/output snapshot). */
+export interface JsonToolHistoryItem {
+  id: number;
+  timestamp: number;
+  input: string;
+  output: string;
+  path: string;
+  ok: boolean;
+  nodes: number;
+  chars: number;
+}
+
 export interface GitRepoSummary {
   path: string;
   name: string;
