@@ -31,7 +31,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 ### 账号与 Git
 
-- **Cursor**：多账号一键切换（每账号独立 `--user-data-dir`，登录态互不影响）；工作区 / 历史 / 扩展 / Agent 数据共享；可联动 Git，可选本机密码备忘，支持诊断导出
+- **Cursor**：多账号一键切换（每账号独立 `--user-data-dir`，登录态互不影响）；工作区 / 历史 / 扩展 / Agent 数据 / Composer 会话跨账号共享；磁盘占用可视化 + DB 瘦身（共享层重建 + VACUUM）；可联动 Git，可选本机密码备忘，支持诊断导出
 - **Git 管理**：仓库总览 / 扫描 / 搜索 / 批量身份 / 批量拉推 / 批量移除；提交页多仓变更、diff、提交与推送、AI 生成说明
 
 ### 开发环境
@@ -182,7 +182,7 @@ ai-workbench/
 
 后端命令按模块拆分于 `src-tauri/src/*_commands.rs`，完整列表以 `src-tauri/src/lib.rs` 注册为准。
 
-`src-tauri/src/bin/` 下是内部诊断工具（`cursor_switch_test`、`dump_state`）。它们由 `dev-tools` 特性门控，**默认不参与构建**，因此不会被打进安装包；需要时用 `cargo build --features dev-tools` 单独编译。
+`src-tauri/src/bin/` 下是内部诊断工具（`cursor_switch_test`）。它们由 `dev-tools` 特性门控，**默认不参与构建**，因此不会被打进安装包；需要时用 `cargo build --features dev-tools` 单独编译。
 
 ## 已知限制
 

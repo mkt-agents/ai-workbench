@@ -735,7 +735,23 @@ fn prepare_profile_shared(profile: &Path) -> Result<(), String> {
     if let Err(e) = merge_recent_workspaces_from_default() {
         eprintln!("[cursor] recent workspace merge: {e}");
     }
-    sync_shared_state_to_profile(profile)
+    sync_shared_state_to_profile(profile)?;
+
+    // Composer sessions live in their own tables (composerHeaders + cursorDiskKV),
+    // not in ItemTable, so they need an explicit sync chain. Order matters:
+    // default→shared must precede shared→profile, otherwise sessions created by a
+    // manually launched Cursor never reach this profile; profile→shared in the
+    // middle is a safety net for sessions whose backflow was missed on quit.
+    if let Err(e) = sync_default_composer_to_shared() {
+        eprintln!("[cursor] default composer sync: {e}");
+    }
+    if let Err(e) = sync_profile_composer_to_shared(profile) {
+        eprintln!("[cursor] profile composer backflow: {e}");
+    }
+    if let Err(e) = sync_shared_composer_to_profile(profile) {
+        eprintln!("[cursor] shared composer sync: {e}");
+    }
+    Ok(())
 }
 
 fn profiles_root_dir() -> Result<PathBuf, String> {
@@ -1364,8 +1380,15 @@ fn import_non_auth_keys(
         .unchecked_transaction()
         .map_err(|e| format!("开启事务失败: {}", e))?;
     {
+        // Same no-op guard as the cursorDiskKV importer: only dirty pages when
+        // a value actually changed, so unchanged syncs leave the file mtime
+        // alone and the composer sync markers stay effective.
         let mut stmt = tx
-            .prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)")
+            .prepare(
+                "INSERT INTO ItemTable (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                 WHERE ItemTable.value IS NOT excluded.value",
+            )
             .map_err(|e| format!("准备写入失败: {}", e))?;
         for (key, value) in keys {
             if is_auth_key(key) {
@@ -1543,8 +1566,15 @@ fn export_cursor_disk_kv(src_db: &Path) -> Result<HashMap<String, rusqlite::type
     if table_exists == 0 {
         return Ok(HashMap::new());
     }
+    // Filter in SQL, not in Rust: cursorDiskKV also holds multi-GB derived
+    // caches (agentKv, bubbleId, checkpointId) that must not be materialized
+    // on every sync. The PK B-tree of this WITHOUT ROWID table serves each
+    // GLOB as a range scan.
     let mut stmt = conn
-        .prepare("SELECT key, value FROM cursorDiskKV")
+        .prepare(
+            "SELECT key, value FROM cursorDiskKV
+             WHERE key GLOB 'composerData:*' OR key GLOB 'composer.content.*'",
+        )
         .map_err(|e| format!("查询 cursorDiskKV 失败: {}", e))?;
     let rows = stmt
         .query_map([], |row| {
@@ -1584,8 +1614,15 @@ fn import_cursor_disk_kv(
         .unchecked_transaction()
         .map_err(|e| format!("开启事务失败: {}", e))?;
     {
+        // Skip rows whose value is unchanged: a no-op write transaction
+        // dirties no pages, keeping the source DB fingerprint (and thus the
+        // sync markers below) stable across no-change launches.
         let mut stmt = tx
-            .prepare("INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?, ?)")
+            .prepare(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                 WHERE cursorDiskKV.value IS NOT excluded.value",
+            )
             .map_err(|e| format!("准备写入 cursorDiskKV 失败: {}", e))?;
         for (key, value) in map {
             stmt.execute(rusqlite::params![key, value])
@@ -1598,6 +1635,55 @@ fn import_cursor_disk_kv(
     Ok(())
 }
 
+/// Cheap change detection for the composer sync chain: (mtime|size) of the
+/// main DB plus the WAL size. Sources that did not change since their last
+/// successful sync are skipped entirely, which keeps repeat launches fast.
+/// The WAL size (not mtime — too twitchy) covers crash-quit leftovers whose
+/// changes never reached the main file.
+fn db_fingerprint(db: &Path) -> Option<String> {
+    let meta = fs::metadata(db).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut fp = format!("{}|{}", mtime, meta.len());
+    let mut wal_name = db.file_name()?.to_os_string();
+    wal_name.push("-wal");
+    if let Ok(wal_meta) = fs::metadata(db.with_file_name(wal_name)) {
+        fp.push_str(&format!("|{}", wal_meta.len()));
+    }
+    Some(fp)
+}
+
+fn composer_sync_mark_path(source_db: &Path) -> Option<PathBuf> {
+    let shared_db = shared_state_vscdb().ok()?;
+    let dir = shared_db.parent()?.join(".composer-sync");
+    let key = source_db.to_string_lossy().to_string();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&key, &mut hasher);
+    Some(dir.join(format!("{:016x}.mark", std::hash::Hasher::finish(&hasher))))
+}
+
+/// True when the source DB changed since its last successful composer sync
+/// (or it was never synced). Falls back to "sync" on any doubt.
+fn composer_sync_pending(mark: &Path, source_db: &Path) -> bool {
+    match (fs::read_to_string(mark), db_fingerprint(source_db)) {
+        (Ok(prev), Some(fp)) => prev != fp,
+        _ => true,
+    }
+}
+
+fn composer_sync_done(mark: &Path, source_db: &Path) {
+    if let Some(fp) = db_fingerprint(source_db) {
+        if let Some(parent) = mark.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(mark, fp);
+    }
+}
+
 /// Pull Composer headers + cursorDiskKV entries from the default Cursor dir
 /// into the shared layer. Idempotent — every profile launch re-runs this so
 /// manually-launched sessions keep flowing into shared across launches.
@@ -1606,6 +1692,12 @@ fn sync_default_composer_to_shared() -> Result<(), String> {
     let shared_db = shared_state_vscdb()?;
     if !default_db.exists() {
         return Ok(());
+    }
+    let mark = composer_sync_mark_path(&default_db);
+    if let Some(mark) = &mark {
+        if !composer_sync_pending(mark, &default_db) {
+            return Ok(());
+        }
     }
     if let Some(parent) = shared_db.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
@@ -1617,6 +1709,9 @@ fn sync_default_composer_to_shared() -> Result<(), String> {
     let kv = export_cursor_disk_kv(&default_db)?;
     if !kv.is_empty() {
         import_cursor_disk_kv(&shared_db, &kv)?;
+    }
+    if let Some(mark) = &mark {
+        composer_sync_done(mark, &default_db);
     }
     Ok(())
 }
@@ -1631,6 +1726,12 @@ fn sync_profile_composer_to_shared(profile: &Path) -> Result<(), String> {
     if !profile_db.exists() {
         return Ok(());
     }
+    let mark = composer_sync_mark_path(&profile_db);
+    if let Some(mark) = &mark {
+        if !composer_sync_pending(mark, &profile_db) {
+            return Ok(());
+        }
+    }
     let shared_db = shared_state_vscdb()?;
     if let Some(parent) = shared_db.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
@@ -1643,6 +1744,9 @@ fn sync_profile_composer_to_shared(profile: &Path) -> Result<(), String> {
     if !kv.is_empty() {
         import_cursor_disk_kv(&shared_db, &kv)?;
     }
+    if let Some(mark) = &mark {
+        composer_sync_done(mark, &profile_db);
+    }
     Ok(())
 }
 
@@ -1653,6 +1757,12 @@ fn sync_shared_composer_to_profile(profile: &Path) -> Result<(), String> {
     let shared_db = shared_state_vscdb()?;
     if !shared_db.exists() {
         return Ok(());
+    }
+    let mark = composer_sync_mark_path(&shared_db);
+    if let Some(mark) = &mark {
+        if !composer_sync_pending(mark, &shared_db) {
+            return Ok(());
+        }
     }
     let profile_db = live_state_vscdb_in(profile);
     if let Some(parent) = profile_db.parent() {
@@ -1665,6 +1775,9 @@ fn sync_shared_composer_to_profile(profile: &Path) -> Result<(), String> {
     let kv = export_cursor_disk_kv(&shared_db)?;
     if !kv.is_empty() {
         import_cursor_disk_kv(&profile_db, &kv)?;
+    }
+    if let Some(mark) = &mark {
+        composer_sync_done(mark, &shared_db);
     }
     Ok(())
 }
@@ -1827,11 +1940,25 @@ fn sync_profile_state_to_shared(profile: &Path) -> Result<(), String> {
     if !profile_db.exists() {
         return Ok(());
     }
+    let shared_db = shared_state_vscdb()?;
+
+    // ItemTable non-auth keys: recent workspaces, workbench UI state, ...
     let keys = export_non_auth_keys(&profile_db)?;
-    if keys.is_empty() {
-        return Ok(());
+    if !keys.is_empty() {
+        import_non_auth_keys(&shared_db, &keys)?;
     }
-    import_non_auth_keys(&shared_state_vscdb()?, &keys)
+
+    // Composer sessions created/updated inside this profile flow back into the
+    // shared layer, so the next account (or a manual launch) can see them.
+    let headers = export_composer_headers(&profile_db)?;
+    if !headers.is_empty() {
+        import_composer_headers(&shared_db, &headers)?;
+    }
+    let kv = export_cursor_disk_kv(&profile_db)?;
+    if !kv.is_empty() {
+        import_cursor_disk_kv(&shared_db, &kv)?;
+    }
+    Ok(())
 }
 
 fn open_sqlite_ro(path: &Path) -> Result<Connection, String> {
@@ -3568,6 +3695,206 @@ pub async fn cleanup_cursor_full_backups() -> Result<CursorCleanupResult, String
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorDbSlimTarget {
+    pub label: String,
+    pub path: String,
+    /// "rebuilt" | "vacuumed" | "failed"
+    pub action: String,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorDbSlimReport {
+    pub targets: Vec<CursorDbSlimTarget>,
+    pub freed_bytes: u64,
+    pub message: String,
+}
+
+/// Size of state.vscdb plus its WAL/SHM sidecars — the footprint users see in
+/// Explorer and cleanup tools. The WAL can hold hundreds of MB before a
+/// checkpoint, so counting only the main file under-reports.
+fn state_db_cluster_bytes(db: &Path) -> u64 {
+    let mut total = file_size(db);
+    for suffix in ["-wal", "-shm"] {
+        let mut name = db.file_name().unwrap_or_default().to_os_string();
+        name.push(suffix);
+        total += file_size(&db.with_file_name(name));
+    }
+    total
+}
+
+fn remove_state_db_cluster(db: &Path) -> Result<(), String> {
+    fs::remove_file(db).map_err(|e| format!("删除 {} 失败: {}", db.display(), e))?;
+    for suffix in ["-wal", "-shm"] {
+        let mut name = db.file_name().unwrap_or_default().to_os_string();
+        name.push(suffix);
+        let sidecar = db.with_file_name(name);
+        if sidecar.exists() {
+            let _ = fs::remove_file(&sidecar);
+        }
+    }
+    Ok(())
+}
+
+/// VACUUM rewrites the database file, reclaiming free pages left behind by
+/// deletions (SQLite never shrinks a file on its own). A WAL checkpoint runs
+/// first so pending sidecar content is folded back in. Content and login keys
+/// are untouched; the caller must ensure Cursor is closed.
+fn vacuum_state_db(db: &Path) -> Result<(), String> {
+    let conn = Connection::open(db).map_err(|e| format!("打开数据库失败: {}", e))?;
+    conn.execute_batch("PRAGMA busy_timeout=8000;")
+        .map_err(|e| format!("设置 busy_timeout 失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    conn.execute_batch("VACUUM;")
+        .map_err(|e| format!("VACUUM 失败: {}", e))?;
+    Ok(())
+}
+
+fn vacuum_target(label: &str, db: &Path, targets: &mut Vec<CursorDbSlimTarget>) {
+    if !db.exists() {
+        return;
+    }
+    let before = state_db_cluster_bytes(db);
+    let (action, note) = match vacuum_state_db(db) {
+        Ok(()) => ("vacuumed".to_string(), String::new()),
+        Err(e) => ("failed".to_string(), e),
+    };
+    targets.push(CursorDbSlimTarget {
+        label: label.to_string(),
+        path: db.to_string_lossy().to_string(),
+        action,
+        before_bytes: before,
+        after_bytes: state_db_cluster_bytes(db),
+        note,
+    });
+}
+
+/// Rebuild the shared state.vscdb from scratch. It historically inherited a
+/// full copy of the multi-GB default DB, while its real payload is only
+/// ItemTable keys plus Composer rows. Composer data is salvaged before the
+/// delete and re-imported afterwards, so no sessions are lost.
+fn rebuild_shared_state_db(targets: &mut Vec<CursorDbSlimTarget>) {
+    let shared_db = match shared_state_vscdb() {
+        Ok(p) => p,
+        Err(e) => {
+            targets.push(CursorDbSlimTarget {
+                label: "shared".into(),
+                path: String::new(),
+                action: "failed".into(),
+                before_bytes: 0,
+                after_bytes: 0,
+                note: format!("定位共享层失败: {e}"),
+            });
+            return;
+        }
+    };
+    if !shared_db.exists() {
+        return;
+    }
+    let before = state_db_cluster_bytes(&shared_db);
+    let salvage_headers = export_composer_headers(&shared_db).unwrap_or_default();
+    let salvage_kv = export_cursor_disk_kv(&shared_db).unwrap_or_default();
+
+    let mut note = String::new();
+    if let Err(e) = remove_state_db_cluster(&shared_db) {
+        targets.push(CursorDbSlimTarget {
+            label: "shared".into(),
+            path: shared_db.to_string_lossy().to_string(),
+            action: "failed".into(),
+            before_bytes: before,
+            after_bytes: before,
+            note: e,
+        });
+        return;
+    }
+    // Drop the seed marker too, so ItemTable keys are re-seeded into the fresh DB.
+    if let Ok(marker) = shared_state_seed_marker() {
+        let _ = fs::remove_file(&marker);
+    }
+    if let Err(e) = seed_shared_state_from_default() {
+        note = format!("ItemTable 重新播种失败: {e}");
+    }
+    let _ = merge_recent_workspaces_from_default();
+    if !salvage_headers.is_empty() {
+        let _ = import_composer_headers(&shared_db, &salvage_headers);
+    }
+    if !salvage_kv.is_empty() {
+        let _ = import_cursor_disk_kv(&shared_db, &salvage_kv);
+    }
+    // Bring the default dir's Composer history back in (profiles re-flow on
+    // their next launch via prepare_profile_shared).
+    let _ = sync_default_composer_to_shared();
+
+    targets.push(CursorDbSlimTarget {
+        label: "shared".into(),
+        path: shared_db.to_string_lossy().to_string(),
+        action: "rebuilt".into(),
+        before_bytes: before,
+        after_bytes: state_db_cluster_bytes(&shared_db),
+        note,
+    });
+}
+
+fn slim_cursor_state_dbs_sync() -> Result<CursorDbSlimReport, String> {
+    let mut targets: Vec<CursorDbSlimTarget> = Vec::new();
+
+    // VACUUM / rebuild must not race a live Cursor holding the DBs open.
+    if is_cursor_process_running() {
+        quit_cursor_sync()?;
+    }
+
+    rebuild_shared_state_db(&mut targets);
+
+    let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
+    vacuum_target("default", &default_db, &mut targets);
+
+    // Every account profile keeps its own isolated state.vscdb (login state);
+    // VACUUM only reclaims free pages inside each one.
+    if let Ok(profiles_root) = profiles_root_dir() {
+        if let Ok(entries) = fs::read_dir(&profiles_root) {
+            for entry in entries.flatten() {
+                if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let db = live_state_vscdb_in(&entry.path());
+                let label = format!("profile:{}", entry.file_name().to_string_lossy());
+                vacuum_target(&label, &db, &mut targets);
+            }
+        }
+    }
+
+    let freed_bytes: u64 = targets
+        .iter()
+        .map(|t| t.before_bytes.saturating_sub(t.after_bytes))
+        .sum();
+    let has_failure = targets.iter().any(|t| t.action == "failed");
+    let message = if has_failure {
+        format!(
+            "部分数据库瘦身失败（详见 targets），已回收 {}",
+            format_bytes(freed_bytes)
+        )
+    } else {
+        format!("数据库瘦身完成，共回收 {}", format_bytes(freed_bytes))
+    };
+    Ok(CursorDbSlimReport {
+        targets,
+        freed_bytes,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn slim_cursor_state_dbs() -> Result<CursorDbSlimReport, String> {
+    tokio::task::spawn_blocking(slim_cursor_state_dbs_sync)
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
 fn dir_size(path: &Path) -> u64 {
     let mut budget = DirSizeBudget {
         deadline: Instant::now() + Duration::from_millis(DIR_SIZE_SCAN_TIMEOUT_MS),
@@ -3791,64 +4118,6 @@ pub fn run_cursor_switch_self_test(personal_id: &str, company_id: &str) -> Resul
 
     log("全部通过 ✓".to_string());
     Ok(lines.join("\n"))
-}
-
-// ============================================================================
-// Debug-only commands for investigating Composer session storage in state.vscdb.
-// To be removed after the fix is verified.
-// ============================================================================
-
-fn resolve_target_state_db(target: Option<&str>) -> Result<PathBuf, String> {
-    match target {
-        None | Some("") | Some("active") => Ok(live_state_vscdb()),
-        Some("default") => Ok(default_user_dir().join("globalStorage").join("state.vscdb")),
-        Some("shared") => shared_state_vscdb(),
-        Some(s) if s.starts_with("profile:") => {
-            let account_id = s.trim_start_matches("profile:");
-            validate_account_id(account_id)?;
-            let profile = cursor_profile_dir(account_id)?;
-            Ok(live_state_vscdb_in(&profile))
-        }
-        Some(other) => Err(format!("未知 target: {other}（可选: active|default|shared|profile:<id>）")),
-    }
-}
-
-#[tauri::command]
-pub fn dump_state_keys(target: Option<String>) -> Result<Vec<String>, String> {
-    let db_path = resolve_target_state_db(target.as_deref())?;
-    if !db_path.exists() {
-        return Err(format!("数据库不存在: {}", db_path.display()));
-    }
-    let conn = open_sqlite_ro(&db_path)
-        .or_else(|_| Connection::open(&db_path).map_err(|e| format!("打开数据库失败: {}", e)))?;
-    let mut stmt = conn
-        .prepare("SELECT key FROM ItemTable ORDER BY key")
-        .map_err(|e| format!("准备查询失败: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|e| format!("查询失败: {}", e))?;
-    let mut keys = Vec::new();
-    for row in rows {
-        keys.push(row.map_err(|e| format!("读取行失败: {}", e))?);
-    }
-    Ok(keys)
-}
-
-#[tauri::command]
-pub fn dump_state_value(target: Option<String>, key: String) -> Result<String, String> {
-    let db_path = resolve_target_state_db(target.as_deref())?;
-    if !db_path.exists() {
-        return Err(format!("数据库不存在: {}", db_path.display()));
-    }
-    let value = read_state_value(&db_path, &key)?;
-    match value {
-        None => Ok("<NULL>".to_string()),
-        Some(rusqlite::types::Value::Text(t)) => Ok(t),
-        Some(rusqlite::types::Value::Blob(b)) => {
-            String::from_utf8(b).map_err(|e| format!("Blob 不是 UTF-8: {}", e))
-        }
-        Some(other) => Ok(format!("{:?}", other)),
-    }
 }
 
 #[cfg(test)]

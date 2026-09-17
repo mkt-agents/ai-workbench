@@ -15,6 +15,7 @@ import {
   Copy,
   FolderOpen,
   ClipboardList,
+  Zap,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { useGlobalStore } from "../core/store";
@@ -113,6 +114,7 @@ function CursorManager() {
   const invokeInspectCursorBackup = useGlobalStore((s) => s.invokeInspectCursorBackup);
   const invokeGetCursorDiskUsage = useGlobalStore((s) => s.invokeGetCursorDiskUsage);
   const invokeCleanupCursorFullBackups = useGlobalStore((s) => s.invokeCleanupCursorFullBackups);
+  const invokeSlimCursorStateDbs = useGlobalStore((s) => s.invokeSlimCursorStateDbs);
   const invokeReadCursorDiagnostics = useGlobalStore((s) => s.invokeReadCursorDiagnostics);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
 
@@ -164,6 +166,7 @@ function CursorManager() {
   } | null>(null);
   const [diskLoading, setDiskLoading] = useState(false);
   const [cleaning, setCleaning] = useState(false);
+  const [slimming, setSlimming] = useState(false);
   const [backupSizes, setBackupSizes] = useState<Record<string, number>>({});
   const [orphans, setOrphans] = useState<{ count: number; bytes: number } | null>(null);
   const [accountQuery, setAccountQuery] = useState("");
@@ -362,6 +365,21 @@ function CursorManager() {
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshLiveStatus]);
 
+  // Keep the "Cursor is running" indicator fresh even when the window stays
+  // focused while Cursor quits / starts in the background (focus refresh alone
+  // would leave a stale "in use" state on the active account's button).
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
+      if (switchingId || busy || cleaning || slimming) return;
+      try {
+        setIsCursorRunning(await invokeIsCursorRunning());
+      } catch {
+        /* silent — probing failures must not spam toasts */
+      }
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [invokeIsCursorRunning, switchingId, busy, cleaning, slimming]);
+
   useEffect(() => {
     const unlisten = listen<{ stage: string; message: string }>(
       "cursor:switch_progress",
@@ -411,6 +429,43 @@ function CursorManager() {
     }
   };
 
+  const handleSlimDbs = async () => {
+    if (slimming || cleaning || busy || switchingId) return;
+    const ok = await confirm({
+      title: t("cursor.slimTitle"),
+      message: t("cursor.slimMessage"),
+      warning: t("cursor.slimWarning"),
+      confirmText: t("cursor.slimConfirm"),
+      icon: "warning",
+    });
+    if (!ok) return;
+    setSlimming(true);
+    try {
+      const result = await invokeSlimCursorStateDbs();
+      const slimLabel = (label: string) =>
+        label === "shared"
+          ? t("cursor.diskShared")
+          : label === "default"
+            ? t("cursor.diskLive")
+            : t("cursor.diskProfiles");
+      const failed = result.targets.filter((x) => x.action === "failed");
+      const reclaimed = result.targets
+        .filter((x) => x.beforeBytes > x.afterBytes)
+        .map((x) => `${slimLabel(x.label)} −${formatBytes(x.beforeBytes - x.afterBytes)}`);
+      showMsg(
+        failed.length ? "warning" : "success",
+        failed.length
+          ? `${result.message}：${failed.map((x) => slimLabel(x.label)).join(", ")}`
+          : `${result.message}${reclaimed.length ? `（${reclaimed.join("、")}）` : ""}`
+      );
+      await refreshDiskUsage();
+    } catch (e) {
+      showMsg("error", `${t("cursor.slimFailed")}: ${e}`);
+    } finally {
+      setSlimming(false);
+    }
+  };
+
   const openAddModal = () => {
     const incomplete = cursorAccounts.find((account) => {
       if (!account.profileInitialized) return true;
@@ -452,7 +507,7 @@ function CursorManager() {
   };
 
   const handleDelete = async (id: string) => {
-    if (switchingId || busy) return;
+    if (switchingId || busy || cleaning || slimming) return;
     const ok = await confirm({
       title: t("cursor.deleteTitle"),
       message: t("cursor.deleteMessage"),
@@ -539,7 +594,7 @@ function CursorManager() {
   };
 
   const handleFinishInit = async (account: CursorAccount) => {
-    if (switchingId || busy) return;
+    if (switchingId || busy || cleaning || slimming) return;
     const ok = await confirm({
       title: t("cursor.finishInitTitle"),
       message: t("cursor.finishInitMessage", { name: account.notes || account.name }),
@@ -566,7 +621,7 @@ function CursorManager() {
   };
 
   const handleReopenCursor = async (account: CursorAccount) => {
-    if (switchingId || busy) return;
+    if (switchingId || busy || cleaning || slimming) return;
     setBusy(true);
     setSwitchStep(t("cursor.openingProfile"));
     try {
@@ -606,7 +661,7 @@ function CursorManager() {
   };
 
   const handleLaunchCursor = async (account: CursorAccount) => {
-    if (switchingId || busy) return;
+    if (switchingId || busy || cleaning || slimming) return;
     setBusy(true);
     setSwitchStep(t("cursor.launching"));
     try {
@@ -911,17 +966,15 @@ function CursorManager() {
           </button>
         </div>
         {cursorAccounts.length > 1 && (
-          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <div className="cursor-account-tools">
             <input
               className="input-field"
-              style={{ flex: 1 }}
               value={accountQuery}
               onChange={(e) => setAccountQuery(e.target.value)}
               placeholder={t("cursor.searchAccounts")}
             />
             <select
               className="input-field"
-              style={{ width: 180 }}
               value={accountSort}
               onChange={(e) => setAccountSort(e.target.value as "created" | "name")}
             >
@@ -967,22 +1020,27 @@ function CursorManager() {
                     <div className="account-name">
                       {account.notes?.trim() || account.name}
                       {liveActive && (
-                        <span style={{ color: "var(--accent)", marginLeft: 8, fontSize: 12 }}>
+                        <span className="tag-pill tag-pill-accent">
                           {t("cursor.tagCurrent")}
                         </span>
                       )}
+                      {liveActive && isCursorRunning && (
+                        <span className="tag-pill tag-pill-green">
+                          ● {t("cursor.tagRunning")}
+                        </span>
+                      )}
                       {needsInit && (
-                        <span style={{ color: "#fbbf24", marginLeft: 8, fontSize: 12 }}>
+                        <span className="tag-pill tag-pill-amber">
                           {t("cursor.tagNeedsInit")}
                         </span>
                       )}
                       {account.profileInitialized && !incomplete && (
-                        <span style={{ color: "#34d399", marginLeft: 8, fontSize: 12 }}>
+                        <span className="tag-pill tag-pill-green">
                           {t("cursor.tagReady")}
                         </span>
                       )}
                       {incomplete && (
-                        <span style={{ color: "var(--red)", marginLeft: 8, fontSize: 12 }}>
+                        <span className="tag-pill tag-pill-red">
                           {t("cursor.tagSnapshotBad")}
                         </span>
                       )}
@@ -1247,6 +1305,18 @@ function CursorManager() {
             {diskUsage && diskUsage.staleDbCount > 0
               ? ` (${formatBytes(diskUsage.backupsFullDbBytes)})`
               : ""}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={
+              cleaning || slimming || busy || Boolean(switchingId) || !diskUsage
+            }
+            onClick={handleSlimDbs}
+            title={t("cursor.slimWarning")}
+          >
+            {slimming ? <Loader2 size={12} className="spin" /> : <Zap size={12} />}
+            {t("cursor.slimAction")}
           </button>
           <button
             type="button"

@@ -180,6 +180,18 @@ interface StoreState extends GlobalState, Invocations {
     freedBytes: number;
     message: string;
   }>;
+  invokeSlimCursorStateDbs: () => Promise<{
+    targets: Array<{
+      label: string;
+      path: string;
+      action: string;
+      beforeBytes: number;
+      afterBytes: number;
+      note: string;
+    }>;
+    freedBytes: number;
+    message: string;
+  }>;
   invokeReadCursorDiagnostics: (accountId?: string | null) => Promise<string>;
 
   // AI models
@@ -732,6 +744,19 @@ export const useGlobalStore = create<StoreState>()(
           freedBytes: number;
           message: string;
         }>('cleanup_cursor_full_backups'),
+      invokeSlimCursorStateDbs: async () =>
+        tauriInvoke<{
+          targets: Array<{
+            label: string;
+            path: string;
+            action: string;
+            beforeBytes: number;
+            afterBytes: number;
+            note: string;
+          }>;
+          freedBytes: number;
+          message: string;
+        }>('slim_cursor_state_dbs'),
 
       invokeReadCursorDiagnostics: async (accountId) =>
         tauriInvoke<string>('read_cursor_diagnostics', { accountId: accountId ?? null }),
