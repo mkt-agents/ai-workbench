@@ -460,6 +460,15 @@ function PluginBrowser() {
     const fromIdx = allIds.indexOf(fromId);
     const toIdx = allIds.indexOf(toId);
     if (fromIdx === -1 || toIdx === -1) return;
+    // Cross-group drop: adopt the target's group so the card visibly moves
+    // into that group (an order-only reorder would snap it back to its old
+    // group). `withTable` serialises same-table writes, so the group update
+    // lands before the reorder reads state.
+    const fromPlugin = webPlugins.find((p) => p.id === fromId);
+    const toPlugin = webPlugins.find((p) => p.id === toId);
+    if (fromPlugin && toPlugin && fromPlugin.group !== toPlugin.group) {
+      void updateWebPlugin(fromId, { group: toPlugin.group });
+    }
     const newIds = [...allIds];
     newIds.splice(fromIdx, 1);
     newIds.splice(toIdx, 0, fromId);

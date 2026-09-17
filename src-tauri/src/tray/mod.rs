@@ -319,7 +319,6 @@ pub fn set_quick_ask_bubble_position(app: AppHandle, x: i32, y: i32) -> Result<(
     bubble::ensure_quick_ask_bubble(&app, Some(px), Some(py))?;
     if let Some(win) = app.get_webview_window(bubble::QUICK_ASK_BUBBLE_LABEL) {
         let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
-        bubble::apply_circular_region(&win);
     }
     Ok(())
 }

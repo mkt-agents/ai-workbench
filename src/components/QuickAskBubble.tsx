@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Sparkles } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useGlobalStore } from "../core/store";
 
@@ -31,16 +30,10 @@ export default function QuickAskBubble() {
     document.body?.classList.add("qa-bubble-mode");
 
     void (async () => {
-      try {
-        await getCurrentWebview().setBackgroundColor({
-          red: 0,
-          green: 0,
-          blue: 0,
-          alpha: 0,
-        });
-      } catch {
-        /* ignore */
-      }
+      // Do not call webview.setBackgroundColor here: the runtime path can
+      // force an opaque white backing (white ring around the orb). The
+      // window is created hidden and only revealed after "ready", so the
+      // first paint is already the orb — no flash to suppress.
       try {
         await invoke("quick_ask_bubble_ready");
       } catch {

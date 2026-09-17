@@ -392,6 +392,14 @@ function App() {
       <div className="right-area">
         <div className="titlebar" data-tauri-drag-region>
           <div className="titlebar-drag" />
+          {/* Dev-instance badge (Vite compile-time flag): only rendered when
+              launched via the dev server (npm run tauri dev); dead code in
+              packaged builds — never ships. */}
+          {import.meta.env.DEV && (
+            <span className="dev-badge" data-tauri-drag-region={false}>
+              DEV
+            </span>
+          )}
           <div className="titlebar-controls" data-tauri-drag-region={false}>
             <button
               className="titlebar-btn"

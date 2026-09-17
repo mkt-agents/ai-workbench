@@ -71,6 +71,17 @@ pub fn run() {
             fs::create_dir_all(&data_dir).expect("failed to create app data dir");
             let db_path = data_dir.join("ai-workbench.db");
 
+            // Dev-instance marker: a window launched from the project
+            // (cargo tauri dev / debug build) gets a [DEV] title suffix so it
+            // is distinguishable from an installed package in the taskbar and
+            // alt-tab. Compiled out in release builds — packaged installs
+            // keep the plain "AI Workbench" title.
+            if cfg!(debug_assertions) {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.set_title("AI Workbench [DEV]");
+                }
+            }
+
             let conn = Connection::open(&db_path).expect("failed to open sqlite db");
 
             conn.execute_batch(r#"

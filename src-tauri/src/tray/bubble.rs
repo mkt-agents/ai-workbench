@@ -81,6 +81,11 @@ pub(crate) mod vis {
 pub const QUICK_ASK_LABEL: &str = "quick-ask";
 pub(crate) const QUICK_ASK_BUBBLE_LABEL: &str = "quick-ask-bubble";
 pub(crate) const MAIN_LABEL: &str = "main";
+/// Bounding window size = 44px visible orb (`.qa-bubble-orb` in styles.css).
+/// The window stays a plain (uncut) rectangle: the DWM blur-behind
+/// transparency makes the corners around the CSS-rounded orb see-through,
+/// and the orb fills the window so no opaque backing can leak through.
+/// Keep the orb size in styles.css in sync with this.
 const BUBBLE_SIZE: f64 = 44.0;
 const BUBBLE_MARGIN: f64 = 24.0;
 /// Keep the bubble out of the top chrome band so it cannot cover main titlebar buttons.
@@ -219,8 +224,6 @@ fn reveal_bubble_window<R: Runtime>(
     let (px, py) = resolve_bubble_position(app, x, y);
     let _ = win.set_size(tauri::LogicalSize::new(BUBBLE_SIZE, BUBBLE_SIZE));
     let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
-    // Re-read size after Windows may have clamped the tiny undecorated window.
-    apply_circular_region(win);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
     // `show()` can be a silent no-op (see `vis`); show for real.
@@ -230,33 +233,11 @@ fn reveal_bubble_window<R: Runtime>(
     Ok(())
 }
 
-/// Clip the HWND to an ellipse so WebView2 white corners cannot show.
-#[cfg(windows)]
-pub(crate) fn apply_circular_region<R: Runtime>(win: &WebviewWindow<R>) {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
-
-    let Ok(hwnd) = win.hwnd() else {
-        return;
-    };
-    let Ok(size) = win.outer_size() else {
-        return;
-    };
-    let w = size.width as i32;
-    let h = size.height as i32;
-    if w <= 0 || h <= 0 {
-        return;
-    }
-    unsafe {
-        let hrgn = CreateEllipticRgn(0, 0, w, h);
-        // SetWindowRgn takes ownership of hrgn when successful.
-        let _ = SetWindowRgn(HWND(hwnd.0 as *mut _), Some(hrgn), true);
-    }
-}
-
-#[cfg(not(windows))]
-fn apply_circular_region<R: Runtime>(_win: &WebviewWindow<R>) {}
-
+/// The orb's circular shape comes from CSS `border-radius` on the webview
+/// content. Do NOT use `SetWindowRgn` here: a window region forces the GDI
+/// repaint path and defeats the DWM blur-behind transparency tao sets up for
+/// `transparent(true)` — the uncovered window backing then shows through as
+/// a white ring, and the region edge itself is aliased (no anti-aliasing).
 pub fn ensure_quick_ask_bubble<R: Runtime>(
     app: &AppHandle<R>,
     x: Option<i32>,
@@ -282,7 +263,6 @@ pub fn ensure_quick_ask_bubble<R: Runtime>(
         .skip_taskbar(true)
         .transparent(true)
         .shadow(false)
-        .background_color(tauri::window::Color(0, 0, 0, 0))
         .visible(false)
         .focused(false)
         .build()
@@ -292,7 +272,6 @@ pub fn ensure_quick_ask_bubble<R: Runtime>(
     // Re-assert size after create (Windows may clamp tiny undecorated windows).
     let _ = win.set_size(tauri::LogicalSize::new(BUBBLE_SIZE, BUBBLE_SIZE));
     let _ = win.set_position(tauri::PhysicalPosition::new(pos_x, pos_y));
-    apply_circular_region(&win);
     Ok(())
 }
 
@@ -325,7 +304,6 @@ pub fn set_quick_ask_bubble_visible_inner<R: Runtime>(
         let (px, py) = resolve_bubble_position(app, x, y);
         let _ = win.set_size(tauri::LogicalSize::new(BUBBLE_SIZE, BUBBLE_SIZE));
         let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
-        apply_circular_region(&win);
     }
     Ok(())
 }

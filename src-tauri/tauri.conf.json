@@ -21,7 +21,8 @@
         "resizable": true,
         "decorations": false,
         "shadow": true,
-        "backgroundColor": [15, 17, 19, 255]
+        "backgroundColor": [15, 17, 19, 255],
+        "dragDropEnabled": false
       }
     ],
     "security": {

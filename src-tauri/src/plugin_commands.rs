@@ -515,6 +515,12 @@ pub async fn open_browser_window_with_toolbar(
         .decorations(true)
         .focused(true)
         .theme(inherited_theme)
+        // On Windows, Tauri's default drag-drop handler disables HTML5 drag
+        // and drop APIs in the WebView2. These popup windows are plain web
+        // tools; page-internal DnD (drag-sort boards, whiteboards, upload
+        // dropzones) matters more than dragging OS files onto the page, so
+        // disable the handler to restore normal DnD.
+        .disable_drag_drop_handler()
         .initialization_script(BROWSER_TOOLBAR_INIT_JS)
         .on_navigation(move |url: &Url| {
             if url.host_str() == Some(SHELL_OPEN_TRIGGER_HOST) {

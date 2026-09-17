@@ -1809,6 +1809,23 @@ input, select, textarea { font-family: inherit; }
 
 .titlebar-drag { flex: 1; height: 100%; -webkit-app-region: drag; }
 
+/* Dev-instance chip next to the window controls — dev server only, never in packaged builds */
+.dev-badge {
+  flex: none;
+  margin-right: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #f59e0b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  -webkit-app-region: no-drag;
+  user-select: none;
+  cursor: default;
+}
+
 .titlebar-controls {
   display: flex;
   -webkit-app-region: no-drag;
@@ -9775,43 +9792,51 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   justify-content: center;
   box-sizing: border-box;
   background: transparent !important;
+  /* Circle hit-testing: without the HWND region the window is square, so
+     clip pointer events to the orb's circle (corners pass through). */
+  border-radius: 50%;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* Solid orb fills the window — paired with Windows circular HWND region */
+/* Glass orb — the 44px window (see BUBBLE_SIZE in tray/bubble.rs) is a plain
+   rectangle; the round shape and anti-aliased edge come from this element's
+   border-radius, with the window corners transparent via DWM. Depth comes
+   from the internal gradient and inset highlights. */
 .qa-bubble-orb {
-  width: 100%;
-  height: 100%;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(126, 182, 217, 0.88);
+  color: rgba(143, 195, 232, 0.92);
   background:
-    linear-gradient(165deg, rgba(255, 255, 255, 0.08) 0%, transparent 38%),
-    #161a20;
-  border: 1px solid rgba(126, 182, 217, 0.28);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
-  transition: transform 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+    radial-gradient(120% 120% at 30% 16%,
+      rgba(255, 255, 255, 0.16),
+      rgba(255, 255, 255, 0.02) 44%,
+      transparent 62%),
+    linear-gradient(180deg, #242932, #14171c);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -8px 14px rgba(0, 0, 0, 0.38);
+  transition: filter 0.16s ease, transform 0.16s ease;
 }
 
 .qa-bubble-icon {
   display: block;
-  opacity: 0.9;
+  opacity: 0.92;
   flex-shrink: 0;
 }
 
 .qa-bubble-root:hover .qa-bubble-orb {
-  color: rgba(158, 204, 230, 0.95);
-  border-color: rgba(126, 182, 217, 0.4);
-  transform: scale(1.03);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32);
+  filter: brightness(1.18);
 }
 
 .qa-bubble-root:active .qa-bubble-orb {
-  transform: scale(0.97);
+  transform: scale(0.96);
 }
 
 @media (prefers-reduced-motion: reduce) {
