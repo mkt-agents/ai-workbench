@@ -71,60 +71,66 @@ fn netstat_cmd() -> Command {
 
 /// List listening TCP/UDP ports with their owning PID via `netstat -ano`.
 #[tauri::command]
-pub fn devtools_list_ports() -> Result<Vec<PortEntry>, String> {
+pub async fn devtools_list_ports() -> Result<Vec<PortEntry>, String> {
     #[cfg(target_os = "windows")]
     {
-        let output = netstat_cmd()
-            .args(["-ano"])
-            .output()
-            .map_err(|e| format!("执行 netstat 失败: {e}"))?;
+        let entries = tokio::task::spawn_blocking(|| -> Result<Vec<PortEntry>, String> {
+            let output = netstat_cmd()
+                .args(["-ano"])
+                .output()
+                .map_err(|e| format!("执行 netstat 失败: {e}"))?;
 
-        let text = String::from_utf8_lossy(if output.status.success() {
-            &output.stdout
-        } else {
-            &output.stderr
-        });
-
-        let mut entries = Vec::new();
-        for line in text.lines() {
-            let trimmed = line.trim();
-            let mut parts: Vec<&str> = trimmed.split_whitespace().collect();
-            // UDP has no state column; normalise by inserting empty state.
-            if parts.len() == 4 && parts[0].eq_ignore_ascii_case("udp") {
-                parts.insert(3, "");
-            }
-            if parts.len() < 5 {
-                continue;
-            }
-            let proto = parts[0].to_ascii_uppercase();
-            if !proto.eq_ignore_ascii_case("tcp") && !proto.eq_ignore_ascii_case("udp") {
-                continue;
-            }
-            let (local_addr, local_port) = match parse_addr_port(parts[1]) {
-                Some(v) => v,
-                None => continue,
-            };
-            let (remote_addr, remote_port) = parse_addr_port(parts[2]).unwrap_or_else(|| ("*".to_string(), 0));
-            let state = if proto.eq_ignore_ascii_case("tcp") {
-                parts[3].to_string()
+            let text = String::from_utf8_lossy(if output.status.success() {
+                &output.stdout
             } else {
-                String::new()
-            };
-            let pid: u32 = parts.last().and_then(|p| p.parse().ok()).unwrap_or(0);
-
-            entries.push(PortEntry {
-                proto,
-                local_addr,
-                local_port,
-                remote_addr,
-                remote_port,
-                state,
-                pid,
+                &output.stderr
             });
-        }
 
-        entries.retain(|e| e.pid != 0 || !e.state.is_empty());
-        entries.sort_by(|a, b| a.local_port.cmp(&b.local_port));
+            let mut entries = Vec::new();
+            for line in text.lines() {
+                let trimmed = line.trim();
+                let mut parts: Vec<&str> = trimmed.split_whitespace().collect();
+                // UDP has no state column; normalise by inserting empty state.
+                if parts.len() == 4 && parts[0].eq_ignore_ascii_case("udp") {
+                    parts.insert(3, "");
+                }
+                if parts.len() < 5 {
+                    continue;
+                }
+                let proto = parts[0].to_ascii_uppercase();
+                if !proto.eq_ignore_ascii_case("tcp") && !proto.eq_ignore_ascii_case("udp") {
+                    continue;
+                }
+                let (local_addr, local_port) = match parse_addr_port(parts[1]) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let (remote_addr, remote_port) =
+                    parse_addr_port(parts[2]).unwrap_or_else(|| ("*".to_string(), 0));
+                let state = if proto.eq_ignore_ascii_case("tcp") {
+                    parts[3].to_string()
+                } else {
+                    String::new()
+                };
+                let pid: u32 = parts.last().and_then(|p| p.parse().ok()).unwrap_or(0);
+
+                entries.push(PortEntry {
+                    proto,
+                    local_addr,
+                    local_port,
+                    remote_addr,
+                    remote_port,
+                    state,
+                    pid,
+                });
+            }
+
+            entries.retain(|e| e.pid != 0 || !e.state.is_empty());
+            entries.sort_by(|a, b| a.local_port.cmp(&b.local_port));
+            Ok(entries)
+        })
+        .await
+        .map_err(|e| format!("任务执行失败: {e}"))??;
         Ok(entries)
     }
 
@@ -329,95 +335,100 @@ pub fn devtools_kill_process(pid: u32) -> Result<(), String> {
 ///   2. PowerShell `Get-Process` → executable path per PID
 /// This replaces the old per-PID hover path that spawned 3 processes *each*.
 #[tauri::command]
-pub fn devtools_resolve_processes(pids: Vec<u32>) -> Result<Vec<ProcessInfo>, String> {
+pub async fn devtools_resolve_processes(pids: Vec<u32>) -> Result<Vec<ProcessInfo>, String> {
     #[cfg(target_os = "windows")]
     {
-        use std::collections::HashSet;
-        let wanted: HashSet<u32> = pids.into_iter().filter(|p| *p != 0).collect();
-        let mut results: Vec<ProcessInfo> = Vec::new();
+        let results = tokio::task::spawn_blocking(move || -> Result<Vec<ProcessInfo>, String> {
+            use std::collections::HashSet;
+            let wanted: HashSet<u32> = pids.into_iter().filter(|p| *p != 0).collect();
+            let mut results: Vec<ProcessInfo> = Vec::new();
 
-        // 1) name + memory + services for all processes in one tasklist call
-        let mut name_map: std::collections::HashMap<u32, (String, String, String)> =
-            std::collections::HashMap::new();
-        if let Ok(output) = Command::new("tasklist")
-            .args(["/FO", "CSV", "/NH", "/SVC"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for line in text.lines() {
-                let fields = parse_csv_line(line);
-                if fields.len() < 2 {
-                    continue;
-                }
-                if let Ok(pid) = fields[1].parse::<u32>() {
-                    if wanted.contains(&pid) {
-                        let name = if fields[0].eq_ignore_ascii_case("image name") {
-                            String::new()
-                        } else {
-                            fields[0].clone()
-                        };
-                        let memory = fields.get(4).cloned().unwrap_or_default();
-                        let services = if fields.len() > 5 {
-                            fields[5..]
-                                .iter()
-                                .map(|s| s.trim())
-                                .filter(|s| !s.is_empty())
-                                .map(|s| s.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        } else {
-                            String::new()
-                        };
-                        name_map.insert(pid, (name, memory, services));
-                    }
-                }
-            }
-        }
-
-        // 2) executable paths via a single PowerShell call for all wanted PIDs
-        let mut path_map: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
-        if !wanted.is_empty() {
-            // Single PowerShell call returns "pid|path" lines for all wanted PIDs
-            let ps = format!(
-                "$filter = @({}); Get-Process -Id $filter -ErrorAction SilentlyContinue | ForEach-Object {{ \"$($_.Id)|$($_.Path)\" }}",
-                wanted.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
-            );
-            if let Ok(output) = Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+            // 1) name + memory + services for all processes in one tasklist call
+            let mut name_map: std::collections::HashMap<u32, (String, String, String)> =
+                std::collections::HashMap::new();
+            if let Ok(output) = Command::new("tasklist")
+                .args(["/FO", "CSV", "/NH", "/SVC"])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()
             {
                 let text = String::from_utf8_lossy(&output.stdout);
                 for line in text.lines() {
-                    let line = line.trim();
-                    if let Some(pos) = line.find('|') {
-                        if let Ok(pid) = line[..pos].parse::<u32>() {
-                            let path = line[pos + 1..].trim().to_string();
-                            if !path.is_empty() && !path.eq_ignore_ascii_case("null") {
-                                path_map.insert(pid, path);
+                    let fields = parse_csv_line(line);
+                    if fields.len() < 2 {
+                        continue;
+                    }
+                    if let Ok(pid) = fields[1].parse::<u32>() {
+                        if wanted.contains(&pid) {
+                            let name = if fields[0].eq_ignore_ascii_case("image name") {
+                                String::new()
+                            } else {
+                                fields[0].clone()
+                            };
+                            let memory = fields.get(4).cloned().unwrap_or_default();
+                            let services = if fields.len() > 5 {
+                                fields[5..]
+                                    .iter()
+                                    .map(|s| s.trim())
+                                    .filter(|s| !s.is_empty())
+                                    .map(|s| s.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            } else {
+                                String::new()
+                            };
+                            name_map.insert(pid, (name, memory, services));
+                        }
+                    }
+                }
+            }
+
+            // 2) executable paths via a single PowerShell call for all wanted PIDs
+            let mut path_map: std::collections::HashMap<u32, String> =
+                std::collections::HashMap::new();
+            if !wanted.is_empty() {
+                let ps = format!(
+                    "$filter = @({}); Get-Process -Id $filter -ErrorAction SilentlyContinue | ForEach-Object {{ \"$($_.Id)|$($_.Path)\" }}",
+                    wanted.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
+                );
+                if let Ok(output) = Command::new("powershell")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+                {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    for line in text.lines() {
+                        let line = line.trim();
+                        if let Some(pos) = line.find('|') {
+                            if let Ok(pid) = line[..pos].parse::<u32>() {
+                                let path = line[pos + 1..].trim().to_string();
+                                if !path.is_empty() && !path.eq_ignore_ascii_case("null") {
+                                    path_map.insert(pid, path);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // 3) assemble results
-        for pid in &wanted {
-            let (name, memory, services) = name_map
-                .remove(pid)
-                .unwrap_or_else(|| (String::new(), String::new(), String::new()));
-            let path = path_map.remove(pid).unwrap_or_default();
-            results.push(ProcessInfo {
-                pid: *pid,
-                name,
-                memory,
-                path,
-                services,
-            });
-        }
+            // 3) assemble results
+            for pid in &wanted {
+                let (name, memory, services) = name_map
+                    .remove(pid)
+                    .unwrap_or_else(|| (String::new(), String::new(), String::new()));
+                let path = path_map.remove(pid).unwrap_or_default();
+                results.push(ProcessInfo {
+                    pid: *pid,
+                    name,
+                    memory,
+                    path,
+                    services,
+                });
+            }
 
+            Ok(results)
+        })
+        .await
+        .map_err(|e| format!("任务执行失败: {e}"))??;
         Ok(results)
     }
 
