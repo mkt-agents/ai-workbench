@@ -6,7 +6,7 @@ import { projectNameFromPath } from "../core/pathUtils";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
 import CommitChangelist from "./CommitChangelist";
-import type { AIModelConfig, GitRepoSummary } from "../core/types";
+import type { GitRepoSummary } from "../core/types";
 
 type Props = {
   active?: boolean;
