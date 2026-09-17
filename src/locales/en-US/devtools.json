@@ -87,11 +87,11 @@
     "header": "Header",
     "payload": "Payload",
     "signature": "Signature (preserved as-is)",
+    "sample": "Sample token",
     "invalid": "Invalid JWT (must be three Base64Url segments)",
     "clear": "Clear",
     "copy": "Copy",
-    "copied": "Copied",
-    "sample": "Paste JWT here…"
+    "copied": "Copied"
   },
   "regex": {
     "title": "Regex",
@@ -115,8 +115,9 @@
   },
   "hash": {
     "title": "Hash",
-    "description": "Web Crypto hashing (SHA family, hex output)",
+    "description": "Web Crypto hashing (SHA family, Hex / Base64 output)",
     "algorithm": "Algorithm",
+    "allAlgos": "All algorithms",
     "sha1": "SHA-1",
     "sha256": "SHA-256",
     "sha384": "SHA-384",
@@ -169,6 +170,7 @@
     "duration": "Duration",
     "responseHeaders": "Response Headers",
     "responseBody": "Response Body",
+    "formatJson": "Format JSON",
     "copyBody": "Copy body",
     "copied": "Copied",
     "clear": "Clear",

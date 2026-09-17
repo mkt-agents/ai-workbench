@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Eraser, Shuffle } from "lucide-react";
+import { Check, ClipboardCopy, Copy, Eraser, Shuffle } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 function UuidTool() {
@@ -10,25 +10,43 @@ function UuidTool() {
   const [count, setCount] = useState(5);
   const [hyphen, setHyphen] = useState(true);
   const [uppercase, setUppercase] = useState(false);
-  const [items, setItems] = useState<string[]>([]);
+  const [items, setItems] = useState<string[]>(() => {
+    // Auto-generate on first load
+    const out: string[] = [];
+    for (let i = 0; i < 5; i++) out.push(crypto.randomUUID() as string);
+    return out;
+  });
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const generate = () => {
     const n = Math.max(1, Math.min(100, count || 1));
     const out: string[] = [];
     for (let i = 0; i < n; i++) {
-      let u: string = crypto.randomUUID();
+      let u = crypto.randomUUID() as string;
       if (!hyphen) u = u.replace(/-/g, "");
       if (uppercase) u = u.toUpperCase();
       out.push(u);
     }
     setItems(out);
+    setMessage(null);
+  };
+
+  const handleCopyOne = async (text: string, idx: number) => {
+    try {
+      await copy(text);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx(null), 1200);
+    } catch (e) {
+      setMessage({ type: "error", text: String(e) });
+    }
   };
 
   const handleCopyAll = async () => {
     try {
       await copy(items.join("\n"));
       setMessage({ type: "success", text: t("uuid.copied") });
+      setTimeout(() => setMessage(null), 2000);
     } catch (e) {
       setMessage({ type: "error", text: String(e) });
     }
@@ -56,25 +74,24 @@ function UuidTool() {
           <input type="checkbox" checked={uppercase} onChange={(e) => setUppercase(e.target.checked)} />
           <span>{t("uuid.uppercase")}</span>
         </label>
-        <div className="devtools-actions">
-          <button type="button" className="btn btn-primary btn-small" onClick={generate}>
-            <Shuffle size={14} />
-            {t("uuid.generate")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            onClick={handleCopyAll}
-            disabled={items.length === 0}
-          >
-            <ClipboardCopy size={14} />
-            {t("uuid.copyAll")}
-          </button>
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => setItems([])}>
-            <Eraser size={14} />
-            {t("uuid.clear")}
-          </button>
-        </div>
+        <div className="devtools-actions-spacer" />
+        <button type="button" className="btn btn-primary btn-small" onClick={generate}>
+          <Shuffle size={14} />
+          {t("uuid.generate")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={handleCopyAll}
+          disabled={items.length === 0}
+        >
+          <ClipboardCopy size={14} />
+          {t("uuid.copyAll")}
+        </button>
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => setItems([])}>
+          <Eraser size={14} />
+          {t("uuid.clear")}
+        </button>
       </div>
 
       {message && (
@@ -91,16 +108,20 @@ function UuidTool() {
               <code>{u}</code>
               <button
                 type="button"
-                className="btn btn-secondary btn-small"
-                onClick={async () => {
-                  await copy(u);
-                  setMessage({ type: "success", text: t("uuid.copied") });
-                }}
+                className="btn btn-secondary btn-small icon-only"
+                onClick={() => handleCopyOne(u, i)}
+                title={t("uuid.copy")}
               >
-                <ClipboardCopy size={12} />
+                {copiedIdx === i ? <Check size={12} /> : <Copy size={12} />}
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div className="uuid-stats">
+          {t("uuid.count")}: {items.length} · {items[0].length} chars
         </div>
       )}
     </div>

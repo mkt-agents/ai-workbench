@@ -50,27 +50,45 @@ function RegexTool() {
   }, [pattern, testStr, flags]);
 
   const toggleFlag = (key: keyof typeof flags) => {
-    if (key === "g") {
-      // global is the default, allow toggling
-      setFlags({ ...flags, g: !flags.g });
-    } else {
-      setFlags({ ...flags, [key]: !flags[key] });
-    }
+    setFlags({ ...flags, [key]: !flags[key] });
+  };
+
+  const flash = (type: "success" | "error", text: string) => {
+    setMessage({ type, text });
+    setTimeout(() => setMessage(null), 2500);
   };
 
   const handleCopy = async () => {
     try {
       const text = result.matches.map((m) => `${m.index}: ${m.match}`).join("\n");
       await copy(text);
-      setMessage({ type: "success", text: t("regex.copied") });
+      flash("success", t("regex.copied"));
     } catch (e) {
-      setMessage({ type: "error", text: String(e) });
+      flash("error", String(e));
     }
   };
 
+  // Build highlighted segments for the test string
+  const segments = useMemo(() => {
+    if (!result.ok || result.matches.length === 0 || !testStr) return null;
+    const parts: { text: string; highlight: boolean }[] = [];
+    let lastIdx = 0;
+    for (const m of result.matches) {
+      if (m.index > lastIdx) {
+        parts.push({ text: testStr.slice(lastIdx, m.index), highlight: false });
+      }
+      parts.push({ text: m.match, highlight: true });
+      lastIdx = m.index + m.match.length;
+    }
+    if (lastIdx < testStr.length) {
+      parts.push({ text: testStr.slice(lastIdx), highlight: false });
+    }
+    return parts;
+  }, [result, testStr]);
+
   return (
     <div className="devtools-tool">
-      <div className="devtools-row">
+      <div className="devtools-actions">
         <button
           type="button"
           className="btn btn-secondary btn-small"
@@ -93,56 +111,77 @@ function RegexTool() {
         </button>
       </div>
 
-      <label className="devtools-label">{t("regex.pattern")}</label>
-      <input
-        className="devtools-input"
-        value={pattern}
-        onChange={(e) => setPattern(e.target.value)}
-        placeholder="(\\d+)"
-        spellCheck={false}
-      />
+      <div className="devtools-io">
+        <div className="devtools-io-pane">
+          <label className="devtools-label">{t("regex.pattern")}</label>
+          <input
+            className="devtools-input"
+            value={pattern}
+            onChange={(e) => setPattern(e.target.value)}
+            placeholder="(\\d+)"
+            spellCheck={false}
+          />
 
-      <div className="devtools-flags">
-        {(Object.keys(flags) as (keyof typeof flags)[])
-          .filter((k) => k !== "g" || true)
-          .map((key) => (
-            <label key={key} className="devtools-checkbox">
-              <input type="checkbox" checked={flags[key]} onChange={() => toggleFlag(key)} />
-              <span>{t(`regex.${key}`)}</span>
+          <div className="devtools-flags">
+            {(Object.keys(flags) as (keyof typeof flags)[]).map((key) => (
+              <label key={key} className="devtools-checkbox">
+                <input type="checkbox" checked={flags[key]} onChange={() => toggleFlag(key)} />
+                <span>{t(`regex.${key}`)}</span>
+              </label>
+            ))}
+          </div>
+
+          <label className="devtools-label">{t("regex.test")}</label>
+          <textarea
+            className="devtools-textarea"
+            value={testStr}
+            onChange={(e) => setTestStr(e.target.value)}
+            placeholder=""
+            rows={5}
+            spellCheck={false}
+          />
+        </div>
+
+        <div className="devtools-io-pane">
+          <div className="io-header">
+            <label className="devtools-label">
+              {t("regex.matches")} ({result.matches.length})
             </label>
-          ))}
-      </div>
+          </div>
 
-      <label className="devtools-label">{t("regex.test")}</label>
-      <textarea
-        className="devtools-textarea"
-        value={testStr}
-        onChange={(e) => setTestStr(e.target.value)}
-        placeholder=""
-        rows={4}
-        spellCheck={false}
-      />
+          {message && (
+            <div className={`runtime-msg ${message.type}`}>
+              {message.type === "success" ? <Check size={14} /> : <Regex size={14} />}
+              <span>{message.text}</span>
+            </div>
+          )}
 
-      {message && (
-        <div className={`runtime-msg ${message.type}`}>
-          {message.type === "success" ? <Check size={14} /> : <Regex size={14} />}
-          <span>{message.text}</span>
-        </div>
-      )}
+          {!result.ok && result.error && (
+            <div className="runtime-msg error">
+              <Regex size={14} />
+              <span>
+                {t("regex.invalid")}: {result.error}
+              </span>
+            </div>
+          )}
 
-      {!result.ok && result.error && (
-        <div className="runtime-msg error">
-          <Regex size={14} />
-          <span>{t("regex.invalid") + ": " + result.error}</span>
-        </div>
-      )}
+          {result.ok && segments && (
+            <div className="regex-highlight-box">
+              <div className="regex-highlight-text">
+                {segments.map((seg, i) =>
+                  seg.highlight ? (
+                    <mark key={i} className="regex-match-mark">
+                      {seg.text}
+                    </mark>
+                  ) : (
+                    <span key={i}>{seg.text}</span>
+                  ),
+                )}
+              </div>
+            </div>
+          )}
 
-      {result.ok && (
-        <div className="devtools-regex-out">
-          <label className="devtools-label">
-            {t("regex.matches")} ({result.matches.length})
-          </label>
-          {result.matches.length === 0 ? (
+          {result.ok && result.matches.length === 0 ? (
             <div className="runtime-hint">{t("regex.noMatch")}</div>
           ) : (
             <div className="devtools-match-list">
@@ -164,7 +203,7 @@ function RegexTool() {
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

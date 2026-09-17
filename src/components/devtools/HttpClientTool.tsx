@@ -7,6 +7,7 @@ import {
   Plus,
   Send,
   Trash2,
+  Wrench,
   XCircle,
 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
@@ -26,6 +27,20 @@ function newHeader(key = "", value = ""): HeaderRow {
 
 const METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] as const;
 
+function formatJson(text: string): { ok: boolean; result: string } {
+  try {
+    const parsed = JSON.parse(text);
+    return { ok: true, result: JSON.stringify(parsed, null, 2) };
+  } catch {
+    return { ok: false, result: text };
+  }
+}
+
+function detectContentType(headers: { key: string; value: string }[]): string {
+  const ct = headers.find((h) => h.key.toLowerCase() === "content-type");
+  return ct?.value || "";
+}
+
 function HttpClientTool() {
   const { t } = useTranslation("devtools");
   const copy = useGlobalStore((s) => s.invokeCopyToClipboard);
@@ -42,6 +57,7 @@ function HttpClientTool() {
     duration_ms: number;
     headers: { key: string; value: string }[];
     body: string;
+    contentType: string;
   } | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -59,14 +75,19 @@ function HttpClientTool() {
     setHeaders((hs) => (hs.length <= 1 ? hs : hs.filter((h) => h.id !== id)));
   };
 
+  const flash = (type: "success" | "error", text: string) => {
+    setMessage({ type, text });
+    setTimeout(() => setMessage(null), 3000);
+  };
+
   const handleSend = async () => {
     const trimmed = url.trim();
     if (!trimmed) {
-      setMessage({ type: "error", text: t("http.invalidUrl") });
+      flash("error", t("http.invalidUrl"));
       return;
     }
     if (!/^https?:\/\//i.test(trimmed)) {
-      setMessage({ type: "error", text: t("http.invalidUrl") });
+      flash("error", t("http.invalidUrl"));
       return;
     }
     setSending(true);
@@ -82,15 +103,17 @@ function HttpClientTool() {
         body: method !== "GET" && method !== "HEAD" ? body || undefined : undefined,
         timeout_sec: 30,
       });
+      const contentType = detectContentType(resp.headers);
       setResponse({
         status: resp.status,
         duration_ms: resp.duration_ms,
         headers: resp.headers,
         body: resp.body,
+        contentType,
       });
       setTab("response");
     } catch (e) {
-      setMessage({ type: "error", text: String(e) });
+      flash("error", String(e));
     } finally {
       setSending(false);
     }
@@ -100,9 +123,18 @@ function HttpClientTool() {
     if (!response) return;
     try {
       await copy(response.body);
-      setMessage({ type: "success", text: t("http.copied") });
+      flash("success", t("http.copied"));
     } catch (e) {
-      setMessage({ type: "error", text: String(e) });
+      flash("error", String(e));
+    }
+  };
+
+  const handleFormatBody = () => {
+    if (!response) return;
+    const { ok, result } = formatJson(response.body);
+    if (ok) {
+      setResponse({ ...response, body: result });
+      flash("success", "JSON formatted");
     }
   };
 
@@ -112,6 +144,8 @@ function HttpClientTool() {
       : response && response.status >= 400
         ? "status-err"
         : "";
+
+  const isJsonResponse = response?.contentType?.includes("application/json");
 
   return (
     <div className="devtools-tool">
@@ -139,7 +173,7 @@ function HttpClientTool() {
         />
         <button
           type="button"
-          className="btn btn-primary"
+          className="btn btn-primary btn-small"
           onClick={handleSend}
           disabled={sending}
         >
@@ -199,7 +233,7 @@ function HttpClientTool() {
               />
               <button
                 type="button"
-                className="btn btn-secondary btn-small"
+                className="btn btn-secondary btn-small icon-only"
                 onClick={() => removeHeader(h.id)}
                 disabled={headers.length <= 1}
               >
@@ -235,11 +269,20 @@ function HttpClientTool() {
             <>
               <div className="devtools-response-meta">
                 <span className={`devtools-status ${statusClass}`}>
-                  {t("http.status")}: {response.status}
+                  {response.status}
                 </span>
-                <span className="devtools-duration">
-                  {t("http.duration")}: {response.duration_ms} ms
-                </span>
+                <span className="devtools-duration">{response.duration_ms} ms</span>
+                {isJsonResponse && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={handleFormatBody}
+                  >
+                    <Wrench size={12} />
+                    {t("http.formatJson")}
+                  </button>
+                )}
+                <div className="devtools-actions-spacer" />
                 <button
                   type="button"
                   className="btn btn-secondary btn-small"
@@ -249,8 +292,16 @@ function HttpClientTool() {
                   {t("http.copyBody")}
                 </button>
               </div>
-              <div className="devtools-response-headers">
-                <label className="devtools-label">{t("http.responseHeaders")}</label>
+
+              <div className="devtools-response-body">
+                <label className="devtools-label">{t("http.responseBody")}</label>
+                <pre className="devtools-pre">{response.body || " "}</pre>
+              </div>
+
+              <div className="devtools-response-headers-section">
+                <label className="devtools-label">
+                  {t("http.responseHeaders")} ({response.headers.length})
+                </label>
                 <div className="devtools-response-headers-list">
                   {response.headers.map((h, i) => (
                     <div key={i} className="devtools-response-header">
@@ -258,10 +309,6 @@ function HttpClientTool() {
                     </div>
                   ))}
                 </div>
-              </div>
-              <div className="devtools-response-body">
-                <label className="devtools-label">{t("http.responseBody")}</label>
-                <pre className="devtools-pre">{response.body || " "}</pre>
               </div>
             </>
           )}

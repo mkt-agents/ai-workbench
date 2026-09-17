@@ -1,16 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ClipboardCopy, Eraser, Key } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 type Algo = "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512";
+type Encoding = "hex" | "base64";
 
-async function hashText(text: string, algo: Algo): Promise<string> {
+const ALGOS: Algo[] = ["SHA-1", "SHA-256", "SHA-384", "SHA-512"];
+
+async function hashText(text: string, algo: Algo): Promise<Uint8Array> {
   const data = new TextEncoder().encode(text);
   const buf = await crypto.subtle.digest(algo, data);
-  return Array.from(new Uint8Array(buf))
+  return new Uint8Array(buf);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 function HashTool() {
@@ -19,32 +34,58 @@ function HashTool() {
 
   const [algo, setAlgo] = useState<Algo>("SHA-256");
   const [input, setInput] = useState("");
+  const [encoding, setEncoding] = useState<Encoding>("hex");
+  const [multiAlgo, setMultiAlgo] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const [hashed, setHashed] = useState("");
+  const [multiHashes, setMultiHashes] = useState<Record<Algo, string>>({
+    "SHA-1": "",
+    "SHA-256": "",
+    "SHA-384": "",
+    "SHA-512": "",
+  });
 
   useEffect(() => {
     if (!input) {
       setHashed("");
+      setMultiHashes({ "SHA-1": "", "SHA-256": "", "SHA-384": "", "SHA-512": "" });
       return;
     }
     let active = true;
-    hashText(input, algo)
-      .then((h) => {
-        if (active) setHashed(h);
-      })
-      .catch(() => {
-        if (active) setHashed("");
+    const algosToUse = multiAlgo ? ALGOS : [algo];
+
+    Promise.all(algosToUse.map((a) => hashText(input, a))).then((results) => {
+      if (!active) return;
+      if (multiAlgo) {
+        const map: Record<string, string> = {};
+        algosToUse.forEach((a, i) => {
+          map[a] = encoding === "hex" ? bytesToHex(results[i]) : bytesToBase64(results[i]);
+        });
+        setMultiHashes(map as Record<Algo, string>);
+      } else {
+        const bytes = results[0];
+        setHashed(encoding === "hex" ? bytesToHex(bytes) : bytesToBase64(bytes));
+      }
     });
     return () => {
       active = false;
     };
-  }, [input, algo]);
+  }, [input, algo, encoding, multiAlgo]);
 
-  const handleCopy = async () => {
+  const outputLength = useMemo(() => {
+    if (multiAlgo) {
+      const first = Object.values(multiHashes).find((v) => v);
+      return first ? first.length : 0;
+    }
+    return hashed.length;
+  }, [hashed, multiHashes, multiAlgo]);
+
+  const handleCopy = async (text: string) => {
     try {
-      await copy(hashed);
+      await copy(text);
       setMessage({ type: "success", text: t("hash.copied") });
+      setTimeout(() => setMessage(null), 2000);
     } catch (e) {
       setMessage({ type: "error", text: String(e) });
     }
@@ -59,32 +100,53 @@ function HashTool() {
             className="devtools-select"
             value={algo}
             onChange={(e) => setAlgo(e.target.value as Algo)}
+            disabled={multiAlgo}
           >
-            <option value="SHA-1">{t("hash.sha1")}</option>
-            <option value="SHA-256">{t("hash.sha256")}</option>
-            <option value="SHA-384">{t("hash.sha384")}</option>
-            <option value="SHA-512">{t("hash.sha512")}</option>
+            {ALGOS.map((a) => (
+              <option key={a} value={a}>
+                {t(`hash.${a.toLowerCase()}`)}
+              </option>
+            ))}
           </select>
         </label>
-        <div className="devtools-actions">
+        <label className="devtools-checkbox">
+          <input
+            type="checkbox"
+            checked={multiAlgo}
+            onChange={(e) => setMultiAlgo(e.target.checked)}
+          />
+          <span>{t("hash.allAlgos")}</span>
+        </label>
+        <div className="devtools-segmented">
           <button
             type="button"
-            className="btn btn-secondary btn-small"
-            onClick={handleCopy}
-            disabled={!hashed}
+            className={`segmented-item ${encoding === "hex" ? "active" : ""}`}
+            onClick={() => setEncoding("hex")}
           >
-            <ClipboardCopy size={14} />
-            {t("hash.copy")}
+            Hex
           </button>
           <button
             type="button"
-            className="btn btn-secondary btn-small"
-            onClick={() => setInput("")}
+            className={`segmented-item ${encoding === "base64" ? "active" : ""}`}
+            onClick={() => setEncoding("base64")}
           >
-            <Eraser size={14} />
-            {t("hash.clear")}
+            Base64
           </button>
         </div>
+        <div className="devtools-actions-spacer" />
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={() => handleCopy(multiAlgo ? Object.values(multiHashes).join("\n") : hashed)}
+          disabled={!outputLength}
+        >
+          <ClipboardCopy size={14} />
+          {t("hash.copy")}
+        </button>
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => setInput("")}>
+          <Eraser size={14} />
+          {t("hash.clear")}
+        </button>
       </div>
 
       {message && (
@@ -96,7 +158,10 @@ function HashTool() {
 
       <div className="devtools-io">
         <div className="devtools-io-pane">
-          <label className="devtools-label">{t("hash.input")}</label>
+          <div className="io-header">
+            <label className="devtools-label">{t("hash.input")}</label>
+            {input && <span className="json-stats">{input.length} chars</span>}
+          </div>
           <textarea
             className="devtools-textarea"
             value={input}
@@ -107,15 +172,44 @@ function HashTool() {
           />
         </div>
         <div className="devtools-io-pane">
-          <label className="devtools-label">{t("hash.output")}</label>
-          <textarea
-            className="devtools-textarea"
-            value={hashed}
-            readOnly
-            placeholder=""
-            rows={6}
-            spellCheck={false}
-          />
+          <div className="io-header">
+            <label className="devtools-label">
+              {t("hash.output")}
+              {outputLength > 0 && <span className="json-stats">{outputLength} chars</span>}
+            </label>
+          </div>
+
+          {multiAlgo ? (
+            <div className="hash-multi-list">
+              {ALGOS.map((a) => (
+                <div key={a} className="hash-multi-item">
+                  <span className="hash-algo-name">{a}</span>
+                  <code className="hash-algo-value">
+                    {multiHashes[a] || <span className="devports-na">—</span>}
+                  </code>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small icon-only"
+                    onClick={() => handleCopy(multiHashes[a])}
+                    disabled={!multiHashes[a]}
+                  >
+                    <ClipboardCopy size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="hash-single-output">
+              <textarea
+                className="devtools-textarea"
+                value={hashed}
+                readOnly
+                placeholder=""
+                rows={6}
+                spellCheck={false}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

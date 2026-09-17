@@ -87,11 +87,11 @@
     "header": "Header",
     "payload": "Payload",
     "signature": "Signature（原样保留）",
+    "sample": "示例 Token",
     "invalid": "JWT 格式无效（需要三段 Base64Url）",
     "clear": "清空",
     "copy": "复制",
-    "copied": "已复制",
-    "sample": "粘贴 JWT 到此处…"
+    "copied": "已复制"
   },
   "regex": {
     "title": "正则",
@@ -115,8 +115,9 @@
   },
   "hash": {
     "title": "Hash",
-    "description": "Web Crypto 哈希（SHA 系列，输出 Hex）",
+    "description": "Web Crypto 哈希（SHA 系列，支持 Hex / Base64 输出）",
     "algorithm": "算法",
+    "allAlgos": "全部算法",
     "sha1": "SHA-1",
     "sha256": "SHA-256",
     "sha384": "SHA-384",
@@ -169,6 +170,7 @@
     "duration": "耗时",
     "responseHeaders": "响应头",
     "responseBody": "响应体",
+    "formatJson": "格式化 JSON",
     "copyBody": "复制响应体",
     "copied": "已复制",
     "clear": "清空",
