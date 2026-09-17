@@ -33,7 +33,14 @@ fn build_tooltip(dsh_ports: &[u16], tunnel_count: usize) -> String {
         let ports: Vec<String> = dsh_ports.iter().map(|p| format!(":{p}")).collect();
         format!("DSH {} 运行中", ports.join(" "))
     };
-    format!("{dsh} · 隧道 x{tunnel_count}")
+    let base = format!("{dsh} · 隧道 x{tunnel_count}");
+    // Dev-instance marker, compile-time stripped from release builds
+    // (same rule as the "[DEV]" window title suffix in lib.rs).
+    if cfg!(debug_assertions) {
+        format!("[DEV] {base}")
+    } else {
+        base
+    }
 }
 
 fn apply_tray_menu<R: Runtime>(
