@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  BookmarkPlus, Check, Copy, History, MessageSquarePlus, RefreshCw, Send,
-  Sparkles, Square, Trash2, X, ExternalLink,
+  BookmarkPlus, Check, ClipboardPaste, Copy, Eye, FileText, History,
+  MessageSquarePlus, RefreshCw, Send, Sparkles, Square, Trash2, X, ExternalLink,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -735,9 +735,19 @@ function QuickAskApp() {
           <Sparkles size={16} />
           <span>{t("title")}</span>
         </div>
-        <button type="button" className="btn-icon" onClick={() => void hide()} title={t("close")}>
-          <X size={16} />
-        </button>
+        <div className="quick-ask-header-actions">
+          <button
+            type="button"
+            className={`btn-icon qa-history-btn${historyOpen ? " on" : ""}`}
+            onClick={() => setHistoryOpen((v) => !v)}
+            title={t("history")}
+          >
+            <History size={15} />
+          </button>
+          <button type="button" className="btn-icon" onClick={() => void hide()} title={t("close")}>
+            <X size={16} />
+          </button>
+        </div>
       </header>
 
       <div className="quick-ask-toolbar">
@@ -763,57 +773,64 @@ function QuickAskApp() {
           <option value="explain">{t("task.explain")}</option>
           <option value="polish">{t("task.polish")}</option>
         </select>
-        <button
-          type="button"
-          className={`btn-icon qa-history-btn${historyOpen ? " on" : ""}`}
-          onClick={() => setHistoryOpen((v) => !v)}
-          title={t("history")}
-        >
-          <History size={16} />
-        </button>
       </div>
 
       <div className="quick-ask-chips">
-        <label className={`qa-chip ${chips.workspace ? "on" : ""}`}>
-          <input
-            type="checkbox"
-            checked={chips.workspace}
-            onChange={(e) => setChip("workspace", e.target.checked)}
-          />
-          {t("chip.workspace")}
-        </label>
-        <label className={`qa-chip ${chips.git ? "on" : ""}`}>
-          <input type="checkbox" checked={chips.git} onChange={(e) => setChip("git", e.target.checked)} />
-          {t("chip.git")}
-        </label>
-        <label className={`qa-chip ${chips.dirty ? "on" : ""}`}>
-          <input type="checkbox" checked={chips.dirty} onChange={(e) => setChip("dirty", e.target.checked)} />
-          {t("chip.dirty")}
-        </label>
-        <label className={`qa-chip ${chips.clipboard ? "on" : ""}`}>
-          <input
-            type="checkbox"
-            checked={chips.clipboard}
-            onChange={(e) => setChip("clipboard", e.target.checked)}
-          />
-          {t("chip.clipboard")}
-        </label>
-        <button type="button" className="btn btn-secondary btn-small" onClick={() => void fillClipboard()}>
-          {t("pasteClipboard")}
-        </button>
-        {(snippets?.length ?? 0) > 0 && (
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => setSnippetOpen((v) => !v)}>
-            {t("snippets")}
+        <div className="qa-chip-group">
+          <label className={`qa-chip ${chips.workspace ? "on" : ""}`}>
+            <input
+              type="checkbox"
+              checked={chips.workspace}
+              onChange={(e) => setChip("workspace", e.target.checked)}
+            />
+            {t("chip.workspace")}
+          </label>
+          <label className={`qa-chip ${chips.git ? "on" : ""}`}>
+            <input type="checkbox" checked={chips.git} onChange={(e) => setChip("git", e.target.checked)} />
+            {t("chip.git")}
+          </label>
+          <label className={`qa-chip ${chips.dirty ? "on" : ""}`}>
+            <input type="checkbox" checked={chips.dirty} onChange={(e) => setChip("dirty", e.target.checked)} />
+            {t("chip.dirty")}
+          </label>
+          <label className={`qa-chip ${chips.clipboard ? "on" : ""}`}>
+            <input
+              type="checkbox"
+              checked={chips.clipboard}
+              onChange={(e) => setChip("clipboard", e.target.checked)}
+            />
+            {t("chip.clipboard")}
+          </label>
+        </div>
+        <div className="qa-tool-group">
+          <button
+            type="button"
+            className="qa-tool-btn"
+            onClick={() => void fillClipboard()}
+            title={t("pasteClipboard")}
+          >
+            <ClipboardPaste size={14} />
           </button>
-        )}
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          onClick={() => setCtxOpen((v) => !v)}
-          disabled={!ctxPreview}
-        >
-          {ctxOpen ? t("hideContext") : t("showContext")}
-        </button>
+          {(snippets?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              className={`qa-tool-btn${snippetOpen ? " on" : ""}`}
+              onClick={() => setSnippetOpen((v) => !v)}
+              title={t("snippets")}
+            >
+              <FileText size={14} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={`qa-tool-btn${ctxOpen ? " on" : ""}`}
+            onClick={() => setCtxOpen((v) => !v)}
+            disabled={!ctxPreview}
+            title={ctxOpen ? t("hideContext") : t("showContext")}
+          >
+            <Eye size={14} />
+          </button>
+        </div>
       </div>
 
       {ctxTruncated && <div className="quick-ask-hint">{t("truncated")}</div>}
@@ -876,68 +893,82 @@ function QuickAskApp() {
         </div>
       )}
 
-      <textarea
-        ref={inputRef}
-        className="quick-ask-input input-field"
-        placeholder={t("placeholder")}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key !== "Enter") return;
-          // Ctrl/Cmd+Enter always sends; plain Enter sends too, Shift+Enter = newline.
-          if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
-          e.preventDefault();
-          if (!busy) void send();
-        }}
-        rows={5}
-      />
+      <div className="qa-input-card">
+        <textarea
+          ref={inputRef}
+          className="quick-ask-input"
+          placeholder={t("placeholder")}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            // Ctrl/Cmd+Enter always sends; plain Enter sends too, Shift+Enter = newline.
+            if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
+            e.preventDefault();
+            if (!busy) void send();
+          }}
+          rows={4}
+        />
+        <div className="qa-input-foot">
+          {busy ? (
+            <button
+              type="button"
+              className="qa-stop-btn"
+              onClick={() => void stopStream()}
+              title={t("stop")}
+            >
+              <Square size={13} />
+              <span>{t("stop")}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="qa-send-btn"
+              onClick={() => void send()}
+              disabled={!input.trim()}
+              title={t("send")}
+            >
+              <Send size={15} />
+            </button>
+          )}
+        </div>
+      </div>
 
       <div className="quick-ask-actions">
-        {busy ? (
-          <button type="button" className="btn btn-secondary" onClick={() => void stopStream()}>
-            <Square size={14} />
-            {t("stop")}
-          </button>
-        ) : (
-          <button type="button" className="btn btn-primary" onClick={() => void send()}>
-            <Send size={14} />
-            {t("send")}
-          </button>
-        )}
         <button
           type="button"
-          className="btn btn-secondary"
+          className="qa-mini-btn"
           disabled={busy || !lastQuestionRef.current}
           onClick={() => void send(lastQuestionRef.current, lastHistoryRef.current)}
           title={t("regenerate")}
         >
-          <RefreshCw size={14} /> {t("regenerate")}
+          <RefreshCw size={13} /> {t("regenerate")}
         </button>
-        <button type="button" className="btn btn-secondary" disabled={!answer} onClick={() => void copyAnswer()}>
-          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? t("copied") : t("copy")}
+        <button type="button" className="qa-mini-btn" disabled={!answer} onClick={() => void copyAnswer()}>
+          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? t("copied") : t("copy")}
         </button>
         <button
           type="button"
-          className="btn btn-secondary"
+          className="qa-mini-btn"
           disabled={!answer}
           onClick={() => void saveAnswerAsSnippet()}
           title={t("saveSnippet")}
         >
-          {snippetSaved ? <Check size={14} /> : <BookmarkPlus size={14} />}{" "}
+          {snippetSaved ? <Check size={13} /> : <BookmarkPlus size={13} />}{" "}
           {snippetSaved ? t("savedSnippet") : t("saveSnippet")}
         </button>
-        <button type="button" className="btn btn-secondary" onClick={() => void openDeepSeek()}>
-          <ExternalLink size={14} /> {t("openDeepseek")}
+        <button type="button" className="qa-mini-btn" onClick={() => void openDeepSeek()}>
+          <ExternalLink size={13} /> {t("openDeepseek")}
         </button>
         {(history.length > 0 || answer) && (
           <button
             type="button"
-            className="btn btn-secondary"
+            className="qa-mini-btn"
             disabled={busy}
             onClick={startNewChat}
             title={t("newChat")}
           >
-            <MessageSquarePlus size={14} /> {t("newChat")}
+            <MessageSquarePlus size={13} /> {t("newChat")}
           </button>
         )}
       </div>
