@@ -43,6 +43,7 @@
   "hotkeyLabel": "Hotkey",
   "openCountLabel": "Open count",
   "allGroups": "All",
+  "ungrouped": "Ungrouped",
   "listView": "List view",
   "cardView": "Card view",
   "sortManual": "Manual",

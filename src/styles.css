@@ -5411,22 +5411,18 @@ input, select, textarea { font-family: inherit; }
   }
 }
 
-.plugin-ungrouped {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
-}
-
-@media (min-width: 1100px) {
-  .plugin-ungrouped {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-.plugin-ungrouped .plugin-card-grid,
 .plugin-group-items .plugin-card-grid {
   grid-column: 1 / -1;
+}
+
+/* Ungrouped section header — informational, not clickable */
+.plugin-group-header-static {
+  cursor: default;
+}
+
+.plugin-group-header-static:hover {
+  background: transparent;
+  color: var(--text-2);
 }
 
 /* Drag & drop */

@@ -43,6 +43,7 @@
   "hotkeyLabel": "快捷键",
   "openCountLabel": "打开次数",
   "allGroups": "全部",
+  "ungrouped": "未分组",
   "listView": "列表视图",
   "cardView": "卡片视图",
   "sortManual": "手动",

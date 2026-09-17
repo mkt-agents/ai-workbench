@@ -6,7 +6,7 @@ import { useConfirm } from "./ConfirmModal";
 import type { WebPlugin } from "../core/types";
 import {
   X, Plus, Trash2, Edit2, Check, Globe, ExternalLink, Search, Link2,
-  BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen,
+  BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
   Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown,
 } from "lucide-react";
 
@@ -786,20 +786,32 @@ function PluginBrowser() {
   };
 
   const renderGroupHeader = (group: string, items: WebPlugin[]) => {
-    if (!group) return null;
-    const isExpanded = expandedGroups.has(group) || selectedGroup !== "all";
+    const isUngrouped = group === "";
+    const isExpanded = isUngrouped || expandedGroups.has(group) || selectedGroup !== "all";
     return (
-      <div key={`group-${group}`} className="plugin-group">
-        <button
-          className="plugin-group-header"
-          onClick={() => toggleGroup(group)}
-          type="button"
-        >
-          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <FolderOpen size={14} />
-          <span>{group}</span>
-          <span className="plugin-group-count">{items.length}</span>
-        </button>
+      <div
+        key={isUngrouped ? "group-ungrouped" : `group-${group}`}
+        className="plugin-group"
+      >
+        {isUngrouped ? (
+          // Static header: ungrouped sites always show, never collapsed
+          <div className="plugin-group-header plugin-group-header-static">
+            <Inbox size={14} />
+            <span>{t("ungrouped")}</span>
+            <span className="plugin-group-count">{items.length}</span>
+          </div>
+        ) : (
+          <button
+            className="plugin-group-header"
+            onClick={() => toggleGroup(group)}
+            type="button"
+          >
+            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <FolderOpen size={14} />
+            <span>{group}</span>
+            <span className="plugin-group-count">{items.length}</span>
+          </button>
+        )}
         {isExpanded && (
           <div className="plugin-group-items">
             {viewMode === "list"
@@ -1014,17 +1026,15 @@ function PluginBrowser() {
                 </div>
               )
             ) : (
-              Array.from(groupedPlugins.entries()).map(([group, items]) =>
-                group ? (
-                  renderGroupHeader(group, items)
-                ) : (
-                  <div key="ungrouped" className="plugin-ungrouped">
-                    {viewMode === "list"
-                      ? items.map(renderPluginItem)
-                      : <div className="plugin-card-grid">{items.map(renderCardItem)}</div>}
-                  </div>
-                )
-              )
+              <>
+                {Array.from(groupedPlugins.entries())
+                  .filter(([g]) => g !== "")
+                  .map(([group, items]) => renderGroupHeader(group, items))}
+                {/* Ungrouped sites render as their own section, always last,
+                    so they never look like stray cards of the group above */}
+                {groupedPlugins.has("") &&
+                  renderGroupHeader("", groupedPlugins.get("")!)}
+              </>
             )}
           </div>
         </div>

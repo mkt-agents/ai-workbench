@@ -37,20 +37,27 @@ pub fn navigate_browser_window(app: tauri::AppHandle, url: String) -> Result<boo
 }
 
 /// Floating toolbar injected into every opened browser window. Runs on every
-/// page load via `WebviewWindowBuilder::initialization_script`, so it survives
+/// page load via `WebviewWindowBuilder::initialization_script` (top-level
+/// frame only — see the guard at the top of the script), so it survives
 /// in-page navigation. Uses Shadow DOM to avoid colliding with the host page's
 /// styles. Toolbar features:
-///   - Drag handle (move toolbar anywhere in the viewport)
 ///   - Back / Forward / Reload / Home
-///   - Zoom out / display / zoom in / reset (WebView2 supports body.style.zoom)
-///   - URL display (click to copy)
-///   - Copy URL / Open in external browser / Collapse / Hide
+///   - Zoom out / display (click to reset) / zoom in / reset — via
+///     body.style.zoom (WebView2 + WKWebView both support it)
+///   - URL chip (click to copy) / Copy / Open in external browser
+///   - Drag the whole bar (not just the grip); double-click re-docks to the
+///     bottom-right corner. A drag mask keeps pointermove alive over
+///     cross-origin iframes while dragging.
+///   - Collapse / expand with an animated width transition
+///   - Hide, with a small restore dot in the corner to bring it back
+///   - Position / collapsed state / zoom persist per-origin via
+///     sessionStorage, so they survive in-page navigation in this window
 ///
 /// The toolbar calls the webview's own `history.back()/forward()` and
 /// `location.reload()` — no IPC round-trip needed for nav actions. Opening
-/// the external browser tries `window.open` first; if the webview blocks it,
-/// we fall back to copying the URL so the user can paste it into their
-/// system browser.
+/// the external browser navigates to a magic placeholder hostname
+/// (`aiwb-shell.open`) that the Rust-side `on_navigation` handler intercepts
+/// and forwards to `shell.open`; the URL is also copied as a fallback.
 const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
   // WebView2 runs initialization scripts in EVERY frame (top-level + all
   // iframes). Pages with embedded iframes (e.g. QR-code login widgets) would
@@ -66,6 +73,43 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     configurable: false,
   });
 
+  // ---- Helpers -----------------------------------------------------------
+
+  // Inline SVG (feather-style) icons: crisp at any DPI and consistent across
+  // systems, unlike the unicode glyphs used before.
+  function svg(body) {
+    return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+  }
+  var ICONS = {
+    grip: '<circle cx="9" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.3" fill="currentColor" stroke="none"/>',
+    back: '<polyline points="15 18 9 12 15 6"/>',
+    forward: '<polyline points="9 18 15 12 9 6"/>',
+    reload: '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+    home: '<path d="M3 9.5 12 3l9 6.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 14 15 14 15 22"/>',
+    zoomOut: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>',
+    zoomIn: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/>',
+    zoomReset: '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    collapse: '<polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/>',
+    expand: '<polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/>',
+    close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    chevronUp: '<polyline points="18 15 12 9 6 15"/>'
+  };
+
+  // Toolbar state survives in-page navigation within this window (session
+  // storage is per-tab and per-origin). All access is guarded — some pages
+  // run with storage disabled.
+  var store = {
+    get: function (k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } },
+    set: function (k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} },
+    del: function (k) { try { sessionStorage.removeItem(k); } catch (_) {} }
+  };
+  var POS_KEY = 'aiwb-toolbar-pos';
+  var COL_KEY = 'aiwb-toolbar-collapsed';
+  var ZOOM_KEY = 'aiwb-toolbar-zoom';
+
   function init() {
     if (document.getElementById('ai-workbench-toolbar-host')) return;
     if (!document.documentElement) return;
@@ -78,47 +122,67 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     root.innerHTML =
       '<style>' +
       ':host{all:initial;}' +
-      '.bar{display:flex;gap:2px;align-items:center;padding:4px 6px;background:#1f2937;color:#fff;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px;user-select:none;}' +
-      '.bar.collapsed .expanded-only{display:none !important;}' +
-      'button{appearance:none;background:transparent;border:0;color:#fff;width:28px;height:28px;border-radius:5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;font-size:14px;line-height:1;transition:background 0.15s;font-family:inherit;}' +
-      'button:hover:not(:disabled){background:rgba(255,255,255,0.18);}' +
-      'button:active:not(:disabled){background:rgba(255,255,255,0.3);}' +
-      'button:disabled{opacity:0.35;cursor:default;}' +
-      '.grip{cursor:grab;opacity:0.55;font-size:14px;letter-spacing:-3px;}' +
-      '.grip:hover{opacity:0.9;background:rgba(255,255,255,0.12);}' +
-      '.grip:active{cursor:grabbing;}' +
-      '.sep{width:1px;height:18px;background:rgba(255,255,255,0.2);margin:0 3px;}' +
-      '.url{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9ca3af;padding:0 6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;cursor:text;border-radius:4px;}' +
-      '.url:hover{color:#fff;background:rgba(255,255,255,0.08);}' +
-      '.badge{background:#10b981;color:#fff;border-radius:3px;padding:1px 5px;font-size:10px;margin:0 4px 0 2px;font-weight:600;letter-spacing:0.5px;}' +
-      '.zoom-display{min-width:34px;text-align:center;color:#d1d5db;font-size:11px;padding:0 2px;font-family:ui-monospace,monospace;}' +
+      '.bar{display:flex;align-items:center;gap:1px;padding:5px 7px 5px 5px;background:rgba(17,24,39,0.85);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);color:#e5e7eb;border:1px solid rgba(255,255,255,0.09);border-radius:12px;box-shadow:0 2px 6px rgba(0,0,0,0.25),0 12px 32px rgba(0,0,0,0.35);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px;user-select:none;-webkit-user-select:none;opacity:0.94;transition:opacity 0.2s,transform 0.15s,box-shadow 0.2s;}' +
+      '.bar:hover{opacity:1;}' +
+      '.bar.dragging{opacity:1;transform:scale(1.03);box-shadow:0 4px 10px rgba(0,0,0,0.3),0 18px 48px rgba(0,0,0,0.45);cursor:grabbing;}' +
+      'button{appearance:none;-webkit-appearance:none;background:transparent;border:0;color:#d1d5db;width:30px;height:30px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:background 0.15s,color 0.15s,transform 0.1s;font-family:inherit;flex:none;}' +
+      'button:hover:not(:disabled){background:rgba(255,255,255,0.12);color:#fff;}' +
+      'button:active:not(:disabled){transform:scale(0.88);background:rgba(255,255,255,0.22);}' +
+      'button:disabled{opacity:0.3;cursor:default;}' +
+      'button:focus-visible{outline:2px solid #34d399;outline-offset:1px;}' +
+      '.grip{cursor:grab;opacity:0.6;}' +
+      '.grip:hover{opacity:1;}' +
+      '.bar.dragging .grip{cursor:grabbing;}' +
+      // All expanded controls live in one group so collapsing animates the
+      // width smoothly. visibility is delayed until the collapse transition
+      // finishes so the hidden buttons drop out of the tab order.
+      '.exp{display:flex;align-items:center;gap:1px;max-width:720px;padding:3px 0;margin:0 3px;overflow:hidden;visibility:visible;transition:max-width 0.28s cubic-bezier(0.4,0,0.2,1),padding 0.28s cubic-bezier(0.4,0,0.2,1),margin 0.28s cubic-bezier(0.4,0,0.2,1),opacity 0.18s ease,visibility 0s;}' +
+      '.bar.collapsed .exp{max-width:0;padding:0;margin:0;opacity:0;visibility:hidden;transition:max-width 0.28s cubic-bezier(0.4,0,0.2,1),padding 0.28s cubic-bezier(0.4,0,0.2,1),margin 0.28s cubic-bezier(0.4,0,0.2,1),opacity 0.18s ease,visibility 0s 0.25s;}' +
+      '.sep{width:1px;height:16px;background:linear-gradient(rgba(255,255,255,0),rgba(255,255,255,0.25),rgba(255,255,255,0));margin:0 5px;flex:none;}' +
+      '.badge{background:linear-gradient(135deg,#10b981,#0d9488);color:#fff;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;letter-spacing:0.5px;margin:0 5px 0 3px;box-shadow:0 0 10px rgba(16,185,129,0.4);flex:none;}' +
+      'button.zoom-display{width:auto;min-width:44px;color:#cbd5e1;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(255,255,255,0.06);}' +
+      'button.zoom-display:hover{background:rgba(255,255,255,0.14);color:#fff;}' +
+      '.zoom-display.pulse{animation:aiwbPulse 0.35s ease;}' +
+      '@keyframes aiwbPulse{50%{transform:scale(1.2);color:#34d399;}}' +
+      '.url{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8;padding:0 8px;height:30px;display:inline-flex;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;cursor:pointer;border-radius:7px;transition:background 0.15s,color 0.15s;flex:none;}' +
+      '.url:hover{color:#fff;background:rgba(255,255,255,0.1);}' +
+      'button.restore{position:fixed;right:12px;bottom:12px;width:32px;height:32px;border-radius:50%;background:rgba(17,24,39,0.78);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);color:#9ca3af;opacity:0.45;box-shadow:0 4px 16px rgba(0,0,0,0.3);transition:opacity 0.2s,background 0.2s,color 0.2s;}' +
+      'button.restore:hover{opacity:1;color:#fff;background:rgba(17,24,39,0.95);}' +
+      // Shown only while dragging: keeps pointer events flowing when the
+      // cursor passes over cross-origin iframes (they would otherwise swallow
+      // pointermove) and shows the grabbing cursor viewport-wide.
+      '.drag-mask{position:fixed;inset:0;z-index:2147483647;display:none;cursor:grabbing;}' +
+      '@media (prefers-reduced-motion:reduce){.bar,.exp,button,.zoom-display,button.restore{transition:none !important;animation:none !important;}}' +
       '</style>' +
       '<div class="bar" id="bar">' +
-      '<button class="grip" id="grip" title="拖动工具栏">::</button>' +
+      '<button class="grip" id="grip" title="拖动工具栏（双击复位）" aria-label="拖动工具栏">' + svg(ICONS.grip) + '</button>' +
       '<span class="badge">AI</span>' +
-      '<button class="expanded-only" id="back" title="后退">←</button>' +
-      '<button class="expanded-only" id="forward" title="前进">→</button>' +
-      '<button class="expanded-only" id="reload" title="刷新">⟳</button>' +
-      '<button class="expanded-only" id="home" title="主页">⌂</button>' +
-      '<span class="sep expanded-only"></span>' +
-      '<button class="expanded-only" id="zoom-out" title="缩小">−</button>' +
-      '<span class="zoom-display expanded-only" id="zoom-display">100%</span>' +
-      '<button class="expanded-only" id="zoom-in" title="放大">+</button>' +
-      '<button class="expanded-only" id="zoom-reset" title="重置缩放" style="font-size:12px;">⊙</button>' +
-      '<span class="sep expanded-only"></span>' +
-      '<span class="url expanded-only" id="url" title=""></span>' +
-      '<span class="sep expanded-only"></span>' +
-      '<button class="expanded-only" id="copy" title="复制地址">⧉</button>' +
-      '<button class="expanded-only" id="external" title="在系统浏览器打开">↗</button>' +
-      '<button class="expanded-only" id="collapse" title="折叠" style="font-size:10px;">▁</button>' +
-      '<button id="expand" title="展开" style="display:none;font-size:10px;">▮</button>' +
-      '<button id="hide" title="隐藏工具栏">×</button>' +
-      '</div>';
+      '<div class="exp">' +
+      '<button id="back" title="后退" aria-label="后退">' + svg(ICONS.back) + '</button>' +
+      '<button id="forward" title="前进" aria-label="前进">' + svg(ICONS.forward) + '</button>' +
+      '<button id="reload" title="刷新" aria-label="刷新">' + svg(ICONS.reload) + '</button>' +
+      '<button id="home" title="主页" aria-label="主页">' + svg(ICONS.home) + '</button>' +
+      '<span class="sep"></span>' +
+      '<button id="zoom-out" title="缩小" aria-label="缩小">' + svg(ICONS.zoomOut) + '</button>' +
+      '<button class="zoom-display" id="zoom-display" title="缩放级别（点击重置）" aria-label="重置缩放">100%</button>' +
+      '<button id="zoom-in" title="放大" aria-label="放大">' + svg(ICONS.zoomIn) + '</button>' +
+      '<button id="zoom-reset" title="重置缩放" aria-label="重置缩放">' + svg(ICONS.zoomReset) + '</button>' +
+      '<span class="sep"></span>' +
+      '<span class="url" id="url" title="点击复制地址"></span>' +
+      '<span class="sep"></span>' +
+      '<button id="copy" title="复制地址" aria-label="复制地址">' + svg(ICONS.copy) + '</button>' +
+      '<button id="external" title="在系统浏览器打开" aria-label="在系统浏览器打开">' + svg(ICONS.external) + '</button>' +
+      '</div>' +
+      '<button id="collapse" title="收起工具栏" aria-label="收起工具栏">' + svg(ICONS.collapse) + '</button>' +
+      '<button id="expand" title="展开工具栏" aria-label="展开工具栏" style="display:none;">' + svg(ICONS.expand) + '</button>' +
+      '<button id="hide" title="隐藏工具栏" aria-label="隐藏工具栏">' + svg(ICONS.close) + '</button>' +
+      '</div>' +
+      '<button class="restore" id="restore" title="显示工具栏" aria-label="显示工具栏" style="display:none;">' + svg(ICONS.chevronUp) + '</button>' +
+      '<div class="drag-mask" id="drag-mask"></div>';
 
     document.documentElement.appendChild(host);
 
     var bar = root.getElementById('bar');
-    var grip = root.getElementById('grip');
     var back = root.getElementById('back');
     var forward = root.getElementById('forward');
     var reload = root.getElementById('reload');
@@ -133,11 +197,19 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     var collapse = root.getElementById('collapse');
     var expand = root.getElementById('expand');
     var hide = root.getElementById('hide');
+    var restoreBtn = root.getElementById('restore');
+    var dragMask = root.getElementById('drag-mask');
 
-    var zoomLevel = 1.0;
-    function applyZoom() {
+    // ---- Zoom ----
+    var zoomLevel = parseFloat(store.get(ZOOM_KEY));
+    if (!isFinite(zoomLevel)) zoomLevel = 1.0;
+    zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel));
+
+    function applyZoom(pulse) {
       // WebView2 (Windows) and WKWebView (macOS) both support body.style.zoom.
-      // This scales the page without reflowing layout — same as Ctrl+/- in browsers.
+      // This scales the page without reflowing layout — same as Ctrl+/- in
+      // browsers. The toolbar host lives on documentElement, so it is not
+      // affected by the body zoom.
       try {
         document.body.style.zoom = zoomLevel;
       } catch (e) {
@@ -146,48 +218,46 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
         document.documentElement.style.transformOrigin = '0 0';
       }
       zoomDisplay.textContent = Math.round(zoomLevel * 100) + '%';
+      store.set(ZOOM_KEY, String(zoomLevel));
+      if (pulse) {
+        zoomDisplay.classList.remove('pulse');
+        void zoomDisplay.offsetWidth; // restart the CSS animation
+        zoomDisplay.classList.add('pulse');
+      }
     }
+    function setZoom(level) {
+      zoomLevel = Math.max(0.5, Math.min(3.0, Math.round(level * 10) / 10));
+      applyZoom(true);
+    }
+    zoomIn.addEventListener('click', function () { setZoom(zoomLevel + 0.1); });
+    zoomOut.addEventListener('click', function () { setZoom(zoomLevel - 0.1); });
+    zoomReset.addEventListener('click', function () { setZoom(1.0); });
+    zoomDisplay.addEventListener('click', function () { setZoom(1.0); });
 
+    // ---- URL state ----
     function updateState() {
-      urlEl.textContent = location.href.length > 40 ? location.href.slice(0, 40) + '…' : location.href;
+      urlEl.textContent = location.href; // CSS ellipsis handles truncation
       urlEl.title = location.href;
       back.disabled = window.history.length <= 1;
     }
+    window.addEventListener('popstate', updateState);
+    window.addEventListener('hashchange', updateState);
+    window.addEventListener('pageshow', updateState); // bfcache restores
 
-    // ---- Navigation actions ----
-    back.addEventListener('click', function (e) {
-      e.preventDefault();
+    // ---- Navigation ----
+    back.addEventListener('click', function () {
       if (window.history.length > 1) window.history.back();
     });
-    forward.addEventListener('click', function (e) {
-      e.preventDefault();
+    forward.addEventListener('click', function () {
       window.history.forward();
     });
-    reload.addEventListener('click', function (e) {
-      e.preventDefault();
+    reload.addEventListener('click', function () {
       location.reload();
     });
-    home.addEventListener('click', function (e) {
-      e.preventDefault();
-      // Go to site root. location.origin works for http(s) and is always same-origin.
+    home.addEventListener('click', function () {
+      // Go to site root. location.origin works for http(s) and is always
+      // same-origin.
       location.href = location.origin + '/';
-    });
-
-    // ---- Zoom ----
-    zoomIn.addEventListener('click', function (e) {
-      e.preventDefault();
-      zoomLevel = Math.min(Math.round((zoomLevel + 0.1) * 10) / 10, 3.0);
-      applyZoom();
-    });
-    zoomOut.addEventListener('click', function (e) {
-      e.preventDefault();
-      zoomLevel = Math.max(Math.round((zoomLevel - 0.1) * 10) / 10, 0.5);
-      applyZoom();
-    });
-    zoomReset.addEventListener('click', function (e) {
-      e.preventDefault();
-      zoomLevel = 1.0;
-      applyZoom();
     });
 
     // ---- Copy URL ----
@@ -200,11 +270,12 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       try { document.execCommand('copy'); } catch (_) {}
       document.body.removeChild(ta);
     }
+    function flashBtn(btn, restoreIcon) {
+      btn.innerHTML = svg(ICONS.check);
+      setTimeout(function () { btn.innerHTML = svg(restoreIcon); }, 900);
+    }
     function copyURL() {
-      var done = function () {
-        copy.textContent = '✓';
-        setTimeout(function () { copy.textContent = '⧉'; }, 1000);
-      };
+      var done = function () { flashBtn(copy, ICONS.copy); };
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(location.href).then(done, function () {
           fallbackCopy();
@@ -215,14 +286,8 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
         done();
       }
     }
-    urlEl.addEventListener('click', function (e) {
-      e.preventDefault();
-      copyURL();
-    });
-    copy.addEventListener('click', function (e) {
-      e.preventDefault();
-      copyURL();
-    });
+    urlEl.addEventListener('click', copyURL);
+    copy.addEventListener('click', copyURL);
 
     // ---- External browser ----
     // The toolbar runs inside an external-URL webview, where Tauri does not
@@ -233,12 +298,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     // intercepts this host, calls `shell.open(target)`, and returns false
     // so the webview never actually fetches the placeholder. Fallback to
     // copying the URL if the trigger somehow fails.
-    function flashOK() {
-      external.textContent = '✓';
-      setTimeout(function () { external.textContent = '↗'; }, 1000);
-    }
-    external.addEventListener('click', function (e) {
-      e.preventDefault();
+    external.addEventListener('click', function () {
       // Magic host must stay in sync with SHELL_OPEN_TRIGGER_HOST in Rust.
       var a = document.createElement('a');
       a.href = 'https://aiwb-shell.open/?url=' + encodeURIComponent(location.href);
@@ -250,68 +310,38 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       }, 200);
       // Also copy URL as backup in case the webview doesn't fire on_navigation
       copyURL();
-      flashOK();
+      flashBtn(external, ICONS.external);
     });
 
     // ---- Collapse / expand ----
-    collapse.addEventListener('click', function (e) {
-      e.preventDefault();
-      bar.classList.add('collapsed');
-      collapse.style.display = 'none';
-      expand.style.display = '';
+    function setCollapsed(v) {
+      bar.classList.toggle('collapsed', v);
+      collapse.style.display = v ? 'none' : '';
+      expand.style.display = v ? '' : 'none';
+      store.set(COL_KEY, v ? '1' : '0');
+    }
+    collapse.addEventListener('click', function () { setCollapsed(true); });
+    expand.addEventListener('click', function () { setCollapsed(false); });
+
+    // ---- Hide / restore ----
+    // Hiding only hides the bar; a small restore dot appears in the corner
+    // so the toolbar is never lost forever (previously it only came back
+    // after a page navigation).
+    hide.addEventListener('click', function () {
+      bar.style.display = 'none';
+      restoreBtn.style.display = 'inline-flex';
     });
-    expand.addEventListener('click', function (e) {
-      e.preventDefault();
-      bar.classList.remove('collapsed');
-      collapse.style.display = '';
-      expand.style.display = 'none';
-    });
-    hide.addEventListener('click', function (e) {
-      e.preventDefault();
-      host.style.display = 'none';
+    restoreBtn.addEventListener('click', function () {
+      bar.style.display = '';
+      restoreBtn.style.display = 'none';
     });
 
-    // ---- Dragging ----
-    // The grip is the only drag handle. On mousedown we switch from
-    // right/bottom anchoring to left/top so the host follows the cursor
-    // freely. Position is clamped to the viewport so the toolbar can't be
-    // dragged off-screen.
+    // ---- Positioning: drag, re-dock, clamp, persist ----
     var dragging = false;
-    var startX = 0, startY = 0, startLeft = 0, startTop = 0;
-    function onMove(e) {
-      if (!dragging) return;
-      var newLeft = startLeft + (e.clientX - startX);
-      var newTop = startTop + (e.clientY - startY);
-      newLeft = Math.max(0, Math.min(window.innerWidth - host.offsetWidth, newLeft));
-      newTop = Math.max(0, Math.min(window.innerHeight - host.offsetHeight, newTop));
-      host.style.left = newLeft + 'px';
-      host.style.top = newTop + 'px';
-    }
-    function onUp() {
-      dragging = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    }
-    grip.addEventListener('mousedown', function (e) {
-      // Ignore right/middle clicks; only left button drags
-      if (e.button !== 0) return;
-      e.preventDefault();
-      dragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      var rect = host.getBoundingClientRect();
-      host.style.right = 'auto';
-      host.style.bottom = 'auto';
-      host.style.left = rect.left + 'px';
-      host.style.top = rect.top + 'px';
-      startLeft = rect.left;
-      startTop = rect.top;
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
+    var dragged = false; // true once the toolbar was dragged or restored
+    var startX = 0, startY = 0, startLeft = 0, startTop = 0, lastDown = 0;
 
-    // Re-clamp position if the window resizes under the toolbar
-    window.addEventListener('resize', function () {
+    function clampIntoView() {
       var rect = host.getBoundingClientRect();
       var newLeft = Math.min(rect.left, window.innerWidth - host.offsetWidth);
       var newTop = Math.min(rect.top, window.innerHeight - host.offsetHeight);
@@ -319,10 +349,98 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       if (newTop < 0) newTop = 0;
       host.style.left = newLeft + 'px';
       host.style.top = newTop + 'px';
+    }
+    function anchorToCorner() {
+      // Back to the default CSS anchoring (right/bottom 16px).
+      dragged = false;
+      host.style.left = '';
+      host.style.top = '';
+      host.style.right = '16px';
+      host.style.bottom = '16px';
+      store.del(POS_KEY);
+    }
+
+    function onMove(e) {
+      if (!dragging) return;
+      var newLeft = Math.max(0, Math.min(window.innerWidth - host.offsetWidth, startLeft + (e.clientX - startX)));
+      var newTop = Math.max(0, Math.min(window.innerHeight - host.offsetHeight, startTop + (e.clientY - startY)));
+      host.style.left = newLeft + 'px';
+      host.style.top = newTop + 'px';
+    }
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      bar.classList.remove('dragging');
+      dragMask.style.display = 'none';
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      store.set(POS_KEY, JSON.stringify({ left: host.style.left, top: host.style.top }));
+    }
+
+    // The whole bar is a drag surface, except for interactive controls.
+    // Pointer events (not mouse events) so touch/pen dragging works too.
+    // A quick second press on the bar background (or grip) re-docks the
+    // toolbar to the bottom-right corner — implemented manually because
+    // preventDefault on pointerdown can suppress native dblclick.
+    bar.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      if (e.target.closest('button:not(.grip), .url')) return;
+      var now = Date.now();
+      if (now - lastDown < 300) {
+        lastDown = 0;
+        anchorToCorner();
+        return;
+      }
+      lastDown = now;
+      e.preventDefault();
+      dragging = true;
+      dragged = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      var rect = host.getBoundingClientRect();
+      // Switch from right/bottom anchoring to left/top so the host follows
+      // the cursor freely.
+      host.style.right = 'auto';
+      host.style.bottom = 'auto';
+      host.style.left = rect.left + 'px';
+      host.style.top = rect.top + 'px';
+      startLeft = rect.left;
+      startTop = rect.top;
+      bar.classList.add('dragging');
+      dragMask.style.display = 'block';
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
     });
 
-    window.addEventListener('popstate', updateState);
-    window.addEventListener('hashchange', updateState);
+    // Re-clamp position when the window resizes — but ONLY in dragged mode.
+    //  - Default (never dragged): the host keeps its right/bottom:16px CSS
+    //    anchoring, so the browser keeps it glued to the bottom-right corner
+    //    through maximize/restore with zero JS involvement. Repositioning
+    //    from JS here would freeze it at old coordinates (it "drifts" toward
+    //    mid-screen when the window grows), and pinning left/top without
+    //    clearing right/bottom over-constrains the box and collapsed it to
+    //    0x0 (the earlier "toolbar disappears" bug).
+    //  - Dragged: the host is left/top-anchored (right/bottom = auto), so we
+    //    just re-clamp those coordinates into the viewport.
+    window.addEventListener('resize', function () {
+      if (dragged) clampIntoView();
+    });
+
+    // ---- Restore persisted state (position / collapsed / zoom) ----
+    var saved = null;
+    try { saved = JSON.parse(store.get(POS_KEY) || 'null'); } catch (_) {}
+    if (saved && isFinite(parseFloat(saved.left)) && isFinite(parseFloat(saved.top))) {
+      host.style.right = 'auto';
+      host.style.bottom = 'auto';
+      host.style.left = String(saved.left);
+      host.style.top = String(saved.top);
+      dragged = true;
+      clampIntoView();
+    }
+    if (store.get(COL_KEY) === '1') setCollapsed(true);
+    if (zoomLevel !== 1) applyZoom(false);
     updateState();
   }
 
