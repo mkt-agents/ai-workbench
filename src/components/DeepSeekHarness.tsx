@@ -9,7 +9,8 @@ import {
   Globe,
   Copy,
   Check,
-  ArrowUpCircle,
+  ArrowRight,
+  Tag,
   Download,
   Undo2,
   X,
@@ -637,16 +638,13 @@ function DeepSeekHarness() {
                   </button>
                 </>
               )}
-              {(!isRunning || dshHasUpdate) && !detecting && (
-                <div className="dsh-version-inline">
-                  {!isRunning && (
-                    <span className="dsh-version-label">
-                      {installed ? `v${dshVersion}` : t("dsh.notInstalledShort")}
-                    </span>
-                  )}
+              {!detecting && (installed || dshHasUpdate) && (
+                <div className="dsh-version-group">
+                  <span className="dsh-version-label">
+                    <Tag size={10} strokeWidth={1.5} />
+                    <span className="dsh-version-text">{installed ? dshVersion : t("dsh.notInstalledShort")}</span>
+                  </span>
                   {dshHasUpdate && dshLatestVersion && (
-                    // One clickable pill (icon + target version) instead of an arrow glued
-                    // to the label plus a separate filled square icon button.
                     <button
                       type="button"
                       className="dsh-update-chip"
@@ -658,7 +656,7 @@ function DeepSeekHarness() {
                       {updating ? (
                         <Loader2 size={11} className="spin" />
                       ) : (
-                        <ArrowUpCircle size={11} />
+                        <ArrowRight size={11} strokeWidth={2} />
                       )}
                       <span>v{dshLatestVersion}</span>
                     </button>

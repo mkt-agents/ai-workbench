@@ -813,11 +813,36 @@
   color: var(--on-accent);
 }
 
-/* No container background here: the base rule has no padding or radius, so tinting it
-   produced a tight stray rectangle behind the version text. The chip carries its own
-   tint instead. */
+/* Version group in glass/ice/silver themes */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label {
-  color: rgba(245, 245, 245, 0.4);
+  color: rgba(245, 245, 245, 0.6);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label svg {
+  opacity: 0.4;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage.is-running .dsh-version-label {
+  color: color-mix(in srgb, var(--green) 80%, white 20%);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  border-color: color-mix(in srgb, var(--green) 22%, transparent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage.is-running .dsh-version-label svg {
+  color: var(--green);
+  opacity: 0.75;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-chip {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-chip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-msg {
@@ -6159,46 +6184,102 @@ input, select, textarea { font-family: inherit; }
   border-color: var(--accent);
 }
 
-/* Version Inline */
-.dsh-version-inline {
+/* Version Group — version badge + optional update chip as a connected unit */
+.dsh-version-group {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0;
   flex-shrink: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .dsh-version-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px 0 6px;
   font-size: 11px;
-  color: var(--text-3);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-3) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-3) 15%, transparent);
+  border-right: none;
+  border-radius: 999px 0 0 999px;
+  white-space: nowrap;
+  line-height: 1;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
-/* Update chip: icon + target version as a single hoverable, clickable unit. The old
-   "→v…" text fragment next to a filled square icon button read as two unrelated
-   pieces, and the filled button pulled all the attention off the version itself. */
+.dsh-version-label svg {
+  opacity: 0.5;
+  flex-shrink: 0;
+  transition: opacity 0.2s ease;
+}
+
+.dsh-version-text {
+  position: relative;
+  top: 0.5px;
+}
+
+.dsh-stage.is-running .dsh-version-label {
+  color: color-mix(in srgb, var(--green) 85%, var(--text-2) 15%);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  border-color: color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+.dsh-stage.is-running .dsh-version-label svg {
+  opacity: 0.7;
+  color: var(--green);
+}
+
+/* Running pulse — subtle breathing glow on the tag icon */
+@keyframes dsh-version-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+.dsh-stage.is-running .dsh-version-label svg {
+  animation: dsh-version-pulse 2.5s ease-in-out infinite;
+}
+
+/* Update chip — connected to the version label as a single unit. Rounded right side,
+   subtle accent tint, arrow icon conveys "upgrade to". */
 .dsh-update-chip {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  height: 18px;
-  padding: 0 7px;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-left: none;
+  border-radius: 0 999px 999px 0;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
   font-size: 11px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 .dsh-update-chip:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.dsh-update-chip:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .dsh-update-chip:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
