@@ -23,11 +23,11 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 ### AI 工作台
 
-- **DeepSeek**：启动/停止本地 `@deepseek-ai/dsh`，iframe 内嵌 Web UI；侧栏切走后保活；自定义启动端口；浏览器打开
+- **Harness**：启动/停止本地 `@deepseek-ai/dsh`，iframe 内嵌 Web UI；侧栏切走后保活；自定义启动端口；浏览器打开
 - **快问**：托盘常驻；默认 `Ctrl+Alt+K`；桌面浮漂；流式问答；多轮追问 / 重新生成；可选工作区 / Git / Dirty / 剪贴板上下文
 - **模型配置**：多厂商与 OpenAI 兼容接口；增删改查、连接测试、批量测试/同步/删除、分组视图、同步 DSH
 - **AI 提示词**：基于已配置模型改写提示词
-- **片段**：本地 CRUD，`{{param}}` 替换后复制或插入快问；JSON 导入导出、克隆、实时预览
+- **片段库**：本地 CRUD，`{{param}}` 替换后复制或插入快问；JSON 导入导出、克隆、实时预览
 
 ### 账号与 Git
 
@@ -40,7 +40,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 ### 系统工具
 
-- **Hosts**：读写系统 hosts，手动/自动备份与恢复，另存为配置（需管理员）
+- **Hosts管理**：读写系统 hosts，手动/自动备份与恢复，另存为配置（需管理员）
 - **内网穿透**：cloudflared 临时/命名隧道；日志过滤/导出；公网 URL 浏览器打开；详见 [docs/cloudflared.md](docs/cloudflared.md)
 - **网页工具**：添加 http(s) 链接，独立窗口打开
 
@@ -54,10 +54,10 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 ```
 AI 工作台
-├── DeepSeek
+├── Harness
 ├── 模型配置
 ├── AI 提示词
-└── 片段
+└── 片段库
 
 账号与 Git
 ├── Cursor
@@ -67,7 +67,7 @@ AI 工作台
 └── 版本切换
 
 系统工具
-├── Hosts
+├── Hosts管理
 ├── 内网穿透
 └── 网页工具
 
