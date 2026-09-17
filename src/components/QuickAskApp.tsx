@@ -288,6 +288,12 @@ function QuickAskApp() {
 
     void listen("quick-ask-shown", () => {
       syncThemeFromStorage();
+      // Reload mutable data from SQLite — the main window may have added/removed
+      // models, snippets, or sessions while this window was hidden. bootApp()
+      // only runs once on mount (memoised promise), so without this the lists go stale.
+      void useGlobalStore.getState().loadAIModels();
+      void useGlobalStore.getState().loadSnippets();
+      void useGlobalStore.getState().loadQuickAskSessions();
       void refreshContextRef.current();
     }).then((fn) => {
       unlistenShown = fn;
