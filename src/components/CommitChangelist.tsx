@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
@@ -17,7 +18,7 @@ import { useGlobalStore } from "../core/store";
 import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import type { AIModelConfig, GitRepoSummary, GitStatusEntry, RecentProject } from "../core/types";
-import { getProviderMeta } from "../lib/aiProviders";
+
 
 function identityMatches(
   actual: { name: string; email: string },
@@ -258,31 +259,6 @@ function IndeterminateCheckbox({
   );
 }
 
-const PROVIDER_COLORS: Record<string, string> = {
-  deepseek: "#4F8CFF",
-  openai: "#10A37F",
-  anthropic: "#D97757",
-  qwen: "#624AFF",
-  moonshot: "#7B61FF",
-  zhipu: "#3B82F6",
-  ollama: "#FF6B35",
-  google: "#EA4335",
-  groq: "#F55036",
-  mistral: "#FF7000",
-  xai: "#111111",
-  longcat: "#E60012",
-  agnes: "#9333EA",
-  mimo: "#F59E0B",
-  openrouter: "#6366F1",
-  siliconflow: "#0EA5E9",
-  together: "#00B2FF",
-  custom: "#6B7280",
-};
-
-function providerDotColor(provider: string): string {
-  return PROVIDER_COLORS[provider] ?? "#6B7280";
-}
-
 type ModelSelectorProps = {
   models: AIModelConfig[];
   selectedId: string;
@@ -296,8 +272,6 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: ModelS
   const ref = useRef<HTMLDivElement>(null);
 
   const active = models.find((m) => m.id === selectedId) ?? models[0];
-  const activeMeta = active ? getProviderMeta(active.provider) : undefined;
-  const activeDot = active ? providerDotColor(active.provider) : "#6B7280";
 
   useEffect(() => {
     if (!open) return;
@@ -316,45 +290,47 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: ModelS
   }, [open]);
 
   return (
-    <div className="cl-model-select" ref={ref}>
+    <div className="prompt-model-wrap" ref={ref}>
       <button
         type="button"
-        className="cl-model-trigger"
+        className="prompt-model-trigger"
         disabled={disabled}
+        aria-expanded={open}
+        aria-label={t("commit.aiModel")}
+        title={active ? `${active.name} — ${active.model}` : t("commit.aiModel")}
         onClick={() => setOpen((v) => !v)}
-        title={t("commit.aiModel")}
       >
-        <span className="cl-model-dot" style={{ background: activeDot, boxShadow: `0 0 5px ${activeDot}66` }} />
-        <span className="cl-model-provider">{activeMeta?.shortLabel ?? active?.provider.slice(0, 4) ?? "?"}</span>
-        <span className="cl-model-name">{active?.name || active?.model || "—"}</span>
-        <ChevronDown size={10} className={`cl-model-chevron${open ? " is-open" : ""}`} />
+        <Bot size={12} className="prompt-model-icon" aria-hidden />
+        <span className="prompt-model-trigger-label">
+          {active?.name || t("commit.aiModel")}
+        </span>
+        <ChevronDown size={12} />
       </button>
 
       {open && (
-        <div className="cl-model-dropdown" role="listbox">
-          {models.map((m) => {
-            const meta = getProviderMeta(m.provider);
-            const dot = providerDotColor(m.provider);
-            const isActive = m.id === selectedId;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                className={`cl-model-option${isActive ? " is-active" : ""}`}
-                onClick={() => {
-                  onChange(m.id);
-                  setOpen(false);
-                }}
-                role="option"
-                aria-selected={isActive}
-              >
-                <span className="cl-model-dot" style={{ background: dot, boxShadow: `0 0 5px ${dot}66` }} />
-                <span className="cl-model-provider">{meta?.shortLabel ?? m.provider.slice(0, 4)}</span>
-                <span className="cl-model-name">{m.name || m.model}</span>
-                {isActive && <Check size={11} className="cl-model-check" />}
-              </button>
-            );
-          })}
+        <div className="prompt-model-menu" role="listbox">
+          <div className="prompt-model-menu-list">
+            {models.map((m) => {
+              const isActive = m.id === selectedId;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`prompt-model-item${isActive ? " is-active" : ""}`}
+                  onClick={() => {
+                    onChange(m.id);
+                    setOpen(false);
+                  }}
+                  role="option"
+                  aria-selected={isActive}
+                  title={`${m.name} — ${m.model}`}
+                >
+                  <span className="prompt-model-item-name">{m.name}</span>
+                  <span className="prompt-model-item-id">{m.model}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

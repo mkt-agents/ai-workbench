@@ -174,7 +174,7 @@ function PromptOptimizer({ onGoModels }: Props) {
       if (!el) return;
       setModelMenuStyle(
         computeFloatingMenuStyle(el, {
-          align: "left",
+          align: "right",
           minWidth: 220,
           preferMaxHeight: 280,
         })
