@@ -160,7 +160,14 @@
     "empty": "No listening ports",
     "resolving": "Resolving…",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "autoRefresh": "Auto refresh",
+    "searchPlaceholder": "Search port, PID, process…",
+    "all": "All",
+    "total": "Total",
+    "processes": "Processes",
+    "noMatch": "No matches",
+    "copyAll": "Copy all"
   },
   "http": {
     "title": "HTTP Client",
@@ -184,6 +191,14 @@
     "copied": "Copied",
     "clear": "Clear",
     "invalidUrl": "Enter a valid URL (include http:// or https://)",
+    "history": "History",
+    "noHistory": "No request history",
+    "clearHistory": "Clear history",
+    "autoFormat": "Auto-format before send",
+    "formatted": "Formatted",
+    "sendHint": "Response will appear here after sending",
+    "curlLabel": "cURL Command",
+    "copyCurl": "Copy cURL",
     "methods": {
       "GET": "GET",
       "POST": "POST",

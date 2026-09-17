@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
@@ -7,12 +7,15 @@ import {
   ClipboardCopy,
   Loader2,
   RefreshCw,
+  Search,
   Skull,
   XCircle,
 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 import { useConfirm } from "../ConfirmModal";
 import type { DevtoolsPortEntry, DevtoolsProcessInfo } from "../../core/types";
+
+type ProtoFilter = "all" | "tcp" | "udp";
 
 interface PidMap {
   [pid: number]: DevtoolsProcessInfo | undefined;
@@ -41,8 +44,12 @@ function PortProcessTool() {
   const [killing, setKilling] = useState<number | null>(null);
   const [pidMap, setPidMap] = useState<PidMap>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [protoFilter, setProtoFilter] = useState<ProtoFilter>("all");
+  const [autoRefresh, setAutoRefresh] = useState(false);
 
   const cancelled = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,7 +61,7 @@ function PortProcessTool() {
       setPidMap({});
       setExpanded(new Set());
 
-      // Bulk-resolve all unique PIDs at once (3 commands total, regardless of count)
+      // Bulk-resolve all unique PIDs at once
       const uniquePids = Array.from(new Set(list.map((p) => p.pid).filter((p) => p !== 0)));
       if (uniquePids.length > 0) {
         setResolving(true);
@@ -68,7 +75,6 @@ function PortProcessTool() {
             setPidMap(map);
           }
         } catch (e) {
-          // non-fatal: rows will show PID only
           console.warn("resolveProcesses failed:", e);
         } finally {
           if (!cancelled.current) setResolving(false);
@@ -90,6 +96,21 @@ function PortProcessTool() {
       cancelled.current = true;
     };
   }, [load]);
+
+  // Auto-refresh timer
+  useEffect(() => {
+    if (autoRefresh) {
+      timerRef.current = setInterval(() => {
+        load();
+      }, 5000);
+    } else if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [autoRefresh, load]);
 
   const toggleRow = (key: string) => {
     setExpanded((prev) => {
@@ -134,7 +155,47 @@ function PortProcessTool() {
     }
   };
 
+  const handleCopyAll = async () => {
+    if (filteredPorts.length === 0) return;
+    const lines = filteredPorts.map((p) => {
+      const info = pidMap[p.pid];
+      return `${p.proto}\t${p.local_addr}:${p.local_port}\t${p.remote_addr}:${p.remote_port || "*"}\t${p.state || "—"}\t${p.pid}\t${info?.name || ""}`;
+    });
+    const text = `Proto\tLocal\tRemote\tState\tPID\tProcess\n${lines.join("\n")}`;
+    try {
+      await copy(text);
+      setMessage({ type: "success", text: t("ports.copied") });
+    } catch (e) {
+      setMessage({ type: "error", text: String(e) });
+    }
+  };
+
   const resolvingCount = resolving ? Object.keys(pidMap).length === 0 && ports.length > 0 : false;
+
+  // Filter ports based on search and protocol
+  const filteredPorts = useMemo(() => {
+    const searchLower = search.toLowerCase().trim();
+    return ports.filter((p) => {
+      if (protoFilter !== "all" && p.proto.toLowerCase() !== protoFilter) return false;
+      if (!searchLower) return true;
+      const info = pidMap[p.pid];
+      return (
+        String(p.local_port).includes(searchLower) ||
+        String(p.pid).includes(searchLower) ||
+        p.local_addr.toLowerCase().includes(searchLower) ||
+        (info?.name || "").toLowerCase().includes(searchLower) ||
+        (info?.path || "").toLowerCase().includes(searchLower)
+      );
+    });
+  }, [ports, search, protoFilter, pidMap]);
+
+  // Stats
+  const stats = useMemo(() => {
+    const tcpCount = filteredPorts.filter((p) => p.proto.toLowerCase() === "tcp").length;
+    const udpCount = filteredPorts.filter((p) => p.proto.toLowerCase() === "udp").length;
+    const uniquePids = new Set(filteredPorts.map((p) => p.pid)).size;
+    return { tcpCount, udpCount, uniquePids, total: filteredPorts.length };
+  }, [filteredPorts]);
 
   return (
     <div className="devtools-tool">
@@ -148,13 +209,68 @@ function PortProcessTool() {
           {loading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
           {t("ports.refresh")}
         </button>
+        <label className="devtools-checkbox">
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(e) => setAutoRefresh(e.target.checked)}
+          />
+          {t("ports.autoRefresh")}
+        </label>
         {resolvingCount && (
           <span className="devports-resolve-hint">
             <Loader2 size={12} className="spin" />
             {t("ports.resolving")}
           </span>
         )}
+        <div className="devtools-actions-spacer" />
+        {ports.length > 0 && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={handleCopyAll}
+          >
+            <ClipboardCopy size={14} />
+            {t("ports.copyAll")}
+          </button>
+        )}
       </div>
+
+      {ports.length > 0 && (
+        <div className="devports-filter-bar">
+          <div className="devports-search">
+            <Search size={14} className="devports-search-icon" />
+            <input
+              className="devtools-input"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t("ports.searchPlaceholder")}
+              spellCheck={false}
+            />
+          </div>
+          <div className="devports-proto-filter">
+            {(["all", "tcp", "udp"] as ProtoFilter[]).map((proto) => (
+              <button
+                key={proto}
+                type="button"
+                className={`btn btn-small ${protoFilter === proto ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => setProtoFilter(proto)}
+              >
+                {proto === "all" ? t("ports.all") : proto.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {ports.length > 0 && (
+        <div className="devports-stats">
+          <span>{t("ports.total")}: <strong>{stats.total}</strong></span>
+          <span>TCP: <strong>{stats.tcpCount}</strong></span>
+          <span>UDP: <strong>{stats.udpCount}</strong></span>
+          <span>{t("ports.processes")}: <strong>{stats.uniquePids}</strong></span>
+        </div>
+      )}
 
       {message && (
         <div className={`runtime-msg ${message.type}`}>
@@ -170,9 +286,11 @@ function PortProcessTool() {
         </div>
       ) : ports.length === 0 ? (
         <div className="runtime-empty">{t("ports.empty")}</div>
+      ) : filteredPorts.length === 0 ? (
+        <div className="runtime-empty">{t("ports.noMatch")}</div>
       ) : (
         <div className="devports-list">
-          {ports.map((p, i) => {
+          {filteredPorts.map((p, i) => {
             const key = `${p.proto}-${p.local_addr}-${p.local_port}-${p.pid}-${i}`;
             const info = pidMap[p.pid];
             const isOpen = expanded.has(key);
@@ -219,7 +337,11 @@ function PortRow({ port, info, isOpen, killing, onToggle, onKill, onCopyPath, t 
       >
         <span className="devports-card-chevron">
           {hasDetail ? (
-            isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+            isOpen ? (
+              <ChevronDown size={14} />
+            ) : (
+              <ChevronRight size={14} />
+            )
           ) : null}
         </span>
         <span className={`tag tag-${port.proto.toLowerCase()}`}>{port.proto}</span>

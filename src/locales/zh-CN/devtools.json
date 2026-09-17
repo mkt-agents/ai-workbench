@@ -160,7 +160,14 @@
     "empty": "无监听端口",
     "resolving": "查询中…",
     "copy": "复制",
-    "copied": "已复制"
+    "copied": "已复制",
+    "autoRefresh": "自动刷新",
+    "searchPlaceholder": "搜索端口、PID、进程名…",
+    "all": "全部",
+    "total": "共",
+    "processes": "进程数",
+    "noMatch": "无匹配项",
+    "copyAll": "复制全部"
   },
   "http": {
     "title": "HTTP 客户端",
@@ -184,6 +191,14 @@
     "copied": "已复制",
     "clear": "清空",
     "invalidUrl": "请输入合法的 URL（需包含 http:// 或 https://）",
+    "history": "历史记录",
+    "noHistory": "暂无请求历史",
+    "clearHistory": "清空历史",
+    "autoFormat": "发送前自动格式化",
+    "formatted": "已格式化",
+    "sendHint": "发送请求后此处显示响应",
+    "curlLabel": "cURL 命令",
+    "copyCurl": "复制 cURL",
     "methods": {
       "GET": "GET",
       "POST": "POST",
