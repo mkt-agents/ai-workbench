@@ -64,20 +64,29 @@ i18n
     supportedLngs: ['zh-CN', 'en-US'],
     defaultNS: 'common',
     ns: ['common', 'navigation', 'git', 'settings', 'ai', 'hosts', 'plugins', 'runtime', 'cloudflared', 'quickask', 'snippets'],
-    
+
     detection: {
       order: ['localStorage', 'navigator'],
       caches: ['localStorage'],
       lookupLocalStorage: 'workbench-language',
     },
-    
+
     interpolation: {
       escapeValue: false,
     },
-    
+
     react: {
       useSuspense: false,
     },
   });
+
+// Dev-only: locale JSONs are captured as snapshots when this module runs, so
+// editing a translation afterwards would otherwise never reach the i18n
+// singleton (stale labels / raw keys until a full restart). Self-accepting
+// this module makes Vite re-run it on any locale change — init() runs again
+// with the fresh bundles and react-i18next re-renders its subscribers.
+if (import.meta.hot) {
+  import.meta.hot.accept();
+}
 
 export default i18n;

@@ -22,6 +22,7 @@ pub enum DbTable {
     CloudflaredProfiles,
     Snippets,
     WebPluginHistory,
+    QuickAskSessions,
 }
 
 pub fn table_from_key(key: &str) -> Option<DbTable> {
@@ -38,6 +39,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "cloudflared_profiles" => Some(DbTable::CloudflaredProfiles),
         "snippets" => Some(DbTable::Snippets),
         "web_plugin_history" => Some(DbTable::WebPluginHistory),
+        "quick_ask_sessions" => Some(DbTable::QuickAskSessions),
         _ => None,
     }
 }
@@ -56,6 +58,7 @@ fn load_sql(table: DbTable) -> &'static str {
         DbTable::CloudflaredProfiles => "SELECT * FROM cloudflared_profiles ORDER BY created_at DESC",
         DbTable::Snippets => "SELECT * FROM snippets ORDER BY use_count DESC, updated_at DESC",
         DbTable::WebPluginHistory => "SELECT * FROM web_plugin_history ORDER BY opened_at DESC LIMIT 100",
+        DbTable::QuickAskSessions => "SELECT * FROM quick_ask_sessions ORDER BY updated_at DESC LIMIT 30",
     }
 }
 
@@ -73,6 +76,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::CloudflaredProfiles => "DELETE FROM cloudflared_profiles",
         DbTable::Snippets => "DELETE FROM snippets",
         DbTable::WebPluginHistory => "DELETE FROM web_plugin_history",
+        DbTable::QuickAskSessions => "DELETE FROM quick_ask_sessions",
     }
 }
 
@@ -299,6 +303,19 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "url")?,
                     json_str(obj, "name")?,
                     json_str(obj, "opened_at")?,
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::QuickAskSessions => {
+            tx.execute(
+                "INSERT INTO quick_ask_sessions (id, title, task, turns, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_str(obj, "title")?,
+                    json_opt_str(obj, "task").unwrap_or_else(|| "none".to_string()),
+                    json_opt_str(obj, "turns").unwrap_or_else(|| "[]".to_string()),
+                    json_str(obj, "created_at")?,
+                    json_str(obj, "updated_at")?,
                 ],
             ).map_err(|e| e.to_string())?;
         }

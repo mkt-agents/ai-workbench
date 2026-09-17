@@ -81,6 +81,24 @@ export interface Snippet {
   updatedAt: string;
 }
 
+/** One Q&A exchange inside a quick-ask session. */
+export interface QuickAskTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** A persisted quick-ask conversation (multi-turn). */
+export interface QuickAskSession {
+  id: string;
+  /** Short label derived from the first question. */
+  title: string;
+  /** TaskKind snapshot ('none' | 'debug' | 'explain' | 'polish'). */
+  task: string;
+  turns: QuickAskTurn[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface GitRepoSummary {
   path: string;
   name: string;
@@ -116,6 +134,7 @@ export interface GlobalState {
   aiModels: AIModelConfig[];
   cloudflaredProfiles: CloudflaredNamedProfile[];
   snippets: Snippet[];
+  quickAskSessions: QuickAskSession[];
 }
 
 export interface HostProfile {

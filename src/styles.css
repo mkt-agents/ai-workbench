@@ -9609,13 +9609,194 @@ input, select, textarea { font-family: inherit; }
   border-radius: 8px;
   background: var(--bg-2, #1a1d21);
   border: 1px solid var(--border-1, #333);
-  white-space: pre-wrap;
   word-break: break-word;
   font-size: 13px;
   line-height: 1.5;
   flex: 1 1 auto;
   min-height: 120px;
   overflow: auto;
+  position: relative;
+}
+.qa-history-btn {
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+}
+.qa-history-btn.on {
+  border-color: var(--accent, #5b8def);
+  color: var(--accent, #5b8def);
+}
+.quick-ask-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-1, #333);
+  border-radius: 8px;
+  background: var(--bg-0, #0e1012);
+}
+.qa-sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.qa-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow: auto;
+}
+.qa-session-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border-1, #333);
+  border-radius: 6px;
+  background: var(--bg-2, #1a1d21);
+}
+.qa-session-item.active {
+  border-color: var(--accent, #5b8def);
+}
+.qa-session-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+}
+.qa-session-main:hover .qa-session-title {
+  color: var(--accent, #5b8def);
+}
+.qa-session-title {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.qa-session-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.qa-selection-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-top: 8px;
+  border: 1px solid var(--border-1, #333);
+  border-radius: 8px;
+  background: var(--bg-1, #14171b);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
+}
+.qa-selection-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ===== Quick Ask markdown answer ===== */
+.qa-md > *:first-child { margin-top: 0; }
+.qa-md > *:last-child { margin-bottom: 0; }
+.qa-md p {
+  margin: 6px 0;
+}
+.qa-md h1, .qa-md h2, .qa-md h3, .qa-md h4 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+}
+.qa-md h1 { font-size: 17px; }
+.qa-md h2 { font-size: 15px; }
+.qa-md h3 { font-size: 14px; }
+.qa-md h4 { font-size: 13px; }
+.qa-md ul, .qa-md ol {
+  margin: 6px 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qa-md blockquote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--accent, #5b8def);
+  background: var(--bg-1, #14171b);
+  border-radius: 0 6px 6px 0;
+  color: var(--text-2);
+}
+.qa-md hr {
+  border: none;
+  border-top: 1px solid var(--border-1, #333);
+  margin: 10px 0;
+}
+.qa-md code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-0, #0e1012);
+  border: 1px solid var(--border-subtle, #2a2d31);
+}
+.qa-md a {
+  color: var(--accent, #5b8def);
+  text-decoration: none;
+}
+.qa-md a:hover {
+  text-decoration: underline;
+}
+.qa-md .qa-code-block code {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.qa-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border-1, #333);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-0, #0e1012);
+}
+.qa-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle, #2a2d31);
+  background: var(--bg-1, #14171b);
+}
+.qa-code-lang {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.qa-code-body {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.qa-caret {
+  display: inline-block;
+  color: var(--accent, #5b8def);
+  animation: qa-blink 1s steps(1) infinite;
+}
+@keyframes qa-blink {
+  50% { opacity: 0; }
 }
 .btn-icon {
   border: none;

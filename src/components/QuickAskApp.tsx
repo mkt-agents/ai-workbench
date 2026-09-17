@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, MessageSquarePlus, RefreshCw, Send, Sparkles, Square, X, ExternalLink } from "lucide-react";
+import {
+  BookmarkPlus, Check, Copy, History, MessageSquarePlus, RefreshCw, Send,
+  Sparkles, Square, Trash2, X, ExternalLink,
+} from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
-import type { AIModelConfig, AppTheme, GitRepoSummary, QuickAskChips, Snippet } from "../core/types";
+import type {
+  AIModelConfig, AppTheme, GitRepoSummary, QuickAskChips, QuickAskSession,
+  QuickAskTurn, Snippet,
+} from "../core/types";
 import { bootApp } from "../core/boot";
 import { fillParams, parseParamNames } from "../lib/snippets";
 import {
@@ -14,6 +20,7 @@ import {
   readPersistedTheme,
 } from "../lib/theme";
 import ModalTitleRow from "./ModalTitleRow";
+import MarkdownView from "./MarkdownView";
 
 const CONTEXT_LIMIT = 2000;
 const SNIPPET_PICK_LIMIT = 24;
@@ -24,7 +31,19 @@ const MAX_TURN_CHARS = 4000;
 
 type TaskKind = "none" | "debug" | "explain" | "polish";
 
-type QaTurn = { role: "user" | "assistant"; content: string };
+type QaTurn = QuickAskTurn;
+
+/** Coerce a stored task string back to a valid TaskKind. */
+function validTask(value: string): TaskKind {
+  return value === "debug" || value === "explain" || value === "polish" ? value : "none";
+}
+
+/** Short session label from the first non-empty line of a question. */
+function makeTitle(question: string, fallback: string): string {
+  const firstLine = question.split("\n").map((s) => s.trim()).find(Boolean) || "";
+  if (!firstLine) return fallback;
+  return firstLine.length > 24 ? firstLine.slice(0, 24) + "…" : firstLine;
+}
 
 function clipTurn(text: string): string {
   return text.length > MAX_TURN_CHARS
@@ -80,6 +99,10 @@ function QuickAskApp() {
   const recentProjects = useGlobalStore((s) => s.recentProjects);
   const snippets = useGlobalStore((s) => s.snippets);
   const bumpSnippetUse = useGlobalStore((s) => s.bumpSnippetUse);
+  const addSnippet = useGlobalStore((s) => s.addSnippet);
+  const quickAskSessions = useGlobalStore((s) => s.quickAskSessions);
+  const upsertQuickAskSession = useGlobalStore((s) => s.upsertQuickAskSession);
+  const deleteQuickAskSession = useGlobalStore((s) => s.deleteQuickAskSession);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
   const invokeGitStatus = useGlobalStore((s) => s.invokeGitStatus);
@@ -103,7 +126,14 @@ function QuickAskApp() {
   /** Previous Q&A pairs sent along as multi-turn context (follow-up questions). */
   const [history, setHistory] = useState<QaTurn[]>([]);
   const [copied, setCopied] = useState(false);
+  /** Persisted-session id the current chat belongs to (null = fresh chat). */
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [snippetSaved, setSnippetSaved] = useState(false);
+  /** Text currently selected inside the answer area (for quote follow-up). */
+  const [selectedText, setSelectedText] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const answerRef = useRef<HTMLDivElement | null>(null);
   /** Last question + the history snapshot it was sent with, for regenerate. */
   const lastQuestionRef = useRef<string>("");
   const lastHistoryRef = useRef<QaTurn[]>([]);
@@ -319,16 +349,52 @@ function QuickAskApp() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      // A modal on top wins over hiding the window.
+      // Layered escape: modal > snippet panel > session panel > context panel >
+      // clear input > hide window.
       if (paramTarget) {
         setParamTarget(null);
+        return;
+      }
+      if (snippetOpen) {
+        setSnippetOpen(false);
+        return;
+      }
+      if (historyOpen) {
+        setHistoryOpen(false);
+        return;
+      }
+      if (ctxOpen) {
+        setCtxOpen(false);
+        return;
+      }
+      if (input.trim()) {
+        setInput("");
         return;
       }
       void hide();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [paramTarget]);
+  }, [paramTarget, snippetOpen, historyOpen, ctxOpen, input]);
+
+  // Track text selected inside the answer area for the quote-follow-up bar.
+  useEffect(() => {
+    const onSelect = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !answerRef.current) {
+        setSelectedText("");
+        return;
+      }
+      const node = sel.getRangeAt(0).commonAncestorContainer;
+      if (!answerRef.current.contains(node)) {
+        setSelectedText("");
+        return;
+      }
+      setSelectedText(sel.toString());
+    };
+    document.addEventListener("selectionchange", onSelect);
+    return () => document.removeEventListener("selectionchange", onSelect);
+  }, []);
 
   const fillClipboard = async () => {
     try {
@@ -382,6 +448,30 @@ function QuickAskApp() {
     return filtered.slice(0, SNIPPET_PICK_LIMIT);
   }, [snippets, snippetQuery]);
 
+  /** Persist (or create) the active session after a completed exchange. */
+  const persistTurns = async (turns: QaTurn[], firstQuestion: string) => {
+    const existing = activeSessionId
+      ? useGlobalStore.getState().quickAskSessions.find((s) => s.id === activeSessionId)
+      : undefined;
+    const now = new Date().toISOString();
+    const session: QuickAskSession = existing
+      ? { ...existing, turns, task, updatedAt: now }
+      : {
+          id: `qas-${crypto.randomUUID()}`,
+          title: makeTitle(firstQuestion, t("newChat")),
+          task,
+          turns,
+          createdAt: now,
+          updatedAt: now,
+        };
+    if (!existing) setActiveSessionId(session.id);
+    try {
+      await upsertQuickAskSession(session);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const send = async (rawInput?: string, historyOverride?: QaTurn[]) => {
     if (busy) return;
     if (!selectedModel) {
@@ -401,6 +491,7 @@ function QuickAskApp() {
     setBusy(true);
     setError(null);
     setAnswer("");
+    setSelectedText("");
 
     let settled = false;
     let full = "";
@@ -432,9 +523,11 @@ function QuickAskApp() {
           setBusy(false);
           // Completed exchange becomes follow-up context (plain text, no ctx dump).
           if (full.trim()) {
-            setHistory(appendTurn(baseHistory, question, full));
+            const nextTurns = appendTurn(baseHistory, question, full);
+            setHistory(nextTurns);
             lastQuestionRef.current = question;
             lastHistoryRef.current = baseHistory;
+            void persistTurns(nextTurns, question);
           }
         }
         activeReqRef.current = null;
@@ -450,9 +543,11 @@ function QuickAskApp() {
           if (!stopped) setError(payload.error || t("streamFailed"));
           else if (full.trim()) {
             // Stopped mid-stream: keep the partial answer as context too.
-            setHistory(appendTurn(baseHistory, question, full));
+            const nextTurns = appendTurn(baseHistory, question, full);
+            setHistory(nextTurns);
             lastQuestionRef.current = question;
             lastHistoryRef.current = baseHistory;
+            void persistTurns(nextTurns, question);
           }
           setBusy(false);
         }
@@ -498,9 +593,93 @@ function QuickAskApp() {
     setHistory([]);
     setAnswer("");
     setError(null);
+    setActiveSessionId(null);
+    setSelectedText("");
     lastQuestionRef.current = "";
     lastHistoryRef.current = [];
     requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  /** Restore a persisted session into the current chat. */
+  const openSession = (s: QuickAskSession) => {
+    if (busy) return;
+    const turns = s.turns || [];
+    setHistory(turns);
+    setTask(validTask(s.task));
+    const lastAnswer = [...turns].reverse().find((t) => t.role === "assistant");
+    const lastUser = [...turns].reverse().find((t) => t.role === "user");
+    setAnswer(lastAnswer?.content ?? "");
+    setActiveSessionId(s.id);
+    setError(null);
+    setSelectedText("");
+    // Point regenerate at the final exchange of this session.
+    lastQuestionRef.current = lastUser?.content ?? "";
+    lastHistoryRef.current = turns.length >= 2 ? turns.slice(0, -2) : [];
+    setHistoryOpen(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const removeSession = async (id: string) => {
+    try {
+      await deleteQuickAskSession(id);
+      if (activeSessionId === id) {
+        setActiveSessionId(null);
+        setHistory([]);
+        setAnswer("");
+        lastQuestionRef.current = "";
+        lastHistoryRef.current = [];
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  /** Relative "n minutes ago" label for the session list. */
+  const relativeTime = (iso: string): string => {
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return "";
+    const minutes = Math.floor((Date.now() - then) / 60000);
+    if (minutes < 1) return t("justNow");
+    if (minutes < 60) return t("minutesAgo", { n: minutes });
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return t("hoursAgo", { n: hours });
+    const days = Math.floor(hours / 24);
+    if (days < 7) return t("daysAgo", { n: days });
+    return new Date(then).toLocaleDateString();
+  };
+
+  const saveAnswerAsSnippet = async () => {
+    if (!answer) return;
+    const name = makeTitle(lastQuestionRef.current || answer, t("saveSnippet"));
+    try {
+      await addSnippet({ name, content: answer, tags: "quickask,ai", params: "" });
+      setSnippetSaved(true);
+      window.setTimeout(() => setSnippetSaved(false), 1500);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  /** Quote the selected answer text into the input as a follow-up prompt. */
+  const quoteSelection = () => {
+    const text = selectedText.trim().slice(0, 500);
+    if (!text) return;
+    const quoted = t("quotePrefix", { text });
+    setInput((prev) => (prev ? `${prev}\n\n${quoted}` : quoted));
+    setSelectedText("");
+    window.getSelection()?.removeAllRanges();
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const copySelection = async () => {
+    if (!selectedText) return;
+    try {
+      await invokeCopyToClipboard(selectedText);
+      setSelectedText("");
+      window.getSelection()?.removeAllRanges();
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   /// Abort the in-flight stream. The backend answers with an
@@ -584,6 +763,14 @@ function QuickAskApp() {
           <option value="explain">{t("task.explain")}</option>
           <option value="polish">{t("task.polish")}</option>
         </select>
+        <button
+          type="button"
+          className={`btn-icon qa-history-btn${historyOpen ? " on" : ""}`}
+          onClick={() => setHistoryOpen((v) => !v)}
+          title={t("history")}
+        >
+          <History size={16} />
+        </button>
       </div>
 
       <div className="quick-ask-chips">
@@ -652,6 +839,43 @@ function QuickAskApp() {
         </div>
       )}
 
+      {historyOpen && (
+        <div className="quick-ask-sessions">
+          <div className="qa-sessions-head">
+            <span>{t("history")}</span>
+            <button type="button" className="btn btn-secondary btn-small" onClick={startNewChat} disabled={busy}>
+              <MessageSquarePlus size={13} /> {t("newChat")}
+            </button>
+          </div>
+          <div className="qa-session-list">
+            {quickAskSessions.map((s) => (
+              <div
+                key={s.id}
+                className={`qa-session-item${s.id === activeSessionId ? " active" : ""}`}
+              >
+                <button type="button" className="qa-session-main" onClick={() => openSession(s)}>
+                  <span className="qa-session-title">{s.title || t("newChat")}</span>
+                  <span className="qa-session-meta">
+                    {t("turnsCount", { n: Math.ceil((s.turns?.length ?? 0) / 2) })} · {relativeTime(s.updatedAt)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="btn-icon"
+                  onClick={() => void removeSession(s.id)}
+                  title={t("deleteSession")}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+            {quickAskSessions.length === 0 && (
+              <span className="quick-ask-hint">{t("historyEmpty")}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       <textarea
         ref={inputRef}
         className="quick-ask-input input-field"
@@ -660,7 +884,8 @@ function QuickAskApp() {
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
           if (e.key !== "Enter") return;
-          if (e.shiftKey) return; // Shift+Enter = newline
+          // Ctrl/Cmd+Enter always sends; plain Enter sends too, Shift+Enter = newline.
+          if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
           e.preventDefault();
           if (!busy) void send();
         }}
@@ -691,6 +916,16 @@ function QuickAskApp() {
         <button type="button" className="btn btn-secondary" disabled={!answer} onClick={() => void copyAnswer()}>
           {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? t("copied") : t("copy")}
         </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={!answer}
+          onClick={() => void saveAnswerAsSnippet()}
+          title={t("saveSnippet")}
+        >
+          {snippetSaved ? <Check size={14} /> : <BookmarkPlus size={14} />}{" "}
+          {snippetSaved ? t("savedSnippet") : t("saveSnippet")}
+        </button>
         <button type="button" className="btn btn-secondary" onClick={() => void openDeepSeek()}>
           <ExternalLink size={14} /> {t("openDeepseek")}
         </button>
@@ -710,10 +945,21 @@ function QuickAskApp() {
       {error && <div className="quick-ask-error">{error}</div>}
 
       {(answer || busy) && (
-        <pre className={`quick-ask-answer${busy ? " is-streaming" : ""}`}>
-          {answer}
-          {busy ? "▍" : ""}
-        </pre>
+        <div ref={answerRef} className={`quick-ask-answer${busy ? " is-streaming" : ""}`}>
+          <MarkdownView text={answer} />
+          {busy && <span className="qa-caret">▍</span>}
+          {selectedText && !busy && (
+            <div className="qa-selection-bar">
+              <span className="qa-selection-text">{selectedText.trim().slice(0, 60)}</span>
+              <button type="button" className="btn btn-secondary btn-small" onClick={quoteSelection}>
+                <MessageSquarePlus size={13} /> {t("followUp")}
+              </button>
+              <button type="button" className="btn btn-secondary btn-small" onClick={() => void copySelection()}>
+                <Copy size={13} /> {t("copySelection")}
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {paramTarget && (

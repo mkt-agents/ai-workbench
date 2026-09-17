@@ -4,7 +4,7 @@ import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig,
   RecentProject, WebPlugin, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
-  Snippet,
+  Snippet, QuickAskSession,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -209,6 +209,12 @@ interface StoreState extends GlobalState, Invocations {
   restoreSnippet: (snippet: Snippet) => Promise<void>;
   bumpSnippetUse: (id: string) => Promise<void>;
 
+  // Quick-ask sessions
+  loadQuickAskSessions: () => Promise<void>;
+  /** Insert or update a session (by id); caps the stored list at 30 by updatedAt. */
+  upsertQuickAskSession: (session: QuickAskSession) => Promise<void>;
+  deleteQuickAskSession: (id: string) => Promise<void>;
+
   // DeepSeek Harness cached state
   dshNodejsInstalled: boolean | null;
   dshVersion: string | null;
@@ -242,6 +248,7 @@ export const useGlobalStore = create<StoreState>()(
       aiModels: [],
       cloudflaredProfiles: [],
       snippets: [],
+      quickAskSessions: [],
 
       // Settings
       setSettings: (newSettings) => set((state) => ({
@@ -904,6 +911,31 @@ export const useGlobalStore = create<StoreState>()(
         set({ snippets });
       }),
 
+      loadQuickAskSessions: async () => withTable("quick_ask_sessions", async () => {
+        const sessions = await storage.quickAskSessions.load();
+        set({ quickAskSessions: sessions });
+      }),
+
+      upsertQuickAskSession: async (session) => withTable("quick_ask_sessions", async () => {
+        const MAX_SESSIONS = 30;
+        const without = get().quickAskSessions.filter((s) => s.id !== session.id);
+        let sessions = [session, ...without];
+        if (sessions.length > MAX_SESSIONS) {
+          // Drop the stalest beyond the cap (list is newest-first by design).
+          sessions = [...sessions]
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .slice(0, MAX_SESSIONS);
+        }
+        await storage.quickAskSessions.save(sessions);
+        set({ quickAskSessions: sessions });
+      }),
+
+      deleteQuickAskSession: async (id) => withTable("quick_ask_sessions", async () => {
+        const sessions = get().quickAskSessions.filter((s) => s.id !== id);
+        await storage.quickAskSessions.save(sessions);
+        set({ quickAskSessions: sessions });
+      }),
+
       // Spread all pure pass-through Tauri invoke wrappers
       ...invocations,
 
@@ -976,6 +1008,7 @@ export const useGlobalStore = create<StoreState>()(
           get().loadAIModels(),
           get().loadCloudflaredProfiles(),
           get().loadSnippets(),
+          get().loadQuickAskSessions(),
         ]);
       },
     }),

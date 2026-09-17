@@ -192,6 +192,14 @@ pub fn run() {
                     name TEXT NOT NULL,
                     opened_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS quick_ask_sessions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    task TEXT NOT NULL DEFAULT 'none',
+                    turns TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             "#).expect("failed to init schema");
 
             let _ = conn.execute_batch("ALTER TABLE git_accounts ADD COLUMN note TEXT;");

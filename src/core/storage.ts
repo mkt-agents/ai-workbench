@@ -1,12 +1,29 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, HostProfile, WebPlugin, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet } from './types';
+import type { GitAccount, GitRepoConfig, HostProfile, WebPlugin, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** Parse the JSON-encoded turns column; corrupt rows degrade to empty turns. */
+function parseTurns(raw: unknown): QuickAskTurn[] {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (t): t is QuickAskTurn =>
+        !!t && typeof t === 'object' &&
+        (t.role === 'user' || t.role === 'assistant') &&
+        typeof t.content === 'string'
+    );
+  } catch {
+    return [];
+  }
 }
 
 type DbTable =
@@ -20,7 +37,8 @@ type DbTable =
   | 'cursor_accounts'
   | 'ai_models'
   | 'cloudflared_profiles'
-  | 'snippets';
+  | 'snippets'
+  | 'quick_ask_sessions';
 
 async function loadRows(table: DbTable): Promise<Record<string, unknown>[]> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -314,6 +332,32 @@ export const storage = {
           tags: item.tags || '',
           params: item.params || '',
           use_count: item.useCount ?? 0,
+          created_at: item.createdAt,
+          updated_at: item.updatedAt,
+        }))
+      );
+    },
+  },
+  quickAskSessions: {
+    load: async (): Promise<QuickAskSession[]> => {
+      const rows = await loadRows('quick_ask_sessions');
+      return rows.map((r) => ({
+        id: r['id'] as string,
+        title: (r['title'] as string) || '',
+        task: (r['task'] as string) || 'none',
+        turns: parseTurns(r['turns']),
+        createdAt: r['created_at'] as string,
+        updatedAt: r['updated_at'] as string,
+      }));
+    },
+    save: async (items: QuickAskSession[]): Promise<void> => {
+      await saveRows(
+        'quick_ask_sessions',
+        items.map((item) => ({
+          id: item.id,
+          title: item.title,
+          task: item.task || 'none',
+          turns: JSON.stringify(item.turns ?? []),
           created_at: item.createdAt,
           updated_at: item.updatedAt,
         }))
