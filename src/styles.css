@@ -10015,14 +10015,57 @@ input, select, textarea { font-family: inherit; }
   padding: 12px;
   background: var(--bg-2, transparent);
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.snippet-card:hover {
+  border-color: color-mix(in srgb, var(--accent, #5b8def) 45%, var(--border-1, #333));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 .snippet-card-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 8px;
+  margin-bottom: 6px;
+}
+.snippet-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.snippet-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--accent, #5b8def);
+  background: color-mix(in srgb, var(--accent, #5b8def) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #5b8def) 30%, transparent);
+}
+.snippet-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
   margin-bottom: 8px;
 }
-.snippet-meta { font-size: 12px; color: var(--text-3); }
+.snippet-tag-chip {
+  border: 1px solid var(--border-subtle, #2a2d31);
+  background: transparent;
+  color: var(--text-3);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.snippet-tag-chip:hover {
+  color: var(--accent, #5b8def);
+  border-color: var(--accent, #5b8def);
+}
 .snippet-preview {
   margin: 0 0 10px;
   font-size: 12px;
@@ -10030,8 +10073,44 @@ input, select, textarea { font-family: inherit; }
   max-height: 120px;
   overflow: auto;
   color: var(--text-2);
+  flex: 1 1 auto;
+  min-height: 0;
 }
-.snippet-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.snippet-actions {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+/* Ghost mini buttons reused from quick-ask; snippet-specific variants. */
+.qa-mini-btn.primary {
+  color: var(--accent, #5b8def);
+  border: 1px solid color-mix(in srgb, var(--accent, #5b8def) 35%, transparent);
+}
+.qa-mini-btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent, #5b8def) 12%, transparent);
+  color: var(--accent, #5b8def);
+}
+.qa-mini-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #e5534b) 12%, transparent);
+  color: var(--danger, #e5534b);
+}
+.snippets-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 16px;
+  color: var(--text-3);
+  border: 1px dashed var(--border-1, #333);
+  border-radius: 10px;
+}
+.snippets-empty p {
+  margin: 0;
+  font-size: 13px;
+}
 
 .snippets-modal {
   max-width: min(520px, calc(100vw - 32px));

@@ -10,7 +10,7 @@
   "repos": "Repo Config",
   "hosts": "Hosts",
   "runtime": "Version Management",
-  "cursorAccounts": "Cursor Accounts",
+  "cursorAccounts": "Cursor",
   "devEnv": "Dev Environment",
   "system": "System",
   "systemTools": "System Tools",
@@ -19,6 +19,6 @@
   "expandSidebar": "Expand sidebar",
   "plugins": "Web Tools",
   "cloudflared": "Tunnel",
-  "snippets": "Snippets",
+  "snippets": "Snippet Library",
   "loading": "Loading..."
 }

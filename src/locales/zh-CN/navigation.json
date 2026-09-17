@@ -8,9 +8,9 @@
   "accounts": "Git 账号",
   "switch": "快速切换",
   "repos": "仓库配置",
-  "hosts": "Hosts",
+  "hosts": "Hosts管理",
   "runtime": "版本管理",
-  "cursorAccounts": "Cursor 账号",
+  "cursorAccounts": "Cursor",
   "devEnv": "开发环境",
   "system": "系统",
   "systemTools": "系统工具",
@@ -19,6 +19,6 @@
   "expandSidebar": "展开侧栏",
   "plugins": "网页工具",
   "cloudflared": "内网穿透",
-  "snippets": "片段",
+  "snippets": "片段库",
   "loading": "正在加载..."
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Copy, Pencil, Check, XCircle, Sparkles, X, Download, Upload, Loader2 } from "lucide-react";
+import { Plus, Trash2, Copy, Pencil, Check, XCircle, Sparkles, X, Download, Upload, Loader2, FileText } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
 import type { Snippet } from "../core/types";
@@ -363,55 +363,76 @@ export default function SnippetsManager() {
       )}
 
       <div className="snippets-list">
-        {filtered.map((s) => (
-          <div key={s.id} className="snippet-card">
-            <div className="snippet-card-head">
-              <strong>{s.name}</strong>
-              <span className="snippet-meta">
-                {s.tags || t("noTags")}
-                {s.useCount > 0 ? ` · ${t("used", { count: s.useCount })}` : ""}
-              </span>
+        {filtered.map((s) => {
+          const tags = splitTags(s.tags);
+          return (
+            <div key={s.id} className="snippet-card">
+              <div className="snippet-card-head">
+                <strong className="snippet-name" title={s.name}>{s.name}</strong>
+                {s.useCount > 0 && (
+                  <span className="snippet-badge" title={t("used", { count: s.useCount })}>
+                    {s.useCount}×
+                  </span>
+                )}
+              </div>
+              {tags.length > 0 && (
+                <div className="snippet-card-tags">
+                  {tags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className="snippet-tag-chip"
+                      onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
+                      title={tagFilter === tag ? t("tagAll") : tag}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <pre className="snippet-preview">{s.content}</pre>
+              <div className="snippet-actions">
+                <button type="button" className="qa-mini-btn primary" onClick={() => startUse(s)}>
+                  <Copy size={13} /> {t("use")}
+                </button>
+                <button
+                  type="button"
+                  className="qa-mini-btn"
+                  onClick={() => setEditing({ ...s })}
+                >
+                  <Pencil size={13} /> {t("edit")}
+                </button>
+                <button
+                  type="button"
+                  className="qa-mini-btn"
+                  onClick={() => void handleClone(s)}
+                  title={t("clone")}
+                >
+                  <Copy size={13} /> {t("clone")}
+                </button>
+                <button
+                  type="button"
+                  className="qa-mini-btn danger"
+                  onClick={() => void handleDelete(s)}
+                >
+                  <Trash2 size={13} /> {t("delete")}
+                </button>
+              </div>
             </div>
-            <pre className="snippet-preview">{s.content}</pre>
-            <div className="snippet-actions">
-              <button type="button" className="btn btn-secondary btn-small" onClick={() => startUse(s)}>
-                <Copy size={12} /> {t("use")}
+          );
+        })}
+        {filtered.length === 0 && (
+          <div className="snippets-empty">
+            <FileText size={28} />
+            <p>{snippets.length === 0 ? t("empty") : t("noMatch")}</p>
+            {snippets.length === 0 ? (
+              <button type="button" className="btn btn-primary" onClick={openCreate}>
+                <Plus size={14} /> {t("add")}
               </button>
+            ) : (
               <button
                 type="button"
                 className="btn btn-secondary btn-small"
-                onClick={() => setEditing({ ...s })}
-              >
-                <Pencil size={12} /> {t("edit")}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={() => void handleClone(s)}
-                title={t("clone")}
-              >
-                <Copy size={12} /> {t("clone")}
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger btn-small"
-                onClick={() => void handleDelete(s)}
-              >
-                <Trash2 size={12} /> {t("delete")}
-              </button>
-            </div>
-          </div>
-        ))}
-        {filtered.length === 0 &&
-          (snippets.length === 0 ? (
-            <div className="empty-hint">{t("empty")}</div>
-          ) : (
-            <div className="empty-hint">
-              {t("noMatch")}
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                style={{ marginLeft: 8 }}
                 onClick={() => {
                   setQuery("");
                   setTagFilter("");
@@ -419,8 +440,9 @@ export default function SnippetsManager() {
               >
                 {t("clearSearch")}
               </button>
-            </div>
-          ))}
+            )}
+          </div>
+        )}
       </div>
 
       {editing && (
