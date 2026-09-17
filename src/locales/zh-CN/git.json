@@ -157,6 +157,7 @@
     "diffLoading": "加载 diff…",
     "generate": "AI 生成",
     "generating": "生成中…",
+    "aiModel": "AI 模型",
     "generateNeedModel": "请先在「模型配置」中添加并设默认模型",
     "generateOverwrite": "将覆盖当前提交说明，是否继续？",
     "generateOk": "已生成提交说明",

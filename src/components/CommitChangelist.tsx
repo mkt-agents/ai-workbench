@@ -17,6 +17,7 @@ import { useGlobalStore } from "../core/store";
 import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import type { AIModelConfig, GitRepoSummary, GitStatusEntry, RecentProject } from "../core/types";
+import { getProviderMeta } from "../lib/aiProviders";
 
 function identityMatches(
   actual: { name: string; email: string },
@@ -222,6 +223,12 @@ type Props = {
   undoDisabled?: boolean;
   undoTitle?: string;
   undoing?: boolean;
+  /** Pre-selected AI model for commit-message generation (controlled by parent toolbar). */
+  selectedModel: AIModelConfig | null;
+  /** Currently selected model id in the parent toolbar. */
+  selectedModelId: string;
+  /** Notifies parent when the user picks a different model. */
+  onModelChange: (id: string) => void;
 };
 
 function IndeterminateCheckbox({
@@ -251,6 +258,109 @@ function IndeterminateCheckbox({
   );
 }
 
+const PROVIDER_COLORS: Record<string, string> = {
+  deepseek: "#4F8CFF",
+  openai: "#10A37F",
+  anthropic: "#D97757",
+  qwen: "#624AFF",
+  moonshot: "#7B61FF",
+  zhipu: "#3B82F6",
+  ollama: "#FF6B35",
+  google: "#EA4335",
+  groq: "#F55036",
+  mistral: "#FF7000",
+  xai: "#111111",
+  longcat: "#E60012",
+  agnes: "#9333EA",
+  mimo: "#F59E0B",
+  openrouter: "#6366F1",
+  siliconflow: "#0EA5E9",
+  together: "#00B2FF",
+  custom: "#6B7280",
+};
+
+function providerDotColor(provider: string): string {
+  return PROVIDER_COLORS[provider] ?? "#6B7280";
+}
+
+type ModelSelectorProps = {
+  models: AIModelConfig[];
+  selectedId: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+};
+
+export function ModelSelector({ models, selectedId, onChange, disabled }: ModelSelectorProps) {
+  const { t } = useTranslation("git");
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const active = models.find((m) => m.id === selectedId) ?? models[0];
+  const activeMeta = active ? getProviderMeta(active.provider) : undefined;
+  const activeDot = active ? providerDotColor(active.provider) : "#6B7280";
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onOutside);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onOutside);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="cl-model-select" ref={ref}>
+      <button
+        type="button"
+        className="cl-model-trigger"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        title={t("commit.aiModel")}
+      >
+        <span className="cl-model-dot" style={{ background: activeDot, boxShadow: `0 0 5px ${activeDot}66` }} />
+        <span className="cl-model-provider">{activeMeta?.shortLabel ?? active?.provider.slice(0, 4) ?? "?"}</span>
+        <span className="cl-model-name">{active?.name || active?.model || "—"}</span>
+        <ChevronDown size={10} className={`cl-model-chevron${open ? " is-open" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="cl-model-dropdown" role="listbox">
+          {models.map((m) => {
+            const meta = getProviderMeta(m.provider);
+            const dot = providerDotColor(m.provider);
+            const isActive = m.id === selectedId;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                className={`cl-model-option${isActive ? " is-active" : ""}`}
+                onClick={() => {
+                  onChange(m.id);
+                  setOpen(false);
+                }}
+                role="option"
+                aria-selected={isActive}
+              >
+                <span className="cl-model-dot" style={{ background: dot, boxShadow: `0 0 5px ${dot}66` }} />
+                <span className="cl-model-provider">{meta?.shortLabel ?? m.provider.slice(0, 4)}</span>
+                <span className="cl-model-name">{m.name || m.model}</span>
+                {isActive && <Check size={11} className="cl-model-check" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CommitChangelist({
   active,
   onToast,
@@ -261,6 +371,9 @@ function CommitChangelist({
   undoDisabled,
   undoTitle,
   undoing,
+  selectedModel,
+  selectedModelId,
+  onModelChange,
 }: Props) {
   const { t } = useTranslation("git");
   const confirm = useConfirm();
@@ -286,7 +399,6 @@ function CommitChangelist({
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeGenerateText = useGlobalStore((s) => s.invokeGenerateText);
   const aiModels = useGlobalStore((s) => s.aiModels);
-  const loadAIModels = useGlobalStore((s) => s.loadAIModels);
 
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(false);
@@ -307,6 +419,11 @@ function CommitChangelist({
   const scanProjects = useMemo(
     () => projectsForScan(recentProjects, currentGitRepo),
     [recentProjects, currentGitRepo]
+  );
+
+  const defaultModel = useMemo(
+    () => aiModels.find((m) => m.isDefault) || aiModels[0] || null,
+    [aiModels]
   );
 
   const scopedProjects = useMemo(() => {
@@ -401,15 +518,6 @@ function CommitChangelist({
   useEffect(() => {
     if (active) void refresh();
   }, [active, refresh, refreshNonce]);
-
-  useEffect(() => {
-    if (active && aiModels.length === 0) void loadAIModels().catch(() => {});
-  }, [active, aiModels.length, loadAIModels]);
-
-  const defaultModel = useMemo(
-    () => aiModels.find((m) => m.isDefault) || aiModels[0] || null,
-    [aiModels]
-  );
 
   const dirtyRepos = useMemo(() => {
     return scopedProjects.filter((p) => isRepoDirty(p.path, summaries, statuses));
@@ -590,7 +698,7 @@ function CommitChangelist({
 
   const runGenerateMessage = async () => {
     if (busy || generating) return;
-    if (!defaultModel) {
+    if (!selectedModel) {
       onToast("error", t("commit.generateNeedModel"));
       return;
     }
@@ -666,7 +774,7 @@ function CommitChangelist({
       ].join("\n");
 
       const raw = await invokeGenerateText({
-        config: defaultModel as AIModelConfig,
+        config: selectedModel as AIModelConfig,
         system: COMMIT_MSG_SYSTEM,
         user,
       });
@@ -1113,6 +1221,16 @@ function CommitChangelist({
           <span className="runtime-muted">
             {t("commit.changelistRunning", { done: progress.done, total: progress.total })}
           </span>
+        )}
+        {aiModels.length > 0 && (
+          <div className="cl-toolbar-model">
+            <ModelSelector
+              models={aiModels}
+              selectedId={selectedModelId || defaultModel?.id || ""}
+              onChange={onModelChange}
+              disabled={busy || generating}
+            />
+          </div>
         )}
       </div>
 

@@ -6,7 +6,7 @@ import { projectNameFromPath } from "../core/pathUtils";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
 import CommitChangelist from "./CommitChangelist";
-import type { GitRepoSummary } from "../core/types";
+import type { AIModelConfig, GitRepoSummary } from "../core/types";
 
 type Props = {
   active?: boolean;
@@ -56,6 +56,8 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
   const invokeGitUndoLastCommit = useGlobalStore((s) => s.invokeGitUndoLastCommit);
+  const aiModels = useGlobalStore((s) => s.aiModels);
+  const loadAIModels = useGlobalStore((s) => s.loadAIModels);
 
   const [author, setAuthor] = useState({ name: "", email: "" });
   const [switching, setSwitching] = useState(false);
@@ -66,6 +68,20 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const [showAccountsModal, setShowAccountsModal] = useState(false);
   const [dirtyScopePaths, setDirtyScopePaths] = useState<string[]>([]);
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<string>("");
+
+  const defaultModel = useMemo(
+    () => aiModels.find((m) => m.isDefault) || aiModels[0] || null,
+    [aiModels]
+  );
+
+  const selectedModelProp = useMemo(() => {
+    if (selectedModelId) {
+      const found = aiModels.find((m) => m.id === selectedModelId);
+      if (found) return found;
+    }
+    return defaultModel;
+  }, [selectedModelId, aiModels, defaultModel]);
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
     setToast({ type, text });
@@ -78,7 +94,8 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     if (state.recentProjects.length === 0) loadRecentProjects().catch(() => {});
     if (state.git.accounts.length === 0) loadAccounts().catch(() => {});
     if (state.git.repoConfigs.length === 0) loadRepoConfigs().catch(() => {});
-  }, [active, loadAccounts, loadRecentProjects, loadRepoConfigs]);
+    if (state.aiModels.length === 0) loadAIModels().catch(() => {});
+  }, [active, loadAccounts, loadRecentProjects, loadRepoConfigs, loadAIModels]);
 
   useEffect(() => {
     if (!active || !repoPath) {
@@ -315,6 +332,9 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
         undoDisabled={!repoPath}
         undoTitle={undoIsRevert ? t("commit.undoLastRevertHint") : t("commit.undoLast")}
         undoing={undoing}
+        selectedModel={selectedModelProp}
+        selectedModelId={selectedModelId}
+        onModelChange={setSelectedModelId}
       />
 
       {showAccountsModal && (

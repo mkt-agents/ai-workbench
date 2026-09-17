@@ -157,6 +157,7 @@
     "diffLoading": "Loading diff…",
     "generate": "AI generate",
     "generating": "Generating…",
+    "aiModel": "AI model",
     "generateNeedModel": "Add a default model in Model Settings first",
     "generateOverwrite": "Replace the current commit message?",
     "generateOk": "Commit message generated",
