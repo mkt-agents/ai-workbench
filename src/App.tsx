@@ -13,7 +13,6 @@ import {
   Minus,
   Square,
   X,
-  User,
   Cpu,
   Layers,
   Wand2,
@@ -21,7 +20,8 @@ import {
   FileText,
   PanelLeftClose,
   PanelLeftOpen,
-  Wrench,
+  KeyRound,
+  Terminal,
 } from "lucide-react";
 import HostsManager from "./components/HostsManager";
 import PluginBrowser from "./components/PluginBrowser";
@@ -91,7 +91,7 @@ function App() {
     setSettings({ sidebarCollapsed: next });
   };
   const [openGroups, setOpenGroups] = useState<Set<string>>(
-    () => new Set<string>(["ai", "identity", "env", "tools"])
+    () => new Set<string>(["ai", "account", "version", "network", "system"])
   );
   const [isReady, setIsReady] = useState(false);
   const [trayToast, setTrayToast] = useState<string | null>(null);
@@ -177,7 +177,7 @@ function App() {
       children: [
         {
           id: "ai-chat",
-          labelKey: "deepseek",
+          labelKey: "harness",
           icon: (
             <img
               src="/deepseek-logo.svg"
@@ -195,31 +195,38 @@ function App() {
       ],
     },
     {
-      group: "identity",
-      labelKey: "identity",
+      group: "account",
+      labelKey: "accountManagement",
       defaultOpen: true,
       children: [
-        { id: "cursor-accounts", labelKey: "cursorAccounts", icon: <User size={16} /> },
-        { id: "git", labelKey: "git", icon: <GitBranch size={16} /> },
+        { id: "cursor-accounts", labelKey: "cursorAccounts", icon: <KeyRound size={16} /> },
       ],
     },
     {
-      group: "env",
-      labelKey: "devEnv",
+      group: "version",
+      labelKey: "versionManagement",
       defaultOpen: true,
       children: [
-        { id: "runtime", labelKey: "runtime", icon: <Layers size={16} /> },
+        { id: "git", labelKey: "gitManagement", icon: <GitBranch size={16} /> },
+        { id: "runtime", labelKey: "runtimeVersion", icon: <Layers size={16} /> },
       ],
     },
     {
-      group: "tools",
-      labelKey: "systemTools",
+      group: "network",
+      labelKey: "networkManagement",
       defaultOpen: true,
       children: [
         { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
         { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
         { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
-        { id: "devtools", labelKey: "devtools", icon: <Wrench size={16} /> },
+      ],
+    },
+    {
+      group: "system",
+      labelKey: "systemUtils",
+      defaultOpen: true,
+      children: [
+        { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
       ],
     },
   ];
