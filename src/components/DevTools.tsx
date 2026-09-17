@@ -10,7 +10,6 @@ import {
   Network,
   Regex,
   Shuffle,
-  Wrench,
 } from "lucide-react";
 import JsonTool from "./devtools/JsonTool";
 import EncoderTool from "./devtools/EncoderTool";
@@ -83,8 +82,6 @@ function DevTools() {
     localStorage.setItem(STORAGE_KEY, activeTool);
   }, [activeTool]);
 
-  const activeMeta = allTools.find((tool) => tool.id === activeTool);
-
   const renderTool = () => {
     switch (activeTool) {
       case "json":
@@ -113,12 +110,6 @@ function DevTools() {
   return (
     <div className="dt-layout">
       <aside className="dt-sidebar">
-        <div className="dt-sidebar-header">
-          <span className="dt-sidebar-icon">
-            <Wrench size={16} />
-          </span>
-          <span className="dt-sidebar-title">{t("title")}</span>
-        </div>
         <nav className="dt-toollist" aria-label={t("title")}>
           {groups.map((group) => (
             <div key={group.groupKey} className="dt-toolgroup">
@@ -141,15 +132,6 @@ function DevTools() {
       </aside>
 
       <main className="dt-main">
-        {activeMeta && (
-          <header className="dt-header">
-            <div className="dt-header-title-row">
-              <span className="dt-header-icon">{activeMeta.icon}</span>
-              <h2 className="dt-header-title">{t(activeMeta.labelKey)}</h2>
-            </div>
-            <p className="dt-header-desc">{t(activeMeta.descriptionKey)}</p>
-          </header>
-        )}
         <div className="dt-content">{renderTool()}</div>
       </main>
     </div>
