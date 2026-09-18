@@ -135,6 +135,7 @@
     "stopped": "已停止",
     "startFailed": "启动失败: {{error}}",
     "stopFailed": "停止失败: {{error}}",
+    "stillServingAfterStop": "端口 {{port}} 上的服务仍在响应",
     "checking": "检查服务...",
     "checkFailed": "检查失败",
     "nodejsRequired": "未检测到 Node.js 运行环境",

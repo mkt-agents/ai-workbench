@@ -16,6 +16,8 @@ mod cancellation_commands;
 
 pub use config::*;
 
+use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Mutex;
 use std::fs;
 use rusqlite::Connection;
@@ -37,6 +39,9 @@ pub struct DshInstance {
 
 pub struct DshState {
     pub instances: Mutex<Vec<DshInstance>>,
+    /// Owned OS children keyed by listen port. Stop kills these directly so we
+    /// are not solely dependent on netstat → taskkill after the Child is dropped.
+    pub children: Mutex<HashMap<u16, Child>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -64,7 +69,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(DbState { conn: Mutex::new(Connection::open_in_memory().expect("failed to create in-memory placeholder")) })
-        .manage(DshState { instances: Mutex::new(Vec::new()) })
+        .manage(DshState {
+            instances: Mutex::new(Vec::new()),
+            children: Mutex::new(HashMap::new()),
+        })
         .manage(cloudflared_commands::CloudflaredState::default())
         .manage(tray::TrayTunnelUrls::default())
         .setup(|app| {

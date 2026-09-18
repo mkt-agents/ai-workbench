@@ -45,6 +45,7 @@ function DeepSeekHarness() {
   const invokeStartDsh = useGlobalStore((s) => s.invokeStartDsh);
   const invokeStopDsh = useGlobalStore((s) => s.invokeStopDsh);
   const invokeListDsh = useGlobalStore((s) => s.invokeListDsh);
+  const invokeCheckDshHttp = useGlobalStore((s) => s.invokeCheckDshHttp);
   const invokeRestoreDshAuth = useGlobalStore((s) => s.invokeRestoreDshAuth);
   const invokeInstallDsh = useGlobalStore((s) => s.invokeInstallDsh);
   const invokeUpdateDsh = useGlobalStore((s) => s.invokeUpdateDsh);
@@ -377,6 +378,19 @@ function DeepSeekHarness() {
     setStopping(true);
     try {
       await invokeStopDsh(activePort);
+      // Backend already verifies the port is dead; probe once more so a stale
+      // UI state cannot claim "stopped" while HTTP still answers (refresh would
+      // then re-adopt the surviving server).
+      const stillServing = await invokeCheckDshHttp(activePort).catch(() => false);
+      if (stillServing) {
+        setStatus(
+          t("dsh.stopFailed", {
+            error: t("dsh.stillServingAfterStop", { port: activePort }),
+          }),
+        );
+        clearStatusAfter(5000);
+        return;
+      }
       setIsRunning(false);
       setIframeLoading(false);
       autoReloadDoneRef.current = false;

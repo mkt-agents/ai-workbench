@@ -135,6 +135,7 @@
     "stopped": "Stopped",
     "startFailed": "Start failed: {{error}}",
     "stopFailed": "Stop failed: {{error}}",
+    "stillServingAfterStop": "Service on port {{port}} is still responding",
     "checking": "Checking...",
     "checkFailed": "Check failed",
     "nodejsRequired": "Node.js was not detected",

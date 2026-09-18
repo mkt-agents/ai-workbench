@@ -472,7 +472,7 @@ fn wait_for_port(port: u16) -> bool {
 
 /// Kill the server and the children `cmd /c npx` spawned.
 fn stop_child(child: &mut std::process::Child) {
-    kill_pid(child.id());
+    let _ = kill_pid(child.id());
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -480,11 +480,19 @@ fn stop_child(child: &mut std::process::Child) {
 /// Wait for a killed server to release its port, so its replacement can bind it.
 /// Without this, `wait_for_port` can see the dying socket and start the successor too
 /// early, which then fails to listen.
-fn wait_for_port_release(port: u16) {
+///
+/// Returns `true` when the port is free; `false` if still bound after the deadline.
+fn wait_for_port_release(port: u16) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while is_port_in_use(port) && std::time::Instant::now() < deadline {
         thread::sleep(Duration::from_millis(200));
     }
+    !is_port_in_use(port)
+}
+
+/// True when neither the TCP port nor a DSH HTTP response remains.
+fn dsh_fully_stopped(port: u16) -> bool {
+    !is_port_in_use(port) && !dsh_is_serving(port)
 }
 
 /// Best-effort "who holds the port" suffix, so the failure text says which program to
@@ -545,9 +553,27 @@ fn is_instance_alive(port: u16) -> bool {
     is_port_in_use(port)
 }
 
-/// Drop tracked instances whose port is no longer listening.
-fn prune_dead_instances(instances: &mut Vec<DshInstance>) {
-    instances.retain(|i| is_instance_alive(i.port))
+/// Drop tracked instances whose port is no longer listening, and reap any
+/// owned Child handles for those ports so we do not leak process handles.
+fn prune_dead_instances(state: &DshState) -> Result<(), String> {
+    let mut instances = state.instances.lock().map_err(|e| e.to_string())?;
+    instances.retain(|i| is_instance_alive(i.port));
+    let alive: std::collections::HashSet<u16> =
+        instances.iter().map(|i| i.port).collect();
+    drop(instances);
+
+    let mut children = state.children.lock().map_err(|e| e.to_string())?;
+    let stale: Vec<u16> = children
+        .keys()
+        .copied()
+        .filter(|p| !alive.contains(p))
+        .collect();
+    for port in stale {
+        if let Some(mut child) = children.remove(&port) {
+            let _ = child.try_wait();
+        }
+    }
+    Ok(())
 }
 
 fn local_addr_port(addr: &str) -> Option<u16> {
@@ -565,16 +591,50 @@ fn line_listens_on_port(line: &str, port: u16) -> bool {
     local_addr_port(parts[1]) == Some(port)
 }
 
-/// Best-effort kill of a PID via the platform's taskkill/kill. Errors are
-/// intentionally ignored — the process may have already exited.
-fn kill_pid(pid: u32) {
+/// Kill a PID (and its process tree on Windows via `taskkill /T`).
+/// "Process not found" is treated as success — the target may already be gone.
+fn kill_pid(pid: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
-    let _ = Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &pid.to_string()])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
+    {
+        let output = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("taskkill 无法启动: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let lower = stderr.to_ascii_lowercase();
+        // Already exited: English and Chinese taskkill messages.
+        if lower.contains("not found")
+            || stderr.contains("没有运行")
+            || stderr.contains("找不到")
+            || stderr.contains("不存在")
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "taskkill PID {pid} 失败: {}",
+            stderr.trim().replace('\r', " ").replace('\n', " ")
+        ))
+    }
     #[cfg(not(target_os = "windows"))]
-    let _ = Command::new("kill").arg(pid.to_string()).output();
+    {
+        let output = Command::new("kill")
+            .arg(pid.to_string())
+            .output()
+            .map_err(|e| format!("kill 无法启动: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        // ESRCH — no such process
+        if output.status.code() == Some(1) {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("kill PID {pid} 失败: {}", stderr.trim()))
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -715,8 +775,8 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
     let target_port = port.unwrap_or(DSH_DEFAULT_PORT);
     {
         let state = window.state::<DshState>();
-        let mut instances = state.instances.lock().map_err(|e| e.to_string())?;
-        prune_dead_instances(&mut instances);
+        prune_dead_instances(&state)?;
+        let instances = state.instances.lock().map_err(|e| e.to_string())?;
         if let Some(existing) = instances.iter().find(|i| i.port == target_port).cloned() {
             return Ok(existing);
         }
@@ -815,19 +875,25 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
         }
     }
 
+    let spawned_pid = child.id();
     let instance = DshInstance {
-        pid: 0, // PID no longer tracked meaningfully; port is the source of truth
+        pid: spawned_pid,
         port: target_port,
         auth_url: None,
         auth_patch_warning,
     };
 
-    // Remove old instance on same port if any
+    // Remove old instance on same port if any; retain the Child so stop can kill
+    // the process tree without relying solely on netstat.
     {
         let state = window.state::<DshState>();
         let mut instances = state.instances.lock().map_err(|e| e.to_string())?;
         instances.retain(|i| i.port != target_port);
         instances.push(instance.clone());
+        let mut children = state.children.lock().map_err(|e| e.to_string())?;
+        if let Some(mut old) = children.insert(target_port, child) {
+            let _ = old.try_wait();
+        }
     }
 
     Ok(instance)
@@ -840,31 +906,68 @@ pub async fn start_dsh(port: Option<u16>, window: tauri::Window) -> Result<DshIn
         .map_err(|e| format!("Task failed: {e}"))?
 }
 
-/// Blocking core of `stop_dsh`: `find_pid_by_port` shells out to netstat and
-/// `kill_pid` runs taskkill.
+/// Blocking core of `stop_dsh`: kill the owned Child (if any), then fall back to
+/// netstat → taskkill by port. Success requires the port to be free and DSH HTTP
+/// to stop answering — otherwise refresh would re-adopt a surviving server.
 fn stop_dsh_sync(port: u16, window: tauri::Window) -> Result<String, String> {
     let state = window.state::<DshState>();
-    let mut instances = state.instances.lock().map_err(|e| e.to_string())?;
 
-    // Try to find in tracked instances first
-    let idx = instances.iter().position(|i| i.port == port);
-    if let Some(i) = idx {
-        instances.remove(i);
-        // Best-effort: kill whatever is listening on the port via netstat.
-        // The tracked PID is no longer reliable (OS reuse), so we resolve by port.
-        if let Some(pid) = find_pid_by_port(port) {
-            kill_pid(pid);
+    let mut owned_child = {
+        let mut children = state.children.lock().map_err(|e| e.to_string())?;
+        children.remove(&port)
+    };
+
+    let was_tracked = {
+        let mut instances = state.instances.lock().map_err(|e| e.to_string())?;
+        if let Some(idx) = instances.iter().position(|i| i.port == port) {
+            instances.remove(idx);
+            true
+        } else {
+            false
         }
-        return Ok(format!("Stopped DSH on port {port}"));
+    };
+
+    let port_pid = find_pid_by_port(port);
+    if owned_child.is_none() && !was_tracked && port_pid.is_none() {
+        if dsh_fully_stopped(port) {
+            return Err(format!("No instance running on port {port}"));
+        }
+        // Listener or HTTP still up but not tracked — keep going and kill by port.
     }
 
-    // Fallback: find PID by port via netstat
+    let mut kill_errors: Vec<String> = Vec::new();
+    let owned_pid = owned_child.as_ref().map(|c| c.id());
+
+    if let Some(ref mut child) = owned_child {
+        if let Err(e) = kill_pid(child.id()) {
+            kill_errors.push(e);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    // Port may still be held by a grandchild (e.g. `cmd /c npx` → node) if the
+    // tree kill missed, or by an orphan adopted after app restart.
     if let Some(pid) = find_pid_by_port(port) {
-        kill_pid(pid);
-        return Ok(format!("Stopped DSH on port {port} (PID: {pid})"));
+        if owned_pid != Some(pid) {
+            if let Err(e) = kill_pid(pid) {
+                kill_errors.push(e);
+            }
+        }
     }
 
-    Err(format!("No instance running on port {port}"))
+    if !wait_for_port_release(port) || dsh_is_serving(port) {
+        let detail = if kill_errors.is_empty() {
+            port_owner_description(port)
+        } else {
+            format!("（{}）{}", kill_errors.join("; "), port_owner_description(port))
+        };
+        return Err(format!(
+            "停止失败：端口 {port} 上的 DeepSeek 服务仍在运行{detail}"
+        ));
+    }
+
+    Ok(format!("Stopped DSH on port {port}"))
 }
 
 #[tauri::command]
@@ -878,9 +981,9 @@ pub async fn stop_dsh(port: u16, window: tauri::Window) -> Result<String, String
 pub async fn list_dsh(window: tauri::Window) -> Result<Vec<DshInstance>, String> {
     tokio::task::spawn_blocking(move || {
         let state = window.state::<DshState>();
+        prune_dead_instances(&state)?;
         let tracked = {
-            let mut instances = state.instances.lock().map_err(|e| e.to_string())?;
-            prune_dead_instances(&mut instances);
+            let instances = state.instances.lock().map_err(|e| e.to_string())?;
             instances.clone()
         };
         // Nothing tracked yet: DSH may still be serving from before an app restart.
