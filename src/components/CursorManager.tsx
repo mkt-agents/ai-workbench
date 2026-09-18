@@ -76,21 +76,21 @@ function avatarColorFor(account: CursorAccount, index: number): string {
   return account.color;
 }
 
-/** Rough completion for each backend progress stage (the flow is not linear). */
+/** Rough completion for each backend progress stage. */
 const SWITCH_STAGE_PERCENT: Record<string, number> = {
-  quit: 20,
-  save: 45,
+  quit: 15,
+  save: 30,
+  sync: 45,
+  seed: 55,
   restore: 70,
-  launch: 90,
+  launch: 88,
   done: 100,
-  rollback: 100,
 };
 
 function CursorManager() {
   const { t } = useTranslation("ai");
   const confirm = useConfirm();
   const cursorAccounts = useGlobalStore((s) => s.cursorAccounts);
-  const gitAccounts = useGlobalStore((s) => s.git.accounts);
   const loadCursorAccounts = useGlobalStore((s) => s.loadCursorAccounts);
   const addCursorAccount = useGlobalStore((s) => s.addCursorAccount);
   const finishAccountProfile = useGlobalStore((s) => s.finishAccountProfile);
@@ -114,6 +114,9 @@ function CursorManager() {
   const invokeInspectCursorBackup = useGlobalStore((s) => s.invokeInspectCursorBackup);
   const invokeGetCursorDiskUsage = useGlobalStore((s) => s.invokeGetCursorDiskUsage);
   const invokeCleanupCursorFullBackups = useGlobalStore((s) => s.invokeCleanupCursorFullBackups);
+  const invokeCleanupCursorSealedBackups = useGlobalStore(
+    (s) => s.invokeCleanupCursorSealedBackups
+  );
   const invokeSlimCursorStateDbs = useGlobalStore((s) => s.invokeSlimCursorStateDbs);
   const invokeReadCursorDiagnostics = useGlobalStore((s) => s.invokeReadCursorDiagnostics);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
@@ -124,8 +127,6 @@ function CursorManager() {
     name: "",
     email: "",
     password: "",
-    gitUserName: "",
-    gitEmail: "",
     notes: "",
   });
   const [showPassword, setShowPassword] = useState(false);
@@ -158,10 +159,10 @@ function CursorManager() {
     backupsBytes: number;
     backupsFullDbBytes: number;
     staleDbCount: number;
-    sharedBytes: number;
+    sealedBytes: number;
+    sealedCount: number;
     liveDbBytes: number;
     backupsPath: string;
-    sharedPath: string;
     liveDbPath: string;
   } | null>(null);
   const [diskLoading, setDiskLoading] = useState(false);
@@ -393,7 +394,13 @@ function CursorManager() {
     };
   }, []);
 
-  const switchPercent = switchStage ? SWITCH_STAGE_PERCENT[switchStage] ?? 0 : 0;
+  // Flows emit stages in different orders (finish saves before it quits), so the
+  // bar only ever moves forward within one run and resets when it goes idle.
+  const maxPercentRef = useRef(0);
+  maxPercentRef.current = switchStage
+    ? Math.max(maxPercentRef.current, SWITCH_STAGE_PERCENT[switchStage] ?? 0)
+    : 0;
+  const switchPercent = maxPercentRef.current;
 
   const formatBytes = (bytes: number) => {
     if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
@@ -429,6 +436,30 @@ function CursorManager() {
     }
   };
 
+  const handleCleanupSealedBackups = async () => {
+    if (cleaning || busy || switchingId) return;
+    const count = diskUsage?.sealedCount ?? 0;
+    const size = diskUsage?.sealedBytes ?? 0;
+    const ok = await confirm({
+      title: t("cursor.sealedCleanupTitle"),
+      message: t("cursor.sealedCleanupMessage", { count, size: formatBytes(size) }),
+      warning: t("cursor.sealedCleanupWarning"),
+      confirmText: t("cursor.sealedCleanupConfirm"),
+      icon: "warning",
+    });
+    if (!ok) return;
+    setCleaning(true);
+    try {
+      const result = await invokeCleanupCursorSealedBackups();
+      showMsg("success", result.message || t("cursor.sealedCleanupOk"));
+      await refreshDiskUsage();
+    } catch (e) {
+      showMsg("error", `${t("cursor.sealedCleanupFailed")}: ${e}`);
+    } finally {
+      setCleaning(false);
+    }
+  };
+
   const handleSlimDbs = async () => {
     if (slimming || cleaning || busy || switchingId) return;
     const ok = await confirm({
@@ -443,7 +474,7 @@ function CursorManager() {
     try {
       const result = await invokeSlimCursorStateDbs();
       const slimLabel = (label: string) =>
-        label === "shared"
+        label === "legacy-shared"
           ? t("cursor.diskShared")
           : label === "default"
             ? t("cursor.diskLive")
@@ -485,8 +516,6 @@ function CursorManager() {
       name: currentCursor?.name || "",
       email: currentCursor?.email || "",
       password: "",
-      gitUserName: "",
-      gitEmail: "",
       notes: "",
     });
     setShowModal(true);
@@ -499,8 +528,6 @@ function CursorManager() {
       name: account.name,
       email: account.email,
       password: account.password || "",
-      gitUserName: account.gitUserName || "",
-      gitEmail: account.gitEmail || "",
       notes: account.notes || "",
     });
     setShowModal(true);
@@ -542,8 +569,6 @@ function CursorManager() {
           name: formData.name,
           email: formData.email,
           password: formData.password.trim() || undefined,
-          gitUserName: formData.gitUserName || undefined,
-          gitEmail: formData.gitEmail || undefined,
           notes: formData.notes || undefined,
         });
         showMsg("success", t("cursor.saveUpdated"));
@@ -576,8 +601,6 @@ function CursorManager() {
         email: formData.email,
         color: colors[cursorAccounts.length % colors.length],
         password: formData.password.trim() || undefined,
-        gitUserName: formData.gitUserName || undefined,
-        gitEmail: formData.gitEmail || undefined,
         notes: formData.notes || undefined,
       });
       showMsg("success", msg);
@@ -625,7 +648,7 @@ function CursorManager() {
     setBusy(true);
     setSwitchStep(t("cursor.openingProfile"));
     try {
-      const msg = await reopenCursorForInit(account.id);
+      const msg = await reopenCursorForInit(account.id, account.email);
       showMsg("success", msg || t("cursor.reopenOk"));
       await refresh();
     } catch (error) {
@@ -665,7 +688,7 @@ function CursorManager() {
     setBusy(true);
     setSwitchStep(t("cursor.launching"));
     try {
-      const msg = await invokeLaunchCursor(account.id);
+      const msg = await invokeLaunchCursor(account.id, account.email);
       showMsg("success", msg || t("cursor.launchOk"));
       await refreshLiveStatus({ silent: true });
     } catch (error) {
@@ -811,16 +834,6 @@ function CursorManager() {
       setSwitchStep("");
       setSwitchStage("");
     }
-  };
-
-  const applyGitAccount = (accountId: string) => {
-    const gitAccount = gitAccounts.find((a) => a.id === accountId);
-    if (!gitAccount) return;
-    setFormData((prev) => ({
-      ...prev,
-      gitUserName: gitAccount.name,
-      gitEmail: gitAccount.email,
-    }));
   };
 
   return (
@@ -1003,7 +1016,9 @@ function CursorManager() {
               const index = cursorAccounts.indexOf(account);
               const liveActive = isLiveAccount(account);
               const snap = backupStatus[account.id];
-              const incomplete = snap ? !snap.complete : false;
+              // Unknown yet (the list paints before the snapshot scan finishes)
+              // must not offer a switch the backend would refuse.
+              const incomplete = snap ? !snap.complete : true;
               const needsInit = !account.profileInitialized;
               return (
                 <li
@@ -1130,11 +1145,6 @@ function CursorManager() {
                         {snap.warning}
                       </div>
                     )}
-                    {account.gitUserName && (
-                      <div className="account-email" style={{ fontSize: 11, opacity: 0.7 }}>
-                        Git: {account.gitUserName} &lt;{account.gitEmail}&gt;
-                      </div>
-                    )}
                     {backupSizes[account.id] > 0 && (
                       <div className="account-email" style={{ fontSize: 11, opacity: 0.7 }}>
                         {t("cursor.backupSize", {
@@ -1243,10 +1253,6 @@ function CursorManager() {
                 {t("cursor.diskLive")} {formatBytes(diskUsage.liveDbBytes)}
               </span>
               <span className="cursor-disk-sep">·</span>
-              <span title={diskUsage.sharedPath}>
-                {t("cursor.diskShared")} {formatBytes(diskUsage.sharedBytes)}
-              </span>
-              <span className="cursor-disk-sep">·</span>
               <span title={diskUsage.backupsPath}>
                 {t("cursor.diskBackups")} {formatBytes(diskUsage.backupsBytes)}
                 {diskUsage.staleDbCount > 0
@@ -1256,6 +1262,15 @@ function CursorManager() {
                     })}）`
                   : ""}
               </span>
+              {diskUsage.sealedCount > 0 && (
+                <>
+                  <span className="cursor-disk-sep">·</span>
+                  <span title={t("cursor.diskSealedHint")}>
+                    {t("cursor.diskSealed")} {formatBytes(diskUsage.sealedBytes)}
+                    {`（${t("cursor.diskSealedShort", { count: diskUsage.sealedCount })}）`}
+                  </span>
+                </>
+              )}
               {orphans && orphans.count > 0 && (
                 <>
                   <span className="cursor-disk-sep">·</span>
@@ -1333,6 +1348,19 @@ function CursorManager() {
             {t("cursor.orphanAction")}
             {orphans && orphans.count > 0 ? ` (${orphans.count})` : ""}
           </button>
+          {diskUsage && diskUsage.sealedCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              disabled={cleaning || busy || Boolean(switchingId)}
+              onClick={handleCleanupSealedBackups}
+              title={t("cursor.sealedCleanupWarning")}
+            >
+              {cleaning ? <Loader2 size={12} className="spin" /> : <Trash2 size={12} />}
+              {t("cursor.sealedCleanupAction")} (
+              {formatBytes(diskUsage.sealedBytes)})
+            </button>
+          )}
         </div>
       </div>
 
@@ -1405,44 +1433,6 @@ function CursorManager() {
               <p className="runtime-muted" style={{ marginTop: 4, fontSize: 12 }}>
                 {t("cursor.passwordMemoNote")}
               </p>
-            </div>
-            {gitAccounts.length > 0 && (
-              <div className="input-group">
-                <label className="input-label">{t("cursor.linkGitLabel")}</label>
-                <select
-                  className="input-field"
-                  value=""
-                  onChange={(e) => applyGitAccount(e.target.value)}
-                  disabled={busy}
-                >
-                  <option value="">{t("cursor.linkGitPlaceholder")}</option>
-                  {gitAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name} &lt;{account.email}&gt;
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <div className="input-group">
-              <label className="input-label">{t("cursor.gitUserLabel")}</label>
-              <input
-                className="input-field"
-                value={formData.gitUserName}
-                onChange={(e) => setFormData({ ...formData, gitUserName: e.target.value })}
-                placeholder={t("cursor.gitUserPlaceholder")}
-                disabled={busy}
-              />
-            </div>
-            <div className="input-group">
-              <label className="input-label">{t("cursor.gitEmailLabel")}</label>
-              <input
-                className="input-field"
-                value={formData.gitEmail}
-                onChange={(e) => setFormData({ ...formData, gitEmail: e.target.value })}
-                placeholder={t("cursor.gitEmailPlaceholder")}
-                disabled={busy}
-              />
             </div>
             <div className="input-group">
               <label className="input-label">{t("cursor.notesLabel")}</label>

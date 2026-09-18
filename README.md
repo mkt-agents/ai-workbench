@@ -31,7 +31,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 ### 账号与 Git
 
-- **Cursor**：多账号一键切换（每账号独立 `--user-data-dir`，登录态互不影响）；工作区 / 历史 / 扩展 / Agent 数据 / Composer 会话跨账号共享；磁盘占用可视化 + DB 瘦身（共享层重建 + VACUUM）；可联动 Git，可选本机密码备忘，支持诊断导出
+- **Cursor**：多账号一键切换 —— `%APPDATA%\Cursor` 为**单一数据源**，工作区 / 历史 / 扩展 / Agent 数据 / Composer 会话只存一份，账号 profile 只是指向它的 junction 壳；切换账号只替换共享库里的 `cursorAuth/*` 登录键（各账号登录态快照单独保存在 `cursor-backups/<id>/auth.json`），互不覆盖；磁盘占用可视化 + DB 瘦身（VACUUM + 移除旧共享层）；可选本机密码备忘，支持诊断导出。Git 身份在「Git 管理」页按仓库 / 域名配置，与 Cursor 账号切换互不影响
 - **Git 管理**：仓库总览 / 扫描 / 搜索 / 批量身份 / 批量拉推 / 批量移除；提交页多仓变更、diff、提交与推送、AI 生成说明；账号支持按域名绑定（origin 自动匹配），身份匹配顺序：路径精确绑定 > 域名绑定 > 全局 git config
 
 ### 开发环境

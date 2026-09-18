@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -107,10 +107,6 @@ fn default_user_dir() -> PathBuf {
 
 const SHARED_WORKSPACE_DIR_NAMES: &[&str] = &["workspaceStorage", "History", "snippets"];
 
-fn default_workspace_linked_marker() -> Result<PathBuf, String> {
-    Ok(app_data_dir()?.join(".default-workspace-linked-v1"))
-}
-
 /// Error code prefix for structured errors returned to the frontend.
 /// Format: "[CODE] message" — parsed by the frontend `parseInvokeError`.
 const ERR_INVALID_ACCOUNT_ID: &str = "[INVALID_ACCOUNT_ID]";
@@ -172,26 +168,10 @@ fn cursor_profile_dir(account_id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn cursor_shared_dir() -> Result<PathBuf, String> {
-    let dir = app_data_dir()?.join("cursor-shared");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
-    Ok(dir)
-}
-
-fn shared_seeded_marker() -> Result<PathBuf, String> {
-    Ok(cursor_shared_dir()?.join(".shared-seeded"))
-}
-
-fn shared_user_dir() -> Result<PathBuf, String> {
-    let dir = cursor_shared_dir()?.join("User");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建 shared/User 失败: {}", e))?;
-    Ok(dir)
-}
-
-fn shared_global_storage_dir() -> Result<PathBuf, String> {
-    let dir = shared_user_dir()?.join("globalStorage");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建 shared/globalStorage 失败: {}", e))?;
-    Ok(dir)
+/// Legacy `cursor-shared` layer path. Not created on read: after the
+/// single-source migration it is deleted and must stay deleted.
+fn cursor_shared_dir() -> PathBuf {
+    app_data_dir().map(|d| d.join("cursor-shared")).unwrap_or_default()
 }
 
 #[cfg(windows)]
@@ -250,20 +230,36 @@ fn merge_tree_into(src: &Path, dst: &Path) -> Result<(), String> {
 /// Unlink a junction / symlink itself. Recursing into it would reach the
 /// default Cursor data it points at.
 fn remove_link(path: &Path) -> Result<(), String> {
-    let result = if path.is_dir() {
-        fs::remove_dir(path)
-    } else {
-        fs::remove_file(path)
-    };
-    result.map_err(|e| format!("移除链接 {} 失败: {}", path.display(), e))
+    // Try in "unlink the mount point" order: `RemoveDirectoryW` drops a
+    // junction — live or dangling — without touching its target, while
+    // `DeleteFileW` on one fails with ERROR_ACCESS_DENIED. A dangling junction
+    // reports `is_dir() == false` (that follows the link) and `is_dir() ==
+    // false` from its own metadata too, so no attribute check can pick for us.
+    if fs::remove_dir(path).is_ok() {
+        return Ok(());
+    }
+    let link = path.to_string_lossy().to_string();
+    if let Ok(output) = hidden_command("cmd").args(["/c", "rmdir", &link]).output() {
+        if output.status.success() {
+            return Ok(());
+        }
+    }
+    if !is_reparse_point(path) && !path.exists() {
+        return Ok(()); // someone already removed it
+    }
+    fs::remove_file(path)
+        .map(|_| ())
+        .map_err(|e| format!("移除链接 {} 失败: {}", path.display(), e))
 }
 
 fn remove_path_for_link(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
+    // Reparse check first: a dangling link does not `exist()` yet must still be
+    // removed, or nothing can take its name again.
     if is_reparse_point(path) {
         return remove_link(path);
+    }
+    if !path.exists() {
+        return Ok(());
     }
     if path.is_dir() {
         return remove_dir_retry(path, 5);
@@ -275,11 +271,13 @@ fn remove_path_for_link(path: &Path) -> Result<(), String> {
 /// removing a Cursor profile, whose subdirectories are junctions into the
 /// default Cursor data directory.
 fn remove_tree_removing_links(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
+    // Reparse first: a dangling junction does not `exist()` but must still be
+    // unlinked, or the tree holding it can never be removed.
     if is_reparse_point(path) {
         return remove_link(path);
+    }
+    if !path.exists() {
+        return Ok(());
     }
     if !path.is_dir() {
         return fs::remove_file(path).map_err(|e| format!("删除 {} 失败: {}", path.display(), e));
@@ -301,18 +299,20 @@ fn remove_tree_removing_links(path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn ensure_dir_junction(link: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|e| format!("创建目录失败: {}", e))?;
-    if link.exists() {
-        if is_reparse_point(link) {
-            let same_target = match (fs::canonicalize(link), fs::canonicalize(target)) {
-                (Ok(a), Ok(b)) => a == b,
-                _ => false,
-            };
-            if same_target {
-                return Ok(());
-            }
-            // Stale junction pointing elsewhere — recreate
-            remove_path_for_link(link)?;
-        } else if link.is_dir() {
+    // A dangling junction (its target was deleted) reports exists() == false
+    // yet still occupies the name, so probe the reparse point first.
+    if is_reparse_point(link) {
+        let same_target = match (fs::canonicalize(link), fs::canonicalize(target)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if same_target {
+            return Ok(());
+        }
+        // Stale or dangling junction pointing elsewhere — recreate
+        remove_path_for_link(link)?;
+    } else if link.exists() {
+        if link.is_dir() {
             merge_tree_into(link, target)?;
             remove_dir_retry(link, 5)?;
         } else {
@@ -367,35 +367,6 @@ fn ensure_dir_junction(link: &Path, target: &Path) -> Result<(), String> {
         .map_err(|e| format!("创建符号链接失败: {}", e))
 }
 
-#[cfg(windows)]
-fn ensure_file_link(link: &Path, target: &Path) -> Result<(), String> {
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-    if !target.exists() && link.exists() && link.is_file() && !is_reparse_point(link) {
-        copy_file_retry(link, target)?;
-    }
-    if link.exists() {
-        if is_reparse_point(link) || (link.is_file() && fs::canonicalize(link).ok() == fs::canonicalize(target).ok()) {
-            return Ok(());
-        }
-        remove_path_for_link(link)?;
-    }
-    if !target.exists() {
-        return Ok(());
-    }
-    let link_s = link.to_string_lossy().to_string();
-    let target_s = target.to_string_lossy().to_string();
-    let output = hidden_command("cmd")
-        .args(["/c", "mklink", &link_s, &target_s])
-        .output()
-        .map_err(|e| format!("创建文件联接失败: {}", e))?;
-    if !output.status.success() {
-        copy_file_retry(target, link)?;
-    }
-    Ok(())
-}
-
 #[cfg(not(windows))]
 fn ensure_file_link(link: &Path, target: &Path) -> Result<(), String> {
     if let Some(parent) = target.parent() {
@@ -414,343 +385,153 @@ fn ensure_file_link(link: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn seed_shared_from_default() -> Result<(), String> {
-    let marker = shared_seeded_marker()?;
-    if marker.exists() {
-        let _ = cleanup_shared_bloated_state_dbs();
-        return Ok(());
-    }
+// ============================================================================
+// Single-source profile shells.
+//
+// %APPDATA%\Cursor\User is the ONLY real data source (workspaces, sessions,
+// settings, extensions). Account profiles are thin `--user-data-dir` shells
+// whose User directory is a junction into the default one; per-account login
+// is swapped into the shared state.vscdb as cursorAuth/* keys only.
+// ============================================================================
 
-    let shared = cursor_shared_dir()?;
-    let shared_user = shared_user_dir()?;
-    let _ = shared_global_storage_dir()?;
-    let default_root = cursor_data_dir();
-    let default_user = default_root.join("User");
+/// Serializes old-layout → shell conversion (see `convert_profile_to_shell`).
+static SHELL_CONVERT_LOCK: Mutex<()> = Mutex::new(());
 
-    // Workspace dirs stay in default Cursor\User and are junction-linked from profiles.
-    if default_user.exists() {
-        for name in ["settings.json", "keybindings.json"] {
-            let src = default_user.join(name);
-            let dst = shared_user.join(name);
-            if src.is_file() && !dst.exists() {
-                copy_file_retry(&src, &dst)?;
-            }
-        }
-        let src_storage = default_user.join("globalStorage").join("storage.json");
-        let dst_storage = shared_user.join("globalStorage").join("storage.json");
-        if src_storage.is_file() && !dst_storage.exists() {
-            copy_file_retry(&src_storage, &dst_storage)?;
-        }
-    }
-
-    let default_ext = default_root.join("extensions");
-    let shared_ext = shared.join("extensions");
-    if default_ext.is_dir() {
-        merge_tree_into(&default_ext, &shared_ext)?;
-    } else {
-        fs::create_dir_all(&shared_ext).map_err(|e| format!("创建 extensions 失败: {}", e))?;
-    }
-
-    let _ = cleanup_shared_bloated_state_dbs();
-
-    fs::write(&marker, "1").map_err(|e| format!("写入 shared 标记失败: {}", e))?;
-    Ok(())
-}
-
-/// Fast path: merge any unique shared-layer folders into default Cursor so profiles can
-/// junction to a single copy. Does NOT delete multi-GB shared copies (that freezes the UI).
-fn reconcile_legacy_shared_workspace_copies() -> Result<(), String> {
-    let marker = default_workspace_linked_marker()?;
-    if marker.exists() {
-        schedule_delete_legacy_shared_workspace_copies();
-        return Ok(());
-    }
-
-    let default_user = default_user_dir();
-    fs::create_dir_all(&default_user).map_err(|e| format!("创建 default User 失败: {}", e))?;
-
-    if let Ok(shared_user) = shared_user_dir() {
-        for name in SHARED_WORKSPACE_DIR_NAMES {
-            let shared_dir = shared_user.join(name);
-            let default_dir = default_user.join(name);
-            if shared_dir.is_dir() && !is_reparse_point(&shared_dir) {
-                merge_missing_subdirs(&shared_dir, &default_dir)?;
-            }
-        }
-        for name in ["settings.json", "keybindings.json"] {
-            let shared_file = shared_user.join(name);
-            let default_file = default_user.join(name);
-            if shared_file.is_file() && !default_file.exists() {
-                copy_file_retry(&shared_file, &default_file)?;
-            }
-        }
-        let shared_storage = shared_user.join("globalStorage").join("storage.json");
-        let default_storage = default_user.join("globalStorage").join("storage.json");
-        if shared_storage.is_file() && !default_storage.exists() {
-            if let Some(parent) = default_storage.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("创建 globalStorage 失败: {}", e))?;
-            }
-            copy_file_retry(&shared_storage, &default_storage)?;
-        }
-    }
-
-    for name in SHARED_WORKSPACE_DIR_NAMES {
-        fs::create_dir_all(default_user.join(name))
-            .map_err(|e| format!("创建 default {} 失败: {}", name, e))?;
-    }
-
-    fs::write(&marker, "1").map_err(|e| format!("写入 default-workspace 标记失败: {}", e))?;
-    schedule_delete_legacy_shared_workspace_copies();
-    Ok(())
-}
-
-fn schedule_delete_legacy_shared_workspace_copies() {
-    std::thread::spawn(|| {
-        let Ok(shared_user) = shared_user_dir() else {
-            return;
-        };
-        for name in SHARED_WORKSPACE_DIR_NAMES {
-            let shared_dir = shared_user.join(name);
-            if shared_dir.is_dir() && !is_reparse_point(&shared_dir) {
-                let _ = remove_dir_retry(&shared_dir, 12);
-            }
-        }
-    });
-}
-
-fn shared_bloat_cleanup_marker() -> Result<PathBuf, String> {
-    Ok(cursor_shared_dir()?.join(".shared-bloat-cleaned-v1"))
-}
-
-/// Remove redundant Cursor login DBs under cursor-shared (never profiles / default Cursor).
-fn cleanup_shared_bloated_state_dbs() -> Result<CursorCleanupResult, String> {
-    let marker = shared_bloat_cleanup_marker()?;
-    if marker.exists() {
-        return Ok(CursorCleanupResult {
-            removed_files: 0,
-            freed_bytes: 0,
-            message: "共享层冗余登录库已清理过".into(),
-        });
-    }
-
-    let shared_gs = shared_global_storage_dir()?;
-    const NAMES: &[&str] = &[
-        "state.vscdb",
-        "state.vscdb-wal",
-        "state.vscdb-shm",
-        "state.vscdb.backup",
-    ];
-
-    let mut freed = 0u64;
-    let mut removed = 0u32;
-    for name in NAMES {
-        let p = shared_gs.join(name);
-        if !p.is_file() {
-            continue;
-        }
-        let size = file_size(&p);
-        match fs::remove_file(&p) {
-            Ok(()) => {
-                freed += size;
-                removed += 1;
-            }
-            Err(e) => {
-                return Err(format!("删除共享层冗余 {} 失败: {}", p.display(), e));
-            }
-        }
-    }
-
-    let _ = fs::write(&marker, "1");
-    Ok(CursorCleanupResult {
-        removed_files: removed,
-        freed_bytes: freed,
-        message: if removed == 0 {
-            "共享层无冗余登录库".into()
-        } else {
-            format!(
-                "已清理共享层冗余登录库 {} 个文件，释放约 {}",
-                removed,
-                format_bytes(freed)
-            )
-        },
-    })
-}
-
-/// `globalStorage` entries that are never bulk-shared: the login database, the
-/// recent-folder config (linked separately), and Cursor's own global-storage
-/// backups (machine-local snapshots — heavy and meaningless to share).
-const GLOBAL_STORAGE_EXCLUDED: &[&str] = &[
-    "state.vscdb",
-    "state.vscdb-wal",
-    "state.vscdb-shm",
-    "state.vscdb.backup",
-    "state.vscdb.options.json",
-    "storage.json",
-    "backups",
-];
-
-/// Excluded entries an earlier build may have linked; unlinked on sight.
-const GLOBAL_STORAGE_UNLINK_IF_LINKED: &[&str] = &["backups"];
-
-fn is_profile_local_global_storage(name: &str) -> bool {
-    GLOBAL_STORAGE_EXCLUDED
-        .iter()
-        .any(|n| name.eq_ignore_ascii_case(n))
-}
-
-/// Share Cursor's machine-global data under `User/globalStorage` — agent
-/// workspaces (`anysphere.cursor-agent-worker`), the conversation search index
-/// (`conversation-search.db`), extension global storage, etc. — across account
-/// profiles. The login database (`state.vscdb`) is deliberately excluded so
-/// each account keeps independent sign-in state.
-///
-/// Best-effort per entry: a single locked/missing entry must never abort the
-/// account launch.
-fn link_global_storage_to_shared(profile: &Path) -> Result<(), String> {
-    let default_gs = default_user_dir().join("globalStorage");
-    fs::create_dir_all(&default_gs).map_err(|e| format!("创建默认 globalStorage 失败: {}", e))?;
-
-    let profile_gs = profile.join("User").join("globalStorage");
-    fs::create_dir_all(&profile_gs).map_err(|e| format!("创建 profile globalStorage 失败: {}", e))?;
-
-    // Drop links a previous build created for entries we no longer share.
-    for name in GLOBAL_STORAGE_UNLINK_IF_LINKED {
-        let link = profile_gs.join(name);
-        if link.exists() && is_reparse_point(&link) {
-            if let Err(e) = remove_link(&link) {
-                eprintln!("[cursor] unlink globalStorage '{name}': {e}");
-            }
-        }
-    }
-
-    // Union of both sides, so entries that only exist in the profile are merged
-    // into the canonical default directory instead of being dropped.
-    let mut names: Vec<String> = Vec::new();
-    for dir in [&default_gs, &profile_gs] {
-        let Ok(entries) = fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if is_profile_local_global_storage(&name) || names.iter().any(|n| n == &name) {
-                continue;
-            }
-            names.push(name);
-        }
-    }
-
-    for name in names {
-        let link = profile_gs.join(&name);
-        let target = default_gs.join(&name);
-        let result = if target.is_dir() || link.is_dir() {
-            ensure_dir_junction(&link, &target)
-        } else if target.exists() || link.exists() {
-            ensure_file_link(&link, &target)
-        } else {
-            Ok(())
-        };
-        if let Err(e) = result {
-            eprintln!("[cursor] share globalStorage '{name}': {e}");
-        }
-    }
-    Ok(())
-}
-
-fn link_profile_to_shared(profile: &Path) -> Result<(), String> {
-    seed_shared_from_default()?;
-    reconcile_legacy_shared_workspace_copies()?;
-
-    let default_user = default_user_dir();
-    fs::create_dir_all(&default_user).map_err(|e| format!("创建 default User 失败: {}", e))?;
-    fs::create_dir_all(default_user.join("globalStorage"))
-        .map_err(|e| format!("创建 default globalStorage 失败: {}", e))?;
-
-    let shared = cursor_shared_dir()?;
-    let default_root = cursor_data_dir();
-    let default_ext = default_root.join("extensions");
-    let extensions_target = if default_ext.is_dir() {
-        default_ext
-    } else {
-        let shared_ext = shared.join("extensions");
-        fs::create_dir_all(&shared_ext).map_err(|e| format!("创建 extensions 失败: {}", e))?;
-        shared_ext
+/// Drop junction links inside a real globalStorage dir before the whole User
+/// tree is renamed away — unlink first so links are never walked into.
+fn unlink_children_in_global_storage(profile: &Path) {
+    let gs = profile.join("User").join("globalStorage");
+    let Ok(entries) = fs::read_dir(&gs) else {
+        return;
     };
-
-    let profile_user = profile.join("User");
-    fs::create_dir_all(&profile_user.join("globalStorage"))
-        .map_err(|e| format!("创建 profile globalStorage 失败: {}", e))?;
-
-    let dir_links = [
-        (
-            profile_user.join("workspaceStorage"),
-            default_user.join("workspaceStorage"),
-        ),
-        (profile_user.join("History"), default_user.join("History")),
-        (profile_user.join("snippets"), default_user.join("snippets")),
-        (profile.join("extensions"), extensions_target),
-    ];
-    for (link, target) in dir_links {
-        ensure_dir_junction(&link, &target)?;
-    }
-
-    let default_storage = default_user.join("globalStorage").join("storage.json");
-    clear_path_readonly(&default_storage);
-
-    let file_links = [
-        (
-            profile_user.join("settings.json"),
-            default_user.join("settings.json"),
-        ),
-        (
-            profile_user.join("keybindings.json"),
-            default_user.join("keybindings.json"),
-        ),
-        (
-            profile_user.join("globalStorage").join("storage.json"),
-            default_storage,
-        ),
-    ];
-    for (link, target) in file_links {
-        if link.exists() || target.exists() {
-            ensure_file_link(&link, &target)?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_reparse_point(&path) {
+            let _ = remove_link(&path);
         }
     }
+}
 
-    // Share machine-global Cursor data (agent workspaces, conversation search
-    // index, extension storage) while keeping the login DB per-profile.
-    link_global_storage_to_shared(profile)?;
+/// Persist a profile's login into its auth.json slot before its state.vscdb
+/// stops existing, so single-source switching keeps a usable snapshot.
+fn save_profile_auth_snapshot(account_id: &str, profile: &Path) {
+    let Ok(backup) = backup_dir(account_id) else {
+        return;
+    };
+    let Ok(snapshot) = read_auth_snapshot_from_root(profile) else {
+        return;
+    };
+    if snapshot.email.is_empty() {
+        return;
+    }
+    if let Ok(existing) = load_auth_snapshot(&backup) {
+        if existing.email == snapshot.email {
+            return; // slot already holds this account's auth
+        }
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&snapshot) {
+        let _ = fs::write(backup.join("auth.json"), json);
+    }
+}
 
+/// Merge a profile's real `globalStorage` entries into the single source,
+/// skipping the whole `state.vscdb*` family: sessions have already flowed
+/// across via `copy_composer_tables` and the login via `auth.json`. Copying a
+/// foreign `-wal`/`-shm` sidecar next to the default DB would have SQLite
+/// apply a WAL from another database — corruption, not just staleness.
+fn merge_global_storage_excluding_login_db(profile_user: &Path, default_user: &Path) -> Result<(), String> {
+    let src = profile_user.join("globalStorage");
+    let dst = default_user.join("globalStorage");
+    if !src.is_dir() || is_reparse_point(&src) {
+        return Ok(());
+    }
+    fs::create_dir_all(&dst).map_err(|e| format!("创建 default globalStorage 失败: {}", e))?;
+    for entry in fs::read_dir(&src).map_err(|e| format!("读取 globalStorage 失败: {}", e))? {
+        let entry = entry.map_err(|e| format!("读取 globalStorage 项失败: {}", e))?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with("state.vscdb") {
+            continue;
+        }
+        let dst_child = dst.join(name);
+        if dst_child.exists() {
+            continue;
+        }
+        let child_src = entry.path();
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            merge_tree_into(&child_src, &dst_child)?;
+        } else if child_src.is_file() {
+            copy_file_retry(&child_src, &dst_child)?;
+        }
+    }
     Ok(())
 }
 
-fn prepare_profile_shared(profile: &Path) -> Result<(), String> {
-    seed_shared_from_default()?;
-    link_profile_to_shared(profile)?;
-    // Pull manual-launch global state into the shared layer *before* it flows into
-    // the profile: the recent-workspace list lives in the global state DB, and not
-    // merging it makes a workbench launch look like a different workspace set.
-    if let Err(e) = seed_shared_state_from_default() {
-        eprintln!("[cursor] shared state seed: {e}");
+/// Convert an old-layout profile (real User data + per-copy sessions) into a
+/// junction shell over the default Cursor dir. Everything unique is merged
+/// into the default first; the User tree is renamed to `User.pre-shell-backup`
+/// rather than deleted so a problem is recoverable by hand.
+fn convert_profile_to_shell(account_id: Option<&str>, profile: &Path) -> Result<(), String> {
+    // The startup migration and a user-initiated launch can both reach this,
+    // and a half-renamed User tree is unrecoverable — serialize.
+    let _guard = SHELL_CONVERT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let user = profile.join("User");
+    if !user.exists() || is_reparse_point(&user) {
+        return Ok(());
     }
-    if let Err(e) = merge_recent_workspaces_from_default() {
-        eprintln!("[cursor] recent workspace merge: {e}");
-    }
-    sync_shared_state_to_profile(profile)?;
 
-    // Composer sessions live in their own tables (composerHeaders + cursorDiskKV),
-    // not in ItemTable, so they need an explicit sync chain. Order matters:
-    // default→shared must precede shared→profile, otherwise sessions created by a
-    // manually launched Cursor never reach this profile; profile→shared in the
-    // middle is a safety net for sessions whose backflow was missed on quit.
-    if let Err(e) = sync_default_composer_to_shared() {
-        eprintln!("[cursor] default composer sync: {e}");
+    // globalStorage/* sublinks created by the old scheme point at the default
+    // dir already; drop them so the rename below sees a plain tree.
+    unlink_children_in_global_storage(profile);
+
+    let profile_db = user.join("globalStorage").join("state.vscdb");
+    if profile_db.is_file() {
+        if let Some(id) = account_id {
+            save_profile_auth_snapshot(id, profile);
+        }
+        // Sessions created inside this profile flow into the single source.
+        let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
+        copy_composer_tables(&profile_db, &default_db)?;
     }
-    if let Err(e) = sync_profile_composer_to_shared(profile) {
-        eprintln!("[cursor] profile composer backflow: {e}");
+
+    let default_user = default_user_dir();
+    fs::create_dir_all(&default_user).map_err(|e| format!("创建 default User 失败: {}", e))?;
+    for name in SHARED_WORKSPACE_DIR_NAMES {
+        merge_missing_subdirs(&user.join(name), &default_user.join(name))?;
     }
-    if let Err(e) = sync_shared_composer_to_profile(profile) {
-        eprintln!("[cursor] shared composer sync: {e}");
+    merge_global_storage_excluding_login_db(&user, &default_user)?;
+    for name in ["settings.json", "keybindings.json"] {
+        let src = user.join(name);
+        let dst = default_user.join(name);
+        if src.is_file() && !dst.exists() {
+            copy_file_retry(&src, &dst)?;
+        }
     }
+
+    let backup_user = profile.join("User.pre-shell-backup");
+    if backup_user.exists() {
+        let _ = remove_tree_removing_links(&backup_user);
+    }
+    fs::rename(&user, &backup_user).map_err(|e| format!("封存旧 profile User 失败: {}", e))?;
+    ensure_dir_junction(&user, &default_user)?;
+    Ok(())
+}
+
+/// Make a profile a thin shell: User junctions onto the default dir and the
+/// extensions dir onto the shared install. Runs on every managed launch.
+fn ensure_profile_shell(account_id: Option<&str>, profile: &Path) -> Result<(), String> {
+    convert_profile_to_shell(account_id, profile)?;
+    let default_root = cursor_data_dir();
+    ensure_dir_junction(&profile.join("User"), &default_root.join("User"))?;
+
+    // A profile can still hold a real extensions dir after its User was
+    // converted (older builds linked it separately): fold it into the single
+    // source before replacing it with a junction, so nothing is dropped.
+    let ext = profile.join("extensions");
+    if ext.is_dir() && !is_reparse_point(&ext) {
+        merge_missing_subdirs(&ext, &default_root.join("extensions"))?;
+        let _ = remove_tree_removing_links(&ext);
+    }
+    ensure_dir_junction(&ext, &default_root.join("extensions"))?;
     Ok(())
 }
 
@@ -758,45 +539,79 @@ fn profiles_root_dir() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("cursor-profiles"))
 }
 
-pub fn ensure_shared_workspace_migration() -> Result<(), String> {
-    seed_shared_from_default()?;
-    reconcile_legacy_shared_workspace_copies()?;
-    if let Err(e) = cleanup_shared_bloated_state_dbs() {
-        eprintln!("[cursor] shared bloat cleanup: {e}");
+/// Fold anything unique to the old `cursor-shared` layer back into the default
+/// Cursor dir, then drop the layer — single-source has no second copy to keep
+/// in step. Best-effort: a locked file must not abort startup.
+fn drop_legacy_shared_layer() -> Result<CursorCleanupResult, String> {
+    let shared = cursor_shared_dir();
+    if !shared.exists() {
+        return Ok(CursorCleanupResult {
+            removed_files: 0,
+            freed_bytes: 0,
+            message: "无共享层需要清理".into(),
+        });
     }
-    // Heal BLOB-typed values left by older shared-state sync (black-screen fix).
-    if let Ok(shared_db) = shared_state_vscdb() {
-        if let Err(e) = repair_blob_typed_state(&shared_db) {
-            eprintln!("[cursor] shared state type repair: {e}");
+    let default_user = default_user_dir();
+    let shared_user = shared.join("User");
+    fs::create_dir_all(&default_user).map_err(|e| format!("创建 default User 失败: {}", e))?;
+
+    let mut freed = 0u64;
+    for name in SHARED_WORKSPACE_DIR_NAMES {
+        let src = shared_user.join(name);
+        freed += dir_size(&src);
+        let _ = merge_missing_subdirs(&src, &default_user.join(name));
+    }
+    // The shared login DB is a synced copy: sessions flow into the single
+    // source, its `state.vscdb*` files never merge (foreign WAL = corruption).
+    let shared_db = shared_user.join("globalStorage").join("state.vscdb");
+    let default_db = default_user.join("globalStorage").join("state.vscdb");
+    if shared_db.is_file() {
+        let _ = copy_composer_tables(&shared_db, &default_db);
+    }
+    freed += dir_size(&shared_user.join("globalStorage"));
+    let _ = merge_global_storage_excluding_login_db(&shared_user, &default_user);
+    let _ = remove_tree_removing_links(&shared);
+
+    Ok(CursorCleanupResult {
+        removed_files: 1,
+        freed_bytes: freed,
+        message: "已合并并移除旧共享层".into(),
+    })
+}
+
+fn schedule_drop_legacy_shared_layer() {
+    std::thread::spawn(|| {
+        if let Err(e) = drop_legacy_shared_layer() {
+            eprintln!("[cursor] drop legacy shared layer: {e}");
         }
-    }
-    // Heal existing installs whose shared layer predates the default-state seed,
-    // then keep the recent-workspace list merged with the default Cursor.
-    if let Err(e) = seed_shared_state_from_default() {
-        eprintln!("[cursor] shared state seed: {e}");
-    }
-    if let Err(e) = merge_recent_workspaces_from_default() {
-        eprintln!("[cursor] recent workspace merge: {e}");
+    });
+}
+
+/// Startup hook: heal legacy damage, then convert every profile to a junction
+/// shell over the default Cursor dir and retire the shared layer.
+pub fn ensure_shared_workspace_migration() -> Result<(), String> {
+    // Heal BLOB-typed values left by the old shared-state sync (black-screen fix).
+    let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
+    if let Err(e) = repair_blob_typed_state(&default_db) {
+        eprintln!("[cursor] default state type repair: {e}");
     }
 
     let profiles_root = profiles_root_dir()?;
-    if !profiles_root.exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(&profiles_root).map_err(|e| format!("读取 profiles 失败: {}", e))? {
-        let entry = entry.map_err(|e| format!("读取 profile 项失败: {}", e))?;
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let profile = entry.path();
-        if let Err(e) = repair_blob_typed_state(&live_state_vscdb_in(&profile)) {
-            eprintln!("[cursor] profile state type repair: {e}");
-        }
-        if is_profile_initialized_at(&profile) {
-            let _ = link_profile_to_shared(&profile);
-            let _ = sync_shared_state_to_profile(&profile);
+    if profiles_root.exists() && !is_cursor_process_running() {
+        for entry in fs::read_dir(&profiles_root).map_err(|e| format!("读取 profiles 失败: {}", e))? {
+            let entry = entry.map_err(|e| format!("读取 profile 项失败: {}", e))?;
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let profile = entry.path();
+            let id = account_id_from_profile_path(&profile);
+            if let Err(e) = ensure_profile_shell(id.as_deref(), &profile) {
+                eprintln!("[cursor] shell convert {}: {e}", profile.display());
+            }
         }
     }
+    schedule_drop_legacy_shared_layer();
+
     let orphaned = cleanup_orphan_profiles(&known_cursor_account_ids());
     if orphaned > 0 {
         eprintln!("[cursor] cleaned {orphaned} orphan profile(s)");
@@ -864,11 +679,6 @@ fn detect_running_cursor_data_dir_uncached() -> Option<PathBuf> {
         }
     }
     None
-}
-
-fn detect_profile_from_running_cursor() -> Option<String> {
-    let dir = detect_running_cursor_data_dir()?;
-    account_id_from_profile_path(&dir)
 }
 
 fn profile_initialized_marker(profile: &Path) -> PathBuf {
@@ -1024,17 +834,6 @@ fn remove_dir_retry(path: &Path, attempts: u32) -> Result<(), String> {
         }
     }
     Err(format!("无法清除 {}: {}", path.display(), last_err))
-}
-
-fn clear_path_readonly(path: &Path) {
-    if !path.exists() {
-        return;
-    }
-    #[cfg(windows)]
-    {
-        let path_s = path.to_string_lossy().to_string();
-        let _ = hidden_command("attrib").args(["-R", &path_s]).output();
-    }
 }
 
 fn replace_dir(src: &Path, dst: &Path) -> Result<(), String> {
@@ -1330,84 +1129,6 @@ fn repair_blob_typed_state(db_path: &Path) -> Result<usize, String> {
     Ok(to_fix.len())
 }
 
-fn export_non_auth_keys(db_path: &Path) -> Result<HashMap<String, rusqlite::types::Value>, String> {
-    if !db_path.exists() {
-        return Ok(HashMap::new());
-    }
-    let conn = open_sqlite_ro(db_path).or_else(|_| {
-        Connection::open(db_path).map_err(|e| format!("打开数据库失败: {}", e))
-    })?;
-    let mut stmt = conn
-        .prepare("SELECT key, value FROM ItemTable")
-        .map_err(|e| format!("查询 ItemTable 失败: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| {
-            let key: String = row.get(0)?;
-            // Preserve the native SQLite type — a TEXT value must stay TEXT.
-            // Coercing it to a BLOB made Cursor read a Uint8Array and its
-            // JSON.parse() fail, which aborts workbench startup (black screen).
-            let value: rusqlite::types::Value = row.get(1)?;
-            Ok((key, value))
-        })
-        .map_err(|e| format!("读取 ItemTable 失败: {}", e))?;
-    let mut keys = HashMap::new();
-    for row in rows {
-        let (key, value) = row.map_err(|e| format!("读取行失败: {}", e))?;
-        if !is_auth_key(&key) {
-            keys.insert(key, value);
-        }
-    }
-    Ok(keys)
-}
-
-fn import_non_auth_keys(
-    db_path: &Path,
-    keys: &HashMap<String, rusqlite::types::Value>,
-) -> Result<(), String> {
-    if keys.is_empty() {
-        return Ok(());
-    }
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-    let conn = Connection::open(db_path).map_err(|e| format!("打开数据库失败: {}", e))?;
-    let _ = conn.execute_batch(
-        "PRAGMA busy_timeout=8000;
-         PRAGMA synchronous=NORMAL;
-         CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);",
-    );
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| format!("开启事务失败: {}", e))?;
-    {
-        // Same no-op guard as the cursorDiskKV importer: only dirty pages when
-        // a value actually changed, so unchanged syncs leave the file mtime
-        // alone and the composer sync markers stay effective.
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO ItemTable (key, value) VALUES (?, ?)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                 WHERE ItemTable.value IS NOT excluded.value",
-            )
-            .map_err(|e| format!("准备写入失败: {}", e))?;
-        for (key, value) in keys {
-            if is_auth_key(key) {
-                continue;
-            }
-            stmt.execute(rusqlite::params![key, value])
-                .map_err(|e| format!("写入 {} 失败: {}", key, e))?;
-        }
-    }
-    tx.commit()
-        .map_err(|e| format!("提交 state 同步失败: {}", e))?;
-    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
-    Ok(())
-}
-
-fn shared_state_vscdb() -> Result<PathBuf, String> {
-    Ok(shared_global_storage_dir()?.join("state.vscdb"))
-}
-
 // ============================================================================
 // Composer session history sharing (composerHeaders + cursorDiskKV tables).
 //
@@ -1551,317 +1272,19 @@ fn copy_composer_tables(src_db: &Path, dst_db: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Cheap change detection for the composer sync chain: (mtime|size) of the
-/// main DB plus the WAL size. Sources that did not change since their last
-/// successful sync are skipped entirely, which keeps repeat launches fast.
-/// The WAL size (not mtime — too twitchy) covers crash-quit leftovers whose
-/// changes never reached the main file.
-fn db_fingerprint(db: &Path) -> Option<String> {
-    let meta = fs::metadata(db).ok()?;
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let mut fp = format!("{}|{}", mtime, meta.len());
-    let mut wal_name = db.file_name()?.to_os_string();
-    wal_name.push("-wal");
-    if let Ok(wal_meta) = fs::metadata(db.with_file_name(wal_name)) {
-        fp.push_str(&format!("|{}", wal_meta.len()));
-    }
-    Some(fp)
-}
-
-fn composer_sync_mark_path(source_db: &Path) -> Option<PathBuf> {
-    let shared_db = shared_state_vscdb().ok()?;
-    let dir = shared_db.parent()?.join(".composer-sync");
-    let key = source_db.to_string_lossy().to_string();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&key, &mut hasher);
-    // Bump the suffix whenever the whitelisted-prefix set changes: old marks
-    // would otherwise report "already synced" and skip the new rows forever.
-    Some(dir.join(format!("{:016x}.mark-v2", std::hash::Hasher::finish(&hasher))))
-}
-
-/// True when the source DB changed since its last successful composer sync
-/// (or it was never synced). Falls back to "sync" on any doubt.
-fn composer_sync_pending(mark: &Path, source_db: &Path) -> bool {
-    match (fs::read_to_string(mark), db_fingerprint(source_db)) {
-        (Ok(prev), Some(fp)) => prev != fp,
-        _ => true,
-    }
-}
-
-fn composer_sync_done(mark: &Path, source_db: &Path) {
-    if let Some(fp) = db_fingerprint(source_db) {
-        if let Some(parent) = mark.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(mark, fp);
-    }
-}
-
-/// Pull Composer headers + cursorDiskKV entries from the default Cursor dir
-/// into the shared layer. Idempotent — every profile launch re-runs this so
-/// manually-launched sessions keep flowing into shared across launches.
-fn sync_default_composer_to_shared() -> Result<(), String> {
-    let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
-    let shared_db = shared_state_vscdb()?;
-    if !default_db.exists() {
-        return Ok(());
-    }
-    let mark = composer_sync_mark_path(&default_db);
-    if let Some(mark) = &mark {
-        if !composer_sync_pending(mark, &default_db) {
-            return Ok(());
-        }
-    }
-    if let Some(parent) = shared_db.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
-    }
-    copy_composer_tables(&default_db, &shared_db)?;
-    if let Some(mark) = &mark {
-        composer_sync_done(mark, &default_db);
-    }
-    Ok(())
-}
-
-/// Push profile's Composer state back into the shared layer. Captures sessions
-/// created inside this profile so the next profile launch (or a manual launch)
-/// can see them. Per-row INSERT OR REPLACE gives last-write-wins per
-/// composerId/key — same-session updates from different accounts overlay, which
-/// matches the user expectation that the most recent edit wins.
-fn sync_profile_composer_to_shared(profile: &Path) -> Result<(), String> {
-    let profile_db = live_state_vscdb_in(profile);
-    if !profile_db.exists() {
-        return Ok(());
-    }
-    let mark = composer_sync_mark_path(&profile_db);
-    if let Some(mark) = &mark {
-        if !composer_sync_pending(mark, &profile_db) {
-            return Ok(());
-        }
-    }
-    let shared_db = shared_state_vscdb()?;
-    if let Some(parent) = shared_db.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
-    }
-    copy_composer_tables(&profile_db, &shared_db)?;
-    if let Some(mark) = &mark {
-        composer_sync_done(mark, &profile_db);
-    }
-    Ok(())
-}
-
-/// Pull shared Composer state into a profile before launch. After this, the
-/// profile's sidebar will show sessions from the default Cursor dir and from
-/// every other profile that has synced into shared.
-fn sync_shared_composer_to_profile(profile: &Path) -> Result<(), String> {
-    let shared_db = shared_state_vscdb()?;
-    if !shared_db.exists() {
-        return Ok(());
-    }
-    let mark = composer_sync_mark_path(&shared_db);
-    if let Some(mark) = &mark {
-        if !composer_sync_pending(mark, &shared_db) {
-            return Ok(());
-        }
-    }
-    let profile_db = live_state_vscdb_in(profile);
-    if let Some(parent) = profile_db.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建 profile 目录失败: {}", e))?;
-    }
-    copy_composer_tables(&shared_db, &profile_db)?;
-    if let Some(mark) = &mark {
-        composer_sync_done(mark, &shared_db);
-    }
-    Ok(())
-}
-
-fn sync_shared_state_to_profile(profile: &Path) -> Result<(), String> {
-    let shared_db = shared_state_vscdb()?;
-    if !shared_db.exists() {
-        return Ok(());
-    }
-    let keys = export_non_auth_keys(&shared_db)?;
-    if keys.is_empty() {
-        return Ok(());
-    }
-    import_non_auth_keys(&live_state_vscdb_in(profile), &keys)
-}
-
-/// Cursor / VS Code keeps the "recently opened workspaces" list here. Unlike the
-/// per-workspace `workspaceStorage` tree (junctioned, genuinely shared), this key
-/// lives in the *global* state DB, which is per-profile — so it has to be merged
-/// explicitly. Otherwise a workbench launch and a manual launch show different
-/// workspace histories.
-const RECENT_WORKSPACES_KEY: &str = "history.recentlyOpenedPathsList";
-
-fn read_state_value(db_path: &Path, key: &str) -> Result<Option<rusqlite::types::Value>, String> {
-    if !db_path.exists() {
-        return Ok(None);
-    }
-    let conn = open_sqlite_ro(db_path)
-        .or_else(|_| Connection::open(db_path).map_err(|e| format!("打开数据库失败: {}", e)))?;
-    let mut stmt = conn
-        .prepare("SELECT value FROM ItemTable WHERE key = ?1")
-        .map_err(|e| format!("查询 ItemTable 失败: {}", e))?;
-    let mut rows = stmt
-        .query([key])
-        .map_err(|e| format!("读取 {} 失败: {}", key, e))?;
-    match rows
-        .next()
-        .map_err(|e| format!("读取 {} 失败: {}", key, e))?
-    {
-        // Keep the native SQLite type: Cursor JSON.parses these values and a
-        // coerced BLOB aborts its workbench startup (black screen).
-        Some(row) => Ok(Some(
-            row.get(0).map_err(|e| format!("读取 {} 失败: {}", key, e))?,
-        )),
-        None => Ok(None),
-    }
-}
-
-fn write_state_value(
-    db_path: &Path,
-    key: &str,
-    value: rusqlite::types::Value,
-) -> Result<(), String> {
-    let mut keys = HashMap::new();
-    keys.insert(key.to_string(), value);
-    import_non_auth_keys(db_path, &keys)
-}
-
-/// Identity of an entry inside `history.recentlyOpenedPathsList`: a folder or a
-/// multi-root `.code-workspace` file.
-fn recent_entry_uri(entry: &serde_json::Value) -> String {
-    entry
-        .get("folderUri")
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            entry
-                .get("workspace")
-                .and_then(|w| w.get("configPath"))
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or_default()
-        .to_string()
-}
-
-/// Union two recent-workspace lists, keeping `primary`'s order and appending
-/// entries only present in `secondary`. Returns `None` when the value is not a
-/// JSON object (leave the caller's data untouched rather than clobber it).
-fn merge_recent_workspaces_json(
-    primary: &rusqlite::types::Value,
-    secondary: Option<&rusqlite::types::Value>,
-) -> Option<rusqlite::types::Value> {
-    let as_text = |value: &rusqlite::types::Value| match value {
-        rusqlite::types::Value::Text(text) => Some(text.clone()),
-        rusqlite::types::Value::Blob(bytes) => String::from_utf8(bytes.clone()).ok(),
-        _ => None,
-    };
-    let mut head: serde_json::Value = serde_json::from_str(&as_text(primary)?).ok()?;
-    if !head.is_object() {
-        return None;
-    }
-
-    let mut entries = head
-        .get("entries")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut seen: HashSet<String> = entries.iter().map(recent_entry_uri).collect();
-
-    if let Some(secondary) = secondary.and_then(as_text) {
-        if let Ok(tail) = serde_json::from_str::<serde_json::Value>(&secondary) {
-            for entry in tail
-                .get("entries")
-                .and_then(|v| v.as_array())
-                .into_iter()
-                .flatten()
-            {
-                let uri = recent_entry_uri(entry);
-                if uri.is_empty() || seen.insert(uri) {
-                    entries.push(entry.clone());
-                }
-            }
-        }
-    }
-
-    head["entries"] = serde_json::Value::Array(entries);
-    Some(rusqlite::types::Value::Text(head.to_string()))
-}
-
-/// Merge the default (manually launched) Cursor's recent-workspace list into the
-/// shared layer, so projects opened outside the workbench still show up in every
-/// profile. The default DB is only ever read — never written — so a manually
-/// launched Cursor cannot be disturbed.
-fn merge_recent_workspaces_from_default() -> Result<(), String> {
-    let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
-    let Some(primary) = read_state_value(&default_db, RECENT_WORKSPACES_KEY)? else {
-        return Ok(());
-    };
-    let shared_db = shared_state_vscdb()?;
-    let secondary = read_state_value(&shared_db, RECENT_WORKSPACES_KEY)?;
-    if let Some(merged) = merge_recent_workspaces_json(&primary, secondary.as_ref()) {
-        write_state_value(&shared_db, RECENT_WORKSPACES_KEY, merged)?;
-    }
-    Ok(())
-}
-
-fn shared_state_seed_marker() -> Result<PathBuf, String> {
-    Ok(cursor_shared_dir()?.join(".shared-state-seeded-v1"))
-}
-
-/// One-shot: bring the default Cursor's non-auth global state (recent workspaces,
-/// workbench UI state, extension global state) into the shared layer, so a fresh
-/// profile does not start from an almost empty state DB. Login keys are filtered
-/// out by `export_non_auth_keys`, so accounts stay isolated.
-fn seed_shared_state_from_default() -> Result<(), String> {
-    let marker = shared_state_seed_marker()?;
-    if marker.exists() {
-        return Ok(());
-    }
-    let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
-    let keys = export_non_auth_keys(&default_db)?;
-    if !keys.is_empty() {
-        import_non_auth_keys(&shared_state_vscdb()?, &keys)?;
-    }
-    fs::write(&marker, "1").map_err(|e| format!("写入 shared state 标记失败: {}", e))?;
-    Ok(())
-}
-
-fn sync_profile_state_to_shared(profile: &Path) -> Result<(), String> {
-    let profile_db = live_state_vscdb_in(profile);
-    if !profile_db.exists() {
-        return Ok(());
-    }
-    let shared_db = shared_state_vscdb()?;
-
-    // ItemTable non-auth keys: recent workspaces, workbench UI state, ...
-    let keys = export_non_auth_keys(&profile_db)?;
-    if !keys.is_empty() {
-        import_non_auth_keys(&shared_db, &keys)?;
-    }
-
-    // Composer sessions created/updated inside this profile flow back into the
-    // shared layer, so the next account (or a manual launch) can see them.
-    copy_composer_tables(&profile_db, &shared_db)
-}
-
-fn open_sqlite_ro(path: &Path) -> Result<Connection, String> {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    let uri = if normalized.contains(':') {
-        format!("file:///{normalized}?mode=ro")
-    } else {
-        format!("file:{normalized}?mode=ro")
-    };
-    Connection::open_with_flags(
-        uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .map_err(|e| format!("打开数据库失败 {}: {}", path.display(), e))
+/// Read a Cursor state.vscdb that may be live (Cursor running, WAL mode).
+///
+/// A `mode=ro` open is deliberately *not* used: SQLite refuses a read-only
+/// connection to a WAL database while another process owns its shared-memory
+/// file ("unable to open database file"), which made the login unreadable
+/// exactly when Cursor was open — and the copy-to-temp fallback is capped far
+/// below a real session DB. Opening normally with `query_only` takes only read
+/// locks, so nothing can be written.
+fn open_state_db_for_read(path: &Path) -> Result<Connection, String> {
+    let conn = Connection::open(path).map_err(|e| format!("打开数据库失败 {}: {}", path.display(), e))?;
+    conn.execute_batch("PRAGMA busy_timeout=8000; PRAGMA query_only=ON;")
+        .map_err(|e| format!("初始化只读连接失败: {}", e))?;
+    Ok(conn)
 }
 
 fn session_dir_pairs_for(backup: &Path, data_root: &Path) -> Vec<(PathBuf, PathBuf)> {
@@ -1983,7 +1406,7 @@ fn copy_live_db_for_read() -> Result<PathBuf, String> {
 }
 
 fn extract_auth_from_db(path: &Path) -> Result<CursorAuthSnapshot, String> {
-    let conn = open_sqlite_ro(path)?;
+    let conn = open_state_db_for_read(path)?;
     let mut stmt = conn
         .prepare(
             "SELECT key, value FROM ItemTable \
@@ -2336,22 +1759,6 @@ fn move_file_replace(src: &Path, dst: &Path) -> Result<(), String> {
     }
 }
 
-/// Backup current Cursor login (auth keys + browser session), not the whole 2GB globalStorage.
-///
-/// Internal only. It snapshots whichever data root is currently active into an
-/// arbitrary account id and performs **no email check**, so exposing it as an IPC
-/// entry point would let a wrong login be filed under the wrong account. The
-/// supported path for saving a login is `finish_account_profile`, which validates
-/// the captured email instead.
-fn backup_cursor_data(account_id: String) -> Result<String, String> {
-    let data_root = if get_active_account_id().is_some() {
-        resolve_data_dir()
-    } else {
-        cursor_data_dir()
-    };
-    backup_cursor_data_from_root(&account_id, &data_root)
-}
-
 /// Restore Cursor login from a backup into a specific data directory.
 fn restore_into_data_dir(account_id: &str, data_root: &Path) -> Result<(), String> {
     let backup = backup_dir(account_id)?;
@@ -2431,16 +1838,11 @@ fn verify_restored_login_in(data_root: &Path, expected_email: &str) -> Result<()
     Ok(())
 }
 
-/// Restore Cursor login from a backup into shared Cursor directory (legacy).
-fn restore_cursor_data_impl(account_id: &str) -> Result<(), String> {
-    restore_into_data_dir(account_id, &cursor_data_dir())
-}
-
 fn migrate_backup_to_profile_impl(account_id: &str) -> Result<PathBuf, String> {
     let profile = cursor_profile_dir(account_id)?;
+    ensure_profile_shell(Some(account_id), &profile)?;
     restore_into_data_dir(account_id, &profile)?;
     mark_profile_initialized_at(&profile)?;
-    prepare_profile_shared(&profile)?;
     Ok(profile)
 }
 
@@ -2614,9 +2016,109 @@ fn pick_launch_workspace_folder() -> Option<PathBuf> {
         .find(|path| path.exists())
 }
 
+/// Remove every stored login from the single shared state.vscdb. Used when a
+/// slot has no usable snapshot: without this the new window would inherit (and
+/// then re-capture) whichever account happened to be signed in before.
+fn clear_auth_in_data_root(data_root: &Path) -> Result<(), String> {
+    let db = live_state_vscdb_in(data_root);
+    if !db.exists() {
+        return Ok(());
+    }
+    let conn = Connection::open(&db).map_err(|e| format!("打开 state.vscdb 失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA busy_timeout=8000; PRAGMA synchronous=NORMAL;");
+    conn.execute(
+        "DELETE FROM ItemTable WHERE key LIKE 'cursorAuth/%' \
+         OR key IN ('glass.lastSignedInAuthId', 'adminSettings.cachedAuthId')",
+        [],
+    )
+    .map_err(|e| format!("清除登录态失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    Ok(())
+}
+
+/// Point the single shared Cursor data dir at one account: write its
+/// `cursorAuth/*` keys into the shared state.vscdb and refresh the profile's
+/// own Chromium session files. `restore_into_data_dir` reaches the shared DB
+/// through the profile's `User` junction, so profile == default storage here.
+fn apply_account_login(account_id: &str, profile: &Path) -> Result<bool, String> {
+    let backup = backup_dir(account_id)?;
+    let status = inspect_backup_dir(account_id, &backup);
+    if !status.complete {
+        return Ok(false);
+    }
+    restore_into_data_dir(account_id, profile)?;
+    Ok(true)
+}
+
+/// The account's email: the caller's copy wins while the row is still being
+/// created, otherwise the persisted one.
+fn known_account_email(account_id: &str, expected: Option<&str>) -> Option<String> {
+    expected
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        .map(str::to_string)
+        .or_else(|| account_email_in_db(account_id))
+}
+
+/// The account's own email, as the user entered it on the Cursor page.
+fn account_email_in_db(account_id: &str) -> Option<String> {
+    let db_path = app_data_dir().ok()?.join("ai-workbench.db");
+    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    conn.query_row(
+        "SELECT email FROM cursor_accounts WHERE id = ?1",
+        rusqlite::params![account_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Which account slot already claims this email.
+fn owner_account_for_email(email: &str) -> Option<String> {
+    let root = backups_root_dir().ok()?;
+    for entry in fs::read_dir(&root).ok()?.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().to_string();
+        if let Ok(snapshot) = load_auth_snapshot(&entry.path()) {
+            if emails_match(&snapshot.email, email) {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+/// The shared DB holds exactly one session. Before it is replaced or cleared,
+/// copy it back into a slot so launching another profile can never destroy the
+/// only live copy of a login. Errs with that address when it cannot be
+/// attributed, so the caller leaves it alone instead of signing out silently.
+fn preserve_current_login() -> Result<(), String> {
+    // Cookies are per user-data-dir even though the DB is shared: snapshot from
+    // wherever Cursor actually runs, falling back to the owner's profile.
+    let root = resolve_data_dir();
+    let live = match read_auth_snapshot_from_root(&root) {
+        Ok(live) => live,
+        Err(_) => return Ok(()),
+    };
+    if live.email.is_empty() {
+        return Ok(());
+    }
+    let owner = owner_account_for_email(&live.email)
+        .or_else(get_active_account_id)
+        .ok_or_else(|| live.email.clone())?;
+    if let Err(e) = backup_cursor_data_from_root(&owner, &root) {
+        eprintln!("[cursor] 从 {} 保留登录态失败: {e}", root.display());
+        let profile = cursor_profile_dir(&owner)?;
+        backup_cursor_data_from_root(&owner, &profile)?;
+    }
+    Ok(())
+}
+
 fn launch_cursor_impl(
     window: Option<&tauri::Window>,
     account_id: Option<String>,
+    expected_email: Option<String>,
 ) -> Result<String, String> {
     let exe = cursor_exe_path()?;
     let exe_str = exe.to_string_lossy().to_string();
@@ -2628,14 +2130,49 @@ fn launch_cursor_impl(
         }
         let profile = cursor_profile_dir(id)?;
         fs::create_dir_all(&profile).map_err(|e| format!("创建 profile 目录失败: {}", e))?;
-        emit_switch_progress(window, "sync", "正在同步共享工作区与会话…");
-        prepare_profile_shared(&profile)?;
-        // Sync may carry over BLOB-typed values; heal before Cursor reads them,
-        // otherwise its workbench aborts with a JSON.parse error (black screen).
+        emit_switch_progress(window, "sync", "正在链接共享工作区与会话…");
+        ensure_profile_shell(Some(id), &profile)?;
+
+        // The shared DB may already hold the login the user just typed in this
+        // account's window; treating that as "someone else's session" would
+        // clear it and send them into a login loop. The caller knows the email
+        // during a first init, before the account row is persisted.
+        let live_email = read_auth_snapshot_from_root(&profile)
+            .map(|snap| snap.email)
+            .unwrap_or_default();
+        let already_here = !live_email.is_empty()
+            && known_account_email(id, expected_email.as_deref())
+                .map(|email| emails_match(&email, &live_email))
+                .unwrap_or(false);
+
+        emit_switch_progress(window, "restore", "正在应用账号登录态…");
+        if already_here {
+            set_active_account(Some(id));
+        } else {
+            // The session being displaced must have somewhere to go first, or a
+            // switch would silently discard the only copy of someone's login.
+            preserve_current_login().map_err(|who| format!(
+                "当前登录的 {who} 还没有任何快照，已停止切换以免丢失它的登录态。请先对该账号「完成初始化」，或在 Cursor 中退出登录后重试。"
+            ))?;
+            if apply_account_login(id, &profile)? {
+                set_active_account(Some(id));
+            } else {
+                // Nothing usable for this account: open signed out rather than
+                // as somebody else.
+                clear_auth_in_data_root(&profile)?;
+                set_active_account(Some(id));
+                emit_switch_progress(
+                    window,
+                    "restore",
+                    "该账号尚无可用登录快照，将以未登录状态打开",
+                );
+            }
+        }
+        // A previous build's sync may have left BLOB-typed values; Cursor's
+        // workbench aborts on them with a JSON.parse error (black screen).
         if let Err(e) = repair_blob_typed_state(&live_state_vscdb_in(&profile)) {
             eprintln!("[cursor] state type repair: {e}");
         }
-        set_active_account(Some(id));
 
         emit_switch_progress(window, "launch", "正在启动 Cursor…");
         spawn_cursor(&exe, Some(&profile))?;
@@ -2676,10 +2213,13 @@ fn spawn_cursor(exe: &Path, profile: Option<&Path>) -> Result<(), String> {
 pub async fn launch_cursor(
     window: tauri::Window,
     account_id: Option<String>,
+    expected_email: Option<String>,
 ) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || launch_cursor_impl(Some(&window), account_id))
-        .await
-        .map_err(|e| format!("启动任务异常: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        launch_cursor_impl(Some(&window), account_id, expected_email)
+    })
+    .await
+    .map_err(|e| format!("启动任务异常: {}", e))?
 }
 
 #[tauri::command]
@@ -2691,49 +2231,23 @@ pub fn get_cursor_profile_dir(account_id: String) -> Result<String, String> {
 pub async fn init_account_profile(
     window: tauri::Window,
     account_id: String,
+    expected_email: Option<String>,
 ) -> Result<String, String> {
     let window = window.clone();
-    tokio::task::spawn_blocking(move || init_account_profile_impl(&window, account_id))
-        .await
-        .map_err(|e| format!("初始化任务异常: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        init_account_profile_impl(&window, account_id, expected_email)
+    })
+    .await
+    .map_err(|e| format!("初始化任务异常: {}", e))?
 }
 
 fn init_account_profile_impl(
     window: &tauri::Window,
     account_id: String,
+    expected_email: Option<String>,
 ) -> Result<String, String> {
     let _profile = cursor_profile_dir(&account_id)?;
     let already_this_profile = get_active_account_id().as_deref() == Some(account_id.as_str());
-
-    // Before opening a new account profile, refresh the currently active account backup
-    // so quitting does not leave the first account with a stale/incomplete snapshot.
-    if is_cursor_process_running() && !already_this_profile {
-        if let Some(active_id) = get_active_account_id() {
-            if active_id != account_id {
-                if let Ok(active_profile) = cursor_profile_dir(&active_id) {
-                    if is_profile_initialized_at(&active_profile) {
-                        emit_switch_progress(
-                            Some(window),
-                            "save",
-                            "正在保存当前账号登录态（关闭前备份）…",
-                        );
-                        let capture = if data_root_has_login(&active_profile) {
-                            active_profile.clone()
-                        } else if let Some(running) = detect_running_cursor_data_dir() {
-                            running
-                        } else {
-                            active_profile.clone()
-                        };
-                        if let Err(e) = backup_cursor_data_from_root(&active_id, &capture) {
-                            eprintln!("[cursor] pre-init backup of {active_id}: {e}");
-                        }
-                    }
-                }
-            }
-        }
-        emit_switch_progress(Some(window), "quit", "正在关闭 Cursor 以打开新账号配置…");
-        quit_cursor_sync()?;
-    }
 
     if is_cursor_process_running() && already_this_profile {
         return Ok(
@@ -2742,8 +2256,16 @@ fn init_account_profile_impl(
         );
     }
 
+    // Quit before opening the other profile: Cursor locks its own Cookies, and
+    // `launch_cursor_impl` snapshots whoever was signed in before displacing
+    // that session.
+    if is_cursor_process_running() {
+        emit_switch_progress(Some(window), "quit", "正在关闭 Cursor 以打开新账号配置…");
+        quit_cursor_sync()?;
+    }
+
     emit_switch_progress(Some(window), "launch", "正在打开独立配置（可能需数十秒）…");
-    launch_cursor_impl(Some(window), Some(account_id))?;
+    launch_cursor_impl(Some(window), Some(account_id), expected_email)?;
     emit_switch_progress(Some(window), "done", "已打开独立配置");
     Ok("已打开该账号的独立 Cursor 配置。请在其中登录，然后回到 AI Workbench 点「完成初始化」。".to_string())
 }
@@ -2795,22 +2317,25 @@ fn data_root_has_login(data_root: &Path) -> bool {
     }
 }
 
-/// Capture login only from this account's independent profile (or the running
-/// Cursor that is already using that same profile). Never fall back to the
-/// default %APPDATA%\\Cursor — that would steal another account's session.
+/// Capture login from the single shared data source (the profile's `User` is a
+/// junction to it). Say precisely what is wrong: an empty source means nobody
+/// has signed in yet, a foreign email means the wrong account is signed in.
 fn resolve_finish_capture_root(profile: &Path) -> Result<PathBuf, String> {
     if data_root_has_login(profile) {
         return Ok(profile.to_path_buf());
     }
-    if let Some(running) = detect_running_cursor_data_dir() {
-        if path_same(&running, profile) && data_root_has_login(&running) {
-            return Ok(running);
-        }
+    let live_email = read_auth_snapshot_from_root(profile)
+        .map(|snap| snap.email)
+        .unwrap_or_default();
+    if live_email.is_empty() {
+        return Err(
+            "共享数据源里当前没有登录态。请先点「重新打开 Cursor」，在 Cursor 中登录该账号，再点「完成初始化」。"
+                .to_string(),
+        );
     }
-    Err(
-        "请先在该账号的独立 Cursor 窗口中登录，再点「完成初始化」。不要用默认手动打开的 Cursor 来初始化其他账号。"
-            .to_string(),
-    )
+    Err(format!(
+        "当前登录的是 {live_email}，不是这个账号。请在 Cursor 中退出并登录目标账号后再点「完成初始化」。"
+    ))
 }
 
 /// Same Cursor login cannot occupy two slots. Remove leftover backup/profile
@@ -2843,9 +2368,11 @@ fn reclaim_duplicate_email_slots(
         if status.auth_email.is_empty() || !emails_match(&status.auth_email, email) {
             continue;
         }
-        let _ = fs::remove_dir_all(entry.path());
+        // Profiles are junction shells over the single source: never recurse
+        // into them with a plain recursive delete.
+        let _ = remove_tree_removing_links(&entry.path());
         if let Ok(profile) = cursor_profile_dir(&other_id) {
-            let _ = fs::remove_dir_all(profile);
+            let _ = remove_tree_removing_links(&profile);
         }
         removed += 1;
     }
@@ -2863,7 +2390,7 @@ fn finish_account_profile_impl(
 
     emit_switch_progress(Some(window), "save", "正在保存登录态…");
     let preflight = read_auth_snapshot_from_root(&capture_root).map_err(|e| {
-        format!("{e}。请先在该账号的独立 Cursor 中登录，再点「完成初始化」。")
+        format!("读取登录态失败: {e}")
     })?;
     match reclaim_duplicate_email_slots(&account_id, &preflight.email) {
         Ok(n) if n > 0 => {
@@ -2882,7 +2409,7 @@ fn finish_account_profile_impl(
         Err(first_err) => {
             if !is_cursor_process_running() {
                 return Err(format!(
-                    "{first_err}。请先在该账号的独立 Cursor 中登录，再点「完成初始化」。"
+                    "{first_err}。请确认已在 Cursor 中登录该账号后重试。"
                 ));
             }
             emit_switch_progress(Some(window), "quit", "正在关闭 Cursor 以便完整保存 Cookies…");
@@ -2912,12 +2439,12 @@ fn finish_account_profile_impl(
 
     mark_profile_initialized_at(&profile)?;
     emit_switch_progress(Some(window), "seed", "正在链接共享工作区…");
-    prepare_profile_shared(&profile)?;
+    ensure_profile_shell(Some(&account_id), &profile)?;
     set_active_account(Some(&account_id));
 
     if should_relaunch && !is_cursor_process_running() {
         emit_switch_progress(Some(window), "launch", "正在重新打开 Cursor…");
-        launch_cursor_impl(Some(window), Some(account_id.clone()))?;
+        launch_cursor_impl(Some(window), Some(account_id.clone()), None)?;
     }
 
     emit_switch_progress(Some(window), "done", "初始化完成");
@@ -2942,10 +2469,14 @@ pub fn migrate_account_to_profile(account_id: String) -> Result<String, String> 
     Ok(profile.to_string_lossy().to_string())
 }
 
+/// Switching accounts under single source = swapping the one shared login.
+/// Order matters: quit (Cookies unlock) → preserve the outgoing session →
+/// apply the target, so no account's token is lost to the overwrite. The
+/// outgoing session is attributed by email, so it also covers a Cursor the user
+/// opened by hand rather than through this page.
 fn switch_cursor_account_impl(
     window: Option<&tauri::Window>,
     target_account_id: String,
-    current_account_id: Option<String>,
     relaunch: Option<bool>,
 ) -> Result<String, String> {
     let should_relaunch = relaunch.unwrap_or(true);
@@ -2958,141 +2489,47 @@ fn switch_cursor_account_impl(
             target_status.reason
         ));
     }
+    let expected = target_status.auth_email.clone();
 
-    let target_profile = cursor_profile_dir(&target_account_id)?;
-    let profile_ready = is_profile_initialized_at(&target_profile);
-
-    // Profile mode: each account lives in its own --user-data-dir; no live overwrite needed.
-    if !profile_ready {
-        if let Some(current_id) = current_account_id.as_ref() {
-            if current_id != &target_account_id {
-                let current_backup = backup_dir(current_id)?;
-                let mut should_backup = true;
-                if current_backup.join("auth.json").exists() {
-                    if let Ok(existing) = load_auth_snapshot(&current_backup) {
-                        if let Ok(live) = extract_auth_from_live() {
-                            if !existing.email.is_empty()
-                                && !live.email.is_empty()
-                                && !emails_match(&existing.email, &live.email)
-                            {
-                                return Err(format!(
-                                    "拒绝覆盖快照：槽位是 {}，当前登录是 {}。请先确认 Cursor 中的当前登录账号，或对该账号重新「完成初始化」。",
-                                    existing.email, live.email
-                                ));
-                            }
-                            if !existing.email.is_empty()
-                                && !live.email.is_empty()
-                                && emails_match(&existing.email, &live.email)
-                            {
-                                should_backup = false;
-                            }
-                        }
-                    }
-                }
-                if should_backup {
-                    emit_switch_progress(window, "save", "正在保存当前账号状态…");
-                    backup_cursor_data(current_id.clone())?;
-                }
-            }
-        }
-    }
-
+    // Close Cursor first: its Network/Cookies are locked while it runs, so the
+    // outgoing account can only be snapshotted after it exits.
     if is_cursor_process_running() {
-        let active_profile = get_active_account_id()
-            .or_else(|| detect_profile_from_running_cursor())
-            .and_then(|id| cursor_profile_dir(&id).ok());
-        if let Some(profile) = active_profile {
-            let _ = sync_profile_state_to_shared(&profile);
-        }
         emit_switch_progress(window, "quit", "正在关闭 Cursor…");
         cache_cursor_exe_from_running();
         quit_cursor_sync()?;
-    } else {
-        let _ = cursor_exe_path();
     }
 
-    if profile_ready {
-        emit_switch_progress(window, "restore", "正在切换到独立配置…");
-        if should_relaunch {
-            launch_cursor_impl(window, Some(target_account_id.clone()))?;
-            emit_switch_progress(window, "done", "切换完成");
-            Ok(format!(
-                "已切换到 {}（独立配置，无需覆盖共享登录态）",
-                target_status.auth_email
-            ))
-        } else {
-            emit_switch_progress(window, "done", "切换完成");
-            Ok(format!("已切换到 {}", target_status.auth_email))
+    if !should_relaunch {
+        emit_switch_progress(window, "save", "正在保存当前账号登录态…");
+        preserve_current_login().map_err(|who| format!(
+            "当前登录的 {who} 还没有任何快照，已停止切换以免丢失它的登录态。请先对该账号「完成初始化」，或在 Cursor 中退出登录后重试。"
+        ))?;
+        emit_switch_progress(window, "restore", "正在切换账号登录态…");
+        let profile = cursor_profile_dir(&target_account_id)?;
+        ensure_profile_shell(Some(&target_account_id), &profile)?;
+        if !apply_account_login(&target_account_id, &profile)? {
+            return Err("目标账号快照不可用，请重新登录并捕获。".to_string());
         }
-    } else if migrate_backup_to_profile_impl(&target_account_id).is_ok() {
-        emit_switch_progress(window, "restore", "已升级为独立配置…");
-        if should_relaunch {
-            launch_cursor_impl(window, Some(target_account_id.clone()))?;
-            emit_switch_progress(window, "done", "切换完成");
-            Ok(format!(
-                "已升级为独立配置并切换到 {}。该账号 Sign Out 不再影响其他账号。",
-                target_status.auth_email
-            ))
-        } else {
-            emit_switch_progress(window, "done", "切换完成");
-            Ok(format!("已切换到 {}", target_status.auth_email))
-        }
-    } else {
-        emit_switch_progress(window, "restore", "正在恢复目标账号（兼容模式）…");
-        if let Err(e) = restore_cursor_data_impl(&target_account_id) {
-            if let Some(current_id) = current_account_id.clone() {
-                emit_switch_progress(window, "rollback", "恢复失败，正在回滚…");
-                let _ = restore_cursor_data_impl(&current_id);
-            }
-            if should_relaunch {
-                let _ = launch_cursor_impl(window, get_active_account_id());
-            }
-            return Err(format!(
-                "{}。该账号可能在捕获后被 Sign Out 导致 token 作废，请重新登录并重捕。",
-                e
-            ));
-        }
+        emit_switch_progress(window, "done", "切换完成");
+        return Ok(format!("已切换到 {}", expected));
+    }
 
-        let expected = target_status.auth_email.clone();
-        let live = extract_auth_from_live().unwrap_or_default();
-        let matched = (!expected.is_empty() && emails_match(&expected, &live.email))
-            || identity_match(&expected, &expected, &live);
-        if !expected.is_empty() && !live.email.is_empty() && !matched {
-            if let Some(current_id) = current_account_id.clone() {
-                let _ = restore_cursor_data_impl(&current_id);
-            }
-            if should_relaunch {
-                let _ = launch_cursor_impl(window, get_active_account_id());
-            }
-            return Err(format!(
-                "切换未生效：期望 {}，实际仍是 {}。该账号可能在捕获后被 Sign Out，请重新登录并重捕。",
-                expected, live.email
-            ));
-        }
+    emit_switch_progress(window, "launch", "正在以新账号打开 Cursor…");
+    launch_cursor_impl(window, Some(target_account_id.clone()), Some(expected.clone()))?;
 
-        let switched_email = if live.email.is_empty() {
-            expected
-        } else {
+    let live = extract_auth_from_live().unwrap_or_default();
+    let matched = expected.is_empty()
+        || emails_match(&expected, &live.email)
+        || identity_match(&expected, &expected, &live);
+    if !matched && !live.email.is_empty() {
+        return Err(format!(
+            "切换未生效：期望 {expected}，实际仍是 {}。该账号快照可能已失效，请重新登录并捕获。",
             live.email
-        };
-
-        if should_relaunch {
-            emit_switch_progress(window, "launch", "正在重新打开 Cursor…");
-            match launch_cursor_impl(window, None) {
-                Ok(_) => {
-                    emit_switch_progress(window, "done", "切换完成");
-                    Ok(format!("已切换到 {} 并重新打开 Cursor", switched_email))
-                }
-                Err(e) => Ok(format!(
-                    "账号已切换到 {}，但自动启动失败：{}。请手动打开 Cursor。",
-                    switched_email, e
-                )),
-            }
-        } else {
-            emit_switch_progress(window, "done", "切换完成");
-            Ok(format!("已切换到 {}", switched_email))
-        }
+        ));
     }
+    emit_switch_progress(window, "done", "切换完成");
+    let switched_email = if live.email.is_empty() { expected } else { live.email };
+    Ok(format!("已切换到 {switched_email}"))
 }
 
 #[tauri::command]
@@ -3103,27 +2540,55 @@ pub async fn switch_cursor_account(
     relaunch: Option<bool>,
 ) -> Result<String, String> {
     let window = window.clone();
+    // Seed the active-account hint from what the page believes is current, so a
+    // session whose address is in no slot yet can still be attributed on switch.
+    if let Some(id) = current_account_id.as_deref() {
+        set_active_account(Some(id));
+    }
     tokio::task::spawn_blocking(move || {
-        switch_cursor_account_impl(
-            Some(&window),
-            target_account_id,
-            current_account_id,
-            relaunch,
-        )
+        switch_cursor_account_impl(Some(&window), target_account_id, relaunch)
     })
     .await
     .map_err(|e| format!("切换任务异常: {}", e))?
 }
 
 #[tauri::command]
-pub fn delete_cursor_backup(account_id: String) -> Result<(), String> {
-    let backup = backup_dir(&account_id)?;
-    remove_tree_removing_links(&backup)?;
+pub async fn delete_cursor_backup(account_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || delete_cursor_backup_impl(account_id))
+        .await
+        .map_err(|e| format!("删除任务异常: {}", e))?
+}
+
+fn delete_cursor_backup_impl(account_id: String) -> Result<(), String> {
+    // Profile first, snapshot second: if the profile is busy (Cursor still open
+    // on it) the account keeps a usable snapshot instead of ending up
+    // half-deleted with an empty slot.
     // The profile holds junctions/symlinks into the default Cursor data
-    // (workspaceStorage, History, extensions, globalStorage/*) — unlink them
-    // without following, then drop the profile directory itself.
+    // (User, extensions) — unlink them without following, then drop the
+    // directory itself.
+    let slot_email = backup_dir(&account_id)
+        .ok()
+        .and_then(|backup| load_auth_snapshot(&backup).ok())
+        .map(|snapshot| snapshot.email)
+        .unwrap_or_default();
+
     let profile = cursor_profile_dir(&account_id)?;
     remove_tree_removing_links(&profile)?;
+    let backup = backup_dir(&account_id)?;
+    remove_tree_removing_links(&backup)?;
+
+    if get_active_account_id().as_deref() == Some(account_id.as_str()) {
+        set_active_account(None);
+    }
+    // Under single source the deleted account's session may still be the one
+    // loaded in the shared DB. Leaving it would sign the next window back in as
+    // a deleted account — and make it unattributable for future preserves.
+    if !slot_email.is_empty() {
+        let live = read_auth_snapshot_from_root(&cursor_data_dir()).unwrap_or_default();
+        if emails_match(&slot_email, &live.email) {
+            let _ = clear_auth_in_data_root(&cursor_data_dir());
+        }
+    }
     Ok(())
 }
 
@@ -3348,11 +2813,29 @@ pub struct CursorDiskUsage {
     pub backups_bytes: u64,
     pub backups_full_db_bytes: u64,
     pub stale_db_count: u32,
-    pub shared_bytes: u64,
+    /// Total size of the sealed `User.pre-shell-backup` trees left behind when
+    /// old-layout profiles were converted to junction shells.
+    pub sealed_bytes: u64,
+    pub sealed_count: u32,
     pub live_db_bytes: u64,
     pub backups_path: String,
-    pub shared_path: String,
     pub live_db_path: String,
+}
+
+/// Sealed pre-shell profile data. Each still contains junctions into the single
+/// source, so only `remove_tree_removing_links` may touch them.
+fn sealed_profile_backups() -> Vec<PathBuf> {
+    let Ok(root) = profiles_root_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path().join("User.pre-shell-backup"))
+        .filter(|path| path.is_dir() && !is_reparse_point(path))
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -3427,7 +2910,6 @@ fn try_remove_empty_dir(path: &Path) {
 
 fn get_cursor_disk_usage_sync() -> Result<CursorDiskUsage, String> {
     let backups_path = backups_root_dir()?;
-    let shared_path = cursor_shared_dir()?;
     let live_db = live_state_vscdb();
 
     let stale = if backups_path.exists() {
@@ -3446,6 +2928,9 @@ fn get_cursor_disk_usage_sync() -> Result<CursorDiskUsage, String> {
         })
         .count() as u32;
 
+    let sealed = sealed_profile_backups();
+    let sealed_bytes: u64 = sealed.iter().map(|p| dir_size(p)).sum();
+
     Ok(CursorDiskUsage {
         backups_bytes: if backups_path.exists() {
             dir_size(&backups_path)
@@ -3454,16 +2939,60 @@ fn get_cursor_disk_usage_sync() -> Result<CursorDiskUsage, String> {
         },
         backups_full_db_bytes,
         stale_db_count,
-        shared_bytes: if shared_path.exists() {
-            shared_layer_bytes(&shared_path)
-        } else {
-            0
-        },
+        sealed_bytes,
+        sealed_count: sealed.len() as u32,
         live_db_bytes: file_size(&live_db),
         backups_path: backups_path.to_string_lossy().to_string(),
-        shared_path: shared_path.to_string_lossy().to_string(),
         live_db_path: live_db.to_string_lossy().to_string(),
     })
+}
+
+/// Drop the sealed pre-shell profile trees. Their sessions and login have
+/// already been folded into the single source during conversion, so this only
+/// removes the safety copies.
+fn cleanup_cursor_sealed_backups_sync() -> Result<CursorCleanupResult, String> {
+    let sealed = sealed_profile_backups();
+    if sealed.is_empty() {
+        return Ok(CursorCleanupResult {
+            removed_files: 0,
+            freed_bytes: 0,
+            message: "没有待清理的旧配置封存".into(),
+        });
+    }
+    let mut freed = 0u64;
+    let mut removed = 0u32;
+    let mut failures: Vec<String> = Vec::new();
+    for path in sealed {
+        let bytes = dir_size(&path);
+        match remove_tree_removing_links(&path) {
+            Ok(()) => {
+                freed += bytes;
+                removed += 1;
+            }
+            Err(e) => failures.push(e),
+        }
+    }
+    let message = if failures.is_empty() {
+        format!("已清理 {removed} 份旧配置封存，释放约 {}", format_bytes(freed))
+    } else {
+        format!(
+            "已清理 {removed} 份，{} 份失败：{}",
+            failures.len(),
+            failures.join("；")
+        )
+    };
+    Ok(CursorCleanupResult {
+        removed_files: removed,
+        freed_bytes: freed,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn cleanup_cursor_sealed_backups() -> Result<CursorCleanupResult, String> {
+    tokio::task::spawn_blocking(cleanup_cursor_sealed_backups_sync)
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
 }
 
 fn cleanup_cursor_full_backups_sync() -> Result<CursorCleanupResult, String> {
@@ -3471,7 +3000,7 @@ fn cleanup_cursor_full_backups_sync() -> Result<CursorCleanupResult, String> {
     let mut freed = 0u64;
     let mut parts: Vec<String> = Vec::new();
 
-    match cleanup_shared_bloated_state_dbs() {
+    match drop_legacy_shared_layer() {
         Ok(r) if r.removed_files > 0 => {
             removed += r.removed_files;
             freed += r.freed_bytes;
@@ -3480,8 +3009,6 @@ fn cleanup_cursor_full_backups_sync() -> Result<CursorCleanupResult, String> {
         Ok(_) => {}
         Err(e) => parts.push(format!("共享层清理跳过: {e}")),
     }
-    schedule_delete_legacy_shared_workspace_copies();
-    parts.push("已在后台清理共享层旧工作区副本".into());
 
     let backups_path = backups_root_dir()?;
     if !backups_path.exists() {
@@ -3628,19 +3155,6 @@ fn state_db_cluster_bytes(db: &Path) -> u64 {
     total
 }
 
-fn remove_state_db_cluster(db: &Path) -> Result<(), String> {
-    fs::remove_file(db).map_err(|e| format!("删除 {} 失败: {}", db.display(), e))?;
-    for suffix in ["-wal", "-shm"] {
-        let mut name = db.file_name().unwrap_or_default().to_os_string();
-        name.push(suffix);
-        let sidecar = db.with_file_name(name);
-        if sidecar.exists() {
-            let _ = fs::remove_file(&sidecar);
-        }
-    }
-    Ok(())
-}
-
 /// VACUUM rewrites the database file, reclaiming free pages left behind by
 /// deletions (SQLite never shrinks a file on its own). A WAL checkpoint runs
 /// first so pending sidecar content is folded back in. Content and login keys
@@ -3674,75 +3188,6 @@ fn vacuum_target(label: &str, db: &Path, targets: &mut Vec<CursorDbSlimTarget>) 
     });
 }
 
-/// Rebuild the shared state.vscdb from scratch. It historically inherited a
-/// full copy of the multi-GB default DB, while its real payload is only
-/// ItemTable keys plus Composer rows. Composer data is salvaged before the
-/// delete and re-imported afterwards, so no sessions are lost.
-fn rebuild_shared_state_db(targets: &mut Vec<CursorDbSlimTarget>) {
-    let shared_db = match shared_state_vscdb() {
-        Ok(p) => p,
-        Err(e) => {
-            targets.push(CursorDbSlimTarget {
-                label: "shared".into(),
-                path: String::new(),
-                action: "failed".into(),
-                before_bytes: 0,
-                after_bytes: 0,
-                note: format!("定位共享层失败: {e}"),
-            });
-            return;
-        }
-    };
-    if !shared_db.exists() {
-        return;
-    }
-    let before = state_db_cluster_bytes(&shared_db);
-    // Salvage Composer tables into a temp DB (streaming, never through Rust
-    // memory), re-import after the rebuild. The old prefix set would have
-    // dropped bubbleId/checkpointId rows here and lost session content.
-    let salvage_path = shared_db.with_file_name("state.vscdb.slim-salvage.tmp");
-    let _ = fs::remove_file(&salvage_path);
-    let salvage_ok = copy_composer_tables(&shared_db, &salvage_path).is_ok();
-
-    let mut note = String::new();
-    if let Err(e) = remove_state_db_cluster(&shared_db) {
-        let _ = fs::remove_file(&salvage_path);
-        targets.push(CursorDbSlimTarget {
-            label: "shared".into(),
-            path: shared_db.to_string_lossy().to_string(),
-            action: "failed".into(),
-            before_bytes: before,
-            after_bytes: before,
-            note: e,
-        });
-        return;
-    }
-    // Drop the seed marker too, so ItemTable keys are re-seeded into the fresh DB.
-    if let Ok(marker) = shared_state_seed_marker() {
-        let _ = fs::remove_file(&marker);
-    }
-    if let Err(e) = seed_shared_state_from_default() {
-        note = format!("ItemTable 重新播种失败: {e}");
-    }
-    let _ = merge_recent_workspaces_from_default();
-    if salvage_ok {
-        let _ = copy_composer_tables(&salvage_path, &shared_db);
-        let _ = fs::remove_file(&salvage_path);
-    }
-    // Bring the default dir's Composer history back in (profiles re-flow on
-    // their next launch via prepare_profile_shared).
-    let _ = sync_default_composer_to_shared();
-
-    targets.push(CursorDbSlimTarget {
-        label: "shared".into(),
-        path: shared_db.to_string_lossy().to_string(),
-        action: "rebuilt".into(),
-        before_bytes: before,
-        after_bytes: state_db_cluster_bytes(&shared_db),
-        note,
-    });
-}
-
 fn slim_cursor_state_dbs_sync() -> Result<CursorDbSlimReport, String> {
     let mut targets: Vec<CursorDbSlimTarget> = Vec::new();
 
@@ -3751,20 +3196,43 @@ fn slim_cursor_state_dbs_sync() -> Result<CursorDbSlimReport, String> {
         quit_cursor_sync()?;
     }
 
-    rebuild_shared_state_db(&mut targets);
+    // The legacy shared layer is a redundant copy: fold anything unique into
+    // the single source, then drop it.
+    if let Ok(r) = drop_legacy_shared_layer() {
+        if r.removed_files > 0 {
+            targets.push(CursorDbSlimTarget {
+                label: "legacy-shared".into(),
+                path: cursor_shared_dir().to_string_lossy().to_string(),
+                action: "removed".into(),
+                before_bytes: r.freed_bytes,
+                after_bytes: 0,
+                note: r.message,
+            });
+        }
+    }
 
     let default_db = default_user_dir().join("globalStorage").join("state.vscdb");
     vacuum_target("default", &default_db, &mut targets);
 
-    // Every account profile keeps its own isolated state.vscdb (login state);
-    // VACUUM only reclaims free pages inside each one.
+    // Profiles are junction shells over the single source, so their "own"
+    // state.vscdb resolves to the same physical file — canonicalize to avoid
+    // vacuuming it once per account. Only genuinely separate DBs get a pass.
     if let Ok(profiles_root) = profiles_root_dir() {
+        let mut seen: Vec<Option<std::path::PathBuf>> = vec![fs::canonicalize(&default_db).ok()];
         if let Ok(entries) = fs::read_dir(&profiles_root) {
             for entry in entries.flatten() {
                 if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                     continue;
                 }
                 let db = live_state_vscdb_in(&entry.path());
+                if !db.exists() {
+                    continue;
+                }
+                let canon = fs::canonicalize(&db).ok();
+                if seen.iter().any(|s| *s == canon) {
+                    continue;
+                }
+                seen.push(canon);
                 let label = format!("profile:{}", entry.file_name().to_string_lossy());
                 vacuum_target(&label, &db, &mut targets);
             }
@@ -3804,37 +3272,6 @@ fn dir_size(path: &Path) -> u64 {
         remaining: DIR_SIZE_SCAN_MAX_ENTRIES,
     };
     dir_size_budget(path, &mut budget, true)
-}
-
-/// Size only the intentional shared layer (settings/extensions fallback under cursor-shared).
-fn shared_layer_bytes(shared_path: &Path) -> u64 {
-    let mut budget = DirSizeBudget {
-        deadline: Instant::now() + Duration::from_millis(2500),
-        remaining: 80_000,
-    };
-    let user = shared_path.join("User");
-    let mut size = 0u64;
-    for name in ["settings.json", "keybindings.json"] {
-        size += file_size(&user.join(name));
-    }
-    size += file_size(&user.join("globalStorage").join("storage.json"));
-    if let Ok(entries) = fs::read_dir(user.join("globalStorage")) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("state.vscdb") {
-                continue;
-            }
-            let path = entry.path();
-            if path.is_file() {
-                size += file_size(&path);
-            } else if path.is_dir() {
-                size += dir_size_budget(&path, &mut budget, false);
-            }
-        }
-    }
-    size += dir_size_budget(&shared_path.join("extensions"), &mut budget, false);
-    size
 }
 
 struct DirSizeBudget {
@@ -3955,28 +3392,26 @@ pub fn run_cursor_switch_self_test(personal_id: &str, company_id: &str) -> Resul
             migrate_backup_to_profile_impl(id)?;
             log(format!("{} ({}) 已迁移到独立 profile", label, id));
         } else {
-            prepare_profile_shared(&profile)?;
-            log(format!("{} ({}) profile 已链接 shared", label, id));
+            ensure_profile_shell(Some(id), &profile)?;
+            log(format!("{} ({}) profile 壳已指向 default", label, id));
         }
     }
 
-    let default_ws = default_user_dir().join("workspaceStorage");
-    if !default_ws.exists() {
-        fs::create_dir_all(&default_ws).map_err(|e| format!("创建 default workspaceStorage 失败: {}", e))?;
-    }
+    let default_user = default_user_dir();
     for id in [personal_id, company_id] {
-        let link = cursor_profile_dir(id)?.join("User").join("workspaceStorage");
+        let link = cursor_profile_dir(id)?.join("User");
         if !link.exists() {
-            return Err(format!("profile {} 未链接 workspaceStorage", id));
+            return Err(format!("profile {} 未链接 User 目录", id));
         }
         if !is_reparse_point(&link) {
-            log(format!("  提示: profile {} workspaceStorage 非 junction（可能为首次合并）", id));
-        } else if let (Ok(link_target), Ok(default_target)) =
-            (fs::canonicalize(&link), fs::canonicalize(&default_ws))
+            return Err(format!("profile {} 的 User 不是 junction（单一真源未生效）", id));
+        }
+        if let (Ok(link_target), Ok(default_target)) =
+            (fs::canonicalize(&link), fs::canonicalize(&default_user))
         {
             if link_target != default_target {
                 return Err(format!(
-                    "profile {} workspaceStorage 未指向 default Cursor（{} != {}）",
+                    "profile {} User 未指向 default Cursor（{} != {}）",
                     id,
                     link_target.display(),
                     default_target.display()
@@ -3984,7 +3419,7 @@ pub fn run_cursor_switch_self_test(personal_id: &str, company_id: &str) -> Resul
             }
         }
     }
-    log("default workspaceStorage 链接检查通过".to_string());
+    log("单一真源 User 链接检查通过".to_string());
 
     if std::env::var("WT_SKIP_SWITCH").is_ok() {
         log("WT_SKIP_SWITCH=1，跳过实际切换".to_string());
@@ -3992,12 +3427,7 @@ pub fn run_cursor_switch_self_test(personal_id: &str, company_id: &str) -> Resul
     }
 
     log("切换 公司 → 个人…".to_string());
-    let r1 = switch_cursor_account_impl(
-        None,
-        personal_id.to_string(),
-        Some(company_id.to_string()),
-        Some(true),
-    )?;
+    let r1 = switch_cursor_account_impl(None, personal_id.to_string(), Some(true))?;
     log(format!("  结果: {}", r1));
     let login1 = wait_for_login(&personal.auth_email, 45_000)?;
     log(format!(
@@ -4006,12 +3436,7 @@ pub fn run_cursor_switch_self_test(personal_id: &str, company_id: &str) -> Resul
     ));
 
     log("切换 个人 → 公司…".to_string());
-    let r2 = switch_cursor_account_impl(
-        None,
-        company_id.to_string(),
-        Some(personal_id.to_string()),
-        Some(true),
-    )?;
+    let r2 = switch_cursor_account_impl(None, company_id.to_string(), Some(true))?;
     log(format!("  结果: {}", r2));
     let login2 = wait_for_login(&company.auth_email, 45_000)?;
     log(format!(
@@ -4038,5 +3463,69 @@ mod account_id_tests {
     #[test]
     fn accepts_simple_id() {
         assert!(validate_account_id("acc-123").is_ok());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod junction_tests {
+    use super::{is_reparse_point, remove_tree_removing_links};
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
+    fn make_junction(link: &Path, target: &Path) {
+        let out = Command::new("cmd")
+            .args([
+                "/c",
+                "mklink",
+                "/J",
+                &link.to_string_lossy().to_string(),
+                &target.to_string_lossy().to_string(),
+            ])
+            .output()
+            .expect("mklink should run");
+        assert!(out.status.success(), "mklink failed: {:?}", out);
+    }
+
+    /// A profile's `extensions` can outlive its shared-layer target (the layer
+    /// is deleted), leaving a dangling junction that reports `exists() ==
+    /// false`. Deleting the profile must still unlink it — and must never
+    /// reach through a live junction into the single source.
+    #[test]
+    fn removes_dangling_and_live_junctions_without_touching_targets() {
+        let root = std::env::temp_dir().join(format!("aiwb-junction-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let live_target = root.join("live-target");
+        fs::create_dir_all(&live_target).unwrap();
+        fs::write(live_target.join("keep.txt"), b"data").unwrap();
+
+        let profile = root.join("profile");
+        fs::create_dir_all(&profile).unwrap();
+        make_junction(&profile.join("extensions"), &root.join("gone-target"));
+        make_junction(&profile.join("User"), &live_target);
+        assert!(is_reparse_point(&profile.join("extensions")));
+        assert!(!profile.join("extensions").exists(), "precondition: dangling");
+
+        // Why remove_link must not pick by attributes: a dangling junction is
+        // neither `is_dir()` (that follows the link) nor a directory per its own
+        // metadata, and DeleteFileW on it is denied.
+        let dangling = profile.join("extensions");
+        assert!(!fs::symlink_metadata(&dangling).unwrap().is_dir());
+        let by_removal_order = fs::remove_dir(&dangling);
+        assert!(
+            by_removal_order.is_ok(),
+            "RemoveDirectoryW should unlink a dangling junction: {by_removal_order:?}"
+        );
+
+        remove_tree_removing_links(&profile).expect("profile tree should be removable");
+
+        assert!(!profile.exists(), "profile dir should be gone");
+        assert!(
+            live_target.join("keep.txt").exists(),
+            "data behind a junction must survive"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

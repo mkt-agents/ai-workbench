@@ -338,6 +338,7 @@ pub fn run() {
             cursor::delete_cursor_backup,
             cursor::get_cursor_disk_usage,
             cursor::cleanup_cursor_full_backups,
+            cursor::cleanup_cursor_sealed_backups,
             cursor::read_cursor_diagnostics,
             cursor::quit_cursor,
             cursor::list_cursor_backups,

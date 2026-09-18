@@ -134,7 +134,7 @@ interface StoreState extends GlobalState, Invocations {
   addCursorAccount: (account: Omit<CursorAccount, 'id' | 'createdAt' | 'updatedAt' | 'backupPath' | 'isLoggedIn' | 'profileDir' | 'profileInitialized'>) => Promise<string>;
   finishAccountProfile: (id: string) => Promise<string>;
   /** Re-open the independent Cursor profile for an account stuck in "pending init" (e.g. user closed Cursor before logging in). */
-  reopenCursorForInit: (id: string) => Promise<string>;
+  reopenCursorForInit: (id: string, expectedEmail?: string) => Promise<string>;
   updateCursorAccount: (id: string, updates: Partial<CursorAccount>) => Promise<void>;
   deleteCursorAccount: (id: string) => Promise<void>;
   switchCursorAccount: (id: string, currentAccountId?: string | null) => Promise<string>;
@@ -153,9 +153,9 @@ interface StoreState extends GlobalState, Invocations {
   invokeGetCursorLoginStatus: () => Promise<{ email: string; name: string; isLoggedIn: boolean }>;
   syncCursorLoggedInFlags: (liveEmail: string, liveName?: string) => Promise<void>;
   invokeIsCursorRunning: () => Promise<boolean>;
-  invokeInitAccountProfile: (accountId: string) => Promise<string>;
+  invokeInitAccountProfile: (accountId: string, expectedEmail?: string) => Promise<string>;
   /** Launch Cursor (with this account's isolated profile when an id is given). */
-  invokeLaunchCursor: (accountId?: string | null) => Promise<string>;
+  invokeLaunchCursor: (accountId?: string | null, expectedEmail?: string) => Promise<string>;
   invokeQuitCursor: () => Promise<string>;
   invokeListCursorBackups: () => Promise<
     Array<{ accountId: string; path: string; sizeBytes: number }>
@@ -178,13 +178,18 @@ interface StoreState extends GlobalState, Invocations {
     backupsBytes: number;
     backupsFullDbBytes: number;
     staleDbCount: number;
-    sharedBytes: number;
+    sealedBytes: number;
+    sealedCount: number;
     liveDbBytes: number;
     backupsPath: string;
-    sharedPath: string;
     liveDbPath: string;
   }>;
   invokeCleanupCursorFullBackups: () => Promise<{
+    removedFiles: number;
+    freedBytes: number;
+    message: string;
+  }>;
+  invokeCleanupCursorSealedBackups: () => Promise<{
     removedFiles: number;
     freedBytes: number;
     message: string;
@@ -649,7 +654,7 @@ export const useGlobalStore = create<StoreState>()(
         const now = new Date().toISOString();
         const id = crypto.randomUUID();
         const profileDir = await get().invokeGetCursorProfileDir(id);
-        const initMsg = await get().invokeInitAccountProfile(id);
+        const initMsg = await get().invokeInitAccountProfile(id, account.email);
         const newAccount: CursorAccount = {
           ...account,
           id,
@@ -678,8 +683,8 @@ export const useGlobalStore = create<StoreState>()(
         return backupPath;
       },
 
-      reopenCursorForInit: async (id) => {
-        return await get().invokeInitAccountProfile(id);
+      reopenCursorForInit: async (id, expectedEmail) => {
+        return await get().invokeInitAccountProfile(id, expectedEmail);
       },
 
       updateCursorAccount: async (id, updates) => withTable("cursor_accounts", async () => {
@@ -734,13 +739,6 @@ export const useGlobalStore = create<StoreState>()(
         const after = await get().invokeGetCursorLoginStatus();
         await get().syncCursorLoggedInFlags(after.email, after.name);
 
-        if (account.gitUserName && account.gitEmail) {
-          try {
-            await get().invokeSetGitConfig('global', account.gitUserName, account.gitEmail);
-          } catch (gitErr) {
-            return `${result} | Git sync failed: ${gitErr}`;
-          }
-        }
         return result;
       },
 
@@ -774,10 +772,16 @@ export const useGlobalStore = create<StoreState>()(
         tauriInvoke<{ email: string; name: string; isLoggedIn: boolean }>('get_cursor_login_status'),
       invokeIsCursorRunning: async () =>
         tauriInvoke<boolean>('is_cursor_running'),
-      invokeInitAccountProfile: async (accountId) =>
-        tauriInvoke<string>("init_account_profile", { accountId }),
-      invokeLaunchCursor: async (accountId) =>
-        tauriInvoke<string>("launch_cursor", { accountId: accountId ?? null }),
+      invokeInitAccountProfile: async (accountId, expectedEmail) =>
+        tauriInvoke<string>("init_account_profile", {
+          accountId,
+          expectedEmail: expectedEmail || null,
+        }),
+      invokeLaunchCursor: async (accountId, expectedEmail) =>
+        tauriInvoke<string>("launch_cursor", {
+          accountId: accountId ?? null,
+          expectedEmail: expectedEmail || null,
+        }),
       invokeQuitCursor: async () => tauriInvoke<string>("quit_cursor"),
       invokeListCursorBackups: async () =>
         tauriInvoke<Array<{ accountId: string; path: string; sizeBytes: number }>>(
@@ -808,10 +812,10 @@ export const useGlobalStore = create<StoreState>()(
           backupsBytes: number;
           backupsFullDbBytes: number;
           staleDbCount: number;
-          sharedBytes: number;
+          sealedBytes: number;
+          sealedCount: number;
           liveDbBytes: number;
           backupsPath: string;
-          sharedPath: string;
           liveDbPath: string;
         }>('get_cursor_disk_usage'),
       invokeCleanupCursorFullBackups: async () =>
@@ -820,6 +824,12 @@ export const useGlobalStore = create<StoreState>()(
           freedBytes: number;
           message: string;
         }>('cleanup_cursor_full_backups'),
+      invokeCleanupCursorSealedBackups: async () =>
+        tauriInvoke<{
+          removedFiles: number;
+          freedBytes: number;
+          message: string;
+        }>('cleanup_cursor_sealed_backups'),
       invokeSlimCursorStateDbs: async () =>
         tauriInvoke<{
           targets: Array<{
