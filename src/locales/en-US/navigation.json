@@ -8,7 +8,7 @@
   "cursorAccounts": "Cursor",
   "versionManagement": "Version Management",
   "gitManagement": "Git Management",
-  "runtimeVersion": "Runtime Version",
+  "runtimeVersion": "Environment",
   "networkManagement": "Network Management",
   "hosts": "Hosts",
   "cloudflared": "Tunnel",

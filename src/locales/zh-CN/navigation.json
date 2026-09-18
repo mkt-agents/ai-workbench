@@ -8,7 +8,7 @@
   "cursorAccounts": "Cursor",
   "versionManagement": "版本管理",
   "gitManagement": "Git 管理",
-  "runtimeVersion": "运行时版本",
+  "runtimeVersion": "环境变量",
   "networkManagement": "网络管理",
   "hosts": "Hosts管理",
   "cloudflared": "内网穿透",
