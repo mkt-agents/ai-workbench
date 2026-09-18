@@ -47,6 +47,7 @@ function PortProcessTool() {
   const [search, setSearch] = useState("");
   const [protoFilter, setProtoFilter] = useState<ProtoFilter>("all");
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [hideSystem, setHideSystem] = useState(true);
 
   const cancelled = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -172,10 +173,11 @@ function PortProcessTool() {
 
   const resolvingCount = resolving ? Object.keys(pidMap).length === 0 && ports.length > 0 : false;
 
-  // Filter ports based on search and protocol
+  // Filter ports based on search, protocol, and system process
   const filteredPorts = useMemo(() => {
     const searchLower = search.toLowerCase().trim();
     return ports.filter((p) => {
+      if (hideSystem && p.pid === 4) return false;
       if (protoFilter !== "all" && p.proto.toLowerCase() !== protoFilter) return false;
       if (!searchLower) return true;
       const info = pidMap[p.pid];
@@ -187,7 +189,7 @@ function PortProcessTool() {
         (info?.path || "").toLowerCase().includes(searchLower)
       );
     });
-  }, [ports, search, protoFilter, pidMap]);
+  }, [ports, search, protoFilter, pidMap, hideSystem]);
 
   // Stats
   const stats = useMemo(() => {
@@ -216,6 +218,14 @@ function PortProcessTool() {
             onChange={(e) => setAutoRefresh(e.target.checked)}
           />
           {t("ports.autoRefresh")}
+        </label>
+        <label className="devtools-checkbox">
+          <input
+            type="checkbox"
+            checked={hideSystem}
+            onChange={(e) => setHideSystem(e.target.checked)}
+          />
+          {t("ports.hideSystem")}
         </label>
         {resolvingCount && (
           <span className="devports-resolve-hint">
@@ -413,7 +423,7 @@ function PortRow({ port, info, isOpen, killing, onToggle, onKill, onCopyPath, t 
             </div>
             {info.services && (
               <div className="devports-detail-row devports-detail-grow">
-                <span className="devports-detail-label">{t("ports.proto")}</span>
+                <span className="devports-detail-label">{t("ports.services")}</span>
                 <div className="devports-services">
                   {info.services.split(", ").map((s, idx) => (
                     <span key={idx} className="tag tag-service">
