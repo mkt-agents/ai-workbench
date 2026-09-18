@@ -291,6 +291,12 @@ function AccountManagerModal({ onClose }: Props) {
               )}
             </div>
 
+            {/* Binding rule hint */}
+            <div className="account-rule-hint">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+              <span>{t("accountManager.bindingRule")}</span>
+            </div>
+
             <div className="account-scroll-area">
               {accounts.length === 0 ? (
                 <div className="empty-state">

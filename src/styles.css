@@ -2499,6 +2499,21 @@ input, select, textarea { font-family: inherit; }
   justify-content: flex-end;
 }
 
+.account-rule-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 11px;
+  color: var(--text-3, #888);
+  line-height: 1.4;
+}
+
+.account-rule-hint svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
 /* Account cards grid */
 .account-grid {
   display: grid;

@@ -216,6 +216,7 @@
     "editGlobalGit": "编辑",
     "noGlobalGit": "未设置全局 user.name/user.email",
     "globalGitSaved": "已保存全局 Git 身份",
+    "bindingRule": "身份匹配顺序：仓库路径精确绑定 > 域名绑定（origin）> 当前 git config",
     "noAccounts": "暂无账号，点击下方按钮添加",
     "backToList": "返回列表",
     "saved": "已保存账号",

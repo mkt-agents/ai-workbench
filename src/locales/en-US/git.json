@@ -216,6 +216,7 @@
     "editGlobalGit": "Edit",
     "noGlobalGit": "No global user.name/user.email set",
     "globalGitSaved": "Global git identity saved",
+    "bindingRule": "Identity match order: repo path binding > host domain (origin) > current git config",
     "noAccounts": "No accounts yet, click below to add one",
     "backToList": "Back to list",
     "saved": "Account saved",
