@@ -30,6 +30,8 @@
   "renameSave": "保存",
   "renameCancel": "取消",
   "exportSession": "导出对话",
+  "focusRepo": "指定要详细分析的项目",
+  "focusRepoAuto": "自动（当前项目）",
   "exported": "已导出",
   "turnsCount": "{{n}} 轮",
   "justNow": "刚刚",

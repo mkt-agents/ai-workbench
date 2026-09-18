@@ -14,6 +14,7 @@ import type {
 } from "../core/types";
 import { bootApp } from "../core/boot";
 import { fillParams, parseParamNames } from "../lib/snippets";
+import { projectNameFromPath } from "../core/pathUtils";
 import {
   APP_THEME_CHANGED_EVENT,
   applyDocumentTheme,
@@ -21,7 +22,7 @@ import {
 } from "../lib/theme";
 import ModalTitleRow from "./ModalTitleRow";
 import MarkdownView from "./MarkdownView";
-import { BASE_SYSTEM, DEFAULT_CHIPS, TASK_SYSTEM, makeTitle, truncate, validTask } from "./quickAskConfig";
+import { DEFAULT_CHIPS, TASK_SYSTEM, makeTitle, truncate, validTask } from "./quickAskConfig";
 import type { TaskKind } from "./quickAskConfig";
 
 const CONTEXT_LIMIT = 12000;
@@ -32,25 +33,32 @@ const MAX_HISTORY_TURNS = 6;
 const MAX_TURN_CHARS = 4000;
 /** Max diff bytes per file when including dirty content in quick-ask context. */
 const MAX_DIFF_PER_FILE = 2000;
-/** Max number of files to fetch diff for per repo in quick-ask context. */
-const MAX_DIFF_FILES_PER_REPO = 10;
+/** Max number of files to fetch diff for the PRIMARY repo in quick-ask context. */
+const MAX_DIFF_FILES_PRIMARY = 8;
+/** Max number of files to fetch diff for SECONDARY repos (status only by default). */
+const MAX_DIFF_FILES_SECONDARY = 2;
 /** How long (ms) a cached context stays fresh before auto-refresh. */
-const CONTEXT_TTL_MS = 30000;
-
-type TaskKind = "none" | "debug" | "explain" | "polish";
+const CONTEXT_TTL_MS = 120000;
+/** Max concurrent git processes to avoid saturating the thread pool. */
+const GIT_CONCURRENCY = 4;
+/** Max repos to scan for dirty status (beyond the primary repo). */
+const MAX_SECONDARY_REPOS = 6;
 
 type QaTurn = QuickAskTurn;
 
-/** Coerce a stored task string back to a valid TaskKind. */
-function validTask(value: string): TaskKind {
-  return value === "debug" || value === "explain" || value === "polish" ? value : "none";
-}
-
-/** Short session label from the first non-empty line of a question. */
-function makeTitle(question: string, fallback: string): string {
-  const firstLine = question.split("\n").map((s) => s.trim()).find(Boolean) || "";
-  if (!firstLine) return fallback;
-  return firstLine.length > 24 ? firstLine.slice(0, 24) + "…" : firstLine;
+/** Run async tasks with a concurrency cap to avoid overwhelming the git backend. */
+async function withConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  const results: T[] = [];
+  let idx = 0;
+  async function worker(): Promise<void> {
+    while (idx < tasks.length) {
+      const i = idx++;
+      results[i] = await tasks[i]();
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
 
 function clipTurn(text: string): string {
@@ -66,43 +74,6 @@ function appendTurn(prev: QaTurn[], question: string, answer: string): QaTurn[] 
     { role: "assistant", content: clipTurn(answer) },
   ];
   return next.slice(-MAX_HISTORY_TURNS * 2);
-}
-
-const CONTEXT_RULES =
-  " You have access to context from the user's workbench below. Proactively use ALL relevant context to give specific, actionable answers. Never say 'I cannot access files' — the context includes everything available. If context is insufficient, say what is missing and still answer from what is given. Answer directly in the user's language; do not ask them to run git/shell commands themselves.";
-
-const BASE_SYSTEM =
-  "You are an expert developer assistant embedded in AI Workbench. You help developers understand, debug, and improve their code. Be concise but thorough. When you see code changes, explain what they do and why. When you see errors, suggest fixes. Anticipate follow-up needs.";
-
-const TASK_SYSTEM: Record<TaskKind, string> = {
-  none:
-    BASE_SYSTEM +
-    " Adapt your style to the question: conceptual explanations, code review, debugging, or planning." +
-    CONTEXT_RULES,
-  debug:
-    BASE_SYSTEM +
-    " Focus on diagnosing the problem. Read error messages and diffs carefully. Explain root cause, then give concrete fix steps. If the error is in shown code, point to the exact line." +
-    CONTEXT_RULES,
-  explain:
-    BASE_SYSTEM +
-    " Explain the code or concept clearly. Use examples from the provided context when possible. Structure complex explanations with bullet points or numbered steps." +
-    CONTEXT_RULES,
-  polish:
-    BASE_SYSTEM +
-    " Improve the text for clarity, tone, and professionalism. Return only the improved text unless asked otherwise. Match the user's language and intent." +
-    CONTEXT_RULES,
-};
-
-const DEFAULT_CHIPS: QuickAskChips = {
-  workspace: true,
-  git: true,
-  dirty: true,
-  clipboard: false,
-};
-
-function truncate(text: string, max: number): { text: string; truncated: boolean } {
-  if (text.length <= max) return { text, truncated: false };
-  return { text: text.slice(0, max) + "\n…(truncated)", truncated: true };
 }
 
 function QuickAskApp() {
@@ -137,6 +108,9 @@ function QuickAskApp() {
   const chips = settings.quickAskChips ?? DEFAULT_CHIPS;
   const [ctxPreview, setCtxPreview] = useState("");
   const [ctxTruncated, setCtxTruncated] = useState(false);
+  const [ctxLoading, setCtxLoading] = useState(false);
+  /** Which repo the user wants to focus on for full diff context. */
+  const [focusedRepo, setFocusedRepo] = useState<string | null>(null);
   const [ctxOpen, setCtxOpen] = useState(false);
   const [snippetOpen, setSnippetOpen] = useState(false);
   const [snippetQuery, setSnippetQuery] = useState("");
@@ -177,7 +151,11 @@ function QuickAskApp() {
   useEffect(() => {
     let cancelled = false;
     bootApp().then(() => {
-      if (!cancelled) setReady(true);
+      if (cancelled) return;
+      // Load repos + workspaces so dirty/workspace chips have data.
+      void useGlobalStore.getState().loadRecentProjects();
+      void useGlobalStore.getState().loadWorkspaces();
+      setReady(true);
     });
     return () => {
       cancelled = true;
@@ -204,22 +182,23 @@ function QuickAskApp() {
     const parts: string[] = [];
     let truncated = false;
 
+    // Determine the primary repo: explicit focus > currentGitRepo > first dirty repo.
+    const primaryRepo = focusedRepo || settings.currentGitRepo || null;
+
     if (chips.workspace) {
       const ws = gitWorkspaces[0];
-      const repo = settings.currentGitRepo;
       if (ws) parts.push(`Workspace: ${ws.path}`);
-      if (repo) parts.push(`Current repo: ${repo}`);
+      if (primaryRepo) parts.push(`Current repo: ${primaryRepo}`);
     }
 
-    // Git identity: fetch config + recent commits in parallel
+    // Git identity: fetch config + recent commits for the primary repo only.
     if (chips.git) {
       try {
         const [name, email] = await invokeGetGitConfig("global");
         if (name || email) parts.push(`Git identity: ${name} <${email}>`);
-        const repo = settings.currentGitRepo;
-        if (repo) {
+        if (primaryRepo) {
           try {
-            const commits = await invokeGitLog(repo, 5);
+            const commits = await invokeGitLog(primaryRepo, 5);
             if (commits.length > 0) {
               parts.push(
                 "Recent commits:\n" +
@@ -235,72 +214,139 @@ function QuickAskApp() {
       }
     }
 
-    // Dirty repos: parallel fetch across repos, then parallel diff within each repo
+    // Dirty repos: primary repo gets full diffs, secondary repos get status only.
     if (chips.dirty) {
-      const pathSet = new Set<string>();
-      if (settings.currentGitRepo) pathSet.add(settings.currentGitRepo);
-      for (const p of (recentProjects || []).slice(0, 8)) pathSet.add(p.path);
+      // Collect candidate paths: primary first, then recent projects.
+      const candidates: string[] = [];
+      if (primaryRepo) candidates.push(primaryRepo);
+      for (const p of (recentProjects || []).slice(0, MAX_SECONDARY_REPOS)) {
+        if (p.path !== primaryRepo) candidates.push(p.path);
+      }
 
-      const repoResults = await Promise.all(
-        Array.from(pathSet).map(async (path): Promise<string | null> => {
+      // Phase 1: fetch summaries in parallel (concurrency-limited).
+      const summaries = await withConcurrency(
+        candidates.map((path) => async () => {
           try {
             const s: GitRepoSummary = await invokeGitRepoSummary(path);
-            if (!s.isGit || s.dirtyCount <= 0) return null;
-            const lines: string[] = [
-              `${s.name || path} (${s.branch}): ${s.dirtyCount} changes`,
-            ];
-            try {
-              const entries = await invokeGitStatus(path);
-              const shown = entries.slice(0, DIRTY_FILE_LIMIT);
-              for (const e of shown) {
-                const mark =
-                  e.group === "untracked"
-                    ? "??"
-                    : `${e.indexStatus || " "}${e.workTreeStatus || " "}`;
-                lines.push(`  ${mark} ${e.path}`);
-              }
-              if (entries.length > DIRTY_FILE_LIMIT) {
-                lines.push(`  …(+${entries.length - DIRTY_FILE_LIMIT} more)`);
-                truncated = true;
-              }
-              // Fetch actual diff content in parallel
-              const diffFiles = entries
-                .filter((e) => e.group !== "untracked")
-                .slice(0, MAX_DIFF_FILES_PER_REPO);
-              if (diffFiles.length > 0) {
-                const diffs = await Promise.all(
-                  diffFiles.map(async (e): Promise<string | null> => {
-                    try {
-                      const diff = await invokeGitDiff(path, e.path, false);
-                      if (!diff || diff === "（无差异）") return null;
-                      const clipped =
-                        diff.length > MAX_DIFF_PER_FILE
-                          ? diff.slice(0, MAX_DIFF_PER_FILE) + "\n  …(truncated)"
-                          : diff;
-                      return `  --- ${e.path} ---\n  ${clipped.split("\n").join("\n  ")}`;
-                    } catch {
-                      return null;
-                    }
-                  })
-                );
-                const validDiffs = diffs.filter((d): d is string => d !== null);
-                if (validDiffs.length > 0) {
-                  lines.push("  Changes:");
-                  lines.push(...validDiffs);
-                }
-              }
-            } catch {
-              /* summary line alone is still useful */
-            }
-            return lines.join("\n");
+            return { path, summary: s };
           } catch {
             return null;
           }
-        })
+        }),
+        GIT_CONCURRENCY
       );
-      const summaries = repoResults.filter((r): r is string => r !== null);
-      if (summaries.length > 0) {
-        parts.push("Dirty repos:\n" + summaries.slice(0, 5).join("\n\n"));
+      const valid = summaries.filter((r): r is { path: string; summary: GitRepoSummary } => r !== null);
+
+      // Separate primary from secondary.
+      const primaryEntry = valid.find((r) => r.path === primaryRepo) || valid[0];
+      const secondaryEntries = valid.filter((r) => r !== primaryEntry && r.summary.isGit && r.summary.dirtyCount > 0);
+
+      // Phase 2a: primary repo — full status + diffs.
+      if (primaryEntry?.summary.isGit && primaryEntry.summary.dirtyCount > 0) {
+        const repo = primaryEntry.path;
+        const s = primaryEntry.summary;
+        const lines: string[] = [`[PRIMARY] ${s.name || repo} (${s.branch}): ${s.dirtyCount} changes`];
+        try {
+          const entries = await invokeGitStatus(repo);
+          const shown = entries.slice(0, DIRTY_FILE_LIMIT);
+          for (const e of shown) {
+            const mark = e.group === "untracked" ? "??" : `${e.indexStatus || " "}${e.workTreeStatus || " "}`;
+            lines.push(`  ${mark} ${e.path}`);
+          }
+          if (entries.length > DIRTY_FILE_LIMIT) {
+            lines.push(`  …(+${entries.length - DIRTY_FILE_LIMIT} more)`);
+            truncated = true;
+          }
+          // Fetch diffs for modified files (parallel, capped).
+          const diffFiles = entries.filter((e) => e.group !== "untracked").slice(0, MAX_DIFF_FILES_PRIMARY);
+          if (diffFiles.length > 0) {
+            const diffs = await withConcurrency(
+              diffFiles.map((e) => async () => {
+                try {
+                  const diff = await invokeGitDiff(repo, e.path, false);
+                  if (!diff || diff === "（无差异）") return null;
+                  const clipped = diff.length > MAX_DIFF_PER_FILE
+                    ? diff.slice(0, MAX_DIFF_PER_FILE) + "\n  …(truncated)"
+                    : diff;
+                  return `  --- ${e.path} ---\n  ${clipped.split("\n").join("\n  ")}`;
+                } catch {
+                  return null;
+                }
+              }),
+              GIT_CONCURRENCY
+            );
+            const validDiffs = diffs.filter((d): d is string => d !== null);
+            if (validDiffs.length > 0) {
+              lines.push("  Changes:");
+              lines.push(...validDiffs);
+            }
+          }
+        } catch {
+          /* summary line alone is still useful */
+        }
+        parts.push(lines.join("\n"));
+
+        // Phase 2b: secondary repos — status marks + limited diffs (concurrency-capped).
+        if (secondaryEntries.length > 0) {
+          const secondaryResults = await withConcurrency(
+            secondaryEntries.map(({ path: repo, summary: s }) => async () => {
+              const lines: string[] = [`${s.name || repo} (${s.branch}): ${s.dirtyCount} changes`];
+              try {
+                const entries = await invokeGitStatus(repo);
+                const shown = entries.slice(0, 10);
+                for (const e of shown) {
+                  const mark = e.group === "untracked" ? "??" : `${e.indexStatus || " "}${e.workTreeStatus || " "}`;
+                  lines.push(`  ${mark} ${e.path}`);
+                }
+                if (entries.length > 10) {
+                  lines.push(`  …(+${entries.length - 10} more)`);
+                }
+                // Only fetch a couple of diffs for secondary repos.
+                const diffFiles = entries.filter((e) => e.group !== "untracked").slice(0, MAX_DIFF_FILES_SECONDARY);
+                if (diffFiles.length > 0) {
+                  const diffs = await withConcurrency(
+                    diffFiles.map((e) => async () => {
+                      try {
+                        const diff = await invokeGitDiff(repo, e.path, false);
+                        if (!diff || diff === "（无差异）") return null;
+                        const clipped = diff.length > 600
+                          ? diff.slice(0, 600) + "\n  …(truncated)"
+                          : diff;
+                        return `  --- ${e.path} ---\n  ${clipped.split("\n").join("\n  ")}`;
+                      } catch {
+                        return null;
+                      }
+                    }),
+                    2
+                  );
+                  const validDiffs = diffs.filter((d): d is string => d !== null);
+                  if (validDiffs.length > 0) {
+                    lines.push("  Changes:");
+                    lines.push(...validDiffs);
+                  }
+                }
+              } catch {
+                /* summary line alone is useful */
+              }
+              return lines.join("\n");
+            }),
+            GIT_CONCURRENCY
+          );
+          const validResults = secondaryResults.filter(Boolean);
+          if (validResults.length > 0) {
+            parts.push("Other dirty repos:\n" + validResults.slice(0, 4).join("\n\n"));
+          }
+        }
+      } else if (primaryEntry) {
+        // Primary repo exists but is clean — just note it.
+        parts.push(`[PRIMARY] ${primaryEntry.summary.name || primaryEntry.path} (${primaryEntry.summary.branch}): clean`);
+        // Still scan secondary repos for dirty status.
+        if (secondaryEntries.length > 0) {
+          const secondaryLines = secondaryEntries.map(
+            ({ summary: s, path: p }) => `  ${s.name || p} (${s.branch}): ${s.dirtyCount} changes`
+          );
+          parts.push("Dirty repos:\n" + secondaryLines.join("\n"));
+        }
       }
     }
 
@@ -337,6 +383,7 @@ function QuickAskApp() {
     gitWorkspaces,
     recentProjects,
     settings.currentGitRepo,
+    focusedRepo,
     invokeGetGitConfig,
     invokeGitRepoSummary,
     invokeGitStatus,
@@ -346,7 +393,7 @@ function QuickAskApp() {
 
   /** Get context: use cache if fresh, otherwise rebuild. */
   const getContext = useCallback((): Promise<{ text: string; truncated: boolean }> => {
-    const sig = `${chips.workspace}|${chips.git}|${chips.dirty}|${chips.clipboard}|${settings.currentGitRepo}`;
+    const sig = `${chips.workspace}|${chips.git}|${chips.dirty}|${chips.clipboard}|${settings.currentGitRepo}|${focusedRepo}`;
     const cached = cachedContextRef.current;
     const now = Date.now();
     if (cached && chipsSigRef.current === sig && now - cached.at < CONTEXT_TTL_MS) {
@@ -354,11 +401,14 @@ function QuickAskApp() {
     }
     // Rebuild and cache
     chipsSigRef.current = sig;
-    return refreshContext().then((out) => {
-      cachedContextRef.current = { text: out.text, truncated: out.truncated, at: Date.now() };
-      return out;
-    });
-  }, [chips, settings.currentGitRepo, refreshContext]);
+    setCtxLoading(true);
+    return refreshContext()
+      .then((out) => {
+        cachedContextRef.current = { text: out.text, truncated: out.truncated, at: Date.now() };
+        return out;
+      })
+      .finally(() => setCtxLoading(false));
+  }, [chips, settings.currentGitRepo, focusedRepo, refreshContext]);
 
   // Use ref to always have the latest getContext without re-registering listeners
   const getContextRef = useRef(getContext);
@@ -366,11 +416,7 @@ function QuickAskApp() {
   // Deduplicate prefill events (both quick-ask windows receive the same event)
   const prefillIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!ready) return;
-    chipsSigRef.current = ""; // force refresh on mount
-    void getContextRef.current();
-  }, [ready]);
+
 
   useEffect(() => {
     let unlistenShown: (() => void) | undefined;
@@ -392,8 +438,14 @@ function QuickAskApp() {
       void useGlobalStore.getState().loadAIModels();
       void useGlobalStore.getState().loadSnippets();
       void useGlobalStore.getState().loadQuickAskSessions();
-      chipsSigRef.current = ""; // invalidate cache on show
-      void getContextRef.current();
+      void useGlobalStore.getState().loadRecentProjects();
+      void useGlobalStore.getState().loadWorkspaces();
+      // Defer context build by 1.5s so the window paints instantly; the first
+      // send will build it immediately anyway if the user is fast.
+      chipsSigRef.current = "";
+      window.setTimeout(() => {
+        void getContextRef.current();
+      }, 1500);
     }).then((fn) => {
       unlistenShown = fn;
     });
@@ -882,6 +934,14 @@ function QuickAskApp() {
     }
   };
 
+  // Deduplicated list of repos for the focus selector.
+  const availableRepos = useMemo(() => {
+    const set = new Set<string>();
+    if (settings.currentGitRepo) set.add(settings.currentGitRepo);
+    for (const p of recentProjects) set.add(p.path);
+    return Array.from(set);
+  }, [settings.currentGitRepo, recentProjects]);
+
   if (!ready) {
     return <div className="quick-ask-root loading">{t("loading")}</div>;
   }
@@ -930,6 +990,19 @@ function QuickAskApp() {
           <option value="debug">{t("task.debug")}</option>
           <option value="explain">{t("task.explain")}</option>
           <option value="polish">{t("task.polish")}</option>
+        </select>
+        <select
+          className="input-field"
+          value={focusedRepo || settings.currentGitRepo || ""}
+          onChange={(e) => setFocusedRepo(e.target.value || null)}
+          title={t("focusRepo")}
+        >
+          <option value="">{t("focusRepoAuto")}</option>
+          {availableRepos.map((p) => (
+            <option key={p} value={p}>
+              {projectNameFromPath(p)}
+            </option>
+          ))}
         </select>
       </div>
 
@@ -981,12 +1054,12 @@ function QuickAskApp() {
           )}
           <button
             type="button"
-            className={`qa-tool-btn${ctxOpen ? " on" : ""}`}
+            className={`qa-tool-btn${ctxOpen ? " on" : ""}${ctxLoading ? " is-loading" : ""}`}
             onClick={() => setCtxOpen((v) => !v)}
-            disabled={!ctxPreview}
+            disabled={!ctxPreview && !ctxLoading}
             title={ctxOpen ? t("hideContext") : t("showContext")}
           >
-            <Eye size={14} />
+            {ctxLoading ? <span className="qa-spinner" /> : <Eye size={14} />}
           </button>
         </div>
       </div>

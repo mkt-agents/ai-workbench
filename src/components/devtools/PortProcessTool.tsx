@@ -178,13 +178,14 @@ function PortProcessTool() {
     const searchLower = search.toLowerCase().trim();
     return ports.filter((p) => {
       if (hideSystem && p.pid === 4) return false;
-      if (protoFilter !== "all" && p.proto.toLowerCase() !== protoFilter) return false;
+      const proto = (p.proto || "").toLowerCase();
+      if (protoFilter !== "all" && proto !== protoFilter) return false;
       if (!searchLower) return true;
       const info = pidMap[p.pid];
       return (
         String(p.local_port).includes(searchLower) ||
         String(p.pid).includes(searchLower) ||
-        p.local_addr.toLowerCase().includes(searchLower) ||
+        (p.local_addr || "").toLowerCase().includes(searchLower) ||
         (info?.name || "").toLowerCase().includes(searchLower) ||
         (info?.path || "").toLowerCase().includes(searchLower)
       );
@@ -193,8 +194,8 @@ function PortProcessTool() {
 
   // Stats
   const stats = useMemo(() => {
-    const tcpCount = filteredPorts.filter((p) => p.proto.toLowerCase() === "tcp").length;
-    const udpCount = filteredPorts.filter((p) => p.proto.toLowerCase() === "udp").length;
+    const tcpCount = filteredPorts.filter((p) => (p.proto || "").toLowerCase() === "tcp").length;
+    const udpCount = filteredPorts.filter((p) => (p.proto || "").toLowerCase() === "udp").length;
     const uniquePids = new Set(filteredPorts.map((p) => p.pid)).size;
     return { tcpCount, udpCount, uniquePids, total: filteredPorts.length };
   }, [filteredPorts]);
@@ -354,7 +355,7 @@ function PortRow({ port, info, isOpen, killing, onToggle, onKill, onCopyPath, t 
             )
           ) : null}
         </span>
-        <span className={`tag tag-${port.proto.toLowerCase()}`}>{port.proto}</span>
+        <span className={`tag tag-${(port.proto || "").toLowerCase()}`}>{port.proto || "?"}</span>
         <span className="devports-card-addr">
           {port.local_addr}:{port.local_port}
         </span>

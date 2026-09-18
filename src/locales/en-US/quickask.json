@@ -31,6 +31,8 @@
   "renameCancel": "Cancel",
   "exportSession": "Export chat",
   "exported": "Exported",
+  "focusRepo": "Specify which repo to analyze in detail",
+  "focusRepoAuto": "Auto (current repo)",
   "turnsCount": "{{n}} turns",
   "justNow": "just now",
   "minutesAgo": "{{n}}m ago",
