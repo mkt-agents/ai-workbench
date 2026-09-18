@@ -28,6 +28,10 @@ const DIRTY_FILE_LIMIT = 30;
 /** Follow-up context: keep the last N Q&A pairs, clipped per turn. */
 const MAX_HISTORY_TURNS = 6;
 const MAX_TURN_CHARS = 4000;
+/** Max diff bytes per file when including dirty content in quick-ask context. */
+const MAX_DIFF_PER_FILE = 1500;
+/** Max number of files to fetch diff for per repo in quick-ask context. */
+const MAX_DIFF_FILES_PER_REPO = 8;
 
 type TaskKind = "none" | "debug" | "explain" | "polish";
 
@@ -61,20 +65,27 @@ function appendTurn(prev: QaTurn[], question: string, answer: string): QaTurn[] 
 }
 
 const CONTEXT_RULES =
-  " Use only facts from any 'Context from workbench' section in the user message. Answer directly; do not ask the user to run git/shell commands to gather that info. If context is insufficient, say what is missing and still answer from what is given.";
+  " You have access to context from the user's workbench below. Proactively use ALL relevant context to give specific, actionable answers. Never say 'I cannot access files' — the context includes everything available. If context is insufficient, say what is missing and still answer from what is given. Answer directly in the user's language; do not ask them to run git/shell commands themselves.";
+
+const BASE_SYSTEM =
+  "You are an expert developer assistant embedded in AI Workbench. You help developers understand, debug, and improve their code. Be concise but thorough. When you see code changes, explain what they do and why. When you see errors, suggest fixes. Anticipate follow-up needs.";
 
 const TASK_SYSTEM: Record<TaskKind, string> = {
   none:
-    "You are a concise assistant for a developer workbench. Answer in the user's language." +
+    BASE_SYSTEM +
+    " Adapt your style to the question: conceptual explanations, code review, debugging, or planning." +
     CONTEXT_RULES,
   debug:
-    "You diagnose errors. Be specific about likely causes and next steps. Answer in the user's language." +
+    BASE_SYSTEM +
+    " Focus on diagnosing the problem. Read error messages and diffs carefully. Explain root cause, then give concrete fix steps. If the error is in shown code, point to the exact line." +
     CONTEXT_RULES,
   explain:
-    "You explain code or text clearly and briefly. Answer in the user's language." +
+    BASE_SYSTEM +
+    " Explain the code or concept clearly. Use examples from the provided context when possible. Structure complex explanations with bullet points or numbered steps." +
     CONTEXT_RULES,
   polish:
-    "You polish and improve the user's text. Return only the improved text unless asked otherwise." +
+    BASE_SYSTEM +
+    " Improve the text for clarity, tone, and professionalism. Return only the improved text unless asked otherwise. Match the user's language and intent." +
     CONTEXT_RULES,
 };
 
@@ -106,6 +117,8 @@ function QuickAskApp() {
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
   const invokeGitStatus = useGlobalStore((s) => s.invokeGitStatus);
+  const invokeGitDiff = useGlobalStore((s) => s.invokeGitDiff);
+  const invokeGitLog = useGlobalStore((s) => s.invokeGitLog);
   const invokeGetGitConfig = useGlobalStore((s) => s.invokeGetGitConfig);
 
   const [ready, setReady] = useState(false);
@@ -188,6 +201,23 @@ function QuickAskApp() {
       try {
         const [name, email] = await invokeGetGitConfig("global");
         if (name || email) parts.push(`Git identity: ${name} <${email}>`);
+        // Add recent commit history for context-aware answers
+        const repo = settings.currentGitRepo;
+        if (repo) {
+          try {
+            const commits = await invokeGitLog(repo, 5);
+            if (commits.length > 0) {
+              parts.push(
+                "Recent commits:\n" +
+                  commits
+                    .map((c) => `  ${c[0]} ${c[1]} (${c[2]})`)
+                    .join("\n")
+              );
+            }
+          } catch {
+            /* ignore */
+          }
+        }
       } catch {
         /* ignore */
       }
@@ -219,6 +249,29 @@ function QuickAskApp() {
               lines.push(`  …(+${entries.length - DIRTY_FILE_LIMIT} more)`);
               truncated = true;
             }
+            // Fetch actual diff content so the AI can answer "what changed".
+            const diffFiles = entries
+              .filter((e) => e.group !== "untracked")
+              .slice(0, MAX_DIFF_FILES_PER_REPO);
+            if (diffFiles.length > 0) {
+              lines.push("  Changes:");
+              for (const e of diffFiles) {
+                try {
+                  const diff = await invokeGitDiff(path, e.path, false);
+                  if (diff && diff !== "（无差异）") {
+                    const clipped = diff.length > MAX_DIFF_PER_FILE
+                      ? diff.slice(0, MAX_DIFF_PER_FILE) + "\n  …(truncated)"
+                      : diff;
+                    lines.push(`  --- ${e.path} ---`);
+                    for (const dl of clipped.split("\n")) {
+                      lines.push(`  ${dl}`);
+                    }
+                  }
+                } catch {
+                  /* skip this file's diff */
+                }
+              }
+            }
           } catch {
             /* summary line alone is still useful */
           }
@@ -245,7 +298,13 @@ function QuickAskApp() {
     }
 
     const joined = parts.join("\n\n");
-    const result = truncate(joined, CONTEXT_LIMIT);
+    const enabledChips: string[] = [];
+    if (chips.workspace) enabledChips.push("workspace");
+    if (chips.git) enabledChips.push("git");
+    if (chips.dirty) enabledChips.push("dirty");
+    if (chips.clipboard) enabledChips.push("clipboard");
+    const header = `Active context: ${enabledChips.join(", ") || "none"}`;
+    const result = truncate(header + "\n\n" + joined, CONTEXT_LIMIT);
     const out = { text: result.text, truncated: truncated || result.truncated };
     setCtxPreview(out.text);
     setCtxTruncated(out.truncated);
@@ -261,6 +320,8 @@ function QuickAskApp() {
     invokeGetGitConfig,
     invokeGitRepoSummary,
     invokeGitStatus,
+    invokeGitDiff,
+    invokeGitLog,
   ]);
 
   // Use ref to always have the latest refreshContext without re-registering listeners

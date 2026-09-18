@@ -299,6 +299,7 @@ pub fn run() {
             git_commands::git_push,
             git_commands::git_pull,
             git_commands::git_diff,
+            git_commands::git_log,
             git_commands::git_discard,
             git_commands::git_undo_last_commit,
             git_commands::git_commit_context,

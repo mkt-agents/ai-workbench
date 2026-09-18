@@ -1005,6 +1005,37 @@ pub async fn git_diff(path: String, file_path: String, staged: bool) -> Result<S
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// Get recent commits (short format: hash + subject + relative date).
+#[tauri::command]
+pub async fn git_log(path: String, count: i64) -> Result<Vec<Vec<String>>, String> {
+    tokio::task::spawn_blocking(move || {
+        ensure_git_repo(&path)?;
+        let count = count.clamp(1, 50);
+        let output = git_output(
+            &path,
+            &[
+                "log",
+                &format!("-{}", count),
+                "--pretty=format:%h|%s|%cr",
+                "--no-merges",
+            ],
+        )?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(stderr.trim().to_string());
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let commits: Vec<Vec<String>> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| line.splitn(3, '|').map(String::from).collect())
+            .collect();
+        Ok(commits)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
 #[tauri::command]
 pub async fn git_discard(
     path: String,

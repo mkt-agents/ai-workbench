@@ -51,6 +51,7 @@ export interface Invocations {
   invokeGitPush: (path: string) => Promise<string>;
   invokeGitPull: (path: string) => Promise<string>;
   invokeGitDiff: (path: string, filePath: string, staged: boolean) => Promise<string>;
+  invokeGitLog: (path: string, count: number) => Promise<string[][]>;
   invokeGitDiscard: (
     path: string,
     filePath: string,
@@ -241,6 +242,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_pull', { path }),
   invokeGitDiff: (path: string, filePath: string, staged: boolean) =>
     tauriInvoke<string>('git_diff', { path, filePath, staged }),
+  invokeGitLog: (path: string, count: number) =>
+    tauriInvoke<string[][]>('git_log', { path, count }),
   invokeGitDiscard: (path: string, filePath: string, untracked: boolean, staged: boolean) =>
     tauriInvoke<string>('git_discard', { path, filePath, untracked, staged }),
   invokeGitUndoLastCommit: (path: string) =>
