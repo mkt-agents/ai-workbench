@@ -55,3 +55,8 @@ dev-tools = []
 name = "cursor_switch_test"
 path = "src/bin/cursor_switch_test.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "dump_composer"
+path = "src/bin/dump_composer.rs"
+required-features = ["dev-tools"]
