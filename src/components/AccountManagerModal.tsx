@@ -46,6 +46,7 @@ function AccountManagerModal({ onClose }: Props) {
   const deleteAccount = useGlobalStore((s) => s.deleteAccount);
   const addHostConfigs = useGlobalStore((s) => s.addHostConfigs);
   const deleteHostConfigsForAccount = useGlobalStore((s) => s.deleteHostConfigsForAccount);
+  const deleteRepoConfigsForAccount = useGlobalStore((s) => s.deleteRepoConfigsForAccount);
   const invokeGetGitConfig = useGlobalStore((s) => s.invokeGetGitConfig);
   const invokeSetGitConfig = useGlobalStore((s) => s.invokeSetGitConfig);
 
@@ -146,8 +147,9 @@ function AccountManagerModal({ onClose }: Props) {
     if (!ok) return;
     try {
       await deleteAccount(id);
-      // Also remove host bindings for this account
+      // Also remove host bindings and path bindings for this account
       await deleteHostConfigsForAccount(id);
+      await deleteRepoConfigsForAccount(id);
     } catch (e) {
       setError(String(e));
     }

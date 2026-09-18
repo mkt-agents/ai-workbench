@@ -93,6 +93,7 @@ interface StoreState extends GlobalState, Invocations {
   upsertRepoConfigs: (configs: Omit<GitRepoConfig, 'createdAt' | 'updatedAt'>[]) => Promise<void>;
   updateRepoConfig: (path: string, updates: Partial<GitRepoConfig>) => Promise<void>;
   deleteRepoConfig: (path: string) => Promise<void>;
+  deleteRepoConfigsForAccount: (accountId: string) => Promise<void>;
 
   // Host configs (domain → account auto-mapping)
   loadHostConfigs: () => Promise<void>;
@@ -387,6 +388,14 @@ export const useGlobalStore = create<StoreState>()(
       deleteRepoConfig: async (path) => {
         await withTable("git_repo_configs", async () => {
           const configs = get().git.repoConfigs.filter(c => pathKey(c.path) !== pathKey(path));
+          await storage.repoConfigs.save(configs);
+          set((state) => ({ git: { ...state.git, repoConfigs: configs } }));
+        });
+      },
+
+      deleteRepoConfigsForAccount: async (accountId) => {
+        await withTable("git_repo_configs", async () => {
+          const configs = get().git.repoConfigs.filter(c => c.accountId !== accountId);
           await storage.repoConfigs.save(configs);
           set((state) => ({ git: { ...state.git, repoConfigs: configs } }));
         });
