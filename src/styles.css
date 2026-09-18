@@ -10543,6 +10543,31 @@ input, select, textarea { font-family: inherit; }
 .qa-session-item.active {
   border-color: var(--accent, #5b8def);
 }
+.qa-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  flex-shrink: 0;
+}
+.qa-session-rename {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  padding: 4px 4px 4px 8px;
+}
+.qa-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-1, #111417);
+  border: 1px solid var(--accent, #5b8def);
+  border-radius: 4px;
+  color: var(--text-1);
+  font-size: 12px;
+  padding: 3px 6px;
+  outline: none;
+}
 .qa-session-main {
   flex: 1;
   min-width: 0;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  BookmarkPlus, Check, ClipboardPaste, Copy, Eye, FileText, History,
+  BookmarkPlus, Check, ClipboardPaste, Copy, Download, Eye, FileText, History,
   MessageSquarePlus, RefreshCw, Send, Sparkles, Square, Trash2, X, ExternalLink,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -21,17 +21,21 @@ import {
 } from "../lib/theme";
 import ModalTitleRow from "./ModalTitleRow";
 import MarkdownView from "./MarkdownView";
+import { BASE_SYSTEM, DEFAULT_CHIPS, TASK_SYSTEM, makeTitle, truncate, validTask } from "./quickAskConfig";
+import type { TaskKind } from "./quickAskConfig";
 
-const CONTEXT_LIMIT = 2000;
+const CONTEXT_LIMIT = 12000;
 const SNIPPET_PICK_LIMIT = 24;
 const DIRTY_FILE_LIMIT = 30;
 /** Follow-up context: keep the last N Q&A pairs, clipped per turn. */
 const MAX_HISTORY_TURNS = 6;
 const MAX_TURN_CHARS = 4000;
 /** Max diff bytes per file when including dirty content in quick-ask context. */
-const MAX_DIFF_PER_FILE = 1500;
+const MAX_DIFF_PER_FILE = 2000;
 /** Max number of files to fetch diff for per repo in quick-ask context. */
-const MAX_DIFF_FILES_PER_REPO = 8;
+const MAX_DIFF_FILES_PER_REPO = 10;
+/** How long (ms) a cached context stays fresh before auto-refresh. */
+const CONTEXT_TTL_MS = 30000;
 
 type TaskKind = "none" | "debug" | "explain" | "polish";
 
@@ -114,6 +118,8 @@ function QuickAskApp() {
   const quickAskSessions = useGlobalStore((s) => s.quickAskSessions);
   const upsertQuickAskSession = useGlobalStore((s) => s.upsertQuickAskSession);
   const deleteQuickAskSession = useGlobalStore((s) => s.deleteQuickAskSession);
+  const loadQuickAskSessions = useGlobalStore((s) => s.loadQuickAskSessions);
+  const invokeSaveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
   const invokeGitStatus = useGlobalStore((s) => s.invokeGitStatus);
@@ -143,6 +149,10 @@ function QuickAskApp() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [snippetSaved, setSnippetSaved] = useState(false);
+  const [exportDone, setExportDone] = useState(false);
+  /** Inline rename state: which session + draft title. */
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   /** Text currently selected inside the answer area (for quote follow-up). */
   const [selectedText, setSelectedText] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -153,6 +163,10 @@ function QuickAskApp() {
   const streamIdRef = useRef(0);
   /** Request id of the stream currently in flight, so it can be cancelled. */
   const activeReqRef = useRef<string | null>(null);
+  /** Context cache: avoid re-fetching git data on every send. */
+  const cachedContextRef = useRef<{ text: string; truncated: boolean; at: number } | null>(null);
+  /** Chips signature to detect changes that invalidate cache. */
+  const chipsSigRef = useRef<string>("");
 
   const setChip = (key: keyof QuickAskChips, value: boolean) => {
     setSettings({
@@ -197,11 +211,11 @@ function QuickAskApp() {
       if (repo) parts.push(`Current repo: ${repo}`);
     }
 
+    // Git identity: fetch config + recent commits in parallel
     if (chips.git) {
       try {
         const [name, email] = await invokeGetGitConfig("global");
         if (name || email) parts.push(`Git identity: ${name} <${email}>`);
-        // Add recent commit history for context-aware answers
         const repo = settings.currentGitRepo;
         if (repo) {
           try {
@@ -209,9 +223,7 @@ function QuickAskApp() {
             if (commits.length > 0) {
               parts.push(
                 "Recent commits:\n" +
-                  commits
-                    .map((c) => `  ${c[0]} ${c[1]} (${c[2]})`)
-                    .join("\n")
+                  commits.map((c) => `  ${c[0]} ${c[1]} (${c[2]})`).join("\n")
               );
             }
           } catch {
@@ -223,65 +235,73 @@ function QuickAskApp() {
       }
     }
 
+    // Dirty repos: parallel fetch across repos, then parallel diff within each repo
     if (chips.dirty) {
       const pathSet = new Set<string>();
       if (settings.currentGitRepo) pathSet.add(settings.currentGitRepo);
       for (const p of (recentProjects || []).slice(0, 8)) pathSet.add(p.path);
-      const summaries: string[] = [];
-      for (const path of pathSet) {
-        try {
-          const s: GitRepoSummary = await invokeGitRepoSummary(path);
-          if (!s.isGit || s.dirtyCount <= 0) continue;
-          const lines: string[] = [
-            `${s.name || path} (${s.branch}): ${s.dirtyCount} changes`,
-          ];
+
+      const repoResults = await Promise.all(
+        Array.from(pathSet).map(async (path): Promise<string | null> => {
           try {
-            const entries = await invokeGitStatus(path);
-            const shown = entries.slice(0, DIRTY_FILE_LIMIT);
-            for (const e of shown) {
-              const mark =
-                e.group === "untracked"
-                  ? "??"
-                  : `${e.indexStatus || " "}${e.workTreeStatus || " "}`;
-              lines.push(`  ${mark} ${e.path}`);
-            }
-            if (entries.length > DIRTY_FILE_LIMIT) {
-              lines.push(`  …(+${entries.length - DIRTY_FILE_LIMIT} more)`);
-              truncated = true;
-            }
-            // Fetch actual diff content so the AI can answer "what changed".
-            const diffFiles = entries
-              .filter((e) => e.group !== "untracked")
-              .slice(0, MAX_DIFF_FILES_PER_REPO);
-            if (diffFiles.length > 0) {
-              lines.push("  Changes:");
-              for (const e of diffFiles) {
-                try {
-                  const diff = await invokeGitDiff(path, e.path, false);
-                  if (diff && diff !== "（无差异）") {
-                    const clipped = diff.length > MAX_DIFF_PER_FILE
-                      ? diff.slice(0, MAX_DIFF_PER_FILE) + "\n  …(truncated)"
-                      : diff;
-                    lines.push(`  --- ${e.path} ---`);
-                    for (const dl of clipped.split("\n")) {
-                      lines.push(`  ${dl}`);
+            const s: GitRepoSummary = await invokeGitRepoSummary(path);
+            if (!s.isGit || s.dirtyCount <= 0) return null;
+            const lines: string[] = [
+              `${s.name || path} (${s.branch}): ${s.dirtyCount} changes`,
+            ];
+            try {
+              const entries = await invokeGitStatus(path);
+              const shown = entries.slice(0, DIRTY_FILE_LIMIT);
+              for (const e of shown) {
+                const mark =
+                  e.group === "untracked"
+                    ? "??"
+                    : `${e.indexStatus || " "}${e.workTreeStatus || " "}`;
+                lines.push(`  ${mark} ${e.path}`);
+              }
+              if (entries.length > DIRTY_FILE_LIMIT) {
+                lines.push(`  …(+${entries.length - DIRTY_FILE_LIMIT} more)`);
+                truncated = true;
+              }
+              // Fetch actual diff content in parallel
+              const diffFiles = entries
+                .filter((e) => e.group !== "untracked")
+                .slice(0, MAX_DIFF_FILES_PER_REPO);
+              if (diffFiles.length > 0) {
+                const diffs = await Promise.all(
+                  diffFiles.map(async (e): Promise<string | null> => {
+                    try {
+                      const diff = await invokeGitDiff(path, e.path, false);
+                      if (!diff || diff === "（无差异）") return null;
+                      const clipped =
+                        diff.length > MAX_DIFF_PER_FILE
+                          ? diff.slice(0, MAX_DIFF_PER_FILE) + "\n  …(truncated)"
+                          : diff;
+                      return `  --- ${e.path} ---\n  ${clipped.split("\n").join("\n  ")}`;
+                    } catch {
+                      return null;
                     }
-                  }
-                } catch {
-                  /* skip this file's diff */
+                  })
+                );
+                const validDiffs = diffs.filter((d): d is string => d !== null);
+                if (validDiffs.length > 0) {
+                  lines.push("  Changes:");
+                  lines.push(...validDiffs);
                 }
               }
+            } catch {
+              /* summary line alone is still useful */
             }
+            return lines.join("\n");
           } catch {
-            /* summary line alone is still useful */
+            return null;
           }
-          summaries.push(lines.join("\n"));
-        } catch {
-          /* ignore */
-        }
-        if (summaries.length >= 5) break;
+        })
+      );
+      const summaries = repoResults.filter((r): r is string => r !== null);
+      if (summaries.length > 0) {
+        parts.push("Dirty repos:\n" + summaries.slice(0, 5).join("\n\n"));
       }
-      if (summaries.length) parts.push("Dirty repos:\n" + summaries.join("\n\n"));
     }
 
     if (chips.clipboard) {
@@ -324,15 +344,32 @@ function QuickAskApp() {
     invokeGitLog,
   ]);
 
-  // Use ref to always have the latest refreshContext without re-registering listeners
-  const refreshContextRef = useRef(refreshContext);
-  refreshContextRef.current = refreshContext;
+  /** Get context: use cache if fresh, otherwise rebuild. */
+  const getContext = useCallback((): Promise<{ text: string; truncated: boolean }> => {
+    const sig = `${chips.workspace}|${chips.git}|${chips.dirty}|${chips.clipboard}|${settings.currentGitRepo}`;
+    const cached = cachedContextRef.current;
+    const now = Date.now();
+    if (cached && chipsSigRef.current === sig && now - cached.at < CONTEXT_TTL_MS) {
+      return Promise.resolve({ text: cached.text, truncated: cached.truncated });
+    }
+    // Rebuild and cache
+    chipsSigRef.current = sig;
+    return refreshContext().then((out) => {
+      cachedContextRef.current = { text: out.text, truncated: out.truncated, at: Date.now() };
+      return out;
+    });
+  }, [chips, settings.currentGitRepo, refreshContext]);
+
+  // Use ref to always have the latest getContext without re-registering listeners
+  const getContextRef = useRef(getContext);
+  getContextRef.current = getContext;
   // Deduplicate prefill events (both quick-ask windows receive the same event)
   const prefillIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!ready) return;
-    void refreshContextRef.current();
+    chipsSigRef.current = ""; // force refresh on mount
+    void getContextRef.current();
   }, [ready]);
 
   useEffect(() => {
@@ -355,7 +392,8 @@ function QuickAskApp() {
       void useGlobalStore.getState().loadAIModels();
       void useGlobalStore.getState().loadSnippets();
       void useGlobalStore.getState().loadQuickAskSessions();
-      void refreshContextRef.current();
+      chipsSigRef.current = ""; // invalidate cache on show
+      void getContextRef.current();
     }).then((fn) => {
       unlistenShown = fn;
     });
@@ -440,9 +478,20 @@ function QuickAskApp() {
       }
       void hide();
     };
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Ctrl/Cmd+N: new chat
+      if ((e.ctrlKey || e.metaKey) && e.key === "n") {
+        e.preventDefault();
+        if (!busy) startNewChat();
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [paramTarget, snippetOpen, historyOpen, ctxOpen, input]);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [paramTarget, snippetOpen, historyOpen, ctxOpen, input, busy]);
 
   // Track text selected inside the answer area for the quote-follow-up bar.
   useEffect(() => {
@@ -569,7 +618,7 @@ function QuickAskApp() {
     const unlisteners: Array<() => void> = [];
 
     try {
-      const ctxResult = await refreshContext();
+      const ctxResult = await getContext();
       const system = TASK_SYSTEM[task];
       const ctx = ctxResult.text;
       const user = ctx
@@ -696,6 +745,48 @@ function QuickAskApp() {
         lastQuestionRef.current = "";
         lastHistoryRef.current = [];
       }
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  /** Persist a new title for a session. */
+  const renameSession = async (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setRenamingId(null);
+      return;
+    }
+    const target = quickAskSessions.find((s) => s.id === id);
+    if (!target) return;
+    try {
+      const now = new Date().toISOString();
+      await upsertQuickAskSession({ ...target, title: trimmed, updatedAt: now });
+      await loadQuickAskSessions();
+      setRenamingId(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  /** Export the active session as a Markdown file. */
+  const exportActiveSession = async () => {
+    if (history.length === 0) return;
+    const title = activeSessionId
+      ? quickAskSessions.find((s) => s.id === activeSessionId)?.title || "quick-ask"
+      : "quick-ask";
+    const lines = [`# ${title}`, ""];
+    history.forEach((turn) => {
+      lines.push(turn.role === "user" ? `## 🧑 You` : `## 🤖 Assistant`);
+      lines.push("");
+      lines.push(turn.content);
+      lines.push("");
+    });
+    const filename = `${title.replace(/[\\/:*?"<>|]/g, "_") || "quick-ask"}.md`;
+    try {
+      await invokeSaveTextFile(lines.join("\n"), filename, t("exportSession"));
+      setExportDone(true);
+      setTimeout(() => setExportDone(false), 1500);
     } catch (e) {
       setError(String(e));
     }
@@ -937,20 +1028,66 @@ function QuickAskApp() {
                 key={s.id}
                 className={`qa-session-item${s.id === activeSessionId ? " active" : ""}`}
               >
-                <button type="button" className="qa-session-main" onClick={() => openSession(s)}>
-                  <span className="qa-session-title">{s.title || t("newChat")}</span>
-                  <span className="qa-session-meta">
-                    {t("turnsCount", { n: Math.ceil((s.turns?.length ?? 0) / 2) })} · {relativeTime(s.updatedAt)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="btn-icon"
-                  onClick={() => void removeSession(s.id)}
-                  title={t("deleteSession")}
-                >
-                  <Trash2 size={13} />
-                </button>
+                {renamingId === s.id ? (
+                  <div className="qa-session-rename">
+                    <input
+                      className="qa-rename-input"
+                      value={renameDraft}
+                      autoFocus
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void renameSession(s.id, renameDraft);
+                        if (e.key === "Escape") setRenamingId(null);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => void renameSession(s.id, renameDraft)}
+                      title={t("renameSave")}
+                    >
+                      <Check size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => setRenamingId(null)}
+                      title={t("renameCancel")}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" className="qa-session-main" onClick={() => openSession(s)}>
+                    <span className="qa-session-title">{s.title || t("newChat")}</span>
+                    <span className="qa-session-meta">
+                      {t("turnsCount", { n: Math.ceil((s.turns?.length ?? 0) / 2) })} · {relativeTime(s.updatedAt)}
+                    </span>
+                  </button>
+                )}
+                {renamingId !== s.id && (
+                  <div className="qa-session-actions">
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => {
+                        setRenamingId(s.id);
+                        setRenameDraft(s.title || "");
+                      }}
+                      title={t("renameSession")}
+                    >
+                      <FileText size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => void removeSession(s.id)}
+                      title={t("deleteSession")}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
             {quickAskSessions.length === 0 && (
@@ -1027,6 +1164,17 @@ function QuickAskApp() {
         <button type="button" className="qa-mini-btn" onClick={() => void openDeepSeek()}>
           <ExternalLink size={13} /> {t("openDeepseek")}
         </button>
+        {history.length > 0 && (
+          <button
+            type="button"
+            className="qa-mini-btn"
+            onClick={() => void exportActiveSession()}
+            title={t("exportSession")}
+          >
+            {exportDone ? <Check size={13} /> : <Download size={13} />}{" "}
+            {exportDone ? t("exported") : t("exportSession")}
+          </button>
+        )}
         {(history.length > 0 || answer) && (
           <button
             type="button"
