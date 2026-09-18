@@ -24,7 +24,9 @@ use rusqlite::Connection;
 use tauri::Manager;
 
 pub struct DbState {
-    pub conn: Mutex<Connection>,
+    // Arc so commands can hand the lock itself to spawn_blocking (rusqlite's
+    // Connection is Send); a bare Mutex cannot be borrowed by 'static tasks.
+    pub conn: std::sync::Arc<Mutex<Connection>>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -68,7 +70,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .manage(DbState { conn: Mutex::new(Connection::open_in_memory().expect("failed to create in-memory placeholder")) })
+        .manage(DbState { conn: std::sync::Arc::new(Mutex::new(Connection::open_in_memory().expect("failed to create in-memory placeholder"))) })
         .manage(DshState {
             instances: Mutex::new(Vec::new()),
             children: Mutex::new(HashMap::new()),
@@ -400,7 +402,6 @@ pub fn run() {
             cloudflared_commands::cloudflared_tunnel_status,
             cloudflared_commands::cloudflared_setup_new_domain,
             devtools_commands::devtools_list_ports,
-            devtools_commands::devtools_process_name,
             devtools_commands::devtools_resolve_processes,
             devtools_commands::devtools_kill_process,
             devtools_commands::devtools_http_request,

@@ -1288,8 +1288,7 @@ mod scan_tests {
     }
 }
 
-#[tauri::command]
-pub fn set_git_config(config: GitConfig) -> Result<String, String> {
+fn set_git_config_sync(config: GitConfig) -> Result<String, String> {
     validate_name(&config.name)?;
     validate_email(&config.email)?;
 
@@ -1328,8 +1327,7 @@ pub fn set_git_config(config: GitConfig) -> Result<String, String> {
     ))
 }
 
-#[tauri::command]
-pub fn set_repo_git_config(config: RepoGitConfig) -> Result<String, String> {
+fn set_repo_git_config_sync(config: RepoGitConfig) -> Result<String, String> {
     validate_name(&config.name)?;
     validate_email(&config.email)?;
 
@@ -1373,8 +1371,7 @@ pub fn set_repo_git_config(config: RepoGitConfig) -> Result<String, String> {
     ))
 }
 
-#[tauri::command]
-pub fn get_repo_git_config(repo_path: String) -> Result<(String, String), String> {
+fn get_repo_git_config_sync(repo_path: String) -> Result<(String, String), String> {
     let path = Path::new(&repo_path);
     if !path.exists() {
         return Err(format!("路径不存在: {}", repo_path));
@@ -1413,8 +1410,7 @@ pub fn get_repo_git_config(repo_path: String) -> Result<(String, String), String
     Ok((name, email))
 }
 
-#[tauri::command]
-pub fn get_git_config(scope: Option<String>) -> Result<(String, String), String> {
+fn get_git_config_sync(scope: Option<String>) -> Result<(String, String), String> {
     let scope_flag = scope.unwrap_or_else(|| "global".to_string());
     if scope_flag != "global" {
         return Err("目前仅支持读取全局 Git 配置".to_string());
@@ -1445,9 +1441,43 @@ pub fn get_git_config(scope: Option<String>) -> Result<(String, String), String>
     Ok((name, email))
 }
 
+#[tauri::command]
+pub async fn set_git_config(config: GitConfig) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || set_git_config_sync(config))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn set_repo_git_config(config: RepoGitConfig) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || set_repo_git_config_sync(config))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_repo_git_config(repo_path: String) -> Result<(String, String), String> {
+    tokio::task::spawn_blocking(move || get_repo_git_config_sync(repo_path))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_git_config(scope: Option<String>) -> Result<(String, String), String> {
+    tokio::task::spawn_blocking(move || get_git_config_sync(scope))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
 /// Native folder picker. Returns None if the user cancels.
 #[tauri::command]
-pub fn pick_directory() -> Result<Option<String>, String> {
+pub async fn pick_directory() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(pick_directory_sync)
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn pick_directory_sync() -> Result<Option<String>, String> {
     let folder = rfd::FileDialog::new()
         .set_title("选择 Git 仓库目录")
         .pick_folder();

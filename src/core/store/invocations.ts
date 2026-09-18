@@ -88,7 +88,6 @@ export interface Invocations {
   invokeInstallRuntime: (kind: RuntimeKind, version: string) => Promise<RuntimeVersion>;
   invokeUninstallRuntime: (kind: RuntimeKind, path: string) => Promise<void>;
   invokeListPorts: () => Promise<DevtoolsPortEntry[]>;
-  invokeProcessName: (pid: number) => Promise<DevtoolsProcessInfo>;
   invokeResolveProcesses: (pids: number[]) => Promise<DevtoolsProcessInfo[]>;
   invokeKillProcess: (pid: number) => Promise<void>;
   invokeHttpRequest: (req: DevtoolsHttpRequest) => Promise<DevtoolsHttpResponse>;
@@ -303,7 +302,6 @@ export const invocations: Invocations = {
   invokeUninstallRuntime: (kind: RuntimeKind, path: string) =>
     tauriInvoke<void>('uninstall_runtime', { kind, path }),
   invokeListPorts: () => tauriInvoke<DevtoolsPortEntry[]>('devtools_list_ports'),
-  invokeProcessName: (pid: number) => tauriInvoke<DevtoolsProcessInfo>('devtools_process_name', { pid }),
   invokeResolveProcesses: (pids: number[]) => tauriInvoke<DevtoolsProcessInfo[]>('devtools_resolve_processes', { pids }),
   invokeKillProcess: (pid: number) => tauriInvoke<void>('devtools_kill_process', { pid }),
   invokeHttpRequest: (req: DevtoolsHttpRequest) => tauriInvoke<DevtoolsHttpResponse>('devtools_http_request', { req }),

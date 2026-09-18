@@ -1414,88 +1414,72 @@ fn shared_state_vscdb() -> Result<PathBuf, String> {
 // Prior sync logic only copied ItemTable. Cursor's actual Composer session
 // list lives in two other tables inside the same state.vscdb:
 //   - composerHeaders: one row per Composer session (sidebar list source)
-//   - cursorDiskKV keys `composerData:<uuid>` and `composer.content.<hash>`:
-//     full session content blobs
+//   - cursorDiskKV: session payload and message bodies (see the whitelist
+//     below)
 // Without syncing these, a profile launched via `--user-data-dir` starts with
 // an empty sidebar and any new session created inside it never flows back to
-// the default Cursor dir or other profiles. The three functions below wire
-// the same default → shared → profile pipeline used for ItemTable.
+// the default Cursor dir or other profiles. `copy_composer_tables` wires the
+// same default → shared → profile pipeline used for ItemTable.
 // ============================================================================
 
-/// One row of the `composerHeaders` table. Types mirror the live schema; the
-/// value column is preserved as raw bytes so JSON content is not mutated.
-struct ComposerHeaderRow {
-    composer_id: String,
-    workspace_id: String,
-    created_at: rusqlite::types::Value,
-    last_updated_at: rusqlite::types::Value,
-    is_archived: rusqlite::types::Value,
-    is_subagent: rusqlite::types::Value,
-    recency: rusqlite::types::Value,
-    checkpoint_at: rusqlite::types::Value,
-    value: rusqlite::types::Value,
-    subagent_type_name: rusqlite::types::Value,
+/// Prefixes inside cursorDiskKV that should be shared across profiles.
+/// - `composerData:<uuid>`: Composer session payload (metadata / fullRows)
+/// - `composer.content.<hash>`: content fragments referenced by Composer
+/// - `bubbleId:<composerId>:<bubbleId>`: individual message bodies. Since the
+///   agent-native UI these render the session content — excluding them made
+///   synced sessions show as empty shells (headers only, no messages).
+/// - `checkpointId:<composerId>:<hash>`: session checkpoint snapshots, keyed
+///   by the same composerIds the sidebar already lists.
+/// Other prefixes (agentKv, inlineDiff, ...) stay skipped: agentKv is a
+/// multi-GB derived cache and inline diffs are bulky temporaries.
+const SHARED_CURSOR_KV_PREFIXES: &[&str] = &[
+    "composerData:",
+    "composer.content.",
+    "bubbleId:",
+    "checkpointId:",
+];
+
+fn shared_kv_glob_clause() -> String {
+    SHARED_CURSOR_KV_PREFIXES
+        .iter()
+        .map(|p| format!("key GLOB '{}*'", p.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
-fn export_composer_headers(src_db: &Path) -> Result<Vec<ComposerHeaderRow>, String> {
-    if !src_db.exists() {
-        return Ok(Vec::new());
-    }
-    let conn = open_sqlite_ro(src_db)
-        .or_else(|_| Connection::open(src_db).map_err(|e| format!("打开数据库失败: {}", e)))?;
-    // composerHeaders may not exist on a fresh profile — treat as empty.
-    let table_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='composerHeaders'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    if table_exists == 0 {
-        return Ok(Vec::new());
-    }
-    let mut stmt = conn
-        .prepare(
-            "SELECT composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, \
-             isSubagent, recency, checkpointAt, value, subagentTypeName \
-             FROM composerHeaders",
-        )
-        .map_err(|e| format!("准备查询 composerHeaders 失败: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(ComposerHeaderRow {
-                composer_id: row.get(0)?,
-                workspace_id: row.get(1)?,
-                created_at: row.get(2)?,
-                last_updated_at: row.get(3)?,
-                is_archived: row.get(4)?,
-                is_subagent: row.get(5)?,
-                recency: row.get(6)?,
-                checkpoint_at: row.get(7)?,
-                value: row.get(8)?,
-                subagent_type_name: row.get(9)?,
-            })
-        })
-        .map_err(|e| format!("查询 composerHeaders 失败: {}", e))?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row.map_err(|e| format!("读取 composerHeaders 行失败: {}", e))?);
-    }
-    Ok(out)
+/// Attach `path` as a queryable schema under `alias`. Plain path form (no
+/// `mode=ro`): a read-only attach fails on sources with a live WAL sidecar,
+/// which is exactly the case when Cursor crashed without checkpointing.
+fn attach_db(conn: &Connection, path: &Path, alias: &str) -> Result<(), String> {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    conn.execute_batch(&format!(
+        "ATTACH DATABASE '{}' AS {alias};",
+        normalized.replace('\'', "''")
+    ))
+    .map_err(|e| format!("附加数据库失败 {}: {}", path.display(), e))
 }
 
-fn import_composer_headers(dst_db: &Path, rows: &[ComposerHeaderRow]) -> Result<(), String> {
-    if rows.is_empty() {
+fn src_has_table(conn: &Connection, alias: &str, table: &str) -> bool {
+    conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM {alias}.sqlite_master WHERE type='table' AND name='{table}'"
+        ),
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
+    > 0
+}
+
+/// Stream composerHeaders src→dst in one SQL statement. Upsert keyed on
+/// composerId; the `IS NOT` guards skip no-op writes so unchanged sources
+/// leave the destination fingerprint alone (keeps sync markers effective).
+fn copy_composer_headers(conn: &Connection) -> Result<(), String> {
+    if !src_has_table(conn, "src", "composerHeaders") {
         return Ok(());
     }
-    if let Some(parent) = dst_db.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-    let conn = Connection::open(dst_db).map_err(|e| format!("打开数据库失败: {}", e))?;
-    let _ = conn.execute_batch(
-        "PRAGMA busy_timeout=8000;
-         PRAGMA synchronous=NORMAL;
-         CREATE TABLE IF NOT EXISTS composerHeaders (\
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS main.composerHeaders (\
              composerId TEXT PRIMARY KEY, \
              workspaceId TEXT, \
              createdAt INTEGER, \
@@ -1506,131 +1490,63 @@ fn import_composer_headers(dst_db: &Path, rows: &[ComposerHeaderRow]) -> Result<
              checkpointAt INTEGER, \
              value TEXT, \
              subagentTypeName TEXT\
-         ) WITHOUT ROWID;",
+         ) WITHOUT ROWID;
+         INSERT INTO main.composerHeaders AS dst (composerId, workspaceId, createdAt, \
+                 lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt, value, subagentTypeName)
+             SELECT composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, \
+                    recency, checkpointAt, value, subagentTypeName
+             FROM src.composerHeaders
+             ON CONFLICT(composerId) DO UPDATE SET
+                 workspaceId = excluded.workspaceId,
+                 createdAt = excluded.createdAt,
+                 lastUpdatedAt = excluded.lastUpdatedAt,
+                 isArchived = excluded.isArchived,
+                 isSubagent = excluded.isSubagent,
+                 recency = excluded.recency,
+                 checkpointAt = excluded.checkpointAt,
+                 value = excluded.value,
+                 subagentTypeName = excluded.subagentTypeName
+             WHERE dst.lastUpdatedAt IS NOT excluded.lastUpdatedAt
+                OR dst.value IS NOT excluded.value;",
+    )
+    .map_err(|e| format!("流式同步 composerHeaders 失败: {}", e))
+}
+
+/// Stream whitelisted cursorDiskKV rows src→dst (ATTACH + INSERT..SELECT).
+/// Never materializes values in Rust memory: bubble rows span 100k+ entries
+/// and hundreds of MB, which the old export-HashMap-then-insert path copied
+/// row-by-row through the process heap on every launch.
+fn copy_cursor_disk_kv(conn: &Connection) -> Result<(), String> {
+    if !src_has_table(conn, "src", "cursorDiskKV") {
+        return Ok(());
+    }
+    let sql = format!(
+        "CREATE TABLE IF NOT EXISTS main.cursorDiskKV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID;
+         INSERT INTO main.cursorDiskKV (key, value)
+             SELECT key, value FROM src.cursorDiskKV WHERE {}
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value
+             WHERE main.cursorDiskKV.value IS NOT excluded.value;",
+        shared_kv_glob_clause()
     );
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| format!("开启事务失败: {}", e))?;
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT OR REPLACE INTO composerHeaders \
-                 (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, \
-                  recency, checkpointAt, value, subagentTypeName) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .map_err(|e| format!("准备写入 composerHeaders 失败: {}", e))?;
-        for r in rows {
-            stmt.execute(rusqlite::params![
-                r.composer_id,
-                r.workspace_id,
-                &r.created_at,
-                &r.last_updated_at,
-                &r.is_archived,
-                &r.is_subagent,
-                &r.recency,
-                &r.checkpoint_at,
-                &r.value,
-                &r.subagent_type_name,
-            ])
-            .map_err(|e| format!("写入 composerHeaders 失败 ({}): {}", r.composer_id, e))?;
-        }
-    }
-    tx.commit()
-        .map_err(|e| format!("提交 composerHeaders 同步失败: {}", e))?;
-    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
-    Ok(())
+    conn.execute_batch(&sql)
+        .map_err(|e| format!("流式同步 cursorDiskKV 失败: {}", e))
 }
 
-/// Prefixes inside cursorDiskKV that should be shared across profiles.
-/// - `composerData:<uuid>`: full Composer session payload
-/// - `composer.content.<hash>`: content fragments referenced by Composer
-/// Other prefixes (agentKv, bubbleId, checkpointId, inlineDiff, ...) are
-/// skipped: they either may carry account-bound state or are bulky temporaries
-/// that don't affect the sidebar session list.
-const SHARED_CURSOR_KV_PREFIXES: &[&str] = &["composerData:", "composer.content."];
-
-fn export_cursor_disk_kv(src_db: &Path) -> Result<HashMap<String, rusqlite::types::Value>, String> {
+/// One-way streaming sync of the Composer tables (headers + whitelisted
+/// cursorDiskKV rows) between two state.vscdb files.
+fn copy_composer_tables(src_db: &Path, dst_db: &Path) -> Result<(), String> {
     if !src_db.exists() {
-        return Ok(HashMap::new());
-    }
-    let conn = open_sqlite_ro(src_db)
-        .or_else(|_| Connection::open(src_db).map_err(|e| format!("打开数据库失败: {}", e)))?;
-    let table_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    if table_exists == 0 {
-        return Ok(HashMap::new());
-    }
-    // Filter in SQL, not in Rust: cursorDiskKV also holds multi-GB derived
-    // caches (agentKv, bubbleId, checkpointId) that must not be materialized
-    // on every sync. The PK B-tree of this WITHOUT ROWID table serves each
-    // GLOB as a range scan.
-    let mut stmt = conn
-        .prepare(
-            "SELECT key, value FROM cursorDiskKV
-             WHERE key GLOB 'composerData:*' OR key GLOB 'composer.content.*'",
-        )
-        .map_err(|e| format!("查询 cursorDiskKV 失败: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, rusqlite::types::Value>(1)?))
-        })
-        .map_err(|e| format!("读取 cursorDiskKV 失败: {}", e))?;
-    let mut out = HashMap::new();
-    for row in rows {
-        let (key, value) = row.map_err(|e| format!("读取 cursorDiskKV 行失败: {}", e))?;
-        if SHARED_CURSOR_KV_PREFIXES
-            .iter()
-            .any(|prefix| key.starts_with(prefix))
-        {
-            out.insert(key, value);
-        }
-    }
-    Ok(out)
-}
-
-fn import_cursor_disk_kv(
-    dst_db: &Path,
-    map: &HashMap<String, rusqlite::types::Value>,
-) -> Result<(), String> {
-    if map.is_empty() {
         return Ok(());
     }
     if let Some(parent) = dst_db.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
     let conn = Connection::open(dst_db).map_err(|e| format!("打开数据库失败: {}", e))?;
-    let _ = conn.execute_batch(
-        "PRAGMA busy_timeout=8000;
-         PRAGMA synchronous=NORMAL;
-         CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID;",
-    );
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| format!("开启事务失败: {}", e))?;
-    {
-        // Skip rows whose value is unchanged: a no-op write transaction
-        // dirties no pages, keeping the source DB fingerprint (and thus the
-        // sync markers below) stable across no-change launches.
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                 WHERE cursorDiskKV.value IS NOT excluded.value",
-            )
-            .map_err(|e| format!("准备写入 cursorDiskKV 失败: {}", e))?;
-        for (key, value) in map {
-            stmt.execute(rusqlite::params![key, value])
-                .map_err(|e| format!("写入 cursorDiskKV 失败 ({}): {}", key, e))?;
-        }
-    }
-    tx.commit()
-        .map_err(|e| format!("提交 cursorDiskKV 同步失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA busy_timeout=8000; PRAGMA synchronous=NORMAL;");
+    attach_db(&conn, src_db, "src")?;
+    let result = copy_composer_headers(&conn).and_then(|()| copy_cursor_disk_kv(&conn));
+    let _ = conn.execute_batch("DETACH DATABASE src;");
+    result?;
     let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
     Ok(())
 }
@@ -1663,7 +1579,9 @@ fn composer_sync_mark_path(source_db: &Path) -> Option<PathBuf> {
     let key = source_db.to_string_lossy().to_string();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&key, &mut hasher);
-    Some(dir.join(format!("{:016x}.mark", std::hash::Hasher::finish(&hasher))))
+    // Bump the suffix whenever the whitelisted-prefix set changes: old marks
+    // would otherwise report "already synced" and skip the new rows forever.
+    Some(dir.join(format!("{:016x}.mark-v2", std::hash::Hasher::finish(&hasher))))
 }
 
 /// True when the source DB changed since its last successful composer sync
@@ -1702,14 +1620,7 @@ fn sync_default_composer_to_shared() -> Result<(), String> {
     if let Some(parent) = shared_db.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
     }
-    let headers = export_composer_headers(&default_db)?;
-    if !headers.is_empty() {
-        import_composer_headers(&shared_db, &headers)?;
-    }
-    let kv = export_cursor_disk_kv(&default_db)?;
-    if !kv.is_empty() {
-        import_cursor_disk_kv(&shared_db, &kv)?;
-    }
+    copy_composer_tables(&default_db, &shared_db)?;
     if let Some(mark) = &mark {
         composer_sync_done(mark, &default_db);
     }
@@ -1736,14 +1647,7 @@ fn sync_profile_composer_to_shared(profile: &Path) -> Result<(), String> {
     if let Some(parent) = shared_db.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 shared 目录失败: {}", e))?;
     }
-    let headers = export_composer_headers(&profile_db)?;
-    if !headers.is_empty() {
-        import_composer_headers(&shared_db, &headers)?;
-    }
-    let kv = export_cursor_disk_kv(&profile_db)?;
-    if !kv.is_empty() {
-        import_cursor_disk_kv(&shared_db, &kv)?;
-    }
+    copy_composer_tables(&profile_db, &shared_db)?;
     if let Some(mark) = &mark {
         composer_sync_done(mark, &profile_db);
     }
@@ -1768,14 +1672,7 @@ fn sync_shared_composer_to_profile(profile: &Path) -> Result<(), String> {
     if let Some(parent) = profile_db.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 profile 目录失败: {}", e))?;
     }
-    let headers = export_composer_headers(&shared_db)?;
-    if !headers.is_empty() {
-        import_composer_headers(&profile_db, &headers)?;
-    }
-    let kv = export_cursor_disk_kv(&shared_db)?;
-    if !kv.is_empty() {
-        import_cursor_disk_kv(&profile_db, &kv)?;
-    }
+    copy_composer_tables(&shared_db, &profile_db)?;
     if let Some(mark) = &mark {
         composer_sync_done(mark, &shared_db);
     }
@@ -1950,15 +1847,7 @@ fn sync_profile_state_to_shared(profile: &Path) -> Result<(), String> {
 
     // Composer sessions created/updated inside this profile flow back into the
     // shared layer, so the next account (or a manual launch) can see them.
-    let headers = export_composer_headers(&profile_db)?;
-    if !headers.is_empty() {
-        import_composer_headers(&shared_db, &headers)?;
-    }
-    let kv = export_cursor_disk_kv(&profile_db)?;
-    if !kv.is_empty() {
-        import_cursor_disk_kv(&shared_db, &kv)?;
-    }
-    Ok(())
+    copy_composer_tables(&profile_db, &shared_db)
 }
 
 fn open_sqlite_ro(path: &Path) -> Result<Connection, String> {
@@ -3808,11 +3697,16 @@ fn rebuild_shared_state_db(targets: &mut Vec<CursorDbSlimTarget>) {
         return;
     }
     let before = state_db_cluster_bytes(&shared_db);
-    let salvage_headers = export_composer_headers(&shared_db).unwrap_or_default();
-    let salvage_kv = export_cursor_disk_kv(&shared_db).unwrap_or_default();
+    // Salvage Composer tables into a temp DB (streaming, never through Rust
+    // memory), re-import after the rebuild. The old prefix set would have
+    // dropped bubbleId/checkpointId rows here and lost session content.
+    let salvage_path = shared_db.with_file_name("state.vscdb.slim-salvage.tmp");
+    let _ = fs::remove_file(&salvage_path);
+    let salvage_ok = copy_composer_tables(&shared_db, &salvage_path).is_ok();
 
     let mut note = String::new();
     if let Err(e) = remove_state_db_cluster(&shared_db) {
+        let _ = fs::remove_file(&salvage_path);
         targets.push(CursorDbSlimTarget {
             label: "shared".into(),
             path: shared_db.to_string_lossy().to_string(),
@@ -3831,11 +3725,9 @@ fn rebuild_shared_state_db(targets: &mut Vec<CursorDbSlimTarget>) {
         note = format!("ItemTable 重新播种失败: {e}");
     }
     let _ = merge_recent_workspaces_from_default();
-    if !salvage_headers.is_empty() {
-        let _ = import_composer_headers(&shared_db, &salvage_headers);
-    }
-    if !salvage_kv.is_empty() {
-        let _ = import_cursor_disk_kv(&shared_db, &salvage_kv);
+    if salvage_ok {
+        let _ = copy_composer_tables(&salvage_path, &shared_db);
+        let _ = fs::remove_file(&salvage_path);
     }
     // Bring the default dir's Composer history back in (profiles re-flow on
     // their next launch via prepare_profile_shared).

@@ -295,7 +295,13 @@ pub fn open_in_browser(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn cloudflared_status() -> CloudflaredStatus {
+pub async fn cloudflared_status() -> Result<CloudflaredStatus, String> {
+    tokio::task::spawn_blocking(cloudflared_status_sync)
+        .await
+        .map_err(|e| format!("Task failed: {e}"))
+}
+
+fn cloudflared_status_sync() -> CloudflaredStatus {
     let custom = read_custom_bin_path().is_some();
     match resolve_cloudflared() {
         Ok((path, version)) => {
@@ -328,7 +334,13 @@ pub fn cloudflared_status() -> CloudflaredStatus {
 }
 
 #[tauri::command]
-pub fn cloudflared_pick_binary() -> Result<Option<String>, String> {
+pub async fn cloudflared_pick_binary() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(cloudflared_pick_binary_sync)
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+fn cloudflared_pick_binary_sync() -> Result<Option<String>, String> {
     let mut dialog = rfd::FileDialog::new().set_title("选择 cloudflared 可执行文件");
     #[cfg(target_os = "windows")]
     {
@@ -343,7 +355,13 @@ pub fn cloudflared_pick_binary() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn cloudflared_set_binary_path(path: String) -> Result<String, String> {
+pub async fn cloudflared_set_binary_path(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || cloudflared_set_binary_path_sync(path))
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+fn cloudflared_set_binary_path_sync(path: String) -> Result<String, String> {
     let p = PathBuf::from(path.trim());
     validate_bin_path(&p)?;
     write_custom_bin_path(&p)?;
@@ -654,7 +672,13 @@ fn cloudflared_start_quick_tunnel_sync(
 }
 
 #[tauri::command]
-pub fn cloudflared_pick_config() -> Result<Option<String>, String> {
+pub async fn cloudflared_pick_config() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(cloudflared_pick_config_sync)
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+fn cloudflared_pick_config_sync() -> Result<Option<String>, String> {
     let mut dialog = rfd::FileDialog::new().set_title("选择 cloudflared config.yml");
     dialog = dialog.add_filter("YAML", &["yml", "yaml"]);
     if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
@@ -813,7 +837,7 @@ fn cloudflared_start_named_tunnel_sync(
 }
 
 #[tauri::command]
-pub fn cloudflared_stop_tunnel(
+pub async fn cloudflared_stop_tunnel(
     state: State<'_, CloudflaredState>,
     id: String,
 ) -> Result<String, String> {
@@ -821,13 +845,22 @@ pub fn cloudflared_stop_tunnel(
     if id.is_empty() {
         return Err("缺少隧道 ID".to_string());
     }
-    let mut guard = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-    reap_exited(&mut guard);
-    let Some(session) = guard.remove(&id) else {
+    let session = drain_one_session(&state, &id);
+    let Some(session) = session else {
         return Ok("该隧道未在运行".to_string());
     };
-    let pid = kill_session(session);
+    let pid = tokio::task::spawn_blocking(move || kill_session(session))
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?;
     Ok(format!("已停止隧道 (pid {})", pid))
+}
+
+/// Remove one session from the map (lock held only for the cheap map ops);
+/// the blocking kill happens on the caller's blocking thread.
+fn drain_one_session(state: &CloudflaredState, id: &str) -> Option<TunnelSession> {
+    let mut guard = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    reap_exited(&mut guard);
+    guard.remove(id)
 }
 
 pub fn stop_all_sessions(state: &CloudflaredState) {
@@ -842,15 +875,26 @@ pub fn stop_all_sessions(state: &CloudflaredState) {
 }
 
 #[tauri::command]
-pub fn cloudflared_stop_all_tunnels(state: State<'_, CloudflaredState>) -> Result<String, String> {
-    let count = {
-        let guard = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        guard.len()
+pub async fn cloudflared_stop_all_tunnels(
+    state: State<'_, CloudflaredState>,
+) -> Result<String, String> {
+    let sessions = {
+        let mut guard = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        reap_exited(&mut guard);
+        guard.drain().map(|(_, session)| session).collect::<Vec<_>>()
     };
+    let count = sessions.len();
     if count == 0 {
         return Ok("当前没有运行中的隧道".to_string());
     }
-    stop_all_sessions(&state);
+    // taskkill + child.wait per tunnel — off the async workers too.
+    tokio::task::spawn_blocking(move || {
+        for session in sessions {
+            let _ = kill_session(session);
+        }
+    })
+    .await
+    .map_err(|e| format!("Task failed: {e}"))?;
     Ok(format!("已停止 {} 条隧道", count))
 }
 

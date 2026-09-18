@@ -129,7 +129,13 @@ fn backup_hosts() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn write_system_hosts(content: String) -> Result<String, String> {
+pub async fn write_system_hosts(content: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || write_system_hosts_sync(content))
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+fn write_system_hosts_sync(content: String) -> Result<String, String> {
     let path = hosts_path();
     // Do not truncate the live file if we cannot keep a restorable copy.
     backup_hosts()?;
@@ -213,7 +219,13 @@ pub fn list_host_backups() -> Result<Vec<HostBackup>, String> {
 }
 
 #[tauri::command]
-pub fn restore_host_backup(path: String) -> Result<String, String> {
+pub async fn restore_host_backup(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || restore_host_backup_sync(path))
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+fn restore_host_backup_sync(path: String) -> Result<String, String> {
     let p = Path::new(&path);
     path_under_backups(p)?;
     let content =
@@ -226,8 +238,10 @@ pub fn restore_host_backup(path: String) -> Result<String, String> {
 
 /// Manual on-demand snapshot, exposed so the UI can back up before risky edits.
 #[tauri::command]
-pub fn backup_hosts_now() -> Result<String, String> {
-    backup_hosts()
+pub async fn backup_hosts_now() -> Result<String, String> {
+    tokio::task::spawn_blocking(backup_hosts)
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
 }
 
 fn chrono_stamp() -> String {

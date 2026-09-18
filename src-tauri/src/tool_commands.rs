@@ -32,7 +32,13 @@ fn reg_command() -> std::process::Command {
 /// Enable or disable auto-start at login by writing to the Windows registry
 /// (HKCU\...\Run). No admin rights required since it's the current user's key.
 #[tauri::command]
-pub fn set_auto_start(enabled: bool) -> Result<(), String> {
+pub async fn set_auto_start(enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || set_auto_start_sync(enabled))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn set_auto_start_sync(enabled: bool) -> Result<(), String> {
     #[cfg(windows)]
     {
         let exe_path = std::env::current_exe()
@@ -98,7 +104,13 @@ pub fn set_auto_start(enabled: bool) -> Result<(), String> {
 
 /// Check whether auto-start is currently enabled for this app.
 #[tauri::command]
-pub fn get_auto_start() -> Result<bool, String> {
+pub async fn get_auto_start() -> Result<bool, String> {
+    tokio::task::spawn_blocking(get_auto_start_sync)
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn get_auto_start_sync() -> Result<bool, String> {
     #[cfg(windows)]
     {
         let output = reg_command()
@@ -173,15 +185,33 @@ fn row_to_json(row: &rusqlite::Row, columns: &[String]) -> Result<serde_json::Va
 
 /// Export all whitelisted tables to a JSON file (user picks path).
 #[tauri::command]
-pub fn export_data(state: tauri::State<'_, crate::DbState>) -> Result<String, String> {
-    let path = rfd::FileDialog::new()
-        .set_title("导出工作台数据")
-        .set_file_name("ai-workbench-backup.json")
-        .add_filter("JSON", &["json"])
-        .save_file()
-        .ok_or_else(|| "已取消导出".to_string())?;
+pub async fn export_data(state: tauri::State<'_, crate::DbState>) -> Result<String, String> {
+    // Dialog first, DB read second: never hold the connection mutex while the
+    // save dialog is open (other commands would block on it).
+    let path = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("导出工作台数据")
+            .set_file_name("ai-workbench-backup.json")
+            .add_filter("JSON", &["json"])
+            .save_file()
+            .ok_or_else(|| "已取消导出".to_string())
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))??;
 
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = std::sync::Arc::clone(&state.conn);
+    tokio::task::spawn_blocking(move || {
+        let guard = conn.lock().map_err(|e| e.to_string())?;
+        export_data_sync(&guard, path)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn export_data_sync(
+    conn: &std::sync::MutexGuard<'_, rusqlite::Connection>,
+    path: std::path::PathBuf,
+) -> Result<String, String> {
     let mut tables = serde_json::Map::new();
     for name in EXPORT_TABLE_NAMES {
         let sql = format!("SELECT * FROM {name}");
@@ -222,13 +252,18 @@ pub async fn import_data(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::DbState>,
 ) -> Result<String, String> {
-    let path = rfd::FileDialog::new()
-        .set_title("导入工作台数据")
-        .add_filter("JSON", &["json"])
-        .pick_file()
-        .ok_or_else(|| "已取消导入".to_string())?;
-
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
+    // Dialog + file read off the main thread; the write phase below is async.
+    let (path, text) = tauri::async_runtime::spawn_blocking(|| {
+        let path = rfd::FileDialog::new()
+            .set_title("导入工作台数据")
+            .add_filter("JSON", &["json"])
+            .pick_file()
+            .ok_or_else(|| "已取消导入".to_string())?;
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
+        Ok::<_, String>((path, text))
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))??;
     let root: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("JSON 无效: {e}"))?;
     let tables = root
@@ -267,7 +302,17 @@ pub async fn import_data(
 
 /// Save arbitrary text via native save dialog (browser `<a download>` does not work in Tauri WebView).
 #[tauri::command]
-pub fn save_text_file(
+pub async fn save_text_file(
+    content: String,
+    default_name: String,
+    title: Option<String>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || save_text_file_sync(content, default_name, title))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn save_text_file_sync(
     content: String,
     default_name: String,
     title: Option<String>,
@@ -286,7 +331,13 @@ pub fn save_text_file(
 
 /// Read a text file via native open dialog.
 #[tauri::command]
-pub fn pick_text_file(title: Option<String>) -> Result<String, String> {
+pub async fn pick_text_file(title: Option<String>) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || pick_text_file_sync(title))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn pick_text_file_sync(title: Option<String>) -> Result<String, String> {
     let path = rfd::FileDialog::new()
         .set_title(title.as_deref().unwrap_or("选择文件"))
         .add_filter("JSON", &["json"])
