@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { findWorkspaceForRepo, projectNameFromPath } from "../core/pathUtils";
+import { resolveRepoAccount } from "../core/gitIdentity";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
 import BatchIdentityModal from "./BatchIdentityModal";
@@ -156,6 +157,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   const removeWorkspace = useGlobalStore((s) => s.removeWorkspace);
   const removeRecentProject = useGlobalStore((s) => s.removeRecentProject);
   const loadRepoConfigs = useGlobalStore((s) => s.loadRepoConfigs);
+  const loadHostConfigs = useGlobalStore((s) => s.loadHostConfigs);
   const loadAccounts = useGlobalStore((s) => s.loadAccounts);
   const upsertRepoConfigs = useGlobalStore((s) => s.upsertRepoConfigs);
   const deleteRepoConfig = useGlobalStore((s) => s.deleteRepoConfig);
@@ -168,6 +170,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   const invokeGitPull = useGlobalStore((s) => s.invokeGitPull);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
+  const invokeGitRemoteUrl = useGlobalStore((s) => s.invokeGitRemoteUrl);
 
   const [summaries, setSummaries] = useState<Record<string, GitRepoSummary>>({});
   const [identities, setIdentities] = useState<Record<string, { name: string; email: string }>>({});
@@ -229,6 +232,42 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     [invokeGitRepoSummary]
   );
 
+  /**
+   * For repos without a path-level binding, check if their origin remote
+   * matches a host config and auto-apply that account's identity.
+   * Silent — never blocks the UI, failures are ignored.
+   */
+  const autoApplyHostIdentities = useCallback(
+    async (paths: string[]) => {
+      const repoConfigs = useGlobalStore.getState().git.repoConfigs;
+      const hostConfigs = useGlobalStore.getState().git.hostConfigs;
+      const accounts = useGlobalStore.getState().git.accounts;
+      if (hostConfigs.length === 0) return;
+
+      for (const path of paths) {
+        // Skip if a path-level binding already exists
+        if (repoConfigs.some((c) => c.path === path)) continue;
+        try {
+          const remoteUrl = await invokeGitRemoteUrl(path);
+          if (!remoteUrl) continue;
+          const account = resolveRepoAccount({
+            repoPath: path,
+            remoteUrl,
+            repoConfigs,
+            hostConfigs,
+            accounts,
+          });
+          if (account) {
+            await invokeSetRepoGitConfig(path, account.name, account.email);
+          }
+        } catch {
+          /* ignore — non-fatal */
+        }
+      }
+    },
+    [invokeGitRemoteUrl, invokeSetRepoGitConfig]
+  );
+
   const refresh = useCallback(
     async (opts?: { force?: boolean }) => {
       const force = opts?.force ?? false;
@@ -238,16 +277,22 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
       }
       setLoading(true);
       try {
-        await Promise.all([loadRecentProjects(), loadRepoConfigs(), loadWorkspaces(), loadAccounts()]);
+        await Promise.all([loadRecentProjects(), loadRepoConfigs(), loadHostConfigs(), loadWorkspaces(), loadAccounts()]);
         const projects = useGlobalStore.getState().recentProjects;
+        const paths = projects.map((p) => p.path);
         await refreshPaths(projects);
+        // After summaries load, auto-apply host-based identities (silent)
+        void autoApplyHostIdentities(paths).then(() => {
+          // Re-fetch summaries so the UI reflects applied identities
+          void refreshPaths(projects);
+        });
         lastRefreshAtRef.current = Date.now();
         hasLoadedRef.current = true;
       } finally {
         setLoading(false);
       }
     },
-    [loadAccounts, loadRecentProjects, loadRepoConfigs, loadWorkspaces, refreshPaths]
+    [loadAccounts, loadRecentProjects, loadRepoConfigs, loadHostConfigs, loadWorkspaces, refreshPaths, autoApplyHostIdentities]
   );
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
-  GlobalState, AppSettings, GitAccount, GitRepoConfig,
+  GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
   RecentProject, WebPlugin, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, QuickAskSession,
@@ -93,6 +93,14 @@ interface StoreState extends GlobalState, Invocations {
   upsertRepoConfigs: (configs: Omit<GitRepoConfig, 'createdAt' | 'updatedAt'>[]) => Promise<void>;
   updateRepoConfig: (path: string, updates: Partial<GitRepoConfig>) => Promise<void>;
   deleteRepoConfig: (path: string) => Promise<void>;
+
+  // Host configs (domain → account auto-mapping)
+  loadHostConfigs: () => Promise<void>;
+  addHostConfig: (config: Omit<GitHostConfig, 'createdAt' | 'updatedAt'>) => Promise<void>;
+  addHostConfigs: (configs: { host: string; accountId: string; note?: string }[]) => Promise<void>;
+  updateHostConfig: (id: string, updates: Partial<GitHostConfig>) => Promise<void>;
+  deleteHostConfig: (id: string) => Promise<void>;
+  deleteHostConfigsForAccount: (accountId: string) => Promise<void>;
 
   // Recent projects
   loadRecentProjects: () => Promise<void>;
@@ -251,6 +259,7 @@ export const useGlobalStore = create<StoreState>()(
       git: {
         accounts: [],
         repoConfigs: [],
+        hostConfigs: [],
       },
       recentProjects: [],
       gitWorkspaces: [],
@@ -380,6 +389,64 @@ export const useGlobalStore = create<StoreState>()(
           const configs = get().git.repoConfigs.filter(c => pathKey(c.path) !== pathKey(path));
           await storage.repoConfigs.save(configs);
           set((state) => ({ git: { ...state.git, repoConfigs: configs } }));
+        });
+      },
+
+      // Host Configs (domain → account mapping)
+      loadHostConfigs: async () => withTable("git_host_configs", async () => {
+        const configs = await storage.hostConfigs.load();
+        set((state) => ({ git: { ...state.git, hostConfigs: configs } }));
+      }),
+
+      addHostConfig: async (config) => {
+        await withTable("git_host_configs", async () => {
+          const now = new Date().toISOString();
+          const configs = get().git.hostConfigs;
+          const newConfig = { ...config, id: crypto.randomUUID(), createdAt: now, updatedAt: now };
+          const next = [newConfig, ...configs];
+          await storage.hostConfigs.save(next);
+          set((state) => ({ git: { ...state.git, hostConfigs: next } }));
+        });
+      },
+
+      addHostConfigs: async (incoming) => {
+        if (incoming.length === 0) return;
+        await withTable("git_host_configs", async () => {
+          const now = new Date().toISOString();
+          const configs = [...get().git.hostConfigs];
+          for (const config of incoming) {
+            // Skip if same host already bound to same account
+            if (configs.some(c => c.host === config.host && c.accountId === config.accountId)) continue;
+            configs.unshift({ ...config, id: crypto.randomUUID(), createdAt: now, updatedAt: now });
+          }
+          await storage.hostConfigs.save(configs);
+          set((state) => ({ git: { ...state.git, hostConfigs: configs } }));
+        });
+      },
+
+      updateHostConfig: async (id, updates) => {
+        await withTable("git_host_configs", async () => {
+          const configs = get().git.hostConfigs.map(c =>
+            c.id === id ? { ...c, ...updates, updatedAt: new Date().toISOString() } : c
+          );
+          await storage.hostConfigs.save(configs);
+          set((state) => ({ git: { ...state.git, hostConfigs: configs } }));
+        });
+      },
+
+      deleteHostConfig: async (id) => {
+        await withTable("git_host_configs", async () => {
+          const configs = get().git.hostConfigs.filter(c => c.id !== id);
+          await storage.hostConfigs.save(configs);
+          set((state) => ({ git: { ...state.git, hostConfigs: configs } }));
+        });
+      },
+
+      deleteHostConfigsForAccount: async (accountId) => {
+        await withTable("git_host_configs", async () => {
+          const configs = get().git.hostConfigs.filter(c => c.accountId !== accountId);
+          await storage.hostConfigs.save(configs);
+          set((state) => ({ git: { ...state.git, hostConfigs: configs } }));
         });
       },
 
@@ -1025,6 +1092,7 @@ export const useGlobalStore = create<StoreState>()(
         await Promise.all([
           get().loadAccounts(),
           get().loadRepoConfigs(),
+          get().loadHostConfigs(),
           get().loadRecentProjects(),
           get().loadWorkspaces(),
           get().loadWebPlugins(),

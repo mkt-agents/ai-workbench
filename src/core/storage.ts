@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, HostProfile, WebPlugin, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -29,6 +29,7 @@ function parseTurns(raw: unknown): QuickAskTurn[] {
 type DbTable =
   | 'git_accounts'
   | 'git_repo_configs'
+  | 'git_host_configs'
   | 'host_profiles'
   | 'web_plugins'
   | 'plugin_states'
@@ -98,6 +99,29 @@ export const storage = {
         user_name: item.userName,
         email: item.email,
         account_id: item.accountId ?? null,
+        created_at: item.createdAt,
+        updated_at: item.updatedAt,
+      })));
+    },
+  },
+  hostConfigs: {
+    load: async (): Promise<GitHostConfig[]> => {
+      const rows = await loadRows('git_host_configs');
+      return rows.map(r => ({
+        id: r['id'] as string,
+        host: r['host'] as string,
+        accountId: r['account_id'] as string,
+        note: (r['note'] as string | undefined) || undefined,
+        createdAt: r['created_at'] as string,
+        updatedAt: r['updated_at'] as string,
+      }));
+    },
+    save: async (items: GitHostConfig[]): Promise<void> => {
+      await saveRows('git_host_configs', items.map(item => ({
+        id: item.id,
+        host: item.host,
+        account_id: item.accountId,
+        note: item.note?.trim() ? item.note.trim() : null,
         created_at: item.createdAt,
         updated_at: item.updatedAt,
       })));

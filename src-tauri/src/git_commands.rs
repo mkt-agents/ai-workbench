@@ -1044,6 +1044,54 @@ pub async fn git_is_repo(path: String) -> Result<bool, String> {
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// Extract the hostname from a git remote URL.
+/// Handles HTTPS, SSH (`git@host:path`), and `ssh://` forms.
+/// Returns None if the URL is empty or unparseable.
+#[cfg(test)]
+pub(crate) fn extract_host(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    // SSH protocol form: ssh://[user@]host[:port]/path
+    if url.contains("://") {
+        let parsed = url::Url::parse(url).ok()?;
+        let host = parsed.host_str()?;
+        // url::Url preserves brackets for IPv6; strip them for matching.
+        Some(host.trim_matches(['[', ']']).to_lowercase())
+    } else if let Some(at) = url.find('@') {
+        // SCP-like SSH: [user@]host:path
+        let after = &url[at + 1..];
+        let host_end = after.find(':').or_else(|| after.find('/'))?;
+        let host = &after[..host_end];
+        // Strip any port (host:port)
+        let host = host.split(':').next().unwrap_or(host);
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_lowercase())
+        }
+    } else {
+        None
+    }
+}
+
+/// Get the `origin` remote URL of a repo, or None if it has no origin.
+#[tauri::command]
+pub async fn git_remote_url(path: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let url = git_stdout(&path, &["remote", "get-url", "origin"])?;
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(trimmed.to_string()))
+        }
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitScannedRepo {
@@ -1184,6 +1232,28 @@ mod scan_tests {
         assert_eq!(names, vec!["repoX"], "仓库内部不应再深入，实际: {:?}", names);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn extract_host_https() {
+        assert_eq!(extract_host("https://github.com/user/repo.git"), Some("github.com".to_string()));
+        assert_eq!(extract_host("https://gitlab.company.com/group/project.git"), Some("gitlab.company.com".to_string()));
+        assert_eq!(extract_host("http://gitea.local:3000/user/repo.git"), Some("gitea.local".to_string()));
+    }
+
+    #[test]
+    fn extract_host_ssh() {
+        assert_eq!(extract_host("git@github.com:user/repo.git"), Some("github.com".to_string()));
+        assert_eq!(extract_host("git@gitlab.company.com:group/project.git"), Some("gitlab.company.com".to_string()));
+        assert_eq!(extract_host("ssh://git@gitlab.company.com/user/repo.git"), Some("gitlab.company.com".to_string()));
+        assert_eq!(extract_host("ssh://git@gitea.local:2222/user/repo.git"), Some("gitea.local".to_string()));
+    }
+
+    #[test]
+    fn extract_host_invalid() {
+        assert_eq!(extract_host(""), None);
+        assert_eq!(extract_host("not-a-url"), None);
+        assert_eq!(extract_host("/local/path"), None);
     }
 }
 

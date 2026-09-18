@@ -19,6 +19,16 @@ export interface GitRepoConfig {
   updatedAt: string;
 }
 
+/** Maps a git host (domain) to an account — auto-applies when a repo's origin matches. */
+export interface GitHostConfig {
+  id: string;
+  host: string;
+  accountId: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RecentProject {
   id: number;
   path: string;
@@ -137,6 +147,7 @@ export interface GlobalState {
   git: {
     accounts: GitAccount[];
     repoConfigs: GitRepoConfig[];
+    hostConfigs: GitHostConfig[];
   };
   recentProjects: RecentProject[];
   gitWorkspaces: GitWorkspace[];

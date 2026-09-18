@@ -104,6 +104,14 @@ pub fn run() {
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS git_host_configs (
+                    id TEXT PRIMARY KEY,
+                    host TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    note TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS host_profiles (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -296,6 +304,7 @@ pub fn run() {
             git_commands::git_commit_context,
             git_commands::git_is_repo,
             git_commands::git_scan_repos,
+            git_commands::git_remote_url,
             hosts_commands::read_system_hosts,
             hosts_commands::is_admin,
             hosts_commands::write_system_hosts,

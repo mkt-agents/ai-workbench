@@ -61,6 +61,7 @@ export interface Invocations {
   invokeGitCommitContext: (path: string) => Promise<{ files: string[]; diff: string; source: string }>;
   invokeGitIsRepo: (path: string) => Promise<boolean>;
   invokeGitScanRepos: (path: string, maxDepth?: number) => Promise<GitScannedRepo[]>;
+  invokeGitRemoteUrl: (path: string) => Promise<string | null>;
   invokeReadSystemHosts: () => Promise<string>;
   invokeIsAdmin: () => Promise<boolean>;
   invokeWriteSystemHosts: (content: string) => Promise<string>;
@@ -250,6 +251,8 @@ export const invocations: Invocations = {
     tauriInvoke<boolean>('git_is_repo', { path }),
   invokeGitScanRepos: (path: string, maxDepth?: number) =>
     tauriInvoke<GitScannedRepo[]>('git_scan_repos', { path, maxDepth }),
+  invokeGitRemoteUrl: (path: string) =>
+    tauriInvoke<string | null>('git_remote_url', { path }),
 
   // Hosts
   invokeReadSystemHosts: () => tauriInvoke<string>('read_system_hosts'),

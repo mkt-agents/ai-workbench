@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle, Check, Loader2, User, XCircle } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { projectNameFromPath } from "../core/pathUtils";
+import { resolveRepoAccount } from "../core/gitIdentity";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
 import CommitChangelist from "./CommitChangelist";
@@ -50,12 +51,14 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const loadRecentProjects = useGlobalStore((s) => s.loadRecentProjects);
   const loadAccounts = useGlobalStore((s) => s.loadAccounts);
   const loadRepoConfigs = useGlobalStore((s) => s.loadRepoConfigs);
+  const loadHostConfigs = useGlobalStore((s) => s.loadHostConfigs);
   const addAccount = useGlobalStore((s) => s.addAccount);
   const updateRepoConfig = useGlobalStore((s) => s.updateRepoConfig);
   const invokeGetRepoGitConfig = useGlobalStore((s) => s.invokeGetRepoGitConfig);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
   const invokeGitUndoLastCommit = useGlobalStore((s) => s.invokeGitUndoLastCommit);
+  const invokeGitRemoteUrl = useGlobalStore((s) => s.invokeGitRemoteUrl);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const loadAIModels = useGlobalStore((s) => s.loadAIModels);
 
@@ -94,8 +97,9 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     if (state.recentProjects.length === 0) loadRecentProjects().catch(() => {});
     if (state.git.accounts.length === 0) loadAccounts().catch(() => {});
     if (state.git.repoConfigs.length === 0) loadRepoConfigs().catch(() => {});
+    if (state.git.hostConfigs.length === 0) loadHostConfigs().catch(() => {});
     if (state.aiModels.length === 0) loadAIModels().catch(() => {});
-  }, [active, loadAccounts, loadRecentProjects, loadRepoConfigs, loadAIModels]);
+  }, [active, loadAccounts, loadRecentProjects, loadRepoConfigs, loadHostConfigs, loadAIModels]);
 
   useEffect(() => {
     if (!active || !repoPath) {
@@ -118,10 +122,39 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
       .catch(() => {
         if (!cancelled) setSummary(null);
       });
+    // If no path-level binding, try host-based auto-apply
+    void (async () => {
+      const state = useGlobalStore.getState();
+      if (state.git.repoConfigs.some((c) => c.path === repoPath)) return;
+      if (state.git.hostConfigs.length === 0) return;
+      try {
+        const remoteUrl = await invokeGitRemoteUrl(repoPath);
+        if (!remoteUrl || cancelled) return;
+        const account = resolveRepoAccount({
+          repoPath,
+          remoteUrl,
+          repoConfigs: state.git.repoConfigs,
+          hostConfigs: state.git.hostConfigs,
+          accounts: state.git.accounts,
+        });
+        if (account && !cancelled) {
+          await invokeSetRepoGitConfig(repoPath, account.name, account.email);
+          setAuthor({ name: account.name, email: account.email });
+          // Re-fetch summary to reflect applied identity
+          invokeGitRepoSummary(repoPath)
+            .then((s) => {
+              if (!cancelled) setSummary(s);
+            })
+            .catch(() => {});
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [active, invokeGetRepoGitConfig, invokeGitRepoSummary, repoPath, refreshNonce, headerNonce]);
+  }, [active, invokeGetRepoGitConfig, invokeGitRepoSummary, invokeGitRemoteUrl, invokeSetRepoGitConfig, repoPath, refreshNonce, headerNonce]);
 
   const currentRepoName = useMemo(() => {
     if (!repoPath) return null;

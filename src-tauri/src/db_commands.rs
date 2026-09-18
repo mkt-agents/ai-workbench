@@ -12,6 +12,7 @@ pub struct SqlRow {
 pub enum DbTable {
     GitAccounts,
     GitRepoConfigs,
+    GitHostConfigs,
     HostProfiles,
     WebPlugins,
     PluginStates,
@@ -30,6 +31,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
     match key {
         "git_accounts" => Some(DbTable::GitAccounts),
         "git_repo_configs" => Some(DbTable::GitRepoConfigs),
+        "git_host_configs" => Some(DbTable::GitHostConfigs),
         "host_profiles" => Some(DbTable::HostProfiles),
         "web_plugins" => Some(DbTable::WebPlugins),
         "plugin_states" => Some(DbTable::PluginStates),
@@ -50,6 +52,7 @@ fn load_sql(table: DbTable) -> &'static str {
     match table {
         DbTable::GitAccounts => "SELECT * FROM git_accounts ORDER BY created_at DESC",
         DbTable::GitRepoConfigs => "SELECT * FROM git_repo_configs ORDER BY created_at DESC",
+        DbTable::GitHostConfigs => "SELECT * FROM git_host_configs ORDER BY created_at DESC",
         DbTable::HostProfiles => "SELECT * FROM host_profiles ORDER BY created_at DESC",
         DbTable::WebPlugins => "SELECT * FROM web_plugins ORDER BY \"order\" ASC, added_at DESC",
         DbTable::PluginStates => "SELECT * FROM plugin_states ORDER BY updated_at DESC",
@@ -69,6 +72,7 @@ fn delete_sql(table: DbTable) -> &'static str {
     match table {
         DbTable::GitAccounts => "DELETE FROM git_accounts",
         DbTable::GitRepoConfigs => "DELETE FROM git_repo_configs",
+        DbTable::GitHostConfigs => "DELETE FROM git_host_configs",
         DbTable::HostProfiles => "DELETE FROM host_profiles",
         DbTable::WebPlugins => "DELETE FROM web_plugins",
         DbTable::PluginStates => "DELETE FROM plugin_states",
@@ -158,6 +162,19 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "user_name")?,
                     json_str(obj, "email")?,
                     json_opt_str(obj, "account_id"),
+                    json_str(obj, "created_at")?,
+                    json_str(obj, "updated_at")?,
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::GitHostConfigs => {
+            tx.execute(
+                "INSERT INTO git_host_configs (id, host, account_id, note, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_str(obj, "host")?,
+                    json_str(obj, "account_id")?,
+                    json_opt_str(obj, "note"),
                     json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
                 ],
