@@ -62,19 +62,6 @@ pub struct HttpResponse {
     pub body: String,
 }
 
-/// Decode bytes from Windows console output (GBK on Chinese Windows).
-/// Falls back to UTF-8 if GBK decoding fails.
-#[cfg(windows)]
-fn decode_gbk(bytes: &[u8]) -> String {
-    let (cow, _, had_errors) = encoding_rs::GBK.decode(bytes);
-    if had_errors {
-        // Fallback to UTF-8 lossy
-        String::from_utf8_lossy(bytes).into_owned()
-    } else {
-        cow.into_owned()
-    }
-}
-
 #[cfg(windows)]
 fn netstat_cmd() -> Command {
     let mut cmd = Command::new("netstat");
@@ -93,7 +80,7 @@ pub async fn devtools_list_ports() -> Result<Vec<PortEntry>, String> {
                 .output()
                 .map_err(|e| format!("执行 netstat 失败: {e}"))?;
 
-            let text = decode_gbk(if output.status.success() {
+            let text = String::from_utf8_lossy(if output.status.success() {
                 &output.stdout
             } else {
                 &output.stderr
@@ -138,8 +125,6 @@ pub async fn devtools_list_ports() -> Result<Vec<PortEntry>, String> {
                 });
             }
 
-            // Filter out TIME_WAIT entries — they are transient and noise
-            entries.retain(|e| !e.state.eq_ignore_ascii_case("TIME_WAIT"));
             entries.retain(|e| e.pid != 0 || !e.state.is_empty());
             entries.sort_by(|a, b| a.local_port.cmp(&b.local_port));
             Ok(entries)
@@ -187,7 +172,7 @@ pub fn devtools_process_name(pid: u32) -> Result<ProcessInfo, String> {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
-            let text = decode_gbk(&output.stdout);
+            let text = String::from_utf8_lossy(&output.stdout);
             for line in text.lines() {
                 let fields = parse_csv_line(line);
                 if fields.len() >= 2 {
@@ -212,7 +197,7 @@ pub fn devtools_process_name(pid: u32) -> Result<ProcessInfo, String> {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
-            let p = decode_gbk(&output.stdout).trim().to_string();
+            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if p.is_empty() || p.eq_ignore_ascii_case("null") {
                 // fallback to wmic if PowerShell can't access the process
                 wpc(pid)
@@ -229,7 +214,7 @@ pub fn devtools_process_name(pid: u32) -> Result<ProcessInfo, String> {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
-            let text = decode_gbk(&output.stdout);
+            let text = String::from_utf8_lossy(&output.stdout);
             let mut svcs: Vec<String> = Vec::new();
             for line in text.lines() {
                 let fields = parse_csv_line(line);
@@ -279,7 +264,7 @@ fn wpc(pid: u32) -> String {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
-        let text = decode_gbk(&output.stdout);
+        let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
             let line = line.trim();
             if !line.is_empty() && !line.eq_ignore_ascii_case("ExecutablePath") {
@@ -324,8 +309,8 @@ pub fn devtools_kill_process(pid: u32) -> Result<(), String> {
         if output.status.success() {
             return Ok(());
         }
-        let stderr = decode_gbk(&output.stderr);
-        let stdout = decode_gbk(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let combined = format!("{stdout} {stderr}");
         if combined.to_ascii_lowercase().contains("not found")
             || combined.contains("找不到")
@@ -366,7 +351,7 @@ pub async fn devtools_resolve_processes(pids: Vec<u32>) -> Result<Vec<ProcessInf
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()
             {
-                let text = decode_gbk(&output.stdout);
+                let text = String::from_utf8_lossy(&output.stdout);
                 for line in text.lines() {
                     let fields = parse_csv_line(line);
                     if fields.len() < 2 {
@@ -410,7 +395,7 @@ pub async fn devtools_resolve_processes(pids: Vec<u32>) -> Result<Vec<ProcessInf
                     .creation_flags(CREATE_NO_WINDOW)
                     .output()
                 {
-                    let text = decode_gbk(&output.stdout);
+                    let text = String::from_utf8_lossy(&output.stdout);
                     for line in text.lines() {
                         let line = line.trim();
                         if let Some(pos) = line.find('|') {

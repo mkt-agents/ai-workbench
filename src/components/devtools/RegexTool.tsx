@@ -18,15 +18,6 @@ function RegexTool() {
   const [replaceStr, setReplaceStr] = useState("");
   const [showReplace, setShowReplace] = useState(false);
   const [flags, setFlags] = useState({ g: true, i: false, m: false, s: false, u: false, y: false });
-
-  const flagLabels: Record<keyof typeof flags, string> = {
-    g: "global",
-    i: "ignoreCase",
-    m: "multiline",
-    s: "dotAll",
-    u: "unicode",
-    y: "sticky",
-  };
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const result = useMemo(() => {
@@ -186,7 +177,7 @@ function RegexTool() {
             {(Object.keys(flags) as (keyof typeof flags)[]).map((key) => (
               <label key={key} className="devtools-checkbox">
                 <input type="checkbox" checked={flags[key]} onChange={() => toggleFlag(key)} />
-                <span>{t(`regex.${flagLabels[key]}`)}</span>
+                <span>{t(`regex.${key}`)}</span>
               </label>
             ))}
           </div>

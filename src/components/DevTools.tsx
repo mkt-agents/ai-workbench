@@ -12,6 +12,7 @@ import {
   Regex,
   Search,
   Shuffle,
+  Wrench,
 } from "lucide-react";
 import JsonTool from "./devtools/JsonTool";
 import EncoderTool from "./devtools/EncoderTool";
@@ -93,7 +94,7 @@ function DevTools() {
     // Update recent tools
     setRecent((prev) => {
       const filtered = prev.filter((id) => id !== activeTool);
-      return [activeTool, ...filtered].slice(0, 3);
+      return [activeTool, ...filtered].slice(0, 5);
     });
   }, [activeTool]);
 
@@ -149,15 +150,21 @@ function DevTools() {
   return (
     <div className="dt-layout">
       <aside className="dt-sidebar">
-        <div className="dt-sidebar-search">
-          <Search size={14} />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("common.search")}
-            spellCheck={false}
-          />
+        <div className="dt-sidebar-header">
+          <div className="dt-sidebar-title">
+            <Wrench size={16} />
+            <span>{t("title")}</span>
+          </div>
+          <div className="dt-sidebar-search">
+            <Search size={14} />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t("common.search")}
+              spellCheck={false}
+            />
+          </div>
         </div>
         <nav className="dt-toollist" aria-label={t("title")}>
           {/* Recent tools */}

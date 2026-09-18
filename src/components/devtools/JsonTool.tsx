@@ -26,6 +26,18 @@ const SAMPLE_JSON = `{
   "tags": []
 }`;
 
+const SAMPLE_JSON_2 = `{
+  "name": "ai-workbench",
+  "version": "2.0.0-beta",
+  "active": true,
+  "themes": ["dark", "light", "ice", "silver", "glass"],
+  "stats": {
+    "users": 3520,
+    "uptime": 99.99
+  },
+  "features": ["json", "hash", "regex", "jwt"]
+}`;
+
 let historyId = 1;
 const HISTORY_MAX = 20;
 
@@ -514,6 +526,14 @@ function JsonTool() {
         >
           <FileJson size={14} />
           {t("json.sample")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={() => setInput(SAMPLE_JSON_2)}
+        >
+          <FileJson size={14} />
+          {t("json.sample2")}
         </button>
         <div className="devtools-actions-spacer" />
         <button
