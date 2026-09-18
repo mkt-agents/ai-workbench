@@ -32,7 +32,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 ### 账号与 Git
 
 - **Cursor**：多账号一键切换（每账号独立 `--user-data-dir`，登录态互不影响）；工作区 / 历史 / 扩展 / Agent 数据 / Composer 会话跨账号共享；磁盘占用可视化 + DB 瘦身（共享层重建 + VACUUM）；可联动 Git，可选本机密码备忘，支持诊断导出
-- **Git 管理**：仓库总览 / 扫描 / 搜索 / 批量身份 / 批量拉推 / 批量移除；提交页多仓变更、diff、提交与推送、AI 生成说明
+- **Git 管理**：仓库总览 / 扫描 / 搜索 / 批量身份 / 批量拉推 / 批量移除；提交页多仓变更、diff、提交与推送、AI 生成说明；账号支持按域名绑定（origin 自动匹配），身份匹配顺序：路径精确绑定 > 域名绑定 > 全局 git config
 
 ### 开发环境
 
@@ -129,7 +129,7 @@ Start-Process .\src-tauri\target\debug\ai_workbench.exe
 | `src-tauri/tauri.conf.json` | `"version"` |
 | `src-tauri/Cargo.toml` | `version`（`src-tauri/Cargo.lock` 未被 git 跟踪，构建时自动更新） |
 
-当前版本：`0.1.1`（设置页通过 Tauri `getVersion()` 读取）。
+当前版本：`0.1.4`（设置页通过 Tauri `getVersion()` 读取）。
 
 ### 构建
 
