@@ -2725,16 +2725,21 @@ fn pick_launch_workspace_folder() -> Option<PathBuf> {
         .find(|path| path.exists())
 }
 
-fn launch_cursor_impl(account_id: Option<String>) -> Result<String, String> {
+fn launch_cursor_impl(
+    window: Option<&tauri::Window>,
+    account_id: Option<String>,
+) -> Result<String, String> {
     let exe = cursor_exe_path()?;
     let exe_str = exe.to_string_lossy().to_string();
 
     if let Some(ref id) = account_id {
         if is_cursor_process_running() {
+            emit_switch_progress(window, "quit", "正在关闭当前 Cursor…");
             quit_cursor_sync()?;
         }
         let profile = cursor_profile_dir(id)?;
         fs::create_dir_all(&profile).map_err(|e| format!("创建 profile 目录失败: {}", e))?;
+        emit_switch_progress(window, "sync", "正在同步共享工作区与会话…");
         prepare_profile_shared(&profile)?;
         // Sync may carry over BLOB-typed values; heal before Cursor reads them,
         // otherwise its workbench aborts with a JSON.parse error (black screen).
@@ -2743,6 +2748,7 @@ fn launch_cursor_impl(account_id: Option<String>) -> Result<String, String> {
         }
         set_active_account(Some(id));
 
+        emit_switch_progress(window, "launch", "正在启动 Cursor…");
         spawn_cursor(&exe, Some(&profile))?;
         invalidate_cursor_probes();
         Ok(format!("已启动独立配置 Cursor（账号 {}）", id))
@@ -2778,8 +2784,13 @@ fn spawn_cursor(exe: &Path, profile: Option<&Path>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn launch_cursor(account_id: Option<String>) -> Result<String, String> {
-    launch_cursor_impl(account_id)
+pub async fn launch_cursor(
+    window: tauri::Window,
+    account_id: Option<String>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || launch_cursor_impl(Some(&window), account_id))
+        .await
+        .map_err(|e| format!("启动任务异常: {}", e))?
 }
 
 #[tauri::command]
@@ -2843,7 +2854,7 @@ fn init_account_profile_impl(
     }
 
     emit_switch_progress(Some(window), "launch", "正在打开独立配置（可能需数十秒）…");
-    launch_cursor_impl(Some(account_id))?;
+    launch_cursor_impl(Some(window), Some(account_id))?;
     emit_switch_progress(Some(window), "done", "已打开独立配置");
     Ok("已打开该账号的独立 Cursor 配置。请在其中登录，然后回到 AI Workbench 点「完成初始化」。".to_string())
 }
@@ -3017,7 +3028,7 @@ fn finish_account_profile_impl(
 
     if should_relaunch && !is_cursor_process_running() {
         emit_switch_progress(Some(window), "launch", "正在重新打开 Cursor…");
-        launch_cursor_impl(Some(account_id.clone()))?;
+        launch_cursor_impl(Some(window), Some(account_id.clone()))?;
     }
 
     emit_switch_progress(Some(window), "done", "初始化完成");
@@ -3114,7 +3125,7 @@ fn switch_cursor_account_impl(
     if profile_ready {
         emit_switch_progress(window, "restore", "正在切换到独立配置…");
         if should_relaunch {
-            launch_cursor_impl(Some(target_account_id.clone()))?;
+            launch_cursor_impl(window, Some(target_account_id.clone()))?;
             emit_switch_progress(window, "done", "切换完成");
             Ok(format!(
                 "已切换到 {}（独立配置，无需覆盖共享登录态）",
@@ -3127,7 +3138,7 @@ fn switch_cursor_account_impl(
     } else if migrate_backup_to_profile_impl(&target_account_id).is_ok() {
         emit_switch_progress(window, "restore", "已升级为独立配置…");
         if should_relaunch {
-            launch_cursor_impl(Some(target_account_id.clone()))?;
+            launch_cursor_impl(window, Some(target_account_id.clone()))?;
             emit_switch_progress(window, "done", "切换完成");
             Ok(format!(
                 "已升级为独立配置并切换到 {}。该账号 Sign Out 不再影响其他账号。",
@@ -3145,7 +3156,7 @@ fn switch_cursor_account_impl(
                 let _ = restore_cursor_data_impl(&current_id);
             }
             if should_relaunch {
-                let _ = launch_cursor_impl(get_active_account_id());
+                let _ = launch_cursor_impl(window, get_active_account_id());
             }
             return Err(format!(
                 "{}。该账号可能在捕获后被 Sign Out 导致 token 作废，请重新登录并重捕。",
@@ -3162,7 +3173,7 @@ fn switch_cursor_account_impl(
                 let _ = restore_cursor_data_impl(&current_id);
             }
             if should_relaunch {
-                let _ = launch_cursor_impl(get_active_account_id());
+                let _ = launch_cursor_impl(window, get_active_account_id());
             }
             return Err(format!(
                 "切换未生效：期望 {}，实际仍是 {}。该账号可能在捕获后被 Sign Out，请重新登录并重捕。",
@@ -3178,7 +3189,7 @@ fn switch_cursor_account_impl(
 
         if should_relaunch {
             emit_switch_progress(window, "launch", "正在重新打开 Cursor…");
-            match launch_cursor_impl(None) {
+            match launch_cursor_impl(window, None) {
                 Ok(_) => {
                     emit_switch_progress(window, "done", "切换完成");
                     Ok(format!("已切换到 {} 并重新打开 Cursor", switched_email))
