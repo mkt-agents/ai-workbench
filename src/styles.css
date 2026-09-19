@@ -5051,6 +5051,7 @@ input, select, textarea { font-family: inherit; }
   align-items: center;
   gap: 4px;
   border-radius: var(--radius-sm);
+  flex-shrink: 0;
 }
 
 .ai-model-option:hover,
@@ -8305,6 +8306,9 @@ input, select, textarea { font-family: inherit; }
   cursor: pointer;
   position: relative;
   overflow: hidden;
+  /* In a scrollable flex column, shrinkable items get squeezed to the viewport height
+     instead of overflowing it, which hides the scrollbar and clips the model-id line. */
+  flex-shrink: 0;
   transition: background 0.12s ease;
 }
 
@@ -8489,6 +8493,7 @@ input, select, textarea { font-family: inherit; }
   text-transform: uppercase;
   color: var(--text-3);
   padding: 8px 8px 4px;
+  flex-shrink: 0;
 }
 
 .prompt-template-empty {
@@ -8510,6 +8515,7 @@ input, select, textarea { font-family: inherit; }
   border-radius: var(--radius-sm);
   padding: 8px;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .prompt-template-item:hover {
@@ -8532,6 +8538,7 @@ input, select, textarea { font-family: inherit; }
   display: flex;
   align-items: stretch;
   gap: 2px;
+  flex-shrink: 0;
 }
 
 .prompt-template-custom-row .prompt-template-item {
