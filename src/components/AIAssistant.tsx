@@ -1,9 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, Copy, CopyPlus, Search, Download, Upload, Layers } from "lucide-react";
+import type { TFunction } from "i18next";
+import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle } from "lucide-react";
 import AppLogoMark from "./AppLogoMark";
 import { useGlobalStore } from "../core/store";
+import { MODEL_TEST_CONCURRENCY, mapPool } from "../core/asyncPool";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
 import { computeFloatingMenuStyle, type FloatingMenuStyle } from "../lib/floatingMenu";
@@ -23,6 +26,142 @@ function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** Temperature presets, named by what they do rather than by the number. */
+const TEMPERATURE_PRESETS = [
+  { value: 0.2, key: "tempPresetPrecise" },
+  { value: 0.7, key: "tempPresetBalanced" },
+  { value: 1.2, key: "tempPresetCreative" },
+] as const;
+
+/** Every power of two from 1K to 1M — one slider stop each. */
+const MAX_TOKEN_STEPS = Array.from({ length: 11 }, (_, i) => 1024 * 2 ** i);
+
+function formatTokenCount(value: number): string {
+  if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) return `${value / 1048576}M`;
+  if (value >= 1024 && value % 1024 === 0) return `${value / 1024}K`;
+  return String(value);
+}
+
+/** "4096 · 4K" for the round values, plain "5000" for anything else. */
+function tokenDisplay(value: number): string {
+  const short = formatTokenCount(value);
+  return short === String(value) ? short : `${value} · ${short}`;
+}
+
+/** Label + live value on one line, control, then a one-line explanation. */
+function FieldShell(props: {
+  label: string;
+  display: string;
+  hint: string;
+  /** The raw API parameter name, kept reachable on hover only. */
+  apiName?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="input-group ai-preset-field">
+      <label className="input-label" title={props.apiName}>
+        <span>{props.label}</span>
+        <span className="ai-preset-value">{props.display}</span>
+      </label>
+      <div className="ai-preset-control">{props.children}</div>
+      <div className="ai-preset-hint">{props.hint}</div>
+    </div>
+  );
+}
+
+/**
+ * Temperature as words: a slider forces the user to already know what 0.7 vs
+ * 1.1 means. Values outside the presets still get an input so nothing is lost.
+ */
+function TemperatureField(props: { value: number; onPick: (value: number) => void }) {
+  const { value, onPick } = props;
+  const { t } = useTranslation("ai");
+  const isPreset = TEMPERATURE_PRESETS.some((preset) => preset.value === value);
+  return (
+    <FieldShell
+      label={t("models.temperature")}
+      display={value.toFixed(1)}
+      hint={t("models.temperatureHint")}
+      apiName={t("models.temperatureApi")}
+    >
+      <div className="ai-seg ai-seg-fill">
+        {TEMPERATURE_PRESETS.map((preset) => (
+          <button
+            key={preset.value}
+            type="button"
+            className={`ai-seg-btn ${value === preset.value ? "is-active" : ""}`}
+            onClick={() => onPick(preset.value)}
+          >
+            {t(`models.${preset.key}`)}
+          </button>
+        ))}
+      </div>
+      {!isPreset && (
+        <div className="ai-preset-custom">
+          <span className="ai-preset-custom-label">{t("models.customValue")}</span>
+          <input
+            className="input-field ai-seg-input"
+            type="number"
+            min={0}
+            max={2}
+            step={0.1}
+            value={value}
+            aria-label={t("models.temperature")}
+            onChange={(e) => onPick(finiteOr(parseFloat(e.target.value), value))}
+          />
+        </div>
+      )}
+    </FieldShell>
+  );
+}
+
+/**
+ * Max tokens on a log scale: the useful range spans 1K→1M, so a linear slider
+ * is unusable and typing exact values is noise. The handle snaps to powers of
+ * two, which is what every provider documents.
+ */
+function TokenField(props: { value: number; onPick: (value: number) => void }) {
+  const { value, onPick } = props;
+  const { t } = useTranslation("ai");
+  const nearestStep = Math.min(
+    MAX_TOKEN_STEPS.length - 1,
+    Math.max(0, Math.round(Math.log2(Math.max(1, value) / 1024)))
+  );
+  return (
+    <FieldShell
+      label={t("models.maxTokens")}
+      display={tokenDisplay(value)}
+      hint={t("models.maxTokensHint")}
+      apiName={t("models.maxTokensApi")}
+    >
+      <input
+        className="ai-token-slider"
+        type="range"
+        min={0}
+        max={MAX_TOKEN_STEPS.length - 1}
+        step={1}
+        value={nearestStep}
+        style={
+          {
+            "--ai-slider-progress": `${(nearestStep / (MAX_TOKEN_STEPS.length - 1)) * 100}%`,
+          } as CSSProperties
+        }
+        aria-label={t("models.maxTokens")}
+        onChange={(e) => onPick(MAX_TOKEN_STEPS[finiteOr(parseInt(e.target.value, 10), nearestStep)])}
+      />
+      <div className="ai-token-scale">
+        {[
+          MAX_TOKEN_STEPS[0],
+          MAX_TOKEN_STEPS[(MAX_TOKEN_STEPS.length - 1) / 2],
+          MAX_TOKEN_STEPS[MAX_TOKEN_STEPS.length - 1],
+        ].map((step) => (
+          <span key={step}>{formatTokenCount(step)}</span>
+        ))}
+      </div>
+    </FieldShell>
+  );
 }
 
 const defaultProvider = AI_PROVIDERS[0];
@@ -45,18 +184,61 @@ function truncateUrl(url: string, max = 42): string {
   return `${t.slice(0, max - 1)}…`;
 }
 
-/** List-view prefs (group toggle + collapsed groups) survive page remounts. */
+/** List-view prefs (grouping, folds, sort, filter) survive page remounts. */
 const MODELS_VIEW_PREFS_KEY = "workbench-models-view";
 
 function loadModelsViewPrefs(): {
   groupByProvider?: boolean;
   collapsedGroups?: string[];
+  sortBy?: string;
+  statusFilter?: string;
 } {
   try {
     const raw = window.localStorage.getItem(MODELS_VIEW_PREFS_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
+  }
+}
+
+type TestState = "untested" | "passed" | "failed";
+
+function testStateOf(config: AIModelConfig): TestState {
+  if (!config.lastTest) return "untested";
+  return config.lastTest.ok ? "passed" : "failed";
+}
+
+function testTimeOf(config: AIModelConfig): number {
+  const at = config.lastTest?.at;
+  const time = at ? new Date(at).getTime() : NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function providerLabelOf(config: AIModelConfig): string {
+  return getProviderMeta(config.provider)?.label || config.provider;
+}
+
+/**
+ * "Default first" is the useful ordering when nothing was picked, but it hides
+ * both the failures and the alphabetical position, so the list is sortable.
+ */
+function sortConfigs(list: AIModelConfig[], sortBy: string): AIModelConfig[] {
+  const byName = (a: AIModelConfig, b: AIModelConfig) =>
+    a.name.localeCompare(b.name, "zh-Hans-CN");
+  const sorted = [...list];
+  switch (sortBy) {
+    case "name":
+      return sorted.sort(byName);
+    case "provider":
+      return sorted.sort(
+        (a, b) => providerLabelOf(a).localeCompare(providerLabelOf(b), "zh-Hans-CN") || byName(a, b)
+      );
+    case "recentTest":
+      return sorted.sort((a, b) => testTimeOf(b) - testTimeOf(a) || byName(a, b));
+    default:
+      return sorted.sort(
+        (a, b) => Number(b.isDefault) - Number(a.isDefault) || byName(a, b)
+      );
   }
 }
 
@@ -67,6 +249,27 @@ function isValidHttpUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Provider error bodies can be a whole HTML page — keep the toast readable. */
+function brief(text: string, max = 120): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`;
+}
+
+/** Coarse "how long ago" stamp for a persisted test verdict. */
+function formatSince(iso: string, t: TFunction<"ai">): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const minutes = Math.floor((Date.now() - then) / 60_000);
+  if (minutes < 1) return t("models.testJustNow");
+  if (minutes < 60) return t("models.testMinutesAgo", { count: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("models.testHoursAgo", { count: hours });
+  const days = Math.floor(hours / 24);
+  if (days < 30) return t("models.testDaysAgo", { count: days });
+  return new Date(then).toLocaleDateString();
 }
 
 
@@ -80,6 +283,7 @@ function AIAssistant() {
   const updateAIModel = useGlobalStore((s) => s.updateAIModel);
   const deleteAIModel = useGlobalStore((s) => s.deleteAIModel);
   const setDefaultAIModel = useGlobalStore((s) => s.setDefaultAIModel);
+  const recordAIModelTests = useGlobalStore((s) => s.recordAIModelTests);
   const invokeSyncModelToDsh = useGlobalStore((s) => s.invokeSyncModelToDsh);
   const invokeTestModelConnection = useGlobalStore((s) => s.invokeTestModelConnection);
   const invokeListProviderModels = useGlobalStore((s) => s.invokeListProviderModels);
@@ -114,13 +318,16 @@ function AIAssistant() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set(loadModelsViewPrefs().collapsedGroups ?? [])
   );
+  const [sortBy, setSortBy] = useState<string>(
+    () => loadModelsViewPrefs().sortBy ?? "default"
+  );
+  const [statusFilter, setStatusFilter] = useState<string>(
+    () => loadModelsViewPrefs().statusFilter ?? "all"
+  );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkBusy, setBulkBusy] = useState<"test" | "sync" | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
   const [transferBusy, setTransferBusy] = useState<"export" | "import" | null>(null);
-  /** Latest connection-test verdict per config, shown on the card until it is re-tested. */
-  const [testResults, setTestResults] = useState<
-    Record<string, { ok: boolean; message: string; at: number }>
-  >({});
   const pickerRootRef = useRef<HTMLDivElement | null>(null);
   const pickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const pickerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -180,12 +387,17 @@ function AIAssistant() {
     try {
       window.localStorage.setItem(
         MODELS_VIEW_PREFS_KEY,
-        JSON.stringify({ groupByProvider, collapsedGroups: [...collapsedGroups] })
+        JSON.stringify({
+          groupByProvider,
+          collapsedGroups: [...collapsedGroups],
+          sortBy,
+          statusFilter,
+        })
       );
     } catch {
       /* private-mode / quota: prefs just don't persist */
     }
-  }, [groupByProvider, collapsedGroups]);
+  }, [groupByProvider, collapsedGroups, sortBy, statusFilter]);
 
   // Esc closes the edit modal, matching the overlay-click affordance.
   useEffect(() => {
@@ -240,20 +452,35 @@ function AIAssistant() {
   const showCustomRow =
     customCandidate.length > 0 && !listedModels.some((m) => m.id === customCandidate);
 
-  // Saved-config filter: matches name, model id, base URL and provider label.
+  // Saved-config filter: status first (so "only failures" survives a search),
+  // then name / model id / base URL / provider label, then the chosen order.
   const listQueryNorm = listQuery.trim().toLowerCase();
   const filteredConfigs = useMemo(() => {
+    const byStatus =
+      statusFilter === "all"
+        ? aiModels
+        : aiModels.filter((config) => testStateOf(config) === statusFilter);
     const matches = listQueryNorm
-      ? aiModels.filter((config) => {
-          const providerLabel = getProviderMeta(config.provider)?.label || config.provider;
-          return `${config.name} ${config.model} ${config.baseUrl} ${providerLabel}`
+      ? byStatus.filter((config) =>
+          `${config.name} ${config.model} ${config.baseUrl} ${providerLabelOf(config)}`
             .toLowerCase()
-            .includes(listQueryNorm);
-        })
-      : [...aiModels];
-    // Default first: it is the one every other feature in the app falls back to.
-    return matches.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
-  }, [aiModels, listQueryNorm]);
+            .includes(listQueryNorm)
+        )
+      : [...byStatus];
+    return sortConfigs(matches, sortBy);
+  }, [aiModels, listQueryNorm, sortBy, statusFilter]);
+
+  const testStateCounts = useMemo(() => {
+    const counts = { untested: 0, passed: 0, failed: 0 };
+    for (const config of aiModels) counts[testStateOf(config)] += 1;
+    return counts;
+  }, [aiModels]);
+
+  /** Every feature that generates text falls back to this one; none is a real gap. */
+  const defaultConfig = useMemo(
+    () => aiModels.find((config) => config.isDefault) ?? null,
+    [aiModels]
+  );
 
   // Derived from the live list, so deleting a config cannot leave a stale selection behind.
   const selectedConfigs = useMemo(
@@ -273,7 +500,7 @@ function AIAssistant() {
       { provider: string; label: string; configs: AIModelConfig[] }
     >();
     for (const config of filteredConfigs) {
-      const label = getProviderMeta(config.provider)?.label || config.provider;
+      const label = providerLabelOf(config);
       let entry = byProvider.get(config.provider);
       if (!entry) {
         entry = { provider: config.provider, label, configs: [] };
@@ -518,11 +745,18 @@ function AIAssistant() {
     });
   };
 
-  const recordTestResult = (id: string, result: { success: boolean; message: string }) => {
-    setTestResults((cur) => ({
-      ...cur,
-      [id]: { ok: result.success, message: result.message, at: Date.now() },
-    }));
+  /** Persisted on the config, so the verdict is still there after a restart. */
+  const persistTestResult = async (
+    id: string,
+    result: { success: boolean; message: string }
+  ) => {
+    try {
+      await recordAIModelTests([
+        { id, ok: result.success, message: result.message, at: new Date().toISOString() },
+      ]);
+    } catch (error) {
+      showMsg("error", t("models.testSaveFailed", { error: String(error) }));
+    }
   };
 
   /** Backup / transfer. The file carries plaintext API keys, so the confirm says so. */
@@ -653,8 +887,12 @@ function AIAssistant() {
     try {
       const result = await runConnectionTest(formData as AIModelConfig);
       setTestStatus({ testing: false, result });
+      // Only an already-saved config can carry the verdict; a draft has no row.
+      if (editingId) await persistTestResult(editingId, result);
     } catch (error) {
-      setTestStatus({ testing: false, result: { success: false, message: String(error) } });
+      const result = { success: false, message: String(error) };
+      setTestStatus({ testing: false, result });
+      if (editingId) await persistTestResult(editingId, result);
     }
   };
 
@@ -675,10 +913,10 @@ function AIAssistant() {
     setTestingId(config.id);
     try {
       const result = await runConnectionTest(config);
-      recordTestResult(config.id, result);
+      await persistTestResult(config.id, result);
       showMsg(result.success ? "success" : "error", result.message);
     } catch (error) {
-      recordTestResult(config.id, { success: false, message: String(error) });
+      await persistTestResult(config.id, { success: false, message: String(error) });
       showMsg("error", String(error));
     } finally {
       setTestingId(null);
@@ -719,31 +957,48 @@ function AIAssistant() {
     );
   };
 
-  /** Bulk test/sync report once at the end: a toast per item would be unreadable. */
+  /**
+   * Bulk test runs 4 at a time (a serial loop over 8 configs could take two
+   * minutes at the 15s HTTP timeout), shows a progress line, and writes every
+   * verdict back in one pass so the cards settle together.
+   */
   const handleBulkTest = async (configs: AIModelConfig[]) => {
     setBulkBusy("test");
-    let ok = 0;
-    let fail = 0;
+    setBulkProgress({ done: 0, total: configs.length });
+    const results: Array<{ id: string; ok: boolean; message: string; at: string }> = [];
     try {
-      for (const config of configs) {
-        setTestingId(config.id);
+      await mapPool(configs, MODEL_TEST_CONCURRENCY, async (config) => {
+        let ok = false;
+        let message = "";
         try {
           const result = await runConnectionTest(config);
-          recordTestResult(config.id, result);
-          if (result.success) ok += 1;
-          else fail += 1;
+          ok = result.success;
+          message = result.message;
         } catch (error) {
-          recordTestResult(config.id, { success: false, message: String(error) });
-          fail += 1;
+          ok = false;
+          message = String(error);
         }
-      }
-      showMsg(fail === 0 ? "success" : "error", t("models.bulkTestDone", { ok, fail }));
+        results.push({ id: config.id, ok, message, at: new Date().toISOString() });
+        setBulkProgress((cur) => (cur ? { ...cur, done: cur.done + 1 } : cur));
+      });
+      await recordAIModelTests(results);
+      const fail = results.filter((r) => !r.ok).length;
+      const firstFail = results.find((r) => !r.ok);
+      showMsg(
+        fail === 0 ? "success" : "error",
+        fail === 0
+          ? t("models.bulkTestDone", { ok: results.length, fail: 0 })
+          : `${t("models.bulkTestDone", { ok: results.length - fail, fail })}${
+              firstFail ? `: ${brief(firstFail.message)}` : ""
+            }`
+      );
     } finally {
-      setTestingId(null);
       setBulkBusy(null);
+      setBulkProgress(null);
     }
   };
 
+  /** Bulk sync keeps going past failures and reports once at the end. */
   const handleBulkSync = async (configs: AIModelConfig[]) => {
     setBulkBusy("sync");
     let ok = 0;
@@ -855,6 +1110,12 @@ function AIAssistant() {
     const meta = getProviderMeta(config.provider);
     const providerLabel = meta?.label || config.provider;
     const iconClass = meta ? `provider-${config.provider}` : "provider-custom";
+    const last = config.lastTest ?? null;
+    const lastTestTitle = last
+      ? `${t("models.lastTest")} · ${last.at ? new Date(last.at).toLocaleString() : ""}${
+          last.message ? `: ${brief(last.message, 200)}` : ""
+        }`
+      : t("models.testFromList");
     return (
       <div
         key={config.id}
@@ -921,8 +1182,17 @@ function AIAssistant() {
             <span>
               {t("models.params", {
                 temperature: config.temperature,
-                maxTokens: config.maxTokens,
+                maxTokens: formatTokenCount(config.maxTokens),
               })}
+            </span>
+            <span className="ai-model-meta-sep">·</span>
+            <span className={`ai-test-state${last ? (last.ok ? " is-ok" : " is-fail") : ""}`}>
+              {last
+                ? `${last.ok ? t("models.testPassed") : t("models.testFailed")} · ${formatSince(
+                    last.at,
+                    t
+                  )}`
+                : t("models.testNever")}
             </span>
           </div>
         </div>
@@ -939,21 +1209,11 @@ function AIAssistant() {
           )}
           <button
             className={`btn btn-secondary btn-small${
-              testResults[config.id]
-                ? testResults[config.id].ok
-                  ? " is-ok"
-                  : " is-fail"
-                : ""
+              last ? (last.ok ? " is-ok" : " is-fail") : ""
             }`}
             onClick={() => handleListTest(config)}
             disabled={testingId === config.id || bulkBusy !== null}
-            title={
-              testResults[config.id]
-                ? `${t("models.lastTest")} · ${new Date(
-                    testResults[config.id].at
-                  ).toLocaleString()}: ${testResults[config.id].message}`
-                : t("models.testFromList")
-            }
+            title={lastTestTitle}
           >
             {testingId === config.id ? (
               <Loader2 size={12} className="spin" />
@@ -1024,6 +1284,15 @@ function AIAssistant() {
                     <span className="models-bulk-count">
                       {t("models.selectedCount", { count: selectedConfigs.length })}
                     </span>
+                    {bulkBusy === "test" && bulkProgress && (
+                      <span className="runtime-muted models-bulk-progress">
+                        <Loader2 size={12} className="spin" />
+                        {t("models.bulkTestProgress", {
+                          done: bulkProgress.done,
+                          total: bulkProgress.total,
+                        })}
+                      </span>
+                    )}
                     <button
                       className="btn btn-secondary btn-small"
                       onClick={() => void handleBulkTest(selectedConfigs)}
@@ -1094,6 +1363,40 @@ function AIAssistant() {
                       </div>
                     )}
                     {aiModels.length > 0 && (
+                      <select
+                        className="input-field models-pick"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        aria-label={t("models.filterByState")}
+                        title={t("models.filterByState")}
+                      >
+                        <option value="all">{t("models.filterAll")}</option>
+                        <option value="failed">
+                          {t("models.filterFailed", { count: testStateCounts.failed })}
+                        </option>
+                        <option value="untested">
+                          {t("models.filterUntested", { count: testStateCounts.untested })}
+                        </option>
+                        <option value="passed">
+                          {t("models.filterPassed", { count: testStateCounts.passed })}
+                        </option>
+                      </select>
+                    )}
+                    {aiModels.length > 0 && (
+                      <select
+                        className="input-field models-pick"
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        aria-label={t("models.sortBy")}
+                        title={t("models.sortBy")}
+                      >
+                        <option value="default">{t("models.sortDefault")}</option>
+                        <option value="name">{t("models.sortName")}</option>
+                        <option value="provider">{t("models.sortProvider")}</option>
+                        <option value="recentTest">{t("models.sortRecentTest")}</option>
+                      </select>
+                    )}
+                    {aiModels.length > 0 && (
                       <button
                         type="button"
                         className={`btn btn-secondary btn-small${groupByProvider ? " is-active" : ""}`}
@@ -1138,6 +1441,20 @@ function AIAssistant() {
                 )}
               </div>
             </div>
+            {aiModels.length > 0 && !defaultConfig && (
+              <div className="models-default-banner">
+                <AlertCircle size={14} className="models-default-banner-icon" />
+                <span className="models-default-banner-text">{t("models.noDefaultBanner")}</span>
+                {aiModels.length === 1 && (
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => void handleSetDefault(aiModels[0].id)}
+                  >
+                    {t("models.setAsDefault", { name: aiModels[0].name })}
+                  </button>
+                )}
+              </div>
+            )}
             {aiModels.length === 0 ? (
               <div className="models-empty">
                 <div className="models-empty-icon">
@@ -1152,9 +1469,19 @@ function AIAssistant() {
             ) : filteredConfigs.length === 0 ? (
               <div className="models-empty">
                 <div className="models-empty-title">{t("models.noMatch")}</div>
-                <div className="models-empty-desc">{t("models.noMatchHint")}</div>
-                <button className="btn btn-secondary" onClick={() => setListQuery("")}>
-                  {t("models.clearSearch")}
+                <div className="models-empty-desc">
+                  {statusFilter === "all"
+                    ? t("models.noMatchHint")
+                    : t("models.noMatchFiltered")}
+                </div>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setListQuery("");
+                    setStatusFilter("all");
+                  }}
+                >
+                  {statusFilter === "all" ? t("models.clearSearch") : t("models.clearFilters")}
                 </button>
               </div>
             ) : (
@@ -1440,43 +1767,15 @@ function AIAssistant() {
 
                     <div className="ai-form-section">
                       <div className="ai-form-section-label">{t("models.sectionAdvanced")}</div>
-                      <div className="ai-form-row">
-                        <div className="input-group">
-                          <label className="input-label">{t("models.temperature")}</label>
-                          <div className="ai-range-row">
-                            <input
-                              type="range"
-                              min="0"
-                              max="2"
-                              step="0.1"
-                              value={formData.temperature}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  temperature: parseFloat(e.target.value),
-                                })
-                              }
-                            />
-                            <span className="ai-range-value">
-                              {formData.temperature.toFixed(1)}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="input-group">
-                          <label className="input-label">{t("models.maxTokens")}</label>
-                          <input
-                            className="input-field"
-                            type="number"
-                            min={1}
-                            value={formData.maxTokens}
-                            onChange={(e) =>
-                              setFormData({
-                                ...formData,
-                                maxTokens: finiteOr(parseInt(e.target.value, 10), formData.maxTokens),
-                              })
-                            }
-                          />
-                        </div>
+                      <div className="ai-preset-grid">
+                        <TemperatureField
+                          value={formData.temperature}
+                          onPick={(temperature) => setFormData({ ...formData, temperature })}
+                        />
+                        <TokenField
+                          value={formData.maxTokens}
+                          onPick={(maxTokens) => setFormData({ ...formData, maxTokens })}
+                        />
                       </div>
                       <label className="ai-checkbox">
                         <input

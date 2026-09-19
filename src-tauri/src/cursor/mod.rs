@@ -2850,6 +2850,289 @@ fn backups_root_dir() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("cursor-backups"))
 }
 
+/// Cached exe path *without* the existence check: a half-finished update leaves
+/// the install dir in place while `Cursor.exe` is temporarily gone.
+fn cached_cursor_exe_path() -> Option<PathBuf> {
+    let cache = cursor_exe_cache_file().ok()?;
+    let content = fs::read_to_string(&cache).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+fn cursor_install_dir_candidates() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut add = |exe: Option<PathBuf>| {
+        if let Some(dir) = exe.and_then(|path| path.parent().map(|p| p.to_path_buf())) {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    };
+    add(cached_cursor_exe_path());
+    add(cursor_exe_from_running_process());
+    for candidate in cursor_exe_default_candidates() {
+        add(Some(candidate));
+    }
+    dirs
+}
+
+fn has_update_leftovers(dir: &Path) -> bool {
+    dir.join("cursor-update.journal.json").is_file()
+        || dir.join("_").is_dir()
+        || dir.join("_bak").is_dir()
+}
+
+fn cursor_install_dir() -> Option<PathBuf> {
+    let dirs: Vec<PathBuf> = cursor_install_dir_candidates()
+        .into_iter()
+        .filter(|dir| dir.is_dir())
+        .collect();
+    // Prefer a dir that still shows update debris; otherwise the first real
+    // install dir, so stale per-profile markers are still reported.
+    dirs.iter()
+        .find(|dir| has_update_leftovers(dir))
+        .or_else(|| dirs.first())
+        .cloned()
+}
+
+/// Every user-data-dir that can hold update state: the shared Cursor root plus
+/// each account's profile shell (the markers are per user-data-dir).
+fn cursor_data_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        roots.push(Path::new(&appdata).join("Cursor"));
+    }
+    if let Ok(profiles) = app_data_dir().map(|dir| dir.join("cursor-profiles")) {
+        if let Ok(entries) = fs::read_dir(&profiles) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    roots.push(path);
+                }
+            }
+        }
+    }
+    roots
+}
+
+fn read_update_job_state(path: &Path) -> (String, u32) {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return (String::new(), 0);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (String::new(), 0);
+    };
+    let stage = value
+        .get("stage")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let attempt = value.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    (stage, attempt)
+}
+
+/// The marker files that tell Cursor's updater an upgrade is still mid-flight.
+fn collect_update_markers() -> (Vec<PathBuf>, String, u32) {
+    let mut files = Vec::new();
+    let mut stage = String::new();
+    let mut attempt = 0;
+    if let Some(dir) = cursor_install_dir() {
+        let journal = dir.join("cursor-update.journal.json");
+        if journal.is_file() {
+            files.push(journal);
+        }
+    }
+    for root in cursor_data_roots() {
+        let pending = root.join("cursor-update-pending-events.json");
+        if pending.is_file() {
+            files.push(pending);
+        }
+        let supervisor = root.join("update-supervisor").join("win32");
+        let Ok(entries) = fs::read_dir(&supervisor) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_name() == "active.json" {
+                if path.is_file() {
+                    files.push(path);
+                }
+                continue;
+            }
+            let state = path.join("state.json");
+            if state.is_file() {
+                let (job_stage, job_attempt) = read_update_job_state(&state);
+                if job_attempt >= attempt {
+                    stage = job_stage;
+                    attempt = job_attempt;
+                }
+                files.push(state);
+            }
+        }
+    }
+    (files, stage, attempt)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorUpdateState {
+    pub install_dir: String,
+    pub exe_present: bool,
+    pub staging_present: bool,
+    pub backup_bytes: u64,
+    pub files: Vec<String>,
+    pub stage: String,
+    pub attempt: u32,
+    /// Promotion finished but the "update in progress" markers survived.
+    pub stuck: bool,
+    pub running: bool,
+    pub message: String,
+}
+
+fn inspect_cursor_update_state_sync() -> Result<CursorUpdateState, String> {
+    let install = cursor_install_dir();
+    let (markers, stage, attempt) = collect_update_markers();
+    let exe_present = install
+        .as_ref()
+        .map(|dir| dir.join("Cursor.exe").is_file())
+        .unwrap_or(false);
+    let staging_present = install
+        .as_ref()
+        .map(|dir| dir.join("_").is_dir())
+        .unwrap_or(false);
+    let backup_bytes = install
+        .as_ref()
+        .map(|dir| dir.join("_bak"))
+        .filter(|dir| dir.is_dir())
+        .map(|dir| dir_size(&dir))
+        .unwrap_or(0);
+    // The new build is already in place and the staging folder is consumed, yet
+    // the markers remain — so every launch retries a move of `Cursor.exe` that
+    // cannot succeed while Cursor itself holds the file (拒绝访问 / os error 5).
+    let stuck = exe_present && !staging_present && !markers.is_empty();
+    let message = if markers.is_empty() {
+        "没有未完成的更新状态".to_string()
+    } else if stuck {
+        format!(
+            "新版已就位，但更新监督器停在 {}（已重试 {} 次），{} 个陈旧标记会让每次启动都报「拒绝访问」",
+            if stage.is_empty() { "未知阶段" } else { &stage },
+            attempt,
+            markers.len()
+        )
+    } else if staging_present {
+        "更新似乎仍在进行中（暂存目录还在），先让 Cursor 完成更新".to_string()
+    } else {
+        format!("未找到 Cursor.exe（安装目录处于半更新状态），共 {} 个陈旧标记", markers.len())
+    };
+    Ok(CursorUpdateState {
+        install_dir: install.map(|dir| dir.display().to_string()).unwrap_or_default(),
+        exe_present,
+        staging_present,
+        backup_bytes,
+        files: markers
+            .into_iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        stage,
+        attempt,
+        stuck,
+        running: is_cursor_process_running(),
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn inspect_cursor_update_state() -> Result<CursorUpdateState, String> {
+    tokio::task::spawn_blocking(inspect_cursor_update_state_sync).await
+        .map_err(|e| format!("检查更新状态失败: {e}"))?
+}
+
+/// `rename` fails across volumes (install dir and app data can differ), and a
+/// locked source must never end up deleted — copy then drop the original.
+fn quarantine_move(src: &Path, dst: &Path) -> Result<(), String> {
+    if let Ok(()) = fs::rename(src, dst) {
+        return Ok(());
+    }
+    fs::copy(src, dst).map_err(|e| format!("备份失败: {e}"))?;
+    fs::remove_file(src).map_err(|e| format!("移除失败: {e}"))
+}
+
+/// Flatten an absolute path into one safe file name: separators and drives are
+/// stripped so a quarantined marker can never escape its folder.
+fn quarantine_name(path: &str) -> String {
+    path.replace([':', '\\', '/'], "_")
+}
+
+fn cleanup_cursor_update_state_sync() -> Result<CursorCleanupResult, String> {
+    if is_cursor_process_running() {
+        return Err("Cursor 正在运行，更新标记会被占用。请先关闭 Cursor 再清理。".into());
+    }
+    let state = inspect_cursor_update_state_sync()?;
+    if state.files.is_empty() {
+        return Ok(CursorCleanupResult {
+            removed_files: 0,
+            freed_bytes: 0,
+            message: "没有需要清理的未完成更新状态".into(),
+        });
+    }
+    if !state.stuck {
+        return Err(format!("当前不建议清理：{}", state.message));
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let quarantine = app_data_dir()?.join("cursor-update-quarantine").join(stamp.to_string());
+    fs::create_dir_all(&quarantine).map_err(|e| format!("创建还原目录失败: {e}"))?;
+    let mut moved = 0_u32;
+    let mut bytes = 0_u64;
+    let mut failures: Vec<String> = Vec::new();
+    for file in &state.files {
+        let src = Path::new(file);
+        let dst = quarantine.join(quarantine_name(file));
+        let size = file_size(src);
+        match quarantine_move(src, &dst) {
+            Ok(()) => {
+                moved += 1;
+                bytes += size;
+            }
+            Err(e) => failures.push(format!("{}: {e}", src.display())),
+        }
+    }
+    let leftover = inspect_cursor_update_state_sync()?;
+    let mut message = if moved == 0 {
+        "未能移出任何更新标记".to_string()
+    } else {
+        format!(
+            "已移出 {moved} 个陈旧更新标记（释放 {}，可从 {} 还原）",
+            format_bytes(bytes),
+            quarantine.display()
+        )
+    };
+    if let Some(first) = failures.first() {
+        message.push_str(&format!("；{}/{} 失败：{}", failures.len(), state.files.len(), first));
+    }
+    if !leftover.files.is_empty() && failures.is_empty() {
+        message.push_str("；请重启 Cursor 生效");
+    }
+    Ok(CursorCleanupResult {
+        removed_files: moved,
+        freed_bytes: bytes,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn cleanup_cursor_update_state() -> Result<CursorCleanupResult, String> {
+    tokio::task::spawn_blocking(cleanup_cursor_update_state_sync)
+        .await
+        .map_err(|e| format!("清理更新状态失败: {e}"))?
+}
+
 fn file_size(path: &Path) -> u64 {
     fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
@@ -3525,6 +3808,66 @@ mod junction_tests {
         assert!(
             live_target.join("keep.txt").exists(),
             "data behind a junction must survive"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod update_state_tests {
+    use super::*;
+
+    #[test]
+    fn reads_stage_and_attempt_from_the_updater_state() {
+        let root = std::env::temp_dir().join(format!("aiwb-update-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let good = root.join("state.json");
+        fs::write(
+            &good,
+            r#"{"schemaVersion":1,"installationId":"x","stage":"removing_old_version","attempt":11}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_update_job_state(&good),
+            ("removing_old_version".to_string(), 11)
+        );
+
+        fs::write(&good, "not json at all").unwrap();
+        assert_eq!(read_update_job_state(&good), (String::new(), 0));
+
+        assert_eq!(
+            read_update_job_state(&root.join("missing.json")),
+            (String::new(), 0)
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quarantine_name_cannot_escape_its_folder() {
+        assert_eq!(
+            quarantine_name(r"C:\Users\x\cursor-update.journal.json"),
+            "C__Users_x_cursor-update.journal.json"
+        );
+        assert!(!quarantine_name("/etc/passwd").contains('/'));
+    }
+
+    #[test]
+    fn quarantine_move_preserves_content_across_a_failed_rename() {
+        let root = std::env::temp_dir().join(format!("aiwb-quarantine-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let src = root.join("journal.json");
+        fs::write(&src, r#"{"phase":"backing_up"}"#).unwrap();
+        let dst = root.join("moved").join("journal.json");
+        fs::create_dir_all(root.join("moved")).unwrap();
+
+        quarantine_move(&src, &dst).expect("move should succeed");
+
+        assert!(!src.exists(), "marker must be gone from the install dir");
+        assert_eq!(
+            fs::read_to_string(&dst).unwrap(),
+            r#"{"phase":"backing_up"}"#
         );
         let _ = fs::remove_dir_all(&root);
     }

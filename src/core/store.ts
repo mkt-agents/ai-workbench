@@ -4,7 +4,7 @@ import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
   RecentProject, WebPlugin, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
-  Snippet, QuickAskSession,
+  Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -194,6 +194,9 @@ interface StoreState extends GlobalState, Invocations {
     freedBytes: number;
     message: string;
   }>;
+  /** Cursor's updater can stall with stale "in progress" markers; see cleanup below. */
+  invokeGetCursorUpdateState: () => Promise<CursorUpdateState>;
+  invokeCleanupCursorUpdateState: () => Promise<CursorCleanupResult>;
   invokeSlimCursorStateDbs: () => Promise<{
     targets: Array<{
       label: string;
@@ -214,6 +217,10 @@ interface StoreState extends GlobalState, Invocations {
   updateAIModel: (id: string, updates: Partial<AIModelConfig>) => Promise<void>;
   deleteAIModel: (id: string) => Promise<void>;
   setDefaultAIModel: (id: string) => Promise<void>;
+  /** Persist connection-test verdicts (they are telemetry, not an edit). */
+  recordAIModelTests: (
+    results: Array<{ id: string; ok: boolean; message: string; at: string }>
+  ) => Promise<void>;
 
   // Cloudflared named profiles
   loadCloudflaredProfiles: () => Promise<void>;
@@ -830,6 +837,9 @@ export const useGlobalStore = create<StoreState>()(
           freedBytes: number;
           message: string;
         }>('cleanup_cursor_sealed_backups'),
+      invokeGetCursorUpdateState: async () => tauriInvoke<CursorUpdateState>('inspect_cursor_update_state'),
+      invokeCleanupCursorUpdateState: async () =>
+        tauriInvoke<CursorCleanupResult>('cleanup_cursor_update_state'),
       invokeSlimCursorStateDbs: async () =>
         tauriInvoke<{
           targets: Array<{
@@ -919,6 +929,26 @@ export const useGlobalStore = create<StoreState>()(
           isDefault: m.id === id,
           updatedAt: new Date().toISOString(),
         }));
+        await optimisticUpdate(
+          current,
+          next,
+          (v) => set({ aiModels: v }),
+          (v) => storage.aiModels.save(v),
+        );
+      }),
+
+      recordAIModelTests: async (results) => withTable("ai_models", async () => {
+        if (results.length === 0) return;
+        const byId = new Map(results.map((r) => [r.id, r]));
+        const current = get().aiModels;
+        // Telemetry, not an edit: updatedAt stays untouched so "last modified"
+        // keeps meaning "the config changed".
+        const next = current.map((m) => {
+          const hit = byId.get(m.id);
+          return hit
+            ? { ...m, lastTest: { ok: hit.ok, at: hit.at, message: hit.message } }
+            : m;
+        });
         await optimisticUpdate(
           current,
           next,

@@ -276,6 +276,14 @@ export const storage = {
         isDefault: ((r['is_default'] as number) || 0) === 1,
         createdAt: (r['created_at'] as string) || "",
         updatedAt: (r['updated_at'] as string) || "",
+        lastTest:
+          r['last_test_ok'] === null || r['last_test_ok'] === undefined
+            ? null
+            : {
+                ok: (r['last_test_ok'] as number) === 1,
+                at: (r['last_test_at'] as string) || "",
+                message: (r['last_test_msg'] as string) || "",
+              },
       }));
     },
     save: async (items: AIModelConfig[]): Promise<void> => {
@@ -290,6 +298,9 @@ export const storage = {
         temperature: item.temperature,
         max_tokens: item.maxTokens,
         is_default: item.isDefault ? 1 : 0,
+        last_test_ok: item.lastTest ? (item.lastTest.ok ? 1 : 0) : null,
+        last_test_at: item.lastTest?.at ?? null,
+        last_test_msg: item.lastTest?.message ?? null,
         created_at: item.createdAt,
         updated_at: item.updatedAt,
       })));

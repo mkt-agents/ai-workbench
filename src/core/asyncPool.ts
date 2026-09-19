@@ -1,14 +1,18 @@
 /**
- * Bounded-concurrency helpers shared by the Git pages.
+ * Bounded-concurrency helpers shared across pages.
  *
  * Both `GitReposPage` and `CommitChangelist` carried their own copy of these,
  * which had already diverged (one tracked errors, the other took a concurrency
  * argument). Keeping one implementation matters because every task here spawns
- * a git subprocess: the pool size *is* the process cap.
+ * a subprocess or hits the network: the pool size *is* the concurrency cap.
  */
 
 /** Parallel git subprocesses per page. Raised by the batch summary command. */
 export const GIT_CONCURRENCY = 4;
+
+/** Parallel connection tests — enough to finish a batch quickly, low enough
+ *  not to look like an attack on the provider's rate limit. */
+export const MODEL_TEST_CONCURRENCY = 4;
 
 export async function mapPool<T>(
   items: T[],

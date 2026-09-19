@@ -180,6 +180,9 @@ pub fn run() {
                     temperature REAL DEFAULT 0.7,
                     max_tokens INTEGER DEFAULT 4096,
                     is_default INTEGER DEFAULT 0,
+                    last_test_ok INTEGER,
+                    last_test_at TEXT,
+                    last_test_msg TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -237,6 +240,9 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE cursor_accounts ADD COLUMN profile_initialized INTEGER DEFAULT 0;");
             let _ = conn.execute_batch("ALTER TABLE cursor_accounts ADD COLUMN password TEXT;");
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN auth_type TEXT DEFAULT 'api';");
+            let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_ok INTEGER;");
+            let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_at TEXT;");
+            let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_msg TEXT;");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN auth_mode TEXT DEFAULT 'token';");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN config_path TEXT;");
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NOT NULL DEFAULT '';");
@@ -345,6 +351,8 @@ pub fn run() {
             cursor::list_cursor_backups,
             cursor::get_cursor_orphan_profiles,
             cursor::cleanup_cursor_orphan_profiles,
+            cursor::inspect_cursor_update_state,
+            cursor::cleanup_cursor_update_state,
             cursor::slim_cursor_state_dbs,
             ai_commands::test_model_connection,
             ai_commands::list_provider_models,

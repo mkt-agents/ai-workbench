@@ -22,7 +22,7 @@ import { useGlobalStore } from "../core/store";
 import { matchCursorAccount } from "../core/cursorMatch";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
-import type { CursorAccount } from "../core/types";
+import type { CursorAccount, CursorUpdateState } from "../core/types";
 
 /** 香槟金主题友好的头像色：珍珠香槟 / 石灰珍珠 */
 const AVATAR_COLORS = [
@@ -132,6 +132,8 @@ function CursorManager() {
   const invokeCleanupCursorSealedBackups = useGlobalStore(
     (s) => s.invokeCleanupCursorSealedBackups
   );
+  const invokeGetCursorUpdateState = useGlobalStore((s) => s.invokeGetCursorUpdateState);
+  const invokeCleanupCursorUpdateState = useGlobalStore((s) => s.invokeCleanupCursorUpdateState);
   const invokeSlimCursorStateDbs = useGlobalStore((s) => s.invokeSlimCursorStateDbs);
   const invokeReadCursorDiagnostics = useGlobalStore((s) => s.invokeReadCursorDiagnostics);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
@@ -184,6 +186,8 @@ function CursorManager() {
     () => lastBackupSizes
   );
   const [orphans, setOrphans] = useState<{ count: number; bytes: number } | null>(null);
+  const [updateState, setUpdateState] = useState<CursorUpdateState | null>(null);
+  const [updateCleaning, setUpdateCleaning] = useState(false);
   const [accountQuery, setAccountQuery] = useState("");
   const [accountSort, setAccountSort] = useState<"created" | "name">("created");
 
@@ -299,10 +303,20 @@ function CursorManager() {
     }
   }, [invokeGetCursorDiskUsage, invokeGetCursorOrphanProfiles]);
 
+  /** Read-only probe: is Cursor's updater stuck with stale "in progress" markers? */
+  const refreshUpdateState = useCallback(async () => {
+    try {
+      setUpdateState(await invokeGetCursorUpdateState());
+    } catch {
+      /* diagnostics only — never block the page on it */
+    }
+  }, [invokeGetCursorUpdateState]);
+
   const refresh = useCallback(async () => {
     // Disk scan can walk multi-GB trees — start it now, but never block the
     // account list or first paint on it.
     void refreshDiskUsage();
+    void refreshUpdateState();
     await loadCursorAccounts();
 
     // One-shot legacy avatar color migration
@@ -371,6 +385,7 @@ function CursorManager() {
     invokeInspectCursorBackup,
     invokeListCursorBackups,
     refreshDiskUsage,
+    refreshUpdateState,
     t,
   ]);
 
@@ -477,6 +492,42 @@ function CursorManager() {
       showMsg("error", `${t("cursor.sealedCleanupFailed")}: ${e}`);
     } finally {
       setCleaning(false);
+    }
+  };
+
+  /**
+   * Move Cursor's stale "update in progress" markers aside (reversible) so its
+   * updater stops re-attempting a move of `Cursor.exe` that can never succeed.
+   */
+  const handleCleanupUpdateState = async () => {
+    if (!updateState?.stuck || updateCleaning || busy || switchingId) return;
+    if (updateState.running) {
+      showMsg("warning", t("cursor.updateCleanupNeedQuit"));
+      return;
+    }
+    const backupNote =
+      updateState.backupBytes > 0
+        ? `\n${t("cursor.updateCleanupBackup", { size: formatBytes(updateState.backupBytes) })}`
+        : "";
+    const ok = await confirm({
+      title: t("cursor.updateCleanupTitle"),
+      message: `${updateState.message}\n${updateState.files
+        .map((file) => `• ${file}`)
+        .join("\n")}${backupNote}`,
+      warning: t("cursor.updateCleanupWarning"),
+      confirmText: t("cursor.updateCleanupConfirm"),
+      icon: "warning",
+    });
+    if (!ok) return;
+    setUpdateCleaning(true);
+    try {
+      const result = await invokeCleanupCursorUpdateState();
+      showMsg("success", result.message || t("cursor.updateCleanupOk"));
+    } catch (e) {
+      showMsg("error", `${t("cursor.updateCleanupFailed")}: ${e}`);
+    } finally {
+      setUpdateCleaning(false);
+      await refreshUpdateState();
     }
   };
 
@@ -1278,6 +1329,35 @@ function CursorManager() {
           </ul>
         )}
       </div>
+
+      {updateState?.stuck && (
+        <div className="cursor-update-alert">
+          <AlertCircle size={14} className="cursor-update-alert-icon" />
+          <div className="cursor-update-alert-body">
+            <div className="cursor-update-alert-title">{t("cursor.updateCleanupDetected")}</div>
+            <div className="cursor-update-alert-text">{updateState.message}</div>
+            <div className="runtime-muted cursor-update-alert-hint">
+              {updateState.running
+                ? t("cursor.updateCleanupNeedQuit")
+                : t("cursor.updateCleanupHint")}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={handleCleanupUpdateState}
+            disabled={updateState.running || updateCleaning || busy || Boolean(switchingId)}
+            title={
+              updateState.running
+                ? t("cursor.updateCleanupNeedQuit")
+                : t("cursor.updateCleanupHint")
+            }
+          >
+            {updateCleaning ? <Loader2 size={12} className="spin" /> : <Trash2 size={12} />}
+            {t("cursor.updateCleanupAction")}
+          </button>
+        </div>
+      )}
 
       <div className="cursor-disk-bar">
         <div className="cursor-disk-bar-main">

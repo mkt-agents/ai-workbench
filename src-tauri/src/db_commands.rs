@@ -108,6 +108,15 @@ fn json_bool_as_i64(obj: &serde_json::Map<String, serde_json::Value>, key: &str)
     }
 }
 
+/// Nullable tri-state column (e.g. a test that passed, failed, or never ran).
+fn json_opt_i64(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<i64> {
+    match obj.get(key) {
+        Some(serde_json::Value::Bool(b)) => Some(if *b { 1 } else { 0 }),
+        Some(serde_json::Value::Number(n)) => n.as_i64(),
+        _ => None,
+    }
+}
+
 fn json_f64(obj: &serde_json::Map<String, serde_json::Value>, key: &str, default: f64) -> f64 {
     obj.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
 }
@@ -268,7 +277,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
         }
         DbTable::AiModels => {
             tx.execute(
-                "INSERT INTO ai_models (id, name, provider, api_key, auth_type, base_url, model, temperature, max_tokens, is_default, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO ai_models (id, name, provider, api_key, auth_type, base_url, model, temperature, max_tokens, is_default, last_test_ok, last_test_at, last_test_msg, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
                     json_str(obj, "id")?,
                     json_str(obj, "name")?,
@@ -280,6 +289,9 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_f64(obj, "temperature", 0.7),
                     json_i64(obj, "max_tokens", 4096),
                     json_bool_as_i64(obj, "is_default")?,
+                    json_opt_i64(obj, "last_test_ok"),
+                    json_opt_str(obj, "last_test_at"),
+                    json_opt_str(obj, "last_test_msg"),
                     json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
                 ],
@@ -434,6 +446,72 @@ mod tests {
         tx.commit().unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM git_accounts", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// The test-result columns must survive the whole-table save, including the
+    /// "never tested" case where they stay NULL.
+    #[test]
+    fn ai_models_roundtrip_keeps_last_test_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"CREATE TABLE ai_models (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL,
+                api_key TEXT NOT NULL, auth_type TEXT DEFAULT 'api', base_url TEXT NOT NULL,
+                model TEXT NOT NULL, temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT 4096,
+                is_default INTEGER DEFAULT 0, last_test_ok INTEGER, last_test_at TEXT,
+                last_test_msg TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );"#,
+        )
+        .unwrap();
+
+        let base = |id: &str| {
+            let mut map = serde_json::Map::new();
+            map.insert("id".into(), id.into());
+            map.insert("name".into(), "m".into());
+            map.insert("provider".into(), "openai".into());
+            map.insert("api_key".into(), "k".into());
+            map.insert("base_url".into(), "http://x".into());
+            map.insert("model".into(), "gpt".into());
+            map.insert("created_at".into(), "2026-01-01".into());
+            map.insert("updated_at".into(), "2026-01-01".into());
+            map
+        };
+        let mut tested = base("t1");
+        tested.insert("last_test_ok".into(), true.into());
+        tested.insert("last_test_at".into(), "2026-09-19T00:00:00Z".into());
+        tested.insert("last_test_msg".into(), "ok".into());
+        let mut failed = base("t2");
+        failed.insert("last_test_ok".into(), false.into());
+        failed.insert("last_test_at".into(), "2026-09-19T00:00:00Z".into());
+        failed.insert("last_test_msg".into(), serde_json::Value::Null);
+
+        let tx = conn.unchecked_transaction().unwrap();
+        insert_row(&tx, DbTable::AiModels, &tested).unwrap();
+        insert_row(&tx, DbTable::AiModels, &failed).unwrap();
+        insert_row(&tx, DbTable::AiModels, &base("t3")).unwrap();
+        tx.commit().unwrap();
+
+        let read = |id: &str| -> (Option<i64>, Option<String>, Option<String>) {
+            conn.query_row(
+                "SELECT last_test_ok, last_test_at, last_test_msg FROM ai_models WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(read("t1").0, Some(1));
+        assert_eq!(read("t1").2.as_deref(), Some("ok"));
+        assert_eq!(read("t2").0, Some(0));
+        assert_eq!(read("t2").2, None);
+        let never = read("t3");
+        assert_eq!(never.0, None);
+        assert_eq!(never.1, None);
     }
 
     #[test]

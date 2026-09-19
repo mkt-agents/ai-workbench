@@ -259,6 +259,16 @@ export interface AIModelConfig {
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Last connection test, persisted so the verdict survives a restart. */
+  lastTest?: AIModelTestResult | null;
+}
+
+export interface AIModelTestResult {
+  ok: boolean;
+  /** ISO timestamp of the test. */
+  at: string;
+  /** Backend message: empty when it passed, otherwise the failure reason. */
+  message: string;
 }
 
 export interface DshInstance {
@@ -337,6 +347,26 @@ export interface DevtoolsHttpResponse {
   duration_ms: number;
   headers: DevtoolsHeaderPair[];
   body: string;
+}
+
+export interface CursorUpdateState {
+  installDir: string;
+  exePresent: boolean;
+  stagingPresent: boolean;
+  backupBytes: number;
+  files: string[];
+  stage: string;
+  attempt: number;
+  /** New build already in place, but the "update in progress" markers survived. */
+  stuck: boolean;
+  running: boolean;
+  message: string;
+}
+
+export interface CursorCleanupResult {
+  removedFiles: number;
+  freedBytes: number;
+  message: string;
 }
 
 export interface GlobalStore {

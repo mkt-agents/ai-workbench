@@ -3628,6 +3628,47 @@ input, select, textarea { font-family: inherit; }
   margin: 0;
 }
 
+/* Cursor updater stuck on stale "in progress" markers — needs action, so it
+   gets more weight than the disk bar below it. */
+.cursor-update-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: color-mix(in srgb, var(--red) 8%, var(--bg-1));
+  border: 1px solid color-mix(in srgb, var(--red) 32%, var(--border-subtle));
+  border-left: 3px solid var(--red);
+  border-radius: var(--radius-md);
+}
+
+.cursor-update-alert-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--red);
+}
+
+.cursor-update-alert-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cursor-update-alert-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.cursor-update-alert-text,
+.cursor-update-alert-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
 .cursor-disk-bar {
   display: flex;
   align-items: center;
@@ -4403,6 +4444,60 @@ input, select, textarea { font-family: inherit; }
   color: var(--text-2);
 }
 
+.models-bulk-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* Toolbar selects: same 28px band as the search box so the row stays even. */
+.models-pick {
+  width: auto;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--text-1);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.models-pick:hover {
+  border-color: var(--accent);
+}
+
+.models-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.models-default-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--yellow-dim);
+  border: 1px solid color-mix(in srgb, var(--yellow) 35%, var(--border-subtle));
+  border-left: 3px solid var(--yellow);
+  border-radius: var(--radius-md);
+}
+
+.models-default-banner-icon {
+  flex-shrink: 0;
+  color: var(--yellow);
+}
+
+.models-default-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Row selection checkbox, kept outside the card actions so bulk ops read clearly. */
 .ai-model-select {
   display: inline-flex;
@@ -4736,6 +4831,17 @@ input, select, textarea { font-family: inherit; }
   opacity: 0.5;
 }
 
+/* Persisted verdict, so it is visible without hovering the test button. */
+.ai-test-state.is-ok {
+  color: var(--green);
+  font-weight: 500;
+}
+
+.ai-test-state.is-fail {
+  color: var(--red);
+  font-weight: 500;
+}
+
 .ai-model-actions {
   display: flex;
   gap: 4px;
@@ -4876,7 +4982,8 @@ input, select, textarea { font-family: inherit; }
 
 .models-modal .ai-form-span,
 .models-modal .ai-checkbox,
-.models-modal .ai-form-row {
+.models-modal .ai-form-row,
+.models-modal .ai-preset-grid {
   grid-column: 1 / -1;
 }
 
@@ -5207,25 +5314,181 @@ input, select, textarea { font-family: inherit; }
   flex: 1;
 }
 
-/* Range slider with value display */
-.ai-range-row {
+/* Numeric settings as one-click choices, with the live value and a one-line
+   explanation so the label alone is enough to decide. */
+.ai-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px 20px;
+}
+
+.ai-preset-field {
+  /* Width of the "custom value" box the temperature field may show. */
+  --ai-preset-input-w: 92px;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.ai-range-row input[type="range"] {
-  flex: 1;
-  accent-color: var(--accent);
+/* Fixed-height control band: the token field has an extra scale row, and this
+   keeps both explanations on the same baseline. */
+.ai-preset-control {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 48px;
 }
 
-.ai-range-value {
+.ai-preset-field .input-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.ai-preset-value {
   font-size: 12px;
   font-weight: 600;
   color: var(--accent);
-  min-width: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-seg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Equal-width words read as one control instead of three loose pills. */
+.ai-seg-fill .ai-seg-btn {
+  flex: 1;
+  text-align: center;
+}
+
+.ai-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 11px;
+  font-size: 12.5px;
+  line-height: 1.2;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.ai-seg-btn:hover {
+  color: var(--text-0);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+}
+
+.ai-seg-btn.is-active {
+  color: var(--text-0);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-2));
+  border-color: var(--accent);
+}
+
+/* Off-preset values get their own row instead of squeezing between the chips. */
+.ai-preset-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-preset-custom-label {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.ai-seg-input {
+  width: var(--ai-preset-input-w);
+  min-height: 28px;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 12.5px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.ai-token-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 28px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ai-token-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--ai-slider-progress, 0%),
+    color-mix(in srgb, var(--text-2) 26%, transparent) var(--ai-slider-progress, 0%)
+  );
+}
+
+.ai-token-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.ai-token-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-2) 26%, transparent);
+}
+
+.ai-token-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.ai-token-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-1);
+}
+
+.ai-token-slider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.ai-token-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-preset-hint {
+  /* Bottom-aligned so both columns' explanations stay on one line even when
+     one of them shows an extra control row. */
+  margin-top: auto;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
 }
 
 .ai-checkbox {
