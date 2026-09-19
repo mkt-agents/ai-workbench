@@ -115,17 +115,6 @@ function isRepoDirty(
   return !!s?.isGit && ((s.dirtyCount ?? 0) > 0 || (statusEntries?.length ?? 0) > 0);
 }
 
-/** Workspace filter value that includes `repoPath`. */
-function filterValueForRepo(
-  repoPath: string,
-  workspaces: { id: number; path: string }[]
-): string {
-  const ws = findWorkspaceForRepo(repoPath, workspaces);
-  if (ws) return `ws-${ws.id}`;
-  if (workspaces.length > 0) return "other";
-  return "all";
-}
-
 function statusCode(entry: GitStatusEntry): string {
   if (entry.group === "untracked") return "?";
   if (entry.group === "staged") return (entry.indexStatus || "M").trim() || "M";
@@ -582,28 +571,9 @@ function CommitChangelist({
     [summaries]
   );
 
-  // Wrong filter (e.g.「其它仓库」) hides dirty repos — jump to a filter that shows them.
-  useEffect(() => {
-    if (!active || loading) return;
-    if (filter === "all") return;
-    if (dirtyRepos.length > 0) return;
-    if (allDirtyRepos.length === 0) return;
-    const prefer =
-      (currentGitRepo && findProjectByPath(allDirtyRepos, currentGitRepo)) || allDirtyRepos[0];
-    if (!prefer) {
-      setFilter("all");
-      return;
-    }
-    setFilter(filterValueForRepo(prefer.path, gitWorkspaces));
-  }, [
-    active,
-    loading,
-    filter,
-    dirtyRepos.length,
-    allDirtyRepos,
-    currentGitRepo,
-    gitWorkspaces,
-  ]);
+  // The filter is the user's choice (and is restored between visits): a clean
+  // workspace must stay selectable. The empty state offers a one-click jump to
+  // the repos that do have changes instead of overriding it here.
 
   // currentGitRepo only changes on user click (or first-time unset during refresh) — never steal it.
 
