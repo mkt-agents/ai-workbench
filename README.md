@@ -25,14 +25,14 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 - **Harness**：启动/停止本地 `@deepseek-ai/dsh`，iframe 内嵌 Web UI；侧栏切走后保活；自定义启动端口；浏览器打开
 - **快问**：托盘常驻；默认 `Ctrl+Alt+K`；桌面浮漂；流式问答；多轮追问 / 重新生成；可选工作区 / Git / Dirty / 剪贴板上下文
-- **模型配置**：多厂商与 OpenAI 兼容接口；增删改查、连接测试、批量测试/同步/删除、分组视图、同步 DSH
+- **模型配置**：多厂商与 OpenAI 兼容接口；增删改查、连接测试、批量测试/同步/删除、分组视图、同步 DSH；批量测试并发 4 路并显示进度，测试结果（通过/失败 + 时间）落库、重启后仍在；支持按测试状态筛选与排序；随机度 / 最长输出改为档位化选择（1K→1M 对数滑杆）
 - **AI 提示词**：基于已配置模型改写提示词
 - **片段库**：本地 CRUD，`{{param}}` 替换后复制或插入快问；JSON 导入导出、克隆、实时预览
 
 ### 账号与 Git
 
-- **Cursor**：多账号一键切换 —— `%APPDATA%\Cursor` 为**单一数据源**，工作区 / 历史 / 扩展 / Agent 数据 / Composer 会话只存一份，账号 profile 只是指向它的 junction 壳；切换账号只替换共享库里的 `cursorAuth/*` 登录键（各账号登录态快照单独保存在 `cursor-backups/<id>/auth.json`），互不覆盖；磁盘占用可视化 + DB 瘦身（VACUUM + 移除旧共享层）；可选本机密码备忘，支持诊断导出。Git 身份在「Git 管理」页按仓库 / 域名配置，与 Cursor 账号切换互不影响
-- **Git 管理**：仓库总览 / 扫描 / 搜索 / 批量身份 / 批量拉推 / 批量移除；提交页多仓变更、diff、提交与推送、AI 生成说明；账号支持按域名绑定（origin 自动匹配），身份匹配顺序：路径精确绑定 > 域名绑定 > 全局 git config
+- **Cursor**：多账号一键切换 —— `%APPDATA%\Cursor` 为**单一数据源**，工作区 / 历史 / 扩展 / Agent 数据 / Composer 会话只存一份，账号 profile 只是指向它的 junction 壳；切换账号只替换共享库里的 `cursorAuth/*` 登录键（各账号登录态快照单独保存在 `cursor-backups/<id>/auth.json`），互不覆盖；磁盘占用可视化 + DB 瘦身（VACUUM + 移除旧共享层）；可检测并清理 Cursor 自更新中断留下的陈旧标记（否则每次启动弹「拒绝访问 os error 5」，清理为**移出可还原**而非删除）；可选本机密码备忘，支持诊断导出。Git 身份在「Git 管理」页按仓库 / 域名配置，与 Cursor 账号切换互不影响
+- **Git 管理**：仓库总览 / 扫描 / 搜索 / 批量身份 / 批量拉推 / 批量移除；提交页多仓变更、diff、提交与推送、AI 生成说明；账号支持按域名绑定（origin 自动匹配），身份匹配顺序：路径精确绑定 > 域名绑定 > 全局 git config。仓库状态由后端 `git_summarize_repos` 一次批量读取（每仓 2 个 git 进程、单进程 4s 超时），仓库页与提交页共享同一份缓存、缓存优先渲染 + 后台静默刷新；批量推送前会列出「落后会被拒绝」和「无上游将首次发布远端分支」的仓库供确认；刷新不会覆盖你取消勾选的文件
 
 ### 开发环境
 
@@ -132,7 +132,7 @@ Start-Process .\src-tauri\target\debug\ai_workbench.exe
 | `src-tauri/tauri.conf.json` | `"version"` |
 | `src-tauri/Cargo.toml` | `version`（`src-tauri/Cargo.lock` 未被 git 跟踪，构建时自动更新） |
 
-当前版本：`0.1.4`（设置页通过 Tauri `getVersion()` 读取）。
+当前版本：`0.1.6`（设置页通过 Tauri `getVersion()` 读取）。发布前务必核对上表四处一致——`src-tauri/Cargo.toml` 最容易漏（它决定 exe 文件属性里的版本号）。
 
 ### 构建
 
