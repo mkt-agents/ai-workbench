@@ -1434,8 +1434,13 @@ function AIAssistant() {
                         <Download size={12} />
                       )}
                     </button>
-                    <button className="btn btn-primary btn-small" onClick={openCreateModal}>
-                      <Plus size={14} /> {t("models.addModel")}
+                    <button
+                      className="btn btn-primary btn-small"
+                      onClick={openCreateModal}
+                      title={t("models.addModel")}
+                    >
+                      <Plus size={14} />
+                      <span className="ai-action-label">{t("models.addModel")}</span>
                     </button>
                   </>
                 )}
