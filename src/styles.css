@@ -9004,6 +9004,11 @@ input, select, textarea { font-family: inherit; }
 }
 
 .repos-batch-bar {
+  /* Stays reachable while scrolling a long list — the selection would
+     otherwise vanish together with the progress line. */
+  position: sticky;
+  top: 0;
+  z-index: 4;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -9872,15 +9877,30 @@ input, select, textarea { font-family: inherit; }
 
 .cl-diff-head {
   flex-shrink: 0;
-  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-0) 55%, var(--bg-1));
+}
+
+.cl-diff-head-title {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.cl-diff-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .cl-diff-empty {
@@ -10082,6 +10102,12 @@ input, select, textarea { font-family: inherit; }
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   z-index: 2;
+}
+
+/* The commit bar is pinned to the bottom of this page, so a centred toast at
+   bottom:24 would sit on top of the commit buttons. */
+.git-commit-page > .toast {
+  bottom: 152px;
 }
 
 .cl-commit-msg {

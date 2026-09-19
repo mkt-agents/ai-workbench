@@ -219,6 +219,7 @@
     "tagNeedsInit": "Pending init",
     "tagReady": "Isolated sign-in · shared workspace",
     "tagSnapshotBad": "Snapshot incomplete",
+    "checkingSnapshot": "Checking snapshot…",
     "needsInitHint": "Sign in inside the isolated Cursor, then click \"Finish Init\"",
     "snapshotReasonHint": "{{reason}} — click \"Finish Init\" again",
     "checkSnapshotFailed": "Could not check snapshot",

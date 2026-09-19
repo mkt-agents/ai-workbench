@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -103,6 +105,103 @@ fn git_stdout(repo_path: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
 }
 
+/// How long a single git call may run inside the batch summary before it is
+/// killed. Reads only, so killing is always safe.
+const GIT_BATCH_TIMEOUT_SECS: u64 = 4;
+
+/// Run git with a hard deadline and captured pipes.
+///
+/// The batch summary runs many repos in one IPC, so one wedged call — a stale
+/// `index.lock`, an offline network share, a credential prompt — would hang
+/// every other repo and tie up blocking-pool threads, and the cache-first UI
+/// would surface that as "nothing ever refreshes".
+fn git_output_timed(
+    repo_path: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = git_command()
+        .args(args)
+        .current_dir(repo_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(map_git_spawn_err)?;
+
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<u8>)>();
+    // Drain both pipes on their own threads: a full 64KB stderr buffer would
+    // otherwise deadlock git before it can exit.
+    if let Some(mut pipe) = child.stdout.take() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            let _ = tx.send((0usize, buf));
+        });
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            let _ = tx.send((1usize, buf));
+        });
+    }
+    drop(tx);
+
+    let verb = args.first().copied().unwrap_or("");
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "git {verb} 超时（>{}s），已跳过",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(format!("等待 git {verb} 失败: {}", e));
+            }
+        }
+    };
+
+    // Pipes hit EOF once the child is reaped, so this normally returns at once.
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    while let Ok((slot, buf)) = rx.recv_timeout(Duration::from_millis(500)) {
+        if slot == 0 {
+            stdout = buf;
+        } else {
+            stderr = buf;
+        }
+    }
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// `git_stdout` variant that reports a non-zero exit as an error carrying stderr.
+fn git_stdout_timed(repo_path: &str, args: &[&str]) -> Result<String, String> {
+    let output = git_output_timed(repo_path, args, Duration::from_secs(GIT_BATCH_TIMEOUT_SECS))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    while text.ends_with('\n') || text.ends_with('\r') {
+        text.pop();
+    }
+    Ok(text)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRepoSummary {
@@ -192,6 +291,376 @@ fn summarize_repo_sync(repo_path: String) -> GitRepoSummary {
         is_git: true,
         error: None,
     }
+}
+
+/// One repo's card state, gathered with two git calls instead of six.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoBatchItem {
+    pub path: String,
+    pub name: String,
+    pub branch: String,
+    pub dirty_count: u32,
+    pub ahead: u32,
+    pub behind: u32,
+    pub has_upstream: bool,
+    pub has_commits: bool,
+    pub user_name: String,
+    pub user_email: String,
+    pub origin_url: String,
+    pub status: Vec<GitStatusEntry>,
+    pub is_git: bool,
+    pub error: Option<String>,
+}
+
+/// Parsed `git status --porcelain=v2 -z --branch -uall`.
+#[derive(Debug, Default)]
+struct V2Status {
+    branch: String,
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+    /// `# branch.ab` present at all — the pair (upstream, ab) is what v1's
+    /// successful `rev-list` meant; upstream alone can show while the branch
+    /// has no commits, and treating that as pushable invites a false push.
+    ab_seen: bool,
+    /// `# branch.oid` all-zero: a branch with no commits yet. Nothing can be
+    /// undone or pushed there, so the UI must know before offering either.
+    unborn: bool,
+    entries: Vec<GitStatusEntry>,
+}
+
+/// Porcelain v2 writes `.` where v1 writes a space for "unchanged" (the fields
+/// are space-separated, so a literal space would break parsing). Normalising
+/// back keeps every downstream comparison identical to the v1 path.
+fn normalize_xy(c: char) -> char {
+    if c == '.' {
+        ' '
+    } else {
+        c
+    }
+}
+
+fn status_group(index: char, work: char) -> &'static str {
+    let index = normalize_xy(index);
+    let work = normalize_xy(work);
+    if index == '?' && work == '?' {
+        "untracked"
+    } else if index != ' ' && index != '?' {
+        "staged"
+    } else {
+        "unstaged"
+    }
+}
+
+fn entry_from_xy(xy: &str, path: String) -> Option<GitStatusEntry> {
+    let mut chars = xy.chars();
+    let index = normalize_xy(chars.next()?);
+    let work = normalize_xy(chars.next()?);
+    if !is_porcelain_status_char(index) || !is_porcelain_status_char(work) || path.is_empty() {
+        return None;
+    }
+    Some(GitStatusEntry {
+        path,
+        index_status: index.to_string(),
+        work_tree_status: work.to_string(),
+        group: status_group(index, work).to_string(),
+    })
+}
+
+/// Split one porcelain record into the changelist rows the UI expects: a path
+/// that is both staged and modified yields two rows (shared with `git_status`).
+fn expand_porcelain_entry(e: GitStatusEntry) -> Vec<GitStatusEntry> {
+    let mut out = Vec::new();
+    if e.index_status != " " && e.index_status != "?" {
+        out.push(GitStatusEntry {
+            path: e.path.clone(),
+            index_status: e.index_status.clone(),
+            work_tree_status: " ".into(),
+            group: "staged".into(),
+        });
+    }
+    if e.work_tree_status != " " && e.work_tree_status != "?" && e.group != "untracked" {
+        out.push(GitStatusEntry {
+            path: e.path.clone(),
+            index_status: " ".into(),
+            work_tree_status: e.work_tree_status.clone(),
+            group: "unstaged".into(),
+        });
+    }
+    if e.group == "untracked" {
+        out.push(e);
+    }
+    out
+}
+
+/// Parse NUL-separated porcelain v2 output. `-z` moves rename/unmerged path
+/// fields into their own tokens, so the record type decides how many tokens to
+/// consume — splitting on newlines instead would mis-align everything after a
+/// renamed file.
+fn parse_status_v2_z(raw: &str) -> V2Status {
+    let mut out = V2Status::default();
+    let mut tokens = raw.split('\0').filter(|t| !t.is_empty());
+
+    while let Some(token) = tokens.next() {
+        if let Some(header) = token.strip_prefix("# ") {
+            let mut parts = header.splitn(2, ' ');
+            let key = parts.next().unwrap_or("");
+            let value = parts.next().unwrap_or("").trim();
+            match key {
+                "branch.head" => out.branch = value.to_string(),
+                "branch.oid" => {
+                    out.unborn = value.is_empty() || value.chars().all(|c| c == '0');
+                }
+                "branch.upstream" => {
+                    if !value.is_empty() {
+                        out.upstream = Some(value.to_string());
+                    }
+                }
+                "branch.ab" => {
+                    let mut seen = false;
+                    for field in value.split_whitespace() {
+                        if let Some(n) = field.strip_prefix('+') {
+                            out.ahead = n.parse().unwrap_or(0);
+                            seen = true;
+                        } else if let Some(n) = field.strip_prefix('-') {
+                            out.behind = n.parse().unwrap_or(0);
+                            seen = true;
+                        }
+                    }
+                    out.ab_seen = seen;
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        let kind = token.chars().next().unwrap_or(' ');
+        // (space-separated field count including the trailing path, and how
+        //  many further path tokens `-z` split onto their own lines).
+        let (fields, trailing_paths) = match kind {
+            '1' => (9, 0usize), // 1 XY sub mH mI mW hH hI <path>
+            '2' => (10, 1),    // 2 XY sub mH mI mW hH hI X<score> <path> + <origPath>
+            'u' => (10, 2),    // u XY sub mH mI mW iH iI iA <p1> + <p2> <p3>
+            '?' => (2, 0),     // ? <path>  — no XY field at all
+            _ => continue,     // '!' ignored submodule, or anything unknown
+        };
+        let pieces: Vec<&str> = token.splitn(fields, ' ').collect();
+        if pieces.len() < fields {
+            continue; // malformed record; never guess a path
+        }
+        // Untracked records carry no XY; v1 spelled them "??".
+        let xy = if kind == '?' { "??" } else { pieces[1] };
+        // `splitn` leaves the whole remainder in the final piece, so a path
+        // containing spaces survives intact.
+        let path = unquote_porcelain_path(pieces[fields - 1]);
+        // The remaining paths of a rename/unmerged record must still be
+        // consumed, or the next iteration would read them as fresh records.
+        for _ in 0..trailing_paths {
+            if tokens.next().is_none() {
+                break;
+            }
+        }
+        if let Some(entry) = entry_from_xy(xy, path) {
+            out.entries.push(entry);
+        }
+    }
+    out
+}
+
+/// Parse `git config --get-regexp` output ("key value" per line). Git lists
+/// matches in increasing precedence, so the last value per key is the effective
+/// one — the same answer `git config <key>` gives.
+fn parse_config_pairs(raw: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in raw.lines() {
+        let line = line.trim_end_matches(['\r']);
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(' ') {
+            map.insert(key.to_string(), value.trim().to_string());
+        } else {
+            map.insert(line.to_string(), String::new());
+        }
+    }
+    map
+}
+
+fn is_not_a_git_repo(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    // Only a genuine "not a repository" answers is_git=false: a permission or
+    // offline-share error must not turn the card into a removable non-repo.
+    lower.contains("not a git repository") || lower.contains("not inside a git")
+}
+
+fn is_unknown_option(stderr: &str) -> bool {
+    stderr.to_ascii_lowercase().contains("unknown option")
+}
+
+/// Two git calls per repo: porcelain v2 (branch/upstream/ahead-behind/changes)
+/// and one config regexp (identity + origin URL).
+fn collect_repo_batch_item(
+    repo_path: String,
+    include_status: bool,
+) -> Result<RepoBatchItem, String> {
+    let name = repo_display_name(&repo_path);
+    let status_args = ["status", "--porcelain=v2", "-z", "--branch", "-uall"];
+
+    let v2 = match git_stdout_timed(&repo_path, &status_args) {
+        Ok(raw) => parse_status_v2_z(&raw),
+        Err(e) if is_not_a_git_repo(&e) => {
+            return Ok(RepoBatchItem {
+                path: repo_path,
+                name,
+                branch: String::new(),
+                dirty_count: 0,
+                ahead: 0,
+                behind: 0,
+                has_upstream: false,
+                has_commits: false,
+                user_name: String::new(),
+                user_email: String::new(),
+                origin_url: String::new(),
+                status: Vec::new(),
+                is_git: false,
+                error: Some(e),
+            });
+        }
+        // git < 2.11 has no porcelain v2: keep the old three-call path working.
+        Err(e) if is_unknown_option(&e) => {
+            let summary = summarize_repo_sync(repo_path.clone());
+            let entries = if include_status {
+                git_status_sync(repo_path.clone()).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            return Ok(RepoBatchItem {
+                path: summary.path,
+                name: summary.name,
+                branch: summary.branch,
+                dirty_count: summary.dirty_count,
+                ahead: summary.ahead,
+                behind: summary.behind,
+                has_upstream: summary.has_upstream,
+                has_commits: true,
+                user_name: summary.user_name,
+                user_email: summary.user_email,
+                origin_url: git_stdout(&repo_path, &["config", "--get", "remote.origin.url"])
+                    .unwrap_or_default(),
+                status: entries,
+                is_git: summary.is_git,
+                error: summary.error.or(Some(e)),
+            });
+        }
+        Err(e) => return Err(e),
+    };
+
+    let config_raw = git_stdout_timed(
+        &repo_path,
+        &[
+            "config",
+            "--get-regexp",
+            r"^(user\.name|user\.email|remote\.origin\.url)$",
+        ],
+    )
+    .unwrap_or_default();
+    let config = parse_config_pairs(&config_raw);
+
+    let status: Vec<GitStatusEntry> = if include_status {
+        v2.entries
+            .clone()
+            .into_iter()
+            .flat_map(expand_porcelain_entry)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(RepoBatchItem {
+        path: repo_path,
+        name,
+        branch: v2.branch,
+        dirty_count: v2.entries.len() as u32,
+        ahead: v2.ahead,
+        behind: v2.behind,
+        has_upstream: v2.upstream.is_some() && v2.ab_seen,
+        has_commits: !v2.unborn,
+        user_name: config.get("user.name").cloned().unwrap_or_default(),
+        user_email: config.get("user.email").cloned().unwrap_or_default(),
+        origin_url: config.get("remote.origin.url").cloned().unwrap_or_default(),
+        status,
+        is_git: true,
+        error: None,
+    })
+}
+
+/// How many repos are summarized in parallel inside one IPC.
+const GIT_SUMMARIZE_WORKERS: usize = 8;
+
+/// A failed repo must not sink the other 39 in the batch: report it per item.
+fn batch_error_item(repo_path: String, error: String) -> RepoBatchItem {
+    RepoBatchItem {
+        name: repo_display_name(&repo_path),
+        path: repo_path,
+        branch: String::new(),
+        dirty_count: 0,
+        ahead: 0,
+        behind: 0,
+        has_upstream: false,
+        has_commits: true,
+        user_name: String::new(),
+        user_email: String::new(),
+        origin_url: String::new(),
+        status: Vec::new(),
+        // Unknown: never claim "not a git repo", that would offer destructive
+        // UI affordances for a repo we merely could not read.
+        is_git: true,
+        error: Some(error),
+    }
+}
+
+/// Batch card state for many repos in one IPC.
+#[tauri::command]
+pub async fn git_summarize_repos(
+    paths: Vec<String>,
+    include_status: bool,
+) -> Result<Vec<RepoBatchItem>, String> {
+    tokio::task::spawn_blocking(move || {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Contiguous chunks, joined in order: no shared mutable state, and the
+        // result index still lines up with `paths`.
+        let workers = GIT_SUMMARIZE_WORKERS.min(paths.len());
+        let per = (paths.len() + workers - 1) / workers;
+        let mut results: Vec<RepoBatchItem> = Vec::with_capacity(paths.len());
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = paths
+                .chunks(per)
+                .map(|chunk| {
+                    let chunk = chunk.to_vec();
+                    scope.spawn(move || {
+                        chunk
+                            .into_iter()
+                            .map(|path| {
+                                collect_repo_batch_item(path.clone(), include_status)
+                                    .unwrap_or_else(|error| batch_error_item(path, error))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            for handle in handles {
+                if let Ok(items) = handle.join() {
+                    results.extend(items);
+                }
+            }
+        });
+        Ok(results)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
 }
 
 fn is_porcelain_status_char(c: char) -> bool {
@@ -1549,5 +2018,230 @@ mod tests {
         let e = parse_porcelain_line(line).expect("parse quoted");
         assert_eq!(e.group, "untracked");
         assert_eq!(e.path, "你好.md");
+    }
+}
+
+#[cfg(test)]
+mod v2_tests {
+    use super::{
+        is_not_a_git_repo, is_unknown_option, parse_config_pairs, parse_status_v2_z,
+        status_group,
+    };
+
+    const NUL: char = '\0';
+
+    fn join(parts: &[&str]) -> String {
+        parts.iter().map(|p| format!("{p}{NUL}")).collect()
+    }
+
+    #[test]
+    fn reads_branch_upstream_and_ahead_behind() {
+        let raw = join(&[
+            "# branch.oid 6ae9b0c",
+            "# branch.head main",
+            "# branch.upstream origin/main",
+            "# branch.ab +2 -1",
+            "1 .M N... 100644 100644 100644 3aa6 3aa6 src/app.ts",
+            "? notes.md",
+        ]);
+        let s = parse_status_v2_z(&raw);
+        assert_eq!(s.branch, "main");
+        assert_eq!(s.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((s.ahead, s.behind, s.ab_seen), (2, 1, true));
+        assert_eq!(s.entries.len(), 2, "one modified + one untracked");
+        assert_eq!(s.entries[0].path, "src/app.ts");
+        assert_eq!(s.entries[0].group, "unstaged");
+        assert_eq!(s.entries[1].path, "notes.md");
+        assert_eq!(s.entries[1].group, "untracked");
+    }
+
+    #[test]
+    fn entry_groups_match_v1_rules() {
+        assert_eq!(status_group('.', 'M'), "unstaged");
+        assert_eq!(status_group('M', ' '), "staged");
+        assert_eq!(status_group('?', '?'), "untracked");
+    }
+
+    #[test]
+    fn rename_consumes_its_orig_path_token() {
+        // `-z` puts the old path in its own record; if it were not consumed the
+        // next iteration would read "old/name.ts" as a fresh entry.
+        let raw = join(&[
+            "# branch.oid abc",
+            "# branch.head main",
+            "2 R. N... 100644 100644 100644 aaa bbb R100 new/dir/file.ts",
+            "old/dir/file.ts",
+            "? tail.txt",
+        ]);
+        let s = parse_status_v2_z(&raw);
+        assert_eq!(s.entries.len(), 2, "rename must not yield a phantom entry");
+        assert_eq!(s.entries[0].path, "new/dir/file.ts");
+        assert_eq!(s.entries[0].index_status, "R");
+        assert_eq!(s.entries[1].path, "tail.txt");
+    }
+
+    #[test]
+    fn unmerged_consumes_both_extra_path_tokens() {
+        let raw = join(&[
+            "# branch.oid abc",
+            "# branch.head main",
+            "u UU N... 100644 100644 100644 100644 100644 100644 src/merging.ts",
+            ":1:src/merging.ts",
+            ":2:src/merging.ts",
+            "1 .M N... 100644 100644 100644 a b after.ts",
+        ]);
+        let s = parse_status_v2_z(&raw);
+        assert_eq!(s.entries.len(), 2);
+        assert_eq!(s.entries[0].path, "src/merging.ts");
+        assert_eq!(s.entries[0].group, "staged");
+        assert_eq!(s.entries[1].path, "after.ts");
+    }
+
+    #[test]
+    fn keeps_spaces_and_non_ascii_in_paths() {
+        let raw = join(&[
+            "# branch.oid abc",
+            "# branch.head main",
+            "1 .M N... 100644 100644 100644 a b docs/my report.md",
+            "? 中文文件.md",
+        ]);
+        let s = parse_status_v2_z(&raw);
+        assert_eq!(s.entries[0].path, "docs/my report.md");
+        assert_eq!(s.entries[1].path, "中文文件.md");
+    }
+
+    #[test]
+    fn detached_and_unborn_branches() {
+        let detached = parse_status_v2_z(&join(&[
+            "# branch.oid 5f3e",
+            "# branch.head (detached)",
+            "? x.txt",
+        ]));
+        assert_eq!(detached.branch, "(detached)");
+        assert!(!detached.ab_seen);
+        assert!(!detached.unborn);
+
+        let zeros = "0".repeat(40);
+        let unborn = parse_status_v2_z(&join(&[
+            &format!("# branch.oid {zeros}"),
+            "# branch.head main",
+            "? README.md",
+        ]));
+        assert!(unborn.unborn, "all-zero branch.oid means no commits yet");
+    }
+
+    #[test]
+    fn ignored_submodule_records_are_skipped() {
+        let s = parse_status_v2_z(&join(&[
+            "# branch.oid abc",
+            "# branch.head main",
+            "! vendor/sub",
+            "? real.txt",
+        ]));
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.entries[0].path, "real.txt");
+    }
+
+    #[test]
+    fn config_takes_last_value_and_keeps_spaces() {
+        let map = parse_config_pairs("user.name Old\nuser.name Zhang San\nuser.email a@b.com\n");
+        assert_eq!(map.get("user.name").map(String::as_str), Some("Zhang San"));
+        assert_eq!(map.get("user.email").map(String::as_str), Some("a@b.com"));
+        assert!(parse_config_pairs("").is_empty());
+    }
+
+    #[test]
+    fn only_a_real_non_repo_answers_not_a_repo() {
+        assert!(is_not_a_git_repo(
+            "fatal: not a git repository (or any of the parent directories): .git"
+        ));
+        // A permission or lock failure must NOT become is_git=false: the UI
+        // would then offer "remove" for a perfectly good repository.
+        assert!(!is_not_a_git_repo("error: could not open directory: Permission denied"));
+        assert!(!is_not_a_git_repo(
+            "fatal: Unable to create 'X/.git/index.lock': File exists."
+        ));
+        assert!(is_unknown_option("error: unknown option `porcelain=v2'"));
+    }
+
+    /// Real-git parity check: v2 records must match v1 lines path-for-path, or
+    /// every card would show a different dirty badge than before this change.
+    /// Excluded from the default run because it shells out to git; execute with
+    /// `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "creates a throwaway git repository and shells out to git"]
+    fn v1_and_v2_agree_on_changed_paths() {
+        use super::{git_output_timed, parse_porcelain_line};
+        use std::time::Duration;
+
+        let root = std::env::temp_dir().join(format!("aiwb-v2-parity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp dir");
+        let dir = root.to_string_lossy().to_string();
+        let run = |args: &[&str]| {
+            git_output_timed(&dir, args, Duration::from_secs(20))
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+
+        let outcome = (|| {
+            if !run(&["init", "-q", "-b", "main"]) {
+                return None;
+            }
+            run(&["config", "user.email", "parity@example.com"]);
+            run(&["config", "user.name", "Parity Test"]);
+
+            std::fs::write(root.join("a.txt"), "one\n").ok()?;
+            std::fs::write(root.join("b.txt"), "two\n").ok()?;
+            std::fs::create_dir_all(root.join("sub")).ok()?;
+            std::fs::write(root.join("sub/e.txt"), "nested\n").ok()?;
+            if !run(&["add", "-A"]) || !run(&["commit", "-q", "-m", "seed"]) {
+                return None;
+            }
+
+            // One unstaged edit, one untracked file, an untracked nested dir,
+            // and a staged rename — the shapes v1 and v2 encode differently.
+            std::fs::write(root.join("a.txt"), "changed\n").ok()?;
+            std::fs::write(root.join("c.txt"), "new\n").ok()?;
+            std::fs::create_dir_all(root.join("fresh/deep")).ok()?;
+            std::fs::write(root.join("fresh/deep/x.txt"), "deep\n").ok()?;
+            if !run(&["mv", "b.txt", "renamed.txt"]) {
+                return None;
+            }
+
+            let v1 = git_output_timed(&dir, &["status", "--porcelain=v1", "-uall"], Duration::from_secs(20)).ok()?;
+            let v2 = git_output_timed(
+                &dir,
+                &["status", "--porcelain=v2", "-z", "--branch", "-uall"],
+                Duration::from_secs(20),
+            )
+            .ok()?;
+
+            let mut v1_paths: Vec<String> = String::from_utf8_lossy(&v1.stdout)
+                .lines()
+                .filter_map(parse_porcelain_line)
+                .map(|e| e.path)
+                .collect();
+            let mut v2_paths: Vec<String> = parse_status_v2_z(&String::from_utf8_lossy(&v2.stdout))
+                .entries
+                .into_iter()
+                .map(|e| e.path)
+                .collect();
+            v1_paths.sort();
+            v2_paths.sort();
+            Some((v1_paths, v2_paths))
+        })();
+
+        let _ = std::fs::remove_dir_all(&root);
+        let (v1_paths, v2_paths) = outcome.expect("git setup failed in this environment");
+
+        assert_eq!(
+            v2_paths, v1_paths,
+            "porcelain v2 must report exactly the paths v1 reported"
+        );
+        assert!(
+            !v1_paths.is_empty(),
+            "fixture produced no changes; the comparison would be vacuous"
+        );
     }
 }

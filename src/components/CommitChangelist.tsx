@@ -13,11 +13,28 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
+import { GIT_CONCURRENCY, mapPoolCounted } from "../core/asyncPool";
+import { readStoredArray, readStoredString, writeStoredArray, writeStoredString } from "../core/localState";
+import {
+  getRepoSnapshot,
+  holdRepos,
+  invalidateRepos,
+  refreshRepos,
+  releaseRepos,
+  reposLoaded,
+} from "../core/gitCache";
 import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
+import { describePushTargets, isPushable } from "../core/gitPushScope";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
-import type { AIModelConfig, GitRepoSummary, GitStatusEntry, RecentProject } from "../core/types";
+import type {
+  AIModelConfig,
+  GitStatusEntry,
+  RecentProject,
+  RepoBatchItem,
+} from "../core/types";
 
 
 function identityMatches(
@@ -55,8 +72,13 @@ function findProjectByPath(projects: RecentProject[], path?: string): RecentProj
   return projects.find((p) => pathKey(p.path) === key);
 }
 
-const CONCURRENCY = 4;
 const AI_CONTEXT_MAX = 12_000;
+
+const CL_FILTER_KEY = "workbench-commit-filter";
+const CL_COLLAPSED_KEY = "workbench-commit-collapsed-repos";
+const CL_DRAFT_KEY = "workbench-commit-draft";
+/** Rendering more than this many diff lines as individual spans gets sluggish. */
+const DIFF_RENDER_LINES = 2000;
 
 const COMMIT_MSG_SYSTEM =
   "你是资深工程师。根据 git 变更写一条提交说明。" +
@@ -78,51 +100,9 @@ function truncateContext(text: string, max = AI_CONTEXT_MAX): string {
   return `${text.slice(0, max)}\n...(truncated)`;
 }
 
-async function mapPool<T>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<void>
-): Promise<void> {
-  if (items.length === 0) return;
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) break;
-      await fn(items[i]);
-    }
-  });
-  await Promise.all(workers);
-}
-
-async function mapPoolCounted(
-  paths: string[],
-  fn: (path: string) => Promise<void>,
-  onProgress?: (done: number, total: number) => void
-): Promise<{ ok: number; fail: number; errors: string[] }> {
-  let ok = 0;
-  let fail = 0;
-  let done = 0;
-  const errors: string[] = [];
-  const total = paths.length;
-  await mapPool(paths, CONCURRENCY, async (path) => {
-    try {
-      await fn(path);
-      ok += 1;
-    } catch (e) {
-      fail += 1;
-      errors.push(formatInvokeError(e));
-    } finally {
-      done += 1;
-      onProgress?.(done, total);
-    }
-  });
-  return { ok, fail, errors };
-}
-
 function isRepoDirty(
   path: string,
-  summaries: Record<string, GitRepoSummary>,
+  summaries: Record<string, RepoBatchItem>,
   statuses: Record<string, GitStatusEntry[]>
 ): boolean {
   const key = pathKey(path);
@@ -180,6 +160,37 @@ function selectionKey(entry: { path: string; group: string }): string {
   return `${entry.group}\0${entry.path}`;
 }
 
+/**
+ * Rebuild the checked set after a refresh without overriding the user.
+ *
+ * A plain "select all" here silently re-ticks files the user had just
+ * unticked, and the next commit then includes them — so previously seen
+ * entries keep their tick state, entries that appeared since default to
+ * checked, and vanished entries are dropped.
+ */
+function mergeSelection(
+  prev: Map<string, Set<string>>,
+  known: Map<string, Set<string>>,
+  next: Record<string, GitStatusEntry[]>
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [path, entries] of Object.entries(next)) {
+    const checked = prev.get(path);
+    const seen = known.get(path);
+    const kept = new Set<string>();
+    for (const entry of entries) {
+      const key = selectionKey(entry);
+      if (!seen || !seen.has(key)) {
+        kept.add(key);
+      } else if (!checked || checked.has(key)) {
+        kept.add(key);
+      }
+    }
+    out.set(path, kept);
+  }
+  return out;
+}
+
 function fileKey(repoPath: string, filePath: string, group?: string): string {
   return group ? `${repoPath}\0${group}\0${filePath}` : `${repoPath}\0${filePath}`;
 }
@@ -195,15 +206,35 @@ function diffLineClass(line: string): string {
 }
 
 function DiffPreview({ text }: { text: string }) {
+  const { t } = useTranslation("git");
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    setExpanded(false);
+  }, [text]);
   const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const hidden = !expanded && lines.length > DIFF_RENDER_LINES;
+  const shown = hidden ? lines.slice(0, DIFF_RENDER_LINES) : lines;
   return (
-    <pre className="git-diff-pre">
-      {lines.map((line, i) => (
-        <span key={i} className={diffLineClass(line)}>
-          {line || "\u00a0"}
-        </span>
-      ))}
-    </pre>
+    <>
+      {hidden && (
+        <div className="cl-diff-more">
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => setExpanded(true)}
+          >
+            {t("commit.diffShowAll", { count: lines.length - DIFF_RENDER_LINES })}
+          </button>
+        </div>
+      )}
+      <pre className="git-diff-pre">
+        {shown.map((line, i) => (
+          <span key={i} className={diffLineClass(line)}>
+            {line || "\u00a0"}
+          </span>
+        ))}
+      </pre>
+    </>
   );
 }
 
@@ -216,9 +247,6 @@ type DiffTarget = {
 type Props = {
   active: boolean;
   onToast: (type: "success" | "error", text: string) => void;
-  onDirtyScopeChange?: (paths: string[]) => void;
-  /** Parent reloads header summary when changelist finishes a refresh. */
-  onRefreshed?: () => void;
   refreshNonce?: number;
   onUndoLastCommit?: () => void;
   undoDisabled?: boolean;
@@ -340,8 +368,6 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: ModelS
 function CommitChangelist({
   active,
   onToast,
-  onDirtyScopeChange,
-  onRefreshed,
   refreshNonce = 0,
   onUndoLastCommit,
   undoDisabled,
@@ -362,8 +388,6 @@ function CommitChangelist({
   const loadRecentProjects = useGlobalStore((s) => s.loadRecentProjects);
   const loadWorkspaces = useGlobalStore((s) => s.loadWorkspaces);
   const setCurrentGitRepo = useGlobalStore((s) => s.setCurrentGitRepo);
-  const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
-  const invokeGitStatus = useGlobalStore((s) => s.invokeGitStatus);
   const invokeGitStage = useGlobalStore((s) => s.invokeGitStage);
   const invokeGitUnstage = useGlobalStore((s) => s.invokeGitUnstage);
   const invokeGitCommit = useGlobalStore((s) => s.invokeGitCommit);
@@ -376,21 +400,64 @@ function CommitChangelist({
   const invokeGenerateText = useGlobalStore((s) => s.invokeGenerateText);
   const aiModels = useGlobalStore((s) => s.aiModels);
 
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState(() => readStoredString(CL_FILTER_KEY, "all"));
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [message, setMessage] = useState("");
-  const [summaries, setSummaries] = useState<Record<string, GitRepoSummary>>({});
+  const [message, setMessage] = useState(() => readStoredString(CL_DRAFT_KEY));
+  const [summaries, setSummaries] = useState<Record<string, RepoBatchItem>>({});
   const [statuses, setStatuses] = useState<Record<string, GitStatusEntry[]>>({});
   const [selected, setSelected] = useState<Map<string, Set<string>>>(() => new Map());
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(readStoredArray<string>(CL_COLLAPSED_KEY))
+  );
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [diffText, setDiffText] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
   const refreshGen = useRef(0);
   const diffGen = useRef(0);
+  /** Until the first read lands, an empty changelist proves nothing. */
+  const loadedOnce = useRef(false);
+  /** Keys each repo showed on the previous refresh, to tell "new" from "still there". */
+  const knownKeysRef = useRef<Map<string, Set<string>>>(new Map());
+  const diffTargetRef = useRef<DiffTarget | null>(null);
+
+  useEffect(() => {
+    diffTargetRef.current = diffTarget;
+  }, [diffTarget]);
+
+  // View choices and the draft survive page switches (and app restarts).
+  useEffect(() => {
+    writeStoredString(CL_FILTER_KEY, filter);
+  }, [filter]);
+
+  useEffect(() => {
+    writeStoredArray(CL_COLLAPSED_KEY, [...collapsed]);
+  }, [collapsed]);
+
+  useEffect(() => {
+    writeStoredString(CL_DRAFT_KEY, message);
+  }, [message]);
+
+  const closeDiff = useCallback(() => {
+    ++diffGen.current; // drop an in-flight diff response
+    setDiffTarget(null);
+    setDiffText("");
+  }, []);
+
+  useEffect(() => {
+    if (!active || !diffTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // A dialog on top owns Escape; the diff pane only closes on its own.
+      if (document.querySelector(".modal-overlay")) return;
+      e.stopPropagation();
+      closeDiff();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, diffTarget, closeDiff]);
 
   const scanProjects = useMemo(
     () => projectsForScan(recentProjects, currentGitRepo),
@@ -415,56 +482,52 @@ function CommitChangelist({
 
   const refresh = useCallback(async () => {
     const gen = ++refreshGen.current;
-    setLoading(true);
+    // Cache-first: keep showing the last known changelist while re-reading.
+    if (!reposLoaded()) setLoading(true);
     try {
       await Promise.all([loadRecentProjects().catch(() => {}), loadWorkspaces().catch(() => {})]);
       if (gen !== refreshGen.current) return;
       const state = useGlobalStore.getState();
       const projects = projectsForScan(state.recentProjects, state.settings.currentGitRepo);
-      const nextSummaries: Record<string, GitRepoSummary> = {};
-      await mapPool(projects, CONCURRENCY, async (p) => {
-        try {
-          nextSummaries[p.path] = await invokeGitRepoSummary(p.path);
-        } catch (e) {
-          nextSummaries[p.path] = {
-            path: p.path,
-            name: p.name || projectNameFromPath(p.path),
-            branch: "",
-            dirtyCount: 0,
-            ahead: 0,
-            behind: 0,
-            hasUpstream: false,
-            userName: "",
-            userEmail: "",
-            isGit: false,
-            error: String(e),
-          };
-        }
-      });
+      // One batched read covers summaries *and* file lists: no second
+      // `git_status` pass per dirty repo any more.
+      await refreshRepos(projects.map((p) => p.path), { withStatus: true }).catch(() => {});
       if (gen !== refreshGen.current) return;
-      setSummaries(nextSummaries);
 
-      const dirty = projects.filter(
-        (p) => nextSummaries[p.path]?.isGit && (nextSummaries[p.path]?.dirtyCount ?? 0) > 0
-      );
+      const snapshot = getRepoSnapshot();
+      const nextSummaries: Record<string, RepoBatchItem> = {};
       const nextStatuses: Record<string, GitStatusEntry[]> = {};
-      const nextSelected = new Map<string, Set<string>>();
       const statusErrors: string[] = [];
-      await mapPool(dirty, CONCURRENCY, async (p) => {
-        try {
-          const entries = await invokeGitStatus(p.path);
-          nextStatuses[p.path] = entries;
-          nextSelected.set(p.path, new Set(entries.map((e) => selectionKey(e))));
-        } catch (e) {
-          nextStatuses[p.path] = [];
-          statusErrors.push(`${p.name || projectNameFromPath(p.path)}: ${formatInvokeError(e)}`);
+      for (const p of projects) {
+        const item = snapshot[p.path];
+        if (!item) continue;
+        nextSummaries[p.path] = item;
+        if (item.error) {
+          statusErrors.push(`${p.name || projectNameFromPath(p.path)}: ${item.error}`);
+          continue;
         }
-      });
-      if (gen !== refreshGen.current) return;
+        if (item.isGit && item.dirtyCount > 0) nextStatuses[p.path] = item.status;
+      }
+
       setStatuses(nextStatuses);
-      setSelected(nextSelected);
-      setDiffTarget(null);
-      setDiffText("");
+      setSummaries(nextSummaries);
+      setSelected((prev) => mergeSelection(prev, knownKeysRef.current, nextStatuses));
+      knownKeysRef.current = new Map(
+        Object.entries(nextStatuses).map(([path, entries]) => [
+          path,
+          new Set(entries.map(selectionKey)),
+        ])
+      );
+      // Keep an open diff unless its file left the changelist.
+      const target = diffTargetRef.current;
+      if (target) {
+        const alive = (nextStatuses[target.repoPath] || []).some(
+          (e) =>
+            e.path === target.filePath &&
+            (target.staged ? e.group === "staged" : e.group !== "staged")
+        );
+        if (!alive) closeDiff();
+      }
       if (statusErrors.length > 0) {
         onToast(
           "error",
@@ -473,23 +536,28 @@ function CommitChangelist({
           })
         );
       }
-      if (!state.settings.currentGitRepo && dirty[0]) {
-        setCurrentGitRepo(dirty[0].path);
+      const dirtyFirst = projects.find((p) => nextSummaries[p.path]?.isGit && (nextSummaries[p.path]?.dirtyCount ?? 0) > 0);
+      if (!state.settings.currentGitRepo && dirtyFirst) {
+        setCurrentGitRepo(dirtyFirst.path);
       }
-      onRefreshed?.();
     } finally {
+      loadedOnce.current = true;
       if (gen === refreshGen.current) setLoading(false);
     }
-  }, [
-    invokeGitRepoSummary,
-    invokeGitStatus,
-    loadRecentProjects,
-    loadWorkspaces,
-    onRefreshed,
-    onToast,
-    setCurrentGitRepo,
-    t,
-  ]);
+  }, [loadRecentProjects, loadWorkspaces, onToast, setCurrentGitRepo, t]);
+
+  /**
+   * Refresh after a write. The shared cache is TTL-based, so without an
+   * explicit invalidate the next read would happily return the pre-write
+   * snapshot for up to a few seconds.
+   */
+  const refreshAfterWrite = useCallback(
+    async (paths: string[]) => {
+      invalidateRepos(paths);
+      await refresh();
+    },
+    [refresh]
+  );
 
   useEffect(() => {
     if (active) void refresh();
@@ -539,10 +607,6 @@ function CommitChangelist({
 
   // currentGitRepo only changes on user click (or first-time unset during refresh) — never steal it.
 
-  useEffect(() => {
-    onDirtyScopeChange?.(dirtyRepos.map((p) => p.path));
-  }, [dirtyRepos, onDirtyScopeChange]);
-
   const scopedPathKeys = useMemo(
     () => new Set(scopedProjects.map((p) => pathKey(p.path))),
     [scopedProjects]
@@ -558,10 +622,16 @@ function CommitChangelist({
   }, [selected, scopedPathKeys]);
 
   const pushableRepos = useMemo(() => {
-    return scopedProjects.filter((p) => (summaries[p.path]?.ahead ?? 0) > 0);
+    return scopedProjects.filter((p) => isPushable(summaries[p.path]));
   }, [scopedProjects, summaries]);
 
   const pushableCount = pushableRepos.length;
+
+  /** Local branches the batch push would publish for the first time. */
+  const firstPushRepos = useMemo(
+    () => pushableRepos.filter((p) => !summaries[p.path]?.hasUpstream),
+    [pushableRepos, summaries]
+  );
 
   const pullableRepos = useMemo(() => {
     return scopedProjects.filter((p) => {
@@ -584,6 +654,28 @@ function CommitChangelist({
 
   const currentSummary = summaryForPath(currentGitRepo);
   const currentIsFavorited = !!findProjectByPath(recentProjects, currentGitRepo);
+
+  /**
+   * Show what a batch push will do before doing it: publishing a branch that
+   * has no upstream yet is not reversible from here.
+   */
+  const confirmBatchPush = async (paths: string[], addedCommits = 0) => {
+    const rows = paths
+      .map((path) => ({
+        label:
+          recentProjects.find((p) => p.path === path)?.name || projectNameFromPath(path),
+        summary: summaries[path],
+      }))
+      .filter((row): row is { label: string; summary: RepoBatchItem } => !!row.summary);
+    const { message, warning } = describePushTargets(rows, t, { addedCommits });
+    return await confirm({
+      title: t("batch.pushTitle"),
+      message,
+      warning,
+      confirmText: t("batch.push"),
+      icon: warning ? "warning" : "info",
+    });
+  };
 
   const toggleCollapsed = (repoPath: string) => {
     setCollapsed((prev) => {
@@ -612,8 +704,9 @@ function CommitChangelist({
     else setRepoSelection(repoPath, entries.map((e) => selectionKey(e)));
   };
 
+  // Ticking a file must not move the "current repo" focus — only acting on the
+  // repo itself (title, whole-repo checkbox) does.
   const toggleFile = (repoPath: string, entry: GitStatusEntry) => {
-    setCurrentGitRepo(repoPath);
     const key = selectionKey(entry);
     setSelected((prev) => {
       const next = new Map(prev);
@@ -629,7 +722,6 @@ function CommitChangelist({
   const loadDiff = async (repoPath: string, entry: GitStatusEntry) => {
     const staged = entry.group === "staged";
     const gen = ++diffGen.current;
-    setCurrentGitRepo(repoPath);
     setDiffTarget({ repoPath, filePath: entry.path, staged });
     setDiffLoading(true);
     try {
@@ -662,11 +754,8 @@ function CommitChangelist({
     try {
       void (await invokeGitDiscard(repoPath, entry.path, isUntracked, isStaged));
       onToast("success", t("commit.discardOk"));
-      if (diffTarget?.repoPath === repoPath && diffTarget.filePath === entry.path) {
-        setDiffTarget(null);
-        setDiffText("");
-      }
-      await refresh();
+      if (diffTarget?.repoPath === repoPath && diffTarget.filePath === entry.path) closeDiff();
+      await refreshAfterWrite([repoPath]);
     } catch (e) {
       onToast("error", formatInvokeError(e));
     }
@@ -707,33 +796,57 @@ function CommitChangelist({
         }
       }
 
+      // One chunk per file/repo, filled in parallel but joined in order, so the
+      // prompt stays stable while the diff reads run 4 at a time.
+      type Chunk = { labels: string[]; text: string } | null;
+      const chunks: Chunk[] = [];
+
       if (selectedPairs.length > 0) {
-        for (const { repoPath, repoName, entry } of selectedPairs) {
-          const label = `${repoName}/${entry.path}`;
-          fileLabels.push(label);
-          let diff = "";
-          try {
-            diff = await invokeGitDiff(repoPath, entry.path, entry.group === "staged");
-          } catch {
-            diff = entry.group === "untracked" ? "(untracked file)" : "";
-          }
-          diffParts.push(`--- ${label} ---\n${diff || "(no diff)"}`);
-        }
+        setProgress({ done: 0, total: selectedPairs.length });
+        chunks.length = selectedPairs.length;
+        await mapPoolCounted(
+          selectedPairs.map((pair, index) => ({ ...pair, index })),
+          GIT_CONCURRENCY,
+          async ({ repoPath, repoName, entry, index }) => {
+            const label = `${repoName}/${entry.path}`;
+            let diff = "";
+            try {
+              diff = await invokeGitDiff(repoPath, entry.path, entry.group === "staged");
+            } catch {
+              diff = entry.group === "untracked" ? "(untracked file)" : "";
+            }
+            chunks[index] = { labels: [label], text: `--- ${label} ---\n${diff || "(no diff)"}` };
+          },
+          { onProgress: (done, total) => setProgress({ done, total }) }
+        );
       } else {
         source = "workspace";
-        for (const p of dirtyRepos) {
-          try {
-            const ctx = await invokeGitCommitContext(p.path);
-            const repoName = p.name || projectNameFromPath(p.path);
-            for (const f of ctx.files) fileLabels.push(`${repoName}/${f}`);
-            diffParts.push(
-              `=== ${repoName} (${ctx.source}) ===\n${ctx.diff || "(no diff)"}`
-            );
-          } catch {
-            /* skip repo */
-          }
-        }
+        setProgress({ done: 0, total: dirtyRepos.length });
+        chunks.length = dirtyRepos.length;
+        await mapPoolCounted(
+          dirtyRepos.map((p, index) => ({ p, index })),
+          GIT_CONCURRENCY,
+          async ({ p, index }) => {
+            try {
+              const ctx = await invokeGitCommitContext(p.path);
+              const repoName = p.name || projectNameFromPath(p.path);
+              chunks[index] = {
+                labels: ctx.files.map((f) => `${repoName}/${f}`),
+                text: `=== ${repoName} (${ctx.source}) ===\n${ctx.diff || "(no diff)"}`,
+              };
+            } catch {
+              chunks[index] = null; // repo unreadable — skip it
+            }
+          },
+          { onProgress: (done, total) => setProgress({ done, total }) }
+        );
       }
+      for (const chunk of chunks) {
+        if (!chunk) continue;
+        fileLabels.push(...chunk.labels);
+        diffParts.push(chunk.text);
+      }
+      setProgress(null);
 
       if (fileLabels.length === 0 && diffParts.length === 0) {
         onToast("error", t("commit.changelistEmpty"));
@@ -866,35 +979,25 @@ function CommitChangelist({
       restageAfter = choice === "alt";
     }
 
-    // Commit & push while behind remote
+    const targetPaths = repos.map(([path]) => path);
+
+    // Commit & push: show what each push will do before touching the remote.
     if (withPush) {
-      const behindRepos = repos
-        .map(([path]) => path)
-        .filter((path) => (summaries[path]?.behind ?? 0) > 0);
-      if (behindRepos.length > 0) {
-        const behindCount = behindRepos.reduce(
-          (n, path) => n + (summaries[path]?.behind ?? 0),
-          0
-        );
-        const ok = await confirm({
-          title: t("commit.behindBeforePushTitle"),
-          message: t("commit.behindHint", { count: behindCount }),
-          warning: t("commit.behindBeforePushWarn"),
-          confirmText: t("commit.behindBeforePushContinue"),
-          icon: "warning",
-        });
-        if (!ok) return;
-      }
+      const ok = await confirmBatchPush(targetPaths, 1);
+      if (!ok) return;
     }
 
+    // Pause background refresh for these repos until the batch settles.
+    holdRepos(targetPaths);
     setBusy(true);
-    setProgress({ done: 0, total: repos.length });
+    setProgress({ done: 0, total: targetPaths.length });
     let ok = 0;
     let fail = 0;
     let errors: string[] = [];
     try {
       const result = await mapPoolCounted(
-        repos.map(([path]) => path),
+        targetPaths,
+        GIT_CONCURRENCY,
         async (repoPath) => {
           const files = selected.get(repoPath) || new Set<string>();
           if (files.size === 0) return;
@@ -938,7 +1041,10 @@ function CommitChangelist({
             }
           }
         },
-        (done, total) => setProgress({ done, total })
+        {
+          onProgress: (done, total) => setProgress({ done, total }),
+          describeError: (_path, e) => formatInvokeError(e),
+        }
       );
       ok = result.ok;
       fail = result.fail;
@@ -946,6 +1052,7 @@ function CommitChangelist({
     } finally {
       setBusy(false);
       setProgress(null);
+      releaseRepos(targetPaths);
     }
 
     if (fail > 0) {
@@ -955,7 +1062,7 @@ function CommitChangelist({
       onToast("success", t("commit.changelistDone", { ok, fail }));
       setMessage("");
     }
-    void refresh();
+    void refreshAfterWrite(targetPaths);
   };
 
   const runPush = async () => {
@@ -963,30 +1070,25 @@ function CommitChangelist({
       onToast("error", t("commit.changelistPushNeedAhead"));
       return;
     }
-    const behindAmong = pushableRepos.filter((p) => (summaries[p.path]?.behind ?? 0) > 0);
-    if (behindAmong.length > 0) {
-      const behindCount = behindAmong.reduce((n, p) => n + (summaries[p.path]?.behind ?? 0), 0);
-      const ok = await confirm({
-        title: t("commit.behindBeforePushTitle"),
-        message: t("commit.behindHint", { count: behindCount }),
-        warning: t("commit.behindBeforePushWarn"),
-        confirmText: t("commit.behindBeforePushContinue"),
-        icon: "warning",
-      });
-      if (!ok) return;
-    }
+    const targetPaths = pushableRepos.map((p) => p.path);
+    if (!(await confirmBatchPush(targetPaths))) return;
+    holdRepos(targetPaths);
     setBusy(true);
-    setProgress({ done: 0, total: pushableRepos.length });
+    setProgress({ done: 0, total: targetPaths.length });
     let ok = 0;
     let fail = 0;
     let errors: string[] = [];
     try {
       const result = await mapPoolCounted(
-        pushableRepos.map((p) => p.path),
+        targetPaths,
+        GIT_CONCURRENCY,
         async (repoPath) => {
           await invokeGitPush(repoPath);
         },
-        (done, total) => setProgress({ done, total })
+        {
+          onProgress: (done, total) => setProgress({ done, total }),
+          describeError: (_path, e) => formatInvokeError(e),
+        }
       );
       ok = result.ok;
       fail = result.fail;
@@ -994,6 +1096,7 @@ function CommitChangelist({
     } finally {
       setBusy(false);
       setProgress(null);
+      releaseRepos(targetPaths);
     }
 
     if (fail > 0) {
@@ -1002,7 +1105,7 @@ function CommitChangelist({
     } else {
       onToast("success", t("commit.pushOk"));
     }
-    void refresh();
+    void refreshAfterWrite(targetPaths);
   };
 
   const runPull = async () => {
@@ -1010,18 +1113,24 @@ function CommitChangelist({
       onToast("error", t("commit.changelistPullNeedBehind"));
       return;
     }
+    const targetPaths = pullableRepos.map((p) => p.path);
+    holdRepos(targetPaths);
     setBusy(true);
-    setProgress({ done: 0, total: pullableRepos.length });
+    setProgress({ done: 0, total: targetPaths.length });
     let ok = 0;
     let fail = 0;
     let errors: string[] = [];
     try {
       const result = await mapPoolCounted(
-        pullableRepos.map((p) => p.path),
+        targetPaths,
+        GIT_CONCURRENCY,
         async (repoPath) => {
           await invokeGitPull(repoPath);
         },
-        (done, total) => setProgress({ done, total })
+        {
+          onProgress: (done, total) => setProgress({ done, total }),
+          describeError: (_path, e) => formatInvokeError(e),
+        }
       );
       ok = result.ok;
       fail = result.fail;
@@ -1029,6 +1138,7 @@ function CommitChangelist({
     } finally {
       setBusy(false);
       setProgress(null);
+      releaseRepos(targetPaths);
     }
 
     if (fail > 0) {
@@ -1037,7 +1147,7 @@ function CommitChangelist({
     } else {
       onToast("success", t("commit.pullOk"));
     }
-    void refresh();
+    void refreshAfterWrite(targetPaths);
   };
 
   const statusLabel = (code: string) => {
@@ -1198,21 +1308,22 @@ function CommitChangelist({
             {t("commit.changelistRunning", { done: progress.done, total: progress.total })}
           </span>
         )}
-        {aiModels.length > 0 && (
-          <div className="cl-toolbar-model">
-            <ModelSelector
-              models={aiModels}
-              selectedId={selectedModelId || defaultModel?.id || ""}
-              onChange={onModelChange}
-              disabled={busy || generating}
-            />
-          </div>
-        )}
+        <div
+          className="cl-toolbar-model"
+          title={aiModels.length === 0 ? t("commit.generateNeedModel") : undefined}
+        >
+          <ModelSelector
+            models={aiModels}
+            selectedId={selectedModelId || defaultModel?.id || ""}
+            onChange={onModelChange}
+            disabled={busy || generating || aiModels.length === 0}
+          />
+        </div>
       </div>
 
       <div className="cl-split">
         <div className="cl-split-tree">
-          {loading && dirtyRepos.length === 0 ? (
+          {(loading || !loadedOnce.current) && dirtyRepos.length === 0 ? (
             <div className="cl-panel cl-empty">
               <div className="cl-empty-body">
                 <Loader2 size={18} className="spin" />
@@ -1283,9 +1394,22 @@ function CommitChangelist({
         </div>
         <div className="cl-panel cl-split-diff git-diff-panel">
           <div className="cl-diff-head">
-            {diffTarget
-              ? t("commit.diffTitle", { path: diffTarget.filePath })
-              : t("commit.diffEmpty")}
+            <span className="cl-diff-head-title">
+              {diffTarget
+                ? t("commit.diffTitle", { path: diffTarget.filePath })
+                : t("commit.diffEmpty")}
+            </span>
+            {diffTarget && (
+              <button
+                type="button"
+                className="btn commit-icon-btn"
+                onClick={closeDiff}
+                title={t("commit.diffClose")}
+                aria-label={t("commit.diffClose")}
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
           {diffLoading ? (
             <div className="cl-diff-empty">
@@ -1354,7 +1478,7 @@ function CommitChangelist({
               onClick={() => void runPull()}
               title={
                 pullableCount > 0
-                  ? t("commit.behindHint", { count: behindTotal })
+                  ? `${t("commit.behindHint", { count: behindTotal })} · ${t("commit.scopeFilter")}`
                   : t("commit.changelistPullNeedBehind")
               }
             >
@@ -1377,9 +1501,13 @@ function CommitChangelist({
               onClick={() => void runPush()}
               title={
                 pushableCount > 0
-                  ? t("commit.aheadHint", {
+                  ? `${t("commit.aheadHint", {
                       count: pushableRepos.reduce((n, p) => n + (summaries[p.path]?.ahead ?? 0), 0),
-                    })
+                    })}${
+                      firstPushRepos.length > 0
+                        ? ` · ${t("commit.pushFirstCount", { count: firstPushRepos.length })}`
+                        : ""
+                    } · ${t("commit.scopeFilter")}`
                   : t("commit.changelistPushNeedAhead")
               }
             >

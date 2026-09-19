@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
@@ -20,6 +20,19 @@ import {
   XCircle,
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
+import { GIT_CONCURRENCY, mapPoolCounted } from "../core/asyncPool";
+import {
+  dropRepos,
+  getRepoSnapshot,
+  holdRepos,
+  invalidateRepos,
+  refreshRepos,
+  releaseRepos,
+  reposLoaded,
+  subscribeRepos,
+} from "../core/gitCache";
+import { describePushTargets, isPushable } from "../core/gitPushScope";
+import { readStoredArray, writeStoredArray } from "../core/localState";
 import { findWorkspaceForRepo, projectNameFromPath } from "../core/pathUtils";
 import { resolveRepoAccount } from "../core/gitIdentity";
 import { useConfirm } from "./ConfirmModal";
@@ -27,7 +40,7 @@ import AccountManagerModal from "./AccountManagerModal";
 import BatchIdentityModal from "./BatchIdentityModal";
 import RepoBindingModal from "./RepoBindingModal";
 import ScanReposModal from "./ScanReposModal";
-import type { GitAccount, GitRepoSummary, GitWorkspace, RecentProject } from "../core/types";
+import type { GitAccount, GitWorkspace, RecentProject, RepoBatchItem } from "../core/types";
 
 type Props = {
   active?: boolean;
@@ -35,49 +48,7 @@ type Props = {
 };
 
 const REFRESH_TTL_MS = 30_000;
-const SUMMARY_CONCURRENCY = 4;
 const REPOS_COLLAPSED_KEY = "workbench-git-collapsed-groups";
-
-async function mapPool<T>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<void>
-): Promise<void> {
-  if (items.length === 0) return;
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) break;
-      await fn(items[i]);
-    }
-  });
-  await Promise.all(workers);
-}
-
-async function mapPoolCounted<T>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<void>,
-  onProgress?: (done: number, total: number) => void
-): Promise<{ ok: number; fail: number }> {
-  let ok = 0;
-  let fail = 0;
-  let done = 0;
-  const total = items.length;
-  await mapPool(items, concurrency, async (item) => {
-    try {
-      await fn(item);
-      ok += 1;
-    } catch {
-      fail += 1;
-    } finally {
-      done += 1;
-      onProgress?.(done, total);
-    }
-  });
-  return { ok, fail };
-}
 
 function identityMatches(
   actual: { name: string; email: string },
@@ -87,22 +58,6 @@ function identityMatches(
     actual.name.trim().toLowerCase() === preset.userName.trim().toLowerCase() &&
     actual.email.trim().toLowerCase() === preset.email.trim().toLowerCase()
   );
-}
-
-function emptySummary(path: string, name: string, error: string): GitRepoSummary {
-  return {
-    path,
-    name: name || projectNameFromPath(path),
-    branch: "",
-    dirtyCount: 0,
-    ahead: 0,
-    behind: 0,
-    hasUpstream: false,
-    userName: "",
-    userEmail: "",
-    isGit: false,
-    error,
-  };
 }
 
 type RepoGroup = {
@@ -163,17 +118,22 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   const deleteRepoConfig = useGlobalStore((s) => s.deleteRepoConfig);
   const setCurrentGitRepo = useGlobalStore((s) => s.setCurrentGitRepo);
   const invokePickDirectory = useGlobalStore((s) => s.invokePickDirectory);
-  const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
   const invokeGitIsRepo = useGlobalStore((s) => s.invokeGitIsRepo);
   const invokeGitScanRepos = useGlobalStore((s) => s.invokeGitScanRepos);
   const invokeGitPush = useGlobalStore((s) => s.invokeGitPush);
   const invokeGitPull = useGlobalStore((s) => s.invokeGitPull);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
-  const invokeGitRemoteUrl = useGlobalStore((s) => s.invokeGitRemoteUrl);
 
-  const [summaries, setSummaries] = useState<Record<string, GitRepoSummary>>({});
-  const [identities, setIdentities] = useState<Record<string, { name: string; email: string }>>({});
+  // Shared with the commit page: one read per repo, cache-first rendering.
+  const summaries = useSyncExternalStore(subscribeRepos, getRepoSnapshot);
+  const identities = useMemo(() => {
+    const map: Record<string, { name: string; email: string }> = {};
+    for (const s of Object.values(summaries)) {
+      if (s.isGit) map[s.path] = { name: s.userName || "", email: s.userEmail || "" };
+    }
+    return map;
+  }, [summaries]);
   const [repoQuery, setRepoQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [syncingPath, setSyncingPath] = useState<string | null>(null);
@@ -186,15 +146,10 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     repos: { path: string; name: string }[];
   } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    try {
-      const raw = localStorage.getItem(REPOS_COLLAPSED_KEY);
-      const parsed = raw ? (JSON.parse(raw) as unknown) : null;
-      return Array.isArray(parsed) ? new Set(parsed as string[]) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(readStoredArray<string>(REPOS_COLLAPSED_KEY))
+  );
+  const [scanningPath, setScanningPath] = useState<string | null>(null);
   const [showBatchBind, setShowBatchBind] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
@@ -208,65 +163,58 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   }, []);
 
   const refreshPaths = useCallback(
-    async (paths: { path: string; name?: string }[]) => {
-      await mapPool(paths, SUMMARY_CONCURRENCY, async (p) => {
-        try {
-          const s = await invokeGitRepoSummary(p.path);
-          startTransition(() => {
-            setSummaries((prev) => ({ ...prev, [p.path]: s }));
-            if (s.isGit) {
-              setIdentities((prev) => ({
-                ...prev,
-                [p.path]: { name: s.userName || "", email: s.userEmail || "" },
-              }));
-            }
-          });
-        } catch (e) {
-          const fallback = emptySummary(p.path, p.name || "", String(e));
-          startTransition(() => {
-            setSummaries((prev) => ({ ...prev, [p.path]: fallback }));
-          });
-        }
-      });
+    async (paths: { path: string; name?: string }[], options?: { force?: boolean }) => {
+      const list = paths.map((p) => p.path);
+      if (options?.force) invalidateRepos(list);
+      // Errors arrive per item from the batch command; nothing to catch here
+      // beyond a transport failure, which must not blank the whole list.
+      await refreshRepos(list).catch(() => {});
     },
-    [invokeGitRepoSummary]
+    []
   );
 
   /**
-   * For repos without a path-level binding, check if their origin remote
+   * For repos without a path-level binding, check if their cached origin remote
    * matches a host config and auto-apply that account's identity.
-   * Silent — never blocks the UI, failures are ignored.
+   * Silent by design, but reported once so the write is not invisible.
+   *
+   * Reads the URL straight from the batch summary — this used to spawn one
+   * `git remote get-url` per repo on every refresh.
    */
-  const autoApplyHostIdentities = useCallback(
-    async (paths: string[]) => {
-      const repoConfigs = useGlobalStore.getState().git.repoConfigs;
-      const hostConfigs = useGlobalStore.getState().git.hostConfigs;
-      const accounts = useGlobalStore.getState().git.accounts;
-      if (hostConfigs.length === 0) return;
+  const attemptedHostApplies = useRef<Set<string>>(new Set());
 
-      for (const path of paths) {
-        // Skip if a path-level binding already exists
-        if (repoConfigs.some((c) => c.path === path)) continue;
-        try {
-          const remoteUrl = await invokeGitRemoteUrl(path);
-          if (!remoteUrl) continue;
-          const account = resolveRepoAccount({
-            repoPath: path,
-            remoteUrl,
-            repoConfigs,
-            hostConfigs,
-            accounts,
-          });
-          if (account) {
-            await invokeSetRepoGitConfig(path, account.name, account.email);
-          }
-        } catch {
-          /* ignore — non-fatal */
-        }
+  const autoApplyHostIdentities = useCallback(async (): Promise<number> => {
+    const { git } = useGlobalStore.getState();
+    if (git.hostConfigs.length === 0) return 0;
+    const snapshot = getRepoSnapshot();
+    const changed: string[] = [];
+
+    for (const [path, item] of Object.entries(snapshot)) {
+      // Skip if a path-level binding already exists
+      if (!item.isGit || !item.originUrl) continue;
+      if (git.repoConfigs.some((c) => c.path === path)) continue;
+      const account = resolveRepoAccount({
+        repoPath: path,
+        remoteUrl: item.originUrl,
+        repoConfigs: git.repoConfigs,
+        hostConfigs: git.hostConfigs,
+        accounts: git.accounts,
+      });
+      if (!account) continue;
+      // Remember the attempt: a failed write must not be retried every refresh.
+      const key = `${path}|${account.id}`;
+      if (attemptedHostApplies.current.has(key)) continue;
+      attemptedHostApplies.current.add(key);
+      try {
+        await invokeSetRepoGitConfig(path, account.name, account.email);
+        invalidateRepos([path]);
+        changed.push(path);
+      } catch {
+        attemptedHostApplies.current.delete(key);
       }
-    },
-    [invokeGitRemoteUrl, invokeSetRepoGitConfig]
-  );
+    }
+    return changed.length;
+  }, [invokeSetRepoGitConfig]);
 
   const refresh = useCallback(
     async (opts?: { force?: boolean }) => {
@@ -275,24 +223,28 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
       if (!force && hasLoadedRef.current && now - lastRefreshAtRef.current < REFRESH_TTL_MS) {
         return;
       }
-      setLoading(true);
+      // Cache-first: the very first load has nothing to show, and an explicit
+      // refresh still spins so the click is acknowledged.
+      if (!reposLoaded() || force) setLoading(true);
       try {
         await Promise.all([loadRecentProjects(), loadRepoConfigs(), loadHostConfigs(), loadWorkspaces(), loadAccounts()]);
         const projects = useGlobalStore.getState().recentProjects;
-        const paths = projects.map((p) => p.path);
+        if (force) invalidateRepos(projects.map((p) => p.path));
         await refreshPaths(projects);
-        // After summaries load, auto-apply host-based identities (silent)
-        void autoApplyHostIdentities(paths).then(() => {
-          // Re-fetch summaries so the UI reflects applied identities
-          void refreshPaths(projects);
-        });
         lastRefreshAtRef.current = Date.now();
         hasLoadedRef.current = true;
+
+        const applied = await autoApplyHostIdentities();
+        if (applied > 0) {
+          showMsg("success", t("repos.autoApplied", { count: applied }));
+          // Only the rewritten repos are still marked stale here.
+          await refreshPaths(projects);
+        }
       } finally {
         setLoading(false);
       }
     },
-    [loadAccounts, loadRecentProjects, loadRepoConfigs, loadHostConfigs, loadWorkspaces, refreshPaths, autoApplyHostIdentities]
+    [loadAccounts, loadRecentProjects, loadRepoConfigs, loadHostConfigs, loadWorkspaces, refreshPaths, autoApplyHostIdentities, showMsg, t]
   );
 
   useEffect(() => {
@@ -301,11 +253,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
 
   // Keep collapsed groups across page switches / app restarts.
   useEffect(() => {
-    try {
-      localStorage.setItem(REPOS_COLLAPSED_KEY, JSON.stringify([...collapsed]));
-    } catch {
-      /* ignore */
-    }
+    writeStoredArray(REPOS_COLLAPSED_KEY, [...collapsed]);
   }, [collapsed]);
 
   const groups: RepoGroup[] = useMemo(() => {
@@ -377,26 +325,32 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     fn: (path: string) => Promise<void>
   ) => {
     if (batchBusy || paths.length === 0) return;
+    // Hold the cache so a background refresh cannot race the writes below.
+    holdRepos(paths);
     setBatchBusy(true);
     setBatchProgress({ done: 0, total: paths.length });
+    let ok = 0;
+    let fail = 0;
     try {
-      const { ok, fail } = await mapPoolCounted(
-        paths,
-        SUMMARY_CONCURRENCY,
-        fn,
-        (done, total) => setBatchProgress({ done, total })
-      );
-      showMsg(fail > 0 ? "error" : "success", t("batch.done", { ok, fail }));
-      await refreshPaths(
-        paths.map((path) => {
-          const p = recentProjects.find((x) => x.path === path);
-          return { path, name: p?.name };
-        })
-      );
+      const result = await mapPoolCounted(paths, GIT_CONCURRENCY, fn, {
+        onProgress: (done, total) => setBatchProgress({ done, total }),
+      });
+      ok = result.ok;
+      fail = result.fail;
     } finally {
+      releaseRepos(paths);
       setBatchBusy(false);
       setBatchProgress(null);
     }
+    showMsg(fail > 0 ? "error" : "success", t("batch.done", { ok, fail }));
+    // The writes landed after these paths were last read, so force a re-read.
+    await refreshPaths(
+      paths.map((path) => {
+        const p = recentProjects.find((x) => x.path === path);
+        return { path, name: p?.name };
+      }),
+      { force: true }
+    );
   };
 
   const handleBatchBind = async (account: GitAccount) => {
@@ -437,15 +391,29 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     });
   };
 
-  const handleBatchPush = () => {
-    const paths = [...selected].filter((path) => {
-      const s = summaries[path];
-      return !!s?.isGit && (s.ahead > 0 || !s.hasUpstream);
-    });
+  const handleBatchPush = async () => {
+    const paths = [...selected].filter((path) => isPushable(summaries[path]));
     if (paths.length === 0) {
       showMsg("error", t("batch.noneToPush"));
       return;
     }
+    // A no-upstream repo gets `push -u origin HEAD`, i.e. a brand new remote
+    // branch — never do that silently for a whole selection.
+    const rows = paths
+      .map((path) => ({
+        label: recentProjects.find((p) => p.path === path)?.name || projectNameFromPath(path),
+        summary: summaries[path],
+      }))
+      .filter((row): row is { label: string; summary: RepoBatchItem } => !!row.summary);
+    const { message, warning } = describePushTargets(rows, t);
+    const ok = await confirm({
+      title: t("batch.pushTitle"),
+      message,
+      warning,
+      confirmText: t("batch.push"),
+      icon: warning ? "warning" : "info",
+    });
+    if (!ok) return;
     void runBatch(paths, async (path) => {
       void (await invokeGitPush(path));
     });
@@ -453,20 +421,20 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
 
   const handleBatchRefresh = () => {
     const paths = [...selected];
-    void runBatch(paths, async (path) => {
-      const p = recentProjects.find((x) => x.path === path);
-      const s = await invokeGitRepoSummary(path);
-      startTransition(() => {
-        setSummaries((prev) => ({ ...prev, [path]: s }));
-        if (s.isGit) {
-          setIdentities((prev) => ({
-            ...prev,
-            [path]: { name: s.userName || "", email: s.userEmail || "" },
-          }));
-        }
-      });
-      void p;
-    });
+    if (batchBusy || paths.length === 0) return;
+    setBatchBusy(true);
+    setBatchProgress({ done: 0, total: paths.length });
+    void (async () => {
+      try {
+        // One batched read for the whole selection, not one per repo.
+        invalidateRepos(paths);
+        await refreshRepos(paths);
+        setBatchProgress({ done: paths.length, total: paths.length });
+        showMsg("success", t("batch.done", { ok: paths.length, fail: 0 }));
+      } finally {
+        setBatchBusy(false);
+      }
+    })();
   };
 
   /** Remove the selected repos from the workbench list (never touches the disk). */
@@ -487,47 +455,51 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
         if (p) await removeRecentProject(p.id);
         if (currentGitRepo === path) setCurrentGitRepo(undefined);
       }
+      dropRepos(paths);
       setSelected(new Set());
       showMsg("success", t("batch.removed", { count: paths.length }));
-      await refresh({ force: true });
     } catch (e) {
       showMsg("error", String(e));
     }
   };
 
-  const handleAdd = async () => {
+  /**
+   * A directory scan can take a few seconds on a cold network drive, so the
+   * trigger shows progress and cannot be pressed twice.
+   */
+  const startScan = async (source: "add" | string) => {
+    if (scanningPath) return;
+    setScanningPath(source === "add" ? "__add__" : source);
     try {
-      const dir = await invokePickDirectory();
-      if (!dir) return;
-      const ok = await invokeGitIsRepo(dir);
-      if (ok) {
-        await addRecentProject({ path: dir, name: projectNameFromPath(dir) });
-        if (!currentGitRepo) setCurrentGitRepo(dir);
-        showMsg("success", t("workbench.added"));
-        await refresh({ force: true });
+      if (source === "add") {
+        const dir = await invokePickDirectory();
+        if (!dir) return;
+        if (await invokeGitIsRepo(dir)) {
+          await addRecentProject({ path: dir, name: projectNameFromPath(dir) });
+          if (!currentGitRepo) setCurrentGitRepo(dir);
+          showMsg("success", t("workbench.added"));
+          // Only the new entry needs a git read — the rest of the list is cached.
+          await refreshOne(dir);
+          return;
+        }
+        const found = await invokeGitScanRepos(dir, 1);
+        if (found.length === 0) {
+          showMsg("error", t("workbench.notGitRepo"));
+          return;
+        }
+        setScanState({ rootPath: dir, repos: found });
         return;
       }
-      const found = await invokeGitScanRepos(dir, 1);
+      const found = await invokeGitScanRepos(source, 1);
       if (found.length === 0) {
         showMsg("error", t("workbench.notGitRepo"));
         return;
       }
-      setScanState({ rootPath: dir, repos: found });
+      setScanState({ rootPath: source, repos: found });
     } catch (e) {
       showMsg("error", String(e));
-    }
-  };
-
-  const handleRescanWorkspace = async (ws: GitWorkspace) => {
-    try {
-      const found = await invokeGitScanRepos(ws.path, 1);
-      if (found.length === 0) {
-        showMsg("error", t("workbench.notGitRepo"));
-        return;
-      }
-      setScanState({ rootPath: ws.path, repos: found });
-    } catch (e) {
-      showMsg("error", String(e));
+    } finally {
+      setScanningPath(null);
     }
   };
 
@@ -536,7 +508,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
       title: t("workspace.removeTitle"),
       message: t("workspace.removeConfirm", { name: ws.name }),
       confirmText: t("workspace.remove"),
-      icon: "warning",
+      icon: "danger",
     });
     if (!ok) return;
     await removeWorkspace(ws.id);
@@ -548,10 +520,11 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
       title: t("workbench.removeTitle"),
       message: t("workbench.removeConfirm", { name: projectNameFromPath(path) }),
       confirmText: t("workbench.remove"),
-      icon: "warning",
+      icon: "danger",
     });
     if (!ok) return;
     await removeRecentProject(id);
+    dropRepos([path]);
     setSelected((prev) => {
       const next = new Set(prev);
       next.delete(path);
@@ -559,7 +532,6 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     });
     if (currentGitRepo === path) setCurrentGitRepo(undefined);
     showMsg("success", t("workbench.removed"));
-    await refresh({ force: true });
   };
 
   const handleSelect = (path: string) => {
@@ -575,16 +547,22 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     }
   };
 
+  /** Re-read one card after a write instead of hammering every repo again. */
+  const refreshOne = useCallback(async (path: string) => {
+    invalidateRepos([path]);
+    await refreshRepos([path]).catch(() => {});
+  }, []);
+
   const handlePush = async (path: string) => {
     if (syncingPath) return;
     setSyncingPath(path);
     try {
       await invokeGitPush(path);
       showMsg("success", t("workbench.pushOk"));
-      await refresh({ force: true });
+      await refreshOne(path);
     } catch (e) {
       showMsg("error", String(e));
-      await refresh({ force: true });
+      await refreshOne(path);
     } finally {
       setSyncingPath(null);
     }
@@ -596,10 +574,10 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     try {
       await invokeGitPull(path);
       showMsg("success", t("workbench.pullOk"));
-      await refresh({ force: true });
+      await refreshOne(path);
     } catch (e) {
       showMsg("error", String(e));
-      await refresh({ force: true });
+      await refreshOne(path);
     } finally {
       setSyncingPath(null);
     }
@@ -611,7 +589,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     try {
       await invokeSetRepoGitConfig(path, userName, email);
       showMsg("success", t("repos.applied"));
-      await refresh({ force: true });
+      await refreshOne(path);
     } catch (e) {
       showMsg("error", t("repos.applyFailed", { error: String(e) }));
     } finally {
@@ -630,7 +608,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     try {
       await deleteRepoConfig(path);
       showMsg("success", t("repos.unbound"));
-      await refresh({ force: true });
+      // Only the binding record changed; the repo's git state is untouched.
     } catch (e) {
       showMsg("error", String(e));
     }
@@ -747,7 +725,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
                 <button
                   type="button"
                   className="btn btn-primary btn-small"
-                  disabled={applyingPath === p.path}
+                  disabled={!!applyingPath || batchBusy}
                   onClick={() => handleApplyPreset(p.path, preset.userName, preset.email)}
                 >
                   {applyingPath === p.path ? (
@@ -773,7 +751,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
               <button
                 type="button"
                 className="btn commit-icon-btn"
-                disabled={syncingPath === p.path}
+                disabled={!!syncingPath || batchBusy}
                 title={t("workbench.pullTitle", { count: s.behind })}
                 onClick={() => handlePull(p.path)}
               >
@@ -784,7 +762,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
               <button
                 type="button"
                 className="btn commit-icon-btn"
-                disabled={syncingPath === p.path}
+                disabled={!!syncingPath || batchBusy}
                 title={
                   s.ahead > 0
                     ? t("workbench.pushTitle", { count: s.ahead })
@@ -881,11 +859,15 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
             <button
               type="button"
               className="btn commit-icon-btn commit-icon-btn-primary"
-              onClick={handleAdd}
-              disabled={batchBusy}
+              onClick={() => void startScan("add")}
+              disabled={batchBusy || scanningPath !== null}
               title={t("workbench.addRepo")}
             >
-              <FolderPlus size={14} />
+              {scanningPath === "__add__" ? (
+                <Loader2 size={14} className="spin" />
+              ) : (
+                <FolderPlus size={14} />
+              )}
               <span>{t("workbench.addRepo")}</span>
             </button>
           </div>
@@ -923,7 +905,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
               type="button"
               className="btn commit-icon-btn"
               disabled={batchBusy}
-              onClick={handleBatchPush}
+              onClick={() => void handleBatchPush()}
             >
               <Upload size={14} />
               <span>{t("batch.push")}</span>
@@ -970,7 +952,12 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
         </div>
       )}
 
-      {recentProjects.length === 0 && gitWorkspaces.length === 0 ? (
+      {!hasLoadedRef.current ? (
+        <div className="runtime-empty">
+          <Loader2 size={18} className="spin" />
+          <div className="runtime-muted">{tc("status.loading")}</div>
+        </div>
+      ) : recentProjects.length === 0 && gitWorkspaces.length === 0 ? (
         <div className="runtime-empty">
           <div>{t("workbench.empty")}</div>
           <div className="runtime-muted">{t("workbench.emptyHint")}</div>
@@ -1036,12 +1023,16 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
                       <button
                         type="button"
                         className="repos-group-admin-btn"
-                        disabled={batchBusy}
+                        disabled={batchBusy || scanningPath !== null}
                         title={t("workspace.rescan")}
                         aria-label={t("workspace.rescan")}
-                        onClick={() => void handleRescanWorkspace(g.workspace!)}
+                        onClick={() => void startScan(g.workspace!.path)}
                       >
-                        <RefreshCw size={13} />
+                        {scanningPath === g.workspace.path ? (
+                          <Loader2 size={13} className="spin" />
+                        ) : (
+                          <RefreshCw size={13} />
+                        )}
                       </button>
                       <button
                         type="button"

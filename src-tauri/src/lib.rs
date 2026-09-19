@@ -302,6 +302,7 @@ pub fn run() {
             git_commands::get_git_config,
             git_commands::pick_directory,
             git_commands::git_repo_summary,
+            git_commands::git_summarize_repos,
             git_commands::git_status,
             git_commands::git_stage,
             git_commands::git_unstage,

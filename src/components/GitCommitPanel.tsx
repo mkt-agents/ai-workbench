@@ -1,18 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Check, Loader2, User, XCircle } from "lucide-react";
 import { useGlobalStore } from "../core/store";
-import { projectNameFromPath } from "../core/pathUtils";
+import { pathKey, projectNameFromPath } from "../core/pathUtils";
+import { readStoredString, writeStoredString } from "../core/localState";
+import { getRepoSnapshot, invalidateRepos, refreshRepos, subscribeRepos } from "../core/gitCache";
 import { resolveRepoAccount } from "../core/gitIdentity";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
 import CommitChangelist from "./CommitChangelist";
-import type { GitRepoSummary } from "../core/types";
 
 type Props = {
   active?: boolean;
   onOpenRepos?: () => void;
 };
+
+const CL_MODEL_KEY = "workbench-commit-model";
 
 type AccountLike = {
   name?: string;
@@ -54,24 +57,21 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const loadHostConfigs = useGlobalStore((s) => s.loadHostConfigs);
   const addAccount = useGlobalStore((s) => s.addAccount);
   const updateRepoConfig = useGlobalStore((s) => s.updateRepoConfig);
-  const invokeGetRepoGitConfig = useGlobalStore((s) => s.invokeGetRepoGitConfig);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
-  const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
   const invokeGitUndoLastCommit = useGlobalStore((s) => s.invokeGitUndoLastCommit);
-  const invokeGitRemoteUrl = useGlobalStore((s) => s.invokeGitRemoteUrl);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const loadAIModels = useGlobalStore((s) => s.loadAIModels);
 
-  const [author, setAuthor] = useState({ name: "", email: "" });
+  const repoItems = useSyncExternalStore(subscribeRepos, getRepoSnapshot);
+  const attemptedHostApply = useRef<Set<string>>(new Set());
   const [switching, setSwitching] = useState(false);
   const [undoing, setUndoing] = useState(false);
-  const [summary, setSummary] = useState<GitRepoSummary | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
-  const [headerNonce, setHeaderNonce] = useState(0);
   const [showAccountsModal, setShowAccountsModal] = useState(false);
-  const [dirtyScopePaths, setDirtyScopePaths] = useState<string[]>([]);
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string>("");
+  const [selectedModelId, setSelectedModelId] = useState<string>(() =>
+    readStoredString(CL_MODEL_KEY)
+  );
 
   const defaultModel = useMemo(
     () => aiModels.find((m) => m.isDefault) || aiModels[0] || null,
@@ -85,6 +85,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     }
     return defaultModel;
   }, [selectedModelId, aiModels, defaultModel]);
+
+  useEffect(() => {
+    writeStoredString(CL_MODEL_KEY, selectedModelId);
+  }, [selectedModelId]);
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
     setToast({ type, text });
@@ -101,60 +105,53 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     if (state.aiModels.length === 0) loadAIModels().catch(() => {});
   }, [active, loadAccounts, loadRecentProjects, loadRepoConfigs, loadHostConfigs, loadAIModels]);
 
+  /**
+   * Header state (branch, ahead/behind, effective identity) comes from the
+   * shared repo cache the changelist already fills — this page used to spawn
+   * nine git processes of its own on every mount.
+   */
+  const summary = useMemo(() => {
+    if (!repoPath) return null;
+    const direct = repoItems[repoPath];
+    if (direct) return direct;
+    const key = pathKey(repoPath);
+    return Object.values(repoItems).find((item) => pathKey(item.path) === key) ?? null;
+  }, [repoItems, repoPath]);
+
+  const author = summary
+    ? { name: summary.userName || "", email: summary.userEmail || "" }
+    : { name: "", email: "" };
+
+  // Host-level binding still applies here for repos visited only from this page.
   useEffect(() => {
-    if (!active || !repoPath) {
-      setAuthor({ name: "", email: "" });
-      setSummary(null);
-      return;
-    }
-    let cancelled = false;
-    invokeGetRepoGitConfig(repoPath)
-      .then(([name, email]) => {
-        if (!cancelled) setAuthor({ name: name || "", email: email || "" });
+    if (!active || !repoPath || !summary?.originUrl) return;
+    const state = useGlobalStore.getState();
+    if (state.git.hostConfigs.length === 0) return;
+    if (state.git.repoConfigs.some((c) => c.path === repoPath)) return;
+    const account = resolveRepoAccount({
+      repoPath,
+      remoteUrl: summary.originUrl,
+      repoConfigs: state.git.repoConfigs,
+      hostConfigs: state.git.hostConfigs,
+      accounts: state.git.accounts,
+    });
+    if (!account) return;
+    // Remember the attempt so a failed write is not retried on every render.
+    const key = `${repoPath}|${account.id}`;
+    if (attemptedHostApply.current.has(key)) return;
+    attemptedHostApply.current.add(key);
+    void invokeSetRepoGitConfig(repoPath, account.name, account.email)
+      .then(() => {
+        invalidateRepos([repoPath]);
+        return refreshRepos([repoPath], { withStatus: true });
+      })
+      .then(() => {
+        showMsg("success", t("repos.autoApplied", { count: 1 }));
       })
       .catch(() => {
-        if (!cancelled) setAuthor({ name: "", email: "" });
+        attemptedHostApply.current.delete(key);
       });
-    invokeGitRepoSummary(repoPath)
-      .then((s) => {
-        if (!cancelled) setSummary(s);
-      })
-      .catch(() => {
-        if (!cancelled) setSummary(null);
-      });
-    // If no path-level binding, try host-based auto-apply
-    void (async () => {
-      const state = useGlobalStore.getState();
-      if (state.git.repoConfigs.some((c) => c.path === repoPath)) return;
-      if (state.git.hostConfigs.length === 0) return;
-      try {
-        const remoteUrl = await invokeGitRemoteUrl(repoPath);
-        if (!remoteUrl || cancelled) return;
-        const account = resolveRepoAccount({
-          repoPath,
-          remoteUrl,
-          repoConfigs: state.git.repoConfigs,
-          hostConfigs: state.git.hostConfigs,
-          accounts: state.git.accounts,
-        });
-        if (account && !cancelled) {
-          await invokeSetRepoGitConfig(repoPath, account.name, account.email);
-          setAuthor({ name: account.name, email: account.email });
-          // Re-fetch summary to reflect applied identity
-          invokeGitRepoSummary(repoPath)
-            .then((s) => {
-              if (!cancelled) setSummary(s);
-            })
-            .catch(() => {});
-        }
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [active, invokeGetRepoGitConfig, invokeGitRepoSummary, invokeGitRemoteUrl, invokeSetRepoGitConfig, repoPath, refreshNonce, headerNonce]);
+  }, [active, repoPath, summary, invokeSetRepoGitConfig, showMsg, t]);
 
   const currentRepoName = useMemo(() => {
     if (!repoPath) return null;
@@ -167,26 +164,24 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     [repoConfigs, repoPath]
   );
 
+  // The changelist already knows the identity mismatch is worth flagging before
+  // a commit happens here — no longer gated on the repo being dirty, so a wrong
+  // identity is visible the moment the repo opens (same rule as the repo cards).
   const identityMismatch =
-    !!currentPreset &&
-    !!author.name &&
-    !!repoPath &&
-    dirtyScopePaths.includes(repoPath) &&
-    !identityMatches(author, currentPreset);
+    !!currentPreset && !!author.name && !identityMatches(author, currentPreset);
 
   /**
    * Tip already on the remote: undo becomes an IntelliJ-style revert (a new inverse
    * commit) instead of resetting history, so the button stays usable after a push.
    */
   const undoIsRevert = Boolean(summary?.hasUpstream && summary.ahead === 0);
-
-  const onDirtyScopeChange = useCallback((paths: string[]) => {
-    setDirtyScopePaths(paths);
-  }, []);
-
-  const onChangelistRefreshed = useCallback(() => {
-    setHeaderNonce((n) => n + 1);
-  }, []);
+  const undoBlockedReason = !repoPath
+    ? t("commit.changelistPickRepo")
+    : summary && !summary.hasCommits
+      ? t("commit.undoLastBlockedEmpty")
+      : summary && undoIsRevert && summary.dirtyCount > 0
+        ? t("commit.undoLastBlockedDirty")
+        : null;
 
   const handleSwitchAccount = async (account: AccountLike) => {
     if (!repoPath || switching) return;
@@ -197,6 +192,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     setSwitching(true);
     try {
       await invokeSetRepoGitConfig(repoPath, name, email);
+      // Show what git now reports rather than what we asked for; the cache read
+      // is the only proof the write landed.
+      invalidateRepos([repoPath]);
+      await refreshRepos([repoPath], { withStatus: true });
       if (!accounts.some((a) => a.email.trim().toLowerCase() === email.toLowerCase())) {
         const colors = ["#5f8f72", "#6a9a88", "#7a9068", "#4d7a6c", "#8a9e7a", "#5a8578"];
         await addAccount({
@@ -204,7 +203,7 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
           name,
           email,
           color: colors[accounts.length % colors.length],
-        }).catch(() => {});
+        });
       }
       const existing = useGlobalStore.getState().git.repoConfigs.find((c) => c.path === repoPath);
       if (existing) {
@@ -215,12 +214,11 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
           userName: name,
           email,
           accountId: matched?.id ?? account.id,
-        }).catch(() => {});
+        });
       }
-      setAuthor({ name, email });
       showMsg("success", t("commit.identityApplied"));
     } catch (e) {
-      showMsg("error", String(e));
+      showMsg("error", formatInvokeError(e));
     } finally {
       setSwitching(false);
     }
@@ -228,6 +226,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
 
   const handleUndoLastCommit = async () => {
     if (!repoPath || undoing) return;
+    if (undoBlockedReason) {
+      showMsg("error", undoBlockedReason);
+      return;
+    }
     const ok = await confirm({
       title: undoIsRevert ? t("commit.undoLastRevertTitle") : t("commit.undoLastTitle"),
       message: undoIsRevert ? t("commit.undoLastRevertConfirm") : t("commit.undoLastConfirm"),
@@ -240,6 +242,7 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     setUndoing(true);
     try {
       await invokeGitUndoLastCommit(repoPath);
+      invalidateRepos([repoPath]);
       showMsg("success", t("commit.undoLastOk"));
       setRefreshNonce((n) => n + 1);
     } catch (e) {
@@ -277,7 +280,15 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
               <span className="runtime-muted">{t("commit.changelistPickRepo")}</span>
             )}
           </div>
-          {accounts.length > 0 ? (
+          <div className="commit-meta-identity">
+            <User size={14} />
+            <span title={`${author.name} <${author.email}>`}>
+              {t("commit.currentIdentity")}{" "}
+              {author.name || "—"}
+              {author.email ? ` <${author.email}>` : ""}
+            </span>
+          </div>
+          {accounts.length > 0 && (
             <div className="commit-identity-quick">
               {accounts.map((a) => {
                 const isActive =
@@ -306,14 +317,6 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
                   </button>
                 );
               })}
-            </div>
-          ) : (
-            <div className="commit-meta-identity">
-              <User size={14} />
-              <span title={`${author.name} <${author.email}>`}>
-                {author.name || "—"}
-                {author.email ? ` <${author.email}>` : ""}
-              </span>
             </div>
           )}
           <button
@@ -358,12 +361,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
       <CommitChangelist
         active={active}
         onToast={showMsg}
-        onDirtyScopeChange={onDirtyScopeChange}
         refreshNonce={refreshNonce}
-        onRefreshed={onChangelistRefreshed}
         onUndoLastCommit={repoPath ? () => void handleUndoLastCommit() : undefined}
-        undoDisabled={!repoPath}
-        undoTitle={undoIsRevert ? t("commit.undoLastRevertHint") : t("commit.undoLast")}
+        undoDisabled={!!undoBlockedReason}
+        undoTitle={undoBlockedReason ?? (undoIsRevert ? t("commit.undoLastRevertHint") : t("commit.undoLast"))}
         undoing={undoing}
         selectedModel={selectedModelProp}
         selectedModelId={selectedModelId}

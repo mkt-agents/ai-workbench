@@ -68,6 +68,21 @@ const AVATAR_MIGRATE_KEY = "ai-workbench-cursor-avatar-migrated-v4";
 /** Pre-rename key: still read so the one-shot migration does not re-run. */
 const LEGACY_AVATAR_MIGRATE_KEY = "wt-cursor-avatar-migrated-v4";
 
+type SnapshotStatus = {
+  complete: boolean;
+  authEmail: string;
+  reason: string;
+  warning?: string;
+};
+
+/**
+ * Last snapshot inspection, kept outside React so re-entering the tab paints
+ * what we already know. Without this every visit rendered all accounts as
+ * "快照不完整" until the (slow) per-account SQLite scan finished.
+ */
+let lastSnapshotStatus: Record<string, SnapshotStatus> | null = null;
+let lastBackupSizes: Record<string, number> = {};
+
 function avatarColorFor(account: CursorAccount, index: number): string {
   const c = (account.color || "").toLowerCase();
   if (!c || LEGACY_AVATAR_COLORS.has(c)) {
@@ -148,12 +163,9 @@ function CursorManager() {
   const [switchStage, setSwitchStage] = useState("");
   const [busy, setBusy] = useState(false);
   const [statusRefreshing, setStatusRefreshing] = useState(false);
-  const [backupStatus, setBackupStatus] = useState<
-    Record<
-      string,
-      { complete: boolean; authEmail: string; reason: string; warning?: string }
-    >
-  >({});
+  const [backupStatus, setBackupStatus] = useState<Record<string, SnapshotStatus>>(
+    () => lastSnapshotStatus ?? {}
+  );
   const [showSetupGuide, setShowSetupGuide] = useState(true);
   const [diskUsage, setDiskUsage] = useState<{
     backupsBytes: number;
@@ -168,7 +180,9 @@ function CursorManager() {
   const [diskLoading, setDiskLoading] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [slimming, setSlimming] = useState(false);
-  const [backupSizes, setBackupSizes] = useState<Record<string, number>>({});
+  const [backupSizes, setBackupSizes] = useState<Record<string, number>>(
+    () => lastBackupSizes
+  );
   const [orphans, setOrphans] = useState<{ count: number; bytes: number } | null>(null);
   const [accountQuery, setAccountQuery] = useState("");
   const [accountSort, setAccountSort] = useState<"created" | "name">("created");
@@ -277,7 +291,8 @@ function CursorManager() {
       setDiskUsage(await invokeGetCursorDiskUsage());
       setOrphans(await invokeGetCursorOrphanProfiles());
     } catch {
-      setDiskUsage(null);
+      // Keep the last known numbers: a failed re-read is not "no data", and the
+      // alternative is flashing "无法读取占用信息" over good figures.
       setOrphans(null);
     } finally {
       setDiskLoading(false);
@@ -285,6 +300,9 @@ function CursorManager() {
   }, [invokeGetCursorDiskUsage, invokeGetCursorOrphanProfiles]);
 
   const refresh = useCallback(async () => {
+    // Disk scan can walk multi-GB trees — start it now, but never block the
+    // account list or first paint on it.
+    void refreshDiskUsage();
     await loadCursorAccounts();
 
     // One-shot legacy avatar color migration
@@ -310,40 +328,42 @@ function CursorManager() {
     await refreshLiveStatus({ silent: true });
 
     const accounts = useGlobalStore.getState().cursorAccounts;
-    const statuses: Record<
-      string,
-      { complete: boolean; authEmail: string; reason: string; warning?: string }
-    > = {};
+    // Publish per account as it lands: the SQLite probe takes ~1s each, and a
+    // card that keeps its last known state beats one that flashes "不完整".
+    const publish = (id: string, status: SnapshotStatus) => {
+      lastSnapshotStatus = { ...(lastSnapshotStatus ?? {}), [id]: status };
+      setBackupStatus(lastSnapshotStatus);
+    };
     await Promise.all(
       accounts.map(async (a) => {
         try {
           const info = await invokeInspectCursorBackup(a.id);
-          statuses[a.id] = {
+          publish(a.id, {
             complete: info.complete,
             authEmail: info.authEmail,
             reason: info.reason,
             warning: info.warning,
-          };
+          });
         } catch {
-          statuses[a.id] = {
+          publish(a.id, {
             complete: false,
             authEmail: "",
             reason: t("cursor.checkSnapshotFailed"),
-          };
+          });
         }
       })
     );
-    setBackupStatus(statuses);
+    const alive = new Set(accounts.map((a) => a.id));
+    lastSnapshotStatus = Object.fromEntries(
+      Object.entries(lastSnapshotStatus ?? {}).filter(([id]) => alive.has(id))
+    );
+    setBackupStatus(lastSnapshotStatus);
 
     const backups = await invokeListCursorBackups().catch(
       (): Array<{ accountId: string; path: string; sizeBytes: number }> => []
     );
-    setBackupSizes(
-      Object.fromEntries(backups.map((b) => [b.accountId, b.sizeBytes]))
-    );
-
-    // Disk scan can walk multi-GB trees — never block tab switch / first paint on it.
-    void refreshDiskUsage();
+    lastBackupSizes = Object.fromEntries(backups.map((b) => [b.accountId, b.sizeBytes]));
+    setBackupSizes(lastBackupSizes);
   }, [
     loadCursorAccounts,
     updateCursorAccount,
@@ -1016,9 +1036,11 @@ function CursorManager() {
               const index = cursorAccounts.indexOf(account);
               const liveActive = isLiveAccount(account);
               const snap = backupStatus[account.id];
-              // Unknown yet (the list paints before the snapshot scan finishes)
-              // must not offer a switch the backend would refuse.
-              const incomplete = snap ? !snap.complete : true;
+              // "Never inspected yet" only happens on the first load of a session.
+              // It must not read as "broken": no red tag, no re-init prompt, and
+              // no switch the backend would refuse.
+              const snapPending = !snap;
+              const incomplete = !!snap && !snap.complete;
               const needsInit = !account.profileInitialized;
               return (
                 <li
@@ -1049,7 +1071,7 @@ function CursorManager() {
                           {t("cursor.tagNeedsInit")}
                         </span>
                       )}
-                      {account.profileInitialized && !incomplete && (
+                      {account.profileInitialized && snap?.complete && (
                         <span className="tag-pill tag-pill-green">
                           {t("cursor.tagReady")}
                         </span>
@@ -1057,6 +1079,11 @@ function CursorManager() {
                       {incomplete && (
                         <span className="tag-pill tag-pill-red">
                           {t("cursor.tagSnapshotBad")}
+                        </span>
+                      )}
+                      {snapPending && !needsInit && (
+                        <span className="tag-pill">
+                          <Loader2 size={10} className="spin" /> {t("cursor.checkingSnapshot")}
                         </span>
                       )}
                     </div>
@@ -1172,6 +1199,15 @@ function CursorManager() {
                           {t("cursor.btnReopen")}
                         </button>
                       </>
+                    ) : snapPending ? (
+                      <button
+                        className="btn btn-primary btn-small"
+                        disabled
+                        title={t("cursor.checkingSnapshot")}
+                      >
+                        <Loader2 size={12} className="spin" />
+                        {t("cursor.checkingSnapshot")}
+                      </button>
                     ) : (
                       <button
                         className="btn btn-primary btn-small"

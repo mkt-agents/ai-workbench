@@ -219,6 +219,7 @@
     "tagNeedsInit": "待初始化",
     "tagReady": "独立登录 · 共享工作区",
     "tagSnapshotBad": "快照不完整",
+    "checkingSnapshot": "检查快照…",
     "needsInitHint": "请在独立 Cursor 中登录后，点「完成初始化」",
     "snapshotReasonHint": "{{reason}} — 请重新「完成初始化」",
     "checkSnapshotFailed": "无法检查快照",

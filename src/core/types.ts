@@ -135,6 +135,17 @@ export interface GitRepoSummary {
   error?: string | null;
 }
 
+/**
+ * One repo from the batched `git_summarize_repos` call: everything the repo
+ * cards and the changelist need, gathered with two git subprocesses.
+ * `status` is only filled when the caller asked for it (see gitCache modes).
+ */
+export interface RepoBatchItem extends GitRepoSummary {
+  hasCommits: boolean;
+  originUrl: string;
+  status: GitStatusEntry[];
+}
+
 export interface GitStatusEntry {
   path: string;
   indexStatus: string;
