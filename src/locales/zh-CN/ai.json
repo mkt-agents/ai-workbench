@@ -147,7 +147,7 @@
   },
   "dsh": {
     "title": "DeepSeek Harness",
-    "serviceTitle": "DeepSeek 服务",
+    "serviceTitle": "DeepSeek Harness",
     "embedHint": "本地 Harness Web 界面",
     "notInstalled": "未安装 DeepSeek Harness",
     "clickInstall": "在上方选择版本并点击「安装」",

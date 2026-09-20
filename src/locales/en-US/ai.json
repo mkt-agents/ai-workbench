@@ -147,7 +147,7 @@
   },
   "dsh": {
     "title": "DeepSeek Harness",
-    "serviceTitle": "DeepSeek Service",
+    "serviceTitle": "DeepSeek Harness",
     "embedHint": "Local Harness web UI",
     "notInstalled": "DeepSeek Harness is not installed",
     "clickInstall": "Pick a version above and click Install",
