@@ -901,10 +901,10 @@ fn spawn_pipe_reader(
     pipe: Option<Box<dyn Read + Send>>,
     acc: ByteSink,
     live: Arc<Mutex<String>>,
-    finished: Arc<AtomicBool>,
+    readers_left: Arc<AtomicUsize>,
 ) {
     let Some(pipe) = pipe else {
-        finished.store(true, Ordering::Release);
+        readers_left.fetch_sub(1, Ordering::AcqRel);
         return;
     };
     std::thread::spawn(move || {
@@ -924,7 +924,9 @@ fn spawn_pipe_reader(
                 tail.push('\n');
             }
         }
-        finished.store(true, Ordering::Release);
+        // Only when *both* readers are done may the caller take the buffers: one
+        // shared bool would let the first EOF release a half-filled log.
+        readers_left.fetch_sub(1, Ordering::AcqRel);
     });
 }
 
@@ -979,19 +981,18 @@ pub(crate) fn run_test_sync(
     let stdout_acc: ByteSink = Arc::new(Mutex::new(Vec::new()));
     let stderr_acc: ByteSink = Arc::new(Mutex::new(Vec::new()));
     let live: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let finished = Arc::new(AtomicBool::new(false));
-    let readers_finished = Arc::clone(&finished);
+    let readers_left = Arc::new(AtomicUsize::new(2));
     spawn_pipe_reader(
         child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
         Arc::clone(&stdout_acc),
         Arc::clone(&live),
-        Arc::clone(&finished),
+        Arc::clone(&readers_left),
     );
     spawn_pipe_reader(
         child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
         Arc::clone(&stderr_acc),
-        live.clone(),
-        readers_finished,
+        Arc::clone(&live),
+        readers_left,
     );
 
     let deadline = timer + timeout;
@@ -1023,7 +1024,7 @@ pub(crate) fn run_test_sync(
     // Bounded wait for the readers to hit EOF: a grandchild can hold a pipe open
     // forever, and the result must not depend on that.
     let drain_deadline = Instant::now() + Duration::from_secs(3);
-    while !finished.load(Ordering::Acquire) && Instant::now() < drain_deadline {
+    while readers_left.load(Ordering::Acquire) > 0 && Instant::now() < drain_deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
     let stdout_buf = take_buffer(&stdout_acc);
