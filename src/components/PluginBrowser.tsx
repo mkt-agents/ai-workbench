@@ -3,11 +3,12 @@ import { useTranslation } from "react-i18next";
 import { openBrowser, closeBrowser, onBrowserClosed, browserMapKey, getOpenBrowserKeys } from "../lib/browser";
 import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
-import type { WebPlugin } from "../core/types";
+import type { WebPlugin, UserScript } from "../core/types";
 import {
   X, Plus, Trash2, Edit2, Check, Globe, ExternalLink, Search, Link2,
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
-  Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown,
+  Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown, Code,
+  Copy, FileText, Zap,
 } from "lucide-react";
 
 const VIEW_MODE_KEY = "ai-workbench.webPlugins.viewMode";
@@ -59,6 +60,103 @@ function loadViewMode(): ViewMode {
   }
 }
 
+/** Preset script templates — users can start from these */
+interface ScriptPreset {
+  id: string;
+  nameKey: string;
+  matchPatterns: string[];
+  code: string;
+}
+
+const SCRIPT_PRESETS: ScriptPreset[] = [
+  {
+    id: "highlight-url",
+    nameKey: "usPresetHighlight",
+    matchPatterns: ["<all_urls>"],
+    code: `(function() {
+  'use strict';
+  // Highlight the current URL in the page title
+  const url = location.href;
+  document.title = "📍 " + url;
+
+  // Show a small floating badge with the URL
+  const badge = document.createElement('div');
+  badge.textContent = new URL(url).hostname;
+  Object.assign(badge.style, {
+    position: 'fixed', top: '8px', left: '8px', zIndex: '999999',
+    background: 'rgba(88,166,255,0.9)', color: '#fff',
+    padding: '4px 10px', borderRadius: '6px', fontSize: '12px',
+    fontFamily: 'system-ui, sans-serif', pointerEvents: 'none',
+  });
+  document.documentElement.appendChild(badge);
+})();`,
+  },
+  {
+    id: "dark-mode",
+    nameKey: "usPresetDarkMode",
+    matchPatterns: ["<all_urls>"],
+    code: `(function() {
+  'use strict';
+  // Force dark mode via CSS filter
+  const style = document.createElement('style');
+  style.textContent = \`
+    html {
+      filter: invert(1) hue-rotate(180deg) !important;
+    }
+    img, video, svg, [style*="background-image"] {
+      filter: invert(1) hue-rotate(180deg) !important;
+    }
+  \`;
+  document.head.appendChild(style);
+})();`,
+  },
+  {
+    id: "remove-ads",
+    nameKey: "usPresetRemoveAds",
+    matchPatterns: ["<all_urls>"],
+    code: `(function() {
+  'use strict';
+  // Remove common ad elements
+  const adSelectors = [
+    '[id*="google_ads"]', '[class*="google-ad"]',
+    '[id*="ad-"]', '[class*="ad-"]',
+    'iframe[src*="doubleclick"]', 'iframe[src*="ads"]',
+    '.adsbygoogle', '[data-ad-slot]',
+  ];
+  setInterval(() => {
+    adSelectors.forEach(sel => {
+      document.querySelectorAll(sel).forEach(el => el.remove());
+    });
+  }, 1000);
+})();`,
+  },
+  {
+    id: "word-count",
+    nameKey: "usPresetWordCount",
+    matchPatterns: ["<all_urls>"],
+    code: `(function() {
+  'use strict';
+  // Count words in the page body and show a badge
+  function countWords() {
+    const text = document.body?.innerText || '';
+    const words = text.trim().split(/\\s+/).filter(w => w.length > 0).length;
+    const chars = text.length;
+    return { words, chars };
+  }
+  const { words, chars } = countWords();
+  const badge = document.createElement('div');
+  badge.textContent = words + " words | " + chars + " chars";
+  Object.assign(badge.style, {
+    position: 'fixed', bottom: '8px', right: '8px', zIndex: '999999',
+    background: 'rgba(16,185,129,0.9)', color: '#fff',
+    padding: '6px 12px', borderRadius: '6px', fontSize: '12px',
+    fontFamily: 'system-ui, sans-serif',
+  });
+  document.documentElement.appendChild(badge);
+})();`,
+  },
+];
+
 function formatInvokeError(e: unknown): string {
   if (typeof e === "string") return e;
   if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
@@ -77,6 +175,12 @@ function PluginBrowser() {
   const recordPluginOpen = useGlobalStore((s) => s.recordPluginOpen);
   const addPresetPlugins = useGlobalStore((s) => s.addPresetPlugins);
   const confirm = useConfirm();
+  const userScripts = useGlobalStore((s) => s.userScripts);
+  const loadUserScripts = useGlobalStore((s) => s.loadUserScripts);
+  const addUserScript = useGlobalStore((s) => s.addUserScript);
+  const updateUserScript = useGlobalStore((s) => s.updateUserScript);
+  const deleteUserScript = useGlobalStore((s) => s.deleteUserScript);
+  const toggleUserScript = useGlobalStore((s) => s.toggleUserScript);
 
   const [address, setAddress] = useState("");
   const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set());
@@ -101,8 +205,30 @@ function PluginBrowser() {
   const [formHotkey, setFormHotkey] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const [activeTab, setActiveTab] = useState<"plugins" | "userscripts">("plugins");
+  const [usFormOpen, setUsFormOpen] = useState(false);
+  const [usFormName, setUsFormName] = useState("");
+  const [usDesc, setUsDesc] = useState("");
+  const [usMatch, setUsMatch] = useState<string[]>(["<all_urls>"]);
+  const [usCode, setUsCode] = useState("");
+  const [usEditingId, setUsEditingId] = useState<string | null>(null);
+  const [usSearch, setUsSearch] = useState("");
+  const [usShowPresets, setUsShowPresets] = useState(false);
+  const [usExpandedCode, setUsExpandedCode] = useState<Set<string>>(new Set());
+  const usCodeRef = useRef<HTMLTextAreaElement>(null);
+
   const filterInputRef = useRef<HTMLInputElement>(null);
   const canDrag = sortMode === "manual";
+
+  const filteredUserScripts = useMemo(() => {
+    const q = usSearch.trim().toLowerCase();
+    if (!q) return userScripts;
+    return userScripts.filter((s) =>
+      s.name.toLowerCase().includes(q) ||
+      s.description.toLowerCase().includes(q) ||
+      s.matchPatterns.some((p) => p.toLowerCase().includes(q))
+    );
+  }, [userScripts, usSearch]);
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
     setMessage({ type, text });
@@ -120,7 +246,8 @@ function PluginBrowser() {
 
   useEffect(() => {
     loadWebPlugins();
-  }, [loadWebPlugins]);
+    loadUserScripts();
+  }, [loadWebPlugins, loadUserScripts]);
 
   useEffect(() => {
     setActiveKeys(new Set(getOpenBrowserKeys()));
@@ -834,6 +961,27 @@ function PluginBrowser() {
 
   return (
     <div className="plugin-browser">
+      <div className="plugin-tabs">
+        <button
+          type="button"
+          className={`plugin-tab ${activeTab === "plugins" ? "active" : ""}`}
+          onClick={() => setActiveTab("plugins")}
+        >
+          <Globe size={14} />
+          <span>{t("tabPlugins")}</span>
+        </button>
+        <button
+          type="button"
+          className={`plugin-tab ${activeTab === "userscripts" ? "active" : ""}`}
+          onClick={() => setActiveTab("userscripts")}
+        >
+          <Code size={14} />
+          <span>{t("tabUserscripts")}</span>
+          <span className="plugin-tab-count">{userScripts.length}</span>
+        </button>
+      </div>
+
+      {activeTab === "plugins" && (
       <div className="plugin-shell">
         <div className="plugin-toolbar">
           <div className="plugin-toolbar-label">{t("openUrlLabel")}</div>
@@ -1048,6 +1196,252 @@ function PluginBrowser() {
           </div>
         </div>
       </div>
+      )}
+
+      {activeTab === "userscripts" && (
+      <div className="plugin-shell">
+        <div className="plugin-main">
+          <div className="plugin-header">
+            <div className="plugin-header-title">
+              <Code size={16} />
+              <h2>{t("tabUserscripts")}</h2>
+              <span className="plugin-count">{userScripts.length}</span>
+            </div>
+            <div className="plugin-header-actions">
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={async () => {
+                  const data = {
+                    version: 2,
+                    userscripts: userScripts.map((s) => ({
+                      name: s.name,
+                      description: s.description,
+                      matchPatterns: s.matchPatterns,
+                      code: s.code,
+                      enabled: s.enabled,
+                    })),
+                  };
+                  try {
+                    const path = await useGlobalStore.getState().invokeSaveTextFile(
+                      JSON.stringify(data, null, 2),
+                      "userscripts-backup.json",
+                      t("usExport")
+                    );
+                    showMsg("success", t("exportedTo", { path }));
+                  } catch (e) {
+                    const msg = String(e);
+                    if (!msg.includes("取消")) showMsg("error", msg);
+                  }
+                }}
+                title={t("usExport")}
+                disabled={userScripts.length === 0}
+              >
+                <Download size={12} /> {t("export")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={async () => {
+                  try {
+                    const text = await useGlobalStore.getState().invokePickTextFile(t("usImport"));
+                    const data = JSON.parse(text);
+                    const scripts = data.userscripts || data.scripts || data;
+                    if (!Array.isArray(scripts)) {
+                      showMsg("error", t("importInvalid"));
+                      return;
+                    }
+                    let imported = 0;
+                    for (const s of scripts) {
+                      if (!s.name || !s.code) continue;
+                      // 兼容新旧格式
+                      let patterns: string[];
+                      if (Array.isArray(s.matchPatterns) && s.matchPatterns.length > 0) {
+                        patterns = s.matchPatterns;
+                      } else if (s.matchPattern) {
+                        patterns = [s.matchPattern];
+                      } else {
+                        patterns = ["<all_urls>"];
+                      }
+                      await addUserScript({
+                        id: `import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        name: s.name,
+                        description: s.description || "",
+                        matchPatterns: patterns,
+                        code: s.code,
+                        enabled: s.enabled !== false,
+                      });
+                      imported++;
+                    }
+                    showMsg("success", t("imported", { count: imported }));
+                  } catch (e) {
+                    const msg = String(e);
+                    if (msg.includes("取消")) return;
+                    showMsg("error", t("importFailed"));
+                  }
+                }}
+                title={t("usImport")}
+              >
+                <Upload size={12} /> {t("import")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => setUsShowPresets(!usShowPresets)}
+                title={t("usPresets")}
+              >
+                <FileText size={12} /> {t("usPresets")}
+              </button>
+              <button
+                className="btn btn-primary btn-small"
+                onClick={() => {
+                  setUsEditingId(null);
+                  setUsFormName("");
+                  setUsDesc("");
+                  setUsMatch(["<all_urls>"]);
+                  setUsCode("");
+                  setUsFormOpen(true);
+                }}
+                type="button"
+              >
+                <Plus size={12} /> {t("add")}
+              </button>
+            </div>
+          </div>
+
+          {usShowPresets && (
+            <div className="us-presets-bar">
+              <div className="us-presets-header">
+                <Zap size={14} />
+                <span>{t("usPresets")}</span>
+                <button
+                  className="us-presets-close"
+                  onClick={() => setUsShowPresets(false)}
+                  aria-label={tc("actions.close")}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="us-presets-grid">
+                {SCRIPT_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    className="us-preset-card"
+                    onClick={() => {
+                      setUsEditingId(null);
+                      setUsFormName(t(preset.nameKey));
+                      setUsDesc("");
+                      setUsMatch(preset.matchPatterns);
+                      setUsCode(preset.code);
+                      setUsFormOpen(true);
+                      setUsShowPresets(false);
+                    }}
+                    type="button"
+                  >
+                    <Code size={16} />
+                    <span className="us-preset-name">{t(preset.nameKey)}</span>
+                    <span className="us-preset-match">{preset.matchPatterns.join(", ")}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {userScripts.length > 0 && (
+            <div className="plugin-filter-row">
+              <div className="plugin-url-input-wrapper plugin-filter-input">
+                <Search size={13} className="plugin-url-icon" />
+                <input
+                  className="plugin-url-input"
+                  value={usSearch}
+                  onChange={(e) => setUsSearch(e.target.value)}
+                  placeholder={t("usSearchPlaceholder")}
+                  aria-label={t("usSearchPlaceholder")}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="plugin-list">
+            {userScripts.length === 0 ? (
+              <div className="plugin-empty">
+                <div className="plugin-empty-icon">
+                  <Code size={32} strokeWidth={1.5} />
+                </div>
+                <p className="plugin-empty-title">{t("usNoScripts")}</p>
+                <p className="plugin-hint-text">{t("usHint")}</p>
+                <div className="plugin-empty-actions">
+                  <button
+                    className="btn btn-primary btn-small"
+                    onClick={() => setUsFormOpen(true)}
+                    type="button"
+                  >
+                    <Plus size={12} /> {t("usAddFirst")}
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => setUsShowPresets(true)}
+                    type="button"
+                  >
+                    <FileText size={12} /> {t("usPresets")}
+                  </button>
+                </div>
+              </div>
+            ) : filteredUserScripts.length === 0 ? (
+              <div className="plugin-empty plugin-empty-compact">
+                <p className="plugin-empty-title">{t("noFilterResults")}</p>
+              </div>
+            ) : (
+              <div className="userscript-list">
+                {filteredUserScripts.map((s) => (
+                  <UserscriptCard
+                    key={s.id}
+                    script={s}
+                    t={t}
+                    tc={tc}
+                    onToggle={() => toggleUserScript(s.id)}
+                    onEdit={() => {
+                      setUsEditingId(s.id);
+                      setUsFormName(s.name);
+                      setUsDesc(s.description);
+                      setUsMatch(s.matchPatterns.length > 0 ? s.matchPatterns : ["<all_urls>"]);
+                      setUsCode(s.code);
+                      setUsFormOpen(true);
+                    }}
+                    onDelete={async () => {
+                      const ok = await confirm({
+                        title: t("deleteTitle"),
+                        message: t("deleteMessage", { name: s.name }),
+                        confirmText: tc("actions.delete"),
+                        icon: "danger",
+                      });
+                      if (ok) deleteUserScript(s.id);
+                    }}
+                    onDuplicate={async () => {
+                      await addUserScript({
+                        id: Date.now().toString(),
+                        name: s.name + " (copy)",
+                        description: s.description,
+                        matchPatterns: [...s.matchPatterns],
+                        code: s.code,
+                        enabled: false,
+                      });
+                      showMsg("success", t("usAdded"));
+                    }}
+                    expanded={usExpandedCode.has(s.id)}
+                    onToggleExpand={() => {
+                      setUsExpandedCode((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(s.id)) next.delete(s.id);
+                        else next.add(s.id);
+                        return next;
+                      });
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      )}
 
       {formOpen && (
         <div className="modal-overlay" onClick={closeForm}>
@@ -1157,9 +1551,282 @@ function PluginBrowser() {
         </div>
       )}
 
+      {usFormOpen && (
+        <div className="modal-overlay" onClick={() => setUsFormOpen(false)}>
+          <div className="modal plugin-edit-modal us-edit-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="plugin-edit-modal-header">
+              {usEditingId ? <Edit2 size={16} /> : <Plus size={16} />}
+              {usEditingId ? t("usEditScript") : t("usAddScript")}
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setUsFormOpen(false)}
+                aria-label={tc("actions.close")}
+                title={tc("actions.close")}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="plugin-edit-modal-body">
+              <div className="input-group">
+                <label className="input-label">{t("name")}</label>
+                <input
+                  className="input-field"
+                  value={usFormName}
+                  onChange={(e) => setUsFormName(e.target.value)}
+                  placeholder={t("name")}
+                  autoFocus
+                />
+              </div>
+              <div className="input-group">
+                <label className="input-label">{t("usDescription")}</label>
+                <input
+                  className="input-field"
+                  value={usDesc}
+                  onChange={(e) => setUsDesc(e.target.value)}
+                  placeholder={t("usDescriptionPlaceholder")}
+                />
+              </div>
+              <div className="input-group">
+                <label className="input-label">{t("usMatchPattern")}</label>
+                <div className="us-match-patterns">
+                  {usMatch.map((pattern, idx) => (
+                    <div key={idx} className="us-match-row">
+                      <input
+                        className="input-field us-match-input"
+                        value={pattern}
+                        onChange={(e) => {
+                          const next = [...usMatch];
+                          next[idx] = e.target.value;
+                          setUsMatch(next);
+                        }}
+                        placeholder="*://example.com/*"
+                      />
+                      {usMatch.length > 1 && (
+                        <button
+                          type="button"
+                          className="us-match-remove"
+                          onClick={() => setUsMatch(usMatch.filter((_, i) => i !== idx))}
+                          title={tc("actions.delete")}
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="us-match-add"
+                    onClick={() => setUsMatch([...usMatch, ""])}
+                  >
+                    <Plus size={14} /> {t("usAddPattern")}
+                  </button>
+                </div>
+                <span className="input-hint">{t("usMatchHint")}</span>
+              </div>
+              <div className="input-group">
+                <label className="input-label">
+                  {t("usCode")}
+                  <span className="input-label-extra">
+                    {usCode.split("\n").length} {t("usLineCountSplit")}
+                  </span>
+                </label>
+                <textarea
+                  ref={usCodeRef}
+                  className="input-field us-code-editor"
+                  value={usCode}
+                  onChange={(e) => setUsCode(e.target.value)}
+                  placeholder={t("usCodePlaceholder")}
+                  rows={12}
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setUsFormOpen(false)} type="button">
+                {tc("actions.cancel")}
+              </button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={!usFormName.trim() || !usCode.trim()}
+                onClick={async () => {
+                  if (!usFormName.trim() || !usCode.trim()) return;
+                  // 过滤空模式，如果没有有效模式则默认 <all_urls>
+                  const patterns = usMatch.map((p) => p.trim()).filter(Boolean);
+                  const finalPatterns = patterns.length > 0 ? patterns : ["<all_urls>"];
+                  try {
+                    if (usEditingId) {
+                      await updateUserScript(usEditingId, {
+                        name: usFormName.trim(),
+                        description: usDesc.trim(),
+                        matchPatterns: finalPatterns,
+                        code: usCode,
+                      });
+                      showMsg("success", t("usSaved"));
+                    } else {
+                      await addUserScript({
+                        id: Date.now().toString(),
+                        name: usFormName.trim(),
+                        description: usDesc.trim(),
+                        matchPatterns: finalPatterns,
+                        code: usCode,
+                        enabled: true,
+                      });
+                      showMsg("success", t("usAdded"));
+                    }
+                    setUsFormOpen(false);
+                    setUsEditingId(null);
+                    setUsFormName("");
+                    setUsDesc("");
+                    setUsMatch(["<all_urls>"]);
+                    setUsCode("");
+                  } catch (e) {
+                    showMsg("error", String(e));
+                  }
+                }}
+              >
+                <Check size={14} /> {t("save")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {message && <div className={`toast toast-${message.type}`}>{message.text}</div>}
     </div>
   );
 }
 
 export default PluginBrowser;
+
+/** Individual userscript card with expand/collapse code preview */
+function UserscriptCard({
+  script,
+  t,
+  tc,
+  onToggle,
+  onEdit,
+  onDelete,
+  onDuplicate,
+  expanded,
+  onToggleExpand,
+}: {
+  script: UserScript;
+  t: (key: string) => string;
+  tc: (key: string) => string;
+  onToggle: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const lineCount = script.code.split("\n").length;
+  const charCount = script.code.length;
+  const lineLabel = t("usLineCount").replace("{{count}}", String(lineCount));
+  const charLabel = t("usCharCount").replace("{{count}}", String(charCount));
+  const timeAgo = useMemo(() => {
+    const ts = script.updatedAt || script.createdAt;
+    if (!ts) return "";
+    const diff = Date.now() - Date.parse(ts);
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return t("justNow");
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    const days = Math.floor(hours / 24);
+    return `${days}d`;
+  }, [script.updatedAt, script.createdAt, t]);
+
+  return (
+    <div className={`userscript-item ${script.enabled ? "" : "userscript-disabled"}`}>
+      <div className="userscript-header">
+        <div className="userscript-info">
+          <div className="userscript-name-row">
+            <span className="userscript-name">{script.name}</span>
+            <span className={`userscript-status ${script.enabled ? "is-enabled" : "is-disabled"}`}>
+              {script.enabled ? t("usEnabled") : t("usDisabled")}
+            </span>
+          </div>
+          {script.description && (
+            <div className="userscript-desc">{script.description}</div>
+          )}
+          <div className="userscript-meta-row">
+            <div className="userscript-match">
+              <Link2 size={11} />
+              {script.matchPatterns.length === 1 && script.matchPatterns[0] === "<all_urls>" ? (
+                <span>{t("usMatchesAll")}</span>
+              ) : script.matchPatterns.length <= 2 ? (
+                script.matchPatterns.map((p, i) => (
+                  <span key={i} className="us-pattern-tag">{p}</span>
+                ))
+              ) : (
+                <>
+                  {script.matchPatterns.slice(0, 2).map((p, i) => (
+                    <span key={i} className="us-pattern-tag">{p}</span>
+                  ))}
+                  <span className="us-pattern-more">+{script.matchPatterns.length - 2}</span>
+                </>
+              )}
+            </div>
+            <span className="userscript-stats">
+              {lineLabel} · {timeAgo}
+            </span>
+          </div>
+        </div>
+        <div className="userscript-controls">
+          <label className="userscript-toggle" title={script.enabled ? t("usEnabled") : t("usDisabled")}>
+            <input
+              type="checkbox"
+              checked={script.enabled}
+              onChange={onToggle}
+            />
+            <span className="userscript-toggle-slider" />
+          </label>
+          <button
+            className="plugin-item-btn"
+            onClick={onEdit}
+            title={t("edit")}
+            type="button"
+          >
+            <Edit2 size={11} />
+          </button>
+          <button
+            className="plugin-item-btn"
+            onClick={onDuplicate}
+            title={t("usDuplicate")}
+            type="button"
+          >
+            <Copy size={11} />
+          </button>
+          <button
+            className="plugin-item-btn plugin-item-btn-danger"
+            onClick={onDelete}
+            title={tc("actions.delete")}
+            type="button"
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
+      </div>
+      <div
+        className={`userscript-code-section ${expanded ? "is-expanded" : ""}`}
+      >
+        <button
+          className="userscript-code-toggle"
+          onClick={onToggleExpand}
+          type="button"
+        >
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <Code size={12} />
+          <span>{t("usViewCode")}</span>
+          <span className="userscript-code-size">{charLabel}</span>
+        </button>
+        {expanded && (
+          <pre className="userscript-code">{script.code}</pre>
+        )}
+      </div>
+    </div>
+  );
+}

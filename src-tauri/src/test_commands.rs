@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -786,6 +787,7 @@ const HISTORY_RETENTION_PER_PROJECT: i64 = 100;
 /// Run tests for a project
 #[tauri::command]
 pub async fn run_test(
+    app: AppHandle,
     state: State<'_, DbState>,
     project_id: String,
     args: Option<String>,
@@ -798,7 +800,7 @@ pub async fn run_test(
     let conn = Arc::clone(&state.conn);
     // A suite can run for minutes; keep it off the async worker threads.
     tokio::task::spawn_blocking(move || {
-        run_test_sync(conn, project, project_id, args, TEST_RUN_TIMEOUT)
+        run_test_sync(conn, project, project_id, args, TEST_RUN_TIMEOUT, Some(app))
     })
     .await
     .map_err(|e| format!("测试任务已中止: {}", e))?
@@ -882,12 +884,80 @@ fn kill_process_tree(pid: u32) {
     let _ = pid;
 }
 
+/// One live-output event for the running suite.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestOutputChunk {
+    pub project_id: String,
+    pub text: String,
+    pub done: bool,
+}
+
+type ByteSink = Arc<Mutex<Vec<u8>>>;
+
+/// Drain one pipe on its own thread: keep the full text for the final result and
+/// append to the live tail as lines arrive, so the UI can follow along.
+fn spawn_pipe_reader(
+    pipe: Option<Box<dyn Read + Send>>,
+    acc: ByteSink,
+    live: Arc<Mutex<String>>,
+    finished: Arc<AtomicBool>,
+) {
+    let Some(pipe) = pipe else {
+        finished.store(true, Ordering::Release);
+        return;
+    };
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(pipe);
+        let mut line: Vec<u8> = Vec::new();
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if let Ok(mut buf) = acc.lock() {
+                buf.extend_from_slice(&line);
+            }
+            if let Ok(mut tail) = live.lock() {
+                tail.push_str(String::from_utf8_lossy(&line).trim_end_matches('\r'));
+                tail.push('\n');
+            }
+        }
+        finished.store(true, Ordering::Release);
+    });
+}
+
+fn take_buffer(acc: &ByteSink) -> Vec<u8> {
+    acc.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default()
+}
+
+fn flush_live_tail(app: Option<&AppHandle>, project_id: &str, live: &Arc<Mutex<String>>, done: bool) {
+    let Some(app) = app else { return };
+    let text = live
+        .lock()
+        .map(|mut g| std::mem::take(&mut *g))
+        .unwrap_or_default();
+    if text.is_empty() && !done {
+        return;
+    }
+    let _ = app.emit(
+        "test-run-output",
+        TestOutputChunk {
+            project_id: project_id.to_string(),
+            text,
+            done,
+        },
+    );
+}
+
 pub(crate) fn run_test_sync(
     conn: Arc<Mutex<rusqlite::Connection>>,
     project: TestProject,
     project_id: String,
     args: Option<String>,
     timeout: Duration,
+    app: Option<AppHandle>,
 ) -> Result<TestRunResult, String> {
     // The cancellation token is keyed by project id: one live run per project.
     let guard_id = project_id.clone();
@@ -904,26 +974,25 @@ pub(crate) fn run_test_sync(
     let started_at = chrono::Utc::now().to_rfc3339();
     let timer = Instant::now();
 
-    let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<u8>)>();
-    // Drain both pipes on their own threads: a full 64KB buffer would otherwise
-    // block the runner before it can exit.
-    if let Some(mut pipe) = child.stdout.take() {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
-            let _ = tx.send((0usize, buf));
-        });
-    }
-    if let Some(mut pipe) = child.stderr.take() {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
-            let _ = tx.send((1usize, buf));
-        });
-    }
-    drop(tx);
+    // Drain both pipes on their own threads (a full 64KB buffer would otherwise stall
+    // the runner before it can exit) and mirror the lines into a live tail the UI polls.
+    let stdout_acc: ByteSink = Arc::new(Mutex::new(Vec::new()));
+    let stderr_acc: ByteSink = Arc::new(Mutex::new(Vec::new()));
+    let live: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let finished = Arc::new(AtomicBool::new(false));
+    let readers_finished = Arc::clone(&finished);
+    spawn_pipe_reader(
+        child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
+        Arc::clone(&stdout_acc),
+        Arc::clone(&live),
+        Arc::clone(&finished),
+    );
+    spawn_pipe_reader(
+        child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
+        Arc::clone(&stderr_acc),
+        live.clone(),
+        readers_finished,
+    );
 
     let deadline = timer + timeout;
     // "" | "cancelled" | "timeout"
@@ -941,6 +1010,7 @@ pub(crate) fn run_test_sync(
                     break false;
                 }
                 std::thread::sleep(Duration::from_millis(100));
+                flush_live_tail(app.as_ref(), &project_id, &live, false);
             }
         }
     };
@@ -950,25 +1020,15 @@ pub(crate) fn run_test_sync(
     }
     let _ = child.wait();
 
-    let mut stdout_buf = Vec::new();
-    let mut stderr_buf = Vec::new();
-    let mut got = [false, false];
+    // Bounded wait for the readers to hit EOF: a grandchild can hold a pipe open
+    // forever, and the result must not depend on that.
     let drain_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < drain_deadline {
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok((slot, buf)) => {
-                let target = if slot == 0 { &mut stdout_buf } else { &mut stderr_buf };
-                *target = buf;
-                got[slot] = true;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-        }
-        if got[0] && got[1] {
-            break;
-        }
+    while !finished.load(Ordering::Acquire) && Instant::now() < drain_deadline {
+        std::thread::sleep(Duration::from_millis(50));
     }
-    drop(rx);
+    let stdout_buf = take_buffer(&stdout_acc);
+    let stderr_buf = take_buffer(&stderr_acc);
+    flush_live_tail(app.as_ref(), &project_id, &live, true);
 
     let completed_at = chrono::Utc::now().to_rfc3339();
     let stdout = String::from_utf8_lossy(&stdout_buf).to_string();

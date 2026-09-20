@@ -163,6 +163,7 @@ export interface GlobalState {
   recentProjects: RecentProject[];
   gitWorkspaces: GitWorkspace[];
   webPlugins: WebPlugin[];
+  userScripts: UserScript[];
   hostProfiles: HostProfile[];
   cursorAccounts: CursorAccount[];
   aiModels: AIModelConfig[];
@@ -192,6 +193,17 @@ export interface WebPlugin {
   openCount: number;
   hotkey: string;
   isPreset: boolean;
+}
+
+export interface UserScript {
+  id: string;
+  name: string;
+  description: string;
+  matchPatterns: string[];  // 支持多个匹配模式
+  code: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CursorAccount {

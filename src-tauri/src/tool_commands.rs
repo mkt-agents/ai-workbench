@@ -13,6 +13,7 @@ const EXPORT_TABLE_NAMES: &[&str] = &[
     "git_repo_configs",
     "host_profiles",
     "web_plugins",
+    "user_scripts",
     "plugin_states",
     "recent_projects",
     "git_workspaces",

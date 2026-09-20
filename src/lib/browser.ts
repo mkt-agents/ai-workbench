@@ -1,5 +1,6 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
+import { useGlobalStore } from "../core/store";
 
 /** logical key → WebviewWindow (survives for focus/close in this session) */
 const windows = new Map<string, WebviewWindow>();
@@ -7,6 +8,38 @@ let defaultWindow: WebviewWindow | null = null;
 
 type ClosedListener = (key: string) => void;
 const closedListeners = new Set<ClosedListener>();
+
+/** Convert userscript match pattern to regex test */
+function matchUrlPattern(pattern: string, url: string): boolean {
+  if (pattern === "<all_urls>") return true;
+  const trimmed = pattern.trim();
+  if (!trimmed) return false;
+  let regex = "";
+  for (const ch of trimmed) {
+    if (ch === "*") regex += ".*";
+    else if (ch === "?") regex += ".";
+    else if ("+.^${}()|[]\\".includes(ch)) regex += "\\" + ch;
+    else regex += ch;
+  }
+  try {
+    return new RegExp("^" + regex + "$").test(url);
+  } catch {
+    return false;
+  }
+}
+
+/** Get enabled userscripts that match the given URL */
+function getMatchingUserscripts(url: string): Array<{ name: string; code: string }> {
+  try {
+    const state = useGlobalStore.getState();
+    const scripts = state.userScripts?.filter(
+      (s) => s.enabled && s.matchPatterns.some((p) => matchUrlPattern(p, url))
+    ) ?? [];
+    return scripts.map((s) => ({ name: s.name, code: s.code }));
+  } catch {
+    return [];
+  }
+}
 
 export function onBrowserClosed(cb: ClosedListener): () => void {
   closedListeners.add(cb);
@@ -110,11 +143,19 @@ async function createBrowserWindow(url: string, width: number, height: number, m
   // initialization_script — that script re-runs on every page navigation,
   // which keeps the floating nav toolbar alive across in-page links. A plain
   // `new WebviewWindow()` + `eval()` would lose the toolbar on the next load.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = new URL("about:blank");
+  }
+  const userscripts = getMatchingUserscripts(parsed.href);
   await invoke<string>("open_browser_window_with_toolbar", {
     url,
     width,
     height,
     label,
+    userscripts,
   });
 
   const win = await WebviewWindow.getByLabel(label);

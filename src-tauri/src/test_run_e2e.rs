@@ -72,7 +72,7 @@ mod tests {
             id.to_string(),
             args,
             timeout,
-        )
+            None,        )
     }
 
     #[test]
@@ -93,7 +93,7 @@ mod tests {
             "p-orphan".to_string(),
             None,
             Duration::from_secs(60),
-        )
+            None,        )
         .unwrap();
 
         assert_eq!(result.total_tests, 3);
@@ -206,7 +206,7 @@ mod tests {
             "p-wd".to_string(),
             None,
             Duration::from_secs(5),
-        )
+            None,        )
         .unwrap_err();
 
         assert!(err.contains("工作目录不存在"), "got: {}", err);
@@ -224,7 +224,7 @@ mod tests {
             "p-missing".to_string(),
             None,
             Duration::from_secs(5),
-        )
+            None,        )
         .unwrap_err();
         assert!(err.contains("启动测试命令失败"), "got: {}", err);
         let _ = std::fs::remove_dir_all(&dir);
@@ -293,7 +293,7 @@ mod tests {
                 "p-cancel".to_string(),
                 None,
                 Duration::from_secs(120),
-            )
+                None,            )
         });
 
         while !crate::cancellation::is_active("p-cancel") {
@@ -379,7 +379,7 @@ mod tests {
             "p-workdir".to_string(),
             None,
             Duration::from_secs(60),
-        )
+            None,        )
         .unwrap();
 
         assert!(

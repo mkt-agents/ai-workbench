@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -32,6 +32,7 @@ type DbTable =
   | 'git_host_configs'
   | 'host_profiles'
   | 'web_plugins'
+  | 'user_scripts'
   | 'plugin_states'
   | 'recent_projects'
   | 'git_workspaces'
@@ -143,6 +144,49 @@ export const storage = {
         id: item.id,
         name: item.name,
         content: item.content,
+        created_at: item.createdAt,
+        updated_at: item.updatedAt,
+      })));
+    },
+  },
+  userScripts: {
+    load: async (): Promise<UserScript[]> => {
+      const rows = await loadRows('user_scripts');
+      return rows.map(r => {
+        let patterns: string[] = [];
+        try {
+          const raw = r['match_patterns'];
+          if (raw) {
+            const parsed = JSON.parse(raw as string);
+            if (Array.isArray(parsed)) patterns = parsed.filter(Boolean);
+          }
+        } catch {
+          // 兼容旧数据：尝试从 match_pattern 读取
+          const old = (r['match_pattern'] as string) || '';
+          if (old) patterns = [old];
+        }
+        if (patterns.length === 0) patterns = ['<all_urls>'];
+        return {
+          id: r['id'] as string,
+          name: r['name'] as string,
+          description: (r['description'] as string) || '',
+          matchPatterns: patterns,
+          code: (r['code'] as string) || '',
+          enabled: Boolean(r['enabled']),
+          createdAt: (r['created_at'] as string) || '',
+          updatedAt: (r['updated_at'] as string) || '',
+        };
+      });
+    },
+    save: async (items: UserScript[]): Promise<void> => {
+      await saveRows('user_scripts', items.map(item => ({
+        id: item.id,
+        name: item.name,
+        description: item.description || '',
+        match_patterns: JSON.stringify(item.matchPatterns.length > 0 ? item.matchPatterns : ['<all_urls>']),
+        match_pattern: item.matchPatterns[0] || '<all_urls>', // 兼容旧版读取
+        code: item.code,
+        enabled: item.enabled ? 1 : 0,
         created_at: item.createdAt,
         updated_at: item.updatedAt,
       })));

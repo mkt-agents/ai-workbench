@@ -140,6 +140,17 @@ pub fn run() {
                     downloaded_at TEXT,
                     added_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS user_scripts (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    match_pattern TEXT NOT NULL DEFAULT '<all_urls>',
+                    match_patterns TEXT NOT NULL DEFAULT '["<all_urls>"]',
+                    code TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS plugin_states (
                     plugin_id TEXT PRIMARY KEY,
                     enabled INTEGER NOT NULL,
@@ -260,6 +271,8 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN open_count INTEGER NOT NULL DEFAULT 0;");
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN hotkey TEXT NOT NULL DEFAULT '';");
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN is_preset INTEGER NOT NULL DEFAULT 0;");
+            // Migrate user_scripts to support multiple match patterns (v0.1.7+)
+            let _ = conn.execute_batch("ALTER TABLE user_scripts ADD COLUMN match_patterns TEXT NOT NULL DEFAULT '[\"<all_urls>\"]';");
             {
                 let state = app.state::<DbState>();
                 let mut guard = state.conn.lock().map_err(|e| e.to_string())?;

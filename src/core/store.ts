@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
-  RecentProject, WebPlugin, HostProfile, CursorAccount,
+  RecentProject, WebPlugin, UserScript, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
   TestProject, ProjectDetectionResult, TestRunResult, TestHistoryEntry, CoverageReport,
@@ -17,6 +17,26 @@ import { invocations, type Invocations } from './store/invocations';
 /** True when `v1` is older than `v2`; prerelease-aware (see `compareVersions`). */
 const isOlderVersion = (v1: string, v2: string): boolean =>
   compareVersions(v1, v2) < 0;
+
+/** Simple URL match: converts userscript match patterns to regex. */
+function matchUrlPattern(pattern: string, url: string): boolean {
+  if (pattern === "<all_urls>") return true;
+  const trimmed = pattern.trim();
+  if (!trimmed) return false;
+  // Escape regex special chars except *
+  let regex = "";
+  for (const ch of trimmed) {
+    if (ch === "*") regex += ".*";
+    else if (ch === "?") regex += ".";
+    else if ("+.^${}()|[]\\".includes(ch)) regex += "\\" + ch;
+    else regex += ch;
+  }
+  try {
+    return new RegExp("^" + regex + "$").test(url);
+  } catch {
+    return false;
+  }
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'glass',
@@ -123,6 +143,14 @@ interface StoreState extends GlobalState, Invocations {
   reorderWebPlugins: (orderedIds: string[]) => Promise<void>;
   recordPluginOpen: (id: string) => Promise<void>;
   addPresetPlugins: () => Promise<void>;
+
+  // User scripts
+  loadUserScripts: () => Promise<void>;
+  addUserScript: (script: Omit<UserScript, "createdAt" | "updatedAt">) => Promise<void>;
+  updateUserScript: (id: string, updates: Partial<UserScript>) => Promise<void>;
+  deleteUserScript: (id: string) => Promise<void>;
+  toggleUserScript: (id: string) => Promise<void>;
+  getUserScriptsForUrl: (url: string) => UserScript[];
 
   // Host profiles
   loadHostProfiles: () => Promise<void>;
@@ -293,6 +321,7 @@ export const useGlobalStore = create<StoreState>()(
       recentProjects: [],
       gitWorkspaces: [],
       webPlugins: [],
+      userScripts: [],
       hostProfiles: [],
       cursorAccounts: [],
       aiModels: [],
@@ -637,6 +666,54 @@ export const useGlobalStore = create<StoreState>()(
         const next = [...existing, ...newPlugins];
         await storage.webPlugins.save(next);
         set(() => ({ webPlugins: next }));
+      }),
+
+      getUserScriptsForUrl: (url: string) => {
+        return get().userScripts.filter(
+          (s) => s.enabled && s.matchPatterns.some((p) => matchUrlPattern(p, url))
+        );
+      },
+
+      loadUserScripts: async () => withTable("user_scripts", async () => {
+        const scripts = await storage.userScripts.load();
+        set(() => ({ userScripts: scripts }));
+      }),
+
+      addUserScript: async (script) => withTable("user_scripts", async () => {
+        const now = new Date().toISOString();
+        const scripts = get().userScripts;
+        const newScript: UserScript = {
+          ...script,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const next = [...scripts, newScript];
+        await storage.userScripts.save(next);
+        set(() => ({ userScripts: next }));
+      }),
+
+      updateUserScript: async (id, updates) => withTable("user_scripts", async () => {
+        const now = new Date().toISOString();
+        const scripts = get().userScripts.map((s) =>
+          s.id === id ? { ...s, ...updates, updatedAt: now } : s
+        );
+        await storage.userScripts.save(scripts);
+        set(() => ({ userScripts: scripts }));
+      }),
+
+      deleteUserScript: async (id) => withTable("user_scripts", async () => {
+        const scripts = get().userScripts.filter((s) => s.id !== id);
+        await storage.userScripts.save(scripts);
+        set(() => ({ userScripts: scripts }));
+      }),
+
+      toggleUserScript: async (id) => withTable("user_scripts", async () => {
+        const now = new Date().toISOString();
+        const scripts = get().userScripts.map((s) =>
+          s.id === id ? { ...s, enabled: !s.enabled, updatedAt: now } : s
+        );
+        await storage.userScripts.save(scripts);
+        set(() => ({ userScripts: scripts }));
       }),
 
       // Host Profiles
@@ -1254,6 +1331,7 @@ export const useGlobalStore = create<StoreState>()(
           get().loadRecentProjects(),
           get().loadWorkspaces(),
           get().loadWebPlugins(),
+          get().loadUserScripts(),
           get().loadHostProfiles(),
           get().loadCursorAccounts(),
           get().loadAIModels(),

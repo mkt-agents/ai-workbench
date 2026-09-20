@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
 use url::Url;
@@ -15,6 +16,12 @@ const SHELL_OPEN_TRIGGER_HOST: &str = "aiwb-shell.open";
 fn is_safe_url(url: &str) -> bool {
     let lower = url.to_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+#[derive(Deserialize)]
+pub struct UserscriptInit {
+    pub name: String,
+    pub code: String,
 }
 
 /// Navigate existing "browser" webview window. Returns true if navigated, false if window missing.
@@ -444,6 +451,21 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     updateState();
   }
 
+  // Userscript runner — injected pages call this from their own IIFE so they
+  // execute after the toolbar sets up, with a guarded try/catch so one bad
+  // script can't break the toolbar or other scripts.
+  window.__aiwb_run_userscript = function(fn) {
+    try {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fn);
+      } else {
+        fn();
+      }
+    } catch (e) {
+      console.warn('[AI Workbench] userscript error:', e);
+    }
+  };
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
@@ -467,6 +489,7 @@ pub async fn open_browser_window_with_toolbar(
     width: Option<f64>,
     height: Option<f64>,
     label: Option<String>,
+    userscripts: Option<Vec<UserscriptInit>>,
 ) -> Result<String, String> {
     if !is_safe_url(&url) {
         return Err("仅允许 http/https 地址".to_string());
@@ -507,6 +530,23 @@ pub async fn open_browser_window_with_toolbar(
         .get_webview_window("main")
         .and_then(|w| w.theme().ok());
 
+    // Build combined initialization script: toolbar + matching userscripts
+    let mut init_script = String::from(BROWSER_TOOLBAR_INIT_JS);
+    if let Some(scripts) = userscripts {
+        for script in scripts {
+            if script.code.trim().is_empty() {
+                continue;
+            }
+            init_script.push_str("\n(function(){\n");
+            init_script.push_str("// Userscript: ");
+            init_script.push_str(&script.name);
+            init_script.push_str("\n");
+            init_script.push_str("__aiwb_run_userscript(() => {\n");
+            init_script.push_str(&script.code);
+            init_script.push_str("\n});\n})();\n");
+        }
+    }
+
     let win = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
         .title(title)
         .inner_size(w, h)
@@ -521,7 +561,7 @@ pub async fn open_browser_window_with_toolbar(
         // dropzones) matters more than dragging OS files onto the page, so
         // disable the handler to restore normal DnD.
         .disable_drag_drop_handler()
-        .initialization_script(BROWSER_TOOLBAR_INIT_JS)
+        .initialization_script(&init_script)
         .on_navigation(move |url: &Url| {
             if url.host_str() == Some(SHELL_OPEN_TRIGGER_HOST) {
                 for (k, v) in url.query_pairs() {

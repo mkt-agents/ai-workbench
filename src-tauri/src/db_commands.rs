@@ -15,6 +15,7 @@ pub enum DbTable {
     GitHostConfigs,
     HostProfiles,
     WebPlugins,
+    UserScripts,
     PluginStates,
     RecentProjects,
     GitWorkspaces,
@@ -34,6 +35,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "git_host_configs" => Some(DbTable::GitHostConfigs),
         "host_profiles" => Some(DbTable::HostProfiles),
         "web_plugins" => Some(DbTable::WebPlugins),
+        "user_scripts" => Some(DbTable::UserScripts),
         "plugin_states" => Some(DbTable::PluginStates),
         "recent_projects" => Some(DbTable::RecentProjects),
         "git_workspaces" => Some(DbTable::GitWorkspaces),
@@ -55,6 +57,7 @@ fn load_sql(table: DbTable) -> &'static str {
         DbTable::GitHostConfigs => "SELECT * FROM git_host_configs ORDER BY created_at DESC",
         DbTable::HostProfiles => "SELECT * FROM host_profiles ORDER BY created_at DESC",
         DbTable::WebPlugins => "SELECT * FROM web_plugins ORDER BY \"order\" ASC, added_at DESC",
+        DbTable::UserScripts => "SELECT * FROM user_scripts ORDER BY created_at DESC",
         DbTable::PluginStates => "SELECT * FROM plugin_states ORDER BY updated_at DESC",
         DbTable::RecentProjects => "SELECT * FROM recent_projects ORDER BY last_opened_at DESC LIMIT 200",
         DbTable::GitWorkspaces => "SELECT * FROM git_workspaces ORDER BY created_at DESC",
@@ -75,6 +78,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::GitHostConfigs => "DELETE FROM git_host_configs",
         DbTable::HostProfiles => "DELETE FROM host_profiles",
         DbTable::WebPlugins => "DELETE FROM web_plugins",
+        DbTable::UserScripts => "DELETE FROM user_scripts",
         DbTable::PluginStates => "DELETE FROM plugin_states",
         DbTable::RecentProjects => "DELETE FROM recent_projects",
         DbTable::GitWorkspaces => "DELETE FROM git_workspaces",
@@ -228,6 +232,21 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "plugin_id")?,
                     json_bool_as_i64(obj, "enabled")?,
                     json_str(obj, "config")?,
+                    json_str(obj, "updated_at")?,
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::UserScripts => {
+            tx.execute(
+                "INSERT INTO user_scripts (id, name, description, match_pattern, code, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_str(obj, "name")?,
+                    json_opt_str(obj, "description").unwrap_or_default(),
+                    json_opt_str(obj, "match_pattern").unwrap_or_else(|| "<all_urls>".to_string()),
+                    json_opt_str(obj, "code").unwrap_or_default(),
+                    json_bool_as_i64(obj, "enabled")?,
+                    json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
                 ],
             ).map_err(|e| e.to_string())?;
