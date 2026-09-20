@@ -111,6 +111,7 @@ export default function TestManager() {
   const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
   const [outputExpanded, setOutputExpanded] = useState(false);
   const [onlyFailed, setOnlyFailed] = useState(false);
+  const [caseSearch, setCaseSearch] = useState("");
 
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [draftOpen, setDraftOpen] = useState(false);
@@ -249,9 +250,12 @@ export default function TestManager() {
     }
     setBatch({ done: 0, total: targets.length });
     const statuses: TestRunOutcome[] = [];
+    let done = 0;
     await mapPool(targets, TEST_RUN_CONCURRENCY, async (project) => {
       const result = await runOne(project, true);
       statuses.push(result?.status ?? "error");
+      done += 1;
+      setBatch({ done, total: targets.length });
     });
     setBatch(null);
     setSelected(new Set());
@@ -481,6 +485,23 @@ export default function TestManager() {
       trimmed,
     };
   }, [focusedResult, outputExpanded]);
+
+  // Failures first, both across suites and within a suite — the thing you are most
+  // likely to act on should be the first thing you see.
+  const sortedSuites = useMemo(() => {
+    if (!focusedResult) return [];
+    const byStatus = (s: string) => (s === "failed" ? 0 : s === "skipped" ? 1 : 2);
+    return [...focusedResult.suites]
+      .map((suite) => ({
+        ...suite,
+        tests: [...suite.tests].sort((a, b) => byStatus(a.status) - byStatus(b.status)),
+      }))
+      .sort((a, b) => {
+        const aFail = a.tests.some((c) => c.status === "failed") ? 0 : 1;
+        const bFail = b.tests.some((c) => c.status === "failed") ? 0 : 1;
+        return aFail - bFail;
+      });
+  }, [focusedResult]);
 
   if (loading) {
     return (
@@ -748,6 +769,16 @@ export default function TestManager() {
             </div>
             <button
               type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => void runOne(focused)}
+              disabled={!!batch || !!runs[focused.id]}
+              title={t("rerunHint")}
+            >
+              <RefreshCw size={12} />
+              {t("rerun")}
+            </button>
+            <button
+              type="button"
               className="btn btn-secondary btn-icon"
               onClick={() => {
                 setResults((prev) => {
@@ -795,10 +826,17 @@ export default function TestManager() {
               <div className="tm-result-toolbar">
                 <span className="tm-output-label">
                   {t("caseDetail", {
-                    count: focusedResult.suites.reduce((n, s) => n + s.tests.length, 0),
-                    files: focusedResult.suites.length,
+                    count: sortedSuites.reduce((n, s) => n + s.tests.length, 0),
+                    files: sortedSuites.length,
                   })}
                 </span>
+                <input
+                  type="search"
+                  className="input-field tm-case-search"
+                  value={caseSearch}
+                  onChange={(e) => setCaseSearch(e.target.value)}
+                  placeholder={t("caseSearchPlaceholder")}
+                />
                 <button
                   type="button"
                   className={`btn btn-small ${onlyFailed ? "btn-primary" : "btn-secondary"}`}
@@ -808,13 +846,16 @@ export default function TestManager() {
                 </button>
               </div>
               <div className="tm-suites">
-                {focusedResult.suites.map((suite) => {
+                {sortedSuites.map((suite) => {
                   const passedCases = suite.tests.filter((c) => c.status === "passed").length;
                   const failedCases = suite.tests.filter((c) => c.status === "failed").length;
                   const skippedCases = suite.tests.filter((c) => c.status === "skipped").length;
-                  const cases = onlyFailed
-                    ? suite.tests.filter((c) => c.status === "failed")
-                    : suite.tests;
+                  const search = caseSearch.trim().toLowerCase();
+                  const cases = suite.tests.filter((c) => {
+                    if (onlyFailed && c.status !== "failed") return false;
+                    if (search && !c.name.toLowerCase().includes(search)) return false;
+                    return true;
+                  });
                   if (cases.length === 0) return null;
                   return (
                     <details key={suite.path} className="tm-suite" open={failedCases > 0}>
