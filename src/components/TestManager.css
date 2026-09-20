@@ -318,6 +318,14 @@
   max-height: 420px;
 }
 
+.tm-case-search {
+  flex: 1 1 160px;
+  min-width: 120px;
+  max-width: 280px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+
 /* ─── Dialog shell ─── */
 .tm-modal {
   display: flex;
