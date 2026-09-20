@@ -847,3 +847,44 @@
     margin-left: 0;
   }
 }
+
+/* ─── Search, enable toggle, live tail ─── */
+.tm-search {
+  flex: 0 1 200px;
+  min-width: 120px;
+  height: 26px;
+}
+
+.tm-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.tm-check-row .tm-check {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+.tm-result-live {
+  border-color: var(--accent-border);
+}
+
+.tm-output-live {
+  max-height: 240px;
+  color: var(--text-2);
+}
+
+@media (max-width: 720px) {
+  .tm-search {
+    flex: 1 1 100%;
+  }
+
+  .tm-output-live {
+    max-height: 180px;
+  }
+}

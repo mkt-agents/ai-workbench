@@ -8,7 +8,7 @@ import {
   X, Plus, Trash2, Edit2, Check, Globe, ExternalLink, Search, Link2,
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
   Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown, Code,
-  Copy, FileText, Zap,
+  Copy, FileText, Zap, ClipboardCopy,
 } from "lucide-react";
 
 const VIEW_MODE_KEY = "ai-workbench.webPlugins.viewMode";
@@ -57,6 +57,25 @@ function loadViewMode(): ViewMode {
     return v === "card" ? "card" : "list";
   } catch {
     return "list";
+  }
+}
+
+/** Test if a URL matches a userscript match pattern */
+function testMatchPattern(pattern: string, url: string): boolean {
+  if (pattern === "<all_urls>") return true;
+  const trimmed = pattern.trim();
+  if (!trimmed) return false;
+  let regex = "";
+  for (const ch of trimmed) {
+    if (ch === "*") regex += ".*";
+    else if (ch === "?") regex += ".";
+    else if ("+.^${}()|[]\\".includes(ch)) regex += "\\" + ch;
+    else regex += ch;
+  }
+  try {
+    return new RegExp("^" + regex + "$").test(url);
+  } catch {
+    return false;
   }
 }
 
@@ -215,6 +234,7 @@ function PluginBrowser() {
   const [usSearch, setUsSearch] = useState("");
   const [usShowPresets, setUsShowPresets] = useState(false);
   const [usExpandedCode, setUsExpandedCode] = useState<Set<string>>(new Set());
+  const [usTestUrl, setUsTestUrl] = useState("");
   const usCodeRef = useRef<HTMLTextAreaElement>(null);
 
   const filterInputRef = useRef<HTMLInputElement>(null);
@@ -535,6 +555,23 @@ function PluginBrowser() {
     }
   };
 
+  const handleUsFormKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      // Trigger save
+      document.querySelector<HTMLButtonElement>("[data-us-save]")?.click();
+    }
+  };
+
+  const copyToClipboard = useCallback(async (text: string, msg: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showMsg("success", msg);
+    } catch {
+      showMsg("error", "Failed to copy");
+    }
+  }, [showMsg]);
+
   const clearDragClasses = () => {
     document
       .querySelectorAll(".plugin-item-drag-over, .is-dragging")
@@ -827,6 +864,22 @@ function PluginBrowser() {
         >
           <button
             className="plugin-item-btn"
+            onClick={() => copyToClipboard(parsed?.href || p.url, t("urlCopied"))}
+            title={t("copyUrl")}
+            type="button"
+          >
+            <ClipboardCopy size={11} />
+          </button>
+          <button
+            className="plugin-item-btn"
+            onClick={() => openFormAdd({ name: p.name + " (copy)", url: p.url, group: p.group })}
+            title={t("duplicate")}
+            type="button"
+          >
+            <Copy size={11} />
+          </button>
+          <button
+            className="plugin-item-btn"
             onClick={() => openFormEdit(p)}
             title={t("edit")}
             type="button"
@@ -883,6 +936,14 @@ function PluginBrowser() {
             />
           </div>
           <div className="plugin-card-actions">
+            <button
+              className="plugin-item-btn"
+              onClick={(e) => { e.stopPropagation(); copyToClipboard(parsed?.href || p.url, t("urlCopied")); }}
+              title={t("copyUrl")}
+              type="button"
+            >
+              <ClipboardCopy size={11} />
+            </button>
             <button
               className="plugin-item-btn"
               onClick={(e) => { e.stopPropagation(); openFormEdit(p); }}
@@ -1553,7 +1614,7 @@ function PluginBrowser() {
 
       {usFormOpen && (
         <div className="modal-overlay" onClick={() => setUsFormOpen(false)}>
-          <div className="modal plugin-edit-modal us-edit-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal plugin-edit-modal us-edit-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleUsFormKeyDown}>
             <div className="plugin-edit-modal-header">
               {usEditingId ? <Edit2 size={16} /> : <Plus size={16} />}
               {usEditingId ? t("usEditScript") : t("usAddScript")}
@@ -1643,6 +1704,25 @@ function PluginBrowser() {
                   )}
                 </div>
                 <span className="input-hint">{t("usMatchHint")}</span>
+                {/* Test pattern area */}
+                <div className="us-test-row">
+                  <div className="us-test-input-wrapper">
+                    <Search size={12} className="us-test-icon" />
+                    <input
+                      className="input-field us-test-input"
+                      value={usTestUrl}
+                      onChange={(e) => setUsTestUrl(e.target.value)}
+                      placeholder={t("usTestUrlPlaceholder")}
+                    />
+                  </div>
+                  {usTestUrl.trim() && (
+                    <span className={`us-test-result ${usMatch.some((p) => testMatchPattern(p, usTestUrl.trim())) ? "is-match" : "is-no-match"}`}>
+                      {usMatch.some((p) => testMatchPattern(p, usTestUrl.trim()))
+                        ? t("usPatternMatches")
+                        : t("usPatternNoMatch")}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="input-group">
                 <label className="input-label">
@@ -1663,10 +1743,11 @@ function PluginBrowser() {
               </div>
             </div>
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setUsFormOpen(false)} type="button">
+              <button className="btn btn-secondary" onClick={() => { setUsFormOpen(false); setUsTestUrl(""); }} type="button">
                 {tc("actions.cancel")}
               </button>
               <button
+                data-us-save
                 className="btn btn-primary"
                 type="button"
                 disabled={!usFormName.trim() || !usCode.trim()}
@@ -1701,6 +1782,7 @@ function PluginBrowser() {
                     setUsDesc("");
                     setUsMatch(["<all_urls>"]);
                     setUsCode("");
+                    setUsTestUrl("");
                   } catch (e) {
                     showMsg("error", String(e));
                   }

@@ -219,8 +219,10 @@ export default function TestManager() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [live]);
 
+  // A string, not TestRunOutcome: rows written by older builds carry values the
+  // current runner no longer emits, and they must not be relabelled as errors.
   const outcomeLabel = useCallback(
-    (status: TestRunOutcome): string => {
+    (status: string): string => {
       switch (status) {
         case "success":
           return t("success");
@@ -296,7 +298,9 @@ export default function TestManager() {
   );
 
   const handleBatchRun = useCallback(async () => {
-    const targets = testProjects.filter((p) => selected.has(p.id) && !runs[p.id]);
+    const targets = testProjects.filter(
+      (p) => selected.has(p.id) && !runs[p.id] && p.enabled
+    );
     if (targets.length === 0) {
       showMsg("error", t("selectAtLeastOne"));
       return;
@@ -526,7 +530,20 @@ export default function TestManager() {
     [getTestRun, showMsg]
   );
 
-  const knownPaths = useMemo(() => new Set(testProjects.map((p) => toKey(p.path))), [testProjects]);  const focused = focusedId ? testProjects.find((p) => p.id === focusedId) ?? null : null;
+  const knownPaths = useMemo(() => new Set(testProjects.map((p) => toKey(p.path))), [testProjects]);  const visibleProjects = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return testProjects;
+    return testProjects.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
+    );
+  }, [testProjects, query]);
+
+  const liveProject = live && runs[live.projectId] ? live : null;
+  const liveName = liveProject
+    ? testProjects.find((p) => p.id === liveProject.projectId)?.name ?? ""
+    : "";
+
+  const focused = focusedId ? testProjects.find((p) => p.id === focusedId) ?? null : null;
   const focusedResult = focusedId ? results[focusedId] ?? null : null;
 
   const outputView = useMemo(() => {
@@ -577,6 +594,16 @@ export default function TestManager() {
             <span className="tm-batch-progress" role="status">
               {t("batchProgress", { done: batch.done, total: batch.total })}
             </span>
+          )}
+          {testProjects.length > 0 && (
+            <input
+              type="search"
+              className="input-field tm-search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("searchPlaceholder")}
+              aria-label={t("searchPlaceholder")}
+            />
           )}
         </div>
         <div className="tm-toolbar-actions">
@@ -639,9 +666,11 @@ export default function TestManager() {
             {t("addFirstProject")}
           </button>
         </div>
+      ) : visibleProjects.length === 0 ? (
+        <div className="tm-empty">{t("noMatches", { q: query })}</div>
       ) : (
         <div className="tm-list">
-          {testProjects.map((project) => {
+          {visibleProjects.map((project) => {
             const startedAt = runs[project.id];
             const isRunning = startedAt !== undefined;
             const hasResult = !!results[project.id];
@@ -674,6 +703,11 @@ export default function TestManager() {
                     <span className={`tm-badge tm-badge-${project.framework}`}>
                       {project.framework}
                     </span>
+                    {!project.enabled && (
+                      <span className="tm-chip" title={t("disabledHint")}>
+                        {t("disabled")}
+                      </span>
+                    )}
                     {project.lastStatus && (
                       <span
                         className={`tm-chip tm-chip-${project.lastStatus}`}
@@ -727,8 +761,8 @@ export default function TestManager() {
                       type="button"
                       className="btn btn-primary btn-small"
                       onClick={() => void runOne(project)}
-                      disabled={!!batch}
-                      title={t("runHint")}
+                      disabled={!!batch || !project.enabled}
+                      title={project.enabled ? t("runHint") : t("disabledHint")}
                     >
                       <Play size={12} />
                       {t("runTests")}
@@ -793,6 +827,42 @@ export default function TestManager() {
             );
           })}
         </div>
+      )}
+
+      {liveProject && (
+        <section className="tm-result tm-result-live" aria-live="polite">
+          <div className="tm-result-head">
+            <h3>
+              {t("liveOutput")} · {liveName}
+            </h3>
+            <span className="tm-chip tm-chip-running" role="status">
+              <Loader2 size={11} className="spin" />
+              {t("elapsed", {
+                sec: Math.max(
+                  0,
+                  Math.round((nowMs - (runs[liveProject.projectId] ?? nowMs)) / 1000)
+                ),
+              })}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => {
+                const project = testProjects.find((p) => p.id === liveProject.projectId);
+                if (project) void handleCancel(project);
+              }}
+              title={t("cancelRunHint")}
+            >
+              <Square size={12} />
+              {t("cancelRun")}
+            </button>
+          </div>
+          <pre className="tm-output tm-output-live" ref={liveRef}>
+            {liveProject.lines.length > 0
+              ? liveProject.lines.join("\n")
+              : t("liveWaiting")}
+          </pre>
+        </section>
       )}
 
       {focusedResult && focused && outputView && (
@@ -1084,6 +1154,18 @@ export default function TestManager() {
             </div>
           </div>
           <p className="tm-hint">{t("workingDirHint")}</p>
+          <label className="tm-check-row">
+            <input
+              type="checkbox"
+              className="tm-check"
+              checked={draft.enabled}
+              onChange={(e) => setDraft((prev) => ({ ...prev, enabled: e.target.checked }))}
+            />
+            <span>
+              {t("enabledField")}
+              <span className="tm-hint"> · {t("disabledHint")}</span>
+            </span>
+          </label>
           {formError && (
             <p className="tm-form-error" role="alert">
               {formError}
