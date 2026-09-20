@@ -98,6 +98,7 @@ export default function TestManager() {
   const runTest = useGlobalStore((s) => s.runTest);
   const cancelTestRun = useGlobalStore((s) => s.cancelTestRun);
   const getTestHistory = useGlobalStore((s) => s.getTestHistory);
+  const getTestRun = useGlobalStore((s) => s.getTestRun);
   const pickDirectory = useGlobalStore((s) => s.invokePickDirectory);
 
   const [loading, setLoading] = useState(true);
@@ -109,6 +110,7 @@ export default function TestManager() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
   const [outputExpanded, setOutputExpanded] = useState(false);
+  const [onlyFailed, setOnlyFailed] = useState(false);
 
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [draftOpen, setDraftOpen] = useState(false);
@@ -448,8 +450,25 @@ export default function TestManager() {
     [getTestHistory, showMsg]
   );
 
-  const knownPaths = useMemo(() => new Set(testProjects.map((p) => toKey(p.path))), [testProjects]);
-  const focused = focusedId ? testProjects.find((p) => p.id === focusedId) ?? null : null;
+  /** Re-open a stored run from the history list: same panel, same truncation rules. */
+  const openStoredRun = useCallback(
+    async (entry: TestHistoryEntry) => {
+      if (!entry.runId) return;
+      try {
+        const result = await getTestRun(entry.runId);
+        setOnlyFailed(false);
+        setOutputExpanded(false);
+        setResults((prev) => ({ ...prev, [result.projectId]: result }));
+        setFocusedId(result.projectId);
+        setHistoryOpen(false);
+      } catch (e) {
+        showMsg("error", String(e));
+      }
+    },
+    [getTestRun, showMsg]
+  );
+
+  const knownPaths = useMemo(() => new Set(testProjects.map((p) => toKey(p.path))), [testProjects]);  const focused = focusedId ? testProjects.find((p) => p.id === focusedId) ?? null : null;
   const focusedResult = focusedId ? results[focusedId] ?? null : null;
 
   const outputView = useMemo(() => {
@@ -771,6 +790,74 @@ export default function TestManager() {
               </button>
             )}
           </div>
+          {focusedResult.suites.length > 0 ? (
+            <>
+              <div className="tm-result-toolbar">
+                <span className="tm-output-label">
+                  {t("caseDetail", {
+                    count: focusedResult.suites.reduce((n, s) => n + s.tests.length, 0),
+                    files: focusedResult.suites.length,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  className={`btn btn-small ${onlyFailed ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setOnlyFailed((v) => !v)}
+                >
+                  {t("onlyFailed")}
+                </button>
+              </div>
+              <div className="tm-suites">
+                {focusedResult.suites.map((suite) => {
+                  const passedCases = suite.tests.filter((c) => c.status === "passed").length;
+                  const failedCases = suite.tests.filter((c) => c.status === "failed").length;
+                  const skippedCases = suite.tests.filter((c) => c.status === "skipped").length;
+                  const cases = onlyFailed
+                    ? suite.tests.filter((c) => c.status === "failed")
+                    : suite.tests;
+                  if (cases.length === 0) return null;
+                  return (
+                    <details key={suite.path} className="tm-suite" open={failedCases > 0}>
+                      <summary className="tm-suite-head">
+                        <span
+                          className={`tm-suite-dot ${failedCases > 0 ? "is-fail" : "is-pass"}`}
+                          aria-hidden
+                        />
+                        <span className="tm-suite-name" title={suite.path}>
+                          {suite.name}
+                        </span>
+                        <span className="tm-suite-stat">
+                          {suite.tests.length} · ✓{passedCases} ✗{failedCases} ○{skippedCases} ·{" "}
+                          {suite.duration}ms
+                        </span>
+                      </summary>
+                      <ul className="tm-cases">
+                        {cases.map((entry) => (
+                          <li key={entry.id} className={`tm-case tm-case-${entry.status}`}>
+                            <span className="tm-case-mark" aria-hidden>
+                              {entry.status === "passed" ? "✓" : entry.status === "failed" ? "✗" : "○"}
+                            </span>
+                            <span className="tm-case-name">{entry.name}</span>
+                            <span className="tm-case-dur">{entry.duration}ms</span>
+                            {entry.error && (
+                              <pre className="tm-case-error">
+                                {entry.error.stack
+                                  ? `${entry.error.message}\n${entry.error.stack}`
+                                  : entry.error.message}
+                              </pre>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <p className="tm-hint">{t("noCaseDetail")}</p>
+          )}
+
           <pre className="tm-output">{outputView.text}</pre>
         </section>
       )}
@@ -977,6 +1064,7 @@ export default function TestManager() {
                   <th className="tm-num">{t("total")}</th>
                   <th className="tm-num">{t("passed")}</th>
                   <th className="tm-num">{t("failed")}</th>
+                  <th aria-label={t("viewRun")} />
                 </tr>
               </thead>
               <tbody>
@@ -991,6 +1079,17 @@ export default function TestManager() {
                     <td className="tm-num">{entry.total ?? "-"}</td>
                     <td className="tm-num tm-m-pass">{entry.passed ?? "-"}</td>
                     <td className="tm-num tm-m-fail">{entry.failed ?? "-"}</td>
+                    <td className="tm-num">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => void openStoredRun(entry)}
+                        disabled={!entry.runId}
+                        title={entry.runId ? t("viewRunHint") : t("viewRunUnavailable")}
+                      >
+                        {t("viewRun")}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

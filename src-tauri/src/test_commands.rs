@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,6 +15,52 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::DbState;
+
+/// Test-assistant tables, executed by `lib.rs` at startup and by the tests here.
+pub(crate) const SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS test_projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    type TEXT NOT NULL,
+    framework TEXT NOT NULL,
+    test_command TEXT NOT NULL,
+    args TEXT,
+    working_dir TEXT,
+    env TEXT,
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_run_at TEXT,
+    last_status TEXT
+);
+CREATE TABLE IF NOT EXISTS test_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    total_tests INTEGER NOT NULL,
+    passed INTEGER NOT NULL,
+    failed INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    output TEXT NOT NULL,
+    suites TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS test_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    run_id TEXT,
+    timestamp TEXT NOT NULL,
+    status TEXT NOT NULL,
+    total INTEGER,
+    passed INTEGER,
+    failed INTEGER,
+    FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
+);
+"#;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -249,11 +295,170 @@ fn parse_test_output(output: &str, framework: &str) -> (String, u32, u32, u32, u
     (status, total, passed, failed, skipped)
 }
 
+/// Where a jest/vitest JSON reporter is expected to write, relative to the project
+/// root. Users opt in with `--reporter=json --outputFile=vitest-results.json`.
+const RESULT_FILE_CANDIDATES: &[&str] = &[
+    "vitest-results.json",
+    "jest-results.json",
+    "test-results.json",
+    ".ai-workbench/results.json",
+];
+
+/// Parse a Jest-compatible machine report (jest `--json` and vitest's `json`
+/// reporter emit the same shape) into per-file suites with per-case detail.
+pub(crate) fn parse_jest_style_results(content: &str) -> Result<Vec<TestSuite>, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| format!("解析测试结果 JSON 失败: {}", e))?;
+    let results = json
+        .get("testResults")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "测试结果 JSON 缺少 testResults 数组".to_string())?;
+
+    let mut suites = Vec::new();
+    for (index, entry) in results.iter().enumerate() {
+        let path = entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut cases = Vec::new();
+        if let Some(assertions) = entry.get("assertionResults").and_then(|v| v.as_array()) {
+            for (case_index, assertion) in assertions.iter().enumerate() {
+                let raw_status = assertion.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                let status = match raw_status {
+                    "passed" => "passed",
+                    "failed" => "failed",
+                    _ => "skipped",
+                };
+                let name = assertion
+                    .get("fullName")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        let mut parts: Vec<String> = assertion
+                            .get("ancestorTitles")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        parts.push(
+                            assertion
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        );
+                        Some(parts.join(" > "))
+                    })
+                    .unwrap_or_default();
+                let duration = assertion
+                    .get("duration")
+                    .and_then(|v| v.as_f64())
+                    .filter(|d| *d > 0.0)
+                    .map(|d| d.round() as u64)
+                    .unwrap_or(0);
+                let failures: Vec<String> = assertion
+                    .get("failureMessages")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let error = if status == "failed" && !failures.is_empty() {
+                    let joined = failures.join("\n\n");
+                    let message = joined.lines().next().unwrap_or("").trim().to_string();
+                    let stack = joined
+                        .split_once('\n')
+                        .map(|(_, rest)| rest.trim().to_string())
+                        .filter(|rest| !rest.is_empty())
+                        .unwrap_or_else(|| joined.clone());
+                    Some(TestCaseError {
+                        message,
+                        stack,
+                        expected: None,
+                        actual: None,
+                    })
+                } else {
+                    None
+                };
+                cases.push(TestCase {
+                    id: format!("{}#{}", path, case_index),
+                    name: if name.is_empty() {
+                        format!("case {}", case_index + 1)
+                    } else {
+                        name
+                    },
+                    status: status.to_string(),
+                    duration,
+                    error,
+                });
+            }
+        }
+        let failed = cases.iter().filter(|c| c.status == "failed").count();
+        let basename = path.rsplit(['\\', '/']).next().unwrap_or("").to_string();
+        suites.push(TestSuite {
+            name: if basename.is_empty() {
+                format!("suite {}", index + 1)
+            } else {
+                basename
+            },
+            path,
+            status: if failed > 0 { "failed" } else { "passed" }.to_string(),
+            duration: cases.iter().map(|c| c.duration).sum(),
+            tests: cases,
+        });
+    }
+    if suites.iter().all(|s| s.tests.is_empty()) {
+        return Err("报告里没有任何用例".to_string());
+    }
+    Ok(suites)
+}
+
+/// (total, passed, failed, skipped) straight from a parsed report.
+pub(crate) fn suite_counts(suites: &[TestSuite]) -> (u32, u32, u32, u32) {
+    let cases: Vec<&TestCase> = suites.iter().flat_map(|s| s.tests.iter()).collect();
+    let passed = cases.iter().filter(|c| c.status == "passed").count() as u32;
+    let failed = cases.iter().filter(|c| c.status == "failed").count() as u32;
+    let skipped = cases.iter().filter(|c| c.status == "skipped").count() as u32;
+    (cases.len() as u32, passed, failed, skipped)
+}
+
+/// Locate a machine-readable report: a conventional file first, then stdout when it
+/// is a bare JSON document (jest/vitest print the report alone with `--json`).
+fn load_structured_suites(root: &Path, stdout: &str, stderr: &str) -> Option<Vec<TestSuite>> {
+    for candidate in RESULT_FILE_CANDIDATES {
+        let file = root.join(candidate);
+        if let Ok(content) = fs::read_to_string(&file) {
+            if let Ok(suites) = parse_jest_style_results(&content) {
+                return Some(suites);
+            }
+        }
+    }
+    for stream in [stdout, stderr] {
+        let trimmed = stream.trim();
+        if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+            continue;
+        }
+        if let Ok(suites) = parse_jest_style_results(trimmed) {
+            return Some(suites);
+        }
+    }
+    None
+}
+
 /// Load all test projects from database
 #[tauri::command]
 pub fn load_test_projects(state: State<DbState>) -> Result<Vec<TestProject>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    load_projects_sync(&conn)
+}
 
+pub(crate) fn load_projects_sync(conn: &rusqlite::Connection) -> Result<Vec<TestProject>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, name, path, type, framework, test_command, args, working_dir, env, enabled, created_at, updated_at, last_run_at, last_status FROM test_projects ORDER BY updated_at DESC"
@@ -294,7 +499,13 @@ pub fn add_test_project(
     project: TestProject,
 ) -> Result<TestProject, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    add_project_sync(&conn, project)
+}
 
+pub(crate) fn add_project_sync(
+    conn: &rusqlite::Connection,
+    project: TestProject,
+) -> Result<TestProject, String> {
     let env_json = project
         .env
         .as_ref()
@@ -333,7 +544,14 @@ pub fn update_test_project(
     updates: serde_json::Value,
 ) -> Result<(), String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    update_project_sync(&conn, id, updates)
+}
 
+pub(crate) fn update_project_sync(
+    conn: &rusqlite::Connection,
+    id: String,
+    updates: serde_json::Value,
+) -> Result<(), String> {
     let mut set_clauses = Vec::new();
     let mut params = Vec::new();
 
@@ -400,8 +618,11 @@ pub fn update_test_project(
 #[tauri::command]
 pub fn delete_test_project(state: State<DbState>, id: String) -> Result<(), String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    delete_project_sync(&conn, &id)
+}
 
-    conn.execute("DELETE FROM test_projects WHERE id = ?", [&id])
+pub(crate) fn delete_project_sync(conn: &rusqlite::Connection, id: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM test_projects WHERE id = ?", [id])
         .map_err(|e| format!("Failed to delete project: {}", e))?;
 
     Ok(())
@@ -555,8 +776,12 @@ pub async fn scan_test_projects(base_path: String) -> Result<Vec<ProjectDetectio
 
 /// How long one test run may take before its process tree is killed.
 const TEST_RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-/// Stored output is capped so a chatty suite cannot grow test_runs without bound.
-const MAX_STORED_OUTPUT_BYTES: usize = 200 * 1024;
+/// Stored output is capped so a chatty suite cannot grow test_runs without bound:
+/// 64KB is well past what the panel shows, and the full log stays in the terminal.
+const MAX_STORED_OUTPUT_BYTES: usize = 64 * 1024;
+/// Newest rows kept per project; older runs and history rows are pruned on write.
+const RUN_RETENTION_PER_PROJECT: i64 = 100;
+const HISTORY_RETENTION_PER_PROJECT: i64 = 100;
 
 /// Run tests for a project
 #[tauri::command]
@@ -572,9 +797,29 @@ pub async fn run_test(
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
     let conn = Arc::clone(&state.conn);
     // A suite can run for minutes; keep it off the async worker threads.
-    tokio::task::spawn_blocking(move || run_test_sync(conn, project, project_id, args))
-        .await
-        .map_err(|e| format!("测试任务已中止: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        run_test_sync(conn, project, project_id, args, TEST_RUN_TIMEOUT)
+    })
+    .await
+    .map_err(|e| format!("测试任务已中止: {}", e))?
+}
+
+/// The directory a run happens in: the UI documents `working_dir` as project-relative
+/// ("packages/web"), so resolve it against the project root instead of passing it to
+/// the OS verbatim.
+fn work_dir_of(project: &TestProject) -> PathBuf {
+    let root = Path::new(&project.path);
+    match project.working_dir.as_deref().filter(|d| !d.trim().is_empty()) {
+        Some(dir) => {
+            let candidate = Path::new(dir);
+            if candidate.is_absolute() {
+                candidate.to_path_buf()
+            } else {
+                root.join(candidate)
+            }
+        }
+        None => root.to_path_buf(),
+    }
 }
 
 /// Build the child command. npm/yarn/pnpm are .cmd shims on Windows and the stored
@@ -608,7 +853,11 @@ fn build_test_command(project: &TestProject, extra_args: Option<&str>) -> Result
             c
         }
     };
-    cmd.current_dir(project.working_dir.as_deref().unwrap_or(&project.path));
+    let work_dir = work_dir_of(&project);
+    if !work_dir.is_dir() {
+        return Err(format!("工作目录不存在：{}", work_dir.display()));
+    }
+    cmd.current_dir(work_dir);
     if let Some(ref env) = project.env {
         for (k, v) in env {
             cmd.env(k, v);
@@ -633,11 +882,12 @@ fn kill_process_tree(pid: u32) {
     let _ = pid;
 }
 
-fn run_test_sync(
+pub(crate) fn run_test_sync(
     conn: Arc<Mutex<rusqlite::Connection>>,
     project: TestProject,
     project_id: String,
     args: Option<String>,
+    timeout: Duration,
 ) -> Result<TestRunResult, String> {
     // The cancellation token is keyed by project id: one live run per project.
     let guard_id = project_id.clone();
@@ -675,7 +925,7 @@ fn run_test_sync(
     }
     drop(tx);
 
-    let deadline = timer + TEST_RUN_TIMEOUT;
+    let deadline = timer + timeout;
     // "" | "cancelled" | "timeout"
     let mut aborted = String::new();
     let exit_ok = loop {
@@ -725,14 +975,18 @@ fn run_test_sync(
     let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
     let mut full_output = format!("{}\n{}", stdout, stderr);
     if !aborted.is_empty() {
-        full_output.push_str(match aborted.as_str() {
-            "cancelled" => "\n[已取消] 测试进程树已被终止",
-            _ => "\n[超时] 运行超过 30 分钟，测试进程树已被终止",
+        full_output.push_str(&if aborted == "cancelled" {
+            "\n[已取消] 测试进程树已被终止".to_string()
+        } else {
+            format!(
+                "\n[超时] 运行超过 {} 分钟，测试进程树已被终止",
+                (timeout.as_secs() + 59) / 60
+            )
         });
     }
 
     // Parse test output
-    let (mut status, total, passed, failed, skipped) =
+    let (mut status, mut total, mut passed, mut failed, mut skipped) =
         parse_test_output(&full_output, &project.framework);
     if !aborted.is_empty() {
         status = aborted.clone();
@@ -743,53 +997,48 @@ fn run_test_sync(
         status = "error".to_string();
     }
 
+    // A machine-readable report beats scraping: exact counts plus per-case detail.
+    let suites = load_structured_suites(&work_dir_of(&project), &stdout, &stderr);
+    if let Some(ref suites) = suites {
+        let (t, p, f, s) = suite_counts(suites);
+        (total, passed, failed, skipped) = (t, p, f, s);
+        if aborted.is_empty() {
+            status = if failed > 0 {
+                "failed"
+            } else if total == 0 {
+                "error"
+            } else {
+                "success"
+            }
+            .to_string();
+        }
+    }
+    let suites_json = serde_json::to_string(&suites.clone().unwrap_or_default())
+        .unwrap_or_else(|_| "[]".to_string());
+
     let duration_ms = timer.elapsed().as_millis() as u64;
-    let stored_output = truncate_tail(&full_output, MAX_STORED_OUTPUT_BYTES);
     let test_id = format!("run-{}", chrono::Utc::now().timestamp_millis());
+    let mut output_for_ui = truncate_tail(&full_output, MAX_STORED_OUTPUT_BYTES);
 
-    // Save test run result to database
-    {
-        let conn = conn.lock().map_err(|e| e.to_string())?;
-        let suites_json = serde_json::to_string(&Vec::<TestSuite>::new())
-            .map_err(|e| format!("Failed to serialize suites: {}", e))?;
-
-        conn.execute(
-            "INSERT INTO test_runs (id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            rusqlite::params![
-                test_id,
-                project_id,
-                started_at,
-                completed_at,
-                duration_ms,
-                status,
-                total,
-                passed,
-                failed,
-                skipped,
-                stored_output,
-                suites_json,
-            ]
-        ).map_err(|e| format!("Failed to save test run: {}", e))?;
-
-        // Save history entry
-        conn.execute(
-            "INSERT INTO test_history (project_id, run_id, timestamp, status, total, passed, failed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                project_id,
-                test_id,
-                completed_at,
-                status,
-                total,
-                passed,
-                failed,
-            ]
-        ).map_err(|e| format!("Failed to save test history: {}", e))?;
-
-        // Update project last run info
-        conn.execute(
-            "UPDATE test_projects SET last_run_at = ?1, last_status = ?2, updated_at = ?3 WHERE id = ?4",
-            rusqlite::params![completed_at, status, completed_at, project_id]
-        ).map_err(|e| format!("Failed to update project: {}", e))?;
+    // Bookkeeping must never lose a finished run: if the write fails (the project was
+    // deleted mid-run, the DB is busy) the result still reaches the UI, with a warning.
+    if let Err(e) = record_run(
+        &conn,
+        &test_id,
+        &project_id,
+        &started_at,
+        &completed_at,
+        duration_ms,
+        &status,
+        total,
+        passed,
+        failed,
+        skipped,
+        &output_for_ui,
+        &suites_json,
+    ) {
+        full_output.push_str(&format!("\n[警告] 运行结果入库失败：{}", e));
+        output_for_ui = truncate_tail(&full_output, MAX_STORED_OUTPUT_BYTES);
     }
 
     Ok(TestRunResult {
@@ -803,9 +1052,120 @@ fn run_test_sync(
         passed,
         failed,
         skipped,
-        output: stored_output,
-        suites: Vec::new(),
+        output: output_for_ui,
+        suites: suites.unwrap_or_default(),
     })
+}
+
+/// Persist one finished run: the detail row, the history row, the project's last-run
+/// columns, and the per-project retention trim.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_run(
+    conn: &Arc<Mutex<rusqlite::Connection>>,
+    run_id: &str,
+    project_id: &str,
+    started_at: &str,
+    completed_at: &str,
+    duration_ms: u64,
+    status: &str,
+    total: u32,
+    passed: u32,
+    failed: u32,
+    skipped: u32,
+    output: &str,
+    suites_json: &str,
+) -> Result<(), String> {
+    let conn = conn.lock().map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO test_runs (id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            run_id,
+            project_id,
+            started_at,
+            completed_at,
+            duration_ms,
+            status,
+            total,
+            passed,
+            failed,
+            skipped,
+            output,
+            suites_json,
+        ]
+    ).map_err(|e| format!("Failed to save test run: {}", e))?;
+
+    conn.execute(
+        "INSERT INTO test_history (project_id, run_id, timestamp, status, total, passed, failed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![project_id, run_id, completed_at, status, total, passed, failed]
+    ).map_err(|e| format!("Failed to save test history: {}", e))?;
+
+    conn.execute(
+        "UPDATE test_projects SET last_run_at = ?1, last_status = ?2, updated_at = ?3 WHERE id = ?4",
+        rusqlite::params![completed_at, status, completed_at, project_id]
+    ).map_err(|e| format!("Failed to update project: {}", e))?;
+
+    prune_run_history(&conn, project_id, RUN_RETENTION_PER_PROJECT)
+        .map_err(|e| format!("Failed to prune test runs: {}", e))?;
+    prune_history(&conn, project_id, HISTORY_RETENTION_PER_PROJECT)
+        .map_err(|e| format!("Failed to prune test history: {}", e))?;
+
+    Ok(())
+}
+
+/// Keep only the newest `keep` run rows of a project; each row can carry 64KB of log,
+/// so an unbounded table would grow the database without limit.
+pub(crate) fn prune_run_history(conn: &rusqlite::Connection, project_id: &str, keep: i64) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM test_runs WHERE project_id = ?1 AND id NOT IN (
+             SELECT id FROM test_runs WHERE project_id = ?1
+             ORDER BY completed_at DESC, rowid DESC LIMIT ?2
+         )",
+        rusqlite::params![project_id, keep],
+    )
+    .map_err(|e| e.to_string())
+}
+
+pub(crate) fn prune_history(conn: &rusqlite::Connection, project_id: &str, keep: i64) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM test_history WHERE project_id = ?1 AND id NOT IN (
+             SELECT id FROM test_history WHERE project_id = ?1 ORDER BY id DESC LIMIT ?2
+         )",
+        rusqlite::params![project_id, keep],
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Read one stored run back, so a history row can show its full result again.
+pub(crate) fn run_by_id_sync(conn: &rusqlite::Connection, run_id: &str) -> Result<TestRunResult, String> {
+    conn.query_row(
+        "SELECT id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites FROM test_runs WHERE id = ?1",
+        [run_id],
+        |row| {
+            Ok(TestRunResult {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                started_at: row.get(2)?,
+                completed_at: row.get(3)?,
+                duration_ms: row.get(4)?,
+                status: row.get(5)?,
+                total_tests: row.get(6)?,
+                passed: row.get(7)?,
+                failed: row.get(8)?,
+                skipped: row.get(9)?,
+                output: row.get(10)?,
+                suites: serde_json::from_str(&row.get::<_, String>(11)?)
+                    .unwrap_or_default(),
+            })
+        },
+    )
+    .map_err(|e| format!("未找到该次运行记录: {}", e))
+}
+
+#[tauri::command]
+pub fn get_test_run(state: State<DbState>, run_id: String) -> Result<TestRunResult, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    run_by_id_sync(&conn, &run_id)
 }
 
 /// Get test history for a project
@@ -1111,7 +1471,7 @@ fn summary_metric(parent: Option<&serde_json::Value>, key: &str) -> CoverageMetr
     }
 }
 
-fn parse_istanbul_summary_coverage(content: &str) -> Result<CoverageReport, String> {
+pub(crate) fn parse_istanbul_summary_coverage(content: &str) -> Result<CoverageReport, String> {
     let json: serde_json::Value = serde_json::from_str(content)
         .map_err(|e| format!("解析覆盖率 JSON 失败: {}", e))?;
     let obj = json
@@ -1120,7 +1480,8 @@ fn parse_istanbul_summary_coverage(content: &str) -> Result<CoverageReport, Stri
 
     let mut files = Vec::new();
     for (path, entry) in obj {
-        if path == "total" {
+        // "total" is the roll-up; newer writers also emit a "root" path entry.
+        if path == "total" || path == "root" || entry.get("lines").is_none() {
             continue;
         }
         files.push(CoverageFile {
@@ -1144,7 +1505,7 @@ fn parse_istanbul_summary_coverage(content: &str) -> Result<CoverageReport, Stri
 }
 
 /// Parse Istanbul/Jest/Vitest coverage format
-fn parse_istanbul_coverage(content: &str) -> Result<CoverageReport, String> {
+pub(crate) fn parse_istanbul_coverage(content: &str) -> Result<CoverageReport, String> {
     let json: serde_json::Value = serde_json::from_str(content)
         .map_err(|e| format!("Failed to parse coverage JSON: {}", e))?;
 
@@ -1296,7 +1657,19 @@ fn parse_istanbul_branch_metric(
         for (_, branches) in obj {
             if let Some(arr) = branches.as_array() {
                 total += arr.len() as u32;
-                covered += arr.iter().filter(|v| v.as_array().map(|a| a[0].as_u64().unwrap_or(0) > 0).unwrap_or(false)).count() as u32;
+                // Istanbul writes plain hit counts ("b": {"0": [3, 0]}); reading them
+                // as nested arrays made every branch look uncovered.
+                covered += arr
+                    .iter()
+                    .filter(|v| match v {
+                        serde_json::Value::Array(inner) => inner
+                            .first()
+                            .and_then(|n| n.as_u64())
+                            .unwrap_or(0)
+                            > 0,
+                        other => other.as_u64().unwrap_or(0) > 0,
+                    })
+                    .count() as u32;
             }
         }
         (total, covered)
@@ -1306,7 +1679,7 @@ fn parse_istanbul_branch_metric(
 }
 
 /// Parse Cargo/llvm-cov coverage format
-fn parse_cargo_coverage(content: &str) -> Result<CoverageReport, String> {
+pub(crate) fn parse_cargo_coverage(content: &str) -> Result<CoverageReport, String> {
     let json: serde_json::Value = serde_json::from_str(content)
         .map_err(|e| format!("Failed to parse coverage JSON: {}", e))?;
 
@@ -1406,7 +1779,7 @@ pub fn cancel_test_run(project_id: String) -> Result<(), String> {
 }
 
 /// Parse pytest-cov coverage format
-fn parse_pytest_coverage(content: &str) -> Result<CoverageReport, String> {
+pub(crate) fn parse_pytest_coverage(content: &str) -> Result<CoverageReport, String> {
     let json: serde_json::Value = serde_json::from_str(content)
         .map_err(|e| format!("Failed to parse coverage JSON: {}", e))?;
 

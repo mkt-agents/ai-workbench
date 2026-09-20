@@ -43,7 +43,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 - **Hosts管理**：读写系统 hosts，手动/自动备份与恢复，另存为配置（需管理员）
 - **内网穿透**：cloudflared 临时/命名隧道；日志过滤/导出；公网 URL 浏览器打开；详见 [docs/cloudflared.md](docs/cloudflared.md)
 - **网页工具**：添加 http(s) 链接，独立窗口打开
-- **测试管理**：登记本机项目并运行其测试命令（jest / vitest / cargo / pytest / gotest 输出解析）；自动识别项目类型与测试脚本、目录批量扫描、单个或批量运行（并发 2、30 分钟超时、可取消并终止进程树）、历史结果留存；AI 测试生成与失败诊断复用「模型配置」的默认模型；覆盖率读取 istanbul / llvm-cov / pytest-cov 的 JSON 报告
+- **测试管理**：登记本机项目并运行其测试命令（jest / vitest / cargo / pytest / gotest 输出解析）；自动识别项目类型与测试脚本、目录批量扫描、单个或批量运行（并发 2、30 分钟超时、可取消并终止进程树）；jest/vitest 配好 JSON 报告（`--reporter=json --outputFile=vitest-results.json` 或 `--json --outputFile=jest-results.json`）后可查看用例级耗时与失败堆栈；历史列表可回看任意一次的完整输出，每个项目保留最近 100 次运行；AI 测试生成与失败诊断复用「模型配置」的默认模型；覆盖率读取 istanbul（final / summary）/ llvm-cov / pytest-cov 的 JSON 报告
 
 ### 设置
 

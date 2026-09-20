@@ -14,6 +14,8 @@ pub mod config;
 pub mod cancellation;
 mod cancellation_commands;
 mod test_commands;
+#[cfg(test)]
+mod test_run_e2e;
 
 pub use config::*;
 
@@ -233,49 +235,12 @@ pub fn run() {
                     chars INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS test_projects (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    framework TEXT NOT NULL,
-                    test_command TEXT NOT NULL,
-                    args TEXT,
-                    working_dir TEXT,
-                    env TEXT,
-                    enabled INTEGER DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    last_run_at TEXT,
-                    last_status TEXT
-                );
-                CREATE TABLE IF NOT EXISTS test_runs (
-                    id TEXT PRIMARY KEY,
-                    project_id TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    completed_at TEXT NOT NULL,
-                    duration_ms INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    total_tests INTEGER NOT NULL,
-                    passed INTEGER NOT NULL,
-                    failed INTEGER NOT NULL,
-                    skipped INTEGER NOT NULL,
-                    output TEXT NOT NULL,
-                    suites TEXT NOT NULL,
-                    FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
-                );
-                CREATE TABLE IF NOT EXISTS test_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_id TEXT NOT NULL,
-                    run_id TEXT,
-                    timestamp TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    total INTEGER,
-                    passed INTEGER,
-                    failed INTEGER,
-                    FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
-                );
             "#).expect("failed to init schema");
+
+            // The test-assistant tables are declared next to their commands so the
+            // Rust tests can build the exact production schema.
+            conn.execute_batch(test_commands::SCHEMA_SQL)
+                .expect("failed to init test schema");
 
             let _ = conn.execute_batch("ALTER TABLE git_accounts ADD COLUMN note TEXT;");
             let _ = conn.execute_batch("ALTER TABLE cursor_accounts ADD COLUMN notes TEXT;");
@@ -471,6 +436,7 @@ pub fn run() {
             test_commands::diagnose_test_failure,
             test_commands::read_coverage_report,
             test_commands::cancel_test_run,
+            test_commands::get_test_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

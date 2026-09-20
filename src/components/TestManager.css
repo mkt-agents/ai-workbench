@@ -701,3 +701,141 @@
     max-width: 180px;
   }
 }
+
+/* ─── Per-case detail (jest / vitest JSON report) ─── */
+.tm-suites {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-0) 3%, transparent);
+}
+
+.tm-suite > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.tm-suite > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tm-suite-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+}
+
+.tm-suite-head:hover {
+  background: var(--bg-hover);
+}
+
+.tm-suite-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--green);
+}
+
+.tm-suite-dot.is-fail {
+  background: var(--red);
+}
+
+.tm-suite-name {
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-suite-stat {
+  margin-left: auto;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tm-cases {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 4px;
+  padding: 0 4px 0 18px;
+  list-style: none;
+}
+
+.tm-case {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-1);
+}
+
+.tm-case-mark {
+  width: 11px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.tm-case-passed .tm-case-mark { color: var(--green); }
+.tm-case-failed .tm-case-mark { color: var(--red); }
+.tm-case-skipped .tm-case-mark { color: var(--yellow); }
+
+.tm-case-name {
+  overflow-wrap: anywhere;
+}
+
+.tm-case-failed .tm-case-name {
+  color: var(--text-0);
+}
+
+.tm-case-dur {
+  margin-left: auto;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tm-case-error {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 2px 0 4px;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow: auto;
+  border-left: 2px solid var(--red);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .tm-suites {
+    max-height: 280px;
+  }
+
+  .tm-suite-stat {
+    margin-left: 0;
+  }
+
+  .tm-case-dur {
+    margin-left: 0;
+  }
+}

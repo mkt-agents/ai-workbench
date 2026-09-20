@@ -274,6 +274,7 @@ interface StoreState extends GlobalState, Invocations {
   diagnoseTestFailure: (testCode: string, sourceCode: string, errorMessage: string, testName: string) => Promise<string>;
   readCoverageReport: (projectId: string) => Promise<CoverageReport>;
   cancelTestRun: (projectId: string) => Promise<void>;
+  getTestRun: (runId: string) => Promise<TestRunResult>;
 
   // Initialize
   initialize: () => Promise<void>;
@@ -1237,6 +1238,11 @@ export const useGlobalStore = create<StoreState>()(
 
       cancelTestRun: async (projectId: string) => {
         return await tauriInvoke<void>('cancel_test_run', { projectId });
+      },
+
+      // Read one stored run back so a history row can show its full result.
+      getTestRun: async (runId: string) => {
+        return await tauriInvoke<TestRunResult>('get_test_run', { runId });
       },
 
       // Initialize
