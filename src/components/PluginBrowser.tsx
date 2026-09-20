@@ -1590,37 +1590,57 @@ function PluginBrowser() {
               <div className="input-group">
                 <label className="input-label">{t("usMatchPattern")}</label>
                 <div className="us-match-patterns">
-                  {usMatch.map((pattern, idx) => (
-                    <div key={idx} className="us-match-row">
-                      <input
-                        className="input-field us-match-input"
-                        value={pattern}
-                        onChange={(e) => {
-                          const next = [...usMatch];
-                          next[idx] = e.target.value;
-                          setUsMatch(next);
-                        }}
-                        placeholder="*://example.com/*"
-                      />
-                      {usMatch.length > 1 && (
-                        <button
-                          type="button"
-                          className="us-match-remove"
-                          onClick={() => setUsMatch(usMatch.filter((_, i) => i !== idx))}
-                          title={tc("actions.delete")}
-                        >
-                          <X size={14} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    className="us-match-add"
-                    onClick={() => setUsMatch([...usMatch, ""])}
-                  >
-                    <Plus size={14} /> {t("usAddPattern")}
-                  </button>
+                  {usMatch.map((pattern, idx) => {
+                    const isAllSites = pattern === "<all_urls>";
+                    return (
+                      <div key={idx} className="us-match-row">
+                        {isAllSites && usMatch.length === 1 ? (
+                          <div className="us-match-all-sites">
+                            <Globe size={14} />
+                            <span>{t("usAllSites")}</span>
+                            <button
+                              type="button"
+                              className="us-match-clear"
+                              onClick={() => setUsMatch([""])}
+                              title={t("usAddPattern")}
+                            >
+                              <Edit2 size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <input
+                              className="input-field us-match-input"
+                              value={pattern}
+                              onChange={(e) => {
+                                const next = [...usMatch];
+                                next[idx] = e.target.value;
+                                setUsMatch(next);
+                              }}
+                              placeholder="*://example.com/*"
+                            />
+                            <button
+                              type="button"
+                              className="us-match-remove"
+                              onClick={() => setUsMatch(usMatch.filter((_, i) => i !== idx))}
+                              title={tc("actions.delete")}
+                            >
+                              <X size={14} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {!(usMatch.length === 1 && usMatch[0] === "<all_urls>") && (
+                    <button
+                      type="button"
+                      className="us-match-add"
+                      onClick={() => setUsMatch([...usMatch, ""])}
+                    >
+                      <Plus size={14} /> {t("usAddPattern")}
+                    </button>
+                  )}
                 </div>
                 <span className="input-hint">{t("usMatchHint")}</span>
               </div>

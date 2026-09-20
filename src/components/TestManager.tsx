@@ -20,6 +20,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
+import { listen } from "@tauri-apps/api/event";
 import { useConfirm } from "./ConfirmModal";
 import TestModal from "./TestModal";
 import TestGenerator from "./TestGenerator";
@@ -37,6 +38,8 @@ import "./TestManager.css";
 
 type Toast = { type: "success" | "error"; text: string };
 type ToastFn = (type: Toast["type"], text: string) => void;
+/** Rolling window of the live tail; the full log arrives with the final result. */
+type LiveTail = { projectId: string; lines: string[] };
 
 type Draft = {
   name: string;
@@ -46,6 +49,7 @@ type Draft = {
   testCommand: string;
   args: string;
   workingDir: string;
+  enabled: boolean;
 };
 
 const EMPTY_DRAFT: Draft = {
@@ -56,7 +60,10 @@ const EMPTY_DRAFT: Draft = {
   testCommand: "",
   args: "",
   workingDir: "",
+  enabled: true,
 };
+
+const LIVE_MAX_LINES = 400;
 
 const PROJECT_TYPES: TestProject["type"][] = [
   "frontend",
@@ -82,6 +89,7 @@ const draftOf = (project: TestProject): Draft => ({
   testCommand: project.testCommand,
   args: project.args ?? "",
   workingDir: project.workingDir ?? "",
+  enabled: project.enabled,
 });
 
 export default function TestManager() {
@@ -135,6 +143,9 @@ export default function TestManager() {
 
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<number | null>(null);
+  const [live, setLive] = useState<LiveTail | null>(null);
+  const liveRef = useRef<HTMLPreElement>(null);
+  const [query, setQuery] = useState("");
 
   const showMsg = useCallback<ToastFn>((type, text) => {
     setToast({ type, text });
@@ -172,6 +183,42 @@ export default function TestManager() {
     return () => window.clearInterval(id);
   }, [runningCount]);
 
+  // Live tail: the runner emits whatever the pipes produced since the last check.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<{ projectId: string; text: string; done: boolean }>(
+      "test-run-output",
+      (event) => {
+        const { projectId, text, done } = event.payload;
+        setLive((prev) => {
+          if (done) return null;
+          const base = prev && prev.projectId === projectId ? prev.lines : [];
+          const next = [
+            ...base,
+            ...text.split(/\r?\n/).filter((line) => line.trim().length > 0),
+          ];
+          return {
+            projectId,
+            lines: next.length > LIVE_MAX_LINES ? next.slice(-LIVE_MAX_LINES) : next,
+          };
+        });
+      }
+    ).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = liveRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [live]);
+
   const outcomeLabel = useCallback(
     (status: TestRunOutcome): string => {
       switch (status) {
@@ -183,8 +230,13 @@ export default function TestManager() {
           return t("statusCancelled");
         case "timeout":
           return t("statusTimeout");
-        default:
+        case "skipped":
+          // Only written by older builds; never relabel it as an error.
+          return t("skipped");
+        case "error":
           return t("error");
+        default:
+          return status;
       }
     },
     [t]
@@ -196,6 +248,7 @@ export default function TestManager() {
       setRuns((prev) => ({ ...prev, [project.id]: Date.now() }));
       setFocusedId(project.id);
       setOutputExpanded(false);
+      setLive({ projectId: project.id, lines: [] });
       let finished: TestRunResult | null = null;
       try {
         const result = await runTest(project.id);
@@ -385,12 +438,13 @@ export default function TestManager() {
         testCommand: draft.testCommand.trim(),
         args: draft.args.trim() || undefined,
         workingDir: draft.workingDir.trim() || undefined,
+        enabled: draft.enabled,
       };
       if (editingId) {
-        await updateTestProject(editingId, { ...payload, enabled: true });
+        await updateTestProject(editingId, payload);
         showMsg("success", t("saved"));
       } else {
-        await addTestProject({ ...payload, enabled: true });
+        await addTestProject(payload);
         showMsg("success", t("added"));
       }
       setDraftOpen(false);
