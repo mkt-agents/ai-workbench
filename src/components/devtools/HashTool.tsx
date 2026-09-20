@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Eraser, Key, FileCheck } from "lucide-react";
+import {
+  Check,
+  ClipboardCopy,
+  Eraser,
+  FileCheck,
+  Key,
+  Copy,
+} from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 type Algo = "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512";
@@ -86,7 +93,6 @@ function HashTool() {
       setCompareResult(null);
       return;
     }
-    // Case-insensitive comparison, trim whitespace
     setCompareResult(currentHash.toLowerCase() === compareHash.trim().toLowerCase());
   }, [compareHash, hashed, multiHashes, multiAlgo, algo]);
 
@@ -124,24 +130,26 @@ function HashTool() {
   };
 
   return (
-    <div className="devtools-tool">
-      <div className="devtools-inline-controls">
-        <label className="devtools-field">
-          <span>{t("hash.algorithm")}</span>
+    <div className="devtools-tool hash-tool">
+      {/* ── Toolbar ── */}
+      <div className="hash-toolbar">
+        <div className="hash-toolbar-group">
+          <span className="hash-toolbar-label">{t("hash.algorithm")}</span>
           <select
-            className="devtools-select"
+            className="hash-select"
             value={algo}
             onChange={(e) => setAlgo(e.target.value as Algo)}
             disabled={multiAlgo}
           >
             {ALGOS.map((a) => (
               <option key={a} value={a}>
-                {t(`hash.${a.toLowerCase()}`)}
+                {a}
               </option>
             ))}
           </select>
-        </label>
-        <label className="devtools-checkbox">
+        </div>
+
+        <label className="hash-checkbox">
           <input
             type="checkbox"
             checked={multiAlgo}
@@ -149,53 +157,72 @@ function HashTool() {
           />
           <span>{t("hash.allAlgos")}</span>
         </label>
-        <div className="devtools-segmented">
-          <button
-            type="button"
-            className={`segmented-item ${encoding === "hex" ? "active" : ""}`}
-            onClick={() => setEncoding("hex")}
-          >
-            Hex
-          </button>
-          <button
-            type="button"
-            className={`segmented-item ${encoding === "base64" ? "active" : ""}`}
-            onClick={() => setEncoding("base64")}
-          >
-            Base64
-          </button>
+
+        <div className="hash-toolbar-divider" />
+
+        <div className="hash-toolbar-group">
+          <span className="hash-toolbar-label">{t("encoder.mode")}</span>
+          <div className="hash-segmented">
+            <button
+              type="button"
+              className={`hash-seg-item ${encoding === "hex" ? "active" : ""}`}
+              onClick={() => setEncoding("hex")}
+            >
+              Hex
+            </button>
+            <button
+              type="button"
+              className={`hash-seg-item ${encoding === "base64" ? "active" : ""}`}
+              onClick={() => setEncoding("base64")}
+            >
+              Base64
+            </button>
+          </div>
         </div>
-        <div className="devtools-actions-spacer" />
+
+        <div className="hash-toolbar-spacer" />
+
         <button
           type="button"
-          className="btn btn-secondary btn-small"
-          onClick={handleCopyAll}
+          className="hash-icon-btn"
+          onClick={() => void handleCopyAll()}
           disabled={!outputLength}
+          title={t("encoder.copy")}
         >
-          <ClipboardCopy size={14} />
-          {t("hash.copy")}
+          <Copy size={14} />
         </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={() => setInput("")}>
+        <button
+          type="button"
+          className="hash-icon-btn"
+          onClick={() => setInput("")}
+          disabled={!input}
+          title={t("encoder.clear")}
+        >
           <Eraser size={14} />
-          {t("hash.clear")}
         </button>
       </div>
 
+      {/* ── Status ── */}
       {message && (
-        <div className={`runtime-msg ${message.type}`}>
-          {message.type === "success" ? <Check size={14} /> : <Key size={14} />}
+        <div className={`hash-status ${message.type}`}>
+          {message.type === "success" ? <Check size={13} /> : <Key size={13} />}
           <span>{message.text}</span>
         </div>
       )}
 
-      <div className="devtools-io">
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">{t("hash.input")}</label>
-            {input && <span className="json-stats">{input.length} chars</span>}
+      {/* ── IO ── */}
+      <div className="hash-io">
+        <div className="hash-pane">
+          <div className="hash-pane-header">
+            <span className="hash-pane-title">{t("hash.input")}</span>
+            {input && (
+              <span className="hash-stats">
+                {input.length} {t("encoder.chars")}
+              </span>
+            )}
           </div>
           <textarea
-            className="devtools-textarea"
+            className="hash-textarea"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={t("hash.sample")}
@@ -205,9 +232,12 @@ function HashTool() {
 
           {/* Hash comparison */}
           <div className="hash-compare">
-            <label className="devtools-label">{t("hash.compare")}</label>
+            <div className="hash-compare-header">
+              <FileCheck size={12} />
+              <span>{t("hash.compare")}</span>
+            </div>
             <input
-              className="devtools-input"
+              className="hash-input"
               value={compareHash}
               onChange={(e) => setCompareHash(e.target.value)}
               placeholder={t("hash.comparePlaceholder")}
@@ -217,12 +247,12 @@ function HashTool() {
               <div className={`hash-compare-result ${compareResult ? "match" : "mismatch"}`}>
                 {compareResult ? (
                   <>
-                    <FileCheck size={14} />
+                    <Check size={13} />
                     <span>{t("hash.match")}</span>
                   </>
                 ) : (
                   <>
-                    <Key size={14} />
+                    <Eraser size={13} />
                     <span>{t("hash.mismatch")}</span>
                   </>
                 )}
@@ -231,12 +261,14 @@ function HashTool() {
           </div>
         </div>
 
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">
-              {t("hash.output")}
-              {outputLength > 0 && <span className="json-stats">{outputLength} chars</span>}
-            </label>
+        <div className="hash-pane">
+          <div className="hash-pane-header">
+            <span className="hash-pane-title">{t("hash.output")}</span>
+            {outputLength > 0 && (
+              <span className="hash-stats">
+                {outputLength} {t("encoder.chars")}
+              </span>
+            )}
           </div>
 
           {multiAlgo ? (
@@ -245,15 +277,16 @@ function HashTool() {
                 <div key={a} className="hash-multi-item">
                   <span className="hash-algo-name">{a}</span>
                   <code className="hash-algo-value">
-                    {multiHashes[a] || <span className="devports-na">—</span>}
+                    {multiHashes[a] || <span className="hash-na">—</span>}
                   </code>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(multiHashes[a])}
+                    className="hash-icon-btn"
+                    onClick={() => void handleCopy(multiHashes[a])}
                     disabled={!multiHashes[a]}
+                    title={t("encoder.copy")}
                   >
-                    <ClipboardCopy size={11} />
+                    <ClipboardCopy size={12} />
                   </button>
                 </div>
               ))}
@@ -261,7 +294,7 @@ function HashTool() {
           ) : (
             <div className="hash-single-output">
               <textarea
-                className="devtools-textarea"
+                className="hash-textarea output"
                 value={hashed}
                 readOnly
                 placeholder=""
