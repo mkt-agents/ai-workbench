@@ -1,7 +1,6 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, FileText, Loader2, RefreshCw, Save, XCircle } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useGlobalStore } from "../core/store";
 import TestModal from "./TestModal";
 import { stripCodeFence } from "../lib/aiText";
@@ -40,6 +39,7 @@ export default function TestGenerator({ project, onClose, onToast }: Props) {
   const generateTestCode = useGlobalStore((s) => s.generateTestCode);
   const saveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
   const readTextFile = useGlobalStore((s) => s.invokeReadTextFile);
+  const pickSourceFile = useGlobalStore((s) => s.invokePickSourceFile);
 
   const [sourceCode, setSourceCode] = useState("");
   const [filePath, setFilePath] = useState("");
@@ -51,21 +51,18 @@ export default function TestGenerator({ project, onClose, onToast }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const handlePickFile = useCallback(async () => {
-    const selected = await open({
-      multiple: false,
-      filters: [
-        { name: "Source", extensions: ["ts", "tsx", "js", "jsx", "rs", "py", "go", "java", "cs"] },
-      ],
-    });
-    if (!selected || typeof selected !== "string") return;
-    setFilePath(selected);
-    setError(null);
     try {
-      setSourceCode(await readTextFile(selected));
+      const picked = await pickSourceFile(t("selectFile"));
+      if (!picked) return;
+      setFilePath(picked);
+      setError(null);
+      setSourceCode(await readTextFile(picked));
     } catch (e) {
-      setError(String(e));
+      const text = String(e);
+      // A dismissed dialog reports as an error — that is not something to surface.
+      if (!/取消|cancel/i.test(text)) setError(text);
     }
-  }, [readTextFile]);
+  }, [pickSourceFile, readTextFile, t]);
 
   const handleGenerate = useCallback(async () => {
     if (!sourceCode.trim() || !filePath.trim()) {

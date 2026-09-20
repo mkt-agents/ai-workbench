@@ -366,3 +366,27 @@ fn read_text_file_sync(path: String) -> Result<String, String> {
         .map_err(|e| format!("读取失败: {e}"))?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
+
+/// Open a native file picker for a source file and return its path. The test
+/// generator needs the path (to derive a sibling test-file name) and the content
+/// (to send to the model), so the two are kept as separate commands — pairing this
+/// with `read_text_file` — rather than collapsing them into one.
+#[tauri::command]
+pub async fn pick_source_file(title: Option<String>) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || pick_source_file_sync(title))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn pick_source_file_sync(title: Option<String>) -> Result<String, String> {
+    let path = rfd::FileDialog::new()
+        .set_title(title.as_deref().unwrap_or("选择源文件"))
+        .add_filter(
+            "Source",
+            &["ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "py", "go", "java", "cs", "cpp", "c", "h"],
+        )
+        .add_filter("所有文件", &["*"])
+        .pick_file()
+        .ok_or_else(|| "已取消选择".to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}

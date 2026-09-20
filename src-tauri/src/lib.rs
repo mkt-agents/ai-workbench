@@ -388,6 +388,7 @@ pub fn run() {
             tool_commands::import_data,
             tool_commands::save_text_file,
             tool_commands::pick_text_file,
+            tool_commands::pick_source_file,
             tool_commands::read_text_file,
             tray::open_quick_ask_with_text,
             tray::tray_toggle_quick_ask,
