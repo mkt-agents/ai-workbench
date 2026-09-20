@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
@@ -920,7 +920,10 @@ fn spawn_pipe_reader(
                 buf.extend_from_slice(&line);
             }
             if let Ok(mut tail) = live.lock() {
-                tail.push_str(String::from_utf8_lossy(&line).trim_end_matches('\r'));
+                // The chunk already carries its own line ending (LF or CRLF); append
+                // exactly one, or the live tail renders every line doubled.
+                let text = String::from_utf8_lossy(&line);
+                tail.push_str(text.trim_end_matches(['\r', '\n']));
                 tail.push('\n');
             }
         }
@@ -992,7 +995,7 @@ pub(crate) fn run_test_sync(
         child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
         Arc::clone(&stderr_acc),
         Arc::clone(&live),
-        readers_left,
+        Arc::clone(&readers_left),
     );
 
     let deadline = timer + timeout;
