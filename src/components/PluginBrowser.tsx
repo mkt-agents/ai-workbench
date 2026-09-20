@@ -8,7 +8,8 @@ import {
   X, Plus, Trash2, Edit2, Check, Globe, ExternalLink, Search, Link2,
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
   Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown, Code,
-  Copy, FileText, Zap, ClipboardCopy,
+  Copy, FileText, Zap, ClipboardCopy, Loader2,
+  ArrowDownAZ, Clock, ToggleLeft,
 } from "lucide-react";
 
 const VIEW_MODE_KEY = "ai-workbench.webPlugins.viewMode";
@@ -235,6 +236,11 @@ function PluginBrowser() {
   const [usShowPresets, setUsShowPresets] = useState(false);
   const [usExpandedCode, setUsExpandedCode] = useState<Set<string>>(new Set());
   const [usTestUrl, setUsTestUrl] = useState("");
+  const [usSortMode, setUsSortMode] = useState<"name" | "date" | "status">("date");
+  const [usFilterMode, setUsFilterMode] = useState<"all" | "enabled" | "disabled">("all");
+  const [usImportUrlOpen, setUsImportUrlOpen] = useState(false);
+  const [usImportUrl, setUsImportUrl] = useState("");
+  const [usImporting, setUsImporting] = useState(false);
   const usCodeRef = useRef<HTMLTextAreaElement>(null);
 
   const filterInputRef = useRef<HTMLInputElement>(null);
@@ -242,13 +248,42 @@ function PluginBrowser() {
 
   const filteredUserScripts = useMemo(() => {
     const q = usSearch.trim().toLowerCase();
-    if (!q) return userScripts;
-    return userScripts.filter((s) =>
-      s.name.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q) ||
-      s.matchPatterns.some((p) => p.toLowerCase().includes(q))
-    );
-  }, [userScripts, usSearch]);
+    let list = userScripts;
+    // Filter by status
+    if (usFilterMode === "enabled") {
+      list = list.filter((s) => s.enabled);
+    } else if (usFilterMode === "disabled") {
+      list = list.filter((s) => !s.enabled);
+    }
+    // Filter by search
+    if (q) {
+      list = list.filter((s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.matchPatterns.some((p) => p.toLowerCase().includes(q))
+      );
+    }
+    // Sort
+    switch (usSortMode) {
+      case "name":
+        return [...list].sort((a, b) => a.name.localeCompare(b.name));
+      case "status":
+        return [...list].sort((a, b) => Number(b.enabled) - Number(a.enabled));
+      case "date":
+      default:
+        return [...list].sort((a, b) => {
+          const ta = a.updatedAt || a.createdAt;
+          const tb = b.updatedAt || b.createdAt;
+          return tb.localeCompare(ta);
+        });
+    }
+  }, [userScripts, usSearch, usSortMode, usFilterMode]);
+
+  const userScriptStats = useMemo(() => {
+    const total = userScripts.length;
+    const enabled = userScripts.filter((s) => s.enabled).length;
+    return { total, enabled, disabled: total - enabled };
+  }, [userScripts]);
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
     setMessage({ type, text });
@@ -571,6 +606,90 @@ function PluginBrowser() {
       showMsg("error", "Failed to copy");
     }
   }, [showMsg]);
+
+  const bulkToggleScripts = useCallback(async (enable: boolean) => {
+    for (const s of userScripts) {
+      if (s.enabled !== enable) {
+        await toggleUserScript(s.id);
+      }
+    }
+    showMsg("success", enable ? t("usEnableAll") : t("usDisableAll"));
+  }, [userScripts, toggleUserScript, showMsg, t]);
+
+  const importScriptFromUrl = useCallback(async (url: string) => {
+    setUsImporting(true);
+    try {
+      // Normalize URL - handle GreasyFork page URLs
+      let fetchUrl = url.trim();
+      // Convert GreasyFork page URL to direct script URL
+      const gfMatch = fetchUrl.match(/greasyfork\.org\/\w+\/scripts\/(\d+)/);
+      if (gfMatch) {
+        fetchUrl = `https://greasyfork.org/scripts/${gfMatch[1]}.user.js`;
+      }
+      // Convert GitHub blob URL to raw URL
+      if (fetchUrl.includes("github.com") && fetchUrl.includes("/blob/")) {
+        fetchUrl = fetchUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
+      }
+
+      const resp = await fetch(fetchUrl);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const code = await resp.text();
+
+      // Try to parse UserScript metadata
+      let name = "";
+      const description = "";
+      const matchPatterns: string[] = [];
+      const metaMatch = code.match(/\/\/ ==UserScript==([\s\S]*?)\/\/ ==\/UserScript==/);
+      if (metaMatch) {
+        const meta = metaMatch[1];
+        const nameMatch = meta.match(/@name\s+(.+)/);
+        if (nameMatch) name = nameMatch[1].trim();
+        const matchLines = meta.match(/@match\s+(.+)/g);
+        if (matchLines) {
+          for (const line of matchLines) {
+            const p = line.replace("@match", "").trim();
+            if (p) matchPatterns.push(p);
+          }
+        }
+      }
+      if (!name) {
+        // Use filename or default
+        const urlObj = new URL(fetchUrl);
+        const parts = urlObj.pathname.split("/");
+        name = parts[parts.length - 1].replace(/\.user\.js$|\.js$/, "") || "Imported Script";
+      }
+
+      // Check if a script with the same name already exists → update in place
+      const existing = userScripts.find(
+        (s) => s.name.toLowerCase() === name.toLowerCase()
+      );
+
+      if (existing) {
+        await updateUserScript(existing.id, {
+          description,
+          matchPatterns: matchPatterns.length > 0 ? matchPatterns : ["<all_urls>"],
+          code,
+        });
+      } else {
+        await addUserScript({
+          id: `import-url-${Date.now()}`,
+          name,
+          description,
+          matchPatterns: matchPatterns.length > 0 ? matchPatterns : ["<all_urls>"],
+          code,
+          enabled: true,
+        });
+      }
+
+      setUsImportUrlOpen(false);
+      setUsImportUrl("");
+      showMsg("success", existing ? t("usImportUpdated") : t("usImportSuccess"));
+    } catch (e) {
+      showMsg("error", t("usImportUrlFailed"));
+    } finally {
+      setUsImporting(false);
+    }
+  }, [addUserScript, updateUserScript, userScripts, showMsg, t]);
 
   const clearDragClasses = () => {
     document
@@ -1269,6 +1388,26 @@ function PluginBrowser() {
               <span className="plugin-count">{userScripts.length}</span>
             </div>
             <div className="plugin-header-actions">
+              {userScripts.length > 0 && (
+                <>
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => bulkToggleScripts(true)}
+                    title={t("usEnableAll")}
+                    disabled={userScriptStats.enabled === userScriptStats.total}
+                  >
+                    {t("usEnableAll")}
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => bulkToggleScripts(false)}
+                    title={t("usDisableAll")}
+                    disabled={userScriptStats.enabled === 0}
+                  >
+                    {t("usDisableAll")}
+                  </button>
+                </>
+              )}
               <button
                 className="btn btn-secondary btn-small"
                 onClick={async () => {
@@ -1313,7 +1452,6 @@ function PluginBrowser() {
                     let imported = 0;
                     for (const s of scripts) {
                       if (!s.name || !s.code) continue;
-                      // 兼容新旧格式
                       let patterns: string[];
                       if (Array.isArray(s.matchPatterns) && s.matchPatterns.length > 0) {
                         patterns = s.matchPatterns;
@@ -1342,6 +1480,13 @@ function PluginBrowser() {
                 title={t("usImport")}
               >
                 <Upload size={12} /> {t("import")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => setUsImportUrlOpen(true)}
+                title={t("usImportUrl")}
+              >
+                <Link2 size={12} /> {t("usImportUrl")}
               </button>
               <button
                 className="btn btn-secondary btn-small"
@@ -1417,6 +1562,63 @@ function PluginBrowser() {
                   aria-label={t("usSearchPlaceholder")}
                 />
               </div>
+              <div className="us-toolbar">
+                <div className="us-sort-group">
+                  <button
+                    className={`us-sort-btn ${usSortMode === "name" ? "active" : ""}`}
+                    onClick={() => setUsSortMode("name")}
+                    type="button"
+                    title={t("usSortName")}
+                  >
+                    <ArrowDownAZ size={12} />
+                    <span>{t("usSortName")}</span>
+                  </button>
+                  <button
+                    className={`us-sort-btn ${usSortMode === "date" ? "active" : ""}`}
+                    onClick={() => setUsSortMode("date")}
+                    type="button"
+                    title={t("usSortDate")}
+                  >
+                    <Clock size={12} />
+                    <span>{t("usSortDate")}</span>
+                  </button>
+                  <button
+                    className={`us-sort-btn ${usSortMode === "status" ? "active" : ""}`}
+                    onClick={() => setUsSortMode("status")}
+                    type="button"
+                    title={t("usSortStatus")}
+                  >
+                    <ToggleLeft size={12} />
+                    <span>{t("usSortStatus")}</span>
+                  </button>
+                </div>
+                <div className="us-filter-group">
+                  <button
+                    className={`us-filter-btn ${usFilterMode === "all" ? "active" : ""}`}
+                    onClick={() => setUsFilterMode("all")}
+                    type="button"
+                  >
+                    {t("usFilterAll")}
+                    <span className="us-filter-count">{userScriptStats.total}</span>
+                  </button>
+                  <button
+                    className={`us-filter-btn ${usFilterMode === "enabled" ? "active" : ""}`}
+                    onClick={() => setUsFilterMode("enabled")}
+                    type="button"
+                  >
+                    {t("usFilterEnabled")}
+                    <span className="us-filter-count">{userScriptStats.enabled}</span>
+                  </button>
+                  <button
+                    className={`us-filter-btn ${usFilterMode === "disabled" ? "active" : ""}`}
+                    onClick={() => setUsFilterMode("disabled")}
+                    type="button"
+                  >
+                    {t("usFilterDisabled")}
+                    <span className="us-filter-count">{userScriptStats.disabled}</span>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1485,6 +1687,30 @@ function PluginBrowser() {
                         enabled: false,
                       });
                       showMsg("success", t("usAdded"));
+                    }}
+                    onCopyCode={() => copyToClipboard(s.code, t("usCodeCopied"))}
+                    onExportSingle={async () => {
+                      const data = {
+                        version: 2,
+                        userscripts: [{
+                          name: s.name,
+                          description: s.description,
+                          matchPatterns: s.matchPatterns,
+                          code: s.code,
+                          enabled: s.enabled,
+                        }],
+                      };
+                      try {
+                        const path = await useGlobalStore.getState().invokeSaveTextFile(
+                          JSON.stringify(data, null, 2),
+                          `${s.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.userscript.json`,
+                          t("usExport")
+                        );
+                        showMsg("success", t("exportedTo", { path }));
+                      } catch (e) {
+                        const msg = String(e);
+                        if (!msg.includes("取消")) showMsg("error", msg);
+                      }
                     }}
                     expanded={usExpandedCode.has(s.id)}
                     onToggleExpand={() => {
@@ -1795,6 +2021,70 @@ function PluginBrowser() {
         </div>
       )}
 
+      {usImportUrlOpen && (
+        <div className="modal-overlay" onClick={() => { if (!usImporting) setUsImportUrlOpen(false); }}>
+          <div className="modal us-import-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="plugin-edit-modal-header">
+              <Link2 size={16} />
+              {t("usImportUrlTitle")}
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => { if (!usImporting) setUsImportUrlOpen(false); }}
+                aria-label={tc("actions.close")}
+                disabled={usImporting}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="us-import-body">
+              <div className="input-group">
+                <label className="input-label">{t("usImportUrl")}</label>
+                <input
+                  className="input-field"
+                  value={usImportUrl}
+                  onChange={(e) => setUsImportUrl(e.target.value)}
+                  placeholder={t("usImportUrlPlaceholder")}
+                  disabled={usImporting}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !usImporting) importScriptFromUrl(usImportUrl);
+                    if (e.key === "Escape" && !usImporting) setUsImportUrlOpen(false);
+                  }}
+                />
+                <p className="us-import-hint">{t("usImportUrlHint")}</p>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setUsImportUrlOpen(false)}
+                type="button"
+                disabled={usImporting}
+              >
+                {tc("actions.cancel")}
+              </button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={!usImportUrl.trim() || usImporting}
+                onClick={() => importScriptFromUrl(usImportUrl)}
+              >
+                {usImporting ? (
+                  <>
+                    <Loader2 size={14} className="spin" /> {t("usImporting")}
+                  </>
+                ) : (
+                  <>
+                    <Download size={14} /> {t("usImportUrl")}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {message && <div className={`toast toast-${message.type}`}>{message.text}</div>}
     </div>
   );
@@ -1811,6 +2101,8 @@ function UserscriptCard({
   onEdit,
   onDelete,
   onDuplicate,
+  onCopyCode,
+  onExportSingle,
   expanded,
   onToggleExpand,
 }: {
@@ -1821,6 +2113,8 @@ function UserscriptCard({
   onEdit: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onCopyCode: () => void;
+  onExportSingle: () => void;
   expanded: boolean;
   onToggleExpand: () => void;
 }) {
@@ -1886,6 +2180,22 @@ function UserscriptCard({
             />
             <span className="userscript-toggle-slider" />
           </label>
+          <button
+            className="plugin-item-btn"
+            onClick={onCopyCode}
+            title={t("usCopyCode")}
+            type="button"
+          >
+            <ClipboardCopy size={11} />
+          </button>
+          <button
+            className="plugin-item-btn"
+            onClick={onExportSingle}
+            title={t("usExport")}
+            type="button"
+          >
+            <Download size={11} />
+          </button>
           <button
             className="plugin-item-btn"
             onClick={onEdit}

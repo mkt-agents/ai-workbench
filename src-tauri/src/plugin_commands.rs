@@ -73,6 +73,50 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
   // Comparing window.top/window.self is safe cross-origin (unlike reading
   // top.location), so no try/catch needed.
   if (window.top !== window.self) return;
+
+  // ---- Popup / OAuth window support ----------------------------------
+  // The webview has no on_new_window handler, so native window.open() calls
+  // are silently dropped — login buttons that open an OAuth popup (Cursor,
+  // GitHub, Google…) would do nothing. Intercept window.open() and redirect
+  // the URL into the current tab so the OAuth redirect flow still completes
+  // in-window. The magic-host branch lets pages that already use the
+  // aiwb-shell.open convention keep working unchanged.
+  if (!window.__aiWorkbenchPopupPatched) {
+    var __origOpen = window.open;
+    window.open = function (url, target, features) {
+      if (url && url.indexOf('aiwb-shell.open') !== -1) {
+        // Already encoded for shell.open — let the navigation handler deal
+        // with it by dispatching a click on a hidden link.
+        var a = document.createElement('a');
+        a.href = url;
+        a.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;';
+        (document.body || document.documentElement).appendChild(a);
+        a.click();
+        setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); }, 200);
+        return { closed: false, focus: function () {}, close: function () {} };
+      }
+      if (url && /^https?:\/\//.test(url)) {
+        // External URL — navigate in place so the OAuth popup flow becomes a
+        // same-tab redirect flow. Returns `window` so callers that expect a
+        // WindowProxy (e.g. to call .close() or .postMessage()) don't throw.
+        window.location.href = url;
+        return window;
+      }
+      // about:blank, javascript:, or no URL — fall back to the original
+      // (which will still likely be a no-op, but we don't break edge cases).
+      try {
+        return __origOpen.apply(window, arguments);
+      } catch (_) {
+        return { closed: false, focus: function () {}, close: function () {} };
+      }
+    };
+    Object.defineProperty(window, '__aiWorkbenchPopupPatched', {
+      value: true,
+      writable: false,
+      configurable: false,
+    });
+  }
+
   if (window.__aiWorkbenchToolbarInjected) return;
   Object.defineProperty(window, '__aiWorkbenchToolbarInjected', {
     value: true,
