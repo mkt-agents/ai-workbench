@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import GitManager from "./components/GitManager";
 import SettingsPage from "./components/Settings";
+import TestManager from "./components/TestManager";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import {
   GitBranch,
@@ -22,6 +23,7 @@ import {
   PanelLeftOpen,
   KeyRound,
   Terminal,
+  FlaskConical as Flask,
 } from "lucide-react";
 import HostsManager from "./components/HostsManager";
 import PluginBrowser from "./components/PluginBrowser";
@@ -56,7 +58,8 @@ type Tab =
   | "runtime"
   | "cloudflared"
   | "snippets"
-  | "devtools";
+  | "devtools"
+  | "test-manager";
 
 type NavLeaf = { id: Tab; labelKey: string; icon: React.ReactNode };
 type NavGroup = {
@@ -226,6 +229,7 @@ function App() {
       labelKey: "systemUtils",
       defaultOpen: true,
       children: [
+        { id: "test-manager", labelKey: "testManagement", icon: <Flask size={16} /> },
         { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
       ],
     },
@@ -469,6 +473,7 @@ function App() {
               {activeTab === "plugins" && <PluginBrowser />}
               {activeTab === "cloudflared" && <CloudflaredManager />}
               {activeTab === "devtools" && <DevTools />}
+              {activeTab === "test-manager" && <TestManager />}
               {activeTab === "settings" && <SettingsPage />}
               {trayToast && (
                 <div className="toast toast-success" role="status">

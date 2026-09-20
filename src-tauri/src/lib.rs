@@ -13,6 +13,7 @@ mod tray;
 pub mod config;
 pub mod cancellation;
 mod cancellation_commands;
+mod test_commands;
 
 pub use config::*;
 
@@ -232,6 +233,48 @@ pub fn run() {
                     chars INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS test_projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    framework TEXT NOT NULL,
+                    test_command TEXT NOT NULL,
+                    args TEXT,
+                    working_dir TEXT,
+                    env TEXT,
+                    enabled INTEGER DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_run_at TEXT,
+                    last_status TEXT
+                );
+                CREATE TABLE IF NOT EXISTS test_runs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    total_tests INTEGER NOT NULL,
+                    passed INTEGER NOT NULL,
+                    failed INTEGER NOT NULL,
+                    skipped INTEGER NOT NULL,
+                    output TEXT NOT NULL,
+                    suites TEXT NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS test_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    run_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    total INTEGER,
+                    passed INTEGER,
+                    failed INTEGER,
+                    FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
+                );
             "#).expect("failed to init schema");
 
             let _ = conn.execute_batch("ALTER TABLE git_accounts ADD COLUMN note TEXT;");
@@ -380,6 +423,7 @@ pub fn run() {
             tool_commands::import_data,
             tool_commands::save_text_file,
             tool_commands::pick_text_file,
+            tool_commands::read_text_file,
             tray::open_quick_ask_with_text,
             tray::tray_toggle_quick_ask,
             tray::hide_quick_ask,
@@ -415,6 +459,18 @@ pub fn run() {
             devtools_commands::devtools_resolve_processes,
             devtools_commands::devtools_kill_process,
             devtools_commands::devtools_http_request,
+            test_commands::load_test_projects,
+            test_commands::add_test_project,
+            test_commands::update_test_project,
+            test_commands::delete_test_project,
+            test_commands::run_test,
+            test_commands::get_test_history,
+            test_commands::detect_project_type,
+            test_commands::scan_test_projects,
+            test_commands::generate_test_code,
+            test_commands::diagnose_test_failure,
+            test_commands::read_coverage_report,
+            test_commands::cancel_test_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

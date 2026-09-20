@@ -52,6 +52,16 @@ pub fn is_cancelled(id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a live command currently owns this request id. Callers that expose a
+/// cancel button use it to avoid reporting success for a run that never started.
+pub fn is_active(id: &str) -> bool {
+    state()
+        .lock()
+        .ok()
+        .map(|s| s.active.contains(id))
+        .unwrap_or(false)
+}
+
 /// Register a request as active and report whether it was pre-cancelled.
 fn register_active(id: &str) -> bool {
     if let Ok(mut s) = state().lock() {

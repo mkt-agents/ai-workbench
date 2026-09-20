@@ -169,6 +169,7 @@ export interface GlobalState {
   cloudflaredProfiles: CloudflaredNamedProfile[];
   snippets: Snippet[];
   quickAskSessions: QuickAskSession[];
+  testProjects: TestProject[];
 }
 
 export interface HostProfile {
@@ -367,6 +368,124 @@ export interface CursorCleanupResult {
   removedFiles: number;
   freedBytes: number;
   message: string;
+}
+
+// Test Automation Types
+/** Mirrors the `status` strings test_commands.rs writes. */
+export type TestRunOutcome = 'success' | 'failed' | 'error' | 'cancelled' | 'timeout';
+
+export interface TestProject {
+  id: string;
+  name: string;
+  path: string;
+  type: 'frontend' | 'backend' | 'rust' | 'python' | 'go' | 'java' | 'csharp' | 'custom';
+  framework: string;
+  testCommand: string;
+  args?: string;
+  workingDir?: string;
+  env?: Record<string, string>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;
+  lastStatus?: TestRunOutcome;
+}
+
+export interface TestCase {
+  id: string;
+  name: string;
+  status: 'passed' | 'failed' | 'skipped';
+  duration: number;
+  error?: TestCaseError;
+}
+
+export interface TestCaseError {
+  message: string;
+  stack: string;
+  expected?: unknown;
+  actual?: unknown;
+}
+
+export interface TestSuite {
+  name: string;
+  path: string;
+  status: 'passed' | 'failed';
+  duration: number;
+  tests: TestCase[];
+}
+
+export interface TestRunResult {
+  projectId: string;
+  id: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  status: TestRunOutcome;
+  totalTests: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  output: string;
+  suites: TestSuite[];
+}
+
+export interface TestHistoryEntry {
+  id: number;
+  projectId: string;
+  runId?: string;
+  timestamp: string;
+  status: TestRunOutcome;
+  total?: number;
+  passed?: number;
+  failed?: number;
+}
+
+export interface ProjectDetectionResult {
+  path: string;
+  detected: boolean;
+  projectType?: string;
+  framework?: string;
+  testCommand?: string;
+  reason: string;
+}
+
+// AI Test Generation Types
+export interface TestGenOptions {
+  coverageLevel: 'comprehensive' | 'basic' | 'boundary' | 'exception';
+  mockStrategy: 'auto' | 'manual' | 'skip';
+  assertStyle: 'expect' | 'assert' | 'should';
+}
+
+/** Sections the diagnosis prompt asks for; filled in by parseDiagnosis(). */
+export interface FailureDiagnosis {
+  rootCause: string;
+  expectedBehavior: string;
+  actualBehavior: string;
+  fixSuggestion: string;
+  fixCode?: string;
+}
+
+// Coverage Report Types
+export interface CoverageMetric {
+  total: number;
+  covered: number;
+  percentage: number;
+}
+
+export interface CoverageFile {
+  path: string;
+  lines: CoverageMetric;
+  statements: CoverageMetric;
+  branches: CoverageMetric;
+  functions: CoverageMetric;
+}
+
+export interface CoverageReport {
+  lines: CoverageMetric;
+  statements: CoverageMetric;
+  branches: CoverageMetric;
+  functions: CoverageMetric;
+  files: CoverageFile[];
 }
 
 export interface GlobalStore {

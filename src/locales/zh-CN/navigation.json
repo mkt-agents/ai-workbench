@@ -14,6 +14,7 @@
   "cloudflared": "内网穿透",
   "plugins": "网页工具",
   "systemUtils": "系统小工具",
+  "testManagement": "测试管理",
   "devtools": "小工具",
   "settings": "设置",
   "collapseSidebar": "折叠侧栏",

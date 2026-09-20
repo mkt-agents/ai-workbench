@@ -76,6 +76,7 @@ export interface Invocations {
   invokeImportData: () => Promise<string>;
   invokeSaveTextFile: (content: string, defaultName: string, title?: string) => Promise<string>;
   invokePickTextFile: (title?: string) => Promise<string>;
+  invokeReadTextFile: (path: string) => Promise<string>;
   invokeListRuntimeVersions: (kind: RuntimeKind) => Promise<RuntimeVersion[]>;
   invokeGetActiveRuntime: (kind: RuntimeKind) => Promise<RuntimeVersion | null>;
   invokeAddCustomRuntime: (kind: RuntimeKind, path: string) => Promise<RuntimeVersion>;
@@ -277,6 +278,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('save_text_file', { content, defaultName, title: title ?? null }),
   invokePickTextFile: (title?: string) =>
     tauriInvoke<string>('pick_text_file', { title: title ?? null }),
+  invokeReadTextFile: (path: string) =>
+    tauriInvoke<string>('read_text_file', { path }),
 
   // Runtime switch
   invokeListRuntimeVersions: (kind: RuntimeKind) =>

@@ -5,6 +5,7 @@ import type {
   RecentProject, WebPlugin, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
+  TestProject, ProjectDetectionResult, TestRunResult, TestHistoryEntry, CoverageReport,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -260,6 +261,20 @@ interface StoreState extends GlobalState, Invocations {
 
   setCurrentGitRepo: (path: string | undefined) => void;
 
+  // Test Projects
+  loadTestProjects: () => Promise<void>;
+  addTestProject: (project: Omit<TestProject, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateTestProject: (id: string, updates: Partial<TestProject>) => Promise<void>;
+  deleteTestProject: (id: string) => Promise<void>;
+  detectProjectType: (path: string) => Promise<ProjectDetectionResult>;
+  scanTestProjects: (basePath: string) => Promise<ProjectDetectionResult[]>;
+  runTest: (projectId: string, args?: string) => Promise<TestRunResult>;
+  getTestHistory: (projectId?: string) => Promise<TestHistoryEntry[]>;
+  generateTestCode: (sourceCode: string, filePath: string, framework: string, coverageLevel: string, mockStrategy: string, assertStyle: string) => Promise<string>;
+  diagnoseTestFailure: (testCode: string, sourceCode: string, errorMessage: string, testName: string) => Promise<string>;
+  readCoverageReport: (projectId: string) => Promise<CoverageReport>;
+  cancelTestRun: (projectId: string) => Promise<void>;
+
   // Initialize
   initialize: () => Promise<void>;
 }
@@ -283,6 +298,7 @@ export const useGlobalStore = create<StoreState>()(
       cloudflaredProfiles: [],
       snippets: [],
       quickAskSessions: [],
+      testProjects: [],
 
       // Settings
       setSettings: (newSettings) => set((state) => ({
@@ -1136,6 +1152,93 @@ export const useGlobalStore = create<StoreState>()(
       setCurrentGitRepo: (path) =>
         get().setSettings({ currentGitRepo: path || undefined }),
 
+      // Test Projects — these use dedicated test_* commands (project-scoped rows that
+      // the generic db_load/db_save table whitelist does not cover).
+      loadTestProjects: async () => {
+        const projects = await tauriInvoke<TestProject[]>('load_test_projects');
+        set({ testProjects: projects });
+      },
+
+      addTestProject: async (project: Omit<TestProject, 'id' | 'createdAt' | 'updatedAt'>) => {
+        const now = new Date().toISOString();
+        const newProject: TestProject = {
+          ...project,
+          id: crypto.randomUUID(),
+          createdAt: now,
+          updatedAt: now,
+        };
+        // The Rust command takes the whole record as a named `project` argument.
+        await tauriInvoke('add_test_project', { project: newProject });
+        await get().loadTestProjects();
+      },
+
+      updateTestProject: async (id: string, updates: Partial<TestProject>) => {
+        await tauriInvoke('update_test_project', { id, updates });
+        await get().loadTestProjects();
+      },
+
+      deleteTestProject: async (id: string) => {
+        await tauriInvoke('delete_test_project', { id });
+        await get().loadTestProjects();
+      },
+
+      detectProjectType: async (path: string) => {
+        return await tauriInvoke<ProjectDetectionResult>('detect_project_type', { path });
+      },
+
+      scanTestProjects: async (basePath: string) => {
+        return await tauriInvoke<ProjectDetectionResult[]>('scan_test_projects', { basePath });
+      },
+
+      runTest: async (projectId: string, args?: string) => {
+        return await tauriInvoke<TestRunResult>('run_test', { projectId, args });
+      },
+
+      getTestHistory: async (projectId?: string) => {
+        return await tauriInvoke<TestHistoryEntry[]>('get_test_history', { projectId });
+      },
+
+      // AI Test Generation — both return the model's raw text
+      generateTestCode: async (
+        sourceCode: string,
+        filePath: string,
+        framework: string,
+        coverageLevel: string,
+        mockStrategy: string,
+        assertStyle: string,
+      ) => {
+        return await tauriInvoke<string>('generate_test_code', {
+          sourceCode,
+          filePath,
+          framework,
+          coverageLevel,
+          mockStrategy,
+          assertStyle,
+        });
+      },
+
+      diagnoseTestFailure: async (
+        testCode: string,
+        sourceCode: string,
+        errorMessage: string,
+        testName: string,
+      ) => {
+        return await tauriInvoke<string>('diagnose_test_failure', {
+          testCode,
+          sourceCode,
+          errorMessage,
+          testName,
+        });
+      },
+
+      readCoverageReport: async (projectId: string) => {
+        return await tauriInvoke<CoverageReport>('read_coverage_report', { projectId });
+      },
+
+      cancelTestRun: async (projectId: string) => {
+        return await tauriInvoke<void>('cancel_test_run', { projectId });
+      },
+
       // Initialize
       initialize: async () => {
         await Promise.all([
@@ -1151,6 +1254,8 @@ export const useGlobalStore = create<StoreState>()(
           get().loadCloudflaredProfiles(),
           get().loadSnippets(),
           get().loadQuickAskSessions(),
+          // testProjects is loaded by the test page itself: a failure there must not
+          // reject the memoized boot promise for every window.
         ]);
       },
     }),

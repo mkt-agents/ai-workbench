@@ -347,3 +347,22 @@ fn pick_text_file_sync(title: Option<String>) -> Result<String, String> {
 
     std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))
 }
+
+/// Read a source file from disk (used by the test generator's file picker).
+/// Capped so a huge file cannot blow up an AI prompt.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || read_text_file_sync(path))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+fn read_text_file_sync(path: String) -> Result<String, String> {
+    const MAX_SOURCE_BYTES: u64 = 200 * 1024;
+    let file = std::fs::File::open(&path).map_err(|e| format!("读取失败: {e}"))?;
+    let mut reader = std::io::Read::take(file, MAX_SOURCE_BYTES);
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut buf)
+        .map_err(|e| format!("读取失败: {e}"))?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}

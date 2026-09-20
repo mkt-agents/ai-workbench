@@ -14,6 +14,7 @@
   "cloudflared": "Tunnel",
   "plugins": "Web Tools",
   "systemUtils": "System Utils",
+  "testManagement": "Test Manager",
   "devtools": "Dev Tools",
   "settings": "Settings",
   "collapseSidebar": "Collapse sidebar",

@@ -1,0 +1,703 @@
+/* Test management page. Everything is namespaced `tm-` so the page cannot reach
+   into the shared design system (`.btn`, `.modal`, `.empty-state`, `.input-field`
+   all come from styles.css) — this file only adds what the page owns itself. */
+
+.tm-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 4px 24px;
+  box-sizing: border-box;
+  min-height: 100%;
+}
+
+.tm-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* ─── Toolbar ─── */
+.tm-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.tm-toolbar-info,
+.tm-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.tm-count,
+.tm-selected-count,
+.tm-batch-progress {
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.tm-batch-progress {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Project cards ─── */
+.tm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tm-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.tm-card:hover {
+  border-color: var(--border);
+}
+
+.tm-card.is-focused {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-1));
+}
+
+.tm-card.is-running {
+  border-color: var(--accent-border);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.tm-check {
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tm-card-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tm-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.tm-name {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.tm-name:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.tm-name:disabled {
+  cursor: default;
+}
+
+.tm-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.tm-path {
+  font-size: 11.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.tm-cmd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.tm-card-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tm-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tm-danger {
+  color: var(--text-2);
+}
+
+.tm-danger:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+/* ─── Framework badges: colour comes from the framework, not the theme ─── */
+.tm-badge {
+  --badge-hue: var(--text-2);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--badge-hue) 14%, transparent);
+  color: color-mix(in srgb, var(--badge-hue) 72%, var(--text-0));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.tm-badge-jest { --badge-hue: #7c5cbf; }
+.tm-badge-vitest { --badge-hue: #d9822b; }
+.tm-badge-cargo { --badge-hue: #b8492a; }
+.tm-badge-pytest { --badge-hue: #4b8b3b; }
+.tm-badge-gotest { --badge-hue: #2a7fbf; }
+.tm-badge-playwright { --badge-hue: #1d7a5f; }
+
+/* ─── Status chips ─── */
+.tm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--text-2) 12%, transparent);
+  color: var(--text-1);
+}
+
+.tm-chip-success {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.tm-chip-failed,
+.tm-chip-error {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.tm-chip-cancelled,
+.tm-chip-timeout,
+.tm-chip-running {
+  background: var(--yellow-dim);
+  color: var(--yellow);
+}
+
+/* ─── Result panel ─── */
+.tm-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.tm-result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tm-result-head h3 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.tm-result-metrics {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.tm-result-metrics strong {
+  color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-m-pass strong { color: var(--green); }
+.tm-m-fail strong { color: var(--red); }
+.tm-m-skip strong { color: var(--yellow); }
+
+.tm-result-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tm-output-label {
+  font-size: 11.5px;
+  color: var(--text-2);
+  margin-right: auto;
+}
+
+.tm-output {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-0) 4%, transparent);
+  color: var(--text-1);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tm-output-code {
+  max-height: 420px;
+}
+
+/* ─── Dialog shell ─── */
+.tm-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(86vh, 760px);
+  box-sizing: border-box;
+  padding: 18px 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-1);
+  box-shadow: var(--float-shadow, 0 18px 48px rgba(0, 0, 0, 0.28));
+  overflow: hidden;
+}
+
+.tm-modal-wide {
+  width: min(820px, calc(100vw - 32px));
+}
+
+.tm-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 2px 4px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.tm-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tm-footer-hint {
+  margin-right: auto;
+  text-align: left;
+}
+
+/* ─── Form fields ─── */
+.tm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tm-field > label {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.tm-field-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tm-field-row > .input-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.tm-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tm-field-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tm-code-area {
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.tm-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tm-form-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--red-dim);
+  color: var(--red);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.tm-empty {
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* ─── Scan results ─── */
+.tm-scan-base {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-scan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tm-scan-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+
+.tm-scan-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tm-scan-path {
+  font-size: 12px;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-scan-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tm-evidence {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.tm-scan-row > .btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ─── Tables (history, coverage files) ─── */
+.tm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.tm-table th,
+.tm-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.tm-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tm-table .tm-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tm-table .tm-time {
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.tm-file-path {
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+  max-width: 420px;
+}
+
+/* ─── AI generator / diagnosis ─── */
+.tm-generated,
+.tm-diagnosis {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tm-generated h4,
+.tm-diagnosis h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.tm-generated-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tm-diagnosis-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tm-diagnosis-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.tm-diagnosis-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ─── Coverage cards ─── */
+.tm-cov-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.tm-cov-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+
+.tm-cov-label {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.tm-cov-value {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-cov-bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-0) 8%, transparent);
+  overflow: hidden;
+}
+
+.tm-cov-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width var(--transition-fast);
+}
+
+.tm-cov-detail {
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-cov-good { color: var(--green); }
+.tm-cov-warn { color: var(--yellow); }
+.tm-cov-bad { color: var(--red); }
+
+.tm-cov-bar-fill.tm-cov-good { background: var(--green); }
+.tm-cov-bar-fill.tm-cov-warn { background: var(--yellow); }
+.tm-cov-bar-fill.tm-cov-bad { background: var(--red); }
+
+.tm-section-title {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.tm-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--red-dim);
+}
+
+.tm-error-detail {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+/* ─── Narrow windows ─── */
+@media (max-width: 960px) {
+  .tm-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .tm-card-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    padding-top: 2px;
+    border-top: 1px solid var(--border-subtle);
+  }
+}
+
+@media (max-width: 720px) {
+  .tm-toolbar {
+    align-items: stretch;
+  }
+
+  .tm-toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .tm-field-grid,
+  .tm-field-grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tm-modal {
+    padding: 14px 16px;
+    max-height: 92vh;
+  }
+
+  .tm-output {
+    max-height: 240px;
+  }
+
+  .tm-file-path {
+    max-width: 180px;
+  }
+}

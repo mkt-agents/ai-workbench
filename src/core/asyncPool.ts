@@ -14,6 +14,10 @@ export const GIT_CONCURRENCY = 4;
  *  not to look like an attack on the provider's rate limit. */
 export const MODEL_TEST_CONCURRENCY = 4;
 
+/** Parallel test suites per batch run. Each one is a full toolchain build/run,
+ *  so two is already enough to saturate a laptop CPU. */
+export const TEST_RUN_CONCURRENCY = 2;
+
 export async function mapPool<T>(
   items: T[],
   concurrency: number,
