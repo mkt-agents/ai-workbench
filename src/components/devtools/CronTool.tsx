@@ -489,11 +489,12 @@ export default function CronTool() {
             </div>
             <button
               type="button"
-              className="cron-icon-btn"
+              className="cron-action-btn"
               onClick={() => handleCopy(expr)}
               title={t("cron.copyExpr")}
             >
               <Copy size={13} />
+              <span>{t("cron.copyExpr")}</span>
             </button>
           </div>
 
@@ -518,8 +519,9 @@ export default function CronTool() {
                   ))}
                 </div>
                 {runs.length > 0 && (
-                  <button type="button" className="cron-icon-btn" onClick={() => void copyAllRuns()} title={t("cron.copyAll")}>
+                  <button type="button" className="cron-action-btn primary" onClick={() => void copyAllRuns()} title={t("cron.copyAll")}>
                     <ClipboardCopy size={13} />
+                    <span>{t("cron.copyAll")}</span>
                   </button>
                 )}
               </div>

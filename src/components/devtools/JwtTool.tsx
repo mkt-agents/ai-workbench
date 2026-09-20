@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Eraser, Lock, AlertCircle } from "lucide-react";
+import { Check, ClipboardCopy, Eraser, Lock, AlertCircle, FileText } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 const SAMPLE_JWT =
@@ -93,35 +93,52 @@ function JwtTool() {
   }, [parsed]);
 
   return (
-    <div className="devtools-tool">
-      <div className="devtools-actions">
+    <div className="devtools-tool jwt-tool">
+      {/* ── Toolbar ── */}
+      <div className="jwt-toolbar">
         <button
           type="button"
-          className="btn btn-secondary btn-small"
+          className="jwt-action-btn"
           onClick={() => setToken(SAMPLE_JWT)}
+          title={t("jwt.sample")}
         >
-          <Lock size={14} />
-          {t("jwt.sample")}
+          <FileText size={14} />
+          <span>{t("jwt.sample")}</span>
         </button>
-        <div className="devtools-actions-spacer" />
-        <button type="button" className="btn btn-secondary btn-small" onClick={() => setToken("")}>
+        <div className="jwt-toolbar-spacer" />
+        <button
+          type="button"
+          className="jwt-action-btn"
+          onClick={() => setToken("")}
+          disabled={!token}
+          title={t("jwt.clear")}
+        >
           <Eraser size={14} />
-          {t("jwt.clear")}
+          <span>{t("jwt.clear")}</span>
         </button>
       </div>
 
+      {/* ── Status ── */}
       {message && (
-        <div className={`runtime-msg ${message.type}`}>
-          {message.type === "success" ? <Check size={14} /> : <Lock size={14} />}
+        <div className={`jwt-status ${message.type}`}>
+          {message.type === "success" ? <Check size={13} /> : <Lock size={13} />}
           <span>{message.text}</span>
         </div>
       )}
 
-      <div className="devtools-io">
-        <div className="devtools-io-pane">
-          <label className="devtools-label">{t("jwt.token")}</label>
+      {/* ── IO ── */}
+      <div className="jwt-io">
+        <div className="jwt-input-area">
+          <div className="jwt-pane-header">
+            <span className="jwt-pane-title">{t("jwt.token")}</span>
+            {token && (
+              <span className="jwt-stats">
+                {token.length} chars
+              </span>
+            )}
+          </div>
           <textarea
-            className="devtools-textarea"
+            className="jwt-textarea"
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder={t("jwt.placeholder")}
@@ -130,17 +147,57 @@ function JwtTool() {
           />
         </div>
 
-        <div className="devtools-io-pane jwt-parse-area">
+        <div className="jwt-result">
           {parsed && "error" in parsed && (
-            <div className="runtime-msg error">
-              <Lock size={14} />
+            <div className="jwt-status error">
+              <Lock size={13} />
               <span>{parsed.error}</span>
             </div>
           )}
 
           {parsed && !("error" in parsed) && (
-            <div className="jwt-result">
-              {/* Status badges */}
+            <div className="jwt-parsed">
+              <div className="jwt-pane-header">
+                <span className="jwt-pane-title">{t("jwt.result")}</span>
+              </div>
+              <div className="jwt-section">
+                <div className="jwt-section-header">
+                  <span className="jwt-section-tag tag-header">{t("jwt.header")}</span>
+                  <button
+                    type="button"
+                    className="jwt-section-copy"
+                    onClick={() => handleCopy(parsed.header)}
+                    title={t("jwt.copy")}
+                  >
+                    <ClipboardCopy size={11} />
+                  </button>
+                </div>
+                <pre className="jwt-pre">{parsed.header}</pre>
+              </div>
+
+              <div className="jwt-section">
+                <div className="jwt-section-header">
+                  <span className="jwt-section-tag tag-payload">{t("jwt.payload")}</span>
+                  <button
+                    type="button"
+                    className="jwt-section-copy"
+                    onClick={() => handleCopy(parsed.payload)}
+                    title={t("jwt.copy")}
+                  >
+                    <ClipboardCopy size={11} />
+                  </button>
+                </div>
+                <pre className="jwt-pre">{parsed.payload}</pre>
+              </div>
+
+              <div className="jwt-section">
+                <div className="jwt-section-header">
+                  <span className="jwt-section-tag tag-signature">{t("jwt.signature")}</span>
+                </div>
+                <pre className="jwt-pre jwt-pre-raw">{parsed.signature}</pre>
+              </div>
+
+              {/* Status badges — moved below sections */}
               <div className="jwt-badges">
                 {algoInfo && (
                   <span className="jwt-badge jwt-badge-algo">
@@ -161,41 +218,6 @@ function JwtTool() {
                 )}
               </div>
 
-              <div className="jwt-section">
-                <div className="jwt-section-header">
-                  <span className="jwt-section-tag tag-tcp">{t("jwt.header")}</span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(parsed.header)}
-                  >
-                    <ClipboardCopy size={11} />
-                  </button>
-                </div>
-                <pre className="devtools-pre">{parsed.header}</pre>
-              </div>
-
-              <div className="jwt-section">
-                <div className="jwt-section-header">
-                  <span className="jwt-section-tag tag-service">{t("jwt.payload")}</span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(parsed.payload)}
-                  >
-                    <ClipboardCopy size={11} />
-                  </button>
-                </div>
-                <pre className="devtools-pre">{parsed.payload}</pre>
-              </div>
-
-              <div className="jwt-section">
-                <div className="jwt-section-header">
-                  <span className="jwt-section-tag">{t("jwt.signature")}</span>
-                </div>
-                <pre className="devtools-pre devtools-pre-raw">{parsed.signature}</pre>
-              </div>
-
               {expInfo && (
                 <div className={`jwt-expiry ${expInfo.expired ? "expired" : "valid"}`}>
                   <AlertCircle size={14} />
@@ -207,10 +229,6 @@ function JwtTool() {
                 </div>
               )}
             </div>
-          )}
-
-          {!parsed && (
-            <div className="runtime-empty">{t("jwt.placeholder")}</div>
           )}
         </div>
       </div>

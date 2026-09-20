@@ -184,21 +184,23 @@ function HashTool() {
 
         <button
           type="button"
-          className="hash-icon-btn"
+          className="hash-action-btn primary"
           onClick={() => void handleCopyAll()}
           disabled={!outputLength}
           title={t("encoder.copy")}
         >
           <Copy size={14} />
+          <span>{t("encoder.copy")}</span>
         </button>
         <button
           type="button"
-          className="hash-icon-btn"
+          className="hash-action-btn"
           onClick={() => setInput("")}
           disabled={!input}
           title={t("encoder.clear")}
         >
           <Eraser size={14} />
+          <span>{t("encoder.clear")}</span>
         </button>
       </div>
 

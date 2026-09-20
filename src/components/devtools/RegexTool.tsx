@@ -126,77 +126,103 @@ function RegexTool() {
   ];
 
   return (
-    <div className="devtools-tool">
-      <div className="devtools-actions">
-        <div className="regex-presets">
-          {commonPatterns.map((preset) => (
-            <button
-              key={preset.label}
-              type="button"
-              className="btn btn-secondary btn-small"
-              onClick={() => setPattern(preset.pattern)}
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-        <div className="devtools-actions-spacer" />
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          onClick={() => setShowReplace(!showReplace)}
-        >
-          <Replace size={14} />
-          {t("regex.replace")}
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          onClick={handleCopy}
-          disabled={result.matches.length === 0}
-        >
-          <ClipboardCopy size={14} />
-          {t("regex.copy")}
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          onClick={() => {
-            setPattern("");
-            setTestStr("");
-          }}
-        >
-          <Eraser size={14} />
-          {t("regex.clear")}
-        </button>
-      </div>
-
-      <div className="devtools-io">
-        <div className="devtools-io-pane">
-          <label className="devtools-label">{t("regex.pattern")}</label>
+    <div className="devtools-tool regex-tool">
+      {/* ── Toolbar ── */}
+      <div className="regex-toolbar">
+        <div className="regex-toolbar-group">
+          <span className="regex-toolbar-label">{t("regex.pattern")}</span>
           <input
-            className="devtools-input"
+            className="regex-input"
             value={pattern}
             onChange={(e) => setPattern(e.target.value)}
             placeholder="(\\d+)"
             spellCheck={false}
           />
+        </div>
 
-          <div className="devtools-flags">
+        <div className="regex-toolbar-divider" />
+
+        <div className="regex-toolbar-group">
+          <span className="regex-toolbar-label">{t("regex.flags")}</span>
+          <div className="regex-flags">
             {(Object.keys(flags) as (keyof typeof flags)[]).map((key) => (
-              <label key={key} className="devtools-checkbox">
+              <label
+                key={key}
+                className={`regex-flag ${flags[key] ? "active" : ""}`}
+                title={t(`regex.${flagLabels[key]}`)}
+              >
                 <input type="checkbox" checked={flags[key]} onChange={() => toggleFlag(key)} />
-                <span>{t(`regex.${flagLabels[key]}`)}</span>
+                <span>{key}</span>
               </label>
             ))}
           </div>
+        </div>
 
-          {/* Replace input */}
+        <div className="regex-toolbar-spacer" />
+
+        <button
+          type="button"
+          className={`regex-action-btn ${showReplace ? "active" : ""}`}
+          onClick={() => setShowReplace(!showReplace)}
+          title={t("regex.replace")}
+        >
+          <Replace size={14} />
+          <span>{t("regex.replace")}</span>
+        </button>
+        <button
+          type="button"
+          className="regex-action-btn primary"
+          onClick={handleCopy}
+          disabled={result.matches.length === 0}
+          title={t("regex.copy")}
+        >
+          <ClipboardCopy size={14} />
+          <span>{t("regex.copy")}</span>
+        </button>
+        <button
+          type="button"
+          className="regex-action-btn"
+          onClick={() => {
+            setPattern("");
+            setTestStr("");
+          }}
+          title={t("regex.clear")}
+        >
+          <Eraser size={14} />
+          <span>{t("regex.clear")}</span>
+        </button>
+      </div>
+
+      {/* ── Presets ── */}
+      <div className="regex-presets">
+        {commonPatterns.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            className="regex-preset-btn"
+            onClick={() => setPattern(preset.pattern)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Status ── */}
+      {message && (
+        <div className={`regex-status ${message.type}`}>
+          {message.type === "success" ? <Check size={13} /> : <Regex size={13} />}
+          <span>{message.text}</span>
+        </div>
+      )}
+
+      {/* ── IO ── */}
+      <div className="regex-main">
+        <div className="regex-pane">
           {showReplace && (
             <>
-              <label className="devtools-label">{t("regex.replaceWith")}</label>
+              <label className="regex-pane-title">{t("regex.replaceWith")}</label>
               <input
-                className="devtools-input"
+                className="regex-input"
                 value={replaceStr}
                 onChange={(e) => setReplaceStr(e.target.value)}
                 placeholder={t("regex.replacePlaceholder")}
@@ -204,10 +230,11 @@ function RegexTool() {
               />
             </>
           )}
-
-          <label className="devtools-label">{t("regex.test")}</label>
+          <div className="regex-pane-header">
+            <span className="regex-pane-title">{t("regex.test")}</span>
+          </div>
           <textarea
-            className="devtools-textarea"
+            className="regex-textarea"
             value={testStr}
             onChange={(e) => setTestStr(e.target.value)}
             placeholder=""
@@ -216,87 +243,81 @@ function RegexTool() {
           />
         </div>
 
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">
+        <div className="regex-pane regex-result-pane">
+          <div className="regex-pane-header">
+            <span className="regex-pane-title">
               {t("regex.matches")} ({result.matches.length})
-            </label>
+            </span>
           </div>
 
-          {message && (
-            <div className={`runtime-msg ${message.type}`}>
-              {message.type === "success" ? <Check size={14} /> : <Regex size={14} />}
-              <span>{message.text}</span>
-            </div>
-          )}
-
           {!result.ok && result.error && (
-            <div className="runtime-msg error">
-              <Regex size={14} />
+            <div className="regex-status error">
+              <Regex size={13} />
               <span>
                 {t("regex.invalid")}: {result.error}
               </span>
             </div>
           )}
 
-          {result.ok && segments && (
-            <div className="regex-highlight-box">
-              <div className="regex-highlight-text">
-                {segments.map((seg, i) =>
-                  seg.highlight ? (
-                    <mark key={i} className="regex-match-mark">
-                      {seg.text}
-                    </mark>
-                  ) : (
-                    <span key={i}>{seg.text}</span>
-                  ),
-                )}
-              </div>
-            </div>
-          )}
-
-          {result.ok && result.matches.length === 0 ? (
-            <div className="runtime-hint">{t("regex.noMatch")}</div>
-          ) : (
-            <div className="devtools-match-list">
-              {result.matches.map((m, i) => (
-                <div key={i} className="devtools-match-item">
-                  <span className="devtools-match-index">@{m.index}</span>
-                  <span className="devtools-match-value">{m.match}</span>
-                  {m.groups.length > 0 && (
-                    <span className="devtools-match-groups">
-                      {m.groups.map((g, j) => (
-                        <span key={j} className="devtools-match-group">
-                          {t("regex.group")} {j + 1}: {g || "undefined"}
-                        </span>
-                      ))}
-                    </span>
+          <div className="regex-result-scroll">
+            {result.ok && segments && (
+              <div className="regex-highlight-box">
+                <div className="regex-highlight-text">
+                  {segments.map((seg, i) =>
+                    seg.highlight ? (
+                      <mark key={i} className="regex-match-mark">
+                        {seg.text}
+                      </mark>
+                    ) : (
+                      <span key={i}>{seg.text}</span>
+                    ),
                   )}
                 </div>
-              ))}
-            </div>
-          )}
-
-          {/* Replace result */}
-          {replaceResult && (
-            <div className="regex-replace-result">
-              <label className="devtools-label">{t("regex.replaceResult")}</label>
-              <div className="regex-replace-preview">
-                <pre className="devtools-pre">{replaceResult}</pre>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-small"
-                  onClick={() => {
-                    copy(replaceResult);
-                    flash("success", t("regex.copied"));
-                  }}
-                >
-                  <ClipboardCopy size={12} />
-                  {t("regex.copy")}
-                </button>
               </div>
-            </div>
-          )}
+            )}
+
+            {result.ok && result.matches.length === 0 ? (
+              <div className="regex-empty">{t("regex.noMatch")}</div>
+            ) : (
+              <div className="regex-matches">
+                {result.matches.map((m, i) => (
+                  <div key={i} className="regex-match">
+                    <span className="regex-match-index">@{m.index}</span>
+                    <span className="regex-match-value">{m.match}</span>
+                    {m.groups.length > 0 && (
+                      <span className="regex-groups">
+                        {m.groups.map((g, j) => (
+                          <span key={j} className="regex-group">
+                            {t("regex.group")} {j + 1}: {g || "undefined"}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {replaceResult && (
+              <div className="regex-replace-result">
+                <label className="regex-pane-title">{t("regex.replaceResult")}</label>
+                <div className="regex-replace-preview">
+                  <pre className="devtools-pre">{replaceResult}</pre>
+                  <button
+                    type="button"
+                    className="regex-icon-btn"
+                    onClick={() => {
+                      copy(replaceResult);
+                      flash("success", t("regex.copied"));
+                    }}
+                    title={t("regex.copy")}
+                  >
+                    <ClipboardCopy size={12} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

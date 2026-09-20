@@ -166,6 +166,7 @@
     "title": "JWT",
     "description": "Parse JWT (decode Header & Payload only, no signature verification)",
     "token": "Token",
+    "result": "Result",
     "header": "Header",
     "payload": "Payload",
     "signature": "Signature (preserved as-is)",

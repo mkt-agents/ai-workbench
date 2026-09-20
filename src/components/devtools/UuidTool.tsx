@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Copy, Eraser, Shuffle, CheckCircle, XCircle } from "lucide-react";
+import { Check, ClipboardCopy, Copy, Eraser, Shuffle, CheckCircle, XCircle, Braces } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,6 +23,11 @@ function UuidTool() {
   const [validateInput, setValidateInput] = useState("");
   const [validateResult, setValidateResult] = useState<{ valid: boolean; version?: number } | null>(null);
 
+  const showStatus = (type: "success" | "error", text: string) => {
+    setMessage({ type, text });
+    setTimeout(() => setMessage(null), 2000);
+  };
+
   const generate = () => {
     const n = Math.max(1, Math.min(100, count || 1));
     const out: string[] = [];
@@ -42,17 +47,16 @@ function UuidTool() {
       setCopiedIdx(idx);
       setTimeout(() => setCopiedIdx(null), 1200);
     } catch (e) {
-      setMessage({ type: "error", text: String(e) });
+      showStatus("error", String(e));
     }
   };
 
   const handleCopyAll = async () => {
     try {
       await copy(items.join("\n"));
-      setMessage({ type: "success", text: t("uuid.copied") });
-      setTimeout(() => setMessage(null), 2000);
+      showStatus("success", t("uuid.copied"));
     } catch (e) {
-      setMessage({ type: "error", text: String(e) });
+      showStatus("error", String(e));
     }
   };
 
@@ -60,10 +64,9 @@ function UuidTool() {
     try {
       const json = JSON.stringify(items, null, 2);
       await copy(json);
-      setMessage({ type: "success", text: t("uuid.copied") });
-      setTimeout(() => setMessage(null), 2000);
+      showStatus("success", t("uuid.copied"));
     } catch (e) {
-      setMessage({ type: "error", text: String(e) });
+      showStatus("error", String(e));
     }
   };
 
@@ -88,72 +91,88 @@ function UuidTool() {
   };
 
   return (
-    <div className="devtools-tool">
-      <div className="devtools-inline-controls">
-        <label className="devtools-field">
-          <span>{t("uuid.count")}</span>
+    <div className="devtools-tool uuid-tool">
+      {/* ── Toolbar ── */}
+      <div className="uuid-toolbar">
+        <div className="uuid-toolbar-group">
+          <span className="uuid-toolbar-label">{t("uuid.count")}</span>
           <input
             type="number"
             min={1}
             max={100}
-            className="devtools-input devtools-input-sm"
+            className="uuid-count-input"
             value={count}
             onChange={(e) => setCount(Number(e.target.value))}
           />
-        </label>
-        <label className="devtools-checkbox">
+        </div>
+
+        <div className="uuid-toolbar-divider" />
+
+        <label className="uuid-checkbox">
           <input type="checkbox" checked={hyphen} onChange={(e) => setHyphen(e.target.checked)} />
           <span>{t("uuid.hyphen")}</span>
         </label>
-        <label className="devtools-checkbox">
+
+        <label className="uuid-checkbox">
           <input type="checkbox" checked={uppercase} onChange={(e) => setUppercase(e.target.checked)} />
           <span>{t("uuid.uppercase")}</span>
         </label>
-        <div className="devtools-actions-spacer" />
-        <button type="button" className="btn btn-primary btn-small" onClick={generate}>
+
+        <div className="uuid-toolbar-spacer" />
+
+        <button type="button" className="uuid-action-btn primary" onClick={generate} title={t("uuid.generate")}>
           <Shuffle size={14} />
-          {t("uuid.generate")}
+          <span>{t("uuid.generate")}</span>
         </button>
         <button
           type="button"
-          className="btn btn-secondary btn-small"
+          className="uuid-action-btn"
           onClick={handleCopyAll}
           disabled={items.length === 0}
+          title={t("uuid.copyAll")}
         >
           <ClipboardCopy size={14} />
-          {t("uuid.copyAll")}
+          <span>{t("uuid.copyAll")}</span>
         </button>
         <button
           type="button"
-          className="btn btn-secondary btn-small"
+          className="uuid-action-btn"
           onClick={handleCopyAsArray}
           disabled={items.length === 0}
+          title={t("uuid.copyAsJson")}
         >
-          <Copy size={14} />
-          {t("uuid.copyAsJson")}
+          <Braces size={14} />
+          <span>{t("uuid.copyAsJson")}</span>
         </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={() => setItems([])}>
+        <button
+          type="button"
+          className="uuid-action-btn"
+          onClick={() => setItems([])}
+          disabled={items.length === 0}
+          title={t("uuid.clear")}
+        >
           <Eraser size={14} />
-          {t("uuid.clear")}
+          <span>{t("uuid.clear")}</span>
         </button>
       </div>
 
+      {/* ── Status ── */}
       {message && (
-        <div className={`runtime-msg ${message.type}`}>
-          {message.type === "success" ? <Check size={14} /> : <Shuffle size={14} />}
+        <div className={`uuid-status ${message.type}`}>
+          {message.type === "success" ? <Check size={13} /> : <Shuffle size={13} />}
           <span>{message.text}</span>
         </div>
       )}
 
-      {/* UUID List */}
+      {/* ── UUID List ── */}
       {items.length > 0 && (
-        <div className="devtools-uuid-list">
+        <div className="uuid-list">
           {items.map((u, i) => (
-            <div key={i} className="devtools-uuid-item">
+            <div key={i} className="uuid-item">
               <code>{u}</code>
               <button
                 type="button"
-                className="btn btn-secondary btn-small icon-only"
+                className="uuid-item-copy"
                 onClick={() => handleCopyOne(u, i)}
                 title={t("uuid.copy")}
               >
@@ -166,16 +185,18 @@ function UuidTool() {
 
       {items.length > 0 && (
         <div className="uuid-stats">
-          {t("uuid.count")}: {items.length} · {items[0].length} chars
+          {items.length} {t("uuid.count")} · {items[0].length} chars
         </div>
       )}
 
-      {/* UUID Validator */}
+      {/* ── UUID Validator ── */}
       <div className="uuid-validator">
-        <label className="devtools-label">{t("uuid.validate")}</label>
-        <div className="uuid-validate-input">
+        <div className="uuid-validator-head">
+          <span className="uuid-validator-title">{t("uuid.validate")}</span>
+        </div>
+        <div className="uuid-validate-box">
           <input
-            className="devtools-input"
+            className="uuid-validate-input"
             value={validateInput}
             onChange={(e) => {
               setValidateInput(e.target.value);
@@ -189,7 +210,7 @@ function UuidTool() {
           />
           <button
             type="button"
-            className="btn btn-secondary btn-small"
+            className="uuid-validate-btn"
             onClick={handleValidate}
           >
             {t("uuid.validate")}

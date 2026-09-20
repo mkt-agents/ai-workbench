@@ -2,6 +2,8 @@ import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   ClipboardCopy,
   History,
   Loader2,
@@ -10,8 +12,6 @@ import {
   Trash2,
   Wrench,
   XCircle,
-  ChevronDown,
-  ChevronRight,
 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
@@ -262,15 +262,18 @@ function HttpClientTool() {
       ? "status-ok"
       : response && response.status >= 400
         ? "status-err"
-        : "";
+        : response
+          ? "status-other"
+          : "";
 
   const isJsonResponse = response?.contentType?.includes("application/json");
 
   return (
-    <div className="devtools-tool">
-      <div className="devtools-http-bar">
+    <div className="devtools-tool http-tool">
+      {/* ── Toolbar ── */}
+      <div className="http-toolbar">
         <select
-          className="devtools-select devtools-select-method"
+          className="http-method-select"
           value={method}
           onChange={(e) => setMethod(e.target.value as (typeof METHODS)[number])}
         >
@@ -280,43 +283,49 @@ function HttpClientTool() {
             </option>
           ))}
         </select>
-        <input
-          className="devtools-input devtools-input-url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://httpbin.org/get"
-          spellCheck={false}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSend();
-          }}
-        />
+        <div className="http-url-bar">
+          <input
+            className="devtools-input"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://httpbin.org/get"
+            spellCheck={false}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSend();
+            }}
+          />
+        </div>
         <button
           type="button"
-          className="btn btn-primary btn-small"
+          className="btn btn-primary btn-small http-send-btn"
           onClick={handleSend}
           disabled={sending}
         >
           {sending ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
           {sending ? t("http.sending") : t("http.send")}
         </button>
-        <div className="devtools-history-dropdown">
+
+        <div className="http-toolbar-spacer" />
+
+        <div className="http-history">
           <button
             type="button"
-            className="btn btn-secondary btn-small icon-only"
+            className="http-action-btn"
             onClick={() => setShowHistory(!showHistory)}
             title={t("http.history")}
           >
             <History size={14} />
+            <span>{t("http.history")}</span>
             {showHistory ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
           </button>
           {showHistory && (
-            <div className="devtools-history-menu">
+            <div className="http-history-menu">
               {history.length === 0 ? (
-                <div className="devtools-history-empty">{t("http.noHistory")}</div>
+                <div className="http-history-empty">{t("http.noHistory")}</div>
               ) : (
                 <>
-                  <div className="devtools-history-header">
-                    <span>{t("http.history")}</span>
+                  <div className="http-history-header">
+                    <span><History size={12} style={{ verticalAlign: "middle", marginRight: 6 }} />{t("http.history")}</span>
                     <button
                       type="button"
                       className="btn btn-secondary btn-small icon-only"
@@ -330,13 +339,13 @@ function HttpClientTool() {
                     <button
                       key={item.id}
                       type="button"
-                      className="devtools-history-item"
+                      className="http-history-item"
                       onClick={() => handleLoadHistory(item)}
                     >
-                      <span className={`tag tag-${item.method === "GET" ? "tcp" : "service"}`}>
+                      <span className={`http-method-badge ${item.method}`}>
                         {item.method}
                       </span>
-                      <span className="devtools-history-url">{item.url}</span>
+                      <span className="http-history-url">{item.url}</span>
                     </button>
                   ))}
                 </>
@@ -346,132 +355,152 @@ function HttpClientTool() {
         </div>
       </div>
 
+      {/* ── Status ── */}
       {message && (
-        <div className={`runtime-msg ${message.type}`}>
+        <div className={`http-status ${message.type}`}>
           {message.type === "success" ? <Check size={14} /> : <XCircle size={14} />}
           <span>{message.text}</span>
         </div>
       )}
 
-      <div className="devtools-http-tabs">
+      {/* ── Tabs ── */}
+      <div className="http-tabs">
         <button
           type="button"
-          className={`devtools-http-tab ${tab === "headers" ? "active" : ""}`}
+          className={`http-tab ${tab === "headers" ? "active" : ""}`}
           onClick={() => setTab("headers")}
         >
           {t("http.headers")} ({headerCount})
         </button>
         <button
           type="button"
-          className={`devtools-http-tab ${tab === "body" ? "active" : ""}`}
+          className={`http-tab ${tab === "body" ? "active" : ""}`}
           onClick={() => setTab("body")}
         >
           {t("http.body")}
         </button>
         <button
           type="button"
-          className={`devtools-http-tab ${tab === "response" ? "active" : ""}`}
+          className={`http-tab ${tab === "response" ? "active" : ""}`}
           onClick={() => setTab("response")}
         >
           {t("http.response")} {response ? `· ${response.status}` : ""}
         </button>
       </div>
 
+      {/* ── Headers tab ── */}
       {tab === "headers" && (
-        <div className="devtools-headers">
-          <div className="devtools-headers-presets">
-            {COMMON_HEADERS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={() => addCommonHeader(preset.key, preset.value)}
-              >
-                + {preset.label}
-              </button>
-            ))}
+        <div className="http-section">
+          <div className="http-section-title">
+            <Plus size={13} />
+            {t("http.headers")}
           </div>
-          {headers.map((h) => (
-            <div key={h.id} className="devtools-header-row">
-              <input
-                className="devtools-input"
-                value={h.key}
-                onChange={(e) => updateHeader(h.id, "key", e.target.value)}
-                placeholder={t("http.headerKey")}
-                spellCheck={false}
-              />
-              <input
-                className="devtools-input"
-                value={h.value}
-                onChange={(e) => updateHeader(h.id, "value", e.target.value)}
-                placeholder={t("http.headerValue")}
-                spellCheck={false}
-              />
-              <button
-                type="button"
-                className="btn btn-secondary btn-small icon-only"
-                onClick={() => removeHeader(h.id)}
-                disabled={headers.length <= 1}
-              >
-                <Trash2 size={12} />
-              </button>
+          <div className="http-headers">
+            <div className="http-headers-presets">
+              {COMMON_HEADERS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={() => addCommonHeader(preset.key, preset.value)}
+                >
+                  + {preset.label}
+                </button>
+              ))}
             </div>
-          ))}
-          <button type="button" className="btn btn-secondary btn-small" onClick={addHeader}>
-            <Plus size={14} />
-            {t("http.addHeader")}
-          </button>
-        </div>
-      )}
-
-      {tab === "body" && (
-        <div className="devtools-io-pane">
-          <div className="devtools-body-toolbar">
-            <label className="devtools-checkbox">
-              <input
-                type="checkbox"
-                checked={formatOnSend}
-                onChange={(e) => setFormatOnSend(e.target.checked)}
-              />
-              {t("http.autoFormat")}
-            </label>
-            <button
-              type="button"
-              className="btn btn-secondary btn-small"
-              onClick={handleFormatRequestBody}
-            >
-              <Wrench size={12} />
-              {t("http.formatJson")}
+            {headers.map((h) => (
+              <div key={h.id} className="http-header-row">
+                <input
+                  className="devtools-input"
+                  value={h.key}
+                  onChange={(e) => updateHeader(h.id, "key", e.target.value)}
+                  placeholder={t("http.headerKey")}
+                  spellCheck={false}
+                />
+                <input
+                  className="devtools-input"
+                  value={h.value}
+                  onChange={(e) => updateHeader(h.id, "value", e.target.value)}
+                  placeholder={t("http.headerValue")}
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small icon-only"
+                  onClick={() => removeHeader(h.id)}
+                  disabled={headers.length <= 1}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            <button type="button" className="btn btn-secondary btn-small" onClick={addHeader}>
+              <Plus size={14} />
+              {t("http.addHeader")}
             </button>
           </div>
-          <textarea
-            className="devtools-textarea"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder='{"key": "value"}'
-            rows={10}
-            spellCheck={false}
-          />
         </div>
       )}
 
+      {/* ── Body tab ── */}
+      {tab === "body" && (
+        <div className="http-section">
+          <div className="http-section-title">
+            <Wrench size={13} />
+            {t("http.body")}
+          </div>
+          <div className="http-body">
+            <div className="http-body-toolbar">
+              <label className="devtools-checkbox">
+                <input
+                  type="checkbox"
+                  checked={formatOnSend}
+                  onChange={(e) => setFormatOnSend(e.target.checked)}
+                />
+                {t("http.autoFormat")}
+              </label>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={handleFormatRequestBody}
+              >
+                <Wrench size={12} />
+                {t("http.formatJson")}
+              </button>
+            </div>
+            <textarea
+              className="devtools-textarea"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder='{"key": "value"}'
+              rows={10}
+              spellCheck={false}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ── Response tab ── */}
       {tab === "response" && (
-        <div className="devtools-response">
+        <div className="http-response">
           {!response ? (
-            <div className="runtime-hint">{t("http.sendHint")}</div>
+            <div className="http-hint">
+              <Send size={16} style={{ opacity: 0.5 }} />
+              {t("http.sendHint")}
+            </div>
           ) : (
             <>
-              <div className="devtools-response-meta">
-                <span className={`devtools-status ${statusClass}`}>
+              <div className="http-response-meta">
+                <span className={`http-response-status ${statusClass}`}>
                   {response.status}
                 </span>
-                <span className="devtools-duration">
+                <span className="http-response-stat">
                   <strong>{response.duration_ms}</strong> ms
                 </span>
-                <span className="devtools-duration">
+                <span className="http-response-stat">
                   {formatBytes(response.size)}
                 </span>
-                <div className="devtools-actions-spacer" />
+                <div className="http-response-actions-spacer" />
                 {isJsonResponse && (
                   <button
                     type="button"
@@ -492,28 +521,28 @@ function HttpClientTool() {
                 </button>
               </div>
 
-              <div className="devtools-response-body">
+              <div className="http-response-body">
                 <label className="devtools-label">{t("http.responseBody")}</label>
                 <pre className="devtools-pre">{response.body || " "}</pre>
               </div>
 
-              <div className="devtools-response-headers-section">
+              <div className="http-response-headers-section">
                 <label className="devtools-label">
                   {t("http.responseHeaders")} ({response.headers.length})
                 </label>
-                <div className="devtools-response-headers-list">
+                <div className="http-response-headers-list">
                   {response.headers.map((h, i) => (
-                    <div key={i} className="devtools-response-header">
+                    <div key={i} className="http-response-header">
                       <strong>{h.key}:</strong> {h.value}
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="devtools-curl-section">
+              <div className="http-curl-section">
                 <label className="devtools-label">{t("http.curlLabel")}</label>
-                <div className="devtools-curl-bar">
-                  <code className="devtools-curl-preview">
+                <div className="http-curl-bar">
+                  <code className="devtools-pre http-curl-preview">
                     {generateCurl(
                       method,
                       url.trim(),

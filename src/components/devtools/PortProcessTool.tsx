@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
-  ChevronDown,
-  ChevronRight,
   ClipboardCopy,
+  ListMinus,
   Loader2,
   RefreshCw,
   Search,
@@ -27,6 +26,15 @@ function shortPath(path: string): string {
   const parts = path.split(/[\\/]/);
   if (parts.length <= 2) return path;
   return `…\\${parts.slice(-2).join("\\")}`;
+}
+
+function StateBadge({ state }: { state: string | undefined }) {
+  const s = (state || "").toLowerCase().replace(/\s+/g, "_");
+  let cls = "ports-state-default";
+  if (s === "listening") cls = "ports-state-listening";
+  else if (s === "established") cls = "ports-state-established";
+  else if (s === "time_wait" || s === "close_wait") cls = "ports-state-time_wait";
+  return <span className={`ports-state-badge ${cls}`}>{state || "—"}</span>;
 }
 
 function PortProcessTool() {
@@ -201,70 +209,50 @@ function PortProcessTool() {
   }, [filteredPorts]);
 
   return (
-    <div className="devtools-tool">
-      <div className="devtools-row">
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          onClick={load}
-          disabled={loading}
-        >
-          {loading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-          {t("ports.refresh")}
-        </button>
-        <label className="devtools-checkbox">
-          <input
-            type="checkbox"
-            checked={autoRefresh}
-            onChange={(e) => setAutoRefresh(e.target.checked)}
-          />
-          {t("ports.autoRefresh")}
-        </label>
-        <label className="devtools-checkbox">
-          <input
-            type="checkbox"
-            checked={hideSystem}
-            onChange={(e) => setHideSystem(e.target.checked)}
-          />
-          {t("ports.hideSystem")}
-        </label>
-        {resolvingCount && (
-          <span className="devports-resolve-hint">
-            <Loader2 size={12} className="spin" />
-            {t("ports.resolving")}
-          </span>
-        )}
-        <div className="devtools-actions-spacer" />
-        {ports.length > 0 && (
+    <div className="devtools-tool ports-tool">
+      {/* ── Toolbar ── */}
+      <div className="ports-toolbar">
+        <div className="ports-toolbar-group">
           <button
             type="button"
-            className="btn btn-secondary btn-small"
-            onClick={handleCopyAll}
+            className="ports-action-btn"
+            onClick={load}
+            disabled={loading}
+            title={t("ports.refresh")}
           >
-            <ClipboardCopy size={14} />
-            {t("ports.copyAll")}
+            {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+            <span>{t("ports.refresh")}</span>
           </button>
-        )}
-      </div>
-
-      {ports.length > 0 && (
-        <div className="devports-filter-bar">
-          <div className="devports-search">
-            <Search size={14} className="devports-search-icon" />
+          <button
+            type="button"
+            className={`ports-action-btn ${autoRefresh ? "active" : ""}`}
+            onClick={() => setAutoRefresh(!autoRefresh)}
+            title={t("ports.autoRefresh")}
+          >
+            <RefreshCw size={13} />
+            <span>{t("ports.autoRefresh")}</span>
+          </button>
+          <label className="ports-action-btn ports-toggle" title={t("ports.hideSystem")}>
             <input
-              className="devtools-input"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t("ports.searchPlaceholder")}
-              spellCheck={false}
+              type="checkbox"
+              checked={hideSystem}
+              onChange={(e) => setHideSystem(e.target.checked)}
             />
-          </div>
-          <div className="devports-proto-filter">
+            <ListMinus size={13} />
+            <span>{t("ports.hideSystem")}</span>
+          </label>
+        </div>
+
+        <div className="ports-toolbar-divider" />
+
+        <div className="ports-toolbar-group">
+          <span className="ports-toolbar-label">{t("ports.proto")}</span>
+          <div className="ports-segmented">
             {(["all", "tcp", "udp"] as ProtoFilter[]).map((proto) => (
               <button
                 key={proto}
                 type="button"
-                className={`btn btn-small ${protoFilter === proto ? "btn-primary" : "btn-secondary"}`}
+                className={`ports-seg-item ${protoFilter === proto ? "active" : ""}`}
                 onClick={() => setProtoFilter(proto)}
               >
                 {proto === "all" ? t("ports.all") : proto.toUpperCase()}
@@ -272,172 +260,205 @@ function PortProcessTool() {
             ))}
           </div>
         </div>
-      )}
 
+        {loading && ports.length === 0 ? (
+          <span className="ports-resolve-hint">
+            <Loader2 size={12} className="spin" />
+            {t("ports.loading")}
+          </span>
+        ) : resolvingCount ? (
+          <span className="ports-resolve-hint">
+            <Loader2 size={12} className="spin" />
+            {t("ports.resolving")}
+          </span>
+        ) : null}
+
+        <div className="ports-toolbar-spacer" />
+
+        {ports.length > 0 && (
+          <div className="ports-toolbar-group">
+            <div className="ports-search">
+              <Search size={14} className="ports-search-icon" />
+              <input
+                className="devtools-input"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("ports.searchPlaceholder")}
+                spellCheck={false}
+              />
+            </div>
+            <button
+              type="button"
+              className="ports-icon-btn"
+              onClick={handleCopyAll}
+              title={t("ports.copyAll")}
+            >
+              <ClipboardCopy size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Stats ── */}
       {ports.length > 0 && (
-        <div className="devports-stats">
+        <div className="ports-stats">
           <span>{t("ports.total")}: <strong>{stats.total}</strong></span>
+          <span className="ports-stats-dot" />
           <span>TCP: <strong>{stats.tcpCount}</strong></span>
+          <span className="ports-stats-dot" />
           <span>UDP: <strong>{stats.udpCount}</strong></span>
+          <span className="ports-stats-dot" />
           <span>{t("ports.processes")}: <strong>{stats.uniquePids}</strong></span>
         </div>
       )}
 
+      {/* ── Status ── */}
       {message && (
-        <div className={`runtime-msg ${message.type}`}>
+        <div className={`ports-status ${message.type}`}>
           {message.type === "success" ? <Check size={14} /> : <XCircle size={14} />}
           <span>{message.text}</span>
         </div>
       )}
 
+      {/* ── Content ── */}
       {loading && ports.length === 0 ? (
-        <div className="runtime-empty">
-          <Loader2 size={20} className="spin" />
+        <div className="ports-empty">
+          <Loader2 size={22} className="spin ports-empty-icon" />
           <span>{t("ports.loading")}</span>
         </div>
       ) : ports.length === 0 ? (
-        <div className="runtime-empty">{t("ports.empty")}</div>
-      ) : filteredPorts.length === 0 ? (
-        <div className="runtime-empty">{t("ports.noMatch")}</div>
-      ) : (
-        <div className="devports-list">
-          {filteredPorts.map((p, i) => {
-            const key = `${p.proto}-${p.local_addr}-${p.local_port}-${p.pid}-${i}`;
-            const info = pidMap[p.pid];
-            const isOpen = expanded.has(key);
-            return (
-              <PortRow
-                key={key}
-                port={p}
-                info={info}
-                isOpen={isOpen}
-                killing={killing}
-                onToggle={() => toggleRow(key)}
-                onKill={() => handleKill(p.pid, info?.name || "")}
-                onCopyPath={handleCopyPath}
-                t={t}
-              />
-            );
-          })}
+        <div className="ports-empty">
+          <Search size={22} className="ports-empty-icon" />
+          <span>{t("ports.empty")}</span>
         </div>
-      )}
-    </div>
-  );
-}
-
-interface PortRowProps {
-  port: DevtoolsPortEntry;
-  info: DevtoolsProcessInfo | undefined;
-  isOpen: boolean;
-  killing: number | null;
-  onToggle: () => void;
-  onKill: () => void;
-  onCopyPath: (path: string) => void;
-  t: (key: string) => string;
-}
-
-function PortRow({ port, info, isOpen, killing, onToggle, onKill, onCopyPath, t }: PortRowProps) {
-  const hasDetail = port.pid !== 0;
-
-  return (
-    <div className={`devports-card ${isOpen ? "open" : ""}`}>
-      <div
-        className="devports-card-main"
-        onClick={hasDetail ? onToggle : undefined}
-        style={hasDetail ? { cursor: "pointer" } : undefined}
-      >
-        <span className="devports-card-chevron">
-          {hasDetail ? (
-            isOpen ? (
-              <ChevronDown size={14} />
-            ) : (
-              <ChevronRight size={14} />
-            )
-          ) : null}
-        </span>
-        <span className={`tag tag-${(port.proto || "").toLowerCase()}`}>{port.proto || "?"}</span>
-        <span className="devports-card-addr">
-          {port.local_addr}:{port.local_port}
-        </span>
-        <span className="devports-card-remote">
-          {port.remote_addr}:{port.remote_port || "*"}
-        </span>
-        <span className="devports-card-state">{port.state || "—"}</span>
-        <span className="devports-card-pid">{port.pid}</span>
-        <span className="devports-card-process">
-          {!hasDetail ? (
-            "—"
-          ) : !info ? (
-            <span className="devports-proc-name">#{port.pid}</span>
-          ) : (
-            <>
-              <span className="devports-proc-name">{info.name || `#${port.pid}`}</span>
-              {info.path && (
-                <span className="devports-proc-path">{shortPath(info.path)}</span>
-              )}
-            </>
-          )}
-        </span>
-        <span className="devports-card-actions" onClick={(e) => e.stopPropagation()}>
-          {hasDetail && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-small"
-              onClick={onKill}
-              disabled={killing === port.pid}
-              title={t("ports.kill")}
-            >
-              {killing === port.pid ? (
-                <Loader2 size={12} className="spin" />
-              ) : (
-                <Skull size={12} />
-              )}
-            </button>
-          )}
-        </span>
-      </div>
-
-      {isOpen && info && (
-        <div className="devports-card-detail">
-          <div className="devports-detail-grid">
-            <div className="devports-detail-row">
-              <span className="devports-detail-label">{t("ports.process")}</span>
-              <span className="devports-detail-value">{info.name || `#${port.pid}`}</span>
-            </div>
-            <div className="devports-detail-row devports-detail-grow">
-              <span className="devports-detail-label">{t("ports.localAddress")}</span>
-              <div className="devports-detail-path-wrap">
-                <code className="devtools-pre devports-detail-path">
-                  {info.path || <span className="devports-na">—</span>}
-                </code>
-                {info.path && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={() => onCopyPath(info.path)}
-                    title={t("ports.copy")}
+      ) : filteredPorts.length === 0 ? (
+        <div className="ports-empty">
+          <Search size={22} className="ports-empty-icon" />
+          <span>{t("ports.noMatch")}</span>
+        </div>
+      ) : (
+        <div className="ports-table">
+          <div className="ports-table-header">
+            <span>{t("ports.proto")}</span>
+            <span>{t("ports.localAddress")}</span>
+            <span>{t("ports.remoteAddress")}</span>
+            <span>{t("ports.state")}</span>
+            <span style={{ textAlign: "right" }}>{t("ports.pid")}</span>
+            <span>{t("ports.process")}</span>
+            <span>{t("ports.actions")}</span>
+          </div>
+          <div className="ports-table-body">
+            {filteredPorts.map((p, i) => {
+              const key = `${p.proto}-${p.local_addr}-${p.local_port}-${p.pid}-${i}`;
+              const info = pidMap[p.pid];
+              const isOpen = expanded.has(key);
+              const hasDetail = p.pid !== 0;
+              return (
+                <Fragment key={key}>
+                  <div
+                    className={`ports-table-row ${isOpen ? "open" : ""}`}
+                    onClick={hasDetail ? () => toggleRow(key) : undefined}
+                    style={hasDetail ? { cursor: "pointer" } : undefined}
                   >
-                    <ClipboardCopy size={12} />
-                  </button>
-                )}
-              </div>
-            </div>
-            {info.services && (
-              <div className="devports-detail-row devports-detail-grow">
-                <span className="devports-detail-label">{t("ports.proto")}</span>
-                <div className="devports-services">
-                  {info.services.split(", ").map((s, idx) => (
-                    <span key={idx} className="tag tag-service">
-                      {s}
+                    <span>
+                      <span className={`tag tag-${(p.proto || "").toLowerCase()}`}>
+                        {p.proto || "?"}
+                      </span>
                     </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="devports-detail-row">
-              <span className="devports-detail-label">{t("ports.memory")}</span>
-              <span className="devports-detail-value">{info.memory || "—"}</span>
-            </div>
+                    <span className="ports-monospace ports-proc-main">
+                      {p.local_addr}:{p.local_port}
+                    </span>
+                    <span className="ports-monospace ports-proc-main">
+                      {p.remote_addr}:{p.remote_port || "*"}
+                    </span>
+                    <span>
+                      <StateBadge state={p.state} />
+                    </span>
+                    <span className="ports-monospace" style={{ textAlign: "right", color: "var(--text-2, #8b949e)" }}>
+                      {p.pid}
+                    </span>
+                    <span>
+                      {!hasDetail ? (
+                        <span className="ports-na">—</span>
+                      ) : !info ? (
+                        <span className="ports-proc-main">#{p.pid}</span>
+                      ) : (
+                        <>
+                          <span className="ports-proc-main">{info.name || `#${p.pid}`}</span>
+                          {info.path && (
+                            <span className="ports-proc-path">{shortPath(info.path)}</span>
+                          )}
+                        </>
+                      )}
+                    </span>
+                    <span onClick={(e) => e.stopPropagation()}>
+                      {hasDetail && (
+                        <button
+                          type="button"
+                          className="ports-kill-btn"
+                          onClick={() => handleKill(p.pid, info?.name || "")}
+                          disabled={killing === p.pid}
+                          title={t("ports.kill")}
+                        >
+                          {killing === p.pid ? (
+                            <Loader2 size={13} className="spin" />
+                          ) : (
+                            <Skull size={13} />
+                          )}
+                        </button>
+                      )}
+                    </span>
+                  </div>
+
+                  {isOpen && info && (
+                    <div className="ports-table-row expanded-row">
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <div className="ports-detail-grid">
+                          <div className="ports-detail-row">
+                            <span className="ports-detail-label">{t("ports.process")}</span>
+                            <span className="ports-detail-value">{info.name || `#${p.pid}`}</span>
+                          </div>
+                          <div className="ports-detail-row">
+                            <span className="ports-detail-label">{t("ports.localAddress")}</span>
+                            <div className="ports-detail-path-wrap">
+                              <code className="devtools-pre ports-detail-path">
+                                {info.path || <span className="ports-na">—</span>}
+                              </code>
+                              {info.path && (
+                                <button
+                                  type="button"
+                                  className="ports-icon-btn"
+                                  onClick={() => handleCopyPath(info.path)}
+                                  title={t("ports.copy")}
+                                >
+                                  <ClipboardCopy size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {info.services && (
+                            <div className="ports-detail-row">
+                              <span className="ports-detail-label">{t("ports.services")}</span>
+                              <div className="ports-services">
+                                {info.services.split(", ").map((s, idx) => (
+                                  <span key={idx} className="tag tag-service">
+                                    {s}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <div className="ports-detail-row">
+                            <span className="ports-detail-label">{t("ports.memory")}</span>
+                            <span className="ports-detail-value">{info.memory || "—"}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </Fragment>
+              );
+            })}
           </div>
         </div>
       )}

@@ -155,29 +155,32 @@ function EncoderTool() {
 
         <button
           type="button"
-          className="encoder-icon-btn"
+          className="encoder-action-btn"
           onClick={swap}
           title={t("encoder.swap")}
         >
           <ArrowRightLeft size={14} />
+          <span>{t("encoder.swap")}</span>
         </button>
         <button
           type="button"
-          className="encoder-icon-btn"
+          className="encoder-action-btn primary"
           onClick={() => void handleCopy()}
           disabled={!output}
           title={t("encoder.copy")}
         >
           <ClipboardCopy size={14} />
+          <span>{t("encoder.copy")}</span>
         </button>
         <button
           type="button"
-          className="encoder-icon-btn"
+          className="encoder-action-btn"
           onClick={() => setInput("")}
           disabled={!input}
           title={t("encoder.clear")}
         >
           <Eraser size={14} />
+          <span>{t("encoder.clear")}</span>
         </button>
       </div>
 

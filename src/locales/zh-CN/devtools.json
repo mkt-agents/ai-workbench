@@ -56,7 +56,7 @@
     "copy": "复制结果",
     "copied": "已复制",
     "sample": "在此输入要编码/解码的文本…",
-    "swap": "交换输入输出",
+    "swap": "交换",
     "chars": "字符",
     "bytes": "字节"
   },
@@ -166,6 +166,7 @@
     "title": "JWT",
     "description": "解析 JWT（仅解码 Header 与 Payload，不校验签名）",
     "token": "Token",
+    "result": "结果",
     "header": "Header",
     "payload": "Payload",
     "signature": "Signature（原样保留）",

@@ -105,7 +105,7 @@ function tryRepairJson(input: string): string | null {
       "null"
     ),
 
-    // 6) Strip JSONC comments (line and block)
+    // 6) Strip JSONC comment (line and block)
     (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n\r]*/g, ""),
 
     // 7) Hex literals -> decimal
@@ -489,79 +489,105 @@ function JsonTool() {
   };
 
   return (
-    <div className="devtools-tool json-tool-with-history">
-      {/* Toolbar */}
-      <div className="devtools-actions">
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleFormat}>
-          {t("json.format")}
-        </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleCompress}>
-          {t("json.compress")}
-        </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleRepair}>
-          {t("json.repair")}
-        </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleEscape}>
-          {t("json.escape")}
-        </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleUnescape}>
-          {t("json.unescape")}
-        </button>
+    <div className="devtools-tool json-tool-with-history json-tool">
+      {/* ── Toolbar ── */}
+      <div className="json-toolbar">
+        <div className="json-toolbar-group">
+          <button type="button" className="json-action-btn" onClick={handleFormat}>
+            {t("json.format")}
+          </button>
+          <button type="button" className="json-action-btn" onClick={handleCompress}>
+            {t("json.compress")}
+          </button>
+          <button type="button" className="json-action-btn" onClick={handleRepair}>
+            {t("json.repair")}
+          </button>
+        </div>
+
+        <div className="json-toolbar-divider" />
+
+        <div className="json-toolbar-group">
+          <button type="button" className="json-action-btn" onClick={handleEscape}>
+            {t("json.escape")}
+          </button>
+          <button type="button" className="json-action-btn" onClick={handleUnescape}>
+            {t("json.unescape")}
+          </button>
+        </div>
+
+        <div className="json-toolbar-divider" />
+
+        <div className="json-toolbar-group">
+          <button
+            type="button"
+            className="json-action-btn"
+            onClick={() => setInput(SAMPLE_JSON)}
+          >
+            <FileJson size={13} />
+            <span>{t("json.sample")}</span>
+          </button>
+        </div>
+
+        <div className="json-toolbar-spacer" />
+
         <button
           type="button"
-          className="btn btn-secondary btn-small"
-          onClick={() => setInput(SAMPLE_JSON)}
-        >
-          <FileJson size={14} />
-          {t("json.sample")}
-        </button>
-        <div className="devtools-actions-spacer" />
-        <button
-          type="button"
-          className={`btn btn-small ${showHistory ? "btn-primary" : "btn-secondary"}`}
+          className={`json-action-btn ${showHistory ? "active" : ""}`}
           onClick={() => setShowHistory(!showHistory)}
         >
-          <History size={14} />
-          {t("json.history")} ({history.length})
-        </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleCopyInput}>
-          <ClipboardCopy size={14} />
-          {t("json.copyInput")}
-        </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleCopy}>
-          <ClipboardCopy size={14} />
-          {t("json.copy")}
+          <History size={13} />
+          <span>{t("json.history")}</span>
+          <span className="json-history-count">{history.length}</span>
         </button>
         <button
           type="button"
-          className="btn btn-secondary btn-small"
+          className="json-action-btn"
+          onClick={handleCopyInput}
+          title={t("json.copyInput")}
+        >
+          <ClipboardCopy size={14} />
+          <span>{t("json.copyInput")}</span>
+        </button>
+        <button
+          type="button"
+          className="json-action-btn primary"
+          onClick={handleCopy}
+          title={t("json.copy")}
+        >
+          <ClipboardCopy size={14} />
+          <span>{t("json.copy")}</span>
+        </button>
+        <button
+          type="button"
+          className="json-action-btn"
           onClick={() => {
             setInput("");
             setPath("");
           }}
+          title={t("json.clear")}
         >
           <Eraser size={14} />
-          {t("json.clear")}
+          <span>{t("json.clear")}</span>
         </button>
       </div>
 
-      {/* Message */}
+      {/* ── Status ── */}
       {message && (
-        <div className={`runtime-msg ${message.type}`}>
+        <div className={`json-status ${message.type}`}>
           {message.type === "success" ? (
-            <Check size={14} />
+            <Check size={13} />
           ) : (
-            <Code2 size={14} />
+            <Code2 size={13} />
           )}
           <span>{message.text}</span>
         </div>
       )}
 
-      {/* JSONPath query bar */}
+      {/* ── JSONPath query bar ── */}
       <div className="json-path-bar">
         <Route size={14} className="json-path-icon" />
         <input
-          className="devtools-input"
+          className="json-input"
           value={path}
           onChange={(e) => setPath(e.target.value)}
           placeholder={t("json.pathHint")}
@@ -570,22 +596,23 @@ function JsonTool() {
         {path && (
           <button
             type="button"
-            className="btn btn-secondary btn-small icon-only"
+            className="json-icon-btn"
             onClick={() => setPath("")}
+            title={t("json.clear")}
           >
             <Eraser size={12} />
           </button>
         )}
       </div>
 
-      {/* Main area: IO panes + optional history sidebar */}
+      {/* ── Main area: IO panes + optional history sidebar ── */}
       <div className="json-main-area">
         <div className={`json-io-area ${showHistory ? "with-sidebar" : ""}`}>
           {/* IO panes */}
-          <div className="devtools-io">
-            <div className="devtools-io-pane">
-              <div className="io-header">
-                <label className="devtools-label">{t("json.input")}</label>
+          <div className="json-io">
+            <div className="json-pane">
+              <div className="json-pane-header">
+                <span className="json-pane-title">{t("json.input")}</span>
                 {stats && (
                   <span className="json-stats">
                     {t("json.stats")
@@ -595,23 +622,23 @@ function JsonTool() {
                 )}
               </div>
               <textarea
-                className="devtools-textarea"
+                className="json-textarea"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={t("json.samplePlaceholder")}
                 spellCheck={false}
               />
             </div>
-            <div className="devtools-io-pane">
-              <div className="io-header">
-                <label className="devtools-label">
+            <div className="json-pane">
+              <div className="json-pane-header">
+                <span className="json-pane-title">
                   {queryResult ? `${t("json.output")} · ${t("json.path")}` : t("json.output")}
-                </label>
+                </span>
                 {parsed.ok && queryResult && (
                   <span className="json-stats tag tag-tcp">JSONPath</span>
                 )}
               </div>
-              <pre className={`devtools-pre json-output ${parsed.ok ? "ok" : input.trim() ? "err" : ""}`}>
+              <pre className={`json-output ${parsed.ok ? "ok" : input.trim() ? "err" : ""}`}>
                 <code>{outputText}</code>
               </pre>
             </div>
@@ -627,22 +654,23 @@ function JsonTool() {
                 </span>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-small icon-only"
+                  className="json-icon-btn"
                   onClick={() => setCompareId(null)}
+                  title={t("json.clear")}
                 >
                   <Eraser size={12} />
                 </button>
               </div>
-              <div className="devtools-io">
-                <div className="devtools-io-pane">
-                  <label className="devtools-label">{t("json.input")}</label>
-                  <pre className="devtools-pre json-output ok compare-pre">
+              <div className="json-compare-io">
+                <div className="json-pane">
+                  <span className="json-pane-title">{t("json.input")}</span>
+                  <pre className="json-output ok compare-pre">
                     <code>{prettyForDisplay(compareItem.input)}</code>
                   </pre>
                 </div>
-                <div className="devtools-io-pane">
-                  <label className="devtools-label">{t("json.output")}</label>
-                  <pre className="devtools-pre json-output ok compare-pre">
+                <div className="json-pane">
+                  <span className="json-pane-title">{t("json.output")}</span>
+                  <pre className="json-output ok compare-pre">
                     <code>{prettyForDisplay(compareOutput)}</code>
                   </pre>
                 </div>
@@ -653,7 +681,7 @@ function JsonTool() {
 
         {/* History sidebar */}
         {showHistory && (
-          <div className="json-history-panel">
+          <div className="json-history">
             <div className="json-history-header">
               <span className="json-history-title">
                 <History size={13} />
@@ -662,7 +690,7 @@ function JsonTool() {
               {history.length > 0 && (
                 <button
                   type="button"
-                  className="btn btn-secondary btn-small icon-only"
+                  className="json-icon-btn"
                   onClick={clearHistory}
                   title={t("json.clearHistory")}
                 >
@@ -696,7 +724,7 @@ function JsonTool() {
                     <div className="json-history-item-actions">
                       <button
                         type="button"
-                        className="btn btn-secondary btn-small icon-only"
+                        className="json-history-icon-btn"
                         onClick={() => setCompareId(compareId === item.id ? null : item.id)}
                         title={t("json.compare")}
                       >
@@ -704,7 +732,7 @@ function JsonTool() {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-small icon-only"
+                        className="json-history-icon-btn danger"
                         onClick={() => deleteHistory(item.id)}
                         title={t("json.delete")}
                       >
