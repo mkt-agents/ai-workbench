@@ -44,6 +44,7 @@
     "title": "Encoder",
     "description": "Base64 / URL encode and decode (UTF-8 safe)",
     "mode": "Mode",
+    "direction": "Direction",
     "encode": "Encode",
     "decode": "Decode",
     "input": "Input",

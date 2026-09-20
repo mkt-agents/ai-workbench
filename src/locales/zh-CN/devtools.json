@@ -44,6 +44,7 @@
     "title": "编解码",
     "description": "Base64 / URL 编解码（UTF-8 安全）",
     "mode": "模式",
+    "direction": "方向",
     "encode": "编码",
     "decode": "解码",
     "input": "输入",

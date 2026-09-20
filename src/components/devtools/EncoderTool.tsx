@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Code2, Eraser, ArrowRightLeft } from "lucide-react";
+import {
+  ArrowRightLeft,
+  Check,
+  ChevronRight,
+  ClipboardCopy,
+  Code2,
+  Eraser,
+} from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 type Mode = "base64" | "url" | "base64url";
@@ -89,106 +96,142 @@ function EncoderTool() {
 
   const inputBytes = useMemo(() => new Blob([input]).size, [input]);
 
+  const modeLabel = mode === "base64" ? "Base64" : mode === "base64url" ? "Base64URL" : "URL";
+
   return (
-    <div className="devtools-tool">
-      <div className="devtools-row">
-        <div className="devtools-segmented">
-          <button
-            type="button"
-            className={`segmented-item ${mode === "base64" ? "active" : ""}`}
-            onClick={() => setMode("base64")}
-          >
-            {t("encoder.base64")}
-          </button>
-          <button
-            type="button"
-            className={`segmented-item ${mode === "base64url" ? "active" : ""}`}
-            onClick={() => setMode("base64url")}
-          >
-            Base64URL
-          </button>
-          <button
-            type="button"
-            className={`segmented-item ${mode === "url" ? "active" : ""}`}
-            onClick={() => setMode("url")}
-          >
-            {t("encoder.url")}
-          </button>
+    <div className="devtools-tool encoder-tool">
+      {/* ── Toolbar ── */}
+      <div className="encoder-toolbar">
+        <div className="encoder-toolbar-group">
+          <span className="encoder-toolbar-label">{t("encoder.mode")}</span>
+          <div className="encoder-segmented">
+            <button
+              type="button"
+              className={`encoder-seg-item ${mode === "base64" ? "active" : ""}`}
+              onClick={() => setMode("base64")}
+            >
+              Base64
+            </button>
+            <button
+              type="button"
+              className={`encoder-seg-item ${mode === "base64url" ? "active" : ""}`}
+              onClick={() => setMode("base64url")}
+            >
+              Base64URL
+            </button>
+            <button
+              type="button"
+              className={`encoder-seg-item ${mode === "url" ? "active" : ""}`}
+              onClick={() => setMode("url")}
+            >
+              URL
+            </button>
+          </div>
         </div>
-        <div className="devtools-segmented">
-          <button
-            type="button"
-            className={`segmented-item ${direction === "encode" ? "active" : ""}`}
-            onClick={() => setDirection("encode")}
-          >
-            {t("encoder.encode")}
-          </button>
-          <button
-            type="button"
-            className={`segmented-item ${direction === "decode" ? "active" : ""}`}
-            onClick={() => setDirection("decode")}
-          >
-            {t("encoder.decode")}
-          </button>
+
+        <div className="encoder-toolbar-divider" />
+
+        <div className="encoder-toolbar-group">
+          <span className="encoder-toolbar-label">{t("encoder.direction")}</span>
+          <div className="encoder-segmented">
+            <button
+              type="button"
+              className={`encoder-seg-item ${direction === "encode" ? "active" : ""}`}
+              onClick={() => setDirection("encode")}
+            >
+              {t("encoder.encode")}
+            </button>
+            <button
+              type="button"
+              className={`encoder-seg-item ${direction === "decode" ? "active" : ""}`}
+              onClick={() => setDirection("decode")}
+            >
+              {t("encoder.decode")}
+            </button>
+          </div>
         </div>
+
+        <div className="encoder-toolbar-spacer" />
+
         <button
           type="button"
-          className="btn btn-secondary btn-small"
+          className="encoder-icon-btn"
           onClick={swap}
           title={t("encoder.swap")}
         >
           <ArrowRightLeft size={14} />
         </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={handleCopy}>
+        <button
+          type="button"
+          className="encoder-icon-btn"
+          onClick={() => void handleCopy()}
+          disabled={!output}
+          title={t("encoder.copy")}
+        >
           <ClipboardCopy size={14} />
-          {t("encoder.copy")}
         </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={() => setInput("")}>
+        <button
+          type="button"
+          className="encoder-icon-btn"
+          onClick={() => setInput("")}
+          disabled={!input}
+          title={t("encoder.clear")}
+        >
           <Eraser size={14} />
-          {t("encoder.clear")}
         </button>
       </div>
 
+      {/* ── Status ── */}
       {hasError && (
-        <div className="runtime-msg error">
-          <Code2 size={14} />
+        <div className="encoder-status error">
+          <Code2 size={13} />
           <span>{t("encoder.invalid")}</span>
         </div>
       )}
-      {message && (
-        <div className={`runtime-msg ${message.type}`}>
-          {message.type === "success" ? <Check size={14} /> : <Code2 size={14} />}
+      {message && !hasError && (
+        <div className={`encoder-status ${message.type}`}>
+          {message.type === "success" ? <Check size={13} /> : <Code2 size={13} />}
           <span>{message.text}</span>
         </div>
       )}
 
-      <div className="devtools-io">
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">{t("encoder.input")}</label>
-            <span className="json-stats">
-              {input.length} {t("encoder.chars")} · {inputBytes} {t("encoder.bytes")}
-            </span>
+      {/* ── IO ── */}
+      <div className="encoder-io">
+        <div className="encoder-pane">
+          <div className="encoder-pane-header">
+            <span className="encoder-pane-title">{t("encoder.input")}</span>
+            {input && (
+              <span className="encoder-stats">
+                {input.length} {t("encoder.chars")} · {inputBytes} {t("encoder.bytes")}
+              </span>
+            )}
           </div>
           <textarea
-            className="devtools-textarea"
+            className="encoder-textarea"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={t("encoder.sample")}
             spellCheck={false}
           />
         </div>
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">{t("encoder.output")}</label>
+
+        <div className="encoder-flow-indicator">
+          <ChevronRight size={16} />
+          <span className="encoder-flow-tag">{modeLabel}</span>
+          <ChevronRight size={16} />
+        </div>
+
+        <div className="encoder-pane">
+          <div className="encoder-pane-header">
+            <span className="encoder-pane-title">{t("encoder.output")}</span>
             {output && (
-              <span className="json-stats">
+              <span className="encoder-stats">
                 {output.length} {t("encoder.chars")}
               </span>
             )}
           </div>
           <textarea
-            className="devtools-textarea"
+            className="encoder-textarea output"
             value={output}
             readOnly
             placeholder={t("encoder.sample")}
