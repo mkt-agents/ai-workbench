@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Braces,
+  CalendarClock,
   Clock,
   Code2,
   Globe,
@@ -16,6 +17,7 @@ import {
 import JsonTool from "./devtools/JsonTool";
 import EncoderTool from "./devtools/EncoderTool";
 import TimestampTool from "./devtools/TimestampTool";
+import CronTool from "./devtools/CronTool";
 import UuidTool from "./devtools/UuidTool";
 import JwtTool from "./devtools/JwtTool";
 import RegexTool from "./devtools/RegexTool";
@@ -43,6 +45,7 @@ const TOOL_GROUPS: ToolGroup[] = [
       { id: "json", labelKey: "json.title", icon: <Braces size={16} />, descriptionKey: "json.description" },
       { id: "encoder", labelKey: "encoder.title", icon: <Code2 size={16} />, descriptionKey: "encoder.description" },
       { id: "timestamp", labelKey: "timestamp.title", icon: <Clock size={16} />, descriptionKey: "timestamp.description" },
+      { id: "cron", labelKey: "cron.title", icon: <CalendarClock size={16} />, descriptionKey: "cron.description" },
     ],
   },
   {
@@ -129,6 +132,8 @@ function DevTools() {
         return <EncoderTool />;
       case "timestamp":
         return <TimestampTool />;
+      case "cron":
+        return <CronTool />;
       case "uuid":
         return <UuidTool />;
       case "jwt":
