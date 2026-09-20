@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardCopy, Clock, Eraser, History, Timer } from "lucide-react";
+import {
+  Calendar,
+  Check,
+  ClipboardCopy,
+  Clock,
+  Copy,
+  History,
+  Timer,
+} from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 
 type Unit = "seconds" | "milliseconds" | "microseconds";
@@ -32,11 +40,6 @@ function relativeTime(msDiff: number, t: (k: string) => string): string {
   return future ? `${text} ${t("timestamp.future")}` : `${text} ${t("timestamp.past")}`;
 }
 
-/** Format a date in RFC 2822 style. */
-function toRFC2822(d: Date): string {
-  return d.toUTCString();
-}
-
 function TimestampTool() {
   const { t } = useTranslation("devtools");
   const copy = useGlobalStore((s) => s.invokeCopyToClipboard);
@@ -63,7 +66,6 @@ function TimestampTool() {
     const n = Number(tsInput);
     if (!Number.isFinite(n) || tsInput.trim() === "")
       return { ok: false as const, result: "", local: "", ms: 0, date: null as Date | null };
-    // Interpret based on the selected unit
     let ms: number;
     if (unit === "microseconds") ms = n / 1000;
     else if (unit === "milliseconds") ms = n;
@@ -107,64 +109,67 @@ function TimestampTool() {
     setDateInput(new Date().toISOString().slice(0, 19));
   };
 
+  const currentNowValue = unit === "microseconds"
+    ? String(Math.floor(now * 1000))
+    : unit === "milliseconds"
+      ? String(now)
+      : String(Math.floor(now / 1000));
+
   return (
-    <div className="devtools-toolbar">
-      {/* Live clock bar */}
+    <div className="devtools-tool ts-tool">
+      {/* ── Live clock bar ── */}
       <div className="ts-live-clock">
-        <Timer size={14} />
-        <span className="ts-live-label">{t("timestamp.now")}</span>
-        <code className="ts-live-value">
-          {unit === "microseconds"
-            ? String(Math.floor(now * 1000))
-            : unit === "milliseconds"
-              ? String(now)
-              : String(Math.floor(now / 1000))}
-        </code>
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          onClick={() =>
-            handleCopy(
-              unit === "microseconds"
-                ? String(Math.floor(now * 1000))
-                : unit === "milliseconds"
-                  ? String(now)
-                  : String(Math.floor(now / 1000)),
-            )
-          }
-        >
-          <ClipboardCopy size={12} />
-        </button>
-        <div className="devtools-actions-spacer" />
-        <div className="devtools-segmented">
-          {(["seconds", "milliseconds", "microseconds"] as Unit[]).map((u) => (
-            <button
-              key={u}
-              type="button"
-              className={`segmented-item ${unit === u ? "active" : ""}`}
-              onClick={() => setUnit(u)}
-            >
-              {t(`timestamp.${u}`)}
-            </button>
-          ))}
+        <div className="ts-live-left">
+          <div className="ts-live-icon">
+            <Timer size={14} />
+          </div>
+          <span className="ts-live-label">{t("timestamp.now")}</span>
+          <code className="ts-live-value">{currentNowValue}</code>
+        </div>
+        <div className="ts-live-right">
+          <button
+            type="button"
+            className="ts-now-btn"
+            onClick={() => void handleCopy(currentNowValue)}
+            title={t("timestamp.copy")}
+          >
+            <ClipboardCopy size={12} />
+          </button>
+          <div className="ts-segmented">
+            {(["seconds", "milliseconds", "microseconds"] as Unit[]).map((u) => (
+              <button
+                key={u}
+                type="button"
+                className={`ts-seg-item ${unit === u ? "active" : ""}`}
+                onClick={() => setUnit(u)}
+              >
+                {t(`timestamp.${u}`)}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
+      {/* ── Status ── */}
       {message && (
-        <div className={`runtime-msg ${message.type}`}>
-          {message.type === "success" ? <Check size={14} /> : <Clock size={14} />}
+        <div className={`ts-status ${message.type}`}>
+          {message.type === "success" ? <Check size={13} /> : <Clock size={13} />}
           <span>{message.text}</span>
         </div>
       )}
 
-      <div className="devtools-io">
+      {/* ── IO panes ── */}
+      <div className="ts-io">
         {/* Timestamp → Date */}
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">{t("timestamp.timestamp")}</label>
+        <div className="ts-pane">
+          <div className="ts-pane-header">
+            <div className="ts-pane-title">
+              <Timer size={12} />
+              {t("timestamp.timestamp")}
+            </div>
             <button
               type="button"
-              className="btn btn-secondary btn-small"
+              className="ts-now-btn"
               onClick={setToNow}
               title={t("timestamp.now")}
             >
@@ -173,7 +178,7 @@ function TimestampTool() {
             </button>
           </div>
           <input
-            className="devtools-input"
+            className="ts-input"
             value={tsInput}
             onChange={(e) => setTsInput(e.target.value)}
             placeholder="1700000000"
@@ -190,10 +195,10 @@ function TimestampTool() {
                 {dateFromTs.ok && (
                   <button
                     type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(dateFromTs.result)}
+                    className="ts-icon-btn"
+                    onClick={() => void handleCopy(dateFromTs.result)}
                   >
-                    <ClipboardCopy size={11} />
+                    <Copy size={11} />
                   </button>
                 )}
               </div>
@@ -208,29 +213,28 @@ function TimestampTool() {
                 {dateFromTs.ok && (
                   <button
                     type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(dateFromTs.local)}
+                    className="ts-icon-btn"
+                    onClick={() => void handleCopy(dateFromTs.local)}
                   >
-                    <ClipboardCopy size={11} />
+                    <Copy size={11} />
                   </button>
                 )}
               </div>
             </div>
 
-            {/* RFC 2822 format */}
             {dateFromTs.ok && dateFromTs.date && (
               <div className="ts-output-row">
                 <span className="ts-output-label">RFC 2822</span>
                 <div className="ts-output-value-wrap">
                   <code className="ts-output-value">
-                    {toRFC2822(dateFromTs.date)}
+                    {dateFromTs.date.toUTCString()}
                   </code>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(toRFC2822(dateFromTs.date!))}
+                    className="ts-icon-btn"
+                    onClick={() => void handleCopy(dateFromTs.date!.toUTCString())}
                   >
-                    <ClipboardCopy size={11} />
+                    <Copy size={11} />
                   </button>
                 </div>
               </div>
@@ -238,67 +242,64 @@ function TimestampTool() {
 
             <div className="ts-output-row">
               <span className="ts-output-label">
-                <History size={11} className="ts-label-icon" />
+                <History size={11} />
                 {t("timestamp.relative")}
               </span>
               <div className="ts-output-value-wrap">
                 <code className="ts-output-value">
-                  {dateFromTs.ok
-                    ? relativeTime(dateFromTs.ms - now, t)
-                    : "—"}
+                  {dateFromTs.ok ? relativeTime(dateFromTs.ms - now, t) : "—"}
                 </code>
               </div>
             </div>
+          </div>
 
-            {/* All units at a glance */}
+          {/* All units at a glance */}
+          {dateFromTs.ok && (
             <div className="ts-all-units">
               <div className="ts-all-unit">
                 <span>{t("timestamp.seconds")}</span>
                 <code>
-                  {dateFromTs.ok
-                    ? unit === "seconds"
-                      ? tsInput
-                      : unit === "milliseconds"
-                        ? String(Math.floor(Number(tsInput) / 1000))
-                        : String(Math.floor(Number(tsInput) / 1e6))
-                    : "—"}
+                  {unit === "seconds"
+                    ? tsInput
+                    : unit === "milliseconds"
+                      ? String(Math.floor(Number(tsInput) / 1000))
+                      : String(Math.floor(Number(tsInput) / 1e6))}
                 </code>
               </div>
               <div className="ts-all-unit">
                 <span>{t("timestamp.milliseconds")}</span>
                 <code>
-                  {dateFromTs.ok
-                    ? unit === "milliseconds"
-                      ? tsInput
-                      : unit === "seconds"
-                        ? String(Number(tsInput) * 1000)
-                        : String(Math.floor(Number(tsInput) / 1000))
-                    : "—"}
+                  {unit === "milliseconds"
+                    ? tsInput
+                    : unit === "seconds"
+                      ? String(Number(tsInput) * 1000)
+                      : String(Math.floor(Number(tsInput) / 1000))}
                 </code>
               </div>
               <div className="ts-all-unit">
                 <span>{t("timestamp.microseconds")}</span>
                 <code>
-                  {dateFromTs.ok
-                    ? unit === "microseconds"
-                      ? tsInput
-                      : unit === "milliseconds"
-                        ? String(Number(tsInput) * 1000)
-                        : String(Number(tsInput) * 1e6)
-                    : "—"}
+                  {unit === "microseconds"
+                    ? tsInput
+                    : unit === "milliseconds"
+                      ? String(Number(tsInput) * 1000)
+                      : String(Number(tsInput) * 1e6)}
                 </code>
               </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Date → Timestamp */}
-        <div className="devtools-io-pane">
-          <div className="io-header">
-            <label className="devtools-label">{t("timestamp.date")}</label>
+        <div className="ts-pane">
+          <div className="ts-pane-header">
+            <div className="ts-pane-title">
+              <Calendar size={12} />
+              {t("timestamp.date")}
+            </div>
             <button
               type="button"
-              className="btn btn-secondary btn-small"
+              className="ts-now-btn"
               onClick={setToNow}
             >
               <Clock size={12} />
@@ -306,7 +307,7 @@ function TimestampTool() {
             </button>
           </div>
           <input
-            className="devtools-input"
+            className="ts-input"
             type="datetime-local"
             step="1"
             value={dateInput}
@@ -323,10 +324,10 @@ function TimestampTool() {
                 {tsFromDate.ok && (
                   <button
                     type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(tsFromDate.seconds)}
+                    className="ts-icon-btn"
+                    onClick={() => void handleCopy(tsFromDate.seconds)}
                   >
-                    <ClipboardCopy size={11} />
+                    <Copy size={11} />
                   </button>
                 )}
               </div>
@@ -340,10 +341,10 @@ function TimestampTool() {
                 {tsFromDate.ok && (
                   <button
                     type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(tsFromDate.milliseconds)}
+                    className="ts-icon-btn"
+                    onClick={() => void handleCopy(tsFromDate.milliseconds)}
                   >
-                    <ClipboardCopy size={11} />
+                    <Copy size={11} />
                   </button>
                 )}
               </div>
@@ -357,30 +358,16 @@ function TimestampTool() {
                 {tsFromDate.ok && (
                   <button
                     type="button"
-                    className="btn btn-secondary btn-small icon-only"
-                    onClick={() => handleCopy(tsFromDate.microseconds)}
+                    className="ts-icon-btn"
+                    onClick={() => void handleCopy(tsFromDate.microseconds)}
                   >
-                    <ClipboardCopy size={11} />
+                    <Copy size={11} />
                   </button>
                 )}
               </div>
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="ts-footer">
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          onClick={() => {
-            setTsInput("");
-            setDateInput("");
-          }}
-        >
-          <Eraser size={14} />
-          {t("timestamp.clear")}
-        </button>
       </div>
     </div>
   );
