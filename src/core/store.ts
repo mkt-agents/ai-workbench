@@ -6,7 +6,8 @@ import type {
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
   TestProject, ProjectDetectionResult, TestRunResult, TestHistoryEntry, CoverageReport,
-  ChangeReportBundle, ChangeReportSummary, StoredChangeReport,
+  ChangeReportBundle, ChangeReportSummary, StoredChangeReport, ScannedProject,
+  TestSelection, ScenarioSummary,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -324,7 +325,8 @@ interface StoreState extends GlobalState, Invocations {
   updateTestProject: (id: string, updates: Partial<TestProject>) => Promise<void>;
   deleteTestProject: (id: string) => Promise<void>;
   detectProjectType: (path: string) => Promise<ProjectDetectionResult>;
-  scanTestProjects: (basePath: string) => Promise<ProjectDetectionResult[]>;
+  scanTestProjects: (basePath: string, maxDepth?: number) => Promise<ScannedProject[]>;
+  addTestProjects: (projects: Omit<TestProject, 'id' | 'createdAt' | 'updatedAt'>[]) => Promise<number>;
   runTest: (projectId: string, args?: string) => Promise<TestRunResult>;
   getTestHistory: (projectId?: string) => Promise<TestHistoryEntry[]>;
   generateTestCode: (sourceCode: string, filePath: string, framework: string, coverageLevel: string, mockStrategy: string, assertStyle: string) => Promise<string>;
@@ -339,6 +341,17 @@ interface StoreState extends GlobalState, Invocations {
   getChangeReport: (reportId: string) => Promise<StoredChangeReport>;
   deleteChangeReport: (reportId: string) => Promise<void>;
   generateChangeReportAi: (reportId: string) => Promise<string>;
+  selectChangeTests: (reportId: string, only?: string[]) => Promise<TestSelection>;
+  generateChangeScenarios: (reportId: string) => Promise<number>;
+  addChangeScenario: (reportId: string, title: string) => Promise<number>;
+  setScenarioStatus: (
+    scenarioId: number,
+    status: string,
+    note?: string,
+    runId?: string
+  ) => Promise<ScenarioSummary>;
+  deleteChangeScenario: (scenarioId: number) => Promise<void>;
+  linkChangeRun: (reportId: string, runId: string) => Promise<void>;
 
   // Initialize
   initialize: () => Promise<void>;
@@ -1320,8 +1333,22 @@ export const useGlobalStore = create<StoreState>()(
         return await tauriInvoke<ProjectDetectionResult>('detect_project_type', { path });
       },
 
-      scanTestProjects: async (basePath: string) => {
-        return await tauriInvoke<ProjectDetectionResult[]>('scan_test_projects', { basePath });
+      scanTestProjects: async (basePath: string, maxDepth?: number) => {
+        return await tauriInvoke<ScannedProject[]>('scan_test_projects', { basePath, maxDepth });
+      },
+
+      // One round trip for the whole batch: the backend inserts them in a transaction.
+      addTestProjects: async (projects) => {
+        const now = new Date().toISOString();
+        const rows = projects.map((project) => ({
+          ...project,
+          id: crypto.randomUUID(),
+          createdAt: now,
+          updatedAt: now,
+        }));
+        const added = await tauriInvoke<number>('add_test_projects', { projects: rows });
+        await get().loadTestProjects();
+        return added;
       },
 
       runTest: async (projectId: string, args?: string) => {
@@ -1397,6 +1424,24 @@ export const useGlobalStore = create<StoreState>()(
 
       generateChangeReportAi: async (reportId: string) => {
         return await tauriInvoke<string>('generate_change_report_ai', { reportId });
+      },
+      selectChangeTests: async (reportId: string, only?: string[]) => {
+        return await tauriInvoke<TestSelection>('select_change_tests', { reportId, only });
+      },
+      generateChangeScenarios: async (reportId: string) => {
+        return await tauriInvoke<number>('generate_change_scenarios', { reportId });
+      },
+      addChangeScenario: async (reportId: string, title: string) => {
+        return await tauriInvoke<number>('add_change_scenario', { reportId, title });
+      },
+      setScenarioStatus: async (scenarioId: number, status: string, note?: string, runId?: string) => {
+        return await tauriInvoke<ScenarioSummary>('set_scenario_status', { scenarioId, status, note, runId });
+      },
+      deleteChangeScenario: async (scenarioId: number) => {
+        await tauriInvoke<void>('delete_change_scenario', { scenarioId });
+      },
+      linkChangeRun: async (reportId: string, runId: string) => {
+        await tauriInvoke<void>('link_change_run', { reportId, runId });
       },
 
       // Initialize

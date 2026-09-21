@@ -402,11 +402,43 @@ pub fn test_candidates(path: &str) -> Vec<String> {
         return out;
     }
 
+    if ext == "py" {
+        // pytest layouts vary more than the others, so offer the common shapes:
+        // mirrored `tests/` tree, sibling test file, and a flat `tests/` directory.
+        let stem = name.strip_suffix(".py").unwrap_or(&name);
+        let dir = path.strip_suffix(&name).unwrap_or("");
+        let leaf = format!("test_{}.py", stem);
+        if stem == "__init__" || stem == "conftest" {
+            return out;
+        }
+        out.push(leaf.clone());
+        out.push(format!("tests/{}", leaf));
+        if !dir.is_empty() {
+            out.push(format!("{}{}", dir, leaf));
+            out.push(format!("tests/{}{}", dir, leaf));
+            let mirror = dir
+                .trim_start_matches("./")
+                .rsplit_once('/')
+                .map(|(head, _)| format!("tests/{}/", head))
+                .unwrap_or_else(|| "tests/".to_string());
+            let mirrored = format!("{}{}", mirror, leaf);
+            if !out.contains(&mirrored) {
+                out.push(mirrored);
+            }
+        }
+        return out;
+    }
+
     if ext == "rs" {
         // Inline `#[cfg(test)]` is the common Rust convention and is reported through
-        // `inline_test_files`; a separate integration test file is the other case.
+        // `inline_test_files`; the other shapes are integration test directories —
+        // including a crate that lives in a subdirectory (`src-tauri/src/x.rs` →
+        // `src-tauri/tests/x.rs`), not just at the repo root.
         let stem = name.strip_suffix(".rs").unwrap_or(&name);
         out.push(format!("tests/{}.rs", stem));
+        if let Some(at) = path.find("/src/") {
+            out.push(format!("{}/tests/{}.rs", &path[..at], stem));
+        }
         out.push(format!("src/tests/{}.rs", stem));
         return out;
     }

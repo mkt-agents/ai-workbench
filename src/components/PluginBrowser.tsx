@@ -134,6 +134,41 @@ function loadViewMode(): ViewMode {
   }
 }
 
+/** Generate a consistent gradient color from a string */
+function colorFromString(str: string): [string, string] {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = Math.abs(hash) % 360;
+  return [
+    `hsl(${hue}, 55%, 50%)`,
+    `hsl(${(hue + 30) % 360}, 50%, 40%)`,
+  ];
+}
+
+/** Fallback icon showing the site's initial with a polished gradient background */
+function FallbackIcon({ name, host, size = 14 }: { name: string; host?: string; size?: number }) {
+  const source = host || name || "?";
+  const initial = source.charAt(0).toUpperCase();
+  const [color1, color2] = colorFromString(source);
+  const dimension = size + 6;
+  return (
+    <div
+      className="plugin-fallback-icon"
+      style={{
+        width: dimension,
+        height: dimension,
+        fontSize: Math.max(9, size * 0.65),
+        background: `linear-gradient(145deg, ${color1}, ${color2})`,
+        boxShadow: `inset 0 1px 1px rgba(255,255,255,0.2), 0 2px 4px ${color1}40`,
+      }}
+    >
+      <span className="plugin-fallback-letter">{initial}</span>
+    </div>
+  );
+}
+
 /** Test if a URL matches a userscript match pattern */
 function testMatchPattern(pattern: string, url: string): boolean {
   if (pattern === "<all_urls>") return true;
@@ -1030,7 +1065,7 @@ function PluginBrowser() {
         <div className="plugin-item-icon">
           {parsed ? (
             <img
-              src={`https://www.google.com/s2/favicons?domain=${host}&sz=32`}
+              src={`https://favicon.im/${host}?larger=true`}
               alt=""
               draggable={false}
               onError={(e) => {
@@ -1039,10 +1074,13 @@ function PluginBrowser() {
               }}
             />
           ) : null}
-          <Globe
-            size={14}
-            className={`plugin-item-icon-fallback ${parsed ? "hidden" : ""}`}
-          />
+          <span className={`plugin-fallback-wrapper ${parsed ? "hidden" : ""}`}>
+            {parsed ? (
+              <FallbackIcon name={p.name} host={parsed.hostname} size={14} />
+            ) : (
+              <Globe size={14} />
+            )}
+          </span>
         </div>
         <div className="plugin-item-content">
           <div className="plugin-item-name">
@@ -1127,7 +1165,7 @@ function PluginBrowser() {
           <div className="plugin-card-icon">
             {parsed ? (
               <img
-                src={`https://www.google.com/s2/favicons?domain=${host}&sz=32`}
+                src={`https://favicon.im/${host}?larger=true`}
                 alt=""
                 draggable={false}
                 onError={(e) => {
@@ -1136,10 +1174,13 @@ function PluginBrowser() {
                 }}
               />
             ) : null}
-            <Globe
-              size={20}
-              className={`plugin-item-icon-fallback ${parsed ? "hidden" : ""}`}
-            />
+            <span className={`plugin-fallback-wrapper ${parsed ? "hidden" : ""}`}>
+              {parsed ? (
+                <FallbackIcon name={p.name} host={parsed.hostname} size={20} />
+              ) : (
+                <Globe size={20} />
+              )}
+            </span>
           </div>
           <div className="plugin-card-actions">
             <button

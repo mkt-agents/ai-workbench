@@ -28,9 +28,10 @@ import TestGenerator from "./TestGenerator";
 import FailureDiagnosis from "./FailureDiagnosis";
 import CoverageReportView from "./CoverageReport";
 import ChangeReportModal from "./ChangeReportModal";
+import ScanTestProjectsModal from "./ScanTestProjectsModal";
 import { mapPool, TEST_RUN_CONCURRENCY } from "../core/asyncPool";
 import type {
-  ProjectDetectionResult,
+  ScannedProject,
   TestHistoryEntry,
   TestProject,
   TestRunOutcome,
@@ -86,8 +87,6 @@ const PROJECT_TYPES: TestProject["type"][] = [
 /** Long logs freeze the webview, so the panel renders the tail first. */
 const OUTPUT_PREVIEW_LINES = 300;
 
-const toKey = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-
 const draftOf = (project: TestProject): Draft => ({
   name: project.name,
   path: project.path,
@@ -115,6 +114,7 @@ export default function TestManager() {
   const cancelTestRun = useGlobalStore((s) => s.cancelTestRun);
   const getTestHistory = useGlobalStore((s) => s.getTestHistory);
   const getTestRun = useGlobalStore((s) => s.getTestRun);
+  const linkChangeRun = useGlobalStore((s) => s.linkChangeRun);
   const pickDirectory = useGlobalStore((s) => s.invokePickDirectory);
 
   const [loading, setLoading] = useState(true);
@@ -136,9 +136,7 @@ export default function TestManager() {
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
 
-  const [scanBase, setScanBase] = useState("");
-  const [scanResults, setScanResults] = useState<ProjectDetectionResult[]>([]);
-  const [scanOpen, setScanOpen] = useState(false);
+  const [scan, setScan] = useState<{ rootPath: string; projects: ScannedProject[] } | null>(null);
   const [scanning, setScanning] = useState(false);
 
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
@@ -254,7 +252,7 @@ export default function TestManager() {
   );
 
   const runOne = useCallback(
-    async (project: TestProject, quiet = false): Promise<TestRunResult | null> => {
+    async (project: TestProject, quiet = false, args?: string): Promise<TestRunResult | null> => {
       if (runs[project.id]) return null;
       setRuns((prev) => ({ ...prev, [project.id]: Date.now() }));
       setFocusedId(project.id);
@@ -262,7 +260,7 @@ export default function TestManager() {
       setLive({ projectId: project.id, lines: [] });
       let finished: TestRunResult | null = null;
       try {
-        const result = await runTest(project.id);
+        const result = await runTest(project.id, args);
         finished = result;
         setResults((prev) => ({ ...prev, [project.id]: result }));
         if (!quiet) {
@@ -304,6 +302,23 @@ export default function TestManager() {
       }
     },
     [cancelTestRun, showMsg, t]
+  );
+
+  /**
+   * A run started from a change report: same runner (live output, cancel, elapsed all
+   * keep working), plus the report↔run link so the report can show what it already ran.
+   */
+  const runForReport = useCallback(
+    async (project: TestProject, args: string, reportId: string) => {
+      const result = await runOne(project, false, args || undefined);
+      if (!result) return;
+      try {
+        await linkChangeRun(reportId, result.id);
+      } catch {
+        // Linking is bookkeeping; the run itself already reached the panel.
+      }
+    },
+    [runOne, linkChangeRun]
   );
 
   const handleBatchRun = useCallback(async () => {
@@ -497,40 +512,18 @@ export default function TestManager() {
   const handleScan = useCallback(async () => {
     const dir = await pickDirectory();
     if (!dir) return;
-    setScanBase(dir);
-    setScanOpen(true);
     setScanning(true);
-    setScanResults([]);
     try {
-      setScanResults(await scanTestProjects(dir));
+      // Two levels by default: the common shape is `<picked>/<group>/<module>`.
+      const projects = await scanTestProjects(dir, 2);
+      setScan({ rootPath: dir, projects });
+      if (projects.length === 0) showMsg("success", t("scan.noneFound"));
     } catch (e) {
       showMsg("error", String(e));
-      setScanOpen(false);
     } finally {
       setScanning(false);
     }
-  }, [pickDirectory, scanTestProjects, showMsg]);
-
-  const addFromScan = useCallback(
-    async (result: ProjectDetectionResult) => {
-      if (!result.testCommand) return;
-      try {
-        await addTestProject({
-          name: result.path.split(/[/\\]/).pop() || result.path,
-          path: result.path,
-          type: (result.projectType ?? "custom") as TestProject["type"],
-          framework: result.framework || "custom",
-          testCommand: result.testCommand,
-          enabled: true,
-        });
-        setScanResults((prev) => prev.filter((r) => r.path !== result.path));
-        showMsg("success", t("added"));
-      } catch (e) {
-        showMsg("error", String(e));
-      }
-    },
-    [addTestProject, showMsg, t]
-  );
+  }, [pickDirectory, scanTestProjects, showMsg, t]);
 
   const openHistory = useCallback(
     async (project: TestProject) => {
@@ -564,7 +557,7 @@ export default function TestManager() {
     [getTestRun, showMsg]
   );
 
-  const knownPaths = useMemo(() => new Set(testProjects.map((p) => toKey(p.path))), [testProjects]);  const visibleProjects = useMemo(() => {
+  const visibleProjects = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return testProjects;
     return testProjects.filter(
@@ -752,7 +745,13 @@ export default function TestManager() {
                     {project.lastStatus && (
                       <span
                         className={`tm-chip tm-chip-${project.lastStatus}`}
-                        title={t("lastStatus")}
+                        title={
+                          project.lastErrorKind
+                            ? `${t("lastStatus")} · ${t(`errorKind.${project.lastErrorKind}`, {
+                                defaultValue: project.lastErrorKind,
+                              })}`
+                            : t("lastStatus")
+                        }
                       >
                         {project.lastStatus === "success" ? (
                           <CheckCircle size={11} />
@@ -760,6 +759,13 @@ export default function TestManager() {
                           <XCircle size={11} />
                         )}
                         {outcomeLabel(project.lastStatus)}
+                        {project.lastErrorKind && project.lastStatus !== "success" && (
+                          <span className="tm-chip-kind">
+                            {t(`errorKind.${project.lastErrorKind}`, {
+                              defaultValue: project.lastErrorKind,
+                            })}
+                          </span>
+                        )}
                       </span>
                     )}
                     {isRunning && (
@@ -1267,54 +1273,16 @@ export default function TestManager() {
         </TestModal>
       )}
 
-      {scanOpen && (
-        <TestModal title={t("scanResults")} onClose={() => setScanOpen(false)} wide busy={scanning}>
-          <p className="tm-scan-base" title={scanBase}>
-            {scanBase}
-          </p>
-          {scanning ? (
-            <div className="tm-loading">
-              <Loader2 size={16} className="spin" />
-              <span>{t("scanning")}</span>
-            </div>
-          ) : scanResults.length === 0 ? (
-            <div className="tm-empty">{t("noProjectsFound")}</div>
-          ) : (
-            <ul className="tm-scan-list">
-              {scanResults.map((result) => {
-                const known = knownPaths.has(toKey(result.path));
-                return (
-                  <li key={result.path} className="tm-scan-row">
-                    <div className="tm-scan-info">
-                      <span className="tm-scan-path" title={result.path}>
-                        {result.path}
-                      </span>
-                      <span className="tm-scan-tags">
-                        {result.framework && (
-                          <span className={`tm-badge tm-badge-${result.framework}`}>
-                            {result.framework}
-                          </span>
-                        )}
-                        {result.testCommand && <code className="tm-cmd">{result.testCommand}</code>}
-                        <span className="tm-evidence">
-                          {result.reason !== "none" ? result.reason : ""}
-                        </span>
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      onClick={() => void addFromScan(result)}
-                      disabled={known || !result.testCommand}
-                    >
-                      {known ? t("alreadyAdded") : t("add")}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </TestModal>
+      {scan && (
+        <ScanTestProjectsModal
+          rootPath={scan.rootPath}
+          initialProjects={scan.projects}
+          onClose={() => setScan(null)}
+          onAdded={(count) => {
+            setScan(null);
+            showMsg("success", t("scan.addedN", { count }));
+          }}
+        />
       )}
 
       {historyOpen && historyFor && (
@@ -1390,6 +1358,8 @@ export default function TestManager() {
           project={changeReportFor}
           onClose={() => setChangeReportFor(null)}
           onToast={showMsg}
+          running={Boolean(runs[changeReportFor.id])}
+          onRunSelected={(args, reportId) => runForReport(changeReportFor, args, reportId)}
         />
       )}
 

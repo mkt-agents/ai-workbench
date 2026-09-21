@@ -17,6 +17,9 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::DbState;
 use crate::coverage_parsers::{self, CoverageFile, CoverageMetric, CoverageReport};
+use crate::maven_pom;
+use crate::project_scan::{self, ScannedProject};
+use crate::test_error_kind;
 use crate::test_output_parsers::{
     line_parsed_suites, load_structured_suites, load_surefire_suites, parse_test_output,
     suite_counts, TestSuite,
@@ -38,7 +41,8 @@ CREATE TABLE IF NOT EXISTS test_projects (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_run_at TEXT,
-    last_status TEXT
+    last_status TEXT,
+    last_error_kind TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS test_runs (
     id TEXT PRIMARY KEY,
@@ -53,6 +57,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
     skipped INTEGER NOT NULL,
     output TEXT NOT NULL,
     suites TEXT NOT NULL,
+    error_kind TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS test_history (
@@ -86,6 +91,10 @@ pub struct TestProject {
     pub updated_at: String,
     pub last_run_at: Option<String>,
     pub last_status: Option<String>,
+    /// Why the last run failed, beyond the five-value status. `#[serde(default)]` keeps
+    /// rows written before this column readable.
+    #[serde(default)]
+    pub last_error_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -103,6 +112,9 @@ pub struct TestRunResult {
     pub skipped: u32,
     pub output: String,
     pub suites: Vec<TestSuite>,
+    /// `""` until classified; see `test_error_kind::KINDS`.
+    #[serde(default)]
+    pub error_kind: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,6 +128,9 @@ pub struct TestHistoryEntry {
     pub total: Option<u32>,
     pub passed: Option<u32>,
     pub failed: Option<u32>,
+    /// Joined in from the run row so history says *what* failed, not just that it did.
+    #[serde(default)]
+    pub error_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -156,7 +171,7 @@ pub fn load_test_projects(state: State<DbState>) -> Result<Vec<TestProject>, Str
 pub(crate) fn load_projects_sync(conn: &rusqlite::Connection) -> Result<Vec<TestProject>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, path, type, framework, test_command, args, working_dir, env, enabled, created_at, updated_at, last_run_at, last_status FROM test_projects ORDER BY updated_at DESC"
+            "SELECT id, name, path, type, framework, test_command, args, working_dir, env, enabled, created_at, updated_at, last_run_at, last_status, last_error_kind FROM test_projects ORDER BY updated_at DESC"
         )
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
@@ -178,6 +193,7 @@ pub(crate) fn load_projects_sync(conn: &rusqlite::Connection) -> Result<Vec<Test
                 updated_at: row.get(11)?,
                 last_run_at: opt_text(row.get(12)?),
                 last_status: opt_text(row.get(13)?),
+                last_error_kind: opt_text(row.get(14)?),
             })
         })
         .map_err(|e| format!("Failed to query projects: {}", e))?
@@ -209,7 +225,7 @@ pub(crate) fn add_project_sync(
         .map_err(|e| format!("Failed to serialize env: {}", e))?;
 
     conn.execute(
-        "INSERT INTO test_projects (id, name, path, type, framework, test_command, args, working_dir, env, enabled, created_at, updated_at, last_run_at, last_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        "INSERT INTO test_projects (id, name, path, type, framework, test_command, args, working_dir, env, enabled, created_at, updated_at, last_run_at, last_status, last_error_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             project.id,
             project.name,
@@ -225,10 +241,37 @@ pub(crate) fn add_project_sync(
             project.updated_at,
             project.last_run_at.as_deref().unwrap_or(""),
             project.last_status.as_deref().unwrap_or(""),
+            project.last_error_kind.as_deref().unwrap_or(""),
         ]
     ).map_err(|e| format!("Failed to insert project: {}", e))?;
 
     Ok(project)
+}
+
+/// Add a whole scanned directory tree in one go. One transaction, because a batch of
+/// twenty rows that fails at row twelve must not leave eleven behind.
+#[tauri::command]
+pub fn add_test_projects(
+    state: State<DbState>,
+    projects: Vec<TestProject>,
+) -> Result<usize, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    add_projects_sync(&conn, projects)
+}
+
+pub(crate) fn add_projects_sync(
+    conn: &rusqlite::Connection,
+    projects: Vec<TestProject>,
+) -> Result<usize, String> {
+    let mut added = 0usize;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for project in projects {
+        if add_project_sync(&tx, project).is_ok() {
+            added += 1;
+        }
+    }
+    tx.commit().map_err(|e| format!("批量添加失败: {}", e))?;
+    Ok(added)
 }
 
 /// Update an existing test project
@@ -323,12 +366,14 @@ pub(crate) fn delete_project_sync(conn: &rusqlite::Connection, id: &str) -> Resu
     Ok(())
 }
 
-/// Detect project type and testing framework from directory
+/// Detect project type and testing framework from a directory.
+///
+/// Delegates to `project_scan` so the single-path check and the recursive scan can
+/// never disagree about what a directory is.
 #[tauri::command]
 pub fn detect_project_type(path: String) -> Result<ProjectDetectionResult, String> {
-    let project_path = Path::new(&path);
-
-    if !project_path.exists() {
+    let dir = Path::new(&path);
+    if !dir.exists() {
         return Ok(ProjectDetectionResult {
             path,
             detected: false,
@@ -339,159 +384,53 @@ pub fn detect_project_type(path: String) -> Result<ProjectDetectionResult, Strin
         });
     }
 
-    // Check for package.json (Node.js/TypeScript projects)
-    let package_json = project_path.join("package.json");
-    let mut marker_without_entry: Option<ProjectDetectionResult> = None;
-    if package_json.exists() {
-        let content = fs::read_to_string(&package_json)
-            .map_err(|e| format!("Failed to read package.json: {}", e))?;
-
-        let json: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse package.json: {}", e))?;
-
-        // Check for test scripts
-        if let Some(scripts) = json.get("scripts").and_then(|v| v.as_object()) {
-            if scripts.contains_key("test") {
-                let framework = if json.get("devDependencies").and_then(|v| v.get("vitest")).is_some() {
-                    Some("vitest".to_string())
-                } else if json.get("devDependencies").and_then(|v| v.get("@playwright/test")).is_some() {
-                    Some("playwright".to_string())
-                } else if json.get("dependencies").and_then(|v| v.get("vitest")).is_some() {
-                    Some("vitest".to_string())
-                } else if json.get("devDependencies").and_then(|v| v.get("@testing-library/react")).is_some() {
-                    Some("jest".to_string())
-                } else if json.get("devDependencies").and_then(|v| v.get("mocha")).is_some() {
-                    Some("mocha".to_string())
-                } else if json.get("devDependencies").and_then(|v| v.get("jest")).is_some() {
-                    Some("jest".to_string())
-                } else {
-                    Some("jest".to_string())
-                };
-
-                return Ok(ProjectDetectionResult {
-                    path,
-                    detected: true,
-                    project_type: Some("frontend".to_string()),
-                    framework,
-                    test_command: Some("npm test".to_string()),
-                    reason: "package.json + test script".to_string(),
-                });
-            }
-        }
-
-        // A `package.json` without a test script is not the end of the story: a Java
-        // service often ships one for its frontend build. Remember it only as the
-        // answer to report when no other marker matches.
-        marker_without_entry = Some(ProjectDetectionResult {
+    Ok(match project_scan::project_at(dir) {
+        Some(project) => ProjectDetectionResult {
+            path: project.path,
+            detected: true,
+            project_type: Some(project.project_type),
+            framework: Some(project.framework),
+            test_command: Some(project.test_command),
+            reason: project.reason,
+        },
+        None => ProjectDetectionResult {
             path: path.clone(),
             detected: false,
-            project_type: Some("frontend".to_string()),
+            project_type: None,
             framework: None,
             test_command: None,
-            reason: "package.json".to_string(),
-        });
-    }
-
-    // Check for Cargo.toml (Rust projects)
-    let cargo_toml = project_path.join("Cargo.toml");
-    if cargo_toml.exists() {
-        return Ok(ProjectDetectionResult {
-            path,
-            detected: true,
-            project_type: Some("rust".to_string()),
-            framework: Some("cargo".to_string()),
-            test_command: Some("cargo test".to_string()),
-            reason: "Cargo.toml".to_string(),
-        });
-    }
-
-    // Check for pom.xml (Java projects). `-B` keeps the log free of progress redraws.
-    if project_path.join("pom.xml").exists() {
-        let runner = ["mvnw.cmd", "mvnw"]
-            .iter()
-            .find(|name| project_path.join(name).is_file())
-            .map(|name| name.to_string())
-            .unwrap_or_else(|| "mvn".to_string());
-        return Ok(ProjectDetectionResult {
-            path,
-            detected: true,
-            project_type: Some("backend".to_string()),
-            framework: Some("maven".to_string()),
-            test_command: Some(format!("{} -B test", runner)),
-            reason: "pom.xml".to_string(),
-        });
-    }
-
-    // Check for requirements.txt or pytest.ini (Python projects)
-    if project_path.join("requirements.txt").exists()
-        || project_path.join("pytest.ini").exists()
-        || project_path.join("pyproject.toml").exists()
-    {
-        return Ok(ProjectDetectionResult {
-            path,
-            detected: true,
-            project_type: Some("python".to_string()),
-            framework: Some("pytest".to_string()),
-            test_command: Some("pytest".to_string()),
-            reason: "pyproject.toml / setup.py / requirements.txt".to_string(),
-        });
-    }
-
-    // Check for go.mod (Go projects)
-    if project_path.join("go.mod").exists() {
-        return Ok(ProjectDetectionResult {
-            path,
-            detected: true,
-            project_type: Some("go".to_string()),
-            framework: Some("gotest".to_string()),
-            test_command: Some("go test ./...".to_string()),
-            reason: "go.mod".to_string(),
-        });
-    }
-
-    if let Some(marker) = marker_without_entry {
-        return Ok(marker);
-    }
-
-    Ok(ProjectDetectionResult {
-        path,
-        detected: false,
-        project_type: None,
-        framework: None,
-        test_command: None,
-        reason: "none".to_string(),
+            reason: marker_reason(dir),
+        },
     })
 }
 
-/// Scan a directory for test projects recursively
+/// A marker that was seen but is not a test entry point, reported as an evidence token
+/// so the UI can say "this is a frontend project without a test script".
+fn marker_reason(dir: &Path) -> String {
+    if dir.join("package.json").is_file() {
+        return "package.json".to_string();
+    }
+    if dir.join("pom.xml").is_file() {
+        return "pom.xml (aggregator)".to_string();
+    }
+    "none".to_string()
+}
+
+/// Scan a directory tree for testable projects, up to `max_depth` levels below it.
+/// Recursive, so pointing at `D:/repo/tct` finds the modules under `p1/`, `p2/`, …
 #[tauri::command]
-pub async fn scan_test_projects(base_path: String) -> Result<Vec<ProjectDetectionResult>, String> {
-    let mut results = Vec::new();
-    let base = Path::new(&base_path);
-
-    if !base.exists() {
-        return Ok(results);
-    }
-
-    let entries = fs::read_dir(base)
-        .map_err(|e| format!("Failed to read directory: {}", e))?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            // Try to detect project type in this directory
-            let path_str = path.to_string_lossy().to_string();
-            if let Ok(result) = detect_project_type(path_str) {
-                if result.detected {
-                    results.push(result);
-                }
-            }
-        }
-    }
-
-    Ok(results)
+pub async fn scan_test_projects(
+    base_path: String,
+    max_depth: Option<u32>,
+) -> Result<Vec<ScannedProject>, String> {
+    let depth = max_depth.unwrap_or(2).clamp(1, 6);
+    // A recursive walk of a large tree takes hundreds of milliseconds: keep it off the
+    // async worker threads.
+    tokio::task::spawn_blocking(move || {
+        project_scan::scan_projects(Path::new(&base_path), depth).projects
+    })
+    .await
+    .map_err(|e| format!("扫描任务已中止: {}", e))
 }
 
 /// How long one test run may take before its process tree is killed.
@@ -732,11 +671,25 @@ pub(crate) fn run_test_sync(
     let reports_not_before = SystemTime::now()
         .checked_sub(Duration::from_secs(3))
         .unwrap_or(SystemTime::UNIX_EPOCH);
-    let mut child = cmd
+    let mut child = match cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动测试命令失败: {}", e))?;
+    {
+        Ok(child) => child,
+        Err(e) => {
+            // A command that never started is still a run worth recording: the reason
+            // ("找不到可执行文件") should be readable in history, not only in a toast.
+            let message = format!("启动测试命令失败: {}", e);
+            let now = chrono::Utc::now().to_rfc3339();
+            let id = format!("run-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default());
+            let _ = record_run(
+                &conn, &id, &project_id, &now, &now, 0, "error", 0, 0, 0, 0, &message, "[]",
+                "command",
+            );
+            return Err(message);
+        }
+    };
     let pid = child.id();
 
     let started_at = chrono::Utc::now().to_rfc3339();
@@ -829,8 +782,16 @@ pub(crate) fn run_test_sync(
     // per-case stdout lines. Surefire/failsafe XML is the Java equivalent — its
     // presence is unambiguous, so it is probed for regardless of the framework label.
     let root = work_dir_of(&project);
+    // A reactor build runs at the aggregator root but writes its surefire reports under
+    // the module it was asked to test; searching the root would attribute a sibling
+    // module's fresh reports to this one.
+    let reports_root = if project.framework == "maven" {
+        PathBuf::from(&project.path)
+    } else {
+        root.clone()
+    };
     let suites = load_structured_suites(&root, &stdout, &stderr)
-        .or_else(|| load_surefire_suites(&root, Some(reports_not_before)))
+        .or_else(|| load_surefire_suites(&reports_root, Some(reports_not_before)))
         .or_else(|| line_parsed_suites(&project.framework, &full_output));
     if let Some(ref suites) = suites {
         let (t, p, f, s) = suite_counts(suites);
@@ -846,11 +807,52 @@ pub(crate) fn run_test_sync(
             .to_string();
         }
     }
+
+    // `error` alone tells the user nothing when eight modules all say it.
+    let has_test_sources = if project.framework == "maven" {
+        maven_pom::read_pom(Path::new(&project.path))
+            .map(|pom| pom.has_test_sources)
+            .unwrap_or(false)
+    } else {
+        // No reliable "has tests" signal for the other ecosystems: do not claim it.
+        true
+    };
+    let error_kind = if matches!(status.as_str(), "cancelled" | "timeout" | "error") {
+        test_error_kind::classify(
+            &full_output,
+            &project.framework,
+            exit_ok,
+            total,
+            &aborted,
+            has_test_sources,
+        )
+        .to_string()
+    } else {
+        String::new()
+    };
+    if !error_kind.is_empty() && error_kind != "unknown" {
+        let lines = test_error_kind::diagnose(
+            &full_output,
+            &error_kind,
+            test_error_kind::settings_local_repo(&home_dir()).as_deref(),
+            &known_providers(&conn),
+        );
+        for line in lines {
+            full_output.push('\n');
+            full_output.push_str(&line);
+        }
+    }
+
     let suites_json = serde_json::to_string(&suites.clone().unwrap_or_default())
         .unwrap_or_else(|_| "[]".to_string());
 
     let duration_ms = timer.elapsed().as_millis() as u64;
-    let test_id = format!("run-{}", chrono::Utc::now().timestamp_millis());
+    // Nanoseconds, because two projects finishing in the same millisecond used to
+    // collide on this primary key and lose a run to a write error.
+    let test_id = format!(
+        "run-{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
     let mut output_for_ui = truncate_tail(&full_output, MAX_STORED_OUTPUT_BYTES);
 
     // Bookkeeping must never lose a finished run: if the write fails (the project was
@@ -869,6 +871,7 @@ pub(crate) fn run_test_sync(
         skipped,
         &output_for_ui,
         &suites_json,
+        &error_kind,
     ) {
         full_output.push_str(&format!("\n[警告] 运行结果入库失败：{}", e));
         output_for_ui = truncate_tail(&full_output, MAX_STORED_OUTPUT_BYTES);
@@ -887,7 +890,39 @@ pub(crate) fn run_test_sync(
         skipped,
         output: output_for_ui,
         suites: suites.unwrap_or_default(),
+        error_kind,
     })
+}
+
+/// The user's home directory, for locating `~/.m2/settings.xml`.
+fn home_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Registered projects that could supply a missing Maven artifact. Reading each pom is
+/// cheap and keeps the answer honest: only a project that really declares that
+/// `groupId:artifactId` is offered as the place to run `mvn install`.
+fn known_providers(
+    conn: &Arc<Mutex<rusqlite::Connection>>,
+) -> Vec<test_error_kind::Provider> {
+    let projects = match conn.lock() {
+        Ok(guard) => load_projects_sync(&guard).unwrap_or_default(),
+        Err(_) => return Vec::new(),
+    };
+    projects
+        .iter()
+        .filter_map(|project| {
+            let pom = maven_pom::read_pom(Path::new(&project.path))?;
+            Some(test_error_kind::Provider {
+                group_id: pom.coord.group_id.clone(),
+                artifact_id: pom.coord.artifact_id.clone(),
+                path: project.path.clone(),
+            })
+        })
+        .collect()
 }
 
 /// Persist one finished run: the detail row, the history row, the project's last-run
@@ -907,11 +942,12 @@ pub(crate) fn record_run(
     skipped: u32,
     output: &str,
     suites_json: &str,
+    error_kind: &str,
 ) -> Result<(), String> {
     let conn = conn.lock().map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO test_runs (id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO test_runs (id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites, error_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         rusqlite::params![
             run_id,
             project_id,
@@ -925,6 +961,7 @@ pub(crate) fn record_run(
             skipped,
             output,
             suites_json,
+            error_kind,
         ]
     ).map_err(|e| format!("Failed to save test run: {}", e))?;
 
@@ -934,8 +971,8 @@ pub(crate) fn record_run(
     ).map_err(|e| format!("Failed to save test history: {}", e))?;
 
     conn.execute(
-        "UPDATE test_projects SET last_run_at = ?1, last_status = ?2, updated_at = ?3 WHERE id = ?4",
-        rusqlite::params![completed_at, status, completed_at, project_id]
+        "UPDATE test_projects SET last_run_at = ?1, last_status = ?2, last_error_kind = ?3, updated_at = ?4 WHERE id = ?5",
+        rusqlite::params![completed_at, status, error_kind, completed_at, project_id]
     ).map_err(|e| format!("Failed to update project: {}", e))?;
 
     prune_run_history(&conn, project_id, RUN_RETENTION_PER_PROJECT)
@@ -972,7 +1009,7 @@ pub(crate) fn prune_history(conn: &rusqlite::Connection, project_id: &str, keep:
 /// Read one stored run back, so a history row can show its full result again.
 pub(crate) fn run_by_id_sync(conn: &rusqlite::Connection, run_id: &str) -> Result<TestRunResult, String> {
     conn.query_row(
-        "SELECT id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites FROM test_runs WHERE id = ?1",
+        "SELECT id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites, error_kind FROM test_runs WHERE id = ?1",
         [run_id],
         |row| {
             Ok(TestRunResult {
@@ -989,6 +1026,7 @@ pub(crate) fn run_by_id_sync(conn: &rusqlite::Connection, run_id: &str) -> Resul
                 output: row.get(10)?,
                 suites: serde_json::from_str(&row.get::<_, String>(11)?)
                     .unwrap_or_default(),
+                error_kind: row.get(12)?,
             })
         },
     )
@@ -1006,10 +1044,16 @@ pub fn get_test_run(state: State<DbState>, run_id: String) -> Result<TestRunResu
 pub fn get_test_history(state: State<DbState>, project_id: Option<String>) -> Result<Vec<TestHistoryEntry>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
 
+    // The join gives history rows the same "why" the detail row has; `test_history`
+    // itself only stores the counts.
     let sql = if project_id.is_some() {
-        "SELECT id, project_id, run_id, timestamp, status, total, passed, failed FROM test_history WHERE project_id = ? ORDER BY timestamp DESC LIMIT 50"
+        "SELECT h.id, h.project_id, h.run_id, h.timestamp, h.status, h.total, h.passed, h.failed, r.error_kind
+         FROM test_history h LEFT JOIN test_runs r ON r.id = h.run_id
+         WHERE h.project_id = ? ORDER BY h.timestamp DESC LIMIT 50"
     } else {
-        "SELECT id, project_id, run_id, timestamp, status, total, passed, failed FROM test_history ORDER BY timestamp DESC LIMIT 50"
+        "SELECT h.id, h.project_id, h.run_id, h.timestamp, h.status, h.total, h.passed, h.failed, r.error_kind
+         FROM test_history h LEFT JOIN test_runs r ON r.id = h.run_id
+         ORDER BY h.timestamp DESC LIMIT 50"
     };
 
     let mut stmt = conn.prepare(sql).map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -1025,6 +1069,7 @@ pub fn get_test_history(state: State<DbState>, project_id: Option<String>) -> Re
                 total: row.get(5)?,
                 passed: row.get(6)?,
                 failed: row.get(7)?,
+                error_kind: opt_text(row.get(8)?),
             })
         })
         .map_err(|e| format!("Failed to query history: {}", e))?
@@ -1041,6 +1086,7 @@ pub fn get_test_history(state: State<DbState>, project_id: Option<String>) -> Re
                 total: row.get(5)?,
                 passed: row.get(6)?,
                 failed: row.get(7)?,
+                error_kind: opt_text(row.get(8)?),
             })
         })
         .map_err(|e| format!("Failed to query history: {}", e))?

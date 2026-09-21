@@ -16,6 +16,12 @@ mod cancellation_commands;
 mod test_commands;
 mod test_output_parsers;
 mod coverage_parsers;
+mod maven_pom;
+mod test_error_kind;
+mod project_scan;
+mod test_schema;
+mod test_selection;
+mod test_scenarios;
 mod change_report;
 mod change_store;
 mod change_commands;
@@ -273,11 +279,19 @@ pub fn run() {
             // The test-assistant tables are declared next to their commands so the
             // Rust tests can build the exact production schema.
             conn.execute_batch(&format!(
-                "{}{}",
+                "{}{}{}",
                 test_commands::SCHEMA_SQL,
-                change_store::SCHEMA_SQL
+                change_store::SCHEMA_SQL,
+                test_scenarios::SCHEMA_SQL
             ))
                 .expect("failed to init test schema");
+
+            // Columns introduced after the first release. Reported instead of swallowed:
+            // a silent failure here leaves the test page querying a column that does
+            // not exist, which surfaces as a confusing runtime error much later.
+            if let Err(e) = test_schema::migrate(&conn) {
+                eprintln!("[ai-workbench] 测试表迁移失败：{}", e);
+            }
 
             let _ = conn.execute_batch("ALTER TABLE git_accounts ADD COLUMN note TEXT;");
             let _ = conn.execute_batch("ALTER TABLE cursor_accounts ADD COLUMN notes TEXT;");
@@ -466,6 +480,7 @@ pub fn run() {
             devtools_commands::devtools_http_request,
             test_commands::load_test_projects,
             test_commands::add_test_project,
+            test_commands::add_test_projects,
             test_commands::update_test_project,
             test_commands::delete_test_project,
             test_commands::run_test,
@@ -482,6 +497,12 @@ pub fn run() {
             change_commands::get_change_report,
             change_commands::delete_change_report,
             change_commands::generate_change_report_ai,
+            change_commands::select_change_tests,
+            change_commands::generate_change_scenarios,
+            change_commands::add_change_scenario,
+            change_commands::set_scenario_status,
+            change_commands::delete_change_scenario,
+            change_commands::link_change_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

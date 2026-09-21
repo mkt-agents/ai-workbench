@@ -52,6 +52,11 @@ pub struct StoredChangeReport {
     pub summary: ChangeReportSummary,
     pub report: serde_json::Value,
     pub ai: Option<String>,
+    /// Acceptance checklist parsed from `ai` plus whatever the tester added by hand.
+    pub scenarios: Vec<crate::test_scenarios::Scenario>,
+    pub scenario_summary: crate::test_scenarios::ScenarioSummary,
+    /// Runs that were executed for this report.
+    pub runs: Vec<crate::test_scenarios::RunLink>,
 }
 
 /// One row's worth of what the collector produced.
@@ -152,6 +157,9 @@ pub fn get(conn: &Connection, report_id: &str) -> Result<StoredChangeReport, Str
         })
         .map_err(|_| format!("报告不存在: {}", report_id))?;
     Ok(StoredChangeReport {
+        scenarios: crate::test_scenarios::list_scenarios(conn, report_id).unwrap_or_default(),
+        scenario_summary: crate::test_scenarios::summary(conn, report_id).unwrap_or_default(),
+        runs: crate::test_scenarios::runs_for_report(conn, report_id).unwrap_or_default(),
         summary,
         report: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
         ai,

@@ -11,6 +11,8 @@ use crate::change_report::{self, ChangeReport};
 use crate::change_store;
 use crate::git_commands::{ensure_git_repo, git_stdout};
 use crate::test_commands::{load_test_projects, TestProject};
+use crate::test_scenarios;
+use crate::test_selection;
 use crate::DbState;
 
 /// Enough patch text to read signatures off; the UI never shows the raw diff.
@@ -370,7 +372,132 @@ pub async fn generate_change_report_ai(
 
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     change_store::set_ai(&conn, &report_id, &markdown)?;
+    // The acceptance sections are only useful if they become tickable rows, so they
+    // are parsed right away; a report with no recognisable bullets just stays empty.
+    if let Ok(project_id) = conn.query_row(
+        "SELECT project_id FROM change_reports WHERE id = ?1",
+        rusqlite::params![report_id],
+        |row| row.get::<_, String>(0),
+    ) {
+        let rows = test_scenarios::scenarios_from_markdown(&markdown);
+        let _ = test_scenarios::save_scenarios(&conn, &report_id, &project_id, &rows, &now());
+    }
     Ok(markdown)
+}
+
+/// Which tests the change points at, in the runner's own filter syntax. The UI ticks
+/// entries off this list and hands the result to `run_test` as `args`.
+/// Passing `only` re-derives the args for that ticked subset, so the filter syntax stays
+/// in one place.
+#[tauri::command]
+pub fn select_change_tests(
+    state: State<'_, DbState>,
+    report_id: String,
+    only: Option<Vec<String>>,
+) -> Result<test_selection::TestSelection, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let (data, framework) = report_context(&conn, &report_id)?;
+    let report: ChangeReport = serde_json::from_str(&data).map_err(|e| format!("报告数据损坏: {}", e))?;
+    let selection = test_selection::select_tests(&report, &framework, test_selection::DEFAULT_MAX_TARGETS);
+    Ok(match only {
+        Some(names) if !names.is_empty() && names.len() < selection.targets.len() => {
+            test_selection::subset(&selection, &names)
+        }
+        _ => selection,
+    })
+}
+
+/// Parse the AI acceptance sections into tickable rows. Safe to call twice: existing
+/// titles are skipped rather than duplicated.
+#[tauri::command]
+pub fn generate_change_scenarios(
+    state: State<'_, DbState>,
+    report_id: String,
+) -> Result<usize, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let (ai, project_id): (Option<String>, String) = conn
+        .query_row(
+            "SELECT ai, project_id FROM change_reports WHERE id = ?1",
+            rusqlite::params![report_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| format!("报告不存在: {}", report_id))?;
+    let markdown = ai.filter(|text| !text.trim().is_empty()).ok_or("请先生成 AI 章节，再产出验收清单")?;
+    let rows = test_scenarios::scenarios_from_markdown(&markdown);
+    if rows.is_empty() {
+        return Err("AI 章节里没有可采集的场景条目".to_string());
+    }
+    test_scenarios::save_scenarios(&conn, &report_id, &project_id, &rows, &now())
+}
+
+#[tauri::command]
+pub fn add_change_scenario(
+    state: State<'_, DbState>,
+    report_id: String,
+    title: String,
+) -> Result<i64, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let project_id: String = conn
+        .query_row("SELECT project_id FROM change_reports WHERE id = ?1", rusqlite::params![report_id], |row| row.get(0))
+        .map_err(|_| format!("报告不存在: {}", report_id))?;
+    test_scenarios::add_manual_scenario(&conn, &report_id, &project_id, &title, &now())
+}
+
+/// Record one acceptance item; returns the new progress so the bar updates without a
+/// second round trip.
+#[tauri::command]
+pub fn set_scenario_status(
+    state: State<'_, DbState>,
+    scenario_id: i64,
+    status: String,
+    note: Option<String>,
+    run_id: Option<String>,
+) -> Result<test_scenarios::ScenarioSummary, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let report_id: String = conn
+        .query_row("SELECT report_id FROM test_scenarios WHERE id = ?1", rusqlite::params![scenario_id], |row| row.get(0))
+        .map_err(|_| format!("场景不存在: {}", scenario_id))?;
+    test_scenarios::set_status(&conn, scenario_id, &status, note.as_deref(), run_id.as_deref(), &now())?;
+    test_scenarios::summary(&conn, &report_id)
+}
+
+#[tauri::command]
+pub fn delete_change_scenario(state: State<'_, DbState>, scenario_id: i64) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    test_scenarios::delete_scenario(&conn, scenario_id)
+}
+
+/// Note that a run was made for this report, so "did we test the change" has an answer.
+#[tauri::command]
+pub fn link_change_run(
+    state: State<'_, DbState>,
+    report_id: String,
+    run_id: String,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let project_id: String = conn
+        .query_row("SELECT project_id FROM change_reports WHERE id = ?1", rusqlite::params![report_id], |row| row.get(0))
+        .map_err(|_| format!("报告不存在: {}", report_id))?;
+    test_scenarios::link_run(&conn, &report_id, &run_id, &project_id, &now())
+}
+
+fn now() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+/// `(stored report json, project framework)` for one report id.
+fn report_context(conn: &rusqlite::Connection, report_id: &str) -> Result<(String, String), String> {
+    let (data, project_id): (String, String) = conn
+        .query_row(
+            "SELECT data, project_id FROM change_reports WHERE id = ?1",
+            rusqlite::params![report_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| format!("报告不存在: {}", report_id))?;
+    let framework: String = conn
+        .query_row("SELECT framework FROM test_projects WHERE id = ?1", rusqlite::params![project_id], |row| row.get(0))
+        .unwrap_or_else(|_| "custom".to_string());
+    Ok((data, framework))
 }
 
 fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> String {
@@ -404,8 +531,8 @@ fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> St
          补丁片段（可能已截断）：\n```diff\n{}\n```\n\n\
          严格按以下五个二级标题输出，不要添加其它章节或解释文字：\n\
          ## 受影响功能点\n## 必测场景\n## 建议回归范围\n## 兼容性与数据风险\n## 验收清单\n\n\
-         要求：每条一行、以 - 开头；「必测场景」写明前置数据与预期结果；「建议回归范围」按 P0/P1/P2 标注；\
-         只依据上面给出的文件与接口，不确定的写「需与开发确认」。",
+         要求：每条一行、以 - 开头；「必测场景」每条以 P0/P1/P2 开头标明优先级，再写「前置：…　预期：…」；\
+         「建议回归范围」同样按 P0/P1/P2 标注；只依据上面给出的文件与接口，不确定的写「需与开发确认」。",
         project_name,
         base,
         report.stats.files,

@@ -180,6 +180,35 @@
   "workingDir": "工作目录",
   "workingDirHint": "留空则在项目根目录运行；monorepo 可指定子包目录",
   "workingDirPlaceholder": "例如 packages/web",
+  "scan": {
+    "results": "扫描到 {{count}} 个可测试项目",
+    "selectAll": "全选",
+    "selectNone": "全不选",
+    "depth": "深度 {{depth}}",
+    "deeper": "再扫一层",
+    "deeperHint": "把搜索范围再向下扩展一层（聚合工程/子目录树）",
+    "alreadyAdded": "已登记",
+    "addSelected": "添加所选（{{count}}）",
+    "addedN": "已添加 {{count}} 个项目",
+    "noneFound": "该目录下没有发现可识别的测试项目",
+    "note": {
+      "reactor": "走聚合根 -pl -am",
+      "wrapper-missing": "mvnw 缺 .mvn 载荷，改用 mvn",
+      "no-test-sources": "无测试源码",
+      "skip-tests-property": "pom 里 skipTests"
+    }
+  },
+  "errorKind": {
+    "dependency": "缺少依赖",
+    "wrapper": "mvnw 无法启动",
+    "compile": "编译失败",
+    "noTests": "无测试用例",
+    "skippedByPom": "pom 跳过测试",
+    "timeout": "运行超时",
+    "cancelled": "已取消",
+    "command": "命令无法启动",
+    "unknown": "原因见输出"
+  },
   "cr": {
     "title": "变更回归报告",
     "open": "根据代码改动生成回归报告",
@@ -219,6 +248,49 @@
     "export": "导出 .md",
     "savedTo": "已保存到 {{path}}",
     "close": "关闭",
+    "sel": {
+      "title": "受影响测试",
+      "loading": "正在匹配受影响测试…",
+      "none": "没有匹配到可运行的测试：这些改动目前找不到配对用例。",
+      "unsupported": "该测试框架不支持按用例过滤，将运行整个测试套件。",
+      "runAll": "运行全部测试",
+      "runAllHint": "未勾选任何用例：运行整个测试套件",
+      "runSelected": "运行所选 ({{n}})",
+      "changed": "用例本身有改动",
+      "truncated": "匹配到的测试超过上限，已截断，可在项目命令里补充。",
+      "gapCount": "{{n}} 个改动文件没有配对测试"
+    },
+    "sc": {
+      "title": "验收清单",
+      "generate": "从 AI 章节补充清单",
+      "generateHint": "解析 AI 的「必测场景 / 验收清单」章节，已有标题不会重复",
+      "needAi": "请先生成 AI 章节，再产出验收清单。",
+      "emptyHint": "点「从 AI 章节补充清单」，把 AI 给出的必测场景变成可勾选条目。",
+      "parsed": "验收清单已解析出 {{n}} 条",
+      "added": "新增 {{n}} 条验收项",
+      "noNew": "没有新增条目：标题都已存在",
+      "progress": "通过 {{passed}}/{{total}}",
+      "manual": "手动",
+      "noteHint": "记录备注（失败原因、环境、数据）",
+      "notePlaceholder": "备注：环境、数据、失败原因…",
+      "delete": "删除该条",
+      "add": "补充",
+      "addPlaceholder": "手动补一条验收场景，例如：切换租户后列表不串数据",
+      "status": {
+        "pending": "待验",
+        "passed": "通过",
+        "failed": "失败",
+        "blocked": "阻塞"
+      }
+    },
+    "runs": "本报告的测试运行",
+    "runStatus": {
+      "success": "通过",
+      "failed": "失败",
+      "error": "错误",
+      "cancelled": "已取消",
+      "timeout": "超时"
+    },
     "api": {
       "added": "新增",
       "removed": "删除",

@@ -180,6 +180,35 @@
   "workingDir": "Working directory",
   "workingDirHint": "Leave empty to run in the project root; use a subfolder for monorepos",
   "workingDirPlaceholder": "e.g. packages/web",
+  "scan": {
+    "results": "Found {{count}} testable projects",
+    "selectAll": "Select all",
+    "selectNone": "Select none",
+    "depth": "depth {{depth}}",
+    "deeper": "Scan deeper",
+    "deeperHint": "Search one level deeper (aggregator or nested directory trees)",
+    "alreadyAdded": "Registered",
+    "addSelected": "Add selected ({{count}})",
+    "addedN": "Added {{count}} projects",
+    "noneFound": "No recognised test projects in this directory",
+    "note": {
+      "reactor": "runs via reactor -pl -am",
+      "wrapper-missing": "mvnw lacks .mvn, using mvn",
+      "no-test-sources": "no test sources",
+      "skip-tests-property": "skipTests in pom"
+    }
+  },
+  "errorKind": {
+    "dependency": "missing dependency",
+    "wrapper": "mvnw cannot start",
+    "compile": "compile error",
+    "noTests": "no test cases",
+    "skippedByPom": "skipped by pom",
+    "timeout": "timed out",
+    "cancelled": "cancelled",
+    "command": "command failed to start",
+    "unknown": "see output"
+  },
   "cr": {
     "title": "Change Regression Report",
     "open": "Build a regression report from the code changes",
@@ -219,6 +248,49 @@
     "export": "Export .md",
     "savedTo": "Saved to {{path}}",
     "close": "Close",
+    "sel": {
+      "title": "Affected tests",
+      "loading": "Matching the affected tests…",
+      "none": "No runnable test matched: these changes have no paired case.",
+      "unsupported": "This runner cannot filter by case, so the whole suite will run.",
+      "runAll": "Run all tests",
+      "runAllHint": "Nothing is ticked: the whole suite runs",
+      "runSelected": "Run selected ({{n}})",
+      "changed": "case itself changed",
+      "truncated": "Too many matches: the target list was truncated; add more in the project command.",
+      "gapCount": "{{n}} changed files have no paired test"
+    },
+    "sc": {
+      "title": "Acceptance checklist",
+      "generate": "Fill from the AI section",
+      "generateHint": "Parses the AI 'must-test scenarios / acceptance checklist' sections; existing titles are not duplicated",
+      "needAi": "Generate the AI section first, then build the checklist.",
+      "emptyHint": "Use 'Fill from the AI section' to turn the AI scenarios into tickable rows.",
+      "parsed": "Parsed {{n}} acceptance items",
+      "added": "{{n}} items added",
+      "noNew": "Nothing added: every title already exists",
+      "progress": "{{passed}}/{{total}} passed",
+      "manual": "manual",
+      "noteHint": "Record a note (reason, environment, data)",
+      "notePlaceholder": "Note: environment, data, failure reason…",
+      "delete": "Delete this item",
+      "add": "Add",
+      "addPlaceholder": "Add an acceptance scenario manually, e.g. switching tenant must not leak rows",
+      "status": {
+        "pending": "pending",
+        "passed": "passed",
+        "failed": "failed",
+        "blocked": "blocked"
+      }
+    },
+    "runs": "Runs for this report",
+    "runStatus": {
+      "success": "passed",
+      "failed": "failed",
+      "error": "error",
+      "cancelled": "cancelled",
+      "timeout": "timeout"
+    },
     "api": {
       "added": "added",
       "removed": "removed",

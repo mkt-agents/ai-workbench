@@ -51,6 +51,7 @@ mod tests {
             updated_at: "2026-09-20T00:00:00Z".to_string(),
             last_run_at: None,
             last_status: None,
+            last_error_kind: None,
         }
     }
 
@@ -473,24 +474,49 @@ mod tests {
     }
 
     #[test]
-    fn detection_of_a_maven_project_prefers_the_wrapper() {
+    fn detection_of_a_maven_project_picks_a_launcher_that_works() {
+        // An intact wrapper is preferred: it pins the project's own Maven version.
         let dir = scratch("detect-mvn");
         std::fs::write(dir.join("pom.xml"), "<project/>").unwrap();
         std::fs::write(dir.join("mvnw.cmd"), "@echo off\r\n").unwrap();
+        std::fs::create_dir_all(dir.join(".mvn/wrapper")).unwrap();
+        std::fs::write(
+            dir.join(".mvn/wrapper/maven-wrapper.properties"),
+            "distributionUrl=https://x/maven.zip\r\n",
+        )
+        .unwrap();
 
         let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();
         assert!(result.detected);
         assert_eq!(result.project_type.as_deref(), Some("backend"));
         assert_eq!(result.framework.as_deref(), Some("maven"));
         assert_eq!(result.reason, "pom.xml");
-        assert_eq!(result.test_command.as_deref(), Some("mvnw.cmd -B test"));
+        assert_eq!(
+            result.test_command.as_deref(),
+            Some("mvnw.cmd -B test -DskipTests=false")
+        );
         let _ = std::fs::remove_dir_all(&dir);
 
-        // No wrapper: plain `mvn`, still in batch mode.
+        // A wrapper without its `.mvn/wrapper` payload cannot bootstrap (this is the
+        // real shape of two of the user's modules): fall back to the system `mvn`.
+        let dir = scratch("detect-mvn-broken-wrapper");
+        std::fs::write(dir.join("pom.xml"), "<project/>").unwrap();
+        std::fs::write(dir.join("mvnw.cmd"), "@echo off\r\n").unwrap();
+        let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();
+        assert_eq!(
+            result.test_command.as_deref(),
+            Some("mvn -B test -DskipTests=false")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // No wrapper at all: plain `mvn`, still in batch mode.
         let dir = scratch("detect-mvn-plain");
         std::fs::write(dir.join("pom.xml"), "<project/>").unwrap();
         let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();
-        assert_eq!(result.test_command.as_deref(), Some("mvn -B test"));
+        assert_eq!(
+            result.test_command.as_deref(),
+            Some("mvn -B test -DskipTests=false")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -891,6 +917,7 @@ process.exit(1);
                 0,
                 "out",
                 "[]",
+                "",
             )
             .unwrap();
         }
@@ -935,7 +962,7 @@ process.exit(1);
             project(Path::new("."), "p-other", "noop", "custom"),
         )
         .unwrap();
-        record_run(&conn, "run-x", "p-other", "t", "t", 1, "success", 1, 1, 0, 0, "o", "[]").unwrap();
+        record_run(&conn, "run-x", "p-other", "t", "t", 1, "success", 1, 1, 0, 0, "o", "[]", "").unwrap();
         {
             let guard = conn.lock().unwrap();
             prune_run_history(&guard, "p-keep", 1).unwrap();

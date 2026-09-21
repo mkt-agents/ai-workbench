@@ -401,6 +401,24 @@ export interface TestProject {
   updatedAt: string;
   lastRunAt?: string;
   lastStatus?: TestRunOutcome;
+  /** Why the last run failed; see `errorKind.*` in the `test` i18n namespace. */
+  lastErrorKind?: string;
+}
+
+/** One project found by the recursive directory scan. */
+export interface ScannedProject {
+  path: string;
+  name: string;
+  projectType: string;
+  framework: string;
+  testCommand: string;
+  reason: string;
+  /** Where the command must run; `..` for a Maven module of a larger reactor. */
+  workingDir: string;
+  reactorRoot: string;
+  reactorModule: string;
+  artifactId: string;
+  notes: string[];
 }
 
 export interface TestCase {
@@ -439,6 +457,8 @@ export interface TestRunResult {
   skipped: number;
   output: string;
   suites: TestSuite[];
+  /** `""` when the run did not fail in a classifiable way. */
+  errorKind: string;
 }
 
 export interface TestHistoryEntry {
@@ -450,6 +470,7 @@ export interface TestHistoryEntry {
   total?: number;
   passed?: number;
   failed?: number;
+  errorKind?: string;
 }
 
 export interface ProjectDetectionResult {
@@ -577,10 +598,73 @@ export interface ChangeReportSummary {
   hasAi: boolean;
 }
 
+export interface TestTarget {
+  name: string;
+  /** `class` (surefire/jest suite), `file` (a path) or `filter` (positional pattern). */
+  kind: string;
+  /** The changed source file this target was derived from. */
+  from: string;
+  /** `true` when the test file itself was edited, so it is its own target. */
+  changed: boolean;
+}
+
+export interface TestSelection {
+  framework: string;
+  targets: TestTarget[];
+  /** Changed code files with no test we can point at. */
+  gaps: string[];
+  /** Append to the project's test command (`run_test`'s `args`). */
+  args: string;
+  truncated: boolean;
+  /** `false` when the framework has no filter syntax we trust: run everything. */
+  selectable: boolean;
+}
+
+export interface Scenario {
+  id: number;
+  reportId: string;
+  projectId: string;
+  runId: string | null;
+  title: string;
+  detail: string | null;
+  priority: string;
+  /** `pending` | `passed` | `failed` | `blocked` */
+  status: string;
+  note: string | null;
+  sort: number;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScenarioSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  blocked: number;
+  pending: number;
+  /** 0..=100 passed share, computed by the backend. */
+  percent: number;
+}
+
+export interface ChangeRunLink {
+  runId: string;
+  projectId: string;
+  createdAt: string;
+  status: string;
+  totalTests: number;
+  passed: number;
+  failed: number;
+  errorKind: string;
+}
+
 export interface StoredChangeReport {
   summary: ChangeReportSummary;
   report: ChangeReport | null;
   ai: string | null;
+  scenarios: Scenario[];
+  scenarioSummary: ScenarioSummary;
+  runs: ChangeRunLink[];
 }
 
 export interface GlobalStore {
