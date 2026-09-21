@@ -115,12 +115,13 @@
   "usStats": "{{total}} 个脚本，{{enabled}} 个已启用",
   "usEnableAll": "全部启用",
   "usDisableAll": "全部禁用",
+  "usBulkToggleFailed": "{{n}} 个脚本切换失败，状态未全部生效",
   "usImportUrlTitle": "从网址导入脚本",
   "usImportUrlPlaceholder": "输入脚本网址 (GreasyFork/GitHub/直接JS链接)…",
   "usImportUrlHint": "支持 .js 文件、GreasyFork 页面、GitHub 原始文件链接",
   "usImporting": "正在导入…",
   "usImportSuccess": "导入成功",
   "usImportUpdated": "脚本已更新",
-  "usImportUrlFailed": "导入失败，请检查网址",
+  "usImportUrlFailed": "导入失败：{{error}}",
   "justNow": "刚刚"
 }

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import { openBrowser, closeBrowser, onBrowserClosed, browserMapKey, getOpenBrowserKeys } from "../lib/browser";
+import { matchUrlPattern, newId, normalizeHttpUrl } from "../lib/webTools";
 import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
 import type { WebPlugin, UserScript } from "../core/types";
@@ -91,22 +93,6 @@ function clearPluginFormDraft() {
   }
 }
 
-function normalizeHttpUrl(raw: string): URL | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const withProtocol = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
-    ? trimmed
-    : `https://${trimmed}`;
-  try {
-    const u = new URL(withProtocol);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    if (!u.hostname) return null;
-    return u;
-  } catch {
-    return null;
-  }
-}
-
 function urlKey(url: URL): string {
   return browserMapKey(url.href);
 }
@@ -167,25 +153,6 @@ function FallbackIcon({ name, host, size = 14 }: { name: string; host?: string; 
       <span className="plugin-fallback-letter">{initial}</span>
     </div>
   );
-}
-
-/** Test if a URL matches a userscript match pattern */
-function testMatchPattern(pattern: string, url: string): boolean {
-  if (pattern === "<all_urls>") return true;
-  const trimmed = pattern.trim();
-  if (!trimmed) return false;
-  let regex = "";
-  for (const ch of trimmed) {
-    if (ch === "*") regex += ".*";
-    else if (ch === "?") regex += ".";
-    else if ("+.^${}()|[]\\".includes(ch)) regex += "\\" + ch;
-    else regex += ch;
-  }
-  try {
-    return new RegExp("^" + regex + "$").test(url);
-  } catch {
-    return false;
-  }
 }
 
 /** Preset script templates — users can start from these */
@@ -406,10 +373,21 @@ function PluginBrowser() {
     return { total, enabled, disabled: total - enabled };
   }, [userScripts]);
 
+  const messageTimer = useRef<number | null>(null);
   const showMsg = useCallback((type: "success" | "error", text: string) => {
+    // One timer, re-armed: otherwise a message posted just after a previous one gets
+    // erased by that earlier timeout, mid-read.
+    if (messageTimer.current) window.clearTimeout(messageTimer.current);
     setMessage({ type, text });
-    setTimeout(() => setMessage(null), 3000);
+    messageTimer.current = window.setTimeout(() => setMessage(null), 3000);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (messageTimer.current) window.clearTimeout(messageTimer.current);
+    },
+    []
+  );
 
   const changeViewMode = useCallback((mode: ViewMode) => {
     setViewMode(mode);
@@ -442,7 +420,7 @@ function PluginBrowser() {
   const addressParsed = useMemo(() => normalizeHttpUrl(address), [address]);
 
   const openPlugin = useCallback(
-    async (pluginUrl: string, pluginId?: string, opts?: { quiet?: boolean }) => {
+    async (pluginUrl: string, pluginId?: string) => {
       const parsed = normalizeHttpUrl(pluginUrl);
       if (!parsed) {
         showMsg("error", t("invalidUrlOpen"));
@@ -455,7 +433,7 @@ function PluginBrowser() {
         setActiveKeys((prev) => new Set(prev).add(key));
         setAddress(parsed.href);
         if (pluginId) void recordPluginOpen(pluginId);
-        if (!opts?.quiet) showMsg("success", t("openedInPopup"));
+        showMsg("success", t("openedInPopup"));
       } catch (e) {
         showMsg("error", t("openFailed", { error: formatInvokeError(e) }));
       } finally {
@@ -465,53 +443,14 @@ function PluginBrowser() {
     [showMsg, t, recordPluginOpen]
   );
 
-  useEffect(() => {
-    const registered: Array<{ unregister: () => Promise<void> }> = [];
-    let cancelled = false;
-    const registerAll = async () => {
-      const { register, unregister, isRegistered } = await import("@tauri-apps/plugin-global-shortcut");
-      const failed: string[] = [];
-      for (const p of webPlugins) {
-        if (!p.hotkey) continue;
-        try {
-          if (await isRegistered(p.hotkey)) {
-            await unregister(p.hotkey);
-          }
-          await register(p.hotkey, async (event) => {
-            if (event.state !== "Pressed") return;
-            const parsed = normalizeHttpUrl(p.url);
-            if (parsed) {
-              await openPlugin(parsed.href, p.id, { quiet: true });
-            }
-          });
-          registered.push({
-            unregister: async () => {
-              try {
-                await unregister(p.hotkey);
-              } catch {
-                /* ignore */
-              }
-            },
-          });
-        } catch {
-          failed.push(`${p.name} (${p.hotkey})`);
-        }
-      }
-      if (!cancelled && failed.length > 0) {
-        showMsg("error", t("hotkeyRegisterFailed", { list: failed.slice(0, 3).join(", ") }));
-      }
-    };
-    void registerAll();
-    return () => {
-      cancelled = true;
-      for (const r of registered) void r.unregister();
-    };
-  }, [webPlugins, openPlugin, showMsg, t]);
+  // Hotkey bindings are owned by `lib/pluginHotkeys.ts` (registered at app level): this
+  // page unmounts whenever the user switches tabs, and an effect here would unregister
+  // every shortcut the moment they did.
 
   useEffect(() => {
     if (!formOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setFormOpen(false);
+      if (e.key === "Escape") closeForm();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -597,19 +536,51 @@ function PluginBrowser() {
     return map;
   }, [filteredPlugins]);
 
+  /** One entry point so every way of opening the editor resets what must be reset. */
+  const openUsForm = (
+    values: { name: string; description: string; matchPatterns: string[]; code: string },
+    editingId: string | null
+  ) => {
+    setUsEditingId(editingId);
+    setUsFormName(values.name);
+    setUsDesc(values.description);
+    setUsMatch(values.matchPatterns.length > 0 ? values.matchPatterns : ["<all_urls>"]);
+    setUsCode(values.code);
+    // The match preview belongs to the script on screen, not to the last one edited.
+    setUsTestUrl("");
+    setUsFormOpen(true);
+  };
+
+  const openUsFormAdd = () => {
+    // Only an abnormal close leaves a draft; restoring it is what makes the auto-save
+    // worth having.
+    const draft = loadUsFormDraft();
+    openUsForm(
+      {
+        name: draft?.name ?? "",
+        description: draft?.description ?? "",
+        matchPatterns: draft?.matchPatterns ?? [],
+        code: draft?.code ?? "",
+      },
+      null
+    );
+  };
+
   const openFormAdd = (prefill?: { name?: string; url?: string; group?: string }) => {
     setFormMode("add");
     setEditingId(null);
-    setFormName(prefill?.name ?? "");
-    setFormUrl(prefill?.url ?? "");
-    setFormGroup(prefill?.group ?? "");
-    setFormTags("");
-    setFormHotkey("");
+    // A draft only survives an abnormal close (Esc / backdrop), which is exactly when
+    // restoring it matters. A prefill from 复制 / 保存地址 wins.
+    const draft = prefill ? null : loadPluginFormDraft();
+    setFormName(prefill?.name ?? draft?.name ?? "");
+    setFormUrl(prefill?.url ?? draft?.url ?? "");
+    setFormGroup(prefill?.group ?? draft?.group ?? "");
+    setFormTags(draft?.tags ?? "");
+    setFormHotkey(draft?.hotkey ?? "");
     setFormOpen(true);
   };
 
-  const openFormEdit = (p: WebPlugin) => {
-    setFormMode("edit");
+  const openFormEdit = (p: WebPlugin) => {    setFormMode("edit");
     setEditingId(p.id);
     setFormName(p.name);
     setFormUrl(p.url);
@@ -656,9 +627,9 @@ function PluginBrowser() {
       return;
     }
 
-    const newId = Date.now().toString();
+    const pluginId = newId();
     await addWebPlugin({
-      id: newId,
+      id: pluginId,
       name: formName.trim(),
       url: parsed.href,
       group: formGroup.trim(),
@@ -671,7 +642,7 @@ function PluginBrowser() {
     });
     closeForm();
     if (andOpen) {
-      await openPlugin(parsed.href, newId);
+      await openPlugin(parsed.href, pluginId);
     } else {
       showMsg("success", t("added"));
     }
@@ -729,14 +700,25 @@ function PluginBrowser() {
     }
   }, [showMsg]);
 
-  const bulkToggleScripts = useCallback(async (enable: boolean) => {
-    for (const s of userScripts) {
-      if (s.enabled !== enable) {
-        await toggleUserScript(s.id);
+  const bulkToggleScripts = useCallback(
+    async (enable: boolean) => {
+      const targets = userScripts.filter((s) => s.enabled !== enable);
+      if (targets.length === 0) return;
+      let failed = 0;
+      for (const s of targets) {
+        try {
+          await toggleUserScript(s.id);
+        } catch {
+          failed++;
+        }
       }
-    }
-    showMsg("success", enable ? t("usEnableAll") : t("usDisableAll"));
-  }, [userScripts, toggleUserScript, showMsg, t]);
+      // Reporting "已启用" after a half-applied batch is how you end up believing a
+      // script is live when it is not.
+      if (failed > 0) showMsg("error", t("usBulkToggleFailed", { n: failed }));
+      else showMsg("success", enable ? t("usEnableAll") : t("usDisableAll"));
+    },
+    [userScripts, toggleUserScript, showMsg, t]
+  );
 
   const importScriptFromUrl = useCallback(async (url: string) => {
     setUsImporting(true);
@@ -753,23 +735,25 @@ function PluginBrowser() {
         fetchUrl = fetchUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
       }
 
-      const resp = await fetch(fetchUrl);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const code = await resp.text();
+      // Rust does the request: script hosts do not send CORS headers, so a webview
+      // `fetch()` fails for exactly the sites this feature is meant for.
+      const code = await invoke<string>("fetch_userscript_source", { url: fetchUrl });
 
       // Try to parse UserScript metadata
       let name = "";
-      const description = "";
+      let description = "";
       const matchPatterns: string[] = [];
       const metaMatch = code.match(/\/\/ ==UserScript==([\s\S]*?)\/\/ ==\/UserScript==/);
       if (metaMatch) {
         const meta = metaMatch[1];
         const nameMatch = meta.match(/@name\s+(.+)/);
         if (nameMatch) name = nameMatch[1].trim();
+        const descMatch = meta.match(/@description\s+(.+)/);
+        if (descMatch) description = descMatch[1].trim();
         const matchLines = meta.match(/@match\s+(.+)/g);
         if (matchLines) {
           for (const line of matchLines) {
-            const p = line.replace("@match", "").trim();
+            const p = line.replace(/@match\s*/, "").trim();
             if (p) matchPatterns.push(p);
           }
         }
@@ -794,7 +778,7 @@ function PluginBrowser() {
         });
       } else {
         await addUserScript({
-          id: `import-url-${Date.now()}`,
+          id: newId("import-url"),
           name,
           description,
           matchPatterns: matchPatterns.length > 0 ? matchPatterns : ["<all_urls>"],
@@ -807,7 +791,9 @@ function PluginBrowser() {
       setUsImportUrl("");
       showMsg("success", existing ? t("usImportUpdated") : t("usImportSuccess"));
     } catch (e) {
-      showMsg("error", t("usImportUrlFailed"));
+      // The reason is the useful part: a 404 and a refused connection look identical
+      // otherwise.
+      showMsg("error", t("usImportUrlFailed", { error: formatInvokeError(e) }));
     } finally {
       setUsImporting(false);
     }
@@ -986,7 +972,7 @@ function PluginBrowser() {
         if (existingUrls.has(parsed.href)) continue;
         existingUrls.add(parsed.href);
         await addWebPlugin({
-          id: `import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          id: newId("import"),
           name: s.name,
           url: parsed.href,
           group: s.group || "",
@@ -1065,7 +1051,7 @@ function PluginBrowser() {
         <div className="plugin-item-icon">
           {parsed ? (
             <img
-              src={`https://favicon.im/${host}?larger=true`}
+              src={`${parsed.origin}/favicon.ico`}
               alt=""
               draggable={false}
               onError={(e) => {
@@ -1165,7 +1151,7 @@ function PluginBrowser() {
           <div className="plugin-card-icon">
             {parsed ? (
               <img
-                src={`https://favicon.im/${host}?larger=true`}
+                src={`${parsed.origin}/favicon.ico`}
                 alt=""
                 draggable={false}
                 onError={(e) => {
@@ -1589,7 +1575,7 @@ function PluginBrowser() {
                         patterns = ["<all_urls>"];
                       }
                       await addUserScript({
-                        id: `import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        id: newId("import"),
                         name: s.name,
                         description: s.description || "",
                         matchPatterns: patterns,
@@ -1625,14 +1611,7 @@ function PluginBrowser() {
               </button>
               <button
                 className="btn btn-primary btn-small"
-                onClick={() => {
-                  setUsEditingId(null);
-                  setUsFormName("");
-                  setUsDesc("");
-                  setUsMatch(["<all_urls>"]);
-                  setUsCode("");
-                  setUsFormOpen(true);
-                }}
+                onClick={openUsFormAdd}
                 type="button"
               >
                 <Plus size={12} /> {t("add")}
@@ -1659,12 +1638,10 @@ function PluginBrowser() {
                     key={preset.id}
                     className="us-preset-card"
                     onClick={() => {
-                      setUsEditingId(null);
-                      setUsFormName(t(preset.nameKey));
-                      setUsDesc("");
-                      setUsMatch(preset.matchPatterns);
-                      setUsCode(preset.code);
-                      setUsFormOpen(true);
+                      openUsForm(
+                        { name: t(preset.nameKey), description: "", matchPatterns: preset.matchPatterns, code: preset.code },
+                        null
+                      );
                       setUsShowPresets(false);
                     }}
                     type="button"
@@ -1761,7 +1738,7 @@ function PluginBrowser() {
                 <div className="plugin-empty-actions">
                   <button
                     className="btn btn-primary btn-small"
-                    onClick={() => setUsFormOpen(true)}
+                    onClick={openUsFormAdd}
                     type="button"
                   >
                     <Plus size={12} /> {t("usAddFirst")}
@@ -1788,14 +1765,12 @@ function PluginBrowser() {
                     t={t}
                     tc={tc}
                     onToggle={() => toggleUserScript(s.id)}
-                    onEdit={() => {
-                      setUsEditingId(s.id);
-                      setUsFormName(s.name);
-                      setUsDesc(s.description);
-                      setUsMatch(s.matchPatterns.length > 0 ? s.matchPatterns : ["<all_urls>"]);
-                      setUsCode(s.code);
-                      setUsFormOpen(true);
-                    }}
+                    onEdit={() =>
+                      openUsForm(
+                        { name: s.name, description: s.description, matchPatterns: s.matchPatterns, code: s.code },
+                        s.id
+                      )
+                    }
                     onDelete={async () => {
                       const ok = await confirm({
                         title: t("deleteTitle"),
@@ -1807,7 +1782,7 @@ function PluginBrowser() {
                     }}
                     onDuplicate={async () => {
                       await addUserScript({
-                        id: Date.now().toString(),
+                        id: newId(),
                         name: s.name + " (copy)",
                         description: s.description,
                         matchPatterns: [...s.matchPatterns],
@@ -2070,8 +2045,8 @@ function PluginBrowser() {
                     />
                   </div>
                   {usTestUrl.trim() && (
-                    <span className={`us-test-result ${usMatch.some((p) => testMatchPattern(p, usTestUrl.trim())) ? "is-match" : "is-no-match"}`}>
-                      {usMatch.some((p) => testMatchPattern(p, usTestUrl.trim()))
+                    <span className={`us-test-result ${usMatch.some((p) => matchUrlPattern(p, usTestUrl.trim())) ? "is-match" : "is-no-match"}`}>
+                      {usMatch.some((p) => matchUrlPattern(p, usTestUrl.trim()))
                         ? t("usPatternMatches")
                         : t("usPatternNoMatch")}
                     </span>
@@ -2121,7 +2096,7 @@ function PluginBrowser() {
                       showMsg("success", t("usSaved"));
                     } else {
                       await addUserScript({
-                        id: Date.now().toString(),
+                        id: newId(),
                         name: usFormName.trim(),
                         description: usDesc.trim(),
                         matchPatterns: finalPatterns,

@@ -393,6 +393,7 @@ pub fn run() {
             cloudflared_commands::open_in_browser,
             plugin_commands::navigate_browser_window,
             plugin_commands::open_browser_window_with_toolbar,
+            plugin_commands::fetch_userscript_source,
             db_commands::db_load,
             db_commands::db_save,
             cursor::inspect_cursor_backup,

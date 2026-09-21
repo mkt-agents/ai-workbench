@@ -1031,11 +1031,16 @@
 
 /* ─── Reset ─── */*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Added by App.tsx while the window is being resized: the blurred surfaces are the
+   expensive part of a resize (they re-sample at the new area), and transitions on
+   geometry properties would animate the reflow itself.
+   Deliberately NOT killing `animation` — every keyframe here is transform/opacity,
+   which the compositor handles and which resize does not make costlier. Killing them
+   froze the running-test / AI-request spinners for 300ms after any resize. */
 body.resizing *,
 body.resizing *::before,
 body.resizing *::after {
   transition: none !important;
-  animation: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -1823,10 +1828,8 @@ input, select, textarea { font-family: inherit; }
   flex-shrink: 0;
   background: var(--bg-1);
   border-bottom: none;
-  -webkit-app-region: drag;
   position: relative;
   z-index: 50;
-  will-change: -webkit-app-region;
 }
 
 @media not (prefers-color-scheme: dark) {
@@ -1903,7 +1906,6 @@ input, select, textarea { font-family: inherit; }
   user-select: none;
   position: relative;
   z-index: 40;
-  will-change: width;
 }
 
 @media not (prefers-color-scheme: dark) {

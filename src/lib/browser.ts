@@ -1,6 +1,7 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
+import { matchUrlPattern } from "./webTools";
 
 /** logical key → WebviewWindow (survives for focus/close in this session) */
 const windows = new Map<string, WebviewWindow>();
@@ -9,33 +10,13 @@ let defaultWindow: WebviewWindow | null = null;
 type ClosedListener = (key: string) => void;
 const closedListeners = new Set<ClosedListener>();
 
-/** Convert userscript match pattern to regex test */
-function matchUrlPattern(pattern: string, url: string): boolean {
-  if (pattern === "<all_urls>") return true;
-  const trimmed = pattern.trim();
-  if (!trimmed) return false;
-  let regex = "";
-  for (const ch of trimmed) {
-    if (ch === "*") regex += ".*";
-    else if (ch === "?") regex += ".";
-    else if ("+.^${}()|[]\\".includes(ch)) regex += "\\" + ch;
-    else regex += ch;
-  }
-  try {
-    return new RegExp("^" + regex + "$").test(url);
-  } catch {
-    return false;
-  }
-}
-
 /** Get enabled userscripts that match the given URL */
-function getMatchingUserscripts(url: string): Array<{ name: string; code: string }> {
+function getMatchingUserscripts(url: string): Array<{ name: string; code: string; patterns: string[] }> {
   try {
     const state = useGlobalStore.getState();
-    const scripts = state.userScripts?.filter(
-      (s) => s.enabled && s.matchPatterns.some((p) => matchUrlPattern(p, url))
-    ) ?? [];
-    return scripts.map((s) => ({ name: s.name, code: s.code }));
+    const scripts =
+      state.userScripts?.filter((s) => s.enabled && s.matchPatterns.some((p) => matchUrlPattern(p, url))) ?? [];
+    return scripts.map((s) => ({ name: s.name, code: s.code, patterns: s.matchPatterns }));
   } catch {
     return [];
   }

@@ -777,9 +777,11 @@ export const useGlobalStore = create<StoreState>()(
       }),
 
       toggleUserScript: async (id) => withTable("user_scripts", async () => {
-        const now = new Date().toISOString();
+        // Deliberately not touching updatedAt: the list sorts by it by default, and
+        // flipping the enable switch is not an edit — cards jumping around the list made
+        // the switch look broken.
         const scripts = get().userScripts.map((s) =>
-          s.id === id ? { ...s, enabled: !s.enabled, updatedAt: now } : s
+          s.id === id ? { ...s, enabled: !s.enabled } : s
         );
         await storage.userScripts.save(scripts);
         set(() => ({ userScripts: scripts }));

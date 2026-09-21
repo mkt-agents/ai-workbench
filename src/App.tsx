@@ -42,6 +42,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { registerQuickAskShortcut } from "./lib/quickAskShortcut";
+import { syncPluginHotkeys } from "./lib/pluginHotkeys";
 import { applyDocumentTheme } from "./lib/theme";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import "./styles.css";
@@ -76,9 +77,11 @@ const WIDE_EXPAND_PX = 900;
 function App() {
   const { t } = useTranslation("navigation");
   const { t: tc } = useTranslation("common");
+  const { t: tp } = useTranslation("plugins");
   const { i18n } = useTranslation();
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
+  const webPlugins = useGlobalStore((s) => s.webPlugins);
 
   const [activeTab, setActiveTab] = useState<Tab>("ai-chat");
   const [gitMounted, setGitMounted] = useState(false);
@@ -98,6 +101,28 @@ function App() {
   );
   const [isReady, setIsReady] = useState(false);
   const [trayToast, setTrayToast] = useState<string | null>(null);
+  const [hotkeyToast, setHotkeyToast] = useState<string | null>(null);
+
+  // Bookmark shortcuts belong to the app, not to the 网页工具 page: that page unmounts on
+  // every tab switch, and a page-level registration dies with it.
+  useEffect(() => {
+    let cancelled = false;
+    void syncPluginHotkeys(webPlugins).then((failed) => {
+      if (cancelled) return;
+      setHotkeyToast(
+        failed.length ? tp("hotkeyRegisterFailed", { list: failed.slice(0, 3).join(", ") }) : null
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [webPlugins, tp]);
+
+  useEffect(() => {
+    if (!hotkeyToast) return;
+    const timer = setTimeout(() => setHotkeyToast(null), 5000);
+    return () => clearTimeout(timer);
+  }, [hotkeyToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -259,15 +284,10 @@ function App() {
   );
 
   useEffect(() => {
-    let timer: number | undefined;
-    const onResize = () => {
-      document.body.classList.add("resizing");
-      if (timer) clearTimeout(timer);
-      timer = window.setTimeout(
-        () => document.body.classList.remove("resizing"),
-        300
-      );
+    let idleTimer: number | undefined;
+    let frame = 0;
 
+    const applyWidthRules = () => {
       const w = window.innerWidth;
       const { sidebarCollapsed } = useGlobalStore.getState().settings;
 
@@ -290,11 +310,27 @@ function App() {
       }
     };
 
-    onResize();
+    const onResize = () => {
+      // Must stay synchronous: the blurred surfaces have to be gone before the frame
+      // that paints the new size.
+      document.body.classList.add("resizing");
+      if (idleTimer) window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => document.body.classList.remove("resizing"), 300);
+
+      // A drag-resize fires per pixel; the width rules only need to run once per frame.
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        applyWidthRules();
+      });
+    };
+
+    applyWidthRules();
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
-      if (timer) clearTimeout(timer);
+      if (idleTimer) window.clearTimeout(idleTimer);
+      if (frame) window.cancelAnimationFrame(frame);
     };
   }, []);
 
@@ -406,7 +442,7 @@ function App() {
 
       <div className="right-area">
         <div className="titlebar" data-tauri-drag-region>
-          <div className="titlebar-drag" />
+          <div className="titlebar-drag" data-tauri-drag-region />
           {/* Dev-instance badge (Vite compile-time flag): only rendered when
               launched via the dev server (npm run tauri dev); dead code in
               packaged builds — never ships. */}
@@ -478,6 +514,11 @@ function App() {
               {trayToast && (
                 <div className="toast toast-success" role="status">
                   <span className="toast-text">{trayToast}</span>
+                </div>
+              )}
+              {hotkeyToast && (
+                <div className="toast toast-error" role="alert">
+                  <span className="toast-text">{hotkeyToast}</span>
                 </div>
               )}
             </div>

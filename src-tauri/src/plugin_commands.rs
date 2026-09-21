@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::time::Duration;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
 use url::Url;
@@ -22,6 +23,13 @@ fn is_safe_url(url: &str) -> bool {
 pub struct UserscriptInit {
     pub name: String,
     pub code: String,
+    /// The script's `@match` patterns. The window's init script re-runs on every
+    /// navigation, so each script has to re-check them against the *current* URL —
+    /// otherwise a script bound to one site keeps executing on whatever the user
+    /// clicks through to. Missing/empty means "run everywhere", i.e. the old behaviour,
+    /// rather than failing the whole window creation.
+    #[serde(default)]
+    pub patterns: Vec<String>,
 }
 
 /// Navigate existing "browser" webview window. Returns true if navigated, false if window missing.
@@ -498,7 +506,36 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
   // Userscript runner — injected pages call this from their own IIFE so they
   // execute after the toolbar sets up, with a guarded try/catch so one bad
   // script can't break the toolbar or other scripts.
-  window.__aiwb_run_userscript = function(fn) {
+  //
+  // `patterns` is re-checked against the current URL because this init script runs on
+  // every navigation, not just the first. The glob rules mirror the app's own matcher
+  // (src/lib/webTools.ts): `*` any run, `?` one char, everything else literal.
+  window.__aiwb_url_matches = function (patterns) {
+    if (!patterns || !patterns.length) return true;
+    var url = String(location.href);
+    for (var i = 0; i < patterns.length; i++) {
+      var p = String(patterns[i] || '').trim();
+      if (p === '<all_urls>') return true;
+      if (!p) continue;
+      var re = '';
+      for (var j = 0; j < p.length; j++) {
+        var ch = p.charAt(j);
+        if (ch === '*') re += '.*';
+        else if (ch === '?') re += '.';
+        else if ('+.^${}()|[]\\'.indexOf(ch) >= 0) re += '\\' + ch;
+        else re += ch;
+      }
+      try {
+        if (new RegExp('^' + re + '$').test(url)) return true;
+      } catch (e) {
+        /* a broken pattern simply never matches */
+      }
+    }
+    return false;
+  };
+
+  window.__aiwb_run_userscript = function (fn, patterns) {
+    if (!window.__aiwb_url_matches(patterns)) return;
     try {
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', fn);
@@ -581,13 +618,18 @@ pub async fn open_browser_window_with_toolbar(
             if script.code.trim().is_empty() {
                 continue;
             }
+            let patterns_json = serde_json::to_string(&script.patterns).unwrap_or_else(|_| "[]".into());
             init_script.push_str("\n(function(){\n");
             init_script.push_str("// Userscript: ");
-            init_script.push_str(&script.name);
+            // The name comes from the script itself (`@name` on import) and this is a
+            // line comment inside generated code — a newline in it would escape.
+            init_script.push_str(&script.name.replace(['\r', '\n'], " "));
             init_script.push_str("\n");
             init_script.push_str("__aiwb_run_userscript(() => {\n");
             init_script.push_str(&script.code);
-            init_script.push_str("\n});\n})();\n");
+            init_script.push_str("\n}, ");
+            init_script.push_str(&patterns_json);
+            init_script.push_str(");\n})();\n");
         }
     }
 
@@ -623,4 +665,48 @@ pub async fn open_browser_window_with_toolbar(
 
     let _ = win.set_focus();
     Ok(label)
+}
+
+/// Largest script body the importer will hold in memory.
+const MAX_FETCH_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Fetch a userscript source for the "import from URL" flow.
+///
+/// It has to happen here rather than with the webview's own `fetch()`: script hosts
+/// (GreasyFork above all) do not send `Access-Control-Allow-Origin`, so the browser-side
+/// request is blocked by CORS and the feature could never work for its main use case.
+#[tauri::command]
+pub async fn fetch_userscript_source(url: String) -> Result<String, String> {
+    if !is_safe_url(&url) {
+        return Err("仅支持 http/https 地址".to_string());
+    }
+    let client = reqwest::Client::builder()
+        // Some hosts reject reqwest's default agent outright.
+        .user_agent("Mozilla/5.0 (AI-Workbench) userscript-import")
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("无法发起请求: {}", e))?;
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("服务端返回 {}", status.as_str()));
+    }
+    if resp.content_length().unwrap_or(0) > MAX_FETCH_BYTES {
+        return Err("文件超过 2MB，不像脚本文件".to_string());
+    }
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {}", e))?;
+    if text.len() as u64 > MAX_FETCH_BYTES {
+        return Err("文件超过 2MB，不像脚本文件".to_string());
+    }
+    if text.trim().is_empty() {
+        return Err("返回内容为空".to_string());
+    }
+    Ok(text)
 }

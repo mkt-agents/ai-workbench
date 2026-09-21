@@ -115,12 +115,13 @@
   "usStats": "{{total}} scripts, {{enabled}} enabled",
   "usEnableAll": "Enable all",
   "usDisableAll": "Disable all",
+  "usBulkToggleFailed": "{{n}} script(s) failed to toggle; the state is only partly applied",
   "usImportUrlTitle": "Import script from URL",
   "usImportUrlPlaceholder": "Enter script URL (GreasyFork/GitHub/raw JS)…",
   "usImportUrlHint": "Supports .js files, GreasyFork pages, GitHub raw links",
   "usImporting": "Importing…",
   "usImportSuccess": "Import successful",
   "usImportUpdated": "Script updated",
-  "usImportUrlFailed": "Import failed, check the URL",
+  "usImportUrlFailed": "Import failed: {{error}}",
   "justNow": "just now"
 }
