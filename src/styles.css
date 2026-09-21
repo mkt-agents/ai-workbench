@@ -7265,7 +7265,9 @@ input, select, textarea { font-family: inherit; }
 .tool-confirm-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7279,12 +7281,12 @@ input, select, textarea { font-family: inherit; }
 }
 
 .tool-confirm-dialog {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
   width: 420px;
   max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--float-shadow);
   transform: scale(0.95);
   transition: transform 0.2s;
 }
