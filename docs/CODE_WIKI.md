@@ -114,7 +114,19 @@ ai-workbench/
 │   │   ├── VersionSwitcher.tsx   # Node.js / JDK 版本切换
 │   │   ├── CloudflaredManager.tsx# 内网穿透（临时 / 命名隧道 + 日志流）
 │   │   ├── HostsManager.tsx      # 系统 Hosts 读写 + 备份恢复
-│   │   ├── PluginBrowser.tsx     # 网页工具（WebView 打开 http(s) 链接）
+│   │   ├── PluginBrowser.tsx     # 网页工具（书签 + 用户脚本，弹窗浏览器打开 http(s)）
+│   │   ├── TestManager.tsx       # 测试管理主页（项目列表 + 运行 + 实时输出 + 批量）
+│   │   ├── ScanTestProjectsModal.tsx # 递归扫描并批量登记测试项目
+│   │   ├── TestGenerator.tsx     # AI 生成测试用例
+│   │   ├── FailureDiagnosis.tsx  # AI 失败诊断
+│   │   ├── CoverageReport.tsx    # 覆盖率报告视图
+│   │   ├── ChangeReportModal.tsx # 变更回归报告（基准选择 + 静态结论 + AI 章节）
+│   │   ├── ChangeTestSelection.tsx # 受影响测试：勾选后按改动跑指定用例
+│   │   ├── ChangeScenarioChecklist.tsx # 验收清单：可勾选条目 + 进度
+│   │   ├── TestModal.tsx         # 测试页弹窗外壳（宽度/滚动规则）
+│   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
+│   │   ├── MarkdownView.tsx      # Markdown 渲染
+│   │   ├── DevTools.tsx          # 小工具页（HTTP 客户端等）
 │   │   ├── Settings.tsx          # 设置页（主题 / 语言 / 导出导入）
 │   │   ├── ErrorBoundary.tsx     # React 错误边界
 │   │   ├── ConfirmModal.tsx      # 确认对话框 + Provider（Context）
@@ -131,7 +143,10 @@ ai-workbench/
 │   │
 │   ├── lib/                       # 业务工具库
 │   │   ├── aiProviders.ts       # AI 厂商 provider 列表 + 显示元数据
-│   │   ├── browser.ts            # 打开浏览器窗口（webview）
+│   │   ├── aiText.ts             # AI 纯文本的围栏剥离 / `##` 章节切分
+│   │   ├── browser.ts            # 打开浏览器窗口（webview）+ 用户脚本注入筛选
+│   │   ├── webTools.ts           # URL 规范化 / `@match` 通配判定 / newId（唯一主键）
+│   │   ├── pluginHotkeys.ts      # 书签全局快捷键注册（应用层，切页不失效）
 │   │   ├── floatingMenu.ts       # 悬浮菜单定位计算
 │   │   ├── promptOptimize.ts     # 提示词构造器
 │   │   ├── quickAskShortcut.ts   # 全局快捷键注册
@@ -164,7 +179,21 @@ ai-workbench/
 │   │   ├── cloudflared_commands.rs# Cloudflare Tunnel（快速 / 命名 + 日志 + config.yml）
 │   │   ├── hosts_commands.rs      # 系统 Hosts（读 / 写 / 备份 / 还原 / 原子替换）
 │   │   ├── runtime_commands.rs    # Node.js / JDK 版本切换（修改注册表 PATH）
-│   │   ├── plugin_commands.rs     # 网页工具（WebView navigate）
+│   │   ├── plugin_commands.rs     # 网页工具（建带浮动工具栏的弹窗 + 注入脚本 + 脚本抓取）
+│   │   ├── test_commands.rs       # 测试管理：项目 CRUD / 扫描 / run_test（超时·取消·实时输出）
+│   │   ├── test_output_parsers.rs # 纯函数：各框架 stdout 与 jest/vitest/surefire 报告解析
+│   │   ├── coverage_parsers.rs    # 纯函数：istanbul / llvm-cov / pytest-cov / lcov / jacoco / cobertura
+│   │   ├── maven_pom.rs           # 纯函数：pom 解析 + reactor 根查找 + mvn 命令计划
+│   │   ├── project_scan.rs        # 纯函数：目录树递归识别可测项目（跳过 target/node_modules…）
+│   │   ├── test_error_kind.rs     # 纯函数：失败原因分类（dependency/wrapper/…）+ 可执行诊断
+│   │   ├── test_schema.rs         # rusqlite：已存在数据库的加列迁移（幂等）
+│   │   ├── test_selection.rs      # 纯函数：改动 → 各框架的用例过滤参数（-Dtest / -- path / 位置参数）
+│   │   ├── test_scenarios.rs      # rusqlite：验收清单落库 + 报告↔运行关联 + markdown 解析
+│   │   ├── change_report.rs       # 纯函数：git diff 机器可读输出 → 模块/分层/风险/接口变化
+│   │   ├── change_store.rs        # rusqlite：变更报告落库与保留策略
+│   │   ├── change_commands.rs     # 变更回归报告命令（采集 / AI 章节 / 选测 / 清单 / 关联）
+│   │   ├── devtools_commands.rs   # 小工具页（HTTP 请求等）
+│   │   ├── test_run_e2e.rs        # 真实子进程 + 真实 schema 的端到端测试（本机仅编译验证）
 │   │   ├── tool_commands.rs       # 工具类：auto-start / 剪贴板 / 数据导入导出 / 文件对话框
 │   │   ├── cancellation.rs        # AI 流式请求取消（CancelGuard）
 │   │   ├── cancellation_commands.rs# cancel_request Tauri 命令
@@ -405,11 +434,14 @@ storage.<domain>.save()  →  invoke('db_save', { table, rows })  →  void
 
 **Table 类型**:
 ```typescript
-type DbTable = 'git_accounts' | 'git_repo_configs' | 'host_profiles'
-  | 'web_plugins' | 'plugin_states' | 'recent_projects'
-  | 'git_workspaces' | 'cursor_accounts' | 'ai_models'
-  | 'cloudflared_profiles' | 'snippets'
+type DbTable = 'git_accounts' | 'git_repo_configs' | 'git_host_configs'
+  | 'host_profiles' | 'web_plugins' | 'user_scripts' | 'plugin_states'
+  | 'recent_projects' | 'git_workspaces' | 'cursor_accounts' | 'ai_models'
+  | 'cloudflared_profiles' | 'snippets' | 'quick_ask_sessions'
+  | 'json_tool_history' | 'http_saved_requests' | 'http_history'
 ```
+
+> 测试管理与变更回归的表（`test_projects` / `test_runs` / `test_history` / `change_reports` / `test_scenarios` / `change_report_runs`）不走这个联合类型：它们由各模块自己的 `SCHEMA_SQL` 建表、由 `test_commands.rs` / `change_store.rs` / `test_scenarios.rs` 直接读写。
 
 **命名约定**: TypeScript 用 camelCase (`createdAt`)，SQLite 用 snake_case (`created_at`)。该层完成双向映射。
 
@@ -469,6 +501,17 @@ useTauriEvent<T>(eventName, handler, deps)
 
 invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）。
 
+### 6.10 样式与窗口 resize 性能约定
+
+主窗口是无边框（`decorations: false`）+ 自定义标题栏，最大化 / 拖动改尺寸时整篇文档要重新算样式并重新栅格化，所以有这几条硬约定：
+
+- **不要用 `transition: all`**，也不要把布局属性（`width/height/padding/margin/font-size/gap/inset…`）写进 transition —— 那样每次改窗口尺寸都会把 reflow 当动画播（"UI 在慢慢追"的由来）。统一用两个 token：`--transition-colors-fast`（0.12s）/ `--transition-colors`（0.18s），值只含 `background-color, color, border-color, box-shadow, opacity, transform`。
+- 确实需要过渡布局属性的只有三处：`.sidebar`（折叠宽度）、`.dsh-progress-fill` 与 `.tm-cov-bar-fill`（进度条宽度）。`App.tsx` 在 resize 期间给 `body` 加 `.resizing`，`styles.css` 里对应规则把它们临时关掉。
+- **新增带 `backdrop-filter` 的界面，必须同时加进 `styles.css` 的 `body.resizing :is(...)` 清单**，否则拖窗口时它会按新面积重采样背景。`.card` 是例外：只有 `glass` 主题保留卡片磨砂，所以它的 kill 规则按主题限定为 `html[data-theme="glass"] body.resizing .card`（一屏可能上百个卡片，白匹配很贵）。
+- 不要用 `will-change` 常驻提升合成层；`-webkit-app-region` 是 Electron 属性，Tauri 只认 `data-tauri-drag-region`。
+- `resize` 监听要用 `requestAnimationFrame` 合并（每帧最多一次宽度判定），但 `classList.add("resizing")` 必须留在事件回调里同步执行，否则模糊面在这一帧仍参与栅格化。
+- 复测脚本在仓库外（`.qoder-cn/tmp/…/ab-old.html` / `ab-new.html` / `resize-cost-harness.html`，引 dist 里的当前 CSS）。**不要在页面里运行时改 `CSSRule`**：那会让整篇样式失效，读数不可信。
+
 ---
 
 ## 7. 前端组件层
@@ -511,7 +554,8 @@ openGroups: Set<string>       // 分组展开状态
 | `CloudflaredManager` | 内网穿透 | 临时隧道 / 命名隧道 / 日志流 / config.yml 编辑 |
 | `HostsManager` | Hosts 管理 | 读写 + 原子替换 + 备份恢复 |
 | `VersionSwitcher` | 运行时切换 | Node.js / JDK PATH 写入注册表 |
-| `PluginBrowser` | 网页工具 | 自定义 WebView 窗口打开 http(s) |
+| `PluginBrowser` | 网页工具 | 书签 + 用户脚本两个页签；弹窗浏览器打开 http(s)（脚本按 `@match` 注入） |
+| `TestManager` | 测试管理 | 项目登记/递归扫描、单个与批量运行、实时输出与取消、用例明细、覆盖率、变更回归报告入口 |
 | `Settings` | 设置 | 主题 / 语言 / 自启 / 快捷键 / 数据导出导入 |
 
 ### 7.3 弹窗组件
@@ -523,6 +567,11 @@ openGroups: Set<string>       // 分组展开状态
 | `BatchIdentityModal` | 批量设置仓库身份 |
 | `RepoBindingModal` | 仓库绑定 Git 账号 |
 | `ScanReposModal` | 扫描目录找 Git 仓库 |
+| `ScanTestProjectsModal` | 递归扫描目录批量登记测试项目（含框架/命令预览与注意事项徽章） |
+| `TestModal` + `ModalTitleRow` | 测试页弹窗外壳（宽度/滚动/Esc 规则，`busy` 时拒绝关闭） |
+| `ChangeReportModal` | 变更回归报告弹窗（基准选择、静态结论、AI 章节、导出） |
+| `ChangeTestSelection` | 报告内「受影响测试」：勾选目标 → 按改动只跑指定用例 |
+| `ChangeScenarioChecklist` | 报告内「验收清单」：四态勾选 + 进度条 + 手动补条/删除 |
 | `RuntimeInstallModal` | 安装新版本 Node/JDK |
 | `AccountManagerModal` | Cursor 账号编辑弹窗 |
 
@@ -743,6 +792,28 @@ is_cancelled(request_id)      // 每 chunk 检查
 cancel_request(request_id)    // 前端调用取消
 ```
 
+### 8.14 测试管理模块族
+
+按"能不能脱离 Tauri 单测"分三层，这是本项目唯一能真跑后端测试的路径（app 测试可执行文件在部分机器上加载失败）：
+
+| 层 | 文件 | 依赖 | 职责 |
+|----|------|------|------|
+| 纯函数 | `test_output_parsers.rs`、`coverage_parsers.rs`、`maven_pom.rs`、`project_scan.rs`、`test_error_kind.rs`、`test_selection.rs`、`change_report.rs` | serde / 标准库 | 解析与判定，不含 IO |
+| 仅 rusqlite | `test_schema.rs`、`test_scenarios.rs`、`change_store.rs` | rusqlite | 建表/迁移/查询 |
+| 命令层 | `test_commands.rs`、`change_commands.rs` | tauri | 起进程、读写库、发事件 |
+
+关键约定：
+
+- **`run_test` 的取消 token 就是 `project_id`**（一个项目同时只允许一次运行），与 AI 的 `request_id` 共用 `CancelGuard`。
+- **Maven 命令计划只有一个出口** `maven_pom::plan_maven_run()`：有 reactor 根时在根上跑 `-B -pl :<artifactId> -am test -DskipTests=false`，但 **surefire 报告永远在模块目录找**（`exec_dir` 与 `reports_root` 是两个变量），并用 mtime 过滤掉上一次运行留下的陈旧报告。
+- **`error_kind` 是 `status` 之外的第二维度**，词表固定：`dependency | wrapper | compile | noTests | skippedByPom | timeout | cancelled | command | unknown`；依赖缺失时诊断信息会带上本地仓库实际版本与可提供该构件的已登记工程路径。
+- **表结构变更必须走 `test_schema::migrate`**（`pragma_table_info` 判存在再 `ALTER`）：`CREATE TABLE IF NOT EXISTS` 不会给已存在的库加列。
+- **用例过滤语法只有一份实现**：`test_selection::args_for()`。前端勾选后回传目标名，由 `select_change_tests(report_id, only)` 重建 args，UI 侧不得拼 `-Dtest=`。
+
+### 8.15 变更回归报告
+
+`collect_change_report` 读 `git diff` 的机器可读输出（`--name-status -z` / `--numstat -z` / `ls-files --others -z`，重命名记录是 `R100\0旧\0新\0`，**旧路径在前**），产出静态分析并落库；`generate_change_report_ai` 让默认模型补五章节，并在存正文时顺带把「必测场景 / 验收清单」解析成可勾选条目入库。IDE 与编译产物（`.idea`、`target`、`node_modules`…）按**目录段精确匹配**忽略并计入 `stats.ignored`。
+
 ---
 
 ## 9. 数据库设计
@@ -862,6 +933,13 @@ cancel_request(request_id)    // 前端调用取消
 | host_profiles | TEXT (uuid) | Hosts 配置快照 |
 | web_plugin_history | INTEGER AUTO | 插件打开历史（限 100） |
 | plugin_states | TEXT (plugin_id) | 插件启用/配置 |
+| user_scripts | TEXT (id) | 用户脚本：`match_patterns`(JSON) + `match_pattern`(旧版兼容) + code + enabled |
+| test_projects | TEXT (id) | 测试项目：path/framework/test_command/working_dir + `last_error_kind` |
+| test_runs | TEXT (id，纳秒时间戳) | 单次运行完整结果：status/计数/output(≤64KB)/suites/`error_kind`（每项目保留 100 条） |
+| test_history | INTEGER AUTO | 运行历史摘要（与 test_runs 一对多） |
+| change_reports | TEXT (id) | 变更回归报告：data(静态分析 JSON) + patch + ai 章节（每项目保留 50 条） |
+| test_scenarios | INTEGER AUTO | 验收清单条目：report_id/project_id/run_id/title/detail/priority/status/note（随报告级联删除） |
+| change_report_runs | (report_id, run_id) | 报告↔运行关联（随报告或运行删除而级联） |
 
 ### 9.3 Schema 迁移
 
@@ -1028,6 +1106,53 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | 命令 | 参数 | 返回 |
 |------|------|------|
 | `cancel_request` | request_id: String | — |
+
+### 10.12 Plugin Commands（3 条）
+
+| 命令 | 参数 | 返回 |
+|------|------|------|
+| `navigate_browser_window` | url: String | bool（是否复用了旧窗口） |
+| `open_browser_window_with_toolbar` | url, width?, height?, label?, userscripts? | String（窗口 label） |
+| `fetch_userscript_source` | url: String | String（脚本正文；http/https 白名单 + 20s 超时 + 2MB 上限） |
+
+### 10.13 Test Commands（14 条）
+
+| 命令 | 参数 | 返回 |
+|------|------|------|
+| `load_test_projects` | — | Vec\<TestProject\> |
+| `add_test_project` / `add_test_projects` | TestProject / Vec | — |
+| `update_test_project` | id, updates | TestProject |
+| `delete_test_project` | id | — |
+| `detect_project_type` | path | ProjectDetectionResult |
+| `scan_test_projects` | base_path, max_depth? | ScanOutcome（递归识别，聚合器 pom 只作容器） |
+| `run_test` | project_id, args? | TestRunResult（emit `test-run-output` 实时输出；30 分钟超时；`cancel_test_run(project_id)` 真杀进程树） |
+| `cancel_test_run` | project_id | — |
+| `get_test_history` | project_id, limit? | Vec\<TestHistoryEntry\> |
+| `get_test_run` | run_id | TestRunResult（历史回看完整输出） |
+| `generate_test_code` / `diagnose_test_failure` | 复用默认模型 | String（markdown） |
+| `read_coverage_report` | project_id | CoverageReport \| null |
+
+### 10.14 Change Report Commands（11 条）
+
+| 命令 | 参数 | 返回 |
+|------|------|------|
+| `collect_change_report` | project_id, base?, last_commits? | ChangeReportBundle（未提交 / 相对基准 / 最近 N 个提交） |
+| `list_change_reports` / `get_change_report` / `delete_change_report` | project_id / report_id | 摘要列表 / StoredChangeReport（含 scenarios + summary + runs） |
+| `generate_change_report_ai` | report_id | String（同时把验收条目解析落库） |
+| `select_change_tests` | report_id, only? | TestSelection（`only` 传入勾选目标后重建 args） |
+| `generate_change_scenarios` / `add_change_scenario` | report_id[, title] | 新增条数 / scenario id |
+| `set_scenario_status` | scenario_id, status, note?, run_id? | ScenarioSummary（含 percent；`note: null` 表示不改） |
+| `delete_change_scenario` | scenario_id | — |
+| `link_change_run` | report_id, run_id | —（报告↔运行关联） |
+
+### 10.15 DevTools Commands（4 条）
+
+| 命令 | 参数 | 返回 |
+|------|------|------|
+| `devtools_list_ports` | — | 监听端口列表 |
+| `devtools_resolve_processes` | ports | 端口→进程 |
+| `devtools_kill_process` | pid | — |
+| `devtools_http_request` | 请求描述 | 响应（小工具页 HTTP 客户端） |
 
 ---
 
