@@ -74,6 +74,13 @@
   --transition-fast: 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-normal: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 
+  /* Paint and composite properties only. Layout properties (width, height, padding,
+     margin, font-size…) deliberately do NOT appear here: a transition that covers them
+     turns every window resize into an animation of the reflow itself, which is what made
+     maximizing feel like the UI was catching up with itself. */
+  --transition-colors-fast: background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1), color 0.12s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1), transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-colors: background-color 0.18s cubic-bezier(0.4, 0, 0.2, 1), color 0.18s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.18s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.18s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.18s cubic-bezier(0.4, 0, 0.2, 1), transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+
   /* 字体 */
   --font-sans: 'Inter', -apple-system, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
@@ -715,7 +722,7 @@
   border-radius: 14px;
   padding: 16px;
   margin-bottom: 8px;
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: var(--transition-colors-fast);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-item:hover {
@@ -1031,18 +1038,54 @@
 
 /* ─── Reset ─── */*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* Added by App.tsx while the window is being resized: the blurred surfaces are the
-   expensive part of a resize (they re-sample at the new area), and transitions on
-   geometry properties would animate the reflow itself.
-   Deliberately NOT killing `animation` — every keyframe here is transform/opacity,
-   which the compositor handles and which resize does not make costlier. Killing them
-   froze the running-test / AI-request spinners for 300ms after any resize. */
-body.resizing *,
-body.resizing *::before,
-body.resizing *::after {
-  transition: none !important;
+/* Added by App.tsx while the window is being resized.
+ *
+ * Scoped on purpose. `body.resizing *` matched every node, so one resize gesture cost
+ * two whole-document style recalcs (measured: ~49ms on a 1.9k-node page, i.e. ~3
+ * dropped frames). Listing the surfaces keeps the same effect for pennies.
+ *
+ * The blur list is every selector in this file that declares backdrop-filter; the
+ * transition list is every selector that transitions a layout property (.sidebar plus
+ * the two progress fills). New blurred surface? Add it here.
+ *
+ * `animation` is deliberately untouched: all 18 keyframes animate transform/opacity
+ * only, and killing them froze the test/AI spinners for 300ms after any resize. */
+body.resizing :is(
+  .sidebar,
+  .titlebar,
+  .ai-header,
+  .modal-overlay,
+  .toast,
+  .tool-confirm-overlay,
+  .prompt-model-menu,
+  .ai-model-menu,
+  .prompt-template-menu,
+  .tm-toolbar,
+  .http-history-menu
+) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* `.card` is handled separately because there can be hundreds of them on a page and the
+   walk is linear in matched elements (measured: 240 cards ≈ 17ms per resize gesture,
+   without them ≈ 0.5ms). It only carries a blur in the frosted themes, so only there is
+   it worth matching — see the backdrop-filter rules further down this file. */
+html:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"], [data-theme="light"]) body.resizing .card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+@media not (prefers-color-scheme: dark) {
+  /* "跟随系统" leaves the attribute off, and that is when .card gets the light blur. */
+  html:not([data-theme]) body.resizing .card {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+body.resizing :is(.sidebar, .dsh-progress-fill, .tm-cov-bar-fill) {
+  transition: none !important;
 }
 
 html {
@@ -1663,7 +1706,7 @@ input, select, textarea { font-family: inherit; }
   font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
   position: relative;
 }
 
@@ -1723,7 +1766,7 @@ input, select, textarea { font-family: inherit; }
   inset: 0;
   background: var(--bg-3);
   border-radius: var(--radius-full);
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
 }
 
 .toggle-slider::before {
@@ -1735,7 +1778,7 @@ input, select, textarea { font-family: inherit; }
   bottom: 3px;
   background: white;
   border-radius: 50%;
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
   box-shadow: var(--shadow-sm);
 }
 
@@ -2407,7 +2450,7 @@ input, select, textarea { font-family: inherit; }
   font-size: 12px;
   font-weight: 500;
   border: none;
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
   white-space: nowrap;
   box-shadow: var(--shadow-xs);
 }
@@ -3372,7 +3415,7 @@ input, select, textarea { font-family: inherit; }
   color: var(--text-2);
   font-size: 11px;
   font-weight: 500;
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
   cursor: pointer;
 }
 
@@ -4027,7 +4070,7 @@ input, select, textarea { font-family: inherit; }
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: var(--transition-colors);
 }
 
 .ai-tab:hover {
@@ -4191,7 +4234,7 @@ input, select, textarea { font-family: inherit; }
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: var(--transition-colors-fast);
 }
 
 .ai-toolbar-btn:hover {
@@ -4235,7 +4278,7 @@ input, select, textarea { font-family: inherit; }
   font-size: 12px;
   white-space: nowrap;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: var(--transition-colors-fast);
 }
 
 .ai-mode-btn:hover {
@@ -4751,7 +4794,7 @@ input, select, textarea { font-family: inherit; }
   border-radius: 12px;
   border: 1px solid var(--border-subtle);
   background: var(--bg-1);
-  transition: all 0.2s ease;
+  transition: var(--transition-colors);
   position: relative;
 }
 
@@ -5257,7 +5300,7 @@ input, select, textarea { font-family: inherit; }
   border-radius: 5px;
   padding: 3px 10px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: var(--transition-colors-fast);
 }
 
 .md-copy-btn:hover {
@@ -5636,7 +5679,7 @@ input, select, textarea { font-family: inherit; }
   background: var(--bg-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  transition: all 0.15s;
+  transition: var(--transition-colors-fast);
 }
 
 .plugin-address-input {
@@ -5756,7 +5799,7 @@ input, select, textarea { font-family: inherit; }
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: var(--transition-colors-fast);
   white-space: nowrap;
 }
 
@@ -5782,7 +5825,7 @@ input, select, textarea { font-family: inherit; }
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
   white-space: nowrap;
 }
 
@@ -5874,7 +5917,7 @@ input, select, textarea { font-family: inherit; }
   padding: 11px 14px;
   border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: var(--transition-colors);
   border: 1px solid var(--border-subtle);
   background: var(--bg-1);
   position: relative;
@@ -6039,7 +6082,7 @@ input, select, textarea { font-family: inherit; }
   flex-shrink: 0;
   opacity: 0;
   transform: translateX(4px);
-  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: var(--transition-colors);
 }
 
 .plugin-item:hover .plugin-item-actions,
@@ -6059,7 +6102,7 @@ input, select, textarea { font-family: inherit; }
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: var(--transition-colors-fast);
 }
 
 .plugin-item-btn:hover,
@@ -6133,7 +6176,7 @@ input, select, textarea { font-family: inherit; }
   border: none;
   color: var(--text-2);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
 }
 
 .plugin-view-btn:hover {
@@ -6165,7 +6208,7 @@ input, select, textarea { font-family: inherit; }
   border-radius: var(--radius-full);
   color: var(--text-2);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
   white-space: nowrap;
 }
 
@@ -6204,7 +6247,7 @@ input, select, textarea { font-family: inherit; }
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
   letter-spacing: 0.01em;
 }
 
@@ -6364,7 +6407,7 @@ input, select, textarea { font-family: inherit; }
   background: var(--bg-2);
   color: var(--text-2);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: var(--transition-colors-fast);
 }
 
 .plugin-tag-chip:hover {
@@ -6389,7 +6432,7 @@ input, select, textarea { font-family: inherit; }
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: var(--transition-colors);
   position: relative;
   overflow: hidden;
 }
@@ -6464,7 +6507,7 @@ input, select, textarea { font-family: inherit; }
   gap: 2px;
   opacity: 0;
   transform: translateY(2px);
-  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: var(--transition-colors);
   position: relative;
   z-index: 1;
 }
@@ -7392,7 +7435,7 @@ input, select, textarea { font-family: inherit; }
   border-radius: 8px;
   background: var(--bg-2);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: var(--transition-colors-fast);
 }
 
 .permission-mode-btn:hover {
@@ -11577,7 +11620,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   border: none;
   border-radius: 8px 8px 0 0;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
   position: relative;
 }
 
@@ -11609,7 +11652,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   border-radius: 999px;
   color: var(--text-2, #8b949e);
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
 }
 
 .plugin-tab.active .plugin-tab-count {
@@ -11634,7 +11677,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   border: 1px solid var(--border, #30363d);
   border-radius: 12px;
   overflow: hidden;
-  transition: all 0.2s ease;
+  transition: var(--transition-colors);
 }
 
 .userscript-item:hover {
@@ -11771,7 +11814,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   border-radius: 6px;
   color: var(--text-2, #8b949e);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
   flex-shrink: 0;
 }
 
@@ -11793,7 +11836,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   color: var(--text-2, #8b949e);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
 }
 
 .us-match-add:hover {
@@ -11839,7 +11882,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   border-radius: 4px;
   color: var(--text-2, #8b949e);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
 }
 
 .us-match-clear:hover {
@@ -11879,7 +11922,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   inset: 0;
   background: var(--border, #30363d);
   border-radius: 999px;
-  transition: all 0.2s ease;
+  transition: var(--transition-colors);
 }
 
 .userscript-toggle-slider::before {
@@ -11891,7 +11934,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   bottom: 2px;
   background: var(--text-0, #e6edf3);
   border-radius: 50%;
-  transition: all 0.2s ease;
+  transition: var(--transition-colors);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
@@ -12014,7 +12057,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   border-radius: 8px;
   cursor: pointer;
   text-align: left;
-  transition: all 0.15s ease;
+  transition: var(--transition-colors-fast);
 }
 
 .us-preset-card:hover {
@@ -12166,7 +12209,7 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   border: 0;
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: var(--transition-colors-fast);
   white-space: nowrap;
 }
 
