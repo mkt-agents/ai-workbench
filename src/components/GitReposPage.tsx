@@ -33,7 +33,7 @@ import {
 } from "../core/gitCache";
 import { describePushTargets, isPushable } from "../core/gitPushScope";
 import { readStoredArray, writeStoredArray } from "../core/localState";
-import { findWorkspaceForRepo, projectNameFromPath } from "../core/pathUtils";
+import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
 import { resolveRepoAccount } from "../core/gitIdentity";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
@@ -192,7 +192,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     for (const [path, item] of Object.entries(snapshot)) {
       // Skip if a path-level binding already exists
       if (!item.isGit || !item.originUrl) continue;
-      if (git.repoConfigs.some((c) => c.path === path)) continue;
+      if (git.repoConfigs.some((c) => pathKey(c.path) === pathKey(path))) continue;
       const account = resolveRepoAccount({
         repoPath: path,
         remoteUrl: item.originUrl,
@@ -615,7 +615,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   };
 
   const currentProject = currentGitRepo
-    ? recentProjects.find((p) => p.path === currentGitRepo)
+    ? recentProjects.find((p) => pathKey(p.path) === pathKey(currentGitRepo))
     : undefined;
   const currentRepoName = currentProject
     ? currentProject.name || projectNameFromPath(currentProject.path)
@@ -625,9 +625,9 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
 
   const renderCard = (p: RecentProject) => {
     const s = summaries[p.path];
-    const isCurrent = currentGitRepo === p.path;
+    const isCurrent = !!currentGitRepo && pathKey(currentGitRepo) === pathKey(p.path);
     const actual = identities[p.path];
-    const preset = repoConfigs.find((c) => c.path === p.path);
+    const preset = repoConfigs.find((c) => pathKey(c.path) === pathKey(p.path));
     const mismatch = !!preset && !!actual && s?.isGit && !identityMatches(actual, preset);
     const isChecked = selected.has(p.path);
 

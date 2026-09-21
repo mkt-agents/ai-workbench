@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod tests {
     use crate::test_commands::*;
+    use crate::test_output_parsers::{parse_jest_style_results, suite_counts, TestCase};
     use rusqlite::Connection;
     use std::path::{Path, PathBuf};
     use std::process::{Command as OsCommand, Stdio};

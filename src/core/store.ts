@@ -18,6 +18,34 @@ import { invocations, type Invocations } from './store/invocations';
 const isOlderVersion = (v1: string, v2: string): boolean =>
   compareVersions(v1, v2) < 0;
 
+/**
+ * Collapse rows that point at the same directory and canonicalise their paths.
+ * Windows paths reach us in three spellings (picker, git output, scan output that
+ * joins a forward-slash root with a backslash segment), and exact-string dedupe
+ * let the same repo be collected two or three times.
+ *
+ * Keeps one row per directory: the spelling that already has an identity binding,
+ * otherwise the most recently opened one, and writes it in canonical form.
+ */
+export function dedupeRecentProjects(
+  rows: RecentProject[],
+  boundKeys: ReadonlySet<string> = new Set(),
+): RecentProject[] {
+  const buckets = new Map<string, RecentProject[]>();
+  for (const row of rows) {
+    const key = pathKey(row.path);
+    const group = buckets.get(key);
+    if (group) group.push(row);
+    else buckets.set(key, [row]);
+  }
+  return [...buckets.values()].map((group) => {
+    const best =
+      group.find((p) => boundKeys.has(pathKey(p.path))) ??
+      group.reduce((a, b) => ((b.lastOpenedAt || "") > (a.lastOpenedAt || "") ? b : a));
+    return { ...best, path: normalizePath(best.path) };
+  });
+}
+
 /** Simple URL match: converts userscript match patterns to regex. */
 function matchUrlPattern(pattern: string, url: string): boolean {
   if (pattern === "<all_urls>") return true;
@@ -519,23 +547,32 @@ export const useGlobalStore = create<StoreState>()(
 
       // Recent Projects
       loadRecentProjects: async () => withTable("recent_projects", async () => {
-        const projects = await storage.recentProjects.load();
+        const stored = await storage.recentProjects.load();
+        const repoConfigKeys = new Set(get().git.repoConfigs.map((c) => pathKey(c.path)));
+        const projects = dedupeRecentProjects(stored, repoConfigKeys);
         set({ recentProjects: projects });
+        // Rows written before paths were canonicalised can describe the same repo
+        // twice (`D:\a\b` and `D:/a\b`); fold them and persist once.
+        const dirty =
+          projects.length !== stored.length ||
+          projects.some((p, i) => p.id !== stored[i]?.id || p.path !== stored[i]?.path);
+        if (dirty) await storage.recentProjects.save(projects);
       }),
 
       addRecentProject: async (project) => withTable("recent_projects", async () => {
         const now = new Date().toISOString();
+        const path = normalizePath(project.path);
         const projects = get().recentProjects;
-        const existing = projects.findIndex(p => p.path === project.path);
+        const existing = projects.findIndex(p => pathKey(p.path) === pathKey(path));
         let next: RecentProject[];
         if (existing >= 0) {
           next = projects.map((p, i) =>
-            i === existing ? { ...p, lastOpenedAt: now } : p
+            i === existing ? { ...p, path, lastOpenedAt: now } : p
           );
         } else {
           // 递增 id 防碰撞
           const maxId = projects.reduce((m, p) => Math.max(m, p.id || 0), 0);
-          next = [{ ...project, lastOpenedAt: now, id: maxId + 1 }, ...projects].slice(0, 200);
+          next = [{ ...project, path, lastOpenedAt: now, id: maxId + 1 }, ...projects].slice(0, 200);
         }
         await storage.recentProjects.save(next);
         set({ recentProjects: next });
@@ -544,11 +581,22 @@ export const useGlobalStore = create<StoreState>()(
       addRecentProjects: async (projects) => withTable("recent_projects", async () => {
         const now = new Date().toISOString();
         const current = get().recentProjects;
-        const existingPaths = new Set(current.map(p => p.path));
+        const existingPaths = new Set(current.map(p => pathKey(p.path)));
         let maxId = current.reduce((m, p) => Math.max(m, p.id || 0), 0);
-        const additions: RecentProject[] = projects
-          .filter(p => !existingPaths.has(p.path))
-          .map(p => ({ ...p, lastOpenedAt: now, id: ++maxId }));
+        const additions: RecentProject[] = [];
+        for (const p of projects) {
+          const path = normalizePath(p.path);
+          const key = pathKey(path);
+          // Also drop repeats inside one batch, and reuse a row the caller added
+          // moments ago instead of inserting a second spelling of it.
+          if (existingPaths.has(key)) {
+            const at = current.findIndex((x) => pathKey(x.path) === key);
+            if (at >= 0) current[at] = { ...current[at], path, lastOpenedAt: now };
+            continue;
+          }
+          existingPaths.add(key);
+          additions.push({ ...p, path, lastOpenedAt: now, id: ++maxId });
+        }
         if (additions.length === 0) return 0;
         const next = [...additions, ...current].slice(0, 200);
         await storage.recentProjects.save(next);
@@ -1228,7 +1276,7 @@ export const useGlobalStore = create<StoreState>()(
       },
 
       setCurrentGitRepo: (path) =>
-        get().setSettings({ currentGitRepo: path || undefined }),
+        get().setSettings({ currentGitRepo: path ? normalizePath(path) : undefined }),
 
       // Test Projects — these use dedicated test_* commands (project-scoped rows that
       // the generic db_load/db_save table whitelist does not cover).

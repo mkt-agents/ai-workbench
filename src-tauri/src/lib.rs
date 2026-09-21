@@ -14,6 +14,7 @@ pub mod config;
 pub mod cancellation;
 mod cancellation_commands;
 mod test_commands;
+mod test_output_parsers;
 #[cfg(test)]
 mod test_run_e2e;
 

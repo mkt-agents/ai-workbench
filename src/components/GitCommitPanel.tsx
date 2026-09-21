@@ -127,7 +127,7 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     if (!active || !repoPath || !summary?.originUrl) return;
     const state = useGlobalStore.getState();
     if (state.git.hostConfigs.length === 0) return;
-    if (state.git.repoConfigs.some((c) => c.path === repoPath)) return;
+    if (state.git.repoConfigs.some((c) => pathKey(c.path) === pathKey(repoPath))) return;
     const account = resolveRepoAccount({
       repoPath,
       remoteUrl: summary.originUrl,
@@ -160,7 +160,7 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   }, [recentProjects, repoPath]);
 
   const currentPreset = useMemo(
-    () => (repoPath ? repoConfigs.find((c) => c.path === repoPath) : undefined),
+    () => (repoPath ? repoConfigs.find((c) => pathKey(c.path) === pathKey(repoPath)) : undefined),
     [repoConfigs, repoPath]
   );
 
@@ -205,7 +205,9 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
           color: colors[accounts.length % colors.length],
         });
       }
-      const existing = useGlobalStore.getState().git.repoConfigs.find((c) => c.path === repoPath);
+      const existing = useGlobalStore
+        .getState()
+        .git.repoConfigs.find((c) => pathKey(c.path) === pathKey(repoPath));
       if (existing) {
         const matched = useGlobalStore
           .getState()

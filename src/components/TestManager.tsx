@@ -50,6 +50,7 @@ type Draft = {
   args: string;
   workingDir: string;
   enabled: boolean;
+  env: { key: string; value: string }[];
 };
 
 const EMPTY_DRAFT: Draft = {
@@ -61,9 +62,13 @@ const EMPTY_DRAFT: Draft = {
   args: "",
   workingDir: "",
   enabled: true,
+  env: [],
 };
 
 const LIVE_MAX_LINES = 400;
+
+/** Frameworks `read_coverage_report` can actually parse. */
+const COVERAGE_FRAMEWORKS = ["jest", "vitest", "cargo", "pytest"];
 
 const PROJECT_TYPES: TestProject["type"][] = [
   "frontend",
@@ -90,6 +95,7 @@ const draftOf = (project: TestProject): Draft => ({
   args: project.args ?? "",
   workingDir: project.workingDir ?? "",
   enabled: project.enabled,
+  env: Object.entries(project.env ?? {}).map(([key, value]) => ({ key, value })),
 });
 
 export default function TestManager() {
@@ -434,6 +440,12 @@ export default function TestManager() {
     }
     setSaving(true);
     try {
+      const env = draft.env
+        .filter((row) => row.key.trim())
+        .reduce<Record<string, string>>((acc, row) => {
+          acc[row.key.trim()] = row.value;
+          return acc;
+        }, {});
       const payload = {
         name: draft.name.trim(),
         path: draft.path.trim(),
@@ -443,6 +455,7 @@ export default function TestManager() {
         args: draft.args.trim() || undefined,
         workingDir: draft.workingDir.trim() || undefined,
         enabled: draft.enabled,
+        env: Object.keys(env).length > 0 ? env : undefined,
       };
       if (editingId) {
         await updateTestProject(editingId, payload);
@@ -459,6 +472,24 @@ export default function TestManager() {
       setSaving(false);
     }
   }, [draft, editingId, updateTestProject, addTestProject, showMsg, t]);
+
+  const addEnvRow = useCallback(
+    () => setDraft((prev) => ({ ...prev, env: [...prev.env, { key: "", value: "" }] })),
+    []
+  );
+  const updateEnvRow = useCallback(
+    (index: number, patch: Partial<{ key: string; value: string }>) =>
+      setDraft((prev) => ({
+        ...prev,
+        env: prev.env.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+      })),
+    []
+  );
+  const removeEnvRow = useCallback(
+    (index: number) =>
+      setDraft((prev) => ({ ...prev, env: prev.env.filter((_, i) => i !== index) })),
+    []
+  );
 
   const handleScan = useCallback(async () => {
     const dir = await pickDirectory();
@@ -674,6 +705,8 @@ export default function TestManager() {
             const startedAt = runs[project.id];
             const isRunning = startedAt !== undefined;
             const hasResult = !!results[project.id];
+            const envCount = Object.keys(project.env ?? {}).length;
+            const coverageSupported = COVERAGE_FRAMEWORKS.includes(project.framework);
             return (
               <div
                 key={project.id}
@@ -706,6 +739,11 @@ export default function TestManager() {
                     {!project.enabled && (
                       <span className="tm-chip" title={t("disabledHint")}>
                         {t("disabled")}
+                      </span>
+                    )}
+                    {envCount > 0 && (
+                      <span className="tm-chip" title={t("envVars")}>
+                        env {envCount}
                       </span>
                     )}
                     {project.lastStatus && (
@@ -790,7 +828,8 @@ export default function TestManager() {
                     type="button"
                     className="btn btn-secondary btn-icon"
                     onClick={() => setCoverageFor(project)}
-                    title={t("viewCoverage")}
+                    disabled={!coverageSupported}
+                    title={coverageSupported ? t("viewCoverage") : t("coverageUnsupported")}
                     aria-label={t("viewCoverage")}
                   >
                     <TrendingUp size={14} />
@@ -1152,6 +1191,48 @@ export default function TestManager() {
                 placeholder={t("workingDirPlaceholder")}
               />
             </div>
+          </div>
+          <div className="tm-field">
+            <div className="tm-env-head">
+              <span className="tm-field-label">{t("envVars")}</span>
+              <button type="button" className="btn btn-secondary btn-small" onClick={addEnvRow}>
+                <Plus size={12} />
+                {t("addEnv")}
+              </button>
+            </div>
+            {draft.env.length === 0 ? (
+              <p className="tm-hint">{t("envHint")}</p>
+            ) : (
+              <div className="tm-env-rows">
+                {draft.env.map((row, index) => (
+                  <div className="tm-env-row" key={index}>
+                    <input
+                      className="input-field"
+                      value={row.key}
+                      placeholder={t("envKey")}
+                      aria-label={t("envKey")}
+                      onChange={(e) => updateEnvRow(index, { key: e.target.value })}
+                    />
+                    <input
+                      className="input-field"
+                      value={row.value}
+                      placeholder={t("envValue")}
+                      aria-label={t("envValue")}
+                      onChange={(e) => updateEnvRow(index, { value: e.target.value })}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-icon tm-danger"
+                      onClick={() => removeEnvRow(index)}
+                      title={t("removeEnv")}
+                      aria-label={t("removeEnv")}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <p className="tm-hint">{t("workingDirHint")}</p>
           <label className="tm-check-row">

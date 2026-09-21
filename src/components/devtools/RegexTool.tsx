@@ -129,68 +129,68 @@ function RegexTool() {
     <div className="devtools-tool regex-tool">
       {/* ── Toolbar ── */}
       <div className="regex-toolbar">
-        <div className="regex-toolbar-group">
-          <span className="regex-toolbar-label">{t("regex.pattern")}</span>
-          <input
-            className="regex-input"
-            value={pattern}
-            onChange={(e) => setPattern(e.target.value)}
-            placeholder="(\\d+)"
-            spellCheck={false}
-          />
+        <div className="regex-toolbar-row">
+          <div className="regex-toolbar-group regex-pattern-group">
+            <span className="regex-toolbar-label">{t("regex.pattern")}</span>
+            <input
+              className="regex-input"
+              value={pattern}
+              onChange={(e) => setPattern(e.target.value)}
+              placeholder="(\\d+)"
+              spellCheck={false}
+            />
+          </div>
+
+          <div className="regex-toolbar-spacer" />
+
+          <button
+            type="button"
+            className={`regex-action-btn ${showReplace ? "active" : ""}`}
+            onClick={() => setShowReplace(!showReplace)}
+            title={t("regex.replace")}
+          >
+            <Replace size={14} />
+            <span>{t("regex.replace")}</span>
+          </button>
+          <button
+            type="button"
+            className="regex-action-btn primary"
+            onClick={handleCopy}
+            disabled={result.matches.length === 0}
+            title={t("regex.copy")}
+          >
+            <ClipboardCopy size={14} />
+            <span>{t("regex.copy")}</span>
+          </button>
+          <button
+            type="button"
+            className="regex-action-btn"
+            onClick={() => {
+              setPattern("");
+              setTestStr("");
+            }}
+            title={t("regex.clear")}
+          >
+            <Eraser size={14} />
+            <span>{t("regex.clear")}</span>
+          </button>
         </div>
 
-        <div className="regex-toolbar-divider" />
-
-        <div className="regex-toolbar-group">
+        <div className="regex-toolbar-row">
           <span className="regex-toolbar-label">{t("regex.flags")}</span>
           <div className="regex-flags">
             {(Object.keys(flags) as (keyof typeof flags)[]).map((key) => (
               <label
                 key={key}
                 className={`regex-flag ${flags[key] ? "active" : ""}`}
-                title={t(`regex.${flagLabels[key]}`)}
               >
                 <input type="checkbox" checked={flags[key]} onChange={() => toggleFlag(key)} />
-                <span>{key}</span>
+                <span className="regex-flag-key">{key}</span>
+                <span className="regex-flag-desc">{t(`regex.${flagLabels[key]}`)}</span>
               </label>
             ))}
           </div>
         </div>
-
-        <div className="regex-toolbar-spacer" />
-
-        <button
-          type="button"
-          className={`regex-action-btn ${showReplace ? "active" : ""}`}
-          onClick={() => setShowReplace(!showReplace)}
-          title={t("regex.replace")}
-        >
-          <Replace size={14} />
-          <span>{t("regex.replace")}</span>
-        </button>
-        <button
-          type="button"
-          className="regex-action-btn primary"
-          onClick={handleCopy}
-          disabled={result.matches.length === 0}
-          title={t("regex.copy")}
-        >
-          <ClipboardCopy size={14} />
-          <span>{t("regex.copy")}</span>
-        </button>
-        <button
-          type="button"
-          className="regex-action-btn"
-          onClick={() => {
-            setPattern("");
-            setTestStr("");
-          }}
-          title={t("regex.clear")}
-        >
-          <Eraser size={14} />
-          <span>{t("regex.clear")}</span>
-        </button>
       </div>
 
       {/* ── Presets ── */}

@@ -16,6 +16,9 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::DbState;
+use crate::test_output_parsers::{
+    line_parsed_suites, load_structured_suites, parse_test_output, suite_counts, TestSuite,
+};
 
 /// Test-assistant tables, executed by `lib.rs` at startup and by the tests here.
 pub(crate) const SCHEMA_SQL: &str = r#"
@@ -85,35 +88,6 @@ pub struct TestProject {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct TestCase {
-    pub id: String,
-    pub name: String,
-    pub status: String,
-    pub duration: u64,
-    pub error: Option<TestCaseError>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TestCaseError {
-    pub message: String,
-    pub stack: String,
-    pub expected: Option<serde_json::Value>,
-    pub actual: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TestSuite {
-    pub name: String,
-    pub path: String,
-    pub status: String,
-    pub duration: u64,
-    pub tests: Vec<TestCase>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TestRunResult {
     pub project_id: String,
     pub id: String,
@@ -153,16 +127,6 @@ pub struct ProjectDetectionResult {
     pub reason: String,
 }
 
-/// Read the integer that sits in front of a summary keyword ("5 passed" → 5).
-fn num_before(chunk: &str, keyword: &str) -> u32 {
-    chunk
-        .split(keyword)
-        .next()
-        .and_then(|s| s.split_whitespace().last())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0)
-}
-
 /// SQLite stores blank strings where the domain wants "unset".
 fn opt_text(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.trim().is_empty())
@@ -178,278 +142,6 @@ fn truncate_tail(text: &str, max_bytes: usize) -> String {
         start += 1;
     }
     format!("…（已省略前 {} 字节）…\n{}", start, &text[start..])
-}
-
-/// Parse test output and extract test results
-fn parse_test_output(output: &str, framework: &str) -> (String, u32, u32, u32, u32) {
-    let mut total = 0u32;
-    let mut passed = 0u32;
-    let mut failed = 0u32;
-    let mut skipped = 0u32;
-
-    match framework {
-        "jest" | "vitest" => {
-            // Summary line wins: "Tests  5 passed | 1 failed (6)" (vitest) or
-            // "Tests:  5 passed, 1 failed (6)" (jest). Also counting per-test
-            // checkmarks on top of a summary double-counts verbose reporters.
-            for line in output.lines() {
-                if let Some(part) = line.split("Tests").nth(1) {
-                    passed += num_before(part, "passed");
-                    failed += num_before(part, "failed");
-                    skipped += num_before(part, "skipped");
-                }
-            }
-
-            if passed + failed + skipped == 0 {
-                // No summary at all (aborted or crashed mid-run): fall back to marks.
-                for line in output.lines() {
-                    passed += line.matches('✓').count() as u32 + line.matches('√').count() as u32;
-                    failed += line.matches('✗').count() as u32 + line.matches('×').count() as u32;
-                    skipped += line.matches('○').count() as u32;
-                }
-            }
-
-            total = passed + failed + skipped;
-        }
-        "cargo" => {
-            // One "test result:" line per test binary:
-            // "test result: ok. 12 passed; 0 failed; 0 ignored; …"
-            for line in output.lines() {
-                if line.contains("test result:") {
-                    if line.contains("passed") {
-                        passed += num_before(line, "passed");
-                    }
-                    if line.contains("failed") {
-                        failed += num_before(line, "failed");
-                    }
-                    if line.contains("ignored") {
-                        skipped += num_before(line, "ignored");
-                    }
-                }
-                // "running 12 tests" — the count sits between the two words.
-                if let Some(pos) = line.find("running ") {
-                    total += num_before(&line[pos + "running ".len()..], "test");
-                }
-            }
-            if total == 0 {
-                total = passed + failed + skipped;
-            }
-        }
-        "pytest" => {
-            // pytest prints exactly one summary line at the very end:
-            // "== 5 passed, 1 failed, 2 skipped, 1 warning in 0.42s =="
-            // Scanning every line that mentions "passed" also catches coverage
-            // tables and echoed commands, which inflates the counts.
-            if let Some(line) = output
-                .lines()
-                .rev()
-                .find(|l| l.contains("passed") || l.contains("failed") || l.contains("error"))
-            {
-                passed += num_before(line, "passed");
-                failed += num_before(line, "failed");
-                skipped += num_before(line, "skipped");
-                // Collection errors are reported as "1 error" and mean the run broke.
-                failed += num_before(line, "error");
-            }
-            total = passed + failed + skipped;
-        }
-        "gotest" => {
-            // Per-test markers only ("--- PASS: TestX (0.00s)"). The package-level
-            // "ok"/"PASS" lines would add one more pass per package.
-            for line in output.lines() {
-                let trimmed = line.trim_start();
-                if trimmed.starts_with("--- PASS:") {
-                    passed += 1;
-                } else if trimmed.starts_with("--- FAIL:") {
-                    failed += 1;
-                } else if trimmed.starts_with("--- SKIP:") {
-                    skipped += 1;
-                }
-            }
-            total = passed + failed + skipped;
-        }
-        _ => {
-            // Generic parsing
-            for line in output.lines() {
-                if line.contains("pass") || line.contains("✓") || line.contains("√") {
-                    passed += 1;
-                }
-                if line.contains("fail") || line.contains("✗") || line.contains("×") {
-                    failed += 1;
-                }
-                if line.contains("skip") || line.contains("○") {
-                    skipped += 1;
-                }
-            }
-            total = passed + failed + skipped;
-        }
-    }
-
-    let status = if failed > 0 {
-        "failed".to_string()
-    } else if total == 0 {
-        "error".to_string()
-    } else {
-        "success".to_string()
-    };
-
-    (status, total, passed, failed, skipped)
-}
-
-/// Where a jest/vitest JSON reporter is expected to write, relative to the project
-/// root. Users opt in with `--reporter=json --outputFile=vitest-results.json`.
-const RESULT_FILE_CANDIDATES: &[&str] = &[
-    "vitest-results.json",
-    "jest-results.json",
-    "test-results.json",
-    ".ai-workbench/results.json",
-];
-
-/// Parse a Jest-compatible machine report (jest `--json` and vitest's `json`
-/// reporter emit the same shape) into per-file suites with per-case detail.
-pub(crate) fn parse_jest_style_results(content: &str) -> Result<Vec<TestSuite>, String> {
-    let json: serde_json::Value =
-        serde_json::from_str(content).map_err(|e| format!("解析测试结果 JSON 失败: {}", e))?;
-    let results = json
-        .get("testResults")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "测试结果 JSON 缺少 testResults 数组".to_string())?;
-
-    let mut suites = Vec::new();
-    for (index, entry) in results.iter().enumerate() {
-        let path = entry
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let mut cases = Vec::new();
-        if let Some(assertions) = entry.get("assertionResults").and_then(|v| v.as_array()) {
-            for (case_index, assertion) in assertions.iter().enumerate() {
-                let raw_status = assertion.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                let status = match raw_status {
-                    "passed" => "passed",
-                    "failed" => "failed",
-                    _ => "skipped",
-                };
-                let name = assertion
-                    .get("fullName")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-                    .or_else(|| {
-                        let mut parts: Vec<String> = assertion
-                            .get("ancestorTitles")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(str::to_string))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        parts.push(
-                            assertion
-                                .get("title")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                        );
-                        Some(parts.join(" > "))
-                    })
-                    .unwrap_or_default();
-                let duration = assertion
-                    .get("duration")
-                    .and_then(|v| v.as_f64())
-                    .filter(|d| *d > 0.0)
-                    .map(|d| d.round() as u64)
-                    .unwrap_or(0);
-                let failures: Vec<String> = assertion
-                    .get("failureMessages")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let error = if status == "failed" && !failures.is_empty() {
-                    let joined = failures.join("\n\n");
-                    let message = joined.lines().next().unwrap_or("").trim().to_string();
-                    let stack = joined
-                        .split_once('\n')
-                        .map(|(_, rest)| rest.trim().to_string())
-                        .filter(|rest| !rest.is_empty())
-                        .unwrap_or_else(|| joined.clone());
-                    Some(TestCaseError {
-                        message,
-                        stack,
-                        expected: None,
-                        actual: None,
-                    })
-                } else {
-                    None
-                };
-                cases.push(TestCase {
-                    id: format!("{}#{}", path, case_index),
-                    name: if name.is_empty() {
-                        format!("case {}", case_index + 1)
-                    } else {
-                        name
-                    },
-                    status: status.to_string(),
-                    duration,
-                    error,
-                });
-            }
-        }
-        let failed = cases.iter().filter(|c| c.status == "failed").count();
-        let basename = path.rsplit(['\\', '/']).next().unwrap_or("").to_string();
-        suites.push(TestSuite {
-            name: if basename.is_empty() {
-                format!("suite {}", index + 1)
-            } else {
-                basename
-            },
-            path,
-            status: if failed > 0 { "failed" } else { "passed" }.to_string(),
-            duration: cases.iter().map(|c| c.duration).sum(),
-            tests: cases,
-        });
-    }
-    if suites.iter().all(|s| s.tests.is_empty()) {
-        return Err("报告里没有任何用例".to_string());
-    }
-    Ok(suites)
-}
-
-/// (total, passed, failed, skipped) straight from a parsed report.
-pub(crate) fn suite_counts(suites: &[TestSuite]) -> (u32, u32, u32, u32) {
-    let cases: Vec<&TestCase> = suites.iter().flat_map(|s| s.tests.iter()).collect();
-    let passed = cases.iter().filter(|c| c.status == "passed").count() as u32;
-    let failed = cases.iter().filter(|c| c.status == "failed").count() as u32;
-    let skipped = cases.iter().filter(|c| c.status == "skipped").count() as u32;
-    (cases.len() as u32, passed, failed, skipped)
-}
-
-/// Locate a machine-readable report: a conventional file first, then stdout when it
-/// is a bare JSON document (jest/vitest print the report alone with `--json`).
-fn load_structured_suites(root: &Path, stdout: &str, stderr: &str) -> Option<Vec<TestSuite>> {
-    for candidate in RESULT_FILE_CANDIDATES {
-        let file = root.join(candidate);
-        if let Ok(content) = fs::read_to_string(&file) {
-            if let Ok(suites) = parse_jest_style_results(&content) {
-                return Some(suites);
-            }
-        }
-    }
-    for stream in [stdout, stderr] {
-        let trimmed = stream.trim();
-        if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
-            continue;
-        }
-        if let Ok(suites) = parse_jest_style_results(trimmed) {
-            return Some(suites);
-        }
-    }
-    None
 }
 
 /// Load all test projects from database
@@ -1062,7 +754,10 @@ pub(crate) fn run_test_sync(
     }
 
     // A machine-readable report beats scraping: exact counts plus per-case detail.
-    let suites = load_structured_suites(&work_dir_of(&project), &stdout, &stderr);
+    // cargo/pytest/go have no JSON convention to opt into, so fall back to their
+    // per-case stdout lines.
+    let suites = load_structured_suites(&work_dir_of(&project), &stdout, &stderr)
+        .or_else(|| line_parsed_suites(&project.framework, &full_output));
     if let Some(ref suites) = suites {
         let (t, p, f, s) = suite_counts(suites);
         (total, passed, failed, skipped) = (t, p, f, s);

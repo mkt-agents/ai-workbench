@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderGit, Loader2 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
+import { pathKey } from "../core/pathUtils";
 import ModalTitleRow from "./ModalTitleRow";
 
 type Props = {
@@ -30,18 +31,22 @@ function ScanReposModal({ rootPath, initialRepos, onClose, onAdded }: Props) {
   const [depth, setDepth] = useState(1);
   const [scanning, setScanning] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(initialRepos.map((r) => r.path))
-  );
+  // Only what is not collected yet starts checked — pre-checking everything made a
+  // rescan look like "全选" and re-added repos whose stored path differs in spelling.
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const existing = new Set(useGlobalStore.getState().recentProjects.map((p) => pathKey(p.path)));
+    return new Set(initialRepos.filter((r) => !existing.has(pathKey(r.path))).map((r) => r.path));
+  });
   const [error, setError] = useState("");
 
   const existingPaths = useMemo(
-    () => new Set(recentProjects.map((p) => p.path)),
+    () => new Set(recentProjects.map((p) => pathKey(p.path))),
     [recentProjects]
   );
+  const isExisting = (path: string) => existingPaths.has(pathKey(path));
 
-  const selectable = repos.filter((r) => !existingPaths.has(r.path));
-  const selectedCount = repos.filter((r) => selected.has(r.path) && !existingPaths.has(r.path)).length;
+  const selectable = repos.filter((r) => !isExisting(r.path));
+  const selectedCount = repos.filter((r) => selected.has(r.path) && !isExisting(r.path)).length;
 
   const toggle = (path: string) => {
     setSelected((prev) => {
@@ -55,7 +60,7 @@ function ScanReposModal({ rootPath, initialRepos, onClose, onAdded }: Props) {
     });
   };
 
-  const selectAll = () => setSelected(new Set(repos.map((r) => r.path)));
+  const selectAll = () => setSelected(new Set(selectable.map((r) => r.path)));
   const selectNone = () => setSelected(new Set());
 
   /** 再扫一层：depth+1 重扫并合并（保留已勾选状态） */
@@ -72,7 +77,7 @@ function ScanReposModal({ rootPath, initialRepos, onClose, onAdded }: Props) {
       setSelected((prev) => {
         const next = new Set(prev);
         for (const r of found) {
-          if (!existingPaths.has(r.path)) next.add(r.path);
+          if (!isExisting(r.path)) next.add(r.path);
         }
         return next;
       });
@@ -90,7 +95,7 @@ function ScanReposModal({ rootPath, initialRepos, onClose, onAdded }: Props) {
     setError("");
     try {
       const toAdd = repos
-        .filter((r) => selected.has(r.path) && !existingPaths.has(r.path))
+        .filter((r) => selected.has(r.path) && !isExisting(r.path))
         .map((r) => ({ path: r.path, name: r.name }));
       const added = await addRecentProjects(toAdd);
       onAdded(added);
@@ -134,19 +139,19 @@ function ScanReposModal({ rootPath, initialRepos, onClose, onAdded }: Props) {
 
         <ul className="scan-repos-list">
           {repos.map((r) => {
-            const isExisting = existingPaths.has(r.path);
+            const favorited = isExisting(r.path);
             const checked = selected.has(r.path);
             return (
               <li
-                key={r.path}
-                className={`scan-repos-item ${isExisting ? "is-existing" : ""}`}
-                onClick={() => !isExisting && toggle(r.path)}
+                key={pathKey(r.path)}
+                className={`scan-repos-item ${favorited ? "is-existing" : ""}`}
+                onClick={() => !favorited && toggle(r.path)}
               >
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={isExisting}
-                  onChange={() => !isExisting && toggle(r.path)}
+                  disabled={favorited}
+                  onChange={() => !favorited && toggle(r.path)}
                   onClick={(e) => e.stopPropagation()}
                 />
                 <FolderGit size={14} className="scan-repos-icon" />
@@ -156,7 +161,7 @@ function ScanReposModal({ rootPath, initialRepos, onClose, onAdded }: Props) {
                 <span className="scan-repos-path" title={r.path}>
                   {r.path}
                 </span>
-                {isExisting && (
+                {favorited && (
                   <span className="runtime-badge active">{t("scan.alreadyFavorited")}</span>
                 )}
               </li>

@@ -888,3 +888,29 @@
     max-height: 180px;
   }
 }
+
+/* ─── Environment variable editor ─── */
+.tm-field-label {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.tm-env-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tm-env-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tm-env-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: 4px;
+  align-items: center;
+}
