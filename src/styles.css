@@ -7558,6 +7558,10 @@ input, select, textarea { font-family: inherit; }
     padding: 12px 16px 16px;
   }
 
+  .plugin-tabs {
+    padding: 2px 16px 0;
+  }
+
   .plugin-toolbar-url {
     flex-wrap: wrap;
   }
@@ -11586,64 +11590,64 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   }
 }
 
-/* ---------- Plugin tabs ---------- */
+/* ---------- Plugin tabs (segmented control) ---------- */
 .plugin-tabs {
   display: flex;
-  gap: 4px;
-  padding: 6px 12px 0;
-  border-bottom: 1px solid var(--border, #30363d);
-  background: var(--bg-1, #161b22);
+  /* left padding matches .main-header / .plugin-shell (24px) so title, tabs and
+     content share one edge; no full-bleed band. */
+  padding: 2px 24px 0;
+  flex-shrink: 0;
 }
 
 .plugin-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 16px;
-  font-size: 12.5px;
+  padding: 5px 14px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-2, #8b949e);
-  background: transparent;
-  border: none;
-  border-radius: 8px 8px 0 0;
+  background: var(--bg-1, #161b22);
+  border: 1px solid var(--border-subtle, #21262d);
+  border-radius: 999px;
   cursor: pointer;
   transition: var(--transition-colors-fast);
-  position: relative;
+}
+
+.plugin-tab + .plugin-tab {
+  margin-left: 4px;
 }
 
 .plugin-tab:hover {
-  color: var(--text-0, #e6edf3);
-  background: color-mix(in srgb, var(--text-3, #6e7681) 8%, transparent);
+  color: var(--text-1, #c9d1d9);
+  background: var(--bg-hover, #1c2128);
 }
 
 .plugin-tab.active {
-  color: var(--text-0, #e6edf3);
-  background: var(--bg-2, #1c2128);
-}
-
-.plugin-tab.active::after {
-  content: "";
-  position: absolute;
-  bottom: 0;
-  left: 8px;
-  right: 8px;
-  height: 2px;
-  background: var(--accent, #58a6ff);
-  border-radius: 2px 2px 0 0;
+  /* same active language as .plugin-view-btn/.plugin-sort-btn — some themes
+     define --bg-2 darker than --bg-1, so a raised gray pill is unreliable */
+  color: var(--accent, #58a6ff);
+  background: var(--accent-dim, rgba(88, 166, 255, 0.15));
+  border-color: color-mix(in srgb, var(--accent, #58a6ff) 28%, transparent);
 }
 
 .plugin-tab-count {
   font-size: 10px;
-  padding: 1px 6px;
-  background: color-mix(in srgb, var(--text-3, #6e7681) 20%, transparent);
+  min-width: 17px;
+  padding: 1px 5px;
+  box-sizing: border-box;
+  text-align: center;
+  background: color-mix(in srgb, var(--text-3, #6e7681) 18%, transparent);
   border-radius: 999px;
   color: var(--text-2, #8b949e);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   transition: var(--transition-colors-fast);
 }
 
 .plugin-tab.active .plugin-tab-count {
-  background: var(--accent-dim, rgba(88, 166, 255, 0.15));
+  /* stronger than the tab's own accent-dim pill background so the badge stays visible */
+  background: color-mix(in srgb, var(--accent, #58a6ff) 28%, transparent);
   color: var(--accent, #58a6ff);
 }
 
