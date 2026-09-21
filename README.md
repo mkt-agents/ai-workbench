@@ -43,7 +43,9 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 - **Hosts管理**：读写系统 hosts，手动/自动备份与恢复，另存为配置（需管理员）
 - **内网穿透**：cloudflared 临时/命名隧道；日志过滤/导出；公网 URL 浏览器打开；详见 [docs/cloudflared.md](docs/cloudflared.md)
 - **网页工具**：添加 http(s) 链接，独立窗口打开
-- **测试管理**：登记本机项目并运行其测试命令（jest / vitest / cargo / pytest / gotest 输出解析）；自动识别项目类型与测试脚本、目录批量扫描、单个或批量运行（并发 2、30 分钟超时、可取消并终止进程树、运行期间实时输出流）；用例级明细：cargo / pytest / go **零配置**从标准输出解析（按文件分组的用例、耗时、失败堆栈），jest / vitest 配好 JSON 报告（`--reporter=json --outputFile=vitest-results.json` 或 `--json --outputFile=jest-results.json`）后同样可看；每项目可配环境变量与启用开关、按名称/路径搜索；历史列表可回看任意一次的完整输出，每个项目保留最近 100 次运行；AI 测试生成与失败诊断复用「模型配置」的默认模型；覆盖率读取 istanbul（final / summary）/ llvm-cov / pytest-cov 的 JSON 报告
+- **测试管理**：登记本机项目并运行其测试命令（jest / vitest / cargo / pytest / gotest / maven 输出解析）；自动识别项目类型与测试脚本（`package.json` 的 test 脚本、`Cargo.toml`、`pom.xml`（自动选用 `mvnw.cmd`/`mvnw`，无包装器时用 `mvn -B test`）、`pyproject.toml`、`go.mod`）、目录批量扫描、单个或批量运行（并发 2、30 分钟超时、可取消并终止进程树、运行期间实时输出流）；用例级明细：cargo / pytest / go **零配置**从标准输出解析（按文件分组的用例、耗时、失败堆栈），jest / vitest 配好 JSON 报告（`--reporter=json --outputFile=vitest-results.json` 或 `--json --outputFile=jest-results.json`）后同样可看，Maven 直接读各模块 `target/surefire-reports/TEST-*.xml`（自动忽略上一次运行留下的陈旧报告）；每项目可配环境变量与启用开关、按名称/路径搜索；历史列表可回看任意一次的完整输出，每个项目保留最近 100 次运行；AI 测试生成与失败诊断复用「模型配置」的默认模型；覆盖率支持 istanbul（final / summary）、llvm-cov、pytest-cov 的 JSON，以及跨语言的 **lcov.info、JaCoCo XML、Cobertura XML**（多模块工程会自动到各模块 `target/site/jacoco/` 下找报告）；报告缺失时会区分"没产物"和"工具没装"（例如本机没有 cargo-llvm-cov 子命令会直接说明并给出安装命令）
+
+- **变更回归报告**：以「未提交改动 / 相对某分支-tag-commit / 最近 N 个提交」为基准，读取 `git diff` 的机器可读输出，先给出静态结论——按模块与分层（接口/服务/持久层/页面/组件/配置/迁移脚本…）归组的改动清单、增删行数、**没有配对测试的文件**、SQL 与 Mapper、依赖与配置变更、鉴权/金额相关面、公开接口签名新增-删除-变化，再由默认模型补出「受影响功能点 / 必测场景 / 建议回归范围 / 兼容性与数据风险 / 验收清单」五章节；IDE 与编译产物自动忽略并计数，报告按项目留档可回看（每项目最近 50 次），支持一键复制或导出 Markdown 给测试同学
 
 ### 设置
 

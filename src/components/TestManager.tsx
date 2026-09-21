@@ -8,6 +8,7 @@ import {
   Edit,
   FlaskConical,
   FolderOpen,
+  GitCompare,
   History,
   Loader2,
   Play,
@@ -26,6 +27,7 @@ import TestModal from "./TestModal";
 import TestGenerator from "./TestGenerator";
 import FailureDiagnosis from "./FailureDiagnosis";
 import CoverageReportView from "./CoverageReport";
+import ChangeReportModal from "./ChangeReportModal";
 import { mapPool, TEST_RUN_CONCURRENCY } from "../core/asyncPool";
 import type {
   ProjectDetectionResult,
@@ -68,7 +70,7 @@ const EMPTY_DRAFT: Draft = {
 const LIVE_MAX_LINES = 400;
 
 /** Frameworks `read_coverage_report` can actually parse. */
-const COVERAGE_FRAMEWORKS = ["jest", "vitest", "cargo", "pytest"];
+const COVERAGE_FRAMEWORKS = ["jest", "vitest", "mocha", "playwright", "cargo", "pytest", "maven", "gotest"];
 
 const PROJECT_TYPES: TestProject["type"][] = [
   "frontend",
@@ -146,6 +148,7 @@ export default function TestManager() {
   const [generatorFor, setGeneratorFor] = useState<TestProject | null>(null);
   const [diagnosisFor, setDiagnosisFor] = useState<TestProject | null>(null);
   const [coverageFor, setCoverageFor] = useState<TestProject | null>(null);
+  const [changeReportFor, setChangeReportFor] = useState<TestProject | null>(null);
 
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -827,6 +830,15 @@ export default function TestManager() {
                   <button
                     type="button"
                     className="btn btn-secondary btn-icon"
+                    onClick={() => setChangeReportFor(project)}
+                    title={t("cr.open")}
+                    aria-label={t("cr.open")}
+                  >
+                    <GitCompare size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-icon"
                     onClick={() => setCoverageFor(project)}
                     disabled={!coverageSupported}
                     title={coverageSupported ? t("viewCoverage") : t("coverageUnsupported")}
@@ -1154,7 +1166,7 @@ export default function TestManager() {
                 list="tm-framework-options"
               />
               <datalist id="tm-framework-options">
-                {["jest", "vitest", "cargo", "pytest", "gotest", "custom"].map((f) => (
+                {["jest", "vitest", "cargo", "pytest", "gotest", "maven", "custom"].map((f) => (
                   <option key={f} value={f} />
                 ))}
               </datalist>
@@ -1372,6 +1384,13 @@ export default function TestManager() {
       )}
       {coverageFor && (
         <CoverageReportView project={coverageFor} onClose={() => setCoverageFor(null)} />
+      )}
+      {changeReportFor && (
+        <ChangeReportModal
+          project={changeReportFor}
+          onClose={() => setChangeReportFor(null)}
+          onToast={showMsg}
+        />
       )}
 
       {toast && (

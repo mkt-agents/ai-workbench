@@ -72,7 +72,7 @@ fn is_git_work_tree(repo_path: &Path) -> Result<bool, String> {
     Ok(stdout.trim() == "true")
 }
 
-fn ensure_git_repo(repo_path: &str) -> Result<(), String> {
+pub(crate) fn ensure_git_repo(repo_path: &str) -> Result<(), String> {
     let path = Path::new(repo_path);
     if !path.exists() {
         return Err(format!("路径不存在: {}", repo_path));
@@ -94,7 +94,7 @@ fn git_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, St
         .map_err(map_git_spawn_err)
 }
 
-fn git_stdout(repo_path: &str, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git_stdout(repo_path: &str, args: &[&str]) -> Result<String, String> {
     let output = git_output(repo_path, args)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

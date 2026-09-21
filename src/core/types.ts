@@ -500,6 +500,89 @@ export interface CoverageReport {
   files: CoverageFile[];
 }
 
+/** One changed file in a regression report, as classified by the backend. */
+export interface ChangeFile {
+  path: string;
+  oldPath?: string | null;
+  status: string;
+  adds: number;
+  dels: number;
+  module: string;
+  layer: string;
+  risks: string[];
+  testPath?: string | null;
+  hasTest: boolean;
+  untracked: boolean;
+}
+
+export interface ChangeModuleGroup {
+  name: string;
+  files: number;
+  adds: number;
+  dels: number;
+  layers: string[];
+  risks: string[];
+  untested: string[];
+}
+
+export interface ApiChange {
+  kind: 'added' | 'removed' | 'changed' | string;
+  name: string;
+  path: string;
+}
+
+export interface ChangeStats {
+  files: number;
+  adds: number;
+  dels: number;
+  modules: number;
+  codeFiles: number;
+  untested: number;
+  testFiles: number;
+  ignored: number;
+}
+
+export interface ChangeReport {
+  base: string;
+  source: string;
+  commits: string[];
+  files: ChangeFile[];
+  groups: ChangeModuleGroup[];
+  stats: ChangeStats;
+  apiChanges: ApiChange[];
+  scope: string[];
+  truncated: boolean;
+}
+
+export interface ChangeReportBundle {
+  report: ChangeReport;
+  branch: string;
+  head: string;
+  repoRoot: string;
+  subdir: boolean;
+  reportId: string | null;
+}
+
+export interface ChangeReportSummary {
+  id: string;
+  projectId: string;
+  base: string;
+  source: string;
+  createdAt: string;
+  branch: string;
+  files: number;
+  adds: number;
+  dels: number;
+  untested: number;
+  hasAi: boolean;
+}
+
+export interface StoredChangeReport {
+  summary: ChangeReportSummary;
+  report: ChangeReport | null;
+  ai: string | null;
+}
+
 export interface GlobalStore {
   getState: () => GlobalState;
   setState: (partial: Partial<GlobalState> | ((state: GlobalState) => GlobalState)) => void;

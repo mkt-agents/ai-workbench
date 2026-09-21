@@ -15,6 +15,10 @@ pub mod cancellation;
 mod cancellation_commands;
 mod test_commands;
 mod test_output_parsers;
+mod coverage_parsers;
+mod change_report;
+mod change_store;
+mod change_commands;
 #[cfg(test)]
 mod test_run_e2e;
 
@@ -247,11 +251,32 @@ pub fn run() {
                     chars INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS http_saved_requests (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    method TEXT NOT NULL DEFAULT 'GET',
+                    url TEXT NOT NULL,
+                    headers TEXT NOT NULL DEFAULT '[]',
+                    params TEXT NOT NULL DEFAULT '[]',
+                    body TEXT NOT NULL DEFAULT '',
+                    body_type TEXT NOT NULL DEFAULT 'none',
+                    saved_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS http_history (
+                    id INTEGER PRIMARY KEY,
+                    method TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL
+                );
             "#).expect("failed to init schema");
 
             // The test-assistant tables are declared next to their commands so the
             // Rust tests can build the exact production schema.
-            conn.execute_batch(test_commands::SCHEMA_SQL)
+            conn.execute_batch(&format!(
+                "{}{}",
+                test_commands::SCHEMA_SQL,
+                change_store::SCHEMA_SQL
+            ))
                 .expect("failed to init test schema");
 
             let _ = conn.execute_batch("ALTER TABLE git_accounts ADD COLUMN note TEXT;");
@@ -452,6 +477,11 @@ pub fn run() {
             test_commands::read_coverage_report,
             test_commands::cancel_test_run,
             test_commands::get_test_run,
+            change_commands::collect_change_report,
+            change_commands::list_change_reports,
+            change_commands::get_change_report,
+            change_commands::delete_change_report,
+            change_commands::generate_change_report_ai,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

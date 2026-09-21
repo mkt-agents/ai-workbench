@@ -26,6 +26,8 @@ pub enum DbTable {
     WebPluginHistory,
     QuickAskSessions,
     JsonToolHistory,
+    HttpSavedRequests,
+    HttpHistory,
 }
 
 pub fn table_from_key(key: &str) -> Option<DbTable> {
@@ -46,6 +48,8 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "web_plugin_history" => Some(DbTable::WebPluginHistory),
         "quick_ask_sessions" => Some(DbTable::QuickAskSessions),
         "json_tool_history" => Some(DbTable::JsonToolHistory),
+        "http_saved_requests" => Some(DbTable::HttpSavedRequests),
+        "http_history" => Some(DbTable::HttpHistory),
         _ => None,
     }
 }
@@ -68,6 +72,8 @@ fn load_sql(table: DbTable) -> &'static str {
         DbTable::WebPluginHistory => "SELECT * FROM web_plugin_history ORDER BY opened_at DESC LIMIT 100",
         DbTable::QuickAskSessions => "SELECT * FROM quick_ask_sessions ORDER BY updated_at DESC LIMIT 30",
         DbTable::JsonToolHistory => "SELECT * FROM json_tool_history ORDER BY id DESC LIMIT 20",
+        DbTable::HttpSavedRequests => "SELECT * FROM http_saved_requests ORDER BY saved_at DESC",
+        DbTable::HttpHistory => "SELECT * FROM http_history ORDER BY id DESC LIMIT 50",
     }
 }
 
@@ -89,6 +95,8 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::WebPluginHistory => "DELETE FROM web_plugin_history",
         DbTable::QuickAskSessions => "DELETE FROM quick_ask_sessions",
         DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
+        DbTable::HttpSavedRequests => "DELETE FROM http_saved_requests",
+        DbTable::HttpHistory => "DELETE FROM http_history",
     }
 }
 
@@ -382,6 +390,33 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_i64(obj, "nodes", 0),
                     json_i64(obj, "chars", 0),
                     json_str(obj, "created_at")?,
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::HttpSavedRequests => {
+            tx.execute(
+                "INSERT INTO http_saved_requests (id, name, method, url, headers, params, body, body_type, saved_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_str(obj, "name")?,
+                    json_str(obj, "method")?,
+                    json_str(obj, "url")?,
+                    json_str(obj, "headers")?,
+                    json_str(obj, "params")?,
+                    json_opt_str(obj, "body").unwrap_or_default(),
+                    json_opt_str(obj, "body_type").unwrap_or_else(|| "none".to_string()),
+                    json_str(obj, "saved_at")?,
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::HttpHistory => {
+            tx.execute(
+                "INSERT INTO http_history (id, method, url, timestamp) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    json_i64(obj, "id", 0),
+                    json_str(obj, "method")?,
+                    json_str(obj, "url")?,
+                    json_i64(obj, "timestamp", 0),
                 ],
             ).map_err(|e| e.to_string())?;
         }

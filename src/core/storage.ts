@@ -3,6 +3,26 @@
  */
 import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem } from './types';
 
+// Types for HTTP client storage
+export interface HttpSavedRequest {
+  id: string;
+  name: string;
+  method: string;
+  url: string;
+  headers: { key: string; value: string }[];
+  params: { key: string; value: string }[];
+  body: string;
+  bodyType: string;
+  savedAt: number;
+}
+
+export interface HttpHistoryItem {
+  id: number;
+  method: string;
+  url: string;
+  timestamp: number;
+}
+
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
   const n = typeof value === "number" ? value : Number(value);
@@ -41,7 +61,9 @@ type DbTable =
   | 'cloudflared_profiles'
   | 'snippets'
   | 'quick_ask_sessions'
-  | 'json_tool_history';
+  | 'json_tool_history'
+  | 'http_saved_requests'
+  | 'http_history';
 
 async function loadRows(table: DbTable): Promise<Record<string, unknown>[]> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -469,6 +491,72 @@ export const storage = {
           nodes: item.nodes ?? 0,
           chars: item.chars ?? 0,
           created_at: new Date(item.timestamp).toISOString(),
+        }))
+      );
+    },
+  },
+  httpSavedRequests: {
+    load: async (): Promise<HttpSavedRequest[]> => {
+      const rows = await loadRows('http_saved_requests');
+      return rows.map((r) => {
+        let headers: { key: string; value: string }[] = [];
+        let params: { key: string; value: string }[] = [];
+        try {
+          const h = JSON.parse((r['headers'] as string) || '[]');
+          if (Array.isArray(h)) headers = h;
+        } catch { /* ignore */ }
+        try {
+          const p = JSON.parse((r['params'] as string) || '[]');
+          if (Array.isArray(p)) params = p;
+        } catch { /* ignore */ }
+        return {
+          id: r['id'] as string,
+          name: (r['name'] as string) || '',
+          method: (r['method'] as string) || 'GET',
+          url: (r['url'] as string) || '',
+          headers,
+          params,
+          body: (r['body'] as string) || '',
+          bodyType: (r['body_type'] as string) || 'none',
+          savedAt: Number(r['saved_at'] ?? 0),
+        };
+      });
+    },
+    save: async (items: HttpSavedRequest[]): Promise<void> => {
+      await saveRows(
+        'http_saved_requests',
+        items.map((item) => ({
+          id: item.id,
+          name: item.name,
+          method: item.method,
+          url: item.url,
+          headers: JSON.stringify(item.headers),
+          params: JSON.stringify(item.params),
+          body: item.body,
+          body_type: item.bodyType,
+          saved_at: item.savedAt,
+        }))
+      );
+    },
+  },
+  httpHistory: {
+    load: async (): Promise<HttpHistoryItem[]> => {
+      const rows = await loadRows('http_history');
+      return rows.map((r) => ({
+        id: Number(r['id'] ?? 0),
+        method: (r['method'] as string) || 'GET',
+        url: (r['url'] as string) || '',
+        timestamp: Number(r['timestamp'] ?? 0),
+      }));
+    },
+    save: async (items: HttpHistoryItem[]): Promise<void> => {
+      await saveRows(
+        'http_history',
+        items.map((item) => ({
+          id: item.id,
+          method: item.method,
+          url: item.url,
+          timestamp: item.timestamp,
         }))
       );
     },

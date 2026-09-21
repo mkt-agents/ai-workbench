@@ -1,4 +1,4 @@
-import { useCallback, useState, useMemo } from "react";
+import { useCallback, useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
@@ -21,6 +21,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
+import { storage } from "../../core/storage";
 
 type Tab = "params" | "headers" | "body" | "response";
 
@@ -80,19 +81,29 @@ const COMMON_HEADERS: { label: string; key: string; value: string }[] = [
   { label: "Accept", key: "Accept", value: "application/json" },
 ];
 
-const SAVED_REQUESTS_KEY = "ai-workbench.http-saved-requests";
+interface HttpFormState {
+  method: string;
+  baseUrl: string;
+  body: string;
+  bodyType: BodyType;
+}
 
-function loadSavedRequests(): SavedRequest[] {
+function loadHttpForm(): HttpFormState {
   try {
-    const raw = localStorage.getItem(SAVED_REQUESTS_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const raw = localStorage.getItem("ai-workbench.http-form");
+    if (!raw) return { method: "GET", baseUrl: "", body: "", bodyType: "none" };
+    return JSON.parse(raw) as HttpFormState;
   } catch {
-    return [];
+    return { method: "GET", baseUrl: "", body: "", bodyType: "none" };
   }
 }
 
-function saveSavedRequests(items: SavedRequest[]) {
-  localStorage.setItem(SAVED_REQUESTS_KEY, JSON.stringify(items));
+function saveHttpForm(state: HttpFormState) {
+  try {
+    localStorage.setItem("ai-workbench.http-form", JSON.stringify(state));
+  } catch {
+    // ignore
+  }
 }
 
 function formatJson(text: string): { ok: boolean; result: string } {
@@ -303,13 +314,17 @@ function HttpClientTool() {
   const copy = useGlobalStore((s) => s.invokeCopyToClipboard);
   const httpRequest = useGlobalStore((s) => s.invokeHttpRequest);
 
-  const [method, setMethod] = useState<(typeof METHODS)[number]>("GET");
+  const savedForm = loadHttpForm();
+  const [method, setMethod] = useState<(typeof METHODS)[number]>(() => {
+    const m = savedForm.method;
+    return (METHODS as readonly string[]).includes(m) ? (m as (typeof METHODS)[number]) : "GET";
+  });
   const [url, setUrl] = useState("");
-  const [baseUrl, setBaseUrl] = useState(""); // URL without query params
+  const [baseUrl, setBaseUrl] = useState(savedForm.baseUrl); // URL without query params
   const [params, setParams] = useState<ParamRow[]>([]);
   const [headers, setHeaders] = useState<HeaderRow[]>([newHeader("Accept", "*/*")]);
-  const [body, setBody] = useState("");
-  const [bodyType, setBodyType] = useState<BodyType>("none");
+  const [body, setBody] = useState(savedForm.body);
+  const [bodyType, setBodyType] = useState<BodyType>(savedForm.bodyType);
   const [tab, setTab] = useState<Tab>("params");
   const [sending, setSending] = useState(false);
   const [response, setResponse] = useState<{
@@ -327,10 +342,45 @@ function HttpClientTool() {
   const [showImportCurl, setShowImportCurl] = useState(false);
   const [importCurlText, setImportCurlText] = useState("");
   const [searchText, setSearchText] = useState("");
-  const [savedRequests, setSavedRequests] = useState<SavedRequest[]>(loadSavedRequests);
+  const [savedRequests, setSavedRequests] = useState<SavedRequest[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false);
+
+  // Load saved requests and history from SQLite on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [saved, hist] = await Promise.all([
+          storage.httpSavedRequests.load(),
+          storage.httpHistory.load(),
+        ]);
+        if (!cancelled) {
+          setSavedRequests(saved as unknown as SavedRequest[]);
+          setHistory(hist as unknown as RequestHistoryItem[]);
+        }
+      } catch {
+        // ignore load errors
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Auto-save form state
+  useEffect(() => {
+    saveHttpForm({ method, baseUrl, body, bodyType });
+  }, [method, baseUrl, body, bodyType]);
+
+  // Auto-save history to SQLite
+  useEffect(() => {
+    storage.httpHistory.save(history).catch(() => {});
+  }, [history]);
+
+  // Auto-save saved requests to SQLite
+  useEffect(() => {
+    storage.httpSavedRequests.save(savedRequests).catch(() => {});
+  }, [savedRequests]);
 
   const headerCount = headers.filter((h) => h.key.trim()).length;
   const paramCount = params.filter((p) => p.key.trim()).length;
@@ -521,7 +571,6 @@ function HttpClientTool() {
     };
     const updated = [newReq, ...savedRequests.filter((r) => r.name !== newReq.name)];
     setSavedRequests(updated);
-    saveSavedRequests(updated);
     setShowSaveDialog(false);
     setSaveName("");
     flash("success", t("http.saved"));
@@ -555,7 +604,6 @@ function HttpClientTool() {
   const handleDeleteSaved = (id: string) => {
     const updated = savedRequests.filter((r) => r.id !== id);
     setSavedRequests(updated);
-    saveSavedRequests(updated);
   };
 
   const handleExportSaved = async () => {
@@ -582,7 +630,6 @@ function HttpClientTool() {
         if (Array.isArray(imported)) {
           const merged = [...imported, ...savedRequests];
           setSavedRequests(merged);
-          saveSavedRequests(merged);
           flash("success", t("http.imported", { count: imported.length }));
         }
       } catch {

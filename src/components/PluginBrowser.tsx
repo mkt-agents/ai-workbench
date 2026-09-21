@@ -13,10 +13,83 @@ import {
 } from "lucide-react";
 
 const VIEW_MODE_KEY = "ai-workbench.webPlugins.viewMode";
+const US_FORM_DRAFT_KEY = "ai-workbench.userscripts.formDraft";
+const PLUGIN_FORM_DRAFT_KEY = "ai-workbench.webPlugins.formDraft";
 
 type ViewMode = "list" | "card";
 type SortMode = "manual" | "recent";
 type FormMode = "add" | "edit";
+
+interface UsFormDraft {
+  name: string;
+  description: string;
+  matchPatterns: string[];
+  code: string;
+}
+
+interface PluginFormDraft {
+  name: string;
+  url: string;
+  group: string;
+  tags: string;
+  hotkey: string;
+}
+
+function loadUsFormDraft(): UsFormDraft | null {
+  try {
+    const raw = localStorage.getItem(US_FORM_DRAFT_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as UsFormDraft;
+    if (!data || typeof data.name !== "string") return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveUsFormDraft(draft: UsFormDraft) {
+  try {
+    localStorage.setItem(US_FORM_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // ignore
+  }
+}
+
+function clearUsFormDraft() {
+  try {
+    localStorage.removeItem(US_FORM_DRAFT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function loadPluginFormDraft(): PluginFormDraft | null {
+  try {
+    const raw = localStorage.getItem(PLUGIN_FORM_DRAFT_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as PluginFormDraft;
+    if (!data || typeof data.name !== "string") return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function savePluginFormDraft(draft: PluginFormDraft) {
+  try {
+    localStorage.setItem(PLUGIN_FORM_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // ignore
+  }
+}
+
+function clearPluginFormDraft() {
+  try {
+    localStorage.removeItem(PLUGIN_FORM_DRAFT_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 function normalizeHttpUrl(raw: string): URL | null {
   const trimmed = raw.trim();
@@ -218,19 +291,19 @@ function PluginBrowser() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<FormMode>("add");
-  const [formName, setFormName] = useState("");
-  const [formUrl, setFormUrl] = useState("");
-  const [formGroup, setFormGroup] = useState("");
-  const [formTags, setFormTags] = useState("");
-  const [formHotkey, setFormHotkey] = useState("");
+  const [formName, setFormName] = useState(() => loadPluginFormDraft()?.name ?? "");
+  const [formUrl, setFormUrl] = useState(() => loadPluginFormDraft()?.url ?? "");
+  const [formGroup, setFormGroup] = useState(() => loadPluginFormDraft()?.group ?? "");
+  const [formTags, setFormTags] = useState(() => loadPluginFormDraft()?.tags ?? "");
+  const [formHotkey, setFormHotkey] = useState(() => loadPluginFormDraft()?.hotkey ?? "");
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<"plugins" | "userscripts">("plugins");
   const [usFormOpen, setUsFormOpen] = useState(false);
-  const [usFormName, setUsFormName] = useState("");
-  const [usDesc, setUsDesc] = useState("");
-  const [usMatch, setUsMatch] = useState<string[]>(["<all_urls>"]);
-  const [usCode, setUsCode] = useState("");
+  const [usFormName, setUsFormName] = useState(() => loadUsFormDraft()?.name ?? "");
+  const [usDesc, setUsDesc] = useState(() => loadUsFormDraft()?.description ?? "");
+  const [usMatch, setUsMatch] = useState<string[]>(() => loadUsFormDraft()?.matchPatterns ?? ["<all_urls>"]);
+  const [usCode, setUsCode] = useState(() => loadUsFormDraft()?.code ?? "");
   const [usEditingId, setUsEditingId] = useState<string | null>(null);
   const [usSearch, setUsSearch] = useState("");
   const [usShowPresets, setUsShowPresets] = useState(false);
@@ -242,6 +315,19 @@ function PluginBrowser() {
   const [usImportUrl, setUsImportUrl] = useState("");
   const [usImporting, setUsImporting] = useState(false);
   const usCodeRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-save form drafts to localStorage
+  useEffect(() => {
+    if (usFormOpen) {
+      saveUsFormDraft({ name: usFormName, description: usDesc, matchPatterns: usMatch, code: usCode });
+    }
+  }, [usFormOpen, usFormName, usDesc, usMatch, usCode]);
+
+  useEffect(() => {
+    if (formOpen) {
+      savePluginFormDraft({ name: formName, url: formUrl, group: formGroup, tags: formTags, hotkey: formHotkey });
+    }
+  }, [formOpen, formName, formUrl, formGroup, formTags, formHotkey]);
 
   const filterInputRef = useRef<HTMLInputElement>(null);
   const canDrag = sortMode === "manual";
@@ -506,6 +592,7 @@ function PluginBrowser() {
     setFormGroup("");
     setFormTags("");
     setFormHotkey("");
+    clearPluginFormDraft();
   };
 
   const savePlugin = async (andOpen: boolean) => {
@@ -2009,6 +2096,7 @@ function PluginBrowser() {
                     setUsMatch(["<all_urls>"]);
                     setUsCode("");
                     setUsTestUrl("");
+                    clearUsFormDraft();
                   } catch (e) {
                     showMsg("error", String(e));
                   }

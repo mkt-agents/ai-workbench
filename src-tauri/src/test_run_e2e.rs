@@ -473,6 +473,218 @@ mod tests {
     }
 
     #[test]
+    fn detection_of_a_maven_project_prefers_the_wrapper() {
+        let dir = scratch("detect-mvn");
+        std::fs::write(dir.join("pom.xml"), "<project/>").unwrap();
+        std::fs::write(dir.join("mvnw.cmd"), "@echo off\r\n").unwrap();
+
+        let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();
+        assert!(result.detected);
+        assert_eq!(result.project_type.as_deref(), Some("backend"));
+        assert_eq!(result.framework.as_deref(), Some("maven"));
+        assert_eq!(result.reason, "pom.xml");
+        assert_eq!(result.test_command.as_deref(), Some("mvnw.cmd -B test"));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // No wrapper: plain `mvn`, still in batch mode.
+        let dir = scratch("detect-mvn-plain");
+        std::fs::write(dir.join("pom.xml"), "<project/>").unwrap();
+        let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();
+        assert_eq!(result.test_command.as_deref(), Some("mvn -B test"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_package_json_without_a_test_script_does_not_hide_the_pom() {
+        let dir = scratch("detect-both");
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"build":"vite build"}}"#).unwrap();
+        std::fs::write(dir.join("pom.xml"), "<project/>").unwrap();
+
+        let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();
+        assert!(result.detected, "the Java marker still wins: {:?}", result);
+        assert_eq!(result.framework.as_deref(), Some("maven"));
+
+        // With no other marker the package.json answer is still reported.
+        std::fs::remove_file(dir.join("pom.xml")).unwrap();
+        let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();
+        assert!(!result.detected);
+        assert_eq!(result.reason, "package.json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A reactor run: the child writes the reports maven would and prints its stdout.
+    fn maven_project(dir: &Path, id: &str, command: &str) -> TestProject {
+        TestProject {
+            framework: "maven".to_string(),
+            project_type: "backend".to_string(),
+            ..project(dir, id, command, "maven")
+        }
+    }
+
+    const MAVEN_SCRIPT: &str = r#"
+const fs = require('fs'), path = require('path');
+const dir = path.join(__dirname, 'target', 'surefire-reports');
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, 'TEST-com.x.AdminTest.xml'),
+  '<testsuite name="com.x.AdminTest" time="0.318" tests="2" errors="0" skipped="0" failures="1">' +
+  '<testcase name="seedsHash" classname="com.x.AdminTest" time="0.122"/>' +
+  '<testcase name="rejectsOld" classname="com.x.AdminTest" time="0.07">' +
+  '<failure message="expected: &lt;2&gt; but was: &lt;1&gt;" type="AssertionFailedError"><![CDATA[AssertionFailedError: expected: <2> but was: <1>' + String.fromCharCode(10) + '\tat com.x.AdminTest.rejectsOld(AdminTest.java:31)' + String.fromCharCode(10) + ']]></failure>' +
+  '</testcase></testsuite>');
+console.log('[INFO] Running com.x.AdminTest');
+console.log('[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.318 s <<< FAILURE! -- in com.x.AdminTest');
+console.log('[INFO] Results:');
+console.log('[INFO] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0');
+console.log('[INFO] BUILD FAILURE');
+process.exit(1);
+"#;
+
+    #[test]
+    fn a_maven_run_takes_its_case_detail_from_the_surefire_reports() {
+        if !node_available() {
+            eprintln!("skipping: node not on PATH");
+            return;
+        }
+        let dir = scratch("maven");
+        write_script(&dir, "t.js", MAVEN_SCRIPT);
+        let conn = db();
+        add_project_sync(&conn.lock().unwrap(), maven_project(&dir, "p-mvn", "node t.js")).unwrap();
+
+        let result = run_test_sync(
+            std::sync::Arc::clone(&conn),
+            maven_project(&dir, "p-mvn", "node t.js"),
+            "p-mvn".to_string(),
+            None,
+            Duration::from_secs(60),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.status, "failed");
+        assert_eq!((result.total_tests, result.passed, result.failed, result.skipped), (2, 1, 1, 0));
+        assert_eq!(result.suites.len(), 1);
+        assert_eq!(result.suites[0].name, "com.x.AdminTest");
+        assert_eq!(result.suites[0].duration, 318);
+        assert_eq!(result.suites[0].tests[0].name, "seedsHash");
+        let failing = &result.suites[0].tests[1];
+        assert_eq!(failing.status, "failed");
+        assert_eq!(failing.error.as_ref().expect("failure").message, "expected: <2> but was: <1>");
+        assert!(
+            failing.error.as_ref().unwrap().stack.contains("AdminTest.java:31"),
+            "the CDATA stack is kept: {:?}",
+            failing.error
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_maven_run_ignores_reports_left_by_an_earlier_run() {
+        if !node_available() {
+            eprintln!("skipping: node not on PATH");
+            return;
+        }
+        let dir = scratch("maven-stale");
+        // The child prints reactor stdout but writes nothing: only the stale report
+        // created here is on disk, and it must not be mistaken for this run's result.
+        let reports = dir.join("target").join("surefire-reports");
+        std::fs::create_dir_all(&reports).unwrap();
+        let stale = reports.join("TEST-com.x.GoneTest.xml");
+        std::fs::write(
+            &stale,
+            "<testsuite name=\"com.x.GoneTest\"><testcase name=\"a\" classname=\"com.x.GoneTest\"/>\
+             <testcase name=\"b\" classname=\"com.x.GoneTest\"/></testsuite>",
+        )
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000))
+            .unwrap();
+        write_script(
+            &dir,
+            "t.js",
+            "console.log('[INFO] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.1 s -- in com.x.AdminTest');",
+        );
+        let conn = db();
+        add_project_sync(&conn.lock().unwrap(), maven_project(&dir, "p-mvn-stale", "node t.js")).unwrap();
+
+        let result = run_test_sync(
+            std::sync::Arc::clone(&conn),
+            maven_project(&dir, "p-mvn-stale", "node t.js"),
+            "p-mvn-stale".to_string(),
+            None,
+            Duration::from_secs(60),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (result.total_tests, result.passed, result.failed, result.skipped),
+            (2, 1, 1, 0),
+            "counts come from reactor stdout, not from the stale XML's two passing cases"
+        );
+        assert!(result.suites.is_empty(), "the stale report is not shown as detail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_batch_wrapper_in_the_project_is_resolved_by_bare_name() {
+        if !node_available() {
+            eprintln!("skipping: node not on PATH");
+            return;
+        }
+        let dir = scratch("maven-wrapper");
+        write_script(&dir, "t.js", "console.log('Tests  1 passed (1)');");
+        // `mvnw.cmd`-style: CreateProcess will not start a .cmd by its bare name, so
+        // the runner has to find it in the project directory first.
+        std::fs::write(dir.join("mvnw.cmd"), "@echo off\r\nnode \"%~dp0t.js\"\r\n").unwrap();
+        let conn = db();
+        let project = maven_project(&dir, "p-wrap", "mvnw.cmd -B test");
+        add_project_sync(&conn.lock().unwrap(), project.clone()).unwrap();
+
+        let result = run_test_sync(
+            std::sync::Arc::clone(&conn),
+            project,
+            "p-wrap".to_string(),
+            None,
+            Duration::from_secs(60),
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            !result.output.contains("启动测试命令失败"),
+            "output: {}",
+            result.output
+        );
+        assert_eq!(result.status, "success");
+        assert_eq!(result.total_tests, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_program_says_so_instead_of_looking_like_a_test_failure() {
+        let dir = scratch("missing-bin");
+        let conn = db();
+        let project = project(&dir, "p-nobin", "definitely-not-a-real-tool --test", "custom");
+        add_project_sync(&conn.lock().unwrap(), project.clone()).unwrap();
+
+        let error = run_test_sync(
+            std::sync::Arc::clone(&conn),
+            project,
+            "p-nobin".to_string(),
+            None,
+            Duration::from_secs(60),
+            None,
+        )
+        .expect_err("spawning a program that does not exist must not look like a run");
+        assert!(error.contains("启动测试命令失败"), "got: {}", error);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn unknown_directory_is_reported_as_undetected() {
         let dir = scratch("detect-none");
         let result = detect_project_type(dir.to_string_lossy().to_string()).unwrap();

@@ -6,6 +6,7 @@ import type {
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
   TestProject, ProjectDetectionResult, TestRunResult, TestHistoryEntry, CoverageReport,
+  ChangeReportBundle, ChangeReportSummary, StoredChangeReport,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -331,6 +332,13 @@ interface StoreState extends GlobalState, Invocations {
   readCoverageReport: (projectId: string) => Promise<CoverageReport>;
   cancelTestRun: (projectId: string) => Promise<void>;
   getTestRun: (runId: string) => Promise<TestRunResult>;
+
+  // Change-driven regression reports
+  collectChangeReport: (projectId: string, base?: string, lastCommits?: number) => Promise<ChangeReportBundle>;
+  listChangeReports: (projectId: string) => Promise<ChangeReportSummary[]>;
+  getChangeReport: (reportId: string) => Promise<StoredChangeReport>;
+  deleteChangeReport: (reportId: string) => Promise<void>;
+  generateChangeReportAi: (reportId: string) => Promise<string>;
 
   // Initialize
   initialize: () => Promise<void>;
@@ -1368,6 +1376,27 @@ export const useGlobalStore = create<StoreState>()(
       // Read one stored run back so a history row can show its full result.
       getTestRun: async (runId: string) => {
         return await tauriInvoke<TestRunResult>('get_test_run', { runId });
+      },
+
+      // The backend stores the report as it collects it, so the answer carries its id.
+      collectChangeReport: async (projectId: string, base?: string, lastCommits?: number) => {
+        return await tauriInvoke<ChangeReportBundle>('collect_change_report', { projectId, base, lastCommits });
+      },
+
+      listChangeReports: async (projectId: string) => {
+        return await tauriInvoke<ChangeReportSummary[]>('list_change_reports', { projectId });
+      },
+
+      getChangeReport: async (reportId: string) => {
+        return await tauriInvoke<StoredChangeReport>('get_change_report', { reportId });
+      },
+
+      deleteChangeReport: async (reportId: string) => {
+        await tauriInvoke<void>('delete_change_report', { reportId });
+      },
+
+      generateChangeReportAi: async (reportId: string) => {
+        return await tauriInvoke<string>('generate_change_report_ai', { reportId });
       },
 
       // Initialize

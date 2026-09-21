@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter, State};
 
 #[cfg(target_os = "windows")]
@@ -16,8 +16,10 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::DbState;
+use crate::coverage_parsers::{self, CoverageFile, CoverageMetric, CoverageReport};
 use crate::test_output_parsers::{
-    line_parsed_suites, load_structured_suites, parse_test_output, suite_counts, TestSuite,
+    line_parsed_suites, load_structured_suites, load_surefire_suites, parse_test_output,
+    suite_counts, TestSuite,
 };
 
 /// Test-assistant tables, executed by `lib.rs` at startup and by the tests here.
@@ -339,6 +341,7 @@ pub fn detect_project_type(path: String) -> Result<ProjectDetectionResult, Strin
 
     // Check for package.json (Node.js/TypeScript projects)
     let package_json = project_path.join("package.json");
+    let mut marker_without_entry: Option<ProjectDetectionResult> = None;
     if package_json.exists() {
         let content = fs::read_to_string(&package_json)
             .map_err(|e| format!("Failed to read package.json: {}", e))?;
@@ -376,8 +379,11 @@ pub fn detect_project_type(path: String) -> Result<ProjectDetectionResult, Strin
             }
         }
 
-        return Ok(ProjectDetectionResult {
-            path,
+        // A `package.json` without a test script is not the end of the story: a Java
+        // service often ships one for its frontend build. Remember it only as the
+        // answer to report when no other marker matches.
+        marker_without_entry = Some(ProjectDetectionResult {
+            path: path.clone(),
             detected: false,
             project_type: Some("frontend".to_string()),
             framework: None,
@@ -396,6 +402,23 @@ pub fn detect_project_type(path: String) -> Result<ProjectDetectionResult, Strin
             framework: Some("cargo".to_string()),
             test_command: Some("cargo test".to_string()),
             reason: "Cargo.toml".to_string(),
+        });
+    }
+
+    // Check for pom.xml (Java projects). `-B` keeps the log free of progress redraws.
+    if project_path.join("pom.xml").exists() {
+        let runner = ["mvnw.cmd", "mvnw"]
+            .iter()
+            .find(|name| project_path.join(name).is_file())
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| "mvn".to_string());
+        return Ok(ProjectDetectionResult {
+            path,
+            detected: true,
+            project_type: Some("backend".to_string()),
+            framework: Some("maven".to_string()),
+            test_command: Some(format!("{} -B test", runner)),
+            reason: "pom.xml".to_string(),
         });
     }
 
@@ -424,6 +447,10 @@ pub fn detect_project_type(path: String) -> Result<ProjectDetectionResult, Strin
             test_command: Some("go test ./...".to_string()),
             reason: "go.mod".to_string(),
         });
+    }
+
+    if let Some(marker) = marker_without_entry {
+        return Ok(marker);
     }
 
     Ok(ProjectDetectionResult {
@@ -516,6 +543,45 @@ fn work_dir_of(project: &TestProject) -> PathBuf {
     }
 }
 
+/// Locate a program the way a shell would: the project directory first, then PATH,
+/// trying the Windows shim extensions. `mvn`, `mvnw` and `gradlew` are `.cmd` shims
+/// that `CreateProcess` will not find under their bare name.
+fn resolve_program(bin: &str, work_dir: &Path) -> Option<PathBuf> {
+    let requested = PathBuf::from(bin);
+    let bases: Vec<PathBuf> = if requested.is_absolute() || requested.parent().map(|p| !p.as_os_str().is_empty()).unwrap_or(false) {
+        // The user wrote a path: honour it relative to the project.
+        vec![requested.clone()]
+    } else {
+        let mut dirs: Vec<PathBuf> = vec![work_dir.to_path_buf()];
+        if let Ok(path) = std::env::var("PATH") {
+            dirs.extend(std::env::split_paths(&path));
+        }
+        dirs.iter().map(|dir| dir.join(&requested)).collect()
+    };
+
+    let mut extensions: Vec<&str> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        let names_like_exe = ["exe", "cmd", "bat"]
+            .iter()
+            .any(|e| requested.extension().map(|x| x.eq_ignore_ascii_case(e)).unwrap_or(false));
+        if !names_like_exe {
+            extensions.extend([".exe", ".cmd", ".bat"]);
+        }
+    }
+    extensions.push("");
+
+    for base in bases {
+        for ext in &extensions {
+            let candidate = PathBuf::from(format!("{}{}", base.display(), ext));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Build the child command. npm/yarn/pnpm are .cmd shims on Windows and the stored
 /// string may carry quoting, so those go through the shell instead of argv.
 fn build_test_command(project: &TestProject, extra_args: Option<&str>) -> Result<Command, String> {
@@ -525,6 +591,10 @@ fn build_test_command(project: &TestProject, extra_args: Option<&str>) -> Result
         }
         _ => project.test_command.clone(),
     };
+    let work_dir = work_dir_of(&project);
+    if !work_dir.is_dir() {
+        return Err(format!("工作目录不存在：{}", work_dir.display()));
+    }
     let mut cmd = match command.split_whitespace().next().unwrap_or("") {
         "npm" | "yarn" | "pnpm" => {
             #[cfg(target_os = "windows")]
@@ -542,15 +612,11 @@ fn build_test_command(project: &TestProject, extra_args: Option<&str>) -> Result
         }
         "" => return Err("测试命令为空".to_string()),
         bin => {
-            let mut c = Command::new(bin);
+            let mut c = Command::new(resolve_program(bin, &work_dir).unwrap_or_else(|| PathBuf::from(bin)));
             c.args(command.split_whitespace().skip(1));
             c
         }
     };
-    let work_dir = work_dir_of(&project);
-    if !work_dir.is_dir() {
-        return Err(format!("工作目录不存在：{}", work_dir.display()));
-    }
     cmd.current_dir(work_dir);
     if let Some(ref env) = project.env {
         for (k, v) in env {
@@ -661,6 +727,11 @@ pub(crate) fn run_test_sync(
     let _guard = crate::cancellation::CancelGuard::new(&guard_id);
 
     let mut cmd = build_test_command(&project, args.as_deref())?;
+    // Reports written by this run must be newer than this, but file-system mtimes can
+    // be coarse, so the cut-off sits a few seconds in the past.
+    let reports_not_before = SystemTime::now()
+        .checked_sub(Duration::from_secs(3))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -755,8 +826,11 @@ pub(crate) fn run_test_sync(
 
     // A machine-readable report beats scraping: exact counts plus per-case detail.
     // cargo/pytest/go have no JSON convention to opt into, so fall back to their
-    // per-case stdout lines.
-    let suites = load_structured_suites(&work_dir_of(&project), &stdout, &stderr)
+    // per-case stdout lines. Surefire/failsafe XML is the Java equivalent — its
+    // presence is unambiguous, so it is probed for regardless of the framework label.
+    let root = work_dir_of(&project);
+    let suites = load_structured_suites(&root, &stdout, &stderr)
+        .or_else(|| load_surefire_suites(&root, Some(reports_not_before)))
         .or_else(|| line_parsed_suites(&project.framework, &full_output));
     if let Some(ref suites) = suites {
         let (t, p, f, s) = suite_counts(suites);
@@ -979,7 +1053,7 @@ pub fn get_test_history(state: State<DbState>, project_id: Option<String>) -> Re
 
 /// Load the default model row into the shared AI request config.
 /// The column order must match the closure below (it mirrors `ai_commands::AIModelConfig`).
-fn load_default_model_config(
+pub(crate) fn load_default_model_config(
     conn: &rusqlite::Connection,
 ) -> Result<crate::ai_commands::AIModelConfig, String> {
     conn.query_row(
@@ -1119,34 +1193,6 @@ pub async fn diagnose_test_failure(
     Ok(result)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CoverageReport {
-    pub lines: CoverageMetric,
-    pub statements: CoverageMetric,
-    pub branches: CoverageMetric,
-    pub functions: CoverageMetric,
-    pub files: Vec<CoverageFile>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CoverageMetric {
-    pub total: u32,
-    pub covered: u32,
-    pub percentage: f64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CoverageFile {
-    pub path: String,
-    pub lines: CoverageMetric,
-    pub statements: CoverageMetric,
-    pub branches: CoverageMetric,
-    pub functions: CoverageMetric,
-}
-
 /// Read coverage report for a project
 #[tauri::command]
 pub fn read_coverage_report(
@@ -1163,36 +1209,46 @@ pub fn read_coverage_report(
 
     // Only formats we can actually parse: pytest's binary `.coverage` database is
     // deliberately not a candidate — reading it as JSON always failed.
-    let (candidates, hint): (&[&str], &str) = match project.framework.as_str() {
-        "jest" | "vitest" => (
-            &["coverage/coverage-final.json", "coverage/coverage-summary.json"],
-            "请先运行带覆盖率的测试，例如 npm test -- --coverage",
-        ),
-        "cargo" => (
-            &["target/llvm-cov/coverage.json"],
-            "请先运行 cargo llvm-cov --json --output-path target/llvm-cov/coverage.json",
-        ),
-        "pytest" => (
-            &["coverage.json", "coverage/coverage.json"],
-            "请先运行 pytest --cov --cov-report=json",
-        ),
-        other => return Err(format!("暂不支持 {} 框架的覆盖率报告", other)),
+    let candidates: &[&str] = match project.framework.as_str() {
+        "jest" | "vitest" | "mocha" | "playwright" => &[
+            "coverage/coverage-summary.json",
+            "coverage/coverage-final.json",
+            "coverage/lcov.info",
+            "lcov.info",
+        ],
+        "cargo" => &[
+            "target/llvm-cov/coverage.json",
+            "target/llvm-cov/coverage.info",
+            "coverage/lcov.info",
+        ],
+        "pytest" => &["coverage.json", "coverage/coverage.json", "coverage/lcov.info"],
+        "maven" => &["target/site/jacoco/jacoco.xml", "target/site/jacoco/test/jacoco.xml"],
+        "gotest" => &["coverage.xml", "coverage/cobertura.xml", "coverage/lcov.info"],
+        _ => &["coverage/coverage-summary.json", "coverage/lcov.info", "coverage.xml", "jacoco.xml"],
     };
     let root = Path::new(&project.path);
     let found = candidates
         .iter()
         .map(|p| root.join(p))
-        .find(|p| p.exists())
-        .ok_or_else(|| format!("未找到覆盖率报告（{}），{}", candidates.join(" / "), hint))?;
+        .find(|p| p.is_file())
+        // A maven reactor or a monorepo writes one report per module, so a fixed
+        // relative path is not enough.
+        .or_else(|| coverage_parsers::find_report_file(root, "jacoco", "jacoco.xml", 8))
+        .or_else(|| coverage_parsers::find_report_file(root, "coverage", "lcov.info", 6))
+        .ok_or_else(|| missing_coverage_message(&project.framework))?;
 
     let content = fs::read_to_string(&found)
         .map_err(|e| format!("读取覆盖率报告失败: {}", e))?;
 
     // The file name says which writer produced it, which is sturdier than trusting
     // the framework label the user typed when adding the project.
-    let report = match found.file_name().and_then(|n| n.to_str()).unwrap_or("") {
+    let file_name = found.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let report = match file_name {
         "coverage-final.json" => parse_istanbul_coverage(&content)?,
         "coverage-summary.json" => parse_istanbul_summary_coverage(&content)?,
+        "jacoco.xml" => coverage_parsers::parse_jacoco_xml(&content)?,
+        "cobertura.xml" | "coverage.xml" => coverage_parsers::parse_cobertura_xml(&content)?,
+        _ if file_name.ends_with(".info") => coverage_parsers::parse_lcov_coverage(&content)?,
         _ => match project.framework.as_str() {
             "cargo" => parse_cargo_coverage(&content)?,
             "pytest" => parse_pytest_coverage(&content)?,
@@ -1201,6 +1257,46 @@ pub fn read_coverage_report(
     };
 
     Ok(report)
+}
+
+/// "No report" and "no tool to produce one" need different answers, so the cargo case
+/// checks whether the subcommand exists before telling the user to run it.
+fn missing_coverage_message(framework: &str) -> String {
+    let generic = |how: &str| format!("未找到覆盖率报告，请先运行 {}", how);
+    match framework {
+        "jest" | "vitest" | "mocha" | "playwright" => {
+            generic("带覆盖率的测试，例如 npm test -- --coverage（会产出 coverage/lcov.info）")
+        }
+        "cargo" => {
+            if cargo_llvm_cov_installed() {
+                generic("cargo llvm-cov --json --output-path target/llvm-cov/coverage.json")
+            } else {
+                "未找到覆盖率报告，且本机没有安装 cargo-llvm-cov 子命令。先执行 cargo install cargo-llvm-cov，\
+                 再运行 cargo llvm-cov --json --output-path target/llvm-cov/coverage.json"
+                    .to_string()
+            }
+        }
+        "pytest" => generic("pytest --cov --cov-report=json --cov-report=lcov"),
+        "maven" => generic("带 JaCoCo 的测试。pom 里没配插件时可用：\
+             mvn -B test org.jacoco:jacoco-maven-plugin:0.8.11:prepare-agent org.jacoco:jacoco-maven-plugin:0.8.11:report\
+             （产出 target/site/jacoco/jacoco.xml）"),
+        "gotest" => generic("go test -coverprofile=coverage.out && gocover-cobertura < coverage.out > coverage.xml"),
+        other => generic(&format!("（{} 项目）带覆盖率的测试，产出 lcov.info / jacoco.xml / cobertura.xml 任一格式", other)),
+    }
+}
+
+/// `cargo --list` is the only supported way to see installed subcommands.
+fn cargo_llvm_cov_installed() -> bool {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["--list"]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    match cmd.output() {
+        Ok(output) => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim().ends_with("llvm-cov")),
+        Err(_) => false,
+    }
 }
 
 /// Istanbul `coverage-summary.json`: one `{ total, covered, pct }` block per
