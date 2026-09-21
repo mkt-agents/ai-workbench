@@ -395,7 +395,7 @@
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar,
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .titlebar,
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card {
+:is([data-theme="glass"]) .card {
   backdrop-filter: blur(20px) saturate(1.08);
   -webkit-backdrop-filter: blur(20px) saturate(1.08);
 }
@@ -1067,21 +1067,12 @@ body.resizing :is(
   -webkit-backdrop-filter: none !important;
 }
 
-/* `.card` is handled separately because there can be hundreds of them on a page and the
-   walk is linear in matched elements (measured: 240 cards ≈ 17ms per resize gesture,
-   without them ≈ 0.5ms). It only carries a blur in the frosted themes, so only there is
-   it worth matching — see the backdrop-filter rules further down this file. */
-html:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"], [data-theme="light"]) body.resizing .card {
+/* `.card` is listed separately because a page can carry hundreds of them and the
+   invalidation walk grows with the number matched. It only has a blur in the glass
+   theme, so only glass pays for the match — see the backdrop-filter rules below. */
+html[data-theme="glass"] body.resizing .card {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-}
-
-@media not (prefers-color-scheme: dark) {
-  /* "跟随系统" leaves the attribute off, and that is when .card gets the light blur. */
-  html:not([data-theme]) body.resizing .card {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
 }
 
 body.resizing :is(.sidebar, .dsh-progress-fill, .tm-cov-bar-fill) {
@@ -2288,8 +2279,6 @@ input, select, textarea { font-family: inherit; }
     border: 1px solid rgba(15, 23, 42, 0.08);
     border-radius: 12px;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), var(--card-shadow);
-    backdrop-filter: blur(40px) saturate(1.08);
-    -webkit-backdrop-filter: blur(40px) saturate(1.08);
     transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
   }
 
@@ -2361,8 +2350,6 @@ input, select, textarea { font-family: inherit; }
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 12px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), var(--card-shadow);
-  backdrop-filter: blur(40px) saturate(1.08);
-  -webkit-backdrop-filter: blur(40px) saturate(1.08);
   transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
 }
 
