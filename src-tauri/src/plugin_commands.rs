@@ -14,6 +14,12 @@ use url::Url;
 /// is unavailable).
 const SHELL_OPEN_TRIGGER_HOST: &str = "aiwb-shell.open";
 
+/// Second magic host: "问快问" in the injected toolbar navigates to
+/// `https://aiwb-quickask.open/?text=<encoded selection>` and we forward the
+/// text to the quick-ask window via `open_quick_ask_with_text`. Same trick as
+/// `SHELL_OPEN_TRIGGER_HOST`: external-URL webviews have no IPC bridge.
+const QUICK_ASK_TRIGGER_HOST: &str = "aiwb-quickask.open";
+
 fn is_safe_url(url: &str) -> bool {
     let lower = url.to_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
@@ -154,6 +160,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     collapse: '<polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/>',
     expand: '<polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/>',
     close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    ask: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
     chevronUp: '<polyline points="18 15 12 9 6 15"/>'
   };
 
@@ -231,6 +238,8 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       '<span class="sep"></span>' +
       '<button id="copy" title="复制地址" aria-label="复制地址">' + svg(ICONS.copy) + '</button>' +
       '<button id="external" title="在系统浏览器打开" aria-label="在系统浏览器打开">' + svg(ICONS.external) + '</button>' +
+      '<span class="sep"></span>' +
+      '<button id="ask" title="问快问（送入选中文本，未选中则送页面标题+地址）" aria-label="问快问">' + svg(ICONS.ask) + '</button>' +
       '</div>' +
       '<button id="collapse" title="收起工具栏" aria-label="收起工具栏">' + svg(ICONS.collapse) + '</button>' +
       '<button id="expand" title="展开工具栏" aria-label="展开工具栏" style="display:none;">' + svg(ICONS.expand) + '</button>' +
@@ -253,6 +262,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     var urlEl = root.getElementById('url');
     var copy = root.getElementById('copy');
     var external = root.getElementById('external');
+    var ask = root.getElementById('ask');
     var collapse = root.getElementById('collapse');
     var expand = root.getElementById('expand');
     var hide = root.getElementById('hide');
@@ -370,6 +380,28 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       // Also copy URL as backup in case the webview doesn't fire on_navigation
       copyURL();
       flashBtn(external, ICONS.external);
+    });
+
+    // ---- Ask quick-ask --------------------------------------------------
+    // Sends the current selection (or the page title + URL when nothing is
+    // selected) to the quick-ask window through the `aiwb-quickask.open`
+    // magic host — same no-IPC navigation trick as the external button.
+    // 3500 chars keeps the encoded URL well inside navigation limits.
+    ask.addEventListener('click', function () {
+      var text = '';
+      try { text = (window.getSelection() || '').toString(); } catch (_) {}
+      text = text.trim();
+      if (!text) text = document.title + '\n' + location.href;
+      if (text.length > 3500) text = text.slice(0, 3500);
+      var a = document.createElement('a');
+      a.href = 'https://aiwb-quickask.open/?text=' + encodeURIComponent(text);
+      a.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        if (a.parentNode) a.parentNode.removeChild(a);
+      }, 200);
+      flashBtn(ask, ICONS.ask);
     });
 
     // ---- Collapse / expand ----
@@ -654,6 +686,21 @@ pub async fn open_browser_window_with_toolbar(
                     if k == "url" {
                         let target = v.to_string();
                         let _ = app_handle_for_nav.shell().open(target, None);
+                    }
+                }
+                return false;
+            }
+            if url.host_str() == Some(QUICK_ASK_TRIGGER_HOST) {
+                for (k, v) in url.query_pairs() {
+                    if k == "text" {
+                        let text = v.to_string();
+                        if !text.trim().is_empty() {
+                            let _ = crate::tray::open_quick_ask_with_text(
+                                app_handle_for_nav.clone(),
+                                text,
+                                None,
+                            );
+                        }
                     }
                 }
                 return false;

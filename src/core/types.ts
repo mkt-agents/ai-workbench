@@ -71,6 +71,10 @@ export interface AppSettings {
   quickAskPasteClipboard?: boolean;
   /** Persisted context chip toggles for quick-ask */
   quickAskChips?: QuickAskChips;
+  /** Repos given full-diff context in quick-ask (empty = auto = current repo) */
+  quickAskFocusRepos?: string[];
+  /** Last used quick-ask task (encoded, see quickAsk/config encodeTask) */
+  quickAskLastTask?: string;
   /** Show desktop floating bubble for quick-ask */
   quickAskBubbleEnabled?: boolean;
   /** Physical screen position of the bubble */

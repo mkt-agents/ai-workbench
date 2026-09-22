@@ -33,6 +33,11 @@
   "exported": "Exported",
   "focusRepo": "Specify which repo to analyze in detail",
   "focusRepoAuto": "Auto (current repo)",
+  "focusNSelected": "{{n}} repos selected",
+  "focusClear": "Clear",
+  "focusEmpty": "No repos yet — scan a folder",
+  "focusScanFolder": "Scan folder…",
+  "focusScanEmpty": "No git repos found in that folder",
   "turnsCount": "{{n}} turns",
   "justNow": "just now",
   "minutesAgo": "{{n}}m ago",
@@ -44,11 +49,16 @@
   "copySelection": "Copy selection",
   "quotePrefix": "About \"{{text}}\": ",
   "bubbleTip": "Quick Ask · click to open · drag to move · right-click to hide",
+  "modeAsk": "AI Q&A",
+  "modeTools": "Tools",
   "task": {
     "none": "General",
     "debug": "Debug error",
     "explain": "Explain",
-    "polish": "Polish text"
+    "polish": "Polish text",
+    "translate": "Translate",
+    "summarize": "Summarize",
+    "optimize": "Optimize prompt"
   },
   "chip": {
     "workspace": "Workspace",

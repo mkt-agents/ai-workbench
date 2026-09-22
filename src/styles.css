@@ -1061,7 +1061,9 @@ body.resizing :is(
   .ai-model-menu,
   .prompt-template-menu,
   .tm-toolbar,
-  .http-history-menu
+  .http-history-menu,
+  .qa-focus-pop,
+  .quick-ask-toolbar .qa-focus-btn
 ) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -10788,12 +10790,14 @@ input, select, textarea { font-family: inherit; }
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 12px 14px 16px;
+  padding: 10px 14px 14px;
   box-sizing: border-box;
   background: var(--bg-1);
   color: var(--text-1);
-  gap: 10px;
-  overflow: auto;
+  gap: 8px;
+  /* The answer area owns scrolling; never let the 520px window itself scroll
+     (that would drag the header/toolbar out of view). */
+  overflow: hidden;
 }
 .quick-ask-root.loading {
   align-items: center;
@@ -10820,10 +10824,153 @@ input, select, textarea { font-family: inherit; }
 .quick-ask-toolbar {
   display: flex;
   gap: 8px;
+  align-items: center;
 }
-.quick-ask-toolbar .input-field {
+/* All three controls are custom popovers (QuickSelect / FocusPicker) sharing
+   the .qa-focus shell — native select popups are OS-drawn and can't match the
+   window's frosted surface. Model names run long, so the first gets more room. */
+.quick-ask-toolbar > .qa-focus {
   flex: 1;
   min-width: 0;
+}
+.quick-ask-toolbar > .qa-focus:first-child { flex: 1.5; }
+.quick-ask-toolbar .qa-focus-btn:hover {
+  border-color: var(--accent-border, var(--accent, #5b8def));
+}
+/* Frosted controls: --bg-0/.input-field are near-transparent in the translucent
+   themes and the window itself lets the desktop through. */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-toolbar .qa-focus-btn {
+  background-color: rgba(24, 28, 32, 0.7);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+/* Focus repo multi-select */
+.qa-focus {
+  position: relative;
+  min-width: 0;
+}
+.qa-focus-btn {
+  /* base look (bg/border/radius/color) comes from .input-field so it matches
+     the model/task selects in every theme — only layout lives here */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+.qa-focus-btn.is-open {
+  border-color: var(--accent-border, var(--accent, #5b8def));
+  box-shadow: 0 0 0 3px var(--accent-dim, color-mix(in srgb, var(--accent, #5b8def) 18%, transparent));
+}
+.qa-focus-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-focus-caret { font-size: 9px; opacity: 0.7; }
+.qa-focus-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 280px;
+  max-width: calc(100vw - 28px);
+  padding: 8px;
+  background: var(--bg-0, #0e1012);
+  border: 1px solid var(--border-1, #333);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+/* Same frosted recipe as .ai-model-menu — --bg-0 is transparent in the
+   translucent themes and the popover floats over page content. */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-focus-pop {
+  background: rgba(24, 28, 32, 0.95);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-color: color-mix(in srgb, var(--accent) 12%, rgba(255, 255, 255, 0.08));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.qa-focus-pop.is-left {
+  left: 0;
+  right: auto;
+}
+.qa-focus-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.qa-focus-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow: auto;
+}
+.qa-focus-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 6px;
+  align-items: center;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+.qa-focus-item:hover { background: var(--bg-2, #1a1d21); }
+.qa-focus-item.on { border-color: var(--accent, #5b8def); }
+/* Single-row variant used by QuickSelect (no path line). */
+.qa-focus-item.is-row {
+  grid-template-rows: auto;
+  align-items: center;
+}
+.qa-focus-item.is-row .qa-focus-check { grid-row: auto; }
+.qa-focus-item.is-row .qa-focus-name { grid-column: 2; }
+.qa-focus-check {
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-1, #333);
+  border-radius: 4px;
+  color: #fff;
+}
+.qa-focus-check.on {
+  background: var(--accent, #5b8def);
+  border-color: var(--accent, #5b8def);
+}
+.qa-focus-name {
+  font-size: 12px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-focus-path {
+  grid-column: 2;
+  font-size: 10px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+.qa-focus-scan {
+  justify-content: center;
+  gap: 5px;
 }
 .quick-ask-chips {
   display: flex;
@@ -10868,6 +11015,112 @@ input, select, textarea { font-family: inherit; }
   background: color-mix(in srgb, var(--accent, #5b8def) 12%, transparent);
 }
 .qa-chip input { margin: 0; accent-color: var(--accent, #5b8def); }
+/* Optimize task: scenario/goal chip rows above the input card */
+.qa-optimize-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 0;
+}
+.qa-opt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.qa-opt-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-1, #333);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.qa-opt-chip:hover {
+  border-color: var(--accent, #5b8def);
+  color: var(--text-1);
+}
+.qa-opt-chip.active {
+  border-color: var(--accent, #5b8def);
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--accent, #5b8def) 12%, transparent);
+}
+
+/* ---------- Quick-ask mode tabs + embedded tools ---------- */
+.qa-mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin-right: 6px;
+}
+.qa-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-mode-btn:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+.qa-mode-btn.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.quick-ask-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+.qa-tools-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.qa-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.qa-tools-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding-right: 2px;
+}
+/* The devtools pages are designed for the wide main window — collapse their
+   two-column IO grids and tighten spacing for the 560px quick-ask window. */
+.qa-tools-body .devtools-tool {
+  gap: 8px;
+  max-width: none;
+  flex: 1;
+}
+.qa-tools-body .devtools-io,
+.qa-tools-body .ts-io {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+.qa-tools-body .devtools-io-pane {
+  min-width: 0;
+}
 .qa-tool-btn {
   display: inline-flex;
   align-items: center;
@@ -10971,8 +11224,8 @@ input, select, textarea { font-family: inherit; }
 .quick-ask-input {
   width: 100%;
   resize: none;
-  min-height: 88px;
-  max-height: 200px;
+  min-height: 64px;
+  max-height: 160px;
   font-family: inherit;
   font-size: 13px;
   line-height: 1.5;
@@ -11074,7 +11327,7 @@ input, select, textarea { font-family: inherit; }
   font-size: 13px;
   line-height: 1.5;
   flex: 1 1 auto;
-  min-height: 120px;
+  min-height: 90px;
   overflow: auto;
   position: relative;
 }

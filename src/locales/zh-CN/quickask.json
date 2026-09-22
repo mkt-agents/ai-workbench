@@ -32,6 +32,11 @@
   "exportSession": "导出对话",
   "focusRepo": "指定要详细分析的项目",
   "focusRepoAuto": "自动（当前项目）",
+  "focusNSelected": "已选 {{n}} 个项目",
+  "focusClear": "清除",
+  "focusEmpty": "暂无候选项目，可扫描文件夹",
+  "focusScanFolder": "扫描文件夹…",
+  "focusScanEmpty": "该文件夹下未发现 Git 仓库",
   "exported": "已导出",
   "turnsCount": "{{n}} 轮",
   "justNow": "刚刚",
@@ -44,11 +49,16 @@
   "copySelection": "复制选中",
   "quotePrefix": "关于「{{text}}」：",
   "bubbleTip": "快问 · 左键打开 · 拖动移动 · 右键隐藏",
+  "modeAsk": "AI 问答",
+  "modeTools": "小工具",
   "task": {
     "none": "普通问答",
     "debug": "报错诊断",
     "explain": "解释说明",
-    "polish": "润色文案"
+    "polish": "润色文案",
+    "translate": "翻译",
+    "summarize": "总结要点",
+    "optimize": "优化提示词"
   },
   "chip": {
     "workspace": "工作区",

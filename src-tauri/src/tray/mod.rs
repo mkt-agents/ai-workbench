@@ -268,7 +268,11 @@ pub fn refresh_tray_status(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_quick_ask_with_text(app: AppHandle, text: String) -> Result<(), String> {
+pub fn open_quick_ask_with_text(
+    app: AppHandle,
+    text: String,
+    task: Option<String>,
+) -> Result<(), String> {
     bubble::show_quick_ask(&app);
     // Emit to both quick-ask windows with a unique event ID so each frontend
     // instance can deduplicate (they run in separate processes).
@@ -276,7 +280,10 @@ pub fn open_quick_ask_with_text(app: AppHandle, text: String) -> Result<(), Stri
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis(), text.len());
-    let payload = serde_json::json!({ "id": event_id, "text": text });
+    let mut payload = serde_json::json!({ "id": event_id, "text": text });
+    if let Some(task) = task {
+        payload["task"] = serde_json::Value::String(task);
+    }
     if let Some(win) = app.get_webview_window(bubble::QUICK_ASK_LABEL) {
         let _ = win.emit("quick-ask-prefill", payload.clone());
     }
@@ -302,6 +309,32 @@ pub fn hide_quick_ask(app: AppHandle) -> Result<(), String> {
 pub fn open_main_deepseek(app: AppHandle) -> Result<(), String> {
     bubble::show_main_window(&app);
     let _ = app.emit("navigate-tab", "ai-chat");
+    Ok(())
+}
+
+/// Show the main window and switch it to a whitelisted tab (quick-ask tools panel jumps).
+#[tauri::command]
+pub fn open_main_tab(app: AppHandle, tab: String) -> Result<(), String> {
+    const ALLOWED: &[&str] = &[
+        "ai-chat",
+        "ai-models",
+        "ai-prompt",
+        "snippets",
+        "cursor-accounts",
+        "git",
+        "runtime",
+        "hosts",
+        "cloudflared",
+        "plugins",
+        "test-manager",
+        "devtools",
+        "settings",
+    ];
+    if !ALLOWED.contains(&tab.as_str()) {
+        return Err(format!("unknown tab: {tab}"));
+    }
+    bubble::show_main_window(&app);
+    let _ = app.emit("navigate-tab", tab.as_str());
     Ok(())
 }
 
