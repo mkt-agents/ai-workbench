@@ -2530,6 +2530,18 @@
   overscroll-behavior-x: contain;
 }
 
+/* The sticky header band stops at the scrollbar gutter, leaving a notch in the
+   top-right corner. Pin the gutter to a known 8px and paint the header row's
+   strip with the same fill, so the band runs flush to the rounded border. */
+.tm-vuln-tablewrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.tm-vuln-tablewrap thead th:last-child {
+  box-shadow: 8px 0 0 color-mix(in srgb, var(--bg-1) 80%, transparent);
+}
+
 .tm-vuln-table {
   width: 100%;
   min-width: 720px;
