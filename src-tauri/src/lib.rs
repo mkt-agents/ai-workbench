@@ -13,6 +13,8 @@ mod tray;
 pub mod config;
 pub mod cancellation;
 mod cancellation_commands;
+mod change_report;
+mod report_commands;
 
 pub use config::*;
 
@@ -367,6 +369,9 @@ pub fn run() {
             git_commands::git_is_repo,
             git_commands::git_scan_repos,
             git_commands::git_remote_url,
+            report_commands::collect_test_report,
+            report_commands::generate_test_report_ai,
+            report_commands::cancel_test_report_ai,
             hosts_commands::read_system_hosts,
             hosts_commands::is_admin,
             hosts_commands::write_system_hosts,

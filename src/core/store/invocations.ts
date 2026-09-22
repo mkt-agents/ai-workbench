@@ -7,6 +7,7 @@
  */
 import { tauriInvoke } from './helpers';
 import type { AIModelConfig, DshInstance, DevtoolsHttpRequest, DevtoolsHttpResponse, DevtoolsPortEntry, DevtoolsProcessInfo, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion } from '../types';
+import type { AiResult, TestReportBundle } from '../../components/testReportTypes';
 
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
@@ -63,6 +64,13 @@ export interface Invocations {
   invokeGitIsRepo: (path: string) => Promise<boolean>;
   invokeGitScanRepos: (path: string, maxDepth?: number) => Promise<GitScannedRepo[]>;
   invokeGitRemoteUrl: (path: string) => Promise<string | null>;
+  invokeCollectTestReport: (
+    repoPath: string,
+    base?: string,
+    lastCommits?: number,
+  ) => Promise<TestReportBundle>;
+  invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig) => Promise<AiResult>;
+  invokeCancelTestReportAi: (reportId: string) => Promise<void>;
   invokeReadSystemHosts: () => Promise<string>;
   invokeIsAdmin: () => Promise<boolean>;
   invokeWriteSystemHosts: (content: string) => Promise<string>;
@@ -257,6 +265,14 @@ export const invocations: Invocations = {
     tauriInvoke<GitScannedRepo[]>('git_scan_repos', { path, maxDepth }),
   invokeGitRemoteUrl: (path: string) =>
     tauriInvoke<string | null>('git_remote_url', { path }),
+
+  // Regression report (repo card)
+  invokeCollectTestReport: (repoPath: string, base?: string, lastCommits?: number) =>
+    tauriInvoke<TestReportBundle>('collect_test_report', { repoPath, base, lastCommits }),
+  invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig) =>
+    tauriInvoke<AiResult>('generate_test_report_ai', { reportId, config }),
+  invokeCancelTestReportAi: (reportId: string) =>
+    tauriInvoke<void>('cancel_test_report_ai', { reportId }),
 
   // Hosts
   invokeReadSystemHosts: () => tauriInvoke<string>('read_system_hosts'),

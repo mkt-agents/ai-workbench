@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -40,6 +41,7 @@ import AccountManagerModal from "./AccountManagerModal";
 import BatchIdentityModal from "./BatchIdentityModal";
 import RepoBindingModal from "./RepoBindingModal";
 import ScanReposModal from "./ScanReposModal";
+import TestReportModal from "./TestReportModal";
 import type { GitAccount, GitWorkspace, RecentProject, RepoBatchItem } from "../core/types";
 
 type Props = {
@@ -140,6 +142,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   const [applyingPath, setApplyingPath] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [bindingPath, setBindingPath] = useState<string | null>(null);
+  const [testReportPath, setTestReportPath] = useState<string | null>(null);
   const [showAccounts, setShowAccounts] = useState(false);
   const [scanState, setScanState] = useState<{
     rootPath: string;
@@ -793,6 +796,17 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
                 <GitCommitHorizontal size={14} />
               </button>
             )}
+            {s?.isGit && (
+              <button
+                type="button"
+                className="btn commit-icon-btn"
+                title={t("testReport.open")}
+                aria-label={t("testReport.open")}
+                onClick={() => setTestReportPath(p.path)}
+              >
+                <ClipboardList size={14} />
+              </button>
+            )}
             <button
               type="button"
               className="btn commit-icon-btn"
@@ -1071,6 +1085,10 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
             void refresh({ force: true });
           }}
         />
+      )}
+
+      {testReportPath !== null && (
+        <TestReportModal repoPath={testReportPath} onClose={() => setTestReportPath(null)} />
       )}
 
       {showAccounts && (

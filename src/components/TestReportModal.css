@@ -1,0 +1,470 @@
+/* Regression test report modal. Ported from the retired change-report styles
+   (tm-cr-* → tr-*). Global .modal-overlay / .modal / .btn / .input-field /
+   .repos-modal-error / .spin / .toast / .modal-actions are reused as-is. */
+
+.tr-modal {
+  display: flex;
+  flex-direction: column;
+  width: 92%;
+  max-width: 820px;
+  max-height: 86vh;
+}
+
+.tr-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.tr-toolbar .input-field {
+  flex: 1 1 180px;
+  min-width: 150px;
+}
+
+.tr-count {
+  flex: 0 0 72px;
+  min-width: 72px;
+}
+
+.tr-toggle {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.tr-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tr-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tr-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.tr-stat {
+  padding: 3px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tr-stat.is-add {
+  color: var(--green);
+  background: var(--green-dim);
+}
+
+.tr-stat.is-del {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.tr-stat.is-warn {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+}
+
+.tr-stat.is-muted {
+  color: var(--text-3);
+}
+
+.tr-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tr-scope,
+.tr-commits,
+.tr-api {
+  margin-bottom: 10px;
+}
+
+.tr-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.tr-scope .tr-label {
+  margin: 0;
+}
+
+.tr-scope-chip {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+}
+
+.tr-commits ul,
+.tr-api ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.tr-commits li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-api li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.tr-api-kind {
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+.tr-api-Added {
+  color: var(--green);
+  background: var(--green-dim);
+}
+
+.tr-api-Removed {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.tr-api-Changed {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+}
+
+.tr-api-path {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tr-groupbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.tr-groupbar .btn {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.tr-groupbar-hint {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tr-group {
+  margin-bottom: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tr-group[open] {
+  box-shadow: var(--shadow-xs);
+}
+
+.tr-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--bg-2) 50%, transparent);
+  transition: background var(--transition-fast);
+}
+
+.tr-group-head:hover {
+  background: var(--bg-2);
+}
+
+.tr-group-head::before {
+  content: "▸";
+  flex: 0 0 auto;
+  margin-right: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+  transition: transform var(--transition-fast);
+}
+
+.tr-group[open] .tr-group-head::before {
+  transform: rotate(90deg);
+}
+
+.tr-group-head::-webkit-details-marker {
+  display: none;
+}
+
+.tr-group-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.tr-group-stat {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tr-risk {
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border-radius: 4px;
+}
+
+.tr-risk-sql,
+.tr-risk-migration,
+.tr-risk-security,
+.tr-risk-money {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.tr-risk-newFile,
+.tr-risk-deleted {
+  color: var(--text-2);
+  background: var(--bg-2);
+}
+
+.tr-risk-hint {
+  color: var(--text-3);
+  background: var(--bg-2);
+  border: 1px dashed var(--border-subtle);
+}
+
+.tr-files {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tr-file {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 92px 74px minmax(0, 22%);
+  gap: 8px;
+  align-items: center;
+  padding: 4px 10px 4px 8px;
+  font-size: 12px;
+  border-left: 2px solid transparent;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tr-file:hover {
+  background: var(--bg-hover);
+  border-left-color: var(--accent-border);
+}
+
+.tr-file-status {
+  font-weight: 700;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.tr-status-A {
+  color: var(--green);
+}
+
+.tr-status-D {
+  color: var(--red);
+}
+
+.tr-status-M,
+.tr-status-R {
+  color: var(--yellow);
+}
+
+.tr-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+}
+
+.tr-file-layer {
+  color: var(--text-3);
+}
+
+.tr-file-delta {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.tr-file-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.tr-ok {
+  color: var(--green);
+}
+
+.tr-warn {
+  color: var(--text-3);
+}
+
+.tr-file-sha {
+  padding: 0 5px;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.tr-commit-line {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.tr-commit-subject {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-commit-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.tr-commit-body {
+  padding: 0 12px 4px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+  white-space: pre-wrap;
+}
+
+.tr-commit-empty {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tr-ai {
+  padding: 10px;
+  margin-top: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tr-ai:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.tr-ai .tr-label {
+  margin: 0;
+}
+
+.tr-ai-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tr-model {
+  flex: 0 1 180px;
+  min-width: 120px;
+}
+
+.tr-ai-head > .btn:last-child {
+  margin-left: auto;
+}
+
+.tr-ai-progress {
+  flex: 1;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.tr-ai-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.tr-ai-block h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.tr-ai-block ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-1);
+}
+
+.tr-ai-warn {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border: 1px solid color-mix(in srgb, var(--yellow) 35%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.tr-actions-spacer {
+  flex: 1;
+}
