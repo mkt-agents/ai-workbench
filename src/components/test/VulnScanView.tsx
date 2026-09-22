@@ -369,6 +369,9 @@ export default function VulnScanView({ projects, onToast }: Props) {
       {findings.length === 0 && !loading ? (
         <div className="tm-empty">{t("empty")}</div>
       ) : (
+        /* The 7-column table needs ~720px; let it scroll sideways instead of
+           being clipped by the page's overflow-x:hidden on narrow windows. */
+        <div className="tm-vuln-tablewrap">
         <table className="tm-table tm-vuln-table">
           <thead>
             <tr>
@@ -397,6 +400,7 @@ export default function VulnScanView({ projects, onToast }: Props) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {pages > 1 && (

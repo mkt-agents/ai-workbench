@@ -1987,14 +1987,22 @@
 }
 
 /* ─── Run dock (global live-run monitor, src/components/test/RunDock) ─── */
+/* The dock floats over the page; keep the last rows reachable while it is up. */
+.tm-page:has(.tm-dock) {
+  padding-bottom: 96px;
+}
+
+.tm-page:has(.tm-dock.is-expanded) {
+  padding-bottom: 68vh;
+}
+
 .tm-dock {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
   bottom: 16px;
   width: min(1080px, calc(100vw - 48px));
-  max-height: 62vh;
-  display: flex;
+  max-height: 62vh;  display: flex;
   flex-direction: column;
   /* Above .modal-overlay (100): a run started from the change report must stay
      observable while the report itself is open. */
@@ -2513,8 +2521,14 @@
   background: var(--green-dim);
 }
 
+.tm-vuln-tablewrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
 .tm-vuln-table {
   width: 100%;
+  min-width: 720px;
 }
 
 .tm-vuln-table td,

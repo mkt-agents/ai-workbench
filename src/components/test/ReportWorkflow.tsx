@@ -650,7 +650,7 @@ export default function ReportWorkflow({
       <span className={`tm-cr-file-status tm-cr-status-${file.status}`}>{file.status}</span>
       <span
         className="tm-cr-file-path"
-        title={file.testPath ?? (file.hasTest ? "" : t("cr.noTestHint"))}
+        title={`${file.path}${file.testPath ? ` → ${file.testPath}` : file.hasTest ? "" : ` · ${t("cr.noTestHint")}`}`}
       >
         {file.path}
       </span>
