@@ -214,6 +214,9 @@
   "workingDirPlaceholder": "e.g. packages/web",
   "scan": {
     "results": "Found {{count}} testable projects",
+    "filter": "Filter by name/path",
+    "noMatch": "No matching projects",
+    "existingGroup": "{{count}} already registered (expand to view)",
     "selectAll": "Select all",
     "selectNone": "Select none",
     "depth": "depth {{depth}}",

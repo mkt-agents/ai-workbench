@@ -34,6 +34,7 @@ function ScanTestProjectsModal({ rootPath, initialProjects, onClose, onAdded }: 
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(initialProjects.map((p) => p.path))
   );
+  const [filter, setFilter] = useState("");
   const [scanning, setScanning] = useState(false);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
@@ -49,6 +50,22 @@ function ScanTestProjectsModal({ rootPath, initialProjects, onClose, onAdded }: 
   const isRegistered = (path: string) => registered.has(path.toLowerCase());
   const selectable = projects.filter((p) => !isRegistered(p.path));
   const selectedCount = selectable.filter((p) => selected.has(p.path)).length;
+
+  // A big monorepo scan can list 50+ projects: sort by name, filter by
+  // name/path, and park the already-registered ones in a collapsed group so
+  // the tick-list shows only what the user can actually act on.
+  const needle = filter.trim().toLowerCase();
+  const matches = (p: ScannedProject) =>
+    !needle || p.name.toLowerCase().includes(needle) || p.path.toLowerCase().includes(needle);
+  const byName = (a: ScannedProject, b: ScannedProject) => a.name.localeCompare(b.name);
+  const shownSelectable = useMemo(
+    () => projects.filter((p) => !registered.has(p.path.toLowerCase()) && matches(p)).sort(byName),
+    [projects, registered, needle]
+  );
+  const shownExisting = useMemo(
+    () => projects.filter((p) => registered.has(p.path.toLowerCase()) && matches(p)).sort(byName),
+    [projects, registered, needle]
+  );
 
   const toggle = (path: string) => {
     setSelected((prev) => {
@@ -109,17 +126,62 @@ function ScanTestProjectsModal({ rootPath, initialProjects, onClose, onAdded }: 
     }
   };
 
+  const renderRow = (project: ScannedProject, existing: boolean) => {
+    const checked = selected.has(project.path);
+    return (
+      <li
+        key={project.path}
+        className={`tm-scan-item${existing ? " is-existing" : ""}`}
+        onClick={() => !existing && toggle(project.path)}
+      >
+        <input
+          type="checkbox"
+          checked={checked && !existing}
+          disabled={existing || adding}
+          onChange={() => !existing && toggle(project.path)}
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+        <FolderGit2 size={14} className="tm-scan-icon" />
+        <span className="tm-scan-name" title={project.name}>
+          {project.name}
+        </span>
+        <span className={`tm-badge tm-badge-${project.framework}`}>{project.framework}</span>
+        <code className="tm-scan-cmd" title={project.workingDir ? `${project.workingDir} · ${project.testCommand}` : project.testCommand}>
+          {project.testCommand}
+        </code>
+        <span className="tm-scan-notes">
+          {project.notes
+            .filter((note) => NOTE_KEYS.includes(note))
+            .map((note) => (
+              <span key={note} className={`tm-scan-note tm-scan-note-${note.replace(/[^a-z-]/g, "")}`}>
+                {t(`scan.note.${note}`, { defaultValue: note })}
+              </span>
+            ))}
+        </span>
+        {existing && <span className="runtime-badge active">{t("scan.alreadyAdded")}</span>}
+      </li>
+    );
+  };
+
   return (
     <div className="modal-overlay" onMouseDown={(e) => !adding && e.target === e.currentTarget && onClose()}>
       <div className="modal tm-scan-modal" onMouseDown={(e) => e.stopPropagation()}>
         <ModalTitleRow title={t("scan.results", { count: projects.length })} onClose={onClose} disabled={adding} />
 
         <div className="tm-scan-toolbar">
+          <input
+            type="search"
+            className="input-field tm-scan-filter"
+            placeholder={t("scan.filter", { defaultValue: "按名称/路径过滤" })}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            disabled={adding}
+          />
           <button
             type="button"
             className="btn btn-secondary btn-small"
-            onClick={() => setSelected(new Set(selectable.map((p) => p.path)))}
-            disabled={selectable.length === 0}
+            onClick={() => setSelected(new Set(shownSelectable.map((p) => p.path)))}
+            disabled={shownSelectable.length === 0}
           >
             {t("scan.selectAll")}
           </button>
@@ -150,45 +212,17 @@ function ScanTestProjectsModal({ rootPath, initialProjects, onClose, onAdded }: 
         </div>
 
         <ul className="tm-scan-list">
-          {projects.map((project) => {
-            const existing = isRegistered(project.path);
-            const checked = selected.has(project.path);
-            return (
-              <li
-                key={project.path}
-                className={`tm-scan-item${existing ? " is-existing" : ""}`}
-                onClick={() => !existing && toggle(project.path)}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked && !existing}
-                  disabled={existing || adding}
-                  onChange={() => !existing && toggle(project.path)}
-                  onMouseDown={(e) => e.stopPropagation()}
-                />
-                <FolderGit2 size={14} className="tm-scan-icon" />
-                <span className="tm-scan-name" title={project.name}>
-                  {project.name}
-                </span>
-                <span className={`tm-badge tm-badge-${project.framework}`}>{project.framework}</span>
-                <code className="tm-scan-cmd" title={project.workingDir ? `${project.workingDir} · ${project.testCommand}` : project.testCommand}>
-                  {project.testCommand}
-                </code>
-                <span className="tm-scan-notes">
-                  {project.notes
-                    .filter((note) => NOTE_KEYS.includes(note))
-                    .map((note) => (
-                      <span key={note} className={`tm-scan-note tm-scan-note-${note.replace(/[^a-z-]/g, "")}`}>
-                        {t(`scan.note.${note}`, { defaultValue: note })}
-                      </span>
-                    ))}
-                </span>
-                {existing && <span className="runtime-badge active">{t("scan.alreadyAdded")}</span>}
-              </li>
-            );
-          })}
-          {projects.length === 0 && !scanning && (
-            <li className="tm-scan-empty">{t("scan.noneFound")}</li>
+          {shownSelectable.map((project) => renderRow(project, false))}
+          {shownSelectable.length === 0 && !scanning && (
+            <li className="tm-scan-empty">{needle ? t("scan.noMatch", { defaultValue: "无匹配项目" }) : t("scan.noneFound")}</li>
+          )}
+          {shownExisting.length > 0 && (
+            <li className="tm-scan-existing">
+              <details>
+                <summary>{t("scan.existingGroup", { count: shownExisting.length, defaultValue: `已登记 ${shownExisting.length} 个（展开查看）` })}</summary>
+                <ul className="tm-scan-list tm-scan-list-nested">{shownExisting.map((project) => renderRow(project, true))}</ul>
+              </details>
+            </li>
           )}
         </ul>
 

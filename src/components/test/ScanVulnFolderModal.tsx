@@ -32,6 +32,7 @@ export default function ScanVulnFolderModal({ rootPath, initialProjects, onClose
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(initialProjects.map((p) => p.path))
   );
+  const [filter, setFilter] = useState("");
   const [scanning, setScanning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +47,18 @@ export default function ScanVulnFolderModal({ rootPath, initialProjects, onClose
 
   const isRegistered = (path: string) => registered.has(path.toLowerCase());
   const chosen = projects.filter((p) => selected.has(p.path));
+
+  // Same long-list treatment as the test page's scan modal: sorted, filterable.
+  const needle = filter.trim().toLowerCase();
+  const shown = useMemo(
+    () =>
+      projects
+        .filter(
+          (p) => !needle || p.name.toLowerCase().includes(needle) || p.path.toLowerCase().includes(needle)
+        )
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [projects, needle]
+  );
 
   const toggle = (path: string) =>
     setSelected((prev) => {
@@ -95,10 +108,19 @@ export default function ScanVulnFolderModal({ rootPath, initialProjects, onClose
         <ModalTitleRow title={tv("folder.title", { count: projects.length })} onClose={onClose} disabled={submitting} />
 
         <div className="tm-scan-toolbar">
+          <input
+            type="search"
+            className="input-field tm-scan-filter"
+            placeholder={t("scan.filter", { defaultValue: "按名称/路径过滤" })}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            disabled={submitting}
+          />
           <button
             type="button"
             className="btn btn-secondary btn-small"
-            onClick={() => setSelected(new Set(projects.map((p) => p.path)))}
+            onClick={() => setSelected(new Set(shown.map((p) => p.path)))}
+            disabled={shown.length === 0}
           >
             {t("scan.selectAll")}
           </button>
@@ -131,7 +153,7 @@ export default function ScanVulnFolderModal({ rootPath, initialProjects, onClose
         <p className="tm-hint">{tv("folder.note")}</p>
 
         <ul className="tm-scan-list">
-          {projects.map((project) => (
+          {shown.map((project) => (
             <li key={project.path} className="tm-scan-item" onClick={() => toggle(project.path)}>
               <input
                 type="checkbox"
@@ -150,8 +172,8 @@ export default function ScanVulnFolderModal({ rootPath, initialProjects, onClose
               )}
             </li>
           ))}
-          {projects.length === 0 && (
-            <li className="tm-scan-empty">{t("scan.noneFound")}</li>
+          {shown.length === 0 && (
+            <li className="tm-scan-empty">{needle ? t("scan.noMatch", { defaultValue: "无匹配项目" }) : t("scan.noneFound")}</li>
           )}
         </ul>
 

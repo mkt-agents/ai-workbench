@@ -214,6 +214,9 @@
   "workingDirPlaceholder": "例如 packages/web",
   "scan": {
     "results": "扫描到 {{count}} 个可测试项目",
+    "filter": "按名称/路径过滤",
+    "noMatch": "无匹配项目",
+    "existingGroup": "已登记 {{count}} 个（展开查看）",
     "selectAll": "全选",
     "selectNone": "全不选",
     "depth": "深度 {{depth}}",
