@@ -326,7 +326,6 @@ pub fn open_main_tab(app: AppHandle, tab: String) -> Result<(), String> {
         "hosts",
         "cloudflared",
         "plugins",
-        "test-manager",
         "devtools",
         "settings",
     ];

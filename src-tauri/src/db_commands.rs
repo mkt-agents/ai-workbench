@@ -31,14 +31,6 @@ pub enum DbTable {
     // Test assistant. Order here is only the enum order; import follows the
     // file. FKs are not enforced at runtime (PRAGMA foreign_keys is off), so
     // the whole set must travel together to keep the rows referentially sane.
-    TestProjects,
-    TestRuns,
-    TestHistory,
-    ChangeReports,
-    TestScenarios,
-    ChangeReportRuns,
-    VulnScans,
-    VulnFindings,
 }
 
 pub fn table_from_key(key: &str) -> Option<DbTable> {
@@ -61,14 +53,6 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "json_tool_history" => Some(DbTable::JsonToolHistory),
         "http_saved_requests" => Some(DbTable::HttpSavedRequests),
         "http_history" => Some(DbTable::HttpHistory),
-        "test_projects" => Some(DbTable::TestProjects),
-        "test_runs" => Some(DbTable::TestRuns),
-        "test_history" => Some(DbTable::TestHistory),
-        "change_reports" => Some(DbTable::ChangeReports),
-        "test_scenarios" => Some(DbTable::TestScenarios),
-        "change_report_runs" => Some(DbTable::ChangeReportRuns),
-        "vuln_scans" => Some(DbTable::VulnScans),
-        "vuln_findings" => Some(DbTable::VulnFindings),
         _ => None,
     }
 }
@@ -95,14 +79,6 @@ pub(crate) fn load_sql(table: DbTable) -> &'static str {
         DbTable::HttpHistory => "SELECT * FROM http_history ORDER BY id DESC LIMIT 50",
         // Runs keep their tails (64KB each), so the export side caps how many go
         // out; the newest ones are the useful ones.
-        DbTable::TestProjects => "SELECT * FROM test_projects ORDER BY created_at DESC",
-        DbTable::TestRuns => "SELECT * FROM test_runs ORDER BY started_at DESC LIMIT 500",
-        DbTable::TestHistory => "SELECT * FROM test_history ORDER BY id DESC LIMIT 2000",
-        DbTable::ChangeReports => "SELECT * FROM change_reports ORDER BY created_at DESC LIMIT 200",
-        DbTable::TestScenarios => "SELECT * FROM test_scenarios ORDER BY report_id ASC, sort ASC",
-        DbTable::ChangeReportRuns => "SELECT * FROM change_report_runs",
-        DbTable::VulnScans => "SELECT * FROM vuln_scans ORDER BY started_at DESC LIMIT 200",
-        DbTable::VulnFindings => "SELECT * FROM vuln_findings ORDER BY id DESC LIMIT 2000",
     }
 }
 
@@ -126,14 +102,6 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
         DbTable::HttpSavedRequests => "DELETE FROM http_saved_requests",
         DbTable::HttpHistory => "DELETE FROM http_history",
-        DbTable::TestProjects => "DELETE FROM test_projects",
-        DbTable::TestRuns => "DELETE FROM test_runs",
-        DbTable::TestHistory => "DELETE FROM test_history",
-        DbTable::ChangeReports => "DELETE FROM change_reports",
-        DbTable::TestScenarios => "DELETE FROM test_scenarios",
-        DbTable::ChangeReportRuns => "DELETE FROM change_report_runs",
-        DbTable::VulnScans => "DELETE FROM vuln_scans",
-        DbTable::VulnFindings => "DELETE FROM vuln_findings",
     }
 }
 
@@ -455,163 +423,6 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "method")?,
                     json_str(obj, "url")?,
                     json_i64(obj, "timestamp", 0),
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::TestProjects => {
-            tx.execute(
-                "INSERT INTO test_projects (id, name, path, type, framework, test_command, args, working_dir, env, enabled, created_at, updated_at, last_run_at, last_status, last_error_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-                rusqlite::params![
-                    json_str(obj, "id")?,
-                    json_str(obj, "name")?,
-                    json_str(obj, "path")?,
-                    json_str(obj, "type")?,
-                    json_str(obj, "framework")?,
-                    json_str(obj, "test_command")?,
-                    json_opt_str(obj, "args"),
-                    json_opt_str(obj, "working_dir"),
-                    json_opt_str(obj, "env"),
-                    json_i64(obj, "enabled", 1),
-                    json_str(obj, "created_at")?,
-                    json_str(obj, "updated_at")?,
-                    json_opt_str(obj, "last_run_at"),
-                    json_opt_str(obj, "last_status"),
-                    json_opt_str(obj, "last_error_kind").unwrap_or_default(),
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::TestRuns => {
-            tx.execute(
-                "INSERT INTO test_runs (id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites, error_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                rusqlite::params![
-                    json_str(obj, "id")?,
-                    json_str(obj, "project_id")?,
-                    json_str(obj, "started_at")?,
-                    json_str(obj, "completed_at")?,
-                    json_i64(obj, "duration_ms", 0),
-                    json_str(obj, "status")?,
-                    json_i64(obj, "total_tests", 0),
-                    json_i64(obj, "passed", 0),
-                    json_i64(obj, "failed", 0),
-                    json_i64(obj, "skipped", 0),
-                    json_opt_str(obj, "output").unwrap_or_default(),
-                    json_opt_str(obj, "suites").unwrap_or_else(|| "[]".to_string()),
-                    json_opt_str(obj, "error_kind").unwrap_or_default(),
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::TestHistory => {
-            tx.execute(
-                "INSERT INTO test_history (id, project_id, run_id, timestamp, status, total, passed, failed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    json_opt_i64(obj, "id"),
-                    json_str(obj, "project_id")?,
-                    json_opt_str(obj, "run_id"),
-                    json_str(obj, "timestamp")?,
-                    json_str(obj, "status")?,
-                    json_opt_i64(obj, "total"),
-                    json_opt_i64(obj, "passed"),
-                    json_opt_i64(obj, "failed"),
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::ChangeReports => {
-            tx.execute(
-                "INSERT INTO change_reports (id, project_id, base, source, created_at, branch, head, files, adds, dels, untested, data, patch, ai, delta_coverage, accepted_at, ai_warnings) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-                rusqlite::params![
-                    json_str(obj, "id")?,
-                    json_str(obj, "project_id")?,
-                    json_str(obj, "base")?,
-                    json_str(obj, "source")?,
-                    json_str(obj, "created_at")?,
-                    json_opt_str(obj, "branch").unwrap_or_default(),
-                    json_opt_str(obj, "head").unwrap_or_default(),
-                    json_i64(obj, "files", 0),
-                    json_i64(obj, "adds", 0),
-                    json_i64(obj, "dels", 0),
-                    json_i64(obj, "untested", 0),
-                    json_str(obj, "data")?,
-                    json_opt_str(obj, "patch").unwrap_or_default(),
-                    json_opt_str(obj, "ai"),
-                    json_opt_str(obj, "delta_coverage"),
-                    json_opt_str(obj, "accepted_at"),
-                    json_opt_str(obj, "ai_warnings").unwrap_or_else(|| "[]".to_string()),
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::TestScenarios => {
-            tx.execute(
-                "INSERT INTO test_scenarios (id, report_id, project_id, run_id, title, detail, priority, status, note, sort, source, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                rusqlite::params![
-                    json_opt_i64(obj, "id"),
-                    json_str(obj, "report_id")?,
-                    json_str(obj, "project_id")?,
-                    json_opt_str(obj, "run_id"),
-                    json_str(obj, "title")?,
-                    json_opt_str(obj, "detail"),
-                    json_opt_str(obj, "priority").unwrap_or_default(),
-                    json_opt_str(obj, "status").unwrap_or_else(|| "pending".to_string()),
-                    json_opt_str(obj, "note"),
-                    json_i64(obj, "sort", 0),
-                    json_opt_str(obj, "source").unwrap_or_else(|| "ai".to_string()),
-                    json_str(obj, "created_at")?,
-                    json_str(obj, "updated_at")?,
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::ChangeReportRuns => {
-            tx.execute(
-                "INSERT INTO change_report_runs (report_id, run_id, project_id, created_at) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    json_str(obj, "report_id")?,
-                    json_str(obj, "run_id")?,
-                    json_str(obj, "project_id")?,
-                    json_str(obj, "created_at")?,
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::VulnScans => {
-            tx.execute(
-                "INSERT INTO vuln_scans (id, project_id, started_at, completed_at, status, error_kind, deps_checked, files_checked, findings_critical, findings_high, findings_total) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                rusqlite::params![
-                    json_str(obj, "id")?,
-                    json_str(obj, "project_id")?,
-                    json_str(obj, "started_at")?,
-                    json_opt_str(obj, "completed_at"),
-                    json_str(obj, "status")?,
-                    json_opt_str(obj, "error_kind").unwrap_or_default(),
-                    json_i64(obj, "deps_checked", 0),
-                    json_i64(obj, "files_checked", 0),
-                    json_i64(obj, "findings_critical", 0),
-                    json_i64(obj, "findings_high", 0),
-                    json_i64(obj, "findings_total", 0),
-                ],
-            ).map_err(|e| e.to_string())?;
-        }
-        DbTable::VulnFindings => {
-            tx.execute(
-                "INSERT INTO vuln_findings (id, project_id, scan_id, kind, dedup_key, ecosystem, package, version, vuln_id, severity, summary, fixed_versions, aliases, file, line, preview, rule, status, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-                rusqlite::params![
-                    json_opt_i64(obj, "id"),
-                    json_str(obj, "project_id")?,
-                    json_str(obj, "scan_id")?,
-                    json_str(obj, "kind")?,
-                    json_str(obj, "dedup_key")?,
-                    json_opt_str(obj, "ecosystem").unwrap_or_default(),
-                    json_opt_str(obj, "package").unwrap_or_default(),
-                    json_opt_str(obj, "version").unwrap_or_default(),
-                    json_opt_str(obj, "vuln_id").unwrap_or_default(),
-                    json_opt_str(obj, "severity").unwrap_or_else(|| "unknown".to_string()),
-                    json_opt_str(obj, "summary").unwrap_or_default(),
-                    json_opt_str(obj, "fixed_versions").unwrap_or_else(|| "[]".to_string()),
-                    json_opt_str(obj, "aliases").unwrap_or_else(|| "[]".to_string()),
-                    json_opt_str(obj, "file").unwrap_or_default(),
-                    json_i64(obj, "line", 0),
-                    json_opt_str(obj, "preview").unwrap_or_default(),
-                    json_opt_str(obj, "rule").unwrap_or_default(),
-                    json_opt_str(obj, "status").unwrap_or_else(|| "open".to_string()),
-                    json_str(obj, "first_seen")?,
-                    json_str(obj, "last_seen")?,
                 ],
             ).map_err(|e| e.to_string())?;
         }

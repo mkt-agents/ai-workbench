@@ -21,14 +21,6 @@ const EXPORT_TABLE_NAMES: &[&str] = &[
     "ai_models",
     "cloudflared_profiles",
     "snippets",
-    "test_projects",
-    "test_runs",
-    "test_history",
-    "change_reports",
-    "test_scenarios",
-    "change_report_runs",
-    "vuln_scans",
-    "vuln_findings",
 ];
 
 #[cfg(windows)]

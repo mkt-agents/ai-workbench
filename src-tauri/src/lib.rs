@@ -13,27 +13,6 @@ mod tray;
 pub mod config;
 pub mod cancellation;
 mod cancellation_commands;
-mod test_commands;
-mod test_output_parsers;
-mod coverage_parsers;
-mod coverage_delta;
-mod maven_pom;
-mod test_error_kind;
-mod project_scan;
-mod test_schema;
-mod test_selection;
-mod test_scenarios;
-mod change_report;
-mod change_store;
-mod change_commands;
-mod vuln_lock;
-mod vuln_osv;
-mod vuln_secrets;
-mod vuln_store;
-mod vuln_scan;
-mod vuln_commands;
-#[cfg(test)]
-mod test_run_e2e;
 
 pub use config::*;
 
@@ -283,23 +262,19 @@ pub fn run() {
                 );
             "#).expect("failed to init schema");
 
-            // The test-assistant tables are declared next to their commands so the
-            // Rust tests can build the exact production schema.
-            conn.execute_batch(&format!(
-                "{}{}{}{}",
-                test_commands::SCHEMA_SQL,
-                change_store::SCHEMA_SQL,
-                test_scenarios::SCHEMA_SQL,
-                vuln_store::SCHEMA_SQL
-            ))
-                .expect("failed to init test schema");
-
-            // Columns introduced after the first release. Reported instead of swallowed:
-            // a silent failure here leaves the test page querying a column that does
-            // not exist, which surfaces as a confusing runtime error much later.
-            if let Err(e) = test_schema::migrate(&conn) {
-                eprintln!("[ai-workbench] 测试表迁移失败：{}", e);
-            }
+            // The automated-testing feature was removed; drop the tables it used
+            // to own so a stale DB from an older build does not linger. Idempotent.
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS vuln_findings;
+                 DROP TABLE IF EXISTS vuln_scans;
+                 DROP TABLE IF EXISTS change_report_runs;
+                 DROP TABLE IF EXISTS change_reports;
+                 DROP TABLE IF EXISTS test_scenarios;
+                 DROP TABLE IF EXISTS test_history;
+                 DROP TABLE IF EXISTS test_runs;
+                 DROP TABLE IF EXISTS test_projects;",
+            )
+            .expect("failed to drop legacy test tables");
 
             let _ = conn.execute_batch("ALTER TABLE git_accounts ADD COLUMN note TEXT;");
             let _ = conn.execute_batch("ALTER TABLE cursor_accounts ADD COLUMN notes TEXT;");
@@ -488,39 +463,6 @@ pub fn run() {
             devtools_commands::devtools_resolve_processes,
             devtools_commands::devtools_kill_process,
             devtools_commands::devtools_http_request,
-            test_commands::load_test_projects,
-            test_commands::add_test_project,
-            test_commands::add_test_projects,
-            test_commands::update_test_project,
-            test_commands::delete_test_project,
-            test_commands::run_test,
-            test_commands::get_test_history,
-            test_commands::detect_project_type,
-            test_commands::scan_test_projects,
-            test_commands::generate_test_code,
-            test_commands::diagnose_test_failure,
-            test_commands::read_coverage_report,
-            test_commands::cancel_test_run,
-            test_commands::get_test_run,
-            change_commands::collect_change_report,
-            change_commands::list_change_reports,
-            change_commands::get_change_report,
-            change_commands::delete_change_report,
-            change_commands::generate_change_report_ai,
-            change_commands::select_change_tests,
-            change_commands::generate_change_scenarios,
-            change_commands::add_change_scenario,
-            change_commands::set_scenario_status,
-            change_commands::delete_change_scenario,
-            change_commands::link_change_run,
-            change_commands::compute_incremental_coverage,
-            change_commands::set_change_report_accepted,
-            change_commands::cancel_change_ai,
-            vuln_commands::scan_project_vulns,
-            vuln_commands::list_vuln_findings,
-            vuln_commands::set_vuln_finding_status,
-            vuln_commands::list_vuln_scans,
-            vuln_commands::find_package_exposures,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,8 +1,7 @@
-import { useEffect, useState, useRef, useSyncExternalStore } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import GitManager from "./components/GitManager";
 import SettingsPage from "./components/Settings";
-import TestManager from "./components/TestManager";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import {
   GitBranch,
@@ -23,8 +22,6 @@ import {
   PanelLeftOpen,
   KeyRound,
   Terminal,
-  Loader2,
-  FlaskConical as Flask,
 } from "lucide-react";
 import HostsManager from "./components/HostsManager";
 import PluginBrowser from "./components/PluginBrowser";
@@ -39,7 +36,6 @@ import DevTools from "./components/DevTools";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
 import { useGlobalStore } from "./core/store";
-import { runningRuns, subscribeRuns } from "./core/testRuns";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -61,8 +57,7 @@ type Tab =
   | "runtime"
   | "cloudflared"
   | "snippets"
-  | "devtools"
-  | "test-manager";
+  | "devtools";
 
 type NavLeaf = { id: Tab; labelKey: string; icon: React.ReactNode };
 type NavGroup = {
@@ -199,10 +194,6 @@ function App() {
     });
   };
 
-  // Badge on the test page: a run keeps going when the page unmounts, so the
-  // sidebar is the only place left that can say "something is still running".
-  const testRunsRunning = useSyncExternalStore(subscribeRuns, () => runningRuns().length);
-
   const NAV_NODES: NavNode[] = [
     {
       group: "ai",
@@ -260,7 +251,6 @@ function App() {
       labelKey: "systemUtils",
       defaultOpen: true,
       children: [
-        { id: "test-manager", labelKey: "testManagement", icon: <Flask size={16} /> },
         { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
       ],
     },
@@ -286,11 +276,6 @@ function App() {
     >
       <span className="nav-icon">{leaf.icon}</span>
       {!collapsed && <span className="nav-label">{t(leaf.labelKey)}</span>}
-      {leaf.id === "test-manager" && testRunsRunning > 0 && (
-        <span className="nav-run-badge" role="status" title={t("test:runningBadge", { count: testRunsRunning })}>
-          <Loader2 size={10} className="spin" />
-        </span>
-      )}
     </button>
   );
 
@@ -520,7 +505,6 @@ function App() {
               {activeTab === "plugins" && <PluginBrowser />}
               {activeTab === "cloudflared" && <CloudflaredManager />}
               {activeTab === "devtools" && <DevTools />}
-              {activeTab === "test-manager" && <TestManager />}
               {activeTab === "settings" && <SettingsPage />}
               {trayToast && (
                 <div className="toast toast-success" role="status">

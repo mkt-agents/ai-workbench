@@ -5,10 +5,6 @@ import type {
   RecentProject, WebPlugin, UserScript, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
-  TestProject, ProjectDetectionResult, TestRunResult, TestHistoryEntry, CoverageReport,
-  ChangeReportBundle, ChangeReportSummary, StoredChangeReport, ScannedProject,
-  TestSelection, ScenarioSummary, DeltaCoverage,
-  VulnScanOutcome, VulnFindingsPage, VulnScanSummary,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -320,50 +316,6 @@ interface StoreState extends GlobalState, Invocations {
 
   setCurrentGitRepo: (path: string | undefined) => void;
 
-  // Test Projects
-  loadTestProjects: () => Promise<void>;
-  addTestProject: (project: Omit<TestProject, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
-  updateTestProject: (id: string, updates: Partial<TestProject>) => Promise<void>;
-  deleteTestProject: (id: string) => Promise<void>;
-  detectProjectType: (path: string) => Promise<ProjectDetectionResult>;
-  scanTestProjects: (basePath: string, maxDepth?: number) => Promise<ScannedProject[]>;
-  addTestProjects: (projects: Omit<TestProject, 'id' | 'createdAt' | 'updatedAt'>[]) => Promise<number>;
-  getTestHistory: (projectId?: string) => Promise<TestHistoryEntry[]>;
-  generateTestCode: (sourceCode: string, filePath: string, framework: string, coverageLevel: string, mockStrategy: string, assertStyle: string) => Promise<string>;
-  diagnoseTestFailure: (testCode: string, sourceCode: string, errorMessage: string, testName: string) => Promise<string>;
-  readCoverageReport: (projectId: string) => Promise<CoverageReport>;
-  getTestRun: (runId: string) => Promise<TestRunResult>;
-
-  // Change-driven regression reports
-  collectChangeReport: (projectId: string, base?: string, lastCommits?: number) => Promise<ChangeReportBundle>;
-  listChangeReports: (projectId: string) => Promise<ChangeReportSummary[]>;
-  getChangeReport: (reportId: string) => Promise<StoredChangeReport>;
-  deleteChangeReport: (reportId: string) => Promise<void>;
-  generateChangeReportAi: (reportId: string) => Promise<string>;
-  cancelChangeAi: (reportId: string) => Promise<void>;
-  computeIncrementalCoverage: (reportId: string) => Promise<DeltaCoverage>;
-  setChangeReportAccepted: (reportId: string, accepted: boolean) => Promise<string | null>;
-
-  // Vulnerability scans
-  scanProjectVulns: (projectId: string, includeUntracked?: boolean) => Promise<VulnScanOutcome>;
-  listVulnFindings: (
-    projectId: string,
-    filters?: { status?: string; kind?: string; severity?: string; limit?: number; offset?: number }
-  ) => Promise<VulnFindingsPage>;
-  setVulnFindingStatus: (findingId: number, status: string) => Promise<void>;
-  listVulnScans: (projectId: string) => Promise<VulnScanSummary[]>;
-  cancelVulnScan: (projectId: string) => Promise<void>;
-  selectChangeTests: (reportId: string, only?: string[]) => Promise<TestSelection>;
-  generateChangeScenarios: (reportId: string) => Promise<number>;
-  addChangeScenario: (reportId: string, title: string) => Promise<number>;
-  setScenarioStatus: (
-    scenarioId: number,
-    status: string,
-    note?: string,
-    runId?: string
-  ) => Promise<ScenarioSummary>;
-  deleteChangeScenario: (scenarioId: number) => Promise<void>;
-
   // Initialize
   initialize: () => Promise<void>;
 }
@@ -388,7 +340,6 @@ export const useGlobalStore = create<StoreState>()(
       cloudflaredProfiles: [],
       snippets: [],
       quickAskSessions: [],
-      testProjects: [],
 
       // Settings
       setSettings: (newSettings) => set((state) => ({
@@ -1312,175 +1263,6 @@ export const useGlobalStore = create<StoreState>()(
       setCurrentGitRepo: (path) =>
         get().setSettings({ currentGitRepo: path ? normalizePath(path) : undefined }),
 
-      // Test Projects — these use dedicated test_* commands (project-scoped rows that
-      // the generic db_load/db_save table whitelist does not cover).
-      loadTestProjects: async () => {
-        const projects = await tauriInvoke<TestProject[]>('load_test_projects');
-        set({ testProjects: projects });
-      },
-
-      addTestProject: async (project: Omit<TestProject, 'id' | 'createdAt' | 'updatedAt'>) => {
-        const now = new Date().toISOString();
-        const newProject: TestProject = {
-          ...project,
-          id: crypto.randomUUID(),
-          createdAt: now,
-          updatedAt: now,
-        };
-        // The Rust command takes the whole record as a named `project` argument.
-        await tauriInvoke('add_test_project', { project: newProject });
-        await get().loadTestProjects();
-      },
-
-      updateTestProject: async (id: string, updates: Partial<TestProject>) => {
-        await tauriInvoke('update_test_project', { id, updates });
-        await get().loadTestProjects();
-      },
-
-      deleteTestProject: async (id: string) => {
-        await tauriInvoke('delete_test_project', { id });
-        await get().loadTestProjects();
-      },
-
-      detectProjectType: async (path: string) => {
-        return await tauriInvoke<ProjectDetectionResult>('detect_project_type', { path });
-      },
-
-      scanTestProjects: async (basePath: string, maxDepth?: number) => {
-        return await tauriInvoke<ScannedProject[]>('scan_test_projects', { basePath, maxDepth });
-      },
-
-      // One round trip for the whole batch: the backend inserts them in a transaction.
-      addTestProjects: async (projects) => {
-        const now = new Date().toISOString();
-        const rows = projects.map((project) => ({
-          ...project,
-          id: crypto.randomUUID(),
-          createdAt: now,
-          updatedAt: now,
-        }));
-        const added = await tauriInvoke<number>('add_test_projects', { projects: rows });
-        await get().loadTestProjects();
-        return added;
-      },
-
-      getTestHistory: async (projectId?: string) => {
-        return await tauriInvoke<TestHistoryEntry[]>('get_test_history', { projectId });
-      },
-
-      // AI Test Generation — both return the model's raw text
-      generateTestCode: async (
-        sourceCode: string,
-        filePath: string,
-        framework: string,
-        coverageLevel: string,
-        mockStrategy: string,
-        assertStyle: string,
-      ) => {
-        return await tauriInvoke<string>('generate_test_code', {
-          sourceCode,
-          filePath,
-          framework,
-          coverageLevel,
-          mockStrategy,
-          assertStyle,
-        });
-      },
-
-      diagnoseTestFailure: async (
-        testCode: string,
-        sourceCode: string,
-        errorMessage: string,
-        testName: string,
-      ) => {
-        return await tauriInvoke<string>('diagnose_test_failure', {
-          testCode,
-          sourceCode,
-          errorMessage,
-          testName,
-        });
-      },
-
-      readCoverageReport: async (projectId: string) => {
-        return await tauriInvoke<CoverageReport>('read_coverage_report', { projectId });
-      },
-
-      // Read one stored run back so a history row can show its full result.
-      getTestRun: async (runId: string) => {
-        return await tauriInvoke<TestRunResult>('get_test_run', { runId });
-      },
-
-      // The backend stores the report as it collects it, so the answer carries its id.
-      collectChangeReport: async (projectId: string, base?: string, lastCommits?: number) => {
-        return await tauriInvoke<ChangeReportBundle>('collect_change_report', { projectId, base, lastCommits });
-      },
-
-      listChangeReports: async (projectId: string) => {
-        return await tauriInvoke<ChangeReportSummary[]>('list_change_reports', { projectId });
-      },
-
-      getChangeReport: async (reportId: string) => {
-        return await tauriInvoke<StoredChangeReport>('get_change_report', { reportId });
-      },
-
-      deleteChangeReport: async (reportId: string) => {
-        await tauriInvoke<void>('delete_change_report', { reportId });
-      },
-
-      generateChangeReportAi: async (reportId: string) => {
-        return await tauriInvoke<string>('generate_change_report_ai', { reportId });
-      },
-      cancelChangeAi: async (reportId: string) => {
-        await tauriInvoke<void>('cancel_change_ai', { reportId });
-      },
-      computeIncrementalCoverage: async (reportId: string) => {
-        return await tauriInvoke<DeltaCoverage>('compute_incremental_coverage', { reportId });
-      },
-      setChangeReportAccepted: async (reportId: string, accepted: boolean) => {
-        return await tauriInvoke<string | null>('set_change_report_accepted', { reportId, accepted });
-      },
-      scanProjectVulns: async (projectId: string, includeUntracked?: boolean) => {
-        return await tauriInvoke<VulnScanOutcome>('scan_project_vulns', { projectId, includeUntracked });
-      },
-      listVulnFindings: async (
-        projectId: string,
-        filters?: { status?: string; kind?: string; severity?: string; limit?: number; offset?: number }
-      ) => {
-        return await tauriInvoke<VulnFindingsPage>('list_vuln_findings', {
-          projectId,
-          status: filters?.status,
-          kind: filters?.kind,
-          severity: filters?.severity,
-          limit: filters?.limit,
-          offset: filters?.offset,
-        });
-      },
-      setVulnFindingStatus: async (findingId: number, status: string) => {
-        await tauriInvoke<void>('set_vuln_finding_status', { findingId, status });
-      },
-      listVulnScans: async (projectId: string) => {
-        return await tauriInvoke<VulnScanSummary[]>('list_vuln_scans', { projectId });
-      },
-      cancelVulnScan: async (projectId: string) => {
-        // Same cancellation token the scan registers its CancelGuard under.
-        await tauriInvoke<void>('cancel_request', { id: projectId });
-      },
-      selectChangeTests: async (reportId: string, only?: string[]) => {
-        return await tauriInvoke<TestSelection>('select_change_tests', { reportId, only });
-      },
-      generateChangeScenarios: async (reportId: string) => {
-        return await tauriInvoke<number>('generate_change_scenarios', { reportId });
-      },
-      addChangeScenario: async (reportId: string, title: string) => {
-        return await tauriInvoke<number>('add_change_scenario', { reportId, title });
-      },
-      setScenarioStatus: async (scenarioId: number, status: string, note?: string, runId?: string) => {
-        return await tauriInvoke<ScenarioSummary>('set_scenario_status', { scenarioId, status, note, runId });
-      },
-      deleteChangeScenario: async (scenarioId: number) => {
-        await tauriInvoke<void>('delete_change_scenario', { scenarioId });
-      },
-
       // Initialize
       initialize: async () => {
         await Promise.all([
@@ -1497,8 +1279,6 @@ export const useGlobalStore = create<StoreState>()(
           get().loadCloudflaredProfiles(),
           get().loadSnippets(),
           get().loadQuickAskSessions(),
-          // testProjects is loaded by the test page itself: a failure there must not
-          // reject the memoized boot promise for every window.
         ]);
       },
     }),
