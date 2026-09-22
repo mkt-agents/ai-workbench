@@ -1997,11 +1997,15 @@
 }
 
 .tm-dock {
-  position: fixed;
+  /* Absolute, not fixed: the nearest positioned ancestor is `.main-content`,
+     so the dock centers over the page area instead of the whole window — a
+     `position: fixed` dock sat ~half a sidebar-width left of everything, and
+     the shell's pageIn transform could re-home a fixed dock mid-animation. */
+  position: absolute;
   left: 50%;
   transform: translateX(-50%);
   bottom: 16px;
-  width: min(1080px, calc(100vw - 48px));
+  width: min(1080px, calc(100% - 48px));
   max-height: 62vh;  display: flex;
   flex-direction: column;
   /* Above .modal-overlay (100): a run started from the change report must stay
@@ -2166,7 +2170,7 @@
 
 @media (max-width: 720px) {
   .tm-dock {
-    width: calc(100vw - 16px);
+    width: calc(100% - 16px);
     bottom: 8px;
     max-height: 70vh;
   }
