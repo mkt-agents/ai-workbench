@@ -222,18 +222,12 @@ mod tests {
 
     fn report(name_status: &str, numstat: &str, known_tests: &[&str]) -> ChangeReport {
         let known: HashSet<String> = known_tests.iter().map(|p| p.to_lowercase()).collect();
-        build_report(
-            "",
-            "uncommitted",
-            vec![],
-            name_status,
-            numstat,
-            "",
-            &known,
-            &empty_set(),
-            "",
-            false,
-        )
+        build_report(&crate::change_report::ReportInputs {
+            name_status_z: name_status,
+            numstat_z: numstat,
+            known_test_paths: known,
+            ..Default::default()
+        })
     }
 
     #[test]
@@ -372,6 +366,8 @@ mod tests {
             test_path: None,
             has_test: false,
             untracked: false,
+            commits: vec![],
+            hints: vec![],
         };
         assert!(is_testable(&file.layer));
     }

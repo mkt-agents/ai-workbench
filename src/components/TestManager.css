@@ -1184,6 +1184,155 @@
   color: var(--text-3);
 }
 
+/* Phase 3: commit grouping, incremental coverage, weak hints, acceptance */
+
+.tm-cr-stat.is-ok {
+  color: var(--green);
+  background: var(--green-dim);
+}
+
+.tm-cr-stat.is-bad {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.tm-cr-groupbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.tm-cr-groupbar .btn {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.tm-cr-groupbar-hint {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tm-cr-commit-line {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.tm-cr-commit-subject {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-cr-commit-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.tm-cr-commit-body {
+  padding: 0 12px 4px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+  white-space: pre-wrap;
+}
+
+.tm-cr-commit-empty {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tm-cr-file-sha {
+  padding: 0 5px;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.tm-cr-risk-hint {
+  color: var(--text-3);
+  background: var(--bg-2);
+  border: 1px dashed var(--border-subtle);
+}
+
+.tm-cr-delta {
+  padding: 10px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+
+.tm-cr-delta .tm-cr-label {
+  margin: 0;
+}
+
+.tm-cr-delta-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--red);
+}
+
+.tm-cr-delta .tm-cr-stats {
+  margin: 8px 0 6px;
+}
+
+.tm-cr-hotspot-lines {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tm-cr-ai-warn {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border: 1px solid color-mix(in srgb, var(--yellow) 35%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.tm-cr-accept-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.tm-cr-accept-head .tm-cr-label {
+  margin: 0 auto 0 0;
+}
+
+.tm-cr-accept-stamp {
+  font-size: 11px;
+  color: var(--green);
+}
+
+.tm-cr-accept-head .btn {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
 .tm-cr-ai {
   padding: 10px;
   margin-top: 12px;
@@ -1197,6 +1346,16 @@
   gap: 10px;
   align-items: center;
   justify-content: space-between;
+}
+
+.tm-cr-ai-head > .btn:last-child {
+  margin-left: auto;
+}
+
+.tm-cr-ai-progress {
+  flex: 1;
+  font-size: 12px;
+  opacity: 0.75;
 }
 
 .tm-cr-ai-body {
@@ -1747,4 +1906,651 @@
     width: 100%;
     margin-left: 0;
   }
+}
+
+/* ─── Run dock (global live-run monitor, src/components/test/RunDock) ─── */
+.tm-dock {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 16px;
+  width: min(1080px, calc(100vw - 48px));
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  /* Above .modal-overlay (100): a run started from the change report must stay
+     observable while the report itself is open. */
+  z-index: 120;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.38);
+}
+
+.tm-dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+}
+
+.tm-dock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tm-dock-toggle:hover {
+  border-color: var(--accent-border);
+}
+
+.tm-dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tm-dock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition-colors-fast);
+}
+
+.tm-dock-tab:hover {
+  color: var(--text-1);
+}
+
+.tm-dock-tab.is-active {
+  color: var(--text-1);
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+
+.tm-dock-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tm-dock-dot.is-running {
+  background: var(--accent);
+  animation: tm-dock-pulse 1.2s ease-in-out infinite;
+}
+
+.tm-dock-dot.is-pass {
+  background: var(--green);
+}
+
+.tm-dock-dot.is-fail {
+  background: var(--red);
+}
+
+.tm-dock-dot.is-idle {
+  background: var(--text-3);
+}
+
+@keyframes tm-dock-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.tm-dock-close {
+  display: inline-flex;
+  padding: 1px;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.tm-dock-close:hover {
+  color: var(--red);
+}
+
+.tm-dock-body {
+  overflow-y: auto;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border-subtle);
+  min-height: 0;
+}
+
+/* ─── OutputPanel (shared by dock and history viewer) ─── */
+.tm-op {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tm-op .tm-output-live {
+  max-height: 38vh;
+}
+
+.tm-op .tm-output {
+  max-height: 32vh;
+}
+
+.tm-op .tm-suites {
+  max-height: 30vh;
+}
+
+.tm-op-source {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  vertical-align: 1px;
+}
+
+.tm-op-error-text {
+  font-size: 11.5px;
+  color: var(--red);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .tm-dock {
+    width: calc(100vw - 16px);
+    bottom: 8px;
+    max-height: 70vh;
+  }
+}
+
+/* ─── Sub-navigation (shell) ─── */
+.tm-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.tm-nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.tm-nav-item:hover {
+  color: var(--text-1);
+}
+
+.tm-nav-item.is-active {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+
+/* ─── Reports view: history list (left) + workflow (right) ─── */
+.tm-cr-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .tm-cr-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.tm-cr-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: sticky;
+  top: 4px;
+  max-height: calc(100vh - 120px);
+}
+
+.tm-cr-side-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.tm-cr-side-head .input-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.tm-cr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.tm-cr-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  color: var(--text-1);
+  text-align: left;
+}
+
+.tm-cr-item.is-active {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
+}
+
+.tm-cr-item.is-new {
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  border-style: dashed;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.tm-cr-item.is-new:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.tm-cr-item-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+
+.tm-cr-item-date {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tm-cr-item-meta {
+  font-size: 11px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.tm-cr-item-del {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.tm-cr-item:hover .tm-cr-item-del,
+.tm-cr-item.is-active .tm-cr-item-del {
+  opacity: 1;
+}
+
+.tm-cr-main {
+  min-width: 0;
+}
+
+/* ─── Report workflow stepper ─── */
+.tm-wf {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tm-wf-steps {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.tm-wf-spacer {
+  flex: 1;
+}
+
+.tm-wf-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.tm-wf-step:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tm-wf-step-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--bg-1);
+}
+
+.tm-wf-step.is-done .tm-wf-step-dot {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.tm-wf-step.is-done {
+  color: var(--text-1);
+}
+
+.tm-wf-step.is-running .tm-wf-step-dot,
+.tm-wf-step.is-ready .tm-wf-step-dot {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tm-wf-step.is-running {
+  color: var(--accent);
+}
+
+.tm-wf-step.is-ready:not(:disabled) {
+  border-color: var(--accent-border);
+}
+
+/* --------------------------------- vuln scan --------------------------------- */
+
+.tm-vuln {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tm-vuln-toolbar,
+.tm-vuln-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.tm-vuln-toolbar .input-field {
+  min-width: 200px;
+}
+
+.tm-vuln-filters .input-field {
+  width: auto;
+}
+
+.tm-vuln-total {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tm-vuln-progress {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.tm-vuln-bar {
+  flex: 1 1 120px;
+  max-width: 320px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--bg-2);
+  border-radius: 999px;
+}
+
+.tm-vuln-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.tm-vuln-count,
+.tm-vuln-queued {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tm-vuln-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.tm-vuln-clean {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--green);
+}
+
+.tm-vuln-sev {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  border-radius: 999px;
+  color: var(--text-2);
+  background: var(--bg-2);
+}
+
+.tm-vuln-sev-critical {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.tm-vuln-sev-high {
+  color: #ff7a45;
+  background: color-mix(in srgb, #ff7a45 14%, transparent);
+}
+
+.tm-vuln-sev-medium {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+}
+
+.tm-vuln-sev-low {
+  color: var(--text-2);
+  background: var(--bg-2);
+}
+
+.tm-vuln-status {
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  border-radius: 999px;
+  color: var(--text-3);
+  background: var(--bg-2);
+}
+
+.tm-vuln-status-open {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+}
+
+.tm-vuln-status-fixed {
+  color: var(--green);
+  background: var(--green-dim);
+}
+
+.tm-vuln-table {
+  width: 100%;
+}
+
+.tm-vuln-table td,
+.tm-vuln-table th {
+  font-size: 12px;
+}
+
+.tm-vuln-expander {
+  width: 22px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.tm-vuln-expander svg {
+  transition: transform 0.15s ease;
+}
+
+.tm-vuln-expander svg.is-open {
+  transform: rotate(180deg);
+}
+
+.tm-vuln-kind {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.tm-vuln-target,
+.tm-vuln-advisory {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-vuln-row.is-expanded td {
+  background: var(--bg-1);
+}
+
+.tm-vuln-actions {
+  white-space: nowrap;
+}
+
+.tm-vuln-actions .btn {
+  margin-right: 4px;
+}
+
+.tm-vuln-detail-row > td {
+  padding: 6px 12px 10px 28px;
+  background: var(--bg-1);
+}
+
+.tm-vuln-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.tm-vuln-detail p {
+  margin: 0;
+}
+
+.tm-vuln-detail code {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  color: var(--text-1);
+}
+
+.tm-vuln-when {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tm-vuln-pager {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tm-vuln-history {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.tm-vuln-history summary {
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.tm-vuln-history ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.tm-vuln-history li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.tm-cr-dep-link {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
 }

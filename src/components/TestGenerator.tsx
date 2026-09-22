@@ -112,7 +112,7 @@ export default function TestGenerator({ project, onClose, onToast }: Props) {
   }, [generated, filePath, project.framework, saveTextFile, onToast, t]);
 
   return (
-    <TestModal title={`${t("aiTestGenerator")} · ${project.name}`} onClose={onClose} busy={busy} wide>
+    <TestModal title={`${t("aiTestGenerator")} · ${project.name}`} onClose={onClose} wide>
       <div className="tm-field">
         <label htmlFor="tm-gen-path">{t("selectFile")}</label>
         <div className="tm-field-row">

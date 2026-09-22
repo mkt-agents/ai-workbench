@@ -1,0 +1,129 @@
+{
+  "noProjects": "还没有测试项目：先到「测试项目」页添加，或用下方「扫描文件夹」批量登记",
+  "empty": "没有符合条件的漏洞记录",
+  "allHandled": "没有未处理的漏洞",
+  "neverScanned": "该项目还没有扫描记录",
+  "count": "共 {{n}} 条",
+  "aria": {
+    "project": "选择项目",
+    "status": "按状态过滤",
+    "kind": "按类型过滤",
+    "severity": "按严重度过滤"
+  },
+  "scan": {
+    "one": "扫描此项目",
+    "folder": "扫描文件夹",
+    "cancel": "取消",
+    "includeUntracked": "包含未提交文件",
+    "queued": "排队中 {{n}} 个",
+    "done": "{{project}}：依赖 {{deps}} 个，新发现/确认 {{n}} 条",
+    "cancelled": "{{project}}：扫描已取消"
+  },
+  "phase": {
+    "deps": "查询依赖漏洞（OSV）",
+    "secrets": "扫描密钥/敏感信息",
+    "done": "完成"
+  },
+  "folder": {
+    "title": "扫描结果 · {{count}} 个项目",
+    "note": "勾选后会先登记为测试项目（漏洞记录需要挂在项目上），再逐个加入扫描队列；扫描串行执行，对 OSV 限流友好。",
+    "queue": "登记并扫描（{{count}}）",
+    "queued": "已加入扫描队列：{{count}} 个项目",
+    "noneFound": "该目录下没有发现可识别的项目"
+  },
+  "statusFilter": {
+    "open": "未处理",
+    "ignored": "已忽略",
+    "falsePositive": "误报",
+    "fixed": "已修复",
+    "all": "全部状态"
+  },
+  "kindFilter": {
+    "all": "全部类型"
+  },
+  "sevFilter": {
+    "all": "全部严重度"
+  },
+  "kind": {
+    "dependency": "依赖漏洞",
+    "secret": "密钥泄露"
+  },
+  "sev": {
+    "critical": "严重",
+    "high": "高危",
+    "medium": "中危",
+    "low": "低危",
+    "unknown": "未知"
+  },
+  "totals": {
+    "critical": "严重 ×{{count}}",
+    "high": "高危 ×{{count}}",
+    "medium": "中危 ×{{count}}",
+    "low": "低危 ×{{count}}",
+    "secrets": "密钥 ×{{count}}"
+  },
+  "status": {
+    "open": "未处理",
+    "fixed": "已修复",
+    "ignored": "已忽略",
+    "false_positive": "误报"
+  },
+  "col": {
+    "severity": "严重度",
+    "kind": "类型",
+    "package": "对象",
+    "advisory": "公告 / 位置",
+    "status": "状态",
+    "actions": "操作"
+  },
+  "action": {
+    "ignore": "忽略",
+    "falsePositive": "误报",
+    "reopen": "恢复",
+    "reopenAll": "恢复全部忽略/误报",
+    "copy": "复制编号"
+  },
+  "confirm": {
+    "reopenAll": "会把本项目所有「已忽略」和「误报」的漏洞恢复为未处理，确定吗？"
+  },
+  "detail": {
+    "fixed": "修复版本",
+    "aliases": "别名",
+    "firstSeen": "首次发现",
+    "lastSeen": "最近确认",
+    "secretLine": "位于 {{file}}:{{line}}，内容 {{preview}}（原文永不入库）"
+  },
+  "rule": {
+    "awsAccessKey": "AWS 密钥",
+    "githubToken": "GitHub 令牌",
+    "gitlabToken": "GitLab 令牌",
+    "slackToken": "Slack 令牌",
+    "jwt": "JWT 令牌",
+    "privateKey": "私钥块",
+    "genericSecret": "高熵密钥赋值",
+    "base64Secret": "长 Base64 密钥"
+  },
+  "ruleHelp": {
+    "awsAccessKey": "AKIA 开头的 20 位访问密钥 ID",
+    "githubToken": "ghp_/gho_/ghu_/ghs_/ghr_ 或 github_pat_ 开头的令牌",
+    "gitlabToken": "glpat- 开头的个人访问令牌",
+    "slackToken": "xox 开头的 Slack 令牌",
+    "jwt": "eyJ 开头、带两段签名的 JWT",
+    "privateKey": "-----BEGIN … PRIVATE KEY----- 块",
+    "genericSecret": "key/secret/token/password 类变量名 + 高熵值",
+    "base64Secret": "40 位以上 Base64 块且同行出现密钥类词"
+  },
+  "history": {
+    "title": "扫描历史",
+    "deps": "依赖 {{n}}",
+    "files": "文件 {{n}}",
+    "findings": "漏洞 {{n}}"
+  },
+  "runStatus": {
+    "success": "成功",
+    "failed": "失败",
+    "error": "错误",
+    "cancelled": "已取消",
+    "timeout": "超时"
+  }
+}

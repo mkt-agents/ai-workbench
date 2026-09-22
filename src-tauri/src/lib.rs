@@ -16,6 +16,7 @@ mod cancellation_commands;
 mod test_commands;
 mod test_output_parsers;
 mod coverage_parsers;
+mod coverage_delta;
 mod maven_pom;
 mod test_error_kind;
 mod project_scan;
@@ -25,6 +26,12 @@ mod test_scenarios;
 mod change_report;
 mod change_store;
 mod change_commands;
+mod vuln_lock;
+mod vuln_osv;
+mod vuln_secrets;
+mod vuln_store;
+mod vuln_scan;
+mod vuln_commands;
 #[cfg(test)]
 mod test_run_e2e;
 
@@ -279,10 +286,11 @@ pub fn run() {
             // The test-assistant tables are declared next to their commands so the
             // Rust tests can build the exact production schema.
             conn.execute_batch(&format!(
-                "{}{}{}",
+                "{}{}{}{}",
                 test_commands::SCHEMA_SQL,
                 change_store::SCHEMA_SQL,
-                test_scenarios::SCHEMA_SQL
+                test_scenarios::SCHEMA_SQL,
+                vuln_store::SCHEMA_SQL
             ))
                 .expect("failed to init test schema");
 
@@ -448,6 +456,7 @@ pub fn run() {
             tray::tray_toggle_quick_ask,
             tray::hide_quick_ask,
             tray::open_main_deepseek,
+            tray::open_main_tab,
             tray::set_quick_ask_bubble_visible,
             tray::set_quick_ask_bubble_position,
             tray::bubble::quick_ask_bubble_ready,
@@ -504,6 +513,14 @@ pub fn run() {
             change_commands::set_scenario_status,
             change_commands::delete_change_scenario,
             change_commands::link_change_run,
+            change_commands::compute_incremental_coverage,
+            change_commands::set_change_report_accepted,
+            change_commands::cancel_change_ai,
+            vuln_commands::scan_project_vulns,
+            vuln_commands::list_vuln_findings,
+            vuln_commands::set_vuln_finding_status,
+            vuln_commands::list_vuln_scans,
+            vuln_commands::find_package_exposures,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

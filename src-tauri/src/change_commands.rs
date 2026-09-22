@@ -5,10 +5,11 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::change_report::{self, ChangeReport};
 use crate::change_store;
+use crate::coverage_delta;
 use crate::git_commands::{ensure_git_repo, git_stdout};
 use crate::test_commands::{load_test_projects, TestProject};
 use crate::test_scenarios;
@@ -127,14 +128,85 @@ fn inline_test_sources(repo_root: &str, name_status_z: &str, untracked_z: &str) 
     out
 }
 
-fn commits_of(repo: &Path, range: Option<&str>) -> Vec<String> {
-    let mut args = vec!["log", "--format=%s", "-z", "--no-merges"];
-    if let Some(range) = range {
-        args.push(range);
-    } else {
-        return Vec::new();
+/// Commit records for the analysed range: subjects, full briefs, and the
+/// path -> short-sha attribution that lets the UI answer "which commit is this
+/// file from". `-z` keeps CJK and spaced paths verbatim; \x02/\x01 are ours.
+fn commit_records(repo: &Path, range: Option<&str>) -> (Vec<String>, Vec<change_report::CommitBrief>, std::collections::BTreeMap<String, Vec<String>>) {
+    let Some(range) = range else {
+        return (Vec::new(), Vec::new(), Default::default());
+    };
+    let raw = git_lines(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--format=%x02%H%x00%h%x00%an%x00%aI%x00%s%x00%b%x01",
+            "--name-only",
+            "-z",
+            range,
+        ],
+    )
+    .unwrap_or_default();
+    let (details, by_file) = change_report::parse_log_z(&raw);
+    let subjects = details.iter().map(|c| c.subject.clone()).collect();
+    // Log paths are repo-root relative, like the report's diff paths.
+    let file_commits = by_file
+        .into_iter()
+        .map(|(path, shas)| {
+            (
+                path.replace('\\', "/")
+                    .trim_start_matches("./")
+                    .to_lowercase(),
+                shas,
+            )
+        })
+        .collect();
+    (subjects, details, file_commits)
+}
+
+fn truncate_bytes(s: &str, limit: usize) -> String {
+    if s.len() <= limit {
+        return s.to_string();
     }
-    git_lines(repo, &args).map(|raw| split_z(&raw)).unwrap_or_default()
+    let mut end = limit;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
+/// The `-U0` patch for the same range a stored report described — the "changed
+/// lines" side of the incremental-coverage join. Re-running git is deliberate:
+/// coverage artifacts describe today's working tree, so the diff must too.
+fn patch_sync(dir: &Path, scope: &ChangeScope) -> Result<String, String> {
+    let (one, two): (String, Option<String>) = match scope {
+        ChangeScope::Uncommitted => ("HEAD".to_string(), None),
+        ChangeScope::Ref(value) => (validate_ref(value)?, None),
+        ChangeScope::Commits(count) => (
+            format!("HEAD~{}", (*count).clamp(1, MAX_RECENT_COMMITS)),
+            Some("HEAD".to_string()),
+        ),
+    };
+    let mut args: Vec<&str> = vec!["diff", "--no-color", "-U0", one.as_str()];
+    if let Some(two) = &two {
+        args.push(two.as_str());
+    }
+    let patch = git_lines(dir, &scoped(args, &[]))?;
+    Ok(truncate_bytes(&patch, MAX_PATCH_BYTES))
+}
+
+/// Rebuild the git range a stored report was generated from.
+fn scope_from_stored(source: &str, base: &str) -> Result<ChangeScope, String> {
+    match source {
+        "uncommitted" => Ok(ChangeScope::Uncommitted),
+        "base" => Ok(ChangeScope::Ref(base.to_string())),
+        "commits" => base
+            .strip_prefix("HEAD~")
+            .and_then(|n| n.parse::<i64>().ok())
+            .map(ChangeScope::Commits)
+            .ok_or_else(|| format!("无法从基准重建提交范围：{}", base)),
+        other => Err(format!("无法识别的报告来源：{}", other)),
+    }
 }
 
 pub(crate) fn collect_sync(project: &TestProject, scope: ChangeScope) -> Result<ChangeReportBundle, String> {
@@ -197,18 +269,8 @@ pub(crate) fn collect_sync(project: &TestProject, scope: ChangeScope) -> Result<
     };
 
     let patch = match git_lines(dir, &scoped(patch_args, &[])) {
-        Ok(patch) => {
-            if patch.len() > MAX_PATCH_BYTES {
-                let mut end = MAX_PATCH_BYTES;
-                while end > 0 && !patch.is_char_boundary(end) {
-                    end -= 1;
-                }
-                patch[..end].to_string()
-            } else {
-                patch
-            }
-        }
         // A huge or broken patch must not cost the tester the whole report.
+        Ok(patch) => truncate_bytes(&patch, MAX_PATCH_BYTES),
         Err(_) => String::new(),
     };
 
@@ -222,18 +284,22 @@ pub(crate) fn collect_sync(project: &TestProject, scope: ChangeScope) -> Result<
         .into_iter()
         .collect();
 
-    let report = change_report::build_report(
-        &base_label,
-        &source,
-        commits_of(dir, commit_range.as_deref()),
-        &name_status,
-        &numstat,
-        &untracked,
-        &known_tests,
-        &inline_tests,
-        &patch,
-        patch.len() >= MAX_PATCH_BYTES,
-    );
+    let (subjects, commit_details, file_commits) = commit_records(dir, commit_range.as_deref());
+
+    let report = change_report::build_report(&change_report::ReportInputs {
+        base: &base_label,
+        source: &source,
+        subjects,
+        commit_details,
+        file_commits,
+        name_status_z: &name_status,
+        numstat_z: &numstat,
+        untracked: &untracked,
+        known_test_paths: known_tests,
+        inline_test_files: inline_tests,
+        patch: &patch,
+        truncated: patch.len() >= MAX_PATCH_BYTES,
+    });
 
     Ok(ChangeReportBundle {
         ai_patch: {
@@ -339,39 +405,148 @@ pub fn delete_change_report(state: State<'_, DbState>, report_id: String) -> Res
     change_store::delete(&conn, &report_id)
 }
 
+/// The honest "did our tests actually touch the changed lines": diff line
+/// ranges × the coverage artifact's per-line hits. The result is cached on the
+/// report so reopening is instant; recompute after a fresh coverage run.
+#[tauri::command]
+pub async fn compute_incremental_coverage(
+    state: State<'_, DbState>,
+    report_id: String,
+) -> Result<coverage_delta::DeltaCoverage, String> {
+    let projects = load_test_projects(state.clone())?;
+    let (project_id, source, base) = {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        change_store::scope_of(&conn, &report_id)?
+    };
+    let project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+    let scope = scope_from_stored(&source, &base)?;
+    let conn = Arc::clone(&state.conn);
+    tokio::task::spawn_blocking(move || {
+        ensure_git_repo(&project.path)?;
+        let patch = patch_sync(Path::new(&project.path), &scope)?;
+        let changed = coverage_delta::parse_hunk_ranges(&patch);
+        if changed.is_empty() {
+            return Err("该报告范围内没有可定位行号的新增/修改行（补丁为空、纯删除或已被截断）".to_string());
+        }
+        let hits = crate::test_commands::coverage_line_hits(&project)?;
+        let delta = coverage_delta::intersect(&changed, &hits);
+        // The cache is a convenience; losing it must not lose the answer itself.
+        if let (Ok(guard), Ok(json)) = (conn.lock(), serde_json::to_string(&delta)) {
+            let _ = change_store::set_delta_coverage(&guard, &report_id, &json);
+        }
+        Ok(delta)
+    })
+    .await
+    .map_err(|e| format!("增量覆盖率任务已中止: {}", e))?
+}
+
+/// Stamp (or revoke) the report's acceptance; the workflow derives its final
+/// step from the returned timestamp.
+#[tauri::command]
+pub fn set_change_report_accepted(
+    state: State<'_, DbState>,
+    report_id: String,
+    accepted: bool,
+) -> Result<Option<String>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let stamp = accepted.then(now);
+    change_store::set_accepted(&conn, &report_id, stamp.as_deref())?;
+    Ok(stamp)
+}
+
+/// Chunk budget for the map pass: a prompt this size is one the model actually
+/// reads end to end, which a 300-file single call is not.
+const AI_CHUNK_FILES: usize = 20;
+const AI_CHUNK_APIS: usize = 3;
+const AI_MAP_TOKENS: i64 = 1500;
+const AI_REDUCE_TOKENS: i64 = 3000;
+const AI_SYSTEM: &str = "你是资深测试工程师，只依据给定的改动分析作答，不编造未出现的模块或接口。";
+
+fn emit_ai_progress(app: &AppHandle, report_id: &str, done: usize, total: usize) {
+    let _ = app.emit(
+        "change-ai-progress",
+        serde_json::json!({ "reportId": report_id, "done": done, "total": total }),
+    );
+}
+
 /// Ask the default model for the test-facing half of the report: which functions are
 /// affected and what must be re-tested. Works from the stored analysis plus a bounded
-/// patch, so it always matches what the panel just showed.
+/// patch, so it always matches what the panel just showed. Large reports go through a
+/// map-reduce pass: one brief per module chunk, then one final call assembles the
+/// five sections — so no chunk's files silently fall off the end of the prompt.
 #[tauri::command]
 pub async fn generate_change_report_ai(
+    app: AppHandle,
     state: State<'_, DbState>,
     report_id: String,
 ) -> Result<String, String> {
-    let (prompt, project_name) = {
+    // Cancel key = report id (`cr-<millis>`), which can never collide with the
+    // project ids used as keys by test runs and vuln scans.
+    let _guard = crate::cancellation::CancelGuard::new(&report_id);
+
+    let (project_name, report, patch) = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
         let (data, patch, project_id, _) = change_store::ai_input(&conn, &report_id)?;
         let name = change_store::project_name(&conn, &project_id);
         let report: ChangeReport = serde_json::from_str(&data).map_err(|e| format!("报告数据损坏: {}", e))?;
-        (build_ai_prompt(&name, &report, &patch), name)
+        (name, report, patch)
     };
-
     let mut config = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
         crate::test_commands::load_default_model_config(&conn)?
     };
-    config.max_tokens = 3000;
     config.temperature = 0.2;
 
-    let markdown = crate::ai_commands::generate_text(crate::ai_commands::GenerateTextRequest {
-        config,
-        system: "你是资深测试工程师，只依据给定的改动分析作答，不编造未出现的模块或接口。".to_string(),
-        user: prompt,
-    })
-    .await
-    .map_err(|e| format!("{} 生成失败：{}", project_name, e))?;
+    let chunks = change_report::plan_ai_chunks(&report, AI_CHUNK_FILES, AI_CHUNK_APIS);
+    // Every map call plus the final reduce; a single-pass report is just "the call".
+    let total = if chunks.len() <= 1 { 1 } else { chunks.len() + 1 };
+    emit_ai_progress(&app, &report_id, 0, total);
+
+    let send = |config: crate::ai_commands::AIModelConfig, user: String| {
+        crate::ai_commands::generate_text(crate::ai_commands::GenerateTextRequest {
+            config,
+            system: AI_SYSTEM.to_string(),
+            user,
+        })
+    };
+    let markdown = if chunks.len() <= 1 {
+        config.max_tokens = AI_REDUCE_TOKENS;
+        send(config, build_ai_prompt(&project_name, &report, &patch))
+            .await
+            .map_err(|e| format!("{} 生成失败：{}", project_name, e))?
+    } else {
+        let mut summaries = Vec::with_capacity(chunks.len());
+        for (index, chunk) in chunks.iter().enumerate() {
+            if crate::cancellation::is_cancelled(&report_id) {
+                return Err("[E_CANCELLED] 生成已取消".to_string());
+            }
+            config.max_tokens = AI_MAP_TOKENS;
+            let brief = send(config.clone(), build_ai_chunk_prompt(&project_name, &report, chunk))
+                .await
+                .map_err(|e| format!("{} 生成失败（模块 {}）：{}", project_name, chunk.module, e))?;
+            summaries.push(format!("【{}】\n{}", chunk.module, brief.trim()));
+            emit_ai_progress(&app, &report_id, index + 1, total);
+        }
+        if crate::cancellation::is_cancelled(&report_id) {
+            return Err("[E_CANCELLED] 生成已取消".to_string());
+        }
+        config.max_tokens = AI_REDUCE_TOKENS;
+        send(config, build_ai_reduce_prompt(&project_name, &report, &summaries))
+            .await
+            .map_err(|e| format!("{} 汇总失败：{}", project_name, e))?
+    };
 
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     change_store::set_ai(&conn, &report_id, &markdown)?;
+    // Cross-check the answer against the static report: identifiers the model
+    // mentioned that appear nowhere in it are flagged as suspects (never blocked).
+    let warnings = change_report::verify_ai_against_report(&markdown, &report);
+    if let Ok(json) = serde_json::to_string(&warnings) {
+        let _ = change_store::set_ai_warnings(&conn, &report_id, &json);
+    }
     // The acceptance sections are only useful if they become tickable rows, so they
     // are parsed right away; a report with no recognisable bullets just stays empty.
     if let Ok(project_id) = conn.query_row(
@@ -383,6 +558,17 @@ pub async fn generate_change_report_ai(
         let _ = test_scenarios::save_scenarios(&conn, &report_id, &project_id, &rows, &now());
     }
     Ok(markdown)
+}
+
+/// Cancel a live AI generation for one report. The running command notices
+/// before its next model call.
+#[tauri::command]
+pub fn cancel_change_ai(report_id: String) -> Result<(), String> {
+    if !crate::cancellation::is_active(&report_id) {
+        return Err("该报告当前没有进行中的 AI 生成".to_string());
+    }
+    crate::cancellation::cancel_request(&report_id);
+    Ok(())
 }
 
 /// Which tests the change points at, in the runner's own filter syntax. The UI ticks
@@ -504,7 +690,7 @@ fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> St
     let mut files = String::new();
     for file in report.files.iter().take(80) {
         files.push_str(&format!(
-            "- {} [{}] +{} -{} 层={} 模块={} 风险={} 已有测试={}\n",
+            "- {} [{}] +{} -{} 层={} 模块={} 风险={} 已有测试={}{}\n",
             file.path,
             file.status,
             file.adds,
@@ -513,6 +699,11 @@ fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> St
             file.module,
             if file.risks.is_empty() { "-".to_string() } else { file.risks.join(",") },
             if file.has_test { "是" } else { "否" },
+            if file.commits.is_empty() {
+                String::new()
+            } else {
+                format!(" 提交={}", file.commits.join(","))
+            },
         ));
     }
     let mut api = String::new();
@@ -520,12 +711,13 @@ fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> St
         api.push_str(&format!("- [{}] {} @ {}\n", change.kind, change.name, change.path));
     }
     let base = if report.base.is_empty() { "未提交改动（相对 HEAD）".to_string() } else { report.base.clone() };
+    let commits = commits_block(report);
 
     format!(
         "请根据下面的代码改动分析，产出面向测试同学的回归测试报告。\n\n\
          项目：{}\n基准：{}\n统计：{} 个文件，+{} -{}，涉及 {} 个模块，其中 {} 个改动没有配对测试\n\
          建议回归面（程序判定）：{}\n\
-         提交说明：{}\n\n\
+         提交明细（短 sha、说明、改动文件）：\n{}\n\
          改动文件：\n{}\n\
          公开接口变化：\n{}\n\
          补丁片段（可能已截断）：\n```diff\n{}\n```\n\n\
@@ -541,9 +733,104 @@ fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> St
         report.stats.modules,
         report.stats.untested,
         if report.scope.is_empty() { "-".to_string() } else { report.scope.join(",") },
-        if report.commits.is_empty() { "-".to_string() } else { report.commits.join("；") },
+        if commits.is_empty() { "- 无（未提交改动）\n".to_string() } else { commits },
         files,
         if api.is_empty() { "- 无\n".to_string() } else { api },
         if patch.is_empty() { "（无补丁文本）".to_string() } else { patch.to_string() },
+    )
+}
+
+/// Per-commit attribution: which commit touched which files, so the model can
+/// tie a scenario to an intent instead of guessing from one flat file list.
+fn commits_block(report: &ChangeReport) -> String {
+    let mut commits = String::new();
+    for detail in report.commit_details.iter().take(20) {
+        let touched: Vec<&str> = report
+            .files
+            .iter()
+            .filter(|f| f.commits.iter().any(|s| *s == detail.short_sha))
+            .map(|f| f.path.as_str())
+            .take(12)
+            .collect();
+        commits.push_str(&format!(
+            "- {} {}（{}，{}）：{}\n",
+            detail.short_sha,
+            detail.subject,
+            detail.author,
+            detail.date,
+            if touched.is_empty() { "-".to_string() } else { touched.join(", ") }
+        ));
+        if !detail.body.trim().is_empty() {
+            commits.push_str(&format!("  正文：{}\n", detail.body.trim().replace('\n', " ")));
+        }
+    }
+    commits
+}
+
+fn file_line(file: &change_report::FileChange) -> String {
+    format!(
+        "- {} [{}] +{} -{} 层={} 风险={} 已有测试={}{}\n",
+        file.path,
+        file.status,
+        file.adds,
+        file.dels,
+        file.layer,
+        if file.risks.is_empty() { "-".to_string() } else { file.risks.join(",") },
+        if file.has_test { "是" } else { "否" },
+        if file.commits.is_empty() { String::new() } else { format!(" 提交={}", file.commits.join(",")) },
+    )
+}
+
+/// Map pass: one focused brief per module chunk. No patch on purpose — the
+/// chunk is small enough to judge from its own file and interface lists, and
+/// pasting the same global patch into every call would only bury them.
+fn build_ai_chunk_prompt(project_name: &str, report: &ChangeReport, chunk: &change_report::AiChunk) -> String {
+    let files: String = chunk.files.iter().map(file_line).collect();
+    let mut api = String::new();
+    for change in &chunk.api {
+        api.push_str(&format!("- [{}] {} @ {}\n", change.kind, change.name, change.path));
+    }
+    format!(
+        "项目「{}」本次共改动 {} 个文件（+{} -{}），下面是模块「{}」的改动明细；全量建议回归面（程序判定）：{}。\n\n\
+         改动文件：\n{}\n\
+         公开接口变化：\n{}\n\
+         请用不超过 8 行要点总结该模块：改了什么、可能影响哪些功能、有哪些兼容性或数据风险值得测试关注。\
+         只依据上面内容，不确定的写「需与开发确认」；不要输出章节标题或解释文字。",
+        project_name,
+        report.stats.files,
+        report.stats.adds,
+        report.stats.dels,
+        chunk.module,
+        if report.scope.is_empty() { "-".to_string() } else { report.scope.join(",") },
+        files,
+        if api.is_empty() { "- 无\n".to_string() } else { api },
+    )
+}
+
+/// Reduce pass: the five tester-facing sections are assembled from the module
+/// briefs, so no chunk's detail is dropped no matter how big the report is.
+fn build_ai_reduce_prompt(project_name: &str, report: &ChangeReport, summaries: &[String]) -> String {
+    let base = if report.base.is_empty() { "未提交改动（相对 HEAD）".to_string() } else { report.base.clone() };
+    let commits = commits_block(report);
+    format!(
+        "请把下面按模块整理的改动小结，汇总成一份面向测试同学的回归测试报告。\n\n\
+         项目：{}\n基准：{}\n统计：{} 个文件，+{} -{}，涉及 {} 个模块，其中 {} 个改动没有配对测试\n\
+         建议回归面（程序判定）：{}\n\
+         提交明细（短 sha、说明、改动文件）：\n{}\n\
+         各模块改动小结：\n{}\n\n\
+         严格按以下五个二级标题输出，不要添加其它章节或解释文字：\n\
+         ## 受影响功能点\n## 必测场景\n## 建议回归范围\n## 兼容性与数据风险\n## 验收清单\n\n\
+         要求：每条一行、以 - 开头；「必测场景」每条以 P0/P1/P2 开头标明优先级，再写「前置：…　预期：…」；\
+         「建议回归范围」同样按 P0/P1/P2 标注；只依据上面的小结与提交明细，不确定的写「需与开发确认」。",
+        project_name,
+        base,
+        report.stats.files,
+        report.stats.adds,
+        report.stats.dels,
+        report.stats.modules,
+        report.stats.untested,
+        if report.scope.is_empty() { "-".to_string() } else { report.scope.join(",") },
+        if commits.is_empty() { "- 无（未提交改动）\n".to_string() } else { commits },
+        summaries.join("\n\n"),
     )
 }

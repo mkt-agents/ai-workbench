@@ -40,6 +40,8 @@
     "DSH_START_FAILED": "Failed to start DeepSeek",
     "DSH_INSTALL_FAILED": "Failed to install DeepSeek",
     "INVALID_INPUT": "Invalid input",
-    "INTERNAL_ERROR": "Internal error, please try again later"
+    "INTERNAL_ERROR": "Internal error, please try again later",
+    "E_CANCELLED": "Cancelled",
+    "E_NETWORK": "Network error"
   }
 }

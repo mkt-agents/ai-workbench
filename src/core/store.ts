@@ -7,7 +7,8 @@ import type {
   Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
   TestProject, ProjectDetectionResult, TestRunResult, TestHistoryEntry, CoverageReport,
   ChangeReportBundle, ChangeReportSummary, StoredChangeReport, ScannedProject,
-  TestSelection, ScenarioSummary,
+  TestSelection, ScenarioSummary, DeltaCoverage,
+  VulnScanOutcome, VulnFindingsPage, VulnScanSummary,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -327,12 +328,10 @@ interface StoreState extends GlobalState, Invocations {
   detectProjectType: (path: string) => Promise<ProjectDetectionResult>;
   scanTestProjects: (basePath: string, maxDepth?: number) => Promise<ScannedProject[]>;
   addTestProjects: (projects: Omit<TestProject, 'id' | 'createdAt' | 'updatedAt'>[]) => Promise<number>;
-  runTest: (projectId: string, args?: string) => Promise<TestRunResult>;
   getTestHistory: (projectId?: string) => Promise<TestHistoryEntry[]>;
   generateTestCode: (sourceCode: string, filePath: string, framework: string, coverageLevel: string, mockStrategy: string, assertStyle: string) => Promise<string>;
   diagnoseTestFailure: (testCode: string, sourceCode: string, errorMessage: string, testName: string) => Promise<string>;
   readCoverageReport: (projectId: string) => Promise<CoverageReport>;
-  cancelTestRun: (projectId: string) => Promise<void>;
   getTestRun: (runId: string) => Promise<TestRunResult>;
 
   // Change-driven regression reports
@@ -341,6 +340,19 @@ interface StoreState extends GlobalState, Invocations {
   getChangeReport: (reportId: string) => Promise<StoredChangeReport>;
   deleteChangeReport: (reportId: string) => Promise<void>;
   generateChangeReportAi: (reportId: string) => Promise<string>;
+  cancelChangeAi: (reportId: string) => Promise<void>;
+  computeIncrementalCoverage: (reportId: string) => Promise<DeltaCoverage>;
+  setChangeReportAccepted: (reportId: string, accepted: boolean) => Promise<string | null>;
+
+  // Vulnerability scans
+  scanProjectVulns: (projectId: string, includeUntracked?: boolean) => Promise<VulnScanOutcome>;
+  listVulnFindings: (
+    projectId: string,
+    filters?: { status?: string; kind?: string; severity?: string; limit?: number; offset?: number }
+  ) => Promise<VulnFindingsPage>;
+  setVulnFindingStatus: (findingId: number, status: string) => Promise<void>;
+  listVulnScans: (projectId: string) => Promise<VulnScanSummary[]>;
+  cancelVulnScan: (projectId: string) => Promise<void>;
   selectChangeTests: (reportId: string, only?: string[]) => Promise<TestSelection>;
   generateChangeScenarios: (reportId: string) => Promise<number>;
   addChangeScenario: (reportId: string, title: string) => Promise<number>;
@@ -351,7 +363,6 @@ interface StoreState extends GlobalState, Invocations {
     runId?: string
   ) => Promise<ScenarioSummary>;
   deleteChangeScenario: (scenarioId: number) => Promise<void>;
-  linkChangeRun: (reportId: string, runId: string) => Promise<void>;
 
   // Initialize
   initialize: () => Promise<void>;
@@ -1353,10 +1364,6 @@ export const useGlobalStore = create<StoreState>()(
         return added;
       },
 
-      runTest: async (projectId: string, args?: string) => {
-        return await tauriInvoke<TestRunResult>('run_test', { projectId, args });
-      },
-
       getTestHistory: async (projectId?: string) => {
         return await tauriInvoke<TestHistoryEntry[]>('get_test_history', { projectId });
       },
@@ -1398,10 +1405,6 @@ export const useGlobalStore = create<StoreState>()(
         return await tauriInvoke<CoverageReport>('read_coverage_report', { projectId });
       },
 
-      cancelTestRun: async (projectId: string) => {
-        return await tauriInvoke<void>('cancel_test_run', { projectId });
-      },
-
       // Read one stored run back so a history row can show its full result.
       getTestRun: async (runId: string) => {
         return await tauriInvoke<TestRunResult>('get_test_run', { runId });
@@ -1427,6 +1430,41 @@ export const useGlobalStore = create<StoreState>()(
       generateChangeReportAi: async (reportId: string) => {
         return await tauriInvoke<string>('generate_change_report_ai', { reportId });
       },
+      cancelChangeAi: async (reportId: string) => {
+        await tauriInvoke<void>('cancel_change_ai', { reportId });
+      },
+      computeIncrementalCoverage: async (reportId: string) => {
+        return await tauriInvoke<DeltaCoverage>('compute_incremental_coverage', { reportId });
+      },
+      setChangeReportAccepted: async (reportId: string, accepted: boolean) => {
+        return await tauriInvoke<string | null>('set_change_report_accepted', { reportId, accepted });
+      },
+      scanProjectVulns: async (projectId: string, includeUntracked?: boolean) => {
+        return await tauriInvoke<VulnScanOutcome>('scan_project_vulns', { projectId, includeUntracked });
+      },
+      listVulnFindings: async (
+        projectId: string,
+        filters?: { status?: string; kind?: string; severity?: string; limit?: number; offset?: number }
+      ) => {
+        return await tauriInvoke<VulnFindingsPage>('list_vuln_findings', {
+          projectId,
+          status: filters?.status,
+          kind: filters?.kind,
+          severity: filters?.severity,
+          limit: filters?.limit,
+          offset: filters?.offset,
+        });
+      },
+      setVulnFindingStatus: async (findingId: number, status: string) => {
+        await tauriInvoke<void>('set_vuln_finding_status', { findingId, status });
+      },
+      listVulnScans: async (projectId: string) => {
+        return await tauriInvoke<VulnScanSummary[]>('list_vuln_scans', { projectId });
+      },
+      cancelVulnScan: async (projectId: string) => {
+        // Same cancellation token the scan registers its CancelGuard under.
+        await tauriInvoke<void>('cancel_request', { id: projectId });
+      },
       selectChangeTests: async (reportId: string, only?: string[]) => {
         return await tauriInvoke<TestSelection>('select_change_tests', { reportId, only });
       },
@@ -1441,9 +1479,6 @@ export const useGlobalStore = create<StoreState>()(
       },
       deleteChangeScenario: async (scenarioId: number) => {
         await tauriInvoke<void>('delete_change_scenario', { scenarioId });
-      },
-      linkChangeRun: async (reportId: string, runId: string) => {
-        await tauriInvoke<void>('link_change_run', { reportId, runId });
       },
 
       // Initialize

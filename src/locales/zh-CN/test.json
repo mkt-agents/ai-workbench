@@ -1,4 +1,20 @@
 {
+  "nav": {
+    "aria": "测试页视图",
+    "projects": "项目",
+    "reports": "变更报告",
+    "vuln": "漏洞扫描"
+  },
+  "wf": {
+    "steps": "工作流步骤",
+    "step": {
+      "collect": "采集改动",
+      "ai": "AI 分析",
+      "select": "选测",
+      "run": "运行",
+      "accept": "验收"
+    }
+  },
   "actualBehavior": "实际行为",
   "add": "添加",
   "addFirstProject": "添加第一个测试项目",
@@ -42,6 +58,7 @@
   "enabledField": "启用该项目",
   "liveOutput": "实时输出",
   "liveWaiting": "等待输出…",
+  "runningBadge": "有 {{count}} 个测试正在运行",
   "caseDetail": "用例明细 · {{count}} 个用例 / {{files}} 个文件",
   "caseSearchPlaceholder": "搜索用例名",
   "noCaseDetail": "未找到用例级明细。jest 加 --json --outputFile=jest-results.json、vitest 加 --reporter=json --outputFile=vitest-results.json 即可；cargo、go 与 Maven 会自动解析（Maven 读 target/surefire-reports 报告），pytest 需要带 -v",
@@ -71,6 +88,15 @@
   "deletePartial": "{{count}} 个项目删除失败",
   "deleteProject": "删除项目",
   "deleted": "已删除",
+  "dock": {
+    "title": "运行监控",
+    "running": "{{count}} 个运行中",
+    "finished": "{{count}} 个已结束",
+    "expand": "展开运行面板",
+    "collapse": "收起运行面板",
+    "clear": "清除已结束",
+    "close": "移除"
+  },
   "detecting": "正在识别项目类型与测试命令…",
   "diagnoseFailed": "诊断失败：{{error}}",
   "diagnosing": "诊断中…",
@@ -150,7 +176,13 @@
   "statements": "语句",
   "status": "状态",
   "statusCancelled": "已取消",
+  "statusRunning": "运行中",
   "statusTimeout": "超时",
+  "source": {
+    "batch": "批量运行",
+    "change-report": "变更报告",
+    "coverage-rerun": "覆盖率重跑"
+  },
   "success": "成功",
   "failed": "失败",
   "testCode": "测试代码",
@@ -220,6 +252,8 @@
     "generate": "生成报告",
     "onlyUntested": "只看缺测试的文件",
     "intro": "选择基准后点「生成报告」：先给出改了哪些模块/分层、哪些改动没有配对测试、有哪些高风险面，再由模型补出功能点与回归场景。",
+    "depOpen": "依赖漏洞 {{n}} 条未处理（critical×{{c}}）",
+    "depOpenHint": "本次改动涉及依赖清单；点击前往漏洞页处理",
     "failed": "生成报告失败：{{error}}",
     "empty": "该基准下没有检测到代码改动。",
     "files": "文件",
@@ -231,7 +265,18 @@
     "baseline": "基准",
     "branch": "分支",
     "stats": "统计",
-    "scope": "建议回归面",
+    "scopeTitle": "建议回归面",
+    "scope": {
+      "dataMigration": "数据迁移验证",
+      "dataAccess": "数据读写回归",
+      "apiContract": "接口契约回归",
+      "businessFlow": "业务流程回归",
+      "uiFlow": "界面流程回归",
+      "security": "鉴权与越权",
+      "money": "金额与对账",
+      "smoke": "冒烟测试",
+      "none": "无需功能回归"
+    },
     "commits": "包含的提交",
     "apiChanges": "公开接口变化",
     "truncated": "补丁文本超过 200KB 已截断，接口变化可能不完整。",
@@ -240,6 +285,10 @@
     "aiSection": "AI 回归建议",
     "aiGenerate": "生成 AI 章节",
     "aiRegenerate": "重新生成",
+    "aiProgress": "分块生成中 {{done}}/{{total}}",
+    "aiCancel": "取消生成",
+    "aiCancelled": "AI 生成已取消",
+    "aiCancelSent": "已发送取消指令，将在当前模型调用结束后停止",
     "aiHint": "按「受影响功能点 / 必测场景 / 回归范围 / 风险 / 验收清单」补全，需要模型配置里有默认模型。",
     "aiUnavailable": "报告未入库，无法调用 AI 章节；静态结论与导出不受影响。",
     "aiFailed": "AI 章节生成失败：{{error}}",
@@ -284,6 +333,32 @@
       }
     },
     "runs": "本报告的测试运行",
+    "groupBy": "文件分组",
+    "groupModule": "按模块",
+    "groupCommit": "按提交",
+    "groupCommitHint": "同一文件被多个提交改动时会在各提交下分别列出",
+    "commitNoFiles": "改动文件不在报告范围内（或被过滤）",
+    "hintWhy": "仅文件名弱匹配，不计入风险",
+    "aiWarn": "AI 提到了报告中不存在的标识符：{{list}}",
+    "delta": {
+      "title": "增量覆盖率",
+      "compute": "计算增量覆盖率",
+      "recompute": "重新计算",
+      "hint": "把改动行与最新覆盖率产物逐行对照：改的代码到底跑没跑。需先运行一次带覆盖率的测试（产物为 lcov.info / jacoco.xml / coverage.xml）。",
+      "line": "命中 {{covered}} / 未命中 {{missed}}",
+      "unknown": "无行数据 {{n}} 行",
+      "unknownHint": "这些改动行在覆盖率产物里没有对应数据（未插桩或路径对不上），不计入未命中",
+      "hotspots": "未命中热点行",
+      "summary": "增量覆盖 {{pct}}%（命中 {{covered}} / 未命中 {{missed}} / 无数据 {{unknown}}）"
+    },
+    "accept": {
+      "title": "报告验收",
+      "mark": "标记验收通过",
+      "undo": "撤销验收",
+      "done": "已标记验收",
+      "undone": "已撤销验收",
+      "at": "验收于 {{time}}"
+    },
     "runStatus": {
       "success": "通过",
       "failed": "失败",
@@ -327,16 +402,18 @@
       "test": "测试",
       "other": "其他"
     },
-    "scope": {
-      "dataMigration": "数据迁移验证",
-      "dataAccess": "数据读写回归",
-      "apiContract": "接口契约回归",
-      "businessFlow": "业务流程回归",
-      "uiFlow": "界面流程回归",
-      "security": "鉴权与越权",
-      "money": "金额与对账",
-      "smoke": "冒烟测试",
-      "none": "无需功能回归"
-    }
-  }
+    "newReport": "新建报告",
+    "listEmpty": "还没有报告，选范围后点「采集改动」。",
+    "sort": "按时间排序",
+    "project": "项目",
+    "noProjects": "还没有测试项目：先到「项目」视图登记或扫描目录。",
+    "delete": "删除报告",
+    "deleteHint": "删除这份报告及其清单",
+    "deleteConfirm": "删除 {{when}} 的报告（{{files}} 个文件）？验收清单与运行关联会一并删除。",
+    "deleted": "报告已删除",
+    "regenerate": "重新采集"
+  },
+  "coverageRerun": "带覆盖率重跑",
+  "coverageRerunHint": "按框架自动附加覆盖率参数重跑一次，完成后自动刷新本报告",
+  "diagnosisPrefilled": "已自动带入最近一次失败的输出，可直接编辑"
 }

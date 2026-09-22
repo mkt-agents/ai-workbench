@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Copy, Loader2, XCircle } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import TestModal from "./TestModal";
 import { firstFencedBlock, markdownSections } from "../lib/aiText";
-import type { FailureDiagnosis as Diagnosis, TestProject } from "../core/types";
+import { latestFinishedOf } from "../core/testRuns";
+import type { FailureDiagnosis as Diagnosis, TestProject, TestRunResult } from "../core/types";
 
 type Props = {
   project: TestProject;
@@ -31,6 +32,8 @@ function pick(sections: Record<string, string>, patterns: RegExp): string | unde
 export default function FailureDiagnosis({ project, onClose, onToast }: Props) {
   const { t } = useTranslation("test");
   const diagnoseTestFailure = useGlobalStore((s) => s.diagnoseTestFailure);
+  const getTestHistory = useGlobalStore((s) => s.getTestHistory);
+  const getTestRun = useGlobalStore((s) => s.getTestRun);
 
   const [testName, setTestName] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -39,6 +42,44 @@ export default function FailureDiagnosis({ project, onClose, onToast }: Props) {
   const [raw, setRaw] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [prefilled, setPrefilled] = useState(false);
+
+  // The failure output the user is staring at is almost always the last run's —
+  // pull it from the live session first, then from history, so diagnosis stops
+  // asking people to re-paste what they just watched fail.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        let result: TestRunResult | null = null;
+        const session = latestFinishedOf(project.id);
+        if (session?.result && (session.status === "failed" || session.status === "error")) {
+          result = session.result;
+        } else {
+          const history = await getTestHistory(project.id);
+          const lastBad = history.find(
+            (h) => h.runId && (h.status === "failed" || h.status === "error")
+          );
+          if (lastBad?.runId) result = await getTestRun(lastBad.runId);
+        }
+        if (!result || cancelled) return;
+        const firstFail = result.suites
+          .flatMap((suite) => suite.tests)
+          .find((c) => c.status === "failed");
+        const tail = result.output.split("\n").slice(-80).join("\n");
+        const errText =
+          [firstFail?.error?.message, firstFail?.error?.stack].filter(Boolean).join("\n") || tail;
+        setTestName((prev) => prev || firstFail?.name || "");
+        setErrorMessage((prev) => prev || errText);
+        setPrefilled(true);
+      } catch {
+        /* prefill is a convenience; the manual path still works */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, getTestHistory, getTestRun]);
 
   const diagnosis = useMemo<Diagnosis | null>(() => {
     if (!raw) return null;
@@ -98,7 +139,7 @@ export default function FailureDiagnosis({ project, onClose, onToast }: Props) {
   ];
 
   return (
-    <TestModal title={`${t("aiFailureDiagnosis")} · ${project.name}`} onClose={onClose} busy={busy} wide>
+    <TestModal title={`${t("aiFailureDiagnosis")} · ${project.name}`} onClose={onClose} wide>
       <div className="tm-field">
         <label htmlFor="tm-diag-name">{t("testName")}</label>
         <input
@@ -111,6 +152,9 @@ export default function FailureDiagnosis({ project, onClose, onToast }: Props) {
       </div>
       <div className="tm-field">
         <label htmlFor="tm-diag-error">{t("errorMessage")}</label>
+        {prefilled && errorMessage && (
+          <p className="tm-hint">{t("diagnosisPrefilled")}</p>
+        )}
         <textarea
           id="tm-diag-error"
           className="input-field tm-code-area"

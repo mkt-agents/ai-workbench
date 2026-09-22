@@ -12,6 +12,9 @@ use rusqlite::Connection;
 pub fn migrate(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "test_projects", "last_error_kind", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "test_runs", "error_kind", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(conn, "change_reports", "delta_coverage", "TEXT")?;
+    ensure_column(conn, "change_reports", "accepted_at", "TEXT")?;
+    ensure_column(conn, "change_reports", "ai_warnings", "TEXT NOT NULL DEFAULT '[]'")?;
     Ok(())
 }
 
@@ -74,6 +77,22 @@ CREATE TABLE test_runs (
     output TEXT NOT NULL,
     suites TEXT NOT NULL
 );
+CREATE TABLE change_reports (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    base TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT '',
+    head TEXT NOT NULL DEFAULT '',
+    files INTEGER NOT NULL DEFAULT 0,
+    adds INTEGER NOT NULL DEFAULT 0,
+    dels INTEGER NOT NULL DEFAULT 0,
+    untested INTEGER NOT NULL DEFAULT 0,
+    data TEXT NOT NULL,
+    patch TEXT NOT NULL DEFAULT '',
+    ai TEXT
+);
 "#;
 
     fn pre_migration_db() -> Connection {
@@ -88,6 +107,12 @@ CREATE TABLE test_runs (
         db.execute(
             "INSERT INTO test_runs (id, project_id, started_at, completed_at, duration_ms, status, total_tests, passed, failed, skipped, output, suites)
              VALUES ('r1','p1','a','b',1,'error',0,0,0,0,'log','[]')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO change_reports (id, project_id, base, source, created_at, data)
+             VALUES ('cr-1','p1','','uncommitted','t','{}')",
             [],
         )
         .unwrap();
@@ -124,6 +149,15 @@ CREATE TABLE test_runs (
                 .unwrap(),
             ""
         );
+        let (delta, accepted, warnings): (Option<String>, Option<String>, String) = db
+            .query_row(
+                "SELECT delta_coverage, accepted_at, ai_warnings FROM change_reports WHERE id = 'cr-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert!(delta.is_none() && accepted.is_none(), "nullable columns start empty");
+        assert_eq!(warnings, "[]", "the JSON list column gets its default, not NULL");
     }
 
     #[test]

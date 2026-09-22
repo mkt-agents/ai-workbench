@@ -447,6 +447,116 @@ pub fn parse_cobertura_xml(content: &str) -> Result<CoverageReport, String> {
     })
 }
 
+// ----------------------------------------------------------------------- line level
+
+/// File path -> (line number -> hit count). Only instrumented lines appear, so a
+/// missing key means "no data", which is NOT the same as zero. Feeds
+/// `coverage_delta::intersect`; the count reports themselves stay at file level.
+pub type LineHits = BTreeMap<String, BTreeMap<u32, u64>>;
+
+pub fn parse_lcov_lines(content: &str) -> LineHits {
+    let mut out: LineHits = BTreeMap::new();
+    let mut current = String::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line == "end_of_record" {
+            current.clear();
+            continue;
+        }
+        let Some((tag, value)) = line.split_once(':') else { continue };
+        if tag == "SF" {
+            current = value.trim().replace('\\', "/");
+            out.entry(current.clone()).or_default();
+            continue;
+        }
+        if current.is_empty() || tag != "DA" {
+            continue;
+        }
+        let number: u32 = field(value, 0).parse().unwrap_or(0);
+        let hits = hits_of(field(value, 1));
+        if number == 0 {
+            continue;
+        }
+        // Same merge rule as the count parser: duplicate SF records take the max.
+        let entry = out.get_mut(&current).expect("entry created with SF");
+        let slot = entry.entry(number).or_insert(0);
+        *slot = (*slot).max(hits);
+    }
+    out
+}
+
+pub fn parse_jacoco_lines(content: &str) -> LineHits {
+    let mut out: LineHits = BTreeMap::new();
+    let mut package = String::new();
+    let mut current: Option<String> = None;
+
+    let mut pos = 0usize;
+    while let Some(tag) = next_xml_tag(content, pos) {
+        pos = tag.end;
+        if tag.close {
+            match tag.name {
+                "sourcefile" => current = None,
+                "package" => package.clear(),
+                _ => {}
+            }
+            continue;
+        }
+        match tag.name {
+            "package" => package = attr(&tag.attrs, "name").unwrap_or("").to_string(),
+            "sourcefile" => {
+                let name = attr(&tag.attrs, "name").unwrap_or("").to_string();
+                current = Some(if package.is_empty() {
+                    name
+                } else {
+                    format!("{}/{}", package.trim_matches('/'), name)
+                });
+            }
+            // <line nr= mi= ci=> — instrumented iff mi+ci > 0; covered iff ci > 0.
+            "line" => {
+                if let Some(path) = &current {
+                    let mi = parse_u32(attr(&tag.attrs, "mi"));
+                    let ci = parse_u32(attr(&tag.attrs, "ci"));
+                    let nr = parse_u32(attr(&tag.attrs, "nr"));
+                    if nr > 0 && mi + ci > 0 {
+                        out.entry(path.clone()).or_default().insert(nr, ci as u64);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+pub fn parse_cobertura_lines(content: &str) -> LineHits {
+    let mut out: LineHits = BTreeMap::new();
+    let mut current: Option<String> = None;
+
+    let mut pos = 0usize;
+    while let Some(tag) = next_xml_tag(content, pos) {
+        pos = tag.end;
+        match (tag.name, tag.close) {
+            ("class", false) => {
+                let filename = attr(&tag.attrs, "filename").unwrap_or("").replace('\\', "/");
+                current = if filename.is_empty() { None } else { Some(filename) };
+            }
+            ("class", true) => current = None,
+            ("line", false) => {
+                if let Some(path) = &current {
+                    let number = parse_u32(attr(&tag.attrs, "number"));
+                    if number == 0 {
+                        continue;
+                    }
+                    let hits = hits_of(field(attr(&tag.attrs, "hits").unwrap_or("0"), 0));
+                    out.entry(path.clone()).or_default().insert(number, hits);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// `"50% (1 of 2)"` → `(1, 2)`; absent or malformed → not a branch.
 fn condition_coverage(value: Option<&str>) -> Option<(u32, u32)> {
     let value = value?.trim();
@@ -588,5 +698,44 @@ mod tests {
         assert!(found.ends_with("account.service/target/site/jacoco/jacoco.xml"), "got {:?}", found);
         assert!(find_report_file(&root, "surefire-reports", "x.xml", 8).is_none());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lcov_lines_keep_zero_hit_entries_and_merge_by_max() {
+        let lcov = "SF:src/a.ts\nDA:1,0\nDA:2,3\nend_of_record\nSF:src/a.ts\nDA:1,5\nend_of_record\n";
+        let lines = parse_lcov_lines(lcov);
+        let a = &lines["src/a.ts"];
+        assert_eq!(a.get(&1), Some(&5), "duplicate SF record merges by max");
+        assert_eq!(a.get(&2), Some(&3));
+    }
+
+    #[test]
+    fn jacoco_lines_join_package_path_and_skip_uninstrumented() {
+        let xml = r#"<report><package name="com/x">
+            <sourcefile name="A.java">
+                <line nr="3" mi="2" ci="0"/>
+                <line nr="4" mi="0" ci="1"/>
+                <line nr="5" mi="0" ci="0"/>
+            </sourcefile>
+        </package></report>"#;
+        let lines = parse_jacoco_lines(xml);
+        let a = &lines["com/x/A.java"];
+        assert_eq!(a.get(&3), Some(&0));
+        assert_eq!(a.get(&4), Some(&1));
+        assert!(!a.contains_key(&5), "mi+ci==0 is not instrumented");
+    }
+
+    #[test]
+    fn cobertura_lines_map_number_to_hits() {
+        let xml = r#"<coverage><packages><package><classes>
+            <class filename="a/ctx.c"><lines>
+                <line number="5" hits="0"/>
+                <line number="6" hits="2"/>
+            </lines></class>
+        </classes></package></packages></coverage>"#;
+        let lines = parse_cobertura_lines(xml);
+        let f = &lines["a/ctx.c"];
+        assert_eq!(f.get(&5), Some(&0));
+        assert_eq!(f.get(&6), Some(&2));
     }
 }

@@ -74,6 +74,7 @@ mod tests {
             id.to_string(),
             args,
             timeout,
+            None,
             None,        )
     }
 
@@ -95,6 +96,7 @@ mod tests {
             "p-orphan".to_string(),
             None,
             Duration::from_secs(60),
+            None,
             None,        )
         .unwrap();
 
@@ -208,6 +210,7 @@ mod tests {
             "p-wd".to_string(),
             None,
             Duration::from_secs(5),
+            None,
             None,        )
         .unwrap_err();
 
@@ -226,6 +229,7 @@ mod tests {
             "p-missing".to_string(),
             None,
             Duration::from_secs(5),
+            None,
             None,        )
         .unwrap_err();
         assert!(err.contains("启动测试命令失败"), "got: {}", err);
@@ -295,6 +299,7 @@ mod tests {
                 "p-cancel".to_string(),
                 None,
                 Duration::from_secs(120),
+                None,
                 None,            )
         });
 
@@ -381,6 +386,7 @@ mod tests {
             "p-workdir".to_string(),
             None,
             Duration::from_secs(60),
+            None,
             None,        )
         .unwrap();
 
@@ -583,6 +589,7 @@ process.exit(1);
             None,
             Duration::from_secs(60),
             None,
+            None,
         )
         .unwrap();
 
@@ -642,6 +649,7 @@ process.exit(1);
             None,
             Duration::from_secs(60),
             None,
+            None,
         )
         .unwrap();
 
@@ -677,6 +685,7 @@ process.exit(1);
             None,
             Duration::from_secs(60),
             None,
+            None,
         )
         .unwrap();
 
@@ -703,6 +712,7 @@ process.exit(1);
             "p-nobin".to_string(),
             None,
             Duration::from_secs(60),
+            None,
             None,
         )
         .expect_err("spawning a program that does not exist must not look like a run");

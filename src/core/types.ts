@@ -531,9 +531,23 @@ export interface ChangeFile {
   module: string;
   layer: string;
   risks: string[];
+  /** Weak (substring-only) risk matches, shown grey and never counted. */
+  hints?: string[];
   testPath?: string | null;
   hasTest: boolean;
   untracked: boolean;
+  /** Short shas of the commits in range that touched this file. */
+  commits?: string[];
+}
+
+/** One commit in the analysed range, with enough detail to attribute a file. */
+export interface CommitBrief {
+  sha: string;
+  shortSha: string;
+  author: string;
+  date: string;
+  subject: string;
+  body: string;
 }
 
 export interface ChangeModuleGroup {
@@ -567,12 +581,40 @@ export interface ChangeReport {
   base: string;
   source: string;
   commits: string[];
+  /** Full commit briefs when the range had commits (absent on old reports). */
+  commitDetails?: CommitBrief[];
   files: ChangeFile[];
   groups: ChangeModuleGroup[];
   stats: ChangeStats;
   apiChanges: ApiChange[];
   scope: string[];
   truncated: boolean;
+}
+
+/** Incremental (diff-line) coverage: what the change touched vs what ran. */
+export interface DeltaFile {
+  path: string;
+  changedLines: number;
+  covered: number;
+  missed: number;
+  /** Changed lines the coverage artifact says nothing about — never counted missed. */
+  unknown: number;
+  ratio: number;
+}
+
+export interface CoverageHotspot {
+  path: string;
+  lines: number[];
+}
+
+export interface DeltaCoverage {
+  files: DeltaFile[];
+  changedLines: number;
+  covered: number;
+  missed: number;
+  unknown: number;
+  ratio: number;
+  uncoveredHotspots: CoverageHotspot[];
 }
 
 export interface ChangeReportBundle {
@@ -665,6 +707,113 @@ export interface StoredChangeReport {
   scenarios: Scenario[];
   scenarioSummary: ScenarioSummary;
   runs: ChangeRunLink[];
+  /** Cached incremental coverage; `null` until first computed. */
+  deltaCoverage: DeltaCoverage | null;
+  /** Set once the tester accepted the report; `null` while in flight. */
+  acceptedAt: string | null;
+  /** Identifiers the AI mentioned that the static report cannot back up. */
+  aiWarnings: string[];
+}
+
+/* ---------------------------------- vuln scan ---------------------------------- */
+
+/** One OSV advisory as stored on a dependency finding. */
+export interface OsvVuln {
+  id: string;
+  summary: string;
+  severity: string;
+  fixedVersions: string[];
+  aliases: string[];
+  package: string;
+  version: string;
+}
+
+/** One secret hit; the raw value never reaches the frontend either. */
+export interface SecretHit {
+  rule: string;
+  file: string;
+  line: number;
+  preview: string;
+  digest: string;
+}
+
+/** What one `scan_project_vulns` call answered. */
+export interface VulnScanOutcome {
+  status: string;
+  errorKind: string;
+  error: string | null;
+  /** e.g. maven: dependency audit unsupported — a note, not a failure. */
+  unsupported: string | null;
+  depsChecked: number;
+  filesChecked: number;
+  filesSkipped: number;
+  critical: number;
+  high: number;
+  total: number;
+  vulns: OsvVuln[];
+  secrets: SecretHit[];
+}
+
+/** `open | fixed | ignored | false_positive` (gated in the Rust store). */
+export interface VulnFinding {
+  id: number;
+  projectId: string;
+  scanId: string;
+  kind: string;
+  dedupKey: string;
+  ecosystem: string;
+  package: string;
+  version: string;
+  vulnId: string;
+  severity: string;
+  summary: string;
+  fixedVersions: string[];
+  aliases: string[];
+  file: string;
+  line: number;
+  preview: string;
+  rule: string;
+  status: string;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export interface VulnTotals {
+  total: number;
+  open: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+  secrets: number;
+}
+
+export interface VulnFindingsPage {
+  findings: VulnFinding[];
+  totals: VulnTotals;
+  totalCount: number;
+}
+
+export interface VulnScanSummary {
+  id: string;
+  projectId: string;
+  startedAt: string;
+  completedAt: string | null;
+  status: string;
+  errorKind: string;
+  depsChecked: number;
+  filesChecked: number;
+  findingsCritical: number;
+  findingsHigh: number;
+  findingsTotal: number;
+}
+
+/** Change-report link: open findings sitting on one package. */
+export interface PackageExposure {
+  package: string;
+  count: number;
+  critical: number;
 }
 
 export interface GlobalStore {

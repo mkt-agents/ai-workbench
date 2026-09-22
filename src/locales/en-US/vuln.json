@@ -1,0 +1,129 @@
+{
+  "noProjects": "No test projects yet: add them on the Projects tab, or batch-register via Scan folder below",
+  "empty": "No findings match the current filters",
+  "allHandled": "No open findings",
+  "neverScanned": "This project has no scan yet",
+  "count": "{{n}} rows",
+  "aria": {
+    "project": "Choose project",
+    "status": "Filter by status",
+    "kind": "Filter by kind",
+    "severity": "Filter by severity"
+  },
+  "scan": {
+    "one": "Scan this project",
+    "folder": "Scan a folder",
+    "cancel": "Cancel",
+    "includeUntracked": "Include uncommitted files",
+    "queued": "{{n}} queued",
+    "done": "{{project}}: {{deps}} dependencies, {{n}} findings confirmed",
+    "cancelled": "{{project}}: scan cancelled"
+  },
+  "phase": {
+    "deps": "Querying OSV advisories",
+    "secrets": "Scanning for secrets",
+    "done": "Done"
+  },
+  "folder": {
+    "title": "Scan results · {{count}} projects",
+    "note": "Tick the projects: they are registered as test projects first (findings must belong to a project), then queued one by one — scans run serially, which the OSV rate limit appreciates.",
+    "queue": "Register & scan ({{count}})",
+    "queued": "Queued {{count}} projects for scanning",
+    "noneFound": "No recognisable projects under this directory"
+  },
+  "statusFilter": {
+    "open": "Open",
+    "ignored": "Ignored",
+    "falsePositive": "False positive",
+    "fixed": "Fixed",
+    "all": "Any status"
+  },
+  "kindFilter": {
+    "all": "Any kind"
+  },
+  "sevFilter": {
+    "all": "Any severity"
+  },
+  "kind": {
+    "dependency": "Dependency",
+    "secret": "Secret"
+  },
+  "sev": {
+    "critical": "Critical",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
+    "unknown": "Unknown"
+  },
+  "totals": {
+    "critical": "Critical ×{{count}}",
+    "high": "High ×{{count}}",
+    "medium": "Medium ×{{count}}",
+    "low": "Low ×{{count}}",
+    "secrets": "Secrets ×{{count}}"
+  },
+  "status": {
+    "open": "Open",
+    "fixed": "Fixed",
+    "ignored": "Ignored",
+    "false_positive": "False positive"
+  },
+  "col": {
+    "severity": "Severity",
+    "kind": "Kind",
+    "package": "Target",
+    "advisory": "Advisory / location",
+    "status": "Status",
+    "actions": "Actions"
+  },
+  "action": {
+    "ignore": "Ignore",
+    "falsePositive": "False positive",
+    "reopen": "Reopen",
+    "reopenAll": "Reopen all ignored/false positives",
+    "copy": "Copy id"
+  },
+  "confirm": {
+    "reopenAll": "This reopens every ignored and false-positive finding of the project. Continue?"
+  },
+  "detail": {
+    "fixed": "Fixed in",
+    "aliases": "Aliases",
+    "firstSeen": "First seen",
+    "lastSeen": "Last seen",
+    "secretLine": "At {{file}}:{{line}}, content {{preview}} (the raw value is never stored)"
+  },
+  "rule": {
+    "awsAccessKey": "AWS key",
+    "githubToken": "GitHub token",
+    "gitlabToken": "GitLab token",
+    "slackToken": "Slack token",
+    "jwt": "JWT",
+    "privateKey": "Private key",
+    "genericSecret": "High-entropy secret",
+    "base64Secret": "Long base64 secret"
+  },
+  "ruleHelp": {
+    "awsAccessKey": "20-char access key id starting with AKIA",
+    "githubToken": "Token starting with ghp_/gho_/ghu_/ghs_/ghr_ or github_pat_",
+    "gitlabToken": "Personal access token starting with glpat-",
+    "slackToken": "Slack token starting with xox",
+    "jwt": "eyJ-prefixed token with two signed segments",
+    "privateKey": "-----BEGIN … PRIVATE KEY----- block",
+    "genericSecret": "key/secret/token/password-style name with a high-entropy value",
+    "base64Secret": "40+ char base64 blob on a line mentioning a secret-family word"
+  },
+  "history": {
+    "title": "Scan history",
+    "deps": "{{n}} deps",
+    "files": "{{n}} files",
+    "findings": "{{n}} findings"
+  },
+  "runStatus": {
+    "success": "Success",
+    "failed": "Failed",
+    "error": "Error",
+    "cancelled": "Cancelled",
+    "timeout": "Timeout"
+  }
+}

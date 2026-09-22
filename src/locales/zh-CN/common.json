@@ -40,6 +40,8 @@
     "DSH_START_FAILED": "启动 DeepSeek 失败",
     "DSH_INSTALL_FAILED": "安装 DeepSeek 失败",
     "INVALID_INPUT": "输入无效",
-    "INTERNAL_ERROR": "内部错误，请稍后重试"
+    "INTERNAL_ERROR": "内部错误，请稍后重试",
+    "E_CANCELLED": "已取消",
+    "E_NETWORK": "网络异常"
   }
 }

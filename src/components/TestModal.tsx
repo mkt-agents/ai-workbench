@@ -4,8 +4,12 @@ import ModalTitleRow from "./ModalTitleRow";
 type Props = {
   title: string;
   onClose: () => void;
-  /** Busy dialogs refuse Esc / backdrop / X so a running request cannot be orphaned. */
-  busy?: boolean;
+  /**
+   * Hard lock for short, must-finish form submits (saving a row). Long AI calls
+   * deliberately do NOT set this: orphaning a request is better than trapping
+   * the user in a dialog while a model hangs.
+   */
+  lockClose?: boolean;
   wide?: boolean;
   children: ReactNode;
   footer?: ReactNode;
@@ -15,12 +19,12 @@ type Props = {
  * Dialog shell for the test-management page: the shared overlay and title row from
  * the design system, plus the page's own width and scrolling rules (`tm-modal`).
  */
-export default function TestModal({ title, onClose, busy = false, wide = false, children, footer }: Props) {
+export default function TestModal({ title, onClose, lockClose = false, wide = false, children, footer }: Props) {
   return (
     <div
       className="modal-overlay"
       onMouseDown={(e) => {
-        if (!busy && e.target === e.currentTarget) onClose();
+        if (!lockClose && e.target === e.currentTarget) onClose();
       }}
     >
       <div
@@ -29,7 +33,7 @@ export default function TestModal({ title, onClose, busy = false, wide = false, 
         aria-modal="true"
         aria-label={title}
       >
-        <ModalTitleRow title={title} onClose={onClose} disabled={busy} />
+        <ModalTitleRow title={title} onClose={onClose} disabled={lockClose} />
         <div className="tm-modal-body">{children}</div>
         {footer ? <div className="tm-modal-footer">{footer}</div> : null}
       </div>

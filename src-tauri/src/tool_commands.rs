@@ -21,6 +21,14 @@ const EXPORT_TABLE_NAMES: &[&str] = &[
     "ai_models",
     "cloudflared_profiles",
     "snippets",
+    "test_projects",
+    "test_runs",
+    "test_history",
+    "change_reports",
+    "test_scenarios",
+    "change_report_runs",
+    "vuln_scans",
+    "vuln_findings",
 ];
 
 #[cfg(windows)]
@@ -215,7 +223,12 @@ fn export_data_sync(
 ) -> Result<String, String> {
     let mut tables = serde_json::Map::new();
     for name in EXPORT_TABLE_NAMES {
-        let sql = format!("SELECT * FROM {name}");
+        // Whitelisted tables carry their own capped/ordered read query, so the
+        // export cannot balloon with every stored 64KB run output.
+        let sql = match crate::db_commands::table_from_key(name) {
+            Some(table) => crate::db_commands::load_sql(table).to_string(),
+            None => format!("SELECT * FROM {name}"),
+        };
         let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
             Err(_) => {

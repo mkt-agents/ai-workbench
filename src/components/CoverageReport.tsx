@@ -8,6 +8,8 @@ import type { CoverageMetric, CoverageReport, TestProject } from "../core/types"
 type Props = {
   project: TestProject;
   onClose: () => void;
+  /** One-click "run again with coverage flags"; the flag mapping lives in Rust. */
+  onRerunWithCoverage?: () => void;
 };
 
 /** Thresholds follow the usual istanbul watermarks (80 / 60). */
@@ -16,7 +18,10 @@ const levelClass = (percentage: number) =>
 
 const HINTED_FRAMEWORKS = ["jest", "vitest", "cargo", "pytest"];
 
-export default function CoverageReportView({ project, onClose }: Props) {
+/** Mirrors `coverage_extra_args` in test_commands.rs — anything else errors in Rust. */
+const ONE_CLICK_COVERAGE = ["jest", "vitest", "pytest", "maven"];
+
+export default function CoverageReportView({ project, onClose, onRerunWithCoverage }: Props) {
   const { t } = useTranslation("test");
   const readCoverageReport = useGlobalStore((s) => s.readCoverageReport);
 
@@ -73,6 +78,17 @@ export default function CoverageReportView({ project, onClose }: Props) {
                 : "coverageHint.other"
             )}
           </span>
+          {onRerunWithCoverage && ONE_CLICK_COVERAGE.includes(project.framework) && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={onRerunWithCoverage}
+              title={t("coverageRerunHint")}
+            >
+              <RefreshCw size={13} />
+              {t("coverageRerun")}
+            </button>
+          )}
           <button type="button" className="btn btn-secondary" onClick={() => void load()} disabled={loading}>
             {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
             {t("refresh")}

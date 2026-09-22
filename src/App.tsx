@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import GitManager from "./components/GitManager";
 import SettingsPage from "./components/Settings";
@@ -23,6 +23,7 @@ import {
   PanelLeftOpen,
   KeyRound,
   Terminal,
+  Loader2,
   FlaskConical as Flask,
 } from "lucide-react";
 import HostsManager from "./components/HostsManager";
@@ -38,6 +39,7 @@ import DevTools from "./components/DevTools";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
 import { useGlobalStore } from "./core/store";
+import { runningRuns, subscribeRuns } from "./core/testRuns";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -197,6 +199,10 @@ function App() {
     });
   };
 
+  // Badge on the test page: a run keeps going when the page unmounts, so the
+  // sidebar is the only place left that can say "something is still running".
+  const testRunsRunning = useSyncExternalStore(subscribeRuns, () => runningRuns().length);
+
   const NAV_NODES: NavNode[] = [
     {
       group: "ai",
@@ -280,6 +286,11 @@ function App() {
     >
       <span className="nav-icon">{leaf.icon}</span>
       {!collapsed && <span className="nav-label">{t(leaf.labelKey)}</span>}
+      {leaf.id === "test-manager" && testRunsRunning > 0 && (
+        <span className="nav-run-badge" role="status" title={t("test:runningBadge", { count: testRunsRunning })}>
+          <Loader2 size={10} className="spin" />
+        </span>
+      )}
     </button>
   );
 

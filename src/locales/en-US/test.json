@@ -1,4 +1,20 @@
 {
+  "nav": {
+    "aria": "Test page views",
+    "projects": "Projects",
+    "reports": "Change reports",
+    "vuln": "Vulnerabilities"
+  },
+  "wf": {
+    "steps": "Workflow steps",
+    "step": {
+      "collect": "collect",
+      "ai": "AI analysis",
+      "select": "pick tests",
+      "run": "run",
+      "accept": "accept"
+    }
+  },
   "actualBehavior": "Actual behaviour",
   "add": "Add",
   "addFirstProject": "Add your first test project",
@@ -42,6 +58,7 @@
   "enabledField": "Enable this project",
   "liveOutput": "Live output",
   "liveWaiting": "Waiting for output…",
+  "runningBadge": "{{count}} test run(s) in progress",
   "caseDetail": "Cases · {{count}} tests / {{files}} files",
   "caseSearchPlaceholder": "Search test names",
   "noCaseDetail": "No per-case detail found. Add --json --outputFile=jest-results.json for jest, or --reporter=json --outputFile=vitest-results.json for vitest; cargo, go and Maven are parsed automatically (Maven reads target/surefire-reports), pytest needs -v",
@@ -71,6 +88,15 @@
   "deletePartial": "Failed to delete {{count}} projects",
   "deleteProject": "Delete project",
   "deleted": "Deleted",
+  "dock": {
+    "title": "Run monitor",
+    "running": "{{count}} running",
+    "finished": "{{count}} finished",
+    "expand": "Expand run panel",
+    "collapse": "Collapse run panel",
+    "clear": "Clear finished",
+    "close": "Remove"
+  },
   "detecting": "Detecting project type and test command…",
   "diagnoseFailed": "Diagnosis failed: {{error}}",
   "diagnosing": "Diagnosing…",
@@ -150,7 +176,13 @@
   "statements": "Statements",
   "status": "Status",
   "statusCancelled": "Cancelled",
+  "statusRunning": "Running",
   "statusTimeout": "Timed out",
+  "source": {
+    "batch": "batch",
+    "change-report": "change report",
+    "coverage-rerun": "coverage rerun"
+  },
   "success": "Success",
   "failed": "Failed",
   "testCode": "Test code",
@@ -220,6 +252,8 @@
     "generate": "Generate report",
     "onlyUntested": "Only files without tests",
     "intro": "Pick a baseline and generate: the static pass shows which modules and layers changed, which edits have no matching test and which high-risk areas are touched; the model then fills in the feature points and regression scenarios.",
+    "depOpen": "{{n}} open dependency findings (critical ×{{c}})",
+    "depOpenHint": "This change touches a lock file; click to handle it on the vulnerabilities page",
     "failed": "Failed to build the report: {{error}}",
     "empty": "No code changes found for this baseline.",
     "files": "files",
@@ -231,7 +265,18 @@
     "baseline": "Baseline",
     "branch": "Branch",
     "stats": "Stats",
-    "scope": "Suggested scope",
+    "scopeTitle": "Suggested regression scope",
+    "scope": {
+      "dataMigration": "data migration check",
+      "dataAccess": "data access regression",
+      "apiContract": "API contract regression",
+      "businessFlow": "business flow regression",
+      "uiFlow": "UI flow regression",
+      "security": "auth & permissions",
+      "money": "amounts & reconciliation",
+      "smoke": "smoke test",
+      "none": "no functional regression needed"
+    },
     "commits": "Commits included",
     "apiChanges": "Public API changes",
     "truncated": "The patch was longer than 200KB and is truncated, so API changes may be incomplete.",
@@ -240,6 +285,10 @@
     "aiSection": "AI regression advice",
     "aiGenerate": "Generate with AI",
     "aiRegenerate": "Regenerate",
+    "aiProgress": "Generating chunks {{done}}/{{total}}",
+    "aiCancel": "Cancel",
+    "aiCancelled": "AI generation cancelled",
+    "aiCancelSent": "Cancel requested; it stops after the current model call",
     "aiHint": "Fills in affected features, must-test scenarios, regression scope, risks and an acceptance checklist; needs a default model in Model settings.",
     "aiUnavailable": "The report was not stored, so the AI step is unavailable; the static report and export still work.",
     "aiFailed": "AI step failed: {{error}}",
@@ -284,6 +333,32 @@
       }
     },
     "runs": "Runs for this report",
+    "groupBy": "Group files",
+    "groupModule": "By module",
+    "groupCommit": "By commit",
+    "groupCommitHint": "A file touched by several commits is listed under each commit",
+    "commitNoFiles": "No in-scope files for this commit (or filtered out)",
+    "hintWhy": "Weak file-name match only — not counted as a risk",
+    "aiWarn": "The AI mentioned identifiers that appear nowhere in the report: {{list}}",
+    "delta": {
+      "title": "Incremental coverage",
+      "compute": "Compute incremental coverage",
+      "recompute": "Recompute",
+      "hint": "Matches the changed lines against the latest coverage artifact: did the new code actually run? Requires one coverage-enabled test run (lcov.info / jacoco.xml / coverage.xml).",
+      "line": "hit {{covered}} / missed {{missed}}",
+      "unknown": "{{n}} lines without data",
+      "unknownHint": "These changed lines have no per-line data in the coverage artifact (not instrumented or path mismatch) — never counted as missed",
+      "hotspots": "Missed line hotspots",
+      "summary": "Incremental coverage {{pct}}% (hit {{covered}} / missed {{missed}} / no data {{unknown}})"
+    },
+    "accept": {
+      "title": "Report acceptance",
+      "mark": "Mark accepted",
+      "undo": "Revoke acceptance",
+      "done": "Report accepted",
+      "undone": "Acceptance revoked",
+      "at": "Accepted at {{time}}"
+    },
     "runStatus": {
       "success": "passed",
       "failed": "failed",
@@ -327,16 +402,18 @@
       "test": "test",
       "other": "other"
     },
-    "scope": {
-      "dataMigration": "data migration check",
-      "dataAccess": "data access regression",
-      "apiContract": "API contract regression",
-      "businessFlow": "business flow regression",
-      "uiFlow": "UI flow regression",
-      "security": "auth & permissions",
-      "money": "amounts & reconciliation",
-      "smoke": "smoke test",
-      "none": "no functional regression needed"
-    }
-  }
+    "newReport": "New report",
+    "listEmpty": "No reports yet — choose a range and collect one.",
+    "sort": "Sort by time",
+    "project": "Project",
+    "noProjects": "No test projects yet: add or scan them in the Projects view first.",
+    "delete": "Delete report",
+    "deleteHint": "Delete this report and its checklist",
+    "deleteConfirm": "Delete the report from {{when}} ({{files}} files)? Its checklist and run links go with it.",
+    "deleted": "Report deleted",
+    "regenerate": "Re-collect"
+  },
+  "coverageRerun": "Rerun with coverage",
+  "coverageRerunHint": "Re-runs once with the framework coverage flags, then refreshes this report",
+  "diagnosisPrefilled": "Loaded from the most recent failed run — edit freely"
 }

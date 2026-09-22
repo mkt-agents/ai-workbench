@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS change_reports (
     data TEXT NOT NULL,
     patch TEXT NOT NULL DEFAULT '',
     ai TEXT,
+    delta_coverage TEXT,
+    accepted_at TEXT,
+    ai_warnings TEXT NOT NULL DEFAULT '[]',
     FOREIGN KEY (project_id) REFERENCES test_projects(id) ON DELETE CASCADE
 );
 "#;
@@ -57,6 +60,12 @@ pub struct StoredChangeReport {
     pub scenario_summary: crate::test_scenarios::ScenarioSummary,
     /// Runs that were executed for this report.
     pub runs: Vec<crate::test_scenarios::RunLink>,
+    /// Cached incremental (diff-line) coverage; `None` until computed.
+    pub delta_coverage: Option<serde_json::Value>,
+    /// When the tester accepted the report; `None` while it is still in flight.
+    pub accepted_at: Option<String>,
+    /// Identifiers the AI mentioned that the static report cannot back up.
+    pub ai_warnings: Vec<String>,
 }
 
 /// One row's worth of what the collector produced.
@@ -149,11 +158,21 @@ pub fn list(conn: &Connection, project_id: &str, limit: i64) -> Result<Vec<Chang
 }
 
 pub fn get(conn: &Connection, report_id: &str) -> Result<StoredChangeReport, String> {
-    let sql = format!("SELECT {}, data, ai FROM change_reports WHERE id = ?1", SUMMARY_COLUMNS);
+    let sql = format!(
+        "SELECT {}, data, ai, delta_coverage, accepted_at, ai_warnings FROM change_reports WHERE id = ?1",
+        SUMMARY_COLUMNS
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let (summary, data, ai) = stmt
+    let (summary, data, ai, delta, accepted_at, warnings) = stmt
         .query_row(params![report_id], |row| {
-            Ok((row_to_summary(row)?, row.get::<_, String>(11)?, row.get::<_, Option<String>>(12)?))
+            Ok((
+                row_to_summary(row)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+                row.get::<_, String>(15)?,
+            ))
         })
         .map_err(|_| format!("报告不存在: {}", report_id))?;
     Ok(StoredChangeReport {
@@ -163,6 +182,9 @@ pub fn get(conn: &Connection, report_id: &str) -> Result<StoredChangeReport, Str
         summary,
         report: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
         ai,
+        delta_coverage: delta.as_deref().and_then(|text| serde_json::from_str(text).ok()),
+        accepted_at,
+        ai_warnings: serde_json::from_str(&warnings).unwrap_or_default(),
     })
 }
 
@@ -185,6 +207,48 @@ pub fn ai_input(conn: &Connection, report_id: &str) -> Result<(String, String, S
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )
     .map_err(|_| format!("报告不存在: {}", report_id))
+}
+
+/// `(project_id, source, base)` — enough to rebuild the same git range later,
+/// which is how incremental coverage re-finds the diff it must join with.
+pub fn scope_of(conn: &Connection, report_id: &str) -> Result<(String, String, String), String> {
+    conn.query_row(
+        "SELECT project_id, source, base FROM change_reports WHERE id = ?1",
+        params![report_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .map_err(|_| format!("报告不存在: {}", report_id))
+}
+
+/// Cache the incremental-coverage JSON so reopening the report is instant.
+pub fn set_delta_coverage(conn: &Connection, report_id: &str, json: &str) -> Result<(), String> {
+    let changed = conn
+        .execute("UPDATE change_reports SET delta_coverage = ?2 WHERE id = ?1", params![report_id, json])
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(format!("报告不存在: {}", report_id));
+    }
+    Ok(())
+}
+
+/// Stamp (or un-stamp) acceptance; `None` puts the report back in flight.
+pub fn set_accepted(conn: &Connection, report_id: &str, accepted_at: Option<&str>) -> Result<(), String> {
+    let changed = conn
+        .execute("UPDATE change_reports SET accepted_at = ?2 WHERE id = ?1", params![report_id, accepted_at])
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(format!("报告不存在: {}", report_id));
+    }
+    Ok(())
+}
+
+pub fn set_ai_warnings(conn: &Connection, report_id: &str, warnings_json: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE change_reports SET ai_warnings = ?2 WHERE id = ?1",
+        params![report_id, warnings_json],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn project_name(conn: &Connection, project_id: &str) -> String {
@@ -279,6 +343,27 @@ mod tests {
         assert!(set_ai(&db, "cr-missing", "x").is_err(), "an unknown id must fail loudly");
         assert!(get(&db, "cr-missing").is_err());
         assert!(ai_input(&db, "cr-missing").is_err());
+    }
+
+    #[test]
+    fn the_phase3_columns_round_trip_through_get() {
+        let db = conn();
+        save(&db, &report("cr-9", "2026-09-21T10:00:00Z")).unwrap();
+        let fresh = get(&db, "cr-9").unwrap();
+        assert!(fresh.delta_coverage.is_none() && fresh.accepted_at.is_none());
+        assert!(fresh.ai_warnings.is_empty(), "a fresh report carries no warnings");
+
+        set_delta_coverage(&db, "cr-9", r#"{"ratio":0.5}"#).unwrap();
+        set_accepted(&db, "cr-9", Some("2026-09-22T00:00:00Z")).unwrap();
+        set_ai_warnings(&db, "cr-9", r#"["ghost.ts"]"#).unwrap();
+        let stored = get(&db, "cr-9").unwrap();
+        assert_eq!(stored.delta_coverage.unwrap()["ratio"], 0.5);
+        assert_eq!(stored.accepted_at.as_deref(), Some("2026-09-22T00:00:00Z"));
+        assert_eq!(stored.ai_warnings, vec!["ghost.ts".to_string()]);
+
+        set_accepted(&db, "cr-9", None).unwrap();
+        assert!(get(&db, "cr-9").unwrap().accepted_at.is_none(), "acceptance can be revoked");
+        assert!(set_delta_coverage(&db, "cr-nope", "{}").is_err());
     }
 
     #[test]

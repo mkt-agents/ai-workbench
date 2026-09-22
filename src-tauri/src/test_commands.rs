@@ -442,6 +442,40 @@ const MAX_STORED_OUTPUT_BYTES: usize = 64 * 1024;
 const RUN_RETENTION_PER_PROJECT: i64 = 100;
 const HISTORY_RETENTION_PER_PROJECT: i64 = 100;
 
+/// Flags that make a framework emit a coverage report `read_coverage_report`
+/// can parse. The mapping lives here so the frontend never assembles command
+/// lines (same rule as `test_selection::args_for`).
+fn coverage_extra_args(project: &TestProject) -> Result<String, String> {
+    let head = project.test_command.split_whitespace().next().unwrap_or("");
+    // npm/yarn/pnpm swallow unknown flags themselves; the script only sees
+    // what comes after a `--` separator.
+    let via_runner = matches!(head, "npm" | "yarn" | "pnpm");
+    let for_runner = |flags: &str| {
+        if via_runner {
+            format!("-- {flags}")
+        } else {
+            flags.to_string()
+        }
+    };
+    match project.framework.as_str() {
+        "jest" | "vitest" => Ok(for_runner("--coverage")),
+        "mocha" | "playwright" => Err(format!(
+            "{} 没有开箱即用的覆盖率参数：nyc/playwright 需改测试命令本身，请手动写入项目的附加参数",
+            project.framework
+        )),
+        // The path must match `read_coverage_report`'s pytest candidates.
+        "pytest" => Ok(for_runner("--cov=. --cov-report=lcov:coverage/lcov.info")),
+        "maven" => Ok("-Djacoco.skip=false".to_string()),
+        "gotest" => Err(
+            "go 的 -coverprofile 产物不是可读报告，需 gocover-cobertura 转成 coverage.xml；一键模式做不到，请手动配置命令".to_string(),
+        ),
+        "cargo" => Err(
+            "cargo 覆盖率需要 cargo-llvm-cov 替换 test 子命令，一键模式做不到；请手动配置附加参数或改用 llvm-cov".to_string(),
+        ),
+        other => Err(format!("{other} 框架不支持一键覆盖率")),
+    }
+}
+
 /// Run tests for a project
 #[tauri::command]
 pub async fn run_test(
@@ -449,16 +483,27 @@ pub async fn run_test(
     state: State<'_, DbState>,
     project_id: String,
     args: Option<String>,
+    run_id: Option<String>,
+    coverage: Option<bool>,
 ) -> Result<TestRunResult, String> {
     let projects = load_test_projects(state.clone())?;
     let project = projects
         .into_iter()
         .find(|p| p.id == project_id)
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
+    let args = if coverage.unwrap_or(false) {
+        let flag = coverage_extra_args(&project)?;
+        Some(match args.filter(|a| !a.trim().is_empty()) {
+            Some(existing) => format!("{existing} {flag}"),
+            None => flag,
+        })
+    } else {
+        args
+    };
     let conn = Arc::clone(&state.conn);
     // A suite can run for minutes; keep it off the async worker threads.
     tokio::task::spawn_blocking(move || {
-        run_test_sync(conn, project, project_id, args, TEST_RUN_TIMEOUT, Some(app))
+        run_test_sync(conn, project, project_id, args, TEST_RUN_TIMEOUT, Some(app), run_id)
     })
     .await
     .map_err(|e| format!("测试任务已中止: {}", e))?
@@ -586,6 +631,9 @@ fn kill_process_tree(pid: u32) {
 #[serde(rename_all = "camelCase")]
 pub struct TestOutputChunk {
     pub project_id: String,
+    /// Lets the UI route chunks to the exact session that started them — two
+    /// concurrent runs of the same project used to overwrite each other's tail.
+    pub run_id: String,
     pub text: String,
     pub done: bool,
 }
@@ -634,7 +682,13 @@ fn take_buffer(acc: &ByteSink) -> Vec<u8> {
     acc.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default()
 }
 
-fn flush_live_tail(app: Option<&AppHandle>, project_id: &str, live: &Arc<Mutex<String>>, done: bool) {
+fn flush_live_tail(
+    app: Option<&AppHandle>,
+    project_id: &str,
+    run_id: &str,
+    live: &Arc<Mutex<String>>,
+    done: bool,
+) {
     let Some(app) = app else { return };
     let text = live
         .lock()
@@ -647,6 +701,7 @@ fn flush_live_tail(app: Option<&AppHandle>, project_id: &str, live: &Arc<Mutex<S
         "test-run-output",
         TestOutputChunk {
             project_id: project_id.to_string(),
+            run_id: run_id.to_string(),
             text,
             done,
         },
@@ -660,10 +715,20 @@ pub(crate) fn run_test_sync(
     args: Option<String>,
     timeout: Duration,
     app: Option<AppHandle>,
+    run_id: Option<String>,
 ) -> Result<TestRunResult, String> {
     // The cancellation token is keyed by project id: one live run per project.
     let guard_id = project_id.clone();
     let _guard = crate::cancellation::CancelGuard::new(&guard_id);
+
+    // The UI generates this id up front so live events can be routed to the session
+    // that started them; fall back to nanoseconds for callers without one (two runs
+    // in the same millisecond used to collide on this primary key).
+    let test_id = run_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!("run-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default())
+        });
 
     let mut cmd = build_test_command(&project, args.as_deref())?;
     // Reports written by this run must be newer than this, but file-system mtimes can
@@ -682,9 +747,8 @@ pub(crate) fn run_test_sync(
             // ("找不到可执行文件") should be readable in history, not only in a toast.
             let message = format!("启动测试命令失败: {}", e);
             let now = chrono::Utc::now().to_rfc3339();
-            let id = format!("run-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default());
             let _ = record_run(
-                &conn, &id, &project_id, &now, &now, 0, "error", 0, 0, 0, 0, &message, "[]",
+                &conn, &test_id, &project_id, &now, &now, 0, "error", 0, 0, 0, 0, &message, "[]",
                 "command",
             );
             return Err(message);
@@ -730,7 +794,7 @@ pub(crate) fn run_test_sync(
                     break false;
                 }
                 std::thread::sleep(Duration::from_millis(100));
-                flush_live_tail(app.as_ref(), &project_id, &live, false);
+                flush_live_tail(app.as_ref(), &project_id, &test_id, &live, false);
             }
         }
     };
@@ -748,7 +812,7 @@ pub(crate) fn run_test_sync(
     }
     let stdout_buf = take_buffer(&stdout_acc);
     let stderr_buf = take_buffer(&stderr_acc);
-    flush_live_tail(app.as_ref(), &project_id, &live, true);
+    flush_live_tail(app.as_ref(), &project_id, &test_id, &live, true);
 
     let completed_at = chrono::Utc::now().to_rfc3339();
     let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
@@ -847,12 +911,6 @@ pub(crate) fn run_test_sync(
         .unwrap_or_else(|_| "[]".to_string());
 
     let duration_ms = timer.elapsed().as_millis() as u64;
-    // Nanoseconds, because two projects finishing in the same millisecond used to
-    // collide on this primary key and lose a run to a write error.
-    let test_id = format!(
-        "run-{}",
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    );
     let mut output_for_ui = truncate_tail(&full_output, MAX_STORED_OUTPUT_BYTES);
 
     // Bookkeeping must never lose a finished run: if the write fails (the project was
@@ -1253,35 +1311,7 @@ pub fn read_coverage_report(
         .ok_or_else(|| format!("Project not found: {}", project_id))?
         .clone();
 
-    // Only formats we can actually parse: pytest's binary `.coverage` database is
-    // deliberately not a candidate — reading it as JSON always failed.
-    let candidates: &[&str] = match project.framework.as_str() {
-        "jest" | "vitest" | "mocha" | "playwright" => &[
-            "coverage/coverage-summary.json",
-            "coverage/coverage-final.json",
-            "coverage/lcov.info",
-            "lcov.info",
-        ],
-        "cargo" => &[
-            "target/llvm-cov/coverage.json",
-            "target/llvm-cov/coverage.info",
-            "coverage/lcov.info",
-        ],
-        "pytest" => &["coverage.json", "coverage/coverage.json", "coverage/lcov.info"],
-        "maven" => &["target/site/jacoco/jacoco.xml", "target/site/jacoco/test/jacoco.xml"],
-        "gotest" => &["coverage.xml", "coverage/cobertura.xml", "coverage/lcov.info"],
-        _ => &["coverage/coverage-summary.json", "coverage/lcov.info", "coverage.xml", "jacoco.xml"],
-    };
-    let root = Path::new(&project.path);
-    let found = candidates
-        .iter()
-        .map(|p| root.join(p))
-        .find(|p| p.is_file())
-        // A maven reactor or a monorepo writes one report per module, so a fixed
-        // relative path is not enough.
-        .or_else(|| coverage_parsers::find_report_file(root, "jacoco", "jacoco.xml", 8))
-        .or_else(|| coverage_parsers::find_report_file(root, "coverage", "lcov.info", 6))
-        .ok_or_else(|| missing_coverage_message(&project.framework))?;
+    let found = locate_coverage_report(&project)?;
 
     let content = fs::read_to_string(&found)
         .map_err(|e| format!("读取覆盖率报告失败: {}", e))?;
@@ -1303,6 +1333,57 @@ pub fn read_coverage_report(
     };
 
     Ok(report)
+}
+
+/// Where this project's coverage artifact lives, or the "how to produce one" hint.
+pub(crate) fn locate_coverage_report(project: &TestProject) -> Result<PathBuf, String> {
+    // Only formats we can actually parse: pytest's binary `.coverage` database is
+    // deliberately not a candidate — reading it as JSON always failed.
+    let candidates: &[&str] = match project.framework.as_str() {
+        "jest" | "vitest" | "mocha" | "playwright" => &[
+            "coverage/coverage-summary.json",
+            "coverage/coverage-final.json",
+            "coverage/lcov.info",
+            "lcov.info",
+        ],
+        "cargo" => &[
+            "target/llvm-cov/coverage.json",
+            "target/llvm-cov/coverage.info",
+            "coverage/lcov.info",
+        ],
+        "pytest" => &["coverage.json", "coverage/coverage.json", "coverage/lcov.info"],
+        "maven" => &["target/site/jacoco/jacoco.xml", "target/site/jacoco/test/jacoco.xml"],
+        "gotest" => &["coverage.xml", "coverage/cobertura.xml", "coverage/lcov.info"],
+        _ => &["coverage/coverage-summary.json", "coverage/lcov.info", "coverage.xml", "jacoco.xml"],
+    };
+    let root = Path::new(&project.path);
+    Ok(candidates
+        .iter()
+        .map(|p| root.join(p))
+        .find(|p| p.is_file())
+        // A maven reactor or a monorepo writes one report per module, so a fixed
+        // relative path is not enough.
+        .or_else(|| coverage_parsers::find_report_file(root, "jacoco", "jacoco.xml", 8))
+        .or_else(|| coverage_parsers::find_report_file(root, "coverage", "lcov.info", 6))
+        .ok_or_else(|| missing_coverage_message(&project.framework))?)
+}
+
+/// Per-line hit counts, for the incremental-coverage join. Only the line-oriented
+/// formats carry them; summary JSONs (istanbul `coverage-final`, llvm-cov JSON) do not.
+pub(crate) fn coverage_line_hits(project: &TestProject) -> Result<coverage_parsers::LineHits, String> {
+    let found = locate_coverage_report(project)?;
+    let content = fs::read_to_string(&found)
+        .map_err(|e| format!("读取覆盖率报告失败: {}", e))?;
+    let name = found.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name == "jacoco.xml" {
+        Ok(coverage_parsers::parse_jacoco_lines(&content))
+    } else if matches!(name, "coverage.xml" | "cobertura.xml") {
+        Ok(coverage_parsers::parse_cobertura_lines(&content))
+    } else if name.ends_with(".info") {
+        Ok(coverage_parsers::parse_lcov_lines(&content))
+    } else {
+        Err("该覆盖率产物没有行级数据：增量覆盖率需要 lcov.info / jacoco.xml / coverage.xml（jest 可加 --coverageReporters=lcov）".to_string())
+    }
 }
 
 /// "No report" and "no tool to produce one" need different answers, so the cargo case
