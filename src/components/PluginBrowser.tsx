@@ -2263,103 +2263,112 @@ function UserscriptCard({
     return `${days}d`;
   }, [script.updatedAt, script.createdAt, t]);
 
+  const initial = (script.name || "?").trim().charAt(0).toUpperCase() || "?";
+
   return (
     <div className={`userscript-item ${script.enabled ? "" : "userscript-disabled"}`}>
-      <div className="userscript-header">
-        <div className="userscript-info">
-          <div className="userscript-name-row">
-            <span className="userscript-name">{script.name}</span>
-            <span className={`userscript-status ${script.enabled ? "is-enabled" : "is-disabled"}`}>
-              {script.enabled ? t("usEnabled") : t("usDisabled")}
-            </span>
-          </div>
-          {script.description && (
-            <div className="userscript-desc">{script.description}</div>
-          )}
-          {script.sourceUrl && (
-            <div className="userscript-source" title={script.sourceUrl}>
-              <Link2 size={11} />
-              <button
-                type="button"
-                className="userscript-source-link"
-                onClick={() => void invoke("open_in_browser", { url: script.sourceUrl })}
-              >
-                {script.sourceUrl}
-              </button>
-            </div>
-          )}
-          <div className="userscript-meta-row">
-            <div className="userscript-match">
-              <Link2 size={11} />
-              {script.matchPatterns.length === 1 && script.matchPatterns[0] === "<all_urls>" ? (
-                <span>{t("usMatchesAll")}</span>
-              ) : script.matchPatterns.length <= 2 ? (
-                script.matchPatterns.map((p, i) => (
-                  <span key={i} className="us-pattern-tag">{p}</span>
-                ))
-              ) : (
-                <>
-                  {script.matchPatterns.slice(0, 2).map((p, i) => (
-                    <span key={i} className="us-pattern-tag">{p}</span>
-                  ))}
-                  <span className="us-pattern-more">+{script.matchPatterns.length - 2}</span>
-                </>
-              )}
-            </div>
-            <span className="userscript-stats">
-              {lineLabel} · {timeAgo}
-            </span>
-          </div>
+      <div className="userscript-main">
+        <div className="userscript-icon" aria-hidden="true">
+          <span>{initial}</span>
         </div>
-        <div className="userscript-controls">
-          <label className="userscript-toggle" title={script.enabled ? t("usEnabled") : t("usDisabled")}>
-            <input
-              type="checkbox"
-              checked={script.enabled}
-              onChange={onToggle}
-            />
-            <span className="userscript-toggle-slider" />
-          </label>
-          <button
-            className="plugin-item-btn"
-            onClick={onCopyCode}
-            title={t("usCopyCode")}
-            type="button"
-          >
-            <ClipboardCopy size={11} />
-          </button>
-          <button
-            className="plugin-item-btn"
-            onClick={onExportSingle}
-            title={t("usExport")}
-            type="button"
-          >
-            <Download size={11} />
-          </button>
-          <button
-            className="plugin-item-btn"
-            onClick={onEdit}
-            title={t("edit")}
-            type="button"
-          >
-            <Edit2 size={11} />
-          </button>
-          <button
-            className="plugin-item-btn"
-            onClick={onDuplicate}
-            title={t("usDuplicate")}
-            type="button"
-          >
-            <Copy size={11} />
-          </button>
-          <button
-            className="plugin-item-btn plugin-item-btn-danger"
-            onClick={onDelete}
-            title={tc("actions.delete")}
-            type="button"
-          >
-            <Trash2 size={11} />
-          </button>
+        <div className="userscript-body">
+          <div className="userscript-header">
+            <div className="userscript-info">
+              <div className="userscript-name-row">
+                <span className="userscript-name">{script.name}</span>
+                <span className={`userscript-status ${script.enabled ? "is-enabled" : "is-disabled"}`}>
+                  {script.enabled ? t("usEnabled") : t("usDisabled")}
+                </span>
+              </div>
+              <div className="userscript-desc">{script.description || ""}</div>
+              <div className="userscript-source" title={script.sourceUrl || ""}>
+                {script.sourceUrl && <Link2 size={11} />}
+                {script.sourceUrl && (
+                  <button
+                    type="button"
+                    className="userscript-source-link"
+                    onClick={() => void invoke("open_in_browser", { url: script.sourceUrl })}
+                  >
+                    {script.sourceUrl}
+                  </button>
+                )}
+              </div>
+              <div className="userscript-meta-row">
+                <div className="userscript-match">
+                  <Link2 size={11} />
+                  {script.matchPatterns.length === 1 && script.matchPatterns[0] === "<all_urls>" ? (
+                    <span>{t("usMatchesAll")}</span>
+                  ) : script.matchPatterns.length <= 2 ? (
+                    script.matchPatterns.map((p, i) => (
+                      <span key={i} className="us-pattern-tag">{p}</span>
+                    ))
+                  ) : (
+                    <>
+                      {script.matchPatterns.slice(0, 2).map((p, i) => (
+                        <span key={i} className="us-pattern-tag">{p}</span>
+                      ))}
+                      <span className="us-pattern-more">+{script.matchPatterns.length - 2}</span>
+                    </>
+                  )}
+                </div>
+                <span className="userscript-stats">
+                  {lineLabel} · {timeAgo}
+                </span>
+              </div>
+            </div>
+            <div className="userscript-controls">
+              <div className="userscript-actions">
+                <button
+                  className="plugin-item-btn"
+                  onClick={onEdit}
+                  title={t("edit")}
+                  type="button"
+                >
+                  <Edit2 size={11} />
+                </button>
+                <button
+                  className="plugin-item-btn"
+                  onClick={onCopyCode}
+                  title={t("usCopyCode")}
+                  type="button"
+                >
+                  <ClipboardCopy size={11} />
+                </button>
+                <button
+                  className="plugin-item-btn"
+                  onClick={onDuplicate}
+                  title={t("usDuplicate")}
+                  type="button"
+                >
+                  <Copy size={11} />
+                </button>
+                <button
+                  className="plugin-item-btn"
+                  onClick={onExportSingle}
+                  title={t("usExport")}
+                  type="button"
+                >
+                  <Download size={11} />
+                </button>
+                <button
+                  className="plugin-item-btn plugin-item-btn-danger"
+                  onClick={onDelete}
+                  title={tc("actions.delete")}
+                  type="button"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+              <label className="userscript-toggle" title={script.enabled ? t("usEnabled") : t("usDisabled")}>
+                <input
+                  type="checkbox"
+                  checked={script.enabled}
+                  onChange={onToggle}
+                />
+                <span className="userscript-toggle-slider" />
+              </label>
+            </div>
+          </div>
         </div>
       </div>
       <div
