@@ -123,5 +123,7 @@
   "usImportSuccess": "导入成功",
   "usImportUpdated": "脚本已更新",
   "usImportUrlFailed": "导入失败：{{error}}",
+  "usSourceUrl": "导入链接",
+  "usSourceUrlHint": "此脚本原始导入的网址，可点击在浏览器中打开",
   "justNow": "刚刚"
 }

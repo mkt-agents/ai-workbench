@@ -28,6 +28,7 @@ export default function CoverageReportView({ project, onClose, onRerunWithCovera
   const [report, setReport] = useState<CoverageReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -105,7 +106,23 @@ export default function CoverageReportView({ project, onClose, onRerunWithCovera
 
       {!loading && error && (
         <div className="tm-error-state">
-          <XCircle size={20} className="tm-cov-bad" />
+          <div className="tm-error-head">
+            <XCircle size={18} className="tm-cov-bad" />
+            <span className="tm-error-title">{t("coverageLoadError")}</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small tm-error-copy"
+              onClick={() => {
+                void navigator.clipboard.writeText(error).then(() => {
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 1500);
+                });
+              }}
+              title={t("copy")}
+            >
+              {copied ? t("copied") : t("copy")}
+            </button>
+          </div>
           <p className="tm-error-detail">{error}</p>
         </div>
       )}

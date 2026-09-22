@@ -208,6 +208,8 @@ export interface UserScript {
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
+  /** 从网址导入时记录的原始链接，本地手写的脚本为空 */
+  sourceUrl?: string;
 }
 
 export interface CursorAccount {

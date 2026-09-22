@@ -29,6 +29,7 @@ export default function ChangeReportsView({ projects, focusProjectId, onToast, o
   const [projectId, setProjectId] = useState(focusProjectId ?? projects[0]?.id ?? "");
   const [reports, setReports] = useState<ChangeReportSummary[]>([]);
   const [newestFirst, setNewestFirst] = useState(true);
+  const [timeRange, setTimeRange] = useState<"all" | "today" | "7d" | "30d">("all");
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -60,7 +61,21 @@ export default function ChangeReportsView({ projects, focusProjectId, onToast, o
     void refresh();
   }, [refresh]);
 
-  const ordered = newestFirst ? reports : [...reports].reverse();
+  const ordered = (() => {
+    let rows = reports;
+    if (timeRange !== "all") {
+      const now = Date.now();
+      const day = 24 * 60 * 60 * 1000;
+      const cutoff =
+        timeRange === "today"
+          ? new Date().setHours(0, 0, 0, 0)
+          : timeRange === "7d"
+            ? now - 7 * day
+            : now - 30 * day;
+      rows = rows.filter((r) => new Date(r.createdAt).getTime() >= cutoff);
+    }
+    return newestFirst ? rows : [...rows].reverse();
+  })();
 
   const remove = async (row: ChangeReportSummary) => {
     const ok = await confirm({
@@ -109,6 +124,18 @@ export default function ChangeReportsView({ projects, focusProjectId, onToast, o
               </option>
             ))}
           </select>
+          <select
+            className="input-field tm-cr-time-filter"
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value as typeof timeRange)}
+            aria-label={t("cr.timeFilter.all")}
+            title={t("cr.timeFilter.all")}
+          >
+            <option value="all">{t("cr.timeFilter.all")}</option>
+            <option value="today">{t("cr.timeFilter.today")}</option>
+            <option value="7d">{t("cr.timeFilter.7d")}</option>
+            <option value="30d">{t("cr.timeFilter.30d")}</option>
+          </select>
           <button
             type="button"
             className="btn btn-secondary btn-small"
@@ -124,7 +151,9 @@ export default function ChangeReportsView({ projects, focusProjectId, onToast, o
             <p className="tm-hint">{t("loading")}</p>
           )}
           {!loading && ordered.length === 0 && (
-            <p className="tm-hint">{t("cr.listEmpty")}</p>
+            <p className="tm-hint">
+              {reports.length === 0 ? t("cr.listEmpty") : t("cr.timeFilter.empty")}
+            </p>
           )}
           <button
             type="button"

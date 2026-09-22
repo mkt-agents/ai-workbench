@@ -123,5 +123,7 @@
   "usImportSuccess": "Import successful",
   "usImportUpdated": "Script updated",
   "usImportUrlFailed": "Import failed: {{error}}",
+  "usSourceUrl": "Source URL",
+  "usSourceUrlHint": "The URL this script was originally imported from; click to open in browser",
   "justNow": "just now"
 }

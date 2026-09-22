@@ -663,17 +663,43 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  padding: 12px;
+  gap: 8px;
+  padding: 12px 14px;
   border-radius: var(--radius-sm);
-  background: var(--red-dim);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 22%, transparent);
+}
+
+.tm-error-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.tm-error-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.tm-error-copy {
+  flex: 0 0 auto;
+  font-size: 11px;
 }
 
 .tm-error-detail {
   margin: 0;
+  width: 100%;
   font-size: 11.5px;
+  line-height: 1.5;
   color: var(--text-1);
   overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-1) 60%, transparent);
 }
 
 /* ─── Narrow windows ─── */
@@ -960,12 +986,14 @@
 }
 
 .tm-cr-stat {
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--text-1);
   background: var(--bg-2);
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
+  font-variant-numeric: tabular-nums;
 }
 
 .tm-cr-stat.is-add {
@@ -1072,6 +1100,15 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tm-cr-group:hover {
+  border-color: var(--border);
+}
+
+.tm-cr-group[open] {
+  box-shadow: var(--shadow-xs);
 }
 
 .tm-cr-group-head {
@@ -1079,9 +1116,27 @@
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  padding: 7px 10px;
+  padding: 8px 10px;
   cursor: pointer;
-  background: var(--bg-1);
+  background: color-mix(in srgb, var(--bg-2) 50%, transparent);
+  transition: background var(--transition-fast);
+}
+
+.tm-cr-group-head:hover {
+  background: var(--bg-2);
+}
+
+.tm-cr-group-head::before {
+  content: "▸";
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+  transition: transform var(--transition-fast);
+  margin-right: 2px;
+}
+
+.tm-cr-group[open] .tm-cr-group-head::before {
+  transform: rotate(90deg);
 }
 
 .tm-cr-group-head::-webkit-details-marker {
@@ -1133,12 +1188,15 @@
   grid-template-columns: 22px minmax(0, 1fr) 92px 74px minmax(0, 22%);
   gap: 8px;
   align-items: center;
-  padding: 3px 10px;
+  padding: 4px 10px 4px 8px;
   font-size: 12px;
+  border-left: 2px solid transparent;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .tm-cr-file:hover {
   background: var(--bg-hover);
+  border-left-color: var(--accent-border);
 }
 
 .tm-cr-file-status {
@@ -1276,16 +1334,38 @@
   border: 1px dashed var(--border-subtle);
 }
 
-.tm-cr-delta {
+.tm-cr-delta,
+.tm-cr-ai,
+.tm-cr-sc {
   padding: 10px;
   margin-top: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-1);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
 
-.tm-cr-delta .tm-cr-label {
+.tm-cr-delta:hover,
+.tm-cr-ai:hover,
+.tm-cr-sc:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.tm-cr-delta .tm-cr-label,
+.tm-cr-ai .tm-cr-label,
+.tm-cr-sc .tm-cr-label {
   margin: 0;
+}
+
+/* Card headers share a frosted band with a subtle accent stripe, so the three
+   sections (delta / AI / self-check) read as a consistent family. */
+.tm-cr-delta > .tm-cr-label,
+.tm-cr-ai-head,
+.tm-cr-sc > .tm-cr-label {
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .tm-cr-delta-error {
@@ -1338,14 +1418,6 @@
   display: inline-flex;
   gap: 4px;
   align-items: center;
-}
-
-.tm-cr-ai {
-  padding: 10px;
-  margin-top: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-1);
 }
 
 .tm-cr-ai-head {
@@ -1476,14 +1548,6 @@
 
 /* ---------- acceptance checklist (phase 2) ---------- */
 
-.tm-cr-sc {
-  padding: 10px;
-  margin-top: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-1);
-}
-
 .tm-cr-sc .tm-cr-label {
   display: inline-flex;
   gap: 5px;
@@ -1505,13 +1569,16 @@
   height: 6px;
   overflow: hidden;
   background: var(--bg-2);
-  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
 }
 
 .tm-cr-sc-bar-fill {
   display: block;
   height: 100%;
-  background: var(--green);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--green) 70%, transparent), var(--green));
+  border-radius: 999px;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .tm-cr-sc-percent {
@@ -1531,12 +1598,24 @@
 }
 
 .tm-cr-sc-row {
-  padding: 6px 2px;
+  padding: 7px 4px 7px 8px;
   border-top: 1px solid var(--border-subtle);
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .tm-cr-sc-row:first-child {
   border-top: none;
+}
+
+.tm-cr-sc-row.is-passed {
+  border-left-color: var(--green);
+}
+
+.tm-cr-sc-row.is-failed,
+.tm-cr-sc-row.is-blocked {
+  border-left-color: var(--red);
 }
 
 .tm-cr-sc-row.is-passed .tm-cr-sc-title {
@@ -2252,6 +2331,15 @@
   min-width: 0;
 }
 
+/* The project select stretches; the time filter only takes what its options
+   need so the row stays a single line. */
+.tm-cr-time-filter {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 92px;
+  max-width: 132px;
+}
+
 .tm-cr-list {
   display: flex;
   flex-direction: column;
@@ -2265,17 +2353,24 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 6px 8px;
+  padding: 7px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-1);
   color: var(--text-1);
   text-align: left;
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.tm-cr-item:hover {
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
 }
 
 .tm-cr-item.is-active {
   border-color: var(--accent-border);
   background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
+  box-shadow: inset 2px 0 0 var(--accent), var(--shadow-xs);
 }
 
 .tm-cr-item.is-new {
@@ -2286,11 +2381,14 @@
   cursor: pointer;
   font-size: 12px;
   color: var(--text-2);
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .tm-cr-item.is-new:hover {
   color: var(--accent);
   border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  box-shadow: var(--shadow-xs);
 }
 
 .tm-cr-item-main {
@@ -2309,24 +2407,29 @@
 
 .tm-cr-item-date {
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .tm-cr-item-meta {
   font-size: 11px;
-  color: var(--text-2);
+  color: var(--text-3);
   overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .tm-cr-item-del {
   flex-shrink: 0;
   opacity: 0;
-  transition: opacity var(--transition-fast);
+  transform: translateX(2px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 
 .tm-cr-item:hover .tm-cr-item-del,
 .tm-cr-item.is-active .tm-cr-item-del {
   opacity: 1;
+  transform: translateX(0);
 }
 
 .tm-cr-main {

@@ -84,6 +84,7 @@
   },
   "coverageLevel": "Coverage scope",
   "coverageLoading": "Reading the coverage report…",
+  "coverageLoadError": "Failed to read the coverage report",
   "date": "Time",
   "deleteConfirm": "Delete project “{{name}}”?",
   "deletePartial": "Failed to delete {{count}} projects",
@@ -409,6 +410,13 @@
     "newReport": "New report",
     "listEmpty": "No reports yet — choose a range and collect one.",
     "sort": "Sort by time",
+    "timeFilter": {
+      "all": "All time",
+      "today": "Today",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "empty": "No reports in this time range"
+    },
     "project": "Project",
     "noProjects": "No test projects yet: add or scan them in the Projects view first.",
     "delete": "Delete report",

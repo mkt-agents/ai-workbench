@@ -306,6 +306,7 @@ function PluginBrowser() {
   const [usDesc, setUsDesc] = useState(() => loadUsFormDraft()?.description ?? "");
   const [usMatch, setUsMatch] = useState<string[]>(() => loadUsFormDraft()?.matchPatterns ?? ["<all_urls>"]);
   const [usCode, setUsCode] = useState(() => loadUsFormDraft()?.code ?? "");
+  const [usSourceUrl, setUsSourceUrl] = useState<string | null>(null);
   const [usEditingId, setUsEditingId] = useState<string | null>(null);
   const [usSearch, setUsSearch] = useState("");
   const [usShowPresets, setUsShowPresets] = useState(false);
@@ -538,7 +539,7 @@ function PluginBrowser() {
 
   /** One entry point so every way of opening the editor resets what must be reset. */
   const openUsForm = (
-    values: { name: string; description: string; matchPatterns: string[]; code: string },
+    values: { name: string; description: string; matchPatterns: string[]; code: string; sourceUrl?: string },
     editingId: string | null
   ) => {
     setUsEditingId(editingId);
@@ -546,6 +547,7 @@ function PluginBrowser() {
     setUsDesc(values.description);
     setUsMatch(values.matchPatterns.length > 0 ? values.matchPatterns : ["<all_urls>"]);
     setUsCode(values.code);
+    setUsSourceUrl(values.sourceUrl ?? null);
     // The match preview belongs to the script on screen, not to the last one edited.
     setUsTestUrl("");
     setUsFormOpen(true);
@@ -775,6 +777,7 @@ function PluginBrowser() {
           description,
           matchPatterns: matchPatterns.length > 0 ? matchPatterns : ["<all_urls>"],
           code,
+          sourceUrl: fetchUrl,
         });
       } else {
         await addUserScript({
@@ -784,6 +787,7 @@ function PluginBrowser() {
           matchPatterns: matchPatterns.length > 0 ? matchPatterns : ["<all_urls>"],
           code,
           enabled: true,
+          sourceUrl: fetchUrl,
         });
       }
 
@@ -1767,7 +1771,7 @@ function PluginBrowser() {
                     onToggle={() => toggleUserScript(s.id)}
                     onEdit={() =>
                       openUsForm(
-                        { name: s.name, description: s.description, matchPatterns: s.matchPatterns, code: s.code },
+                        { name: s.name, description: s.description, matchPatterns: s.matchPatterns, code: s.code, sourceUrl: s.sourceUrl },
                         s.id
                       )
                     }
@@ -1958,25 +1962,44 @@ function PluginBrowser() {
               </button>
             </div>
             <div className="plugin-edit-modal-body">
-              <div className="input-group">
-                <label className="input-label">{t("name")}</label>
-                <input
-                  className="input-field"
-                  value={usFormName}
-                  onChange={(e) => setUsFormName(e.target.value)}
-                  placeholder={t("name")}
-                  autoFocus
-                />
+              <div className="us-form-top">
+                <div className="input-group">
+                  <label className="input-label">{t("name")}</label>
+                  <input
+                    className="input-field"
+                    value={usFormName}
+                    onChange={(e) => setUsFormName(e.target.value)}
+                    placeholder={t("name")}
+                    autoFocus
+                  />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">{t("usDescription")}</label>
+                  <input
+                    className="input-field"
+                    value={usDesc}
+                    onChange={(e) => setUsDesc(e.target.value)}
+                    placeholder={t("usDescriptionPlaceholder")}
+                  />
+                </div>
               </div>
-              <div className="input-group">
-                <label className="input-label">{t("usDescription")}</label>
-                <input
-                  className="input-field"
-                  value={usDesc}
-                  onChange={(e) => setUsDesc(e.target.value)}
-                  placeholder={t("usDescriptionPlaceholder")}
-                />
-              </div>
+              {usSourceUrl && (
+                <div className="input-group">
+                  <label className="input-label">{t("usSourceUrl")}</label>
+                  <div className="us-source-url">
+                    <Link2 size={13} />
+                    <button
+                      type="button"
+                      className="us-source-url-link"
+                      onClick={() => void invoke("open_in_browser", { url: usSourceUrl })}
+                      title={usSourceUrl}
+                    >
+                      {usSourceUrl}
+                    </button>
+                  </div>
+                  <span className="input-hint">{t("usSourceUrlHint")}</span>
+                </div>
+              )}
               <div className="input-group">
                 <label className="input-label">{t("usMatchPattern")}</label>
                 <div className="us-match-patterns">
@@ -2111,6 +2134,7 @@ function PluginBrowser() {
                     setUsDesc("");
                     setUsMatch(["<all_urls>"]);
                     setUsCode("");
+                    setUsSourceUrl(null);
                     setUsTestUrl("");
                     clearUsFormDraft();
                   } catch (e) {
@@ -2251,6 +2275,18 @@ function UserscriptCard({
           </div>
           {script.description && (
             <div className="userscript-desc">{script.description}</div>
+          )}
+          {script.sourceUrl && (
+            <div className="userscript-source" title={script.sourceUrl}>
+              <Link2 size={11} />
+              <button
+                type="button"
+                className="userscript-source-link"
+                onClick={() => void invoke("open_in_browser", { url: script.sourceUrl })}
+              >
+                {script.sourceUrl}
+              </button>
+            </div>
           )}
           <div className="userscript-meta-row">
             <div className="userscript-match">

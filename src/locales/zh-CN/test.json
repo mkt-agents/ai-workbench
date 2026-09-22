@@ -84,6 +84,7 @@
   },
   "coverageLevel": "测试覆盖度",
   "coverageLoading": "正在读取覆盖率报告…",
+  "coverageLoadError": "读取覆盖率报告失败",
   "date": "时间",
   "deleteConfirm": "确定删除项目“{{name}}”？",
   "deletePartial": "{{count}} 个项目删除失败",
@@ -409,6 +410,13 @@
     "newReport": "新建报告",
     "listEmpty": "还没有报告，选范围后点「采集改动」。",
     "sort": "按时间排序",
+    "timeFilter": {
+      "all": "全部时间",
+      "today": "今天",
+      "7d": "近 7 天",
+      "30d": "近 30 天",
+      "empty": "该时间范围内没有报告"
+    },
     "project": "项目",
     "noProjects": "还没有测试项目：先到「项目」视图登记或扫描目录。",
     "delete": "删除报告",
