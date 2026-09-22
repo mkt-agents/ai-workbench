@@ -1046,7 +1046,7 @@
  *
  * The blur list is every selector in this file that declares backdrop-filter; the
  * transition list is every selector that transitions a layout property (.sidebar plus
- * the two progress fills). New blurred surface? Add it here.
+ * the dsh progress fill). New blurred surface? Add it here.
  *
  * `animation` is deliberately untouched: all 18 keyframes animate transform/opacity
  * only, and killing them froze the test/AI spinners for 300ms after any resize. */
@@ -1060,7 +1060,6 @@ body.resizing :is(
   .prompt-model-menu,
   .ai-model-menu,
   .prompt-template-menu,
-  .tm-toolbar,
   .http-history-menu,
   .qa-focus-pop,
   .quick-ask-toolbar .qa-focus-btn
@@ -1077,7 +1076,7 @@ html[data-theme="glass"] body.resizing .card {
   -webkit-backdrop-filter: none !important;
 }
 
-body.resizing :is(.sidebar, .dsh-progress-fill, .tm-cov-bar-fill) {
+body.resizing :is(.sidebar, .dsh-progress-fill) {
   transition: none !important;
 }
 
