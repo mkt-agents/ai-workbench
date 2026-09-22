@@ -11546,6 +11546,55 @@ input, select, textarea { font-family: inherit; }
 }
 .btn-icon:hover { background: var(--bg-2); color: var(--text-1); }
 
+/* ===== Dropdown menu (shared) ===== */
+.dd { position: relative; display: inline-flex; }
+.dd-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 210px;
+  padding: 4px;
+  background: var(--bg-1, var(--bg-0));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  animation: dd-in 120ms ease-out;
+}
+@keyframes dd-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-1, var(--text-0));
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+.dd-item svg { opacity: 0.8; }
+.dd-item:hover:not(:disabled) { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
+.dd-item:hover:not(:disabled) svg { opacity: 1; }
+.dd-item:disabled { opacity: 0.4; cursor: default; }
+.dd-item.is-danger { color: var(--red, #e5484d); }
+.dd-item.is-danger:hover:not(:disabled) { background: var(--red-dim, rgba(229, 72, 77, 0.12)); }
+.dd-divider {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--border, rgba(255, 255, 255, 0.08));
+}
+
 /* ===== Snippets page ===== */
 .snippets-page {
   display: flex;

@@ -5,6 +5,7 @@
     "reports": "变更报告",
     "vuln": "漏洞扫描"
   },
+  "moreActions": "更多操作",
   "wf": {
     "steps": "工作流步骤",
     "step": {
@@ -246,7 +247,7 @@
   },
   "cr": {
     "title": "变更回归报告",
-    "open": "根据代码改动生成回归报告",
+    "open": "变更回归报告",
     "mode": "改动基准",
     "modeUncommitted": "未提交改动",
     "modeBase": "相对分支/tag/commit",

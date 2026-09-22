@@ -19,6 +19,7 @@ import {
   GitCompare,
   History,
   Loader2,
+  MoreVertical,
   Play,
   Plus,
   RefreshCw,
@@ -35,6 +36,7 @@ import TestGenerator from "../TestGenerator";
 import FailureDiagnosis from "../FailureDiagnosis";
 import CoverageReportView from "../CoverageReport";
 import ScanTestProjectsModal from "../ScanTestProjectsModal";
+import DropdownMenu, { type DropdownItem } from "../DropdownMenu";
 import OutputPanel from "./OutputPanel";
 import { mapPool, TEST_RUN_CONCURRENCY } from "../../core/asyncPool";
 import {
@@ -609,7 +611,7 @@ export default function ProjectsView({
             return (
               <div
                 key={project.id}
-                className={`tm-card${live ? " is-running" : ""}`}
+                className={`tm-card${live ? " is-running" : ""}${project.enabled ? "" : " is-disabled"}`}
               >
                 <input
                   type="checkbox"
@@ -716,52 +718,42 @@ export default function ProjectsView({
                       {t("runTests")}
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-icon"
-                    onClick={() => setGeneratorFor(project)}
-                    title={t("aiTestGenerator")}
-                    aria-label={t("aiTestGenerator")}
+                  <DropdownMenu
+                    label={t("moreActions")}
+                    items={
+                      [
+                        {
+                          label: t("aiTestGenerator"),
+                          icon: <Sparkles size={14} />,
+                          onClick: () => setGeneratorFor(project),
+                        },
+                        {
+                          label: t("aiFailureDiagnosis"),
+                          icon: <AlertTriangle size={14} />,
+                          onClick: () => setDiagnosisFor(project),
+                        },
+                        { divider: true },
+                        {
+                          label: t("cr.open"),
+                          icon: <GitCompare size={14} />,
+                          onClick: () => onOpenReports?.(project.id),
+                        },
+                        {
+                          label: t("viewCoverage"),
+                          icon: <TrendingUp size={14} />,
+                          disabled: !coverageSupported,
+                          onClick: () => setCoverageFor(project),
+                        },
+                        {
+                          label: t("viewHistory"),
+                          icon: <History size={14} />,
+                          onClick: () => openHistory(project),
+                        },
+                      ] satisfies DropdownItem[]
+                    }
                   >
-                    <Sparkles size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-icon"
-                    onClick={() => setDiagnosisFor(project)}
-                    title={t("aiFailureDiagnosis")}
-                    aria-label={t("aiFailureDiagnosis")}
-                  >
-                    <AlertTriangle size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-icon"
-                    onClick={() => onOpenReports?.(project.id)}
-                    title={t("cr.open")}
-                    aria-label={t("cr.open")}
-                  >
-                    <GitCompare size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-icon"
-                    onClick={() => setCoverageFor(project)}
-                    disabled={!coverageSupported}
-                    title={coverageSupported ? t("viewCoverage") : t("coverageUnsupported")}
-                    aria-label={t("viewCoverage")}
-                  >
-                    <TrendingUp size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-icon"
-                    onClick={() => void openHistory(project)}
-                    title={t("viewHistory")}
-                    aria-label={t("viewHistory")}
-                  >
-                    <History size={14} />
-                  </button>
+                    <MoreVertical size={14} />
+                  </DropdownMenu>
                   <button
                     type="button"
                     className="btn btn-secondary btn-icon"

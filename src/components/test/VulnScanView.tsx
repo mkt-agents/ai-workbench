@@ -372,34 +372,34 @@ export default function VulnScanView({ projects, onToast }: Props) {
         /* The 7-column table needs ~720px; let it scroll sideways instead of
            being clipped by the page's overflow-x:hidden on narrow windows. */
         <div className="tm-vuln-tablewrap">
-        <table className="tm-table tm-vuln-table">
-          <thead>
-            <tr>
-              <th aria-label="" />
-              <th>{t("col.severity")}</th>
-              <th>{t("col.kind")}</th>
-              {allProjects && <th>{t("col.project", { defaultValue: "项目" })}</th>}
-              <th>{t("col.package")}</th>
-              <th>{t("col.advisory")}</th>
-              <th>{t("col.status")}</th>
-              <th>{t("col.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {findings.map((finding) => (
-              <FindingRow
-                key={`${projectId}-${finding.id}`}
-                finding={finding}
-                expanded={expanded === finding.id}
-                showProject={allProjects}
-                projectName={projectNameById.get(finding.projectId) ?? finding.projectId}
-                onToggle={() => setExpanded(expanded === finding.id ? null : finding.id)}
-                onDecide={decide}
-                onCopy={copy}
-              />
-            ))}
-          </tbody>
-        </table>
+          <table className="tm-table tm-vuln-table">
+            <thead>
+              <tr>
+                <th aria-label="" />
+                <th>{t("col.severity")}</th>
+                <th>{t("col.kind")}</th>
+                {allProjects && <th>{t("col.project", { defaultValue: "项目" })}</th>}
+                <th>{t("col.package")}</th>
+                <th>{t("col.advisory")}</th>
+                <th>{t("col.status")}</th>
+                <th>{t("col.actions")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {findings.map((finding) => (
+                <FindingRow
+                  key={`${projectId}-${finding.id}`}
+                  finding={finding}
+                  expanded={expanded === finding.id}
+                  showProject={allProjects}
+                  projectName={projectNameById.get(finding.projectId) ?? finding.projectId}
+                  onToggle={() => setExpanded(expanded === finding.id ? null : finding.id)}
+                  onDecide={decide}
+                  onCopy={copy}
+                />
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

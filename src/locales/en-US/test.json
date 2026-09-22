@@ -5,6 +5,7 @@
     "reports": "Change reports",
     "vuln": "Vulnerabilities"
   },
+  "moreActions": "More actions",
   "wf": {
     "steps": "Workflow steps",
     "step": {
@@ -246,7 +247,7 @@
   },
   "cr": {
     "title": "Change Regression Report",
-    "open": "Build a regression report from the code changes",
+    "open": "Change regression report",
     "mode": "Change baseline",
     "modeUncommitted": "Uncommitted changes",
     "modeBase": "Against a branch / tag / commit",
