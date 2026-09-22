@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { FolderGit2, Loader2 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 import ModalTitleRow from "../ModalTitleRow";
+import { groupByFolder } from "../ScanTestProjectsModal";
 import type { ScannedProject, TestProject } from "../../core/types";
 
 type Props = {
@@ -102,6 +103,39 @@ export default function ScanVulnFolderModal({ rootPath, initialProjects, onClose
     }
   };
 
+  const renderRow = (project: ScannedProject) => (
+    <li key={project.path} className="tm-scan-item" onClick={() => toggle(project.path)}>
+      <input
+        type="checkbox"
+        checked={selected.has(project.path)}
+        disabled={submitting}
+        onChange={() => toggle(project.path)}
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+      <FolderGit2 size={14} className="tm-scan-icon" />
+      <span className="tm-scan-name" title={project.name}>
+        {project.name}
+      </span>
+      <span className={`tm-badge tm-badge-${project.framework}`}>{project.framework}</span>
+      {isRegistered(project.path) && (
+        <span className="runtime-badge active">{t("scan.alreadyAdded")}</span>
+      )}
+    </li>
+  );
+
+  const toggleGroup = (group: ScannedProject[], checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const p of group) {
+        if (checked) next.add(p.path);
+        else next.delete(p.path);
+      }
+      return next;
+    });
+
+  const groups = groupByFolder(shown, rootPath);
+  const useGroups = groups.length > 1;
+
   return (
     <div className="modal-overlay" onMouseDown={(e) => !submitting && e.target === e.currentTarget && onClose()}>
       <div className="modal tm-scan-modal" onMouseDown={(e) => e.stopPropagation()}>
@@ -153,25 +187,28 @@ export default function ScanVulnFolderModal({ rootPath, initialProjects, onClose
         <p className="tm-hint">{tv("folder.note")}</p>
 
         <ul className="tm-scan-list">
-          {shown.map((project) => (
-            <li key={project.path} className="tm-scan-item" onClick={() => toggle(project.path)}>
-              <input
-                type="checkbox"
-                checked={selected.has(project.path)}
-                disabled={submitting}
-                onChange={() => toggle(project.path)}
-                onMouseDown={(e) => e.stopPropagation()}
-              />
-              <FolderGit2 size={14} className="tm-scan-icon" />
-              <span className="tm-scan-name" title={project.name}>
-                {project.name}
-              </span>
-              <span className={`tm-badge tm-badge-${project.framework}`}>{project.framework}</span>
-              {isRegistered(project.path) && (
-                <span className="runtime-badge active">{t("scan.alreadyAdded")}</span>
-              )}
-            </li>
-          ))}
+          {useGroups
+            ? groups.map(([folder, items]) => {
+                const allChecked = items.every((p) => selected.has(p.path));
+                return (
+                  <li key={`g-${folder}`} className="tm-scan-group">
+                    <label className="tm-scan-group-head">
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        disabled={submitting}
+                        onChange={(e) => toggleGroup(items, e.target.checked)}
+                      />
+                      <span className="tm-scan-group-name" title={folder === "." ? rootPath : folder}>
+                        {folder === "." ? t("scan.groupRoot", { defaultValue: "（根目录）" }) : folder}
+                      </span>
+                      <span className="tm-scan-group-count">{items.length}</span>
+                    </label>
+                    <ul className="tm-scan-list tm-scan-list-nested">{items.map(renderRow)}</ul>
+                  </li>
+                );
+              })
+            : shown.map(renderRow)}
           {shown.length === 0 && (
             <li className="tm-scan-empty">{needle ? t("scan.noMatch", { defaultValue: "无匹配项目" }) : t("scan.noneFound")}</li>
           )}

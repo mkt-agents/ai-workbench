@@ -82,7 +82,7 @@ export default function VulnScanView({ projects, onToast }: Props) {
 
   // Keep the selection valid when the project list changes underneath us.
   useEffect(() => {
-    if (projects.length && !projects.some((p) => p.id === projectId)) {
+    if (projects.length && projectId !== "*" && !projects.some((p) => p.id === projectId)) {
       setProjectId(projects[0].id);
     }
   }, [projects, projectId]);
@@ -99,7 +99,8 @@ export default function VulnScanView({ projects, onToast }: Props) {
           limit: PAGE_SIZE,
           offset: page * PAGE_SIZE,
         }),
-        listVulnScans(projectId),
+        // Scan history is per project; the aggregate view has none of its own.
+        projectId === "*" ? Promise.resolve([] as VulnScanSummary[]) : listVulnScans(projectId),
       ]);
       if (!alive.current) return;
       setFindings(pageResult.findings);
@@ -118,7 +119,10 @@ export default function VulnScanView({ projects, onToast }: Props) {
   }, [refresh]);
 
   const queue = useVulnScans();
-  const activeForProject = queue.active && queue.active.projectId === projectId ? queue.active : null;
+  // "*" is the folder dimension: one report over every registered project.
+  const allProjects = projectId === "*";
+  const activeForProject = allProjects ? queue.active : queue.active && queue.active.projectId === projectId ? queue.active : null;
+  const projectNameById = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
 
   // Any scan that ends — from this page, the folder modal or after a tab
   // switch — refreshes what is on screen.
@@ -155,6 +159,11 @@ export default function VulnScanView({ projects, onToast }: Props) {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
     enqueueScans([{ projectId: project.id, projectName: project.name, includeUntracked }]);
+  };
+
+  /** The folder dimension: queue every registered project, one serial scan. */
+  const scanAll = () => {
+    enqueueScans(projects.map((p) => ({ projectId: p.id, projectName: p.name, includeUntracked })));
   };
 
   const pickFolder = useCallback(async () => {
@@ -253,6 +262,7 @@ export default function VulnScanView({ projects, onToast }: Props) {
       <div className="tm-vuln-toolbar">
         <select className="input-field" value={projectId} onChange={(e) => { setProjectId(e.target.value); setPage(0); }} aria-label={t("aria.project")}>
           {projects.length === 0 && <option value="">{t("noProjects")}</option>}
+          {projects.length > 1 && <option value="*">{t("project.all", { n: projects.length })}</option>}
           {projects.map((project) => (
             <option key={project.id} value={project.id}>
               {project.name}
@@ -263,10 +273,22 @@ export default function VulnScanView({ projects, onToast }: Props) {
           <input type="checkbox" checked={includeUntracked} onChange={(e) => setIncludeUntracked(e.target.checked)} />
           {t("scan.includeUntracked")}
         </label>
-        <button type="button" className="btn btn-primary btn-small" onClick={scanCurrent} disabled={!projectId || Boolean(activeForProject)}>
-          {activeForProject ? <Loader2 size={12} className="spin" /> : <ShieldAlert size={12} />}
-          {t("scan.one")}
-        </button>
+        {allProjects ? (
+          <button
+            type="button"
+            className="btn btn-primary btn-small"
+            onClick={scanAll}
+            disabled={projects.length === 0 || Boolean(queue.active) || queue.queue.length > 0}
+          >
+            {queue.active ? <Loader2 size={12} className="spin" /> : <ShieldAlert size={12} />}
+            {t("scan.all", { n: projects.length })}
+          </button>
+        ) : (
+          <button type="button" className="btn btn-primary btn-small" onClick={scanCurrent} disabled={!projectId || Boolean(activeForProject)}>
+            {activeForProject ? <Loader2 size={12} className="spin" /> : <ShieldAlert size={12} />}
+            {t("scan.one")}
+          </button>
+        )}
         <button type="button" className="btn btn-secondary btn-small" onClick={() => void pickFolder()} disabled={scanningFolder}>
           {scanningFolder ? <Loader2 size={12} className="spin" /> : <FolderSearch size={12} />}
           {t("scan.folder")}
@@ -353,6 +375,7 @@ export default function VulnScanView({ projects, onToast }: Props) {
               <th aria-label="" />
               <th>{t("col.severity")}</th>
               <th>{t("col.kind")}</th>
+              {allProjects && <th>{t("col.project", { defaultValue: "项目" })}</th>}
               <th>{t("col.package")}</th>
               <th>{t("col.advisory")}</th>
               <th>{t("col.status")}</th>
@@ -362,9 +385,11 @@ export default function VulnScanView({ projects, onToast }: Props) {
           <tbody>
             {findings.map((finding) => (
               <FindingRow
-                key={finding.id}
+                key={`${projectId}-${finding.id}`}
                 finding={finding}
                 expanded={expanded === finding.id}
+                showProject={allProjects}
+                projectName={projectNameById.get(finding.projectId) ?? finding.projectId}
                 onToggle={() => setExpanded(expanded === finding.id ? null : finding.id)}
                 onDecide={decide}
                 onCopy={copy}
@@ -423,12 +448,17 @@ export default function VulnScanView({ projects, onToast }: Props) {
 function FindingRow({
   finding,
   expanded,
+  showProject,
+  projectName,
   onToggle,
   onDecide,
   onCopy,
 }: {
   finding: VulnFinding;
   expanded: boolean;
+  /** The aggregate ("all projects") report says which system a hit belongs to. */
+  showProject?: boolean;
+  projectName?: string;
   onToggle: () => void;
   onDecide: (finding: VulnFinding, next: string) => Promise<void>;
   onCopy: (text: string) => void;
@@ -448,6 +478,11 @@ function FindingRow({
             {t(`kind.${finding.kind}`, { defaultValue: finding.kind })}
           </span>
         </td>
+        {showProject && (
+          <td className="tm-vuln-project" title={projectName}>
+            {projectName}
+          </td>
+        )}
         <td className="tm-vuln-target" title={isSecret ? `${finding.file}:${finding.line}` : `${finding.ecosystem} ${finding.package}@${finding.version}`}>
           {isSecret ? `${finding.file}:${finding.line}` : `${finding.package}@${finding.version}`}
         </td>
@@ -484,7 +519,7 @@ function FindingRow({
       </tr>
       {expanded && (
         <tr className="tm-vuln-detail-row">
-          <td colSpan={7}>
+          <td colSpan={showProject ? 8 : 7}>
             <div className="tm-vuln-detail">
               {isSecret ? (
                 <p>

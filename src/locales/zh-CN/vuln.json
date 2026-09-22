@@ -1,5 +1,8 @@
 {
   "noProjects": "还没有测试项目：先到「测试项目」页添加，或用下方「扫描文件夹」批量登记",
+  "project": {
+    "all": "全部项目（文件夹维度汇总）"
+  },
   "empty": "没有符合条件的漏洞记录",
   "allHandled": "没有未处理的漏洞",
   "neverScanned": "该项目还没有扫描记录",
@@ -12,6 +15,7 @@
   },
   "scan": {
     "one": "扫描此项目",
+    "all": "扫描全部 {{n}} 个项目",
     "folder": "扫描文件夹",
     "cancel": "取消",
     "includeUntracked": "包含未提交文件",
@@ -71,6 +75,7 @@
   "col": {
     "severity": "严重度",
     "kind": "类型",
+    "project": "项目",
     "package": "对象",
     "advisory": "公告 / 位置",
     "status": "状态",

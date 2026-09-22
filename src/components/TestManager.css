@@ -1847,6 +1847,41 @@
   min-height: 0;
 }
 
+.tm-scan-group {
+  list-style: none;
+}
+
+.tm-scan-group-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px 4px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.tm-scan-group-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-scan-group-count {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tm-scan-group .tm-scan-item {
+  padding-left: 22px;
+}
+
 .tm-scan-depth {
   display: inline-flex;
   gap: 8px;

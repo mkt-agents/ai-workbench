@@ -314,8 +314,13 @@ pub struct FindingFilter {
     pub offset: i64,
 }
 
+/// Findings for one project, or for the whole registry when `project_id` is
+/// `"*"` — the folder-dimension report scans every registered project.
 pub fn list_findings(conn: &Connection, project_id: &str, filter: &FindingFilter) -> Result<Vec<Finding>, String> {
-    let mut sql = format!("SELECT {} FROM vuln_findings WHERE project_id = ?1", FINDING_COLUMNS);
+    let mut sql = format!(
+        "SELECT {} FROM vuln_findings WHERE (?1 = '*' OR project_id = ?1)",
+        FINDING_COLUMNS
+    );
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id.to_string())];
     let bind = |sql: &mut String, args: &mut Vec<Box<dyn rusqlite::ToSql>>, column: &str, value: &str| {
         args.push(Box::new(value.to_string()));
@@ -345,8 +350,8 @@ pub fn list_findings(conn: &Connection, project_id: &str, filter: &FindingFilter
 
 pub fn count_findings(conn: &Connection, project_id: &str, status: Option<&str>) -> Result<i64, String> {
     let sql = match status {
-        Some(_) => "SELECT COUNT(*) FROM vuln_findings WHERE project_id = ?1 AND status = ?2",
-        None => "SELECT COUNT(*) FROM vuln_findings WHERE project_id = ?1",
+        Some(_) => "SELECT COUNT(*) FROM vuln_findings WHERE (?1 = '*' OR project_id = ?1) AND status = ?2",
+        None => "SELECT COUNT(*) FROM vuln_findings WHERE (?1 = '*' OR project_id = ?1)",
     };
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     match status {
@@ -372,7 +377,7 @@ pub struct FindingTotals {
 
 pub fn totals(conn: &Connection, project_id: &str) -> Result<FindingTotals, String> {
     let mut stmt = conn
-        .prepare("SELECT status, severity, kind, COUNT(*) FROM vuln_findings WHERE project_id = ?1 GROUP BY status, severity, kind")
+        .prepare("SELECT status, severity, kind, COUNT(*) FROM vuln_findings WHERE (?1 = '*' OR project_id = ?1) GROUP BY status, severity, kind")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?)))
@@ -511,6 +516,24 @@ mod tests {
         assert_eq!(findings[0].severity, "critical");
         assert_eq!(findings[0].fixed_versions, vec!["1.6.0".to_string()]);
         assert_eq!(findings[0].aliases, vec!["CVE-2023-45857".to_string()]);
+    }
+
+    #[test]
+    fn star_project_aggregates_across_the_registry() {
+        let db = conn();
+        db.execute("INSERT INTO test_projects (id, name) VALUES ('p2', 'other')", []).unwrap();
+        create_scan(&db, "vs-a", "p1", "t").unwrap();
+        create_scan(&db, "vs-b", "p2", "t").unwrap();
+        upsert_finding(&db, "p1", "vs-a", &dep("npm|axios|G1", "critical"), "t").unwrap();
+        upsert_finding(&db, "p2", "vs-b", &dep("crates|openssl|G2", "high"), "t").unwrap();
+
+        let all = list_findings(&db, "*", &FindingFilter::default()).unwrap();
+        assert_eq!(all.len(), 2, "the folder-dimension report sees every project");
+        assert_eq!(count_findings(&db, "*", Some("open")).unwrap(), 2);
+        let t = totals(&db, "*").unwrap();
+        assert_eq!((t.total, t.open, t.critical, t.high), (2, 2, 1, 1));
+        // A single project still sees only its own rows.
+        assert_eq!(list_findings(&db, "p1", &FindingFilter::default()).unwrap().len(), 1);
     }
 
     #[test]

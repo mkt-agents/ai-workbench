@@ -16,6 +16,32 @@ type Props = {
 
 const NOTE_KEYS = ["wrapper-missing", "no-test-sources", "skip-tests-property", "reactor"];
 
+const normPath = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+
+/** Folder dimension: which sub-directory a hit lives in, relative to the
+ *  scanned root ("." = directly under it). A system is usually one parent
+ *  folder of many service modules, so the list groups by this key. */
+export function folderKey(path: string, rootPath: string): string {
+  const full = normPath(path);
+  const parent = full.slice(0, full.lastIndexOf("/"));
+  const root = normPath(rootPath);
+  if (!parent || parent.toLowerCase() === root.toLowerCase()) return ".";
+  return parent.toLowerCase().startsWith(root.toLowerCase() + "/") ? parent.slice(root.length + 1) : parent;
+}
+
+export function groupByFolder<T extends { path: string }>(items: T[], rootPath: string): [string, T[]][] {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = folderKey(item.path, rootPath);
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(item);
+    else groups.set(key, [item]);
+  }
+  return [...groups.entries()].sort((a, b) =>
+    a[0] === "." ? -1 : b[0] === "." ? 1 : a[0].localeCompare(b[0])
+  );
+}
+
 /**
  * Recursive scan results: tick the projects to register, in one batch.
  * Already-registered paths are badged and disabled; "scan deeper" widens the search
@@ -126,6 +152,22 @@ function ScanTestProjectsModal({ rootPath, initialProjects, onClose, onAdded }: 
     }
   };
 
+  const toggleGroup = (group: ScannedProject[], checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const p of group) {
+        if (checked) next.add(p.path);
+        else next.delete(p.path);
+      }
+      return next;
+    });
+  };
+
+  // One parent folder (the common monorepo case) would gain nothing from
+  // headers; group only when the scan actually spans several directories.
+  const groups = groupByFolder(shownSelectable, rootPath);
+  const useGroups = groups.length > 1;
+
   const renderRow = (project: ScannedProject, existing: boolean) => {
     const checked = selected.has(project.path);
     return (
@@ -212,7 +254,28 @@ function ScanTestProjectsModal({ rootPath, initialProjects, onClose, onAdded }: 
         </div>
 
         <ul className="tm-scan-list">
-          {shownSelectable.map((project) => renderRow(project, false))}
+          {useGroups
+            ? groups.map(([folder, items]) => {
+                const allChecked = items.every((p) => selected.has(p.path));
+                return (
+                  <li key={`g-${folder}`} className="tm-scan-group">
+                    <label className="tm-scan-group-head">
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        disabled={adding}
+                        onChange={(e) => toggleGroup(items, e.target.checked)}
+                      />
+                      <span className="tm-scan-group-name" title={folder === "." ? rootPath : folder}>
+                        {folder === "." ? t("scan.groupRoot", { defaultValue: "（根目录）" }) : folder}
+                      </span>
+                      <span className="tm-scan-group-count">{items.length}</span>
+                    </label>
+                    <ul className="tm-scan-list tm-scan-list-nested">{items.map((project) => renderRow(project, false))}</ul>
+                  </li>
+                );
+              })
+            : shownSelectable.map((project) => renderRow(project, false))}
           {shownSelectable.length === 0 && !scanning && (
             <li className="tm-scan-empty">{needle ? t("scan.noMatch", { defaultValue: "无匹配项目" }) : t("scan.noneFound")}</li>
           )}
