@@ -1181,7 +1181,7 @@ function AIAssistant() {
               title={t("models.copyModelId")}
               onClick={() => void copyValue(`${config.id}:model`, config.model)}
             >
-              {config.model}
+              <span className="ai-model-copyable-text">{config.model}</span>
               {copiedField === `${config.id}:model` ? (
                 <Check size={11} />
               ) : (
@@ -1197,9 +1197,9 @@ function AIAssistant() {
               title={config.baseUrl || t("models.urlMissing")}
               onClick={() => void copyValue(`${config.id}:url`, config.baseUrl)}
             >
-              {config.baseUrl
-                ? truncateUrl(config.baseUrl)
-                : t("models.urlMissing")}
+              <span className="ai-model-copyable-text">
+                {config.baseUrl ? truncateUrl(config.baseUrl) : t("models.urlMissing")}
+              </span>
               {copiedField === `${config.id}:url` ? (
                 <Check size={11} />
               ) : config.baseUrl ? (
@@ -1207,17 +1207,10 @@ function AIAssistant() {
               ) : null}
             </button>
             <span className="ai-model-meta-sep">·</span>
-            <span>
+            <span className="ai-model-meta-fixed">
               {config.apiKey?.trim()
                 ? t("models.keyConfigured")
                 : t("models.keyMissing")}
-            </span>
-            <span className="ai-model-meta-sep">·</span>
-            <span>
-              {t("models.params", {
-                temperature: config.temperature,
-                maxTokens: formatTokenCount(config.maxTokens),
-              })}
             </span>
           </div>
         </div>
@@ -1330,11 +1323,7 @@ function AIAssistant() {
       </button>
       {!collapsedGroups.has(group.provider) && (
         <div className="ai-model-group-body">
-          {group.configs.map((config) => (
-            <div className="ai-model-cell" key={config.id}>
-              {renderConfigCard(config, true)}
-            </div>
-          ))}
+          {group.configs.map((config) => renderConfigCard(config, true))}
         </div>
       )}
     </section>
@@ -1591,7 +1580,7 @@ function AIAssistant() {
                 </button>
               </div>
             ) : (
-              <div className="ai-model-list">
+              <div className={`ai-model-list${groupByProvider ? "" : " is-flat"}`}>
                 {groupByProvider
                   ? groupedConfigs.map((group) => renderGroup(group))
                   : filteredConfigs.map((config) => renderConfigCard(config))}

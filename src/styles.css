@@ -719,9 +719,6 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-item {
   background: rgba(255, 255, 255, 0.04);
   border: 0.25px solid rgba(255, 255, 255, 0.07);
-  border-radius: 14px;
-  padding: 16px;
-  margin-bottom: 8px;
   transition: var(--transition-colors-fast);
 }
 
@@ -4609,6 +4606,8 @@ input, select, textarea { font-family: inherit; }
   align-items: center;
   gap: 4px;
   max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   padding: 1px 4px;
   margin: -1px -4px;
   border: none;
@@ -4618,6 +4617,15 @@ input, select, textarea { font-family: inherit; }
   font: inherit;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+}
+
+/* The label truncates before the card layout ever reflows — every card in a row
+   keeps the same height no matter how long the model id or URL is. */
+.ai-model-copyable-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ai-model-copyable:hover:not(:disabled) {
@@ -4667,11 +4675,22 @@ input, select, textarea { font-family: inherit; }
   line-height: 1.6;
 }
 
-/* Model list */
+/* Model list — panels stack full width; the card grid inside each panel (and the
+   flat view) is the same, so a card is the same size whichever view it renders
+   in. auto-fill (not auto-fit) keeps the empty slot of a single-model group, or
+   every card would get its own width. */
 .ai-model-list {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+}
+
+/* Flat view has no panels to fill the width, so it uses the same card grid as a
+   group body — otherwise every card stretches edge to edge and the page reads
+   as half-empty on wide windows. */
+.ai-model-list.is-flat {
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 10px;
 }
 
 /* ─── Provider groups (foldable) ─── */
@@ -4771,51 +4790,14 @@ input, select, textarea { font-family: inherit; }
 
 .ai-model-group-body {
   display: grid;
-  /* A group's models sit side by side: two models share one row on a wide panel,
-     and the panel itself always spans the full list width. */
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 8px;
-}
-
-/* Each card sits in its own query container, so a card reads its own width —
-   not the panel's — when deciding where the action strip goes. */
-.ai-model-cell {
-  min-width: 0;
-  container-type: inline-size;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 10px;
 }
 
 /* Inside a panel the surface is already drawn, so a row keeps its fill but only
    shows a border on hover — no card-inside-a-card double outline. */
 .ai-model-group .ai-model-item {
-  padding: 10px 12px;
   border-color: transparent;
-  /* Narrow cards (two models sharing a row) stack the actions under the info. */
-  flex-wrap: wrap;
-  align-items: flex-start;
-}
-
-.ai-model-group .ai-model-item .ai-model-actions {
-  width: 100%;
-  justify-content: flex-start;
-  margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-/* A card at least this wide (a lone model in its group, or a very wide panel)
-   keeps the compact row: info left, actions right. */
-@container (min-width: 640px) {
-  .ai-model-group .ai-model-item {
-    flex-wrap: nowrap;
-    align-items: center;
-  }
-
-  .ai-model-group .ai-model-item .ai-model-actions {
-    width: auto;
-    margin-top: 0;
-    padding-top: 0;
-    border-top: none;
-  }
 }
 
 .ai-model-group .ai-model-item:hover {
@@ -4834,9 +4816,12 @@ input, select, textarea { font-family: inherit; }
 
 .ai-model-item {
   display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
+  /* Actions always take their own strip under the info — one skeleton from a
+     400px card to a 700px one, so heights never drift between cards. */
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--border-subtle);
   background: var(--bg-1);
@@ -4981,6 +4966,9 @@ input, select, textarea { font-family: inherit; }
   color: var(--text-2);
   margin-top: 3px;
   font-family: "JetBrains Mono", "SF Mono", monospace;
+  /* One line, always — long ids truncate inside the copy button. */
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .ai-model-meta {
@@ -4989,8 +4977,13 @@ input, select, textarea { font-family: inherit; }
   margin-top: 4px;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  /* Never wraps: the URL gives way first, so card heights stay in lockstep. */
+  flex-wrap: nowrap;
   gap: 4px;
+}
+
+.ai-model-meta-fixed {
+  flex-shrink: 0;
 }
 
 .ai-model-meta-sep {
@@ -5004,6 +4997,15 @@ input, select, textarea { font-family: inherit; }
   justify-content: flex-end;
   opacity: 1;
   flex-shrink: 0;
+}
+
+/* Full-width action strip shared by every card, in every view. */
+.ai-model-item .ai-model-actions {
+  width: 100%;
+  justify-content: flex-start;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .ai-model-actions .ai-action-label {
