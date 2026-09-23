@@ -19,7 +19,8 @@
 
 .tr-split {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  /* A touch wider than before so the nested repo rows keep their names intact. */
+  grid-template-columns: 272px minmax(0, 1fr);
   gap: 14px;
   flex: 1;
   min-width: 0;
@@ -29,9 +30,10 @@
 .tr-tree {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
   min-height: 0;
-  padding: 8px;
+  padding: 6px;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
@@ -65,26 +67,35 @@
 .tr-tree-group {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .tr-tree-folder {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
 }
 
+/* Caret stays quiet until the row (or the caret itself) is touched, so a full
+   tree reads as folder names instead of a column of chevrons. */
 .tr-tree-caret {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   width: 18px;
-  height: 22px;
+  height: 24px;
   color: var(--text-3);
   cursor: pointer;
   background: none;
   border: none;
-  border-radius: var(--radius-sh);
+  border-radius: var(--radius-sm);
+  opacity: 0.6;
+  transition: var(--transition-colors-fast);
+}
+
+.tr-tree-folder:hover .tr-tree-caret {
+  opacity: 1;
 }
 
 .tr-tree-caret:hover {
@@ -107,17 +118,59 @@
   background: none;
   border: none;
   border-radius: var(--radius-sm);
-  transition: background var(--transition-colors-fast), color var(--transition-colors-fast);
+  transition: var(--transition-colors-fast);
+}
+
+.tr-tree-folder-label {
+  padding-left: 4px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.tr-tree-folder-label svg,
+.tr-tree-repo svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: var(--transition-colors-fast);
+}
+
+/* Child rows hang off a hairline rail that continues the caret column, so the
+   nesting reads even where a row is hovered or selected. */
+.tr-tree-children {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tr-tree-children:empty {
+  display: none;
+}
+
+.tr-tree-children::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: 16px;
+  width: 1px;
+  border-radius: 1px;
+  background: var(--border-subtle);
 }
 
 .tr-tree-repo {
-  padding-left: 28px;
+  padding-left: 34px;
   color: var(--text-2);
 }
 
 .tr-tree-folder-label:hover:not(:disabled),
 .tr-tree-repo:hover:not(:disabled) {
+  color: var(--text-0);
   background: var(--bg-hover);
+}
+
+.tr-tree-repo:hover:not(:disabled) svg {
+  color: var(--text-2);
 }
 
 .tr-tree-folder-label:disabled,
@@ -127,27 +180,35 @@
   opacity: 0.5;
 }
 
+/* The name absorbs the slack so every trailing badge lines up on one right edge. */
 .tr-tree-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .tr-tree-count {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
+  min-width: 17px;
   height: 16px;
   padding: 0 5px;
-  margin-left: auto;
   font-size: 10px;
   font-weight: 500;
   line-height: 1;
   color: var(--text-2);
   background: var(--bg-2);
-  border-radius: 8px;
+  border-radius: var(--radius-full);
   font-variant-numeric: tabular-nums;
+  transition: var(--transition-colors-fast);
+}
+
+.tr-tree-folder-label:hover:not(:disabled) .tr-tree-count {
+  color: var(--text-1);
 }
 
 .tr-tree-folder.is-selected .tr-tree-folder-label,
@@ -156,6 +217,7 @@
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+.tr-tree-folder.is-selected .tr-tree-folder-label svg,
 .tr-tree-repo.is-selected svg {
   color: var(--accent);
 }
@@ -262,29 +324,30 @@
   }
 }
 
-/* Repo tree badge — changed-file count next to a repo node; grey dot when none. */
+/* Repo tree badge — changed-file count next to a repo node; a muted dot when the
+   repo is clean, which keeps the count column visually anchored. */
 .tr-tree-badge {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
+  min-width: 17px;
   height: 16px;
   padding: 0 5px;
-  margin-left: auto;
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-full);
   font-variant-numeric: tabular-nums;
+  transition: var(--transition-colors-fast);
 }
 .tr-tree-badge.is-empty {
-  min-width: 6px;
-  width: 6px;
-  height: 6px;
+  min-width: 5px;
+  width: 5px;
+  height: 5px;
   padding: 0;
-  margin-left: auto;
   background: var(--border);
   border-radius: 50%;
 }

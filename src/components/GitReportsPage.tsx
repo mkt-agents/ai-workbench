@@ -107,32 +107,35 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
                     <span className="tr-tree-count">{gitPaths.length}</span>
                   </button>
                 </div>
-                {!isCollapsed &&
-                  g.projects.map((p) => {
-                    const isGit = summaries[p.path]?.isGit;
-                    const selected = target?.kind === "repo" && target.path === p.path;
-                    return (
-                      <button
-                        key={p.path}
-                        type="button"
-                        className={`tr-tree-repo${selected ? " is-selected" : ""}`}
-                        disabled={isGit !== true}
-                        title={isGit === false ? t("reports.notGit") : p.path}
-                        onClick={() => onTargetChange({ kind: "repo", path: p.path })}
-                      >
-                        <GitBranch size={11} />
-                        {isGit === true ? (
-                          <span
-                            className={`tr-tree-badge${(summaries[p.path]?.dirtyCount ?? 0) > 0 ? "" : " is-empty"}`}
-                            title={t("reports.treeBadge")}
-                          >
-                            {summaries[p.path]?.dirtyCount ?? 0}
-                          </span>
-                        ) : null}
-                        <span className="tr-tree-name">{p.name}</span>
-                      </button>
-                    );
-                  })}
+                {!isCollapsed && (
+                  <div className="tr-tree-children">
+                    {g.projects.map((p) => {
+                      const isGit = summaries[p.path]?.isGit;
+                      const selected = target?.kind === "repo" && target.path === p.path;
+                      return (
+                        <button
+                          key={p.path}
+                          type="button"
+                          className={`tr-tree-repo${selected ? " is-selected" : ""}`}
+                          disabled={isGit !== true}
+                          title={isGit === false ? t("reports.notGit") : p.path}
+                          onClick={() => onTargetChange({ kind: "repo", path: p.path })}
+                        >
+                          <GitBranch size={11} />
+                          <span className="tr-tree-name">{p.name}</span>
+                          {isGit === true ? (
+                            <span
+                              className={`tr-tree-badge${(summaries[p.path]?.dirtyCount ?? 0) > 0 ? "" : " is-empty"}`}
+                              title={t("reports.treeBadge")}
+                            >
+                              {summaries[p.path]?.dirtyCount ?? 0}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}

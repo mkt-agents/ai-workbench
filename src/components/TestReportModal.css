@@ -72,6 +72,13 @@
   transition: opacity var(--transition-normal);
 }
 
+/* `.tr-group` has overflow:hidden, which zeroes its automatic minimum size —
+   as a flex item it would then shrink to fit the panel and clip the file rows
+   instead of overflowing into the scroll. Keep children at natural height. */
+.tr-body > * {
+  flex-shrink: 0;
+}
+
 .tr-stats {
   display: flex;
   flex-wrap: wrap;
