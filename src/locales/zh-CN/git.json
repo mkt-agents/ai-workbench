@@ -237,6 +237,13 @@
   },
   "testReport": {
     "open": "生成回归测试报告",
+    "openFolder": "为该文件夹的 {{count}} 个仓库生成合并回归报告",
+    "folderTitle": "文件夹回归测试报告",
+    "folderIntro": "为整个文件夹下的所有仓库采集改动，合并成一份回归测试报告（同夹仓库通常相互关联）。",
+    "baselineNote": "基准会应用到文件夹下的每个仓库；缺失该基准或非 Git 的仓库会在各仓概览中标为跳过。",
+    "collectProgress": "采集仓库 {{done}}/{{total}}…",
+    "repoSummary": "各仓概览",
+    "repoError": "已跳过：{{error}}",
     "title": "回归测试报告",
     "mode": "改动基准",
     "modeUncommitted": "未提交改动",

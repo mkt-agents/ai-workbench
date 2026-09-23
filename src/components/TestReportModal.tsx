@@ -1,8 +1,9 @@
 /**
- * One-shot regression report launched from a repo card: collect the change set
- * (uncommitted / against a base / last N commits), show the static analysis,
- * then optionally ask a model for the five tester-facing sections. Nothing is
- * persisted — copy or export the assembled Markdown and it's yours.
+ * One-shot regression report launched from a repo card, or from a folder group
+ * header. A folder report folds every repo under the group into ONE merged
+ * report — repos that live together ship related code — while still showing a
+ * per-repo rollup and tagging every path/module with its repo. Nothing is
+ * persisted: collect → static analysis → optional AI scenarios → copy/export.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -13,27 +14,45 @@ import { readStoredString, writeStoredString } from "../core/localState";
 import { markdownSections } from "../lib/aiText";
 import ModalTitleRow from "./ModalTitleRow";
 import { isCancelledError, cleanErrorMessage } from "./testReportTypes";
-import type { AiResult, FileChange, TestReportBundle } from "./testReportTypes";
+import type { AiResult, ChangeReport, FileChange, FolderRepoRow } from "./testReportTypes";
 import type { AIModelConfig } from "../core/types";
 import "./TestReportModal.css";
 
-type Props = {
-  repoPath: string;
-  onClose: () => void;
-};
+type Props =
+  | { repoPath: string; onClose: () => void }
+  | { folderName: string; repoPaths: string[]; onClose: () => void };
 
 type Mode = "uncommitted" | "base" | "commits";
 type GroupMode = "module" | "commit";
+
+/** A merged single/folder view, so the render path is shared. */
+type View = {
+  report: ChangeReport;
+  reportId: string;
+  /** Repo or folder display name — used for the title, export and AI label. */
+  name: string;
+  branch: string;
+  head: string;
+  /** Per-repo rollup; non-null only in folder mode. */
+  rows: FolderRepoRow[] | null;
+};
 
 /** The panel renders a bounded list; the full set still counts towards the totals. */
 const MAX_VISIBLE_FILES = 150;
 const MODEL_KEY = "workbench-commit-model";
 
-export default function TestReportModal({ repoPath, onClose }: Props) {
+export default function TestReportModal(props: Props) {
   const { t } = useTranslation("git");
   const { t: tc } = useTranslation("common");
 
+  const isFolder = "repoPaths" in props;
+  const repoPath = isFolder ? "" : props.repoPath;
+  const folderName = isFolder ? props.folderName : "";
+  const repoPaths = isFolder ? props.repoPaths : [];
+  const onClose = props.onClose;
+
   const collect = useGlobalStore((s) => s.invokeCollectTestReport);
+  const collectFolder = useGlobalStore((s) => s.invokeCollectFolderReport);
   const generateAi = useGlobalStore((s) => s.invokeGenerateTestReportAi);
   const cancelAi = useGlobalStore((s) => s.invokeCancelTestReportAi);
   const saveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
@@ -45,9 +64,10 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
   const [base, setBase] = useState("");
   const [commits, setCommits] = useState(5);
   const [busy, setBusy] = useState(false);
-  const [bundle, setBundle] = useState<TestReportBundle | null>(null);
+  const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [collectProgress, setCollectProgress] = useState<{ done: number; total: number } | null>(null);
 
   const [ai, setAi] = useState("");
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
@@ -58,8 +78,9 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
   const [groupMode, setGroupMode] = useState<GroupMode>("module");
   const [selectedModelId, setSelectedModelId] = useState<string>(() => readStoredString(MODEL_KEY));
 
-  const report = bundle?.report ?? null;
-  const viewingId = bundle?.reportId ?? "";
+  const report = view?.report ?? null;
+  const viewingId = view?.reportId ?? "";
+  const rows = view?.rows ?? null;
   const commitDetails = report?.commitDetails ?? [];
 
   const defaultModel = useMemo(() => aiModels.find((m) => m.isDefault) || aiModels[0] || null, [aiModels]);
@@ -87,27 +108,78 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
   // A new baseline invalidates any shown report — never let it go stale against
   // the wrong range.
   const resetReport = useCallback(() => {
-    setBundle(null);
+    setView(null);
     setAi("");
     setAiWarnings([]);
     setAiProgress(null);
+    setCollectProgress(null);
     setError("");
   }, []);
+
+  const runAi = useCallback(
+    async (idArg?: string) => {
+      const id = idArg ?? viewingId;
+      if (aiBusy || !id || !selectedModel) return;
+      setAiBusy(true);
+      setAiProgress(null);
+      setError("");
+      try {
+        const result: AiResult = await generateAi(id, selectedModel);
+        setAi(result.markdown);
+        setAiWarnings(result.warnings);
+      } catch (e) {
+        // A cancel is a user action, not a failure; the static report stays usable.
+        if (isCancelledError(e)) {
+          showMsg("success", t("testReport.aiCancelled"));
+        } else {
+          setError(cleanErrorMessage(e));
+          showMsg("error", t("testReport.aiFailed", { error: cleanErrorMessage(e) }));
+        }
+      } finally {
+        setAiBusy(false);
+        setAiProgress(null);
+      }
+    },
+    [aiBusy, viewingId, selectedModel, generateAi, showMsg, t]
+  );
 
   const generate = async () => {
     if (busy) return;
     setBusy(true);
     setError("");
+    setCollectProgress(null);
+    const baseArg = mode === "base" ? base.trim() : undefined;
+    const commitsArg = mode === "commits" ? commits : undefined;
     try {
-      const result = await collect(
-        repoPath,
-        mode === "base" ? base.trim() : undefined,
-        mode === "commits" ? commits : undefined
-      );
-      setBundle(result);
-      setAi("");
-      setAiWarnings([]);
-      if (result.report.stats.files === 0) showMsg("success", t("testReport.empty"));
+      if (isFolder) {
+        const r = await collectFolder(folderName, repoPaths, baseArg, commitsArg);
+        setView({
+          report: r.report,
+          reportId: r.reportId,
+          name: r.folderName,
+          branch: "",
+          head: "",
+          rows: r.repos,
+        });
+        setAi("");
+        setAiWarnings([]);
+        if (r.report.stats.files === 0) showMsg("success", t("testReport.empty"));
+        else if (selectedModel) void runAi(r.reportId); // folder mode asks the model right away
+        else showMsg("error", t("testReport.aiNeedModel"));
+      } else {
+        const r = await collect(repoPath, baseArg, commitsArg);
+        setView({
+          report: r.report,
+          reportId: r.reportId,
+          name: r.repoName,
+          branch: r.branch,
+          head: r.head,
+          rows: null,
+        });
+        setAi("");
+        setAiWarnings([]);
+        if (r.report.stats.files === 0) showMsg("success", t("testReport.empty"));
+      }
     } catch (e) {
       setError(cleanErrorMessage(e));
       showMsg("error", t("testReport.failed", { error: cleanErrorMessage(e) }));
@@ -116,30 +188,18 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
     }
   };
 
-  const runAi = async () => {
-    if (aiBusy || !viewingId || !selectedModel) return;
-    setAiBusy(true);
-    setAiProgress(null);
-    setError("");
-    try {
-      const result: AiResult = await generateAi(viewingId, selectedModel);
-      setAi(result.markdown);
-      setAiWarnings(result.warnings);
-    } catch (e) {
-      // A cancel is a user action, not a failure; the static report stays usable.
-      if (isCancelledError(e)) {
-        showMsg("success", t("testReport.aiCancelled"));
-      } else {
-        setError(cleanErrorMessage(e));
-        showMsg("error", t("testReport.aiFailed", { error: cleanErrorMessage(e) }));
-      }
-    } finally {
-      setAiBusy(false);
-      setAiProgress(null);
-    }
-  };
+  // The folder collect is one slow pass over every repo; keep the count live.
+  useEffect(() => {
+    if (!busy || !isFolder) return;
+    const un = listen<{ done: number; total: number }>("test-report-collect-progress", (event) => {
+      setCollectProgress({ done: event.payload.done, total: event.payload.total });
+    });
+    return () => {
+      void un.then((dispose) => dispose());
+    };
+  }, [busy, isFolder]);
 
-  // The map-reduce pass emits one event per finished chunk.
+  // The map-reduce AI pass emits one event per finished chunk.
   useEffect(() => {
     if (!aiBusy || !viewingId) return;
     const un = listen<{ reportId: string; done: number; total: number }>(
@@ -188,16 +248,28 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
   const markdown = useMemo(() => {
     if (!report) return "";
     const lines: string[] = [];
-    lines.push(`# ${t("testReport.title")} · ${bundle?.repoName ?? ""}`);
+    lines.push(`# ${t(isFolder ? "testReport.folderTitle" : "testReport.title")} · ${view?.name ?? ""}`);
     lines.push("");
     lines.push(`- ${t("testReport.baseline")}: ${report.base || t("testReport.modeUncommitted")}`);
-    if (bundle?.branch)
-      lines.push(`- ${t("testReport.branch")}: ${bundle.branch}${bundle.head ? ` @ ${bundle.head}` : ""}`);
+    if (view?.branch)
+      lines.push(`- ${t("testReport.branch")}: ${view.branch}${view.head ? ` @ ${view.head}` : ""}`);
     lines.push(
       `- ${t("testReport.stats")}: ${report.stats.files} ${t("testReport.files")}, +${report.stats.adds} -${report.stats.dels}, ` +
         `${report.stats.modules} ${t("testReport.modules")}, ${report.stats.untested} ${t("testReport.untested")}` +
         (report.stats.ignored ? `, ${t("testReport.ignored")} ${report.stats.ignored}` : "")
     );
+    if (rows && rows.length) {
+      lines.push("", `## ${t("testReport.repoSummary")}`);
+      for (const row of rows) {
+        lines.push(
+          row.error
+            ? `- ${row.name}: ${t("testReport.repoError", { error: row.error })}`
+            : `- ${row.name}: ${row.files} ${t("testReport.files")}, +${row.adds} -${row.dels}${
+                row.untested ? `, ${row.untested} ${t("testReport.untested")}` : ""
+              }`
+        );
+      }
+    }
     if (report.scope.length)
       lines.push(
         `- ${t("testReport.scopeTitle")}: ${report.scope.map((s) => t(`testReport.scope.${s}`, { defaultValue: s })).join(" / ")}`
@@ -229,7 +301,7 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
     }
     if (ai) lines.push("", `## ${t("testReport.aiSection")}`, "", ai.trim());
     return lines.join("\n");
-  }, [report, bundle, ai, onlyUntested, t]);
+  }, [report, view, rows, ai, onlyUntested, isFolder, t]);
 
   const copy = async () => {
     try {
@@ -242,7 +314,7 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
 
   const exportMd = async () => {
     try {
-      const name = `${bundle?.repoName ?? "repo"}-${t("testReport.title")}-${new Date().toISOString().slice(0, 10)}.md`;
+      const name = `${view?.name ?? "folder"}-${t(isFolder ? "testReport.folderTitle" : "testReport.title")}-${new Date().toISOString().slice(0, 10)}.md`;
       const path = await saveTextFile(markdown, name, t("testReport.export"));
       showMsg("success", t("testReport.savedTo", { path }));
     } catch (e) {
@@ -290,7 +362,11 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal tr-modal" onClick={(e) => e.stopPropagation()}>
-        <ModalTitleRow title={t("testReport.title")} onClose={onClose} disabled={busy || aiBusy} />
+        <ModalTitleRow
+          title={isFolder ? `${t("testReport.folderTitle")} · ${folderName}` : t("testReport.title")}
+          onClose={onClose}
+          disabled={busy || aiBusy}
+        />
 
         <div className="tr-toolbar">
           <select
@@ -345,18 +421,50 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
           )}
         </div>
 
+        {isFolder && <p className="tr-hint tr-baseline-note">{t("testReport.baselineNote")}</p>}
         {error && <div className="repos-modal-error">{error}</div>}
         {toast && <div className={`toast toast-${toast.type}`}><span className="toast-text">{toast.text}</span></div>}
 
-        {!report && !busy && <p className="tr-hint">{t("testReport.intro")}</p>}
+        {!report && !busy && <p className="tr-hint">{t(isFolder ? "testReport.folderIntro" : "testReport.intro")}</p>}
         {busy && !report && (
           <p className="tr-hint">
-            <Loader2 size={13} className="spin" /> {tc("loading")}
+            <Loader2 size={13} className="spin" />{" "}
+            {isFolder && collectProgress
+              ? t("testReport.collectProgress", { done: collectProgress.done, total: collectProgress.total })
+              : tc("loading")}
           </p>
         )}
 
         {report && (
           <div className="tr-body">
+            {rows && rows.length > 0 && (
+              <div className="tr-repos">
+                <span className="tr-label">{t("testReport.repoSummary")}</span>
+                <ul>
+                  {rows.map((row) => (
+                    <li key={row.name} className={`tr-repo${row.error ? " is-error" : ""}`}>
+                      <span className="tr-repo-name" title={row.name}>
+                        {row.name}
+                      </span>
+                      {row.error ? (
+                        <span className="tr-repo-error">{t("testReport.repoError", { error: row.error })}</span>
+                      ) : (
+                        <span className="tr-repo-stat">
+                          {row.files} {t("testReport.files")} · +{row.adds} -{row.dels}
+                          {row.untested > 0 && (
+                            <span className="tr-repo-warn">
+                              {" "}
+                              · {row.untested} {t("testReport.untested")}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div className="tr-stats">
               <span className="tr-stat">
                 {report.stats.files} {t("testReport.files")}
@@ -381,10 +489,10 @@ export default function TestReportModal({ repoPath, onClose }: Props) {
                   {t("testReport.ignored")} {report.stats.ignored}
                 </span>
               )}
-              {bundle?.branch && (
+              {view?.branch && (
                 <span className="tr-stat is-muted">
-                  {bundle.branch}
-                  {bundle.head ? ` @ ${bundle.head}` : ""}
+                  {view.branch}
+                  {view.head ? ` @ ${view.head}` : ""}
                 </span>
               )}
             </div>

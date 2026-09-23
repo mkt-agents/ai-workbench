@@ -241,6 +241,16 @@ fn repo_display_name(repo_path: &str) -> String {
         .unwrap_or_else(|| trimmed.to_string())
 }
 
+/// Turn the two optional baseline params into a scope: base wins over last-N,
+/// neither means the uncommitted working tree.
+fn scope_of(base: Option<String>, last_commits: Option<i64>) -> ChangeScope {
+    match (base.filter(|b| !b.trim().is_empty()), last_commits) {
+        (Some(base), _) => ChangeScope::Ref(base),
+        (None, Some(count)) => ChangeScope::Commits(count),
+        (None, None) => ChangeScope::Uncommitted,
+    }
+}
+
 pub(crate) fn collect_sync(repo_path: &str, scope: ChangeScope) -> Result<TestReportBundle, String> {
     let dir = Path::new(repo_path);
     ensure_git_repo(repo_path)?;
@@ -362,11 +372,7 @@ pub async fn collect_test_report(
     base: Option<String>,
     last_commits: Option<i64>,
 ) -> Result<TestReportBundle, String> {
-    let scope = match (base.filter(|b| !b.trim().is_empty()), last_commits) {
-        (Some(base), _) => ChangeScope::Ref(base),
-        (None, Some(count)) => ChangeScope::Commits(count),
-        (None, None) => ChangeScope::Uncommitted,
-    };
+    let scope = scope_of(base, last_commits);
     let mut bundle = tokio::task::spawn_blocking(move || collect_sync(&repo_path, scope))
         .await
         .map_err(|e| format!("分析任务已中止: {}", e))??;
@@ -385,14 +391,136 @@ pub async fn collect_test_report(
     Ok(bundle)
 }
 
+/// Per-repo rollup row inside a folder report.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderRepoRow {
+    pub name: String,
+    pub files: u32,
+    pub adds: u32,
+    pub dels: u32,
+    pub untested: u32,
+    /// `None` = collected fine; `Some(msg)` = this repo was skipped (not a repo /
+    /// missing base / git error) and contributed nothing to the merged report.
+    pub error: Option<String>,
+}
+
+/// The merged result of collecting every repo under one folder.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderReportBundle {
+    pub report: ChangeReport,
+    /// Cache key + cancellation token for the shared AI step.
+    pub report_id: String,
+    pub folder_name: String,
+    pub repos: Vec<FolderRepoRow>,
+}
+
+/// Folder = N related repos, so the model gets one combined patch. Repos with no
+/// changes add nothing; the total stays bounded so a big folder can't blow the prompt.
+fn build_folder_ai_patch(entries: &[(&str, &TestReportBundle)]) -> String {
+    let mut out = String::new();
+    for (name, bundle) in entries {
+        if bundle.ai_patch.trim().is_empty() {
+            continue;
+        }
+        out.push_str(&format!("### 仓库 {}\n", name));
+        out.push_str(&bundle.ai_patch);
+        out.push('\n');
+    }
+    truncate_bytes(&out, MAX_AI_PATCH_BYTES)
+}
+
+/// Collect every repo under a folder in one pass and fold the results into a single
+/// regression report. The AI step is the ordinary `generate_test_report_ai`, keyed on
+/// the merged `report_id`, so map-reduce + cancellation come for free. Repos that fail
+/// (or have no changes) are reported per-row instead of aborting the whole folder.
+#[tauri::command]
+pub async fn collect_folder_report(
+    app: AppHandle,
+    folder_name: String,
+    repo_paths: Vec<String>,
+    base: Option<String>,
+    last_commits: Option<i64>,
+) -> Result<FolderReportBundle, String> {
+    if repo_paths.is_empty() {
+        return Err("该文件夹下没有可选的 Git 仓库".to_string());
+    }
+    let scope = scope_of(base, last_commits);
+    let total = repo_paths.len();
+    let mut collected: Vec<(String, TestReportBundle)> = Vec::new();
+    let mut rows: Vec<FolderRepoRow> = Vec::new();
+
+    for (index, path) in repo_paths.iter().enumerate() {
+        let _ = app.emit(
+            "test-report-collect-progress",
+            serde_json::json!({ "folder": folder_name, "done": index, "total": total }),
+        );
+        let name = repo_display_name(path);
+        let scope = scope.clone();
+        let path = path.clone();
+        let outcome = tokio::task::spawn_blocking(move || collect_sync(&path, scope))
+            .await
+            .map_err(|e| format!("分析任务已中止: {}", e))?;
+        match outcome {
+            Ok(bundle) => {
+                rows.push(FolderRepoRow {
+                    name: name.clone(),
+                    files: bundle.report.stats.files,
+                    adds: bundle.report.stats.adds,
+                    dels: bundle.report.stats.dels,
+                    untested: bundle.report.stats.untested,
+                    error: None,
+                });
+                collected.push((name, bundle));
+            }
+            Err(err) => rows.push(FolderRepoRow {
+                name,
+                files: 0,
+                adds: 0,
+                dels: 0,
+                untested: 0,
+                error: Some(err),
+            }),
+        }
+    }
+    let _ = app.emit(
+        "test-report-collect-progress",
+        serde_json::json!({ "folder": folder_name, "done": total, "total": total }),
+    );
+
+    let with_changes: Vec<(&str, &TestReportBundle)> = collected
+        .iter()
+        .filter(|(_, b)| b.report.stats.files > 0)
+        .map(|(n, b)| (n.as_str(), b))
+        .collect();
+    let report = change_report::merge_folder_report(
+        &with_changes
+            .iter()
+            .map(|(n, b)| (*n, &b.report))
+            .collect::<Vec<(&str, &ChangeReport)>>(),
+    );
+    let ai_patch = build_folder_ai_patch(&with_changes);
+
+    // Only repo names + reports are needed to cache; drop the bundles.
+    let id = next_report_id();
+    cache_put(
+        id.clone(),
+        CacheEntry {
+            repo_name: folder_name.clone(),
+            report: report.clone(),
+            ai_patch,
+        },
+    );
+    Ok(FolderReportBundle { report, report_id: id, folder_name, repos: rows })
+}
+
 fn emit_ai_progress(app: &AppHandle, report_id: &str, done: usize, total: usize) {
     let _ = app.emit(
         "test-report-ai-progress",
         serde_json::json!({ "reportId": report_id, "done": done, "total": total }),
     );
-}
-
-/// Ask the chosen model for the test-facing half of the report: which functions are
+}/// Ask the chosen model for the test-facing half of the report: which functions are
 /// affected and what must be re-tested. Works from the cached analysis plus a bounded
 /// patch, so it always matches what the panel just showed. Large reports go through a
 /// map-reduce pass: one brief per module chunk, then one final call assembles the

@@ -468,3 +468,65 @@
 .tr-actions-spacer {
   flex: 1;
 }
+
+.tr-baseline-note {
+  margin-bottom: 8px;
+}
+
+.tr-repos {
+  margin-bottom: 10px;
+}
+
+.tr-repos ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.tr-repo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tr-repo:first-child {
+  border-top: none;
+}
+
+.tr-repo:nth-child(even) {
+  background: color-mix(in srgb, var(--bg-2) 40%, transparent);
+}
+
+.tr-repo-name {
+  flex: 1 1 120px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.tr-repo-stat {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.tr-repo-warn {
+  color: var(--yellow);
+}
+
+.tr-repo-error {
+  color: var(--red);
+}
+
+.tr-repo.is-error .tr-repo-name {
+  color: var(--text-2);
+}

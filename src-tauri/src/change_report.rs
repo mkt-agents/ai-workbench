@@ -1266,6 +1266,110 @@ pub fn build_report(inputs: &ReportInputs) -> ChangeReport {
     }
 }
 
+/// Group changed files by module the same way `build_report` renders them; split
+/// out so the folder merge can rebuild groups over a repo-tagged file set.
+pub fn groups_of(files: &[FileChange]) -> Vec<ModuleGroup> {
+    let mut grouped: BTreeMap<String, ModuleGroup> = BTreeMap::new();
+    for file in files {
+        let group = grouped.entry(file.module.clone()).or_insert_with(|| ModuleGroup {
+            name: file.module.clone(),
+            files: 0,
+            adds: 0,
+            dels: 0,
+            layers: Vec::new(),
+            risks: Vec::new(),
+            untested: Vec::new(),
+        });
+        group.files += 1;
+        group.adds += file.adds;
+        group.dels += file.dels;
+        if !group.layers.contains(&file.layer) {
+            group.layers.push(file.layer.clone());
+        }
+        for risk in &file.risks {
+            if !group.risks.contains(risk) {
+                group.risks.push(risk.clone());
+            }
+        }
+        if file.risks.iter().any(|r| r == "untested") {
+            group.untested.push(file.path.clone());
+        }
+    }
+    grouped.into_values().collect()
+}
+
+/// Fold one folder's per-repo reports into a single regression report. Repos that
+/// live together ship related code, so a tester wants one report over the whole
+/// set; provenance stays readable because every path and module is repo-tagged
+/// ("repo:path", "repo · module") and cross-repo commit ids are namespaced
+/// ("repo@sha") so a file never borrows another repo's commit.
+pub fn merge_folder_report(repos: &[(&str, &ChangeReport)]) -> ChangeReport {
+    let mut files: Vec<FileChange> = Vec::new();
+    let mut commit_details: Vec<CommitBrief> = Vec::new();
+    let mut api_changes: Vec<ApiChange> = Vec::new();
+    let mut subjects: Vec<String> = Vec::new();
+    let mut layers: BTreeSet<String> = BTreeSet::new();
+    let mut risks: BTreeSet<String> = BTreeSet::new();
+    let mut ignored = 0u32;
+    let mut truncated = false;
+
+    for (repo, report) in repos {
+        for file in &report.files {
+            let mut file = file.clone();
+            file.path = format!("{}:{}", repo, file.path);
+            file.module = format!("{} · {}", repo, file.module);
+            file.commits = file.commits.iter().map(|sha| format!("{}@{}", repo, sha)).collect();
+            layers.insert(file.layer.clone());
+            for risk in &file.risks {
+                risks.insert(risk.clone());
+            }
+            files.push(file);
+        }
+        for detail in &report.commit_details {
+            let mut detail = detail.clone();
+            detail.short_sha = format!("{}@{}", repo, detail.short_sha);
+            detail.subject = format!("[{}] {}", repo, detail.subject);
+            commit_details.push(detail);
+        }
+        for change in &report.api_changes {
+            let mut change = change.clone();
+            change.path = format!("{}:{}", repo, change.path);
+            api_changes.push(change);
+        }
+        subjects.extend(report.commits.iter().map(|s| format!("[{}] {}", repo, s)));
+        ignored += report.stats.ignored;
+        truncated |= report.truncated;
+    }
+
+    files.sort_by(|a, b| a.module.cmp(&b.module).then(a.path.cmp(&b.path)));
+    let groups = groups_of(&files);
+    let scope = suggested_scope(&layers, &risks, &api_changes);
+    let code_files = files.iter().filter(|f| f.layer != "test" && f.layer != "docs" && is_code(&f.path)).count() as u32;
+    let untested = files.iter().filter(|f| f.risks.iter().any(|r| r == "untested")).count() as u32;
+
+    ChangeReport {
+        base: repos.first().map(|(_, r)| r.base.clone()).unwrap_or_default(),
+        source: "folder".to_string(),
+        commits: subjects,
+        commit_details,
+        stats: ChangeStats {
+            files: files.len() as u32,
+            adds: files.iter().map(|f| f.adds).sum(),
+            dels: files.iter().map(|f| f.dels).sum(),
+            modules: groups.len() as u32,
+            code_files,
+            untested,
+            test_files: files.iter().filter(|f| f.layer == "test").count() as u32,
+            ignored,
+        },
+        groups,
+        api_changes,
+        scope,
+        files,
+        truncated,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1576,5 +1680,90 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].kind, "removed");
         assert_eq!(changes[0].path, "src/main/java/com/x/Gone.java");
+    }
+
+    fn mk_file(path: &str, module: &str, layer: &str, adds: u32, dels: u32, risks: &[&str]) -> FileChange {
+        FileChange {
+            path: path.into(),
+            old_path: None,
+            status: "M".into(),
+            adds,
+            dels,
+            module: module.into(),
+            layer: layer.into(),
+            risks: risks.iter().map(|s| s.to_string()).collect(),
+            test_path: None,
+            has_test: false,
+            untracked: false,
+            commits: vec![],
+            hints: vec![],
+        }
+    }
+
+    fn mk_repo(files: Vec<FileChange>) -> ChangeReport {
+        let groups = groups_of(&files);
+        ChangeReport {
+            base: String::new(),
+            source: "uncommitted".into(),
+            commits: vec![],
+            commit_details: vec![],
+            stats: ChangeStats {
+                files: files.len() as u32,
+                adds: files.iter().map(|f| f.adds).sum(),
+                dels: files.iter().map(|f| f.dels).sum(),
+                modules: groups.len() as u32,
+                code_files: 0,
+                untested: files.iter().filter(|f| f.risks.iter().any(|r| r == "untested")).count() as u32,
+                test_files: 0,
+                ignored: 0,
+            },
+            groups,
+            api_changes: vec![],
+            scope: vec![],
+            files,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn folder_merge_tags_provenance_and_sums_stats() {
+        let mut pay = mk_file("src/svc/pay.ts", "svc", "logic", 10, 2, &["money"]);
+        pay.commits = vec!["aaaa111".into()];
+        let a = mk_repo(vec![pay]);
+        let b = mk_repo(vec![mk_file("src/svc/pay.ts", "svc", "logic", 3, 1, &["untested"])]);
+        let merged = merge_folder_report(&[("alpha", &a), ("beta", &b)]);
+        assert_eq!(merged.stats.files, 2);
+        assert_eq!(merged.stats.adds, 13);
+        assert_eq!(merged.stats.dels, 3);
+        // same module name in two repos stays two repo-tagged groups
+        assert_eq!(merged.groups.len(), 2);
+        let paths: Vec<&str> = merged.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"alpha:src/svc/pay.ts"));
+        assert!(paths.contains(&"beta:src/svc/pay.ts"));
+        assert!(merged.files.iter().any(|f| f.module == "alpha · svc"));
+        // the untested risk from beta is counted once, and the money risk reaches scope
+        assert_eq!(merged.stats.untested, 1);
+        assert!(merged.scope.contains(&"money".to_string()));
+    }
+
+    #[test]
+    fn folder_merge_namespaces_commit_ids() {
+        let mut fa = mk_file("a.go", "root", "logic", 1, 0, &[]);
+        fa.commits = vec!["deadbeef".into()];
+        let mut fb = mk_file("b.go", "root", "logic", 1, 0, &[]);
+        fb.commits = vec!["deadbeef".into()]; // identical short sha, different repo
+        let mut alpha = mk_repo(vec![fa]);
+        alpha.commit_details = vec![CommitBrief {
+            sha: "x".into(),
+            short_sha: "deadbeef".into(),
+            author: "A".into(),
+            date: "2026".into(),
+            subject: "s".into(),
+            body: String::new(),
+        }];
+        let merged = merge_folder_report(&[("alpha", &alpha), ("beta", &mk_repo(vec![fb]))]);
+        assert!(merged.files.iter().any(|f| f.commits.contains(&"alpha@deadbeef".to_string())));
+        assert!(merged.files.iter().any(|f| f.commits.contains(&"beta@deadbeef".to_string())));
+        assert!(merged.commit_details.iter().any(|c| c.short_sha == "alpha@deadbeef"));
     }
 }

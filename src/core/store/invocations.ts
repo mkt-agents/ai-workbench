@@ -7,7 +7,7 @@
  */
 import { tauriInvoke } from './helpers';
 import type { AIModelConfig, DshInstance, DevtoolsHttpRequest, DevtoolsHttpResponse, DevtoolsPortEntry, DevtoolsProcessInfo, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion } from '../types';
-import type { AiResult, TestReportBundle } from '../../components/testReportTypes';
+import type { AiResult, FolderReportBundle, TestReportBundle } from '../../components/testReportTypes';
 
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
@@ -69,6 +69,12 @@ export interface Invocations {
     base?: string,
     lastCommits?: number,
   ) => Promise<TestReportBundle>;
+  invokeCollectFolderReport: (
+    folderName: string,
+    repoPaths: string[],
+    base?: string,
+    lastCommits?: number,
+  ) => Promise<FolderReportBundle>;
   invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig) => Promise<AiResult>;
   invokeCancelTestReportAi: (reportId: string) => Promise<void>;
   invokeReadSystemHosts: () => Promise<string>;
@@ -269,6 +275,8 @@ export const invocations: Invocations = {
   // Regression report (repo card)
   invokeCollectTestReport: (repoPath: string, base?: string, lastCommits?: number) =>
     tauriInvoke<TestReportBundle>('collect_test_report', { repoPath, base, lastCommits }),
+  invokeCollectFolderReport: (folderName: string, repoPaths: string[], base?: string, lastCommits?: number) =>
+    tauriInvoke<FolderReportBundle>('collect_folder_report', { folderName, repoPaths, base, lastCommits }),
   invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig) =>
     tauriInvoke<AiResult>('generate_test_report_ai', { reportId, config }),
   invokeCancelTestReportAi: (reportId: string) =>

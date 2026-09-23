@@ -84,6 +84,24 @@ export interface AiResult {
   warnings: string[];
 }
 
+/** One repo's rollup line inside a folder (multi-repo) report. */
+export interface FolderRepoRow {
+  name: string;
+  files: number;
+  adds: number;
+  dels: number;
+  untested: number;
+  error?: string | null;
+}
+
+/** The merged report over every repo under one folder, plus its per-repo rollup. */
+export interface FolderReportBundle {
+  report: ChangeReport;
+  reportId: string;
+  folderName: string;
+  repos: FolderRepoRow[];
+}
+
 /** The backend prefixes cancellable errors so the UI can tell a cancel from a failure. */
 export function isCancelledError(error: unknown): boolean {
   return String(error).includes("[E_CANCELLED]");

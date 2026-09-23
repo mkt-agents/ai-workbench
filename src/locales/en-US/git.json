@@ -237,6 +237,13 @@
   },
   "testReport": {
     "open": "Generate regression test report",
+    "openFolder": "Generate a merged regression report for the {{count}} repos in this folder",
+    "folderTitle": "Folder Regression Report",
+    "folderIntro": "Collect changes across every repo in the folder and merge them into one regression report (repos in a folder usually relate).",
+    "baselineNote": "The baseline applies to each repo in the folder; repos missing it (or not a Git repo) are marked skipped in the rollup.",
+    "collectProgress": "Collecting repos {{done}}/{{total}}…",
+    "repoSummary": "Per-repo rollup",
+    "repoError": "Skipped: {{error}}",
     "title": "Regression Test Report",
     "mode": "Change baseline",
     "modeUncommitted": "Uncommitted changes",

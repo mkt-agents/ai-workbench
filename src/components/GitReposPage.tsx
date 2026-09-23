@@ -143,6 +143,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [bindingPath, setBindingPath] = useState<string | null>(null);
   const [testReportPath, setTestReportPath] = useState<string | null>(null);
+  const [testReportFolder, setTestReportFolder] = useState<{ name: string; repoPaths: string[] } | null>(null);
   const [showAccounts, setShowAccounts] = useState(false);
   const [scanState, setScanState] = useState<{
     rootPath: string;
@@ -999,6 +1000,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
               g.projects.length > 0 && selectedInGroup === g.projects.length;
             const groupPartialSelected =
               selectedInGroup > 0 && selectedInGroup < g.projects.length;
+            const gitRepoPaths = g.projects.filter((p) => summaries[p.path]?.isGit).map((p) => p.path);
             return (
               <div key={g.key} className="repos-group">
                 <div className="repos-group-header">
@@ -1027,6 +1029,18 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
                     <span className="repos-group-title">{title}</span>
                     <span className="runtime-muted">({g.projects.length})</span>
                   </button>
+                  {gitRepoPaths.length > 0 && (
+                    <button
+                      type="button"
+                      className="repos-group-admin-btn"
+                      disabled={batchBusy}
+                      title={t("testReport.openFolder", { count: gitRepoPaths.length })}
+                      aria-label={t("testReport.openFolder", { count: gitRepoPaths.length })}
+                      onClick={() => setTestReportFolder({ name: title, repoPaths: gitRepoPaths })}
+                    >
+                      <ClipboardList size={13} />
+                    </button>
+                  )}
                   {g.workspace && (
                     <span className="repos-group-path" title={g.workspace.path}>
                       {g.workspace.path}
@@ -1089,6 +1103,14 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
 
       {testReportPath !== null && (
         <TestReportModal repoPath={testReportPath} onClose={() => setTestReportPath(null)} />
+      )}
+
+      {testReportFolder !== null && (
+        <TestReportModal
+          folderName={testReportFolder.name}
+          repoPaths={testReportFolder.repoPaths}
+          onClose={() => setTestReportFolder(null)}
+        />
       )}
 
       {showAccounts && (
