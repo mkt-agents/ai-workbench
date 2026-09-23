@@ -25,8 +25,9 @@
 ### 临时隧道
 
 1. 填写本地地址（如 `http://localhost:3000`）或点最近端口
-2. 点「启动隧道」，等待日志中出现 trycloudflare URL
-3. 右侧日志可按隧道过滤；运行中总览可复制/停止
+2. 视网络选择**连接协议**：默认自动协商（QUIC）；部分网络下 QUIC（UDP）不通会导致隧道无法注册，选 HTTP2 可绕过。该偏好对临时与命名隧道都生效
+3. 点「启动隧道」，等待日志中出现 trycloudflare URL
+4. 右侧日志可按隧道过滤；运行中总览可复制/停止。启动约 6 秒后应用会复查进程是否存活——若很快退出会弹出错误提示，日志里通常附带中文修复指引
 
 ### 命名隧道（二级域名绑定）
 
@@ -73,4 +74,5 @@ cloudflared tunnel --no-autoupdate run --token "<token>"
 - **config.yml 不存在**：检查路径；浏览对话框默认尝试打开 `.cloudflared` 目录
 - **已有隧道在跑（同 id）**：先停掉该条再启，或改用另一本地端口 / 另一绑定
 - **临时 URL 迟迟不出**：看右侧日志；确认本地服务已监听对应端口
-- **访问域名报 1033（Argo Tunnel error）**：Cloudflare 边缘找不到该隧道 ID 的活跃连接 —— 隧道**离线**，与本地服务端口无关（端口没起是 502）。排查顺序：① 应用内看该隧道是否还显示「运行中」（cloudflared 进程崩溃/被杀后卡片会在 5 秒内自动消失，日志面板也会出现「进程已退出」）；② 日志里找 `Registered tunnel connection` —— 没有它说明从未连上边缘，常见于网络无法连 Cloudflare（可给 cloudflared 配置代理 `--edge-ip-version 4` / `--protocol http2` 规避 QUIC/UDP 被限速）；③ 确认绑定用的 token / config 与 DNS 指向的是**同一条**隧道（hostname 的 CNAME 指向隧道 A、绑定却用隧道 B 的 token，B 在线也照样 1033）
+- **访问域名报 1033（Argo Tunnel error）**：Cloudflare 边缘找不到该隧道 ID 的活跃连接 —— 隧道**离线**，与本地服务端口无关（端口没起是 502）。排查顺序：① 应用内看该隧道是否还显示「运行中」（cloudflared 进程崩溃/被杀后卡片会在 5 秒内自动消失，日志面板也会出现「进程已退出」）；② 日志里找 `Registered tunnel connection` —— 没有它说明从未连上边缘，常见于 QUIC（UDP）被限速，把「连接协议」切到 HTTP2 或给 cloudflared 配置代理；③ 确认绑定用的 token / config 与 DNS 指向的是**同一条**隧道（hostname 的 CNAME 指向隧道 A、绑定却用隧道 B 的 token，B 在线也照样 1033）；④ `The last ingress rule must match all URLs` → config.yml 末尾补 `- service: http_status:404`
+- **删除绑定**：若该绑定正在运行，确认后会先停止隧道再删除记录，不会留下孤儿 cloudflared 进程

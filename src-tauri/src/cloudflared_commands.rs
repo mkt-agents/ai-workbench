@@ -624,14 +624,30 @@ pub fn cloudflared_tunnel_status(state: State<'_, CloudflaredState>) -> Vec<Tunn
     guard.values().map(session_to_status).collect()
 }
 
+/// Only forward values cloudflared accepts; empty / "auto" keeps the default
+/// edge-protocol negotiation. HTTP2 is the escape hatch when QUIC (UDP 7844)
+/// is throttled or blocked — a common cause of tunnels that never register.
+fn push_protocol(cmd: &mut std::process::Command, protocol: Option<&str>) {
+    let p = protocol
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if p == "http2" || p == "quic" {
+        cmd.args(["--protocol", &p]);
+    }
+}
+
 #[tauri::command]
 pub async fn cloudflared_start_quick_tunnel(
     app: AppHandle,
     local_url: String,
+    protocol: Option<String>,
 ) -> Result<TunnelStatus, String> {
-    tokio::task::spawn_blocking(move || cloudflared_start_quick_tunnel_sync(app, local_url))
-        .await
-        .map_err(|e| format!("Task failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        cloudflared_start_quick_tunnel_sync(app, local_url, protocol)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {e}"))?
 }
 
 /// Blocking core: resolves the cloudflared binary (`where` + `--version`) and spawns
@@ -640,6 +656,7 @@ pub async fn cloudflared_start_quick_tunnel(
 fn cloudflared_start_quick_tunnel_sync(
     app: AppHandle,
     local_url: String,
+    protocol: Option<String>,
 ) -> Result<TunnelStatus, String> {
     let state = app.state::<CloudflaredState>();
     let local = normalize_local_url(&local_url)?;
@@ -675,6 +692,7 @@ fn cloudflared_start_quick_tunnel_sync(
     cmd.args(["tunnel", "--no-autoupdate", "--config", &empty_cfg.to_string_lossy(), "--url", &local])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    push_protocol(&mut cmd, protocol.as_deref());
 
     let mut child = cmd
         .spawn()
@@ -742,9 +760,12 @@ pub async fn cloudflared_start_named_tunnel(
     token: Option<String>,
     config_path: Option<String>,
     local_url: Option<String>,
+    protocol: Option<String>,
 ) -> Result<TunnelStatus, String> {
     tokio::task::spawn_blocking(move || {
-        cloudflared_start_named_tunnel_sync(app, profile_id, hostname, token, config_path, local_url)
+        cloudflared_start_named_tunnel_sync(
+            app, profile_id, hostname, token, config_path, local_url, protocol,
+        )
     })
     .await
     .map_err(|e| format!("Task failed: {e}"))?
@@ -758,6 +779,7 @@ fn cloudflared_start_named_tunnel_sync(
     token: Option<String>,
     config_path: Option<String>,
     local_url: Option<String>,
+    protocol: Option<String>,
 ) -> Result<TunnelStatus, String> {
     let state = app.state::<CloudflaredState>();
     let id = profile_id.trim().to_string();
@@ -821,6 +843,7 @@ fn cloudflared_start_named_tunnel_sync(
         return Err("请提供 Tunnel Token 或 config.yml 路径".to_string());
     }
 
+    push_protocol(&mut cmd, protocol.as_deref());
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd
@@ -1032,8 +1055,9 @@ fn cloudflared_setup_new_domain_sync(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let already = route_dns_target_exists(&stdout, &stderr);
 
-    if !(output.status.success() || stdout.contains("already configured")) {
+    if !(output.status.success() || already) {
         return Err(format!(
             "route dns 失败，未修改 config.yml。stdout: {}\nstderr: {}",
             stdout.trim(),
@@ -1048,7 +1072,7 @@ fn cloudflared_setup_new_domain_sync(
     };
     write_config_replacing(&cfg_path, updated.as_bytes())?;
 
-    let msg = if stdout.contains("already configured") {
+    let msg = if already {
         format!("域名 {} 路由已存在（无需重复创建）", host)
     } else {
         format!("已为 {} 创建 CNAME 路由", host)
@@ -1062,6 +1086,14 @@ fn cloudflared_setup_new_domain_sync(
 
 fn leading_ws(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
+}
+
+/// `cloudflared tunnel route dns` fails when the CNAME already exists, which is
+/// the desired end state — treat it as success so re-running 一键配置 is
+/// idempotent. cloudflared reports this on **stderr** with a non-zero exit.
+fn route_dns_target_exists(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    combined.contains("already configured") || combined.contains("already exists")
 }
 
 fn yaml_unquote(raw: &str) -> String {
@@ -1223,7 +1255,21 @@ fn replace_file(dest: &Path, replacement: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::explain_cloudflared_line;
+    use super::{explain_cloudflared_line, route_dns_target_exists};
+
+    #[test]
+    fn route_dns_existing_record_is_idempotent() {
+        // cloudflared reports an existing CNAME on stderr with a non-zero exit.
+        assert!(route_dns_target_exists(
+            "",
+            "failed to create CNAME: record already exists"
+        ));
+        assert!(route_dns_target_exists("CNAME record already configured", ""));
+        assert!(!route_dns_target_exists(
+            "",
+            "failed to fetch credentials: authentication error"
+        ));
+    }
 
     #[test]
     fn explains_missing_ingress_catch_all() {

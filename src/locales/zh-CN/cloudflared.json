@@ -19,6 +19,12 @@
   "tunnelHint": "将本地服务映射到 *.trycloudflare.com，无需 Cloudflare 账号。",
   "localUrl": "本地地址",
   "localUrlPlaceholder": "http://localhost:3000",
+  "protocol": "连接协议",
+  "protocolAuto": "自动（推荐）",
+  "protocolHttp2": "HTTP2（QUIC 不通时使用）",
+  "protocolQuic": "QUIC",
+  "protocolHint": "部分网络下 QUIC（UDP）不通会导致隧道无法注册，选 HTTP2 可绕过；对临时与命名隧道都生效。",
+  "startDiedHint": "隧道进程启动后很快退出了，请查看日志中的错误详情（常见：config.yml 的 ingress 缺兜底规则、Token 失效）",
   "port": "端口",
   "recentPorts": "最近端口",
   "start": "启动隧道",
@@ -91,6 +97,6 @@
   "exportLogsOk": "已导出到 {{path}}",
   "exportLogsFailed": "导出失败: {{error}}",
   "namedHostnameDuplicate": "该二级域名已存在绑定",
-  "namedDeleteRunningWarning": "该绑定正在运行；删除配置不会停止隧道，建议先停止再删除。",
+  "namedDeleteRunningWarning": "该绑定正在运行，删除时将自动停止隧道。",
   "invalidLocalUrl": "本地地址格式不正确"
 }

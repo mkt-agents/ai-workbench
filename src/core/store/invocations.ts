@@ -39,8 +39,8 @@ export interface Invocations {
   invokeCloudflaredSetBinaryPath: (path: string) => Promise<string>;
   invokeCloudflaredClearBinaryPath: () => Promise<string>;
   invokeCloudflaredPickConfig: () => Promise<string | null>;
-  invokeCloudflaredStartQuickTunnel: (localUrl: string) => Promise<{ id: string; running: boolean; pid?: number | null; localUrl?: string | null; publicUrl?: string | null; mode?: string | null; profileId?: string | null }>;
-  invokeCloudflaredStartNamedTunnel: (params: { profileId: string; hostname: string; token?: string; configPath?: string; localUrl?: string }) => Promise<{ id: string; running: boolean; pid?: number | null; localUrl?: string | null; publicUrl?: string | null; mode?: string | null; profileId?: string | null }>;
+  invokeCloudflaredStartQuickTunnel: (localUrl: string, protocol?: string) => Promise<{ id: string; running: boolean; pid?: number | null; localUrl?: string | null; publicUrl?: string | null; mode?: string | null; profileId?: string | null }>;
+  invokeCloudflaredStartNamedTunnel: (params: { profileId: string; hostname: string; token?: string; configPath?: string; localUrl?: string; protocol?: string }) => Promise<{ id: string; running: boolean; pid?: number | null; localUrl?: string | null; publicUrl?: string | null; mode?: string | null; profileId?: string | null }>;
   invokeCloudflaredStopTunnel: (id: string) => Promise<string>;
   invokeCloudflaredStopAllTunnels: () => Promise<string>;
   invokeCloudflaredTunnelStatus: () => Promise<Array<{ id: string; running: boolean; pid?: number | null; localUrl?: string | null; publicUrl?: string | null; mode?: string | null; profileId?: string | null }>>;
@@ -189,7 +189,7 @@ export const invocations: Invocations = {
     tauriInvoke<string>('cloudflared_clear_binary_path'),
   invokeCloudflaredPickConfig: () =>
     tauriInvoke<string | null>('cloudflared_pick_config'),
-  invokeCloudflaredStartQuickTunnel: (localUrl: string) =>
+  invokeCloudflaredStartQuickTunnel: (localUrl: string, protocol?: string) =>
     tauriInvoke<{
       id: string;
       running: boolean;
@@ -198,13 +198,14 @@ export const invocations: Invocations = {
       publicUrl?: string | null;
       mode?: string | null;
       profileId?: string | null;
-    }>('cloudflared_start_quick_tunnel', { localUrl }),
+    }>('cloudflared_start_quick_tunnel', { localUrl, protocol }),
   invokeCloudflaredStartNamedTunnel: (params: {
     profileId: string;
     hostname: string;
     token?: string;
     configPath?: string;
     localUrl?: string;
+    protocol?: string;
   }) =>
     tauriInvoke<{
       id: string;
@@ -220,6 +221,7 @@ export const invocations: Invocations = {
       token: params.token,
       configPath: params.configPath,
       localUrl: params.localUrl,
+      protocol: params.protocol,
     }),
   invokeCloudflaredStopTunnel: (id: string) =>
     tauriInvoke<string>('cloudflared_stop_tunnel', { id }),

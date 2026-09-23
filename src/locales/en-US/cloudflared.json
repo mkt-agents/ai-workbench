@@ -19,6 +19,12 @@
   "tunnelHint": "Expose a local service on *.trycloudflare.com — no Cloudflare account required.",
   "localUrl": "Local URL",
   "localUrlPlaceholder": "http://localhost:3000",
+  "protocol": "Connection protocol",
+  "protocolAuto": "Auto (recommended)",
+  "protocolHttp2": "HTTP2 (use when QUIC is blocked)",
+  "protocolQuic": "QUIC",
+  "protocolHint": "On some networks QUIC (UDP) is throttled and the tunnel never registers — HTTP2 works around it. Applies to quick and named tunnels.",
+  "startDiedHint": "The tunnel process exited shortly after starting — check the logs (common causes: config.yml ingress missing the catch-all rule, invalid token)",
   "port": "Port",
   "recentPorts": "Recent ports",
   "start": "Start tunnel",
@@ -91,6 +97,6 @@
   "exportLogsOk": "Exported to {{path}}",
   "exportLogsFailed": "Export failed: {{error}}",
   "namedHostnameDuplicate": "A binding with this hostname already exists",
-  "namedDeleteRunningWarning": "This binding is running; deleting the config will not stop the tunnel. Stop it first.",
+  "namedDeleteRunningWarning": "This binding is running — deleting it will also stop the tunnel.",
   "invalidLocalUrl": "Invalid local URL"
 }

@@ -25,8 +25,18 @@ import type { CloudflaredNamedProfile } from "../core/types";
 const RECENT_PORTS_KEY = "ai-workbench-cloudflared-recent-ports";
 /** Pre-rename key: still read so recent ports survive the rename. */
 const LEGACY_RECENT_PORTS_KEY = "wt-cloudflared-recent-ports";
+const PROTOCOL_KEY = "ai-workbench-cloudflared-protocol";
 const MAX_RECENT = 8;
 const MAX_LOG_LINES = 400;
+
+function loadProtocol(): string {
+  try {
+    const v = localStorage.getItem(PROTOCOL_KEY);
+    return v === "http2" || v === "quic" ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
 
 type CfStatus = {
   installed: boolean;
@@ -191,6 +201,8 @@ function CloudflaredManager() {
   const [tunnels, setTunnels] = useState<TunnelStatus[]>([]);
   const [localUrl, setLocalUrl] = useState("http://localhost:3000");
   const [recentPorts, setRecentPorts] = useState<number[]>(() => loadRecentPorts());
+  /** Edge protocol for both quick and named tunnels; "auto" = cloudflared default. */
+  const [protocol, setProtocol] = useState<string>(() => loadProtocol());
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logFilterId, setLogFilterId] = useState<string>("all");
   const [busy, setBusy] = useState(false);
@@ -306,6 +318,15 @@ function CloudflaredManager() {
     setTimeout(() => setMessage(null), 5000);
   }, []);
 
+  const handleProtocolChange = (value: string) => {
+    setProtocol(value);
+    try {
+      localStorage.setItem(PROTOCOL_KEY, value);
+    } catch {
+      /* private mode: the choice just doesn't persist */
+    }
+  };
+
   const refreshStatus = useCallback(async () => {
     try {
       const s = await invokeCloudflaredStatus();
@@ -321,6 +342,28 @@ function CloudflaredManager() {
     refreshStatus();
     loadCloudflaredProfiles().catch(() => {});
   }, [refreshStatus, loadCloudflaredProfiles]);
+
+  /** A spawn succeeding does not mean the tunnel survived: bad ingress or a stale
+      token kills cloudflared seconds later. Re-check once so the success toast
+      becomes the error the user actually needs. */
+  const recheckTunnelAlive = useCallback(
+    (id: string) => {
+      setTimeout(() => {
+        void (async () => {
+          try {
+            const list = await invokeCloudflaredTunnelStatus();
+            if (!list.some((t) => t.id === id)) {
+              showMsg("error", t("startDiedHint"));
+              await refreshStatus();
+            }
+          } catch {
+            /* ignore — the poller covers the rest */
+          }
+        })();
+      }, 6000);
+    },
+    [invokeCloudflaredTunnelStatus, refreshStatus, showMsg, t]
+  );
 
   // cloudflared can die on its own (invalid token, edge unreachable, killed
   // elsewhere). Poll while anything is running so a dead process leaves the UI
@@ -446,7 +489,10 @@ function CloudflaredManager() {
     }
     setBusy(true);
     try {
-      const ts = await invokeCloudflaredStartQuickTunnel(target);
+      const ts = await invokeCloudflaredStartQuickTunnel(
+        target,
+        protocol === "auto" ? undefined : protocol
+      );
       setTunnels((prev) => {
         const rest = prev.filter((t) => t.id !== ts.id);
         return [...rest, ts];
@@ -457,6 +503,7 @@ function CloudflaredManager() {
         setRecentPorts(saveRecentPort(port));
       }
       showMsg("success", t("startOk"));
+      recheckTunnelAlive(ts.id);
     } catch (e) {
       showMsg("error", t("error", { error: String(e) }));
       await refreshStatus();
@@ -492,12 +539,14 @@ function CloudflaredManager() {
         ...(mode === "config"
           ? { configPath: profile.configPath }
           : { token: profile.token }),
+        ...(protocol === "auto" ? {} : { protocol }),
       });
       setTunnels((prev) => {
         const rest = prev.filter((t) => t.id !== ts.id);
         return [...rest, ts];
       });
       showMsg("success", t("namedStartOk"));
+      recheckTunnelAlive(ts.id);
     } catch (e) {
       showMsg("error", t("error", { error: String(e) }));
       await refreshStatus();
@@ -720,6 +769,12 @@ function CloudflaredManager() {
     });
     if (!ok) return;
     try {
+      // Deleting a running binding must not orphan the cloudflared process — it
+      // would keep serving the hostname with no config left to manage it.
+      if (running) {
+        await invokeCloudflaredStopTunnel(running.id);
+        setTunnels((prev) => prev.filter((t) => t.id !== running.id));
+      }
       await deleteCloudflaredProfile(p.id);
       showMsg("success", t("namedDeleted"));
     } catch (e) {
@@ -1078,6 +1133,24 @@ function CloudflaredManager() {
                 placeholder={t("localUrlPlaceholder")}
                 disabled={busy}
               />
+            </div>
+            <div className="input-group">
+              <label className="input-label">{t("protocol")}</label>
+              <select
+                className="input-field"
+                value={protocol}
+                onChange={(e) => handleProtocolChange(e.target.value)}
+                disabled={busy}
+                title={t("protocolHint")}
+                aria-label={t("protocol")}
+              >
+                <option value="auto">{t("protocolAuto")}</option>
+                <option value="http2">{t("protocolHttp2")}</option>
+                <option value="quic">{t("protocolQuic")}</option>
+              </select>
+              <p className="runtime-muted cloudflared-hint" style={{ marginTop: 4 }}>
+                {t("protocolHint")}
+              </p>
             </div>
             {recentPorts.length > 0 && (
               <div className="input-group">
