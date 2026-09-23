@@ -27,7 +27,7 @@ function GitManager({ active = true }: Props) {
 
   return (
     <div className="git-manager">
-      <div className={`git-manager-column ${subTab === "report" ? "is-wide" : ""}`}>
+      <div className="git-manager-column is-wide">
         <div className="git-subnav" role="tablist" aria-label={t("tabs.repos")}>
           {SUB_TABS.map((tab) => (
             <button

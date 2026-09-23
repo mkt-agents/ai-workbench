@@ -1,274 +1,382 @@
 /**
  * Regression report panel — the right-hand detail of the "报告" sub-tab.
  * Two modes via a discriminated prop: a single repo, or a whole folder merged
- * into one report (repos that live together ship related code). Collect →
- * static analysis → optional AI scenarios → copy/export. Nothing is persisted;
- * the backend keeps the collected report in an in-process cache keyed by reportId.
+ * into one report (repos that live together ship related code). Selecting a
+ * target auto-collects the report (no click needed); the AI scenarios are generated
+ * manually on demand. Nothing is persisted; the backend keeps the collected report
+ * in an in-process cache keyed by reportId.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
-import { listen } from "@tauri-apps/api/event";
-import { Copy, Download, GitCommitHorizontal, Loader2, ShieldAlert, Sparkles } from "lucide-react";
-import { useGlobalStore } from "../core/store";
-import { readStoredString, writeStoredString } from "../core/localState";
-import { markdownSections } from "../lib/aiText";
-import { projectNameFromPath } from "../core/pathUtils";
-import { isCancelledError, cleanErrorMessage } from "./testReportTypes";
-import type { AiResult, ChangeReport, FileChange, FolderRepoRow } from "./testReportTypes";
-import type { AIModelConfig } from "../core/types";
-import "./TestReportModal.css";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { listen } from "@tauri-apps/api/event"
+import {
+  ChevronDown,
+  ClipboardList,
+  Copy,
+  Download,
+  GitCommitHorizontal,
+  Loader2,
+  Search,
+  ShieldAlert,
+  Sparkles,
+} from "lucide-react"
+import { useGlobalStore } from "../core/store"
+import { refreshRepos } from "../core/gitCache"
+import { readStoredString, writeStoredString } from "../core/localState"
+import { markdownSections } from "../lib/aiText"
+import { projectNameFromPath } from "../core/pathUtils"
+import { isCancelledError, cleanErrorMessage } from "./testReportTypes"
+import type { AiResult, ChangeReport, FileChange, FolderRepoRow } from "./testReportTypes"
+import type { AIModelConfig } from "../core/types"
+import { summarizeRisks } from "../lib/reportRisk"
+import { useFilteredFiles, EMPTY_FILTER } from "./useFilteredFiles"
+import type { FileFilter } from "./useFilteredFiles"
+import MultiSelectDropdown from "./MultiSelectDropdown"
+import "./TestReportModal.css"
 
-type Props = { repoPath: string } | { folderName: string; repoPaths: string[] };
+type Props = { repoPath: string } | { folderName: string; repoPaths: string[] }
 
-type Mode = "uncommitted" | "base" | "commits";
-type GroupMode = "module" | "commit";
+type Mode = "uncommitted" | "base" | "commits"
+type GroupMode = "module" | "commit"
+type Tab = "overview" | "files" | "commits" | "api" | "ai"
 
 /** A merged single/folder view, so the render path is shared. */
 type View = {
-  report: ChangeReport;
-  reportId: string;
+  report: ChangeReport
+  reportId: string
   /** Repo or folder display name — used for the title, export and AI label. */
-  name: string;
-  branch: string;
-  head: string;
+  name: string
+  branch: string
+  head: string
   /** Per-repo rollup; non-null only in folder mode. */
-  rows: FolderRepoRow[] | null;
-};
+  rows: FolderRepoRow[] | null
+}
 
 /** The panel renders a bounded list; the full set still counts towards the totals. */
-const MAX_VISIBLE_FILES = 150;
-const MODEL_KEY = "workbench-commit-model";
+const MAX_VISIBLE_FILES = 150
+const MODEL_KEY = "workbench-commit-model"
+const SYSTEM_KEY = "workbench-report-ai-system"
+
+interface ReportModeState {
+  mode: Mode
+  base: string
+  commits: number
+}
+
+function readReportMode(repoPath: string): ReportModeState {
+  try {
+    const parsed: unknown = JSON.parse(readStoredString("workbench-report-mode:" + repoPath))
+    if (!parsed || typeof parsed !== "object") return { mode: "uncommitted", base: "", commits: 5 }
+    const value = parsed as Partial<ReportModeState>
+    const mode = value.mode === "base" || value.mode === "commits" ? value.mode : "uncommitted"
+    const commits = Number(value.commits)
+    return {
+      mode,
+      base: typeof value.base === "string" ? value.base : "",
+      commits: Number.isFinite(commits) ? Math.max(1, Math.min(50, Math.trunc(commits))) : 5,
+    }
+  } catch {
+    return { mode: "uncommitted", base: "", commits: 5 }
+  }
+}
 
 export default function TestReportPanel(props: Props) {
-  const { t } = useTranslation("git");
-  const { t: tc } = useTranslation("common");
+  const { t } = useTranslation("git")
 
-  const isFolder = "repoPaths" in props;
-  const repoPath = isFolder ? "" : props.repoPath;
-  const folderName = isFolder ? props.folderName : "";
-  const repoPaths = isFolder ? props.repoPaths : [];
+  const isFolder = "repoPaths" in props
+  const repoPath = isFolder ? "" : props.repoPath
+  const folderName = isFolder ? props.folderName : ""
+  const repoPaths = isFolder ? props.repoPaths : []
 
-  const collect = useGlobalStore((s) => s.invokeCollectTestReport);
-  const collectFolder = useGlobalStore((s) => s.invokeCollectFolderReport);
-  const generateAi = useGlobalStore((s) => s.invokeGenerateTestReportAi);
-  const cancelAi = useGlobalStore((s) => s.invokeCancelTestReportAi);
-  const saveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
-  const copyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
-  const aiModels = useGlobalStore((s) => s.aiModels);
-  const loadAIModels = useGlobalStore((s) => s.loadAIModels);
+  const collect = useGlobalStore((s) => s.invokeCollectTestReport)
+  const collectFolder = useGlobalStore((s) => s.invokeCollectFolderReport)
+  const generateAi = useGlobalStore((s) => s.invokeGenerateTestReportAi)
+  const cancelAi = useGlobalStore((s) => s.invokeCancelTestReportAi)
+  const saveTextFile = useGlobalStore((s) => s.invokeSaveTextFile)
+  const copyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard)
+  const aiModels = useGlobalStore((s) => s.aiModels)
+  const loadAIModels = useGlobalStore((s) => s.loadAIModels)
 
-  const [mode, setMode] = useState<Mode>("uncommitted");
-  const [base, setBase] = useState("");
-  const [commits, setCommits] = useState(5);
-  const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<View | null>(null);
-  const [error, setError] = useState("");
-  const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [collectProgress, setCollectProgress] = useState<{ done: number; total: number } | null>(null);
+  const [mode, setMode] = useState<Mode>("uncommitted")
+  const [base, setBase] = useState("")
+  const [commits, setCommits] = useState(5)
+  const [busy, setBusy] = useState(false)
+  const [view, setView] = useState<View | null>(null)
+  const [error, setError] = useState("")
+  const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [collectProgress, setCollectProgress] = useState<{ done: number; total: number } | null>(null)
 
-  const [ai, setAi] = useState("");
-  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null);
+  const [ai, setAi] = useState("")
+  const [aiWarnings, setAiWarnings] = useState<string[]>([])
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null)
 
-  const [onlyUntested, setOnlyUntested] = useState(false);
-  const [groupMode, setGroupMode] = useState<GroupMode>("module");
-  const [selectedModelId, setSelectedModelId] = useState<string>(() => readStoredString(MODEL_KEY));
+  const [onlyUntested, setOnlyUntested] = useState(false)
+  const [groupMode, setGroupMode] = useState<GroupMode>("module")
+  const [selectedModelId, setSelectedModelId] = useState<string>(() => readStoredString(MODEL_KEY))
+  const [activeTab, setActiveTab] = useState<Tab>("overview")
+  const [fileFilter, setFileFilter] = useState<FileFilter>(EMPTY_FILTER)
+  const [expandAll, setExpandAll] = useState(true)
+  const [customSystem, setCustomSystem] = useState(() => readStoredString(SYSTEM_KEY))
+  const [promptOpen, setPromptOpen] = useState(true)
 
   // Bumped whenever the panel target changes, so a slow collect/AI that lands
   // after the switch is dropped instead of bleeding into the new target.
-  const genRef = useRef(0);
+  const genRef = useRef(0)
+  const modeStorageKeyRef = useRef("")
 
-  const report = view?.report ?? null;
-  const viewingId = view?.reportId ?? "";
-  const rows = view?.rows ?? null;
-  const commitDetails = report?.commitDetails ?? [];
-  const displayName = isFolder ? folderName : projectNameFromPath(repoPath);
+  const report = view?.report ?? null
+  const viewingId = view?.reportId ?? ""
+  const rows = view?.rows ?? null
+  const commitDetails = report?.commitDetails ?? []
+  const displayName = isFolder ? folderName : projectNameFromPath(repoPath)
+  const modeStorageKey = repoPath ? "workbench-report-mode:" + repoPath : ""
 
-  const defaultModel = useMemo(() => aiModels.find((m) => m.isDefault) || aiModels[0] || null, [aiModels]);
+  const defaultModel = useMemo(() => aiModels.find((m) => m.isDefault) || aiModels[0] || null, [aiModels])
   const selectedModel: AIModelConfig | null = useMemo(() => {
     if (selectedModelId) {
-      const found = aiModels.find((m) => m.id === selectedModelId);
-      if (found) return found;
+      const found = aiModels.find((m) => m.id === selectedModelId)
+      if (found) return found
     }
-    return defaultModel;
-  }, [selectedModelId, aiModels, defaultModel]);
+    return defaultModel
+  }, [selectedModelId, aiModels, defaultModel])
+
+  const filtered = useFilteredFiles(report?.files ?? [], fileFilter)
+  const { visible, total, options } = filtered
+  useEffect(() => {
+    writeStoredString(MODEL_KEY, selectedModelId)
+  }, [selectedModelId])
 
   useEffect(() => {
-    writeStoredString(MODEL_KEY, selectedModelId);
-  }, [selectedModelId]);
+    writeStoredString(SYSTEM_KEY, customSystem)
+  }, [customSystem])
 
   useEffect(() => {
-    if (aiModels.length === 0) void loadAIModels().catch(() => {});
-  }, [aiModels.length, loadAIModels]);
+    if (!modeStorageKey) return
+    if (modeStorageKeyRef.current !== modeStorageKey) {
+      modeStorageKeyRef.current = modeStorageKey
+      return
+    }
+    writeStoredString(modeStorageKey, JSON.stringify({ mode, base, commits }))
+  }, [modeStorageKey, mode, base, commits])
+
+  useEffect(() => {
+    if (aiModels.length === 0) void loadAIModels().catch(() => {})
+  }, [aiModels.length, loadAIModels])
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
-    setToast({ type, text });
-    window.setTimeout(() => setToast(null), type === "error" ? 8000 : 3000);
-  }, []);
+    setToast({ type, text })
+    window.setTimeout(() => setToast(null), type === "error" ? 8000 : 3000)
+  }, [])
 
   // A new baseline invalidates any shown report — never let it go stale against
   // the wrong range.
   const resetReport = useCallback(() => {
-    setView(null);
-    setAi("");
-    setAiWarnings([]);
-    setAiProgress(null);
-    setCollectProgress(null);
-    setError("");
-  }, []);
+    setView(null)
+    setAi("")
+    setAiWarnings([])
+    setAiProgress(null)
+    setCollectProgress(null)
+    setError("")
+  }, [])
 
   const runAi = useCallback(
     async (idArg?: string) => {
-      const id = idArg ?? viewingId;
-      if (aiBusy || !id || !selectedModel) return;
-      const gen = genRef.current;
-      setAiBusy(true);
-      setAiProgress(null);
-      setError("");
+      const id = idArg ?? viewingId
+      if (aiBusy || !id || !selectedModel) return
+      const gen = genRef.current
+      setAiBusy(true)
+      setAiProgress(null)
+      setError("")
       try {
-        const result: AiResult = await generateAi(id, selectedModel);
-        if (genRef.current !== gen) return; // target switched mid-flight — drop it
-        setAi(result.markdown);
-        setAiWarnings(result.warnings);
+        const result: AiResult = await generateAi(id, selectedModel, customSystem.trim() || undefined)
+        if (genRef.current !== gen) return // target switched mid-flight — drop it
+        setAi(result.markdown)
+        setAiWarnings(result.warnings)
       } catch (e) {
-        if (genRef.current !== gen) return;
+        if (genRef.current !== gen) return
         // A cancel is a user action, not a failure; the static report stays usable.
         if (isCancelledError(e)) {
-          showMsg("success", t("testReport.aiCancelled"));
+          showMsg("success", t("testReport.aiCancelled"))
         } else {
-          setError(cleanErrorMessage(e));
-          showMsg("error", t("testReport.aiFailed", { error: cleanErrorMessage(e) }));
+          setError(cleanErrorMessage(e))
+          showMsg("error", t("testReport.aiFailed", { error: cleanErrorMessage(e) }))
         }
       } finally {
         if (genRef.current === gen) {
-          setAiBusy(false);
-          setAiProgress(null);
+          setAiBusy(false)
+          setAiProgress(null)
         }
       }
     },
-    [aiBusy, viewingId, selectedModel, generateAi, showMsg, t]
-  );
+    [aiBusy, viewingId, selectedModel, generateAi, customSystem, showMsg, t]
+  )
 
-  const generate = async () => {
-    if (busy) return;
-    const gen = genRef.current;
-    setBusy(true);
-    setError("");
-    setCollectProgress(null);
-    const baseArg = mode === "base" ? base.trim() : undefined;
-    const commitsArg = mode === "commits" ? commits : undefined;
+  const generate = async (force = false, scope?: ReportModeState) => {
+    if (busy && !force) return
+    const gen = genRef.current
+    setBusy(true)
+    setError("")
+    setCollectProgress(null)
+    const activeMode = scope?.mode ?? mode
+    const baseArg = activeMode === "base" ? (scope?.base ?? base).trim() : undefined
+    const commitsArg = activeMode === "commits" ? scope?.commits ?? commits : undefined
     try {
       if (isFolder) {
-        const r = await collectFolder(folderName, repoPaths, baseArg, commitsArg);
-        if (genRef.current !== gen) return; // switched away while collecting
-        setView({ report: r.report, reportId: r.reportId, name: r.folderName, branch: "", head: "", rows: r.repos });
-        setAi("");
-        setAiWarnings([]);
-        if (r.report.stats.files === 0) showMsg("success", t("testReport.empty"));
-        else if (selectedModel) void runAi(r.reportId); // folder mode asks the model right away
-        else showMsg("error", t("testReport.aiNeedModel"));
+        const r = await collectFolder(folderName, repoPaths, baseArg, commitsArg)
+        if (genRef.current !== gen) return // switched away while collecting
+        setView({ report: r.report, reportId: r.reportId, name: r.folderName, branch: "", head: "", rows: r.repos })
+        void refreshRepos(repoPaths, { withStatus: true, force: true }).catch(() => {})
+        setAi("")
+        setAiWarnings([])
+        if (r.report.stats.files === 0) showMsg("success", t("testReport.empty"))
       } else {
-        const r = await collect(repoPath, baseArg, commitsArg);
-        if (genRef.current !== gen) return;
-        setView({ report: r.report, reportId: r.reportId, name: r.repoName, branch: r.branch, head: r.head, rows: null });
-        setAi("");
-        setAiWarnings([]);
-        if (r.report.stats.files === 0) showMsg("success", t("testReport.empty"));
+        const r = await collect(repoPath, baseArg, commitsArg)
+        if (genRef.current !== gen) return
+        setView({ report: r.report, reportId: r.reportId, name: r.repoName, branch: r.branch, head: r.head, rows: null })
+        void refreshRepos([repoPath], { withStatus: true, force: true }).catch(() => {})
+        setAi("")
+        setAiWarnings([])
+        if (r.report.stats.files === 0) showMsg("success", t("testReport.empty"))
       }
     } catch (e) {
-      if (genRef.current !== gen) return;
-      setError(cleanErrorMessage(e));
-      showMsg("error", t("testReport.failed", { error: cleanErrorMessage(e) }));
+      if (genRef.current !== gen) return
+      setError(cleanErrorMessage(e))
+      showMsg("error", t("testReport.failed", { error: cleanErrorMessage(e) }))
     } finally {
-      if (genRef.current === gen) setBusy(false);
+      if (genRef.current === gen) setBusy(false)
     }
-  };
+  }
 
   // Switching target: cancel any live AI for the old report, then wipe the view
-  // and the commit-group filter (meaningless for a different target).
-  const targetKey = isFolder ? `f:${folderName}|${repoPaths.join("|")}` : `r:${repoPath}`;
+  // and the filters (meaningless for a different target). Auto-collect for the
+  // new target — `force` bypasses the busy guard so a fresh report appears
+  // without a click. The genRef guard drops stale results, so rapid switching is safe.
+  const targetKey = isFolder ? `f:${folderName}|${repoPaths.join("|")}` : `r:${repoPath}`
   useEffect(() => {
-    genRef.current += 1;
-    if (aiBusy && viewingId) void cancelAi(viewingId).catch(() => {});
-    setGroupMode("module");
-    setOnlyUntested(false);
-    resetReport();
+    genRef.current += 1
+    if (aiBusy && viewingId) void cancelAi(viewingId).catch(() => {})
+    const remembered = readReportMode(repoPath)
+    setMode(remembered.mode)
+    setBase(remembered.base)
+    setCommits(remembered.commits)
+    setGroupMode("module")
+    setOnlyUntested(false)
+    setActiveTab("overview")
+    setFileFilter(EMPTY_FILTER)
+    setExpandAll(true)
+    resetReport()
+    void generate(true, remembered)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetKey]);
+  }, [targetKey])
 
   // The folder collect is one slow pass over every repo; keep the count live.
   useEffect(() => {
-    if (!busy || !isFolder) return;
+    if (!busy || !isFolder) return
     const un = listen<{ done: number; total: number }>("test-report-collect-progress", (event) => {
-      setCollectProgress({ done: event.payload.done, total: event.payload.total });
-    });
+      setCollectProgress({ done: event.payload.done, total: event.payload.total })
+    })
     return () => {
-      void un.then((dispose) => dispose());
-    };
-  }, [busy, isFolder]);
+      void un.then((dispose) => dispose())
+    }
+  }, [busy, isFolder])
 
   // The map-reduce AI pass emits one event per finished chunk.
   useEffect(() => {
-    if (!aiBusy || !viewingId) return;
+    if (!aiBusy || !viewingId) return
     const un = listen<{ reportId: string; done: number; total: number }>(
       "test-report-ai-progress",
       (event) => {
-        if (event.payload.reportId !== viewingId) return;
-        setAiProgress({ done: event.payload.done, total: event.payload.total });
+        if (event.payload.reportId !== viewingId) return
+        setAiProgress({ done: event.payload.done, total: event.payload.total })
       }
-    );
+    )
     return () => {
-      void un.then((dispose) => dispose());
-    };
-  }, [aiBusy, viewingId]);
+      void un.then((dispose) => dispose())
+    }
+  }, [aiBusy, viewingId])
 
   const cancelAiRun = async () => {
-    if (!viewingId) return;
+    if (!viewingId) return
     try {
-      await cancelAi(viewingId);
-      showMsg("success", t("testReport.aiCancelSent"));
+      await cancelAi(viewingId)
+      showMsg("success", t("testReport.aiCancelSent"))
     } catch (e) {
-      showMsg("error", cleanErrorMessage(e));
+      showMsg("error", cleanErrorMessage(e))
     }
-  };
+  }
 
-  const fileFilter = (files: FileChange[]) =>
-    files.filter((f) => !onlyUntested || f.risks.includes("untested")).slice(0, MAX_VISIBLE_FILES);
-  const visibleFiles = (moduleName: string) =>
-    fileFilter((report?.files ?? []).filter((f) => f.module === moduleName));
+  const copySection = useCallback(
+    async (text: string) => {
+      try {
+        await copyToClipboard(text)
+        showMsg("success", t("testReport.copied"))
+      } catch (e) {
+        showMsg("error", cleanErrorMessage(e))
+      }
+    },
+    [copyToClipboard, showMsg, t]
+  )
 
-  const commitGroups = useMemo(() => {
-    if (!report || commitDetails.length === 0) return [];
-    return commitDetails
-      .map((commit) => ({
-        commit,
-        files: fileFilter(report.files.filter((f) => (f.commits ?? []).includes(commit.shortSha))),
+  const fileMatches = useMemo(() => {
+    if (!report) return []
+    return onlyUntested ? visible.filter((f) => f.risks.includes("untested")) : visible
+  }, [report, visible, onlyUntested])
+
+  const truncated = fileMatches.length > MAX_VISIBLE_FILES
+  const shownFiles = truncated ? fileMatches.slice(0, MAX_VISIBLE_FILES) : fileMatches
+
+  const riskSummary = useMemo(() => summarizeRisks(report), [report])
+
+  const fileGroups = useMemo(() => {
+    if (!report) return []
+    if (groupMode === "commit" && commitDetails.length > 0) {
+      return commitDetails
+        .map((commit) => ({
+          kind: "commit" as const,
+          key: commit.sha,
+          commit,
+          files: shownFiles.filter((f) => (f.commits ?? []).includes(commit.shortSha)),
+        }))
+        .filter((g) => g.files.length > 0)
+    }
+    return report.groups
+      .map((group) => ({
+        kind: "module" as const,
+        key: group.name,
+        group,
+        files: shownFiles.filter((f) => f.module === group.name),
       }))
-      .filter((group) => group.files.length > 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [report, commitDetails, onlyUntested]);
-  const ungroupedCommits = commitDetails.filter(
-    (commit) => report?.files.length && !commitGroups.some((g) => g.commit.shortSha === commit.shortSha)
-  );
+      .filter((g) => g.files.length > 0)
+  }, [report, shownFiles, groupMode, commitDetails])
 
-  const aiSections = useMemo(() => Object.entries(markdownSections(ai)), [ai]);
+  const ungroupedCommits = useMemo(() => {
+    if (!report) return []
+    return commitDetails.filter(
+      (commit) => report.files.length > 0 && !fileGroups.some((g) => g.kind === "commit" && g.commit.shortSha === commit.shortSha)
+    )
+  }, [report, commitDetails, fileGroups])
+
+  const aiSections = useMemo(() => Object.entries(markdownSections(ai)), [ai])
+
+  const applyOnlyUntested = (files: FileChange[]) =>
+    files.filter((f) => !onlyUntested || f.risks.includes("untested")).slice(0, MAX_VISIBLE_FILES)
 
   const markdown = useMemo(() => {
-    if (!report) return "";
-    const lines: string[] = [];
-    lines.push(`# ${t(isFolder ? "testReport.folderTitle" : "testReport.title")} · ${view?.name ?? ""}`);
-    lines.push("");
-    lines.push(`- ${t("testReport.baseline")}: ${report.base || t("testReport.modeUncommitted")}`);
+    if (!report) return ""
+    const lines: string[] = []
+    lines.push(`# ${t(isFolder ? "testReport.folderTitle" : "testReport.title")} · ${view?.name ?? ""}`)
+    lines.push("")
+    lines.push(`- ${t("testReport.baseline")}: ${report.base || t("testReport.modeUncommitted")}`)
     if (view?.branch)
-      lines.push(`- ${t("testReport.branch")}: ${view.branch}${view.head ? ` @ ${view.head}` : ""}`);
+      lines.push(`- ${t("testReport.branch")}: ${view.branch}${view.head ? ` @ ${view.head}` : ""}`)
     lines.push(
       `- ${t("testReport.stats")}: ${report.stats.files} ${t("testReport.files")}, +${report.stats.adds} -${report.stats.dels}, ` +
         `${report.stats.modules} ${t("testReport.modules")}, ${report.stats.untested} ${t("testReport.untested")}` +
         (report.stats.ignored ? `, ${t("testReport.ignored")} ${report.stats.ignored}` : "")
-    );
+    )
     if (rows && rows.length) {
-      lines.push("", `## ${t("testReport.repoSummary")}`);
+      lines.push("", `## ${t("testReport.repoSummary")}`)
       for (const row of rows) {
         lines.push(
           row.error
@@ -276,61 +384,60 @@ export default function TestReportPanel(props: Props) {
             : `- ${row.name}: ${row.files} ${t("testReport.files")}, +${row.adds} -${row.dels}${
                 row.untested ? `, ${row.untested} ${t("testReport.untested")}` : ""
               }`
-        );
+        )
       }
     }
     if (report.scope.length)
       lines.push(
         `- ${t("testReport.scopeTitle")}: ${report.scope.map((s) => t(`testReport.scope.${s}`, { defaultValue: s })).join(" / ")}`
-      );
+      )
     if (report.commits.length) {
-      lines.push("", `## ${t("testReport.commits")}`);
-      for (const c of report.commits) lines.push(`- ${c}`);
+      lines.push("", `## ${t("testReport.commits")}`)
+      for (const c of report.commits) lines.push(`- ${c}`)
     }
     for (const group of report.groups) {
-      lines.push("", `## ${group.name} (${group.files} ${t("testReport.files")}, +${group.adds} -${group.dels})`);
+      lines.push("", `## ${group.name} (${group.files} ${t("testReport.files")}, +${group.adds} -${group.dels})`)
       if (group.risks.length)
-        lines.push(`- ${t("testReport.risks")}: ${group.risks.map((r) => t(`testReport.risk.${r}`, { defaultValue: r })).join(" / ")}`);
-      for (const file of report.files.filter((f) => f.module === group.name).slice(0, MAX_VISIBLE_FILES)) {
-        if (onlyUntested && !file.risks.includes("untested")) continue;
+        lines.push(`- ${t("testReport.risks")}: ${group.risks.map((r) => t(`testReport.risk.${r}`, { defaultValue: r })).join(" / ")}`)
+      for (const file of applyOnlyUntested(report.files.filter((f) => f.module === group.name))) {
         const flags = [
           file.layer && t(`testReport.layer.${file.layer}`, { defaultValue: file.layer }),
           ...file.risks.map((r) => t(`testReport.risk.${r}`, { defaultValue: r })),
           (file.commits ?? []).length ? `@${(file.commits ?? []).join("/")}` : null,
         ]
           .filter(Boolean)
-          .join(" · ");
-        lines.push(`- [${file.status}] ${file.path} (+${file.adds} -${file.dels}) ${flags}`);
+          .join(" · ")
+        lines.push(`- [${file.status}] ${file.path} (+${file.adds} -${file.dels}) ${flags}`)
       }
     }
     if (report.apiChanges.length) {
-      lines.push("", `## ${t("testReport.apiChanges")}`);
+      lines.push("", `## ${t("testReport.apiChanges")}`)
       for (const change of report.apiChanges)
-        lines.push(`- [${t(`testReport.api.${change.kind}`, { defaultValue: change.kind })}] ${change.name} @ ${change.path}`);
+        lines.push(`- [${t(`testReport.api.${change.kind}`, { defaultValue: change.kind })}] ${change.name} @ ${change.path}`)
     }
-    if (ai) lines.push("", `## ${t("testReport.aiSection")}`, "", ai.trim());
-    return lines.join("\n");
-  }, [report, view, rows, ai, onlyUntested, isFolder, t]);
+    if (ai) lines.push("", `## ${t("testReport.aiSection")}`, "", ai.trim())
+    return lines.join("\n")
+  }, [report, view, rows, ai, onlyUntested, isFolder, t])
 
   const copy = async () => {
     try {
-      await copyToClipboard(markdown);
-      showMsg("success", t("testReport.copied"));
+      await copyToClipboard(markdown)
+      showMsg("success", t("testReport.copied"))
     } catch (e) {
-      showMsg("error", cleanErrorMessage(e));
+      showMsg("error", cleanErrorMessage(e))
     }
-  };
+  }
 
   const exportMd = async () => {
     try {
-      const name = `${view?.name ?? "folder"}-${t(isFolder ? "testReport.folderTitle" : "testReport.title")}-${new Date().toISOString().slice(0, 10)}.md`;
-      const path = await saveTextFile(markdown, name, t("testReport.export"));
-      showMsg("success", t("testReport.savedTo", { path }));
+      const name = `${view?.name ?? "folder"}-${t(isFolder ? "testReport.folderTitle" : "testReport.title")}-${new Date().toISOString().slice(0, 10)}.md`
+      const path = await saveTextFile(markdown, name, t("testReport.export"))
+      showMsg("success", t("testReport.savedTo", { path }))
     } catch (e) {
-      const text = cleanErrorMessage(e);
-      if (!/cancel/i.test(text)) showMsg("error", text);
+      const text = cleanErrorMessage(e)
+      if (!/cancel/i.test(text)) showMsg("error", text)
     }
-  };
+  }
 
   const renderFile = (file: FileChange) => (
     <li key={`${groupMode}-${file.path}`} className="tr-file">
@@ -366,11 +473,70 @@ export default function TestReportPanel(props: Props) {
         ))}
       </span>
     </li>
-  );
+  )
+
+  const folderCollect = isFolder ? collectProgress : null
+  const aiChunk = aiProgress && aiProgress.total > 1 ? aiProgress : null
+  const progressPct =
+    busy && folderCollect && folderCollect.total > 0
+      ? Math.round((folderCollect.done / folderCollect.total) * 100)
+      : aiBusy && aiChunk
+        ? Math.round((aiChunk.done / aiChunk.total) * 100)
+        : null
+  const showProgress = (busy || aiBusy) && (!report || busy)
+
+  const renderGroup = (g: typeof fileGroups[number]) => {
+    if (g.kind === "commit") {
+      const { commit, files } = g
+      return (
+        <details key={commit.sha} className="tr-group" open={expandAll}>
+          <summary className="tr-group-head">
+            <span className="tr-group-name tr-commit-subject" title={commit.subject}>
+              {commit.subject}
+            </span>
+            <code className="tr-file-sha">{commit.shortSha}</code>
+            <span className="tr-group-stat">
+              {files.length} · {commit.author} · {commit.date.slice(0, 10)}
+            </span>
+          </summary>
+          {commit.body.trim() && <p className="tr-commit-body">{commit.body.trim()}</p>}
+          <ul className="tr-files">{files.map(renderFile)}</ul>
+        </details>
+      )
+    }
+    const { group, files } = g
+    return (
+      <details key={group.name} className="tr-group" open={expandAll}>
+        <summary className="tr-group-head">
+          <span className="tr-group-name">{group.name}</span>
+          <span className="tr-group-stat">
+            {group.files} · +{group.adds} -{group.dels}
+          </span>
+          {group.risks.map((risk) => (
+            <span key={risk} className={`tr-risk tr-risk-${risk}`}>
+              {t(`testReport.risk.${risk}`, { defaultValue: risk })}
+            </span>
+          ))}
+        </summary>
+        <ul className="tr-files">{files.map(renderFile)}</ul>
+      </details>
+    )
+  }
 
   return (
     <section className="tr-panel">
+      {showProgress && (
+        <div className="tr-progress" aria-hidden>
+          <div
+            className={`tr-progress-bar${progressPct == null ? " is-indeterminate" : ""}`}
+            style={progressPct == null ? undefined : { width: `${progressPct}%` }}
+          />
+        </div>
+      )}
       <header className="tr-panel-head">
+        <span className="tr-panel-head-icon" aria-hidden>
+          <ClipboardList size={15} />
+        </span>
         <h3 className="tr-panel-title">
           {isFolder ? `${t("testReport.folderTitle")} · ${displayName}` : `${t("testReport.title")} · ${displayName}`}
         </h3>
@@ -378,18 +544,21 @@ export default function TestReportPanel(props: Props) {
         <button type="button" className="btn btn-secondary btn-small" onClick={() => void copy()} disabled={!report}>
           <Copy size={13} /> {t("testReport.copy")}
         </button>
-        <button type="button" className="btn btn-primary btn-small" onClick={() => void exportMd()} disabled={!report}>
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => void exportMd()} disabled={!report}>
           <Download size={13} /> {t("testReport.export")}
         </button>
       </header>
 
       <div className="tr-toolbar">
         <select
-          className="input-field"
+          className="input-field tr-mode"
           value={mode}
           onChange={(e) => {
-            setMode(e.target.value as Mode);
-            resetReport();
+            setMode(e.target.value as Mode)
+            resetReport()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void generate()
           }}
           disabled={busy || aiBusy}
           aria-label={t("testReport.mode")}
@@ -404,8 +573,11 @@ export default function TestReportPanel(props: Props) {
             value={base}
             placeholder={t("testReport.basePlaceholder")}
             onChange={(e) => {
-              setBase(e.target.value);
-              resetReport();
+              setBase(e.target.value)
+              resetReport()
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void generate()
             }}
             disabled={busy || aiBusy}
           />
@@ -418,23 +590,77 @@ export default function TestReportPanel(props: Props) {
             max={50}
             value={commits}
             onChange={(e) => {
-              setCommits(Math.max(1, Math.min(50, Number(e.target.value) || 1)));
-              resetReport();
+              setCommits(Math.max(1, Math.min(50, Number(e.target.value) || 1)))
+              resetReport()
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void generate()
             }}
             disabled={busy || aiBusy}
           />
         )}
-        <button type="button" className="btn btn-primary btn-small" onClick={() => void generate()} disabled={busy || aiBusy}>
-          {busy ? <Loader2 size={12} className="spin" /> : null}
-          {report ? t("testReport.regenerate") : t("testReport.generate")}
-        </button>
+        <span className="tr-actions-spacer" />
         {report && (
           <label className="tr-toggle">
             <input type="checkbox" checked={onlyUntested} onChange={(e) => setOnlyUntested(e.target.checked)} />
             {t("testReport.onlyUntested")}
           </label>
         )}
+        <button type="button" className="btn btn-primary btn-small" onClick={() => void generate()} disabled={busy || aiBusy}>
+          {busy ? <Loader2 size={12} className="spin" /> : null}
+          {report ? t("testReport.regenerate") : t("testReport.generate")}
+        </button>
       </div>
+
+      {report && (
+        <div className="tr-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            className={`tr-tab${activeTab === "overview" ? " is-active" : ""}`}
+            aria-selected={activeTab === "overview"}
+            onClick={() => setActiveTab("overview")}
+          >
+            {t("testReport.tabs.overview", { defaultValue: "概览" })}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`tr-tab${activeTab === "files" ? " is-active" : ""}`}
+            aria-selected={activeTab === "files"}
+            onClick={() => setActiveTab("files")}
+          >
+            {t("testReport.tabs.files", { defaultValue: "改动文件" })}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`tr-tab${activeTab === "commits" ? " is-active" : ""}`}
+            aria-selected={activeTab === "commits"}
+            onClick={() => setActiveTab("commits")}
+          >
+            {t("testReport.tabs.commits", { defaultValue: "提交" })}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`tr-tab${activeTab === "api" ? " is-active" : ""}`}
+            aria-selected={activeTab === "api"}
+            onClick={() => setActiveTab("api")}
+          >
+            {t("testReport.tabs.api", { defaultValue: "API变更" })}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`tr-tab${activeTab === "ai" ? " is-active" : ""}`}
+            aria-selected={activeTab === "ai"}
+            onClick={() => setActiveTab("ai")}
+          >
+            {t("testReport.tabs.ai", { defaultValue: "AI建议" })}
+          </button>
+        </div>
+      )}
 
       {isFolder && <p className="tr-hint tr-baseline-note">{t("testReport.baselineNote")}</p>}
       {error && <div className="repos-modal-error">{error}</div>}
@@ -442,115 +668,279 @@ export default function TestReportPanel(props: Props) {
 
       {!report && !busy && <p className="tr-hint">{t(isFolder ? "testReport.folderIntro" : "testReport.intro")}</p>}
       {busy && !report && (
-        <p className="tr-hint">
-          <Loader2 size={13} className="spin" />{" "}
-          {isFolder && collectProgress
-            ? t("testReport.collectProgress", { done: collectProgress.done, total: collectProgress.total })
-            : tc("loading")}
-        </p>
+        <div className="tr-loading">
+          <Loader2 size={18} className="spin" />
+          <span>
+            {isFolder && collectProgress
+              ? t("testReport.collectProgress", { done: collectProgress.done, total: collectProgress.total })
+              : t("testReport.collecting")}
+          </span>
+        </div>
       )}
 
       {report && (
-        <div className="tr-body">
-          {rows && rows.length > 0 && (
-            <div className="tr-repos">
-              <span className="tr-label">{t("testReport.repoSummary")}</span>
-              <ul>
-                {rows.map((row) => (
-                  <li key={row.name} className={`tr-repo${row.error ? " is-error" : ""}`}>
-                    <span className="tr-repo-name" title={row.name}>
-                      {row.name}
-                    </span>
-                    {row.error ? (
-                      <span className="tr-repo-error">{t("testReport.repoError", { error: row.error })}</span>
-                    ) : (
-                      <span className="tr-repo-stat">
-                        {row.files} {t("testReport.files")} · +{row.adds} -{row.dels}
-                        {row.untested > 0 && (
-                          <span className="tr-repo-warn">
-                            {" "}
-                            · {row.untested} {t("testReport.untested")}
+        <div className={`tr-body${busy ? " is-refreshing" : ""}`} key={viewingId}>
+          {activeTab === "overview" && (
+            <>
+              {rows && rows.length > 0 && (
+                <div className="tr-repos">
+                  <span className="tr-label">{t("testReport.repoSummary")}</span>
+                  <ul>
+                    {rows.map((row) => (
+                      <li key={row.name} className={`tr-repo${row.error ? " is-error" : ""}`}>
+                        <span className="tr-repo-name" title={row.name}>
+                          {row.name}
+                        </span>
+                        {row.error ? (
+                          <span className="tr-repo-error">{t("testReport.repoError", { error: row.error })}</span>
+                        ) : (
+                          <span className="tr-repo-stat">
+                            {row.files} {t("testReport.files")} · +{row.adds} -{row.dels}
+                            {row.untested > 0 && (
+                              <span className="tr-repo-warn">
+                                {" "}
+                                · {row.untested} {t("testReport.untested")}
+                              </span>
+                            )}
                           </span>
                         )}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-          <div className="tr-stats">
-            <span className="tr-stat">
-              {report.stats.files} {t("testReport.files")}
-            </span>
-            <span className="tr-stat is-add">+{report.stats.adds}</span>
-            <span className="tr-stat is-del">-{report.stats.dels}</span>
-            <span className="tr-stat">
-              {report.stats.modules} {t("testReport.modules")}
-            </span>
-            {report.stats.untested > 0 && (
-              <span className="tr-stat is-warn">
-                {report.stats.untested} {t("testReport.untested")}
-              </span>
-            )}
-            {report.stats.testFiles > 0 && (
-              <span className="tr-stat">
-                {report.stats.testFiles} {t("testReport.testFiles")}
-              </span>
-            )}
-            {report.stats.ignored > 0 && (
-              <span className="tr-stat is-muted" title={t("testReport.ignoredHint")}>
-                {t("testReport.ignored")} {report.stats.ignored}
-              </span>
-            )}
-            {view?.branch && (
-              <span className="tr-stat is-muted">
-                {view.branch}
-                {view.head ? ` @ ${view.head}` : ""}
-              </span>
-            )}
-          </div>
+              <div className="tr-risk-banner">
+                {riskSummary.length === 0 ? (
+                  <span className="tr-hint">{t("testReport.riskBanner.none", { defaultValue: "暂未识别高风险改动" })}</span>
+                ) : (
+                  <>
+                    <span className="tr-label">{t("testReport.riskBanner.title", { defaultValue: "高风险改动" })}</span>
+                    {riskSummary.map(({ type, count }) => (
+                      <button
+                        key={type}
+                        type="button"
+                        className={`tr-risk-chip tr-risk-${type}`}
+                        onClick={() => {
+                          setFileFilter((_) => ({ ...EMPTY_FILTER, risks: [type] }))
+                          setActiveTab("files")
+                        }}
+                      >
+                        {t("testReport.riskBanner.count", {
+                          count,
+                          label: t(`testReport.risk.${type}`, { defaultValue: type }),
+                        })}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
 
-          {report.stats.files === 0 && <p className="tr-hint">{t("testReport.empty")}</p>}
-
-          {report.scope.length > 0 && (
-            <div className="tr-scope">
-              <span className="tr-label">{t("testReport.scopeTitle")}</span>
-              {report.scope.map((s) => (
-                <span key={s} className={`tr-scope-chip tr-scope-${s}`}>
-                  {t(`testReport.scope.${s}`, { defaultValue: s })}
+              <div className="tr-section-card tr-stats">
+                <span className="tr-stat">
+                  <span className="tr-stat-value">{report.stats.files}</span> {t("testReport.files")}
                 </span>
-              ))}
-            </div>
+                <span className="tr-stat-sep" aria-hidden />
+                <span className="tr-stat is-add">
+                  <span className="tr-stat-value">+{report.stats.adds}</span>
+                </span>
+                <span className="tr-stat is-del">
+                  <span className="tr-stat-value">-{report.stats.dels}</span>
+                </span>
+                <span className="tr-stat-sep" aria-hidden />
+                <span className="tr-stat">
+                  <span className="tr-stat-value">{report.stats.modules}</span> {t("testReport.modules")}
+                </span>
+                {report.stats.untested > 0 && (
+                  <>
+                    <span className="tr-stat-sep" aria-hidden />
+                    <span className="tr-stat is-warn">
+                      <span className="tr-stat-value">{report.stats.untested}</span> {t("testReport.untested")}
+                    </span>
+                  </>
+                )}
+                {report.stats.testFiles > 0 && (
+                  <span className="tr-stat is-muted">
+                    {report.stats.testFiles} {t("testReport.testFiles")}
+                  </span>
+                )}
+                {report.stats.ignored > 0 && (
+                  <span className="tr-stat is-muted" title={t("testReport.ignoredHint")}>
+                    {t("testReport.ignored")} {report.stats.ignored}
+                  </span>
+                )}
+                {view?.branch && (
+                  <span className="tr-stat is-muted">
+                    {view.branch}
+                    {view.head ? ` @ ${view.head}` : ""}
+                  </span>
+                )}
+              </div>
+
+              {report.stats.files === 0 && <p className="tr-hint">{t("testReport.empty")}</p>}
+
+              {report.scope.length > 0 && (
+                <div className="tr-section-card tr-scope">
+                  <span className="tr-label">
+                    {t("testReport.scopeTitle")}
+                    <span className="tr-count-badge">{report.scope.length}</span>
+                  </span>
+                  {report.scope.map((s) => (
+                    <span key={s} className={`tr-scope-chip tr-scope-${s}`}>
+                      {t(`testReport.scope.${s}`, { defaultValue: s })}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {report.truncated && <p className="tr-hint">{t("testReport.truncated")}</p>}
+
+              {report.apiChanges.length > 0 && (
+                <div className="tr-section-card tr-api">
+                  <span className="tr-label">{t("testReport.apiChanges")}</span>
+                  <ul>
+                    {report.apiChanges.slice(0, 3).map((c) => (
+                      <li key={`ov-${c.kind}-${c.name}-${c.path}`}>
+                        <span className={`tr-api-kind tr-api-${c.kind}`}>
+                          {t(`testReport.api.${c.kind}`, { defaultValue: c.kind })}
+                        </span>
+                        <code>{c.name}</code>
+                        <span className="tr-api-path">{c.path}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {report.apiChanges.length > 0 && (
+                    <button type="button" className="tr-view-all" onClick={() => setActiveTab("api")}>
+                      {t("testReport.overview.viewAll", { defaultValue: "查看全部 →" })}
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
-          {report.truncated && <p className="tr-hint">{t("testReport.truncated")}</p>}
+          {activeTab === "files" && (
+            <>
+              <div className="tr-subtoolbar">
+                <span className="tr-subtoolbar-field">
+                  <Search size={13} aria-hidden />
+                  <input
+                    className="input-field"
+                    value={fileFilter.search}
+                    onChange={(e) => setFileFilter((f) => ({ ...f, search: e.target.value }))}
+                    placeholder={t("testReport.subtoolbar.searchPlaceholder", { defaultValue: "搜索文件路径…" })}
+                  />
+                </span>
+                <MultiSelectDropdown
+                  label={t("testReport.subtoolbar.layer", { defaultValue: "层级" })}
+                  options={options.layers.map((layer) => ({
+                    value: layer,
+                    label: t(`testReport.layer.${layer}`, { defaultValue: layer }),
+                  }))}
+                  selected={fileFilter.layers}
+                  onChange={(layers) => setFileFilter((f) => ({ ...f, layers }))}
+                />
+                <MultiSelectDropdown
+                  label={t("testReport.subtoolbar.risk", { defaultValue: "风险" })}
+                  options={options.risks.map((risk) => ({
+                    value: risk,
+                    label: t(`testReport.risk.${risk}`, { defaultValue: risk }),
+                  }))}
+                  selected={fileFilter.risks}
+                  onChange={(risks) => setFileFilter((f) => ({ ...f, risks }))}
+                />
+                <button type="button" className="btn btn-secondary btn-small" onClick={() => setExpandAll((e) => !e)}>
+                  {expandAll
+                    ? t("testReport.subtoolbar.collapseAll", { defaultValue: "全部折叠" })
+                    : t("testReport.subtoolbar.expandAll", { defaultValue: "全部展开" })}
+                </button>
+                <button type="button" className="btn btn-secondary btn-small" onClick={() => setFileFilter(EMPTY_FILTER)}>
+                  {t("testReport.subtoolbar.reset", { defaultValue: "重置" })}
+                </button>
+                <span className="tr-subtoolbar-count">
+                  {t("testReport.subtoolbar.showing", {
+                    defaultValue: "已筛选 {{n}} / 共 {{total}} 个文件",
+                    n: fileMatches.length,
+                    total,
+                  })}
+                </span>
+              </div>
 
-          {report.commits.length > 0 && (
-            <div className="tr-commits">
-              <span className="tr-label">{t("testReport.commits")}</span>
+              {commitDetails.length > 0 && report.stats.files > 0 && (
+                <div className="tr-groupbar" role="group" aria-label={t("testReport.groupBy")}>
+                  <button
+                    type="button"
+                    className={`btn btn-small ${groupMode === "module" ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => setGroupMode("module")}
+                  >
+                    {t("testReport.groupModule")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-small ${groupMode === "commit" ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => setGroupMode("commit")}
+                  >
+                    <GitCommitHorizontal size={11} />
+                    {t("testReport.groupCommit")}
+                  </button>
+                  <span className="tr-groupbar-hint">{t("testReport.groupCommitHint")}</span>
+                </div>
+              )}
+
+              {fileMatches.length === 0 ? (
+                <p className="tr-hint">{t("testReport.subtoolbar.empty", { defaultValue: "无匹配文件" })}</p>
+              ) : (
+                <>
+                  {truncated && (
+                    <p className="tr-hint">
+                      {t("testReport.subtoolbar.truncated", {
+                        defaultValue: "显示前 150 / {{n}} 个文件 · 使用搜索缩小范围",
+                        n: fileMatches.length,
+                      })}
+                    </p>
+                  )}
+                  {fileGroups.map(renderGroup)}
+                  {groupMode === "commit" &&
+                    ungroupedCommits.map((commit) => (
+                      <div key={commit.sha} className="tr-commit-empty">
+                        <code className="tr-file-sha">{commit.shortSha}</code>
+                        <span title={commit.subject}>{commit.subject}</span>
+                        <span className="tr-groupbar-hint">{t("testReport.commitNoFiles")}</span>
+                      </div>
+                    ))}
+                </>
+              )}
+            </>
+          )}
+
+          {activeTab === "commits" && (
+            <div className="tr-section-card tr-commits">
+              <span className="tr-label">
+                {t("testReport.commits")}
+                <span className="tr-count-badge">{commitDetails.length || report.commits.length}</span>
+              </span>
               <ul>
                 {commitDetails.length > 0
-                  ? commitDetails
-                      .slice(0, 20)
-                      .map((c) => (
-                        <li key={c.sha} className="tr-commit-line">
-                          <code className="tr-file-sha">{c.shortSha}</code>
-                          <span title={c.body.trim() || undefined}>{c.subject}</span>
-                          <span className="tr-commit-meta">
-                            {c.author} · {c.date.slice(0, 10)}
-                          </span>
-                        </li>
-                      ))
+                  ? commitDetails.slice(0, 20).map((c) => (
+                      <li key={c.sha} className="tr-commit-line">
+                        <code className="tr-file-sha">{c.shortSha}</code>
+                        <span title={c.body.trim() || undefined}>{c.subject}</span>
+                        <span className="tr-commit-meta">
+                          {c.author} · {c.date.slice(0, 10)}
+                        </span>
+                      </li>
+                    ))
                   : report.commits.slice(0, 20).map((c, index) => <li key={`${c}-${index}`}>{c}</li>)}
               </ul>
             </div>
           )}
 
-          {report.apiChanges.length > 0 && (
-            <div className="tr-api">
-              <span className="tr-label">{t("testReport.apiChanges")}</span>
+          {activeTab === "api" && (
+            <div className="tr-section-card tr-api">
+              <span className="tr-label">
+                {t("testReport.apiChanges")}
+                <span className="tr-count-badge">{report.apiChanges.length}</span>
+              </span>
               <ul>
                 {report.apiChanges.slice(0, 40).map((c) => (
                   <li key={`${c.kind}-${c.name}-${c.path}`}>
@@ -565,140 +955,120 @@ export default function TestReportPanel(props: Props) {
             </div>
           )}
 
-          {commitDetails.length > 0 && (
-            <div className="tr-groupbar" role="group" aria-label={t("testReport.groupBy")}>
-              <button
-                type="button"
-                className={`btn btn-small ${groupMode === "module" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setGroupMode("module")}
-              >
-                {t("testReport.groupModule")}
-              </button>
-              <button
-                type="button"
-                className={`btn btn-small ${groupMode === "commit" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setGroupMode("commit")}
-              >
-                <GitCommitHorizontal size={11} />
-                {t("testReport.groupCommit")}
-              </button>
-              <span className="tr-groupbar-hint">{t("testReport.groupCommitHint")}</span>
-            </div>
-          )}
-
-          {groupMode === "module" || commitDetails.length === 0 ? (
-            report.groups.map((group) => {
-              const files = visibleFiles(group.name);
-              if (files.length === 0) return null;
-              return (
-                <details key={group.name} className="tr-group" open>
-                  <summary className="tr-group-head">
-                    <span className="tr-group-name">{group.name}</span>
-                    <span className="tr-group-stat">
-                      {group.files} · +{group.adds} -{group.dels}
-                    </span>
-                    {group.risks.map((risk) => (
-                      <span key={risk} className={`tr-risk tr-risk-${risk}`}>
-                        {t(`testReport.risk.${risk}`, { defaultValue: risk })}
-                      </span>
-                    ))}
-                  </summary>
-                  <ul className="tr-files">{files.map(renderFile)}</ul>
-                </details>
-              );
-            })
-          ) : (
+          {activeTab === "ai" && (
             <>
-              {commitGroups.map(({ commit, files }) => (
-                <details key={commit.sha} className="tr-group" open>
-                  <summary className="tr-group-head">
-                    <span className="tr-group-name tr-commit-subject" title={commit.subject}>
-                      {commit.subject}
+              <div className="tr-ai-prompt">
+                <button type="button" className="tr-ai-prompt-toggle" onClick={() => setPromptOpen((o) => !o)}>
+                  {t("testReport.ai.systemPrompt", { defaultValue: "自定义提示词" })}
+                  <ChevronDown size={12} className={promptOpen ? "is-open" : ""} />
+                </button>
+                {promptOpen && (
+                  <div className="tr-ai-prompt-body">
+                    <textarea
+                      className="input-field"
+                      value={customSystem}
+                      onChange={(e) => setCustomSystem(e.target.value)}
+                      placeholder={t("testReport.ai.systemPlaceholder", {
+                        defaultValue: "可选：覆盖默认 system 提示词…",
+                      })}
+                      rows={4}
+                    />
+                    <p className="tr-hint">
+                      {t("testReport.ai.systemHint", {
+                        defaultValue: "留空则使用内置提示词；该内容仅保存在本机。",
+                      })}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="tr-ai">
+                <div className="tr-ai-head">
+                  <span className="tr-label">
+                    <Sparkles size={12} />
+                    {t("testReport.aiSection")}
+                  </span>
+                  <select
+                    className="input-field tr-model"
+                    value={selectedModel?.id ?? ""}
+                    onChange={(e) => setSelectedModelId(e.target.value)}
+                    disabled={aiBusy}
+                    aria-label={t("testReport.aiModel")}
+                  >
+                    {aiModels.length === 0 && <option value="">{t("testReport.aiNeedModel")}</option>}
+                    {aiModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                  {aiBusy && (aiProgress?.total ?? 1) > 1 && (
+                    <span className="tr-ai-progress">
+                      {t("testReport.aiProgress", { done: aiProgress?.done ?? 0, total: aiProgress?.total ?? 1 })}
                     </span>
-                    <code className="tr-file-sha">{commit.shortSha}</code>
-                    <span className="tr-group-stat">
-                      {files.length} · {commit.author} · {commit.date.slice(0, 10)}
-                    </span>
-                  </summary>
-                  {commit.body.trim() && <p className="tr-commit-body">{commit.body.trim()}</p>}
-                  <ul className="tr-files">{files.map(renderFile)}</ul>
-                </details>
-              ))}
-              {ungroupedCommits.map((commit) => (
-                <div key={commit.sha} className="tr-commit-empty">
-                  <code className="tr-file-sha">{commit.shortSha}</code>
-                  <span title={commit.subject}>{commit.subject}</span>
-                  <span className="tr-groupbar-hint">{t("testReport.commitNoFiles")}</span>
+                  )}
+                  {aiBusy && (
+                    <button type="button" className="btn btn-secondary btn-small" onClick={() => void cancelAiRun()}>
+                      {t("testReport.aiCancel")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => void runAi()}
+                    disabled={aiBusy || !viewingId || !selectedModel || report.stats.files === 0}
+                  >
+                    {aiBusy ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />}
+                    {ai ? t("testReport.aiRegenerate") : t("testReport.aiGenerate")}
+                  </button>
                 </div>
-              ))}
+                {!ai && !aiBusy && <p className="tr-hint">{selectedModel ? t("testReport.aiHint") : t("testReport.aiNeedModel")}</p>}
+                {aiSections.length > 0 && (
+                  <div className="tr-ai-body">
+                    {aiSections.map(([title, body]) => (
+                      <section key={title} className="tr-ai-block">
+                        <h4>
+                          {title}
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small tr-ai-block-copy"
+                            onClick={() => void copySection(`## ${title}` + `\n\n` + body)}
+                            title={t("testReport.ai.copySection", { defaultValue: "复制该章节" })}
+                          >
+                            <Copy size={12} />
+                          </button>
+                        </h4>
+                        <ul>
+                          {body
+                            .split("\n")
+                            .map((line) => line.replace(/^[-*]\s*/, "").trim())
+                            .filter(Boolean)
+                            .map((item, index) => (
+                              <li key={`${title}-${index}`}>{item}</li>
+                            ))}
+                        </ul>
+                      </section>
+                    ))}
+                  </div>
+                )}
+                {ai && !aiBusy && aiSections.length === 0 && (
+                  <div className="tr-ai-raw">
+                    {ai.split("\n").map((line, i) => (
+                      <p key={i}>{line || " "}</p>
+                    ))}
+                  </div>
+                )}
+                {ai && aiWarnings.length > 0 && (
+                  <p className="tr-ai-warn">
+                    <ShieldAlert size={12} />
+                    {t("testReport.aiWarn", { list: aiWarnings.join("、") })}
+                  </p>
+                )}
+              </div>
             </>
           )}
-
-          <div className="tr-ai">
-            <div className="tr-ai-head">
-              <span className="tr-label">{t("testReport.aiSection")}</span>
-              <select
-                className="input-field tr-model"
-                value={selectedModel?.id ?? ""}
-                onChange={(e) => setSelectedModelId(e.target.value)}
-                disabled={aiBusy}
-                aria-label={t("testReport.aiModel")}
-              >
-                {aiModels.length === 0 && <option value="">{t("testReport.aiNeedModel")}</option>}
-                {aiModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-              {aiBusy && (aiProgress?.total ?? 1) > 1 && (
-                <span className="tr-ai-progress">
-                  {t("testReport.aiProgress", { done: aiProgress?.done ?? 0, total: aiProgress?.total ?? 1 })}
-                </span>
-              )}
-              {aiBusy && (
-                <button type="button" className="btn btn-secondary btn-small" onClick={() => void cancelAiRun()}>
-                  {t("testReport.aiCancel")}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={() => void runAi()}
-                disabled={aiBusy || !viewingId || !selectedModel || report.stats.files === 0}
-              >
-                {aiBusy ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />}
-                {ai ? t("testReport.aiRegenerate") : t("testReport.aiGenerate")}
-              </button>
-            </div>
-            {!ai && !aiBusy && <p className="tr-hint">{selectedModel ? t("testReport.aiHint") : t("testReport.aiNeedModel")}</p>}
-            {aiSections.length > 0 && (
-              <div className="tr-ai-body">
-                {aiSections.map(([title, body]) => (
-                  <section key={title} className="tr-ai-block">
-                    <h4>{title}</h4>
-                    <ul>
-                      {body
-                        .split("\n")
-                        .map((line) => line.replace(/^[-*]\s*/, "").trim())
-                        .filter(Boolean)
-                        .map((item, index) => (
-                          <li key={`${title}-${index}`}>{item}</li>
-                        ))}
-                    </ul>
-                  </section>
-                ))}
-              </div>
-            )}
-            {ai && aiWarnings.length > 0 && (
-              <p className="tr-ai-warn">
-                <ShieldAlert size={12} />
-                {t("testReport.aiWarn", { list: aiWarnings.join("、") })}
-              </p>
-            )}
-          </div>
         </div>
       )}
     </section>
-  );
+  )
 }

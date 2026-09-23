@@ -7,14 +7,14 @@
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 use crate::ai_commands::{generate_text, AIModelConfig, GenerateTextRequest};
 use crate::cancellation::{self, CancelGuard};
 use crate::change_report::{self, ChangeReport};
-use crate::git_commands::{ensure_git_repo, git_stdout};
+use crate::git_commands::git_stdout;
 
 /// Enough patch text to read signatures off; the UI never shows the raw diff.
 const MAX_PATCH_BYTES: usize = 200 * 1024;
@@ -34,6 +34,10 @@ const AI_REDUCE_TOKENS: i64 = 3000;
 /// trips into ~ceil(N/this). Bounded so a big folder doesn't trip the provider's
 /// rate limit (local DeepSeek and hosted endpoints share this path).
 const AI_MAP_CONCURRENCY: usize = 4;
+/// Repos under one folder are independent, so collect them concurrently: a folder
+/// of N drops from N sequential passes to ~ceil(N/this). Bounded like the AI map
+/// pass so a big folder doesn't thrash the machine with git processes.
+const FOLDER_COLLECT_CONCURRENCY: usize = 4;
 const AI_SYSTEM: &str = "你是资深测试工程师，只依据给定的改动分析作答，不编造未出现的模块或接口。";
 
 /// One of the three things a tester can mean by "the change".
@@ -192,24 +196,10 @@ fn inline_test_sources(repo_root: &str, name_status_z: &str, untracked_z: &str) 
 
 /// Commit records for the analysed range: subjects, full briefs, and the
 /// path -> short-sha attribution that lets the UI answer "which commit is this
-/// file from". `-z` keeps CJK and spaced paths verbatim; \x02/\x01 are ours.
-fn commit_records(repo: &Path, range: Option<&str>) -> (Vec<String>, Vec<change_report::CommitBrief>, std::collections::BTreeMap<String, Vec<String>>) {
-    let Some(range) = range else {
-        return (Vec::new(), Vec::new(), Default::default());
-    };
-    let raw = git_lines(
-        repo,
-        &[
-            "log",
-            "--no-merges",
-            "--format=%x02%H%x00%h%x00%an%x00%aI%x00%s%x00%b%x01",
-            "--name-only",
-            "-z",
-            range,
-        ],
-    )
-    .unwrap_or_default();
-    let (details, by_file) = change_report::parse_log_z(&raw);
+/// file from". The raw `log -z` output is gathered by the caller (concurrently
+/// with the other git reads); \x02/\x01 are ours.
+fn commit_records(raw_log: &str) -> (Vec<String>, Vec<change_report::CommitBrief>, std::collections::BTreeMap<String, Vec<String>>) {
+    let (details, by_file) = change_report::parse_log_z(raw_log);
     let subjects = details.iter().map(|c| c.subject.clone()).collect();
     // Log paths are repo-root relative, like the report's diff paths.
     let file_commits = by_file
@@ -256,29 +246,32 @@ fn scope_of(base: Option<String>, last_commits: Option<i64>) -> ChangeScope {
     }
 }
 
+/// Join a scoped worker thread. The git reads are written not to panic, but a
+/// stray panic must surface as an error instead of unwinding the process.
+fn joined(result: Result<Result<String, String>, Box<dyn std::any::Any + Send>>) -> Result<String, String> {
+    result.unwrap_or_else(|_| Err("分析任务已中止".to_string()))
+}
+
 pub(crate) fn collect_sync(repo_path: &str, scope: ChangeScope) -> Result<TestReportBundle, String> {
     let dir = Path::new(repo_path);
-    ensure_git_repo(repo_path)?;
+    if !dir.exists() {
+        return Err(format!("路径不存在: {}", repo_path));
+    }
+    if !dir.is_dir() {
+        return Err(format!("路径不是目录: {}", repo_path));
+    }
 
-    let repo_root = git_lines(dir, &["rev-parse", "--show-toplevel"])?.trim().to_string();
-    let branch = git_lines(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default().trim().to_string();
-    let head = git_lines(dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default().trim().to_string();
-    let subdir = !repo_root.is_empty() && {
-        let normalized_root = repo_root.replace('\\', "/").trim_end_matches('/').to_lowercase();
-        let normalized_dir = repo_path.replace('\\', "/").trim_end_matches('/').to_lowercase();
-        normalized_dir != normalized_root
+    // Validate the baseline text before spending any process spawns on it.
+    let base_ref: Option<String> = match &scope {
+        ChangeScope::Ref(value) => Some(validate_ref(value)?),
+        _ => None,
     };
 
     // Which git range describes this report.
     let (range, base_label, source, commit_range): (Vec<String>, String, String, Option<String>) = match &scope {
         ChangeScope::Uncommitted => (vec![], String::new(), "uncommitted".to_string(), None),
-        ChangeScope::Ref(value) => {
-            let value = validate_ref(value)?;
-            let resolved = git_lines(dir, &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", value)])
-                .unwrap_or_default();
-            if resolved.trim().is_empty() {
-                return Err(format!("找不到基准：{}（分支/tag/commit 是否存在？）", value));
-            }
+        ChangeScope::Ref(_) => {
+            let value = base_ref.clone().unwrap_or_default();
             (
                 vec![value.clone()],
                 value.clone(),
@@ -295,43 +288,107 @@ pub(crate) fn collect_sync(repo_path: &str, scope: ChangeScope) -> Result<TestRe
 
     // `git diff <anchor>` compares the working tree with that point, so staged and
     // unstaged edits land in one authoritative list instead of two overlapping ones.
+    // `--no-optional-locks`: the diffs below run concurrently with each other and
+    // must not race on git's opportunistic index refresh.
     let anchor: Vec<&str> = match &scope {
         ChangeScope::Uncommitted => vec!["HEAD"],
         ChangeScope::Ref(_) | ChangeScope::Commits(_) => range.iter().map(String::as_str).collect(),
     };
 
-    let mut name_args = vec!["diff", "--name-status", "-z"];
+    let mut name_args = vec!["--no-optional-locks", "diff", "--name-status", "-z"];
     name_args.extend(anchor.iter().copied());
-    let mut num_args = vec!["diff", "--numstat", "-z"];
+    let mut num_args = vec!["--no-optional-locks", "diff", "--numstat", "-z"];
     num_args.extend(anchor.iter().copied());
-    let mut patch_args = vec!["diff", "--no-color", "-U0"];
+    let mut patch_args = vec!["--no-optional-locks", "diff", "--no-color", "-U0"];
     patch_args.extend(anchor.iter().copied());
+    let uncommitted = matches!(scope, ChangeScope::Uncommitted);
 
-    let name_status = git_lines(dir, &scoped(name_args, &[]))?;
-    let numstat = git_lines(dir, &scoped(num_args, &[]))?;
-    let untracked = if matches!(scope, ChangeScope::Uncommitted) {
-        git_lines(dir, &scoped(vec!["ls-files", "--others", "--exclude-standard", "-z"], &[]))?
-    } else {
-        String::new()
-    };
+    // Every git read below targets the same repo and is read-only, so they all run
+    // at once: on Windows each git spawn costs tens of milliseconds and a sequential
+    // pass used to pay that ~10× per repo. The patch diff is the heaviest single
+    // call, so it keeps a thread of its own.
+    let (top, branch, head, base_ok, name_status, numstat, untracked, patch, known_raw, log_raw) = std::thread::scope(|s| {
+        let h_top = s.spawn(|| git_lines(dir, &["rev-parse", "--show-toplevel"]));
+        let h_branch = s.spawn(|| git_lines(dir, &["rev-parse", "--abbrev-ref", "HEAD"]));
+        let h_head = s.spawn(|| git_lines(dir, &["rev-parse", "--short", "HEAD"]));
+        let h_base = s.spawn(|| match base_ref.as_deref() {
+            Some(value) => git_lines(dir, &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", value)]).unwrap_or_default(),
+            None => String::new(),
+        });
+        let h_names = s.spawn(|| git_lines(dir, &scoped(name_args, &[])));
+        let h_nums = s.spawn(|| git_lines(dir, &scoped(num_args, &[])));
+        let h_patch = s.spawn(|| git_lines(dir, &scoped(patch_args, &[])));
+        let h_others = s.spawn(|| {
+            if uncommitted {
+                git_lines(dir, &scoped(vec!["ls-files", "--others", "--exclude-standard", "-z"], &[]))
+            } else {
+                Ok(String::new())
+            }
+        });
+        let h_tests = s.spawn(|| git_lines(dir, &scoped(vec!["ls-files", "-z"], TEST_PATHS)));
+        let h_log = s.spawn(|| match commit_range.as_deref() {
+            Some(range) => git_lines(
+                dir,
+                &["log", "--no-merges", "--format=%x02%H%x00%h%x00%an%x00%aI%x00%s%x00%b%x01", "--name-only", "-z", range],
+            ),
+            None => Ok(String::new()),
+        });
+        (
+            joined(h_top.join()),
+            joined(h_branch.join()).unwrap_or_default(),
+            joined(h_head.join()).unwrap_or_default(),
+            h_base.join().unwrap_or_default(),
+            joined(h_names.join()),
+            joined(h_nums.join()),
+            joined(h_others.join()),
+            joined(h_patch.join()),
+            joined(h_tests.join()),
+            joined(h_log.join()).unwrap_or_default(),
+        )
+    });
 
-    let patch = match git_lines(dir, &scoped(patch_args, &[])) {
-        // A huge or broken patch must not cost the tester the whole report.
-        Ok(patch) => truncate_bytes(&patch, MAX_PATCH_BYTES),
-        Err(_) => String::new(),
+    // `--show-toplevel` doubles as the repo check; its failure text tells a
+    // non-repo apart from anything else.
+    let repo_root = top
+        .map_err(|err| {
+            if err.contains("not a git repository") || err.contains("work tree") {
+                format!("不是 Git 仓库: {}", repo_path)
+            } else {
+                err
+            }
+        })?
+        .trim()
+        .to_string();
+    let branch = branch.trim().to_string();
+    let head = head.trim().to_string();
+    let subdir = !repo_root.is_empty() && {
+        let normalized_root = repo_root.replace('\\', "/").trim_end_matches('/').to_lowercase();
+        let normalized_dir = repo_path.replace('\\', "/").trim_end_matches('/').to_lowercase();
+        normalized_root != normalized_dir
     };
+    if let Some(value) = &base_ref {
+        if base_ok.trim().is_empty() {
+            return Err(format!("找不到基准：{}（分支/tag/commit 是否存在？）", value));
+        }
+    }
+
+    let name_status = name_status?;
+    let numstat = numstat?;
+    let untracked = untracked?;
+    // A huge or broken patch must not cost the tester the whole report.
+    let patch = patch.map(|p| truncate_bytes(&p, MAX_PATCH_BYTES)).unwrap_or_default();
 
     // Rust keeps its tests inline (`#[cfg(test)] mod tests`), which no path convention
     // can see, so the changed sources themselves are read for it.
     let inline_tests = inline_test_sources(&repo_root, &name_status, &untracked);
 
-    let known_tests: std::collections::HashSet<String> = git_lines(dir, &scoped(vec!["ls-files", "-z"], TEST_PATHS))
+    let known_tests: std::collections::HashSet<String> = known_raw
         .map(|raw| split_z(&raw))
         .unwrap_or_default()
         .into_iter()
         .collect();
 
-    let (subjects, commit_details, file_commits) = commit_records(dir, commit_range.as_deref());
+    let (subjects, commit_details, file_commits) = commit_records(&log_raw);
 
     let report = change_report::build_report(&change_report::ReportInputs {
         base: &base_label,
@@ -453,20 +510,47 @@ pub async fn collect_folder_report(
     }
     let scope = scope_of(base, last_commits);
     let total = repo_paths.len();
+    let _ = app.emit(
+        "test-report-collect-progress",
+        serde_json::json!({ "folder": folder_name, "done": 0, "total": total }),
+    );
+
+    // Each repo's collection is its own pile of git spawns, so run a bounded number
+    // at once: a 10-repo folder used to pay ~10 sequential spawns × 10 repos; now
+    // it pays ~10 spawns × ~3 waves. Results carry their original index so they can
+    // be re-sorted into tree order after the unordered finish.
+    use futures_util::stream::{self, StreamExt};
+    let finished = AtomicUsize::new(0);
+    let mut outcomes: Vec<(usize, String, Result<TestReportBundle, String>)> = stream::iter(
+        repo_paths.into_iter().enumerate(),
+    )
+    .map(|(index, path)| {
+        let scope = scope.clone();
+        let app = app.clone();
+        let folder_name = folder_name.clone();
+        let finished = &finished;
+        async move {
+            let name = repo_display_name(&path);
+            let outcome = tokio::task::spawn_blocking(move || collect_sync(&path, scope))
+                .await
+                .map_err(|e| format!("分析任务已中止: {}", e))
+                .and_then(|r| r);
+            let done = finished.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = app.emit(
+                "test-report-collect-progress",
+                serde_json::json!({ "folder": folder_name, "done": done, "total": total }),
+            );
+            (index, name, outcome)
+        }
+    })
+    .buffer_unordered(FOLDER_COLLECT_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    outcomes.sort_by_key(|(index, _, _)| *index);
+
     let mut collected: Vec<(String, TestReportBundle)> = Vec::new();
     let mut rows: Vec<FolderRepoRow> = Vec::new();
-
-    for (index, path) in repo_paths.iter().enumerate() {
-        let _ = app.emit(
-            "test-report-collect-progress",
-            serde_json::json!({ "folder": folder_name, "done": index, "total": total }),
-        );
-        let name = repo_display_name(path);
-        let scope = scope.clone();
-        let path = path.clone();
-        let outcome = tokio::task::spawn_blocking(move || collect_sync(&path, scope))
-            .await
-            .map_err(|e| format!("分析任务已中止: {}", e))?;
+    for (_, name, outcome) in outcomes {
         match outcome {
             Ok(bundle) => {
                 rows.push(FolderRepoRow {
@@ -489,10 +573,6 @@ pub async fn collect_folder_report(
             }),
         }
     }
-    let _ = app.emit(
-        "test-report-collect-progress",
-        serde_json::json!({ "folder": folder_name, "done": total, "total": total }),
-    );
 
     let with_changes: Vec<(&str, &TestReportBundle)> = collected
         .iter()
@@ -535,11 +615,12 @@ pub async fn generate_test_report_ai(
     app: AppHandle,
     report_id: String,
     config: AIModelConfig,
+    system: Option<String>,
 ) -> Result<AiResult, String> {
-    // Cancel key = report id (`tr-<millis>-<seq>`), which can never collide with the
+    // Cancel key = report id (	r-<millis>-<seq>), which can never collide with the
     // project ids used as keys by other long-running commands.
-    let _guard = CancelGuard::new(&report_id);
 
+    let _guard = CancelGuard::new(&report_id);
     let entry = cache_get(&report_id).ok_or("报告已过期，请重新采集")?;
     let project_name = entry.repo_name;
     let report = entry.report;
@@ -547,22 +628,23 @@ pub async fn generate_test_report_ai(
 
     let mut config = config;
     config.temperature = 0.2;
+    let system_prompt = std::sync::Arc::new(system.unwrap_or_else(|| AI_SYSTEM.to_string()));
 
     let chunks = change_report::plan_ai_chunks(&report, AI_CHUNK_FILES, AI_CHUNK_APIS);
     // Every map call plus the final reduce; a single-pass report is just "the call".
     let total = if chunks.len() <= 1 { 1 } else { chunks.len() + 1 };
     emit_ai_progress(&app, &report_id, 0, total);
 
-    let send = |config: AIModelConfig, user: String| {
+    let send = |config: AIModelConfig, user: String, system: &str| {
         generate_text(GenerateTextRequest {
             config,
-            system: AI_SYSTEM.to_string(),
+            system: system.to_string(),
             user,
         })
     };
     let markdown = if chunks.len() <= 1 {
         config.max_tokens = AI_REDUCE_TOKENS;
-        send(config, build_ai_prompt(&project_name, &report, &patch))
+        send(config, build_ai_prompt(&project_name, &report, &patch), &system_prompt)
             .await
             .map_err(|e| format!("{} 生成失败：{}", project_name, e))?
     } else {
@@ -591,14 +673,17 @@ pub async fn generate_test_report_ai(
         let mut summaries: Vec<Option<String>> = (0..requests.len()).map(|_| None).collect();
         let mut done = 0usize;
         let mut briefs = stream::iter(requests)
-            .map(|(index, module, prompt, map_config)| async move {
-                let result = generate_text(GenerateTextRequest {
-                    config: map_config,
-                    system: AI_SYSTEM.to_string(),
-                    user: prompt,
-                })
-                .await;
-                (index, module, result)
+            .map(|(index, module, prompt, map_config)| {
+                let system = system_prompt.clone();
+                async move {
+                    let result = generate_text(GenerateTextRequest {
+                        config: map_config,
+                        system: (*system).clone(),
+                        user: prompt,
+                    })
+                    .await;
+                    (index, module, result)
+                }
             })
             .buffer_unordered(concurrency);
         while let Some((index, module, result)) = briefs.next().await {
@@ -615,7 +700,7 @@ pub async fn generate_test_report_ai(
             return Err("[E_CANCELLED] 生成已取消".to_string());
         }
         config.max_tokens = AI_REDUCE_TOKENS;
-        send(config, build_ai_reduce_prompt(&project_name, &report, &summaries))
+        send(config, build_ai_reduce_prompt(&project_name, &report, &summaries), system_prompt.as_str())
             .await
             .map_err(|e| format!("{} 汇总失败：{}", project_name, e))?
     };

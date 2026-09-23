@@ -10,7 +10,7 @@
   "gitManagement": "Git 管理",
   "runtimeVersion": "环境变量",
   "networkManagement": "网络管理",
-  "hosts": "Hosts管理",
+  "hosts": "Hosts",
   "cloudflared": "内网穿透",
   "plugins": "网页工具",
   "systemUtils": "系统工具",

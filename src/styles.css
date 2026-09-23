@@ -11757,6 +11757,19 @@ input, select, textarea { font-family: inherit; }
   gap: 2px;
   flex-wrap: wrap;
   margin-top: auto;
+  /* Hidden by default, revealed on card hover / focus — matches the webpage
+     (plugin) list so both lists share the same show/hide interaction. */
+  opacity: 0;
+  transform: translateY(4px);
+  transition: var(--transition-colors);
+  pointer-events: none;
+}
+
+.snippet-card:hover .snippet-actions,
+.snippet-card:focus-within .snippet-actions {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 /* Ghost mini buttons reused from quick-ask; snippet-specific variants. */
 .qa-mini-btn.primary {
@@ -12396,6 +12409,19 @@ html.qa-bubble-mode[data-theme="glass"] body::before {
   flex-wrap: wrap;
   gap: 2px;
   flex-shrink: 0;
+  /* Hidden by default, revealed on row hover / focus — keeps the enable
+     toggle always visible while the action buttons appear on demand. */
+  opacity: 0;
+  transform: translateX(4px);
+  transition: var(--transition-colors);
+  pointer-events: none;
+}
+
+.userscript-item:hover .userscript-actions,
+.userscript-item:focus-within .userscript-actions {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
 }
 
 .userscript-toggle {

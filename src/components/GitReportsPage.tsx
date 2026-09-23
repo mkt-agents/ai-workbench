@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronRight, Folder, GitBranch } from "lucide-react";
+import { ChevronDown, ChevronRight, ClipboardList, Folder, GitBranch } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { getRepoSnapshot, refreshRepos, subscribeRepos } from "../core/gitCache";
 import { buildRepoGroups, REPOS_COLLAPSED_KEY } from "../core/repoGroups";
@@ -71,7 +71,12 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
     <div className="git-reports-page">
       <div className="tr-split">
         <aside className="tr-tree">
-          {groups.length === 0 && <div className="tr-tree-empty">{t("workbench.empty")}</div>}
+          {groups.length === 0 && (
+            <div className="tr-tree-empty">
+              <ClipboardList size={18} />
+              {t("workbench.empty")}
+            </div>
+          )}
           {groups.map((g) => {
             const isCollapsed = collapsed.has(g.key);
             const name = g.workspace ? g.workspace.name : t("workspace.other");
@@ -116,6 +121,14 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
                         onClick={() => onTargetChange({ kind: "repo", path: p.path })}
                       >
                         <GitBranch size={11} />
+                        {isGit === true ? (
+                          <span
+                            className={`tr-tree-badge${(summaries[p.path]?.dirtyCount ?? 0) > 0 ? "" : " is-empty"}`}
+                            title={t("reports.treeBadge")}
+                          >
+                            {summaries[p.path]?.dirtyCount ?? 0}
+                          </span>
+                        ) : null}
                         <span className="tr-tree-name">{p.name}</span>
                       </button>
                     );
@@ -134,6 +147,9 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
             )
           ) : (
             <div className="tr-panel tr-panel-empty">
+              <span className="tr-empty-icon" aria-hidden>
+                <ClipboardList size={20} />
+              </span>
               <div className="tr-empty-title">{t("reports.empty")}</div>
               <div className="runtime-muted">{t("reports.emptyHint")}</div>
             </div>

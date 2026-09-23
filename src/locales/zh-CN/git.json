@@ -9,7 +9,8 @@
     "emptyHint": "选中仓库生成单仓报告，选中文件夹合并该文件夹下所有仓库的报告",
     "folderNode": "合并该文件夹下所有仓库",
     "noGitInFolder": "该文件夹下没有 Git 仓库",
-    "notGit": "不是 Git 仓库"
+    "notGit": "不是 Git 仓库",
+    "treeBadge": "该仓库改动文件数"
   },
   "repos": {
     "subtitle": "收藏仓库、绑定身份，一步完成日常 Git 操作",
@@ -245,11 +246,12 @@
   },
   "testReport": {
     "open": "生成回归测试报告",
-    "openFolder": "为该文件夹的 {{count}} 个仓库生成合并回归报告",
-    "folderTitle": "文件夹回归测试报告",
-    "folderIntro": "为整个文件夹下的所有仓库采集改动，合并成一份回归测试报告（同夹仓库通常相互关联）。",
+    "openFolder": "为当前文件夹下 {{count}} 个仓库合并生成回归报告",
+    "folderTitle": "合并回归测试报告",
+    "folderIntro": "为当前文件夹下的所有仓库采集改动，合并成一份回归报告（同夹仓库通常相互关联）。",
     "baselineNote": "基准会应用到文件夹下的每个仓库；缺失该基准或非 Git 的仓库会在各仓概览中标为跳过。",
     "collectProgress": "采集仓库 {{done}}/{{total}}…",
+    "collecting": "正在采集改动…",
     "repoSummary": "各仓概览",
     "repoError": "已跳过：{{error}}",
     "title": "回归测试报告",
@@ -347,6 +349,39 @@
     "copy": "复制",
     "copied": "已复制到剪贴板",
     "export": "导出",
-    "savedTo": "已保存到 {{path}}"
+    "savedTo": "已保存到 {{path}}",
+    "overview": {
+      "viewAll": "查看全部 →"
+    },
+    "tabs": {
+      "overview": "概览",
+      "files": "改动文件",
+      "commits": "提交",
+      "api": "API 变更",
+      "ai": "AI 建议"
+    },
+    "subtoolbar": {
+      "searchPlaceholder": "搜索文件路径…",
+      "layer": "层级",
+      "risk": "风险",
+      "expandAll": "全部展开",
+      "collapseAll": "全部折叠",
+      "reset": "重置筛选",
+      "showing": "已筛选 {{n}} / 共 {{total}} 个文件",
+      "noMatch": "无匹配文件",
+      "empty": "无匹配文件",
+      "truncated": "显示前 150 / {{n}} 个文件 · 使用搜索缩小范围"
+    },
+    "riskBanner": {
+      "title": "高风险改动",
+      "none": "暂未识别高风险改动",
+      "count": "{{count}} 个 {{label}}"
+    },
+    "ai": {
+      "systemPrompt": "自定义提示词",
+      "systemPlaceholder": "可选：覆盖默认 system 提示词，例如「聚焦数据迁移与资金安全」",
+      "systemHint": "留空则使用内置提示词；该内容仅保存在本机。",
+      "copySection": "复制该章节"
+    }
   }
 }

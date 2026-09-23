@@ -9,7 +9,8 @@
     "emptyHint": "A repo gives a single-repo report; a folder merges every repo inside it.",
     "folderNode": "Merge all repos in this folder",
     "noGitInFolder": "No Git repos in this folder",
-    "notGit": "Not a Git repo"
+    "notGit": "Not a Git repo",
+    "treeBadge": "Changed files in this repo"
   },
   "repos": {
     "subtitle": "Favorite repos, bind identities, and run everyday Git actions in one place",
@@ -245,11 +246,12 @@
   },
   "testReport": {
     "open": "Generate regression test report",
-    "openFolder": "Generate a merged regression report for the {{count}} repos in this folder",
-    "folderTitle": "Folder Regression Report",
+    "openFolder": "Merge regression report for the {{count}} repos in this folder",
+    "folderTitle": "Merged Regression Report",
     "folderIntro": "Collect changes across every repo in the folder and merge them into one regression report (repos in a folder usually relate).",
     "baselineNote": "The baseline applies to each repo in the folder; repos missing it (or not a Git repo) are marked skipped in the rollup.",
     "collectProgress": "Collecting repos {{done}}/{{total}}…",
+    "collecting": "Collecting changes…",
     "repoSummary": "Per-repo rollup",
     "repoError": "Skipped: {{error}}",
     "title": "Regression Test Report",
@@ -347,6 +349,39 @@
     "copy": "Copy",
     "copied": "Copied to clipboard",
     "export": "Export",
-    "savedTo": "Saved to {{path}}"
+    "savedTo": "Saved to {{path}}",
+    "overview": {
+      "viewAll": "View all →"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "files": "Changed Files",
+      "commits": "Commits",
+      "api": "API Changes",
+      "ai": "AI Suggestions"
+    },
+    "subtoolbar": {
+      "searchPlaceholder": "Search file paths…",
+      "layer": "Layer",
+      "risk": "Risk",
+      "expandAll": "Expand All",
+      "collapseAll": "Collapse All",
+      "reset": "Reset filters",
+      "showing": "Showing {{n}} / {{total}} files",
+      "noMatch": "No matching files",
+      "empty": "No matching files",
+      "truncated": "Showing first 150 / {{n}} files · refine with search"
+    },
+    "riskBanner": {
+      "title": "High-risk changes",
+      "none": "No high-risk changes detected",
+      "count": "{{count}} {{label}}"
+    },
+    "ai": {
+      "systemPrompt": "Custom prompt",
+      "systemPlaceholder": "Optional: override the default system prompt, e.g. focus on data migrations & money safety",
+      "systemHint": "Leave empty to use the built-in prompt; this text stays on this device.",
+      "copySection": "Copy section"
+    }
   }
 }

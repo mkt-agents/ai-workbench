@@ -11,12 +11,16 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  /* The repos/commit pages get this inset from .git-manager-body
+     .page-scrollable; this page isn't scrollable-page shaped, so match it here
+     to keep the tree aligned with the subnav instead of pressed against it. */
+  padding: 12px 16px 16px;
 }
 
 .tr-split {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  gap: 12px;
+  gap: 14px;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -27,7 +31,7 @@
   flex-direction: column;
   gap: 2px;
   min-height: 0;
-  padding: 6px;
+  padding: 8px;
   overflow-y: auto;
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
@@ -35,9 +39,27 @@
 }
 
 .tr-tree-empty {
-  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 12px;
   font-size: 12px;
   color: var(--text-3);
+  text-align: center;
+}
+
+.tr-tree-empty::before {
+  content: "";
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  border: 1px dashed var(--border);
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><polyline points='14 2 14 8 20 8'/><line x1='9' y1='13' x2='15' y2='13'/><line x1='9' y1='17' x2='13' y2='17'/></svg>") center / 18px 18px no-repeat;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><polyline points='14 2 14 8 20 8'/><line x1='9' y1='13' x2='15' y2='13'/><line x1='9' y1='17' x2='13' y2='17'/></svg>") center / 18px 18px no-repeat;
+  opacity: 0.7;
 }
 
 .tr-tree-group {
@@ -62,11 +84,12 @@
   cursor: pointer;
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sh);
 }
 
 .tr-tree-caret:hover {
   background: var(--bg-hover);
+  color: var(--text-1);
 }
 
 .tr-tree-folder-label,
@@ -76,7 +99,7 @@
   gap: 6px;
   align-items: center;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 5px 8px;
   font-size: 12px;
   color: var(--text-1);
   text-align: left;
@@ -88,7 +111,7 @@
 }
 
 .tr-tree-repo {
-  padding-left: 26px;
+  padding-left: 28px;
   color: var(--text-2);
 }
 
@@ -101,7 +124,7 @@
 .tr-tree-repo:disabled {
   color: var(--text-3);
   cursor: default;
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
 .tr-tree-name {
@@ -111,9 +134,19 @@
 }
 
 .tr-tree-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
   margin-left: auto;
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border-radius: 8px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -121,6 +154,15 @@
 .tr-tree-repo.is-selected {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.tr-tree-repo.is-selected svg {
+  color: var(--accent);
+}
+
+.tr-tree-folder.is-selected .tr-tree-count {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .tr-tree-folder.is-selected .tr-tree-folder-label:disabled {
@@ -140,7 +182,7 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 12px;
+  padding: 14px 16px;
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -151,7 +193,7 @@
   flex-shrink: 0;
   gap: 8px;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .tr-panel-title {
@@ -173,11 +215,16 @@
   position: absolute;
   top: 8px;
   right: 8px;
+  /* The base .toast pins bottom/left with a -50% translate; keep those from
+     stretching this absolute box across the whole panel. */
+  bottom: auto;
+  left: auto;
+  transform: none;
   z-index: 5;
 }
 
 .tr-panel-empty {
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   justify-content: center;
   text-align: center;
@@ -185,7 +232,25 @@
 
 .tr-empty-title {
   font-size: 13px;
+  font-weight: 500;
   color: var(--text-1);
+}
+
+.tr-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  color: var(--text-3);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.tr-empty-icon svg {
+  opacity: 0.75;
 }
 
 @media (max-width: 900px) {
@@ -195,4 +260,31 @@
   .tr-tree {
     max-height: 220px;
   }
+}
+
+/* Repo tree badge — changed-file count next to a repo node; grey dot when none. */
+.tr-tree-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.tr-tree-badge.is-empty {
+  min-width: 6px;
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  margin-left: auto;
+  background: var(--border);
+  border-radius: 50%;
 }
