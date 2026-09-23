@@ -514,6 +514,29 @@ struct CloudflaredLogEvent {
     line: String,
 }
 
+/// Known cloudflared startup failures worth a plain-Chinese fix hint, emitted as
+/// an extra log line right after the offending one — the raw error alone sent a
+/// user hunting through Cloudflare docs for what 1033 meant.
+fn explain_cloudflared_line(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("the last ingress rule must match all urls") {
+        return Some(
+            "[cloudflared] config.yml 的 ingress 缺少兜底规则：最后一条不能带 hostname/path。在文件末尾补一行 `- service: http_status:404`（缩进与上一条对齐）后重新启动".into(),
+        );
+    }
+    if lower.contains("invalid tunnel token") || lower.contains("token is not valid") {
+        return Some(
+            "[cloudflared] Tunnel Token 无效或已过期：到 Cloudflare Zero Trust 重新复制 token 并更新绑定".into(),
+        );
+    }
+    if lower.contains("credentials file") && (lower.contains("not found") || lower.contains("no such file")) {
+        return Some(
+            "[cloudflared] 找不到隧道凭据文件：检查 config.yml 里 credentials-file 指向的 <隧道ID>.json 是否存在".into(),
+        );
+    }
+    None
+}
+
 fn emit_log(app: &AppHandle, id: &str, tag: &str, line: &str) {
     let _ = app.emit(
         "cloudflared-log",
@@ -539,12 +562,16 @@ fn spawn_log_readers(
         session_id: String,
         log_tag: String,
         parse_trycloudflare: bool,
+        announce_exit: bool,
     ) {
         if let Some(stream) = stream {
             thread::spawn(move || {
                 let reader = BufReader::new(stream);
                 for line in reader.lines().flatten() {
                     emit_log(&app, &session_id, &log_tag, &line);
+                    if let Some(hint) = explain_cloudflared_line(&line) {
+                        emit_log(&app, &session_id, &log_tag, &hint);
+                    }
                     if parse_trycloudflare {
                         if let Some(url) = extract_trycloudflare_url(&line) {
                             if let Some(state) = app.try_state::<CloudflaredState>() {
@@ -561,6 +588,16 @@ fn spawn_log_readers(
                         }
                     }
                 }
+                // Stream EOF means the cloudflared process is gone. Announce it once
+                // (stderr reader only) so the log panel explains an incoming 1033.
+                if announce_exit {
+                    emit_log(
+                        &app,
+                        &session_id,
+                        &log_tag,
+                        "[cloudflared] 进程已退出，隧道不再在线（访问绑定域名会报 1033 Argo Tunnel error）",
+                    );
+                }
             });
         }
     }
@@ -570,8 +607,9 @@ fn spawn_log_readers(
         session_id.clone(),
         log_tag.clone(),
         parse_trycloudflare,
+        false,
     );
-    spawn_one(app, stderr, session_id, log_tag, parse_trycloudflare);
+    spawn_one(app, stderr, session_id, log_tag, parse_trycloudflare, true);
 }
 
 #[tauri::command]
@@ -1180,5 +1218,30 @@ fn replace_file(dest: &Path, replacement: &Path) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         fs::rename(replacement, dest).map_err(|e| format!("写入 config.yml 失败: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::explain_cloudflared_line;
+
+    #[test]
+    fn explains_missing_ingress_catch_all() {
+        let line = r#"ERR Couldn't start tunnel error="The last ingress rule must match all URLs (i.e. it should not have a hostname or path filter)""#;
+        let hint = explain_cloudflared_line(line).expect("hint expected");
+        assert!(hint.contains("http_status:404"), "got: {hint}");
+    }
+
+    #[test]
+    fn explains_invalid_token() {
+        let hint = explain_cloudflared_line("ERR Invalid Tunnel token provided");
+        assert!(hint.is_some(), "hint expected");
+        assert!(hint.unwrap().contains("Token 无效"));
+    }
+
+    #[test]
+    fn regular_log_lines_get_no_hint() {
+        let line = "INF Registered tunnel connection connIndex=0";
+        assert!(explain_cloudflared_line(line).is_none());
     }
 }

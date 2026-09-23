@@ -73,3 +73,4 @@ cloudflared tunnel --no-autoupdate run --token "<token>"
 - **config.yml 不存在**：检查路径；浏览对话框默认尝试打开 `.cloudflared` 目录
 - **已有隧道在跑（同 id）**：先停掉该条再启，或改用另一本地端口 / 另一绑定
 - **临时 URL 迟迟不出**：看右侧日志；确认本地服务已监听对应端口
+- **访问域名报 1033（Argo Tunnel error）**：Cloudflare 边缘找不到该隧道 ID 的活跃连接 —— 隧道**离线**，与本地服务端口无关（端口没起是 502）。排查顺序：① 应用内看该隧道是否还显示「运行中」（cloudflared 进程崩溃/被杀后卡片会在 5 秒内自动消失，日志面板也会出现「进程已退出」）；② 日志里找 `Registered tunnel connection` —— 没有它说明从未连上边缘，常见于网络无法连 Cloudflare（可给 cloudflared 配置代理 `--edge-ip-version 4` / `--protocol http2` 规避 QUIC/UDP 被限速）；③ 确认绑定用的 token / config 与 DNS 指向的是**同一条**隧道（hostname 的 CNAME 指向隧道 A、绑定却用隧道 B 的 token，B 在线也照样 1033）

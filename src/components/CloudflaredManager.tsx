@@ -322,6 +322,20 @@ function CloudflaredManager() {
     loadCloudflaredProfiles().catch(() => {});
   }, [refreshStatus, loadCloudflaredProfiles]);
 
+  // cloudflared can die on its own (invalid token, edge unreachable, killed
+  // elsewhere). Poll while anything is running so a dead process leaves the UI
+  // promptly — a stale "running" card is exactly what makes a hostname answer
+  // 1033 Argo Tunnel error while the user thinks the tunnel is up.
+  useEffect(() => {
+    if (runningTunnels.length === 0) return;
+    const timer = setInterval(() => {
+      invokeCloudflaredTunnelStatus()
+        .then((list) => setTunnels(Array.isArray(list) ? list : []))
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [runningTunnels.length, invokeCloudflaredTunnelStatus]);
+
   useEffect(() => {
     let unLog: (() => void) | undefined;
     let unUrl: (() => void) | undefined;
