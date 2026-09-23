@@ -8,7 +8,7 @@
 
 - **愿景**：本地优先的桌面 AI 助手；多模型配置、提示词优化，管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
 - **功能分层**：核心 = DSH / 模型配置 / 提示词 / Cursor；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 小工具（devtools）。
-- **已移除，勿再参照旧文档**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，相关表在 `lib.rs` setup 中被 `DROP TABLE` 清理（`docs/test-assistant-*.md` 是历史文档）。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。
+- **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。
 - **明确不做**：内置多模型流式对话（AI 走 DeepSeek 外部集成）、AI 工具执行循环（shell/文件/Git 自动操作）、多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.1.8`
