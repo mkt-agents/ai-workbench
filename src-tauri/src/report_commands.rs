@@ -40,7 +40,7 @@ const AI_MAP_CONCURRENCY: usize = 4;
 const FOLDER_COLLECT_CONCURRENCY: usize = 4;
 const AI_SYSTEM: &str = "你是资深测试工程师，只依据给定的改动分析作答，不编造未出现的模块或接口。";
 
-/// One of the three things a tester can mean by "the change".
+/// One of the ways a tester can mean "the change".
 #[derive(Debug, Clone)]
 pub enum ChangeScope {
     /// Staged + unstaged + never-committed files, against `HEAD`.
@@ -49,6 +49,12 @@ pub enum ChangeScope {
     Ref(String),
     /// The last N commits.
     Commits(i64),
+    /// Everything that landed inside a date window, both ends inclusive. Either
+    /// bound may be omitted; both are `YYYY-MM-DD` as typed into the date inputs.
+    Since {
+        since: Option<String>,
+        until: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -236,14 +242,111 @@ fn repo_display_name(repo_path: &str) -> String {
         .unwrap_or_else(|| trimmed.to_string())
 }
 
-/// Turn the two optional baseline params into a scope: base wins over last-N,
-/// neither means the uncommitted working tree.
-fn scope_of(base: Option<String>, last_commits: Option<i64>) -> ChangeScope {
-    match (base.filter(|b| !b.trim().is_empty()), last_commits) {
-        (Some(base), _) => ChangeScope::Ref(base),
-        (None, Some(count)) => ChangeScope::Commits(count),
-        (None, None) => ChangeScope::Uncommitted,
+/// Turn the optional baseline params into a scope. Precedence: an explicit ref
+/// wins over a commit count, which wins over a date window; nothing at all means
+/// the uncommitted working tree.
+fn scope_of(
+    base: Option<String>,
+    last_commits: Option<i64>,
+    since: Option<String>,
+    until: Option<String>,
+) -> Result<ChangeScope, String> {
+    if let Some(base) = base.filter(|value| !value.trim().is_empty()) {
+        return Ok(ChangeScope::Ref(base));
     }
+    if let Some(count) = last_commits {
+        return Ok(ChangeScope::Commits(count));
+    }
+    let since = date_bound(since)?;
+    let until = date_bound(until)?;
+    if since.is_none() && until.is_none() {
+        return Ok(ChangeScope::Uncommitted);
+    }
+    // A backwards window resolves to no commits at all; say so instead of handing
+    // back an empty report that looks like "nothing changed".
+    if let (Some(from), Some(to)) = (&since, &until) {
+        if from > to {
+            return Err(format!("开始日期 {} 晚于结束日期 {}", from, to));
+        }
+    }
+    Ok(ChangeScope::Since { since, until })
+}
+
+/// Validate one `YYYY-MM-DD` bound from the date inputs. The shape check is not
+/// cosmetic: the value ends up in git's argv, and git would read anything
+/// starting with `-` as one of its own options.
+fn date_bound(value: Option<String>) -> Result<Option<String>, String> {
+    match value.map(|raw| raw.trim().to_string()).filter(|text| !text.is_empty()) {
+        None => Ok(None),
+        Some(text) if is_iso_date(&text) => Ok(Some(text)),
+        Some(text) => Err(format!("日期格式应为 YYYY-MM-DD：{}", text)),
+    }
+}
+
+fn is_iso_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+}
+
+/// What the report shows as its baseline for a date window.
+fn date_window_label(since: &Option<String>, until: &Option<String>) -> String {
+    match (since, until) {
+        (Some(from), Some(to)) => format!("{} ~ {}", from, to),
+        (Some(from), None) => format!(">= {}", from),
+        (None, Some(to)) => format!("<= {}", to),
+        (None, None) => String::new(),
+    }
+}
+
+/// The diff endpoints a date window describes: the parent of the oldest commit
+/// inside the window, up to the newest one.
+///
+/// `git diff` understands no `--since/--until`, so the window is resolved into a
+/// commit range first. Resolving it here (rather than only filtering `log`) keeps
+/// the diff, the commit list and the per-file attribution on one range — a report
+/// whose file list disagrees with its commit list is worse than no report.
+fn resolve_date_window(
+    dir: &Path,
+    since: &Option<String>,
+    until: &Option<String>,
+) -> Result<(String, String), String> {
+    // Both ends are inclusive. `--until=<date>` alone resolves to midnight, which
+    // would silently drop everything committed on the closing day.
+    let since_arg = since.as_ref().map(|value| format!("--since={} 00:00:00", value));
+    let until_arg = until.as_ref().map(|value| format!("--until={} 23:59:59", value));
+
+    let mut args: Vec<&str> = vec!["log", "--no-merges", "--format=%H"];
+    if let Some(value) = since_arg.as_deref() {
+        args.push(value);
+    }
+    if let Some(value) = until_arg.as_deref() {
+        args.push(value);
+    }
+    args.push("HEAD");
+
+    let raw = git_lines(dir, &args)?;
+    let commits: Vec<&str> = raw.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    if commits.is_empty() {
+        return Err("该时间区间内没有提交，请调整日期或改用其它基准".to_string());
+    }
+    // `git log` walks newest first, so the first entry is the window's tip.
+    let tip = commits[0].to_string();
+    let earliest = commits[commits.len() - 1].to_string();
+
+    let parent_spec = format!("{}^", earliest);
+    let from = match git_lines(dir, &["rev-parse", "--verify", "--quiet", &parent_spec]) {
+        Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+        // The window opens at the root commit, which has no parent: the root then
+        // stands in as the base and its own changes fall outside the window.
+        _ => earliest,
+    };
+    Ok((from, tip))
 }
 
 /// Join a scoped worker thread. The git reads are written not to panic, but a
@@ -284,6 +387,15 @@ pub(crate) fn collect_sync(repo_path: &str, scope: ChangeScope) -> Result<TestRe
             let from = format!("HEAD~{}", count);
             (vec![from.clone(), "HEAD".to_string()], from, "commits".to_string(), Some(format!("HEAD~{}..HEAD", count)))
         }
+        ChangeScope::Since { since, until } => {
+            let (from, tip) = resolve_date_window(dir, since, until)?;
+            (
+                vec![from.clone(), tip.clone()],
+                date_window_label(since, until),
+                "since".to_string(),
+                Some(format!("{}..{}", from, tip)),
+            )
+        }
     };
 
     // `git diff <anchor>` compares the working tree with that point, so staged and
@@ -292,7 +404,9 @@ pub(crate) fn collect_sync(repo_path: &str, scope: ChangeScope) -> Result<TestRe
     // must not race on git's opportunistic index refresh.
     let anchor: Vec<&str> = match &scope {
         ChangeScope::Uncommitted => vec!["HEAD"],
-        ChangeScope::Ref(_) | ChangeScope::Commits(_) => range.iter().map(String::as_str).collect(),
+        ChangeScope::Ref(_) | ChangeScope::Commits(_) | ChangeScope::Since { .. } => {
+            range.iter().map(String::as_str).collect()
+        }
     };
 
     let mut name_args = vec!["--no-optional-locks", "diff", "--name-status", "-z"];
@@ -433,8 +547,10 @@ pub async fn collect_test_report(
     repo_path: String,
     base: Option<String>,
     last_commits: Option<i64>,
+    since: Option<String>,
+    until: Option<String>,
 ) -> Result<TestReportBundle, String> {
-    let scope = scope_of(base, last_commits);
+    let scope = scope_of(base, last_commits, since, until)?;
     let mut bundle = tokio::task::spawn_blocking(move || collect_sync(&repo_path, scope))
         .await
         .map_err(|e| format!("分析任务已中止: {}", e))??;
@@ -504,11 +620,13 @@ pub async fn collect_folder_report(
     repo_paths: Vec<String>,
     base: Option<String>,
     last_commits: Option<i64>,
+    since: Option<String>,
+    until: Option<String>,
 ) -> Result<FolderReportBundle, String> {
     if repo_paths.is_empty() {
         return Err("该文件夹下没有可选的 Git 仓库".to_string());
     }
-    let scope = scope_of(base, last_commits);
+    let scope = scope_of(base, last_commits, since, until)?;
     let total = repo_paths.len();
     let _ = app.emit(
         "test-report-collect-progress",
@@ -995,5 +1113,69 @@ mod tests {
         // The scenario line shape the panel parses back (`parseAiLine`) is pinned here.
         assert!(with.contains("｜"));
         assert!(with.contains("已覆盖"));
+    }
+
+    #[test]
+    fn iso_date_accepts_only_the_input_shape() {
+        assert!(is_iso_date("2026-09-23"));
+        assert!(!is_iso_date("2026-9-23"));
+        assert!(!is_iso_date("2026/09/23"));
+        assert!(!is_iso_date("2026-09-23 10:00"));
+        assert!(!is_iso_date(""));
+        // A bound that could be read as a git option must never pass.
+        assert!(!is_iso_date("--since=2026-09-23"));
+    }
+
+    #[test]
+    fn date_bound_trims_and_rejects_junk() {
+        assert_eq!(date_bound(None).unwrap(), None);
+        assert_eq!(date_bound(Some("   ".to_string())).unwrap(), None);
+        assert_eq!(
+            date_bound(Some(" 2026-09-23 ".to_string())).unwrap(),
+            Some("2026-09-23".to_string())
+        );
+        assert!(date_bound(Some("yesterday".to_string())).is_err());
+        assert!(date_bound(Some("-d".to_string())).is_err());
+    }
+
+    #[test]
+    fn scope_prefers_ref_then_count_then_window() {
+        let by_ref = scope_of(Some("main".to_string()), Some(5), Some("2026-09-01".to_string()), None).unwrap();
+        assert!(matches!(by_ref, ChangeScope::Ref(value) if value == "main"));
+
+        let by_count = scope_of(None, Some(3), Some("2026-09-01".to_string()), None).unwrap();
+        assert!(matches!(by_count, ChangeScope::Commits(3)));
+
+        let by_window =
+            scope_of(None, None, Some("2026-09-01".to_string()), Some("2026-09-23".to_string())).unwrap();
+        match by_window {
+            ChangeScope::Since { since, until } => {
+                assert_eq!(since.as_deref(), Some("2026-09-01"));
+                assert_eq!(until.as_deref(), Some("2026-09-23"));
+            }
+            other => panic!("expected a date window, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn scope_without_any_baseline_is_the_working_tree() {
+        assert!(matches!(scope_of(None, None, None, None).unwrap(), ChangeScope::Uncommitted));
+    }
+
+    #[test]
+    fn a_backwards_window_is_rejected() {
+        let err = scope_of(None, None, Some("2026-09-23".to_string()), Some("2026-09-01".to_string()))
+            .expect_err("a window ending before it starts must not be accepted");
+        assert!(err.contains("晚于"), "unexpected message: {}", err);
+    }
+
+    #[test]
+    fn date_window_label_names_the_window() {
+        assert_eq!(
+            date_window_label(&Some("2026-09-01".into()), &Some("2026-09-23".into())),
+            "2026-09-01 ~ 2026-09-23"
+        );
+        assert_eq!(date_window_label(&Some("2026-09-01".into()), &None), ">= 2026-09-01");
+        assert_eq!(date_window_label(&None, &Some("2026-09-23".into())), "<= 2026-09-23");
     }
 }

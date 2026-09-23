@@ -37,7 +37,7 @@ import "./TestReportModal.css"
 
 type Props = { repoPath: string } | { folderName: string; repoPaths: string[] }
 
-type Mode = "uncommitted" | "base" | "commits"
+type Mode = "uncommitted" | "base" | "commits" | "since"
 type GroupMode = "module" | "commit"
 type Tab = "overview" | "files" | "commits" | "api" | "ai"
 
@@ -66,22 +66,48 @@ interface ReportModeState {
   mode: Mode
   base: string
   commits: number
+  /** `YYYY-MM-DD` bounds of the date window; both ends are inclusive. */
+  since: string
+  until: string
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/** Local `YYYY-MM-DD` — `toISOString` is UTC and shifts the day near midnight. */
+function localIsoDate(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+/** A window that is useful the first time the mode is picked: last 7 days, today included. */
+function defaultDateWindow(): { since: string; until: string } {
+  const today = new Date()
+  return { since: localIsoDate(new Date(today.getTime() - 6 * DAY_MS)), until: localIsoDate(today) }
 }
 
 function readReportMode(repoPath: string): ReportModeState {
+  const window = defaultDateWindow()
+  const fallback: ReportModeState = { mode: "uncommitted", base: "", commits: 5, ...window }
   try {
     const parsed: unknown = JSON.parse(readStoredString("workbench-report-mode:" + repoPath))
-    if (!parsed || typeof parsed !== "object") return { mode: "uncommitted", base: "", commits: 5 }
+    if (!parsed || typeof parsed !== "object") return fallback
     const value = parsed as Partial<ReportModeState>
-    const mode = value.mode === "base" || value.mode === "commits" ? value.mode : "uncommitted"
+    const mode =
+      value.mode === "base" || value.mode === "commits" || value.mode === "since" ? value.mode : "uncommitted"
     const commits = Number(value.commits)
     return {
       mode,
       base: typeof value.base === "string" ? value.base : "",
       commits: Number.isFinite(commits) ? Math.max(1, Math.min(50, Math.trunc(commits))) : 5,
+      // A remembered window can be stale but never malformed; anything that does
+      // not look like a date falls back to the default rather than reaching git.
+      since: typeof value.since === "string" && ISO_DATE.test(value.since) ? value.since : window.since,
+      until: typeof value.until === "string" && ISO_DATE.test(value.until) ? value.until : window.until,
     }
   } catch {
-    return { mode: "uncommitted", base: "", commits: 5 }
+    return fallback
   }
 }
 
@@ -105,6 +131,8 @@ export default function TestReportPanel(props: Props) {
   const [mode, setMode] = useState<Mode>("uncommitted")
   const [base, setBase] = useState("")
   const [commits, setCommits] = useState(5)
+  const [since, setSince] = useState(() => defaultDateWindow().since)
+  const [until, setUntil] = useState(() => defaultDateWindow().until)
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<View | null>(null)
   const [error, setError] = useState("")
@@ -175,8 +203,8 @@ export default function TestReportPanel(props: Props) {
       modeStorageKeyRef.current = modeStorageKey
       return
     }
-    writeStoredString(modeStorageKey, JSON.stringify({ mode, base, commits }))
-  }, [modeStorageKey, mode, base, commits])
+    writeStoredString(modeStorageKey, JSON.stringify({ mode, base, commits, since, until }))
+  }, [modeStorageKey, mode, base, commits, since, until])
 
   useEffect(() => {
     if (aiModels.length === 0) void loadAIModels().catch(() => {})
@@ -249,9 +277,11 @@ export default function TestReportPanel(props: Props) {
     const activeMode = scope?.mode ?? mode
     const baseArg = activeMode === "base" ? (scope?.base ?? base).trim() : undefined
     const commitsArg = activeMode === "commits" ? scope?.commits ?? commits : undefined
+    const sinceArg = activeMode === "since" ? (scope?.since ?? since).trim() : undefined
+    const untilArg = activeMode === "since" ? (scope?.until ?? until).trim() : undefined
     try {
       if (isFolder) {
-        const r = await collectFolder(folderName, repoPaths, baseArg, commitsArg)
+        const r = await collectFolder(folderName, repoPaths, baseArg, commitsArg, sinceArg, untilArg)
         if (genRef.current !== gen) return // switched away while collecting
         setView({ report: r.report, reportId: r.reportId, name: r.folderName, branch: "", head: "", rows: r.repos })
         void refreshRepos(repoPaths, { withStatus: true, force: true }).catch(() => {})
@@ -259,7 +289,7 @@ export default function TestReportPanel(props: Props) {
         setAiWarnings([])
         if (r.report.stats.files === 0) showMsg("success", t("testReport.empty"))
       } else {
-        const r = await collect(repoPath, baseArg, commitsArg)
+        const r = await collect(repoPath, baseArg, commitsArg, sinceArg, untilArg)
         if (genRef.current !== gen) return
         setView({ report: r.report, reportId: r.reportId, name: r.repoName, branch: r.branch, head: r.head, rows: null })
         void refreshRepos([repoPath], { withStatus: true, force: true }).catch(() => {})
@@ -288,6 +318,8 @@ export default function TestReportPanel(props: Props) {
     setMode(remembered.mode)
     setBase(remembered.base)
     setCommits(remembered.commits)
+    setSince(remembered.since)
+    setUntil(remembered.until)
     setGroupMode("module")
     setOnlyUntested(false)
     setActiveTab("overview")
@@ -603,10 +635,11 @@ export default function TestReportPanel(props: Props) {
           <option value="uncommitted">{t("testReport.modeUncommitted")}</option>
           <option value="base">{t("testReport.modeBase")}</option>
           <option value="commits">{t("testReport.modeCommits")}</option>
+          <option value="since">{t("testReport.modeSince")}</option>
         </select>
         {mode === "base" && (
           <input
-            className="input-field"
+            className="input-field tr-base"
             value={base}
             placeholder={t("testReport.basePlaceholder")}
             onChange={(e) => {
@@ -636,17 +669,60 @@ export default function TestReportPanel(props: Props) {
             disabled={busy || aiBusy}
           />
         )}
-        <span className="tr-actions-spacer" />
-        {report && (
-          <label className="tr-toggle">
-            <input type="checkbox" checked={onlyUntested} onChange={(e) => setOnlyUntested(e.target.checked)} />
-            {t("testReport.onlyUntested")}
-          </label>
+        {mode === "since" && (
+          <>
+            <input
+              className="input-field tr-date"
+              type="date"
+              value={since}
+              max={until || undefined}
+              onChange={(e) => {
+                setSince(e.target.value)
+                resetReport()
+              }}
+              disabled={busy || aiBusy}
+              aria-label={t("testReport.dateFrom")}
+            />
+            <span className="tr-date-sep" aria-hidden>
+              ~
+            </span>
+            <input
+              className="input-field tr-date"
+              type="date"
+              value={until}
+              min={since || undefined}
+              onChange={(e) => {
+                setUntil(e.target.value)
+                resetReport()
+              }}
+              disabled={busy || aiBusy}
+              aria-label={t("testReport.dateTo")}
+            />
+          </>
         )}
-        <button type="button" className="btn btn-primary btn-small" onClick={() => void generate()} disabled={busy || aiBusy}>
-          {busy ? <Loader2 size={12} className="spin" /> : null}
-          {report ? t("testReport.regenerate") : t("testReport.generate")}
-        </button>
+        {/* The readout and the primary action travel as one group holding the
+            right edge — on a narrow window they wrap together instead of
+            scattering to the left. */}
+        <span className="tr-actions">
+          {mode === "since" && !since && !until ? (
+            <span className="tr-hint">{t("testReport.dateRequired")}</span>
+          ) : null}
+          {report && (
+            <label className="tr-toggle">
+              <input type="checkbox" checked={onlyUntested} onChange={(e) => setOnlyUntested(e.target.checked)} />
+              {t("testReport.onlyUntested")}
+            </label>
+          )}
+          <button
+            type="button"
+            className="btn btn-primary btn-small"
+            onClick={() => void generate()}
+            disabled={busy || aiBusy || (mode === "since" && !since && !until)}
+          >
+            {busy ? <Loader2 size={12} className="spin" /> : null}
+            {report ? t("testReport.regenerate") : t("testReport.generate")}
+          </button>
+        </span>
       </div>
 
       {report && (

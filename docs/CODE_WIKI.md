@@ -1061,8 +1061,8 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
-| `collect_test_report` | repoPath, base?, lastCommits? | TestReportBundle（单仓采集；结果只写进程内缓存，不落库） |
-| `collect_folder_report` | folderName, repoPaths[], base?, lastCommits? | FolderReportBundle（同夹多仓并发采集后合并；失败仓进 `repos[].error`） |
+| `collect_test_report` | repoPath, base?, lastCommits?, since?, until? | TestReportBundle（单仓采集；结果只写进程内缓存，不落库） |
+| `collect_folder_report` | folderName, repoPaths[], base?, lastCommits?, since?, until? | FolderReportBundle（同夹多仓并发采集后合并；失败仓进 `repos[].error`） |
 | `generate_test_report_ai` | reportId, config, system?, requirement? | AiResult{markdown, warnings}；分块 map-reduce，`requirement` 为需求 / 验收标准，填了才输出「需求覆盖对照」 |
 | `cancel_test_report_ai` | reportId | — |
 

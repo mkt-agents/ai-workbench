@@ -68,12 +68,16 @@ export interface Invocations {
     repoPath: string,
     base?: string,
     lastCommits?: number,
+    since?: string,
+    until?: string,
   ) => Promise<TestReportBundle>;
   invokeCollectFolderReport: (
     folderName: string,
     repoPaths: string[],
     base?: string,
     lastCommits?: number,
+    since?: string,
+    until?: string,
   ) => Promise<FolderReportBundle>;
   invokeGenerateTestReportAi: (
     reportId: string,
@@ -278,10 +282,24 @@ export const invocations: Invocations = {
     tauriInvoke<string | null>('git_remote_url', { path }),
 
   // Regression report (repo card)
-  invokeCollectTestReport: (repoPath: string, base?: string, lastCommits?: number) =>
-    tauriInvoke<TestReportBundle>('collect_test_report', { repoPath, base, lastCommits }),
-  invokeCollectFolderReport: (folderName: string, repoPaths: string[], base?: string, lastCommits?: number) =>
-    tauriInvoke<FolderReportBundle>('collect_folder_report', { folderName, repoPaths, base, lastCommits }),
+  invokeCollectTestReport: (repoPath: string, base?: string, lastCommits?: number, since?: string, until?: string) =>
+    tauriInvoke<TestReportBundle>('collect_test_report', { repoPath, base, lastCommits, since, until }),
+  invokeCollectFolderReport: (
+    folderName: string,
+    repoPaths: string[],
+    base?: string,
+    lastCommits?: number,
+    since?: string,
+    until?: string,
+  ) =>
+    tauriInvoke<FolderReportBundle>('collect_folder_report', {
+      folderName,
+      repoPaths,
+      base,
+      lastCommits,
+      since,
+      until,
+    }),
   invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig, system?: string, requirement?: string) =>
     tauriInvoke<AiResult>('generate_test_report_ai', { reportId, config, system, requirement }),
   invokeCancelTestReportAi: (reportId: string) =>

@@ -1044,7 +1044,8 @@
  * two whole-document style recalcs (measured: ~49ms on a 1.9k-node page, i.e. ~3
  * dropped frames). Listing the surfaces keeps the same effect for pennies.
  *
- * The blur list is every selector in this file that declares backdrop-filter; the
+ * The blur list is every blurred surface in the app, including those declared in the
+ * per-page stylesheets (e.g. `.tr-multiselect-menu` in TestReportModal.css); the
  * transition list is every selector that transitions a layout property (.sidebar plus
  * the dsh progress fill). New blurred surface? Add it here.
  *
@@ -1062,6 +1063,7 @@ body.resizing :is(
   .prompt-template-menu,
   .http-history-menu,
   .qa-focus-pop,
+  .tr-multiselect-menu,
   .quick-ask-toolbar .qa-focus-btn
 ) {
   backdrop-filter: none !important;

@@ -259,6 +259,10 @@
 }
 
 .tr-panel-title {
+  /* Shrinkable: a `nowrap` flex item keeps its intrinsic width by default, which
+     pushed the copy/export buttons out of the panel on a narrow window. */
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
