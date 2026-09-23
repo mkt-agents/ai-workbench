@@ -948,6 +948,17 @@ fn has_remote(repo_path: &str, name: &str) -> bool {
 
 fn friendly_push_error(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
+    // Network is the most common push failure and the one the user can actually
+    // fix without re-entering credentials — name the symptom and the escape hatches.
+    if lower.contains("unable to access")
+        || lower.contains("failed to connect")
+        || lower.contains("connection timed out")
+        || lower.contains("could not resolve host")
+        || lower.contains("network unreachable")
+        || lower.contains("ssl_connect")
+    {
+        return "推送失败：无法连接远程仓库（网络不通、超时或被墙）。请检查网络/代理；若仓库配置了其它远程（如 gitee），可改推那个远程，本地提交不受影响。".into();
+    }
     if lower.contains("could not read from remote")
         || lower.contains("permission denied")
         || lower.contains("authentication failed")
@@ -1952,7 +1963,22 @@ fn pick_directory_sync() -> Result<Option<String>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_porcelain_line, validate_email, validate_name};
+    use super::{friendly_push_error, parse_porcelain_line, validate_email, validate_name};
+
+    #[test]
+    fn push_error_translates_network_failure() {
+        // The exact error from the field: github.com unreachable behind the wall.
+        let raw = "fatal: unable to access 'https://github.com/mkt-agents/ai-workbench.git/': Failed to connect to github.com:443";
+        let msg = friendly_push_error(raw);
+        assert!(msg.contains("无法连接远程仓库"), "got: {msg}");
+        assert!(msg.contains("本地提交不受影响"), "got: {msg}");
+    }
+
+    #[test]
+    fn push_error_keeps_authentication_branch_before_generic_text() {
+        let msg = friendly_push_error("fatal: Authentication failed for 'https://github.com/x.git/'");
+        assert!(msg.contains("认证失败"), "got: {msg}");
+    }
 
     #[test]
     fn validate_email_accepts_simple() {
