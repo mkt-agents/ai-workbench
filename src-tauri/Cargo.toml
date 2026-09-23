@@ -1,6 +1,6 @@
 [package]
 name = "ai_workbench"
-version = "0.1.9"
+version = "0.2.0"
 description = "AI Workbench - AI-powered developer toolbox"
 authors = ["you"]
 edition = "2021"
