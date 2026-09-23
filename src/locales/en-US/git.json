@@ -92,13 +92,13 @@
     "refresh": "Refresh",
     "addRepo": "Add repo",
     "empty": "No favorite repos yet",
-    "emptyHint": "Click “Add repo”: a single Git folder, or a parent with many repos (e.g. D:\\\\d_project\\\\tct\\\\p3)",
+    "emptyHint": "Click \"Add repo\": a single Git folder, or a parent with many repos (e.g. D:\\\\d_project\\\\tct\\\\p3)",
     "notGitRepo": "Selected folder is not a Git repository",
     "added": "Repo added",
     "removed": "Removed",
     "selected": "Set as current repo",
     "removeTitle": "Remove favorite",
-    "removeConfirm": "Remove “{{name}}” from the list? (disk files stay)",
+    "removeConfirm": "Remove \"{{name}}\" from the list? (disk files stay)",
     "remove": "Remove",
     "openFolder": "Open folder",
     "use": "Use",
@@ -127,12 +127,12 @@
     "identityMismatchMsg": "Current: {{actual}}\nPreset for this repo: {{preset}}\n\nCommit with the current identity?",
     "identityMismatchMulti": "{{count}} repos have an identity that differs from the preset:",
     "identityMismatchLine": "current {{actual}} · preset {{preset}}",
-    "identityMismatchWarn": "“Use preset” applies the preset first, then commits.",
+    "identityMismatchWarn": "\"Use preset\" applies the preset first, then commits.",
     "commitWithCurrent": "Commit with current",
     "usePresetFirst": "Use preset",
     "discard": "Discard",
     "discardTitle": "Discard changes",
-    "discardConfirm": "Discard local changes to “{{path}}”?",
+    "discardConfirm": "Discard local changes to \"{{path}}\"?",
     "discardWarn": "Worktree will be restored to the last commit. This cannot be undone.",
     "discardStagedWarn": "Both the index and worktree will be restored to the last commit. Unstaged edits on this file are discarded too. This cannot be undone.",
     "discardUntrackedWarn": "The untracked file will be permanently deleted.",
@@ -210,7 +210,7 @@
     "changelistPickRepo": "Click a repo in the changelist first",
     "unstagePartialTitle": "Partial commit will unstage other files",
     "unstagePartialConfirm": "{{count}} staged file(s) are not checked; they will be unstaged before commit so they are not included.",
-    "unstagePartialWarn": "“Keep staged after commit” re-stages those files after a successful commit.",
+    "unstagePartialWarn": "\"Keep staged after commit\" re-stages those files after a successful commit.",
     "unstagePartialProceed": "Continue",
     "unstagePartialKeep": "Keep staged after commit"
   },
@@ -381,7 +381,11 @@
       "systemPrompt": "Custom prompt",
       "systemPlaceholder": "Optional: override the default system prompt, e.g. focus on data migrations & money safety",
       "systemHint": "Leave empty to use the built-in prompt; this text stays on this device.",
-      "copySection": "Copy section"
+      "copySection": "Copy section",
+      "requirement": "Requirement & acceptance",
+      "requirementPlaceholder": "Paste the requirement, acceptance criteria or PR description (optional)…",
+      "requirementHint": "Stays on this device; sent to the model you picked only while generating. Filling it in appends a Requirement coverage section.",
+      "requirementStale": "The requirement changed — regenerate to refresh the coverage section."
     }
   }
 }

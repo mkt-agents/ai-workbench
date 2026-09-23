@@ -607,15 +607,18 @@ fn emit_ai_progress(app: &AppHandle, report_id: &str, done: usize, total: usize)
     );
 }/// Ask the chosen model for the test-facing half of the report: which functions are
 /// affected and what must be re-tested. Works from the cached analysis plus a bounded
-/// patch, so it always matches what the panel just showed. Large reports go through a
-/// map-reduce pass: one brief per module chunk, then one final call assembles the
-/// five sections — so no chunk's files silently fall off the end of the prompt.
+/// patch, so it always matches what the panel just showed. `requirement` is the
+/// requirement/acceptance text the tester pasted in (optional) — with it the answer
+/// also has to say which asks the change covered and which it missed. Large reports
+/// go through a map-reduce pass: one brief per module chunk, then one final call
+/// assembles the sections — so no chunk's files silently fall off the end of the prompt.
 #[tauri::command]
 pub async fn generate_test_report_ai(
     app: AppHandle,
     report_id: String,
     config: AIModelConfig,
     system: Option<String>,
+    requirement: Option<String>,
 ) -> Result<AiResult, String> {
     // Cancel key = report id (	r-<millis>-<seq>), which can never collide with the
     // project ids used as keys by other long-running commands.
@@ -625,6 +628,7 @@ pub async fn generate_test_report_ai(
     let project_name = entry.repo_name;
     let report = entry.report;
     let patch = entry.ai_patch;
+    let requirement: String = requirement.unwrap_or_default().chars().take(MAX_REQUIREMENT_CHARS).collect();
 
     let mut config = config;
     config.temperature = 0.2;
@@ -644,7 +648,11 @@ pub async fn generate_test_report_ai(
     };
     let markdown = if chunks.len() <= 1 {
         config.max_tokens = AI_REDUCE_TOKENS;
-        send(config, build_ai_prompt(&project_name, &report, &patch), &system_prompt)
+        send(
+            config,
+            build_ai_prompt(&project_name, &report, &patch, &requirement),
+            &system_prompt,
+        )
             .await
             .map_err(|e| format!("{} 生成失败：{}", project_name, e))?
     } else {
@@ -664,7 +672,7 @@ pub async fn generate_test_report_ai(
                 (
                     index,
                     chunk.module.clone(),
-                    build_ai_chunk_prompt(&project_name, &report, chunk),
+                    build_ai_chunk_prompt(&project_name, &report, chunk, &requirement),
                     map_config,
                 )
             })
@@ -700,7 +708,11 @@ pub async fn generate_test_report_ai(
             return Err("[E_CANCELLED] 生成已取消".to_string());
         }
         config.max_tokens = AI_REDUCE_TOKENS;
-        send(config, build_ai_reduce_prompt(&project_name, &report, &summaries), system_prompt.as_str())
+        send(
+            config,
+            build_ai_reduce_prompt(&project_name, &report, &summaries, &requirement),
+            system_prompt.as_str(),
+        )
             .await
             .map_err(|e| format!("{} 汇总失败：{}", project_name, e))?
     };
@@ -722,7 +734,66 @@ pub fn cancel_test_report_ai(report_id: String) -> Result<(), String> {
     Ok(())
 }
 
-fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> String {
+/// How much of a pasted requirement the map pass sees. The reduce pass gets the
+/// full text; the map pass only needs enough to know which ask a module serves,
+/// and it runs once per chunk (4 at a time), so it stays bounded on purpose.
+const AI_MAP_REQUIREMENT_CHARS: usize = 1500;
+
+/// A tester may paste a whole PRD into the box; cap it once at the command
+/// boundary so no single model call can be blown out by it.
+const MAX_REQUIREMENT_CHARS: usize = 8000;
+
+/// The requirement / acceptance text a tester pasted in. Empty means "none
+/// given" — every prompt then keeps its original code-only wording, so the
+/// feature degrades to exactly what it did before.
+fn requirement_block(requirement: &str, limit: Option<usize>) -> String {
+    let text = requirement.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let (body, cut) = match limit {
+        Some(max) if text.chars().count() > max => {
+            let head: String = text.chars().take(max).collect();
+            (head, true)
+        }
+        _ => (text.to_string(), false),
+    };
+    format!(
+        "需求与验收标准（由产品/测试提供，是判断「该测什么」的主要依据）：\n{}\n{}\n",
+        body,
+        if cut { "（以上为节选，完整需求见最终汇总）" } else { "" }
+    )
+}
+
+/// The section list + per-line format rules. A requirement adds the coverage
+/// cross-check section: "did the change actually answer the ask" is the one
+/// question a tester cannot answer from a diff alone. The scenario line format
+/// is fixed and pipe-delimited so the panel can render it as a case, not prose.
+fn output_rules(has_requirement: bool) -> String {
+    let mut sections = "## 受影响功能点\n## 必测场景\n## 建议回归范围\n## 兼容性与数据风险\n## 验收清单\n".to_string();
+    if has_requirement {
+        sections.push_str("## 需求覆盖对照\n");
+    }
+    let mut rules = "严格按以下二级标题输出，不要添加其它章节或解释文字：\n".to_string();
+    rules.push_str(&sections);
+    rules.push_str(
+        "\n要求：每条一行、以 - 开头；\
+         「必测场景」每条固定格式 `- [P0] 场景名 ｜ 前置：… ｜ 步骤：… ｜ 预期：…`\
+         （优先级只取 P0/P1/P2，字段之间用全角竖线 ｜ 分隔，四个字段都要写）；\
+         「建议回归范围」同样按 P0/P1/P2 标注；\
+         只依据上面给出的文件与接口，不确定的写「需与开发确认」。",
+    );
+    if has_requirement {
+        rules.push_str(
+            "「需求覆盖对照」逐条对应需求点，格式 `- [已覆盖] 需求点 ｜ 依据：文件或接口 ｜ 缺口：…`，\
+             覆盖判断只能取 已覆盖 / 部分覆盖 / 未见对应改动；\
+             需求中提到但改动里找不到对应文件的，必须判为「未见对应改动」，不要替它找理由。",
+        );
+    }
+    rules
+}
+
+fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str, requirement: &str) -> String {
     let mut files = String::new();
     for file in report.files.iter().take(80) {
         files.push_str(&format!(
@@ -748,19 +819,19 @@ fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> St
     }
     let base = if report.base.is_empty() { "未提交改动（相对 HEAD）".to_string() } else { report.base.clone() };
     let commits = commits_block(report);
+    let ask = requirement_block(requirement, None);
+    let rules = output_rules(!ask.is_empty());
 
     format!(
         "请根据下面的代码改动分析，产出面向测试同学的回归测试报告。\n\n\
          项目：{}\n基准：{}\n统计：{} 个文件，+{} -{}，涉及 {} 个模块，其中 {} 个改动没有配对测试\n\
          建议回归面（程序判定）：{}\n\
+         {}\
          提交明细（短 sha、说明、改动文件）：\n{}\n\
          改动文件：\n{}\n\
          公开接口变化：\n{}\n\
          补丁片段（可能已截断）：\n```diff\n{}\n```\n\n\
-         严格按以下五个二级标题输出，不要添加其它章节或解释文字：\n\
-         ## 受影响功能点\n## 必测场景\n## 建议回归范围\n## 兼容性与数据风险\n## 验收清单\n\n\
-         要求：每条一行、以 - 开头；「必测场景」每条以 P0/P1/P2 开头标明优先级，再写「前置：…　预期：…」；\
-         「建议回归范围」同样按 P0/P1/P2 标注；只依据上面给出的文件与接口，不确定的写「需与开发确认」。",
+         {}",
         project_name,
         base,
         report.stats.files,
@@ -769,10 +840,12 @@ fn build_ai_prompt(project_name: &str, report: &ChangeReport, patch: &str) -> St
         report.stats.modules,
         report.stats.untested,
         if report.scope.is_empty() { "-".to_string() } else { report.scope.join(",") },
+        ask,
         if commits.is_empty() { "- 无（未提交改动）\n".to_string() } else { commits },
         files,
         if api.is_empty() { "- 无\n".to_string() } else { api },
         if patch.is_empty() { "（无补丁文本）".to_string() } else { patch.to_string() },
+        rules,
     )
 }
 
@@ -820,17 +893,25 @@ fn file_line(file: &change_report::FileChange) -> String {
 /// Map pass: one focused brief per module chunk. No patch on purpose — the
 /// chunk is small enough to judge from its own file and interface lists, and
 /// pasting the same global patch into every call would only bury them.
-fn build_ai_chunk_prompt(project_name: &str, report: &ChangeReport, chunk: &change_report::AiChunk) -> String {
+fn build_ai_chunk_prompt(
+    project_name: &str,
+    report: &ChangeReport,
+    chunk: &change_report::AiChunk,
+    requirement: &str,
+) -> String {
     let files: String = chunk.files.iter().map(file_line).collect();
     let mut api = String::new();
     for change in &chunk.api {
         api.push_str(&format!("- [{}] {} @ {}\n", change.kind, change.name, change.path));
     }
+    let ask = requirement_block(requirement, Some(AI_MAP_REQUIREMENT_CHARS));
     format!(
         "项目「{}」本次共改动 {} 个文件（+{} -{}），下面是模块「{}」的改动明细；全量建议回归面（程序判定）：{}。\n\n\
+         {}\
          改动文件：\n{}\n\
          公开接口变化：\n{}\n\
          请用不超过 8 行要点总结该模块：改了什么、可能影响哪些功能、有哪些兼容性或数据风险值得测试关注。\
+         若给了需求，额外说明该模块与需求中哪些点相关（没有相关点就直接说无关）。\
          只依据上面内容，不确定的写「需与开发确认」；不要输出章节标题或解释文字。",
         project_name,
         report.stats.files,
@@ -838,26 +919,34 @@ fn build_ai_chunk_prompt(project_name: &str, report: &ChangeReport, chunk: &chan
         report.stats.dels,
         chunk.module,
         if report.scope.is_empty() { "-".to_string() } else { report.scope.join(",") },
+        ask,
         files,
         if api.is_empty() { "- 无\n".to_string() } else { api },
     )
 }
 
-/// Reduce pass: the five tester-facing sections are assembled from the module
+/// Reduce pass: the tester-facing sections are assembled from the module
 /// briefs, so no chunk's detail is dropped no matter how big the report is.
-fn build_ai_reduce_prompt(project_name: &str, report: &ChangeReport, summaries: &[String]) -> String {
+/// The full requirement is replayed here — this is the call that has to answer
+/// "was the ask covered", and the map briefs only saw an excerpt of it.
+fn build_ai_reduce_prompt(
+    project_name: &str,
+    report: &ChangeReport,
+    summaries: &[String],
+    requirement: &str,
+) -> String {
     let base = if report.base.is_empty() { "未提交改动（相对 HEAD）".to_string() } else { report.base.clone() };
     let commits = commits_block(report);
+    let ask = requirement_block(requirement, None);
+    let rules = output_rules(!ask.is_empty());
     format!(
         "请把下面按模块整理的改动小结，汇总成一份面向测试同学的回归测试报告。\n\n\
          项目：{}\n基准：{}\n统计：{} 个文件，+{} -{}，涉及 {} 个模块，其中 {} 个改动没有配对测试\n\
          建议回归面（程序判定）：{}\n\
+         {}\
          提交明细（短 sha、说明、改动文件）：\n{}\n\
          各模块改动小结：\n{}\n\n\
-         严格按以下五个二级标题输出，不要添加其它章节或解释文字：\n\
-         ## 受影响功能点\n## 必测场景\n## 建议回归范围\n## 兼容性与数据风险\n## 验收清单\n\n\
-         要求：每条一行、以 - 开头；「必测场景」每条以 P0/P1/P2 开头标明优先级，再写「前置：…　预期：…」；\
-         「建议回归范围」同样按 P0/P1/P2 标注；只依据上面的小结与提交明细，不确定的写「需与开发确认」。",
+         {}",
         project_name,
         base,
         report.stats.files,
@@ -866,7 +955,45 @@ fn build_ai_reduce_prompt(project_name: &str, report: &ChangeReport, summaries: 
         report.stats.modules,
         report.stats.untested,
         if report.scope.is_empty() { "-".to_string() } else { report.scope.join(",") },
+        ask,
         if commits.is_empty() { "- 无（未提交改动）\n".to_string() } else { commits },
         summaries.join("\n\n"),
+        rules,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requirement_block_is_empty_without_an_ask() {
+        assert!(requirement_block("", None).is_empty());
+        assert!(requirement_block("   \n\t ", None).is_empty());
+    }
+
+    #[test]
+    fn requirement_block_keeps_the_text_and_marks_an_excerpt() {
+        let full = requirement_block("新增退款审批流程", None);
+        assert!(full.contains("新增退款审批流程"));
+        assert!(!full.contains("节选"));
+
+        let cut = requirement_block("abcdef", Some(3));
+        assert!(cut.contains("abc"));
+        assert!(!cut.contains("def"), "excerpt must not leak the tail");
+        assert!(cut.contains("节选"));
+    }
+
+    #[test]
+    fn output_rules_only_add_the_coverage_section_with_an_ask() {
+        let without = output_rules(false);
+        assert!(without.contains("## 必测场景"));
+        assert!(!without.contains("需求覆盖对照"));
+
+        let with = output_rules(true);
+        assert!(with.contains("## 需求覆盖对照"));
+        // The scenario line shape the panel parses back (`parseAiLine`) is pinned here.
+        assert!(with.contains("｜"));
+        assert!(with.contains("已覆盖"));
+    }
 }

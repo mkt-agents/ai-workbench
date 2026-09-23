@@ -75,7 +75,12 @@ export interface Invocations {
     base?: string,
     lastCommits?: number,
   ) => Promise<FolderReportBundle>;
-  invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig, system?: string) => Promise<AiResult>;
+  invokeGenerateTestReportAi: (
+    reportId: string,
+    config: AIModelConfig,
+    system?: string,
+    requirement?: string,
+  ) => Promise<AiResult>;
   invokeCancelTestReportAi: (reportId: string) => Promise<void>;
   invokeReadSystemHosts: () => Promise<string>;
   invokeIsAdmin: () => Promise<boolean>;
@@ -277,8 +282,8 @@ export const invocations: Invocations = {
     tauriInvoke<TestReportBundle>('collect_test_report', { repoPath, base, lastCommits }),
   invokeCollectFolderReport: (folderName: string, repoPaths: string[], base?: string, lastCommits?: number) =>
     tauriInvoke<FolderReportBundle>('collect_folder_report', { folderName, repoPaths, base, lastCommits }),
-  invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig, system?: string) =>
-    tauriInvoke<AiResult>('generate_test_report_ai', { reportId, config, system }),
+  invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig, system?: string, requirement?: string) =>
+    tauriInvoke<AiResult>('generate_test_report_ai', { reportId, config, system, requirement }),
   invokeCancelTestReportAi: (reportId: string) =>
     tauriInvoke<void>('cancel_test_report_ai', { reportId }),
 

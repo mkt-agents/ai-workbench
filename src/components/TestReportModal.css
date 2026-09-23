@@ -768,6 +768,51 @@
 .tr-ai-prompt textarea { width: 100%; min-height: 56px; padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--text-1); background: var(--bg-0, transparent); border: none; border-top: 1px solid var(--border-subtle); border-radius: 0; resize: vertical; outline: none; }
 .tr-ai-prompt textarea:focus { box-shadow: inset 0 0 0 1px var(--accent-border); }
 
+/* Requirement box: natural language, so it drops the mono face the system-prompt
+   box uses, and gets a taller floor since it usually holds a pasted PRD. */
+.tr-ai-prompt-name { display: inline-flex; gap: 6px; align-items: center; }
+.tr-ai-prompt-filled { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.tr-ai-prompt .tr-requirement { min-height: 96px; font-family: var(--font-sans); }
+
+/* The requirement was edited after this AI text was generated. */
+.tr-ai-stale { margin-top: 8px; color: var(--accent); }
+
+/* A formatted scenario/coverage line renders as a case card instead of prose, so
+   a tester reads priority → what → how without reformatting anything. */
+.tr-ai-case {
+  padding: 7px 9px;
+  margin-top: 6px;
+  list-style: none;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.tr-ai-case-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tr-ai-case-title { font-weight: 500; color: var(--text-0); }
+.tr-ai-case-fields { display: grid; gap: 3px; margin: 5px 0 0; }
+.tr-ai-case-field { display: flex; gap: 6px; align-items: baseline; }
+.tr-ai-case-field dt { flex-shrink: 0; width: 30px; font-size: 11px; color: var(--text-3); }
+.tr-ai-case-field dd { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--text-2); word-break: break-word; }
+
+.tr-ai-chip {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  padding: 0 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: var(--radius-full);
+}
+.tr-ai-priority.is-p0 { color: var(--red); background: var(--red-dim); }
+.tr-ai-priority.is-p1 { color: var(--yellow); background: var(--yellow-dim); }
+.tr-ai-priority.is-p2 { color: var(--text-2); background: var(--bg-2); }
+.tr-ai-verdict.is-covered { color: var(--green); background: var(--green-dim); }
+.tr-ai-verdict.is-partial { color: var(--yellow); background: var(--yellow-dim); }
+.tr-ai-verdict.is-missing { color: var(--red); background: var(--red-dim); }
+
 /* Per-section copy button in ai block headers */
 .tr-ai-block { position: relative; }
 .tr-ai-block-copy { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; color: var(--text-3); background: none; border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; opacity: 0; transition: opacity var(--transition-colors-fast), color var(--transition-colors-fast); }

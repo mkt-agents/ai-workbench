@@ -24,6 +24,7 @@ import { useGlobalStore } from "../core/store"
 import { refreshRepos } from "../core/gitCache"
 import { readStoredString, writeStoredString } from "../core/localState"
 import { markdownSections } from "../lib/aiText"
+import { parseAiLine } from "../lib/reportAi"
 import { projectNameFromPath } from "../core/pathUtils"
 import { isCancelledError, cleanErrorMessage } from "./testReportTypes"
 import type { AiResult, ChangeReport, FileChange, FolderRepoRow } from "./testReportTypes"
@@ -56,6 +57,10 @@ type View = {
 const MAX_VISIBLE_FILES = 150
 const MODEL_KEY = "workbench-commit-model"
 const SYSTEM_KEY = "workbench-report-ai-system"
+/** Pasted requirement/acceptance text — the only non-code input of the AI step. */
+const REQUIREMENT_KEY = "workbench-report-requirement"
+/** Long enough that writing on every keystroke would stutter a pasted PRD. */
+const REQUIREMENT_SAVE_DEBOUNCE_MS = 400
 
 interface ReportModeState {
   mode: Mode
@@ -108,6 +113,9 @@ export default function TestReportPanel(props: Props) {
 
   const [ai, setAi] = useState("")
   const [aiWarnings, setAiWarnings] = useState<string[]>([])
+  /** The requirement snapshot the shown AI text was built from. Comparing it with
+      the box lets us say "regenerate to pick this up" instead of ignoring the edit. */
+  const [aiRequirement, setAiRequirement] = useState("")
   const [aiBusy, setAiBusy] = useState(false)
   const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null)
 
@@ -118,7 +126,9 @@ export default function TestReportPanel(props: Props) {
   const [fileFilter, setFileFilter] = useState<FileFilter>(EMPTY_FILTER)
   const [expandAll, setExpandAll] = useState(true)
   const [customSystem, setCustomSystem] = useState(() => readStoredString(SYSTEM_KEY))
+  const [requirement, setRequirement] = useState(() => readStoredString(REQUIREMENT_KEY))
   const [promptOpen, setPromptOpen] = useState(true)
+  const [requirementOpen, setRequirementOpen] = useState(() => readStoredString(REQUIREMENT_KEY).trim().length > 0)
 
   // Bumped whenever the panel target changes, so a slow collect/AI that lands
   // after the switch is dropped instead of bleeding into the new target.
@@ -151,6 +161,14 @@ export default function TestReportPanel(props: Props) {
     writeStoredString(SYSTEM_KEY, customSystem)
   }, [customSystem])
 
+  // Debounced: this box routinely holds a pasted PRD, and writing a few KB to
+  // localStorage on every keystroke is visible. Remembered across targets on
+  // purpose — in a folder report the same ask spans several repos.
+  useEffect(() => {
+    const id = window.setTimeout(() => writeStoredString(REQUIREMENT_KEY, requirement), REQUIREMENT_SAVE_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [requirement])
+
   useEffect(() => {
     if (!modeStorageKey) return
     if (modeStorageKeyRef.current !== modeStorageKey) {
@@ -175,6 +193,7 @@ export default function TestReportPanel(props: Props) {
     setView(null)
     setAi("")
     setAiWarnings([])
+    setAiRequirement("")
     setAiProgress(null)
     setCollectProgress(null)
     setError("")
@@ -185,14 +204,23 @@ export default function TestReportPanel(props: Props) {
       const id = idArg ?? viewingId
       if (aiBusy || !id || !selectedModel) return
       const gen = genRef.current
+      // Snapshot the ask: the result must be stamped with what it actually used,
+      // not with whatever the box holds when the response lands.
+      const ask = requirement.trim()
       setAiBusy(true)
       setAiProgress(null)
       setError("")
       try {
-        const result: AiResult = await generateAi(id, selectedModel, customSystem.trim() || undefined)
+        const result: AiResult = await generateAi(
+          id,
+          selectedModel,
+          customSystem.trim() || undefined,
+          ask || undefined
+        )
         if (genRef.current !== gen) return // target switched mid-flight — drop it
         setAi(result.markdown)
         setAiWarnings(result.warnings)
+        setAiRequirement(ask)
       } catch (e) {
         if (genRef.current !== gen) return
         // A cancel is a user action, not a failure; the static report stays usable.
@@ -209,7 +237,7 @@ export default function TestReportPanel(props: Props) {
         }
       }
     },
-    [aiBusy, viewingId, selectedModel, generateAi, customSystem, showMsg, t]
+    [aiBusy, viewingId, selectedModel, generateAi, customSystem, requirement, showMsg, t]
   )
 
   const generate = async (force = false, scope?: ReportModeState) => {
@@ -415,9 +443,18 @@ export default function TestReportPanel(props: Props) {
       for (const change of report.apiChanges)
         lines.push(`- [${t(`testReport.api.${change.kind}`, { defaultValue: change.kind })}] ${change.name} @ ${change.path}`)
     }
+    // The ask is part of the deliverable: whoever reads the exported report has
+    // to see what was being tested against, not just what the AI concluded.
+    if (requirement.trim())
+      lines.push(
+        "",
+        `## ${t("testReport.ai.requirement", { defaultValue: "需求与验收标准" })}`,
+        "",
+        requirement.trim()
+      )
     if (ai) lines.push("", `## ${t("testReport.aiSection")}`, "", ai.trim())
     return lines.join("\n")
-  }, [report, view, rows, ai, onlyUntested, isFolder, t])
+  }, [report, view, rows, ai, requirement, onlyUntested, isFolder, t])
 
   const copy = async () => {
     try {
@@ -957,6 +994,36 @@ export default function TestReportPanel(props: Props) {
 
           {activeTab === "ai" && (
             <>
+              {/* The only non-code input: with it the model answers "was the ask
+                  covered", without it the panel behaves exactly as before. */}
+              <div className="tr-ai-prompt">
+                <button type="button" className="tr-ai-prompt-toggle" onClick={() => setRequirementOpen((o) => !o)}>
+                  <span className="tr-ai-prompt-name">
+                    {t("testReport.ai.requirement", { defaultValue: "需求与验收标准" })}
+                    {requirement.trim() ? <span className="tr-ai-prompt-filled" aria-hidden /> : null}
+                  </span>
+                  <ChevronDown size={12} className={requirementOpen ? "is-open" : ""} />
+                </button>
+                {requirementOpen && (
+                  <div className="tr-ai-prompt-body">
+                    <textarea
+                      className="input-field tr-requirement"
+                      value={requirement}
+                      onChange={(e) => setRequirement(e.target.value)}
+                      placeholder={t("testReport.ai.requirementPlaceholder", {
+                        defaultValue: "粘贴需求描述、验收标准或 PR 说明（可选）…",
+                      })}
+                      rows={6}
+                    />
+                    <p className="tr-hint">
+                      {t("testReport.ai.requirementHint", {
+                        defaultValue: "本机保存；仅在生成时随请求发送给你配置的模型。填写后会追加「需求覆盖对照」章节。",
+                      })}
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="tr-ai-prompt">
                 <button type="button" className="tr-ai-prompt-toggle" onClick={() => setPromptOpen((o) => !o)}>
                   {t("testReport.ai.systemPrompt", { defaultValue: "自定义提示词" })}
@@ -1023,6 +1090,13 @@ export default function TestReportPanel(props: Props) {
                   </button>
                 </div>
                 {!ai && !aiBusy && <p className="tr-hint">{selectedModel ? t("testReport.aiHint") : t("testReport.aiNeedModel")}</p>}
+                {ai && !aiBusy && aiRequirement !== requirement.trim() && (
+                  <p className="tr-hint tr-ai-stale">
+                    {t("testReport.ai.requirementStale", {
+                      defaultValue: "需求已改动，重新生成才能更新「需求覆盖对照」。",
+                    })}
+                  </p>
+                )}
                 {aiSections.length > 0 && (
                   <div className="tr-ai-body">
                     {aiSections.map(([title, body]) => (
@@ -1043,9 +1117,37 @@ export default function TestReportPanel(props: Props) {
                             .split("\n")
                             .map((line) => line.replace(/^[-*]\s*/, "").trim())
                             .filter(Boolean)
-                            .map((item, index) => (
-                              <li key={`${title}-${index}`}>{item}</li>
-                            ))}
+                            .map((item, index) => {
+                              // A formatted scenario/coverage line becomes a case
+                              // card; anything else stays a plain bullet.
+                              const parsed = parseAiLine(item)
+                              if (!parsed) return <li key={`${title}-${index}`}>{item}</li>
+                              return (
+                                <li key={`${title}-${index}`} className="tr-ai-case">
+                                  <div className="tr-ai-case-head">
+                                    {parsed.priority && (
+                                      <span className={`tr-ai-chip tr-ai-priority is-${parsed.priority.toLowerCase()}`}>
+                                        {parsed.priority}
+                                      </span>
+                                    )}
+                                    {parsed.verdict && (
+                                      <span className={`tr-ai-chip tr-ai-verdict is-${parsed.verdict.key}`}>
+                                        {parsed.verdict.text}
+                                      </span>
+                                    )}
+                                    {parsed.title && <span className="tr-ai-case-title">{parsed.title}</span>}
+                                  </div>
+                                  <dl className="tr-ai-case-fields">
+                                    {parsed.fields.map((field) => (
+                                      <div key={field.label} className="tr-ai-case-field">
+                                        <dt>{field.label}</dt>
+                                        <dd>{field.value}</dd>
+                                      </div>
+                                    ))}
+                                  </dl>
+                                </li>
+                              )
+                            })}
                         </ul>
                       </section>
                     ))}

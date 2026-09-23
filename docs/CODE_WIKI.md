@@ -1057,17 +1057,18 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `open_browser_window_with_toolbar` | url, width?, height?, label?, userscripts? | String（窗口 label） |
 | `fetch_userscript_source` | url: String | String（脚本正文；http/https 白名单 + 20s 超时 + 2MB 上限） |
 
-### 10.13 Test Commands（14 条）
+### 10.13 Report Commands（4 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
+| `collect_test_report` | repoPath, base?, lastCommits? | TestReportBundle（单仓采集；结果只写进程内缓存，不落库） |
+| `collect_folder_report` | folderName, repoPaths[], base?, lastCommits? | FolderReportBundle（同夹多仓并发采集后合并；失败仓进 `repos[].error`） |
+| `generate_test_report_ai` | reportId, config, system?, requirement? | AiResult{markdown, warnings}；分块 map-reduce，`requirement` 为需求 / 验收标准，填了才输出「需求覆盖对照」 |
+| `cancel_test_report_ai` | reportId | — |
 
-### 10.14 Change Report Commands（11 条）
+> 自动化测试执行 / 覆盖率 / 漏洞扫描相关的命令与数据表已整体移除，启动时 `DROP TABLE`（见 `lib.rs` setup）。
 
-| 命令 | 参数 | 返回 |
-|------|------|------|
-
-### 10.15 DevTools Commands（4 条）
+### 10.14 DevTools Commands（4 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|

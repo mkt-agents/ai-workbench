@@ -381,7 +381,11 @@
       "systemPrompt": "自定义提示词",
       "systemPlaceholder": "可选：覆盖默认 system 提示词，例如「聚焦数据迁移与资金安全」",
       "systemHint": "留空则使用内置提示词；该内容仅保存在本机。",
-      "copySection": "复制该章节"
+      "copySection": "复制该章节",
+      "requirement": "需求与验收标准",
+      "requirementPlaceholder": "粘贴需求描述、验收标准或 PR 说明（可选）…",
+      "requirementHint": "本机保存；仅在生成时随请求发送给你配置的模型。填写后会追加「需求覆盖对照」章节。",
+      "requirementStale": "需求已改动，重新生成才能更新「需求覆盖对照」。"
     }
   }
 }

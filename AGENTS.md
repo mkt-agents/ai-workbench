@@ -7,12 +7,13 @@
 **已确认定位（见 `ROADMAP.md`）**：**AI 驱动的开发工具箱**——以 **DeepSeek 本地服务**为核心 AI 引擎，Git / Cursor 身份管理为基础能力，AI 模型配置与系统工具（Hosts / 内网穿透等）为辅助。
 
 - **愿景**：本地优先的桌面 AI 助手；多模型配置、提示词优化，管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
-- **功能分层**：核心 = DSH / 模型配置 / 提示词 / Cursor；基础 = Git 多仓 / 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具扩展 = 自动化测试（运行、变更回归报告、覆盖率、漏洞扫描）。
+- **功能分层**：核心 = DSH / 模型配置 / 提示词 / Cursor；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 小工具（devtools）。
+- **已移除，勿再参照旧文档**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，相关表在 `lib.rs` setup 中被 `DROP TABLE` 清理（`docs/test-assistant-*.md` 是历史文档）。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。
 - **明确不做**：内置多模型流式对话（AI 走 DeepSeek 外部集成）、AI 工具执行循环（shell/文件/Git 自动操作）、多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
-- 标识：`com.ai-workbench.app`，当前版本 `0.1.7`
+- 标识：`com.ai-workbench.app`，当前版本 `0.1.8`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite，密钥明文，勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor）→ 版本管理（Git 管理/环境变量）→ 网络管理（Hosts/内网穿透/网页工具）→ 系统工具（小工具/自动化测试）→ 设置（文案以 `src/locales/*/navigation.json` 为准）
+- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor）→ 版本管理（Git 管理/环境变量）→ 网络管理（Hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置（文案以 `src/locales/*/navigation.json` 为准）
 
 ## 技术栈与目录
 
@@ -34,9 +35,11 @@ src/                  # React 前端
   hooks/              # useTauriEvent、useInvokeError
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
-  *_commands.rs       # 按域拆分的 IPC 命令（git/ai/dsh/hosts/cursor/cloudflared/plugin/test/vuln…）
-  纯函数层             # test_output_parsers / coverage_parsers / maven_pom / project_scan /
-                      # test_selection / change_report / vuln_* 等——可单测、不含 IO
+  *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
+                      # devtools/runtime/tool/db/cancellation…）
+  纯函数层             # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +
+                      # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
+                      # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO
   cursor/ tray/       # Cursor 多身份、系统托盘与快问窗
 docs/                 # CODE_WIKI.md（架构百科）、cloudflared.md、各计划文档
 ```
@@ -97,7 +100,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 ### 交互与 UX
 
 - 快问/托盘/全局快捷键等多窗口行为以 `交接文档.md`「快问窗要点」为准，不信任窗口缓存可见性。
-- 长任务必须可取消（`CancelGuard`）并有实时进度事件；测试运行输出走 `test-run-output` 流。
+- 长任务必须可取消（`CancelGuard`）并有实时进度事件；报告侧是 `test-report-collect-progress`（多仓采集）与 `test-report-ai-progress`（AI 分块）。
 - 危险操作（删账号、覆盖 Hosts、批量推拉）必须二次确认并给出影响范围列表。
 - 空态、加载态、错误态要区分（如 Git 提交页区分「筛选内无改动」vs「真正无改动」）。
 - 文案中文为主、通过 i18n 双语；数字/代码/路径用等宽字体展示。
@@ -111,12 +114,12 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ## 架构约定
 
-1. **IPC 读写表只走 `db_load` / `db_save`**（Rust 侧表白名单，整表全量写）。测试管理 / 变更报告 / 漏洞等表不走该通道，由各模块自己的 `SCHEMA_SQL` + `*_schema.rs` / `*_store.rs` 直接读写。
-2. **Schema 迁移**：`CREATE TABLE IF NOT EXISTS` 不会给已有库加列；加列必须走 `test_schema::migrate` 式的 `pragma_table_info` 判存在再 `ALTER`，或 `lib.rs` setup 里的幂等 `ALTER TABLE` 行。
+1. **IPC 读写表只走 `db_load` / `db_save`**（Rust 侧表白名单，整表全量写）。Git 报告**不落库**：采集结果只存在 `report_commands.rs` 的进程内缓存（`REPORT_CACHE`，上限 16 条 FIFO），AI 步骤靠 `reportId` 取回同一份数据。
+2. **Schema 迁移**：`CREATE TABLE IF NOT EXISTS` 不会给已有库加列；加列必须走 `pragma_table_info` 判存在再 `ALTER`，或 `lib.rs` setup 里的幂等 `ALTER TABLE` 行。
 3. **命名映射**：TypeScript 用 camelCase，SQLite 用 snake_case，`storage.ts` 负责双向转换。
-4. **三层分层（测试/报告/漏洞类模块）**：纯函数（serde/标准库）→ 仅 rusqlite（建表查询）→ 命令层（tauri、起进程、发事件）。新逻辑优先落在纯函数层以便 `cargo test`。
-5. **用例过滤 / Maven 命令只有一份实现**：`test_selection::args_for()`、`maven_pom::plan_maven_run()`。UI 不得自行拼 `-Dtest=` 等参数。
-6. **取消机制**：AI 流式用 `request_id`，测试运行用 `project_id` 作 token，共用 `CancelGuard`（`cancellation.rs`）。
+4. **三层分层（报告类模块）**：纯函数（serde/标准库，`change_report.rs`）→ 命令层（tauri、起 git 进程、发事件，`report_commands.rs`）。新逻辑优先落在纯函数层以便 `cargo test`。
+5. **AI 提示词格式只有一份实现**：section 列表与逐行格式由 `report_commands::output_rules()` 生成，前端 `src/lib/reportAi.ts` 的 `parseAiLine()` 负责解析回来——改用例行格式必须同时改这两处（后端单测 `output_rules_only_add_the_coverage_section_with_an_ask` 钉住了契约）。
+6. **取消机制**：AI 流式（快问）用 `request_id`，报告 AI 用 `reportId` 作 token，共用 `CancelGuard`（`cancellation.rs`）。
 7. **页面保活**：Git / DSH 面板用 `gitMounted` / `dshMounted` + `.page-panel.is-active`，切走隐藏不卸载。
 
 ## 样式硬约定（窗口 resize 性能）
@@ -124,7 +127,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 主窗无边框 + 自定义标题栏，resize 时整篇 CSS 重栅格化：
 
 - **禁止 `transition: all`**，禁止把布局属性（width/padding/margin/font-size/gap…）放进 transition。只用 `--transition-colors-fast` / `--transition-colors`（仅 color/border/shadow/opacity/transform）。
-- 唯一例外：`.sidebar` 折叠宽度、`.dsh-progress-fill`、`.tm-cov-bar-fill`；`App.tsx` resize 期间给 `body` 加 `.resizing` 临时关闭。
+- 唯一例外：`.sidebar` 折叠宽度、`.dsh-progress-fill`；`App.tsx` resize 期间给 `body` 加 `.resizing` 临时关闭。
 - **新增带 `backdrop-filter` 的界面必须加进 `styles.css` 的 `body.resizing :is(...)` 清单**。
 - 拖拽区用 `data-tauri-drag-region`（不是 Electron 的 `-webkit-app-region`）。
 
