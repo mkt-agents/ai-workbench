@@ -1,0 +1,198 @@
+/* Regression-report sub-tab: workspace tree (left) + report panel (right).
+   The `.tr-*` report blocks themselves live in TestReportModal.css; this file is
+   only the page shell + tree. No backdrop-filter here, so body.resizing is untouched. */
+
+/* Widen the shared Git column for this tab only (styles.css is off-limits). */
+.git-manager-column.is-wide {
+  max-width: none;
+}
+
+.git-reports-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.tr-split {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.tr-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 6px;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.tr-tree-empty {
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tr-tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tr-tree-folder {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tr-tree-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 22px;
+  color: var(--text-3);
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.tr-tree-caret:hover {
+  background: var(--bg-hover);
+}
+
+.tr-tree-folder-label,
+.tr-tree-repo {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-colors-fast), color var(--transition-colors-fast);
+}
+
+.tr-tree-repo {
+  padding-left: 26px;
+  color: var(--text-2);
+}
+
+.tr-tree-folder-label:hover:not(:disabled),
+.tr-tree-repo:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.tr-tree-folder-label:disabled,
+.tr-tree-repo:disabled {
+  color: var(--text-3);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.tr-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-tree-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.tr-tree-folder.is-selected .tr-tree-folder-label,
+.tr-tree-repo.is-selected {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.tr-tree-folder.is-selected .tr-tree-folder-label:disabled {
+  opacity: 1;
+}
+
+.tr-report-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.tr-panel {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.tr-panel-head {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.tr-panel-title {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  white-space: nowrap;
+}
+
+.tr-panel .tr-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.tr-panel .toast {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+}
+
+.tr-panel-empty {
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.tr-empty-title {
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+@media (max-width: 900px) {
+  .tr-split {
+    grid-template-columns: 1fr;
+  }
+  .tr-tree {
+    max-height: 220px;
+  }
+}

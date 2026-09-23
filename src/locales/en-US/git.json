@@ -1,7 +1,15 @@
 {
   "tabs": {
     "repos": "Repos",
-    "commit": "Commit"
+    "commit": "Commit",
+    "report": "Reports"
+  },
+  "reports": {
+    "empty": "Pick a repo or a workspace folder on the left",
+    "emptyHint": "A repo gives a single-repo report; a folder merges every repo inside it.",
+    "folderNode": "Merge all repos in this folder",
+    "noGitInFolder": "No Git repos in this folder",
+    "notGit": "Not a Git repo"
   },
   "repos": {
     "subtitle": "Favorite repos, bind identities, and run everyday Git actions in one place",

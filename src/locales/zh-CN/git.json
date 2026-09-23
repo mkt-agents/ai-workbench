@@ -1,7 +1,15 @@
 {
   "tabs": {
     "repos": "仓库",
-    "commit": "提交"
+    "commit": "提交",
+    "report": "报告"
+  },
+  "reports": {
+    "empty": "在左侧选择一个仓库或工作区文件夹",
+    "emptyHint": "选中仓库生成单仓报告，选中文件夹合并该文件夹下所有仓库的报告",
+    "folderNode": "合并该文件夹下所有仓库",
+    "noGitInFolder": "该文件夹下没有 Git 仓库",
+    "notGit": "不是 Git 仓库"
   },
   "repos": {
     "subtitle": "收藏仓库、绑定身份，一步完成日常 Git 操作",

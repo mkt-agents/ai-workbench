@@ -102,6 +102,11 @@ export interface FolderReportBundle {
   repos: FolderRepoRow[];
 }
 
+/** What the report panel is pointed at: one repo, or a whole folder merged. */
+export type ReportTarget =
+  | { kind: "repo"; path: string }
+  | { kind: "folder"; name: string; paths: string[] };
+
 /** The backend prefixes cancellable errors so the UI can tell a cancel from a failure. */
 export function isCancelledError(error: unknown): boolean {
   return String(error).includes("[E_CANCELLED]");

@@ -34,23 +34,24 @@ import {
 } from "../core/gitCache";
 import { describePushTargets, isPushable } from "../core/gitPushScope";
 import { readStoredArray, writeStoredArray } from "../core/localState";
-import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
+import { pathKey, projectNameFromPath } from "../core/pathUtils";
+import { buildRepoGroups, REPOS_COLLAPSED_KEY, type RepoGroup } from "../core/repoGroups";
 import { resolveRepoAccount } from "../core/gitIdentity";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
 import BatchIdentityModal from "./BatchIdentityModal";
 import RepoBindingModal from "./RepoBindingModal";
 import ScanReposModal from "./ScanReposModal";
-import TestReportModal from "./TestReportModal";
+import type { ReportTarget } from "./testReportTypes";
 import type { GitAccount, GitWorkspace, RecentProject, RepoBatchItem } from "../core/types";
 
 type Props = {
   active?: boolean;
   onOpenCommit?: () => void;
+  onOpenReport?: (target: ReportTarget) => void;
 };
 
 const REFRESH_TTL_MS = 30_000;
-const REPOS_COLLAPSED_KEY = "workbench-git-collapsed-groups";
 
 function identityMatches(
   actual: { name: string; email: string },
@@ -61,12 +62,6 @@ function identityMatches(
     actual.email.trim().toLowerCase() === preset.email.trim().toLowerCase()
   );
 }
-
-type RepoGroup = {
-  key: string;
-  workspace: GitWorkspace | null;
-  projects: RecentProject[];
-};
 
 function GroupSelectCheckbox({
   checked,
@@ -97,7 +92,7 @@ function GroupSelectCheckbox({
   );
 }
 
-function GitReposPage({ active = true, onOpenCommit }: Props) {
+function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const { t } = useTranslation("git");
   const { t: tc } = useTranslation("common");
   const confirm = useConfirm();
@@ -142,8 +137,6 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
   const [applyingPath, setApplyingPath] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [bindingPath, setBindingPath] = useState<string | null>(null);
-  const [testReportPath, setTestReportPath] = useState<string | null>(null);
-  const [testReportFolder, setTestReportFolder] = useState<{ name: string; repoPaths: string[] } | null>(null);
   const [showAccounts, setShowAccounts] = useState(false);
   const [scanState, setScanState] = useState<{
     rootPath: string;
@@ -260,35 +253,10 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
     writeStoredArray(REPOS_COLLAPSED_KEY, [...collapsed]);
   }, [collapsed]);
 
-  const groups: RepoGroup[] = useMemo(() => {
-    const q = repoQuery.trim().toLowerCase();
-    const byWs = new Map<number, RecentProject[]>();
-    const others: RecentProject[] = [];
-    for (const p of recentProjects) {
-      if (q && !`${p.name} ${p.path}`.toLowerCase().includes(q)) continue;
-      const ws = findWorkspaceForRepo(p.path, gitWorkspaces);
-      if (ws) {
-        const list = byWs.get(ws.id) || [];
-        list.push(p);
-        byWs.set(ws.id, list);
-      } else {
-        others.push(p);
-      }
-    }
-    const result: RepoGroup[] = [];
-    for (const ws of gitWorkspaces) {
-      result.push({
-        key: `ws-${ws.id}`,
-        workspace: ws,
-        projects: byWs.get(ws.id) || [],
-      });
-    }
-    if (others.length > 0 || gitWorkspaces.length === 0) {
-      result.push({ key: "other", workspace: null, projects: others });
-    }
-    // While searching, groups without matches are just noise.
-    return q ? result.filter((g) => g.projects.length > 0) : result;
-  }, [gitWorkspaces, recentProjects, repoQuery]);
+  const groups: RepoGroup[] = useMemo(
+    () => buildRepoGroups(gitWorkspaces, recentProjects, repoQuery),
+    [gitWorkspaces, recentProjects, repoQuery]
+  );
 
   const toggleCollapsed = (key: string) => {
     setCollapsed((prev) => {
@@ -803,7 +771,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
                 className="btn commit-icon-btn"
                 title={t("testReport.open")}
                 aria-label={t("testReport.open")}
-                onClick={() => setTestReportPath(p.path)}
+                onClick={() => onOpenReport?.({ kind: "repo", path: p.path })}
               >
                 <ClipboardList size={14} />
               </button>
@@ -1036,7 +1004,7 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
                       disabled={batchBusy}
                       title={t("testReport.openFolder", { count: gitRepoPaths.length })}
                       aria-label={t("testReport.openFolder", { count: gitRepoPaths.length })}
-                      onClick={() => setTestReportFolder({ name: title, repoPaths: gitRepoPaths })}
+                      onClick={() => onOpenReport?.({ kind: "folder", name: title, paths: gitRepoPaths })}
                     >
                       <ClipboardList size={13} />
                     </button>
@@ -1098,18 +1066,6 @@ function GitReposPage({ active = true, onOpenCommit }: Props) {
             setBindingPath(null);
             void refresh({ force: true });
           }}
-        />
-      )}
-
-      {testReportPath !== null && (
-        <TestReportModal repoPath={testReportPath} onClose={() => setTestReportPath(null)} />
-      )}
-
-      {testReportFolder !== null && (
-        <TestReportModal
-          folderName={testReportFolder.name}
-          repoPaths={testReportFolder.repoPaths}
-          onClose={() => setTestReportFolder(null)}
         />
       )}
 
