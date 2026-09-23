@@ -124,7 +124,7 @@
 - [x] **Hosts**：写入系统前二次确认、编辑器脏状态标记 + 启用/注释行统计、另存为配置、`backup_hosts_now` 手动备份、配置名称重复校验
 - [x] **内网穿透**：`open_in_browser` 公网 URL 浏览器打开（运行列表/绑定卡/临时隧道三处）、日志关键字过滤 + 自动滚动开关 + 复制/导出、绑定域名重复校验、删除运行中绑定警示
 - [x] **快问**：多轮追问（`generate_text_stream` 新增可选 `history`，最近 6 轮上下文）、重新生成、新对话、复制反馈、Esc 弹窗优先、参数弹窗 Enter 提交
-- [x] **DeepSeek**：运行时浏览器打开（复用 `open_in_browser`）、自定义启动端口（localStorage 持久化）
+- [x] **DeepSeek**：运行时浏览器打开（复用 `open_in_browser`）、自定义启动端口（localStorage 持久化）；空态内嵌「安装」按钮、可选进入页面自动启动、运行中每 8s 探测进程（外部关闭自动回落未启动态）
 - [x] **Git 仓库页**：仓库搜索过滤、批量移除所选（仅移出列表）、分组折叠持久化
 
 **新增 Rust 命令**：`backup_hosts_now`、`open_in_browser`；`GenerateTextStreamRequest.history`。

@@ -13,6 +13,7 @@ import {
   Tag,
   Download,
   Undo2,
+  Rocket,
   X,
 } from "lucide-react";
 
@@ -29,6 +30,7 @@ function dshUrl(port: number) {
 }
 
 const DSH_PORT_KEY = "workbench-dsh-port";
+const DSH_AUTO_START_KEY = "workbench-dsh-autostart";
 
 function loadStartPort(): number {
   try {
@@ -38,6 +40,14 @@ function loadStartPort(): number {
     /* ignore */
   }
   return DEFAULT_PORT;
+}
+
+function loadAutoStart(): boolean {
+  try {
+    return localStorage.getItem(DSH_AUTO_START_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function DeepSeekHarness() {
@@ -82,6 +92,9 @@ function DeepSeekHarness() {
   /** Port for the next start; persisted so "port already in use" is fixable in-UI. */
   const [startPort, setStartPort] = useState<number>(() => loadStartPort());
   const startPortValid = Number.isInteger(startPort) && startPort > 0 && startPort < 65536;
+  /** Auto-start the service when this page mounts and nothing is running yet. */
+  const [autoStart, setAutoStart] = useState<boolean>(() => loadAutoStart());
+  const autoStartRef = useRef(autoStart);
   const [alertBanner, setAlertBanner] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(
     () => localStorage.getItem("workbench-onboarding-dismissed") !== "1"
@@ -103,6 +116,19 @@ function DeepSeekHarness() {
   const dismissOnboarding = () => {
     localStorage.setItem("workbench-onboarding-dismissed", "1");
     setShowOnboarding(false);
+  };
+
+  const toggleAutoStart = () => {
+    setAutoStart((cur) => {
+      const next = !cur;
+      autoStartRef.current = next;
+      try {
+        localStorage.setItem(DSH_AUTO_START_KEY, next ? "1" : "0");
+      } catch {
+        /* private mode: the toggle just doesn't persist */
+      }
+      return next;
+    });
   };
 
   const iframeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -237,6 +263,57 @@ function DeepSeekHarness() {
       }
     };
   }, [loadDshStatus, refreshDshStatus, invokeGetDshVersions, checkStatus, clearIframeTimers]);
+
+  // Auto-start once per mount: only when the user opted in, DSH is installed, and
+  // nothing is already serving. This page is kept alive across sidebar switches, so
+  // it runs exactly once per app session.
+  useEffect(() => {
+    autoStartRef.current = autoStart;
+  }, [autoStart]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const list = await invokeListDsh();
+          if (list.length > 0) return; // already serving — checkStatus owns the UI
+          if (!autoStartRef.current) return;
+          const snapshot = useGlobalStore.getState();
+          if (snapshot.dshNodejsInstalled !== true) return;
+          if (snapshot.dshVersion === null || snapshot.dshVersion === "") return;
+          await startOnPort(loadStartPort());
+        } catch {
+          /* auto-start is best effort */
+        }
+      })();
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A DSH process can die outside this window (crash, killed in another terminal).
+  // Poll the backend list while running so the toolbar never claims "running"
+  // for a dead service — the dead iframe is the classic symptom this prevents.
+  useEffect(() => {
+    if (!isRunning || starting || stopping || updating || installing) return;
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const list = await invokeListDsh();
+          if (list.length === 0) {
+            setIsRunning(false);
+            setIframeLoading(false);
+            autoReloadDoneRef.current = false;
+            setStatus(t("dsh.serviceDied"));
+            clearStatusAfter(6000);
+          }
+        } catch {
+          /* transient — the next tick retries */
+        }
+      })();
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [isRunning, starting, stopping, updating, installing, invokeListDsh, t, clearStatusAfter]);
 
   useEffect(() => {
     const unlisten = listen<{ stage: string; percent: number; message: string }>(
@@ -772,14 +849,14 @@ function DeepSeekHarness() {
               {(isRunning || stopping) && !starting && (
                 <button
                   type="button"
-                  className="btn commit-icon-btn"
+                  className="btn commit-icon-btn dsh-stop-btn"
                   onClick={handleStop}
                   disabled={stopping}
                   title={t("dsh.stop")}
                   aria-label={t("dsh.stop")}
                 >
                   {stopping ? <Loader2 size={14} className="spin" /> : <Square size={14} />}
-                  {!isRunning && <span>{t("dsh.stop")}</span>}
+                  <span>{t("dsh.stop")}</span>
                 </button>
               )}
 
@@ -797,16 +874,29 @@ function DeepSeekHarness() {
               )}
 
               {installed && !detecting && (
-                <button
-                  type="button"
-                  className="btn commit-icon-btn"
-                  onClick={handleRestoreAuth}
-                  disabled={busy}
-                  title={t("dsh.restoreAuthTitle")}
-                  aria-label={t("dsh.restoreAuthTitle")}
-                >
-                  {restoringAuth ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className={`btn commit-icon-btn${autoStart ? " is-active" : ""}`}
+                    onClick={toggleAutoStart}
+                    disabled={busy}
+                    title={t("dsh.autoStartTitle")}
+                    aria-label={t("dsh.autoStartTitle")}
+                    aria-pressed={autoStart}
+                  >
+                    <Rocket size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn commit-icon-btn"
+                    onClick={handleRestoreAuth}
+                    disabled={busy}
+                    title={t("dsh.restoreAuthTitle")}
+                    aria-label={t("dsh.restoreAuthTitle")}
+                  >
+                    {restoringAuth ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -868,6 +958,15 @@ function DeepSeekHarness() {
                 <>
                   <div className="dsh-empty-state-desc">{t("dsh.notInstalled")}</div>
                   <div className="dsh-empty-state-hint">{t("dsh.clickInstall")}</div>
+                  <button
+                    type="button"
+                    className="btn btn-primary dsh-empty-state-btn"
+                    onClick={() => handleInstall(selectedVersion || undefined)}
+                    disabled={busy}
+                  >
+                    <Download size={14} />
+                    {t("dsh.install")}
+                  </button>
                 </>
               ) : (
                 <div className="dsh-empty-state-desc">{t("dsh.clickStart")}</div>

@@ -6845,6 +6845,19 @@ input, select, textarea { font-family: inherit; }
   padding: 0;
 }
 
+/* Stop keeps its label and a warning tint in the icon-only running toolbar, so it
+   can't be mistaken for a generic tool (or for the auto-start toggle next door). */
+.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn {
+  width: auto;
+  padding: 0 10px;
+  color: var(--red);
+  transition: var(--transition-colors-fast);
+}
+
+.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+
 .dsh-stage.is-running .dsh-iframe-container {
   margin: 0;
   border: none;
@@ -7278,6 +7291,11 @@ input, select, textarea { font-family: inherit; }
   max-width: 300px;
   text-align: center;
   line-height: 1.5;
+}
+
+/* Empty state primary action (install branch). */
+.dsh-empty-state-btn {
+  margin-top: 4px;
 }
 
 .dsh-install-link {

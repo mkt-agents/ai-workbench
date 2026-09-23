@@ -213,6 +213,9 @@
     "updateTo": "更新到 v{{version}}",
     "restoreAuth": "还原认证补丁",
     "restoreAuthTitle": "还原 DSH 认证补丁",
+    "autoStart": "自动启动",
+    "autoStartTitle": "进入本页时自动启动服务（再次点击关闭）",
+    "serviceDied": "服务已停止运行，可能在外部被关闭",
     "restoreAuthMessage": "将把 DSH 的 connection 文件恢复为原始版本（移除免登录补丁）；正在运行的服务需重启后生效。",
     "restoreAuthDone": "已还原 DSH 原始认证文件",
     "restoreAuthFailed": "还原失败: {{error}}"

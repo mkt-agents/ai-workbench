@@ -213,6 +213,9 @@
     "updateTo": "Update to v{{version}}",
     "restoreAuth": "Restore auth patch",
     "restoreAuthTitle": "Restore DSH auth patch",
+    "autoStart": "Auto-start",
+    "autoStartTitle": "Start the service automatically when this page opens (click again to turn off)",
+    "serviceDied": "The service stopped — it may have been closed elsewhere",
     "restoreAuthMessage": "Restores the original DSH connection file (removes the auth-bypass patch). A running service must be restarted for this to take effect.",
     "restoreAuthDone": "Original DSH auth file restored",
     "restoreAuthFailed": "Restore failed: {{error}}"
