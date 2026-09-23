@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { openBrowser, closeBrowser, onBrowserClosed, browserMapKey, getOpenBrowserKeys } from "../lib/browser";
-import { matchUrlPattern, newId, normalizeHttpUrl } from "../lib/webTools";
+import { findHotkeyConflict, matchUrlPattern, newId, normalizeHttpUrl, validateHotkey } from "../lib/webTools";
 import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
 import type { WebPlugin, UserScript } from "../core/types";
@@ -258,6 +258,18 @@ function formatInvokeError(e: unknown): string {
   return String(e);
 }
 
+/** Best-effort syntax check: compile as a function body — exactly how the injected
+    script runs. Returns the SyntaxError message, or null when the code parses. */
+function checkScriptSyntax(code: string): string | null {
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function(code);
+    return null;
+  } catch (e) {
+    return e instanceof SyntaxError ? e.message : String(e);
+  }
+}
+
 function PluginBrowser() {
   const { t } = useTranslation("plugins");
   const { t: tc } = useTranslation("common");
@@ -290,6 +302,7 @@ function PluginBrowser() {
   const dragOverIdRef = useRef<string | null>(null);
   const didDragRef = useRef(false);
   const reorderedRef = useRef(false);
+  const openingRef = useRef(false);
 
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<FormMode>("add");
@@ -317,6 +330,7 @@ function PluginBrowser() {
   const [usImportUrlOpen, setUsImportUrlOpen] = useState(false);
   const [usImportUrl, setUsImportUrl] = useState("");
   const [usImporting, setUsImporting] = useState(false);
+  const [usSyntaxError, setUsSyntaxError] = useState<string | null>(null);
   const usCodeRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-save form drafts to localStorage
@@ -427,6 +441,10 @@ function PluginBrowser() {
         showMsg("error", t("invalidUrlOpen"));
         return;
       }
+      // Rapid double clicks raced two createBrowserWindow calls for the same
+      // window label; the second one errors out. One in-flight open at a time.
+      if (openingRef.current) return;
+      openingRef.current = true;
       setLoading(true);
       try {
         const key = urlKey(parsed);
@@ -438,6 +456,7 @@ function PluginBrowser() {
       } catch (e) {
         showMsg("error", t("openFailed", { error: formatInvokeError(e) }));
       } finally {
+        openingRef.current = false;
         setLoading(false);
       }
     },
@@ -457,10 +476,21 @@ function PluginBrowser() {
     return () => window.removeEventListener("keydown", onKey);
   }, [formOpen]);
 
-  // Ctrl/Cmd+F focuses the site filter (not the address bar)
+  // Ctrl/Cmd+F focuses the site filter (not the address bar) — but never steals
+  // the shortcut from text inputs, where the user may be searching their own text.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (
+          target?.isContentEditable ||
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT"
+        ) {
+          return;
+        }
         e.preventDefault();
         filterInputRef.current?.focus();
         filterInputRef.current?.select();
@@ -478,6 +508,19 @@ function PluginBrowser() {
       return parsed ? urlKey(parsed) === key : false;
     });
   }, [addressParsed, webPlugins]);
+
+  // Live validation under the hotkey input: a broken or duplicated shortcut never
+  // reaches the app-level registration, which would otherwise fail silently.
+  const hotkeyHint = useMemo(() => {
+    const trimmed = formHotkey.trim();
+    if (!trimmed) return null;
+    const v = validateHotkey(trimmed);
+    if (v.kind === "need-modifier") return t("hotkeyNeedModifier");
+    if (v.kind === "unknown-key") return t("hotkeyUnknownKey", { part: v.part });
+    const clash = findHotkeyConflict(trimmed, webPlugins, editingId);
+    if (clash) return t("hotkeyConflict", { name: clash.name });
+    return null;
+  }, [formHotkey, webPlugins, editingId, t]);
 
   const groups = useMemo(() => {
     const groupSet = new Set<string>();
@@ -550,6 +593,7 @@ function PluginBrowser() {
     setUsSourceUrl(values.sourceUrl ?? null);
     // The match preview belongs to the script on screen, not to the last one edited.
     setUsTestUrl("");
+    setUsSyntaxError(checkScriptSyntax(values.code));
     setUsFormOpen(true);
   };
 
@@ -614,39 +658,45 @@ function PluginBrowser() {
       return;
     }
 
-    if (formMode === "edit" && editingId) {
-      await updateWebPlugin(editingId, {
+    // Storage writes can fail (disk / db lock / duplicate row) — the form must stay
+    // open with the draft intact when that happens, not silently vanish.
+    try {
+      if (formMode === "edit" && editingId) {
+        await updateWebPlugin(editingId, {
+          name: formName.trim(),
+          url: parsed.href,
+          group: formGroup.trim(),
+          tags: formTags.trim(),
+          hotkey: formHotkey.trim(),
+        });
+        const id = editingId;
+        closeForm();
+        showMsg("success", t("updated"));
+        if (andOpen) await openPlugin(parsed.href, id);
+        return;
+      }
+
+      const pluginId = newId();
+      await addWebPlugin({
+        id: pluginId,
         name: formName.trim(),
         url: parsed.href,
         group: formGroup.trim(),
         tags: formTags.trim(),
         hotkey: formHotkey.trim(),
+        order: webPlugins.length,
+        lastOpenedAt: "",
+        openCount: 0,
+        isPreset: false,
       });
-      const id = editingId;
       closeForm();
-      showMsg("success", t("updated"));
-      if (andOpen) await openPlugin(parsed.href, id);
-      return;
-    }
-
-    const pluginId = newId();
-    await addWebPlugin({
-      id: pluginId,
-      name: formName.trim(),
-      url: parsed.href,
-      group: formGroup.trim(),
-      tags: formTags.trim(),
-      hotkey: formHotkey.trim(),
-      order: webPlugins.length,
-      lastOpenedAt: "",
-      openCount: 0,
-      isPreset: false,
-    });
-    closeForm();
-    if (andOpen) {
-      await openPlugin(parsed.href, pluginId);
-    } else {
-      showMsg("success", t("added"));
+      if (andOpen) {
+        await openPlugin(parsed.href, pluginId);
+      } else {
+        showMsg("success", t("added"));
+      }
+    } catch (e) {
+      showMsg("error", t("saveFailed", { error: formatInvokeError(e) }));
     }
   };
 
@@ -657,9 +707,12 @@ function PluginBrowser() {
       confirmText: tc("actions.delete"),
       icon: "danger",
     });
-    if (ok) {
+    if (!ok) return;
+    try {
       await deleteWebPlugin(p.id);
       showMsg("success", t("deleted"));
+    } catch (e) {
+      showMsg("error", t("deleteFailed", { error: formatInvokeError(e) }));
     }
   };
 
@@ -685,11 +738,50 @@ function PluginBrowser() {
     }
   };
 
+  const saveUserScript = async () => {
+    if (!usFormName.trim() || !usCode.trim()) return;
+    // 过滤空模式，如果没有有效模式则默认 <all_urls>
+    const patterns = usMatch.map((p) => p.trim()).filter(Boolean);
+    const finalPatterns = patterns.length > 0 ? patterns : ["<all_urls>"];
+    try {
+      if (usEditingId) {
+        await updateUserScript(usEditingId, {
+          name: usFormName.trim(),
+          description: usDesc.trim(),
+          matchPatterns: finalPatterns,
+          code: usCode,
+        });
+        showMsg("success", t("usSaved"));
+      } else {
+        await addUserScript({
+          id: newId(),
+          name: usFormName.trim(),
+          description: usDesc.trim(),
+          matchPatterns: finalPatterns,
+          code: usCode,
+          enabled: true,
+        });
+        showMsg("success", t("usAdded"));
+      }
+      setUsFormOpen(false);
+      setUsEditingId(null);
+      setUsFormName("");
+      setUsDesc("");
+      setUsMatch(["<all_urls>"]);
+      setUsCode("");
+      setUsSourceUrl(null);
+      setUsTestUrl("");
+      setUsSyntaxError(null);
+      clearUsFormDraft();
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
   const handleUsFormKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
-      // Trigger save
-      document.querySelector<HTMLButtonElement>("[data-us-save]")?.click();
+      void saveUserScript();
     }
   };
 
@@ -1316,7 +1408,17 @@ function PluginBrowser() {
               {activeKeys.size > 0 ? (
                 <button
                   className="btn btn-secondary btn-small"
-                  onClick={async () => { await closeBrowser(); setActiveKeys(new Set()); }}
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: t("closeAllWindows"),
+                      message: t("closeAllConfirm", { count: activeKeys.size }),
+                      confirmText: t("closeAllWindows"),
+                      icon: "warning",
+                    });
+                    if (!ok) return;
+                    await closeBrowser();
+                    setActiveKeys(new Set());
+                  }}
                   disabled={loading}
                   title={t("closeAllWindows")}
                 >
@@ -1907,6 +2009,9 @@ function PluginBrowser() {
                   onChange={(e) => setFormHotkey(e.target.value)}
                   placeholder={t("hotkeyPlaceholder")}
                 />
+                {hotkeyHint && (
+                  <span className="input-hint input-hint-error">{hotkeyHint}</span>
+                )}
               </div>
             </div>
             <div className="modal-actions">
@@ -2087,11 +2192,32 @@ function PluginBrowser() {
                   ref={usCodeRef}
                   className="input-field us-code-editor"
                   value={usCode}
-                  onChange={(e) => setUsCode(e.target.value)}
+                  onChange={(e) => {
+                    setUsCode(e.target.value);
+                    setUsSyntaxError(checkScriptSyntax(e.target.value));
+                  }}
+                  onKeyDown={(e) => {
+                    // Two-space indent on Tab: writing code in a bare textarea needs it.
+                    if (e.key === "Tab") {
+                      e.preventDefault();
+                      const el = e.currentTarget;
+                      const { selectionStart: s, selectionEnd: en, value } = el;
+                      el.value = `${value.slice(0, s)}  ${value.slice(en)}`;
+                      el.selectionStart = el.selectionEnd = s + 2;
+                      setUsCode(el.value);
+                    }
+                  }}
                   placeholder={t("usCodePlaceholder")}
                   rows={12}
                   spellCheck={false}
                 />
+                {usSyntaxError ? (
+                  <span className="input-hint input-hint-error">
+                    SyntaxError: {usSyntaxError}
+                  </span>
+                ) : usCode.trim() ? (
+                  <span className="input-hint">{t("usSyntaxOk")}</span>
+                ) : null}
               </div>
             </div>
             <div className="modal-actions">
@@ -2099,48 +2225,10 @@ function PluginBrowser() {
                 {tc("actions.cancel")}
               </button>
               <button
-                data-us-save
                 className="btn btn-primary"
                 type="button"
                 disabled={!usFormName.trim() || !usCode.trim()}
-                onClick={async () => {
-                  if (!usFormName.trim() || !usCode.trim()) return;
-                  // 过滤空模式，如果没有有效模式则默认 <all_urls>
-                  const patterns = usMatch.map((p) => p.trim()).filter(Boolean);
-                  const finalPatterns = patterns.length > 0 ? patterns : ["<all_urls>"];
-                  try {
-                    if (usEditingId) {
-                      await updateUserScript(usEditingId, {
-                        name: usFormName.trim(),
-                        description: usDesc.trim(),
-                        matchPatterns: finalPatterns,
-                        code: usCode,
-                      });
-                      showMsg("success", t("usSaved"));
-                    } else {
-                      await addUserScript({
-                        id: newId(),
-                        name: usFormName.trim(),
-                        description: usDesc.trim(),
-                        matchPatterns: finalPatterns,
-                        code: usCode,
-                        enabled: true,
-                      });
-                      showMsg("success", t("usAdded"));
-                    }
-                    setUsFormOpen(false);
-                    setUsEditingId(null);
-                    setUsFormName("");
-                    setUsDesc("");
-                    setUsMatch(["<all_urls>"]);
-                    setUsCode("");
-                    setUsSourceUrl(null);
-                    setUsTestUrl("");
-                    clearUsFormDraft();
-                  } catch (e) {
-                    showMsg("error", String(e));
-                  }
-                }}
+                onClick={() => void saveUserScript()}
               >
                 <Check size={14} /> {t("save")}
               </button>

@@ -52,3 +52,65 @@ export function newId(prefix?: string): string {
   const id = crypto.randomUUID();
   return prefix ? `${prefix}-${id}` : id;
 }
+
+const HOTKEY_MODIFIERS = new Set([
+  "control",
+  "ctrl",
+  "command",
+  "commandorcontrol",
+  "cmd",
+  "cmdorcontrol",
+  "meta",
+  "super",
+  "alt",
+  "option",
+  "altgr",
+  "shift",
+]);
+
+export type HotkeyValidation =
+  | { kind: "ok" }
+  | { kind: "empty" }
+  | { kind: "need-modifier" }
+  | { kind: "unknown-key"; part: string };
+
+/**
+ * Tauri global-shortcut format: `Modifier+Key` — `Ctrl+Alt+K`, `CommandOrControl+Shift+1`,
+ * `F9`. Structured result; the editor renders the reason with i18n so a broken
+ * shortcut never reaches the OS registration layer.
+ */
+export function validateHotkey(hotkey: string): HotkeyValidation {
+  const parts = hotkey
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return { kind: "empty" }; // empty = no hotkey, fine
+  if (parts.length < 2) return { kind: "need-modifier" };
+  let hasModifier = false;
+  for (const part of parts) {
+    const low = part.toLowerCase();
+    if (HOTKEY_MODIFIERS.has(low)) {
+      hasModifier = true;
+      continue;
+    }
+    if (/^(key[a-z]|digit\d|f([1-9]|1\d|2[0-4]))$/i.test(part)) continue;
+    if (/^[a-z0-9]$/i.test(part)) continue;
+    return { kind: "unknown-key", part };
+  }
+  if (!hasModifier) return { kind: "need-modifier" };
+  return { kind: "ok" };
+}
+
+/** Same shortcut on two plugins: the second registration silently loses. */
+export function findHotkeyConflict(
+  hotkey: string,
+  plugins: { id: string; name: string; hotkey: string }[],
+  editingId?: string | null
+): { name: string } | null {
+  const norm = hotkey.trim().toLowerCase();
+  if (!norm) return null;
+  const clash = plugins.find(
+    (p) => p.id !== editingId && p.hotkey.trim().toLowerCase() === norm
+  );
+  return clash ? { name: clash.name } : null;
+}

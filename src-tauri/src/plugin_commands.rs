@@ -80,40 +80,46 @@ pub fn navigate_browser_window(app: tauri::AppHandle, url: String) -> Result<boo
 /// (`aiwb-shell.open`) that the Rust-side `on_navigation` handler intercepts
 /// and forwards to `shell.open`; the URL is also copied as a fallback.
 const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
-  // WebView2 runs initialization scripts in EVERY frame (top-level + all
-  // iframes). Pages with embedded iframes (e.g. QR-code login widgets) would
-  // get one toolbar per iframe, each fixed to the iframe's own viewport and
-  // stacked over the page content. Only the top-level frame gets a toolbar.
-  // Comparing window.top/window.self is safe cross-origin (unlike reading
-  // top.location), so no try/catch needed.
-  if (window.top !== window.self) return;
-
-  // ---- Popup / OAuth window support ----------------------------------
+  // ---- Popup / OAuth / target=_blank support (runs in EVERY frame) ----
   // The webview has no on_new_window handler, so native window.open() calls
-  // are silently dropped — login buttons that open an OAuth popup (Cursor,
-  // GitHub, Google…) would do nothing. Intercept window.open() and redirect
-  // the URL into the current tab so the OAuth redirect flow still completes
-  // in-window. The magic-host branch lets pages that already use the
-  // aiwb-shell.open convention keep working unchanged.
+  // and target="_blank" anchors are silently dropped — login buttons (Cursor,
+  // GitHub, Google…) would do nothing. Normalize both into same-window
+  // navigations so the OAuth redirect flow completes inside this webview.
+  // This must run in iframes too: login widgets often live in one, and a
+  // cross-origin frame is allowed to navigate the top window.
   if (!window.__aiWorkbenchPopupPatched) {
     var __origOpen = window.open;
+    var __navigateSameTab = function (url) {
+      // In an iframe, send the navigation to the top window: an OAuth chain
+      // that lands back on the site then logs the whole page in. Navigating
+      // top from a cross-origin frame is permitted; same-origin too.
+      var w = window.top !== window.self ? window.top : window;
+      try {
+        w.location.href = url;
+      } catch (_) {
+        window.location.href = url;
+      }
+    };
+    var __shellRelay = function (url) {
+      var a = document.createElement('a');
+      a.href = 'https://aiwb-shell.open/?url=' + encodeURIComponent(url);
+      a.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;';
+      (document.body || document.documentElement).appendChild(a);
+      a.click();
+      setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); }, 200);
+    };
     window.open = function (url, target, features) {
       if (url && url.indexOf('aiwb-shell.open') !== -1) {
         // Already encoded for shell.open — let the navigation handler deal
         // with it by dispatching a click on a hidden link.
-        var a = document.createElement('a');
-        a.href = url;
-        a.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;';
-        (document.body || document.documentElement).appendChild(a);
-        a.click();
-        setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); }, 200);
+        __shellRelay(url);
         return { closed: false, focus: function () {}, close: function () {} };
       }
       if (url && /^https?:\/\//.test(url)) {
-        // External URL — navigate in place so the OAuth popup flow becomes a
-        // same-tab redirect flow. Returns `window` so callers that expect a
-        // WindowProxy (e.g. to call .close() or .postMessage()) don't throw.
-        window.location.href = url;
+        // External URL — navigate so the OAuth popup flow becomes a same-tab
+        // redirect flow. Returns `window` so callers that expect a WindowProxy
+        // (e.g. to call .close() or .postMessage()) don't throw.
+        __navigateSameTab(String(url));
         return window;
       }
       // about:blank, javascript:, or no URL — fall back to the original
@@ -124,11 +130,72 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
         return { closed: false, focus: function () {}, close: function () {} };
       }
     };
+    // target="_blank" anchors are dropped exactly like window.open was.
+    document.addEventListener('click', function (e) {
+      if (e.defaultPrevented) return;
+      var el = e.target;
+      while (el && el.tagName !== 'A') {
+        el = el.parentElement;
+      }
+      if (!el) return;
+      var href = el.getAttribute('href');
+      if (!href || href.indexOf('javascript:') === 0 || href.charAt(0) === '#') return;
+      if (String(el.target || '').toLowerCase() !== '_blank') return;
+      e.preventDefault();
+      try {
+        var abs = new URL(href, location.href);
+        if (abs.protocol !== 'http:' && abs.protocol !== 'https:') return;
+        __navigateSameTab(abs.href);
+      } catch (_) {
+        /* ignore malformed hrefs */
+      }
+    }, true);
     Object.defineProperty(window, '__aiWorkbenchPopupPatched', {
       value: true,
       writable: false,
       configurable: false,
     });
+  }
+
+  // WebView2 runs initialization scripts in EVERY frame (top-level + all
+  // iframes). Pages with embedded iframes (e.g. QR-code login widgets) would
+  // get one toolbar per iframe, each fixed to the iframe's own viewport and
+  // stacked over the page content. Only the top-level frame gets a toolbar.
+  // Comparing window.top/window.self is safe cross-origin (unlike reading
+  // top.location), so no try/catch needed.
+  if (window.top !== window.self) return;
+
+  // ---- Loading overlay -------------------------------------------------
+  // Between window creation and the remote page's first paint the frame is
+  // just black. An overlay injected at document-create time hides that; it
+  // fades out on `load`, with a hard timeout so a page that never fires load
+  // cannot trap the user. Re-armed automatically on every real navigation
+  // (this script re-runs), while SPA pushState hops don't re-trigger it.
+  if (!document.getElementById('aiwb-loading-overlay')) {
+    var __ov = document.createElement('div');
+    __ov.id = 'aiwb-loading-overlay';
+    __ov.style.cssText =
+      'position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:#12151a;transition:opacity 0.25s ease;';
+    __ov.innerHTML =
+      '<style>@keyframes aiwb-spin{to{transform:rotate(360deg);}}' +
+      '.aiwb-spin{width:30px;height:30px;border-radius:50%;border:2.5px solid rgba(255,255,255,0.15);border-top-color:#e5e7eb;animation:aiwb-spin 0.9s linear infinite;}</style>' +
+      '<div class="aiwb-spin"></div>';
+    (document.body || document.documentElement).appendChild(__ov);
+    var __ovDone = false;
+    var __ovRemove = function () {
+      if (__ovDone) return;
+      __ovDone = true;
+      try {
+        __ov.style.opacity = '0';
+        setTimeout(function () { if (__ov.parentNode) __ov.parentNode.removeChild(__ov); }, 280);
+      } catch (_) { /* the document may already be gone */ }
+    };
+    if (document.readyState === 'complete') {
+      setTimeout(__ovRemove, 150);
+    } else {
+      window.addEventListener('load', function () { setTimeout(__ovRemove, 150); });
+      setTimeout(__ovRemove, 10000);
+    }
   }
 
   if (window.__aiWorkbenchToolbarInjected) return;
