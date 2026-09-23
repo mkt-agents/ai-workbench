@@ -29,6 +29,11 @@ const AI_CHUNK_FILES: usize = 20;
 const AI_CHUNK_APIS: usize = 3;
 const AI_MAP_TOKENS: i64 = 1500;
 const AI_REDUCE_TOKENS: i64 = 3000;
+/// How many module briefs to ask for at once. Map calls are independent, so
+/// running them concurrently turns an N-module report from N sequential round
+/// trips into ~ceil(N/this). Bounded so a big folder doesn't trip the provider's
+/// rate limit (local DeepSeek and hosted endpoints share this path).
+const AI_MAP_CONCURRENCY: usize = 4;
 const AI_SYSTEM: &str = "你是资深测试工程师，只依据给定的改动分析作答，不编造未出现的模块或接口。";
 
 /// One of the three things a tester can mean by "the change".
@@ -561,18 +566,51 @@ pub async fn generate_test_report_ai(
             .await
             .map_err(|e| format!("{} 生成失败：{}", project_name, e))?
     } else {
-        let mut summaries = Vec::with_capacity(chunks.len());
-        for (index, chunk) in chunks.iter().enumerate() {
+        use futures_util::stream::{self, StreamExt};
+        // Module briefs are independent, so ask for them concurrently (bounded):
+        // an N-module report drops from N sequential round trips to ~ceil(N/concurrency).
+        // Build every request up front (cheap, synchronous) so the stream owns its data
+        // and never borrows `config`/`report`. Results are placed back by index to keep
+        // module order; progress ticks as each lands; an error or cancel drops the stream,
+        // cancelling in-flight calls.
+        let requests: Vec<(usize, String, String, AIModelConfig)> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let mut map_config = config.clone();
+                map_config.max_tokens = AI_MAP_TOKENS;
+                (
+                    index,
+                    chunk.module.clone(),
+                    build_ai_chunk_prompt(&project_name, &report, chunk),
+                    map_config,
+                )
+            })
+            .collect();
+        let concurrency = requests.len().min(AI_MAP_CONCURRENCY);
+        let mut summaries: Vec<Option<String>> = (0..requests.len()).map(|_| None).collect();
+        let mut done = 0usize;
+        let mut briefs = stream::iter(requests)
+            .map(|(index, module, prompt, map_config)| async move {
+                let result = generate_text(GenerateTextRequest {
+                    config: map_config,
+                    system: AI_SYSTEM.to_string(),
+                    user: prompt,
+                })
+                .await;
+                (index, module, result)
+            })
+            .buffer_unordered(concurrency);
+        while let Some((index, module, result)) = briefs.next().await {
+            let brief = result.map_err(|e| format!("{} 生成失败（模块 {}）：{}", project_name, module, e))?;
+            done += 1;
+            emit_ai_progress(&app, &report_id, done, total);
+            summaries[index] = Some(format!("【{}】\n{}", module, brief.trim()));
             if cancellation::is_cancelled(&report_id) {
                 return Err("[E_CANCELLED] 生成已取消".to_string());
             }
-            config.max_tokens = AI_MAP_TOKENS;
-            let brief = send(config.clone(), build_ai_chunk_prompt(&project_name, &report, chunk))
-                .await
-                .map_err(|e| format!("{} 生成失败（模块 {}）：{}", project_name, chunk.module, e))?;
-            summaries.push(format!("【{}】\n{}", chunk.module, brief.trim()));
-            emit_ai_progress(&app, &report_id, index + 1, total);
         }
+        let summaries: Vec<String> = summaries.into_iter().flatten().collect();
         if cancellation::is_cancelled(&report_id) {
             return Err("[E_CANCELLED] 生成已取消".to_string());
         }
