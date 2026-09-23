@@ -48,6 +48,8 @@
     "groupByProvider": "Group by provider",
     "groupCollapse": "Collapse group",
     "groupExpand": "Expand group",
+    "groupCollapseAll": "Collapse all groups",
+    "groupExpandAll": "Expand all groups",
     "noMatch": "No matching configs",
     "noMatchHint": "Try another keyword, or clear the search",
     "noMatchFiltered": "Nothing matches this status filter — back to \"All statuses\"",

@@ -114,7 +114,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ## 架构约定
 
-1. **IPC 读写表只走 `db_load` / `db_save`**（Rust 侧表白名单，整表全量写）。Git 报告**不落库**：采集结果只存在 `report_commands.rs` 的进程内缓存（`REPORT_CACHE`，上限 16 条 FIFO），AI 步骤靠 `reportId` 取回同一份数据。
+1. **IPC 读写表只走 `db_load` / `db_save`**（Rust 侧表白名单，整表全量写）。Git 报告**本体不落库**：采集结果只存在 `report_commands.rs` 的进程内缓存（`REPORT_CACHE`，上限 16 条 FIFO），AI 步骤靠 `reportId` 取回同一份数据。唯一持久化的是 **AI 结论历史**（`report_history.rs` 的 `report_ai_history`，上限 50 条 FIFO）。这个区分是有意的：报告是可重算的投影，AI 结论要花一次模型往返，删了就得重跑。
 2. **Schema 迁移**：`CREATE TABLE IF NOT EXISTS` 不会给已有库加列；加列必须走 `pragma_table_info` 判存在再 `ALTER`，或 `lib.rs` setup 里的幂等 `ALTER TABLE` 行。
 3. **命名映射**：TypeScript 用 camelCase，SQLite 用 snake_case，`storage.ts` 负责双向转换。
 4. **三层分层（报告类模块）**：纯函数（serde/标准库，`change_report.rs`）→ 命令层（tauri、起 git 进程、发事件，`report_commands.rs`）。新逻辑优先落在纯函数层以便 `cargo test`。

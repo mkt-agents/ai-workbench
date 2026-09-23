@@ -269,6 +269,7 @@
     "onlyUntested": "Untested only",
     "intro": "Pick a change baseline and click \"Generate report\" to collect and statically analyse the changes.",
     "empty": "No changes detected for this baseline.",
+    "emptyHint": "Try another baseline, or check whether the changes were committed.",
     "failed": "Collection failed: {{error}}",
     "baseline": "Baseline",
     "branch": "Branch",
@@ -276,6 +277,7 @@
     "files": "files",
     "modules": "modules",
     "untested": "untested",
+    "untestedJump": "Show only changes with no paired test",
     "testFiles": "test files",
     "ignored": "ignored",
     "ignoredHint": "IDE / build output dropped from the report",
@@ -293,6 +295,7 @@
     },
     "commits": "Commits",
     "apiChanges": "API changes",
+    "apiJump": "Show this file in the changed-file list",
     "api": {
       "Added": "Added",
       "Removed": "Removed",
@@ -389,7 +392,16 @@
       "requirement": "Requirement & acceptance",
       "requirementPlaceholder": "Paste the requirement, acceptance criteria or PR description (optional)…",
       "requirementHint": "Stays on this device; sent to the model you picked only while generating. Filling it in appends a Requirement coverage section.",
-      "requirementStale": "The requirement changed — regenerate to refresh the coverage section."
+      "requirementStale": "The requirement changed — regenerate to refresh the coverage section.",
+      "history": {
+        "title": "History",
+        "empty": "Nothing yet — every successful generation is kept here.",
+        "kindRepo": "Repo",
+        "kindFolder": "Folder",
+        "withRequirement": "with req.",
+        "copy": "Copy content",
+        "delete": "Delete this entry"
+      }
     }
   }
 }

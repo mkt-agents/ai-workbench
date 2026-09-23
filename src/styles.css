@@ -737,12 +737,9 @@
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-icon {
-  border-radius: 12px;
-  width: 40px;
-  height: 40px;
-  font-size: 12px;
-  font-weight: 600;
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-group {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.05);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-name {
@@ -4674,20 +4671,21 @@ input, select, textarea { font-family: inherit; }
 .ai-model-list {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 12px;
 }
 
 /* ─── Provider groups (foldable) ─── */
 
-/* Stretch groups to the grid row height so side-by-side groups stay level. */
+/* Each group is its own surface: header, health flags and rows read as one block,
+   and stacked panels never fight each other for row height. */
 .ai-model-group {
   display: flex;
   flex-direction: column;
   min-width: 0;
-}
-
-.ai-model-group + .ai-model-group {
-  margin-top: 2px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-2) 60%, transparent);
 }
 
 .ai-model-group-header {
@@ -4695,18 +4693,21 @@ input, select, textarea { font-family: inherit; }
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 4px 4px;
+  padding: 6px 8px;
   border: none;
   background: transparent;
-  color: var(--text-2);
+  color: var(--text-1);
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
   border-radius: var(--radius-sm);
+  transition: var(--transition-colors-fast);
 }
 
 .ai-model-group-header:hover {
   color: var(--text-0);
+  background: var(--bg-hover);
 }
 
 .ai-model-group-chevron {
@@ -4737,15 +4738,91 @@ input, select, textarea { font-family: inherit; }
   flex-shrink: 0;
 }
 
+/* Health flags on the group header: visible even when the group is folded, so a
+   collapsed list still shows which provider needs a test or a fix. */
+.ai-model-group-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.ai-model-group-flag-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ai-model-group-flag.is-fail {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.ai-model-group-flag.is-untested {
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 12%, transparent);
+}
+
 .ai-model-group-body {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  margin-top: 6px;
-  /* Fill the stretched group and distribute rows evenly so cards align
-     with the sibling group's cards. */
-  flex: 1;
-  grid-auto-rows: 1fr;
+  /* A group's models sit side by side: two models share one row on a wide panel,
+     and the panel itself always spans the full list width. */
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 8px;
+}
+
+/* Each card sits in its own query container, so a card reads its own width —
+   not the panel's — when deciding where the action strip goes. */
+.ai-model-cell {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+/* Inside a panel the surface is already drawn, so a row keeps its fill but only
+   shows a border on hover — no card-inside-a-card double outline. */
+.ai-model-group .ai-model-item {
+  padding: 10px 12px;
+  border-color: transparent;
+  /* Narrow cards (two models sharing a row) stack the actions under the info. */
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.ai-model-group .ai-model-item .ai-model-actions {
+  width: 100%;
+  justify-content: flex-start;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* A card at least this wide (a lone model in its group, or a very wide panel)
+   keeps the compact row: info left, actions right. */
+@container (min-width: 640px) {
+  .ai-model-group .ai-model-item {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .ai-model-group .ai-model-item .ai-model-actions {
+    width: auto;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+}
+
+.ai-model-group .ai-model-item:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-hover);
+  box-shadow: none;
+  transform: none;
 }
 
 /* Active state for the group-by toggle (and any icon-only toggle button). */
@@ -4753,27 +4830,6 @@ input, select, textarea { font-family: inherit; }
   color: var(--accent);
   border-color: var(--accent-border);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-@media (min-width: 1100px) {
-  .ai-model-list {
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
-
-  .ai-model-item {
-    flex-wrap: wrap;
-    align-items: flex-start;
-  }
-
-  .ai-model-item .ai-model-actions {
-    width: 100%;
-    justify-content: flex-start;
-    /* Push actions to the card bottom when the card is stretched taller. */
-    margin-top: auto;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-subtle);
-  }
 }
 
 .ai-model-item {
@@ -4795,8 +4851,8 @@ input, select, textarea { font-family: inherit; }
 }
 
 .ai-model-item.default {
-  background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-1));
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   box-shadow: var(--card-shadow);
 }
 
@@ -4814,17 +4870,18 @@ input, select, textarea { font-family: inherit; }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), var(--card-shadow);
 }
 
-/* Provider icon */
+/* Provider glyph: the colour-coded initials at the head of every card. */
 .ai-model-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  font-size: 18px;
-  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  font-size: 11px;
   font-weight: 600;
+  letter-spacing: -0.2px;
+  flex-shrink: 0;
 }
 
 .ai-model-icon.provider-openai { background: rgba(16, 185, 129, 0.15); color: #10b981; }
@@ -4852,12 +4909,59 @@ input, select, textarea { font-family: inherit; }
 }
 
 .ai-model-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--text-0);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-0);
+}
+
+/* A long name gives way before the verdict badge does. */
+.ai-model-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Test verdict on the name line — the first thing worth knowing about a config. */
+.ai-model-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  background: var(--bg-2);
+  flex-shrink: 0;
+}
+
+.ai-model-state-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.ai-model-state.is-ok {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.ai-model-state.is-fail {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.ai-model-state.is-ok .ai-model-state-dot,
+.ai-model-state.is-fail .ai-model-state-dot {
+  opacity: 1;
 }
 
 .ai-model-badge {
@@ -4887,23 +4991,10 @@ input, select, textarea { font-family: inherit; }
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
-  /* Reserve the wrapped second line so cards in one row keep a uniform height. */
-  min-height: 26px;
 }
 
 .ai-model-meta-sep {
   opacity: 0.5;
-}
-
-/* Persisted verdict, so it is visible without hovering the test button. */
-.ai-test-state.is-ok {
-  color: var(--green);
-  font-weight: 500;
-}
-
-.ai-test-state.is-fail {
-  color: var(--red);
-  font-weight: 500;
 }
 
 .ai-model-actions {
@@ -4928,40 +5019,6 @@ input, select, textarea { font-family: inherit; }
 .ai-model-actions .btn.is-fail {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 40%, transparent);
-}
-
-.ai-model-item.default {
-  background: var(--accent-dim);
-  border-color: var(--accent-border);
-}
-
-/* Provider icon */
-.ai-model-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: var(--bg-2);
-  font-size: 11px;
-  font-weight: 600;
-  flex-shrink: 0;
-  border: 1px solid var(--border-subtle);
-}
-
-.ai-model-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.ai-model-name {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text-0);
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* Form sections */

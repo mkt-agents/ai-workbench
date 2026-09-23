@@ -116,3 +116,27 @@ export function isCancelledError(error: unknown): boolean {
 export function cleanErrorMessage(error: unknown): string {
   return String(error).replace(/^\[E_[A-Z0-9_]+\]\s*/, "").trim() || String(error);
 }
+
+/**
+ * One saved AI answer. The report itself is never persisted — it is recomputed
+ * from the working tree on every selection, so a stored copy would only go stale.
+ * The AI answer is the part worth keeping: it costs a model round trip and it is
+ * what a tester actually works from. See `src-tauri/src/report_history.rs`.
+ */
+export interface ReportAiHistoryEntry {
+  id: number;
+  /** `repo` | `folder`. */
+  targetKind: string;
+  targetLabel: string;
+  /** How the change set was described, e.g. `HEAD~5` or `2026-09-01 ~ 2026-09-23`. */
+  baseline: string;
+  model: string;
+  /** The requirement box as it read when this answer was generated. */
+  requirement: string;
+  markdown: string;
+  /** Unix milliseconds. */
+  createdAt: number;
+}
+
+/** What the panel hands over when a generation succeeds. */
+export type ReportAiHistoryInput = Omit<ReportAiHistoryEntry, "id" | "createdAt">;

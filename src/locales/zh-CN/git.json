@@ -269,6 +269,7 @@
     "onlyUntested": "只看缺测",
     "intro": "选择改动基准后点击「生成报告」，采集并静态分析改动点。",
     "empty": "该基准下没有检测到改动。",
+    "emptyHint": "换个改动基准，或确认改动是否已经提交。",
     "failed": "采集失败：{{error}}",
     "baseline": "基准",
     "branch": "分支",
@@ -276,6 +277,7 @@
     "files": "文件",
     "modules": "模块",
     "untested": "缺测",
+    "untestedJump": "只看没有配对测试的改动",
     "testFiles": "测试文件",
     "ignored": "已忽略",
     "ignoredHint": "IDE / 构建产物等已从报告中剔除",
@@ -293,6 +295,7 @@
     },
     "commits": "涉及提交",
     "apiChanges": "接口变更",
+    "apiJump": "在改动文件中查看该文件",
     "api": {
       "Added": "新增",
       "Removed": "移除",
@@ -389,7 +392,16 @@
       "requirement": "需求与验收标准",
       "requirementPlaceholder": "粘贴需求描述、验收标准或 PR 说明（可选）…",
       "requirementHint": "本机保存；仅在生成时随请求发送给你配置的模型。填写后会追加「需求覆盖对照」章节。",
-      "requirementStale": "需求已改动，重新生成才能更新「需求覆盖对照」。"
+      "requirementStale": "需求已改动，重新生成才能更新「需求覆盖对照」。",
+      "history": {
+        "title": "历史记录",
+        "empty": "还没有生成记录；生成成功后会留在这里。",
+        "kindRepo": "仓库",
+        "kindFolder": "文件夹",
+        "withRequirement": "含需求",
+        "copy": "复制内容",
+        "delete": "删除该记录"
+      }
     }
   }
 }

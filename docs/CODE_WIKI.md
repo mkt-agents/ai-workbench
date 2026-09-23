@@ -1057,7 +1057,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `open_browser_window_with_toolbar` | url, width?, height?, label?, userscripts? | String（窗口 label） |
 | `fetch_userscript_source` | url: String | String（脚本正文；http/https 白名单 + 20s 超时 + 2MB 上限） |
 
-### 10.13 Report Commands（4 条）
+### 10.13 Report Commands（7 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -1065,7 +1065,12 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `collect_folder_report` | folderName, repoPaths[], base?, lastCommits?, since?, until? | FolderReportBundle（同夹多仓并发采集后合并；失败仓进 `repos[].error`） |
 | `generate_test_report_ai` | reportId, config, system?, requirement? | AiResult{markdown, warnings}；分块 map-reduce，`requirement` 为需求 / 验收标准，填了才输出「需求覆盖对照」 |
 | `cancel_test_report_ai` | reportId | — |
+| `save_report_ai_history` | entry: HistoryInput | 新行 id；生成成功后由前端调用，超过 50 条 FIFO 淘汰 |
+| `list_report_ai_history` | — | HistoryEntry[]（新→旧，含 markdown，供面板展开） |
+| `delete_report_ai_history` | id | — |
 
+> 报告**本体不落库**：它是当前工作树的投影，每次选中都重算，存下来只会过期。唯一持久化的是 AI 结论历史 —— `report_history.rs` 的 `report_ai_history` 表（该表的 schema 与 CRUD 都在这个文件里，`lib.rs` setup 只调一次 `ensure_schema`）。
+>
 > 自动化测试执行 / 覆盖率 / 漏洞扫描相关的命令与数据表已整体移除，启动时 `DROP TABLE`（见 `lib.rs` setup）。
 
 ### 10.14 DevTools Commands（4 条）

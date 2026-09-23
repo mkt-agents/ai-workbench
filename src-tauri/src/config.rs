@@ -54,7 +54,14 @@ pub const MODEL_TEST_TIMEOUT_SECS: u64 = 15;
 pub const MODEL_LIST_TIMEOUT_SECS: u64 = 20;
 
 /// HTTP timeout for single-shot text generation (seconds).
-pub const GENERATE_TEXT_TIMEOUT_SECS: u64 = 60;
+///
+/// 60 was sized for short answers and quietly sabotaged the report path: a
+/// regression report asks for ~3000 tokens of output, which a local model needs
+/// well over a minute to produce — so the request timed out, the retry policy
+/// retried it, and one "slow" generation became three timed-out rounds. This
+/// covers the whole request including the body read, so it has to exceed the
+/// longest legitimate generation, not the typical one.
+pub const GENERATE_TEXT_TIMEOUT_SECS: u64 = 300;
 
 /// HTTP timeout for streaming text generation (seconds).
 pub const GENERATE_STREAM_TIMEOUT_SECS: u64 = 120;

@@ -1675,9 +1675,6 @@ mod scan_tests {
     fn mk_git(p: &Path) {
         std::fs::create_dir_all(p.join(".git")).unwrap();
     }
-    fn mk_dir(p: &Path) {
-        std::fs::create_dir_all(p).unwrap();
-    }
 
     /// 深度 1：只找直接子目录中的仓库；跳过隐藏目录与 node_modules；仓库内部不再深入
     #[test]

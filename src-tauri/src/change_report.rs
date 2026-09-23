@@ -980,38 +980,61 @@ pub fn suggested_scope(layers: &BTreeSet<String>, risks: &BTreeSet<String>, api_
     scope
 }
 
-/// One map-reduce unit for the AI step: a module's worth of files plus the
-/// interface changes that live in them. Chunked so a 300-file report does not
+/// One map-reduce unit for the AI step: a batch of changed files plus the
+/// interface changes that belong to them. Chunked so a 300-file report does not
 /// get one model call with a truncated prompt — each chunk fits its own budget.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiChunk {
-    pub module: String,
+    /// The modules this chunk covers, in first-seen order. A chunk mixes modules
+    /// when they are small, so the prompt has to name all of them.
+    pub modules: Vec<String>,
     pub files: Vec<FileChange>,
     pub api: Vec<ApiChange>,
 }
 
-/// Pack files into ≤`max_files`-per-chunk, splitting a large module across
-/// chunks; api changes attach to a chunk of their own module (capped at
-/// `max_api`, overflow starts a files-empty chunk so nothing is dropped).
+/// Pack files into ≤`max_files`-per-chunk, then let interface changes ride along
+/// with the files of their own module.
+///
+/// Packing is by size, deliberately **not** by module. The previous version opened
+/// a new chunk for every module, so a report spanning ten small modules cost ten
+/// model calls + the reduce — eleven full round trips the tester waits on, no
+/// matter how few files each module had. A file line carries its module name, so
+/// nothing is lost by mixing them in one prompt.
+///
+/// Api changes attach to a chunk holding their module (capped at `max_api`);
+/// overflow, or a module with no files of its own, starts a chunk so that nothing
+/// is silently dropped.
 pub fn plan_ai_chunks(report: &ChangeReport, max_files: usize, max_api: usize) -> Vec<AiChunk> {
     let max_files = max_files.max(1);
     let mut chunks: Vec<AiChunk> = Vec::new();
     for file in &report.files {
-        match chunks.iter_mut().find(|c| c.module == file.module && c.files.len() < max_files) {
-            Some(chunk) => chunk.files.push(file.clone()),
-            None => {
-                chunks.push(AiChunk { module: file.module.clone(), files: vec![file.clone()], api: Vec::new() });
+        match chunks.iter_mut().find(|chunk| chunk.files.len() < max_files) {
+            Some(chunk) => {
+                chunk.files.push(file.clone());
+                if !chunk.modules.iter().any(|name| name == &file.module) {
+                    chunk.modules.push(file.module.clone());
+                }
             }
+            None => chunks.push(AiChunk {
+                modules: vec![file.module.clone()],
+                files: vec![file.clone()],
+                api: Vec::new(),
+            }),
         }
     }
     for change in &report.api_changes {
         let module = module_of(&normalize_key(&change.path));
-        match chunks.iter_mut().find(|c| c.module == module && c.api.len() < max_api) {
+        match chunks
+            .iter_mut()
+            .find(|chunk| chunk.api.len() < max_api && chunk.modules.iter().any(|name| name == &module))
+        {
             Some(chunk) => chunk.api.push(change.clone()),
-            None => {
-                chunks.push(AiChunk { module, files: Vec::new(), api: vec![change.clone()] });
-            }
+            None => chunks.push(AiChunk {
+                modules: vec![module],
+                files: Vec::new(),
+                api: vec![change.clone()],
+            }),
         }
     }
     chunks
@@ -1653,7 +1676,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_ai_chunks_packs_modules_and_keeps_every_api_change() {
+    fn plan_ai_chunks_packs_by_size_and_keeps_every_api_change() {
         let mut name_status = String::new();
         for i in 0..25 {
             name_status.push_str(&format!("M\0svc/src/main/java/A{}.java\0", i));
@@ -1666,15 +1689,41 @@ mod tests {
         report.api_changes = vec![ApiChange { kind: "added".to_string(), name: "f()".to_string(), path: "svc/src/main/java/A1.java".to_string() }];
 
         let chunks = plan_ai_chunks(&report, 20, 3);
-        assert_eq!(chunks.len(), 3, "25 svc files split 20+5, web is its own chunk");
-        assert_eq!((chunks[0].module.as_str(), chunks[0].files.len()), ("svc", 20));
-        assert_eq!(chunks[1].files.len(), 5);
-        // The api change lands in the first chunk of its own module.
+        // 26 files split 20 + 6. The tail of `svc` shares the second chunk with
+        // `web` — that mixing is the point: one chunk per module used to mean one
+        // model call per module.
+        assert_eq!(chunks.len(), 2, "26 files pack into 20 + 6");
+        assert_eq!(chunks[0].files.len(), 20);
+        assert_eq!(chunks[1].files.len(), 6);
+        assert!(chunks[1].modules.iter().any(|m| m == "web"), "small modules share a chunk");
+        // The api change lands in the chunk holding its module's files.
         assert_eq!(chunks[0].api.len(), 1);
         let packed: usize = chunks.iter().map(|c| c.files.len()).sum();
         assert_eq!(packed, report.files.len(), "no file is dropped by packing");
         let api: usize = chunks.iter().map(|c| c.api.len()).sum();
         assert_eq!(api, report.api_changes.len());
+    }
+
+    #[test]
+    fn many_small_modules_still_fit_in_one_chunk() {
+        // The regression this guards: ten modules of three files each used to plan
+        // ten chunks — ten model round trips the tester waited on — even though the
+        // whole report was 30 files.
+        let mut name_status = String::new();
+        for module in 0..10 {
+            for file in 0..3 {
+                name_status.push_str(&format!("M\0m{}/src/F{}.java\0", module, file));
+            }
+        }
+        let report = build_report(&ReportInputs {
+            name_status_z: &name_status,
+            ..Default::default()
+        });
+        assert_eq!(report.files.len(), 30);
+
+        let chunks = plan_ai_chunks(&report, 60, 10);
+        assert_eq!(chunks.len(), 1, "30 files across 10 modules must stay one call");
+        assert_eq!(chunks[0].modules.len(), 10, "the chunk names every module it covers");
     }
 
     #[test]

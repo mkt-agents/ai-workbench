@@ -23,17 +23,28 @@ const MAX_AI_PATCH_BYTES: usize = 24 * 1024;
 /// How far back the "recent commits" mode may look.
 const MAX_RECENT_COMMITS: i64 = 50;
 
-/// Chunk budget for the map pass: a prompt this size is one the model actually
-/// reads end to end, which a 300-file single call is not.
-const AI_CHUNK_FILES: usize = 20;
-const AI_CHUNK_APIS: usize = 3;
+/// Chunk budget for the map pass. A chunk this size is one the model reads end to
+/// end, which a 300-file single call is not — but the budget is deliberately
+/// generous, because **every chunk is one more model round trip** and the tester
+/// waits out all of them. 60 file lines is ~6KB of prompt.
+const AI_CHUNK_FILES: usize = 60;
+/// Same reasoning for interface changes: each is one short line, so the old
+/// budget of 3 split API-heavy modules into a stream of their own chunks.
+const AI_CHUNK_APIS: usize = 10;
 const AI_MAP_TOKENS: i64 = 1500;
 const AI_REDUCE_TOKENS: i64 = 3000;
-/// How many module briefs to ask for at once. Map calls are independent, so
-/// running them concurrently turns an N-module report from N sequential round
-/// trips into ~ceil(N/this). Bounded so a big folder doesn't trip the provider's
-/// rate limit (local DeepSeek and hosted endpoints share this path).
-const AI_MAP_CONCURRENCY: usize = 4;
+/// How many module briefs to ask for at once. Kept low on purpose: hosted
+/// endpoints and local DeepSeek instances commonly cap concurrent requests at
+/// 1–2, and being *rejected* costs far more wall-clock than serialising would
+/// have — the tester waits out the whole round only to see a failure. With the
+/// chunk sizing above there are only a couple of chunks in practice, so
+/// concurrency buys little anyway.
+const AI_MAP_CONCURRENCY: usize = 2;
+/// Retries for a call the provider rejected for backpressure (429 / concurrency
+/// limit / "too many requests"). Short, because someone is watching a progress
+/// bar; a failed report is worse than a slightly slower one.
+const AI_RETRIES: usize = 2;
+const AI_RETRY_BASE_MS: u64 = 700;
 /// Repos under one folder are independent, so collect them concurrently: a folder
 /// of N drops from N sequential passes to ~ceil(N/this). Bounded like the AI map
 /// pass so a big folder doesn't thrash the machine with git processes.
@@ -730,6 +741,60 @@ fn emit_ai_progress(app: &AppHandle, report_id: &str, done: usize, total: usize)
 /// also has to say which asks the change covered and which it missed. Large reports
 /// go through a map-reduce pass: one brief per module chunk, then one final call
 /// assembles the sections — so no chunk's files silently fall off the end of the prompt.
+/// Whether a failed call is worth retrying: the provider asking us to slow down
+/// (429 / concurrency limit), or a transient upstream hiccup.
+///
+/// Matching on the message text is deliberate — the endpoints in play
+/// (OpenAI-compatible, Anthropic, local DeepSeek) each word this differently and a
+/// string is all we get back. A bad key or an unknown model must NOT match:
+/// retrying those only makes the tester wait longer for the same error.
+fn is_retryable(err: &str) -> bool {
+    let text = err.to_lowercase();
+    [
+        "429",
+        "rate limit",
+        "ratelimit",
+        "too many requests",
+        "concurren",
+        "并发",
+        "限流",
+        "请求过多",
+        "请求频率",
+        "timed out",
+        "timeout",
+        "502",
+        "503",
+        "504",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+/// One model call with retries. Shared by the single/reduce path and every map
+/// brief, so both obey exactly one retry policy.
+async fn send_with_retry(config: AIModelConfig, system: String, user: String) -> Result<String, String> {
+    let mut attempt = 0usize;
+    loop {
+        let result = generate_text(GenerateTextRequest {
+            config: config.clone(),
+            system: system.clone(),
+            user: user.clone(),
+        })
+        .await;
+        match result {
+            Ok(text) => return Ok(text),
+            Err(err) => {
+                // Back off a little longer each round.
+                if attempt >= AI_RETRIES || !is_retryable(&err) {
+                    return Err(err);
+                }
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(AI_RETRY_BASE_MS * attempt as u64)).await;
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn generate_test_report_ai(
     app: AppHandle,
@@ -757,22 +822,15 @@ pub async fn generate_test_report_ai(
     let total = if chunks.len() <= 1 { 1 } else { chunks.len() + 1 };
     emit_ai_progress(&app, &report_id, 0, total);
 
-    let send = |config: AIModelConfig, user: String, system: &str| {
-        generate_text(GenerateTextRequest {
-            config,
-            system: system.to_string(),
-            user,
-        })
-    };
     let markdown = if chunks.len() <= 1 {
         config.max_tokens = AI_REDUCE_TOKENS;
-        send(
+        send_with_retry(
             config,
+            (*system_prompt).clone(),
             build_ai_prompt(&project_name, &report, &patch, &requirement),
-            &system_prompt,
         )
-            .await
-            .map_err(|e| format!("{} 生成失败：{}", project_name, e))?
+        .await
+        .map_err(|e| format!("{} 生成失败：{}", project_name, e))?
     } else {
         use futures_util::stream::{self, StreamExt};
         // Module briefs are independent, so ask for them concurrently (bounded):
@@ -789,7 +847,7 @@ pub async fn generate_test_report_ai(
                 map_config.max_tokens = AI_MAP_TOKENS;
                 (
                     index,
-                    chunk.module.clone(),
+                    chunk_label(chunk),
                     build_ai_chunk_prompt(&project_name, &report, chunk, &requirement),
                     map_config,
                 )
@@ -802,12 +860,7 @@ pub async fn generate_test_report_ai(
             .map(|(index, module, prompt, map_config)| {
                 let system = system_prompt.clone();
                 async move {
-                    let result = generate_text(GenerateTextRequest {
-                        config: map_config,
-                        system: (*system).clone(),
-                        user: prompt,
-                    })
-                    .await;
+                    let result = send_with_retry(map_config, (*system).clone(), prompt).await;
                     (index, module, result)
                 }
             })
@@ -826,13 +879,13 @@ pub async fn generate_test_report_ai(
             return Err("[E_CANCELLED] 生成已取消".to_string());
         }
         config.max_tokens = AI_REDUCE_TOKENS;
-        send(
+        send_with_retry(
             config,
+            (*system_prompt).clone(),
             build_ai_reduce_prompt(&project_name, &report, &summaries, &requirement),
-            system_prompt.as_str(),
         )
-            .await
-            .map_err(|e| format!("{} 汇总失败：{}", project_name, e))?
+        .await
+        .map_err(|e| format!("{} 汇总失败：{}", project_name, e))?
     };
 
     // Cross-check the answer against the static report: identifiers the model
@@ -888,7 +941,11 @@ fn requirement_block(requirement: &str, limit: Option<usize>) -> String {
 /// question a tester cannot answer from a diff alone. The scenario line format
 /// is fixed and pipe-delimited so the panel can render it as a case, not prose.
 fn output_rules(has_requirement: bool) -> String {
-    let mut sections = "## 受影响功能点\n## 必测场景\n## 建议回归范围\n## 兼容性与数据风险\n## 验收清单\n".to_string();
+    // No「建议回归范围」section on purpose: the panel already shows the
+    // program-computed scope chips right above the AI output, so asking the model
+    // to restate them was pure output-token cost — and output is what a local
+    // model is slowest at.
+    let mut sections = "## 受影响功能点\n## 必测场景\n## 兼容性与数据风险\n## 验收清单\n".to_string();
     if has_requirement {
         sections.push_str("## 需求覆盖对照\n");
     }
@@ -898,7 +955,7 @@ fn output_rules(has_requirement: bool) -> String {
         "\n要求：每条一行、以 - 开头；\
          「必测场景」每条固定格式 `- [P0] 场景名 ｜ 前置：… ｜ 步骤：… ｜ 预期：…`\
          （优先级只取 P0/P1/P2，字段之间用全角竖线 ｜ 分隔，四个字段都要写）；\
-         「建议回归范围」同样按 P0/P1/P2 标注；\
+         每个章节不超过 8 条，整份回答尽量精炼——每多输出一个字，本地模型就多生成一个字；\
          只依据上面给出的文件与接口，不确定的写「需与开发确认」。",
     );
     if has_requirement {
@@ -994,9 +1051,13 @@ fn commits_block(report: &ChangeReport) -> String {
     commits
 }
 
+/// One line per file. The module leads because a chunk may now span several of
+/// them, so the grouping has to be spelled out instead of being implied by the
+/// call the file happens to sit in.
 fn file_line(file: &change_report::FileChange) -> String {
     format!(
-        "- {} [{}] +{} -{} 层={} 风险={} 已有测试={}{}\n",
+        "- [{}] {} [{}] +{} -{} 层={} 风险={} 已有测试={}{}\n",
+        file.module,
         file.path,
         file.status,
         file.adds,
@@ -1008,9 +1069,20 @@ fn file_line(file: &change_report::FileChange) -> String {
     )
 }
 
-/// Map pass: one focused brief per module chunk. No patch on purpose — the
-/// chunk is small enough to judge from its own file and interface lists, and
-/// pasting the same global patch into every call would only bury them.
+/// A short label for progress messages and error text, where the full module list
+/// would be noise.
+fn chunk_label(chunk: &change_report::AiChunk) -> String {
+    match chunk.modules.split_first() {
+        None => "-".to_string(),
+        Some((first, rest)) if rest.is_empty() => first.clone(),
+        Some((first, rest)) => format!("{} 等 {} 个模块", first, rest.len() + 1),
+    }
+}
+
+/// Map pass: one brief covering a batch of files, which may span several modules.
+/// No patch on purpose — the chunk is small enough to judge from its own file and
+/// interface lists, and pasting the same global patch into every call would only
+/// bury them.
 fn build_ai_chunk_prompt(
     project_name: &str,
     report: &ChangeReport,
@@ -1023,19 +1095,27 @@ fn build_ai_chunk_prompt(
         api.push_str(&format!("- [{}] {} @ {}\n", change.kind, change.name, change.path));
     }
     let ask = requirement_block(requirement, Some(AI_MAP_REQUIREMENT_CHARS));
+    let modules = if chunk.modules.is_empty() {
+        "-".to_string()
+    } else {
+        chunk.modules.join("、")
+    };
+    let module_count = chunk.modules.len().max(1);
     format!(
-        "项目「{}」本次共改动 {} 个文件（+{} -{}），下面是模块「{}」的改动明细；全量建议回归面（程序判定）：{}。\n\n\
+        "项目「{}」本次共改动 {} 个文件（+{} -{}），下面是 {} 个模块的改动明细：{}。\n\
+         全量建议回归面（程序判定）：{}。\n\n\
          {}\
-         改动文件：\n{}\n\
+         改动文件（行首方括号是所属模块）：\n{}\n\
          公开接口变化：\n{}\n\
-         请用不超过 8 行要点总结该模块：改了什么、可能影响哪些功能、有哪些兼容性或数据风险值得测试关注。\
-         若给了需求，额外说明该模块与需求中哪些点相关（没有相关点就直接说无关）。\
-         只依据上面内容，不确定的写「需与开发确认」；不要输出章节标题或解释文字。",
+         请**按模块分节**总结，每节以「【模块名】」开头、不超过 5 行要点：改了什么、可能影响哪些功能、\
+         有哪些兼容性或数据风险值得测试关注。若给了需求，额外说明该模块与需求中哪些点相关（无关就直接说无关）。\
+         只依据上面内容，不确定的写「需与开发确认」；不要输出其它章节标题或解释文字。",
         project_name,
         report.stats.files,
         report.stats.adds,
         report.stats.dels,
-        chunk.module,
+        module_count,
+        modules,
         if report.scope.is_empty() { "-".to_string() } else { report.scope.join(",") },
         ask,
         files,
@@ -1107,6 +1187,9 @@ mod tests {
         let without = output_rules(false);
         assert!(without.contains("## 必测场景"));
         assert!(!without.contains("需求覆盖对照"));
+        // Dropped on purpose: the static scope chips above the AI output already
+        // carry this, and restating it only spends generation time.
+        assert!(!without.contains("## 建议回归范围"));
 
         let with = output_rules(true);
         assert!(with.contains("## 需求覆盖对照"));
@@ -1177,5 +1260,22 @@ mod tests {
         );
         assert_eq!(date_window_label(&Some("2026-09-01".into()), &None), ">= 2026-09-01");
         assert_eq!(date_window_label(&None, &Some("2026-09-23".into())), "<= 2026-09-23");
+    }
+
+    #[test]
+    fn retryable_errors_are_told_apart_from_permanent_ones() {
+        // The shapes the providers in play actually return under load.
+        assert!(is_retryable("HTTP 429 Too Many Requests"));
+        assert!(is_retryable("rate limit exceeded, please retry"));
+        assert!(is_retryable("Concurrency limit reached"));
+        assert!(is_retryable("请求并发数超过上限"));
+        assert!(is_retryable("触发限流，请稍后重试"));
+        assert!(is_retryable("request timed out"));
+        assert!(is_retryable("503 Service Temporarily Unavailable"));
+
+        // Retrying these only makes the tester wait longer for the same error.
+        assert!(!is_retryable("401 Unauthorized: invalid api key"));
+        assert!(!is_retryable("model not found"));
+        assert!(!is_retryable("connection refused"));
     }
 }

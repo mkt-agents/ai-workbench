@@ -48,6 +48,8 @@
     "groupByProvider": "按提供商分组",
     "groupCollapse": "收起分组",
     "groupExpand": "展开分组",
+    "groupCollapseAll": "收起全部分组",
+    "groupExpandAll": "展开全部分组",
     "noMatch": "没有匹配的配置",
     "noMatchHint": "换个关键词试试，或清空搜索条件",
     "noMatchFiltered": "当前状态筛选下没有配置，试试切回「全部状态」",

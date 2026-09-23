@@ -11,14 +11,17 @@ import { useTranslation } from "react-i18next"
 import { listen } from "@tauri-apps/api/event"
 import {
   ChevronDown,
+  ChevronRight,
   ClipboardList,
   Copy,
   Download,
   GitCommitHorizontal,
+  History,
   Loader2,
   Search,
   ShieldAlert,
   Sparkles,
+  Trash2,
 } from "lucide-react"
 import { useGlobalStore } from "../core/store"
 import { refreshRepos } from "../core/gitCache"
@@ -27,7 +30,13 @@ import { markdownSections } from "../lib/aiText"
 import { parseAiLine } from "../lib/reportAi"
 import { projectNameFromPath } from "../core/pathUtils"
 import { isCancelledError, cleanErrorMessage } from "./testReportTypes"
-import type { AiResult, ChangeReport, FileChange, FolderRepoRow } from "./testReportTypes"
+import type {
+  AiResult,
+  ChangeReport,
+  FileChange,
+  FolderRepoRow,
+  ReportAiHistoryEntry,
+} from "./testReportTypes"
 import type { AIModelConfig } from "../core/types"
 import { summarizeRisks } from "../lib/reportRisk"
 import { useFilteredFiles, EMPTY_FILTER } from "./useFilteredFiles"
@@ -111,6 +120,31 @@ function readReportMode(repoPath: string): ReportModeState {
   }
 }
 
+/**
+ * Splits a changed-file path at its last separator so the two halves can be
+ * styled and truncated independently: the directory is dimmed and gives up its
+ * width first, which keeps the file name — the part that identifies the row —
+ * readable even in a deep monorepo path.
+ */
+function PathLabel({ path }: { path: string }) {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
+  if (cut < 0) return <span className="tr-file-name">{path}</span>
+  return (
+    <>
+      <span className="tr-file-dir">{path.slice(0, cut + 1)}</span>
+      <span className="tr-file-name">{path.slice(cut + 1)}</span>
+    </>
+  )
+}
+
+/** `09-23 15:30`. The table only keeps ~50 answers, so the year is noise here;
+ *  the full timestamp stays available through the `title` attribute. */
+function formatHistoryTime(millis: number): string {
+  const date = new Date(millis)
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 export default function TestReportPanel(props: Props) {
   const { t } = useTranslation("git")
 
@@ -123,6 +157,9 @@ export default function TestReportPanel(props: Props) {
   const collectFolder = useGlobalStore((s) => s.invokeCollectFolderReport)
   const generateAi = useGlobalStore((s) => s.invokeGenerateTestReportAi)
   const cancelAi = useGlobalStore((s) => s.invokeCancelTestReportAi)
+  const saveReportHistory = useGlobalStore((s) => s.invokeSaveReportAiHistory)
+  const listReportHistory = useGlobalStore((s) => s.invokeListReportAiHistory)
+  const deleteReportHistory = useGlobalStore((s) => s.invokeDeleteReportAiHistory)
   const saveTextFile = useGlobalStore((s) => s.invokeSaveTextFile)
   const copyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard)
   const aiModels = useGlobalStore((s) => s.aiModels)
@@ -146,6 +183,13 @@ export default function TestReportPanel(props: Props) {
   const [aiRequirement, setAiRequirement] = useState("")
   const [aiBusy, setAiBusy] = useState(false)
   const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null)
+
+  // Past answers, newest first. Loaded lazily when the section is opened and only
+  // ever rendered read-only — it never writes back into `ai`, so the live report
+  // stays the single source of truth for the panel's current state.
+  const [history, setHistory] = useState<ReportAiHistoryEntry[]>([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyExpandedId, setHistoryExpandedId] = useState<number | null>(null)
 
   const [onlyUntested, setOnlyUntested] = useState(false)
   const [groupMode, setGroupMode] = useState<GroupMode>("module")
@@ -227,6 +271,37 @@ export default function TestReportPanel(props: Props) {
     setError("")
   }, [])
 
+  /** Loaded lazily when the history section opens, and refreshed after a new
+   *  answer lands so the list is correct whether or not it is on screen. */
+  const loadReportHistory = useCallback(async () => {
+    try {
+      setHistory(await listReportHistory())
+    } catch {
+      // A failed history read must never disturb the report — the section simply
+      // keeps showing what it already had.
+    }
+  }, [listReportHistory])
+
+  const removeReportHistory = useCallback(
+    async (id: number) => {
+      try {
+        await deleteReportHistory(id)
+        setHistory((prev) => prev.filter((item) => item.id !== id))
+        setHistoryExpandedId((current) => (current === id ? null : current))
+      } catch (e) {
+        showMsg("error", cleanErrorMessage(e))
+      }
+    },
+    [deleteReportHistory, showMsg]
+  )
+
+  // The history only leaves the database when the tester asks to see it. Declared
+  // after `loadReportHistory` on purpose: the dependency array is evaluated during
+  // render, so referencing a later `const` here would hit the temporal dead zone.
+  useEffect(() => {
+    if (historyOpen) void loadReportHistory()
+  }, [historyOpen, loadReportHistory])
+
   const runAi = useCallback(
     async (idArg?: string) => {
       const id = idArg ?? viewingId
@@ -249,6 +324,22 @@ export default function TestReportPanel(props: Props) {
         setAi(result.markdown)
         setAiWarnings(result.warnings)
         setAiRequirement(ask)
+        // Keep the answer: it cost a map-reduce round trip and it is the artefact
+        // the tester works from. The report itself is never stored — it is a
+        // projection of the working tree, recomputed on every selection.
+        void saveReportHistory({
+          targetKind: isFolder ? "folder" : "repo",
+          targetLabel: view?.name ?? "",
+          baseline: view?.report.base ?? "",
+          model: selectedModel.name,
+          requirement: ask,
+          markdown: result.markdown,
+        })
+          .then(() => void loadReportHistory())
+          .catch(() => {
+            // A failed history write must not read as a failed generation: the
+            // panel already has the text, which is what the user asked for.
+          })
       } catch (e) {
         if (genRef.current !== gen) return
         // A cancel is a user action, not a failure; the static report stays usable.
@@ -265,7 +356,20 @@ export default function TestReportPanel(props: Props) {
         }
       }
     },
-    [aiBusy, viewingId, selectedModel, generateAi, customSystem, requirement, showMsg, t]
+    [
+      aiBusy,
+      viewingId,
+      selectedModel,
+      generateAi,
+      customSystem,
+      requirement,
+      view,
+      isFolder,
+      saveReportHistory,
+      loadReportHistory,
+      showMsg,
+      t,
+    ]
   )
 
   const generate = async (force = false, scope?: ReportModeState) => {
@@ -419,6 +523,65 @@ export default function TestReportPanel(props: Props) {
 
   const aiSections = useMemo(() => Object.entries(markdownSections(ai)), [ai])
 
+  /** Shared by the live answer and the history entries: both are the same shape of
+   *  markdown, so both get P0/P1/P2 case cards and per-section copy. */
+  const renderAiSections = (markdownText: string) => (
+    <div className="tr-ai-body">
+      {Object.entries(markdownSections(markdownText)).map(([title, body]) => (
+        <section key={title} className="tr-ai-block">
+          <h4>
+            {title}
+            <button
+              type="button"
+              className="btn btn-secondary btn-small tr-ai-block-copy"
+              onClick={() => void copySection(`## ${title}` + `\n\n` + body)}
+              title={t("testReport.ai.copySection", { defaultValue: "复制该章节" })}
+            >
+              <Copy size={12} />
+            </button>
+          </h4>
+          <ul>
+            {body
+              .split("\n")
+              .map((line) => line.replace(/^[-*]\s*/, "").trim())
+              .filter(Boolean)
+              .map((item, index) => {
+                // A formatted scenario/coverage line becomes a case card;
+                // anything else stays a plain bullet.
+                const parsed = parseAiLine(item)
+                if (!parsed) return <li key={`${title}-${index}`}>{item}</li>
+                return (
+                  <li key={`${title}-${index}`} className="tr-ai-case">
+                    <div className="tr-ai-case-head">
+                      {parsed.priority && (
+                        <span className={`tr-ai-chip tr-ai-priority is-${parsed.priority.toLowerCase()}`}>
+                          {parsed.priority}
+                        </span>
+                      )}
+                      {parsed.verdict && (
+                        <span className={`tr-ai-chip tr-ai-verdict is-${parsed.verdict.key}`}>
+                          {parsed.verdict.text}
+                        </span>
+                      )}
+                      {parsed.title && <span className="tr-ai-case-title">{parsed.title}</span>}
+                    </div>
+                    <dl className="tr-ai-case-fields">
+                      {parsed.fields.map((field) => (
+                        <div key={field.label} className="tr-ai-case-field">
+                          <dt>{field.label}</dt>
+                          <dd>{field.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </li>
+                )
+              })}
+          </ul>
+        </section>
+      ))}
+    </div>
+  )
+
   const applyOnlyUntested = (files: FileChange[]) =>
     files.filter((f) => !onlyUntested || f.risks.includes("untested")).slice(0, MAX_VISIBLE_FILES)
 
@@ -508,6 +671,14 @@ export default function TestReportPanel(props: Props) {
     }
   }
 
+  /** An interface change lives in a file; the useful next step is seeing that
+   *  file in context, not reading its path off a list. */
+  const jumpToFile = (path: string) => {
+    setFileFilter({ ...EMPTY_FILTER, search: path })
+    setExpandAll(true)
+    setActiveTab("files")
+  }
+
   const renderFile = (file: FileChange) => (
     <li key={`${groupMode}-${file.path}`} className="tr-file">
       <span className={`tr-file-status tr-status-${file.status}`}>{file.status}</span>
@@ -515,7 +686,7 @@ export default function TestReportPanel(props: Props) {
         className="tr-file-path"
         title={`${file.path}${file.testPath ? ` → ${file.testPath}` : file.hasTest ? "" : ` · ${t("testReport.noTestHint")}`}`}
       >
-        {file.path}
+        <PathLabel path={file.path} />
       </span>
       <span className="tr-file-layer">{t(`testReport.layer.${file.layer}`, { defaultValue: file.layer })}</span>
       <span className="tr-file-delta">
@@ -560,6 +731,7 @@ export default function TestReportPanel(props: Props) {
       return (
         <details key={commit.sha} className="tr-group" open={expandAll}>
           <summary className="tr-group-head">
+            <ChevronRight size={12} className="tr-group-caret" aria-hidden />
             <span className="tr-group-name tr-commit-subject" title={commit.subject}>
               {commit.subject}
             </span>
@@ -577,6 +749,7 @@ export default function TestReportPanel(props: Props) {
     return (
       <details key={group.name} className="tr-group" open={expandAll}>
         <summary className="tr-group-head">
+          <ChevronRight size={12} className="tr-group-caret" aria-hidden />
           <span className="tr-group-name">{group.name}</span>
           <span className="tr-group-stat">
             {group.files} · +{group.adds} -{group.dels}
@@ -867,9 +1040,22 @@ export default function TestReportPanel(props: Props) {
                 {report.stats.untested > 0 && (
                   <>
                     <span className="tr-stat-sep" aria-hidden />
-                    <span className="tr-stat is-warn">
+                    {/* "Which changes have no test?" is the question a tester opens
+                        the overview for, so the number is the shortcut to the list
+                        rather than a read-only figure. */}
+                    <button
+                      type="button"
+                      className="tr-stat is-warn is-action"
+                      onClick={() => {
+                        setOnlyUntested(true)
+                        setFileFilter(EMPTY_FILTER)
+                        setExpandAll(true)
+                        setActiveTab("files")
+                      }}
+                      title={t("testReport.untestedJump", { defaultValue: "只看没有配对测试的改动" })}
+                    >
                       <span className="tr-stat-value">{report.stats.untested}</span> {t("testReport.untested")}
-                    </span>
+                    </button>
                   </>
                 )}
                 {report.stats.testFiles > 0 && (
@@ -890,7 +1076,19 @@ export default function TestReportPanel(props: Props) {
                 )}
               </div>
 
-              {report.stats.files === 0 && <p className="tr-hint">{t("testReport.empty")}</p>}
+              {/* Zero changes is usually a wrong-baseline symptom, not a result:
+                  it reads as a state with a next step, not a stray grey line. */}
+              {report.stats.files === 0 && (
+                <div className="tr-blank">
+                  <span className="tr-blank-icon" aria-hidden>
+                    <ClipboardList size={18} />
+                  </span>
+                  <span className="tr-blank-title">{t("testReport.empty")}</span>
+                  <span className="tr-hint">
+                    {t("testReport.emptyHint", { defaultValue: "换个改动基准，或确认改动是否已经提交。" })}
+                  </span>
+                </div>
+              )}
 
               {report.scope.length > 0 && (
                 <div className="tr-section-card tr-scope">
@@ -914,11 +1112,18 @@ export default function TestReportPanel(props: Props) {
                   <ul>
                     {report.apiChanges.slice(0, 3).map((c) => (
                       <li key={`ov-${c.kind}-${c.name}-${c.path}`}>
-                        <span className={`tr-api-kind tr-api-${c.kind}`}>
-                          {t(`testReport.api.${c.kind}`, { defaultValue: c.kind })}
-                        </span>
-                        <code>{c.name}</code>
-                        <span className="tr-api-path">{c.path}</span>
+                        <button
+                          type="button"
+                          className="tr-api-row"
+                          onClick={() => jumpToFile(c.path)}
+                          title={t("testReport.apiJump", { defaultValue: "在改动文件中查看该文件" })}
+                        >
+                          <span className={`tr-api-kind tr-api-${c.kind}`}>
+                            {t(`testReport.api.${c.kind}`, { defaultValue: c.kind })}
+                          </span>
+                          <code>{c.name}</code>
+                          <span className="tr-api-path">{c.path}</span>
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -1057,11 +1262,18 @@ export default function TestReportPanel(props: Props) {
               <ul>
                 {report.apiChanges.slice(0, 40).map((c) => (
                   <li key={`${c.kind}-${c.name}-${c.path}`}>
-                    <span className={`tr-api-kind tr-api-${c.kind}`}>
-                      {t(`testReport.api.${c.kind}`, { defaultValue: c.kind })}
-                    </span>
-                    <code>{c.name}</code>
-                    <span className="tr-api-path">{c.path}</span>
+                    <button
+                      type="button"
+                      className="tr-api-row"
+                      onClick={() => jumpToFile(c.path)}
+                      title={t("testReport.apiJump", { defaultValue: "在改动文件中查看该文件" })}
+                    >
+                      <span className={`tr-api-kind tr-api-${c.kind}`}>
+                        {t(`testReport.api.${c.kind}`, { defaultValue: c.kind })}
+                      </span>
+                      <code>{c.name}</code>
+                      <span className="tr-api-path">{c.path}</span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -1173,62 +1385,7 @@ export default function TestReportPanel(props: Props) {
                     })}
                   </p>
                 )}
-                {aiSections.length > 0 && (
-                  <div className="tr-ai-body">
-                    {aiSections.map(([title, body]) => (
-                      <section key={title} className="tr-ai-block">
-                        <h4>
-                          {title}
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-small tr-ai-block-copy"
-                            onClick={() => void copySection(`## ${title}` + `\n\n` + body)}
-                            title={t("testReport.ai.copySection", { defaultValue: "复制该章节" })}
-                          >
-                            <Copy size={12} />
-                          </button>
-                        </h4>
-                        <ul>
-                          {body
-                            .split("\n")
-                            .map((line) => line.replace(/^[-*]\s*/, "").trim())
-                            .filter(Boolean)
-                            .map((item, index) => {
-                              // A formatted scenario/coverage line becomes a case
-                              // card; anything else stays a plain bullet.
-                              const parsed = parseAiLine(item)
-                              if (!parsed) return <li key={`${title}-${index}`}>{item}</li>
-                              return (
-                                <li key={`${title}-${index}`} className="tr-ai-case">
-                                  <div className="tr-ai-case-head">
-                                    {parsed.priority && (
-                                      <span className={`tr-ai-chip tr-ai-priority is-${parsed.priority.toLowerCase()}`}>
-                                        {parsed.priority}
-                                      </span>
-                                    )}
-                                    {parsed.verdict && (
-                                      <span className={`tr-ai-chip tr-ai-verdict is-${parsed.verdict.key}`}>
-                                        {parsed.verdict.text}
-                                      </span>
-                                    )}
-                                    {parsed.title && <span className="tr-ai-case-title">{parsed.title}</span>}
-                                  </div>
-                                  <dl className="tr-ai-case-fields">
-                                    {parsed.fields.map((field) => (
-                                      <div key={field.label} className="tr-ai-case-field">
-                                        <dt>{field.label}</dt>
-                                        <dd>{field.value}</dd>
-                                      </div>
-                                    ))}
-                                  </dl>
-                                </li>
-                              )
-                            })}
-                        </ul>
-                      </section>
-                    ))}
-                  </div>
-                )}
+                {aiSections.length > 0 && renderAiSections(ai)}
                 {ai && !aiBusy && aiSections.length === 0 && (
                   <div className="tr-ai-raw">
                     {ai.split("\n").map((line, i) => (
@@ -1241,6 +1398,85 @@ export default function TestReportPanel(props: Props) {
                     <ShieldAlert size={12} />
                     {t("testReport.aiWarn", { list: aiWarnings.join("、") })}
                   </p>
+                )}
+              </div>
+
+              {/* Past answers. Read-only by construction: it renders saved markdown
+                  and never writes back into the live `ai` state, so the current
+                  report stays the single source of truth for the panel. */}
+              <div className="tr-ai-prompt tr-history">
+                <button type="button" className="tr-ai-prompt-toggle" onClick={() => setHistoryOpen((open) => !open)}>
+                  <span className="tr-ai-prompt-name">
+                    <History size={12} />
+                    {t("testReport.history.title", { defaultValue: "历史记录" })}
+                    {history.length > 0 ? <span className="tr-count-badge">{history.length}</span> : null}
+                  </span>
+                  <ChevronDown size={12} className={historyOpen ? "is-open" : ""} />
+                </button>
+                {historyOpen && (
+                  <div className="tr-ai-prompt-body">
+                    {history.length === 0 ? (
+                      <p className="tr-hint">
+                        {t("testReport.history.empty", { defaultValue: "还没有生成记录；生成成功后会留在这里。" })}
+                      </p>
+                    ) : (
+                      <ul className="tr-history-list">
+                        {history.map((item) => {
+                          const expanded = historyExpandedId === item.id
+                          return (
+                            <li key={item.id} className={`tr-history-item${expanded ? " is-open" : ""}`}>
+                              <div className="tr-history-head">
+                                <button
+                                  type="button"
+                                  className="tr-history-summary"
+                                  onClick={() => setHistoryExpandedId(expanded ? null : item.id)}
+                                  aria-expanded={expanded}
+                                >
+                                  <ChevronRight size={12} className="tr-history-caret" aria-hidden />
+                                  <span
+                                    className="tr-history-when"
+                                    title={new Date(item.createdAt).toLocaleString()}
+                                  >
+                                    {formatHistoryTime(item.createdAt)}
+                                  </span>
+                                  <span className="tr-history-target">
+                                    {item.targetKind === "folder"
+                                      ? t("testReport.history.kindFolder", { defaultValue: "文件夹" })
+                                      : t("testReport.history.kindRepo", { defaultValue: "仓库" })}
+                                    {item.targetLabel ? ` · ${item.targetLabel}` : ""}
+                                  </span>
+                                  {item.baseline ? <code className="tr-history-baseline">{item.baseline}</code> : null}
+                                  <span className="tr-history-model">{item.model}</span>
+                                  {item.requirement ? (
+                                    <span className="tr-history-req" title={item.requirement}>
+                                      {t("testReport.history.withRequirement", { defaultValue: "含需求" })}
+                                    </span>
+                                  ) : null}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="tr-history-action"
+                                  onClick={() => void copySection(item.markdown)}
+                                  title={t("testReport.history.copy", { defaultValue: "复制内容" })}
+                                >
+                                  <Copy size={12} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="tr-history-action is-danger"
+                                  onClick={() => void removeReportHistory(item.id)}
+                                  title={t("testReport.history.delete", { defaultValue: "删除该记录" })}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                              {expanded && <div className="tr-history-body">{renderAiSections(item.markdown)}</div>}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
                 )}
               </div>
             </>

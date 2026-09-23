@@ -366,6 +366,19 @@ fn describe_empty_generation(json: &serde_json::Value, raw: &str) -> String {
     format!("模型未返回有效文本 (finish_reason={finish}): {snippet}")
 }
 
+/// One shared client for one-shot generations. Building one per call threw away
+/// the connection pool, so every call — and every map brief of a report — paid a
+/// fresh TCP/TLS handshake before the model even saw the prompt.
+fn text_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(GENERATE_TEXT_TIMEOUT_SECS))
+            .build()
+            .expect("failed to build HTTP client")
+    })
+}
+
 /// One-shot text generation via the configured model (OpenAI-compatible or Anthropic).
 #[tauri::command]
 pub async fn generate_text(req: GenerateTextRequest) -> Result<String, String> {
@@ -378,10 +391,7 @@ pub async fn generate_text(req: GenerateTextRequest) -> Result<String, String> {
         return Err(msg);
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(GENERATE_TEXT_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let client = text_client();
 
     let base = trim_trailing_slash(&req.config.base_url);
     let provider = req.config.provider.to_lowercase();

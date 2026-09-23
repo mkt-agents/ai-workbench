@@ -7,7 +7,13 @@
  */
 import { tauriInvoke } from './helpers';
 import type { AIModelConfig, DshInstance, DevtoolsHttpRequest, DevtoolsHttpResponse, DevtoolsPortEntry, DevtoolsProcessInfo, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion } from '../types';
-import type { AiResult, FolderReportBundle, TestReportBundle } from '../../components/testReportTypes';
+import type {
+  AiResult,
+  FolderReportBundle,
+  ReportAiHistoryEntry,
+  ReportAiHistoryInput,
+  TestReportBundle,
+} from '../../components/testReportTypes';
 
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
@@ -86,6 +92,9 @@ export interface Invocations {
     requirement?: string,
   ) => Promise<AiResult>;
   invokeCancelTestReportAi: (reportId: string) => Promise<void>;
+  invokeSaveReportAiHistory: (entry: ReportAiHistoryInput) => Promise<number>;
+  invokeListReportAiHistory: () => Promise<ReportAiHistoryEntry[]>;
+  invokeDeleteReportAiHistory: (id: number) => Promise<void>;
   invokeReadSystemHosts: () => Promise<string>;
   invokeIsAdmin: () => Promise<boolean>;
   invokeWriteSystemHosts: (content: string) => Promise<string>;
@@ -304,6 +313,11 @@ export const invocations: Invocations = {
     tauriInvoke<AiResult>('generate_test_report_ai', { reportId, config, system, requirement }),
   invokeCancelTestReportAi: (reportId: string) =>
     tauriInvoke<void>('cancel_test_report_ai', { reportId }),
+  invokeSaveReportAiHistory: (entry: ReportAiHistoryInput) =>
+    tauriInvoke<number>('save_report_ai_history', { entry }),
+  invokeListReportAiHistory: () => tauriInvoke<ReportAiHistoryEntry[]>('list_report_ai_history'),
+  invokeDeleteReportAiHistory: (id: number) =>
+    tauriInvoke<void>('delete_report_ai_history', { id }),
 
   // Hosts
   invokeReadSystemHosts: () => tauriInvoke<string>('read_system_hosts'),

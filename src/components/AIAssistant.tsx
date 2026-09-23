@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle } from "lucide-react";
+import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle } from "lucide-react";
 import AppLogoMark from "./AppLogoMark";
 import { useGlobalStore } from "../core/store";
 import { MODEL_TEST_CONCURRENCY, mapPool } from "../core/asyncPool";
@@ -492,21 +492,31 @@ function AIAssistant() {
     filteredConfigs.every((config) => selectedIds.includes(config.id));
 
   // Group the (filtered) configs by provider for the foldable view. Order: the group
-  // holding the default first, then alphabetically by provider label.
+  // holding the default first, then alphabetically by provider label. Per-group health
+  // counts let a folded header still flag what needs attention inside it.
   const groupedConfigs = useMemo(() => {
     if (!groupByProvider) return [];
     const byProvider = new Map<
       string,
-      { provider: string; label: string; configs: AIModelConfig[] }
+      {
+        provider: string;
+        label: string;
+        configs: AIModelConfig[];
+        failed: number;
+        untested: number;
+      }
     >();
     for (const config of filteredConfigs) {
       const label = providerLabelOf(config);
       let entry = byProvider.get(config.provider);
       if (!entry) {
-        entry = { provider: config.provider, label, configs: [] };
+        entry = { provider: config.provider, label, configs: [], failed: 0, untested: 0 };
         byProvider.set(config.provider, entry);
       }
       entry.configs.push(config);
+      const state = testStateOf(config);
+      if (state === "failed") entry.failed += 1;
+      else if (state === "untested") entry.untested += 1;
     }
     return Array.from(byProvider.values()).sort((a, b) => {
       const aDefault = a.configs.some((c) => c.isDefault);
@@ -516,6 +526,17 @@ function AIAssistant() {
     });
   }, [filteredConfigs, groupByProvider]);
 
+  /** Every visible group folded — drives the single expand-all / collapse-all toggle. */
+  const allGroupsCollapsed =
+    groupedConfigs.length > 0 &&
+    groupedConfigs.every((group) => collapsedGroups.has(group.provider));
+
+  const toggleAllGroups = () => {
+    setCollapsedGroups(
+      allGroupsCollapsed ? new Set() : new Set(groupedConfigs.map((group) => group.provider))
+    );
+  };
+
   const toggleGroup = (provider: string) => {
     setCollapsedGroups((cur) => {
       const next = new Set(cur);
@@ -524,6 +545,7 @@ function AIAssistant() {
       return next;
     });
   };
+
   const keyRequired = !isOllama;
   const canRefreshModels =
     supportsList &&
@@ -1105,12 +1127,15 @@ function AIAssistant() {
     }
   };
 
-  // One config card, reused by both the flat list and each provider group.
-  const renderConfigCard = (config: AIModelConfig) => {
+  // One config card, reused by both the flat list and each provider group. Inside a group
+  // the provider name already sits on the group header, so the card drops it and promotes
+  // the test verdict onto the name line — the first thing worth scanning.
+  const renderConfigCard = (config: AIModelConfig, inGroup = false) => {
     const meta = getProviderMeta(config.provider);
     const providerLabel = meta?.label || config.provider;
     const iconClass = meta ? `provider-${config.provider}` : "provider-custom";
     const last = config.lastTest ?? null;
+    const testState = testStateOf(config);
     const lastTestTitle = last
       ? `${t("models.lastTest")} · ${last.at ? new Date(last.at).toLocaleString() : ""}${
           last.message ? `: ${brief(last.message, 200)}` : ""
@@ -1134,13 +1159,22 @@ function AIAssistant() {
         </div>
         <div className="ai-model-info">
           <div className="ai-model-name">
-            {config.name}
+            <span className="ai-model-name-text">{config.name}</span>
             {config.isDefault && (
               <span className="ai-model-badge">{t("models.default")}</span>
             )}
+            <span className={`ai-model-state is-${testState}`} title={lastTestTitle}>
+              <span className="ai-model-state-dot" />
+              {last
+                ? `${last.ok ? t("models.testPassed") : t("models.testFailed")} · ${formatSince(
+                    last.at,
+                    t
+                  )}`
+                : t("models.testNever")}
+            </span>
           </div>
           <div className="ai-model-detail">
-            {providerLabel} ·{" "}
+            {!inGroup && <>{providerLabel} · </>}
             <button
               type="button"
               className="ai-model-copyable"
@@ -1184,15 +1218,6 @@ function AIAssistant() {
                 temperature: config.temperature,
                 maxTokens: formatTokenCount(config.maxTokens),
               })}
-            </span>
-            <span className="ai-model-meta-sep">·</span>
-            <span className={`ai-test-state${last ? (last.ok ? " is-ok" : " is-fail") : ""}`}>
-              {last
-                ? `${last.ok ? t("models.testPassed") : t("models.testFailed")} · ${formatSince(
-                    last.at,
-                    t
-                  )}`
-                : t("models.testNever")}
             </span>
           </div>
         </div>
@@ -1261,6 +1286,59 @@ function AIAssistant() {
       </div>
     );
   };
+
+  // One foldable provider panel; shared by the single-column list and each balanced column.
+  const renderGroup = (group: (typeof groupedConfigs)[number]) => (
+    <section className="ai-model-group" key={group.provider}>
+      <button
+        type="button"
+        className="ai-model-group-header"
+        onClick={() => toggleGroup(group.provider)}
+        aria-expanded={!collapsedGroups.has(group.provider)}
+        title={
+          collapsedGroups.has(group.provider)
+            ? t("models.groupExpand")
+            : t("models.groupCollapse")
+        }
+      >
+        <ChevronDown
+          size={14}
+          className={`ai-model-group-chevron ${
+            collapsedGroups.has(group.provider) ? "collapsed" : ""
+          }`}
+        />
+        <span className="ai-model-group-name">{group.label}</span>
+        {group.failed > 0 && (
+          <span
+            className="ai-model-group-flag is-fail"
+            title={t("models.filterFailed", { count: group.failed })}
+          >
+            <span className="ai-model-group-flag-dot" />
+            {group.failed}
+          </span>
+        )}
+        {group.untested > 0 && (
+          <span
+            className="ai-model-group-flag is-untested"
+            title={t("models.filterUntested", { count: group.untested })}
+          >
+            <span className="ai-model-group-flag-dot" />
+            {group.untested}
+          </span>
+        )}
+        <span className="ai-model-group-count">{group.configs.length}</span>
+      </button>
+      {!collapsedGroups.has(group.provider) && (
+        <div className="ai-model-group-body">
+          {group.configs.map((config) => (
+            <div className="ai-model-cell" key={config.id}>
+              {renderConfigCard(config, true)}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <div className="ai-assistant">
@@ -1408,6 +1486,29 @@ function AIAssistant() {
                         <Layers size={12} />
                       </button>
                     )}
+                    {groupByProvider && groupedConfigs.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={toggleAllGroups}
+                        title={
+                          allGroupsCollapsed
+                            ? t("models.groupExpandAll")
+                            : t("models.groupCollapseAll")
+                        }
+                        aria-label={
+                          allGroupsCollapsed
+                            ? t("models.groupExpandAll")
+                            : t("models.groupCollapseAll")
+                        }
+                      >
+                        {allGroupsCollapsed ? (
+                          <ChevronsUpDown size={12} />
+                        ) : (
+                          <ChevronsDownUp size={12} />
+                        )}
+                      </button>
+                    )}
                     <button
                       className="btn btn-secondary btn-small"
                       onClick={() => void handleImportConfigs()}
@@ -1492,35 +1593,7 @@ function AIAssistant() {
             ) : (
               <div className="ai-model-list">
                 {groupByProvider
-                  ? groupedConfigs.map((group) => (
-                      <section className="ai-model-group" key={group.provider}>
-                        <button
-                          type="button"
-                          className="ai-model-group-header"
-                          onClick={() => toggleGroup(group.provider)}
-                          aria-expanded={!collapsedGroups.has(group.provider)}
-                          title={
-                            collapsedGroups.has(group.provider)
-                              ? t("models.groupExpand")
-                              : t("models.groupCollapse")
-                          }
-                        >
-                          <ChevronDown
-                            size={14}
-                            className={`ai-model-group-chevron ${
-                              collapsedGroups.has(group.provider) ? "collapsed" : ""
-                            }`}
-                          />
-                          <span className="ai-model-group-name">{group.label}</span>
-                          <span className="ai-model-group-count">{group.configs.length}</span>
-                        </button>
-                        {!collapsedGroups.has(group.provider) && (
-                          <div className="ai-model-group-body">
-                            {group.configs.map((config) => renderConfigCard(config))}
-                          </div>
-                        )}
-                      </section>
-                    ))
+                  ? groupedConfigs.map((group) => renderGroup(group))
                   : filteredConfigs.map((config) => renderConfigCard(config))}
               </div>
             )}

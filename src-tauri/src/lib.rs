@@ -15,6 +15,7 @@ pub mod cancellation;
 mod cancellation_commands;
 mod change_report;
 mod report_commands;
+mod report_history;
 
 pub use config::*;
 
@@ -264,6 +265,10 @@ pub fn run() {
                 );
             "#).expect("failed to init schema");
 
+            // The AI history is the one report-related thing that is persisted;
+            // its schema lives next to its own code (see report_history.rs).
+            report_history::ensure_schema(&conn).expect("failed to init report history schema");
+
             // The automated-testing feature was removed; drop the tables it used
             // to own so a stale DB from an older build does not linger. Idempotent.
             conn.execute_batch(
@@ -373,6 +378,9 @@ pub fn run() {
             report_commands::collect_folder_report,
             report_commands::generate_test_report_ai,
             report_commands::cancel_test_report_ai,
+            report_history::save_report_ai_history,
+            report_history::list_report_ai_history,
+            report_history::delete_report_ai_history,
             hosts_commands::read_system_hosts,
             hosts_commands::is_admin,
             hosts_commands::write_system_hosts,
