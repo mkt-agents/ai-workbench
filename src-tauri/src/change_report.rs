@@ -803,6 +803,9 @@ fn signature_of(path: &str, body: &str) -> Option<(String, String, String, Strin
             // `Map<String, String> f(...)`. Scan back from the name over
             // `>`(`<` nesting so a space inside the generics is not a separator.
             let without_name = {
+                // `head` may end in whitespace (`int 商品 (…)` — a space before the
+                // paren), which would push the cut point inside the name's bytes.
+                let head = head.trim_end();
                 let name_len = head.split_whitespace().next_back().map(str::len).unwrap_or(0);
                 head[..head.len().saturating_sub(name_len)].trim_end().to_string()
             };
@@ -1765,5 +1768,16 @@ mod tests {
         assert!(merged.files.iter().any(|f| f.commits.contains(&"alpha@deadbeef".to_string())));
         assert!(merged.files.iter().any(|f| f.commits.contains(&"beta@deadbeef".to_string())));
         assert!(merged.commit_details.iter().any(|c| c.short_sha == "alpha@deadbeef"));
+    }
+
+    #[test]
+    fn java_signature_with_space_before_paren_and_cjk_name_does_not_panic() {
+        // `商品 (…)` leaves trailing whitespace on `head`; the return-type cut used
+        // to land inside the 3-byte '商' and panic. Regression guard.
+        let patch = "diff --git a/A.java b/A.java\n--- a/A.java\n+++ b/A.java\n@@\n+public int 商品 (int a) {\n";
+        let changes = api_surface_changes(patch);
+        assert_eq!(changes.len(), 1, "expected one added signature, got {:?}", changes);
+        assert_eq!(changes[0].kind, "added");
+        assert!(changes[0].name.starts_with("商品"), "name={}", changes[0].name);
     }
 }
