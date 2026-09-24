@@ -737,61 +737,19 @@ export function loadCustomTemplates(): CustomPromptTemplate[] {
   }
 }
 
-export function saveCustomTemplates(items: CustomPromptTemplate[]): void {
-  try {
-    localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(items));
-  } catch {
-    /* ignore quota */
+/**
+ * One-shot migration helper: custom templates now live in the snippets table
+ * (kind = 'prompt'). Returns whatever is still in localStorage and clears the
+ * key, so the store can merge them into SQLite on next load.
+ */
+export function takeLegacyCustomTemplates(): CustomPromptTemplate[] {
+  const items = loadCustomTemplates();
+  if (items.length > 0) {
+    try {
+      localStorage.removeItem(CUSTOM_TEMPLATES_KEY);
+    } catch {
+      /* ignore */
+    }
   }
-}
-
-export function upsertCustomTemplate(
-  prev: CustomPromptTemplate[],
-  draft: { id?: string; scenario: PromptScenario; title: string; body: string }
-): CustomPromptTemplate[] {
-  const title = draft.title.trim();
-  const body = draft.body;
-  if (!title) throw new Error("need_title");
-  const now = Date.now();
-  let next: CustomPromptTemplate[];
-  if (draft.id && prev.some((t) => t.id === draft.id)) {
-    next = prev.map((t) =>
-      t.id === draft.id
-        ? { ...t, scenario: draft.scenario, title, body, at: now }
-        : t
-    );
-  } else {
-    next = [
-      {
-        id: `custom-${now}-${Math.random().toString(36).slice(2, 8)}`,
-        scenario: draft.scenario,
-        title,
-        body,
-        at: now,
-      },
-      ...prev,
-    ];
-  }
-  next = next.sort((a, b) => b.at - a.at);
-  saveCustomTemplates(next);
-  return next;
-}
-
-export function deleteCustomTemplate(
-  prev: CustomPromptTemplate[],
-  id: string
-): CustomPromptTemplate[] {
-  const next = prev.filter((t) => t.id !== id);
-  saveCustomTemplates(next);
-  return next;
-}
-
-export function getTemplatesForScenario(scenario: PromptScenario): {
-  builtin: PromptTemplate[];
-  custom: CustomPromptTemplate[];
-} {
-  return {
-    builtin: PROMPT_TEMPLATES[scenario] || [],
-    custom: loadCustomTemplates().filter((t) => t.scenario === scenario),
-  };
+  return items;
 }

@@ -57,7 +57,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 AI 工作台
 ├── Harness
 ├── 模型配置
-├── AI 提示词
+├── 提示词
 └── 片段库
 
 账号管理

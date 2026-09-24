@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
-import type { AIModelConfig } from "../core/types";
+import type { AIModelConfig, Snippet } from "../core/types";
 import {
   DEFAULT_PROMPT_GOALS,
   PROMPT_GOALS,
@@ -35,21 +35,18 @@ import {
   buildExplainChangesMessages,
   buildPromptOptimizeMessages,
   cleanOptimizedPrompt,
-  deleteCustomTemplate,
   exportPromptHistory,
   importPromptHistory,
-  loadCustomTemplates,
   loadPromptHistory,
   pushPromptHistory,
   savePromptHistory,
   toggleHistoryPinned,
-  upsertCustomTemplate,
-  type CustomPromptTemplate,
   type PromptGoal,
   type PromptHistoryItem,
   type PromptScenario,
   type PromptTemplate,
 } from "../lib/promptOptimize";
+import { useConfirm } from "./ConfirmModal";
 
 type Props = {
   onGoModels?: () => void;
@@ -76,6 +73,13 @@ function PromptOptimizer({ onGoModels }: Props) {
   const aiModels = useGlobalStore((s) => s.aiModels);
   const invokeGenerateText = useGlobalStore((s) => s.invokeGenerateText);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
+  // Custom templates live in the snippets table (kind='prompt') since the
+  // snippets migration — localStorage is only read once at boot to migrate.
+  const allSnippets = useGlobalStore((s) => s.snippets);
+  const addSnippet = useGlobalStore((s) => s.addSnippet);
+  const updateSnippet = useGlobalStore((s) => s.updateSnippet);
+  const deleteSnippet = useGlobalStore((s) => s.deleteSnippet);
+  const confirm = useConfirm();
 
   const [scenario, setScenario] = useState<PromptScenario>("general");
   const [goals, setGoals] = useState<PromptGoal[]>(DEFAULT_PROMPT_GOALS);
@@ -96,7 +100,6 @@ function PromptOptimizer({ onGoModels }: Props) {
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateQuery, setTemplateQuery] = useState("");
   const [templateMenuStyle, setTemplateMenuStyle] = useState<FloatingMenuStyle | null>(null);
-  const [customTemplates, setCustomTemplates] = useState<CustomPromptTemplate[]>([]);
   const [templateForm, setTemplateForm] = useState<EditableTemplate | null>(null);
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(
@@ -119,8 +122,12 @@ function PromptOptimizer({ onGoModels }: Props) {
 
   useEffect(() => {
     setHistory(loadPromptHistory());
-    setCustomTemplates(loadCustomTemplates());
   }, []);
+
+  const customTemplates = useMemo<Snippet[]>(
+    () => allSnippets.filter((s) => s.kind === "prompt"),
+    [allSnippets]
+  );
 
   useEffect(() => {
     const target = pendingFocus.current;
@@ -281,7 +288,7 @@ function PromptOptimizer({ onGoModels }: Props) {
     if (!q) return scenarioCustoms;
     return scenarioCustoms.filter(
       (tpl) =>
-        tpl.title.toLowerCase().includes(q) || tpl.body.toLowerCase().includes(q)
+        tpl.name.toLowerCase().includes(q) || tpl.content.toLowerCase().includes(q)
     );
   }, [scenarioCustoms, templateQuery]);
 
@@ -442,8 +449,8 @@ function PromptOptimizer({ onGoModels }: Props) {
     pendingFocus.current = "input";
   };
 
-  const applyCustomTemplate = (tpl: CustomPromptTemplate) => {
-    setInput(tpl.body);
+  const applyCustomTemplate = (tpl: Snippet) => {
+    setInput(tpl.content);
     setTemplateOpen(false);
     setTemplateForm(null);
     pendingFocus.current = "input";
@@ -461,29 +468,52 @@ function PromptOptimizer({ onGoModels }: Props) {
     setTemplateOpen(true);
   };
 
-  const saveTemplateForm = () => {
+  const saveTemplateForm = async () => {
     if (!templateForm) return;
+    const title = templateForm.title.trim();
+    if (!title) {
+      showMsg("error", t("prompts.customNeedTitle"));
+      return;
+    }
     try {
-      setCustomTemplates((prev) =>
-        upsertCustomTemplate(prev, {
-          id: templateForm.id,
+      if (templateForm.id) {
+        await updateSnippet(templateForm.id, {
+          name: title,
+          content: templateForm.body,
           scenario,
-          title: templateForm.title,
-          body: templateForm.body,
-        })
-      );
+        });
+      } else {
+        await addSnippet({
+          name: title,
+          content: templateForm.body,
+          tags: "",
+          params: "",
+          kind: "prompt",
+          scenario,
+        });
+      }
       setTemplateForm(null);
       showMsg("success", t("prompts.customSaved"));
-    } catch {
-      showMsg("error", t("prompts.customNeedTitle"));
+    } catch (e) {
+      showMsg("error", formatInvokeError(e));
     }
   };
 
-  const removeCustom = (id: string) => {
-    if (!window.confirm(t("prompts.customDeleteConfirm"))) return;
-    setCustomTemplates((prev) => deleteCustomTemplate(prev, id));
-    if (templateForm?.id === id) setTemplateForm(null);
-    showMsg("success", t("prompts.customDeleted"));
+  const removeCustom = async (id: string) => {
+    const ok = await confirm({
+      title: t("prompts.customDelete"),
+      message: t("prompts.customDeleteConfirm"),
+      icon: "danger",
+      confirmText: t("prompts.customDelete"),
+    });
+    if (!ok) return;
+    try {
+      await deleteSnippet(id);
+      if (templateForm?.id === id) setTemplateForm(null);
+      showMsg("success", t("prompts.customDeleted"));
+    } catch (e) {
+      showMsg("error", formatInvokeError(e));
+    }
   };
 
   const runExplain = async () => {
@@ -894,10 +924,10 @@ function PromptOptimizer({ onGoModels }: Props) {
                                 role="menuitem"
                                 onClick={() => applyCustomTemplate(tpl)}
                               >
-                                <span className="prompt-template-item-title">{tpl.title}</span>
+                                <span className="prompt-template-item-title">{tpl.name}</span>
                                 <span className="prompt-template-item-body">
-                                  {tpl.body.slice(0, 48)}
-                                  {tpl.body.length > 48 ? "…" : ""}
+                                  {tpl.content.slice(0, 48)}
+                                  {tpl.content.length > 48 ? "…" : ""}
                                 </span>
                               </button>
                               <div className="prompt-template-custom-actions">
@@ -909,8 +939,8 @@ function PromptOptimizer({ onGoModels }: Props) {
                                   onClick={() =>
                                     setTemplateForm({
                                       id: tpl.id,
-                                      title: tpl.title,
-                                      body: tpl.body,
+                                      title: tpl.name,
+                                      body: tpl.content,
                                     })
                                   }
                                 >
@@ -921,7 +951,7 @@ function PromptOptimizer({ onGoModels }: Props) {
                                   className="btn btn-secondary btn-small"
                                   title={t("prompts.customDelete")}
                                   aria-label={t("prompts.customDelete")}
-                                  onClick={() => removeCustom(tpl.id)}
+                                  onClick={() => void removeCustom(tpl.id)}
                                 >
                                   <Trash2 size={12} />
                                 </button>

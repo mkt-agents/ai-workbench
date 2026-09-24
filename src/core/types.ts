@@ -83,6 +83,8 @@ export interface AppSettings {
   trayHintShown?: boolean;
 }
 
+export type SnippetKind = 'text' | 'prompt';
+
 export interface Snippet {
   id: string;
   name: string;
@@ -93,6 +95,10 @@ export interface Snippet {
   useCount: number;
   createdAt: string;
   updatedAt: string;
+  /** 'text' = reusable fragment; 'prompt' = Prompt Studio custom template */
+  kind?: SnippetKind;
+  /** Prompt Studio scenario key (PROMPT_SCENARIOS) when kind === 'prompt' */
+  scenario?: string;
 }
 
 /** One Q&A exchange inside a quick-ask session. */

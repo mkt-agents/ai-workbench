@@ -51,7 +51,10 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
 
   const snippetChoices = useMemo(() => {
     const q = snippetQuery.trim().toLowerCase();
-    const list = [...(snippets || [])].sort((a, b) => b.useCount - a.useCount || b.updatedAt.localeCompare(a.updatedAt));
+    // Prompt Studio templates (kind='prompt') are optimizer recipes, not insertable fragments
+    const list = [...(snippets || [])]
+      .filter((s) => s.kind !== "prompt")
+      .sort((a, b) => b.useCount - a.useCount || b.updatedAt.localeCompare(a.updatedAt));
     const filtered = q
       ? list.filter(
           (s) =>

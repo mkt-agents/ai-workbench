@@ -73,6 +73,7 @@
   "urlCopied": "URL copied",
   "duplicate": "Duplicate",
   "duplicated": "Site duplicated",
+  "duplicateSuffix": " (copy)",
   "tabPlugins": "Web",
   "tabUserscripts": "Scripts",
   "usAddScript": "Add Script",

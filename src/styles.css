@@ -11781,30 +11781,108 @@ input, select, textarea { font-family: inherit; }
   flex-wrap: wrap;
   align-items: center;
 }
+.snippets-search {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+.snippets-search .input-field {
+  width: 100%;
+  padding-left: 30px;
+  padding-right: 26px;
+}
+.snippets-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.snippets-search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.snippets-search-clear:hover {
+  color: var(--text-0);
+  background: var(--bg-hover);
+}
+.snippets-select-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+.snippets-select-wrap select {
+  appearance: none;
+  width: auto;
+  min-width: 108px;
+  padding-right: 26px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.snippets-select-wrap select:hover {
+  background: var(--bg-3);
+}
+.snippets-select-wrap > svg {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
 .snippets-toolbar .input-field { flex: 1; min-width: 140px; }
 .snippets-sort {
   flex: 0 0 auto;
   width: auto;
-  min-width: 120px;
+  min-width: 108px;
+}
+.snippets-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px;
 }
 .snippets-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
 }
 .snippets-tag-chip {
-  border: 1px solid var(--border-subtle, #333);
-  background: var(--bg-2, transparent);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
   color: var(--text-2);
-  border-radius: 999px;
-  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  padding: 4px 11px;
   font-size: 12px;
+  line-height: 1.4;
   cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.snippets-tag-chip:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 .snippets-tag-chip.on {
-  border-color: var(--accent);
+  border-color: var(--accent-border);
   color: var(--accent);
-  background: var(--accent-dim, rgba(59, 130, 246, 0.15));
+  background: var(--accent-dim);
+  font-weight: 600;
 }
 .snippets-list {
   display: flex;
@@ -11825,41 +11903,46 @@ input, select, textarea { font-family: inherit; }
   }
 }
 .snippet-card {
-  border: 1px solid var(--border-1, #333);
-  border-radius: 10px;
-  padding: 12px;
-  background: var(--bg-2, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  background: var(--bg-1);
   min-width: 0;
   display: flex;
   flex-direction: column;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  transition: var(--transition-colors), transform 0.15s ease;
 }
 .snippet-card:hover {
-  border-color: color-mix(in srgb, var(--accent, #5b8def) 45%, var(--border-1, #333));
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-sm);
 }
 .snippet-card-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 .snippet-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
 }
 .snippet-badge {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 999px;
-  color: var(--accent, #5b8def);
-  background: color-mix(in srgb, var(--accent, #5b8def) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent, #5b8def) 30%, transparent);
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  letter-spacing: 0.01em;
 }
 .snippet-card-tags {
   display: flex;
@@ -11867,27 +11950,51 @@ input, select, textarea { font-family: inherit; }
   gap: 4px;
   margin-bottom: 8px;
 }
+.snippet-card-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.snippet-param-chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 0 7px;
+  color: var(--text-2);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--bg-2);
+}
 .snippet-tag-chip {
-  border: 1px solid var(--border-subtle, #2a2d31);
+  border: 1px solid var(--border-subtle);
   background: transparent;
   color: var(--text-3);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   padding: 1px 8px;
   font-size: 11px;
+  line-height: 1.5;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: var(--transition-colors-fast);
 }
 .snippet-tag-chip:hover {
-  color: var(--accent, #5b8def);
-  border-color: var(--accent, #5b8def);
+  color: var(--accent);
+  border-color: var(--accent-border);
 }
 .snippet-preview {
   margin: 0 0 10px;
-  font-size: 12px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
   white-space: pre-wrap;
+  word-break: break-word;
   max-height: 120px;
   overflow: auto;
-  color: var(--text-2);
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -11930,10 +12037,14 @@ input, select, textarea { font-family: inherit; }
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 48px 16px;
+  padding: 56px 16px;
   color: var(--text-3);
-  border: 1px dashed var(--border-1, #333);
-  border-radius: 10px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+}
+.snippets-empty svg {
+  opacity: 0.45;
 }
 .snippets-empty p {
   margin: 0;
@@ -11954,14 +12065,19 @@ input, select, textarea { font-family: inherit; }
   background: var(--bg-2);
   width: 100%;
   box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  word-break: break-word;
 }
 
 .snippets-content-editor {
   width: 100%;
   resize: vertical;
   min-height: 140px;
-  font-family: inherit;
-  line-height: 1.45;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .toast .toast-action {

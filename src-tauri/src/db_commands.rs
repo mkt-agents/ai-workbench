@@ -348,7 +348,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
         }
         DbTable::Snippets => {
             tx.execute(
-                "INSERT INTO snippets (id, name, content, tags, params, use_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO snippets (id, name, content, tags, params, use_count, created_at, updated_at, kind, scenario) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     json_str(obj, "id")?,
                     json_str(obj, "name")?,
@@ -358,6 +358,8 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_i64(obj, "use_count", 0),
                     json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
+                    json_opt_str(obj, "kind").unwrap_or_else(|| "text".to_string()),
+                    json_opt_str(obj, "scenario"),
                 ],
             ).map_err(|e| e.to_string())?;
         }

@@ -219,7 +219,9 @@ pub fn run() {
                     params TEXT NOT NULL DEFAULT '',
                     use_count INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'text',
+                    scenario TEXT
                 );
                 CREATE TABLE IF NOT EXISTS web_plugin_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -303,6 +305,9 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN is_preset INTEGER NOT NULL DEFAULT 0;");
             // Migrate user_scripts to support multiple match patterns (v0.1.7+)
             let _ = conn.execute_batch("ALTER TABLE user_scripts ADD COLUMN match_patterns TEXT NOT NULL DEFAULT '[\"<all_urls>\"]';");
+            // Snippets: 'text' fragments vs 'prompt' (Prompt Studio custom templates)
+            let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN kind TEXT NOT NULL DEFAULT 'text';");
+            let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN scenario TEXT;");
             {
                 let state = app.state::<DbState>();
                 let mut guard = state.conn.lock().map_err(|e| e.to_string())?;

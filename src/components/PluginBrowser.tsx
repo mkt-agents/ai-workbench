@@ -1244,7 +1244,7 @@ function PluginBrowser() {
           </button>
           <button
             className="plugin-item-btn"
-            onClick={() => openFormAdd({ name: p.name + " (copy)", url: p.url, group: p.group })}
+            onClick={() => openFormAdd({ name: p.name + t("duplicateSuffix"), url: p.url, group: p.group })}
             title={t("duplicate")}
             type="button"
           >

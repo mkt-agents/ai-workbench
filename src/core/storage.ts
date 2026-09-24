@@ -422,6 +422,8 @@ export const storage = {
         useCount: Number(r['use_count'] ?? 0),
         createdAt: r['created_at'] as string,
         updatedAt: r['updated_at'] as string,
+        kind: r['kind'] === 'prompt' ? 'prompt' : 'text',
+        scenario: (r['scenario'] as string) || undefined,
       }));
     },
     save: async (items: Snippet[]): Promise<void> => {
@@ -436,6 +438,8 @@ export const storage = {
           use_count: item.useCount ?? 0,
           created_at: item.createdAt,
           updated_at: item.updatedAt,
+          kind: item.kind ?? 'text',
+          scenario: item.scenario ?? null,
         }))
       );
     },

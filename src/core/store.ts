@@ -10,6 +10,7 @@ import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
 import { normalizePath, pathKey, projectNameFromPath } from './pathUtils';
 import { compareVersions } from '../lib/version';
+import { takeLegacyCustomTemplates } from '../lib/promptOptimize';
 import { buildSeedSnippets, optimisticUpdate, tauriInvoke, withTable } from './store/helpers';
 import { invocations, type Invocations } from './store/invocations';
 
@@ -1128,6 +1129,30 @@ export const useGlobalStore = create<StoreState>()(
           const missing = seeds.filter((s) => !existing.has(s.id));
           if (missing.length > 0) {
             snippets = [...missing, ...snippets];
+            await storage.snippets.save(snippets);
+          }
+        }
+        // One-shot migration: legacy Prompt Studio custom templates (localStorage)
+        // become kind='prompt' snippets; keeps original ids so re-runs dedupe.
+        const legacy = takeLegacyCustomTemplates();
+        if (legacy.length > 0) {
+          const existing = new Set(snippets.map((s) => s.id));
+          const migrated = legacy
+            .filter((t) => !existing.has(t.id))
+            .map((t) => ({
+              id: t.id,
+              name: t.title,
+              content: t.body,
+              tags: '',
+              params: '',
+              kind: 'prompt' as const,
+              scenario: t.scenario,
+              useCount: 0,
+              createdAt: new Date(t.at).toISOString(),
+              updatedAt: new Date(t.at).toISOString(),
+            }));
+          if (migrated.length > 0) {
+            snippets = [...migrated, ...snippets];
             await storage.snippets.save(snippets);
           }
         }
