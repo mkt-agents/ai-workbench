@@ -211,6 +211,7 @@
     "updateDoneStarted": "Updated and started",
     "updateFailed": "Update failed: {{error}}",
     "updateTo": "Update to v{{version}}",
+    "updateAction": "Update",
     "restoreAuth": "Restore auth patch",
     "restoreAuthTitle": "Restore DSH auth patch",
     "autoStart": "Auto-start",

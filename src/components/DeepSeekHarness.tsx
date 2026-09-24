@@ -9,7 +9,7 @@ import {
   Globe,
   Copy,
   Check,
-  ArrowRight,
+  ArrowUpRight,
   Tag,
   Download,
   Undo2,
@@ -733,7 +733,7 @@ function DeepSeekHarness() {
                 <div className="dsh-version-group">
                   <span className="dsh-version-label">
                     <Tag size={10} strokeWidth={1.5} />
-                    <span className="dsh-version-text">{installed ? dshVersion : t("dsh.notInstalledShort")}</span>
+                    <span>{installed ? dshVersion : t("dsh.notInstalledShort")}</span>
                   </span>
                   {dshHasUpdate && dshLatestVersion && (
                     <button
@@ -747,9 +747,10 @@ function DeepSeekHarness() {
                       {updating ? (
                         <Loader2 size={11} className="spin" />
                       ) : (
-                        <ArrowRight size={11} strokeWidth={2} />
+                        <ArrowUpRight size={11} strokeWidth={2.2} />
                       )}
-                      <span>v{dshLatestVersion}</span>
+                      <span>{t("dsh.updateAction")}</span>
+                      <span className="dsh-update-chip-ver">v{dshLatestVersion}</span>
                     </button>
                   )}
                 </div>

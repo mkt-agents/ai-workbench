@@ -211,6 +211,7 @@
     "updateDoneStarted": "更新并启动完成",
     "updateFailed": "更新失败: {{error}}",
     "updateTo": "更新到 v{{version}}",
+    "updateAction": "升级",
     "restoreAuth": "还原认证补丁",
     "restoreAuthTitle": "还原 DSH 认证补丁",
     "autoStart": "自动启动",

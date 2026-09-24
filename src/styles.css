@@ -830,10 +830,13 @@
 }
 
 /* Version group in glass/ice/silver themes */
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label {
-  color: rgba(245, 245, 245, 0.6);
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-group {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.08);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label {
+  color: rgba(245, 245, 245, 0.6);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label svg {
@@ -842,23 +845,10 @@
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage.is-running .dsh-version-label {
   color: color-mix(in srgb, var(--green) 80%, white 20%);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
-  border-color: color-mix(in srgb, var(--green) 22%, transparent);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage.is-running .dsh-version-label svg {
   color: var(--green);
-  opacity: 0.75;
-}
-
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-chip {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-}
-
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-chip:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-msg {
@@ -7163,57 +7153,46 @@ input, select, textarea { font-family: inherit; }
   border-color: var(--accent);
 }
 
-/* Version Group — version badge + optional update chip as a connected unit */
+/* Version Group — one outer capsule carrying the hairline border; the version
+   label and update chip sit inside as separate pills (pill-in-pill), so there
+   is no hard seam where the two segments meet. */
 .dsh-version-group {
   display: inline-flex;
   align-items: center;
-  gap: 0;
+  gap: 3px;
   flex-shrink: 0;
+  height: 24px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--text-3) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-3) 26%, transparent);
   border-radius: 999px;
-  overflow: hidden;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .dsh-version-label {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
-  padding: 0 8px 0 6px;
+  height: 100%;
+  padding: 0 7px;
   font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   color: var(--text-2);
-  background: color-mix(in srgb, var(--text-3) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text-3) 15%, transparent);
-  border-right: none;
-  border-radius: 999px 0 0 999px;
+  border-radius: 999px;
   white-space: nowrap;
   line-height: 1;
-  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  transition: color 0.2s ease;
 }
 
 .dsh-version-label svg {
-  opacity: 0.5;
+  opacity: 0.55;
   flex-shrink: 0;
   transition: opacity 0.2s ease;
 }
 
-.dsh-version-text {
-  position: relative;
-  top: 0.5px;
-}
-
 .dsh-stage.is-running .dsh-version-label {
   color: color-mix(in srgb, var(--green) 85%, var(--text-2) 15%);
-  background: color-mix(in srgb, var(--green) 8%, transparent);
-  border-color: color-mix(in srgb, var(--green) 18%, transparent);
-}
-
-.dsh-stage.is-running .dsh-version-label svg {
-  opacity: 0.7;
-  color: var(--green);
 }
 
 /* Running pulse — subtle breathing glow on the tag icon */
@@ -7223,42 +7202,59 @@ input, select, textarea { font-family: inherit; }
 }
 
 .dsh-stage.is-running .dsh-version-label svg {
+  color: var(--green);
   animation: dsh-version-pulse 2.5s ease-in-out infinite;
 }
 
-/* Update chip — connected to the version label as a single unit. Rounded right side,
-   subtle accent tint, arrow icon conveys "upgrade to". */
+/* Update chip — solid accent pill inside the capsule + breathing glow so an
+   available upgrade is impossible to miss. */
 .dsh-update-chip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  height: 22px;
-  padding: 0 8px 0 6px;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-left: none;
-  border-radius: 0 999px 999px 0;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
+  gap: 4px;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  animation: dsh-update-glow 2.4s ease-in-out infinite;
+  transition: background 0.2s ease;
+}
+
+.dsh-update-chip-ver {
+  opacity: 0.85;
+  font-weight: 500;
+}
+
+/* Soft breathing drop shadow — a spreading ring reads as a grey smudge on the
+   light theme, a depth pulse stays clean in both. */
+@keyframes dsh-update-glow {
+  0%, 100% {
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 2px 9px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
 }
 
 .dsh-update-chip:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-strong);
 }
 
 .dsh-update-chip:active:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: var(--accent-strong);
 }
 
 .dsh-update-chip:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
+  animation: none;
   cursor: not-allowed;
 }
 
