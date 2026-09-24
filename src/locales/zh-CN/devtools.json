@@ -336,6 +336,9 @@
     "success": "成功",
     "loading": "加载中…",
     "search": "搜索工具…",
-    "recent": "最近使用"
+    "recent": "最近使用",
+    "noResults": "无匹配结果",
+    "shortcutHint": "1-9 切换工具",
+    "clearSearch": "清除搜索"
   }
 }

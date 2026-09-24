@@ -339,13 +339,13 @@ function PortProcessTool() {
       ) : (
         <div className="ports-table">
           <div className="ports-table-header">
-            <span>{t("ports.proto")}</span>
-            <span>{t("ports.localAddress")}</span>
-            <span>{t("ports.remoteAddress")}</span>
-            <span>{t("ports.state")}</span>
-            <span style={{ textAlign: "right" }}>{t("ports.pid")}</span>
-            <span>{t("ports.process")}</span>
-            <span>{t("ports.actions")}</span>
+            <span className="ports-cell-proto">{t("ports.proto")}</span>
+            <span className="ports-cell-local">{t("ports.localAddress")}</span>
+            <span className="ports-cell-remote">{t("ports.remoteAddress")}</span>
+            <span className="ports-cell-state">{t("ports.state")}</span>
+            <span className="ports-cell-pid">{t("ports.pid")}</span>
+            <span className="ports-cell-proc">{t("ports.process")}</span>
+            <span className="ports-cell-actions">{t("ports.actions")}</span>
           </div>
           <div className="ports-table-body">
             {filteredPorts.map((p, i) => {
@@ -360,38 +360,36 @@ function PortProcessTool() {
                     onClick={hasDetail ? () => toggleRow(key) : undefined}
                     style={hasDetail ? { cursor: "pointer" } : undefined}
                   >
-                    <span>
+                    <span className="ports-cell-proto">
                       <span className={`tag tag-${(p.proto || "").toLowerCase()}`}>
                         {p.proto || "?"}
                       </span>
                     </span>
-                    <span className="ports-monospace ports-proc-main">
+                    <span className="ports-cell-local ports-monospace ports-proc-main">
                       {p.local_addr}:{p.local_port}
                     </span>
-                    <span className="ports-monospace ports-proc-main">
+                    <span className="ports-cell-remote ports-monospace ports-proc-main">
                       {p.remote_addr}:{p.remote_port || "*"}
                     </span>
-                    <span>
+                    <span className="ports-cell-state">
                       <StateBadge state={p.state} />
                     </span>
-                    <span className="ports-monospace" style={{ textAlign: "right", color: "var(--text-2, #8b949e)" }}>
-                      {p.pid}
-                    </span>
-                    <span>
+                    <span className="ports-cell-pid ports-monospace">{p.pid}</span>
+                    <span className="ports-cell-proc">
                       {!hasDetail ? (
                         <span className="ports-na">—</span>
                       ) : !info ? (
                         <span className="ports-proc-main">#{p.pid}</span>
                       ) : (
-                        <>
+                        <span className="ports-proc-names">
                           <span className="ports-proc-main">{info.name || `#${p.pid}`}</span>
                           {info.path && (
                             <span className="ports-proc-path">{shortPath(info.path)}</span>
                           )}
-                        </>
+                        </span>
                       )}
                     </span>
-                    <span onClick={(e) => e.stopPropagation()}>
+                    <span className="ports-cell-actions" onClick={(e) => e.stopPropagation()}>
                       {hasDetail && (
                         <button
                           type="button"
@@ -412,7 +410,7 @@ function PortProcessTool() {
 
                   {isOpen && info && (
                     <div className="ports-table-row expanded-row">
-                      <div style={{ gridColumn: "1 / -1" }}>
+                      <div className="ports-expanded-inner">
                         <div className="ports-detail-grid">
                           <div className="ports-detail-row">
                             <span className="ports-detail-label">{t("ports.process")}</span>

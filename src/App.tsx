@@ -80,9 +80,13 @@ function App() {
   const setSettings = useGlobalStore((s) => s.setSettings);
   const webPlugins = useGlobalStore((s) => s.webPlugins);
 
-  const [activeTab, setActiveTab] = useState<Tab>("ai-chat");
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "ai-chat", "ai-models", "ai-prompt", "runtime", "cloudflared", "snippets", "devtools"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+  });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
+  const [devtoolsMounted] = useState(true);
   const collapsed = settings.sidebarCollapsed;
   const autoCollapsedByWidth = useRef(false);
   const userOverrideCollapse = useRef(false);
@@ -270,7 +274,7 @@ function App() {
   const renderLeafButton = (leaf: NavLeaf, className = "") => (
     <button
       key={leaf.id}
-      onClick={() => setActiveTab(leaf.id)}
+      onClick={() => { setActiveTab(leaf.id); if (typeof window !== "undefined") window.location.hash = `#${leaf.id}`; }}
       className={`sidebar-nav-item ${className} ${activeTab === leaf.id ? "active" : ""}`.trim()}
       title={t(leaf.labelKey)}
     >
@@ -504,7 +508,14 @@ function App() {
               {activeTab === "snippets" && <SnippetsManager />}
               {activeTab === "plugins" && <PluginBrowser />}
               {activeTab === "cloudflared" && <CloudflaredManager />}
-              {activeTab === "devtools" && <DevTools />}
+              {devtoolsMounted && (
+                <div
+                  className={activeTab === "devtools" ? "page-panel is-active" : "page-panel"}
+                  aria-hidden={activeTab !== "devtools"}
+                >
+                  <DevTools active={activeTab === "devtools"} />
+                </div>
+              )}
               {activeTab === "settings" && <SettingsPage />}
               {trayToast && (
                 <div className="toast toast-success" role="status">

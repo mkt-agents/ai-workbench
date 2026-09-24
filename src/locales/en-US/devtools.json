@@ -336,6 +336,9 @@
     "success": "Success",
     "loading": "Loading…",
     "search": "Search tools…",
-    "recent": "Recent"
+    "recent": "Recent",
+    "noResults": "No results",
+    "shortcutHint": "1-9 switch tools",
+    "clearSearch": "Clear search"
   }
 }

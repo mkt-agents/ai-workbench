@@ -1365,10 +1365,12 @@ function HttpClientTool() {
 // Helper to highlight search matches in response
 function highlightText(text: string, query: string): React.ReactNode {
   if (!query.trim()) return text;
+  // Use a fresh RegExp for each test call to avoid lastIndex statefulness bug with /g flag
+  const matcher = new RegExp(query, "gi");
   const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
   const parts = text.split(regex);
   return parts.map((part, i) =>
-    regex.test(part) ? (
+    matcher.test(part) ? (
       <mark key={i} className="http-search-highlight">
         {part}
       </mark>
