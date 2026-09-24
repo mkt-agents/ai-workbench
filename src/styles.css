@@ -6344,6 +6344,50 @@ input, select, textarea { font-family: inherit; }
   opacity: 1;
 }
 
+/* Group rename */
+.plugin-group-rename-input,
+.plugin-group-filter-rename-input {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+  background: var(--input-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  outline: none;
+  min-width: 0;
+  width: 200px;
+  max-width: 100%;
+}
+
+.plugin-group-filter-rename-input {
+  font-weight: 500;
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  width: 150px;
+}
+
+.plugin-group-filter-edit {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  margin-right: -3px;
+  padding: 1px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.plugin-group-filter-edit:hover,
+.plugin-group-filter-edit:focus-visible {
+  opacity: 1;
+  color: var(--accent);
+}
+
 .plugin-group-count {
   font-size: 10px;
   color: var(--text-3);
@@ -6497,9 +6541,15 @@ input, select, textarea { font-family: inherit; }
 /* Card view */
 .plugin-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
   gap: 12px;
   padding: 4px 0 12px;
+}
+
+/* When a group filter is active, the grid sits directly inside the
+   two-column .plugin-list — span full width so cards aren't squeezed */
+.plugin-list > .plugin-card-grid {
+  grid-column: 1 / -1;
 }
 
 .plugin-card {
@@ -6512,6 +6562,16 @@ input, select, textarea { font-family: inherit; }
   cursor: pointer;
   transition: var(--transition-colors);
   position: relative;
+  overflow: hidden;
+  /* Uniform card size: body (flex:1) absorbs the slack, footer stays bottom-aligned */
+  min-height: 148px;
+}
+
+/* Clamp tags to a single row inside cards so heights stay uniform */
+.plugin-card .plugin-tag-list {
+  flex-wrap: nowrap;
+  max-height: 22px;
+  margin-top: 3px;
   overflow: hidden;
 }
 

@@ -298,6 +298,9 @@ function PluginBrowser() {
   const [sortMode, setSortMode] = useState<SortMode>("manual");
   const [selectedGroup, setSelectedGroup] = useState<string>("all");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const commitRenameRef = useRef(false);
   const dragIdRef = useRef<string | null>(null);
   const dragOverIdRef = useRef<string | null>(null);
   const didDragRef = useRef(false);
@@ -1021,6 +1024,49 @@ function PluginBrowser() {
     setSelectedGroup((prev) => (prev === g ? "all" : g));
   };
 
+  const startRenameGroup = (g: string) => {
+    setRenamingGroup(g);
+    setRenameValue(g);
+  };
+
+  const commitRenameGroup = async () => {
+    // Enter 提交后输入框卸载可能再触发一次 blur，用 ref 防重入
+    if (commitRenameRef.current) return;
+    const oldName = renamingGroup;
+    if (!oldName) return;
+    commitRenameRef.current = true;
+    try {
+      const newName = renameValue.trim();
+      setRenamingGroup(null);
+      setRenameValue("");
+      if (!newName || newName === oldName) return;
+      if (groups.includes(newName)) {
+        setMessage({ type: "error", text: t("groupRenameConflict", { name: newName }) });
+        return;
+      }
+      const affected = webPlugins.filter((p) => p.group === oldName);
+      try {
+        for (const p of affected) {
+          await updateWebPlugin(p.id, { group: newName });
+        }
+      } catch (e) {
+        setMessage({ type: "error", text: t("saveFailed", { error: String(e) }) });
+        return;
+      }
+      setExpandedGroups((prev) => {
+        if (!prev.has(oldName)) return prev;
+        const next = new Set(prev);
+        next.delete(oldName);
+        next.add(newName);
+        return next;
+      });
+      setSelectedGroup((prev) => (prev === oldName ? newName : prev));
+      setMessage({ type: "success", text: t("groupRenamed") });
+    } finally {
+      commitRenameRef.current = false;
+    }
+  };
+
   const handleExport = async () => {
     const data = {
       version: 1,
@@ -1326,6 +1372,24 @@ function PluginBrowser() {
             <span>{t("ungrouped")}</span>
             <span className="plugin-group-count">{items.length}</span>
           </div>
+        ) : renamingGroup === group ? (
+          <input
+            className="plugin-group-rename-input"
+            value={renameValue}
+            autoFocus
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void commitRenameGroup();
+              else if (e.key === "Escape") {
+                setRenamingGroup(null);
+                setRenameValue("");
+              }
+            }}
+            onBlur={() => void commitRenameGroup()}
+            aria-label={t("renameGroup")}
+            type="text"
+          />
         ) : (
           <button
             className="plugin-group-header"
@@ -1532,14 +1596,56 @@ function PluginBrowser() {
                   {t("allGroups")}
                 </button>
                 {groups.map((g) => (
-                  <button
-                    key={g}
-                    className={`plugin-group-filter-btn ${selectedGroup === g ? "active" : ""}`}
-                    onClick={() => toggleGroupFilter(g)}
-                    type="button"
-                  >
-                    {g}
-                  </button>
+                  renamingGroup === g ? (
+                    <input
+                      key={g}
+                      className="plugin-group-filter-rename-input"
+                      value={renameValue}
+                      autoFocus
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void commitRenameGroup();
+                        else if (e.key === "Escape") {
+                          setRenamingGroup(null);
+                          setRenameValue("");
+                        }
+                      }}
+                      onBlur={() => void commitRenameGroup()}
+                      aria-label={t("renameGroup")}
+                      type="text"
+                    />
+                  ) : (
+                    <button
+                      key={g}
+                      className={`plugin-group-filter-btn ${selectedGroup === g ? "active" : ""}`}
+                      onClick={() => toggleGroupFilter(g)}
+                      type="button"
+                    >
+                      <span>{g}</span>
+                      {selectedGroup === g && (
+                        <span
+                          className="plugin-group-filter-edit"
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startRenameGroup(g);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              startRenameGroup(g);
+                            }
+                          }}
+                          title={t("renameGroup")}
+                          aria-label={t("renameGroup")}
+                        >
+                          <Edit2 size={10} />
+                        </span>
+                      )}
+                    </button>
+                  )
                 ))}
               </div>
             </div>
