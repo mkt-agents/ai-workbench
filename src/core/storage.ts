@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
 
 // Types for HTTP client storage
 export interface HttpSavedRequest {
@@ -63,7 +63,8 @@ type DbTable =
   | 'quick_ask_sessions'
   | 'json_tool_history'
   | 'http_saved_requests'
-  | 'http_history';
+  | 'http_history'
+  | 'quick_app_launchers';
 
 async function loadRows(table: DbTable): Promise<Record<string, unknown>[]> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -561,6 +562,38 @@ export const storage = {
           method: item.method,
           url: item.url,
           timestamp: item.timestamp,
+        }))
+      );
+    },
+  },
+  quickAppLaunchers: {
+    load: async (): Promise<QuickAppLauncher[]> => {
+      const rows = await loadRows('quick_app_launchers');
+      return rows.map((r) => ({
+        id: r['id'] as string,
+        name: (r['name'] as string) || '',
+        path: (r['path'] as string) || '',
+        args: (r['args'] as string) || '',
+        order: Number(r['order'] ?? 0),
+        group: (r['group'] as string) || undefined,
+        version: (r['version'] as string) || undefined,
+        createdAt: (r['created_at'] as string) || '',
+        updatedAt: (r['updated_at'] as string) || '',
+      }));
+    },
+    save: async (items: QuickAppLauncher[]): Promise<void> => {
+      await saveRows(
+        'quick_app_launchers',
+        items.map((item) => ({
+          id: item.id,
+          name: item.name,
+          path: item.path,
+          args: item.args || '',
+          order: item.order ?? 0,
+          group: item.group ?? '',
+          version: item.version ?? '',
+          created_at: item.createdAt,
+          updated_at: item.updatedAt,
         }))
       );
     },

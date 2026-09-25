@@ -15,6 +15,7 @@
   "plugins": "Web Tools",
   "systemUtils": "System Tools",
   "devtools": "Dev Tools",
+  "quickApps": "Quick Apps",
   "settings": "Settings",
   "collapseSidebar": "Collapse sidebar",
   "expandSidebar": "Expand sidebar",

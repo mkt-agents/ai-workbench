@@ -22,6 +22,7 @@ import {
   PanelLeftOpen,
   KeyRound,
   Terminal,
+  Rocket,
 } from "lucide-react";
 import HostsManager from "./components/HostsManager";
 import PluginBrowser from "./components/PluginBrowser";
@@ -33,6 +34,7 @@ import VersionSwitcher from "./components/VersionSwitcher";
 import CloudflaredManager from "./components/CloudflaredManager";
 import SnippetsManager from "./components/SnippetsManager";
 import DevTools from "./components/DevTools";
+import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
 import { useGlobalStore } from "./core/store";
@@ -57,7 +59,8 @@ type Tab =
   | "runtime"
   | "cloudflared"
   | "snippets"
-  | "devtools";
+  | "devtools"
+  | "app-launcher";
 
 type NavLeaf = { id: Tab; labelKey: string; icon: React.ReactNode };
 type NavGroup = {
@@ -82,11 +85,10 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "ai-chat", "ai-models", "ai-prompt", "runtime", "cloudflared", "snippets", "devtools"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "ai-chat", "ai-models", "ai-prompt", "runtime", "cloudflared", "snippets", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
-  const [devtoolsMounted] = useState(true);
   const collapsed = settings.sidebarCollapsed;
   const autoCollapsedByWidth = useRef(false);
   const userOverrideCollapse = useRef(false);
@@ -258,6 +260,7 @@ function App() {
         { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
       ],
     },
+    { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
   ];
 
   const NAV_MAP: Record<string, string> = {
@@ -508,12 +511,14 @@ function App() {
               {activeTab === "snippets" && <SnippetsManager />}
               {activeTab === "plugins" && <PluginBrowser />}
               {activeTab === "cloudflared" && <CloudflaredManager />}
-              {devtoolsMounted && (
-                <div
-                  className={activeTab === "devtools" ? "page-panel is-active" : "page-panel"}
-                  aria-hidden={activeTab !== "devtools"}
-                >
-                  <DevTools active={activeTab === "devtools"} />
+              {activeTab === "devtools" && (
+                <DevTools active={activeTab === "devtools"} />
+              )}
+              {activeTab === "app-launcher" && (
+                <div className="page-panel is-active">
+                  <div className="page-scrollable">
+                    <AppLauncherTool />
+                  </div>
                 </div>
               )}
               {activeTab === "settings" && <SettingsPage />}

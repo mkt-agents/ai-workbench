@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Pure pass-through Tauri invoke wrappers.
  *
  * These functions do no business logic — they forward arguments to the
@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, DevtoolsHttpRequest, DevtoolsHttpResponse, DevtoolsPortEntry, DevtoolsProcessInfo, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion } from '../types';
+import type { AIModelConfig, DshInstance, DevtoolsHttpRequest, DevtoolsHttpResponse, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -121,10 +121,12 @@ export interface Invocations {
   invokeListInstallableRuntimes: (kind: RuntimeKind) => Promise<InstallableVersion[]>;
   invokeInstallRuntime: (kind: RuntimeKind, version: string) => Promise<RuntimeVersion>;
   invokeUninstallRuntime: (kind: RuntimeKind, path: string) => Promise<void>;
-  invokeListPorts: () => Promise<DevtoolsPortEntry[]>;
-  invokeResolveProcesses: (pids: number[]) => Promise<DevtoolsProcessInfo[]>;
-  invokeKillProcess: (pid: number) => Promise<void>;
   invokeHttpRequest: (req: DevtoolsHttpRequest) => Promise<DevtoolsHttpResponse>;
+  invokeLaunchApp: (path: string, args?: string) => Promise<string>;
+  invokeKillApp: (processName: string) => Promise<string>;
+  invokeIsAppRunning: (processName: string) => Promise<boolean>;
+  invokeScanInstalledApps: () => Promise<InstalledAppInfo[]>;
+  invokeGetAppVersion: (path: string) => Promise<string>;
 }
 
 export const invocations: Invocations = {
@@ -370,10 +372,17 @@ export const invocations: Invocations = {
     tauriInvoke<RuntimeVersion>('install_runtime', { kind, version }),
   invokeUninstallRuntime: (kind: RuntimeKind, path: string) =>
     tauriInvoke<void>('uninstall_runtime', { kind, path }),
-  invokeListPorts: () => tauriInvoke<DevtoolsPortEntry[]>('devtools_list_ports'),
-  invokeResolveProcesses: (pids: number[]) => tauriInvoke<DevtoolsProcessInfo[]>('devtools_resolve_processes', { pids }),
-  invokeKillProcess: (pid: number) => tauriInvoke<void>('devtools_kill_process', { pid }),
   invokeHttpRequest: (req: DevtoolsHttpRequest) => tauriInvoke<DevtoolsHttpResponse>('devtools_http_request', { req }),
+  invokeLaunchApp: (path: string, args?: string) =>
+    tauriInvoke<string>('launch_app', { path, args: args ?? null }),
+  invokeKillApp: (processName: string) =>
+    tauriInvoke<string>('kill_app', { processName }),
+  invokeIsAppRunning: (processName: string) =>
+    tauriInvoke<boolean>('is_app_running', { processName }),
+  invokeScanInstalledApps: () =>
+    tauriInvoke<InstalledAppInfo[]>('scan_installed_apps'),
+  invokeGetAppVersion: (path: string) =>
+    tauriInvoke<string>('get_app_version', { path }),
 };
 
 export default invocations;

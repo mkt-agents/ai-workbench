@@ -5,6 +5,7 @@ import type {
   RecentProject, WebPlugin, UserScript, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
+  QuickAppLauncher,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -101,6 +102,11 @@ export const PRESET_WEB_PLUGINS: Omit<WebPlugin, 'id' | 'addedAt' | 'lastOpenedA
   { name: 'Google', url: 'https://www.google.com', group: '工具', tags: 'search', order: 11, hotkey: '', isPreset: true },
   { name: 'YouTube', url: 'https://www.youtube.com', group: '工具', tags: 'video', order: 12, hotkey: '', isPreset: true },
 ];
+
+/** Normalise an app path for duplicate detection (case + separator insensitive). */
+export function normalizeAppPath(path: string): string {
+  return path.trim().toLowerCase().replace(/[\\/]+/g, "\\");
+}
 
 /** One-shot: fold legacy logoVariant into theme, then drop the field. */
 function migrateSettings(
@@ -305,6 +311,13 @@ interface StoreState extends GlobalState, Invocations {
   upsertQuickAskSession: (session: QuickAskSession) => Promise<void>;
   deleteQuickAskSession: (id: string) => Promise<void>;
 
+  // Quick app launchers
+  loadQuickAppLaunchers: () => Promise<void>;
+  addQuickAppLauncher: (launcher: Omit<QuickAppLauncher, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateQuickAppLauncher: (id: string, updates: Partial<QuickAppLauncher>) => Promise<void>;
+  deleteQuickAppLauncher: (id: string) => Promise<void>;
+  reorderQuickAppLaunchers: (orderedIds: string[]) => Promise<void>;
+
   // DeepSeek Harness cached state
   dshNodejsInstalled: boolean | null;
   dshVersion: string | null;
@@ -341,6 +354,7 @@ export const useGlobalStore = create<StoreState>()(
       cloudflaredProfiles: [],
       snippets: [],
       quickAskSessions: [],
+      quickAppLaunchers: [],
 
       // Settings
       setSettings: (newSettings) => set((state) => ({
@@ -1229,6 +1243,52 @@ export const useGlobalStore = create<StoreState>()(
         set({ quickAskSessions: sessions });
       }),
 
+      // Quick app launchers
+      loadQuickAppLaunchers: async () => withTable("quick_app_launchers", async () => {
+        const launchers = await storage.quickAppLaunchers.load();
+        set({ quickAppLaunchers: launchers });
+      }),
+
+      addQuickAppLauncher: async (launcher) => withTable("quick_app_launchers", async () => {
+        const dup = get().quickAppLaunchers.find((l) => normalizeAppPath(l.path) === normalizeAppPath(launcher.path));
+        if (dup) throw new Error(`DUPLICATE_APP:${dup.id}`);
+        const now = new Date().toISOString();
+        const maxOrder = get().quickAppLaunchers.reduce((m, l) => Math.max(m, l.order ?? 0), 0);
+        const newLauncher: QuickAppLauncher = {
+          ...launcher,
+          id: crypto.randomUUID(),
+          order: maxOrder + 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const next = [newLauncher, ...get().quickAppLaunchers];
+        await storage.quickAppLaunchers.save(next);
+        set({ quickAppLaunchers: next });
+      }),
+
+      updateQuickAppLauncher: async (id, updates) => withTable("quick_app_launchers", async () => {
+        const launchers = get().quickAppLaunchers.map((l) =>
+          l.id === id ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l
+        );
+        await storage.quickAppLaunchers.save(launchers);
+        set({ quickAppLaunchers: launchers });
+      }),
+
+      deleteQuickAppLauncher: async (id) => withTable("quick_app_launchers", async () => {
+        const launchers = get().quickAppLaunchers.filter((l) => l.id !== id);
+        await storage.quickAppLaunchers.save(launchers);
+        set({ quickAppLaunchers: launchers });
+      }),
+
+      reorderQuickAppLaunchers: async (orderedIds: string[]) => withTable("quick_app_launchers", async () => {
+        const orderMap = new Map(orderedIds.map((id, i) => [id, i]));
+        const launchers = get().quickAppLaunchers
+          .map((l) => ({ ...l, order: orderMap.get(l.id) ?? l.order }))
+          .sort((a, b) => a.order - b.order);
+        await storage.quickAppLaunchers.save(launchers);
+        set({ quickAppLaunchers: launchers });
+      }),
+
       // Spread all pure pass-through Tauri invoke wrappers
       ...invocations,
 
@@ -1304,6 +1364,7 @@ export const useGlobalStore = create<StoreState>()(
           get().loadCloudflaredProfiles(),
           get().loadSnippets(),
           get().loadQuickAskSessions(),
+          get().loadQuickAppLaunchers(),
         ]);
       },
     }),

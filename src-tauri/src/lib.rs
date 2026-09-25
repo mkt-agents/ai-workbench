@@ -12,6 +12,7 @@ pub mod tool_commands;
 mod tray;
 pub mod config;
 pub mod cancellation;
+mod app_launcher_commands;
 mod cancellation_commands;
 mod change_report;
 mod report_commands;
@@ -265,7 +266,23 @@ pub fn run() {
                     url TEXT NOT NULL,
                     timestamp INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS quick_app_launchers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    args TEXT NOT NULL DEFAULT '',
+                    "order" INTEGER NOT NULL DEFAULT 0,
+                    "group" TEXT NOT NULL DEFAULT '',
+                    version TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             "#).expect("failed to init schema");
+
+            // Migration: add order/group columns for existing databases (ignore if already present)
+            let _ = conn.execute("ALTER TABLE quick_app_launchers ADD COLUMN \"order\" INTEGER NOT NULL DEFAULT 0", []);
+            let _ = conn.execute("ALTER TABLE quick_app_launchers ADD COLUMN \"group\" TEXT NOT NULL DEFAULT ''", []);
+            let _ = conn.execute("ALTER TABLE quick_app_launchers ADD COLUMN version TEXT NOT NULL DEFAULT ''", []);
 
             // The AI history is the one report-related thing that is persisted;
             // its schema lives next to its own code (see report_history.rs).
@@ -478,10 +495,15 @@ pub fn run() {
             cloudflared_commands::cloudflared_stop_all_tunnels,
             cloudflared_commands::cloudflared_tunnel_status,
             cloudflared_commands::cloudflared_setup_new_domain,
-            devtools_commands::devtools_list_ports,
-            devtools_commands::devtools_resolve_processes,
-            devtools_commands::devtools_kill_process,
             devtools_commands::devtools_http_request,
+            app_launcher_commands::browse_app_file,
+            app_launcher_commands::launch_app,
+            app_launcher_commands::kill_app,
+            app_launcher_commands::is_app_running,
+            app_launcher_commands::check_apps_running,
+            app_launcher_commands::scan_installed_apps,
+            app_launcher_commands::extract_app_icon,
+            app_launcher_commands::get_app_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

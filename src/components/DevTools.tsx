@@ -27,7 +27,6 @@ import UuidTool from "./devtools/UuidTool";
 import JwtTool from "./devtools/JwtTool";
 import RegexTool from "./devtools/RegexTool";
 import HashTool from "./devtools/HashTool";
-import PortProcessTool from "./devtools/PortProcessTool";
 import HttpClientTool from "./devtools/HttpClientTool";
 
 const STORAGE_KEY = "workbench-devtools-tool";
@@ -77,7 +76,6 @@ const TOOL_GROUPS: ToolGroup[] = [
     groupKey: "group.network",
     icon: <Network size={10} />,
     tools: [
-      { id: "ports", labelKey: "ports.title", icon: <Network size={16} />, descriptionKey: "ports.description" },
       { id: "http", labelKey: "http.title", icon: <Globe size={16} />, descriptionKey: "http.description" },
     ],
   },
@@ -168,7 +166,6 @@ function DevTools({ active = true }: { active?: boolean }) {
       case "jwt":          return <JwtTool />;
       case "regex":        return <RegexTool />;
       case "hash":         return <HashTool />;
-      case "ports":        return <PortProcessTool />;
       case "http":         return <HttpClientTool />;
       default:             return <JsonTool />;
     }

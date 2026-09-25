@@ -180,6 +180,34 @@ export interface GlobalState {
   cloudflaredProfiles: CloudflaredNamedProfile[];
   snippets: Snippet[];
   quickAskSessions: QuickAskSession[];
+  quickAppLaunchers: QuickAppLauncher[];
+}
+
+/** A saved application shortcut for quick launch / kill. */
+export interface QuickAppLauncher {
+  id: string;
+  name: string;
+  /** Full path to the executable. */
+  path: string;
+  /** Optional command-line arguments. */
+  args: string;
+  /** Sort order (lower = first). */
+  order: number;
+  /** Optional group label for filtering. */
+  group?: string;
+  /** File version of the executable, auto-detected on add (e.g. "1.2.3"). */
+  version?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** An application discovered by scanning the system. */
+export interface InstalledAppInfo {
+  display_name: string;
+  exe_path: string;
+  publisher: string;
+  version: string;
+  icon?: string; // base64 PNG, optional
 }
 
 export interface HostProfile {
@@ -333,24 +361,6 @@ export interface InstallableVersion {
   version: string;
   lts: boolean;
   installed: boolean;
-}
-
-export interface DevtoolsPortEntry {
-  proto: string;
-  local_addr: string;
-  local_port: number;
-  remote_addr: string;
-  remote_port: number;
-  state: string;
-  pid: number;
-}
-
-export interface DevtoolsProcessInfo {
-  pid: number;
-  name: string;
-  memory: string;
-  path: string;
-  services: string;
 }
 
 export interface DevtoolsHeaderPair {

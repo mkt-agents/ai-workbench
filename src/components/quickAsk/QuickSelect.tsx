@@ -9,6 +9,8 @@ type Props = {
   onChange: (v: string) => void;
   title?: string;
   placeholder?: string;
+  /** Extra class on the wrapper (e.g. sizing the trigger for another page). */
+  className?: string;
   /** Anchor the popover to the left edge of the trigger (default: right). */
   alignLeft?: boolean;
   /** Controlled by the shell so opening one popover closes the others. */
@@ -26,6 +28,7 @@ export default function QuickSelect({
   onChange,
   title,
   placeholder,
+  className,
   alignLeft,
   open,
   onToggle,
@@ -37,7 +40,7 @@ export default function QuickSelect({
     if (open) selectedRef.current?.scrollIntoView({ block: "nearest" });
   }, [open]);
   return (
-    <div className="qa-focus">
+    <div className={className ? `qa-focus ${className}` : "qa-focus"}>
       <button
         type="button"
         className={`input-field qa-focus-btn${open ? " is-open" : ""}`}

@@ -1,0 +1,132 @@
+﻿ICON	C:\Program Files (x86)\Microsoft\Edge\Application\144.0.3719.92\msedge.exe
+ICON	C:\Program Files (x86)\Microsoft\EdgeWebView\Application\144.0.3719.93\msedgewebview2.exe
+ICON	C:\Program Files (x86)\Mozilla Maintenance Service\Uninstall.exe
+ICON	C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeClickToRun.exe
+ICON	C:\Program Files\Java\jdk1.8.0_45\\jre\bin\javaws.exe
+ICON	C:\Program Files\Java\jre1.8.0_45\\bin\javaws.exe
+ICON	C:\Program Files\Microsoft OfficePLUS\3.8.0.13669\uninst.exe
+ICON	C:\ProgramData\Package Cache\{042d26ef-3dbe-4c25-95d3-4c1b11b235a7}\vcredist_x64.exe
+ICON	C:\ProgramData\Package Cache\{0e4ccf1b-d073-4cfe-8a24-e86185719b56}\VC_redist.x86.exe
+ICON	C:\ProgramData\Package Cache\{33d1fd90-4274-48a1-9bc1-97e33d9c2d6f}\vcredist_x86.exe
+ICON	C:\ProgramData\Package Cache\{91ee571b-0e8a-4c65-9eaf-2e2f5fc60c00}\VC_redist.x64.exe
+ICON	C:\ProgramData\Package Cache\{9dff3540-fc85-4ed5-ac84-9e3c7fd8bece}\vcredist_x86.exe
+ICON	C:\ProgramData\Package Cache\{c0b93b80-d0a4-47fc-a4d1-21a4008a63ca}\winsdksetup.exe
+ICON	C:\ProgramData\Package Cache\{ca67548a-5ebe-413a-b50c-4b9ceb6d66c6}\vcredist_x64.exe
+ICON	D:\w_app\SogouInput\16.8.0.5194\SGTool.exe
+STAR		C:\Program Files (x86)\AI Cooling\SuperApp\ai_cooling\ai_cooling_ui.exe
+STAR		C:\Program Files (x86)\AI Cooling\uninst.exe
+STAR		C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe
+STAR		C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+STAR		C:\Program Files (x86)\Timi Personal Computing\MiService\4.1.1.121\MiServicePrivacy.exe
+STAR		C:\Program Files (x86)\Windows Kits\10\App Certification Kit\appcertui.exe
+STAR		C:\Program Files (x86)\Windows Media Player\wmplayer.exe
+STAR		C:\Program Files\AOne\AOne.exe
+STAR		C:\Program Files\Google\Chrome\Application\chrome.exe
+STAR		C:\Program Files\Google\Chrome\Application\chrome_proxy.exe
+STAR		C:\Program Files\i4Tools9\i4Launcher.exe
+STAR		C:\Program Files\i4Tools9\Uninstall.exe
+STAR		C:\Program Files\Java\jdk1.8.0_45\bin\jmc.exe
+STAR		C:\Program Files\Java\jre1.8.0_45\bin\javacpl.exe
+STAR		C:\Program Files\MI\Xiaomi Cloud\小米云服务.exe
+STAR		C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE
+STAR		C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE
+STAR		C:\Program Files\Microsoft Office\root\Office16\POWERPNT.EXE
+STAR		C:\Program Files\Microsoft Office\root\Office16\SETLANG.EXE
+STAR		C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE
+STAR		C:\Program Files\Microsoft OneDrive\OneDrive.exe
+STAR		C:\Program Files\Mozilla Firefox\firefox.exe
+STAR		C:\Program Files\Mozilla Firefox\private_browsing.exe
+STAR		C:\Program Files\Tencent\Weixin\Uninstall.exe
+STAR		C:\Program Files\Tencent\Weixin\Weixin.exe
+STAR		C:\ProgramData\YunShuLauncher\YunShuLauncher.exe
+STAR		C:\Users\18252\AppData\Local\Python\pythoncore-3.14-64\python.exe
+STAR		C:\Users\18252\AppData\Local\Python\pythoncore-3.14-64\pythonw.exe
+STAR		C:\Users\18252\AppData\Local\Qoder CN\Qoder CN Launcher\Qoder CN Launcher.exe
+STAR		C:\WINDOWS\explorer.exe
+STAR		C:\WINDOWS\hh.exe
+STAR		C:\WINDOWS\regedit.exe
+STAR		C:\Windows\System32\appverif.exe
+STAR		C:\WINDOWS\system32\charmap.exe
+STAR		C:\WINDOWS\system32\cleanmgr.exe
+STAR		C:\WINDOWS\system32\cmd.exe
+STAR		C:\WINDOWS\system32\control.exe
+STAR		C:\WINDOWS\system32\dfrgui.exe
+STAR		C:\WINDOWS\system32\iscsicpl.exe
+STAR		C:\WINDOWS\system32\LiveCaptions.exe
+STAR		C:\WINDOWS\system32\magnify.exe
+STAR		C:\WINDOWS\system32\MdSched.exe
+STAR		C:\WINDOWS\system32\msconfig.exe
+STAR		C:\Windows\System32\msiexec.exe
+STAR		C:\WINDOWS\system32\msinfo32.exe
+STAR		C:\WINDOWS\system32\mstsc.exe
+STAR		C:\WINDOWS\system32\narrator.exe
+STAR		C:\WINDOWS\system32\odbcad32.exe
+STAR		C:\WINDOWS\system32\osk.exe
+STAR		C:\WINDOWS\system32\perfmon.exe
+STAR		C:\WINDOWS\system32\psr.exe
+STAR		C:\WINDOWS\system32\RecoveryDrive.exe
+STAR		C:\WINDOWS\system32\taskmgr.exe
+STAR		C:\WINDOWS\system32\voiceaccess.exe
+STAR		C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+STAR		C:\WINDOWS\system32\WindowsPowerShell\v1.0\PowerShell_ISE.exe
+STAR		C:\Windows\SysWOW64\appverif.exe
+STAR		C:\Windows\SysWOW64\msiexec.exe
+STAR		C:\WINDOWS\syswow64\odbcad32.exe
+STAR		C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe
+STAR		C:\WINDOWS\syswow64\WindowsPowerShell\v1.0\PowerShell_ISE.exe
+STAR		D:\d_app\Apifox\Apifox.exe
+STAR		D:\d_app\Codex++\codex-plus-plus.exe
+STAR		D:\d_app\Codex++\codex-plus-plus-manager.exe
+STAR		D:\d_app\Codex++\uninstall.exe
+STAR		D:\d_app\cursor\Cursor.exe
+STAR		D:\d_app\DBeaver\dbeaver.exe
+STAR		D:\d_app\DBeaver\Uninstall.exe
+STAR		D:\d_app\FileZilla FTP Client\filezilla.exe
+STAR		D:\d_app\FileZilla FTP Client\uninstall.exe
+STAR		D:\d_app\Git\cmd\git-gui.exe
+STAR		D:\d_app\Git\git-bash.exe
+STAR		D:\d_app\Git\git-cmd.exe
+STAR		D:\d_app\IntelliJ IDEA Community Edition 2024.3.5\bin\idea64.exe
+STAR		D:\d_app\Python\Python38\python.exe
+STAR		D:\d_app\Python\Python38\pythonw.exe
+STAR		D:\w_app\360\360zip\360zip.exe
+STAR		D:\w_app\360\360zip\Uninstaller.exe
+STAR		D:\w_app\360esx\360ChromeX\Chrome\Application\23.1.1233.64\installer\setup.exe
+STAR		D:\w_app\360esx\360ChromeX\Chrome\Application\360ChromeX.exe
+STAR		D:\w_app\7-Zip\7zFM.exe
+STAR		D:\w_app\AI Workbench\ai_workbench.exe
+STAR		D:\w_app\AOMEI Partition Assistant\Help.exe
+STAR		D:\w_app\AOMEI Partition Assistant\PartAssist.exe
+STAR		D:\w_app\AOMEI Partition Assistant\unins000.exe
+STAR		D:\w_app\CBbot\CBbot.exe
+STAR		D:\w_app\CC Switch\cc-switch.exe
+STAR		D:\w_app\Clash Verge\clash-verge.exe
+STAR		D:\w_app\CodeBuddy CN\CodeBuddy CN.exe
+STAR		D:\w_app\DeskGo\4.1.1592.127\DesktopMgr.exe
+STAR		D:\w_app\DeskGo\4.1.1592.127\Uninst.exe
+STAR		D:\w_app\Dict\uninst.exe
+STAR		D:\w_app\Dict\YoudaoDict.exe
+STAR		D:\w_app\EchoBird\echobird.exe
+STAR		D:\w_app\GameViewer\GameViewer.exe
+STAR		D:\w_app\Grok Bot\Grok Bot.exe
+STAR		D:\w_app\InfiniTrader_QhGuangdaUat\autoupdate.exe
+STAR		D:\w_app\JVMan\jvman.exe
+STAR		D:\w_app\nodejs\node.exe
+STAR		D:\w_app\Obsidian\Obsidian.exe
+STAR		D:\w_app\oss-browser2\oss-browser2.exe
+STAR		D:\w_app\QQPCMgr\18.1.30302.212\QQPCSoftMgr.exe
+STAR		D:\w_app\QQPCMgr\18.1.30302.212\QQPCTray.exe
+STAR		D:\w_app\QQPCMgr\18.1.30302.212\Uninst.exe
+STAR		D:\w_app\SogouInput\16.8.0.5194\Uninstall\Uninstall.exe
+STAR		D:\w_app\SogouInput\SogouExe\SogouExe.exe
+STAR		D:\w_app\Tencent\QQNT\QQ.exe
+STAR		D:\w_app\TRAE SOLO CN\TRAE SOLO CN.exe
+STAR		D:\w_app\txcos\cosbrowser.exe
+STAR		D:\w_app\WorkBuddy_Test\WorkBuddy.exe
+STAR		D:\w_app\WPS Office\12.1.0.28505\office6\ksomisc.exe
+STAR		D:\w_app\WPS Office\ksolaunch.exe
+STAR		D:\w_app\WXWork\Uninstall.exe
+STAR		D:\w_app\WXWork\WXWork.exe
+STAR		D:\w_app\ynote-desktop\有道云笔记.exe
+STAR		D:\w_game\asktao\StartAsktao.exe
+STAR		D:\w_game\asktao\Uninstall.exe

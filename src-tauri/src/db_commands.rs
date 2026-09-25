@@ -28,6 +28,7 @@ pub enum DbTable {
     JsonToolHistory,
     HttpSavedRequests,
     HttpHistory,
+    QuickAppLaunchers,
     // Test assistant. Order here is only the enum order; import follows the
     // file. FKs are not enforced at runtime (PRAGMA foreign_keys is off), so
     // the whole set must travel together to keep the rows referentially sane.
@@ -53,6 +54,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "json_tool_history" => Some(DbTable::JsonToolHistory),
         "http_saved_requests" => Some(DbTable::HttpSavedRequests),
         "http_history" => Some(DbTable::HttpHistory),
+        "quick_app_launchers" => Some(DbTable::QuickAppLaunchers),
         _ => None,
     }
 }
@@ -77,6 +79,7 @@ pub(crate) fn load_sql(table: DbTable) -> &'static str {
         DbTable::JsonToolHistory => "SELECT * FROM json_tool_history ORDER BY id DESC LIMIT 20",
         DbTable::HttpSavedRequests => "SELECT * FROM http_saved_requests ORDER BY saved_at DESC",
         DbTable::HttpHistory => "SELECT * FROM http_history ORDER BY id DESC LIMIT 50",
+        DbTable::QuickAppLaunchers => r#"SELECT * FROM quick_app_launchers ORDER BY "order" ASC, created_at DESC"#,
         // Runs keep their tails (64KB each), so the export side caps how many go
         // out; the newest ones are the useful ones.
     }
@@ -102,6 +105,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
         DbTable::HttpSavedRequests => "DELETE FROM http_saved_requests",
         DbTable::HttpHistory => "DELETE FROM http_history",
+        DbTable::QuickAppLaunchers => "DELETE FROM quick_app_launchers",
     }
 }
 
@@ -425,6 +429,22 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "method")?,
                     json_str(obj, "url")?,
                     json_i64(obj, "timestamp", 0),
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::QuickAppLaunchers => {
+            tx.execute(
+                r#"INSERT INTO quick_app_launchers (id, name, path, args, "order", "group", version, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_str(obj, "name")?,
+                    json_str(obj, "path")?,
+                    json_opt_str(obj, "args").unwrap_or_default(),
+                    json_i64(obj, "order", 0),
+                    json_opt_str(obj, "group").unwrap_or_default(),
+                    json_opt_str(obj, "version").unwrap_or_default(),
+                    json_str(obj, "created_at")?,
+                    json_str(obj, "updated_at")?,
                 ],
             ).map_err(|e| e.to_string())?;
         }
