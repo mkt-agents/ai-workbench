@@ -1,6 +1,6 @@
 [package]
 name = "ai_workbench"
-version = "0.2.3"
+version = "0.2.4"
 description = "AI Workbench - AI-powered developer toolbox"
 authors = ["you"]
 edition = "2021"
@@ -31,6 +31,7 @@ url = "2"
 arboard = "3"
 rand = "0.9"
 encoding_rs = "0.8"
+axum = "0.8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
