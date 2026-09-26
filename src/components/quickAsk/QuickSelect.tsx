@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Check } from "lucide-react";
 
-export type QuickOption = { value: string; label: string };
+export type QuickOption = { value: string; label: string; short?: string };
 
 type Props = {
   value: string;
@@ -34,6 +34,7 @@ export default function QuickSelect({
   onToggle,
 }: Props) {
   const current = options.find((o) => o.value === value);
+  const triggerLabel = (current?.short ?? current?.label) || placeholder || "";
   const selectedRef = useRef<HTMLButtonElement | null>(null);
   // Long model lists scroll the current pick into view when the popover opens.
   useEffect(() => {
@@ -49,7 +50,7 @@ export default function QuickSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <span className="qa-focus-btn-label">{current?.label || placeholder || ""}</span>
+        <span className="qa-focus-btn-label">{triggerLabel}</span>
         <span className="qa-focus-caret">▾</span>
       </button>
       {open && (

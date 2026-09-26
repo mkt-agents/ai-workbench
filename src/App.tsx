@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import GitManager from "./components/GitManager";
 import SettingsPage from "./components/Settings";
+import UpdateBanner from "./components/UpdateBanner";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import {
   GitBranch,
@@ -532,6 +533,7 @@ function App() {
                   <span className="toast-text">{hotkeyToast}</span>
                 </div>
               )}
+              <UpdateBanner />
             </div>
           </div>
         </main>

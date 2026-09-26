@@ -6014,6 +6014,11 @@
   border-top: 1px solid var(--border-subtle, #21262d);
 }
 
+/* Push the "manual add" shortcut to the left, keep confirm buttons right. */
+.modal-footer-spacer {
+  flex: 1;
+}
+
 .app-launcher-tool .form-row {
   display: flex;
   flex-direction: column;
@@ -6054,7 +6059,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 6px;
   padding: 8px 10px;
   background: var(--bg-1, #161b22);
   border: 1px solid var(--border-subtle, #21262d);
@@ -6064,17 +6071,29 @@
 .al-toolbar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  row-gap: 6px;
   flex-shrink: 0;
 }
 
 .al-toolbar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 1;
+  /* Never wrap inside the group or shrink below its content — when the row
+     gets tight the whole right side drops under the left buttons as one
+     clean line instead of scattering selects/icons across ragged rows. */
+  flex-wrap: nowrap;
+  column-gap: 6px;
+  flex: 1 0 auto;
   justify-content: flex-end;
-  min-width: 0;
+}
+
+.al-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .al-toolbar-spacer {
@@ -6094,7 +6113,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 6px 10px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-2, #8b949e);
@@ -6141,7 +6160,7 @@
 }
 
 .al-btn-icon {
-  padding: 6px 8px;
+  padding: 6px 7px;
 }
 
 .al-btn-ghost {
@@ -6195,13 +6214,22 @@
   border-radius: 7px;
   transition: border-color 0.15s ease;
   flex: 1;
-  min-width: 100px;
-  max-width: 260px;
+  min-width: 96px;
+  max-width: 180px;
 }
 
 /* Compact QuickSelect trigger for the group filter and sort selector. */
+.al-group-select,
+.al-sort-select,
+.al-batch-group-select {
+  /* Keep the trigger at its full label width — let the search box shrink and
+     the toolbar wrap instead of ellipsizing "全部分组" / "自定义（可拖动）". */
+  flex-shrink: 0;
+}
+
 .al-group-select .qa-focus-btn,
-.al-sort-select .qa-focus-btn {
+.al-sort-select .qa-focus-btn,
+.al-batch-group-select .qa-focus-btn {
   height: 30px;
   padding: 0 10px;
   font-size: 12px;
@@ -6210,8 +6238,58 @@
 }
 
 .al-group-select .qa-focus-pop,
-.al-sort-select .qa-focus-pop {
+.al-sort-select .qa-focus-pop,
+.al-batch-group-select .qa-focus-pop {
   width: 200px;
+}
+
+/* ── Group manager modal ── */
+.al-group-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.al-group-add .devtools-input {
+  flex: 1;
+  min-width: 0;
+}
+.al-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.al-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle, #21262d);
+  border-radius: 7px;
+  background: var(--bg-1, #161b22);
+}
+.al-group-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-0, #e6edf3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.al-group-row-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3, #6e7681);
+  background: var(--bg-2, #21262d);
+  border-radius: var(--radius-full, 999px);
+  padding: 1px 8px;
+}
+.al-group-rename-input {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Path input with browse button (add/edit modal). */
@@ -6872,14 +6950,16 @@
 
 /* ── Responsive ── */
 
-@media (max-width: 900px) {
-  .al-grid {
-    grid-template-columns: 1fr;
-  }
-
+/* When a single row can't fit (~904px of controls), stack deliberately:
+   action buttons on top, then a full-width filter bar (search grows to fill)
+   — no right-aligned clump. Breakpoint sits above the widest single row
+   (incl. the running badge) so desktop widths stay on one clean line. */
+@media (max-width: 1000px) {
   .al-toolbar {
     flex-direction: column;
+    flex-wrap: nowrap;
     align-items: stretch;
+    row-gap: 8px;
   }
 
   .al-toolbar-left,
@@ -6887,8 +6967,19 @@
     flex-wrap: wrap;
   }
 
+  .al-toolbar-right {
+    justify-content: flex-start;
+  }
+
   .al-search {
-    min-width: auto;
-    flex: 1;
+    flex: 1 1 160px;
+    min-width: 140px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .al-grid {
+    grid-template-columns: 1fr;
   }
 }

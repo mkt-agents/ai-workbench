@@ -451,216 +451,395 @@ fn get_app_version_sync(path: String) -> Result<String, String> {
 }
 
 /// Sync icon extraction, safe to call from `spawn_blocking` contexts (e.g. the scan).
+///
+/// Prefers the exe's own PE icon resources: `ExtractIconExW` only ever hands
+/// back the system size (32x32) and takes group 0 blindly, which is a *blank*
+/// placeholder group for e.g. git-bash.exe. Reading RT_GROUP_ICON lets us skip
+/// blank groups and take the largest real artwork at up to 64px.
 #[cfg(target_os = "windows")]
 fn extract_app_icon_sync(path: String) -> Result<String, String> {
-    {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::Graphics::Gdi::{
-            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-            GetDIBits, GetObjectW, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-            DIB_RGB_COLORS,
-        };
-        use windows::Win32::UI::Shell::ExtractIconExW;
-        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, GetIconInfo, ICONINFO};
-        use windows::core::PCWSTR;
-        use std::path::Path;
+    use windows::core::PCWSTR;
+    use std::path::Path;
 
-        let path = path.trim();
-        if path.is_empty() {
-            return Err("路径不能为空".into());
-        }
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("路径不能为空".into());
+    }
+    let path_obj = Path::new(path);
+    if !path_obj.exists() || !path_obj.is_file() {
+        return Err("文件不存在或不是文件".into());
+    }
+    let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let path_obj = Path::new(path);
-        if !path_obj.exists() || !path_obj.is_file() {
-            return Err("文件不存在或不是文件".into());
-        }
+    match unsafe { extract_icon_pe_png(PCWSTR(path_wide.as_ptr())) } {
+        Ok(Some(png)) => return Ok(base64_encode(&png)),
+        // The file carries no icon resource at all (OpenAI's codex.exe, rustup.exe):
+        // stop here. The shell fallback would hand back the generic
+        // "unknown application" bitmap, which reads as a broken icon — the
+        // frontend's letter tile is the honest answer.
+        Ok(None) => return Err("文件不含图标资源".into()),
+        Err(_) => {}
+    }
 
-        let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut large_icon = windows::Win32::UI::WindowsAndMessaging::HICON::default();
-        let mut small_icon = windows::Win32::UI::WindowsAndMessaging::HICON::default();
-
-        let count = unsafe {
-            ExtractIconExW(
+    // Legacy path: ExtractIconExW group 0, owned handle, destroyed by renderer.
+    let legacy = (|| -> Result<Vec<u8>, String> {
+        unsafe {
+            let mut large = windows::Win32::UI::WindowsAndMessaging::HICON::default();
+            let mut small = windows::Win32::UI::WindowsAndMessaging::HICON::default();
+            let count = windows::Win32::UI::Shell::ExtractIconExW(
                 PCWSTR(path_wide.as_ptr()),
                 0,
-                Some(&mut large_icon),
-                Some(&mut small_icon),
+                Some(&mut large),
+                Some(&mut small),
                 1,
-            )
-        };
-
-        if count == 0 || large_icon.0.is_null() {
-            return Err("无法提取图标".into());
-        }
-
-        let icon = large_icon;
-
-        // Get icon info to determine dimensions.
-        let mut icon_info = ICONINFO::default();
-        let info_result = unsafe { GetIconInfo(icon, &mut icon_info) };
-        if info_result.is_err() {
-            unsafe { let _ = DestroyIcon(icon); }
-            return Err("获取图标信息失败".into());
-        }
-
-        // Get the bitmap from the icon to determine size.
-        let mut bmp = windows::Win32::Graphics::Gdi::BITMAP::default();
-        let bmp_size = std::mem::size_of::<windows::Win32::Graphics::Gdi::BITMAP>() as i32;
-        let bmp_result = unsafe {
-            GetObjectW(
-                icon_info.hbmColor.into(),
-                bmp_size,
-                Some(&mut bmp as *mut _ as *mut std::ffi::c_void),
-            )
-        };
-        if bmp_result == 0 {
-            unsafe { let _ = DestroyIcon(icon); }
-            return Err("获取位图信息失败".into());
-        }
-
-        let width = bmp.bmWidth;
-        let height = bmp.bmHeight;
-        if width == 0 || height == 0 {
-            unsafe { let _ = DestroyIcon(icon); }
-            return Err("无效的图标尺寸".into());
-        }
-
-        // Create a memory DC and bitmap to draw the icon onto.
-        let hdc_screen = unsafe { windows::Win32::Graphics::Gdi::GetDC(Some(HWND::default())) };
-        if hdc_screen.0.is_null() {
-            unsafe { let _ = DestroyIcon(icon); }
-            return Err("获取屏幕DC失败".into());
-        }
-
-        let hdc_mem = unsafe { CreateCompatibleDC(Some(hdc_screen)) };
-        if hdc_mem.0.is_null() {
-            unsafe {
-                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(HWND::default()), hdc_screen);
-                let _ = DestroyIcon(icon);
+            );
+            if !small.0.is_null() {
+                let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(small);
             }
-            return Err("创建内存DC失败".into());
-        }
-
-        // Create a 32-bit bitmap to hold the icon (with alpha channel).
-        let mut bmi = BITMAPINFO::default();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bmi.bmiHeader.biWidth = width;
-        bmi.bmiHeader.biHeight = -height; // Top-down
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB.0 as u32;
-        bmi.bmiHeader.biSizeImage = 0;
-        bmi.bmiHeader.biXPelsPerMeter = 0;
-        bmi.bmiHeader.biYPelsPerMeter = 0;
-        bmi.bmiHeader.biClrUsed = 0;
-        bmi.bmiHeader.biClrImportant = 0;
-
-        let hbitmap = unsafe {            CreateCompatibleBitmap(hdc_screen, width, height)
-        };
-        if hbitmap.0.is_null() {
-            unsafe {
-                let _ = DeleteDC(hdc_mem);
-                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(HWND::default()), hdc_screen);
-                let _ = DestroyIcon(icon);
+            if count == 0 || large.0.is_null() {
+                return Err("无法提取图标".into());
             }
-            return Err("创建位图失败".into());
+            render_icon_to_png(large, true)
         }
+    })();
+    if let Ok(png) = legacy {
+        return Ok(base64_encode(&png));
+    }
 
-        let old_bmp = unsafe { SelectObject(hdc_mem, hbitmap.into()) };
-        if old_bmp.0.is_null() {
-            unsafe {
-                let _ = DeleteObject(hbitmap.into());
-                let _ = DeleteDC(hdc_mem);
-                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(HWND::default()), hdc_screen);
-                let _ = DestroyIcon(icon);
-            }
-            return Err("选择位图失败".into());
-        }
+    // Last resort: ask the shell for the icon Explorer itself would display.
+    if let Ok(png) = unsafe { extract_icon_via_shell(PCWSTR(path_wide.as_ptr())) } {
+        return Ok(base64_encode(&png));
+    }
 
-        // Draw the icon onto the memory DC.
-        let draw_result = unsafe {
-            DrawIconEx(
-                hdc_mem,
-                0,
-                0,
-                icon,
-                width,
-                height,
-                0,
-                None,
-                windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
-            )
-        };
-        if draw_result.is_err() {
-            unsafe {
-                let _ = SelectObject(hdc_mem, old_bmp);
-                let _ = DeleteObject(hbitmap.into());
-                let _ = DeleteDC(hdc_mem);
-                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(HWND::default()), hdc_screen);
-                let _ = DestroyIcon(icon);
-            }
-            return Err("绘制图标失败".into());
-        }
+    Err("无法提取图标".into())
+}
 
-        // Get the bitmap data.
-        let row_size = ((width * 32 + 31) / 32) * 4;
-        let data_size = (row_size * height) as usize;
-        let mut pixels: Vec<u8> = vec![0u8; data_size];
+/// The icon the shell/Explorer shows for this file (32x32). Resolves
+/// PNG-compressed and otherwise GDI-undecodable icon members that both
+/// `LoadImageW` and `ExtractIconExW` render as blank (7zFM.exe).
+#[cfg(target_os = "windows")]
+unsafe fn extract_icon_via_shell(path_wide: windows::core::PCWSTR) -> Result<Vec<u8>, String> {
+    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+    use windows::Win32::UI::WindowsAndMessaging::HICON;
 
-        let get_result = unsafe {
-            GetDIBits(
-                hdc_mem,
-                hbitmap,
-                0,
-                height as u32,
-                Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
-                &mut bmi,
-                DIB_RGB_COLORS,
-            )
-        };
-        if get_result == 0 {
-            unsafe {
-                let _ = SelectObject(hdc_mem, old_bmp);
-                let _ = DeleteObject(hbitmap.into());
-                let _ = DeleteDC(hdc_mem);
-                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(HWND::default()), hdc_screen);
-                let _ = DestroyIcon(icon);
-            }
-            return Err("获取位图数据失败".into());
-        }
+    let mut info = SHFILEINFOW::default();
+    // Caller owns the returned hIcon and must destroy it.
+    if SHGetFileInfoW(
+        path_wide,
+        Default::default(),
+        Some(&mut info),
+        std::mem::size_of::<SHFILEINFOW>() as u32,
+        SHGFI_ICON | SHGFI_LARGEICON,
+    ) == 0
+        || info.hIcon.0.is_null()
+    {
+        return Err("shell 未取得图标".into());
+    }
+    // render_icon_to_png(owns = true) destroys the icon on every path.
+    render_icon_to_png(HICON(info.hIcon.0), true)
+}
 
-        // Convert BGRA to RGBA and flip rows (top-down to bottom-up).
-        let mut rgba: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
-        for y in 0..height {
-            let src_row = (y * row_size) as usize;
-            for x in 0..width {
-                let src = src_row + (x * 4) as usize;
-                let b = pixels[src];
-                let g = pixels[src + 1];
-                let r = pixels[src + 2];
-                let a = pixels[src + 3];
-                rgba.push(r);
-                rgba.push(g);
-                rgba.push(b);
-                rgba.push(a);
-            }
-        }
+/// Enumerate the file's RT_GROUP_ICON resources (loaded as datafile, no code
+/// runs) and rasterise the biggest group that GDI can actually draw — all
+/// while the module is still mapped.
+///
+/// Groups are tried largest-first and the first non-blank raster wins: the
+/// largest entry is frequently a PNG-compressed 256px image that `LoadImageW`
+/// silently renders as nothing (EXCEL.EXE, 7zFM.exe), so ranking alone is not
+/// enough. Two aliasing traps this ordering avoids: `LR_SHARED` hands back a
+/// system-cached handle that collides across modules (several unrelated exes
+/// rendered as one identical icon), and freeing the module before drawing
+/// leaves the image data unmapped. So: load owned, render, then free.
+///
+/// `Ok(Some(_))` = rasterised; `Ok(None)` = the file has no icon groups at all
+/// (callers must not fall back to the shell's generic bitmap); `Err` = it has
+/// groups but GDI could not draw them, so a shell retry is worthwhile.
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct EnumState {
+    /// Every RT_GROUP_ICON name seen, integer or string.
+    seen: usize,
+    /// Groups we could rank by integer ID: (largest member area, id).
+    groups: Vec<(u32, u16)>,
+}
 
-        // Encode as PNG.
-        let png_data = encode_png(&rgba, width, height)?;
+#[cfg(target_os = "windows")]
+unsafe fn extract_icon_pe_png(
+    path_wide: windows::core::PCWSTR,
+) -> Result<Option<Vec<u8>>, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{FreeLibrary, HINSTANCE, HMODULE};
+    use windows::Win32::System::LibraryLoader::{
+        EnumResourceNamesW, LoadLibraryExW, DONT_RESOLVE_DLL_REFERENCES,
+        LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{HICON, IMAGE_ICON, LoadImageW, RT_GROUP_ICON};
 
-        // Clean up.
+    extern "system" fn collect_groups(
+        hModule: HMODULE,
+        _resType: PCWSTR,
+        resName: PCWSTR,
+        out_state: isize,
+    ) -> windows::core::BOOL {
         unsafe {
-            let _ = SelectObject(hdc_mem, old_bmp);
-            let _ = DeleteObject(hbitmap.into());
-            let _ = DeleteDC(hdc_mem);
-            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(HWND::default()), hdc_screen);
+            let state = &mut *(out_state as *mut EnumState);
+            // Counted before the integer-ID filter: string-named groups
+            // (MAINICON etc.) are still proof the file HAS icon artwork, even
+            // though this enumerator can't rank them by ID.
+            state.seen += 1;
+            if (resName.0 as usize) > 0xffff {
+                return true.into();
+            }
+            if let Some(candidate) = rank_icon_group(hModule, resName.0 as u16) {
+                if !state.groups.iter().any(|(_, id)| *id == candidate.1) {
+                    state.groups.push(candidate);
+                }
+            }
+            true.into()
+        }
+    }
+
+    let module = LoadLibraryExW(
+        path_wide,
+        None,
+        DONT_RESOLVE_DLL_REFERENCES | LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE,
+    )
+    .map_err(|_| "无法加载可执行文件资源".to_string())?;
+
+    let mut state = EnumState::default();
+    let ok = EnumResourceNamesW(
+        Some(module),
+        RT_GROUP_ICON,
+        Some(collect_groups),
+        &mut state as *mut _ as isize,
+    );
+    if !ok.as_bool() || state.seen == 0 || state.groups.is_empty() {
+        let _ = FreeLibrary(module);
+        return if state.seen == 0 { Ok(None) } else { Err("没有可排序的图标组".into()) };
+    }
+    let mut groups = state.groups;
+    groups.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut last_err = "加载图标失败".to_string();
+    let mut rendered = None;
+    for &(_, group_id) in &groups {
+        // No LR_SHARED → we own the handle and the renderer destroys it.
+        match LoadImageW(
+            Some(HINSTANCE(module.0)),
+            PCWSTR::from_raw(group_id as *const u16),
+            IMAGE_ICON,
+            64,
+            64,
+            Default::default(),
+        ) {
+            Ok(h) if !h.0.is_null() => match render_icon_to_png(HICON(h.0), true) {
+                Ok(png) => {
+                    rendered = Some(png);
+                    break;
+                }
+                Err(e) => last_err = e,
+            },
+            _ => {}
+        }
+    }
+    let _ = FreeLibrary(module);
+    match rendered {
+        Some(png) => Ok(Some(png)),
+        None => Err(last_err),
+    }
+}
+
+/// Read one RT_GROUP_ICON resource and report (largest member area, group id).
+/// Groups whose members are all 0x0 placeholders rank as 0 and lose against
+/// any real artwork.
+#[cfg(target_os = "windows")]
+unsafe fn rank_icon_group(
+    module: windows::Win32::Foundation::HMODULE,
+    group_id: u16,
+) -> Option<(u32, u16)> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HRSRC;
+    use windows::Win32::System::LibraryLoader::{FindResourceW, LoadResource, LockResource, SizeofResource};
+    use windows::Win32::UI::WindowsAndMessaging::RT_GROUP_ICON;
+
+    let hsrc = FindResourceW(Some(module), PCWSTR::from_raw(group_id as *const u16), RT_GROUP_ICON);
+    if hsrc == HRSRC::default() {
+        return None;
+    }
+    let hres = LoadResource(Some(module), hsrc).ok()?;
+    let size = SizeofResource(Some(module), hsrc) as usize;
+    let ptr = LockResource(hres) as *const u8;
+    if ptr.is_null() || size < 6 {
+        return None;
+    }
+    let data = std::slice::from_raw_parts(ptr, size);
+    let count = u16::from_le_bytes([data[4], data[5]]) as usize;
+    let mut area: u32 = 0;
+    for e in data[6..].chunks_exact(14).take(count) {
+        let w = e[0] as u32 % 257; // 0 means 256
+        let h = e[1] as u32 % 257;
+        area = area.max(w * h);
+    }
+    if area == 0 {
+        None
+    } else {
+        Some((area, group_id))
+    }
+}
+
+/// Rasterise an HICON to PNG bytes via a 32-bit DIB section (keeps alpha on
+/// every display depth, unlike CreateCompatibleBitmap). `owns` controls
+/// whether the icon handle is destroyed afterwards (LR_SHARED: never).
+#[cfg(target_os = "windows")]
+unsafe fn render_icon_to_png(
+    icon: windows::Win32::UI::WindowsAndMessaging::HICON,
+    owns: bool,
+) -> Result<Vec<u8>, String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetDIBits,
+        GetObjectW, HGDIOBJ, ReleaseDC, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
+        BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyIcon, DrawIconEx, GetIconInfo, ICONINFO, DI_NORMAL,
+    };
+
+    let mut icon_info = ICONINFO::default();
+    if GetIconInfo(icon, &mut icon_info).is_err() {
+        if owns {
             let _ = DestroyIcon(icon);
         }
-
-        // Base64 encode.
-        Ok(base64_encode(&png_data))
+        return Err("获取图标信息失败".into());
     }
+    // GetIconInfo hands back two separate bitmaps: the colour one is the icon
+    // as-is; a mask-only icon (monochrome) is double-stacked, halve that one.
+    let probe = if icon_info.hbmColor.0.is_null() { icon_info.hbmMask } else { icon_info.hbmColor };
+    if probe.0.is_null() {
+        if owns {
+            let _ = DestroyIcon(icon);
+        }
+        return Err("图标无位图数据".into());
+    }
+    let mut bmp = BITMAP::default();
+    let ok = GetObjectW(
+        probe.into(),
+        std::mem::size_of::<BITMAP>() as i32,
+        Some(&mut bmp as *mut _ as *mut std::ffi::c_void),
+    );
+    let (width, height) = if ok == 0 {
+        (0, 0)
+    } else if icon_info.hbmColor.0.is_null() {
+        (bmp.bmWidth, bmp.bmHeight / 2)
+    } else {
+        (bmp.bmWidth, bmp.bmHeight)
+    };
+    for bmp in [icon_info.hbmColor, icon_info.hbmMask] {
+        if !bmp.0.is_null() {
+            let _ = DeleteObject(bmp.into());
+        }
+    }
+    if width <= 0 || height <= 0 {
+        if owns {
+            let _ = DestroyIcon(icon);
+        }
+        return Err("获取图标尺寸失败".into());
+    }
+
+    let hdc_screen = GetDC(Some(HWND::default()));
+    if hdc_screen.0.is_null() {
+        if owns {
+            let _ = DestroyIcon(icon);
+        }
+        return Err("获取屏幕DC失败".into());
+    }
+    let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
+    if hdc_mem.0.is_null() {
+        let _ = ReleaseDC(Some(HWND::default()), hdc_screen);
+        if owns {
+            let _ = DestroyIcon(icon);
+        }
+        return Err("创建内存DC失败".into());
+    }
+
+    let mut bmi = BITMAPINFO::default();
+    bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height; // top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB.0;
+
+    let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+    let hbitmap = match CreateDIBSection(Some(hdc_mem), &raw const bmi, DIB_RGB_COLORS, &mut bits_ptr, None, 0) {
+        Ok(hb) if !hb.0.is_null() && !bits_ptr.is_null() => hb,
+        _ => {
+            let _ = DeleteDC(hdc_mem);
+            let _ = ReleaseDC(Some(HWND::default()), hdc_screen);
+            if owns {
+                let _ = DestroyIcon(icon);
+            }
+            return Err("创建32位位图失败".into());
+        }
+    };
+    let old_bmp = SelectObject(hdc_mem, hbitmap.into());
+    if old_bmp == HGDIOBJ::default() {
+        let _ = DeleteObject(hbitmap.into());
+        let _ = DeleteDC(hdc_mem);
+        let _ = ReleaseDC(Some(HWND::default()), hdc_screen);
+        if owns {
+            let _ = DestroyIcon(icon);
+        }
+        return Err("选择位图失败".into());
+    }
+
+    let draw_result = DrawIconEx(hdc_mem, 0, 0, icon, width, height, 0, None, DI_NORMAL);
+    let mut pixels: Vec<u8> = vec![0u8; (((width * 32 + 31) / 32) * 4 * height) as usize];
+    let get_result = if draw_result.is_ok() {
+        GetDIBits(
+            hdc_mem,
+            hbitmap,
+            0,
+            height as u32,
+            Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        )
+    } else {
+        0
+    };
+    let _ = SelectObject(hdc_mem, old_bmp);
+    let _ = DeleteObject(hbitmap.into());
+    let _ = DeleteDC(hdc_mem);
+    let _ = ReleaseDC(Some(HWND::default()), hdc_screen);
+    if owns {
+        let _ = DestroyIcon(icon);
+    }
+    if get_result == 0 {
+        return Err("读取图标像素失败".into());
+    }
+
+    // BGRA (top-down) → RGBA.
+    let row_size = ((width * 32 + 31) / 32) * 4;
+    let mut rgba: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        let src_row = (y * row_size) as usize;
+        for x in 0..width {
+            let src = src_row + (x * 4) as usize;
+            let (b, g, r, a) = (pixels[src], pixels[src + 1], pixels[src + 2], pixels[src + 3]);
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+    }
+
+    // Reject a blank raster. GDI cannot decode PNG-compressed icon members (the
+    // 256px entry most Office/7-Zip groups rank as largest), and the failed
+    // decode comes back as a fully transparent bitmap — a valid PNG that renders
+    // as nothing. Callers use the Err to fall through to the next candidate.
+    let opaque = rgba.chunks_exact(4).filter(|p| p[3] > 24).count();
+    if opaque * 200 < rgba.len() / 4 {
+        return Err("图标为空白".into());
+    }
+    encode_png(&rgba, width, height)
 }
 
 /// Encode RGBA pixel data as a minimal PNG file.
@@ -1026,6 +1205,22 @@ mod tests {
         assert_eq!(format_version_parts(0x0012_0034, 0x0056_0078), "18.52.86.120");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn newest_version_exe_picks_highest_version_dir() {
+        let base = std::env::temp_dir().join(format!("al_ver_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for v in ["2.1.280", "2.1.9", "2.1.281", "notaversion"] {
+            let d = base.join(v);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("claude.exe"), b"x").unwrap();
+        }
+        // Numeric compare, not lexical: 2.1.281 must beat 2.1.9.
+        let got = newest_version_exe(&base, "claude.exe").unwrap();
+        assert!(got.ends_with(r"2.1.281\claude.exe"), "got {}", got);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
     #[test]
     fn path_key_normalizes_case_separators_and_trailing_slash() {
         assert_eq!(normalize_path_key("C:/App/exe"), normalize_path_key("c:\\app\\exe"));
@@ -1041,6 +1236,69 @@ mod tests {
         let lines: Vec<String> = apps.iter().map(|a| format!("{}\t{}", a.display_name, a.exe_path)).collect();
         std::fs::write("target/scan_dump.tsv", lines.join("\n")).unwrap();
         println!("scanned {} apps", apps.len());
+    }
+
+    /// Audit helper: run real icon extraction against known exes and write the
+    /// PNGs next to the test binary so failures can be told apart (backend
+    /// error vs. frontend render). `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "audit-only: touches the real filesystem"]
+    fn dump_icon_extraction_for_audit() {
+        fn base64_decode(s: &str) -> Option<Vec<u8>> {
+            const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut acc: u32 = 0;
+            let mut bits = 0;
+            let mut out = Vec::new();
+            for c in s.bytes() {
+                if c == b'=' {
+                    break;
+                }
+                let v = CHARS.iter().position(|&x| x == c)? as u32;
+                acc = (acc << 6) | v;
+                bits += 6;
+                if bits >= 8 {
+                    bits -= 8;
+                    out.push((acc >> bits) as u8);
+                }
+            }
+            Some(out)
+        }
+
+        let windir = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let mut candidates: Vec<String> = vec![
+            format!("{windir}\\System32\\notepad.exe"),
+            format!("{windir}\\explorer.exe"),
+            format!("{local}\\OpenAI\\Codex\\bin\\codex.exe"),
+        ];
+        // Every real scanned app the user's launcher list can contain.
+        if let Ok(dump) = std::fs::read_to_string("target/scan_dump.tsv") {
+            for line in dump.lines() {
+                if let Some((_name, path)) = line.split_once('\t') {
+                    candidates.push(path.to_string());
+                }
+            }
+        }
+        let mut lines = Vec::new();
+        for (i, path) in candidates.iter().enumerate() {
+            let verdict = match extract_app_icon_sync(path.clone()) {
+                Ok(b64) => {
+                    match base64_decode(&b64) {
+                        Some(bytes) => {
+                            let w = bytes.get(16..20).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0);
+                            let h = bytes.get(20..24).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0);
+                            std::fs::write(format!("target/icon_audit_{i}.png"), &bytes).ok();
+                            format!("OK b64={} png={}x{} file={}B", b64.len(), w, h, bytes.len())
+                        }
+                        None => format!("OK-but-undecodable b64={}", b64.len()),
+                    }
+                }
+                Err(e) => format!("ERR {e}"),
+            };
+            lines.push(format!("{path}\t{verdict}"));
+        }
+        std::fs::write("target/icon_audit.txt", lines.join("\n")).unwrap();
+        println!("{}", lines.join("\n"));
     }
 }
 
@@ -1117,9 +1375,13 @@ pub(crate) fn scan_installed_apps_sync() -> Result<Vec<InstalledAppInfo>, String
         );
     }
 
-    // Start Menu shortcuts last: they are the ground truth for what the user
-    // can launch, covering other drives and deep layouts the dir scan can't see.
-    scan_start_menu_apps(&mut apps, &mut seen);
+    // Shortcuts (Start Menu + Desktop) last: they are the ground truth for what
+    // the user can launch, covering other drives and deep layouts the dir scan can't see.
+    scan_shortcut_apps(&mut apps, &mut seen);
+
+    // A curated set of per-user CLI/dev tools that register no uninstall key and
+    // ship no shortcut, so no standard "installed apps" source sees them.
+    scan_cli_tool_apps(&mut apps, &mut seen);
 
     // Sort by display name for a stable list.
     apps.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
@@ -1226,12 +1488,13 @@ fn parse_lnk_local_path(bytes: &[u8]) -> Option<String> {
     }
 }
 
-/// Start Menu shortcuts. Catches non-system-drive installs (D:\\...), deep
-/// layouts (Chrome, Office) and portable apps that never register themselves.
+/// Shortcut-based apps: Start Menu **and** Desktop (user + public). Both are
+/// where Windows records "things the user launches"; the Desktop especially
+/// catches apps that never registered a Start Menu entry or uninstall key.
 /// Resolves each .lnk via `parse_lnk_local_path` — no COM dependency.
 #[cfg(windows)]
-fn scan_start_menu_apps(apps: &mut Vec<InstalledAppInfo>, seen: &mut std::collections::HashSet<String>) {
-    let roots: Vec<std::path::PathBuf> = [
+fn scan_shortcut_apps(apps: &mut Vec<InstalledAppInfo>, seen: &mut std::collections::HashSet<String>) {
+    let mut roots: Vec<std::path::PathBuf> = [
         std::env::var_os("APPDATA"),
         std::env::var_os("ProgramData"),
     ]
@@ -1240,6 +1503,12 @@ fn scan_start_menu_apps(apps: &mut Vec<InstalledAppInfo>, seen: &mut std::collec
     .map(|base| std::path::PathBuf::from(base).join(r"Microsoft\Windows\Start Menu\Programs"))
     .filter(|p| p.is_dir())
     .collect();
+    // Desktop folders (shallow — shortcuts may sit in a subfolder).
+    for desktop in [desktop_dir(), public_desktop_dir()].into_iter().flatten() {
+        if desktop.is_dir() {
+            roots.push(desktop);
+        }
+    }
 
     let mut links: Vec<std::path::PathBuf> = Vec::new();
     for r in &roots {
@@ -1256,15 +1525,96 @@ fn scan_start_menu_apps(apps: &mut Vec<InstalledAppInfo>, seen: &mut std::collec
             continue;
         }
         if seen.insert(normalize_path_key(&target)) {
+            let version = get_app_version_sync(target.clone()).unwrap_or_default();
             apps.push(InstalledAppInfo {
                 display_name: name,
                 exe_path: target,
                 publisher: String::new(),
-                version: String::new(),
+                version,
                 icon: None,
             });
         }
     }
+}
+
+/// Resolve the current user's Desktop via the shell folder (handles OneDrive
+/// redirection), falling back to %USERPROFILE%\Desktop.
+#[cfg(windows)]
+fn desktop_dir() -> Option<std::path::PathBuf> {
+    let profile = std::env::var_os("USERPROFILE")?;
+    let candidate = std::path::PathBuf::from(profile).join("Desktop");
+    if candidate.is_dir() {
+        return Some(candidate);
+    }
+    let one_drive = std::env::var_os("OneDrive").map(|b| std::path::PathBuf::from(b).join("Desktop"));
+    one_drive.filter(|p| p.is_dir()).or(Some(candidate))
+}
+
+#[cfg(windows)]
+fn public_desktop_dir() -> Option<std::path::PathBuf> {
+    let pf = std::env::var_os("PUBLIC")?;
+    Some(std::path::PathBuf::from(pf).join("Desktop"))
+}
+
+/// Per-user CLI / dev tools that install into `%LOCALAPPDATA%\<Vendor>` with no
+/// uninstall key and no shortcut, so no standard "installed apps" source sees
+/// them. This is a deliberately small, curated allowlist (extend as needed) — a
+/// broad LOCALAPPDATA sweep would drown the list in caches and updater dirs.
+#[cfg(windows)]
+fn scan_cli_tool_apps(apps: &mut Vec<InstalledAppInfo>, seen: &mut std::collections::HashSet<String>) {
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else { return };
+    let local = std::path::PathBuf::from(local);
+    // (display name, path under LOCALAPPDATA, exe file, exe sits under a versioned subdir)
+    const SPECS: &[(&str, &str, &str, bool)] = &[
+        ("Codex", r"OpenAI\Codex\bin", "codex.exe", false),
+        ("Claude Code", r"Claude-3p\claude-code", "claude.exe", true),
+    ];
+    for (name, rel, exe, versioned) in SPECS {
+        let root = local.join(rel);
+        let exe_path = if *versioned {
+            newest_version_exe(&root, exe)
+        } else {
+            let p = root.join(exe);
+            p.is_file().then(|| p.to_string_lossy().to_string())
+        };
+        let Some(exe_path) = exe_path else { continue };
+        if seen.insert(normalize_path_key(&exe_path)) {
+            let version = get_app_version_sync(exe_path.clone()).unwrap_or_default();
+            apps.push(InstalledAppInfo {
+                display_name: name.to_string(),
+                exe_path,
+                publisher: String::new(),
+                version,
+                icon: None,
+            });
+        }
+    }
+}
+
+/// Pick `exe` from the highest version-numbered subdirectory of `root`
+/// (e.g. `claude-code\2.1.281\claude.exe` wins over `2.1.280`).
+#[cfg(windows)]
+fn newest_version_exe(root: &std::path::Path, exe: &str) -> Option<String> {
+    let mut best: Option<(Vec<u32>, std::path::PathBuf)> = None;
+    for e in std::fs::read_dir(root).ok()?.flatten() {
+        let dir = e.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let name = dir.file_name()?.to_string_lossy().to_string();
+        let ver: Vec<u32> = name.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
+        if ver.is_empty() {
+            continue;
+        }
+        let cand = dir.join(exe);
+        if !cand.is_file() {
+            continue;
+        }
+        if best.as_ref().map(|(bv, _)| ver > *bv).unwrap_or(true) {
+            best = Some((ver, cand));
+        }
+    }
+    best.map(|(_, p)| p.to_string_lossy().to_string())
 }
 
 /// Acceptance filter for a Start Menu shortcut's resolved exe target.

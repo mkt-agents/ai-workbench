@@ -258,13 +258,11 @@
     "added": "App added",
     "updated": "App updated",
     "deleted": "App deleted",
-    "killedAll": "All running apps killed",
     "deleteTitle": "Delete App",
     "deleteConfirm": "Confirm delete \"{{name}}\"? This cannot be undone.",
     "killTitle": "Kill App",
     "killConfirm": "Confirm kill {{name}}? The app will first attempt a graceful exit, then force-kill after a timeout.",
     "killAllTitle": "Kill All",
-    "killAllConfirm": "Confirm kill {{count}} running apps?",
     "emptyHint": "Scan installed apps or add manually",
     "scan": {
       "title": "Scan Apps",
@@ -275,7 +273,8 @@
       "deselectAll": "Deselect all",
       "selected": "{{selected}} / {{total}} apps selected",
       "addSelected": "Add selected ({{count}})",
-      "added": "Added {{count}} apps"
+      "added": "Added {{count}} apps",
+      "manualAdd": "Add manually…"
     },
     "error": {
       "nameRequired": "Please enter an app name",
@@ -288,7 +287,6 @@
     "import": "Import",
     "imported": "Imported {{count}} apps",
     "skippedDuplicates": "Skipped {{count}} duplicates",
-    "killAllPartial": "Failed to kill {{failed}} of {{total}} apps",
     "batchDeleteConfirm": "Delete the selected {{count}} apps? This cannot be undone.",
     "batchLaunchDone": "Launched {{count}} apps",
     "batchLaunchFailed": "{{count}} failed to launch",
@@ -306,10 +304,27 @@
     "sort": {
       "title": "Sort by",
       "custom": "Custom (drag to reorder)",
+      "customShort": "Custom",
       "name": "Name A→Z",
       "nameDesc": "Name Z→A",
       "group": "By group",
       "running": "Running first"
+    },
+    "close": "Close",
+    "ungrouped": "Ungrouped",
+    "batchSetGroup": "Set group",
+    "batchGroupDone": "Updated the group of {{count}} apps",
+    "groupRenamed": "Group renamed",
+    "groupDeleted": "Group deleted",
+    "groupManager": {
+      "title": "Manage groups",
+      "add": "Add",
+      "newPlaceholder": "New group name…",
+      "empty": "No groups yet — create one",
+      "rename": "Rename",
+      "delete": "Delete",
+      "deleteTitle": "Delete group",
+      "deleteConfirm": "Delete group “{{name}}”? The {{count}} apps in it become ungrouped (the apps themselves are not deleted)."
     }
   },
   "http": {

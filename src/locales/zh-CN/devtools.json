@@ -258,13 +258,11 @@
     "added": "已添加应用",
     "updated": "已更新应用",
     "deleted": "已删除应用",
-    "killedAll": "已关闭所有运行中的应用",
     "deleteTitle": "删除应用",
     "deleteConfirm": "确认删除「{{name}}」？此操作不可撤销。",
     "killTitle": "关闭应用",
     "killConfirm": "确认关闭 {{name}}？应用将先尝试正常退出，超时后强制结束。",
     "killAllTitle": "全部关闭",
-    "killAllConfirm": "确认关闭 {{count}} 个运行中的应用？",
     "emptyHint": "扫描系统已安装的应用，或手动添加",
     "scan": {
       "title": "扫描应用",
@@ -275,7 +273,8 @@
       "deselectAll": "取消全选",
       "selected": "已选 {{selected}} / {{total}} 个应用",
       "addSelected": "添加选中 ({{count}})",
-      "added": "成功添加 {{count}} 个应用"
+      "added": "成功添加 {{count}} 个应用",
+      "manualAdd": "手动添加…"
     },
     "error": {
       "nameRequired": "请输入应用名称",
@@ -288,7 +287,6 @@
     "import": "导入",
     "imported": "已导入 {{count}} 个应用",
     "skippedDuplicates": "跳过 {{count}} 个重复项",
-    "killAllPartial": "{{failed}} 个应用关闭失败（共 {{total}} 个）",
     "batchDeleteConfirm": "确认删除选中的 {{count}} 个应用？此操作不可撤销。",
     "batchLaunchDone": "已启动 {{count}} 个应用",
     "batchLaunchFailed": "{{count}} 个启动失败",
@@ -306,10 +304,27 @@
     "sort": {
       "title": "排序方式",
       "custom": "自定义（可拖动）",
+      "customShort": "自定义",
       "name": "名称 A→Z",
       "nameDesc": "名称 Z→A",
       "group": "按分组",
       "running": "运行中优先"
+    },
+    "close": "关闭",
+    "ungrouped": "未分组",
+    "batchSetGroup": "设置分组",
+    "batchGroupDone": "已更新 {{count}} 个应用的分组",
+    "groupRenamed": "分组已重命名",
+    "groupDeleted": "分组已删除",
+    "groupManager": {
+      "title": "分组管理",
+      "add": "添加",
+      "newPlaceholder": "新分组名称…",
+      "empty": "还没有分组，先新建一个",
+      "rename": "重命名",
+      "delete": "删除",
+      "deleteTitle": "删除分组",
+      "deleteConfirm": "删除分组「{{name}}」？该分组下 {{count}} 个应用将变为未分组（应用本身不会被删除）。"
     }
   },
   "http": {

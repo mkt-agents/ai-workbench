@@ -8,12 +8,12 @@ import {
   Pencil,
   Play,
   Plus,
-  Power,
   RefreshCw,
   Repeat,
   Rocket,
   Search,
   Ban,
+  Tags,
   Trash2,
   Upload,
   X,
@@ -217,19 +217,36 @@ function AppLauncherTool() {
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [groupFilter, setGroupFilter] = useState<string>('');
-  // Which toolbar popover is open — group and sort share one slot so opening
-  // one closes the other (two frosted popovers at once looks broken).
-  const [openPop, setOpenPop] = useState<"" | "group" | "sort">("");
+  // Which toolbar popover is open — group filter, sort, and the batch-group
+  // picker share one slot so opening one closes the others.
+  const [openPop, setOpenPop] = useState<"" | "group" | "sort" | "batchGroup">("");
   const [sortBy, setSortBy] = useState<SortMode>(() => {
     const v = typeof localStorage !== "undefined" ? localStorage.getItem("al-sort") : null;
     return v === "name" || v === "nameDesc" || v === "group" || v === "running" ? v : "custom";
   });
+  // User-defined group names (the canonical list, so empty groups can exist).
+  const [groups, setGroups] = useState<string[]>(() => {
+    try {
+      const raw = typeof localStorage !== "undefined" ? localStorage.getItem("al-groups") : null;
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  const [groupManagerOpen, setGroupManagerOpen] = useState(false);
+  const [newGroup, setNewGroup] = useState("");
+  const [editingGroup, setEditingGroup] = useState<{ name: string; value: string } | null>(null);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     try { localStorage.setItem("al-sort", sortBy); } catch { /* storage disabled */ }
   }, [sortBy]);
+
+  useEffect(() => {
+    try { localStorage.setItem("al-groups", JSON.stringify(groups)); } catch { /* storage disabled */ }
+  }, [groups]);
 
   // Close the toolbars' popovers on outside click / Escape.
   useEffect(() => {
@@ -347,14 +364,68 @@ function AppLauncherTool() {
     return arr;
   }, [launchers, search, groupFilter, sortBy, runningPids]);
 
-  // Extract unique groups for filter dropdown
+  // All groups to show in filters/pickers: the user-defined list plus any group
+  // still used by an app (so a stray/imported group is never invisible).
   const availableGroups = useMemo(() => {
-    const groups = new Set<string>();
+    const set = new Set<string>(groups);
     launchers.forEach((l) => {
-      if (l.group) groups.add(l.group);
+      if (l.group) set.add(l.group);
     });
-    return Array.from(groups).sort();
-  }, [launchers]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "zh"));
+  }, [groups, launchers]);
+
+  // Ensure a group name is in the managed list (used on save / batch / import).
+  const ensureGroup = useCallback((name?: string) => {
+    const n = name?.trim();
+    if (!n) return;
+    setGroups((prev) => (prev.some((g) => g.toLowerCase() === n.toLowerCase()) ? prev : [...prev, n]));
+  }, []);
+
+  const addGroup = useCallback((name: string) => {
+    const n = name.trim();
+    if (!n) return;
+    setGroups((prev) => (prev.some((g) => g.toLowerCase() === n.toLowerCase()) ? prev : [...prev, n]));
+  }, []);
+
+  // Rename a group everywhere: the managed list and every app using it.
+  const renameGroup = useCallback(async (oldName: string, rawNew: string) => {
+    const newName = rawNew.trim();
+    if (!newName || newName === oldName) return;
+    setGroups((prev) => {
+      const exists = prev.some((g) => g.toLowerCase() === newName.toLowerCase());
+      const base = prev.filter((g) => g !== oldName);
+      return exists ? base : [...base, newName];
+    });
+    for (const l of launchers.filter((x) => (x.group || "") === oldName)) {
+      await updateLauncher(l.id, { group: newName });
+    }
+    if (groupFilter === oldName) setGroupFilter(newName);
+    setMessage({ type: "success", text: t("appLauncher.groupRenamed") });
+  }, [launchers, groupFilter, t, updateLauncher]);
+
+  // Delete a group: drop it from the list and clear it on every app using it.
+  const deleteGroup = useCallback(async (name: string) => {
+    setGroups((prev) => prev.filter((g) => g !== name));
+    for (const l of launchers.filter((x) => (x.group || "") === name)) {
+      await updateLauncher(l.id, { group: undefined });
+    }
+    if (groupFilter === name) setGroupFilter("");
+    setMessage({ type: "success", text: t("appLauncher.groupDeleted") });
+  }, [launchers, groupFilter, t, updateLauncher]);
+
+  // Assign a group to all selected apps (empty string clears it).
+  const batchSetGroup = useCallback(async (name: string) => {
+    const targets = launchers.filter((l) => selectedIds.has(l.id));
+    if (targets.length === 0) return;
+    const group = name.trim() || undefined;
+    if (group) ensureGroup(group);
+    for (const l of targets) {
+      if ((l.group || "") !== (group || "")) await updateLauncher(l.id, { group });
+    }
+    setOpenPop("");
+    setSelectedIds(new Set());
+    setMessage({ type: "success", text: t("appLauncher.batchGroupDone", { count: targets.length }) });
+  }, [launchers, selectedIds, ensureGroup, updateLauncher, t]);
 
   const runningCount = useMemo(() => runningPids.size, [runningPids]);
 
@@ -510,6 +581,7 @@ function AppLauncherTool() {
         await addLauncher({ name, path, args: form.args.trim(), group: form.group.trim() || undefined, version: version || undefined, order: 0 });
         setMessage({ type: "success", text: t("appLauncher.added") });
       }
+      ensureGroup(form.group);
       setShowForm(false);
       setEditingId(null);
       setForm({ name: "", path: "", args: "", group: "", version: "" });
@@ -569,28 +641,6 @@ function AppLauncherTool() {
       setMessage({ type: "error", text: String(e) });
     } finally {
       setKilling((prev) => { const n = new Set(prev); n.delete(l.id); return n; });
-    }
-  };
-
-  const handleKillAll = async () => {
-    if (runningCount === 0) return;
-    const ok = await confirm({
-      title: t("appLauncher.killAllTitle"),
-      message: t("appLauncher.killAllConfirm", { count: runningCount }),
-      confirmText: t("appLauncher.kill"),
-      icon: "danger",
-    });
-    if (!ok) return;
-    const running = launchers.filter((l) => runningPids.has(l.id));
-    const results = await Promise.allSettled(
-      running.map((l) => invokeKillApp(exeNameFromPath(l.path)))
-    );
-    const failed = results.filter((r) => r.status === "rejected").length;
-    await refreshStatus(true);
-    if (failed > 0) {
-      setMessage({ type: "error", text: t("appLauncher.killAllPartial", { failed, total: running.length }) });
-    } else {
-      setMessage({ type: "success", text: t("appLauncher.killedAll") });
     }
   };
 
@@ -709,6 +759,7 @@ function AppLauncherTool() {
         if (savedPaths.has(normalizeAppPath(path))) { skipped++; continue; }
         try {
           await addLauncher({ name, path, args, group: group || undefined, version: version || undefined, order: 0 });
+          if (group) ensureGroup(group);
           savedPaths.add(normalizeAppPath(path));
           added++;
         } catch { skipped++; }
@@ -814,23 +865,18 @@ function AppLauncherTool() {
       {/* ── Toolbar ── */}
       <div className="al-toolbar" ref={toolbarRef}>
         <div className="al-toolbar-left">
-          <button type="button" className="al-btn al-btn-primary" onClick={openAddForm} title={t("appLauncher.add")}>
+          <button type="button" className="al-btn al-btn-primary" onClick={openScanDialog} title={t("appLauncher.add")}>
             <Plus size={14} />
             <span>{t("appLauncher.add")}</span>
           </button>
-          <button type="button" className="al-btn" onClick={openScanDialog} title={t("appLauncher.scan.title")}>
-            <Download size={14} />
-            <span>{t("appLauncher.scan.title")}</span>
-          </button>
           <button
             type="button"
-            className="al-btn al-btn-danger-outline"
-            onClick={handleKillAll}
-            disabled={runningCount === 0}
-            title={t("appLauncher.killAllTitle")}
+            className="al-btn"
+            onClick={() => setGroupManagerOpen(true)}
+            title={t("appLauncher.groupManager.title")}
           >
-            <Power size={14} />
-            <span>{t("appLauncher.killAllTitle")}</span>
+            <Tags size={14} />
+            <span>{t("appLauncher.groupManager.title")}</span>
           </button>
         </div>
         <div className="al-toolbar-right">
@@ -851,6 +897,17 @@ function AppLauncherTool() {
                 <Ban size={14} />
                 <span>{t("appLauncher.batchKill")}</span>
               </button>
+              <QuickSelect
+                className="al-batch-group-select"
+                value=""
+                placeholder={t("appLauncher.batchSetGroup")}
+                title={t("appLauncher.batchSetGroup")}
+                options={[{ value: "", label: t("appLauncher.ungrouped") }, ...availableGroups.map((g) => ({ value: g, label: g }))]}
+                onChange={batchSetGroup}
+                alignLeft
+                open={openPop === "batchGroup"}
+                onToggle={() => setOpenPop((v) => (v === "batchGroup" ? "" : "batchGroup"))}
+              />
               <button type="button" className="al-btn al-btn-danger-outline" onClick={handleBatchDelete} title={t("appLauncher.batchDelete")}>
                 <Trash2 size={14} />
                 <span>{t("appLauncher.batchDelete")}</span>
@@ -878,7 +935,7 @@ function AppLauncherTool() {
                   value={sortBy}
                   title={t("appLauncher.sort.title")}
                   options={[
-                    { value: "custom", label: t("appLauncher.sort.custom") },
+                    { value: "custom", label: t("appLauncher.sort.custom"), short: t("appLauncher.sort.customShort") },
                     { value: "name", label: t("appLauncher.sort.name") },
                     { value: "nameDesc", label: t("appLauncher.sort.nameDesc") },
                     { value: "group", label: t("appLauncher.sort.group") },
@@ -908,24 +965,26 @@ function AppLauncherTool() {
                   {runningCount} {t("appLauncher.running")}
                 </span>
               )}
-              <div className="al-divider" />
-              <button type="button" className="al-btn al-btn-icon" onClick={() => { void refreshStatus(true); }} title={t("appLauncher.refreshStatus")}>
-                <RefreshCw size={14} />
-              </button>
-              <button
-                type="button"
-                className={'al-btn al-btn-icon ' + (autoRefresh ? 'al-btn-active' : '')}
-                onClick={() => setAutoRefresh((v) => !v)}
-                title={t("appLauncher.autoRefresh")}
-              >
-                <Repeat size={14} className={autoRefresh ? 'spin' : ''} />
-              </button>
-              <button type="button" className="al-btn al-btn-icon" onClick={handleExport} title={t("appLauncher.export")}>
-                <Upload size={14} />
-              </button>
-              <button type="button" className="al-btn al-btn-icon" onClick={() => fileInputRef.current?.click()} title={t("appLauncher.import")}>
-                <Download size={14} />
-              </button>
+              <div className="al-icon-group">
+                <div className="al-divider" />
+                <button type="button" className="al-btn al-btn-icon" onClick={() => { void refreshStatus(true); }} title={t("appLauncher.refreshStatus")}>
+                  <RefreshCw size={14} />
+                </button>
+                <button
+                  type="button"
+                  className={'al-btn al-btn-icon ' + (autoRefresh ? 'al-btn-active' : '')}
+                  onClick={() => setAutoRefresh((v) => !v)}
+                  title={t("appLauncher.autoRefresh")}
+                >
+                  <Repeat size={14} className={autoRefresh ? 'spin' : ''} />
+                </button>
+                <button type="button" className="al-btn al-btn-icon" onClick={handleExport} title={t("appLauncher.export")}>
+                  <Upload size={14} />
+                </button>
+                <button type="button" className="al-btn al-btn-icon" onClick={() => fileInputRef.current?.click()} title={t("appLauncher.import")}>
+                  <Download size={14} />
+                </button>
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1124,7 +1183,11 @@ function AppLauncherTool() {
                 <label className="form-label">{t("appLauncher.group")}</label>
                 <input type="text" className="devtools-input" value={form.group}
                   onChange={(e) => setForm((f) => ({ ...f, group: e.target.value }))}
+                  list="al-group-options"
                   placeholder={t("appLauncher.groupPlaceholder")} spellCheck={false} />
+                <datalist id="al-group-options">
+                  {availableGroups.map((g) => <option key={g} value={g} />)}
+                </datalist>
               </div>
               <div className="form-row">
                 <label className="form-label">{t("appLauncher.formArgs")}</label>
@@ -1226,10 +1289,140 @@ function AppLauncherTool() {
               )}
             </div>
             <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => { closeScanDialog(); openAddForm(); }}
+              >
+                <span>{t("appLauncher.scan.manualAdd")}</span>
+              </button>
+              <div className="modal-footer-spacer" />
               <button type="button" className="btn btn-secondary" onClick={closeScanDialog}>{t("appLauncher.cancel")}</button>
               <button type="button" className="btn btn-primary" onClick={addSelectedApps} disabled={selectedApps.size === 0}>
                 <Download size={14} />
                 <span>{t("appLauncher.scan.addSelected", { count: selectedApps.size })}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Group Manager Modal ── */}
+      {groupManagerOpen && (
+        <div className="modal-overlay" onClick={() => { setGroupManagerOpen(false); setEditingGroup(null); }}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">{t("appLauncher.groupManager.title")}</span>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => { setGroupManagerOpen(false); setEditingGroup(null); }}
+                aria-label={t("common.clearSearch")}
+              >
+                <XCircle size={16} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="al-group-add">
+                <input
+                  type="text"
+                  className="devtools-input"
+                  value={newGroup}
+                  onChange={(e) => setNewGroup(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && newGroup.trim()) { addGroup(newGroup); setNewGroup(""); } }}
+                  placeholder={t("appLauncher.groupManager.newPlaceholder")}
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="al-btn al-btn-primary"
+                  disabled={!newGroup.trim()}
+                  onClick={() => { addGroup(newGroup); setNewGroup(""); }}
+                >
+                  <Plus size={14} />
+                  <span>{t("appLauncher.groupManager.add")}</span>
+                </button>
+              </div>
+              {availableGroups.length === 0 ? (
+                <div className="al-empty al-empty-sm">
+                  <Tags size={20} className="al-empty-icon" />
+                  <span>{t("appLauncher.groupManager.empty")}</span>
+                </div>
+              ) : (
+                <div className="al-group-list">
+                  {availableGroups.map((g) => {
+                    const count = launchers.filter((l) => (l.group || "") === g).length;
+                    const isEditing = editingGroup?.name === g;
+                    return (
+                      <div key={g} className="al-group-row">
+                        {isEditing ? (
+                          <>
+                            <input
+                              type="text"
+                              className="devtools-input al-group-rename-input"
+                              value={editingGroup.value}
+                              autoFocus
+                              onChange={(e) => setEditingGroup({ name: g, value: e.target.value })}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") { void renameGroup(g, editingGroup.value); setEditingGroup(null); }
+                                else if (e.key === "Escape") setEditingGroup(null);
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="al-icon-btn"
+                              title={t("appLauncher.save")}
+                              onClick={() => { void renameGroup(g, editingGroup.value); setEditingGroup(null); }}
+                            >
+                              <Check size={14} />
+                            </button>
+                            <button type="button" className="al-icon-btn" title={t("appLauncher.cancel")} onClick={() => setEditingGroup(null)}>
+                              <X size={14} />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="al-group-row-name" title={g}>{g}</span>
+                            <span className="al-group-row-count">{count}</span>
+                            <button
+                              type="button"
+                              className="al-icon-btn"
+                              title={t("appLauncher.groupManager.rename")}
+                              onClick={() => setEditingGroup({ name: g, value: g })}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="al-icon-btn al-icon-btn-danger"
+                              title={t("appLauncher.groupManager.delete")}
+                              onClick={async () => {
+                                const ok = await confirm({
+                                  title: t("appLauncher.groupManager.deleteTitle"),
+                                  message: t("appLauncher.groupManager.deleteConfirm", { name: g, count }),
+                                  confirmText: t("appLauncher.delete"),
+                                  icon: "danger",
+                                });
+                                if (ok) await deleteGroup(g);
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => { setGroupManagerOpen(false); setEditingGroup(null); }}
+              >
+                {t("appLauncher.close")}
               </button>
             </div>
           </div>

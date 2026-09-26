@@ -7,7 +7,7 @@ import { useGlobalStore } from "../core/store";
 import type { AppTheme } from "../core/types";
 import {
   APP_RELEASES_URL,
-  checkForUpdates,
+  checkForUpdatesMultiSource as checkForUpdates,
 } from "../lib/version";
 import { registerQuickAskShortcut, DEFAULT_SHORTCUT } from "../lib/quickAskShortcut";
 import { applyDocumentTheme, APP_THEME_CHANGED_EVENT } from "../lib/theme";

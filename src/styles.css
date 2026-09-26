@@ -1048,6 +1048,7 @@ body.resizing :is(
   .http-history-menu,
   .qa-focus-pop,
   .tr-multiselect-menu,
+  .update-banner,
   .quick-ask-toolbar .qa-focus-btn
 ) {
   backdrop-filter: none !important;
@@ -6781,6 +6782,67 @@ input, select, textarea { font-family: inherit; }
   border-left-color: var(--yellow);
   background: var(--bg-1);
   color: var(--text-0);
+}
+
+/* ── Startup update banner (bottom-right, non-blocking) ── */
+
+.update-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: 12.5px;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: update-banner-in 0.2s ease;
+}
+
+@keyframes update-banner-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.update-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.update-banner-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.update-banner-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.update-banner-close:hover {
+  color: var(--text-0);
+  background: var(--bg-hover);
 }
 
 .toast-warning .toast-icon {
