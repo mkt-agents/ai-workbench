@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 
 /**
@@ -40,20 +41,28 @@ export function parseInvokeError(raw: unknown): ParsedInvokeError {
 /**
  * Hook that returns a function to translate an invoke error into a localized
  * string. Falls back to the raw detail message when no translation exists.
+ *
+ * The identity is stable per language on purpose: callers keep it in
+ * `useCallback`/`useEffect` dependency lists to define their own refresh
+ * function, and a fresh closure every render would re-fire those effects and
+ * silently wipe any error message they just set.
  */
 export function useInvokeErrorTranslator() {
   const { t } = useTranslation("common");
 
-  return (raw: unknown): string => {
-    const { code, message } = parseInvokeError(raw);
-    if (code) {
-      const key = `errors.${code}`;
-      const translated = t(key);
-      // i18next returns the key when missing — fall back to detail
-      if (translated !== key) return translated;
-    }
-    return message;
-  };
+  return useCallback(
+    (raw: unknown): string => {
+      const { code, message } = parseInvokeError(raw);
+      if (code) {
+        const key = `errors.${code}`;
+        const translated = t(key);
+        // i18next returns the key when missing — fall back to detail
+        if (translated !== key) return translated;
+      }
+      return message;
+    },
+    [t]
+  );
 }
 
 export default useInvokeErrorTranslator;

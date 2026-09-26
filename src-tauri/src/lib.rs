@@ -17,6 +17,14 @@ mod cancellation_commands;
 mod change_report;
 mod report_commands;
 mod report_history;
+pub mod codebuddy;
+mod wb_commands;
+mod wb_keys;
+mod wb_logs;
+mod wb_checkin;
+mod wb_capture;
+mod wb_gateway;
+mod wb_growth;
 
 pub use config::*;
 
@@ -80,6 +88,7 @@ pub fn run() {
             children: Mutex::new(HashMap::new()),
         })
         .manage(cloudflared_commands::CloudflaredState::default())
+        .manage(wb_gateway::WbGatewayState::default())
         .manage(tray::TrayTunnelUrls::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("failed to get app data dir");
@@ -287,6 +296,7 @@ pub fn run() {
             // The AI history is the one report-related thing that is persisted;
             // its schema lives next to its own code (see report_history.rs).
             report_history::ensure_schema(&conn).expect("failed to init report history schema");
+            codebuddy::ensure_schema(&conn).expect("failed to init workbuddy schema");
 
             // The automated-testing feature was removed; drop the tables it used
             // to own so a stale DB from an older build does not linger. Idempotent.
@@ -344,6 +354,11 @@ pub fn run() {
                     Err(e) => eprintln!("[cursor] shared workspace migration task failed: {e}"),
                 }
             });
+
+            // WorkBuddy daily check-in scheduler. Started only after the real
+            // connection has been swapped into DbState above — the loop reads
+            // wb_settings on its first tick.
+            wb_checkin::spawn_loop(app.handle().clone());
 
             #[cfg(desktop)]
             {
@@ -403,6 +418,40 @@ pub fn run() {
             report_history::save_report_ai_history,
             report_history::list_report_ai_history,
             report_history::delete_report_ai_history,
+            wb_commands::wb_list_accounts,
+            wb_commands::wb_add_account_manual,
+            wb_commands::wb_update_account,
+            wb_commands::wb_delete_account,
+            wb_commands::wb_probe_account,
+            wb_commands::wb_get_settings,
+            wb_commands::wb_update_settings,
+            wb_keys::wb_key_create,
+            wb_keys::wb_key_list,
+            wb_keys::wb_key_set_enabled,
+            wb_keys::wb_key_delete,
+            wb_keys::wb_key_reset,
+            wb_logs::wb_log_list,
+            wb_logs::wb_log_clear,
+            wb_logs::wb_log_stats,
+            wb_logs::wb_log_models,
+            wb_checkin::wb_checkin_now,
+            wb_checkin::wb_checkin_status,
+            wb_growth::wb_growth_info,
+            wb_checkin::wb_checkin_log_list,
+            wb_checkin::wb_checkin_log_clear,
+            wb_capture::wb_open_cb_login_window,
+            wb_capture::wb_capture_cb_login_cookies,
+            wb_capture::wb_read_cb_login_probe,
+            wb_capture::wb_cb_login_selftest,
+            wb_capture::wb_close_cb_login_window,
+            wb_gateway::wb_gateway_start,
+            wb_gateway::wb_gateway_stop,
+            wb_gateway::wb_gateway_status,
+            wb_gateway::wb_set_lan_mode,
+            wb_gateway::wb_ip_list,
+            wb_gateway::wb_ip_add,
+            wb_gateway::wb_ip_delete,
+            wb_gateway::wb_ip_set_enabled,
             hosts_commands::read_system_hosts,
             hosts_commands::is_admin,
             hosts_commands::write_system_hosts,

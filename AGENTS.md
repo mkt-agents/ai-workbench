@@ -13,7 +13,7 @@
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.1.8`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite，密钥明文，勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor）→ 版本管理（Git 管理/环境变量）→ 网络管理（Hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置（文案以 `src/locales/*/navigation.json` 为准）
+- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/WorkBuddy）→ 版本管理（Git 管理/环境变量）→ 网络管理（Hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置（文案以 `src/locales/*/navigation.json` 为准）
 
 ## 技术栈与目录
 
@@ -41,6 +41,12 @@ src-tauri/src/        # Rust 后端
                       # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
                       # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO
   cursor/ tray/       # Cursor 多身份、系统托盘与快问窗
+  codebuddy/          # WorkBuddy 域：adapter.rs（上游协议全 JSON 化，端点不写死）+
+                      # credential.rs（token/cookie 解析、JWT exp、掩码）
+  wb_*.rs + wb_gateway/  # WorkBuddy Manager：wb_commands（账号池）/ wb_gateway（axum 反代 +
+                      # ip_filter + pool + sse 用量侧道）/ wb_keys（wk- 密钥）/
+                      # wb_logs（调用日志 FIFO）/ wb_checkin（签到 + 调度 loop）/
+                      # wb_capture（扫码登录窗 + 凭证回传）
 docs/                 # CODE_WIKI.md（架构百科）、cloudflared.md、各计划文档
 ```
 

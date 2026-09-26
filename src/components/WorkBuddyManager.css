@@ -1,0 +1,862 @@
+/* WorkBuddy Manager 页面专属样式。全部走 token，transition 只含颜色类属性，
+   没有 backdrop-filter，因此不需要动 styles.css 的 body.resizing 清单。
+
+   注意：本文件由组件导入，排在 styles.css 之前，所以覆盖 .card-title / .input-field
+   这类共享基类必须用后代选择器或复合选择器提高优先级，单类名会静默失效。 */
+
+/* 卡片标题栏要能放下状态徽标与右侧操作组（styles.css 里它是普通块级）。 */
+.wb-card .card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wb-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wb-loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+  color: var(--text-3);
+}
+
+.wb-dot-warn {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--yellow);
+  display: inline-block;
+  margin-left: 2px;
+}
+
+/* 账号表：窄列不换行、名称列可压缩，避免窗口 resize 时横向溢出。 */
+.wb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.wb-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-2);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.wb-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+  color: var(--text-1);
+}
+
+.wb-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.wb-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.wb-row-disabled td {
+  opacity: 0.5;
+}
+
+.wb-cell-label {
+  min-width: 0;
+  max-width: 240px;
+}
+
+.wb-label-text {
+  display: block;
+  color: var(--text-0);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-sub-text {
+  display: block;
+  color: var(--text-3);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-cell-credential .mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.wb-cell-time {
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+.wb-col-actions {
+  width: 1%;
+}
+
+.wb-cell-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.wb-cell-actions .btn {
+  margin-left: 4px;
+}
+
+.wb-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  font-size: 10.5px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-2);
+}
+
+.wb-status-active {
+  color: var(--green);
+  background: var(--green-dim);
+  border-color: transparent;
+}
+
+.wb-status-expired,
+.wb-status-banned {
+  color: var(--red);
+  background: var(--red-dim);
+  border-color: transparent;
+}
+
+.wb-status-unverified {
+  color: var(--yellow);
+  background: var(--bg-2);
+}
+
+.wb-expiry-warn {
+  color: var(--yellow);
+}
+
+.wb-expiry-bad {
+  color: var(--red);
+}
+
+.wb-inline-error {
+  font-size: 11.5px;
+  color: var(--red);
+  background: var(--red-dim);
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  margin: 8px 0;
+}
+
+.wb-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+/* `.modal` 的 max-width: min(380px, …) 在 styles.css 里、层叠更晚，单类覆盖会被压回
+   380px。必须用 .modal.wb-modal-* 双类把宽度与上限一起抬起来。
+   另外 .modal 是 overflow:hidden 且没有高度上限：探针表 + 16 行 JSON 会把弹窗顶出视口，
+   标题行的关闭 X 都点不到，所以这里补上 max-height 让弹窗内部滚动。 */
+.modal.wb-modal,
+.modal.wb-modal-wide {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.modal.wb-modal {
+  width: min(460px, 92vw);
+  max-width: min(460px, calc(100vw - 32px));
+}
+
+.modal.wb-modal-wide {
+  width: min(680px, 94vw);
+  max-width: min(680px, calc(100vw - 32px));
+}
+
+.wb-segmented {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-2);
+  border-radius: var(--radius-sm);
+}
+
+.wb-segment {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.wb-segment:hover:not(:disabled) {
+  color: var(--text-0);
+}
+
+.wb-segment.is-active {
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+}
+
+.wb-credential-input {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.wb-json-input {
+  font-size: 11px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.wb-doc-list {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+
+/* ---- 协议探针：抓页面自己的接口调用，一行一条写回 JSON ---- */
+.wb-probe {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+
+.wb-probe-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-2);
+}
+
+.wb-probe-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-0);
+  margin-right: 4px;
+}
+
+.wb-probe-bar .btn {
+  margin-left: auto;
+}
+
+.wb-probe-bar .btn + .btn {
+  margin-left: 0;
+}
+
+.wb-probe .wb-hint {
+  margin: 8px 0 0;
+}
+
+.wb-probe-applied {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--green);
+}
+
+.wb-probe-scroll {
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+}
+
+.wb-probe-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-2);
+}
+
+.wb-probe-table {
+  table-layout: fixed;
+}
+
+.wb-probe-table .wb-col-m {
+  width: 48px;
+}
+
+.wb-probe-table .wb-col-s {
+  width: 46px;
+}
+
+.wb-probe-table .wb-col-auth {
+  width: 126px;
+}
+
+.wb-probe-table .wb-col-n {
+  width: 34px;
+}
+
+.wb-probe-table .wb-col-set {
+  width: 172px;
+}
+
+.wb-probe-url,
+.wb-probe-auth {
+  overflow: hidden;
+}
+
+.wb-probe-url span,
+.wb-probe-auth span {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-probe-code {
+  display: inline-block;
+  min-width: 30px;
+  text-align: center;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-2);
+}
+
+.wb-probe-code.is-ok {
+  color: var(--green);
+  background: var(--green-dim);
+  border-color: transparent;
+}
+
+.wb-probe-code.is-warn {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border-color: transparent;
+}
+
+.wb-probe-code.is-bad {
+  color: var(--red);
+  background: var(--red-dim);
+  border-color: transparent;
+}
+
+.wb-probe-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.wb-probe-selftest {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.wb-probe-selftest-body {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.wb-probe-actions .btn {
+  padding: 2px 6px;
+  font-size: 10.5px;
+}
+
+/* ---- 分区标签（右侧同排放当前分区的操作按钮） ---- */
+.wb-tabs {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.wb-tabs-nav {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.wb-tabs .btn {
+  margin-bottom: 4px;
+}
+
+.wb-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.wb-tab:hover {
+  color: var(--text-0);
+  background: var(--bg-hover);
+}
+
+.wb-tab.is-active {
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+}
+
+/* ---- 网关控制条（不用 .card：三层内边距会让一行控件撑出一张高卡） ---- */
+.wb-gateway-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+
+.wb-gateway-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wb-gateway-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.wb-gateway-sub {
+  gap: 8px;
+  font-size: 11px;
+}
+
+.wb-gateway-sub .wb-base-url {
+  flex: 0 1 auto;
+  max-width: 320px;
+}
+
+.wb-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-field .input-label {
+  margin-bottom: 0;
+}
+
+/* 复合选择器：必须压过 styles.css 的 .input-field { width: 100% }。 */
+.input-field.wb-port-input {
+  width: 92px;
+}
+
+.wb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.wb-hint-inline {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.wb-base-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wb-secret-once .wb-base-row,
+.wb-firewall .wb-base-row {
+  margin-top: 8px;
+}
+
+.wb-base-url {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-facts {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.wb-facts-right {
+  margin-left: auto;
+}
+
+.wb-facts strong {
+  color: var(--text-0);
+  font-family: var(--font-mono);
+}
+
+/* ---- 密钥 ---- */
+.wb-secret-once {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-dim);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.wb-secret-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--accent-strong);
+}
+
+.wb-key-create {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.wb-key-create .input-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.wb-sub {
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+/* ---- IP 规则 ---- */
+.wb-ip-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.wb-ip-form .input-field {
+  width: auto;
+}
+
+.input-field.wb-ip-target {
+  width: 190px;
+  font-size: 11px;
+}
+
+.wb-ip-form .input-field:nth-child(3) {
+  flex: 1;
+  min-width: 120px;
+}
+
+.wb-ip-form .wb-segmented {
+  flex-shrink: 0;
+}
+
+.wb-ip-form .btn {
+  flex-shrink: 0;
+}
+
+.wb-firewall {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ---- 日志 ---- */
+.wb-log-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.input-field.wb-log-filter {
+  width: auto;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+.wb-log-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.wb-log-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+  z-index: 1;
+}
+
+.wb-log-table td {
+  white-space: nowrap;
+}
+
+.wb-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-tag-stream {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 4px;
+  font-size: 9px;
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- 统计条 ---- */
+.wb-stats {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-stat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 130px) minmax(60px, 1fr) 52px 62px 40px 58px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.wb-stat-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-0);
+}
+
+.wb-stat-bar-wrap {
+  height: 8px;
+  background: var(--bg-2);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.wb-stat-bar {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-full);
+  transition: var(--transition-colors);
+}
+
+.wb-stat-num {
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--text-1);
+}
+
+.wb-stat-sub {
+  color: var(--text-3);
+}
+
+.wb-stat-err {
+  color: var(--red);
+}
+
+@media (max-width: 860px) {
+  .wb-stat-row {
+    grid-template-columns: minmax(0, 1fr) 46px 56px;
+  }
+  .wb-stat-bar-wrap,
+  .wb-stat-row > span:nth-of-type(5) {
+    display: none;
+  }
+}
+
+/* ---- 签到 ---- */
+.wb-schedule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.input-field.wb-time-input {
+  width: 108px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.wb-status-block {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.wb-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.wb-title-icon {
+  vertical-align: -2px;
+}
+
+.wb-growth-tasks {
+  margin-top: var(--space-3);
+}
+
+.wb-growth-tasks ul {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wb-growth-tasks li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.wb-growth-task-title {
+  color: var(--text-1);
+  font-size: 11.5px;
+}
+
+.wb-checkin-scroll {
+  max-height: 260px;
+}
+
+.wb-cell-message {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+/* ---- 扫码向导 ---- */
+.wb-scan-phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.wb-scan-saved {
+  border-color: var(--green);
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.wb-scan-failed {
+  border-color: var(--red);
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+/* 入库成功但探测未通过：别用绿色让人以为凭证可用。 */
+.wb-scan-phase.is-warn {
+  border-color: var(--yellow);
+  background: var(--yellow-dim);
+  color: var(--yellow);
+}
+
+.wb-scan-detail {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+  word-break: break-all;
+  max-height: 68px;
+  overflow-y: auto;
+}
+
+/* 扫码捕获后交给确认表单时的说明条。 */
+.wb-capture-note {
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+}
+
+.wb-capture-note.is-warn {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border-color: color-mix(in srgb, var(--yellow) 35%, transparent);
+}
+
