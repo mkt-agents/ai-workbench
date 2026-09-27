@@ -15,7 +15,7 @@ import {
 } from "../../lib/workbuddy";
 import { listen } from "@tauri-apps/api/event";
 import ModalTitleRow from "../ModalTitleRow";
-import CredentialForm from "./CredentialForm";
+import CredentialForm, { type RenewAccount } from "./CredentialForm";
 import { useInvokeErrorTranslator } from "../../hooks/useInvokeError";
 
 type Phase = "opening" | "waiting" | "confirming" | "verifying" | "saved" | "failed";
@@ -39,6 +39,8 @@ interface Props {
   onFallBackToPaste: () => void;
   /** 失败往往是协议里还没有 loginUrl，给一条直达协议配置的路。 */
   onOpenProtocol?: () => void;
+  /** 有值时是「续期」流程：抓到的新凭证写回该账号，而不是新增一行。 */
+  renewAccount?: RenewAccount;
 }
 
 /// CodeBuddy renders the QR page itself, so this wizard never draws one — it
@@ -49,7 +51,7 @@ function newBatchId() {
   return Math.random().toString(36).slice(2, 12);
 }
 
-export default function ScanAddFlow({ onClose, onSaved, onFallBackToPaste, onOpenProtocol }: Props) {
+export default function ScanAddFlow({ onClose, onSaved, onFallBackToPaste, onOpenProtocol, renewAccount }: Props) {
   const { t } = useTranslation("workbuddy");
   const translateError = useInvokeErrorTranslator();
 
@@ -245,7 +247,7 @@ export default function ScanAddFlow({ onClose, onSaved, onFallBackToPaste, onOpe
     <div className="modal-overlay" onClick={busy ? undefined : close}>
       <div className={`modal wb-modal ${phase === "confirming" ? "wb-modal-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
         <ModalTitleRow
-          title={t("scanTitle")}
+          title={renewAccount ? t("renewTitle", { label: renewAccount.label }) : t("scanTitle")}
           onClose={close}
           disabled={busy}
           badge={addedCount > 0 ? <span className="card-title-badge">{addedCount}</span> : undefined}
@@ -298,14 +300,23 @@ export default function ScanAddFlow({ onClose, onSaved, onFallBackToPaste, onOpe
 
         {phase === "confirming" && captured ? (
           <CredentialForm
-            prefill={{
-              label: `${t("scanAutoLabel")} ${addedCount + 1}`,
-              credentialType: captured.credentialType,
-              credentialRaw: captured.credentialRaw,
-              notes: t("scanViaNote", { via: viaLabel }),
-              captureVia: viaLabel,
-            }}
-            submitLabel={t("addAccountSubmit")}
+            renewAccount={renewAccount}
+            prefill={
+              renewAccount
+                ? {
+                    credentialType: captured.credentialType,
+                    credentialRaw: captured.credentialRaw,
+                    captureVia: viaLabel,
+                  }
+                : {
+                    label: `${t("scanAutoLabel")} ${addedCount + 1}`,
+                    credentialType: captured.credentialType,
+                    credentialRaw: captured.credentialRaw,
+                    notes: t("scanViaNote", { via: viaLabel }),
+                    captureVia: viaLabel,
+                  }
+            }
+            submitLabel={renewAccount ? t("renewSubmit") : t("addAccountSubmit")}
             onCancel={close}
             onSaved={(label, id) => void confirmSave(label, id)}
           />
@@ -325,15 +336,19 @@ export default function ScanAddFlow({ onClose, onSaved, onFallBackToPaste, onOpe
                   <button type="button" className="btn btn-secondary" onClick={close}>
                     {t("scanDone")}
                   </button>
-                  <button type="button" className="btn btn-primary" onClick={() => void openWindow()}>
-                    {t("scanNext")}
-                  </button>
+                  {!renewAccount && (
+                    <button type="button" className="btn btn-primary" onClick={() => void openWindow()}>
+                      {t("scanNext")}
+                    </button>
+                  )}
                 </>
               ) : (
                 <>
-                  <button type="button" className="btn btn-secondary" onClick={onFallBackToPaste}>
-                    {t("manualAdd")}
-                  </button>
+                  {!renewAccount && (
+                    <button type="button" className="btn btn-secondary" onClick={onFallBackToPaste}>
+                      {t("manualAdd")}
+                    </button>
+                  )}
                   {(phase === "waiting" || phase === "failed") && !openFailed && (
                     <button type="button" className="btn btn-secondary" onClick={() => void grabCookies(true)}>
                       {t("scanGrabCookies")}

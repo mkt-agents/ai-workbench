@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
-import { wbAddAccount, type WbCredentialType } from "../../lib/workbuddy";
+import { wbAddAccount, wbRefreshAccountCredential, type WbCredentialType } from "../../lib/workbuddy";
 import { useInvokeErrorTranslator } from "../../hooks/useInvokeError";
 
 export interface CredentialPrefill {
@@ -13,8 +13,16 @@ export interface CredentialPrefill {
   captureVia?: string | null;
 }
 
+/** 续期模式：不新增账号，只替换既有账号的凭证字段。 */
+export interface RenewAccount {
+  id: number;
+  label: string;
+}
+
 interface Props {
   prefill?: CredentialPrefill;
+  /** 有值时进入续期模式：只换凭证，名称/备注不可编辑。 */
+  renewAccount?: RenewAccount;
   /** 保存成功回调：入库 id 交回调用方，让它接着探测凭证有效性。 */
   onSaved: (label: string, id: number) => void;
   onCancel?: () => void;
@@ -24,7 +32,7 @@ interface Props {
 }
 
 /** 凭证录入表单本体：手动粘贴与扫码捕获核对共用同一份字段与校验。 */
-export default function CredentialForm({ prefill, onSaved, onCancel, onBusyChange, submitLabel }: Props) {
+export default function CredentialForm({ prefill, renewAccount, onSaved, onCancel, onBusyChange, submitLabel }: Props) {
   const { t } = useTranslation("workbuddy");
   const translateError = useInvokeErrorTranslator();
   const [label, setLabel] = useState(prefill?.label ?? "");
@@ -42,6 +50,22 @@ export default function CredentialForm({ prefill, onSaved, onCancel, onBusyChang
   const submit = async () => {
     const trimmedLabel = label.trim();
     const trimmedCredential = credentialRaw.trim();
+    if (renewAccount) {
+      if (!trimmedCredential) {
+        setError(t("fieldRequired"));
+        return;
+      }
+      setSaving(true);
+      setError(null);
+      try {
+        await wbRefreshAccountCredential(renewAccount.id, credentialType, trimmedCredential);
+        onSaved(renewAccount.label, renewAccount.id);
+      } catch (e) {
+        setError(translateError(e));
+        setSaving(false);
+      }
+      return;
+    }
     if (!trimmedLabel || !trimmedCredential) {
       setError(t("fieldRequired"));
       return;
@@ -70,14 +94,18 @@ export default function CredentialForm({ prefill, onSaved, onCancel, onBusyChang
       {credentialType === "cookie" && <p className="wb-capture-note is-warn">{t("captureCookieWarn")}</p>}
       <div className="input-group">
         <label className="input-label">{t("label")}</label>
-        <input
-          className="input-field"
-          value={label}
-          autoFocus
-          placeholder={t("labelPlaceholder")}
-          onChange={(e) => setLabel(e.target.value)}
-          disabled={busy}
-        />
+        {renewAccount ? (
+          <input className="input-field" value={renewAccount.label} disabled />
+        ) : (
+          <input
+            className="input-field"
+            value={label}
+            autoFocus
+            placeholder={t("labelPlaceholder")}
+            onChange={(e) => setLabel(e.target.value)}
+            disabled={busy}
+          />
+        )}
       </div>
       <div className="input-group">
         <label className="input-label">{t("credentialType")}</label>
@@ -108,10 +136,12 @@ export default function CredentialForm({ prefill, onSaved, onCancel, onBusyChang
         />
         <p className="wb-hint">{t("credentialHint")}</p>
       </div>
-      <div className="input-group">
-        <label className="input-label">{t("notes")}</label>
-        <input className="input-field" value={notes} onChange={(e) => setNotes(e.target.value)} disabled={busy} />
-      </div>
+      {!renewAccount && (
+        <div className="input-group">
+          <label className="input-label">{t("notes")}</label>
+          <input className="input-field" value={notes} onChange={(e) => setNotes(e.target.value)} disabled={busy} />
+        </div>
+      )}
       {error && <div className="wb-inline-error" role="alert">{error}</div>}
       <div className="modal-actions">
         {onCancel && (

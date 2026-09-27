@@ -114,6 +114,37 @@ export default function GrowthPanel({ accounts }: Props) {
               </table>
             )}
 
+            {info.heatmap && info.heatmap.length > 0 && (
+              <div className="wb-growth-heatmap">
+                <span className="wb-sub-text">{t("growthHeatmap")}</span>
+                <div className="wb-heat-grid">
+                  {info.heatmap.map((day) => {
+                    const level =
+                      day.level != null
+                        ? day.level
+                        : day.count == null
+                          ? 0
+                          : day.count <= 0
+                            ? 0
+                            : day.count <= 2
+                              ? 1
+                              : day.count <= 5
+                                ? 2
+                                : day.count <= 9
+                                  ? 3
+                                  : 4;
+                    return (
+                      <span
+                        key={day.date}
+                        className={`wb-heat-cell wb-heat-${Math.max(0, Math.min(4, level))}`}
+                        title={`${day.date}${day.count != null ? ` · ${day.count}` : ""}`}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {info.tasks.length > 0 && (
               <div className="wb-growth-tasks">
                 <span className="wb-sub-text">{t("growthTasks")}</span>

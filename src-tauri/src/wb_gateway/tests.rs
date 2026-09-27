@@ -124,6 +124,46 @@ async fn chat_requires_a_valid_gateway_key() {
 }
 
 #[tokio::test]
+async fn a_key_over_its_daily_limit_gets_429_with_attribution() {
+    let (base, conn) = spawn(None).await;
+    let (id, key) = conn
+        .lock()
+        .unwrap()
+        .query_row("SELECT id, key FROM wb_api_keys", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .unwrap();
+    crate::wb_keys::set_daily_limit(&conn.lock().unwrap(), id, 1).unwrap();
+
+    let client = reqwest::Client::new();
+    let auth = format!("Bearer {key}");
+    // First call passes auth and fails at the (unconfigured) pool.
+    let resp = client
+        .post(format!("{base}/v1/chat/completions"))
+        .header("authorization", &auth)
+        .json(&chat_body())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+
+    // The second one is refused with 429 before any pool work happens.
+    let resp = client
+        .post(format!("{base}/v1/chat/completions"))
+        .header("authorization", &auth)
+        .json(&chat_body())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    assert!(resp.text().await.unwrap().contains("每日调用上限"));
+
+    let rows = log_rows(&conn);
+    assert_eq!(rows.len(), 2);
+    assert_eq!((rows[0].0, rows[0].1.is_some()), (503, true));
+    assert_eq!((rows[1].0, rows[1].1), (429, Some(id)), "the limit hit is attributed to the key");
+    assert!(rows[1].2.as_deref().is_some_and(|e| e.contains("每日调用上限")));
+}
+
+#[tokio::test]
 async fn authenticated_calls_count_against_the_key_and_the_log() {
     let (base, conn) = spawn(None).await;
     let client = reqwest::Client::new();

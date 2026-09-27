@@ -163,6 +163,37 @@ pub fn update_account(conn: &Connection, id: i64, patch: &AccountPatch) -> Resul
     Ok(())
 }
 
+/// Swap in a fresh credential for an existing account: type/exp are
+/// recomputed, the probe verdict and the checkin failure streak reset, and a
+/// previously auto-disabled account comes back enabled.
+pub fn refresh_credential(
+    conn: &Connection,
+    id: i64,
+    credential_type: &str,
+    credential_raw: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    let raw = credential_raw.trim();
+    if raw.is_empty() {
+        return Err("凭证不能为空".to_string());
+    }
+    let kind = CredentialKind::parse(credential_type);
+    let parsed = ParsedCredential::parse(kind, raw);
+    let updated = conn
+        .execute(
+            "UPDATE codebuddy_accounts
+             SET credential_type = ?2, credential = ?3, exp_unix = ?4, status = 'unverified',
+                 checkin_fail_count = 0, enabled = 1, updated_at = ?5
+             WHERE id = ?1",
+            params![id, kind.as_str(), raw, parsed.exp_unix, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+    if updated == 0 {
+        return Err(format!("账号 {id} 不存在"));
+    }
+    Ok(())
+}
+
 pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     conn.execute("DELETE FROM codebuddy_accounts WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -367,6 +398,30 @@ pub async fn wb_delete_account(state: tauri::State<'_, DbState>, id: i64) -> Res
     })
     .await
     .map_err(|e| format!("删除失败: {}", e))?
+}
+
+/// Renew an existing account with a freshly captured/pasted credential; the
+/// caller (frontend) probes right after so the row shows the live verdict.
+#[tauri::command]
+pub async fn wb_refresh_account_credential(
+    state: tauri::State<'_, DbState>,
+    account_id: i64,
+    credential_type: String,
+    credential_raw: String,
+) -> Result<(), String> {
+    let conn = std::sync::Arc::clone(&state.conn);
+    tokio::task::spawn_blocking(move || {
+        let guard = conn.lock().map_err(|e| e.to_string())?;
+        refresh_credential(
+            &guard,
+            account_id,
+            &credential_type,
+            &credential_raw,
+            credential::now_unix() * 1000,
+        )
+    })
+    .await
+    .map_err(|e| format!("续期失败: {}", e))?
 }
 
 /// Verify a stored credential against the configured probe endpoint, updating
@@ -625,6 +680,36 @@ mod tests {
         assert!(!row.enabled);
         delete_account(&conn, id).unwrap();
         assert!(list_accounts(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn refresh_credential_swaps_the_secret_and_resets_state() {
+        let conn = mem_conn();
+        let id = insert_account(&conn, &input("old-credential"), 1).unwrap();
+        conn.execute(
+            "UPDATE codebuddy_accounts SET status = 'expired', checkin_fail_count = 5, enabled = 0 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        refresh_credential(&conn, id, "token", "  new-credential-value  ", 99).unwrap();
+        let row = &list_accounts(&conn).unwrap()[0];
+        assert_eq!(row.status, "unverified");
+        assert!(row.enabled, "a renewed account comes back enabled");
+        assert_eq!(row.checkin_fail_count, 0);
+        assert!(!row.credential_preview.contains("new-credential"));
+        let stored: (String, String, Option<i64>) = conn
+            .query_row(
+                "SELECT credential, credential_type, exp_unix FROM codebuddy_accounts WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(stored.0, "new-credential-value");
+        assert_eq!(stored.1, "token");
+
+        assert!(refresh_credential(&conn, id, "token", "   ", 100).is_err());
+        assert!(refresh_credential(&conn, 404, "token", "abc", 100).is_err());
     }
 
     #[test]

@@ -52,7 +52,10 @@ pub const SCHEMA_SQL: &str = r#"
         created_at INTEGER NOT NULL,
         rotated_at INTEGER,
         last_used_at INTEGER,
-        call_count INTEGER NOT NULL DEFAULT 0
+        call_count INTEGER NOT NULL DEFAULT 0,
+        daily_limit INTEGER NOT NULL DEFAULT 0,
+        calls_today INTEGER NOT NULL DEFAULT 0,
+        usage_date TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS wb_ip_rules (
         id TEXT PRIMARY KEY,
@@ -90,7 +93,10 @@ pub fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
     // CREATE TABLE IF NOT EXISTS won't add columns to an existing database;
     // later schema additions go through pragma checks here.
-    add_column_if_missing(conn, "wb_api_keys", "rotated_at", "INTEGER")
+    add_column_if_missing(conn, "wb_api_keys", "rotated_at", "INTEGER")?;
+    add_column_if_missing(conn, "wb_api_keys", "daily_limit", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "wb_api_keys", "calls_today", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "wb_api_keys", "usage_date", "TEXT NOT NULL DEFAULT ''")
 }
 
 fn add_column_if_missing(

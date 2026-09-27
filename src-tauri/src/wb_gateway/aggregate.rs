@@ -37,12 +37,24 @@ pub enum AggError {
     Upstream(String),
 }
 
+/// One `tool_calls[]` entry being re-assembled from streamed deltas. `id`,
+/// `type` and `function.name` arrive once (first frame wins); `arguments` is
+/// streamed as a JSON-string fragment and must be concatenated in order.
+#[derive(Default)]
+struct ToolCallAcc {
+    id: Option<String>,
+    typ: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
 #[derive(Default)]
 struct ChoiceAcc {
     role: Option<String>,
     content: String,
     reasoning: String,
     finish_reason: Option<serde_json::Value>,
+    tool_calls: BTreeMap<i64, ToolCallAcc>,
 }
 
 /// Feed raw SSE chunks; `finish` flushes a trailing line without a newline.
@@ -136,6 +148,38 @@ impl SseAggregator {
                 if let Some(reasoning) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
                     acc.reasoning.push_str(reasoning);
                 }
+                if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                    for call in calls {
+                        let call_index = call.get("index").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let tool = acc.tool_calls.entry(call_index).or_default();
+                        if tool.id.is_none() {
+                            tool.id = call
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string);
+                        }
+                        if tool.typ.is_none() {
+                            tool.typ = call
+                                .get("type")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string);
+                        }
+                        if let Some(function) = call.get("function") {
+                            if tool.name.is_none() {
+                                tool.name = function
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string);
+                            }
+                            if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) {
+                                tool.arguments.push_str(args);
+                            }
+                        }
+                    }
+                }
             }
             if let Some(finish) = choice.get("finish_reason").filter(|v| !v.is_null()) {
                 acc.finish_reason = Some(finish.clone());
@@ -163,6 +207,28 @@ impl SseAggregator {
                 message.insert("content".to_string(), serde_json::Value::String(acc.content));
                 if !acc.reasoning.is_empty() {
                     message.insert("reasoning_content".to_string(), serde_json::Value::String(acc.reasoning));
+                }
+                if !acc.tool_calls.is_empty() {
+                    // The OpenAI shape drops the per-delta `index` once the
+                    // entries are complete — position order is the index.
+                    let calls: Vec<serde_json::Value> = acc
+                        .tool_calls
+                        .into_iter()
+                        .map(|(call_index, tool)| {
+                            let mut call = serde_json::Map::new();
+                            call.insert("id".to_string(), serde_json::Value::String(tool.id.unwrap_or_else(|| format!("call_{call_index}"))));
+                            call.insert("type".to_string(), serde_json::Value::String(tool.typ.unwrap_or_else(|| "function".to_string())));
+                            call.insert(
+                                "function".to_string(),
+                                serde_json::json!({
+                                    "name": tool.name.unwrap_or_default(),
+                                    "arguments": tool.arguments,
+                                }),
+                            );
+                            serde_json::Value::Object(call)
+                        })
+                        .collect();
+                    message.insert("tool_calls".to_string(), serde_json::Value::Array(calls));
                 }
                 serde_json::json!({
                     "index": index,
@@ -367,6 +433,65 @@ mod tests {
         agg.finish();
         let completion = agg.into_completion("m", 1).unwrap();
         assert_eq!(completion["choices"][0]["message"]["content"], "尾");
+    }
+
+    #[test]
+    fn tool_call_deltas_are_merged_across_frames() {
+        let mut agg = SseAggregator::default();
+        feed_all(
+            &mut agg,
+            &[
+                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]}}]}"#,
+                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]}}]}"#,
+                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"北京\"}"}}]}}]}"#,
+                r#"data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}"#,
+            ],
+        );
+        let completion = agg.into_completion("m", 1).unwrap();
+        let message = &completion["choices"][0]["message"];
+        assert_eq!(message["content"], "");
+        assert_eq!(completion["choices"][0]["finish_reason"], "tool_calls");
+        let calls = message["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], "call_1");
+        assert_eq!(calls[0]["type"], "function");
+        assert_eq!(calls[0]["function"]["name"], "get_weather");
+        assert_eq!(calls[0]["function"]["arguments"], r#"{"city":"北京"}"#);
+        // Completed entries do not carry the delta-only `index` field.
+        assert!(calls[0].get("index").is_none());
+    }
+
+    #[test]
+    fn several_tool_calls_keep_their_own_indexes() {
+        let mut agg = SseAggregator::default();
+        feed_all(
+            &mut agg,
+            &[
+                r#"data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_b","function":{"name":"b","arguments":"2"}}]}}]}"#,
+                r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"a","arguments":"1"}}]}}]}"#,
+            ],
+        );
+        let completion = agg.into_completion("m", 1).unwrap();
+        let calls = completion["choices"][0]["message"]["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["id"], "call_a");
+        assert_eq!(calls[1]["id"], "call_b");
+    }
+
+    #[test]
+    fn tool_calls_and_content_can_coexist() {
+        let mut agg = SseAggregator::default();
+        feed_all(
+            &mut agg,
+            &[
+                r#"data: {"choices":[{"delta":{"content":"查一下"}}]}"#,
+                r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"f","arguments":"{}"}}]}}]}"#,
+            ],
+        );
+        let completion = agg.into_completion("m", 1).unwrap();
+        let message = &completion["choices"][0]["message"];
+        assert_eq!(message["content"], "查一下");
+        assert_eq!(message["tool_calls"][0]["function"]["name"], "f");
     }
 
     #[test]

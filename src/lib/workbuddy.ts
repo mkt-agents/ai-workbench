@@ -72,6 +72,10 @@ export const wbUpdateAccount = (id: number, patch: WbAccountPatch) =>
 
 export const wbDeleteAccount = (id: number) => invoke<void>("wb_delete_account", { id });
 
+/** 用新凭证续期既有账号：类型/到期重算、状态回未验证、连败清零、重新启用。 */
+export const wbRefreshAccountCredential = (accountId: number, credentialType: WbCredentialType, credentialRaw: string) =>
+  invoke<void>("wb_refresh_account_credential", { accountId, credentialType, credentialRaw });
+
 export const wbProbeAccount = (id: number) => invoke<WbProbeResult>("wb_probe_account", { id });
 
 export const wbGetSettings = () => invoke<WbSettings>("wb_get_settings");
@@ -112,6 +116,9 @@ export interface WbApiKey {
   rotatedAt: number | null;
   lastUsedAt: number | null;
   callCount: number;
+  /** 每日调用上限，0 = 不限。 */
+  dailyLimit: number;
+  callsToday: number;
 }
 
 export interface WbCreatedKey {
@@ -150,6 +157,9 @@ export const wbKeySetEnabled = (id: number, enabled: boolean) =>
 export const wbKeyDelete = (id: number) => invoke<void>("wb_key_delete", { id });
 
 export const wbKeyReset = (id: number) => invoke<string>("wb_key_reset", { id });
+
+export const wbKeySetDailyLimit = (id: number, dailyLimit: number) =>
+  invoke<void>("wb_key_set_daily_limit", { id, dailyLimit });
 
 export const wbIpList = () => invoke<WbIpRule[]>("wb_ip_list");
 
@@ -287,6 +297,12 @@ export interface WbGrowthTask {
   done: boolean | null;
 }
 
+export interface WbGrowthHeatDay {
+  date: string;
+  count: number | null;
+  level: number | null;
+}
+
 export interface WbGrowthInfo {
   accountId: number;
   label: string;
@@ -295,6 +311,7 @@ export interface WbGrowthInfo {
   reasons: string[];
   streak: WbGrowthStreak | null;
   tasks: WbGrowthTask[];
+  heatmap: WbGrowthHeatDay[] | null;
   at: number;
 }
 

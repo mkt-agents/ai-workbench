@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CalendarCheck, Check, Loader2, Pencil, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
+import { CalendarCheck, Check, KeyRound, Loader2, Pencil, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
 import {
   wbCheckinNow,
   wbDeleteAccount,
@@ -21,6 +21,8 @@ interface Props {
   onFlash: (kind: "success" | "error", text: string) => void;
   onAdd: () => void;
   onEdit: (account: WbAccount) => void;
+  /** 打开扫码续期流程：抓到的新凭证写回该账号。 */
+  onRenew: (account: WbAccount) => void;
 }
 
 const STATUS_KEYS: Record<WbAccountStatus, string> = {
@@ -49,6 +51,7 @@ export default function AccountPoolTable({
   onFlash,
   onAdd,
   onEdit,
+  onRenew,
 }: Props) {
   const { t } = useTranslation("workbuddy");
   const confirm = useConfirm();
@@ -196,6 +199,15 @@ export default function AccountPoolTable({
                   </td>
                   <td className="wb-cell-time">{formatTimestamp(account.lastCheckinAt)}</td>
                   <td className="wb-cell-actions">
+                    <button
+                      type="button"
+                      className={`btn btn-small ${expiry.tone === "warn" || expiry.tone === "bad" ? "btn-primary" : "btn-secondary"}`}
+                      onClick={() => onRenew(account)}
+                      disabled={busy}
+                      title={t("renewAccount")}
+                    >
+                      <KeyRound size={12} />
+                    </button>
                     <button
                       type="button"
                       className="btn btn-secondary btn-small"

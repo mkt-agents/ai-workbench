@@ -22,6 +22,9 @@ pub struct WbKeyDto {
     pub rotated_at: Option<i64>,
     pub last_used_at: Option<i64>,
     pub call_count: i64,
+    /// Daily call cap; 0 = unlimited.
+    pub daily_limit: i64,
+    pub calls_today: i64,
 }
 
 /// Newly created key — `key` is the only place the full secret is exposed.
@@ -79,7 +82,7 @@ pub fn create_key(conn: &Connection, label: &str, now_ms: i64) -> Result<WbCreat
 pub fn list_keys(conn: &Connection) -> Result<Vec<WbKeyDto>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, key, label, enabled, created_at, rotated_at, last_used_at, call_count
+            "SELECT id, key, label, enabled, created_at, rotated_at, last_used_at, call_count, daily_limit, calls_today
                FROM wb_api_keys ORDER BY id DESC",
         )
         .map_err(|e| e.to_string())?;
@@ -95,6 +98,8 @@ pub fn list_keys(conn: &Connection) -> Result<Vec<WbKeyDto>, String> {
                 rotated_at: row.get(5)?,
                 last_used_at: row.get(6)?,
                 call_count: row.get(7)?,
+                daily_limit: row.get(8)?,
+                calls_today: row.get(9)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -139,20 +144,65 @@ pub fn reset_key(conn: &Connection, id: i64, now_ms: i64) -> Result<String, Stri
     Err("密钥重置失败，请重试".to_string())
 }
 
-/// Resolve a presented bearer token to its key id (None = reject).
-pub fn authenticate(conn: &Connection, key: &str, now_ms: i64) -> Option<i64> {
-    let id: i64 = conn
+/// Outcome of presenting a bearer token. `Limited` means the key is valid but
+/// has spent its call budget for the local day.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyAuth {
+    Allowed(i64),
+    Limited(i64),
+    Invalid,
+}
+
+/// Resolve a presented bearer token to its key id, bumping the key's usage
+/// counters and enforcing its daily limit (0 = unlimited). The `calls_today`
+/// counter self-resets whenever the stored day no longer matches today.
+pub fn authenticate(conn: &Connection, key: &str, now_ms: i64) -> KeyAuth {
+    let Ok((id, daily_limit, mut calls_today, usage_date)) = conn
         .query_row(
-            "SELECT id FROM wb_api_keys WHERE key = ?1 AND enabled = 1",
+            "SELECT id, daily_limit, calls_today, usage_date FROM wb_api_keys WHERE key = ?1 AND enabled = 1",
             params![key],
-            |r| r.get(0),
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?)),
         )
-        .ok()?;
+    else {
+        return KeyAuth::Invalid;
+    };
+    let today = local_date(now_ms);
+    if usage_date != today {
+        calls_today = 0;
+    }
+    if daily_limit > 0 && calls_today >= daily_limit {
+        return KeyAuth::Limited(id);
+    }
     let _ = conn.execute(
-        "UPDATE wb_api_keys SET last_used_at = ?2, call_count = call_count + 1 WHERE id = ?1",
-        params![id, now_ms],
+        "UPDATE wb_api_keys SET last_used_at = ?2, call_count = call_count + 1, calls_today = ?3, usage_date = ?4 WHERE id = ?1",
+        params![id, now_ms, calls_today + 1, today],
     );
-    Some(id)
+    KeyAuth::Allowed(id)
+}
+
+fn local_date(now_ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_millis_opt(now_ms)
+        .single()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+/// Set the daily call cap; anything below zero is treated as unlimited.
+pub fn set_daily_limit(conn: &Connection, id: i64, limit: i64) -> Result<(), String> {
+    let exists: i64 = conn
+        .query_row("SELECT COUNT(*) FROM wb_api_keys WHERE id = ?1", params![id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if exists == 0 {
+        return Err(format!("密钥 {id} 不存在"));
+    }
+    conn.execute(
+        "UPDATE wb_api_keys SET daily_limit = ?2 WHERE id = ?1",
+        params![id, limit.max(0)],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Enabled-key count, used to refuse LAN mode without any way to auth.
@@ -218,6 +268,15 @@ pub async fn wb_key_reset(state: tauri::State<'_, DbState>, id: i64) -> Result<S
     with_db(&state, move |conn| reset_key(conn, id, now_ms())).await
 }
 
+#[tauri::command]
+pub async fn wb_key_set_daily_limit(
+    state: tauri::State<'_, DbState>,
+    id: i64,
+    dailyLimit: i64,
+) -> Result<(), String> {
+    with_db(&state, move |conn| set_daily_limit(conn, id, dailyLimit)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,8 +339,8 @@ mod tests {
     fn authenticate_needs_the_exact_key_and_enabled() {
         let c = conn();
         let created = create_key(&c, "k", 10).unwrap();
-        assert_eq!(authenticate(&c, &created.key, 20), Some(created.id));
-        assert_eq!(authenticate(&c, "wk-wrong", 20), None);
+        assert_eq!(authenticate(&c, &created.key, 20), KeyAuth::Allowed(created.id));
+        assert_eq!(authenticate(&c, "wk-wrong", 20), KeyAuth::Invalid);
         let row: (Option<i64>, i64) = c
             .query_row(
                 "SELECT last_used_at, call_count FROM wb_api_keys WHERE id = ?1",
@@ -292,7 +351,51 @@ mod tests {
         assert_eq!(row, (Some(20), 1));
 
         set_enabled(&c, created.id, false).unwrap();
-        assert_eq!(authenticate(&c, &created.key, 30), None);
+        assert_eq!(authenticate(&c, &created.key, 30), KeyAuth::Invalid);
+    }
+
+    #[test]
+    fn daily_limit_blocks_after_n_calls_and_resets_next_day() {
+        let c = conn();
+        let created = create_key(&c, "k", 10).unwrap();
+        set_daily_limit(&c, created.id, 2).unwrap();
+        let day1 = 1_700_000_000_000i64;
+        let day2 = day1 + 72 * 3600 * 1000; // three days later: any DST shift is outlived
+        assert_eq!(authenticate(&c, &created.key, day1), KeyAuth::Allowed(created.id));
+        assert_eq!(authenticate(&c, &created.key, day1), KeyAuth::Allowed(created.id));
+        assert_eq!(authenticate(&c, &created.key, day1), KeyAuth::Limited(created.id));
+        // The refused call must not have bumped any counter.
+        let calls: i64 = c
+            .query_row("SELECT call_count FROM wb_api_keys WHERE id = ?1", params![created.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(calls, 2);
+        // A later local day gets a fresh budget.
+        assert_eq!(authenticate(&c, &created.key, day2), KeyAuth::Allowed(created.id));
+        let row: i64 = c
+            .query_row("SELECT calls_today FROM wb_api_keys WHERE id = ?1", params![created.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(row, 1, "today counter rolled over with the date");
+    }
+
+    #[test]
+    fn zero_limit_means_unlimited() {
+        let c = conn();
+        let created = create_key(&c, "k", 10).unwrap();
+        for i in 0..5 {
+            assert_eq!(authenticate(&c, &created.key, 100 + i), KeyAuth::Allowed(created.id));
+        }
+    }
+
+    #[test]
+    fn set_daily_limit_clamps_and_validates() {
+        let c = conn();
+        let created = create_key(&c, "k", 10).unwrap();
+        set_daily_limit(&c, created.id, -5).unwrap();
+        let limit: i64 = c
+            .query_row("SELECT daily_limit FROM wb_api_keys WHERE id = ?1", params![created.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(limit, 0);
+        assert!(set_daily_limit(&c, 404, 5).is_err());
     }
 
     #[test]
@@ -302,8 +405,8 @@ mod tests {
         authenticate(&c, &created.key, 11);
         let fresh = reset_key(&c, created.id, 99).unwrap();
         assert_ne!(fresh, created.key);
-        assert_eq!(authenticate(&c, &created.key, 100), None);
-        assert_eq!(authenticate(&c, &fresh, 100), Some(created.id));
+        assert_eq!(authenticate(&c, &created.key, 100), KeyAuth::Invalid);
+        assert_eq!(authenticate(&c, &fresh, 100), KeyAuth::Allowed(created.id));
         let row: (i64, Option<i64>, i64) = c
             .query_row(
                 "SELECT created_at, rotated_at, call_count FROM wb_api_keys WHERE id = ?1",

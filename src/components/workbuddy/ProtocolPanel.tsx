@@ -120,6 +120,8 @@ const TEMPLATE = JSON.stringify(
       url: "https://www.codebuddy.cn/v2/activity/growth/tasks",
       headers: [["authorization", "Bearer {token}"]],
     },
+    // 活跃热力图：端点未实测（面板解析兼容 map/array 两种形态，未配置时静默跳过）。
+    growthHeatmap: null,
     // 实测 2026-09-26（IDE genie 扩展同款端点）：真 JWT → 400 {code:11101 "Non-stream
     // chat request is currently not supported"} = 鉴权已过；无/假凭证 → 401；
     // tokenhub.tencentmaas.com 对 JWT 一律 401（那是云 API Key 的入口）。

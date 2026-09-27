@@ -6,6 +6,7 @@ import {
   wbKeyDelete,
   wbKeyList,
   wbKeyReset,
+  wbKeySetDailyLimit,
   wbKeySetEnabled,
   type WbApiKey,
 } from "../../lib/workbuddy";
@@ -37,6 +38,7 @@ export default function ApiKeyTable({ onChanged }: { onChanged?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [limitDraft, setLimitDraft] = useState<Record<number, string>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -109,6 +111,27 @@ export default function ApiKeyTable({ onChanged }: { onChanged?: () => void }) {
     onChanged?.();
   };
 
+  const saveLimit = async (row: WbApiKey) => {
+    const draft = limitDraft[row.id];
+    if (draft === undefined) return;
+    const parsed = Math.max(0, Math.floor(Number(draft) || 0));
+    if (parsed === row.dailyLimit) {
+      setLimitDraft((d) => {
+        const next = { ...d };
+        delete next[row.id];
+        return next;
+      });
+      return;
+    }
+    await wbKeySetDailyLimit(row.id, parsed).catch((e) => setError(translateError(e)));
+    setLimitDraft((d) => {
+      const next = { ...d };
+      delete next[row.id];
+      return next;
+    });
+    await refresh();
+  };
+
   return (
     <div className="card wb-card">
       <div className="card-title">
@@ -173,6 +196,7 @@ export default function ApiKeyTable({ onChanged }: { onChanged?: () => void }) {
                 <th>{t("keyLabel")}</th>
                 <th>{t("keyValue")}</th>
                 <th>{t("keyCalls")}</th>
+                <th>{t("keyDailyLimit")}</th>
                 <th>{t("keyLastUsed")}</th>
                 <th className="wb-col-actions" />
               </tr>
@@ -188,6 +212,21 @@ export default function ApiKeyTable({ onChanged }: { onChanged?: () => void }) {
                   </td>
                   <td className="mono wb-sub">{row.keyMasked}</td>
                   <td className="mono">{row.callCount}</td>
+                  <td>
+                    <input
+                      className="input-field wb-limit-input mono"
+                      type="number"
+                      min={0}
+                      value={limitDraft[row.id] ?? String(row.dailyLimit)}
+                      title={t("keyLimitHint")}
+                      onChange={(e) => setLimitDraft((d) => ({ ...d, [row.id]: e.target.value }))}
+                      onBlur={() => void saveLimit(row)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                      }}
+                    />
+                    <div className="wb-sub-text">{t("keyTodayCalls", { count: row.callsToday })}</div>
+                  </td>
                   <td className="wb-cell-time">{formatWhen(row.lastUsedAt)}</td>
                   <td className="wb-cell-actions">
                     <button

@@ -255,7 +255,14 @@ fn gate(ctx: &Ctx, peer: SocketAddr) -> Result<(), Response> {
 }
 
 /// Bearer token -> gateway key id, bumping the key's usage counters.
-fn authorize(ctx: &Ctx, headers: &HeaderMap) -> Result<i64, Response> {
+/// `key_id` is filled when the presented key itself was recognized (daily
+/// limit reached) so the audit log can attribute the rejection.
+struct AuthRejection {
+    key_id: Option<i64>,
+    response: Response,
+}
+
+fn authorize(ctx: &Ctx, headers: &HeaderMap) -> Result<i64, AuthRejection> {
     let presented = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -264,16 +271,31 @@ fn authorize(ctx: &Ctx, headers: &HeaderMap) -> Result<i64, Response> {
         .map(str::trim)
         .unwrap_or("");
     if presented.is_empty() {
-        return Err(openai_error(
-            StatusCode::UNAUTHORIZED,
-            "缺少 Authorization: Bearer <wk-… 网关密钥>",
-        ));
+        return Err(AuthRejection {
+            key_id: None,
+            response: openai_error(StatusCode::UNAUTHORIZED, "缺少 Authorization: Bearer <wk-… 网关密钥>"),
+        });
     }
     let Ok(guard) = ctx.conn.lock() else {
-        return Err(openai_error(StatusCode::INTERNAL_SERVER_ERROR, "内部状态不可用"));
+        return Err(AuthRejection {
+            key_id: None,
+            response: openai_error(StatusCode::INTERNAL_SERVER_ERROR, "内部状态不可用"),
+        });
     };
-    wb_keys::authenticate(&guard, presented, now_millis())
-        .ok_or_else(|| openai_error(StatusCode::UNAUTHORIZED, "网关密钥无效或已禁用"))
+    match wb_keys::authenticate(&guard, presented, now_millis()) {
+        wb_keys::KeyAuth::Allowed(id) => Ok(id),
+        wb_keys::KeyAuth::Limited(id) => Err(AuthRejection {
+            key_id: Some(id),
+            response: openai_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "该网关密钥已达每日调用上限，请明天再试或调高限额",
+            ),
+        }),
+        wb_keys::KeyAuth::Invalid => Err(AuthRejection {
+            key_id: None,
+            response: openai_error(StatusCode::UNAUTHORIZED, "网关密钥无效或已禁用"),
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +321,8 @@ async fn list_models(
     if let Err(res) = gate(&ctx, peer) {
         return res;
     }
-    if let Err(res) = authorize(&ctx, &headers) {
-        return res;
+    if let Err(rej) = authorize(&ctx, &headers) {
+        return rej.response;
     }
     let Some(profile) = ctx.conn.lock().ok().and_then(|g| load_profile(&g)) else {
         return openai_error(StatusCode::SERVICE_UNAVAILABLE, "未配置上游协议");
@@ -383,20 +405,25 @@ async fn chat_completions(
     }
     let key_id = match authorize(&ctx, &headers) {
         Ok(id) => id,
-        Err(res) => {
+        Err(rej) => {
+            let error = if rej.key_id.is_some() {
+                "网关密钥已达每日调用上限"
+            } else {
+                "网关密钥校验失败"
+            };
             log_one(&ctx, LogEntryInput {
                 ts: now_millis(),
-                key_id: None,
+                key_id: rej.key_id,
                 account_id: None,
                 model: None,
                 stream: false,
-                status_code: Some(res.status().as_u16() as i64),
+                status_code: Some(rej.response.status().as_u16() as i64),
                 prompt_tokens: None,
                 completion_tokens: None,
                 latency_ms: Some(started.elapsed().as_millis() as i64),
-                error: Some("网关密钥校验失败".to_string()),
+                error: Some(error.to_string()),
             });
-            return res;
+            return rej.response;
         }
     };
 

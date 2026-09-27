@@ -35,6 +35,7 @@ export default function WorkBuddyManager() {
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<WbAccount | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
+  const [renewTarget, setRenewTarget] = useState<WbAccount | null>(null);
   const [protocolOpen, setProtocolOpen] = useState(false);
   const [section, setSection] = useState<Section>("pool");
   /// 网关启停后自增，让日志面板跟着刷新。
@@ -154,6 +155,10 @@ export default function WorkBuddyManager() {
               onFlash={flash}
               onAdd={() => setAddOpen(true)}
               onEdit={setEditTarget}
+              onRenew={(account) => {
+                setRenewTarget(account);
+                setScanOpen(true);
+              }}
             />
             <CheckinPanel
               settings={settings}
@@ -180,7 +185,11 @@ export default function WorkBuddyManager() {
 
       {scanOpen && (
         <ScanAddFlow
-          onClose={() => setScanOpen(false)}
+          renewAccount={renewTarget ? { id: renewTarget.id, label: renewTarget.label } : undefined}
+          onClose={() => {
+            setScanOpen(false);
+            setRenewTarget(null);
+          }}
           onSaved={async (label, status) => {
             await refresh();
             flash(
@@ -190,12 +199,14 @@ export default function WorkBuddyManager() {
           }}
           onFallBackToPaste={() => {
             setScanOpen(false);
+            setRenewTarget(null);
             setAddOpen(true);
           }}
           onOpenProtocol={
             settings
               ? () => {
                   setScanOpen(false);
+                  setRenewTarget(null);
                   setProtocolOpen(true);
                 }
               : undefined

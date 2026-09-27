@@ -38,6 +38,16 @@ pub struct GrowthTask {
     pub done: Option<bool>,
 }
 
+/// One heatmap day. The upstream shape was never observed live, so both the
+/// explicit `level` and a raw `count` are kept and the UI picks whichever came.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthHeatDay {
+    pub date: String,
+    pub count: Option<i64>,
+    pub level: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrowthInfoDto {
@@ -49,6 +59,7 @@ pub struct GrowthInfoDto {
     pub reasons: Vec<String>,
     pub streak: Option<StreakInfo>,
     pub tasks: Vec<GrowthTask>,
+    pub heatmap: Option<Vec<GrowthHeatDay>>,
     pub at: i64,
 }
 
@@ -143,6 +154,52 @@ pub fn parse_tasks(body: &str) -> Vec<GrowthTask> {
         .collect()
 }
 
+/// A `date → value` mapping (JSON object) or an array of `{date, count|level}`
+/// items. Anything unrecognisable yields `None` — the panel just hides the
+/// heatmap, this endpoint was never observed live.
+pub fn parse_heatmap(body: &str) -> Option<Vec<GrowthHeatDay>> {
+    let json = serde_json::from_str::<serde_json::Value>(body.trim()).ok()?;
+    let root = json.get("data").filter(|v| v.is_object() || v.is_array()).unwrap_or(&json);
+    if let Some(map) = root.as_object() {
+        let days: Vec<GrowthHeatDay> = map
+            .iter()
+            .filter(|(k, _)| k.len() >= 8 && k.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .map(|(k, v)| GrowthHeatDay {
+                date: k.clone(),
+                count: v.as_i64().or_else(|| v.get("count").and_then(|c| c.as_i64())),
+                level: v.get("level").and_then(|l| l.as_i64()),
+            })
+            .collect();
+        if !days.is_empty() {
+            return Some(days);
+        }
+        // Otherwise fall through: the payload may carry a heatmap array under
+        // another key instead of being a date → value mapping itself.
+    }
+    let arr = ["heatmap", "heat_map", "days", "list"]
+        .iter()
+        .find_map(|k| root.get(*k))
+        .or(if root.is_array() { Some(root) } else { None })
+        .and_then(|v| v.as_array())?;
+    let days: Vec<GrowthHeatDay> = arr
+        .iter()
+        .filter_map(|item| {
+            let date = ["date", "day", "checkin_date", "checkinDate"]
+                .iter()
+                .find_map(|k| item.get(*k).and_then(|v| v.as_str()))
+                .map(str::to_string)?;
+            let count = ["count", "value", "credits", "times"]
+                .iter()
+                .find_map(|k| item.get(*k).and_then(|v| v.as_i64()));
+            let level = ["level", "intensity", "grade"]
+                .iter()
+                .find_map(|k| item.get(*k).and_then(|v| v.as_i64()));
+            Some(GrowthHeatDay { date, count, level })
+        })
+        .collect();
+    (!days.is_empty()).then_some(days)
+}
+
 // ---------------------------------------------------------------------------
 // Command
 // ---------------------------------------------------------------------------
@@ -206,6 +263,7 @@ pub async fn wb_growth_info(
         reasons: Vec::new(),
         streak: None,
         tasks: Vec::new(),
+        heatmap: None,
         at: credential::now_unix() * 1000,
     };
 
@@ -233,7 +291,16 @@ pub async fn wb_growth_info(
         Err(reason) => dto.reasons.push(reason),
     }
 
-    dto.ok = dto.streak.is_some() || !dto.tasks.is_empty();
+    // Heatmap is a bonus: an unconfigured endpoint stays silent instead of
+    // adding a reason line to the panel.
+    if let Some(ep) = profile.as_ref().and_then(|p| p.growth_heatmap.as_ref()) {
+        match fetch_endpoint(profile.as_ref(), Some(ep), "growthHeatmap", &parsed).await {
+            Ok(body) => dto.heatmap = parse_heatmap(&body),
+            Err(reason) => dto.reasons.push(reason),
+        }
+    }
+
+    dto.ok = dto.streak.is_some() || !dto.tasks.is_empty() || dto.heatmap.is_some();
     Ok(dto)
 }
 
@@ -272,5 +339,23 @@ mod tests {
         assert_eq!(tasks[1].done, Some(true));
         assert!(parse_tasks("not json").is_empty());
         assert!(parse_tasks(r#"{"code":0}"#).is_empty());
+    }
+
+    #[test]
+    fn heatmap_parsing_accepts_maps_and_arrays_and_refuses_junk() {
+        let map = r#"{"code":0,"data":{"2026-09-01":1,"2026-09-02":3,"note":"x"}}"#;
+        let days = parse_heatmap(map).unwrap();
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].date, "2026-09-01");
+        assert_eq!(days[1].count, Some(3));
+
+        let array = r#"{"data":{"heatmap":[{"date":"2026-09-01","count":2},{"day":"2026-09-02","level":4}]}}"#;
+        let days = parse_heatmap(array).unwrap();
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].count, Some(2));
+        assert_eq!(days[1].level, Some(4));
+
+        assert!(parse_heatmap("not json").is_none());
+        assert!(parse_heatmap(r#"{"data":{}}"#).is_none());
     }
 }

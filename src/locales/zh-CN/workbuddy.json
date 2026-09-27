@@ -194,7 +194,6 @@
   "statsErrors": "失败",
   "statsEmpty": "该时间范围内没有请求。",
   "checkinTitle": "签到",
-  "checkinNow": "立即签到",
   "checkinRunAll": "全部签到",
   "checkinRunning": "签到中…",
   "checkinDaily": "每日自动签到",
@@ -236,6 +235,7 @@
   "growthClaimedYes": "已领",
   "growthClaimedNo": "未领",
   "growthTasks": "任务",
+  "growthHeatmap": "活跃热力图",
   "growthTaskDone": "已完成",
   "growthTaskTodo": "未完成",
   "growthNotConfigured": "协议未配置 growth 端点；到「协议配置」填入模板即可查看成长计划。",
@@ -243,5 +243,13 @@
   "growthFailed": "成长数据查询失败",
   "growthRedeemNote": "仅展示成长计划状态；兑换与领取请到官方客户端手动操作，本程序不会代领。",
   "confirm": "确定",
-  "cancel": "取消"
+  "cancel": "取消",
+  "keyDailyLimit": "每日限额",
+  "keyLimitHint": "每日调用上限，0 = 不限；回车或移开焦点保存",
+  "keyTodayCalls": "今日 {count} 次",
+  "renewAccount": "续期",
+  "renewTitle": "续期：{{label}}",
+  "renewSubmit": "确认续期",
+  "credentialKeepPlaceholder": "留空表示不修改凭证；粘贴新 JWT 则立即替换",
+  "credentialKeepHint": "粘贴新的 Keycloak JWT（token 类型）后保存，会自动重置状态并重新启用该账号"
 }

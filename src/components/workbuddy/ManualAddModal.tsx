@@ -3,11 +3,11 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import ModalTitleRow from "../ModalTitleRow";
 import CredentialForm from "./CredentialForm";
-import { wbUpdateAccount, type WbAccount } from "../../lib/workbuddy";
+import { wbRefreshAccountCredential, wbUpdateAccount, type WbAccount, type WbCredentialType } from "../../lib/workbuddy";
 import { useInvokeErrorTranslator } from "../../hooks/useInvokeError";
 
 interface Props {
-  /** 传入则为编辑模式：只改 label/notes，凭证不可改（后端 patch 本就不含凭证）。 */
+  /** 传入则为编辑模式：改 label/notes，凭证留空即不改。 */
   editAccount?: WbAccount;
   onClose: () => void;
   onSaved: (label: string) => void;
@@ -20,6 +20,8 @@ export default function ManualAddModal({ editAccount, onClose, onSaved }: Props)
   const [saving, setSaving] = useState(false);
   const [label, setLabel] = useState(editAccount?.label ?? "");
   const [notes, setNotes] = useState(editAccount?.notes ?? "");
+  const [credentialRaw, setCredentialRaw] = useState("");
+  const [credentialType, setCredentialType] = useState<WbCredentialType>(editAccount?.credentialType ?? "token");
   const [error, setError] = useState<string | null>(null);
 
   const saveEdit = async () => {
@@ -29,9 +31,13 @@ export default function ManualAddModal({ editAccount, onClose, onSaved }: Props)
       setError(t("fieldRequired"));
       return;
     }
+    const freshCredential = credentialRaw.trim();
     setSaving(true);
     setError(null);
     try {
+      if (freshCredential) {
+        await wbRefreshAccountCredential(editAccount.id, credentialType, freshCredential);
+      }
       await wbUpdateAccount(editAccount.id, { label: trimmed, notes: notes.trim() || undefined });
       onSaved(trimmed);
     } catch (e) {
@@ -64,6 +70,35 @@ export default function ManualAddModal({ editAccount, onClose, onSaved }: Props)
                 onChange={(e) => setNotes(e.target.value)}
                 disabled={saving}
               />
+            </div>
+            <div className="input-group">
+              <label className="input-label">{t("credentialType")}</label>
+              <div className="wb-segmented">
+                {(["token", "cookie"] as const).map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={`wb-segment ${credentialType === kind ? "is-active" : ""}`}
+                    onClick={() => setCredentialType(kind)}
+                    disabled={saving}
+                  >
+                    {t(kind === "token" ? "typeToken" : "typeCookie")}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="input-group">
+              <label className="input-label">{t("credential")}</label>
+              <textarea
+                className="input-field wb-credential-input"
+                rows={4}
+                value={credentialRaw}
+                placeholder={t("credentialKeepPlaceholder")}
+                onChange={(e) => setCredentialRaw(e.target.value)}
+                disabled={saving}
+                spellCheck={false}
+              />
+              <p className="wb-hint">{t("credentialKeepHint")}</p>
             </div>
             {error && <div className="wb-inline-error" role="alert">{error}</div>}
             <div className="modal-actions">
