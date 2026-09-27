@@ -223,7 +223,7 @@ export default function CheckinPanel({
             {running ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
             <span>{running ? t("checkinRunning") : t("checkinRunAll")}</span>
           </button>
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => void refresh()} title={t("logRefresh")}>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => void refresh()} title={t("checkinLogRefresh")}>
             <RefreshCw size={12} />
           </button>
           <button
@@ -305,7 +305,7 @@ export default function CheckinPanel({
                       <tr key={account.id}>
                         <td className="wb-label-text">{account.label}</td>
                         {!row ? (
-                          <td colSpan={5} className="wb-sub-text">{queryingAll ? t("checkinStatusQuerying") : "—"}</td>
+                          <td colSpan={5}><span className="wb-sub-text">{queryingAll ? t("checkinStatusQuerying") : "—"}</span></td>
                         ) : (
                           <>
                             <td>
@@ -366,9 +366,9 @@ export default function CheckinPanel({
             <table className="wb-table">
               <thead>
                 <tr>
-                  <th>{t("logTime")}</th>
+                  <th>{t("checkinLogTime")}</th>
                   <th>{t("label")}</th>
-                  <th>{t("logStatus")}</th>
+                  <th>{t("checkinLogStatus")}</th>
                   <th>{t("checkinMessage")}</th>
                 </tr>
               </thead>

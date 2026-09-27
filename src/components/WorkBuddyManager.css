@@ -115,6 +115,24 @@
   white-space: nowrap;
 }
 
+.wb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.wb-hint-inline {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
 .wb-cell-time {
   white-space: nowrap;
   font-family: var(--font-mono);
@@ -463,184 +481,8 @@
   background: var(--accent-dim);
 }
 
-/* ---- 网关控制条（不用 .card：三层内边距会让一行控件撑出一张高卡） ---- */
-.wb-gateway-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  flex-shrink: 0;
-}
-
-.wb-gateway-line {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.wb-gateway-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-1);
-}
-
-.wb-gateway-sub {
-  gap: 8px;
-  font-size: 11px;
-}
-
-.wb-gateway-sub .wb-base-url {
-  flex: 0 1 auto;
-  max-width: 320px;
-}
-
-.wb-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.wb-field .input-label {
-  margin-bottom: 0;
-}
-
-/* 复合选择器：必须压过 styles.css 的 .input-field { width: 100% }。 */
-.input-field.wb-port-input {
-  width: 92px;
-}
-
-.wb-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: var(--text-1);
-  cursor: pointer;
-}
-
-.wb-hint-inline {
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.wb-base-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.wb-secret-once .wb-base-row,
-.wb-firewall .wb-base-row {
-  margin-top: 8px;
-}
-
-.wb-base-url {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  padding: 5px 8px;
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  color: var(--text-0);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wb-facts {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  font-size: 11px;
-  color: var(--text-2);
-}
-
-.wb-facts-right {
-  margin-left: auto;
-}
-
-.wb-facts strong {
-  color: var(--text-0);
-  font-family: var(--font-mono);
-}
-
-/* ---- 密钥 ---- */
-.wb-secret-once {
-  border: 1px solid var(--accent-border);
-  background: var(--accent-dim);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  margin-bottom: 10px;
-}
-
-.wb-secret-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--accent-strong);
-}
-
-.wb-key-create {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.wb-key-create .input-field {
-  flex: 1;
-  min-width: 0;
-}
-
 .mono {
   font-family: var(--font-mono);
-}
-
-.wb-sub {
-  font-size: 10.5px;
-  color: var(--text-2);
-}
-
-/* ---- IP 规则 ---- */
-.wb-ip-form {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.wb-ip-form .input-field {
-  width: auto;
-}
-
-.input-field.wb-ip-target {
-  width: 190px;
-  font-size: 11px;
-}
-
-.wb-ip-form .input-field:nth-child(3) {
-  flex: 1;
-  min-width: 120px;
-}
-
-.wb-ip-form .wb-segmented {
-  flex-shrink: 0;
-}
-
-.wb-ip-form .btn {
-  flex-shrink: 0;
-}
-
-.wb-firewall {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-subtle);
 }
 
 /* ---- 日志 ---- */
@@ -651,106 +493,9 @@
   gap: 6px;
 }
 
-.input-field.wb-log-filter {
-  width: auto;
-  padding: 3px 6px;
-  font-size: 11px;
-}
-
-.wb-log-scroll {
-  max-height: 420px;
-  overflow-y: auto;
-  margin-top: 8px;
-}
-
-.wb-log-table th {
-  position: sticky;
-  top: 0;
-  background: var(--bg-2);
-  z-index: 1;
-}
-
-.wb-log-table td {
-  white-space: nowrap;
-}
-
 .wb-num {
   text-align: right;
   font-variant-numeric: tabular-nums;
-}
-
-.wb-tag-stream {
-  display: inline-block;
-  margin-left: 5px;
-  padding: 0 4px;
-  font-size: 9px;
-  color: var(--accent-strong);
-  background: var(--accent-dim);
-  border-radius: var(--radius-sm);
-}
-
-/* ---- 统计条 ---- */
-.wb-stats {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.wb-stat-row {
-  display: grid;
-  grid-template-columns: minmax(0, 130px) minmax(60px, 1fr) 52px 62px 40px 58px;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-}
-
-.wb-stat-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-0);
-}
-
-.wb-stat-bar-wrap {
-  height: 8px;
-  background: var(--bg-2);
-  border-radius: var(--radius-full);
-  overflow: hidden;
-}
-
-.wb-stat-bar {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-  border-radius: var(--radius-full);
-  transition: var(--transition-colors);
-}
-
-.wb-stat-num {
-  text-align: right;
-  font-size: 10.5px;
-  color: var(--text-1);
-}
-
-.wb-stat-sub {
-  color: var(--text-3);
-}
-
-.wb-stat-err {
-  color: var(--red);
-}
-
-@media (max-width: 860px) {
-  .wb-stat-row {
-    grid-template-columns: minmax(0, 1fr) 46px 56px;
-  }
-  .wb-stat-bar-wrap,
-  .wb-stat-row > span:nth-of-type(5) {
-    display: none;
-  }
 }
 
 /* ---- 签到 ---- */

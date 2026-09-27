@@ -15,8 +15,6 @@ use crate::DbState;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WbSettings {
-    pub port: i64,
-    pub lan_enabled: bool,
     pub checkin_enabled: bool,
     pub checkin_time: String,
     pub last_auto_checkin_date: Option<String>,
@@ -26,8 +24,6 @@ pub struct WbSettings {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WbSettingsPatch {
-    pub port: Option<i64>,
-    pub lan_enabled: Option<bool>,
     pub checkin_enabled: Option<bool>,
     pub checkin_time: Option<String>,
     pub last_auto_checkin_date: Option<String>,
@@ -219,17 +215,15 @@ pub fn apply_probe_result(
 
 pub fn get_settings(conn: &Connection) -> Result<WbSettings, String> {
     conn.query_row(
-        "SELECT port, lan_enabled, checkin_enabled, checkin_time, last_auto_checkin_date, adapter_json
+        "SELECT checkin_enabled, checkin_time, last_auto_checkin_date, adapter_json
            FROM wb_settings WHERE id = 1",
         [],
         |row| {
             Ok(WbSettings {
-                port: row.get(0)?,
-                lan_enabled: row.get::<_, i64>(1)? != 0,
-                checkin_enabled: row.get::<_, i64>(2)? != 0,
-                checkin_time: row.get(3)?,
-                last_auto_checkin_date: row.get(4)?,
-                adapter_json: row.get(5)?,
+                checkin_enabled: row.get::<_, i64>(0)? != 0,
+                checkin_time: row.get(1)?,
+                last_auto_checkin_date: row.get(2)?,
+                adapter_json: row.get(3)?,
             })
         },
     )
@@ -239,16 +233,12 @@ pub fn get_settings(conn: &Connection) -> Result<WbSettings, String> {
 pub fn update_settings(conn: &Connection, patch: &WbSettingsPatch) -> Result<WbSettings, String> {
     conn.execute(
         "UPDATE wb_settings SET
-            port = COALESCE(?1, port),
-            lan_enabled = COALESCE(?2, lan_enabled),
-            checkin_enabled = COALESCE(?3, checkin_enabled),
-            checkin_time = COALESCE(?4, checkin_time),
-            last_auto_checkin_date = COALESCE(?5, last_auto_checkin_date),
-            adapter_json = COALESCE(?6, adapter_json)
+            checkin_enabled = COALESCE(?1, checkin_enabled),
+            checkin_time = COALESCE(?2, checkin_time),
+            last_auto_checkin_date = COALESCE(?3, last_auto_checkin_date),
+            adapter_json = COALESCE(?4, adapter_json)
          WHERE id = 1",
         params![
-            patch.port,
-            patch.lan_enabled.map(i64::from),
             patch.checkin_enabled.map(i64::from),
             patch.checkin_time,
             patch.last_auto_checkin_date,
@@ -558,7 +548,7 @@ pub async fn wb_update_settings(
 ) -> Result<WbSettings, String> {
     if let Some(json) = patch.adapter_json.as_deref() {
         if !json.trim().is_empty() {
-            // Validate before persisting so the gateway never reads a broken profile.
+            // Validate before persisting so a broken profile never reaches the callers.
             UpstreamProfile::from_json(json)?;
         }
     }
@@ -626,8 +616,6 @@ mod tests {
     fn schema_seeds_settings_row() {
         let conn = mem_conn();
         let s = get_settings(&conn).unwrap();
-        assert_eq!(s.port, 8787);
-        assert!(!s.lan_enabled);
         assert_eq!(s.checkin_time, "09:30");
         assert!(s.adapter_json.is_none());
     }
@@ -637,12 +625,12 @@ mod tests {
         let conn = mem_conn();
         update_settings(
             &conn,
-            &WbSettingsPatch { port: Some(9000), ..Default::default() },
+            &WbSettingsPatch { checkin_time: Some("10:00".into()), ..Default::default() },
         )
         .unwrap();
         let s = get_settings(&conn).unwrap();
-        assert_eq!(s.port, 9000);
-        assert_eq!(s.checkin_time, "09:30");
+        assert_eq!(s.checkin_time, "10:00");
+        assert!(!s.checkin_enabled);
     }
 
     #[test]

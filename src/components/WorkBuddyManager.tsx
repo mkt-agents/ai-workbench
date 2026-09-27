@@ -1,21 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { KeyRound, Activity, Network, Plus, ScanLine, Settings2, Users } from "lucide-react";
+import { Plus, ScanLine, Settings2, Users } from "lucide-react";
 import AccountPoolTable from "./workbuddy/AccountPoolTable";
-import ApiKeyTable from "./workbuddy/ApiKeyTable";
 import CheckinPanel from "./workbuddy/CheckinPanel";
-import GatewayLogPanel from "./workbuddy/GatewayLogPanel";
-import GatewayPanel from "./workbuddy/GatewayPanel";
-import IpControlPanel from "./workbuddy/IpControlPanel";
 import ManualAddModal from "./workbuddy/ManualAddModal";
 import ProtocolPanel from "./workbuddy/ProtocolPanel";
 import ScanAddFlow from "./workbuddy/ScanAddFlow";
-import UsageStatsPanel from "./workbuddy/UsageStatsPanel";
 import { wbGetSettings, wbListAccounts, type WbAccount, type WbSettings } from "../lib/workbuddy";
 import { useInvokeErrorTranslator } from "../hooks/useInvokeError";
 import "./WorkBuddyManager.css";
-
-type Section = "pool" | "keys" | "ip" | "logs";
 
 /**
  * WorkBuddy Manager — CodeBuddy 账号池控制台。
@@ -36,9 +29,6 @@ export default function WorkBuddyManager() {
   const [scanOpen, setScanOpen] = useState(false);
   const [renewTarget, setRenewTarget] = useState<WbAccount | null>(null);
   const [protocolOpen, setProtocolOpen] = useState(false);
-  const [section, setSection] = useState<Section>("pool");
-  /// 网关启停后自增，让日志面板跟着刷新。
-  const [logPulse, setLogPulse] = useState(0);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const flash = useCallback((kind: "success" | "error", text: string) => {
@@ -78,64 +68,39 @@ export default function WorkBuddyManager() {
   return (
     <div className="page-panel is-active workbuddy-page">
       <div className="page-scrollable">
-        <GatewayPanel
-          onChanged={() => {
-            void refresh();
-            setLogPulse((n) => n + 1);
-          }}
-        />
-
         <div className="wb-tabs">
           <div className="wb-tabs-nav" role="tablist">
-            {(
-              [
-                { id: "pool", label: t("accountPool"), icon: <Users size={13} /> },
-                { id: "keys", label: t("keysTitle"), icon: <KeyRound size={13} /> },
-                { id: "ip", label: t("ipTitle"), icon: <Network size={13} /> },
-                { id: "logs", label: t("logsTab"), icon: <Activity size={13} /> },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={section === tab.id}
-                className={`wb-tab ${section === tab.id ? "is-active" : ""}`}
-                onClick={() => setSection(tab.id)}
-              >
-                {tab.icon}
-                <span>{tab.label}</span>
-              </button>
-            ))}
+            <span className="wb-tab is-active" role="tab" aria-selected>
+              <Users size={13} />
+              <span>{t("accountPool")}</span>
+            </span>
           </div>
 
-          {section === "pool" && (
-            <div className="wb-toolbar-actions">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setScanOpen(true)}
-                title={protocolConfigured ? t("scanTooltip") : t("scanNeedsProtocol")}
-              >
-                <ScanLine size={14} />
-                <span>{t("scanAdd")}</span>
-                {!protocolConfigured && <span className="wb-dot-warn" aria-hidden />}
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={() => setAddOpen(true)}>
-                <Plus size={14} />
-                <span>{t("manualAdd")}</span>
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => setProtocolOpen(true)}
-                disabled={!settings}
-              >
-                <Settings2 size={14} />
-                <span>{t("protocol")}</span>
-              </button>
-            </div>
-          )}
+          <div className="wb-toolbar-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setScanOpen(true)}
+              title={protocolConfigured ? t("scanTooltip") : t("scanNeedsProtocol")}
+            >
+              <ScanLine size={14} />
+              <span>{t("scanAdd")}</span>
+              {!protocolConfigured && <span className="wb-dot-warn" aria-hidden />}
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => setAddOpen(true)}>
+              <Plus size={14} />
+              <span>{t("manualAdd")}</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setProtocolOpen(true)}
+              disabled={!settings}
+            >
+              <Settings2 size={14} />
+              <span>{t("protocol")}</span>
+            </button>
+          </div>
         </div>
 
         {loadError && (
@@ -144,41 +109,27 @@ export default function WorkBuddyManager() {
           </div>
         )}
 
-        {section === "pool" && (
-          <>
-            <AccountPoolTable
-              accounts={accounts}
-              loading={loading}
-              protocolConfigured={protocolConfigured}
-              onChanged={refresh}
-              onFlash={flash}
-              onAdd={() => setAddOpen(true)}
-              onEdit={setEditTarget}
-              onRenew={(account) => {
-                setRenewTarget(account);
-                setScanOpen(true);
-              }}
-            />
-            <CheckinPanel
-              settings={settings}
-              accountCount={accounts.filter((a) => a.enabled).length}
-              accounts={accounts}
-              onSettingsChanged={() => void refreshSettings()}
-              onAccountsChanged={refresh}
-              onFlash={flash}
-            />
-          </>
-        )}
-        {section === "keys" && <ApiKeyTable onChanged={refresh} />}
-        {section === "ip" && (
-          <IpControlPanel lanEnabled={settings?.lanEnabled ?? false} port={settings?.port ?? 8787} />
-        )}
-        {section === "logs" && (
-          <>
-            <UsageStatsPanel />
-            <GatewayLogPanel refreshSignal={logPulse} />
-          </>
-        )}
+        <AccountPoolTable
+          accounts={accounts}
+          loading={loading}
+          protocolConfigured={protocolConfigured}
+          onChanged={refresh}
+          onFlash={flash}
+          onAdd={() => setAddOpen(true)}
+          onEdit={setEditTarget}
+          onRenew={(account) => {
+            setRenewTarget(account);
+            setScanOpen(true);
+          }}
+        />
+        <CheckinPanel
+          settings={settings}
+          accountCount={accounts.filter((a) => a.enabled).length}
+          accounts={accounts}
+          onSettingsChanged={() => void refreshSettings()}
+          onAccountsChanged={refresh}
+          onFlash={flash}
+        />
       </div>
 
       {scanOpen && (

@@ -19,11 +19,8 @@ mod report_commands;
 mod report_history;
 pub mod codebuddy;
 mod wb_commands;
-mod wb_keys;
-mod wb_logs;
 mod wb_checkin;
 mod wb_capture;
-mod wb_gateway;
 
 pub use config::*;
 
@@ -87,7 +84,6 @@ pub fn run() {
             children: Mutex::new(HashMap::new()),
         })
         .manage(cloudflared_commands::CloudflaredState::default())
-        .manage(wb_gateway::WbGatewayState::default())
         .manage(tray::TrayTunnelUrls::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("failed to get app data dir");
@@ -425,16 +421,6 @@ pub fn run() {
             wb_commands::wb_probe_account,
             wb_commands::wb_get_settings,
             wb_commands::wb_update_settings,
-            wb_keys::wb_key_create,
-            wb_keys::wb_key_list,
-            wb_keys::wb_key_set_enabled,
-            wb_keys::wb_key_delete,
-            wb_keys::wb_key_reset,
-            wb_keys::wb_key_set_daily_limit,
-            wb_logs::wb_log_list,
-            wb_logs::wb_log_clear,
-            wb_logs::wb_log_stats,
-            wb_logs::wb_log_models,
             wb_checkin::wb_checkin_now,
             wb_checkin::wb_checkin_status,
             wb_checkin::wb_checkin_log_list,
@@ -444,14 +430,6 @@ pub fn run() {
             wb_capture::wb_read_cb_login_probe,
             wb_capture::wb_cb_login_selftest,
             wb_capture::wb_close_cb_login_window,
-            wb_gateway::wb_gateway_start,
-            wb_gateway::wb_gateway_stop,
-            wb_gateway::wb_gateway_status,
-            wb_gateway::wb_set_lan_mode,
-            wb_gateway::wb_ip_list,
-            wb_gateway::wb_ip_add,
-            wb_gateway::wb_ip_delete,
-            wb_gateway::wb_ip_set_enabled,
             hosts_commands::read_system_hosts,
             hosts_commands::is_admin,
             hosts_commands::write_system_hosts,

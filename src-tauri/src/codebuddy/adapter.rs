@@ -41,10 +41,10 @@ pub struct UpstreamProfile {
     /// `x-client-platform: web` plus a browser-ish User-Agent header).
     #[serde(default)]
     pub credit_summary: Option<Endpoint>,
-    /// The actual chat upstream the gateway proxies to. `{model}` is available.
+    /// Chat upstream. `{model}` is available.
     #[serde(default)]
     pub chat: Option<Endpoint>,
-    /// Model listing; when absent the gateway serves a static fallback.
+    /// Model listing; when absent the static fallback list applies.
     #[serde(default)]
     pub models: Option<Endpoint>,
     /// Models advertised by /v1/models when there is no upstream listing.
@@ -79,7 +79,7 @@ fn render(template: &str, cx: &RenderContext) -> String {
 }
 
 /// Build the concrete request for `ep`. `None` only when `method` is unusable
-/// (guarded so a half-filled settings row cannot panic the gateway).
+/// (guarded so a half-filled settings row cannot panic the caller).
 pub fn build_request(ep: &Endpoint, cx: &RenderContext) -> Option<OutboundRequest> {
     let method = ep.method.trim().to_uppercase();
     if method.is_empty() {

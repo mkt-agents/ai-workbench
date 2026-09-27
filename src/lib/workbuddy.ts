@@ -47,8 +47,6 @@ export interface WbProbeResult {
 }
 
 export interface WbSettings {
-  port: number;
-  lanEnabled: boolean;
   checkinEnabled: boolean;
   checkinTime: string;
   lastAutoCheckinDate: string | null;
@@ -56,8 +54,6 @@ export interface WbSettings {
 }
 
 export interface WbSettingsPatch {
-  port?: number;
-  lanEnabled?: boolean;
   checkinEnabled?: boolean;
   checkinTime?: string;
   adapterJson?: string;
@@ -91,139 +87,6 @@ export function formatExpiry(expUnix: number | null): { text: string; tone: "non
   if (days <= 7) return { text: `${date}（${Math.ceil(days)} 天）`, tone: "warn" };
   return { text: date, tone: "ok" };
 }
-
-// ---------------------------------------------------------------------------
-// 网关 / 密钥 / IP 规则
-// ---------------------------------------------------------------------------
-
-export interface GatewayStatus {
-  running: boolean;
-  bindAddr: string | null;
-  port: number;
-  lanEnabled: boolean;
-  startedAt: number | null;
-  keyCount: number;
-  accountTotal: number;
-  accountEligible: number;
-}
-
-export interface WbApiKey {
-  id: number;
-  keyMasked: string;
-  label: string;
-  enabled: boolean;
-  createdAt: number;
-  rotatedAt: number | null;
-  lastUsedAt: number | null;
-  callCount: number;
-  /** 每日调用上限，0 = 不限。 */
-  dailyLimit: number;
-  callsToday: number;
-}
-
-export interface WbCreatedKey {
-  id: number;
-  /** 仅此一次返回明文，之后只能重置。 */
-  key: string;
-  label: string;
-}
-
-export type WbIpRuleKind = "allow" | "deny";
-
-export interface WbIpRule {
-  id: string;
-  kind: WbIpRuleKind;
-  ipOrCidr: string;
-  enabled: boolean;
-  note: string | null;
-}
-
-export const wbGatewayStart = (port?: number, lan?: boolean) =>
-  invoke<GatewayStatus>("wb_gateway_start", { port, lan });
-
-export const wbGatewayStop = () => invoke<GatewayStatus>("wb_gateway_stop");
-
-export const wbGatewayStatus = () => invoke<GatewayStatus>("wb_gateway_status");
-
-export const wbSetLanMode = (enabled: boolean) => invoke<GatewayStatus>("wb_set_lan_mode", { enabled });
-
-export const wbKeyCreate = (label: string) => invoke<WbCreatedKey>("wb_key_create", { label });
-
-export const wbKeyList = () => invoke<WbApiKey[]>("wb_key_list");
-
-export const wbKeySetEnabled = (id: number, enabled: boolean) =>
-  invoke<void>("wb_key_set_enabled", { id, enabled });
-
-export const wbKeyDelete = (id: number) => invoke<void>("wb_key_delete", { id });
-
-export const wbKeyReset = (id: number) => invoke<string>("wb_key_reset", { id });
-
-export const wbKeySetDailyLimit = (id: number, dailyLimit: number) =>
-  invoke<void>("wb_key_set_daily_limit", { id, dailyLimit });
-
-export const wbIpList = () => invoke<WbIpRule[]>("wb_ip_list");
-
-export const wbIpAdd = (rule: { kind: WbIpRuleKind; ipOrCidr: string; note?: string | null }) =>
-  invoke<WbIpRule>("wb_ip_add", { rule });
-
-export const wbIpDelete = (id: string) => invoke<void>("wb_ip_delete", { id });
-
-export const wbIpSetEnabled = (id: string, enabled: boolean) =>
-  invoke<void>("wb_ip_set_enabled", { id, enabled });
-
-// ---------------------------------------------------------------------------
-// 调用日志与用量统计
-// ---------------------------------------------------------------------------
-
-export interface WbRequestLog {
-  id: number;
-  ts: number;
-  keyId: number | null;
-  keyLabel: string | null;
-  accountId: number | null;
-  accountLabel: string | null;
-  model: string | null;
-  stream: boolean;
-  statusCode: number | null;
-  promptTokens: number | null;
-  completionTokens: number | null;
-  latencyMs: number | null;
-  error: string | null;
-}
-
-export interface WbStatRow {
-  label: string;
-  requests: number;
-  promptTokens: number;
-  completionTokens: number;
-  errors: number;
-  avgLatencyMs: number | null;
-}
-
-export type WbStatGroup = "day" | "model" | "key";
-
-export interface WbLogFilter {
-  limit?: number;
-  keyId?: number | null;
-  model?: string | null;
-  since?: number | null;
-}
-
-export const wbLogList = (filter: WbLogFilter = {}) =>
-  invoke<WbRequestLog[]>("wb_log_list", {
-    limit: filter.limit ?? 200,
-    keyId: filter.keyId ?? null,
-    model: filter.model ?? null,
-    since: filter.since ?? null,
-  });
-
-export const wbLogClear = (beforeTs?: number | null) =>
-  invoke<number>("wb_log_clear", { beforeTs: beforeTs ?? null });
-
-export const wbLogStats = (days: number, groupBy: WbStatGroup) =>
-  invoke<WbStatRow[]>("wb_log_stats", { days, groupBy });
-
-export const wbLogModels = () => invoke<string[]>("wb_log_models");
 
 // ---------------------------------------------------------------------------
 // 签到

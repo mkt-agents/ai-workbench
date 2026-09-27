@@ -43,10 +43,8 @@ src-tauri/src/        # Rust 后端
   cursor/ tray/       # Cursor 多身份、系统托盘与快问窗
   codebuddy/          # WorkBuddy 域：adapter.rs（上游协议全 JSON 化，端点不写死）+
                       # credential.rs（token/cookie 解析、JWT exp、掩码）
-  wb_*.rs + wb_gateway/  # WorkBuddy Manager：wb_commands（账号池）/ wb_gateway（axum 反代 +
-                      # ip_filter + pool + sse 用量侧道）/ wb_keys（wk- 密钥）/
-                      # wb_logs（调用日志 FIFO）/ wb_checkin（签到 + 调度 loop）/
-                      # wb_capture（扫码登录窗 + 凭证回传）
+  wb_*.rs             # WorkBuddy Manager：wb_commands（账号池）/ wb_checkin（签到 + 调度 loop）/
+                      # wb_capture（扫码登录窗 + 凭证回传）。反代网关/密钥/IP 管控已移除（2026-09-27）
 docs/                 # CODE_WIKI.md（架构百科）、cloudflared.md、各计划文档
 ```
 
