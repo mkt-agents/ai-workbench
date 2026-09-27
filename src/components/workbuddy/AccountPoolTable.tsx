@@ -157,7 +157,8 @@ export default function AccountPoolTable({
         <span className="card-title-badge">{accounts.length}</span>
       </div>
       <div className="card-body">
-        <table className="wb-table">
+        <div className="wb-table-wrap">
+          <table className="wb-table">
           <thead>
             <tr>
               <th>{t("label")}</th>
@@ -262,7 +263,8 @@ export default function AccountPoolTable({
               );
             })}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );

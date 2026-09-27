@@ -323,7 +323,18 @@ export default function CheckinPanel({
                             </td>
                             <td className="mono">{row.streakDays ?? "—"}</td>
                             <td className="mono">{row.weekProgress ?? "—"}</td>
-                            <td className="mono">{row.totalCredits ?? "—"}</td>
+                            <td className="mono">
+                              {row.creditsLeft != null
+                                ? Number.isInteger(row.creditsLeft)
+                                  ? row.creditsLeft
+                                  : Number(row.creditsLeft.toFixed(2))
+                                : "—"}
+                              {row.totalCredits != null && (
+                                <div className="wb-sub-text">
+                                  {t("checkinStatusActivityCredits", { count: row.totalCredits })}
+                                </div>
+                              )}
+                            </td>
                           </>
                         )}
                         <td className="wb-cell-actions">

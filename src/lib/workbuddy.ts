@@ -267,6 +267,9 @@ export interface WbCheckinStatus {
   streakDays: number | null;
   weekProgress: string | null;
   totalCredits: number | null;
+  /** 账户可用积分余额（creditSummary 端点；未配置或被风控拦时为 null）。 */
+  creditsLeft: number | null;
+  creditsTotal: number | null;
   at: number;
 }
 
@@ -277,46 +280,8 @@ export const wbCheckinStatus = (accountId?: number | null) =>
 export const WB_CHECKIN_STATUS_EVENT = "wb-checkin-status-done";
 
 // ---------------------------------------------------------------------------
-// 成长计划（只读，不自动兑换）
+// 签到动作推送
 // ---------------------------------------------------------------------------
-
-export interface WbGrowthTier {
-  tier: number;
-  daysRequired: number;
-  claimed: boolean | null;
-}
-
-export interface WbGrowthStreak {
-  days: number | null;
-  tiers: WbGrowthTier[];
-}
-
-export interface WbGrowthTask {
-  code: string | null;
-  title: string | null;
-  done: boolean | null;
-}
-
-export interface WbGrowthHeatDay {
-  date: string;
-  count: number | null;
-  level: number | null;
-}
-
-export interface WbGrowthInfo {
-  accountId: number;
-  label: string;
-  ok: boolean;
-  /** 各端点失败原因（灰态提示）。 */
-  reasons: string[];
-  streak: WbGrowthStreak | null;
-  tasks: WbGrowthTask[];
-  heatmap: WbGrowthHeatDay[] | null;
-  at: number;
-}
-
-export const wbGrowthInfo = (accountId: number) =>
-  invoke<WbGrowthInfo>("wb_growth_info", { accountId });
 
 /** 后端逐账号推送的事件负载。 */
 export const WB_CHECKIN_EVENT = "wb-checkin-done";

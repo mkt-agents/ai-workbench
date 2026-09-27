@@ -409,6 +409,10 @@ pub struct CheckinStatusDto {
     pub streak_days: Option<i64>,
     pub week_progress: Option<String>,
     pub total_credits: Option<i64>,
+    /// Account-level usable credit balance (creditSummary endpoint, risk-gated
+    /// upstream — silently absent when unconfigured or blocked).
+    pub credits_left: Option<f64>,
+    pub credits_total: Option<f64>,
     pub at: i64,
 }
 
@@ -441,10 +445,14 @@ fn bool_field(value: &serde_json::Value) -> Option<bool> {
     }
 }
 
-/// `week_progress` was only observed once, so render whatever looks progress-ish
-/// into a short string instead of guessing a strict shape.
+/// `checkin-activity-status`（2026-09-27 实测）把 `week_progress` 回成 7 个布尔的
+/// 数组；按「已签天数/7」渲染。
 fn week_to_string(value: &serde_json::Value) -> Option<String> {
     match value {
+        serde_json::Value::Array(arr) if !arr.is_empty() => {
+            let done = arr.iter().filter(|v| v.as_bool() == Some(true)).count();
+            Some(format!("{done}/{}", arr.len()))
+        }
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
             if (0.0..=1.0).contains(&f) && f.fract() != 0.0 {
@@ -473,10 +481,48 @@ fn week_to_string(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Account credit balance (`get-user-resource-summary`): sum the Packages'
+/// positive cycle remain/total capacities — same algorithm as the client's
+/// `sumSummaryCapacity`. Capacities arrive as string numbers; a missing or
+/// blocked payload yields None (the UI keeps its dash).
+pub fn parse_credit_summary(body: &str) -> Option<(f64, f64)> {
+    let json = serde_json::from_str::<serde_json::Value>(body.trim()).ok()?;
+    let empty = serde_json::Value::Null;
+    let data = json.get("data").filter(|v| v.is_object()).unwrap_or(&empty);
+    let arr = data
+        .get("Packages")
+        .or_else(|| data.get("packages"))?
+        .as_array()?;
+    let num = |item: &serde_json::Value, keys: &[&str]| {
+        keys.iter().find_map(|k| item.get(*k)).and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .or_else(|| v.as_f64())
+        })
+    };
+    let mut left = 0.0;
+    let mut total = 0.0;
+    let mut any = false;
+    for item in arr {
+        if let Some(r) = num(item, &["CycleRemainCapacity", "cycleRemain"]) {
+            if r.is_finite() && r > 0.0 {
+                left += r;
+                any = true;
+            }
+        }
+        if let Some(t) = num(item, &["CycleTotalCapacity", "cycleTotal"]) {
+            if t.is_finite() && t > 0.0 {
+                total += t;
+                any = true;
+            }
+        }
+    }
+    any.then_some((left, total))
+}
+
 /// Parse a checkin-status body. Accepts the payload at the top level or under
 /// `data` (the observed shape), snake_case or camelCase keys, string booleans.
-pub fn parse_checkin_status(body: &str) -> ParsedCheckinStatus {
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(body.trim()) else {
+pub fn parse_checkin_status(body: &str) -> ParsedCheckinStatus {    let Ok(json) = serde_json::from_str::<serde_json::Value>(body.trim()) else {
         return ParsedCheckinStatus::default();
     };
     let empty = serde_json::Value::Null;
@@ -540,6 +586,8 @@ async fn status_one(
         streak_days: None,
         week_progress: None,
         total_credits: None,
+        credits_left: None,
+        credits_total: None,
         at,
     };
     match outcome {
@@ -551,6 +599,29 @@ async fn status_one(
             dto.total_credits = status.total_credits;
         }
         Err(reason) => dto.message = Some(reason),
+    }
+
+    // Credit balance rides along when configured; any failure here just
+    // leaves the fields None — it must never fail the status query itself.
+    if let Some(ep) = profile.as_ref().and_then(|p| p.credit_summary.as_ref()) {
+        let cx = adapter::RenderContext {
+            credential: &parsed.raw,
+            token: &parsed.token,
+            cookie: &parsed.cookie,
+            model: "",
+        };
+        if let Some(request) = adapter::build_request(ep, &cx) {
+            if let Ok(resp) = wb_commands::execute_outbound(&request).await {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                if status.is_success() {
+                    if let Some((left, total)) = parse_credit_summary(&body) {
+                        dto.credits_left = Some(left);
+                        dto.credits_total = Some(total);
+                    }
+                }
+            }
+        }
     }
     dto
 }
@@ -986,6 +1057,37 @@ mod tests {
 
         assert_eq!(parse_checkin_status("not json"), ParsedCheckinStatus::default());
         assert_eq!(parse_checkin_status("{}"), ParsedCheckinStatus::default());
+    }
+
+    #[test]
+    fn activity_status_shape_with_boolean_week_array_parses() {
+        let measured = r#"{"code":0,"msg":"OK","data":{"active":true,"today_checked_in":true,
+            "streak_days":11,"daily_credit":100,"today_credit":100,
+            "checkin_dates":["2026-09-27","2026-09-26"],
+            "week_progress":[false,true,true,true,true,true,true],"week_checkin_days":6,
+            "total_credits":1100}}"#;
+        let s = parse_checkin_status(measured);
+        assert_eq!(s.today_checked_in, Some(true));
+        assert_eq!(s.streak_days, Some(11));
+        assert_eq!(s.week_progress.as_deref(), Some("6/7"));
+        assert_eq!(s.total_credits, Some(1100));
+    }
+
+    #[test]
+    fn credit_summary_sums_string_capacities_and_refuses_junk() {
+        let measured = r#"{"code":0,"msg":"OK","data":{"Packages":[
+            {"PackageCode":"a","CycleTotalCapacity":"5550","CycleRemainCapacity":"2500",
+             "CycleUsedCapacity":"3050","CycleFrozenCapacity":"0","CapacityUnit":"credits"},
+            {"PackageCode":"b","CycleTotalCapacity":"500","CycleRemainCapacity":"43.81000082",
+             "CycleUsedCapacity":"456.18999918","CycleFrozenCapacity":"0","CapacityUnit":"credits"}
+        ]}}"#;
+        let (left, total) = parse_credit_summary(measured).unwrap();
+        assert!((left - 2543.81).abs() < 0.01, "left={left}");
+        assert!((total - 6050.0).abs() < 0.01, "total={total}");
+
+        assert!(parse_credit_summary(r#"{"code":0,"data":{}}"#).is_none());
+        assert!(parse_credit_summary("not json").is_none());
+        assert!(parse_credit_summary(r#"{"code":10085}"#).is_none());
     }
 
     #[test]

@@ -37,15 +37,10 @@ pub struct UpstreamProfile {
     /// Queries today's check-in status (streak / credits) without claiming.
     #[serde(default)]
     pub checkin_status: Option<Endpoint>,
-    /// Growth-plan streak ladder (read-only display).
+    /// Account credit balance (`get-user-resource-summary`, risk-gated: needs
+    /// `x-client-platform: web` plus a browser-ish User-Agent header).
     #[serde(default)]
-    pub growth_streak: Option<Endpoint>,
-    /// Growth-plan daily heatmap (fetched but not yet rendered).
-    #[serde(default)]
-    pub growth_heatmap: Option<Endpoint>,
-    /// Growth-plan task list (read-only display).
-    #[serde(default)]
-    pub growth_tasks: Option<Endpoint>,
+    pub credit_summary: Option<Endpoint>,
     /// The actual chat upstream the gateway proxies to. `{model}` is available.
     #[serde(default)]
     pub chat: Option<Endpoint>,

@@ -6,7 +6,6 @@ import ApiKeyTable from "./workbuddy/ApiKeyTable";
 import CheckinPanel from "./workbuddy/CheckinPanel";
 import GatewayLogPanel from "./workbuddy/GatewayLogPanel";
 import GatewayPanel from "./workbuddy/GatewayPanel";
-import GrowthPanel from "./workbuddy/GrowthPanel";
 import IpControlPanel from "./workbuddy/IpControlPanel";
 import ManualAddModal from "./workbuddy/ManualAddModal";
 import ProtocolPanel from "./workbuddy/ProtocolPanel";
@@ -168,7 +167,6 @@ export default function WorkBuddyManager() {
               onAccountsChanged={refresh}
               onFlash={flash}
             />
-            <GrowthPanel accounts={accounts} />
           </>
         )}
         {section === "keys" && <ApiKeyTable onChanged={refresh} />}

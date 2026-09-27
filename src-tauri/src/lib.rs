@@ -24,7 +24,6 @@ mod wb_logs;
 mod wb_checkin;
 mod wb_capture;
 mod wb_gateway;
-mod wb_growth;
 
 pub use config::*;
 
@@ -438,7 +437,6 @@ pub fn run() {
             wb_logs::wb_log_models,
             wb_checkin::wb_checkin_now,
             wb_checkin::wb_checkin_status,
-            wb_growth::wb_growth_info,
             wb_checkin::wb_checkin_log_list,
             wb_checkin::wb_checkin_log_clear,
             wb_capture::wb_open_cb_login_window,

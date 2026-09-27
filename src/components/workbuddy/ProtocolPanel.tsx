@@ -98,30 +98,36 @@ const TEMPLATE = JSON.stringify(
       body: "{}",
     },
     // 签到状态查询（只读）：今日是否已签 / 连登 / 周进度 / 积分余额。
-    // 同族端点，同样挖自 app.asar；失败不影响账号状态与签到连败计数。
+    // ⚠️ 必须用 checkin-activity-status：客户端 UI 用的是这个（2026-09-27 从 asar 实锤 +
+    // 裸 Bearer 实测回真实台账）；旧的 /billing/meter/checkin-status 对 JWT 恒回全零模板
+    // （active:false/0 天/0 分），别配回去。week_progress 是 7 个布尔的数组。
     checkinStatus: {
       method: "POST",
-      url: "https://copilot.tencent.com/billing/meter/checkin-status",
+      url: "https://copilot.tencent.com/billing/meter/checkin-activity-status",
       headers: [
         ["authorization", "Bearer {token}"],
         ["content-type", "application/json"],
       ],
       body: "{}",
     },
-    // 成长计划（只读展示，不自动兑换）：连登阶梯与任务列表。
-    // codebuddy.cn 同源 usercenter 族端点，也认 Bearer JWT；未配置时面板显示灰态。
-    growthStreak: {
-      method: "GET",
-      url: "https://www.codebuddy.cn/activity/growth/streak",
-      headers: [["authorization", "Bearer {token}"]],
+    // 账户积分余额（get-user-resource-summary）：官方客户端「积分余额」的真实来源
+    // （Packages 的 CycleRemain/CycleTotal 求和）。⚠️ 挂风控盾：必须带
+    // x-client-platform: web + 一个浏览器形状的 User-Agent，缺任一回 403 code 10085
+    // 「请求不合法」（2026-09-27 实测）。
+    creditSummary: {
+      method: "POST",
+      url: "https://copilot.tencent.com/billing/meter/get-user-resource-summary",
+      headers: [
+        ["authorization", "Bearer {token}"],
+        ["content-type", "application/json"],
+        ["x-client-platform", "web"],
+        [
+          "User-Agent",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        ],
+      ],
+      body: "{}",
     },
-    growthTasks: {
-      method: "GET",
-      url: "https://www.codebuddy.cn/v2/activity/growth/tasks",
-      headers: [["authorization", "Bearer {token}"]],
-    },
-    // 活跃热力图：端点未实测（面板解析兼容 map/array 两种形态，未配置时静默跳过）。
-    growthHeatmap: null,
     // 实测 2026-09-26（IDE genie 扩展同款端点）：真 JWT → 400 {code:11101 "Non-stream
     // chat request is currently not supported"} = 鉴权已过；无/假凭证 → 401；
     // tokenhub.tencentmaas.com 对 JWT 一律 401（那是云 API Key 的入口）。
