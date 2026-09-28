@@ -180,7 +180,25 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       '<style>@keyframes aiwb-spin{to{transform:rotate(360deg);}}' +
       '.aiwb-spin{width:30px;height:30px;border-radius:50%;border:2.5px solid rgba(255,255,255,0.15);border-top-color:#e5e7eb;animation:aiwb-spin 0.9s linear infinite;}</style>' +
       '<div class="aiwb-spin"></div>';
-    (document.body || document.documentElement).appendChild(__ov);
+    // WebView2 (runtime >= 150) runs document-created scripts BEFORE the HTML
+    // parser has created <html>/<body> — document.body and
+    // document.documentElement are both null at that moment, so a bare
+    // appendChild throws and kills the whole IIFE (toolbar included). Poll
+    // until the parser creates the root element, usually the very next tick.
+    var __ovAttached = false;
+    var __ovAttach = function () {
+      if (__ovAttached) return;
+      var base = document.body || document.documentElement;
+      if (!base) return;
+      try {
+        base.appendChild(__ov);
+      } catch (_) { /* document torn down mid-navigation */ }
+      __ovAttached = true;
+      clearInterval(__ovTimer);
+    };
+    var __ovTimer = setInterval(__ovAttach, 16);
+    setTimeout(function () { clearInterval(__ovTimer); }, 2000);
+    __ovAttach();
     var __ovDone = false;
     var __ovRemove = function () {
       if (__ovDone) return;
