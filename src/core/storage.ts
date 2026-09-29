@@ -196,6 +196,7 @@ export const storage = {
           matchPatterns: patterns,
           code: (r['code'] as string) || '',
           enabled: Boolean(r['enabled']),
+          sourceUrl: (r['source_url'] as string) || undefined,
           createdAt: (r['created_at'] as string) || '',
           updatedAt: (r['updated_at'] as string) || '',
         };
@@ -210,6 +211,7 @@ export const storage = {
         match_pattern: item.matchPatterns[0] || '<all_urls>', // 兼容旧版读取
         code: item.code,
         enabled: item.enabled ? 1 : 0,
+        source_url: item.sourceUrl || '',
         created_at: item.createdAt,
         updated_at: item.updatedAt,
       })));

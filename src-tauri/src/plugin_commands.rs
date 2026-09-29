@@ -295,7 +295,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       'button.zoom-display:hover{background:rgba(255,255,255,0.14);color:#fff;}' +
       '.zoom-display.pulse{animation:aiwbPulse 0.35s ease;}' +
       '@keyframes aiwbPulse{50%{transform:scale(1.2);color:#34d399;}}' +
-      '.url{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8;padding:0 8px;height:30px;display:inline-flex;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;cursor:pointer;border-radius:7px;transition:background 0.15s,color 0.15s;flex:none;}' +
+      '.url{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8;padding:0 8px;height:30px;display:inline-flex;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;cursor:pointer;border-radius:7px;transition:background 0.15s,color 0.15s;flex:none;}' +
       '.url:hover{color:#fff;background:rgba(255,255,255,0.1);}' +
       'button.restore{position:fixed;right:12px;bottom:12px;width:32px;height:32px;border-radius:50%;background:rgba(17,24,39,0.78);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);color:#9ca3af;opacity:0.45;box-shadow:0 4px 16px rgba(0,0,0,0.3);transition:opacity 0.2s,background 0.2s,color 0.2s;}' +
       'button.restore:hover{opacity:1;color:#fff;background:rgba(17,24,39,0.95);}' +
@@ -390,7 +390,9 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
 
     // ---- URL state ----
     function updateState() {
-      urlEl.textContent = location.href; // CSS ellipsis handles truncation
+      // 展示精简地址（去掉协议和默认端口，只留域名+路径），完整地址见 title / 复制按钮
+      var short = location.host + (location.pathname === '/' ? '' : location.pathname);
+      urlEl.textContent = short; // CSS ellipsis handles truncation
       urlEl.title = location.href;
       back.disabled = window.history.length <= 1;
     }

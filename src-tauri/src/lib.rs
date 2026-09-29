@@ -153,6 +153,7 @@ pub fn run() {
                     match_patterns TEXT NOT NULL DEFAULT '["<all_urls>"]',
                     code TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    source_url TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -327,6 +328,8 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN is_preset INTEGER NOT NULL DEFAULT 0;");
             // Migrate user_scripts to support multiple match patterns (v0.1.7+)
             let _ = conn.execute_batch("ALTER TABLE user_scripts ADD COLUMN match_patterns TEXT NOT NULL DEFAULT '[\"<all_urls>\"]';");
+            // user_scripts: record the origin URL for scripts imported from a URL
+            let _ = conn.execute_batch("ALTER TABLE user_scripts ADD COLUMN source_url TEXT;");
             // Snippets: 'text' fragments vs 'prompt' (Prompt Studio custom templates)
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN kind TEXT NOT NULL DEFAULT 'text';");
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN scenario TEXT;");

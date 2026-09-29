@@ -255,7 +255,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
         }
         DbTable::UserScripts => {
             tx.execute(
-                "INSERT INTO user_scripts (id, name, description, match_pattern, match_patterns, code, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO user_scripts (id, name, description, match_pattern, match_patterns, code, enabled, source_url, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     json_str(obj, "id")?,
                     json_str(obj, "name")?,
@@ -264,6 +264,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_opt_str(obj, "match_patterns").unwrap_or_else(|| "[\"<all_urls>\"]".to_string()),
                     json_opt_str(obj, "code").unwrap_or_default(),
                     json_bool_as_i64(obj, "enabled")?,
+                    json_opt_str(obj, "source_url"),
                     json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
                 ],
