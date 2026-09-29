@@ -7,10 +7,10 @@
  *   代码：粘贴本文件全文
  *
  * 功能：在 Nexus 2 页面右上角注入悬浮面板，粘贴多行构件名批量查询最新 RELEASE 版本。
- *   - 每行一个关键词（如 pmys.saas.user.pom），或 group:artifact 精确查（如 com.pmys.saas:pmys.saas.user.pom）
+ *   - 每行一个关键词（如 pmys.saas.parent.pom），或 group:artifact 精确查（如 com.pmys.saas:pmys.saas.account.sdk）
  *   - 走 Nexus 自带 REST：/service/local/lucene/search，登录态自动带上（同源 fetch）
- *   - 结果按输入顺序呈现，查询中/失败/无结果三态分明，失败行可单行重试
- *   - 最新版本点击复制 g:a:v；升级版本（末段+1）点击复制 artifactId+新版本
+ *   - 结果按输入顺序呈现，查询中/失败/无结果三态分明，失败行可单行重试；未查询时列表区显示引导空态
+ *   - 最新版本点击复制 g:a:v；发布时间取该版本在 Nexus 的上传时间戳；升级版本（末段+1，满 999 向前进位）点击复制 artifactId+新版本
  *   - 一键复制全部（TSV）/ 一键复制 artifactId+升级版本（TSV）
  *   - 并发 4，Ctrl+Enter 直接查询；输入内容与面板位置自动记忆（localStorage）
  */
@@ -58,13 +58,40 @@
     return 0;
   }
 
-  // 预设升级版本：末段数字 +1（2.4.349-RELEASE → 2.4.350-RELEASE，SNAPSHOT 同理）
+  // 预设升级版本：末段 +1，满 999 归零并向前一段进位（2.4.999-RELEASE → 2.5.0-RELEASE，2.999.999 → 3.0.0）。
+  // 最左段不再进位、直接增长（999.999 → 1000.0），避免出现 "1.0.0.0" 这种凭空多一段的版本。
+  var SEG_MAX = 999;
   function bumpVersion(v) {
     var m = String(v || '').match(/^(\d+(?:\.\d+)*)(.*)$/);
     if (!m) return v;
     var nums = m[1].split('.');
     nums[nums.length - 1] = String(Number(nums[nums.length - 1]) + 1);
+    for (var i = nums.length - 1; i > 0; i--) {
+      if (Number(nums[i]) <= SEG_MAX) break;
+      nums[i] = String(Number(nums[i]) - (SEG_MAX + 1));
+      nums[i - 1] = String(Number(nums[i - 1]) + 1);
+    }
     return nums.join('.') + (m[2] || '');
+  }
+
+  // 最新版本生成时间：Nexus 2 的 lucene 结果里时间字段命名不统一，且 collapseresults 后
+  // 顶层 timestamp 未必对应我们选中的那个版本，所以优先按版本号在 artifactHits 里找。
+  function tsOf(o) {
+    if (!o) return 0;
+    var t = o.timestamp != null ? o.timestamp : (o.lastUpdated != null ? o.lastUpdated : o.dateCreated);
+    var n = Number(t);
+    return n > 0 ? n : 0;
+  }
+  function hitTime(h, ver) {
+    var hits = (h && h.artifactHits) || [];
+    for (var i = 0; i < hits.length; i++) {
+      if (String(hits[i].version) === String(ver) && tsOf(hits[i])) return tsOf(hits[i]);
+    }
+    return tsOf(h);
+  }
+  function fmtTs(ms) {
+    var d = new Date(ms), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
   function searchOne(term) {
@@ -89,6 +116,8 @@
   }
 
   var CSS = [
+    // 没有 border-box，textarea 的 width:100% + padding 会撑出 20px，面板底部就多出一条横向滚动条
+    '#aiwb-nx-panel,#aiwb-nx-panel *{box-sizing:border-box;}',
     '#aiwb-nx-panel{position:fixed;top:14px;right:14px;z-index:2147483000;width:860px;max-height:88vh;display:flex;flex-direction:column;',
     'background:linear-gradient(180deg,#161b22,#11151b);color:#e5e7eb;border:1px solid rgba(255,255,255,.12);border-radius:12px;',
     'box-shadow:0 16px 48px rgba(0,0,0,.55);font:12.5px/1.55 Consolas,monospace;overflow:hidden;}',
@@ -104,7 +133,7 @@
     '#aiwb-nx-min:hover{background:rgba(255,255,255,.12);}',
     '#aiwb-nx-close:hover{background:rgba(248,113,113,.18);color:#f87171 !important;}',
     '#aiwb-nx-body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px;overflow:auto;}',
-    '#aiwb-nx-input{width:100%;height:110px;background:#0b0e12;color:#d1d5db;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:7px 9px;resize:vertical;',
+    '#aiwb-nx-input{width:100%;min-width:0;height:110px;background:#0b0e12;color:#d1d5db;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:7px 9px;resize:vertical;',
     'font:12px/1.6 Consolas,monospace;transition:border-color .15s,box-shadow .15s;}',
     '#aiwb-nx-input:focus{outline:none;border-color:#0d9488;box-shadow:0 0 0 2px rgba(13,148,136,.25);}',
     '#aiwb-nx-input::placeholder{color:#4b5563;}',
@@ -118,12 +147,29 @@
     '#aiwb-nx-status{color:#94a3b8;margin-left:auto;min-height:16px;}',
     '#aiwb-nx-status.done{color:#34d399;}',
     '#aiwb-nx-status.err{color:#f87171;}',
-    '#aiwb-nx-wrap{overflow:auto;border:1px solid rgba(255,255,255,.08);border-radius:8px;}',
+    // min-width:0 必需：body 是 flex 列，子项默认 min-width:auto 会被表格 nowrap 宽度撑出去，导致面板底部多出一条横向滚动条
+    '#aiwb-nx-wrap{overflow:auto;min-width:0;border:1px solid rgba(255,255,255,.08);border-radius:8px;overscroll-behavior:contain;}',
+    // 细滚动条：Windows 原生亮色粗条在暗面板上很突兀（textarea 与结果表两处）
+    '#aiwb-nx-panel,#aiwb-nx-panel *{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent;}',
+    '#aiwb-nx-panel ::-webkit-scrollbar,#aiwb-nx-panel *::-webkit-scrollbar{width:10px;height:10px;}',
+    '#aiwb-nx-panel ::-webkit-scrollbar-track,#aiwb-nx-panel *::-webkit-scrollbar-track{background:transparent;}',
+    '#aiwb-nx-panel ::-webkit-scrollbar-thumb,#aiwb-nx-panel *::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border:3px solid transparent;border-radius:8px;background-clip:padding-box;}',
+    '#aiwb-nx-panel ::-webkit-scrollbar-thumb:hover,#aiwb-nx-panel *::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.3);background-clip:padding-box;}',
+    '#aiwb-nx-panel ::-webkit-scrollbar-thumb:active,#aiwb-nx-panel *::-webkit-scrollbar-thumb:active{background:rgba(255,255,255,.42);background-clip:padding-box;}',
+    '#aiwb-nx-panel ::-webkit-scrollbar-corner,#aiwb-nx-panel *::-webkit-scrollbar-corner{background:transparent;}',
     '#aiwb-nx-tbl{width:100%;border-collapse:collapse;}',
-    '#aiwb-nx-tbl th{position:sticky;top:0;background:#1a212b;padding:6px 10px;text-align:left;font-size:11px;font-weight:600;color:#9ca3af;letter-spacing:.3px;white-space:nowrap;}',
+    '#aiwb-nx-tbl th{position:sticky;top:0;z-index:1;background:#1a212b;padding:6px 10px;text-align:left;font-size:11px;font-weight:600;color:#9ca3af;letter-spacing:.3px;white-space:nowrap;box-shadow:inset 0 -1px 0 rgba(255,255,255,.08);}',
     '#aiwb-nx-tbl td{padding:5px 10px;border-top:1px solid rgba(255,255,255,.06);white-space:nowrap;}',
     '#aiwb-nx-tbl tbody tr:hover td{background:rgba(255,255,255,.03);}',
+    // 空态：未查询时给出引导，否则只剩表头，像样式坏掉。
+    // 必须左对齐：8 个 nowrap 表头让表格 min-content 宽于面板，居中会把提示推到横向滚动区之外
+    '#aiwb-nx-tbl tr.empty td{color:#6b7280;text-align:left;padding:24px 12px;font-size:12px;border-top:0;white-space:normal;line-height:1.8;}',
+    '#aiwb-nx-tbl tr.empty:hover td{background:transparent;}',
+    '#aiwb-nx-tbl tr.empty b{color:#9ca3af;font-weight:700;}',
+    '#aiwb-nx-tbl tr.empty .ic{margin-right:8px;opacity:.75;}',
+    '#aiwb-nx-tbl tr.empty kbd{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-bottom-width:2px;border-radius:4px;padding:0 4px;font:inherit;color:#9ca3af;}',
     '#aiwb-nx-tbl td.num{color:#6b7280;}',
+    '#aiwb-nx-tbl td.tm{color:#9ca3af;font-variant-numeric:tabular-nums;white-space:nowrap;}',
     '#aiwb-nx-tbl td.ver{color:#34d399;font-weight:700;cursor:pointer;}',
     '#aiwb-nx-tbl td.up{color:#60a5fa;font-weight:700;cursor:pointer;}',
     '#aiwb-nx-tbl td.ver:hover,#aiwb-nx-tbl td.up:hover{text-decoration:underline;text-underline-offset:3px;}',
@@ -141,6 +187,7 @@
 
   var panel, tblBody, statusEl, inputEl, goBtn, running = false;
   var slots = [];   // 本轮查询的行槽位：{ term, tr, rows: [] , err }
+  var EMPTY_HTML = '<tr class="empty"><td colspan="9"><span class="ic">&#128269;</span>还没有查询结果 · 每行粘贴一个构件名（或 <b>group:artifact</b>），点 <b>批量查询</b> 或按 <kbd>Ctrl</kbd>+<kbd>Enter</kbd></td></tr>';
 
   function setStatus(msg, cls) {
     statusEl.textContent = msg;
@@ -174,17 +221,18 @@
       '<span class="sp"></span>' +
       '<button id="aiwb-nx-min" title="最小化">—</button>' +
       '<button id="aiwb-nx-close" title="关闭">×</button></div>' +
-      '<div id="aiwb-nx-body"><textarea id="aiwb-nx-input" placeholder="pmys.saas.parent.pom\npmys.saas.user.pom\ncom.pmys.saas:pmys.saas.order.pom"></textarea>' +
+      '<div id="aiwb-nx-body"><textarea id="aiwb-nx-input" placeholder="pmys.saas.parent.pom\npmys.saas.account.sdk"></textarea>' +
       '<div id="aiwb-nx-btns"><button class="pri" id="aiwb-nx-go">批量查询</button>' +
       '<button id="aiwb-nx-copy">复制全部 (TSV)</button>' +
       '<button id="aiwb-nx-copy-up">复制升级版本 (TSV)</button>' +
       '<span id="aiwb-nx-status"></span></div>' +
       '<div id="aiwb-nx-wrap"><table id="aiwb-nx-tbl"><thead><tr>' +
-      '<th>#</th><th>groupId</th><th>artifactId</th><th>最新版本</th><th>升级版本</th><th>仓库</th><th>命中</th><th>操作</th>' +
+      '<th>#</th><th>groupId</th><th>artifactId</th><th>最新版本</th><th>发布时间</th><th>升级版本</th><th>仓库</th><th>命中</th><th>操作</th>' +
       '</tr></thead><tbody></tbody></table></div></div>';
     document.body.appendChild(panel);
 
     tblBody = panel.querySelector('tbody');
+    tblBody.innerHTML = EMPTY_HTML;
     statusEl = panel.querySelector('#aiwb-nx-status');
     inputEl = panel.querySelector('#aiwb-nx-input');
     goBtn = panel.querySelector('#aiwb-nx-go');
@@ -237,7 +285,7 @@
 
   function pendingRow(term) {
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td class="num"></td><td class="pend spin" colspan="7">查询中 · ' + esc(term) + '</td>';
+    tr.innerHTML = '<td class="num"></td><td class="pend spin" colspan="8">查询中 · ' + esc(term) + '</td>';
     tblBody.appendChild(tr);
     return tr;
   }
@@ -267,7 +315,7 @@
 
   function setSlotPending(slot) {
     slot.tr.className = '';
-    slot.tr.innerHTML = '<td class="num"></td><td class="pend spin" colspan="7">查询中 · ' + esc(slot.term) + '</td>';
+    slot.tr.innerHTML = '<td class="num"></td><td class="pend spin" colspan="8">查询中 · ' + esc(slot.term) + '</td>';
     renumber();
   }
 
@@ -276,7 +324,7 @@
     var tr = slot.tr;
     tr.className = 'err';
     tr.innerHTML = '<td class="num"></td><td>—</td><td>' + esc(slot.term) + '</td>' +
-      '<td colspan="4">' + esc(errMsg || '查询失败') + '</td><td></td>';
+      '<td colspan="5">' + esc(errMsg || '查询失败') + '</td><td></td>';
     var act = tr.lastChild;
     act.appendChild(retryBtn(slot));
     renumber();
@@ -292,7 +340,7 @@
       if (!map[k] || cmpVersion(v, map[k].ver) > 0) {
         var repo = h.repoId || h.latestReleaseRepositoryId ||
           (h.artifactHits && h.artifactHits[0] && h.artifactHits[0].repositoryId) || '';
-        map[k] = { g: h.groupId, a: h.artifactId, ver: v, repo: repo, n: 0 };
+        map[k] = { g: h.groupId, a: h.artifactId, ver: v, repo: repo, ts: hitTime(h, v), n: 0 };
       }
       map[k].n++;
     });
@@ -315,13 +363,14 @@
           '<td>' + esc(row.g) + '</td>' +
           '<td>' + esc(row.a) + '</td>' +
           '<td class="ver" title="点击复制 ' + esc(row.g + ':' + row.a + ':' + row.ver) + '">' + esc(row.ver) + '</td>' +
+          '<td class="tm">' + (row.ts ? fmtTs(row.ts) : '—') + '</td>' +
           '<td class="up" title="点击复制 ' + esc(row.a + '\t' + bumpVersion(row.ver)) + '">' + esc(bumpVersion(row.ver)) + '</td>' +
           '<td>' + esc(row.repo) + '</td>' +
           '<td class="num">' + row.n + '</td>' +
           '<td></td>';
         var act = tr.lastChild;
         act.appendChild(openBtn(row));
-        var verTd = tr.children[3], upTd = tr.children[4];
+        var verTd = tr.querySelector('.ver'), upTd = tr.querySelector('.up');
         verTd.onclick = function () { copyText(row.g + ':' + row.a + ':' + row.ver); flash(verTd); };
         upTd.onclick = function () { copyText(row.a + '\t' + bumpVersion(row.ver)); flash(upTd); };
         if (i !== 0) first.parentNode.insertBefore(tr, first.nextSibling);
@@ -395,8 +444,8 @@
   function copyAll() {
     var rows = allResultRows();
     if (!rows.length) { setStatus('没有可复制的结果', 'err'); return; }
-    var tsv = ['groupId\tartifactId\t最新版本\t升级版本\t仓库\t命中数'].concat(rows.map(function (r) {
-      return r.g + '\t' + r.a + '\t' + r.ver + '\t' + bumpVersion(r.ver) + '\t' + r.repo + '\t' + r.n;
+    var tsv = ['groupId\tartifactId\t最新版本\t发布时间\t升级版本\t仓库\t命中数'].concat(rows.map(function (r) {
+      return r.g + '\t' + r.a + '\t' + r.ver + '\t' + (r.ts ? fmtTs(r.ts) : '') + '\t' + bumpVersion(r.ver) + '\t' + r.repo + '\t' + r.n;
     })).join('\n');
     copyText(tsv);
     setStatus('已复制 ' + rows.length + ' 行 TSV', 'done');
