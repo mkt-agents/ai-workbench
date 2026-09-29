@@ -10,7 +10,7 @@ const SKIP_KEY = "update-skip-version";
 /**
  * Startup update check with a non-blocking bottom-right banner.
  * Silent unless a genuinely newer, non-skipped release is found —
- * unreachable sources (both Gitee and GitHub) never nag.
+ * every source failing (Gitee / GitHub / jsDelivr) never nags.
  */
 export default function UpdateBanner() {
   const { t } = useTranslation("update");
