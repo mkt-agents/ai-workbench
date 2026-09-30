@@ -522,7 +522,7 @@ function App() {
               )}
               {activeTab === "app-launcher" && (
                 <div className="page-panel is-active">
-                  <div className="page-scrollable">
+                  <div className="page-scrollable al-page-host">
                     <AppLauncherTool />
                   </div>
                 </div>

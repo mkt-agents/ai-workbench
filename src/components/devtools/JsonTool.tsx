@@ -489,7 +489,7 @@ function JsonTool() {
   };
 
   return (
-    <div className="devtools-tool json-tool-with-history json-tool">
+    <div className="devtools-tool json-tool">
       {/* ── Toolbar ── */}
       <div className="json-toolbar">
         <div className="json-toolbar-group">

@@ -175,7 +175,7 @@ function JwtTool() {
                 <pre className="jwt-pre">{parsed.header}</pre>
               </div>
 
-              <div className="jwt-section">
+              <div className="jwt-section jwt-section-payload">
                 <div className="jwt-section-header">
                   <span className="jwt-section-tag tag-payload">{t("jwt.payload")}</span>
                   <button

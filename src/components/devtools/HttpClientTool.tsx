@@ -1083,7 +1083,7 @@ function HttpClientTool() {
 
       {/* ── Body tab ── */}
       {tab === "body" && (
-        <div className="http-section">
+        <div className="http-section http-section-body">
           <div className="http-section-title">
             <Wrench size={13} />
             {t("http.body")}

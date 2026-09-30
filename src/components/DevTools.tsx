@@ -1,22 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  ArrowLeftRight,
   Braces,
   CalendarClock,
   Clock,
   Code2,
-  FileSearch,
   Globe,
   Hash,
-  History,
   Lock,
-  Network,
   Regex,
   Search,
   Shuffle,
-  Sparkles,
-  Wrench,
   X,
 } from "lucide-react";
 import JsonTool from "./devtools/JsonTool";
@@ -30,7 +24,6 @@ import HashTool from "./devtools/HashTool";
 import HttpClientTool from "./devtools/HttpClientTool";
 
 const STORAGE_KEY = "workbench-devtools-tool";
-const RECENT_KEY = "workbench-devtools-recent";
 
 type ToolDef = {
   id: string;
@@ -41,14 +34,12 @@ type ToolDef = {
 
 type ToolGroup = {
   groupKey: string;
-  icon: React.ReactNode;
   tools: ToolDef[];
 };
 
 const TOOL_GROUPS: ToolGroup[] = [
   {
     groupKey: "group.convert",
-    icon: <ArrowLeftRight size={10} />,
     tools: [
       { id: "json", labelKey: "json.title", icon: <Braces size={16} />, descriptionKey: "json.description" },
       { id: "encoder", labelKey: "encoder.title", icon: <Code2 size={16} />, descriptionKey: "encoder.description" },
@@ -58,7 +49,6 @@ const TOOL_GROUPS: ToolGroup[] = [
   },
   {
     groupKey: "group.generate",
-    icon: <Sparkles size={10} />,
     tools: [
       { id: "uuid", labelKey: "uuid.title", icon: <Shuffle size={16} />, descriptionKey: "uuid.description" },
       { id: "hash", labelKey: "hash.title", icon: <Hash size={16} />, descriptionKey: "hash.description" },
@@ -66,7 +56,6 @@ const TOOL_GROUPS: ToolGroup[] = [
   },
   {
     groupKey: "group.parse",
-    icon: <FileSearch size={10} />,
     tools: [
       { id: "jwt", labelKey: "jwt.title", icon: <Lock size={16} />, descriptionKey: "jwt.description" },
       { id: "regex", labelKey: "regex.title", icon: <Regex size={16} />, descriptionKey: "regex.description" },
@@ -74,7 +63,6 @@ const TOOL_GROUPS: ToolGroup[] = [
   },
   {
     groupKey: "group.network",
-    icon: <Network size={10} />,
     tools: [
       { id: "http", labelKey: "http.title", icon: <Globe size={16} />, descriptionKey: "http.description" },
     ],
@@ -97,26 +85,18 @@ function DevTools({ active = true }: { active?: boolean }) {
   });
 
   const [search, setSearch] = useState("");
-  const [recent, setRecent] = useState<string[]>(() => {
-    try {
-      const stored = localStorage.getItem(RECENT_KEY);
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, activeTool);
-    setRecent((prev) => {
-      const filtered = prev.filter((id) => id !== activeTool);
-      return [activeTool, ...filtered].slice(0, 3);
-    });
   }, [activeTool]);
 
+  const stripRef = useRef<HTMLElement>(null);
+
+  // The strip scrolls horizontally on narrow windows — keep the active chip in view.
   useEffect(() => {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(recent));
-  }, [recent]);
+    const chip = stripRef.current?.querySelector<HTMLElement>(`[data-tool-id="${activeTool}"]`);
+    chip?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTool]);
 
   // Keyboard shortcut: 1-9 maps to tools in global order
   useEffect(() => {
@@ -148,12 +128,6 @@ function DevTools({ active = true }: { active?: boolean }) {
     })).filter((group) => group.tools.length > 0);
   }, [search, t]);
 
-  const recentTools = useMemo(() => {
-    return recent
-      .map((id) => allTools.find((tool) => tool.id === id))
-      .filter(Boolean) as typeof allTools;
-  }, [recent, allTools]);
-
   const activeToolMeta = useMemo(() => allTools.find((t) => t.id === activeTool), [activeTool, allTools]);
 
   const renderTool = () => {
@@ -171,17 +145,18 @@ function DevTools({ active = true }: { active?: boolean }) {
     }
   };
 
-  /** Tool list button — shared by recent + grouped lists. */
-  const renderToolButton = (tool: ToolDef) => {
+  /** Chip in the top tool strip — group name is carried by the tooltip. */
+  const renderToolButton = (tool: ToolDef, groupKey: string) => {
     const hotkey = toolHotkeyIndex(allTools, tool.id);
     const isActive = activeTool === tool.id;
     return (
       <button
         key={tool.id}
         type="button"
+        data-tool-id={tool.id}
         className={`dt-tool-item ${isActive ? "active" : ""}`}
         onClick={() => setActiveTool(tool.id)}
-        title={t(tool.descriptionKey)}
+        title={`${t(groupKey)} · ${t(tool.descriptionKey)}`}
         aria-pressed={isActive}
       >
         <span className="dt-tool-icon">{tool.icon}</span>
@@ -193,69 +168,22 @@ function DevTools({ active = true }: { active?: boolean }) {
     );
   };
 
+  const noResults = search.trim() !== "" && filteredGroups.length === 0;
+
   return (
     <div className="dt-layout">
-      <aside className="dt-sidebar" role="navigation" aria-label={t("title")}>
-        {/* Sidebar header: title + search */}
-        <div className="dt-sidebar-header">
-          <div className="dt-sidebar-title">
-            <span className="dt-sidebar-title-icon">
-              <Wrench size={13} />
-            </span>
-            <span>{t("title")}</span>
-          </div>
-          <div className="dt-sidebar-search">
-            <Search size={13} />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Escape" && setSearch("")}
-              placeholder={t("common.search")}
-              spellCheck={false}
-              aria-label={t("common.search")}
-            />
-            {search && (
-              <button
-                type="button"
-                className="dt-search-clear"
-                onClick={() => setSearch("")}
-                title={t("common.clearSearch")}
-                aria-label={t("common.clearSearch")}
-              >
-                <X size={12} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        <nav className="dt-toollist">
-          {/* Recent tools (hide when searching) */}
-          {search.trim() === "" && recentTools.length > 0 && (
-            <div className="dt-toolgroup">
-              <div className="dt-toolgroup-label">
-                <History size={10} />
-                <span>{t("common.recent")}</span>
-              </div>
-              {recentTools.map((tool) => renderToolButton(tool))}
-            </div>
-          )}
-
-          {/* Tool groups */}
-          {filteredGroups.map((group) => (
-            <div key={group.groupKey} className="dt-toolgroup">
-              <div className="dt-toolgroup-label">
-                {group.icon}
-                <span>{t(group.groupKey)}</span>
-              </div>
-              {group.tools.map((tool) => renderToolButton(tool))}
-            </div>
+      <header className="dt-toolbar">
+        <nav ref={stripRef} className="dt-toolstrip" role="navigation" aria-label={t("title")}>
+          {filteredGroups.map((group, i) => (
+            <Fragment key={group.groupKey}>
+              {i > 0 && <span className="dt-strip-divider" aria-hidden="true" />}
+              <div className="dt-strip-group">{group.tools.map((tool) => renderToolButton(tool, group.groupKey))}</div>
+            </Fragment>
           ))}
 
-          {/* Empty state when search has no results */}
-          {search.trim() !== "" && filteredGroups.length === 0 && (
-            <div className="dt-empty-state">
-              <Search size={18} />
+          {noResults && (
+            <div className="dt-strip-empty">
+              <Search size={13} />
               <span>{t("common.noResults")}</span>
               <button type="button" className="dt-empty-clear" onClick={() => setSearch("")}>
                 {t("common.clearSearch")}
@@ -263,7 +191,31 @@ function DevTools({ active = true }: { active?: boolean }) {
             </div>
           )}
         </nav>
-      </aside>
+
+        <div className="dt-toolbar-search">
+          <Search size={13} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+            placeholder={t("common.search")}
+            spellCheck={false}
+            aria-label={t("common.search")}
+          />
+          {search && (
+            <button
+              type="button"
+              className="dt-search-clear"
+              onClick={() => setSearch("")}
+              title={t("common.clearSearch")}
+              aria-label={t("common.clearSearch")}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      </header>
 
       <main className="dt-main">
         {/* Active tool header — icon + label + description + hotkey hint */}

@@ -340,7 +340,7 @@ export default function CronTool() {
   };
 
   return (
-    <div className="cron-tool">
+    <div className="devtools-tool cron-tool">
       {/* ── Header card ── */}
       <div className="cron-card cron-input-card">
         <div className="cron-card-head">

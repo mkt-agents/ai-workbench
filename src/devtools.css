@@ -2,82 +2,54 @@
 
 .dt-layout {
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   width: 100%;
   background: var(--bg-0);
 }
 
-/* ---------- Sidebar ---------- */
+/* ---------- Top toolbar (tool strip + search) ---------- */
 
-.dt-sidebar {
+.dt-toolbar {
   display: flex;
-  flex-direction: column;
-  width: 184px;
+  align-items: center;
+  gap: 10px;
   flex-shrink: 0;
+  min-width: 0;
+  padding: 6px 14px;
   background: var(--bg-1);
-  border-right: 1px solid var(--border-subtle);
-  overflow: hidden;
-}
-
-/* Sidebar header area (title + search) — fixed height, never scrolls */
-.dt-sidebar-header {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  padding: 10px 10px 9px;
   border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
 }
 
-.dt-sidebar-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-0);
-  letter-spacing: 0.01em;
-  user-select: none;
-  padding-left: 1px;
-}
-
-.dt-sidebar-title-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  flex-shrink: 0;
-}
-
-.dt-sidebar-search {
+.dt-toolbar-search {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  flex-shrink: 0;
+  width: 112px;
+  padding: 4px 8px;
   background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   transition: border-color var(--transition-colors-fast), box-shadow var(--transition-colors-fast);
 }
 
-.dt-sidebar-search:focus-within {
+.dt-toolbar-search:focus-within {
+  /* 聚焦打字时借走工具条空间，否则 1024 默认窗宽下最后一个 chip 会被挤出去 */
+  width: 168px;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.dt-sidebar-search > svg {
+.dt-toolbar-search > svg {
   color: var(--text-3);
   flex-shrink: 0;
   width: 13px;
   height: 13px;
 }
 
-.dt-sidebar-search input {
+.dt-toolbar-search input {
   flex: 1;
   min-width: 0;
   border: none;
@@ -88,7 +60,7 @@
   padding: 0;
 }
 
-.dt-sidebar-search input::placeholder {
+.dt-toolbar-search input::placeholder {
   color: var(--text-3);
   opacity: 0.75;
 }
@@ -113,61 +85,68 @@
   background: var(--bg-hover);
 }
 
-/* ---------- Tool list ---------- */
+/* ---------- Tool strip (single row; groups separated by hairline dividers) ---------- */
 
-.dt-toollist {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px 6px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.dt-toolgroup {
-  display: flex;
-  flex-direction: column;
-}
-
-.dt-toolgroup + .dt-toolgroup {
-  margin-top: 3px;
-}
-
-.dt-toolgroup-label {
+.dt-toolstrip {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
-  padding: 8px 8px 3px;
-  user-select: none;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* 一行高放不下滚动条：靠 chip 被裁切提示可滚，切工具时自动滚入视野 */
+  scrollbar-width: none;
+  scroll-behavior: smooth;
 }
 
-.dt-toolgroup-label svg {
-  opacity: 0.6;
+.dt-toolstrip::-webkit-scrollbar {
+  display: none;
+}
+
+.dt-strip-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   flex-shrink: 0;
+}
+
+.dt-strip-divider {
+  flex-shrink: 0;
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
+/* 800px 最小窗宽下先让位给工具条：收窄输入框并去掉放大镜，保证占位文案不被截断 */
+@media (max-width: 900px) {
+  .dt-toolbar-search {
+    width: 96px;
+  }
+
+  .dt-toolbar-search > svg {
+    display: none;
+  }
 }
 
 .dt-tool-item {
   display: flex;
   align-items: center;
-  gap: 7px;
-  width: 100%;
-  padding: 5px 7px;
-  border: none;
-  border-radius: var(--radius-sm);
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-2);
   font-size: 12px;
   font-weight: 500;
-  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background var(--transition-colors-fast), color var(--transition-colors-fast);
-  position: relative;
-  line-height: 1.4;
+  transition: background var(--transition-colors-fast), color var(--transition-colors-fast),
+    border-color var(--transition-colors-fast);
+  line-height: 1.5;
 }
 
 .dt-tool-item:hover {
@@ -178,7 +157,6 @@
 .dt-tool-item:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
-  border-radius: var(--radius-sm);
 }
 
 .dt-tool-item:active {
@@ -187,20 +165,9 @@
 
 .dt-tool-item.active {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
   color: var(--accent);
   font-weight: 600;
-}
-
-.dt-tool-item.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 2px;
-  height: 60%;
-  border-radius: 0 2px 2px 0;
-  background: var(--accent);
 }
 
 .dt-tool-icon {
@@ -220,14 +187,10 @@
 }
 
 .dt-tool-label {
-  flex: 1;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-/* Hotkey number badge — visible on hover, hidden when active */
+/* 快捷键数字常驻占位，避免切换时 chip 宽度跳动 */
 .dt-tool-kbd {
   flex-shrink: 0;
   min-width: 15px;
@@ -244,33 +207,28 @@
   background: var(--bg-2);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
-  opacity: 0;
+  opacity: 0.5;
   transition: opacity var(--transition-colors-fast);
 }
 
 .dt-tool-item:hover .dt-tool-kbd,
-.dt-tool-item:focus-visible .dt-tool-kbd {
+.dt-tool-item:focus-visible .dt-tool-kbd,
+.dt-tool-item.active .dt-tool-kbd {
   opacity: 1;
 }
 
-.dt-tool-item.active .dt-tool-kbd {
-  display: none;
-}
-
-/* Empty state in sidebar */
-.dt-empty-state {
+/* Empty state inside the strip (search with no matches) */
+.dt-strip-empty {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 26px 12px;
+  gap: 7px;
+  flex-shrink: 0;
+  padding: 0 4px;
   color: var(--text-3);
-  font-size: 12px;
-  text-align: center;
+  font-size: 11.5px;
 }
 
-.dt-empty-state > svg {
+.dt-strip-empty > svg {
   opacity: 0.45;
 }
 
@@ -373,7 +331,9 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 24px 32px;
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
   position: relative;
   isolation: isolate;
 }
@@ -394,32 +354,27 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ---------- Thin scrollbars (sidebar list + content) ---------- */
+/* ---------- Thin scrollbar (content) ---------- */
 
-.dt-toollist,
 .dt-content {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-3) 32%, transparent) transparent;
 }
 
-.dt-toollist::-webkit-scrollbar,
 .dt-content::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.dt-toollist::-webkit-scrollbar-track,
 .dt-content::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.dt-toollist::-webkit-scrollbar-thumb,
 .dt-content::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--text-3) 28%, transparent);
   border-radius: 3px;
 }
 
-.dt-toollist::-webkit-scrollbar-thumb:hover,
 .dt-content::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--text-3) 48%, transparent);
 }
@@ -432,8 +387,11 @@
   flex-direction: column;
   gap: 12px;
   width: 100%;
-  max-width: 1080px;
+  /* 宽度只在这里定一次：随窗口流式，超宽屏才封顶 */
+  max-width: 1440px;
   margin: 0 auto;
+  /* 长高填满内容区，但不低于自然高，内容多时页面照常滚动 */
+  flex: 1 0 auto;
   position: relative;
 }
 
@@ -495,11 +453,20 @@
   color: var(--text-0, #e6edf3);
   border: 1px solid var(--border, #30363d);
   border-radius: 8px;
-  resize: vertical;
   tab-size: 2;
   white-space: pre;
   overflow: auto;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.devtools-textarea,
+.encoder-textarea,
+.hash-textarea,
+.jwt-textarea,
+.regex-textarea,
+.json-textarea {
+  /* 高度交给容器 flex 决定，拖拽柄会失效，统一关掉 */
+  resize: none;
 }
 
 .devtools-textarea:focus {
@@ -1570,7 +1537,6 @@
   flex: 1;
   margin: 0;
   min-height: 220px;
-  max-height: 60vh;
   overflow: auto;
   padding: 12px 14px;
   background: var(--input-bg, #0d1117);
@@ -1592,12 +1558,6 @@
 }
 
 /* ---------- Timestamp tool ---------- */
-
-.ts-tool {
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-}
 
 .ts-live-clock {
   display: flex;
@@ -1900,9 +1860,6 @@
 /* ---------- Responsive ---------- */
 
 @media (max-width: 900px) {
-  .dt-sidebar {
-    width: 160px;
-  }
   .devtools-io {
     grid-template-columns: 1fr;
   }
@@ -1912,39 +1869,16 @@
 }
 
 @media (max-width: 720px) {
-  .dt-layout {
-    flex-direction: column;
-  }
-  .dt-sidebar {
-    width: 100%;
-    border-right: none;
-    border-bottom: 1px solid var(--border-subtle);
-    max-height: 180px;
-  }
-  .dt-toollist {
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 8px;
-    gap: 10px;
-  }
-  .dt-toolgroup {
-    flex-direction: row;
-    gap: 4px;
-  }
-  .dt-toolgroup-label {
-    display: none;
-  }
-  .dt-tool-item {
-    white-space: nowrap;
-  }
-  .dt-tool-item.active::before {
-    display: none;
+  .dt-toolbar {
+    gap: 8px;
+    padding: 5px 10px;
   }
   .dt-tool-kbd {
     display: none;
   }
-  .dt-header {
+  .dt-toolbar-search {
+    width: 88px;
+  }  .dt-header {
     padding: 7px 16px;
     min-height: 40px;
   }
@@ -2087,6 +2021,8 @@
   gap: 10px;
   align-items: stretch;
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .encoder-pane {
@@ -2136,7 +2072,6 @@
   color: var(--text-0, #e6edf3);
   border: 1.5px solid var(--border, #30363d);
   border-radius: 8px;
-  resize: vertical;
   tab-size: 2;
   white-space: pre;
   overflow: auto;
@@ -2371,6 +2306,8 @@
   grid-template-columns: 1fr 1fr;
   gap: 14px;
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .hash-pane {
@@ -2408,8 +2345,9 @@
 }
 
 .hash-textarea {
-  width: 100%;
+  flex: 1 1 auto;
   min-height: 200px;
+  width: 100%;
   padding: 12px 14px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 12.5px;
@@ -2418,7 +2356,6 @@
   color: var(--text-0, #e6edf3);
   border: 1.5px solid var(--border, #30363d);
   border-radius: 8px;
-  resize: vertical;
   tab-size: 2;
   white-space: pre;
   overflow: auto;
@@ -2456,7 +2393,8 @@
   flex-direction: column;
   gap: 5px;
   overflow-y: auto;
-  max-height: 280px;
+  flex: 1 1 auto;
+  min-height: 120px;
   padding: 2px;
 }
 
@@ -2574,15 +2512,6 @@
 }
 
 /* ---------- UUID tool ---------- */
-
-.uuid-tool {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-}
 
 .uuid-toolbar {
   display: flex;
@@ -2716,7 +2645,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 360px;
+  flex: 1 1 auto;
+  min-height: 120px;
   overflow-y: auto;
   border: 1px solid var(--border-subtle, #21262d);
   border-radius: var(--radius-md, 10px);
@@ -2897,15 +2827,6 @@
 
 /* ---------- JWT tool ---------- */
 
-.jwt-tool {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-}
-
 .jwt-toolbar {
   display: flex;
   align-items: center;
@@ -2976,6 +2897,8 @@
   gap: 10px;
   align-items: stretch;
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .jwt-input-area {
@@ -3024,7 +2947,6 @@
   color: var(--text-0, #e6edf3);
   border: 1.5px solid var(--border, #30363d);
   border-radius: 8px;
-  resize: vertical;
   tab-size: 2;
   white-space: pre-wrap;
   word-break: break-all;
@@ -3043,12 +2965,27 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .jwt-parsed {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 载荷最长，多出来的高度优先给它 */
+.jwt-section-payload {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.jwt-section-payload .jwt-pre {
+  flex: 1 1 auto;
+  min-height: 120px;
 }
 
 .jwt-empty {
@@ -3157,7 +3094,6 @@
 
 .jwt-pre {
   min-height: 80px;
-  max-height: 180px;
   overflow: auto;
   padding: 12px 14px;
   background: color-mix(in srgb, var(--accent, #58a6ff) 2%, var(--input-bg, #0d1117));
@@ -3207,15 +3143,6 @@
 /* ==========================================================================
    HTTP tool
    ========================================================================== */
-
-.http-tool {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-}
 
 /* ── Toolbar ── */
 
@@ -3547,6 +3474,14 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 请求体是唯一该长高的 tab 面板，参数/请求头表格保持自然高 */
+.http-section-body {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .http-body-toolbar {
@@ -3566,6 +3501,8 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .http-response-meta {
@@ -3623,11 +3560,14 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .http-response-body .devtools-pre {
   min-height: 180px;
-  max-height: 420px;
+  flex: 1 1 auto;
+  max-height: none;
   border-radius: 8px;
   line-height: 1.6;
 }
@@ -3991,15 +3931,6 @@
 
 /* ---------- Regex tool ---------- */
 
-.regex-tool {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-}
-
 .regex-toolbar {
   display: flex;
   flex-direction: column;
@@ -4107,6 +4038,8 @@
   gap: 14px;
   align-items: stretch;
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .regex-pane {
@@ -4162,7 +4095,6 @@
   color: var(--text-0, #e6edf3);
   border: 1.5px solid var(--border, #30363d);
   border-radius: 8px;
-  resize: vertical;
   tab-size: 2;
   white-space: pre;
   overflow: auto;
@@ -4577,7 +4509,6 @@
   color: var(--text-0, #e6edf3);
   border: 1.5px solid var(--border, #30363d);
   border-radius: 8px;
-  resize: vertical;
   tab-size: 2;
   white-space: pre;
   overflow: auto;
@@ -4596,6 +4527,8 @@
   gap: 14px;
   align-items: stretch;
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .json-pane {
@@ -4625,7 +4558,6 @@
   flex: 1;
   margin: 0;
   min-height: 220px;
-  max-height: 60vh;
   overflow: auto;
   padding: 12px 14px;
   background: var(--input-bg, #0d1117);
@@ -4968,15 +4900,6 @@
 }
 
 /* ---------- Cron tool ---------- */
-
-.cron-tool {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-}
 
 /* ── Card base ── */
 
@@ -5401,6 +5324,8 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
   animation: dt-fade-in 0.2s ease;
 }
 
@@ -5472,6 +5397,8 @@
 .cron-runs {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .cron-runs-head {
@@ -5552,7 +5479,8 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 340px;
+  flex: 1 1 auto;
+  min-height: 120px;
   overflow-y: auto;
 }
 
@@ -5692,16 +5620,7 @@
 }
 
 /* ---------- JSON tool with history sidebar ---------- */
-
-.json-tool-with-history {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  height: 100%;
-  max-width: none;
-  min-height: 0;
-  flex: 1;
-}
+/* 根节点尺寸走共享的 .devtools-tool（唯一的宽度/高度来源），这里只管内部布局 */
 
 .json-main-area {
   display: flex;
@@ -6055,6 +5974,12 @@
 
 /* ── Toolbar ── */
 
+/* 滚动宿主去掉上内边距，让吸顶的工具条能贴住滚动区顶端（否则卡片会从
+   那 12px 缝里露在工具条上方）；间距改由工具条自己的 margin 提供。 */
+.al-page-host {
+  padding-top: 0;
+}
+
 .al-toolbar {
   display: flex;
   align-items: center;
@@ -6066,6 +5991,11 @@
   background: var(--bg-1, #161b22);
   border: 1px solid var(--border-subtle, #21262d);
   border-radius: var(--radius-md, 10px);
+  /* 吸顶固定：卡片从下面滚过时藏在它后面 */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-top: 12px;
 }
 
 .al-toolbar-left {
@@ -6402,6 +6332,12 @@
   gap: 8px;
   padding: 48px 24px;
   text-align: center;
+}
+
+/* 首屏空态随窗口高度居中；筛选无结果的小空态保持紧凑 */
+.al-empty:not(.al-empty-sm) {
+  flex: 1 1 auto;
+  min-height: 260px;
 }
 
 .al-empty-icon-wrap {
@@ -6998,8 +6934,5 @@
   }
 }
 
-@media (max-width: 900px) {
-  .al-grid {
-    grid-template-columns: 1fr;
-  }
-}
+/* 卡片网格交给 auto-fill 自己收敛列数，不再用断点强制单列：
+   900px 视口下侧栏展开也还有 ~670px 内容宽，能放两张 330px 的卡。 */
