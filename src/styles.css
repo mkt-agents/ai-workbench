@@ -59,6 +59,11 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  /* 页面内容宽度唯一上限：小窗随窗口流式，超宽屏才居中封顶。
+     所有页面级容器（.page-scrollable / .snippets-page / .runtime-page /
+     工具页 .devtools-tool）都引用它，不要再各写一个 px 值。 */
+  --page-max-width: 1440px;
+
   /* 阴影 — 极轻分层 */
   --shadow-xs: 0 1px 1px rgba(15, 23, 42, 0.03);
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 3px 12px rgba(15, 23, 42, 0.04);
@@ -1232,7 +1237,7 @@ input, select, textarea { font-family: inherit; }
   flex: 1;
   min-height: 0;
   width: 100%;
-  max-width: 1080px;
+  max-width: var(--page-max-width);
   margin: 0 auto;
 }
 
@@ -3469,6 +3474,14 @@ input, select, textarea { font-family: inherit; }
   outline: none;
   resize: vertical;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+/* 页面上的系统编辑器跟窗口高度一起长（300px 只够看 15 行），
+   弹窗里的“内容”框仍走上面的基础规则，别被撑高。 */
+.hosts-editor-page {
+  min-height: 300px;
+  height: clamp(300px, 45vh, 560px);
+  max-height: none;
 }
 
 .hosts-editor:focus {
@@ -7776,10 +7789,6 @@ input, select, textarea { font-family: inherit; }
     grid-template-columns: 1fr;
   }
 
-  .runtime-list {
-    grid-template-columns: 1fr;
-  }
-
   .plugin-shell {
     max-width: none;
     padding: 12px 16px 16px;
@@ -7862,7 +7871,7 @@ input, select, textarea { font-family: inherit; }
 /* Wide screens: constrain form/list width for readability */
 @media (min-width: 1400px) {
   .page-scrollable {
-    max-width: 960px;
+    max-width: var(--page-max-width);
     margin-left: auto;
     margin-right: auto;
     width: 100%;
@@ -7891,7 +7900,7 @@ input, select, textarea { font-family: inherit; }
   gap: 14px;
   padding-bottom: 24px;
   width: 100%;
-  max-width: 1080px;
+  max-width: var(--page-max-width);
   margin: 0 auto;
   box-sizing: border-box;
 }
@@ -8074,8 +8083,9 @@ input, select, textarea { font-family: inherit; }
 
 .runtime-list {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
+  /* 列数随内容宽自适应，不再靠 1100px 断点切两列 */
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 10px;
 }
 
 .runtime-list.is-refreshing {
@@ -8083,11 +8093,6 @@ input, select, textarea { font-family: inherit; }
 }
 
 @media (min-width: 1100px) {
-  .runtime-list {
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
-
   .runtime-card {
     flex-wrap: wrap;
     align-items: flex-start;
@@ -11829,7 +11834,7 @@ input, select, textarea { font-family: inherit; }
   height: 100%;
   box-sizing: border-box;
   width: 100%;
-  max-width: 1080px;
+  max-width: var(--page-max-width);
   margin-inline: auto;
   min-height: 0;
 }
@@ -11943,22 +11948,16 @@ input, select, textarea { font-family: inherit; }
   font-weight: 600;
 }
 .snippets-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  align-content: start;
   gap: 10px;
   overflow: auto;
   min-height: 0;
   flex: 1;
 }
-@media (min-width: 1100px) {
-  .snippets-list {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    align-content: start;
-  }
-  .snippets-list .empty-hint {
-    grid-column: 1 / -1;
-  }
+.snippets-list .empty-hint {
+  grid-column: 1 / -1;
 }
 .snippet-card {
   border: 1px solid var(--border-subtle);

@@ -255,7 +255,7 @@ function HostsManager() {
   };
 
   return (
-    <div className="page-scrollable">
+    <div className="page-scrollable hosts-page">
       {!canWrite && <div className="admin-warning">{t("adminWarning")}</div>}
 
       <div className="card">
@@ -267,7 +267,7 @@ function HostsManager() {
           </span>
         </div>
         <textarea
-          className="hosts-editor"
+          className="hosts-editor hosts-editor-page"
           value={systemContent}
           onChange={(e) => {
             readGen.current += 1;

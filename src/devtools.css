@@ -387,8 +387,8 @@
   flex-direction: column;
   gap: 12px;
   width: 100%;
-  /* 宽度只在这里定一次：随窗口流式，超宽屏才封顶 */
-  max-width: 1440px;
+  /* 宽度只在这里定一次：随窗口流式，超宽屏才封顶（token 见 styles.css :root） */
+  max-width: var(--page-max-width);
   margin: 0 auto;
   /* 长高填满内容区，但不低于自然高，内容多时页面照常滚动 */
   flex: 1 0 auto;
