@@ -192,6 +192,12 @@ function DevTools({ active = true }: { active?: boolean }) {
           )}
         </nav>
 
+        {activeToolMeta && (
+          <span className="dt-toolbar-desc" title={t(activeToolMeta.descriptionKey)}>
+            {t(activeToolMeta.descriptionKey)}
+          </span>
+        )}
+
         <div className="dt-toolbar-search">
           <Search size={13} />
           <input
@@ -218,22 +224,6 @@ function DevTools({ active = true }: { active?: boolean }) {
       </header>
 
       <main className="dt-main">
-        {/* Active tool header — icon + label + description + hotkey hint */}
-        <div className="dt-header">
-          {activeToolMeta && (
-            <>
-              <span className="dt-header-icon">{activeToolMeta.icon}</span>
-              <div className="dt-header-text">
-                <span className="dt-header-label">{t(activeToolMeta.labelKey)}</span>
-                <span className="dt-header-desc">{t(activeToolMeta.descriptionKey)}</span>
-              </div>
-            </>
-          )}
-          <span className="dt-header-hint" title={t("common.shortcutHint")}>
-            {t("common.shortcutHint")}
-          </span>
-        </div>
-
         {/* key on activeTool re-triggers the entrance animation on switch */}
         <div className="dt-content" key={activeTool}>
           {renderTool()}
