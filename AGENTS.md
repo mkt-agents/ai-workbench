@@ -11,9 +11,9 @@
 - **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。
 - **明确不做**：内置多模型流式对话（AI 走 DeepSeek 外部集成）、AI 工具执行循环（shell/文件/Git 自动操作）、多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
-- 标识：`com.ai-workbench.app`，当前版本 `0.1.8`
+- 标识：`com.ai-workbench.app`，当前版本 `0.2.8`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite，密钥明文，勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/WorkBuddy）→ 版本管理（Git 管理/环境变量）→ 网络管理（Hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置（文案以 `src/locales/*/navigation.json` 为准）
+- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/WorkBuddy）→ 版本管理（Git 管理/环境变量）→ 网络管理（Hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置；另有**一个不属于任何分组的顶层叶子「快捷应用」（`app-launcher`）**，它的页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）
 
 ## 技术栈与目录
 
@@ -36,7 +36,7 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # devtools/runtime/tool/db/cancellation…）
+                      # devtools/runtime/tool/db/cancellation/app_launcher…）；共 147 条注册
   纯函数层             # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +
                       # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
                       # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO
@@ -135,6 +135,15 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 - **新增带 `backdrop-filter` 的界面必须加进 `styles.css` 的 `body.resizing :is(...)` 清单**。
 - 拖拽区用 `data-tauri-drag-region`（不是 Electron 的 `-webkit-app-region`）。
 
+## 页面尺寸与自适应约定（大小窗口都要好看）
+
+- **页面内容宽度只有一个来源**：`styles.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.runtime-page`、`.git-manager-column`、工具页 `.devtools-tool` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。
+- **卡片列表用 `repeat(auto-fill, minmax(<N>px, 1fr))`，不要用 `@media` 切 `1fr 1fr`**。已定：快捷应用 280 / 片段库 320 / 环境变量 340。断点写死列数在宽屏下会把卡片拉到 700px 高、内容飘在顶部。
+- **输入/输出区靠 flex 长高填满窗口**：`.dt-content` 是 flex 列，工具根节点 `flex: 1 0 auto`（长高但不低于自然高，内容多时页面照常滚动），主区 `flex: 1 1 auto; min-height: <原 px>`；原来的 `max-height: 280/340/360/420px`、`60vh` 等死上限改成 `min-height` 地板。有意不填满的只有：时间戳（单行 input）、HTTP 参数/请求头表格——撑开只会得到空盒子。
+- **textarea 高度交给容器，统一 `resize: none`**（只删声明会让浏览器回退成 `resize: both`，反而能横向拖）。
+- **吸顶工具条**：`position: sticky; top: 0; z-index` 之外，滚动宿主必须 `padding-top: 0`（间距改由吸顶元素 `margin-top` 提供），否则内容会从宿主那圈上内边距里露在吸顶条上方。磨砂表面用 `--chrome-bg` + `blur(20px) saturate(1.08)`（与侧栏同配方），不要 `color-mix(--bg-1 …, transparent)`——`--bg-1` 在磨砂主题下本身就只有 3.5%~4.5% alpha，二次稀释等于没有底色。
+- 布局改动落点：验证别只信截图——内嵌浏览器视口只有 ~590 CSS px（dpr=2），量宽度用 `getBoundingClientRect()` / `scrollWidth` 反推，或注入临时 `<style>` 强制容器宽度；往 React 容器里手工 `appendChild` 假数据不可靠，组件状态刷新会把非它创建的节点抹掉。
+
 ## 发布红线
 
 - **开发标识零泄漏**：`[DEV]` 标题/托盘前缀、前端 DEV 徽标必须是编译期常量（`cfg!(debug_assertions)` / `import.meta.env.DEV`），禁止改成运行时开关。
@@ -160,7 +169,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 | 文件 | 内容 |
 |---|---|
 | `README.md` | 产品功能、打包、隐私说明 |
-| `docs/CODE_WIKI.md` | 架构、DB 表结构、IPC 命令清单（部分版本号可能滞后，以代码为准） |
+| `docs/CODE_WIKI.md` | 架构、DB 表结构、IPC 命令清单（2026-09-30 已与代码核对：版本号、小工具命令条数、目录树；仍可能有滞后，以代码为准） |
 | `交接文档.md` | 历史状态、Cursor/快问等踩坑记录（必读） |
 | `ROADMAP.md` | 阶段规划 |
 | `docs/cloudflared.md` | 内网穿透专题 |

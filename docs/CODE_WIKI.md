@@ -30,13 +30,14 @@
 | 能力域 | 功能 |
 |--------|------|
 | **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 快问（含流式 + 多轮）、提示词优化、代码片段管理 |
-| **账号与 Git** | Cursor 多身份一键切换（独立 profile 目录）、Git 仓库批量管理 / 扫描 / 提交 |
-| **开发环境** | Node.js / JDK 版本切换（修改注册表 PATH） |
-| **系统工具** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具快捷入口 |
+| **账号管理** | Cursor 多身份一键切换（独立 profile 目录）、WorkBuddy 账号池 + 签到 |
+| **版本管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK 运行时切换（改注册表 PATH，页面名「环境变量」） |
+| **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
+| **系统工具** | 小工具页 9 个本地开发工具（顶部工具条）、快捷应用（本机应用扫描 / 启动 / 运行态） |
 
 产品标识：
 - **identifier**: `com.ai-workbench.app`
-- **当前版本**: `0.1.0`
+- **当前版本**: `0.2.8`（以 `package.json` 为准，三处同步见 §13.1）
 - **默认 DeepSeek 端口**: `3080`
 
 ---
@@ -83,13 +84,14 @@ ai-workbench/
 ├── src/                          # React 前端
 │   ├── App.tsx                   # 主容器 + 侧边栏导航 + 标题栏
 │   ├── main.tsx                  # 入口（hash 路由分发：主窗口 / 快问 / 快问气泡）
-│   ├── styles.css                # 全局样式（data-theme 驱动的皮肤系统）
+│   ├── styles.css                # 全局样式（data-theme 驱动的皮肤系统，含 `--page-max-width`）
+│   ├── devtools.css              # 小工具页 + 快捷应用页样式（`.dt-*` / `.al-*`）
 │   ├── tauri.d.ts / vite-env.d.ts
 │   │
 │   ├── core/                     # 核心业务层
 │   │   ├── index.ts              # 统一导出
 │   │   ├── boot.ts               # 启动引导（bootApp）
-│   │   ├── store.ts              # Zustand 全局状态（最大文件 ~1000 行）
+│   │   ├── store.ts              # Zustand 全局状态（~1400 行，前端最大文件）
 │   │   ├── store/helpers.ts      # optimisticUpdate / withTable / tauriInvoke
 │   │   ├── store/invocations.ts  # 纯透传的 Tauri invoke 包装集合
 │   │   ├── types.ts              # 所有实体 TypeScript 接口定义
@@ -115,9 +117,20 @@ ai-workbench/
 │   │   ├── CloudflaredManager.tsx# 内网穿透（临时 / 命名隧道 + 日志流）
 │   │   ├── HostsManager.tsx      # 系统 Hosts 读写 + 备份恢复
 │   │   ├── PluginBrowser.tsx     # 网页工具（书签 + 用户脚本，弹窗浏览器打开 http(s)）
+│   │   ├── WorkBuddyManager.tsx  # WorkBuddy 账号池 + 签到
+│   │   ├── workbuddy/            # WorkBuddy 子组件（ManualAddModal 等）
 │   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
 │   │   ├── MarkdownView.tsx      # Markdown 渲染
-│   │   ├── DevTools.tsx          # 小工具页（HTTP 客户端等）
+│   │   ├── DevTools.tsx          # 小工具页（顶部工具条 + 9 个工具）
+│   │   ├── devtools/             # 工具实现：JsonTool / EncoderTool / TimestampTool / CronTool /
+│   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool / HttpClientTool
+│   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
+│   │   ├── quickAsk/             # 快问窗子组件（QuickSelect 焦点多选等）
+│   │   ├── GitReportsPage.tsx    # Git 报告页（五视图 + 筛选 + 导出）
+│   │   ├── TestReportPanel.tsx   # 报告面板（概览 / 改动 / 提交 / API / AI）
+│   │   ├── reportTypes 见 testReportTypes.ts；useFilteredFiles.ts 为报告筛选 hook
+│   │   ├── UpdateBanner.tsx      # 新版本提示条（三源兜底检查）
+│   │   ├── DropdownMenu.tsx / MultiSelectDropdown.tsx  # 通用下拉
 │   │   ├── Settings.tsx          # 设置页（主题 / 语言 / 导出导入）
 │   │   ├── ErrorBoundary.tsx     # React 错误边界
 │   │   ├── ConfirmModal.tsx      # 确认对话框 + Provider（Context）
@@ -140,6 +153,9 @@ ai-workbench/
 │   │   ├── pluginHotkeys.ts      # 书签全局快捷键注册（应用层，切页不失效）
 │   │   ├── floatingMenu.ts       # 悬浮菜单定位计算
 │   │   ├── promptOptimize.ts     # 提示词构造器
+│   │   ├── reportAi.ts           # AI 用例行解析 `parseAiLine()`（与后端 `output_rules()` 成对）
+│   │   ├── reportRisk.ts         # 报告风险展示分类（纯前端侧）
+│   │   ├── workbuddy.ts          # WorkBuddy 前端适配辅助
 │   │   ├── quickAskShortcut.ts   # 全局快捷键注册
 │   │   ├── snippets.ts           # 片段 {{param}} 替换引擎
 │   │   ├── theme.ts              # 主题应用（documentTheme + CSS 类切换）
@@ -171,14 +187,22 @@ ai-workbench/
 │   │   ├── hosts_commands.rs      # 系统 Hosts（读 / 写 / 备份 / 还原 / 原子替换）
 │   │   ├── runtime_commands.rs    # Node.js / JDK 版本切换（修改注册表 PATH）
 │   │   ├── plugin_commands.rs     # 网页工具（建带浮动工具栏的弹窗 + 注入脚本 + 脚本抓取）
-│   │   ├── devtools_commands.rs   # 小工具页（HTTP 请求等）
-│   │   ├── test_run_e2e.rs        # 真实子进程 + 真实 schema 的端到端测试（本机仅编译验证）
+│   │   ├── devtools_commands.rs   # 小工具页（只剩 HTTP 请求；端口/进程三条命令已删除）
+│   │   ├── app_launcher_commands.rs # 快捷应用：开始菜单 / Program Files 扫描、.lnk 解析、图标提取
 │   │   ├── tool_commands.rs       # 工具类：auto-start / 剪贴板 / 数据导入导出 / 文件对话框
 │   │   ├── cancellation.rs        # AI 流式请求取消（CancelGuard）
 │   │   ├── cancellation_commands.rs# cancel_request Tauri 命令
+│   │   ├── report_commands.rs     # Git 报告命令层（采集缓存 + AI 分块 + 提示词构造）
+│   │   ├── change_report.rs       # Git 报告纯函数层（模块/风险/缺测/API 判定，可单测）
+│   │   ├── report_history.rs      # AI 结论历史（report_ai_history，50 条 FIFO）
 │   │   │
 │   │   ├── cursor/                # Cursor 多身份模块
 │   │   │   ├── mod.rs             # 所有 cursor_* Tauri 命令 + 核心备份/切换逻辑
+│   │   │
+│   │   ├── codebuddy/             # WorkBuddy 上游协议适配（adapter.rs / credential.rs）
+│   │   ├── wb_commands.rs         # WorkBuddy 账号池
+│   │   ├── wb_checkin.rs          # WorkBuddy 签到 + 调度 loop
+│   │   ├── wb_capture.rs          # WorkBuddy 扫码登录窗 + 凭证回传
 │   │   │
 │   │   ├── tray/                  # 系统托盘
 │   │   │   ├── mod.rs             # 托盘图标菜单注册 + 快问窗口 + 气泡
@@ -358,7 +382,7 @@ App 启动
 
 ### 6.2 `core/store.ts` — 全局状态中心
 
-**文件长度**: ~1000 行，整个前端状态的单一真实来源。
+**文件长度**: ~1400 行，整个前端状态的单一真实来源。
 
 **架构**:
 ```
@@ -490,6 +514,14 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 - `resize` 监听要用 `requestAnimationFrame` 合并（每帧最多一次宽度判定），但 `classList.add("resizing")` 必须留在事件回调里同步执行，否则模糊面在这一帧仍参与栅格化。
 - 复测脚本在仓库外（`.qoder-cn/tmp/…/ab-old.html` / `ab-new.html` / `resize-cost-harness.html`，引 dist 里的当前 CSS）。**不要在页面里运行时改 `CSSRule`**：那会让整篇样式失效，读数不可信。
 
+### 6.11 页面内容宽度与自适应（2026-09-30 统一）
+
+- **宽度单一来源**：`styles.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)` 块，原先是 960px）、`.snippets-page` / `.runtime-page` / `.git-manager-column`（原先各写 1080px）、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。
+- **卡片网格一律 `repeat(auto-fill, minmax(Npx, 1fr))`**，不再用 `@media` 切 `1fr 1fr`：快捷应用 `.al-grid` 280、片段库 `.snippets-list` 320、环境变量 `.runtime-list` 340。实测（内容宽→列数）：696→2、1080→3、1412→4。
+- **小工具页（`DevTools.tsx` + `devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
+- **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）与 HTTP 的参数/请求头表格。工具内 textarea 统一 `resize: none`。
+- **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。
+
 ---
 
 ## 7. 前端组件层
@@ -574,7 +606,7 @@ TrayTunnelUrls { ... }                     // 托盘隧道 URL
 8. `tray::ensure_quick_ask_window()`
 9. `tray::set_quick_ask_bubble_visible_inner()`
 
-**invoke_handler**: 约 **70+ 条命令**，完整清单见第 10 节。
+**invoke_handler**: **147 条命令**（`lib.rs` 的 `generate_handler!` 实际计数，2026-09-30 核对），完整清单见第 10 节。
 
 ### 8.2 `config.rs` — 常量与错误码
 
@@ -896,10 +928,11 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 ## 10. Tauri IPC 命令完整清单
 
-### 10.1 Git Commands（16 条）
+### 10.1 Git Commands（21 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
+| `git_summarize_repos` | paths: Vec\<String\> | Vec\<GitRepoSummary\>（批量摘要，省进程往返） |
 | `git_repo_summary` | path: String | GitRepoSummary |
 | `git_status` | path: String | Vec\<GitStatusEntry\> |
 | `git_stage` | path, files: Vec\<String\> | String |
@@ -908,10 +941,12 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `git_push` | path: String | String |
 | `git_pull` | path: String | String |
 | `git_diff` | path, file_path, staged: bool | String |
+| `git_log` | path, limit?: usize | Vec\<CommitRecord\> |
 | `git_discard` | path, file_path, untracked, staged: bool | String |
 | `git_undo_last_commit` | path: String | String |
 | `git_commit_context` | path: String | GitCommitContext |
 | `git_is_repo` | path: String | bool |
+| `git_remote_url` | path, remote?: String | Option\<String\> |
 | `git_scan_repos` | path, max_depth?: u32 | Vec\<GitScannedRepo\> |
 | `set_git_config` | scope, name, email | String |
 | `set_repo_git_config` | repo_path, name, email | String |
@@ -928,7 +963,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `generate_text` | config, system, user | String |
 | `generate_text_stream` | config, system, user, request_id, history? | — (emit 事件) |
 
-### 10.3 DSH Commands（12 条）
+### 10.3 DSH Commands（13 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -976,7 +1011,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `restore_host_backup` | path: String | String |
 | `backup_hosts_now` | — | String |
 
-### 10.6 Cursor Commands（20+ 条）
+### 10.6 Cursor Commands（21 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -984,6 +1019,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `get_cursor_login_status` | — | {email, name, isLoggedIn} |
 | `is_cursor_running` | — | bool |
 | `init_account_profile` | account_id | String |
+| `migrate_account_to_profile` | account_id | String |
 | `finish_account_profile` | account_id, relaunch? | String |
 | `launch_cursor` | account_id? | String |
 | `quit_cursor` | — | String |
@@ -992,10 +1028,14 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `delete_cursor_backup` | account_id | — |
 | `get_cursor_disk_usage` | — | DiskUsage |
 | `cleanup_cursor_full_backups` | — | CleanupResult |
+| `cleanup_cursor_sealed_backups` | — | CleanupResult |
+| `slim_cursor_state_dbs` | account_id? | SlimResult |
 | `read_cursor_diagnostics` | account_id? | String |
 | `list_cursor_backups` | — | Vec\<BackupInfo\> |
 | `get_cursor_orphan_profiles` | — | OrphanReport |
 | `cleanup_cursor_orphan_profiles` | — | CleanupResult |
+| `inspect_cursor_update_state` | — | UpdateStateInspect |
+| `cleanup_cursor_update_state` | — | CleanupResult |
 
 ### 10.7 DB Commands（2 条）
 
@@ -1004,7 +1044,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `db_load` | table: DbTable | Vec\<SqlRow\> |
 | `db_save` | table, rows: Vec\<JSON\> | — |
 
-### 10.8 Runtime Commands（9 条）
+### 10.8 Runtime Commands（11 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -1020,17 +1060,20 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `install_runtime` | kind, version | String |
 | `uninstall_runtime` | kind, path | String |
 
-### 10.9 Tray Commands（5 条）
+### 10.9 Tray / QuickAsk Commands（8 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
 | `open_quick_ask_with_text` | text? | — |
 | `tray_toggle_quick_ask` | — | — |
+| `hide_quick_ask` | — | — |
 | `open_main_deepseek` | — | — |
+| `open_main_tab` | tab: String | — |
 | `set_quick_ask_bubble_visible` | visible, x?, y? | — |
-| `quick_ask_bubble_ready` | — | — |
+| `set_quick_ask_bubble_position` | x, y | — |
+| `quick_ask_bubble_ready` | — | —（在 `tray/bubble.rs`） |
 
-### 10.10 Tool Commands（8 条）
+### 10.10 Tool Commands（10 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -1041,7 +1084,9 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `export_data` | — | String (JSON) |
 | `import_data` | json: String | String |
 | `save_text_file` | default_name?, content | String |
+| `read_text_file` | path | String |
 | `pick_text_file` | — | Option\<String\> |
+| `pick_source_file` | — | Option\<String\> |
 
 ### 10.11 Cancellation Commands（1 条）
 
@@ -1073,14 +1118,37 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 >
 > 自动化测试执行 / 覆盖率 / 漏洞扫描相关的命令与数据表已整体移除，启动时 `DROP TABLE`（见 `lib.rs` setup）。
 
-### 10.14 DevTools Commands（4 条）
+### 10.14 DevTools Commands（1 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
-| `devtools_list_ports` | — | 监听端口列表 |
-| `devtools_resolve_processes` | ports | 端口→进程 |
-| `devtools_kill_process` | pid | — |
 | `devtools_http_request` | 请求描述 | 响应（小工具页 HTTP 客户端） |
+
+> 「端口 / 进程查看与结束」这个工具**已不在小工具页**：`devtools_list_ports` / `devtools_resolve_processes` / `devtools_kill_process` 三条命令在 `devtools_commands.rs` 与 `lib.rs` 注册表里都已不存在，前端也没有调用方（小工具页现在是 9 个工具）。netstat 相关逻辑只剩 `dsh_commands.rs` 内部用于 DSH 端口占用检测。
+
+### 10.15 WorkBuddy Commands（17 条）
+
+账号池与设置走 `wb_commands.rs`，签到走 `wb_checkin.rs`，扫码登录抓凭证走 `wb_capture.rs`。这些表**不进 `db_load`/`db_save` 白名单**（整表覆盖写对凭证表等于误删通道）。
+
+| 分组 | 命令 |
+|------|------|
+| 账号池 | `wb_list_accounts` · `wb_add_account_manual` · `wb_update_account` · `wb_delete_account` · `wb_refresh_account_credential` · `wb_probe_account` |
+| 设置 | `wb_get_settings` · `wb_update_settings`（上游协议 JSON 整体存 `wb_settings.adapter_json`，端点不写死） |
+| 签到 | `wb_checkin_status` · `wb_checkin_now` · `wb_checkin_log_list` · `wb_checkin_log_clear` |
+| 扫码登录 | `wb_open_cb_login_window` · `wb_close_cb_login_window` · `wb_capture_cb_login_cookies` · `wb_read_cb_login_probe` · `wb_cb_login_selftest` |
+
+### 10.16 快捷应用 Commands（8 条，`app_launcher_commands.rs`）
+
+| 命令 | 用途 |
+|------|------|
+| `scan_installed_apps` | 注册表 + 安装目录 + 开始菜单/桌面 `.lnk` 扫描（直接解析二进制，含 per-user CLI 精选清单） |
+| `launch_app` / `kill_app` | 启动 / 关闭（先正常退出，超时再强杀） |
+| `is_app_running` / `check_apps_running` | 单个 / 批量运行态（tasklist 一次查询 + 缓存） |
+| `extract_app_icon` | 提取真实图标（PNG 落临时文件回传路径） |
+| `get_app_version` | 读 Win32 文件版本资源 |
+| `browse_app_file` | 原生文件选择器选 exe |
+
+> 合计核对（2026-09-30）：`lib.rs` 的 `generate_handler!` 实际注册 **147 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `quick_ask_bubble_ready`）。
 
 ---
 
@@ -1197,9 +1265,11 @@ React ErrorBoundary 捕获后渲染 fallback UI，控制台可见堆栈。
 
 | 文件 | 字段 |
 |------|------|
-| `package.json` | `"version": "0.1.0"` |
-| `tauri.conf.json` | `"version": "0.1.0"` |
-| `Cargo.toml` | `version = "0.1.0"` |
+| `package.json` | `"version": "0.2.8"` |
+| `tauri.conf.json` | `"version": "0.2.8"` |
+| `Cargo.toml` | `version = "0.2.8"` |
+
+> 另需同步 `package-lock.json` 的 2 处 `"version"`（随 `npm install` 写入），见 [README.md](../README.md)「版本号同步」。
 
 ### 13.2 构建
 
@@ -1218,7 +1288,8 @@ npm run tauri -- build -- --debug
 
 | 类型 | 路径 |
 |------|------|
-| NSIS 安装包 | `src-tauri/target/release/bundle/nsis/ai_workbench_0.1.0_x64-setup.exe` |
+| NSIS 安装包 | `src-tauri/target/release/bundle/nsis/AI Workbench_<version>_x64-setup.exe` |
+| MSI 安装包 | `src-tauri/target/release/bundle/msi/AI Workbench_<version>_x64_en-US.msi` |
 | 便携 exe | `src-tauri/target/release/ai_workbench.exe` |
 | MSI | `src-tauri/target/release/bundle/msi/` |
 
