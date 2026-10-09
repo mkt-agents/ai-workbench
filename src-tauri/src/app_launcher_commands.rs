@@ -21,7 +21,7 @@ const KILL_POLL_INTERVAL_MS: u64 = 300;
 
 /// Normalise a process image name: strip `.exe` if present (case-insensitive),
 /// trim whitespace. Detection compares bare stems on both sides.
-fn normalize_image_name(name: &str) -> String {
+pub(crate) fn normalize_image_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.len() > 4 && trimmed[trimmed.len() - 4..].eq_ignore_ascii_case(".exe") {
         trimmed[..trimmed.len() - 4].to_string()
@@ -33,7 +33,7 @@ fn normalize_image_name(name: &str) -> String {
 /// Decode bytes from Windows console output (GBK on Chinese Windows).
 /// Falls back to UTF-8 if GBK decoding fails.
 #[cfg(windows)]
-fn decode_gbk(bytes: &[u8]) -> String {
+pub(crate) fn decode_gbk(bytes: &[u8]) -> String {
     let (cow, _, had_errors) = encoding_rs::GBK.decode(bytes);
     if had_errors {
         String::from_utf8_lossy(bytes).into_owned()
@@ -43,7 +43,7 @@ fn decode_gbk(bytes: &[u8]) -> String {
 }
 
 #[cfg(windows)]
-fn hidden_command(program: &str) -> Command {
+pub(crate) fn hidden_command(program: &str) -> Command {
     let mut cmd = Command::new(program);
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
@@ -254,7 +254,7 @@ static TASKLIST_CACHE: std::sync::Mutex<Option<(Instant, Vec<String>)>> = std::s
 
 /// Drop the cached tasklist snapshot (call after kills).
 #[cfg(windows)]
-fn invalidate_tasklist_cache() {
+pub(crate) fn invalidate_tasklist_cache() {
     if let Ok(mut guard) = TASKLIST_CACHE.lock() {
         *guard = None;
     }

@@ -1,11 +1,12 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Braces,
   CalendarClock,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Code2,
-  Globe,
   Hash,
   Lock,
   Regex,
@@ -21,7 +22,6 @@ import UuidTool from "./devtools/UuidTool";
 import JwtTool from "./devtools/JwtTool";
 import RegexTool from "./devtools/RegexTool";
 import HashTool from "./devtools/HashTool";
-import HttpClientTool from "./devtools/HttpClientTool";
 
 const STORAGE_KEY = "workbench-devtools-tool";
 
@@ -61,12 +61,6 @@ const TOOL_GROUPS: ToolGroup[] = [
       { id: "regex", labelKey: "regex.title", icon: <Regex size={16} />, descriptionKey: "regex.description" },
     ],
   },
-  {
-    groupKey: "group.network",
-    tools: [
-      { id: "http", labelKey: "http.title", icon: <Globe size={16} />, descriptionKey: "http.description" },
-    ],
-  },
 ];
 
 /** Global 1-based index of a tool across all groups; used for the 1-9 hotkeys. */
@@ -92,10 +86,80 @@ function DevTools({ active = true }: { active?: boolean }) {
 
   const stripRef = useRef<HTMLElement>(null);
 
-  // The strip scrolls horizontally on narrow windows — keep the active chip in view.
+  // Whether the strip can scroll further in each direction (drives the arrows / edge fades).
+  const [stripScroll, setStripScroll] = useState({ left: false, right: false });
+
+  const syncStripArrows = useCallback(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    const left = el.scrollLeft > 1;
+    const right = max > 1 && el.scrollLeft < max - 1;
+    // Keep the same object when nothing changed so scrolling doesn't re-render every frame.
+    setStripScroll((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
+
   useEffect(() => {
-    const chip = stripRef.current?.querySelector<HTMLElement>(`[data-tool-id="${activeTool}"]`);
-    chip?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const el = stripRef.current;
+    if (!el) return;
+    syncStripArrows();
+    el.addEventListener("scroll", syncStripArrows, { passive: true });
+    const ro = new ResizeObserver(syncStripArrows);
+    ro.observe(el);
+    // A plain mouse wheel has no horizontal axis — pan the strip horizontally instead.
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("scroll", syncStripArrows);
+      ro.disconnect();
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [syncStripArrows]);
+
+  // The overflow distance changes when the filtered chip set changes.
+  useEffect(() => {
+    syncStripArrows();
+  }, [search, syncStripArrows]);
+
+  const scrollStrip = useCallback((dir: -1 | 1) => {
+    const el = stripRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(140, el.clientWidth * 0.7), behavior: "smooth" });
+  }, []);
+
+  // Keyboard: ← / → pan the strip when focus isn't in a text field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const el = stripRef.current;
+      if (!el || el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      scrollStrip(e.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [scrollStrip]);
+
+  // Keep the active chip in view while leaving room for the overlay arrows.
+  useEffect(() => {
+    const el = stripRef.current;
+    const chip = el?.querySelector<HTMLElement>(`[data-tool-id="${activeTool}"]`);
+    if (!el || !chip || !el.clientWidth) return;
+    const pad = 34;
+    const left = chip.offsetLeft;
+    const right = left + chip.offsetWidth;
+    if (left < el.scrollLeft + pad) {
+      el.scrollTo({ left: Math.max(0, left - pad), behavior: "smooth" });
+    } else if (right > el.scrollLeft + el.clientWidth - pad) {
+      el.scrollTo({ left: right - el.clientWidth + pad, behavior: "smooth" });
+    }
   }, [activeTool]);
 
   // Keyboard shortcut: 1-9 maps to tools in global order
@@ -140,7 +204,6 @@ function DevTools({ active = true }: { active?: boolean }) {
       case "jwt":          return <JwtTool />;
       case "regex":        return <RegexTool />;
       case "hash":         return <HashTool />;
-      case "http":         return <HttpClientTool />;
       default:             return <JsonTool />;
     }
   };
@@ -173,24 +236,51 @@ function DevTools({ active = true }: { active?: boolean }) {
   return (
     <div className="dt-layout">
       <header className="dt-toolbar">
-        <nav ref={stripRef} className="dt-toolstrip" role="navigation" aria-label={t("title")}>
-          {filteredGroups.map((group, i) => (
-            <Fragment key={group.groupKey}>
-              {i > 0 && <span className="dt-strip-divider" aria-hidden="true" />}
-              <div className="dt-strip-group">{group.tools.map((tool) => renderToolButton(tool, group.groupKey))}</div>
-            </Fragment>
-          ))}
+        <div className="dt-strip-wrap">
+          <nav ref={stripRef} className="dt-toolstrip" role="navigation" aria-label={t("title")}>
+            {filteredGroups.map((group, i) => (
+              <Fragment key={group.groupKey}>
+                {i > 0 && <span className="dt-strip-divider" aria-hidden="true" />}
+                <div className="dt-strip-group">{group.tools.map((tool) => renderToolButton(tool, group.groupKey))}</div>
+              </Fragment>
+            ))}
 
-          {noResults && (
-            <div className="dt-strip-empty">
-              <Search size={13} />
-              <span>{t("common.noResults")}</span>
-              <button type="button" className="dt-empty-clear" onClick={() => setSearch("")}>
-                {t("common.clearSearch")}
-              </button>
-            </div>
+            {noResults && (
+              <div className="dt-strip-empty">
+                <Search size={13} />
+                <span>{t("common.noResults")}</span>
+                <button type="button" className="dt-empty-clear" onClick={() => setSearch("")}>
+                  {t("common.clearSearch")}
+                </button>
+              </div>
+            )}
+          </nav>
+
+          {stripScroll.left && (
+            <button
+              type="button"
+              className="dt-strip-arrow left"
+              onClick={() => scrollStrip(-1)}
+              aria-label={t("common.scrollLeft")}
+              title={t("common.scrollLeft")}
+              tabIndex={-1}
+            >
+              <ChevronLeft size={15} />
+            </button>
           )}
-        </nav>
+          {stripScroll.right && (
+            <button
+              type="button"
+              className="dt-strip-arrow right"
+              onClick={() => scrollStrip(1)}
+              aria-label={t("common.scrollRight")}
+              title={t("common.scrollRight")}
+              tabIndex={-1}
+            >
+              <ChevronRight size={15} />
+            </button>
+          )}
+        </div>
 
         {activeToolMeta && (
           <span className="dt-toolbar-desc" title={t(activeToolMeta.descriptionKey)}>

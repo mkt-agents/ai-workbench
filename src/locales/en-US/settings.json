@@ -50,6 +50,10 @@
     "upToDate": "You are up to date ({{version}})",
     "updateAvailable": "Update available: {{remote}} (current {{local}})",
     "openReleases": "Open Releases",
+    "upgradeNow": "View notes & upgrade",
+    "clearSkip": "Un-skip v{{version}}",
+    "clearSkipHint": "After clearing, v{{version}} will be offered again",
+    "skippedCleared": "Un-skipped v{{version}} — it will be offered again on next start",
     "checkFailed": "Update check failed: {{error}}",
     "privacyNote": "API keys are stored in local SQLite only — do not share the database file"
   }

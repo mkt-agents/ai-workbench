@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import GitManager from "./components/GitManager";
 import SettingsPage from "./components/Settings";
 import UpdateBanner from "./components/UpdateBanner";
+import UpdateModal from "./components/UpdateModal";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import {
   GitBranch,
@@ -25,6 +26,8 @@ import {
   Terminal,
   Rocket,
   Bot,
+  Check,
+  XCircle,
 } from "lucide-react";
 import HostsManager from "./components/HostsManager";
 import PluginBrowser from "./components/PluginBrowser";
@@ -93,6 +96,10 @@ function App() {
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
+  /** 升级弹窗的目标版本；横幅与设置页都往这里写，弹窗只挂一份。 */
+  const [updateTarget, setUpdateTarget] = useState<{ version: string; htmlUrl: string } | null>(
+    null
+  );
   const collapsed = settings.sidebarCollapsed;
   const autoCollapsedByWidth = useRef(false);
   const userOverrideCollapse = useRef(false);
@@ -527,18 +534,31 @@ function App() {
                   </div>
                 </div>
               )}
-              {activeTab === "settings" && <SettingsPage />}
+              {activeTab === "settings" && <SettingsPage onOpenUpdate={setUpdateTarget} />}
               {trayToast && (
                 <div className="toast toast-success" role="status">
+                  <span className="toast-icon">
+                    <Check size={16} />
+                  </span>
                   <span className="toast-text">{trayToast}</span>
                 </div>
               )}
               {hotkeyToast && (
                 <div className="toast toast-error" role="alert">
+                  <span className="toast-icon">
+                    <XCircle size={16} />
+                  </span>
                   <span className="toast-text">{hotkeyToast}</span>
                 </div>
               )}
-              <UpdateBanner />
+              <UpdateBanner onOpen={setUpdateTarget} />
+              {updateTarget && (
+                <UpdateModal
+                  version={updateTarget.version}
+                  fallbackHtmlUrl={updateTarget.htmlUrl}
+                  onClose={() => setUpdateTarget(null)}
+                />
+              )}
             </div>
           </div>
         </main>

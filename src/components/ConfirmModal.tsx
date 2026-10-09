@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Trash2, AlertTriangle, Info, HelpCircle } from "lucide-react";
 
 type ConfirmIcon = "danger" | "warning" | "info" | "question";
@@ -53,7 +54,9 @@ export function useConfirmChoice() {
 
 /** Global confirm dialog provider - place once at the app root. */
 export function ConfirmDialogProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation("common");
   const [state, setState] = useState<ConfirmState | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
   globalSetConfirmState = setState;
 
   const settle = (value: ConfirmChoice) => {
@@ -77,48 +80,54 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
     return () => window.removeEventListener("keydown", onKey);
   }, [state]);
 
+  // 焦点落到主操作，Enter 即可确认；destructive 的图标（danger）用 btn-danger 承接。
+  useEffect(() => {
+    if (state) confirmRef.current?.focus();
+  }, [state]);
+
   const iconMap: Record<ConfirmIcon, React.ReactNode> = {
-    danger: <Trash2 size={18} />,
-    warning: <AlertTriangle size={18} />,
-    info: <Info size={18} />,
-    question: <HelpCircle size={18} />,
+    danger: <Trash2 size={17} />,
+    warning: <AlertTriangle size={17} />,
+    info: <Info size={17} />,
+    question: <HelpCircle size={17} />,
   };
+
+  if (!state) return <>{children}</>;
 
   return (
     <>
       {children}
-      {state && (
-        <div className="modal-overlay" onClick={() => settle("cancel")}>
-          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="confirm-modal-header">
-              <div className={`confirm-modal-icon confirm-modal-icon-${state.icon || "danger"}`}>
-                {iconMap[state.icon || "danger"]}
-              </div>
-              <div className="confirm-modal-title">{state.title}</div>
+      <div className="modal-overlay" onClick={() => settle("cancel")}>
+        <div className="modal confirm-modal" role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+          <div className="confirm-modal-header">
+            <div className={`confirm-modal-icon confirm-modal-icon-${state.icon || "danger"}`}>
+              {iconMap[state.icon || "danger"]}
             </div>
-            <div className="confirm-modal-body">
-              <p style={{ whiteSpace: "pre-line" }}>{state.message}</p>
-              {state.warning && <p className="confirm-modal-warning">{state.warning}</p>}
-            </div>
-            <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => settle("cancel")}>
-                {state.cancelText || "取消"}
+            <div className="confirm-modal-title">{state.title}</div>
+          </div>
+          <div className="confirm-modal-body">
+            <p className="confirm-modal-message">{state.message}</p>
+            {state.warning && <p className="confirm-modal-warning">{state.warning}</p>}
+          </div>
+          <div className="modal-actions">
+            <button className="btn btn-secondary" onClick={() => settle("cancel")}>
+              {state.cancelText || t("actions.cancel")}
+            </button>
+            {state.altConfirmText && (
+              <button className="btn btn-secondary" onClick={() => settle("alt")}>
+                {state.altConfirmText}
               </button>
-              {state.altConfirmText && (
-                <button className="btn btn-secondary" onClick={() => settle("alt")}>
-                  {state.altConfirmText}
-                </button>
-              )}
-              <button
-                className={`btn ${state.icon === "danger" || !state.icon ? "btn-danger" : "btn-primary"}`}
-                onClick={() => settle("confirm")}
-              >
-                {state.confirmText || "确定"}
-              </button>
-            </div>
+            )}
+            <button
+              ref={confirmRef}
+              className={`btn ${state.icon === "danger" || !state.icon ? "btn-danger" : "btn-primary"}`}
+              onClick={() => settle("confirm")}
+            >
+              {state.confirmText || t("actions.confirm")}
+            </button>
           </div>
         </div>
-      )}
+      </div>
     </>
   );
 }

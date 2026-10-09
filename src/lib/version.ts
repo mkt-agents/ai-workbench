@@ -74,6 +74,46 @@ export function isNewerVersion(local: string, remote: string): boolean {
   return compareVersions(remote, local) > 0;
 }
 
+/**
+ * 「跳过此版本」的 localStorage 键。存的是 `normalizeVersion(tag)`，
+ * 所以横幅、弹窗、设置页三方判断口径一致（也才可被清除）。
+ */
+export const SKIP_VERSION_KEY = "update-skip-version";
+
+export function isVersionSkipped(remote: string): boolean {
+  try {
+    return localStorage.getItem(SKIP_VERSION_KEY) === normalizeVersion(remote);
+  } catch {
+    return false;
+  }
+}
+
+export function skipVersion(remote: string): void {
+  try {
+    localStorage.setItem(SKIP_VERSION_KEY, normalizeVersion(remote));
+  } catch {
+    /* 存储不可用：仍按未跳过处理 */
+  }
+}
+
+export function clearSkippedVersion(): string | null {
+  const previous = getSkippedVersion();
+  try {
+    localStorage.removeItem(SKIP_VERSION_KEY);
+  } catch {
+    /* ignore */
+  }
+  return previous;
+}
+
+export function getSkippedVersion(): string | null {
+  try {
+    return localStorage.getItem(SKIP_VERSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export type UpdateCheckResult =
   | { status: "upToDate"; local: string; remote: string }
   | { status: "updateAvailable"; local: string; remote: string; htmlUrl: string }

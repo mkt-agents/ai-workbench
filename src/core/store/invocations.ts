@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, DevtoolsHttpRequest, DevtoolsHttpResponse, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo } from '../types';
+import type { AIModelConfig, DshInstance, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -121,12 +121,17 @@ export interface Invocations {
   invokeListInstallableRuntimes: (kind: RuntimeKind) => Promise<InstallableVersion[]>;
   invokeInstallRuntime: (kind: RuntimeKind, version: string) => Promise<RuntimeVersion>;
   invokeUninstallRuntime: (kind: RuntimeKind, path: string) => Promise<void>;
-  invokeHttpRequest: (req: DevtoolsHttpRequest) => Promise<DevtoolsHttpResponse>;
   invokeLaunchApp: (path: string, args?: string) => Promise<string>;
   invokeKillApp: (processName: string) => Promise<string>;
   invokeIsAppRunning: (processName: string) => Promise<boolean>;
   invokeScanInstalledApps: () => Promise<InstalledAppInfo[]>;
   invokeGetAppVersion: (path: string) => Promise<string>;
+  invokeFindPortListeners: (ports: number[]) => Promise<PortListener[]>;
+  invokeKillPortListeners: (port: number, pids: number[]) => Promise<PortKillResult>;
+  invokeUpdateReleaseInfo: (version: string) => Promise<ReleaseInfo>;
+  invokeUpdateDownload: (requestId: string, url: string) => Promise<DownloadedInstaller>;
+  invokeUpdateInstall: (path: string) => Promise<void>;
+  invokeCancelRequest: (id: string) => Promise<void>;
 }
 
 export const invocations: Invocations = {
@@ -372,7 +377,6 @@ export const invocations: Invocations = {
     tauriInvoke<RuntimeVersion>('install_runtime', { kind, version }),
   invokeUninstallRuntime: (kind: RuntimeKind, path: string) =>
     tauriInvoke<void>('uninstall_runtime', { kind, path }),
-  invokeHttpRequest: (req: DevtoolsHttpRequest) => tauriInvoke<DevtoolsHttpResponse>('devtools_http_request', { req }),
   invokeLaunchApp: (path: string, args?: string) =>
     tauriInvoke<string>('launch_app', { path, args: args ?? null }),
   invokeKillApp: (processName: string) =>
@@ -383,6 +387,16 @@ export const invocations: Invocations = {
     tauriInvoke<InstalledAppInfo[]>('scan_installed_apps'),
   invokeGetAppVersion: (path: string) =>
     tauriInvoke<string>('get_app_version', { path }),
+  invokeFindPortListeners: (ports: number[]) =>
+    tauriInvoke<PortListener[]>('find_port_listeners', { ports }),
+  invokeKillPortListeners: (port: number, pids: number[]) =>
+    tauriInvoke<PortKillResult>('kill_port_listeners', { port, pids }),
+  invokeUpdateReleaseInfo: (version: string) =>
+    tauriInvoke<ReleaseInfo>('update_fetch_release_info', { version }),
+  invokeUpdateDownload: (requestId: string, url: string) =>
+    tauriInvoke<DownloadedInstaller>('update_download', { requestId, url }),
+  invokeUpdateInstall: (path: string) => tauriInvoke<void>('update_install', { path }),
+  invokeCancelRequest: (id: string) => tauriInvoke<void>('cancel_request', { id }),
 };
 
 export default invocations;

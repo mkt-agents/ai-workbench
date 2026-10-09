@@ -210,6 +210,28 @@ export interface InstalledAppInfo {
   icon?: string; // base64 PNG, optional
 }
 
+/** One process holding a queried port. Rust: `port_commands::PortListener` (camelCase). */
+export interface PortListener {
+  queriedPort: number;
+  pid: number;
+  proto: "TCP" | "UDP" | string;
+  /** e.g. ["0.0.0.0", "[::]"] — a `[` prefix means IPv6. */
+  localAddrs: string[];
+  state: string;
+  processName: string;
+  exePath: string;
+  /** "" | "system-pid" | "critical-process" — non-empty means the backend refuses to kill it. */
+  protection: string;
+}
+
+export interface PortKillResult {
+  port: number;
+  killedPids: number[];
+  failed: string[];
+  stillListening: PortListener[];
+  portReleased: boolean;
+}
+
 export interface HostProfile {
   id: string;
   name: string;
@@ -363,24 +385,34 @@ export interface InstallableVersion {
   installed: boolean;
 }
 
-export interface DevtoolsHeaderPair {
-  key: string;
-  value: string;
+/** 应用内升级：某个 release 的更新日志与安装包资产（后端 `update_fetch_release_info`）。 */
+export interface ReleaseInfo {
+  /** 实际取到的版本，可能与请求的不同（tag 命名不一致时）。 */
+  version: string;
+  notes: string | null;
+  setupUrl: string | null;
+  setupSize: number;
+  msiUrl: string | null;
+  htmlUrl: string;
+  /** true = GitHub API 没答上来（多半是匿名配额 403），日志缺失但直链兜底拿到了安装包。 */
+  degraded: boolean;
 }
 
-export interface DevtoolsHttpRequest {
-  method: string;
-  url: string;
-  headers?: DevtoolsHeaderPair[];
-  body?: string;
-  timeout_sec?: number;
+export interface DownloadedInstaller {
+  path: string;
+  size: number;
 }
 
-export interface DevtoolsHttpResponse {
-  status: number;
-  duration_ms: number;
-  headers: DevtoolsHeaderPair[];
-  body: string;
+/**
+ * `app:update_progress` 事件负载。与 runtime/dsh 的 `{stage, percent, message}` 刻意不同形：
+ * 进度文案一律由前端按 stage + 字节数用 i18n 拼，后端不再下发中文字串（en-US 会漏中文）。
+ */
+export interface UpdateProgress {
+  stage: string;
+  percent: number;
+  downloaded: number;
+  /** 0 = 服务端没给 Content-Length，只能显示已下载字节数。 */
+  total: number;
 }
 
 export interface CursorUpdateState {

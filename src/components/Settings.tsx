@@ -8,6 +8,8 @@ import type { AppTheme } from "../core/types";
 import {
   APP_RELEASES_URL,
   checkForUpdatesMultiSource as checkForUpdates,
+  clearSkippedVersion,
+  getSkippedVersion,
 } from "../lib/version";
 import { registerQuickAskShortcut, DEFAULT_SHORTCUT } from "../lib/quickAskShortcut";
 import { applyDocumentTheme, APP_THEME_CHANGED_EVENT } from "../lib/theme";
@@ -16,7 +18,12 @@ import { emit } from "@tauri-apps/api/event";
 
 const THEME_OPTIONS: AppTheme[] = ["ice", "silver", "glass", "light", "dark", "system"];
 
-function Settings() {
+type Props = {
+  /** 打开升级弹窗（更新日志预览 + 应用内升级）。没传时回落到「打开发布页」。 */
+  onOpenUpdate?: (target: { version: string; htmlUrl: string }) => void;
+};
+
+function Settings({ onOpenUpdate }: Props = {}) {
   const { t, i18n } = useTranslation("settings");
   const confirm = useConfirm();
 
@@ -30,7 +37,8 @@ function Settings() {
   const [appVersion, setAppVersion] = useState("…");
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [updateUrl, setUpdateUrl] = useState<string | null>(null);
+  const [updateTarget, setUpdateTarget] = useState<{ version: string; htmlUrl: string } | null>(null);
+  const [skipped, setSkipped] = useState<string | null>(() => getSkippedVersion());
   const [shortcutDraft, setShortcutDraft] = useState(settings.quickAskShortcut || DEFAULT_SHORTCUT);
   const [dataBusy, setDataBusy] = useState(false);
 
@@ -131,14 +139,14 @@ function Settings() {
 
   const handleCheckUpdate = async () => {
     setChecking(true);
-    setUpdateUrl(null);
+    setUpdateTarget(null);
     try {
       const local = appVersion === "…" ? await getVersion() : appVersion;
       const result = await checkForUpdates(local);
       if (result.status === "upToDate") {
         showMsg("success", t("about.upToDate", { version: result.local }));
       } else if (result.status === "updateAvailable") {
-        setUpdateUrl(result.htmlUrl);
+        setUpdateTarget({ version: result.remote, htmlUrl: result.htmlUrl });
         showMsg(
           "success",
           t("about.updateAvailable", { remote: result.remote, local: result.local })
@@ -320,17 +328,44 @@ function Settings() {
                 t("about.checkUpdate")
               )}
             </button>
+            {updateTarget && (
+              <button
+                className="btn btn-primary btn-small"
+                onClick={() => {
+                  if (onOpenUpdate) onOpenUpdate(updateTarget);
+                  else {
+                    const url = updateTarget.htmlUrl || APP_RELEASES_URL;
+                    invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
+                  }
+                }}
+              >
+                {t("about.upgradeNow")}
+              </button>
+            )}
             <button
               className="btn btn-secondary btn-small"
               onClick={() => {
-                const url = updateUrl || APP_RELEASES_URL;
+                const url = updateTarget?.htmlUrl || APP_RELEASES_URL;
                 // window.open is silently swallowed in the Tauri webview — open the
                 // URL in the system browser via our http(s)-validated command instead.
                 invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
               }}
             >
-              {updateUrl ? t("about.openReleases") : t("about.github")}
+              {t("about.github")}
             </button>
+            {skipped && (
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => {
+                  clearSkippedVersion();
+                  setSkipped(null);
+                  showMsg("success", t("about.skippedCleared", { version: skipped }));
+                }}
+                title={t("about.clearSkipHint", { version: skipped })}
+              >
+                {t("about.clearSkip", { version: skipped })}
+              </button>
+            )}
           </div>
         </div>
       </div>

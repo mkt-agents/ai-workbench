@@ -82,6 +82,13 @@ pub enum ErrorCode {
     DshNotInstalled,
     DshStartFailed,
     DshInstallFailed,
+    // 应用内升级
+    UpdateSourceUnreachable,
+    UpdateAssetMissing,
+    UpdateDownloadFailed,
+    UpdateSizeMismatch,
+    UpdateCancelled,
+    UpdateLaunchFailed,
     // Generic
     InvalidInput,
     InternalError,
@@ -103,6 +110,12 @@ impl ErrorCode {
             ErrorCode::DshNotInstalled => "DSH_NOT_INSTALLED",
             ErrorCode::DshStartFailed => "DSH_START_FAILED",
             ErrorCode::DshInstallFailed => "DSH_INSTALL_FAILED",
+            ErrorCode::UpdateSourceUnreachable => "UPDATE_SOURCE_UNREACHABLE",
+            ErrorCode::UpdateAssetMissing => "UPDATE_ASSET_MISSING",
+            ErrorCode::UpdateDownloadFailed => "UPDATE_DOWNLOAD_FAILED",
+            ErrorCode::UpdateSizeMismatch => "UPDATE_SIZE_MISMATCH",
+            ErrorCode::UpdateCancelled => "UPDATE_CANCELLED",
+            ErrorCode::UpdateLaunchFailed => "UPDATE_LAUNCH_FAILED",
             ErrorCode::InvalidInput => "INVALID_INPUT",
             ErrorCode::InternalError => "INTERNAL_ERROR",
         }

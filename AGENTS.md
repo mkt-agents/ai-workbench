@@ -8,12 +8,12 @@
 
 - **愿景**：本地优先的桌面 AI 助手；多模型配置、提示词优化，管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
 - **功能分层**：核心 = DSH / 模型配置 / 提示词 / Cursor；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 小工具（devtools）。
-- **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。
+- **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。小工具页的 **HTTP 客户端**同样已整体删除：`HttpClientTool.tsx` / `devtools_commands.rs`（该域只剩这一条命令，文件一起删了）/ `http_saved_requests` + `http_history` 两张表（setup 里 `DROP TABLE`）/ devtools i18n 的 `http.*` 与 `group.network`，小工具现在是 8 个（转换 / 生成 / 解析三组）。
 - **明确不做**：内置多模型流式对话（AI 走 DeepSeek 外部集成）、AI 工具执行循环（shell/文件/Git 自动操作）、多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.2.8`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite，密钥明文，勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/WorkBuddy）→ 版本管理（Git 管理/环境变量）→ 网络管理（Hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置；另有**一个不属于任何分组的顶层叶子「快捷应用」（`app-launcher`）**，它的页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）
+- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/WorkBuddy）→ 版本管理（Git 管理/环境变量）→ 网络管理（系统 hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置；另有**一个不属于任何分组的顶层叶子「快捷应用」（`app-launcher`）**，它的页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
 
 ## 技术栈与目录
 
@@ -36,7 +36,9 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # devtools/runtime/tool/db/cancellation/app_launcher…）；共 147 条注册
+                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 150 条注册
+                      # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；原
+                      # `devtools_commands.rs` 随 HTTP 客户端一起删除，该文件已不存在）
   纯函数层             # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +
                       # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
                       # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO
@@ -150,6 +152,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 - **版本号三处一致**：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`（`Cargo.toml` 最容易漏，决定 exe 文件属性版本）。
 - `src-tauri/src/bin/` 内部诊断工具由 `dev-tools` feature 门控，默认不进安装包。
 - 不把 `%APPDATA%\com.ai-workbench.app\` 用户数据打进安装包。
+- **应用内升级依赖资产命名**：release 里的 NSIS 资产名必须以 `_x64-setup.exe` 结尾（`update_commands.rs` 的 `pick_setup_asset` 按此后缀匹配，MSI 认 `.msi`）。改名 = 升级弹窗静默退化成「去浏览器下载」，不会报错，务必发布前核对。仓库名同时写在 `src/lib/version.ts` 的 `APP_GITHUB_REPO` 与 `src-tauri/src/update_commands.rs` 的 `GITHUB_REPO`，改一处必须改两处。
 
 ## 危险操作提示
 

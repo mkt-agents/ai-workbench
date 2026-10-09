@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::process::Command;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::fs;
@@ -33,6 +33,7 @@ fn dsh_backup_path(target: &std::path::Path) -> PathBuf {
 }
 
 use crate::{config::{DSH_DEFAULT_PORT}, DshInstance, DshState};
+use crate::port_commands::{find_pid_by_port, is_port_in_use, kill_pid, wait_for_port_release};
 
 /// Machine+User PATH exactly as the registry has it now. Every call costs a
 /// PowerShell spawn, so multi-step operations read it once and hand the value to
@@ -304,10 +305,6 @@ pub async fn restore_dsh_auth() -> Result<String, String> {
         .map_err(|e| format!("Task failed: {e}"))?
 }
 
-fn is_port_in_use(port: u16) -> bool {
-    TcpListener::bind(("127.0.0.1", port)).is_err()
-}
-
 /// Marker baked into DSH's web UI HTML. Only a listener that actually answers with
 /// this is treated as DSH, so an unrelated program on the same port is never mistaken
 /// for a running service.
@@ -477,19 +474,6 @@ fn stop_child(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-/// Wait for a killed server to release its port, so its replacement can bind it.
-/// Without this, `wait_for_port` can see the dying socket and start the successor too
-/// early, which then fails to listen.
-///
-/// Returns `true` when the port is free; `false` if still bound after the deadline.
-fn wait_for_port_release(port: u16) -> bool {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while is_port_in_use(port) && std::time::Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(200));
-    }
-    !is_port_in_use(port)
-}
-
 /// True when neither the TCP port nor a DSH HTTP response remains.
 fn dsh_fully_stopped(port: u16) -> bool {
     !is_port_in_use(port) && !dsh_is_serving(port)
@@ -574,92 +558,6 @@ fn prune_dead_instances(state: &DshState) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn local_addr_port(addr: &str) -> Option<u16> {
-    let (_, raw) = addr.rsplit_once(':')?;
-    raw.parse().ok()
-}
-
-fn line_listens_on_port(line: &str, port: u16) -> bool {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    // netstat: Proto  Local  Foreign  State  PID. Match the local port exactly
-    // so 3080 does not kill a listener on 30800.
-    if parts.len() < 4 || !parts.iter().any(|p| *p == "LISTENING") {
-        return false;
-    }
-    local_addr_port(parts[1]) == Some(port)
-}
-
-/// Kill a PID (and its process tree on Windows via `taskkill /T`).
-/// "Process not found" is treated as success — the target may already be gone.
-fn kill_pid(pid: u32) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let output = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|e| format!("taskkill 无法启动: {e}"))?;
-        if output.status.success() {
-            return Ok(());
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let lower = stderr.to_ascii_lowercase();
-        // Already exited: English and Chinese taskkill messages.
-        if lower.contains("not found")
-            || stderr.contains("没有运行")
-            || stderr.contains("找不到")
-            || stderr.contains("不存在")
-        {
-            return Ok(());
-        }
-        Err(format!(
-            "taskkill PID {pid} 失败: {}",
-            stderr.trim().replace('\r', " ").replace('\n', " ")
-        ))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let output = Command::new("kill")
-            .arg(pid.to_string())
-            .output()
-            .map_err(|e| format!("kill 无法启动: {e}"))?;
-        if output.status.success() {
-            return Ok(());
-        }
-        // ESRCH — no such process
-        if output.status.code() == Some(1) {
-            return Ok(());
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("kill PID {pid} 失败: {}", stderr.trim()))
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn find_pid_by_port(port: u16) -> Option<u32> {
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/c", "netstat", "-ano", "-p", "TCP"]);
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let output = cmd.output().ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line_listens_on_port(line, port) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(pid_str) = parts.last() {
-                if let Ok(pid) = pid_str.parse::<u32>() {
-                    return Some(pid);
-                }
-            }
-        }
-    }
-    None
-}
-
-#[cfg(not(target_os = "windows"))]
-fn find_pid_by_port(_port: u16) -> Option<u32> {
-    None
 }
 
 fn sanitize_route_part(s: &str) -> String {

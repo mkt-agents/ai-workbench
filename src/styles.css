@@ -71,6 +71,10 @@
   --shadow-lg: 0 4px 8px rgba(15, 23, 42, 0.04), 0 18px 40px rgba(15, 23, 42, 0.07);
   --shadow-glow: none;
   --card-shadow: 0 1px 1px rgba(15, 23, 42, 0.03), 0 8px 24px rgba(15, 23, 42, 0.05);
+  /* 浮层投影：弹框 / 下拉菜单 / 浮动确认框共用的单一来源。
+     历史上 .modal 等三处引用了 --float-shadow 却从未定义，等于所有浮层零投影。 */
+  --float-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.12),
+    0 28px 64px rgba(15, 23, 42, 0.1);
 
   --chrome-bg: rgba(255, 255, 255, 0.48);
   --chrome-line: rgba(15, 23, 42, 0.08);
@@ -128,6 +132,10 @@
   --shadow-lg: 0 4px 8px rgba(15, 23, 42, 0.04), 0 18px 40px rgba(15, 23, 42, 0.07);
   --shadow-glow: none;
   --card-shadow: 0 1px 1px rgba(15, 23, 42, 0.03), 0 8px 24px rgba(15, 23, 42, 0.05);
+  /* 浮层投影：弹框 / 下拉菜单 / 浮动确认框共用的单一来源。
+     历史上 .modal 等三处引用了 --float-shadow 却从未定义，等于所有浮层零投影。 */
+  --float-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.12),
+    0 28px 64px rgba(15, 23, 42, 0.1);
 
   --chrome-bg: rgba(255, 255, 255, 0.48);
   --chrome-line: rgba(15, 23, 42, 0.08);
@@ -375,6 +383,21 @@
 
   --chrome-bg: rgba(12, 12, 11, 0.6);
   --chrome-line: rgba(255, 255, 255, 0.05);
+}
+
+/* 深色系浮层投影：纯黑投影在深底上看不出层次，所以额外给 1px 亮边把浮层
+   与背景切开。弹框、下拉、浮动确认框共用这一条，不要再各自写死 box-shadow。 */
+:is([data-theme="dark"], [data-theme="glass"], [data-theme="ice"], [data-theme="silver"]),
+.dark {
+  --float-shadow: 0 0 0 1px rgba(255, 255, 255, 0.055), 0 18px 40px rgba(0, 0, 0, 0.45),
+    0 44px 90px rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) {
+    --float-shadow: 0 0 0 1px rgba(255, 255, 255, 0.055), 0 18px 40px rgba(0, 0, 0, 0.45),
+      0 44px 90px rgba(0, 0, 0, 0.35);
+  }
 }
 
 [data-theme="glass"] body {
@@ -1050,7 +1073,6 @@ body.resizing :is(
   .prompt-model-menu,
   .ai-model-menu,
   .prompt-template-menu,
-  .http-history-menu,
   .al-toolbar,
   .qa-focus-pop,
   .tr-multiselect-menu,
@@ -3799,9 +3821,9 @@ input, select, textarea { font-family: inherit; }
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3809,17 +3831,32 @@ input, select, textarea { font-family: inherit; }
   animation: fadeIn 0.12s ease;
 }
 
+/* 深色/磨砂主题下纯黑遮罩更有聚焦感；浅色主题的遮罩带墨蓝，避免整屏发灰。 */
+:is([data-theme="dark"], [data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal-overlay {
+  background: rgba(0, 0, 0, 0.62);
+}
+
 .modal {
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 24px;
+  border-radius: 12px;
+  padding: 22px;
   width: 90%;
   max-width: min(380px, calc(100vw - 32px));
   box-sizing: border-box;
   overflow: hidden;
   animation: slideUp 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: var(--float-shadow);
+}
+
+/* 磨砂三主题里 --bg-1 只有 3.5%~4.5% alpha —— 卡片贴在桌面上可以，弹框却是压在
+   暗遮罩上的，用它就等于没有底，正文像浮在空气里。这里给弹框单独一层接近实底的
+   磨砂面，顶部一道高光发丝线，不加 backdrop-filter（遮罩已经糊过一层了）。 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.012) 34%),
+    color-mix(in srgb, var(--chrome-bg) 78%, black);
+  border-color: rgba(255, 255, 255, 0.09);
 }
 
 .modal-title {
@@ -3833,15 +3870,15 @@ input, select, textarea { font-family: inherit; }
   word-break: break-word;
 }
 
-/* 统一弹框标题行：标题（+徽章）在左，X 关闭在右 */
+/* 统一弹框标题行：标题（+徽章）在左，X 关闭在右，底部分隔线 */
 .modal-title-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-0);
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -3884,17 +3921,40 @@ input, select, textarea { font-family: inherit; }
 
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
+/* 内容多、带滚动区的弹框（升级框）用分区页脚：次要在左、主操作在右，
+   上方一道发丝线与正文分开。 */
+.modal-actions--split {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  justify-content: space-between;
+}
+
+.modal-actions--split .modal-actions-secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modal-actions--split .modal-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* Confirm Modal */
 .confirm-modal {
-  max-width: min(360px, calc(100vw - 32px));
-  padding: 20px;
+  max-width: min(400px, calc(100vw - 32px));
+  padding: 22px;
 }
 
 .confirm-modal-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   min-width: 0;
 }
 
@@ -3902,49 +3962,56 @@ input, select, textarea { font-family: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: var(--red-dim);
   color: var(--red);
   flex-shrink: 0;
 }
 
+/* 每种语义色配一圈同色发丝边：深色主题下 *-dim 底色太接近无，只有描边才立得住 */
 .confirm-modal-icon-danger {
   background: var(--red-dim);
   color: var(--red);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 28%, transparent);
 }
 
 .confirm-modal-icon-warning {
   background: var(--yellow-dim);
   color: var(--yellow);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 28%, transparent);
 }
 
 .confirm-modal-icon-info {
   background: var(--accent-dim);
   color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .confirm-modal-icon-question {
   background: var(--green-dim);
   color: var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 28%, transparent);
 }
 
 .confirm-modal-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-0);
   min-width: 0;
   flex: 1;
   overflow-wrap: anywhere;
   word-break: break-word;
-  line-height: 1.35;
+  line-height: 1.45;
 }
 
+/* 正文与标题左缘对齐（图标 34 + gap 10），否则文字从图标下面穿出来。 */
 .confirm-modal-body {
   color: var(--text-1);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.65;
+  margin-left: 44px;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -3953,14 +4020,26 @@ input, select, textarea { font-family: inherit; }
   margin: 0 0 6px;
 }
 
+.confirm-modal-message {
+  white-space: pre-line;
+}
+
 .confirm-modal-body strong {
   color: var(--text-0);
   font-weight: 500;
 }
 
+/* 之前是 --text-3 !important，在磨砂主题下几乎看不见；改成有色底的影响范围提示。 */
 .confirm-modal-warning {
-  color: var(--text-3) !important;
-  font-size: 12px;
+  display: block;
+  margin: 10px 0 0;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--yellow-dim);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 22%, transparent);
+  color: var(--text-1) !important;
+  font-size: 11.5px;
+  line-height: 1.55;
 }
 
 /* === TOAST === */
@@ -6738,7 +6817,8 @@ input, select, textarea { font-family: inherit; }
   line-height: 1.5;
   z-index: 1000;
   animation: toast-in 0.2s ease;
-  box-shadow: var(--shadow-md);
+  /* toast 也是浮层：用与弹框同一套投影 token，不要用 --shadow-md（深底上几乎看不出） */
+  box-shadow: var(--float-shadow);
   white-space: normal;
   text-align: left;
   max-width: min(420px, 90vw);
@@ -6815,7 +6895,7 @@ input, select, textarea { font-family: inherit; }
   background: var(--bg-1);
   color: var(--text-0);
   font-size: 12.5px;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--float-shadow);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   animation: update-banner-in 0.2s ease;
@@ -6859,17 +6939,181 @@ input, select, textarea { font-family: inherit; }
   background: var(--bg-hover);
 }
 
+/* ---------- Update modal (changelog preview + in-app upgrade) ---------- */
+
+/* .modal 默认 380px 窄框，装不下更新日志；这里只放宽自身，不动全局弹框。 */
+.update-modal {
+  max-width: min(560px, calc(100vw - 32px));
+}
+
+/* 元信息行：从哪个版本升上来、装的是哪种安装包、多大。
+   没有这一行时用户只能从标题猜"点了会发生什么"。 */
+.update-modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: -4px 0 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.update-modal-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.update-modal-meta-item svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.update-modal-notes-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  text-transform: uppercase;
+}
+
+.update-modal-notes {
+  max-height: min(44vh, 360px);
+  overflow-y: auto;
+  padding: 11px 13px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-3) 32%, transparent) transparent;
+  /* release 正文里的长路径 / 长 URL 不能把弹框撑破 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 弹框里的更新日志要压一档：.qa-md 是给快问窗定的，h1 17px 在 560px 框里像正文。 */
+.update-modal-notes .qa-md {
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.update-modal-notes .qa-md h1 { font-size: 14px; }
+.update-modal-notes .qa-md h2 { font-size: 13.5px; }
+.update-modal-notes .qa-md h3,
+.update-modal-notes .qa-md h4 { font-size: 13px; }
+
+.update-modal-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 76px;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-2);
+  text-align: center;
+}
+
+/* 拿不到安装包 = 这一版只能手动装，用告警色而不是中性底，别混进正文里。 */
+.update-modal-hint {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--yellow-dim);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 22%, transparent);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-1);
+}
+
+.update-modal-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--red-dim);
+  box-shadow: inset 2px 0 0 var(--red);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-0);
+}
+
+.update-modal-error svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--red);
+}
+
+.update-modal-error-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.update-modal-error-title {
+  font-weight: 600;
+  color: var(--red);
+}
+
+/* 异常原文只作次要线索：等宽 + 最弱文字色，最多三行，可滚动看全。 */
+.update-modal-error-detail {
+  max-height: 3.6em;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.update-modal-progress {
+  margin-top: 12px;
+}
+
+.update-modal-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.update-modal-progress-pct {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.update-modal-progress .dsh-progress-bar {
+  height: 4px;
+}
+
+.update-modal-progress-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
 .toast-warning .toast-icon {
   color: var(--yellow);
 }
 
-/* Glass Theme Toast — same structure, neutral frosted surface */
+/* Glass Theme Toast — same structure, neutral frosted surface.
+   投影留给 --float-shadow（各主题已定好），这里只换表面与描边。 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast {
   background: color-mix(in srgb, var(--chrome-bg) 88%, black);
   border-color: rgba(255, 255, 255, 0.12);
   border-left-width: 3px;
   color: #f5f5f5;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22), 0 0 0 0.25px rgba(255, 255, 255, 0.06);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-success {

@@ -7,12 +7,13 @@ mod ai_commands;
 mod dsh_commands;
 mod runtime_commands;
 mod cloudflared_commands;
-mod devtools_commands;
+mod update_commands;
 pub mod tool_commands;
 mod tray;
 pub mod config;
 pub mod cancellation;
 mod app_launcher_commands;
+mod port_commands;
 mod cancellation_commands;
 mod change_report;
 mod report_commands;
@@ -254,23 +255,6 @@ pub fn run() {
                     chars INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS http_saved_requests (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    method TEXT NOT NULL DEFAULT 'GET',
-                    url TEXT NOT NULL,
-                    headers TEXT NOT NULL DEFAULT '[]',
-                    params TEXT NOT NULL DEFAULT '[]',
-                    body TEXT NOT NULL DEFAULT '',
-                    body_type TEXT NOT NULL DEFAULT 'none',
-                    saved_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS http_history (
-                    id INTEGER PRIMARY KEY,
-                    method TEXT NOT NULL,
-                    url TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS quick_app_launchers (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -307,6 +291,15 @@ pub fn run() {
                  DROP TABLE IF EXISTS test_projects;",
             )
             .expect("failed to drop legacy test tables");
+
+            // HTTP 客户端小工具已移除（含其收藏的请求与历史记录）。这里同样幂等 DROP，
+            // 让旧版本留下的两张空转表不再被 schema 维护；用户自建数据无法还原，
+            // 想保留历史的话删掉这一段即可。
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS http_saved_requests;
+                 DROP TABLE IF EXISTS http_history;",
+            )
+            .expect("failed to drop http client tables");
 
             let _ = conn.execute_batch("ALTER TABLE git_accounts ADD COLUMN note TEXT;");
             let _ = conn.execute_batch("ALTER TABLE cursor_accounts ADD COLUMN notes TEXT;");
@@ -525,7 +518,6 @@ pub fn run() {
             cloudflared_commands::cloudflared_stop_all_tunnels,
             cloudflared_commands::cloudflared_tunnel_status,
             cloudflared_commands::cloudflared_setup_new_domain,
-            devtools_commands::devtools_http_request,
             app_launcher_commands::browse_app_file,
             app_launcher_commands::launch_app,
             app_launcher_commands::kill_app,
@@ -534,6 +526,11 @@ pub fn run() {
             app_launcher_commands::scan_installed_apps,
             app_launcher_commands::extract_app_icon,
             app_launcher_commands::get_app_version,
+            port_commands::find_port_listeners,
+            port_commands::kill_port_listeners,
+            update_commands::update_fetch_release_info,
+            update_commands::update_download,
+            update_commands::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

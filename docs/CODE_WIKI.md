@@ -33,7 +33,7 @@
 | **账号管理** | Cursor 多身份一键切换（独立 profile 目录）、WorkBuddy 账号池 + 签到 |
 | **版本管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
-| **系统工具** | 小工具页 9 个本地开发工具（顶部工具条）、快捷应用（本机应用扫描 / 启动 / 运行态） |
+| **系统工具** | 小工具页 8 个本地开发工具（顶部工具条；HTTP 客户端已移除）、快捷应用（本机应用扫描 / 启动 / 运行态 + 「端口查杀」面板） |
 
 产品标识：
 - **identifier**: `com.ai-workbench.app`
@@ -121,15 +121,17 @@ ai-workbench/
 │   │   ├── workbuddy/            # WorkBuddy 子组件（ManualAddModal 等）
 │   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
 │   │   ├── MarkdownView.tsx      # Markdown 渲染
-│   │   ├── DevTools.tsx          # 小工具页（顶部工具条 + 9 个工具）
+│   │   ├── DevTools.tsx          # 小工具页（顶部工具条 + 8 个工具）
 │   │   ├── devtools/             # 工具实现：JsonTool / EncoderTool / TimestampTool / CronTool /
-│   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool / HttpClientTool
+│   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool
 │   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
+│   │   │                         #   + PortKillerPanel（该页第二个视图：按端口查杀）
 │   │   ├── quickAsk/             # 快问窗子组件（QuickSelect 焦点多选等）
 │   │   ├── GitReportsPage.tsx    # Git 报告页（五视图 + 筛选 + 导出）
 │   │   ├── TestReportPanel.tsx   # 报告面板（概览 / 改动 / 提交 / API / AI）
 │   │   ├── reportTypes 见 testReportTypes.ts；useFilteredFiles.ts 为报告筛选 hook
-│   │   ├── UpdateBanner.tsx      # 新版本提示条（三源兜底检查）
+│   │   ├── UpdateBanner.tsx      # 新版本提示条（点「查看更新」开升级弹窗）
+│   │   ├── UpdateModal.tsx       # 升级弹窗：更新日志预览 + 应用内下载/安装（进度可取消）
 │   │   ├── DropdownMenu.tsx / MultiSelectDropdown.tsx  # 通用下拉
 │   │   ├── Settings.tsx          # 设置页（主题 / 语言 / 导出导入）
 │   │   ├── ErrorBoundary.tsx     # React 错误边界
@@ -187,8 +189,9 @@ ai-workbench/
 │   │   ├── hosts_commands.rs      # 系统 Hosts（读 / 写 / 备份 / 还原 / 原子替换）
 │   │   ├── runtime_commands.rs    # Node.js / JDK 版本切换（修改注册表 PATH）
 │   │   ├── plugin_commands.rs     # 网页工具（建带浮动工具栏的弹窗 + 注入脚本 + 脚本抓取）
-│   │   ├── devtools_commands.rs   # 小工具页（只剩 HTTP 请求；端口/进程三条命令已删除）
 │   │   ├── app_launcher_commands.rs # 快捷应用：开始菜单 / Program Files 扫描、.lnk 解析、图标提取
+│   │   ├── port_commands.rs      # netstat/taskkill 共享原语 + 端口查杀命令（DSH 也 use 这里）
+│   │   ├── update_commands.rs    # 应用内升级：GitHub release 详情 + 流式下载 + 看门狗装新版
 │   │   ├── tool_commands.rs       # 工具类：auto-start / 剪贴板 / 数据导入导出 / 文件对话框
 │   │   ├── cancellation.rs        # AI 流式请求取消（CancelGuard）
 │   │   ├── cancellation_commands.rs# cancel_request Tauri 命令
@@ -441,7 +444,7 @@ type DbTable = 'git_accounts' | 'git_repo_configs' | 'git_host_configs'
   | 'host_profiles' | 'web_plugins' | 'user_scripts' | 'plugin_states'
   | 'recent_projects' | 'git_workspaces' | 'cursor_accounts' | 'ai_models'
   | 'cloudflared_profiles' | 'snippets' | 'quick_ask_sessions'
-  | 'json_tool_history' | 'http_saved_requests' | 'http_history'
+  | 'json_tool_history' | 'quick_app_launchers'
 ```
 
 
@@ -519,7 +522,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 - **宽度单一来源**：`styles.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)` 块，原先是 960px）、`.snippets-page` / `.runtime-page` / `.git-manager-column`（原先各写 1080px）、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。
 - **卡片网格一律 `repeat(auto-fill, minmax(Npx, 1fr))`**，不再用 `@media` 切 `1fr 1fr`：快捷应用 `.al-grid` 280、片段库 `.snippets-list` 320、环境变量 `.runtime-list` 340。实测（内容宽→列数）：696→2、1080→3、1412→4。
 - **小工具页（`DevTools.tsx` + `devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
-- **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）与 HTTP 的参数/请求头表格。工具内 textarea 统一 `resize: none`。
+- **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）。工具内 textarea 统一 `resize: none`。
 - **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。
 
 ---
@@ -606,7 +609,7 @@ TrayTunnelUrls { ... }                     // 托盘隧道 URL
 8. `tray::ensure_quick_ask_window()`
 9. `tray::set_quick_ask_bubble_visible_inner()`
 
-**invoke_handler**: **147 条命令**（`lib.rs` 的 `generate_handler!` 实际计数，2026-09-30 核对），完整清单见第 10 节。
+**invoke_handler**: **150 条命令**（`lib.rs` 的 `generate_handler!` 实际计数：统计列表内 `模块::命令,` 行，2026-10-09 核对当天为 148 条，其后加了 `port_commands` 的 2 条；此前文档写的 150 是把 `.invoke_handler(tauri::generate_handler![` 与 `.run(tauri::generate_context!())` 两行也算进去了），完整清单见第 10 节。
 
 ### 8.2 `config.rs` — 常量与错误码
 
@@ -1011,7 +1014,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `restore_host_backup` | path: String | String |
 | `backup_hosts_now` | — | String |
 
-### 10.6 Cursor Commands（21 条）
+### 10.6 Cursor Commands（20 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -1019,7 +1022,6 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `get_cursor_login_status` | — | {email, name, isLoggedIn} |
 | `is_cursor_running` | — | bool |
 | `init_account_profile` | account_id | String |
-| `migrate_account_to_profile` | account_id | String |
 | `finish_account_profile` | account_id, relaunch? | String |
 | `launch_cursor` | account_id? | String |
 | `quit_cursor` | — | String |
@@ -1118,13 +1120,11 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 >
 > 自动化测试执行 / 覆盖率 / 漏洞扫描相关的命令与数据表已整体移除，启动时 `DROP TABLE`（见 `lib.rs` setup）。
 
-### 10.14 DevTools Commands（1 条）
+### 10.14 DevTools Commands（已移除）
 
-| 命令 | 参数 | 返回 |
-|------|------|------|
-| `devtools_http_request` | 请求描述 | 响应（小工具页 HTTP 客户端） |
+小工具页**不再有后端命令**：HTTP 客户端工具已整体删除，`devtools_commands.rs` 文件、`lib.rs` 的 `mod` 与 `generate_handler!` 注册、`devtools_http_request` 命令、前端 `invokeHttpRequest` 封装与 `storage.http*` 适配器全部移除；`http_saved_requests` / `http_history` 两张表在 `lib.rs` setup 里被 `DROP TABLE`（幂等，与测试功能那批一起）。
 
-> 「端口 / 进程查看与结束」这个工具**已不在小工具页**：`devtools_list_ports` / `devtools_resolve_processes` / `devtools_kill_process` 三条命令在 `devtools_commands.rs` 与 `lib.rs` 注册表里都已不存在，前端也没有调用方（小工具页现在是 9 个工具）。netstat 相关逻辑只剩 `dsh_commands.rs` 内部用于 DSH 端口占用检测。
+> 更早删除的是「端口 / 进程查看与结束」：`devtools_list_ports` / `devtools_resolve_processes` / `devtools_kill_process`（随 `a3595b8` 新增快捷应用一起去掉，当时是为了和"按进程名 kill"去重）。**2026-10-09 以「端口查杀」面板形态回归，但落在快捷应用页而不是小工具页**：命令是 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`（见 §10.16b），netstat 相关逻辑也从 `dsh_commands.rs` 抽到了这个共享模块，DSH 改为 `use` 它。小工具页那 **8 个仍然是纯前端工具**（转换 / 生成 / 解析三组），零后端命令这条约定没变。
 
 ### 10.15 WorkBuddy Commands（17 条）
 
@@ -1148,7 +1148,45 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `get_app_version` | 读 Win32 文件版本资源 |
 | `browse_app_file` | 原生文件选择器选 exe |
 
-> 合计核对（2026-09-30）：`lib.rs` 的 `generate_handler!` 实际注册 **147 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `quick_ask_bubble_ready`）。
+### 10.16b 端口查杀 Commands（2 条，`port_commands.rs`）
+
+挂在**快捷应用页的第二个视图**（`PortKillerPanel.tsx`），不在小工具页。该文件同时是 netstat/taskkill 的**共享原语层**：`dsh_commands.rs` 的 `find_pid_by_port` / `kill_pid` / `is_port_in_use` / `wait_for_port_release` 都搬到了这里并改 `pub(crate)`，改解析等于改 DSH 停止逻辑。
+
+| 命令 | 用途 |
+|------|------|
+| `find_port_listeners(ports)` | 查这些端口谁在监听：PID / 进程名 / 完整 exe 路径（`QueryFullProcessImageNameW`，无需新增 windows feature）/ IPv4+IPv6 地址（双栈同 PID 合并）/ 保护标记 |
+| `kill_port_listeners(port, pids)` | `taskkill /T /F` 连进程树结束。**杀前重读 netstat**，只杀此刻仍监听该端口的 PID（PID 会被回收）；PID ≤ 4 与 csrss / lsass / svchost 等一律拒绝；返回 `portReleased`（bind 探针 **且** netstat 复检都过） |
+
+> 合计核对（2026-10-09）：`lib.rs` 的 `generate_handler!` 实际注册 **150 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `quick_ask_bubble_ready`；当日 148 条的核对结果之后又加了 `port_commands` 2 条）。此前修正的两处历史计数偏差仍然成立：HTTP 客户端下线使 devtools 域从 1 条变 0 条；`migrate_account_to_profile` 只是 `cursor/mod.rs` 的内部函数、从未注册为命令，Cursor 章节因此是 20 条而非 21 条（更早文档写的 150 还把 `generate_handler!` 前后的两行非命令文本也计入了）。
+
+### 10.17 Update Commands（3 条，`update_commands.rs`）
+
+| 命令 | 参数 | 返回 |
+|------|------|------|
+| `update_fetch_release_info` | version | `ReleaseInfo{version, notes, setupUrl, setupSize, msiUrl, htmlUrl}`（GitHub 正文 + 资产；依次试 `v{ver}` → `{ver}` → latest，全失败才报错） |
+| `update_download` | requestId, url | `DownloadedInstaller{path, size}`（流式写 `%APPDATA%\com.ai-workbench.app\updates\*.part` → 改名；每 1MB 发进度；30s 无数据超时；`CancelGuard` 可取消；大小不符 → 删文件报 `UPDATE_SIZE_MISMATCH`） |
+| `update_install` | path | —（排好**分离的** PowerShell 看门狗 → 停 cloudflared 会话 → `app.exit(0)`；看门狗等 PID 消失后 `/S` 静默装，非零退出码自动改弹交互安装界面） |
+
+进度事件 `app:update_progress`，payload 仍是 `{stage, percent, message}`，`stage ∈ fetch|download|verify|launch`。
+
+> **配额兜底（实测过）**：`update_fetch_release_info` 三个 API 端点全失败（共享出口 IP 很容易打满匿名 60 次/小时）时，会改用**不占配额**的资产直链 HEAD 探测（`fallback_setup_urls`：`AI.Workbench_{v}_x64-setup.exe` 与 `ai_workbench_{v}_x64-setup.exe` 两个命名候选），命中就返回 `degraded: true`——升级照常，只是没有更新说明，前端显示 `notesRateLimited` 文案。HEAD 回包经 302 后**常没有 `Content-Length`**，所以 `setupSize` 可能是 0（=未知），真正的完整性校验用 GET 的 `content_length`。
+>
+> **NSIS 同版本重装不会重写主程序**（实测：`ai_workbench.exe` 的 mtime 保持原值，只有 `uninstall.exe` 与注册表被更新）。因此别拿主 exe 时间戳判断"装没装"，权威口径是注册表 `DisplayVersion` + 卸载器时间戳。
+
+审计测试（默认不跑，会联网/动本机安装）：
+```bash
+cargo test --lib -- --ignored update_commands                                  # 取详情 + 下载 8.4 MB
+AIWB_AUDIT_VERSION=0.2.8 cargo test --lib -- --ignored audit_real_silent_install  # 真静默重装
+AIWB_AUDIT_WAIT_PID=<已安装实例PID> ...                                          # 复刻"先退应用再装"的等 PID 时序
+```
+
+> **事件命名的既有分裂**：AGENTS.md 写「事件 kebab-case」，但**进度类通道历史上都是冒号风格**（`runtime:install_progress` / `dsh:install_progress` / `cursor:switch_progress`），新增的 `app:update_progress` 沿用冒号以便与它们配对；流式文本类（`generate-text-chunk`）才是 kebab。别再"顺手统一"，改一处要改全套监听方。
+>
+> **为什么必须有看门狗**：NSIS 覆盖不了正在运行的 exe，「先起安装器 → 再退本进程」一定失败。也不要试图在退出前直接 `ShellExecute`。
+>
+> **更新日志/资产只走 GitHub**：Gitee 上这个仓库目前 404（前端三源探测仍保留 Gitee 那一路，是为了查版本号时的多源比高），jsDelivr 只有 tag 没有正文与资产。取不到详情就降级为「在浏览器中打开」，不假装成功。
+>
+> **不做摘要校验**：`Cargo.toml` 没有 sha2/md5，完整性口径是 `content_length` 对比落地大小 + 下次启动版本号自然复检。
 
 ---
 

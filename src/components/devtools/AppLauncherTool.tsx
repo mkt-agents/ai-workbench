@@ -22,6 +22,7 @@ import {
 import { useGlobalStore, normalizeAppPath } from "../../core/store";
 import { useConfirm } from "../ConfirmModal";
 import QuickSelect from "../quickAsk/QuickSelect";
+import PortKillerPanel from "./PortKillerPanel";
 import type { InstalledAppInfo, QuickAppLauncher } from "../../core/types";
 
 /** Extract the executable name from a full path for process detection. */
@@ -224,6 +225,10 @@ function AppLauncherTool() {
     const v = typeof localStorage !== "undefined" ? localStorage.getItem("al-sort") : null;
     return v === "name" || v === "nameDesc" || v === "group" || v === "running" ? v : "custom";
   });
+  // Two panes share this page: the launcher grid and the port killer.
+  const [view, setView] = useState<"apps" | "ports">(() =>
+    (typeof localStorage !== "undefined" ? localStorage.getItem("al-view") : null) === "ports" ? "ports" : "apps"
+  );
   // User-defined group names (the canonical list, so empty groups can exist).
   const [groups, setGroups] = useState<string[]>(() => {
     try {
@@ -243,6 +248,10 @@ function AppLauncherTool() {
   useEffect(() => {
     try { localStorage.setItem("al-sort", sortBy); } catch { /* storage disabled */ }
   }, [sortBy]);
+
+  useEffect(() => {
+    try { localStorage.setItem("al-view", view); } catch { /* storage disabled */ }
+  }, [view]);
 
   useEffect(() => {
     try { localStorage.setItem("al-groups", JSON.stringify(groups)); } catch { /* storage disabled */ }
@@ -865,22 +874,45 @@ function AppLauncherTool() {
       {/* ── Toolbar ── */}
       <div className="al-toolbar" ref={toolbarRef}>
         <div className="al-toolbar-left">
-          <button type="button" className="al-btn al-btn-primary" onClick={openScanDialog} title={t("appLauncher.add")}>
-            <Plus size={14} />
-            <span>{t("appLauncher.add")}</span>
-          </button>
-          <button
-            type="button"
-            className="al-btn"
-            onClick={() => setGroupManagerOpen(true)}
-            title={t("appLauncher.groupManager.title")}
-          >
-            <Tags size={14} />
-            <span>{t("appLauncher.groupManager.title")}</span>
-          </button>
+          <div className="al-view-tabs" role="tablist">
+            {(["apps", "ports"] as const).map((key) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={view === key}
+                className={`al-view-tab${view === key ? " active" : ""}`}
+                // Selection belongs to the app grid; carrying it into the other pane
+                // would leave an invisible batch bar behind.
+                onClick={() => {
+                  setView(key);
+                  setSelectedIds(new Set());
+                }}
+              >
+                {t(key === "apps" ? "appLauncher.viewApps" : "appLauncher.viewPorts")}
+              </button>
+            ))}
+          </div>
+          {view === "apps" && (
+            <>
+              <button type="button" className="al-btn al-btn-primary" onClick={openScanDialog} title={t("appLauncher.add")}>
+                <Plus size={14} />
+                <span>{t("appLauncher.add")}</span>
+              </button>
+              <button
+                type="button"
+                className="al-btn"
+                onClick={() => setGroupManagerOpen(true)}
+                title={t("appLauncher.groupManager.title")}
+              >
+                <Tags size={14} />
+                <span>{t("appLauncher.groupManager.title")}</span>
+              </button>
+            </>
+          )}
         </div>
         <div className="al-toolbar-right">
-          {selectedIds.size > 0 ? (
+          {view === "ports" ? null : selectedIds.size > 0 ? (
             <>
               <span className="al-selected-count">{t("appLauncher.selected", { count: selectedIds.size })}</span>
               <button type="button" className="al-btn" onClick={handleBatchLaunch} title={t("appLauncher.batchLaunch")}>
@@ -1006,7 +1038,9 @@ function AppLauncherTool() {
       )}
 
       {/* ── Content ── */}
-      {launchers.length === 0 ? (
+      {view === "ports" ? (
+        <PortKillerPanel />
+      ) : launchers.length === 0 ? (
         <div className="al-empty">
           <div className="al-empty-icon-wrap">
             <Rocket size={28} />
