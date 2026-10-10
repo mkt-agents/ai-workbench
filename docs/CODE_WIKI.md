@@ -30,7 +30,7 @@
 | 能力域 | 功能 |
 |--------|------|
 | **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 快问（含流式 + 多轮）、代码片段管理；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
-| **账号管理** | Cursor 多身份一键切换（独立 profile 目录）、WorkBuddy 账号池 + 签到 |
+| **账号管理** | Cursor 多身份一键切换（独立 profile 目录）、账号额度看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
 | **版本管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
 | **系统工具** | 小工具页 8 个本地开发工具（顶部工具条；HTTP 客户端已移除）、快捷应用（本机应用扫描 / 启动 / 运行态 + 「端口查杀」面板） |
@@ -90,7 +90,7 @@ ai-workbench/
 │   │   ├── theme-glass.css       # glass / ice / silver 共享磨砂覆盖层
 │   │   ├── base.css / layout.css # 基础元素、body.resizing 清单 / 标题栏、侧栏、滚动条
 │   │   ├── components.css / controls.css / modal.css / dropdown.css …  # 通用件
-│   │   ├── <页面>.css            # git-pages / quick-ask / models / prompt / hosts …
+│   │   ├── <页面>.css            # git-pages / quick-ask / models / snippets / hosts / account-manager …
 │   │   └── devtools.css          # 小工具页 + 快捷应用页（`.dt-*` / `.al-*`），最后加载
 │   ├── tauri.d.ts / vite-env.d.ts
 │   │
@@ -108,10 +108,11 @@ ai-workbench/
 │   │   └── cursorMatch.ts        # Cursor 账号匹配（email+name 对比）
 │   │
 │   ├── components/               # UI 组件层（全部无类型拆分，单文件单组件）
-│   │   ├── AIAssistant.tsx       # 模型配置页（CRUD + 连接测试 + 批量操作 + 分组）
+│   │   ├── AIAssistant.tsx       # 模型配置页（CRUD + 连接测试 + 批量操作 + 分组；图标见 public/ai-providers/）
 │   │   ├── DeepSeekHarness.tsx   # DSH iframe 托管 + 启动/停止/端口配置
 │   │   ├── PromptOptimizer.tsx   # AI 提示词改写（侧栏已下线，恢复见 AGENTS.md）
-│   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出
+│   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出 + 类型筛选
+│   │   ├── AccountQuotaPanel.tsx # 账号额度看板（多服务商；样式见同名 .css）
 │   │   ├── QuickAskApp.tsx       # 快问主窗口（hash 路由 #/quick-ask）
 │   │   ├── QuickAskBubble.tsx    # 快问桌面悬浮气泡（#/quick-ask-bubble）
 │   │   ├── GitManager.tsx        # Git 管理主页面（仓库总览）
@@ -123,8 +124,8 @@ ai-workbench/
 │   │   ├── CloudflaredManager.tsx# 内网穿透（临时 / 命名隧道 + 日志流）
 │   │   ├── HostsManager.tsx      # 系统 Hosts 读写 + 备份恢复
 │   │   ├── PluginBrowser.tsx     # 网页工具（书签 + 用户脚本，弹窗浏览器打开 http(s)）
-│   │   ├── WorkBuddyManager.tsx  # WorkBuddy 账号池 + 签到
-│   │   ├── workbuddy/            # WorkBuddy 子组件（ManualAddModal 等）
+│   │   ├── WorkBuddyManager.tsx  # WorkBuddy 账号池 + 签到（侧栏已下线，恢复见 AGENTS.md）
+│   │   ├── workbuddy/            # WorkBuddy 子组件（扫码/签到等；额度页仍复用部分）
 │   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
 │   │   ├── MarkdownView.tsx      # Markdown 渲染
 │   │   ├── DevTools.tsx          # 小工具页（顶部工具条 + 8 个工具）
@@ -155,12 +156,14 @@ ai-workbench/
 │   │
 │   ├── lib/                       # 业务工具库
 │   │   ├── aiProviders.ts       # AI 厂商 provider 列表 + 显示元数据
+│   │   ├── aiProviderLogos.ts   # 模型配置页提供商品牌图（指向 public/ai-providers/）
+│   │   ├── providerLogos.ts     # 账号额度侧栏/卡片品牌图（src/assets/providers/ + 本机图标）
 │   │   ├── aiText.ts             # AI 纯文本的围栏剥离 / `##` 章节切分
 │   │   ├── browser.ts            # 打开浏览器窗口（webview）+ 用户脚本注入筛选
 │   │   ├── webTools.ts           # URL 规范化 / `@match` 通配判定 / newId（唯一主键）
 │   │   ├── pluginHotkeys.ts      # 书签全局快捷键注册（应用层，切页不失效）
 │   │   ├── floatingMenu.ts       # 悬浮菜单定位计算
-│   │   ├── promptOptimize.ts     # 提示词构造器
+│   │   ├── promptOptimize.ts     # 提示词构造器（快问优化仍用）
 │   │   ├── reportAi.ts           # AI 用例行解析 `parseAiLine()`（与后端 `output_rules()` 成对）
 │   │   ├── reportRisk.ts         # 报告风险展示分类（纯前端侧）
 │   │   ├── workbuddy.ts          # WorkBuddy 前端适配辅助
@@ -234,8 +237,8 @@ ai-workbench/
 │   ├── workbench-upgrade-plan.md
 │   └── CODE_WIKI.md               # 本文件
 │
-├── public/                         # 静态资源
-├── scripts/                        # 工具脚本
+├── public/                         # 静态资源（含 ai-providers/ 模型配置提供商品牌 SVG/PNG）
+├── scripts/                        # 工具脚本（含 check-css-tokens.mjs → npm run check:css）
 ├── docs/screenshot.png
 ├── README.md
 ├── LICENSE
@@ -495,9 +498,11 @@ bootApp(): Promise<void>
 | `theme.ts` | `applyDocumentTheme(theme)` | 根据 AppTheme 设置 CSS 类（支持 glass/ice/silver/light/dark/system） |
 | `quickAskShortcut.ts` | `registerQuickAskShortcut(shortcut)` | 调用 `registerShortcut` + navigate |
 | `aiProviders.ts` | `AI_PROVIDERS: ProviderMeta[]` | provider 显示名 + 默认 baseUrl |
+| `aiProviderLogos.ts` | `aiProviderLogoUrl(id)` 等 | 模型配置页品牌图 URL（`public/ai-providers/`） |
+| `providerLogos.ts` | 额度侧栏/卡片 glyph | `src/assets/providers/` + 本机安装图标优先 |
 | `snippets.ts` | `renderSnippet(template, params)` | `{{param}}` 替换引擎 |
 | `version.ts` | `compareVersions(a, b)` | 语义版本比较（含 prerelease） |
-| `promptOptimize.ts` | — | 提示词构造器 |
+| `promptOptimize.ts` | — | 提示词构造器（快问「优化提示词」） |
 | `browser.ts` | — | 打开 webview 窗口 |
 
 ### 6.8 `hooks/useTauriEvent.ts`
@@ -525,8 +530,8 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 
 ### 6.11 页面内容宽度与自适应（2026-09-30 统一）
 
-- **宽度单一来源**：`src/styles/tokens.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)` 块，原先是 960px）、`.snippets-page` / `.runtime-page` / `.git-manager-column`（原先各写 1080px）、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。
-- **卡片网格一律 `repeat(auto-fill, minmax(Npx, 1fr))`**，不再用 `@media` 切 `1fr 1fr`：快捷应用 `.al-grid` 280、片段库 `.snippets-list` 320、环境变量 `.runtime-list` 340。实测（内容宽→列数）：696→2、1080→3、1412→4。
+- **宽度单一来源**：`src/styles/tokens.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)`）、`.snippets-page` / `.runtime-page` / `.models-container` / `.git-manager-column`、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。`.settings-page` 720px 是有意窄表单列；`.userscript-list`（≥1100 强制两列）尚未并入。
+- **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、片段库 `.snippets-list` 320、模型配置与环境变量（`.models-*` / `.runtime-list`）340。
 - **小工具页（`DevTools.tsx` + `src/styles/devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
 - **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）。工具内 textarea 统一 `resize: none`。
 - **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。
@@ -562,12 +567,14 @@ openGroups: Set<string>       // 分组展开状态
 | 组件 | 功能 | 关键交互 |
 |------|------|----------|
 | `DeepSeekHarness` | iframe 托管 DSH | 启动/停止/端口/认证补丁状态 |
-| `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组视图 |
-| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md |
-| `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 |
+| `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `public/ai-providers/` |
+| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md；快问优化仍用 |
+| `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 + 类型分段筛选 |
+| `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuickAskApp` | 快问主窗口（`#/quick-ask`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
 | `QuickAskBubble` | 桌面气泡（`#/quick-ask-bubble`） | 快捷唤起，全局置顶 |
 | `CursorManager` | Cursor 多账号 | 初始化 profile + 切换 + 诊断导出 |
+| `WorkBuddyManager` | WorkBuddy（侧栏已下线） | 账号池 + 签到；额度页复用扫码/签到；恢复见 AGENTS.md |
 | `GitManager` | Git 管理 | 仓库总览 / 扫描 / 身份 |
 | `GitCommitPanel` | Git 提交 | 多仓 diff + AI 生成 commit message |
 | `CloudflaredManager` | 内网穿透 | 临时隧道 / 命名隧道 / 日志流 / config.yml 编辑 |
@@ -1213,8 +1220,10 @@ App.tsx
   ├─ lib/theme.ts
   ├─ lib/quickAskShortcut.ts → (Tauri registerShortcut)
   └─ components/*
-       ├─ AIAssistant → aiProviders.ts, (Tauri ai_commands)
-       ├─ QuickAskApp → snippets.ts, (Tauri generate_text_stream)
+       ├─ AIAssistant → aiProviders.ts, aiProviderLogos.ts, (Tauri ai_commands)
+       ├─ AccountQuotaPanel → providerLogos.ts, (Tauri quota / wb / cursor oauth…)
+       ├─ SnippetsManager → snippets.ts
+       ├─ QuickAskApp → snippets.ts, promptOptimize.ts, (Tauri generate_text_stream)
        ├─ CursorManager → (Tauri cursor commands)
        ├─ DeepSeekHarness → (Tauri dsh_commands)
        ├─ CloudflaredManager → (Tauri cloudflared_commands)

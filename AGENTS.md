@@ -6,7 +6,7 @@
 
 **已确认定位（见 `ROADMAP.md`）**：**AI 驱动的开发工具箱**——以 **DeepSeek 本地服务**为核心 AI 引擎，Git / Cursor 身份管理为基础能力，AI 模型配置与系统工具（Hosts / 内网穿透等）为辅助。
 
-- **愿景**：本地优先的桌面 AI 助手；多模型配置、提示词优化，管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
+- **愿景**：本地优先的桌面 AI 助手；多模型配置（提示词独立页已下线，快问优化仍可用），管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
 - **功能分层**：核心 = DSH / 模型配置 / Cursor（提示词独立页已下线，代码保留）；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 小工具（devtools）。
 - **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。小工具页的 **HTTP 客户端**同样已整体删除：`HttpClientTool.tsx` / `devtools_commands.rs`（该域只剩这一条命令，文件一起删了）/ `http_saved_requests` + `http_history` 两张表（setup 里 `DROP TABLE`）/ devtools i18n 的 `http.*` 与 `group.network`，小工具现在是 8 个（转换 / 生成 / 解析三组）。
 - **明确不做**：内置多模型流式对话（AI 走 DeepSeek 外部集成）、AI 工具执行循环（shell/文件/Git 自动操作）、多平台（仅 Windows）、插件浏览器深度开发。
@@ -143,7 +143,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 ## 页面尺寸与自适应约定（大小窗口都要好看）
 
 - **页面内容宽度只有一个来源**：`tokens.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.runtime-page`、`.models-container`、`.git-manager-column`、工具页 `.devtools-tool` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。卡片网格已定：快捷应用 260 / 片段库 320 / 模型配置与环境变量 340。
-- **卡片列表用 `repeat(auto-fill, minmax(<N>px, 1fr))`，不要用 `@media` 切 `1fr 1fr`**。已定：快捷应用 260 / 片段库 320 / 环境变量 340。断点写死列数在宽屏下会把卡片拉到 700px 高、内容飘在顶部。
+- **卡片列表用 `repeat(auto-fill, minmax(min(100%, <N>px), 1fr))`，不要用 `@media` 切 `1fr 1fr`**。已定：快捷应用 260 / 片段库 320 / 模型配置与环境变量 340。断点写死列数在宽屏下会把卡片拉到 700px 高、内容飘在顶部。
 - **输入/输出区靠 flex 长高填满窗口**：`.dt-content` 是 flex 列，工具根节点 `flex: 1 0 auto`（长高但不低于自然高，内容多时页面照常滚动），主区 `flex: 1 1 auto; min-height: <原 px>`；原来的 `max-height: 280/340/360/420px`、`60vh` 等死上限改成 `min-height` 地板。有意不填满的只有：时间戳（单行 input）、HTTP 参数/请求头表格——撑开只会得到空盒子。
 - **textarea 高度交给容器，统一 `resize: none`**（只删声明会让浏览器回退成 `resize: both`，反而能横向拖）。
 - **吸顶工具条**：`position: sticky; top: 0; z-index` 之外，滚动宿主必须 `padding-top: 0`（间距改由吸顶元素 `margin-top` 提供），否则内容会从宿主那圈上内边距里露在吸顶条上方。磨砂表面用 `--chrome-bg` + `blur(20px) saturate(1.08)`（与侧栏同配方），不要 `color-mix(--bg-1 …, transparent)`——`--bg-1` 在磨砂主题下本身就只有 3.5%~4.5% alpha，二次稀释等于没有底色。
