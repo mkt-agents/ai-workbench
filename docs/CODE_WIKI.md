@@ -29,7 +29,7 @@
 
 | 能力域 | 功能 |
 |--------|------|
-| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 快问（含流式 + 多轮）、提示词优化、代码片段管理 |
+| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 快问（含流式 + 多轮）、代码片段管理；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
 | **账号管理** | Cursor 多身份一键切换（独立 profile 目录）、WorkBuddy 账号池 + 签到 |
 | **版本管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
@@ -110,7 +110,7 @@ ai-workbench/
 │   ├── components/               # UI 组件层（全部无类型拆分，单文件单组件）
 │   │   ├── AIAssistant.tsx       # 模型配置页（CRUD + 连接测试 + 批量操作 + 分组）
 │   │   ├── DeepSeekHarness.tsx   # DSH iframe 托管 + 启动/停止/端口配置
-│   │   ├── PromptOptimizer.tsx   # AI 提示词改写（调用 generate_text）
+│   │   ├── PromptOptimizer.tsx   # AI 提示词改写（侧栏已下线，恢复见 AGENTS.md）
 │   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出
 │   │   ├── QuickAskApp.tsx       # 快问主窗口（hash 路由 #/quick-ask）
 │   │   ├── QuickAskBubble.tsx    # 快问桌面悬浮气泡（#/quick-ask-bubble）
@@ -539,7 +539,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 
 **核心职责**:
 - 侧边栏导航渲染（分组折叠 + 折叠模式自动合并）
-- Tab 切换（Git / DeepSeek / 模型配置 / 提示词 / 片段 / Cursor / 版本 / Hosts / Cloudflared / 插件 / 设置）
+- Tab 切换（Git / DeepSeek / 模型配置 / 片段 / Cursor / 账号额度 / 版本 / Hosts / Cloudflared / 插件 / 设置；提示词页已下线）
 - 窗口标题栏（最小化 / 最大化 / 关闭隐藏到托盘）
 - 响应式自动折叠（< 720px 自动折叠，> 900px 自动展开）
 - 两个懒加载面板（Git / DSH 首次进入后常驻 DOM）
@@ -563,7 +563,7 @@ openGroups: Set<string>       // 分组展开状态
 |------|------|----------|
 | `DeepSeekHarness` | iframe 托管 DSH | 启动/停止/端口/认证补丁状态 |
 | `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组视图 |
-| `PromptOptimizer` | 提示词改写 | 调用 `generate_text` + system prompt 模板 |
+| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md |
 | `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 |
 | `QuickAskApp` | 快问主窗口（`#/quick-ask`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
 | `QuickAskBubble` | 桌面气泡（`#/quick-ask-bubble`） | 快捷唤起，全局置顶 |

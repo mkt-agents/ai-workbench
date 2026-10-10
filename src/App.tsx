@@ -17,7 +17,6 @@ import {
   X,
   Cpu,
   Layers,
-  Wand2,
   Cloud,
   FileText,
   PanelLeftClose,
@@ -35,7 +34,6 @@ import PluginBrowser from "./components/PluginBrowser";
 import CursorManager from "./components/CursorManager";
 import AIAssistant from "./components/AIAssistant";
 import DeepSeekHarness from "./components/DeepSeekHarness";
-import PromptOptimizer from "./components/PromptOptimizer";
 import VersionSwitcher from "./components/VersionSwitcher";
 import CloudflaredManager from "./components/CloudflaredManager";
 import SnippetsManager from "./components/SnippetsManager";
@@ -62,7 +60,6 @@ type Tab =
   | "account-quota"
   | "ai-chat"
   | "ai-models"
-  | "ai-prompt"
   | "runtime"
   | "cloudflared"
   | "snippets"
@@ -92,7 +89,7 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "ai-prompt", "runtime", "cloudflared", "snippets", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -232,7 +229,6 @@ function App() {
           ),
         },
         { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
-        { id: "ai-prompt", labelKey: "aiPrompts", icon: <Wand2 size={16} /> },
         { id: "snippets", labelKey: "snippets", icon: <FileText size={16} /> },
       ],
     },
@@ -517,9 +513,6 @@ function App() {
                 >
                   <DeepSeekHarness />
                 </div>
-              )}
-              {activeTab === "ai-prompt" && (
-                <PromptOptimizer onGoModels={() => setActiveTab("ai-models")} />
               )}
               {activeTab === "snippets" && <SnippetsManager />}
               {activeTab === "plugins" && <PluginBrowser />}

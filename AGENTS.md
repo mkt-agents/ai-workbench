@@ -7,13 +7,13 @@
 **已确认定位（见 `ROADMAP.md`）**：**AI 驱动的开发工具箱**——以 **DeepSeek 本地服务**为核心 AI 引擎，Git / Cursor 身份管理为基础能力，AI 模型配置与系统工具（Hosts / 内网穿透等）为辅助。
 
 - **愿景**：本地优先的桌面 AI 助手；多模型配置、提示词优化，管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
-- **功能分层**：核心 = DSH / 模型配置 / 提示词 / Cursor；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 小工具（devtools）。
+- **功能分层**：核心 = DSH / 模型配置 / Cursor（提示词独立页已下线，代码保留）；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 小工具（devtools）。
 - **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。小工具页的 **HTTP 客户端**同样已整体删除：`HttpClientTool.tsx` / `devtools_commands.rs`（该域只剩这一条命令，文件一起删了）/ `http_saved_requests` + `http_history` 两张表（setup 里 `DROP TABLE`）/ devtools i18n 的 `http.*` 与 `group.network`，小工具现在是 8 个（转换 / 生成 / 解析三组）。
 - **明确不做**：内置多模型流式对话（AI 走 DeepSeek 外部集成）、AI 工具执行循环（shell/文件/Git 自动操作）、多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.2.8`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite，密钥明文，勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/账号额度；WorkBuddy 页已从侧栏与路由下线，`WorkBuddyManager.tsx` 及 `components/workbuddy/` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染三处；扫码加号、签到、自动签到设置都已在账号额度页）→ 版本管理（Git 管理/环境变量）→ 网络管理（系统hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置；另有**一个不属于任何分组的顶层叶子「快捷应用」（`app-launcher`）**，它的页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
+- 侧栏分组：AI 工作台（Harness/模型配置/片段库；**提示词页已从侧栏与路由下线**，`PromptOptimizer.tsx` 与 `lib/promptOptimize.ts` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染与 `import`；快问里的「优化提示词」不受影响）→ 账号管理（Cursor/账号额度；WorkBuddy 页已从侧栏与路由下线，`WorkBuddyManager.tsx` 及 `components/workbuddy/` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染三处；扫码加号、签到、自动签到设置都已在账号额度页）→ 版本管理（Git 管理/环境变量）→ 网络管理（系统hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置；另有**一个不属于任何分组的顶层叶子「快捷应用」（`app-launcher`）**，它的页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
 
 ## 技术栈与目录
 

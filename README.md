@@ -1,6 +1,6 @@
 # AI Workbench (AI 工作台)
 
-基于 **Tauri v2 + React + Rust/SQLite** 的 Windows 桌面应用，定位为 **AI 驱动的开发工具箱**。核心是 **DeepSeek 本地服务**，辅以模型配置、提示词优化、Git / Cursor 多身份管理，以及 Hosts、内网穿透、网页工具等能力。
+基于 **Tauri v2 + React + Rust/SQLite** 的 Windows 桌面应用，定位为 **AI 驱动的开发工具箱**。核心是 **DeepSeek 本地服务**，辅以模型配置、Git / Cursor 多身份管理，以及 Hosts、内网穿透、网页工具等能力。
 
 ## 效果图
 
@@ -26,8 +26,8 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 - **Harness**：启动/停止本地 `@deepseek-ai/dsh`，iframe 内嵌 Web UI；侧栏切走后保活；自定义启动端口；浏览器打开；空态内嵌「安装」按钮；可选进入页面自动启动（记忆开关）；运行中每 8 秒探测进程，外部关闭服务后状态自动回落
 - **快问**：托盘常驻；默认 `Ctrl+Alt+K`；桌面浮漂；流式问答；多轮追问 / 重新生成；可选工作区 / Git / Dirty / 剪贴板上下文
 - **模型配置**：多厂商与 OpenAI 兼容接口；增删改查、连接测试、批量测试/同步/删除、分组视图（按提供商分成纵向面板，组头显示失败 / 未测试计数并可一键展开或折叠全部；扁平与分组共用同一卡片网格 —— `auto-fill` 等宽等高，组内模型横向并排，单模型分组保留等宽空位，信息行不换行、超长自动省略）、同步 DSH；批量测试并发 4 路并显示进度，测试结果（通过/失败 + 时间）落库、重启后仍在；支持按测试状态筛选与排序；随机度 / 最长输出改为档位化选择（1K→1M 对数滑杆）
-- **AI 提示词**：基于已配置模型改写提示词
 - **片段库**：本地 CRUD，`{{param}}` 替换后复制或插入快问；JSON 导入导出、克隆、实时预览；卡片列数随窗口自适应（`auto-fill minmax(320px,1fr)`，实测 696→2 列 / 1080→3 列 / 1408→4 列）
+- **AI 提示词**（独立页面已暂时下线；`PromptOptimizer.tsx` 保留，快问里的「优化提示词」仍可用）：基于已配置模型改写提示词
 
 ### 账号与 Git
 
@@ -62,12 +62,10 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 AI 工作台
 ├── Harness
 ├── 模型配置
-├── 提示词
 └── 片段库
 
 账号管理
 ├── Cursor
-├── WorkBuddy
 └── 账号额度
 
 版本管理
