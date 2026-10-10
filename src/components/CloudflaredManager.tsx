@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  ArrowRight,
   Check,
   Copy,
   Download,
@@ -803,7 +804,10 @@ function CloudflaredManager() {
                 </span>
               ) : status.installed ? (
                 <>
-                  <span className="status-label">{t("installed")}</span>
+                  <span className="status-label cloudflared-status-label">
+                    <span className="cloudflared-dot is-on" aria-hidden />
+                    {t("installed")}
+                  </span>
                   <span className="cloudflared-status-meta" title={status.path || undefined}>
                     {t("version")}: {formatCloudflaredVersion(status.version || "—")}
                     {status.customPath ? ` · ${t("customPath")}` : ""}
@@ -812,7 +816,10 @@ function CloudflaredManager() {
                 </>
               ) : (
                 <>
-                  <span className="status-label">{t("notInstalled")}</span>
+                  <span className="status-label cloudflared-status-label">
+                    <span className="cloudflared-dot is-off" aria-hidden />
+                    {t("notInstalled")}
+                  </span>
                   <span className="cloudflared-status-meta">{t("installHint")}</span>
                 </>
               )}
@@ -964,7 +971,12 @@ function CloudflaredManager() {
         <div className="cloudflared-tunnel-grid">
           <div className="card cloudflared-named-card">
             <div className="card-title cursor-card-title">
-              <span>{t("namedTitle")}</span>
+              <span>
+                {t("namedTitle")}
+                {profiles.length > 0 && (
+                  <span className="runtime-muted"> ({profiles.length})</span>
+                )}
+              </span>
               <button
                 type="button"
                 className="btn btn-primary btn-small"
@@ -976,26 +988,27 @@ function CloudflaredManager() {
             </div>
             <p className="runtime-muted cloudflared-hint">{t("namedHint")}</p>
             {profiles.length === 0 ? (
-              <p className="runtime-muted" style={{ fontSize: 13 }}>
-                {t("namedEmpty")}
-              </p>
+              <p className="runtime-muted cloudflared-empty">{t("namedEmpty")}</p>
             ) : (
-              <ul className="account-list cloudflared-binding-list">
+              <ul className="cloudflared-binding-list">
                 {profiles.map((p) => {
-                  const publicUrl = `https://${p.hostname
-                    .replace(/^https?:\/\//i, "")
-                    .replace(/\/$/, "")}`;
+                  const host = normalizePublicHost(p.hostname);
+                  const publicUrl = `https://${host}`;
                   const authMode = p.authMode || (p.configPath ? "config" : "token");
                   const active = findNamedTunnel(p);
                   const isActive = Boolean(active);
                   return (
                     <li
                       key={p.id}
-                      className={`account-item cloudflared-binding-item ${isActive ? "active" : ""}`}
+                      className={`cloudflared-binding-item${isActive ? " is-active" : ""}`}
                     >
                       <div className="cloudflared-binding-body">
                         <div className="cloudflared-binding-top">
-                          <span className="cloudflared-binding-name">
+                          <span
+                            className={`cloudflared-dot${isActive ? " is-on" : ""}`}
+                            aria-hidden
+                          />
+                          <span className="cloudflared-binding-name" title={p.name || p.hostname}>
                             {p.name || p.hostname}
                           </span>
                           <span
@@ -1011,9 +1024,14 @@ function CloudflaredManager() {
                             </span>
                           ) : null}
                         </div>
-                        <div className="cloudflared-binding-host">{publicUrl}</div>
-                        <div className="cloudflared-binding-local">
-                          → {p.localUrl || "—"}
+                        <div className="cloudflared-binding-route">
+                          <span className="cloudflared-binding-host" title={publicUrl}>
+                            {host}
+                          </span>
+                          <ArrowRight size={11} className="cloudflared-binding-arrow" />
+                          <span className="cloudflared-binding-local" title={p.localUrl}>
+                            {p.localUrl || "—"}
+                          </span>
                         </div>
                         {authMode === "config" ? (
                           <div className="cloudflared-binding-path" title={p.configPath}>
@@ -1050,7 +1068,7 @@ function CloudflaredManager() {
                           </div>
                         )}
                       </div>
-                      <div className="account-actions cloudflared-binding-actions">
+                      <div className="cloudflared-binding-actions">
                         {isActive && active ? (
                           <button
                             type="button"
@@ -1079,40 +1097,46 @@ function CloudflaredManager() {
                         >
                           {t("oneClickSetup")}
                         </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() => void handleOpenUrl(publicUrl)}
-                          title={t("openInBrowser")}
-                        >
-                          <ExternalLink size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() => handleCopy(publicUrl)}
-                          title={t("copyUrl")}
-                        >
-                          <Copy size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() => openEdit(p)}
-                          disabled={busy}
-                          title={tc("actions.edit")}
-                        >
-                          <Pencil size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-danger btn-small"
-                          onClick={() => handleDeleteProfile(p)}
-                          disabled={busy}
-                          title={tc("actions.delete")}
-                        >
-                          <Trash2 size={12} />
-                        </button>
+                        <span className="cloudflared-binding-icons">
+                          <button
+                            type="button"
+                            className="btn cloudflared-icon-btn"
+                            onClick={() => void handleOpenUrl(publicUrl)}
+                            title={t("openInBrowser")}
+                            aria-label={t("openInBrowser")}
+                          >
+                            <ExternalLink size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn cloudflared-icon-btn"
+                            onClick={() => handleCopy(publicUrl)}
+                            title={t("copyUrl")}
+                            aria-label={t("copyUrl")}
+                          >
+                            <Copy size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn cloudflared-icon-btn"
+                            onClick={() => openEdit(p)}
+                            disabled={busy}
+                            title={tc("actions.edit")}
+                            aria-label={tc("actions.edit")}
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn cloudflared-icon-btn is-danger"
+                            onClick={() => handleDeleteProfile(p)}
+                            disabled={busy}
+                            title={tc("actions.delete")}
+                            aria-label={tc("actions.delete")}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </span>
                       </div>
                     </li>
                   );
@@ -1122,55 +1146,65 @@ function CloudflaredManager() {
           </div>
 
           <div className="card cloudflared-quick-card">
-            <div className="card-title">{t("tunnelTitle")}</div>
+            <div className="card-title cursor-card-title">
+              <span>{t("tunnelTitle")}</span>
+              <span className={`cloudflared-run-state${activeQuick ? " is-on" : ""}`}>
+                <span className={`cloudflared-dot${activeQuick ? " is-on" : ""}`} aria-hidden />
+                {activeQuick ? t("running") : t("stopped")}
+                {activeQuick?.pid ? ` · pid ${activeQuick.pid}` : ""}
+              </span>
+            </div>
             <p className="runtime-muted cloudflared-hint">{t("tunnelHint")}</p>
-            <div className="input-group">
-              <label className="input-label">{t("localUrl")}</label>
-              <input
-                className="input-field"
-                value={localUrl}
-                onChange={(e) => setLocalUrl(e.target.value)}
-                placeholder={t("localUrlPlaceholder")}
-                disabled={busy}
-              />
-            </div>
-            <div className="input-group">
-              <label className="input-label">{t("protocol")}</label>
-              <select
-                className="input-field"
-                value={protocol}
-                onChange={(e) => handleProtocolChange(e.target.value)}
-                disabled={busy}
-                title={t("protocolHint")}
-                aria-label={t("protocol")}
-              >
-                <option value="auto">{t("protocolAuto")}</option>
-                <option value="http2">{t("protocolHttp2")}</option>
-                <option value="quic">{t("protocolQuic")}</option>
-              </select>
-              <p className="runtime-muted cloudflared-hint" style={{ marginTop: 4 }}>
-                {t("protocolHint")}
-              </p>
-            </div>
-            {recentPorts.length > 0 && (
-              <div className="input-group">
-                <label className="input-label">{t("recentPorts")}</label>
-                <div className="btn-group cloudflared-port-chips">
-                  {recentPorts.map((port) => (
-                    <button
-                      key={port}
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      disabled={busy}
-                      onClick={() => setLocalUrl(`http://localhost:${port}`)}
-                    >
-                      :{port}
-                    </button>
-                  ))}
-                </div>
+            <div className="cloudflared-quick-form">
+              <div className="input-group cloudflared-quick-url">
+                <label className="input-label">{t("localUrl")}</label>
+                <input
+                  className="input-field"
+                  value={localUrl}
+                  onChange={(e) => setLocalUrl(e.target.value)}
+                  placeholder={t("localUrlPlaceholder")}
+                  disabled={busy}
+                />
+                {recentPorts.length > 0 && (
+                  <div className="cloudflared-port-chips" aria-label={t("recentPorts")}>
+                    <span className="cloudflared-port-label">{t("recentPorts")}</span>
+                    {recentPorts.map((port) => {
+                      const selected = buildLocalUrl(localUrl) === `http://localhost:${port}`;
+                      return (
+                        <button
+                          key={port}
+                          type="button"
+                          className={`cloudflared-port-chip${selected ? " is-active" : ""}`}
+                          disabled={busy}
+                          onClick={() => setLocalUrl(`http://localhost:${port}`)}
+                        >
+                          :{port}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-            <div className="btn-group qs-apply-row">
+              <div className="input-group cloudflared-quick-proto">
+                <label className="input-label" title={t("protocolHint")}>
+                  {t("protocol")}
+                </label>
+                <select
+                  className="input-field"
+                  value={protocol}
+                  onChange={(e) => handleProtocolChange(e.target.value)}
+                  disabled={busy}
+                  title={t("protocolHint")}
+                  aria-label={t("protocol")}
+                >
+                  <option value="auto">{t("protocolAuto")}</option>
+                  <option value="http2">{t("protocolHttp2")}</option>
+                  <option value="quic">{t("protocolQuic")}</option>
+                </select>
+              </div>
+            </div>
+            <p className="runtime-muted cloudflared-proto-hint">{t("protocolHint")}</p>
+            <div className="cloudflared-quick-run">
               {!activeQuick ? (
                 <button
                   type="button"
@@ -1206,39 +1240,33 @@ function CloudflaredManager() {
                   )}
                 </button>
               )}
-              <span className="runtime-muted" style={{ alignSelf: "center", fontSize: 12 }}>
-                {activeQuick ? t("running") : t("stopped")}
-                {activeQuick?.pid ? ` · pid ${activeQuick.pid}` : ""}
-              </span>
-            </div>
-
-            <div className="input-group" style={{ marginTop: 14 }}>
-              <label className="input-label">{t("publicUrl")}</label>
-              <div className="qs-path-row">
-                <input
-                  className="input-field"
-                  readOnly
-                  value={activeQuick ? activeQuick.publicUrl || t("waitingUrl") : ""}
-                />
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => void handleOpenUrl(activeQuick?.publicUrl)}
-                  disabled={!activeQuick?.publicUrl}
-                  title={t("openInBrowser")}
-                >
-                  <ExternalLink size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => handleCopy(activeQuick?.publicUrl)}
-                  disabled={!activeQuick?.publicUrl}
-                >
-                  <Copy size={12} />
-                  {t("copyUrl")}
-                </button>
-              </div>
+              <input
+                className="input-field cloudflared-public-url"
+                readOnly
+                value={activeQuick ? activeQuick.publicUrl || t("waitingUrl") : ""}
+                placeholder={t("publicUrl")}
+                aria-label={t("publicUrl")}
+              />
+              <button
+                type="button"
+                className="btn cloudflared-icon-btn"
+                onClick={() => void handleOpenUrl(activeQuick?.publicUrl)}
+                disabled={!activeQuick?.publicUrl}
+                title={t("openInBrowser")}
+                aria-label={t("openInBrowser")}
+              >
+                <ExternalLink size={13} />
+              </button>
+              <button
+                type="button"
+                className="btn cloudflared-icon-btn"
+                onClick={() => handleCopy(activeQuick?.publicUrl)}
+                disabled={!activeQuick?.publicUrl}
+                title={t("copyUrl")}
+                aria-label={t("copyUrl")}
+              >
+                <Copy size={13} />
+              </button>
             </div>
           </div>
         </div>

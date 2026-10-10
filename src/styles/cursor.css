@@ -1,0 +1,287 @@
+/* === CURSOR PAGE: refined account rows & tags === */
+
+/* Status tags rendered as pill badges instead of bare colored text. */
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 17px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.tag-pill-accent {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+}
+.tag-pill-green {
+  color: var(--green);
+  background: var(--green-dim);
+  border-color: var(--green-border);
+}
+.tag-pill-amber {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border-color: var(--yellow-border);
+}
+.tag-pill-red {
+  color: var(--red);
+  background: var(--red-dim);
+  border-color: var(--red-border);
+}
+
+/* settings.css gives every .card-title its own 16px inset on top of the card padding;
+   on this page titles line up with the content below them instead. */
+.cursor-manager-page .card {
+  padding: var(--space-4);
+}
+.cursor-manager-page .card-title {
+  padding: 0 0 var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.cursor-manager-page .card-title-badge {
+  height: 18px;
+  min-width: 18px;
+  font-size: 10.5px;
+  border-radius: var(--radius-full);
+}
+
+/* Card-like rows for the account list: bordered surfaces that lift on hover,
+   scoped to the Cursor page so other pages using .account-item stay as-is. */
+.cursor-manager-page .account-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr));
+  gap: var(--space-2);
+}
+/* Info keeps ≥200px; below that the action buttons wrap onto their own line. */
+.cursor-manager-page .account-item {
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  min-height: 60px;
+  padding: 10px 12px;
+  background: var(--overlay-1);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.cursor-manager-page .account-item:hover {
+  background: var(--overlay-2);
+  border-color: var(--border);
+}
+.cursor-manager-page .account-item.active {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+}
+.cursor-manager-page .account-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  font-size: 13px;
+}
+.cursor-manager-page .account-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.cursor-manager-page .account-info {
+  flex: 1 1 200px;
+}
+.cursor-manager-page .account-actions {
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* email · copy · backup size on one line */
+.cursor-acct-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 3px;
+}
+.cursor-acct-email {
+  margin-top: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cursor-acct-size {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.cursor-acct-size::before {
+  content: "·";
+  margin-right: 6px;
+}
+.cursor-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.cursor-icon-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--overlay-3);
+}
+.cursor-icon-btn:disabled { opacity: 0.4; cursor: default; }
+
+.cursor-note-warn { color: var(--yellow); }
+.cursor-note-error { color: var(--red); }
+
+/* Search + sort row above the account list. */
+.cursor-account-tools {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.cursor-account-tools .input-field:first-child { flex: 1; min-width: 0; }
+.cursor-account-tools select.input-field { width: 180px; flex-shrink: 0; }
+
+.cursor-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cursor-setup-card {
+  border-color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.cursor-setup-list {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.9;
+  padding-left: 20px;
+  margin: 0;
+}
+
+/* Cursor updater stuck on stale "in progress" markers — needs action, so it
+   gets more weight than the disk bar below it. */
+.cursor-update-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: color-mix(in srgb, var(--red) 8%, var(--bg-1));
+  border: 1px solid color-mix(in srgb, var(--red) 32%, var(--border-subtle));
+  border-left: 3px solid var(--red);
+  border-radius: var(--radius-md);
+}
+
+.cursor-update-alert-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--red);
+}
+
+.cursor-update-alert-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cursor-update-alert-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.cursor-update-alert-text,
+.cursor-update-alert-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.cursor-disk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px var(--space-4);
+  margin-bottom: 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  font-size: 12.5px;
+}
+
+.cursor-disk-bar-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.cursor-disk-bar-icon {
+  flex-shrink: 0;
+  color: var(--text-2);
+}
+
+.cursor-disk-bar-title {
+  font-weight: 600;
+  color: var(--text-1);
+  flex-shrink: 0;
+}
+
+.cursor-disk-bar-stats {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: var(--text-2);
+  min-width: 0;
+}
+
+.cursor-disk-sep {
+  color: var(--text-3);
+  margin: 0 2px;
+}
+
+.cursor-disk-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .cursor-toolbar {
+    align-items: flex-start;
+  }
+
+  .cursor-disk-bar {
+    align-items: flex-start;
+  }
+
+  .cursor-disk-bar-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+

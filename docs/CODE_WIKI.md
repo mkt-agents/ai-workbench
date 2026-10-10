@@ -84,8 +84,14 @@ ai-workbench/
 ├── src/                          # React 前端
 │   ├── App.tsx                   # 主容器 + 侧边栏导航 + 标题栏
 │   ├── main.tsx                  # 入口（hash 路由分发：主窗口 / 快问 / 快问气泡）
-│   ├── styles.css                # 全局样式（data-theme 驱动的皮肤系统，含 `--page-max-width`）
-│   ├── devtools.css              # 小工具页 + 快捷应用页样式（`.dt-*` / `.al-*`）
+│   ├── styles/                   # 全局样式（data-theme 驱动的皮肤系统），按域分片
+│   │   ├── index.css             # 按级联顺序 @import 全部分片（顺序即优先级）
+│   │   ├── tokens.css            # 各主题 token（含 `--page-max-width`、overlay / ink / radius 刻度）
+│   │   ├── theme-glass.css       # glass / ice / silver 共享磨砂覆盖层
+│   │   ├── base.css / layout.css # 基础元素、body.resizing 清单 / 标题栏、侧栏、滚动条
+│   │   ├── components.css / controls.css / modal.css / dropdown.css …  # 通用件
+│   │   ├── <页面>.css            # git-pages / quick-ask / models / prompt / hosts …
+│   │   └── devtools.css          # 小工具页 + 快捷应用页（`.dt-*` / `.al-*`），最后加载
 │   ├── tauri.d.ts / vite-env.d.ts
 │   │
 │   ├── core/                     # 核心业务层
@@ -511,17 +517,17 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 主窗口是无边框（`decorations: false`）+ 自定义标题栏，最大化 / 拖动改尺寸时整篇文档要重新算样式并重新栅格化，所以有这几条硬约定：
 
 - **不要用 `transition: all`**，也不要把布局属性（`width/height/padding/margin/font-size/gap/inset…`）写进 transition —— 那样每次改窗口尺寸都会把 reflow 当动画播（"UI 在慢慢追"的由来）。统一用两个 token：`--transition-colors-fast`（0.12s）/ `--transition-colors`（0.18s），值只含 `background-color, color, border-color, box-shadow, opacity, transform`。
-- 确实需要过渡布局属性的只有三处：`.sidebar`（折叠宽度）、`.dsh-progress-fill` 与 `.tm-cov-bar-fill`（进度条宽度）。`App.tsx` 在 resize 期间给 `body` 加 `.resizing`，`styles.css` 里对应规则把它们临时关掉。
-- **新增带 `backdrop-filter` 的界面，必须同时加进 `styles.css` 的 `body.resizing :is(...)` 清单**，否则拖窗口时它会按新面积重采样背景。`.card` 是例外：只有 `glass` 主题保留卡片磨砂，所以它的 kill 规则按主题限定为 `html[data-theme="glass"] body.resizing .card`（一屏可能上百个卡片，白匹配很贵）。
+- 确实需要过渡布局属性的只有三处：`.sidebar`（折叠宽度）、`.dsh-progress-fill` 与 `.tm-cov-bar-fill`（进度条宽度）。`App.tsx` 在 resize 期间给 `body` 加 `.resizing`，`src/styles/base.css` 里对应规则把它们临时关掉。
+- **新增带 `backdrop-filter` 的界面，必须同时加进 `src/styles/base.css` 的 `body.resizing :is(...)` 清单**，否则拖窗口时它会按新面积重采样背景。`.card` 是例外：只有 `glass` 主题保留卡片磨砂，所以它的 kill 规则按主题限定为 `html[data-theme="glass"] body.resizing .card`（一屏可能上百个卡片，白匹配很贵）。
 - 不要用 `will-change` 常驻提升合成层；`-webkit-app-region` 是 Electron 属性，Tauri 只认 `data-tauri-drag-region`。
 - `resize` 监听要用 `requestAnimationFrame` 合并（每帧最多一次宽度判定），但 `classList.add("resizing")` 必须留在事件回调里同步执行，否则模糊面在这一帧仍参与栅格化。
 - 复测脚本在仓库外（`.qoder-cn/tmp/…/ab-old.html` / `ab-new.html` / `resize-cost-harness.html`，引 dist 里的当前 CSS）。**不要在页面里运行时改 `CSSRule`**：那会让整篇样式失效，读数不可信。
 
 ### 6.11 页面内容宽度与自适应（2026-09-30 统一）
 
-- **宽度单一来源**：`styles.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)` 块，原先是 960px）、`.snippets-page` / `.runtime-page` / `.git-manager-column`（原先各写 1080px）、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。
+- **宽度单一来源**：`src/styles/tokens.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)` 块，原先是 960px）、`.snippets-page` / `.runtime-page` / `.git-manager-column`（原先各写 1080px）、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。
 - **卡片网格一律 `repeat(auto-fill, minmax(Npx, 1fr))`**，不再用 `@media` 切 `1fr 1fr`：快捷应用 `.al-grid` 280、片段库 `.snippets-list` 320、环境变量 `.runtime-list` 340。实测（内容宽→列数）：696→2、1080→3、1412→4。
-- **小工具页（`DevTools.tsx` + `devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
+- **小工具页（`DevTools.tsx` + `src/styles/devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
 - **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）。工具内 textarea 统一 `resize: none`。
 - **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。
 

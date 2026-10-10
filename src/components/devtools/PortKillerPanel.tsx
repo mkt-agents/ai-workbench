@@ -195,6 +195,7 @@ export default function PortKillerPanel() {
           {loading ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
           <span>{t("ports.query")}</span>
         </button>
+        <div className="devports-filter-opts">
         <div className="devports-proto-filter">
           {(["tcp", "udp", "all"] as ProtoFilter[]).map((key) => (
             <button
@@ -220,6 +221,7 @@ export default function PortKillerPanel() {
         >
           <RefreshCw size={14} />
         </button>
+        </div>
       </div>
 
       <p className="ports-hint">{t("ports.hint")}</p>

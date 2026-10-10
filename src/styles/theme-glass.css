@@ -1,0 +1,478 @@
+/* Continuous top chrome line — no vertical break at sidebar/titlebar join */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .app-layout::after {
+  background: var(--chrome-line);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .titlebar,
+:is([data-theme="glass"]) .card {
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar {
+  background: var(--chrome-bg);
+  border-right: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar::after {
+  top: 41px;
+  background: var(--chrome-line);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-logo {
+  border-bottom: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-logo-text {
+  color: rgba(244, 246, 245, 0.72);
+  letter-spacing: 1.2px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .titlebar {
+  background: var(--chrome-bg);
+  border-bottom: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .right-area {
+  background: transparent;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card {
+  background: var(--overlay-1);
+  border: 1px solid var(--overlay-3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight);
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card:hover {
+  border-color: var(--overlay-3);
+  background: var(--overlay-2);
+  box-shadow: var(--surface-highlight);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card-title {
+  border-bottom-color: var(--overlay-2);
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .main-content,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .main-header {
+  background: transparent;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .main-header h1 {
+  color: var(--text-0);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: none;
+  border-radius: var(--radius-md);
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  box-shadow: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-secondary {
+  background: var(--overlay-2);
+  border: 1px solid var(--overlay-3);
+  border-radius: var(--radius-md);
+  box-shadow: var(--surface-highlight);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-secondary:hover:not(:disabled) {
+  background: var(--overlay-3);
+  border-color: var(--overlay-4);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-danger {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 22%, transparent);
+  border-radius: var(--radius-md);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+  border-color: color-mix(in srgb, var(--red) 32%, transparent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .input-field {
+  background: var(--overlay-2);
+  border: 1px solid var(--overlay-3);
+  border-radius: var(--radius-md);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .input-field:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+  background: var(--overlay-2);
+}
+
+/* Native select popup: force readable options (WebView often uses light chrome) */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select option,
+[data-theme="dark"] select option,
+.dark select option {
+  background-color: #1e2420;
+  color: #f4f6f5;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select,
+[data-theme="dark"] select,
+.dark select {
+  color-scheme: dark;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-nav-item {
+  border-radius: var(--radius-md);
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-nav-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-group-header {
+  color: var(--text-3);
+  opacity: 1;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  transition: color 0.12s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-group-header:hover {
+  color: var(--text-2);
+  opacity: 1;
+  background: transparent;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-group-header.has-active {
+  color: var(--text-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .account-item,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .account-card {
+  border-radius: var(--radius-lg);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .account-item:hover,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .account-card:hover {
+  background: var(--overlay-1);
+  border-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .account-avatar {
+  border-radius: 50%;
+  box-shadow: none;
+  color: #ffffff;
+  border: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .empty-state::before {
+  opacity: 0.04;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .status-bar {
+  background: var(--overlay-1);
+  border: 1px solid var(--overlay-2);
+  border-radius: var(--radius-lg);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .scope-tabs {
+  background: var(--overlay-1);
+  border: 1px solid var(--overlay-2);
+  border-radius: var(--radius-md);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .scope-tab {
+  border-radius: var(--radius-sm);
+  transition: background 0.1s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .scope-tab.active {
+  background: var(--overlay-3);
+  box-shadow: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .hosts-editor {
+  background: var(--overlay-1);
+  border: 1px solid var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .admin-warning {
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  border-left-color: var(--red);
+  color: var(--red);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .admin-info {
+  background: var(--accent-dim);
+  border-left-color: var(--accent);
+  color: var(--text-1);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .switch-progress {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-selector {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--overlay-2);
+  padding: 3px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn {
+  color: rgba(244, 246, 245, 0.45);
+  border-radius: var(--radius-sm);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn:hover {
+  color: rgba(244, 246, 245, 0.75);
+  background: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toggle-slider {
+  background: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .setting-row {
+  border-bottom-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .setting-label {
+  color: var(--text-1);
+}
+
+/* AI Assistant - Glass Theme */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-assistant {
+  background: transparent;
+  border-radius: var(--radius-xl);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-header {
+  background: var(--chrome-bg);
+  border-bottom: 0.25px solid var(--overlay-2);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: var(--radius-xl);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tabs {
+  background: var(--overlay-1);
+  border: 0.25px solid var(--overlay-3);
+  border-radius: var(--radius-lg);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab {
+  color: rgba(245, 245, 245, 0.4);
+  border-radius: var(--radius-lg);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab:hover {
+  color: rgba(245, 245, 245, 0.65);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab.active {
+  background: var(--overlay-2);
+  color: #f5f5f5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.05);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-container {
+  background: transparent;
+  padding: 24px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-header {
+  border-bottom-color: var(--overlay-2);
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-title h2 {
+  color: #f5f5f5;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-count {
+  color: rgba(245, 245, 245, 0.4);
+  font-size: 11px;
+  background: var(--overlay-2);
+  padding: 3px 10px;
+  border-radius: var(--radius-lg);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-item {
+  background: var(--overlay-2);
+  border: 0.25px solid var(--overlay-3);
+  transition: var(--transition-colors-fast);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-item:hover {
+  background: var(--overlay-2);
+  border-color: var(--overlay-4);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-item.default {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-group {
+  background: var(--overlay-1);
+  border-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-name {
+  color: #f5f5f5;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-badge {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  margin-left: 8px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-detail {
+  color: rgba(245, 245, 245, 0.4);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-meta {
+  color: rgba(245, 245, 245, 0.35);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  opacity: 1;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty {
+  padding: 80px 24px;
+  gap: 14px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-icon {
+  opacity: 0.3;
+  color: var(--accent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-title {
+  color: rgba(245, 245, 245, 0.7);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-desc {
+  color: rgba(245, 245, 245, 0.4);
+  font-size: 12px;
+  max-width: 280px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-container {
+  background: transparent;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-toolbar,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage.is-running {
+  background: var(--overlay-1);
+  border-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-iframe-container {
+  background: var(--overlay-1);
+  border: 0.25px solid var(--overlay-2);
+  border-radius: var(--radius-xl);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-bar {
+  background: var(--overlay-1);
+  border: 0.25px solid var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-url-badge {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-url-badge:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Version group in glass/ice/silver themes */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-group {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label {
+  color: rgba(245, 245, 245, 0.6);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label svg {
+  opacity: 0.4;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage.is-running .dsh-version-label {
+  color: color-mix(in srgb, var(--green) 80%, white 20%);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage.is-running .dsh-version-label svg {
+  color: var(--green);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-msg {
+  background: var(--overlay-1);
+  border-color: var(--overlay-2);
+  color: rgba(245, 245, 245, 0.8);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-progress-bar {
+  background: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-progress-fill {
+  background: linear-gradient(90deg, var(--accent), #60a5fa);
+}
+

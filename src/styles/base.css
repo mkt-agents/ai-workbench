@@ -1,0 +1,196 @@
+/* ─── Reset ─── */*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Added by App.tsx while the window is being resized.
+ *
+ * Scoped on purpose. `body.resizing *` matched every node, so one resize gesture cost
+ * two whole-document style recalcs (measured: ~49ms on a 1.9k-node page, i.e. ~3
+ * dropped frames). Listing the surfaces keeps the same effect for pennies.
+ *
+ * The blur list is every blurred surface in the app, including those declared in the
+ * per-page stylesheets (e.g. `.tr-multiselect-menu` in TestReportModal.css); the
+ * transition list is every selector that transitions a layout property (.sidebar plus
+ * the dsh progress fill). New blurred surface? Add it here.
+ *
+ * `animation` is deliberately untouched: all 18 keyframes animate transform/opacity
+ * only, and killing them froze the test/AI spinners for 300ms after any resize. */
+body.resizing :is(
+  .sidebar,
+  .titlebar,
+  .ai-header,
+  .modal-overlay,
+  .toast,
+  .prompt-model-menu,
+  .ai-model-menu,
+  .prompt-template-menu,
+  .al-toolbar,
+  .qa-focus-pop,
+  .tr-multiselect-menu,
+  .dd-menu,
+  .update-banner,
+  .quick-ask-toolbar .qa-focus-btn
+) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* `.card` is listed separately because a page can carry hundreds of them and the
+   invalidation walk grows with the number matched. It only has a blur in the glass
+   theme, so only glass pays for the match — see the backdrop-filter rules below. */
+html[data-theme="glass"] body.resizing .card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.resizing :is(.sidebar, .dsh-progress-fill) {
+  transition: none !important;
+}
+
+html {
+  background: var(--bg-0);
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-0);
+  background: var(--bg-0);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* 浅色：柔冷灰底 + 弥散氛围（克制、可透） */
+@media not (prefers-color-scheme: dark) {
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) body {
+    background: #e2e7ef;
+    background-attachment: fixed;
+  }
+
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 90% 55% at 8% -8%, color-mix(in srgb, var(--accent) 16%, transparent) 0%, transparent 58%),
+      radial-gradient(ellipse 70% 50% at 100% 0%, rgba(148, 163, 184, 0.2) 0%, transparent 55%),
+      radial-gradient(ellipse 55% 45% at 78% 100%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 50%),
+      linear-gradient(165deg, rgba(255, 255, 255, 0.55) 0%, transparent 38%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .right-area,
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .main-content,
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .main-header {
+    background: transparent;
+  }
+
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .app-layout::after {
+    background: var(--chrome-line);
+  }
+}
+
+[data-theme="light"] body {
+  background: #e2e7ef;
+  background-attachment: fixed;
+}
+
+[data-theme="light"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 90% 55% at 8% -8%, color-mix(in srgb, var(--accent) 16%, transparent) 0%, transparent 58%),
+    radial-gradient(ellipse 70% 50% at 100% 0%, rgba(148, 163, 184, 0.2) 0%, transparent 55%),
+    radial-gradient(ellipse 55% 45% at 78% 100%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 50%),
+    linear-gradient(165deg, rgba(255, 255, 255, 0.55) 0%, transparent 38%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+[data-theme="light"] .right-area,
+[data-theme="light"] .main-content,
+[data-theme="light"] .main-header {
+  background: transparent;
+}
+
+[data-theme="light"] .app-layout::after {
+  background: var(--chrome-line);
+}
+
+button { font-family: inherit; cursor: pointer; }
+input, select, textarea { font-family: inherit; }
+
+::selection { background: var(--accent-dim); color: var(--text-0); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-sm); }
+
+/* ─── Loading Screen ─── */
+
+.loading-screen {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 100%);
+  font-family: var(--font-sans);
+  gap: 20px;
+}
+
+.loading-logo-mark {
+  border-radius: var(--radius-lg);
+  display: block;
+}
+
+.loading-logo {
+  font-size: 28px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+}
+
+.nav-brand-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--accent-dim);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.loading-text {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-top: 8px;
+}
+
+/* ─── Scrollable Page Container ─── */
+
+.page-scrollable {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.page-scrollable .card {
+  flex-shrink: 0;
+}
+

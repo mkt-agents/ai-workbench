@@ -223,6 +223,7 @@
   },
   "cursor": {
     "title": "Cursor",
+    "accountsTitle": "账号",
     "addAccount": "添加账号",
     "switch": "一键切换",
     "finishLogin": "完成初始化",

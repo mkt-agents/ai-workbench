@@ -1,0 +1,102 @@
+/* ===== Quick Ask desktop bubble (solid orb) ===== */
+html.qa-bubble-mode,
+html.qa-bubble-mode body,
+html.qa-bubble-mode #root,
+html:has(.qa-bubble-root),
+body.qa-bubble-mode,
+body:has(.qa-bubble-root),
+body:has(.qa-bubble-root) #root,
+html.qa-bubble-mode[data-theme="ice"] body,
+html.qa-bubble-mode[data-theme="silver"] body,
+html.qa-bubble-mode[data-theme="glass"] body,
+html.qa-bubble-mode[data-theme="dark"] body,
+html.qa-bubble-mode[data-theme="light"] body {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  background-attachment: initial !important;
+  box-shadow: none !important;
+}
+
+/* Theme atmosphere layers must not paint behind the disc */
+html.qa-bubble-mode body::before,
+html.qa-bubble-mode body::after,
+body.qa-bubble-mode::before,
+body.qa-bubble-mode::after,
+body:has(.qa-bubble-root)::before,
+body:has(.qa-bubble-root)::after,
+html.qa-bubble-mode[data-theme="ice"] body::before,
+html.qa-bubble-mode[data-theme="silver"] body::before,
+html.qa-bubble-mode[data-theme="glass"] body::before {
+  display: none !important;
+  content: none !important;
+  background: none !important;
+  opacity: 0 !important;
+}
+
+.qa-bubble-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: transparent !important;
+  /* Circle hit-testing: without the HWND region the window is square, so
+     clip pointer events to the orb's circle (corners pass through). */
+  border-radius: 50%;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Glass orb — the 44px window (see BUBBLE_SIZE in tray/bubble.rs) is a plain
+   rectangle; the round shape and anti-aliased edge come from this element's
+   border-radius, with the window corners transparent via DWM. Depth comes
+   from the internal gradient and inset highlights. */
+.qa-bubble-orb {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(143, 195, 232, 0.92);
+  background:
+    radial-gradient(120% 120% at 30% 16%,
+      rgba(255, 255, 255, 0.16),
+      rgba(255, 255, 255, 0.02) 44%,
+      transparent 62%),
+    linear-gradient(180deg, #242932, #14171c);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -8px 14px rgba(0, 0, 0, 0.38);
+  transition: filter 0.16s ease, transform 0.16s ease;
+}
+
+.qa-bubble-icon {
+  display: block;
+  opacity: 0.92;
+  flex-shrink: 0;
+}
+
+.qa-bubble-root:hover .qa-bubble-orb {
+  filter: brightness(1.18);
+}
+
+.qa-bubble-root:active .qa-bubble-orb {
+  transform: scale(0.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qa-bubble-orb {
+    transition: none;
+  }
+}
+

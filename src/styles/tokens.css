@@ -1,0 +1,522 @@
+
+/* === AI Workbench - Unified Design System === */
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Light tokens（默认 · 白雾磨砂）─── */
+:root {
+  color-scheme: light;
+  /* 品牌：slate 蓝 */
+  --accent: #356a9e;
+  --accent-strong: #2a5680;
+  --accent-dim: rgba(53, 106, 158, 0.12);
+  --accent-border: rgba(53, 106, 158, 0.34);
+  --on-accent: #ffffff;
+
+  /* 语义色：略降饱和 */
+  --green: #3d8f5f;
+  --green-dim: rgba(61, 143, 95, 0.1);
+  --red: #c45c5c;
+  --red-dim: rgba(196, 92, 92, 0.08);
+  --yellow: #b8952e;
+  --yellow-dim: rgba(184, 149, 46, 0.1);
+  /* 语义色描边：状态胶囊 / 危险按钮的边框，比 *-dim 深一档 */
+  --green-border: rgba(61, 143, 95, 0.3);
+  --red-border: rgba(196, 92, 92, 0.3);
+  --yellow-border: rgba(184, 149, 46, 0.32);
+
+  /* 背景层级 — 细白雾，可读仍透 */
+  --bg-0: transparent;
+  --bg-1: rgba(255, 255, 255, 0.56);
+  --bg-2: rgba(255, 255, 255, 0.42);
+  --bg-3: rgba(255, 255, 255, 0.64);
+  --bg-hover: rgba(53, 106, 158, 0.07);
+
+  /* 输入框底 */
+  --input-bg: rgba(255, 255, 255, 0.7);
+
+  /* 边框 — 细发丝冷灰 */
+  --border: rgba(15, 23, 42, 0.1);
+  --border-subtle: rgba(15, 23, 42, 0.07);
+
+  /* 文字 */
+  --text-0: #12151c;
+  --text-1: #3a424e;
+  --text-2: #6a7382;
+  --text-3: #939eaf;
+
+  /* 圆角：控件 md、卡片 lg、浮层 xl；嵌套时内层比外层小一档 */
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* 页面内容宽度唯一上限：小窗随窗口流式，超宽屏才居中封顶。
+     所有页面级容器（.page-scrollable / .snippets-page / .runtime-page /
+     工具页 .devtools-tool）都引用它，不要再各写一个 px 值。 */
+  --page-max-width: 1440px;
+
+  /* 阴影 — 极轻分层 */
+  --shadow-xs: 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 3px 12px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 2px 4px rgba(15, 23, 42, 0.03), 0 10px 28px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 4px 8px rgba(15, 23, 42, 0.04), 0 18px 40px rgba(15, 23, 42, 0.07);
+  --shadow-glow: none;
+  --card-shadow: 0 1px 1px rgba(15, 23, 42, 0.03), 0 8px 24px rgba(15, 23, 42, 0.05);
+  /* 表面顶边高光：卡片 / 次要按钮的 1px 内高光，玻璃质感主要靠它分层 */
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  /* 浮层投影：弹框 / 下拉菜单 / 浮动确认框共用的单一来源。
+     历史上 .modal 等三处引用了 --float-shadow 却从未定义，等于所有浮层零投影。 */
+  --float-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.12),
+    0 28px 64px rgba(15, 23, 42, 0.1);
+
+  --chrome-bg: rgba(255, 255, 255, 0.48);
+  --chrome-line: rgba(15, 23, 42, 0.08);
+
+  /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
+  --overlay-1: rgba(15, 23, 42, 0.03);
+  --overlay-2: rgba(15, 23, 42, 0.05);
+  --overlay-3: rgba(15, 23, 42, 0.08);
+  --overlay-4: rgba(15, 23, 42, 0.12);
+  /* 投影 / 遮罩用的墨色通道：rgba(var(--ink-rgb), a) */
+  --ink-rgb: 15, 23, 42;
+
+  /* 过渡 */
+  --transition-fast: 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Paint and composite properties only. Layout properties (width, height, padding,
+     margin, font-size…) deliberately do NOT appear here: a transition that covers them
+     turns every window resize into an animation of the reflow itself, which is what made
+     maximizing feel like the UI was catching up with itself. */
+  --transition-colors-fast: background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1), color 0.12s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1), transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-colors: background-color 0.18s cubic-bezier(0.4, 0, 0.2, 1), color 0.18s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.18s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.18s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.18s cubic-bezier(0.4, 0, 0.2, 1), transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 字体 */
+  --font-sans: 'Inter', -apple-system, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --accent: #356a9e;
+  --accent-strong: #2a5680;
+  --accent-dim: rgba(53, 106, 158, 0.12);
+  --accent-border: rgba(53, 106, 158, 0.34);
+  --on-accent: #ffffff;
+
+  --green: #3d8f5f;
+  --green-dim: rgba(61, 143, 95, 0.1);
+  --red: #c45c5c;
+  --red-dim: rgba(196, 92, 92, 0.08);
+  --yellow: #b8952e;
+  --yellow-dim: rgba(184, 149, 46, 0.1);
+  /* 语义色描边：状态胶囊 / 危险按钮的边框，比 *-dim 深一档 */
+  --green-border: rgba(61, 143, 95, 0.3);
+  --red-border: rgba(196, 92, 92, 0.3);
+  --yellow-border: rgba(184, 149, 46, 0.32);
+
+  --bg-0: transparent;
+  --bg-1: rgba(255, 255, 255, 0.56);
+  --bg-2: rgba(255, 255, 255, 0.42);
+  --bg-3: rgba(255, 255, 255, 0.64);
+  --bg-hover: rgba(53, 106, 158, 0.07);
+
+  --input-bg: rgba(255, 255, 255, 0.7);
+
+  --border: rgba(15, 23, 42, 0.1);
+  --border-subtle: rgba(15, 23, 42, 0.07);
+
+  --text-0: #12151c;
+  --text-1: #3a424e;
+  --text-2: #6a7382;
+  --text-3: #939eaf;
+
+  --shadow-xs: 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 3px 12px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 2px 4px rgba(15, 23, 42, 0.03), 0 10px 28px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 4px 8px rgba(15, 23, 42, 0.04), 0 18px 40px rgba(15, 23, 42, 0.07);
+  --shadow-glow: none;
+  --card-shadow: 0 1px 1px rgba(15, 23, 42, 0.03), 0 8px 24px rgba(15, 23, 42, 0.05);
+  /* 浮层投影：弹框 / 下拉菜单 / 浮动确认框共用的单一来源。
+     历史上 .modal 等三处引用了 --float-shadow 却从未定义，等于所有浮层零投影。 */
+  --float-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.12),
+    0 28px 64px rgba(15, 23, 42, 0.1);
+
+  --chrome-bg: rgba(255, 255, 255, 0.48);
+  --chrome-line: rgba(15, 23, 42, 0.08);
+
+  /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
+  --overlay-1: rgba(15, 23, 42, 0.03);
+  --overlay-2: rgba(15, 23, 42, 0.05);
+  --overlay-3: rgba(15, 23, 42, 0.08);
+  --overlay-4: rgba(15, 23, 42, 0.12);
+  /* 投影 / 遮罩用的墨色通道：rgba(var(--ink-rgb), a) */
+  --ink-rgb: 15, 23, 42;
+}
+
+/* ─── Dark tokens ─── */
+[data-theme="dark"],
+.dark {
+  color-scheme: dark;
+  --accent: #6b8fbd;
+  --accent-strong: #5a7da8;
+  --accent-dim: rgba(107, 143, 189, 0.14);
+  --accent-border: rgba(107, 143, 189, 0.32);
+  --on-accent: #ffffff;
+
+  --green: #6aaa84;
+  --green-dim: rgba(106, 170, 132, 0.12);
+  --red: #d47878;
+  --red-dim: rgba(212, 120, 120, 0.12);
+  --yellow: #c9a86c;
+  --yellow-dim: rgba(201, 168, 108, 0.12);
+  /* 语义色描边：状态胶囊 / 危险按钮的边框，比 *-dim 深一档 */
+  --green-border: rgba(106, 170, 132, 0.3);
+  --red-border: rgba(212, 120, 120, 0.26);
+  --yellow-border: rgba(201, 168, 108, 0.3);
+
+  /* 背景 - 更深炭黑，拉开层级 */
+  --bg-0: #0c0d0f;
+  --bg-1: #141618;
+  --bg-2: #1a1c20;
+  --bg-3: #25282e;
+  --bg-hover: #1e2126;
+
+  --input-bg: #0d1117;
+
+  /* 边框 */
+  --border: #2e3238;
+  --border-subtle: #22252a;
+
+  /* 文字 */
+  --text-0: #f3f4f6;
+  --text-1: #c8ccd2;
+  --text-2: #8b929c;
+  --text-3: #5c636e;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.38);
+  --shadow-glow: none;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.22);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+  --chrome-bg: rgba(20, 22, 24, 0.92);
+  --chrome-line: rgba(255, 255, 255, 0.06);
+
+  /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
+  --overlay-1: rgba(255, 255, 255, 0.03);
+  --overlay-2: rgba(255, 255, 255, 0.05);
+  --overlay-3: rgba(255, 255, 255, 0.08);
+  --overlay-4: rgba(255, 255, 255, 0.12);
+  /* 投影 / 遮罩用的墨色通道：rgba(var(--ink-rgb), a) */
+  --ink-rgb: 0, 0, 0;
+}
+
+/* 跟随系统 — 与 dark token 一致 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) {
+    --accent: #6b8fbd;
+    --accent-strong: #5a7da8;
+    --accent-dim: rgba(107, 143, 189, 0.14);
+    --accent-border: rgba(107, 143, 189, 0.32);
+    --on-accent: #ffffff;
+
+    --green: #6aaa84;
+    --green-dim: rgba(106, 170, 132, 0.12);
+    --red: #d47878;
+    --red-dim: rgba(212, 120, 120, 0.12);
+    --yellow: #c9a86c;
+    --yellow-dim: rgba(201, 168, 108, 0.12);
+    /* 语义色描边：状态胶囊 / 危险按钮的边框，比 *-dim 深一档 */
+    --green-border: rgba(106, 170, 132, 0.3);
+    --red-border: rgba(212, 120, 120, 0.26);
+    --yellow-border: rgba(201, 168, 108, 0.3);
+
+    --bg-0: #0c0d0f;
+    --bg-1: #141618;
+    --bg-2: #1a1c20;
+    --bg-3: #25282e;
+    --bg-hover: #1e2126;
+
+    --input-bg: #0d1117;
+
+    --border: #2e3238;
+    --border-subtle: #22252a;
+
+    --text-0: #f3f4f6;
+    --text-1: #c8ccd2;
+    --text-2: #8b929c;
+    --text-3: #5c636e;
+
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.25);
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.28);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.32);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.38);
+    --shadow-glow: none;
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.22);
+    --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+    --chrome-bg: rgba(20, 22, 24, 0.92);
+    --chrome-line: rgba(255, 255, 255, 0.06);
+
+    /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
+    --overlay-1: rgba(255, 255, 255, 0.03);
+    --overlay-2: rgba(255, 255, 255, 0.05);
+    --overlay-3: rgba(255, 255, 255, 0.08);
+    --overlay-4: rgba(255, 255, 255, 0.12);
+    /* 投影 / 遮罩用的墨色通道：rgba(var(--ink-rgb), a) */
+    --ink-rgb: 0, 0, 0;
+  }
+}
+
+/* ─── Ice Theme (冰蓝玻璃) ─── */
+[data-theme="ice"] {
+  color-scheme: dark;
+  --accent: #7EB6D9;
+  --accent-strong: #5A9FC4;
+  --accent-dim: rgba(126, 182, 217, 0.14);
+  --accent-border: rgba(126, 182, 217, 0.34);
+  --on-accent: #0c0e12;
+
+  --green: #6aaa84;
+  --green-dim: rgba(106, 170, 132, 0.12);
+  --red: #d47878;
+  --red-dim: rgba(212, 120, 120, 0.12);
+  --yellow: #c9a86c;
+  --yellow-dim: rgba(201, 168, 108, 0.12);
+  /* 语义色描边：状态胶囊 / 危险按钮的边框，比 *-dim 深一档 */
+  --green-border: rgba(106, 170, 132, 0.3);
+  --red-border: rgba(212, 120, 120, 0.26);
+  --yellow-border: rgba(201, 168, 108, 0.3);
+
+  --bg-0: transparent;
+  --bg-1: rgba(255, 255, 255, 0.045);
+  --bg-2: rgba(126, 182, 217, 0.04);
+  --bg-3: rgba(255, 255, 255, 0.075);
+  --bg-hover: rgba(126, 182, 217, 0.08);
+
+  --input-bg: rgba(8, 14, 20, 0.6);
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  --text-0: #e8f0f6;
+  --text-1: rgba(232, 240, 246, 0.88);
+  --text-2: rgba(232, 240, 246, 0.55);
+  --text-3: rgba(232, 240, 246, 0.32);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.22);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --shadow-glow: 0 0 28px rgba(90, 159, 196, 0.1);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+
+  --chrome-bg: rgba(10, 14, 20, 0.58);
+  --chrome-line: rgba(255, 255, 255, 0.06);
+
+  /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
+  --overlay-1: rgba(255, 255, 255, 0.03);
+  --overlay-2: rgba(255, 255, 255, 0.05);
+  --overlay-3: rgba(255, 255, 255, 0.08);
+  --overlay-4: rgba(255, 255, 255, 0.12);
+  /* 投影 / 遮罩用的墨色通道：rgba(var(--ink-rgb), a) */
+  --ink-rgb: 0, 0, 0;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+[data-theme="ice"] body {
+  background: #0c0e12;
+  background-attachment: fixed;
+}
+
+[data-theme="ice"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, transparent 18%),
+    radial-gradient(ellipse 80% 45% at 18% 0%, rgba(126, 182, 217, 0.12) 0%, transparent 52%),
+    radial-gradient(ellipse 55% 40% at 100% 85%, rgba(90, 159, 196, 0.07) 0%, transparent 48%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ─── Silver Theme (冷银玻璃) ─── */
+[data-theme="silver"] {
+  color-scheme: dark;
+  --accent: #B8C0CC;
+  --accent-strong: #8E96A3;
+  --accent-dim: rgba(184, 192, 204, 0.14);
+  --accent-border: rgba(184, 192, 204, 0.32);
+  --on-accent: #0e1014;
+
+  --green: #6aaa84;
+  --green-dim: rgba(106, 170, 132, 0.12);
+  --red: #d47878;
+  --red-dim: rgba(212, 120, 120, 0.12);
+  --yellow: #c9a86c;
+  --yellow-dim: rgba(201, 168, 108, 0.12);
+  /* 语义色描边：状态胶囊 / 危险按钮的边框，比 *-dim 深一档 */
+  --green-border: rgba(106, 170, 132, 0.3);
+  --red-border: rgba(212, 120, 120, 0.26);
+  --yellow-border: rgba(201, 168, 108, 0.3);
+
+  --bg-0: transparent;
+  --bg-1: rgba(255, 255, 255, 0.045);
+  --bg-2: rgba(184, 192, 204, 0.035);
+  --bg-3: rgba(255, 255, 255, 0.075);
+  --bg-hover: rgba(184, 192, 204, 0.07);
+
+  --input-bg: rgba(8, 12, 18, 0.6);
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  --text-0: #e8eaee;
+  --text-1: rgba(232, 234, 238, 0.88);
+  --text-2: rgba(232, 234, 238, 0.55);
+  --text-3: rgba(232, 234, 238, 0.32);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.22);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --shadow-glow: 0 0 28px rgba(184, 192, 204, 0.08);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+
+  --chrome-bg: rgba(12, 14, 18, 0.58);
+  --chrome-line: rgba(255, 255, 255, 0.06);
+
+  /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
+  --overlay-1: rgba(255, 255, 255, 0.03);
+  --overlay-2: rgba(255, 255, 255, 0.05);
+  --overlay-3: rgba(255, 255, 255, 0.08);
+  --overlay-4: rgba(255, 255, 255, 0.12);
+  /* 投影 / 遮罩用的墨色通道：rgba(var(--ink-rgb), a) */
+  --ink-rgb: 0, 0, 0;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+[data-theme="silver"] body {
+  background: #0e1014;
+  background-attachment: fixed;
+}
+
+[data-theme="silver"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 18%),
+    radial-gradient(ellipse 80% 45% at 18% 0%, rgba(184, 192, 204, 0.1) 0%, transparent 52%),
+    radial-gradient(ellipse 55% 40% at 100% 85%, rgba(142, 150, 163, 0.06) 0%, transparent 48%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ─── Glass Theme (香槟金 Pearl Champagne) ─── */
+[data-theme="glass"] {
+  color-scheme: dark;
+  /* Pearl champagne: luminous, low-mud, not yellow-gold or taupe */
+  --accent: #D8CFC3;
+  --accent-strong: #B5AAA0;
+  --accent-dim: rgba(216, 207, 195, 0.12);
+  --accent-border: rgba(216, 207, 195, 0.28);
+  --on-accent: #121110;
+
+  --green: #6aaa84;
+  --green-dim: rgba(106, 170, 132, 0.12);
+  --red: #d47878;
+  --red-dim: rgba(212, 120, 120, 0.1);
+  /* 警示色必须与香槟 accent 拉开色相，否则「余量偏低」看起来像普通强调 */
+  --yellow: #d2a65c;
+  --yellow-dim: rgba(210, 166, 92, 0.12);
+  /* 语义色描边：状态胶囊 / 危险按钮的边框，比 *-dim 深一档 */
+  --green-border: rgba(106, 170, 132, 0.3);
+  --red-border: rgba(212, 120, 120, 0.26);
+  --yellow-border: rgba(210, 166, 92, 0.3);
+
+  --bg-0: transparent;
+  --bg-1: rgba(255, 255, 255, 0.035);
+  --bg-2: rgba(255, 255, 255, 0.025);
+  --bg-3: rgba(255, 255, 255, 0.065);
+  --bg-hover: rgba(216, 207, 195, 0.05);
+
+  --input-bg: rgba(8, 8, 7, 0.6);
+
+  --border: rgba(255, 255, 255, 0.09);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+
+  --text-0: #f4f3f1;
+  --text-1: rgba(244, 243, 241, 0.86);
+  --text-2: rgba(244, 243, 241, 0.52);
+  --text-3: rgba(244, 243, 241, 0.3);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.24);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.3);
+  --shadow-glow: none;
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  --chrome-bg: rgba(12, 12, 11, 0.6);
+  --chrome-line: rgba(255, 255, 255, 0.05);
+
+  /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
+  --overlay-1: rgba(255, 255, 255, 0.03);
+  --overlay-2: rgba(255, 255, 255, 0.05);
+  --overlay-3: rgba(255, 255, 255, 0.08);
+  --overlay-4: rgba(255, 255, 255, 0.12);
+  /* 投影 / 遮罩用的墨色通道：rgba(var(--ink-rgb), a) */
+  --ink-rgb: 0, 0, 0;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+/* 深色系浮层投影：纯黑投影在深底上看不出层次，所以额外给 1px 亮边把浮层
+   与背景切开。弹框、下拉、浮动确认框共用这一条，不要再各自写死 box-shadow。 */
+:is([data-theme="dark"], [data-theme="glass"], [data-theme="ice"], [data-theme="silver"]),
+.dark {
+  --float-shadow: 0 0 0 1px rgba(255, 255, 255, 0.055), 0 18px 40px rgba(0, 0, 0, 0.45),
+    0 44px 90px rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) {
+    --float-shadow: 0 0 0 1px rgba(255, 255, 255, 0.055), 0 18px 40px rgba(0, 0, 0, 0.45),
+      0 44px 90px rgba(0, 0, 0, 0.35);
+  }
+}
+
+[data-theme="glass"] body {
+  background: #0c0c0b;
+  background-attachment: fixed;
+}
+
+[data-theme="glass"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  /* 磨砂面要有东西可糊：左上香槟主光 + 右下暖灰回光，强度压在不抢内容的范围 */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 16%),
+    radial-gradient(ellipse 75% 45% at 15% 0%, rgba(216, 207, 195, 0.075) 0%, transparent 55%),
+    radial-gradient(ellipse 55% 45% at 100% 100%, rgba(181, 170, 160, 0.045) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+

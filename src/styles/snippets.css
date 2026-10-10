@@ -1,0 +1,534 @@
+/* ===== Snippets page ===== */
+.snippets-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 4px 24px;
+  height: 100%;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin-inline: auto;
+  min-height: 0;
+  container: snippets-page / inline-size;
+}
+.snippets-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.snippets-search {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 160px;
+  max-width: 420px;
+}
+
+/* 筛选 + 操作整组不拆行；窄窗时整组换到第二行并靠右 */
+.snippets-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+@container snippets-page (max-width: 680px) {
+  .snippets-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+
+.snippets-kind-seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+
+.snippets-kind-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.snippets-kind-btn:hover {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+.snippets-kind-btn.is-active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  font-weight: 600;
+}
+
+.snippets-kind-count {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.snippets-kind-btn.is-active .snippets-kind-count {
+  color: inherit;
+  opacity: 0.75;
+}
+.snippets-search .input-field {
+  width: 100%;
+  padding-left: 30px;
+  padding-right: 26px;
+}
+.snippets-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.snippets-search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.snippets-search-clear:hover {
+  color: var(--text-0);
+  background: var(--bg-hover);
+}
+.snippets-select-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+.snippets-select-wrap select {
+  appearance: none;
+  width: auto;
+  min-width: 108px;
+  padding-right: 26px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.snippets-select-wrap select:hover {
+  background: var(--bg-3);
+}
+.snippets-select-wrap > svg {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.snippets-sort {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 108px;
+}
+.snippets-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px;
+}
+.snippets-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.snippets-tag-chip {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  color: var(--text-2);
+  border-radius: var(--radius-full);
+  padding: 4px 11px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.snippets-tag-chip:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.snippets-tag-chip.on {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-dim);
+  font-weight: 600;
+}
+.snippets-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  min-height: 0;
+  flex: 1;
+  /* 给卡片聚焦描边留位置，否则会被 overflow 裁掉 */
+  padding: 3px;
+  margin: -3px;
+}
+.snippets-list .empty-hint {
+  grid-column: 1 / -1;
+}
+.snippet-card {
+  position: relative;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px 10px;
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: default;
+  transition: var(--transition-colors);
+}
+.snippet-card:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
+}
+.snippet-card:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+/* 头部：类型图标 + 名称 / 次级行（类型 · #标签） */
+.snippet-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.snippet-kind-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  color: var(--text-2);
+  background: var(--overlay-2);
+}
+.snippet-kind-icon.is-prompt {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.snippet-kind-icon.is-code {
+  color: var(--green);
+  background: var(--green-dim);
+}
+.snippet-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.snippet-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.snippet-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
+}
+.snippet-uses {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.snippet-subline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 16px;
+}
+.snippet-subline > * {
+  flex-shrink: 0;
+}
+.snippet-kind-label {
+  color: var(--text-3);
+}
+.snippet-kind-label.is-prompt {
+  color: var(--accent);
+}
+.snippet-tag-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.snippet-tag-link:hover,
+.snippet-tag-link.on {
+  color: var(--accent);
+}
+
+.snippet-preview {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+/* 卡片里固定 4 行高：不再套一层滚动条，长内容截断，全文在编辑/使用弹窗里看。
+   截断放在内层——外层 overflow 只裁到 padding 边，下一行会露在下内边距里 */
+.snippet-card .snippet-preview {
+  --preview-lh: 1.7;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: var(--preview-lh);
+  color: var(--text-2);
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+.snippet-card .snippet-preview.is-code {
+  --preview-lh: 1.6;
+  padding: 6px 10px;
+  box-sizing: content-box;
+  height: calc(4 * var(--preview-lh) * 1em);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-1);
+  background: var(--overlay-1);
+  border-radius: var(--radius-md);
+}
+.snippet-card .snippet-preview:not(.is-code) {
+  /* 与代码块等高，保证同一行卡片底栏对齐 */
+  height: calc(4 * 1.6 * 11.5px + 12px);
+}
+.snippet-preview-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  max-height: 100%;
+  overflow: hidden;
+}
+.snippet-param-hl {
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* 底栏：参数名（左，单行截断）· 悬停工具 · 主操作（右） */
+.snippet-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.snippet-params {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 4px;
+  overflow: hidden;
+}
+.snippet-param {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--overlay-2);
+  border-radius: var(--radius-sm);
+}
+.snippet-param::before {
+  content: "{{";
+  color: var(--text-3);
+}
+.snippet-param::after {
+  content: "}}";
+  color: var(--text-3);
+}
+.snippet-actions-tools {
+  display: inline-flex;
+  gap: 1px;
+  opacity: 0;
+  transition: var(--transition-colors-fast);
+}
+.snippet-card:hover .snippet-actions-tools,
+.snippet-card:focus-within .snippet-actions-tools {
+  opacity: 1;
+}
+.snippet-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.snippet-icon-btn:hover {
+  background: var(--overlay-2);
+  color: var(--text-0);
+}
+.snippet-icon-btn.danger:hover {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
+.snippet-use-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.snippet-use-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+/* Ghost mini buttons reused from quick-ask; snippet-specific variants. */
+.qa-mini-btn.primary {
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.qa-mini-btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.qa-mini-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
+.snippets-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 56px 16px;
+  color: var(--text-3);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+}
+.snippets-empty svg {
+  opacity: 0.45;
+}
+.snippets-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.snippets-modal {
+  max-width: min(520px, calc(100vw - 32px));
+}
+
+/* Live resolved-text preview inside the "use snippet" modal. */
+.snippets-use-preview {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.snippets-content-editor {
+  width: 100%;
+  resize: vertical;
+  min-height: 140px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.toast .toast-action {
+  pointer-events: auto;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+

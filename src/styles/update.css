@@ -1,0 +1,808 @@
+/* ── Startup update banner (bottom-right, non-blocking) ── */
+
+.update-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: 12.5px;
+  box-shadow: var(--float-shadow);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: update-banner-in 0.2s ease;
+}
+
+@keyframes update-banner-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.update-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+/* 升级完成确认横幅：图标换语义绿，其余复用横幅本体 */
+.update-banner--success .update-banner-icon {
+  color: var(--green);
+}
+
+.update-banner-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.update-banner-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.update-banner-close:hover {
+  color: var(--text-0);
+  background: var(--bg-hover);
+}
+
+/* ---------- Update modal (changelog preview + in-app upgrade) ---------- */
+
+/* .modal 默认 380px 窄框，装不下更新日志；这里只放宽自身，不动全局弹框。 */
+.update-modal {
+  max-width: min(560px, calc(100vw - 32px));
+}
+
+/* 元信息行：从哪个版本升上来、装的是哪种安装包、多大。
+   没有这一行时用户只能从标题猜"点了会发生什么"。 */
+.update-modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: -4px 0 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.update-modal-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.update-modal-meta-item svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.update-modal-notes-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  text-transform: uppercase;
+}
+
+.update-modal-notes {
+  max-height: min(44vh, 360px);
+  overflow-y: auto;
+  padding: 11px 13px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  /* release 正文里的长路径 / 长 URL 不能把弹框撑破 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 弹框里的更新日志要压一档：.qa-md 是给快问窗定的，h1 17px 在 560px 框里像正文。 */
+.update-modal-notes .qa-md {
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.update-modal-notes .qa-md h1 { font-size: 14px; }
+.update-modal-notes .qa-md h2 { font-size: 13.5px; }
+.update-modal-notes .qa-md h3,
+.update-modal-notes .qa-md h4 { font-size: 13px; }
+
+.update-modal-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 76px;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-2);
+  text-align: center;
+}
+
+/* 拿不到安装包 = 这一版只能手动装，用告警色而不是中性底，别混进正文里。 */
+.update-modal-hint {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--yellow-dim);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 22%, transparent);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-1);
+}
+
+.update-modal-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--red-dim);
+  box-shadow: inset 2px 0 0 var(--red);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-0);
+}
+
+.update-modal-error svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--red);
+}
+
+.update-modal-error-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.update-modal-error-title {
+  font-weight: 600;
+  color: var(--red);
+}
+
+/* 异常原文只作次要线索：等宽 + 最弱文字色，最多三行，可滚动看全。 */
+.update-modal-error-detail {
+  max-height: 3.6em;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.update-modal-progress {
+  margin-top: 12px;
+}
+
+.update-modal-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.update-modal-progress-pct {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.update-modal-progress .dsh-progress-bar {
+  height: 4px;
+}
+
+.update-modal-progress-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.toast-warning .toast-icon {
+  color: var(--yellow);
+}
+
+/* Glass Theme Toast — same structure, neutral frosted surface.
+   投影留给 --float-shadow（各主题已定好），这里只换表面与描边。 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast {
+  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
+  border-color: var(--overlay-4);
+  border-left-width: 3px;
+  color: #f5f5f5;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-success {
+  border-left-color: color-mix(in srgb, var(--accent) 85%, transparent);
+  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
+  color: #f5f5f5;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-success .toast-icon {
+  color: var(--accent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-error {
+  border-left-color: rgba(239, 83, 80, 0.85);
+  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
+  color: #f5f5f5;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-error .toast-icon {
+  color: #e57373;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-warning {
+  border-left-color: rgba(255, 167, 38, 0.85);
+  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
+  color: #f5f5f5;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-warning .toast-icon {
+  color: #ffb74d;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.dsh-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 10px 0;
+  padding: 6px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.dsh-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.dsh-stage.is-running {
+  margin: 8px 10px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  overflow: hidden;
+}
+
+.dsh-stage.is-running .dsh-toolbar {
+  margin: 0;
+  padding: 4px 8px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: var(--bg-1);
+  gap: 4px;
+  min-height: 32px;
+}
+
+.dsh-stage.is-running .dsh-toolbar-primary {
+  flex-wrap: nowrap;
+  min-height: 28px;
+}
+
+.dsh-stage.is-running .dsh-status-text {
+  display: none;
+}
+
+.dsh-stage.is-running .dsh-url-badge {
+  height: 24px;
+  padding: 0 6px;
+}
+
+.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+/* Stop keeps its label and a warning tint in the icon-only running toolbar, so it
+   can't be mistaken for a generic tool (or for the auto-start toggle next door). */
+.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn {
+  width: auto;
+  padding: 0 10px;
+  color: var(--red);
+  transition: var(--transition-colors-fast);
+}
+
+.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+
+.dsh-stage.is-running .dsh-iframe-container {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  flex: 1;
+  min-height: 0;
+}
+
+.dsh-toolbar-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.dsh-toolbar-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Growing here pushed the actions onto their own line and left the right
+     half of the toolbar empty, even in a wide window. */
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.dsh-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.dsh-control-bar {
+  display: none;
+}
+
+.dsh-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.dsh-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dsh-url-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  height: 28px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.dsh-url-badge:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.dsh-url-badge .dsh-copy-icon {
+  opacity: 0.6;
+}
+
+.dsh-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 0;
+  max-width: 220px;
+}
+
+.dsh-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+
+.dsh-status-dot.running {
+  background: var(--green);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 55%, transparent);
+}
+
+.dsh-status-dot.busy {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dsh-iframe-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  border-radius: var(--radius-md);
+  margin: 8px 10px 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-1);
+}
+
+.dsh-iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: var(--bg-0);
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+
+.dsh-iframe.is-loading {
+  opacity: 0;
+}
+
+.dsh-iframe-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  /* Must be opaque — theme --bg-0/--bg-1 can be transparent and leak iframe white */
+  background: #0e1014;
+  color: var(--text-2);
+  z-index: 10;
+}
+
+[data-theme="light"] .dsh-iframe-loading {
+  background: #f3f4f6;
+}
+
+.dsh-iframe-loading-text {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.dsh-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px;
+  text-align: center;
+}
+
+.dsh-empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.dsh-empty-state-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0.95;
+}
+
+[data-theme="dark"] .dsh-empty-state-icon img,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-empty-state-icon img {
+  filter: brightness(1.15) saturate(1.1);
+}
+
+.dsh-empty-state-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.dsh-empty-state-desc {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.dsh-empty-state-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+.dsh-install-link {
+  margin-top: 8px;
+}
+
+.dsh-install-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Start-port input: same compact look as the version select, narrower. */
+.dsh-port-input {
+  width: 76px;
+  cursor: text;
+}
+
+.dsh-version-select {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  color: var(--text-0);
+  cursor: pointer;
+  max-width: 120px;
+}
+
+.dsh-version-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Version Group — one outer capsule carrying the hairline border; the version
+   label and update chip sit inside as separate pills (pill-in-pill), so there
+   is no hard seam where the two segments meet. */
+.dsh-version-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  height: 24px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--text-3) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-3) 26%, transparent);
+  border-radius: var(--radius-full);
+}
+
+.dsh-version-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--text-2);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  line-height: 1;
+  transition: color 0.2s ease;
+}
+
+.dsh-version-label svg {
+  opacity: 0.55;
+  flex-shrink: 0;
+  transition: opacity 0.2s ease;
+}
+
+.dsh-stage.is-running .dsh-version-label {
+  color: color-mix(in srgb, var(--green) 85%, var(--text-2) 15%);
+}
+
+/* Running pulse — subtle breathing glow on the tag icon */
+@keyframes dsh-version-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+.dsh-stage.is-running .dsh-version-label svg {
+  color: var(--green);
+  animation: dsh-version-pulse 2.5s ease-in-out infinite;
+}
+
+/* Update chip — solid accent pill inside the capsule + breathing glow so an
+   available upgrade is impossible to miss. */
+.dsh-update-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  animation: dsh-update-glow 2.4s ease-in-out infinite;
+  transition: background 0.2s ease;
+}
+
+.dsh-update-chip-ver {
+  opacity: 0.85;
+  font-weight: 500;
+}
+
+/* Soft breathing drop shadow — a spreading ring reads as a grey smudge on the
+   light theme, a depth pulse stays clean in both. */
+@keyframes dsh-update-glow {
+  0%, 100% {
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 2px 9px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+}
+
+.dsh-update-chip:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.dsh-update-chip:active:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.dsh-update-chip:disabled {
+  opacity: 0.45;
+  animation: none;
+  cursor: not-allowed;
+}
+
+.dsh-progress-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.dsh-progress-text {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-update-msg {
+  display: none;
+}
+
+.dsh-update-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dsh-update-text {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.dsh-progress-bar {
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.dsh-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.dsh-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  gap: 10px;
+  padding: 32px 20px;
+}
+
+.dsh-empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.dsh-empty-state-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0.95;
+}
+
+.dsh-empty-state-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.dsh-empty-state-desc {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.dsh-empty-state-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  max-width: 300px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* Empty state primary action (install branch). */
+.dsh-empty-state-btn {
+  margin-top: 4px;
+}
+
+.dsh-install-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  text-decoration: none;
+}
+
+

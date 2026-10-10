@@ -1,0 +1,103 @@
+/* ═══════════════════════════════════════════
+   RESPONSIVE — window size breakpoints
+   ═══════════════════════════════════════════ */
+
+/* Mid-narrow: reduce padding, wrap toolbars, stack plugin layout */
+@media (max-width: 960px) {
+  .main-body {
+    padding: 12px 14px;
+  }
+
+  .page-scrollable {
+    padding: 12px 14px;
+  }
+
+  .models-container {
+    padding: 16px 14px;
+  }
+
+  .ai-model-list {
+    grid-template-columns: 1fr;
+  }
+
+  .plugin-list {
+    grid-template-columns: 1fr;
+  }
+
+  .account-actions {
+    flex-wrap: wrap;
+  }
+
+  .ai-model-item {
+    flex-wrap: wrap;
+  }
+
+  .ai-model-actions .ai-action-label {
+    display: none;
+  }
+
+  .models-header-actions .ai-action-label {
+    display: none;
+  }
+}
+
+/* Near min-width: compact grids and stack headers */
+@media (max-width: 720px) {
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .models-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .status-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .status-bar > div[style*="text-align: right"],
+  .status-bar > div:last-child {
+    text-align: left !important;
+  }
+
+  .scope-tabs {
+    flex-wrap: wrap;
+  }
+
+  .theme-selector {
+    flex-wrap: wrap;
+  }
+
+  .main-header {
+    padding: 10px 14px 0;
+  }
+}
+
+/* Wide screens: constrain form/list width for readability */
+@media (min-width: 1400px) {
+  .page-scrollable {
+    max-width: var(--page-max-width);
+    margin-left: auto;
+    margin-right: auto;
+    width: 100%;
+  }
+
+  /* Git manager column already caps width; avoid double constraint / left stick */
+  .git-manager-body .page-scrollable {
+    max-width: none;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .models-container .ai-model-list,
+  .models-container .models-header,
+  .models-container .models-empty {
+    max-width: 1100px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}

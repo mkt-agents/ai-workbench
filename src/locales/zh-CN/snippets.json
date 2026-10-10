@@ -52,5 +52,8 @@
   "countLabel": "显示 {{shown}} / 共 {{total}} 条",
   "paramsHint": "使用时需填写这些参数",
   "nameDuplicate": "已存在同名片段，请换个名称",
-  "preview": "替换结果预览"
+  "preview": "替换结果预览",
+  "more": "更多操作",
+  "copy": "复制",
+  "cardHint": "双击或回车使用，F2 编辑"
 }

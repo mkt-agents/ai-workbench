@@ -1,0 +1,761 @@
+/* ===== Quick Ask window ===== */
+.quick-ask-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 10px 14px 14px;
+  box-sizing: border-box;
+  background: var(--bg-1);
+  color: var(--text-1);
+  gap: 8px;
+  /* The answer area owns scrolling; never let the 520px window itself scroll
+     (that would drag the header/toolbar out of view). */
+  overflow: hidden;
+}
+.quick-ask-root.loading {
+  align-items: center;
+  justify-content: center;
+}
+.quick-ask-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+}
+.quick-ask-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.quick-ask-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.quick-ask-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+/* All three controls are custom popovers (QuickSelect / FocusPicker) sharing
+   the .qa-focus shell — native select popups are OS-drawn and can't match the
+   window's frosted surface. Model names run long, so the first gets more room. */
+.quick-ask-toolbar > .qa-focus {
+  flex: 1;
+  min-width: 0;
+}
+.quick-ask-toolbar > .qa-focus:first-child { flex: 1.5; }
+.quick-ask-toolbar .qa-focus-btn:hover {
+  border-color: var(--accent-border);
+}
+/* Frosted controls: --bg-0/.input-field are near-transparent in the translucent
+   themes and the window itself lets the desktop through. */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-toolbar .qa-focus-btn {
+  background-color: rgba(24, 28, 32, 0.7);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+/* Focus repo multi-select */
+.qa-focus {
+  position: relative;
+  min-width: 0;
+}
+.qa-focus-btn {
+  /* base look (bg/border/radius/color) comes from .input-field so it matches
+     the model/task selects in every theme — only layout lives here */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+.qa-focus-btn.is-open {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.qa-focus-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-focus-caret { font-size: 9px; opacity: 0.7; }
+.qa-focus-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 280px;
+  max-width: calc(100vw - 28px);
+  padding: 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+/* Same frosted recipe as .ai-model-menu — --bg-0 is transparent in the
+   translucent themes and the popover floats over page content. */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-focus-pop {
+  background: rgba(24, 28, 32, 0.95);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-color: color-mix(in srgb, var(--accent) 12%, var(--overlay-3));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.qa-focus-pop.is-left {
+  left: 0;
+  right: auto;
+}
+.qa-focus-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.qa-focus-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow: auto;
+}
+.qa-focus-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 6px;
+  align-items: center;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+.qa-focus-item:hover { background: var(--bg-2); }
+.qa-focus-item.on { border-color: var(--accent); }
+/* Single-row variant used by QuickSelect (no path line). */
+.qa-focus-item.is-row {
+  grid-template-rows: auto;
+  align-items: center;
+}
+.qa-focus-item.is-row .qa-focus-check { grid-row: auto; }
+.qa-focus-item.is-row .qa-focus-name { grid-column: 2; }
+.qa-focus-check {
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: #fff;
+}
+.qa-focus-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.qa-focus-name {
+  font-size: 12px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-focus-path {
+  grid-column: 2;
+  font-size: 10px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+.qa-focus-scan {
+  justify-content: center;
+  gap: 5px;
+}
+.quick-ask-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+.qa-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+}
+.qa-tool-group {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.qa-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.qa-chip:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+.qa-chip.on {
+  border-color: var(--accent);
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.qa-chip input { margin: 0; accent-color: var(--accent); }
+/* Optimize task: scenario/goal chip rows above the input card */
+.qa-optimize-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 0;
+}
+.qa-opt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.qa-opt-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.qa-opt-chip:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+.qa-opt-chip.active {
+  border-color: var(--accent);
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* ---------- Quick-ask mode tabs + embedded tools ---------- */
+.qa-mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin-right: 6px;
+}
+.qa-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-mode-btn:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+.qa-mode-btn.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.quick-ask-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+.qa-tools-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.qa-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.qa-tools-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding-right: 2px;
+}
+/* The devtools pages are designed for the wide main window — collapse their
+   two-column IO grids and tighten spacing for the 560px quick-ask window. */
+.qa-tools-body .devtools-tool {
+  gap: 8px;
+  max-width: none;
+  flex: 1;
+}
+.qa-tools-body .devtools-io,
+.qa-tools-body .ts-io {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+.qa-tools-body .devtools-io-pane {
+  min-width: 0;
+}
+.qa-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.qa-tool-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+.qa-tool-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.qa-tool-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.qa-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--text-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: qa-spin 0.6s linear infinite;
+}
+@keyframes qa-spin {
+  to { transform: rotate(360deg); }
+}
+.quick-ask-hint {
+  font-size: 11px;
+  color: var(--yellow);
+}
+.quick-ask-snippets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-0);
+}
+.quick-ask-snippet-search {
+  width: 100%;
+}
+.quick-ask-snippet-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 120px;
+  overflow: auto;
+}
+.qa-snippet-item {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+  cursor: pointer;
+}
+.qa-snippet-item:hover {
+  border-color: var(--accent);
+}
+.quick-ask-ctx-preview {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+  background: var(--bg-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow: auto;
+}
+/* ===== Quick Ask input card ===== */
+.qa-input-card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-0);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.qa-input-card:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.quick-ask-input {
+  width: 100%;
+  resize: none;
+  min-height: 64px;
+  max-height: 160px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-1);
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 10px 12px 4px;
+}
+.quick-ask-input::placeholder {
+  color: var(--text-3);
+}
+.qa-input-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 8px 8px 8px;
+}
+.qa-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s, transform 0.1s;
+}
+.qa-send-btn:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+.qa-send-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.qa-send-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.qa-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--red);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.qa-stop-btn:hover {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.quick-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+}
+.qa-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.qa-mini-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+.qa-mini-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.quick-ask-error {
+  font-size: 12px;
+  color: var(--red);
+}
+.quick-ask-answer {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.5;
+  flex: 1 1 auto;
+  min-height: 90px;
+  overflow: auto;
+  position: relative;
+}
+.qa-history-btn {
+  border: 1px solid transparent;
+}
+.qa-history-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.quick-ask-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-0);
+}
+.qa-sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.qa-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow: auto;
+}
+.qa-session-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+.qa-session-item.active {
+  border-color: var(--accent);
+}
+.qa-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  flex-shrink: 0;
+}
+.qa-session-rename {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  padding: 4px 4px 4px 8px;
+}
+.qa-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  font-size: 12px;
+  padding: 3px 6px;
+  outline: none;
+}
+.qa-session-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+}
+.qa-session-main:hover .qa-session-title {
+  color: var(--accent);
+}
+.qa-session-title {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.qa-session-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.qa-selection-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
+}
+.qa-selection-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ===== Quick Ask markdown answer ===== */
+.qa-md > *:first-child { margin-top: 0; }
+.qa-md > *:last-child { margin-bottom: 0; }
+.qa-md p {
+  margin: 6px 0;
+}
+.qa-md h1, .qa-md h2, .qa-md h3, .qa-md h4 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+}
+.qa-md h1 { font-size: 17px; }
+.qa-md h2 { font-size: 15px; }
+.qa-md h3 { font-size: 14px; }
+.qa-md h4 { font-size: 13px; }
+.qa-md ul, .qa-md ol {
+  margin: 6px 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qa-md blockquote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-1);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-2);
+}
+.qa-md hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+}
+.qa-md code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-0);
+  border: 1px solid var(--border-subtle);
+}
+.qa-md a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.qa-md a:hover {
+  text-decoration: underline;
+}
+.qa-md .qa-code-block code {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.qa-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-0);
+}
+.qa-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-1);
+}
+.qa-code-lang {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.qa-code-body {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.qa-caret {
+  display: inline-block;
+  color: var(--accent);
+  animation: qa-blink 1s steps(1) infinite;
+}
+@keyframes qa-blink {
+  50% { opacity: 0; }
+}
+.btn-icon {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+.btn-icon:hover { background: var(--bg-2); color: var(--text-1); }
+

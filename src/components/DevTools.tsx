@@ -85,6 +85,7 @@ function DevTools({ active = true }: { active?: boolean }) {
   }, [activeTool]);
 
   const stripRef = useRef<HTMLElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   // Whether the strip can scroll further in each direction (drives the arrows / edge fades).
   const [stripScroll, setStripScroll] = useState({ left: false, right: false });
@@ -134,6 +135,7 @@ function DevTools({ active = true }: { active?: boolean }) {
 
   // Keyboard: ← / → pan the strip when focus isn't in a text field.
   useEffect(() => {
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -145,7 +147,7 @@ function DevTools({ active = true }: { active?: boolean }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scrollStrip]);
+  }, [active, scrollStrip]);
 
   // Keep the active chip in view while leaving room for the overlay arrows.
   useEffect(() => {
@@ -168,6 +170,13 @@ function DevTools({ active = true }: { active?: boolean }) {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((e.target as HTMLElement).isContentEditable) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
       const num = parseInt(e.key, 10);
       if (num >= 1 && num <= 9 && num <= allTools.length) {
         e.preventDefault();
@@ -192,6 +201,19 @@ function DevTools({ active = true }: { active?: boolean }) {
     })).filter((group) => group.tools.length > 0);
   }, [search, t]);
 
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      if (search) setSearch("");
+      else e.currentTarget.blur();
+    } else if (e.key === "Enter") {
+      const first = filteredGroups[0]?.tools[0];
+      if (!first) return;
+      setActiveTool(first.id);
+      setSearch("");
+      e.currentTarget.blur();
+    }
+  };
+
   const activeToolMeta = useMemo(() => allTools.find((t) => t.id === activeTool), [activeTool, allTools]);
 
   const renderTool = () => {
@@ -212,12 +234,13 @@ function DevTools({ active = true }: { active?: boolean }) {
   const renderToolButton = (tool: ToolDef, groupKey: string) => {
     const hotkey = toolHotkeyIndex(allTools, tool.id);
     const isActive = activeTool === tool.id;
+    const isFirstMatch = !!search.trim() && filteredGroups[0]?.tools[0]?.id === tool.id;
     return (
       <button
         key={tool.id}
         type="button"
         data-tool-id={tool.id}
-        className={`dt-tool-item ${isActive ? "active" : ""}`}
+        className={`dt-tool-item${isActive ? " active" : ""}${isFirstMatch ? " is-first-match" : ""}`}
         onClick={() => setActiveTool(tool.id)}
         title={`${t(groupKey)} · ${t(tool.descriptionKey)}`}
         aria-pressed={isActive}
@@ -236,6 +259,7 @@ function DevTools({ active = true }: { active?: boolean }) {
   return (
     <div className="dt-layout">
       <header className="dt-toolbar">
+        <div className="dt-toolbar-inner">
         <div className="dt-strip-wrap">
           <nav ref={stripRef} className="dt-toolstrip" role="navigation" aria-label={t("title")}>
             {filteredGroups.map((group, i) => (
@@ -291,11 +315,13 @@ function DevTools({ active = true }: { active?: boolean }) {
         <div className="dt-toolbar-search">
           <Search size={13} />
           <input
+            ref={searchRef}
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+            onKeyDown={handleSearchKeyDown}
             placeholder={t("common.search")}
+            title={t("common.searchHint")}
             spellCheck={false}
             aria-label={t("common.search")}
           />
@@ -310,6 +336,8 @@ function DevTools({ active = true }: { active?: boolean }) {
               <X size={12} />
             </button>
           )}
+          {!search && <kbd className="dt-search-kbd">/</kbd>}
+        </div>
         </div>
       </header>
 

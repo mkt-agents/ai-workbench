@@ -1218,7 +1218,12 @@ function CommitChangelist({
                   />
                   <span className={`git-file-badge ${statusClass(code)}`}>{statusLabel(code)}</span>
                   <span className="cl-file-path" title={e.path}>
-                    {e.path}
+                    <span className="cl-file-name">{e.path.slice(e.path.lastIndexOf("/") + 1)}</span>
+                    {e.path.includes("/") && (
+                      <span className="cl-file-dir">
+                        {e.path.slice(0, e.path.lastIndexOf("/"))}
+                      </span>
+                    )}
                   </span>
                   <button
                     type="button"

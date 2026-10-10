@@ -51,7 +51,7 @@ import { registerQuickAskShortcut } from "./lib/quickAskShortcut";
 import { syncPluginHotkeys } from "./lib/pluginHotkeys";
 import { applyDocumentTheme } from "./lib/theme";
 import { useTauriEvent } from "./hooks/useTauriEvent";
-import "./styles.css";
+import "./styles/index.css";
 
 type Tab =
   | "git"

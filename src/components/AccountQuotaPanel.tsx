@@ -12,7 +12,6 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
   Bot,
-  Braces,
   Clock,
   ExternalLink,
   EyeOff,
@@ -20,9 +19,6 @@ import {
   KeyRound,
   LogIn,
   RefreshCw,
-  Sparkles,
-  Square,
-  Terminal,
   Trash2,
   UserPlus,
   CalendarCheck,
@@ -79,6 +75,7 @@ import {
   type QuotaAccount,
 } from "../lib/quotaAccounts";
 import { useConfirm } from "./ConfirmModal";
+import { cardBrandLogoSrc } from "../lib/providerLogos";
 import ScanAddFlow from "./workbuddy/ScanAddFlow";
 import ManualAddModal from "./workbuddy/ManualAddModal";
 import {
@@ -328,6 +325,31 @@ function cardStatus(key: string, r: QuotaResultBase | undefined, peaks: Record<s
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** reqwest 原文 / 旧缓存里的长 URL 错误 → 短提示；已是友好文案则原样返回。 */
+function friendlyQuotaMessage(msg: string | null | undefined, networkLabel: string): string | null {
+  if (!msg) return null;
+  const lower = msg.toLowerCase();
+  if (
+    lower.includes("error sending request")
+    || lower.includes("connect error")
+    || lower.includes("connection reset")
+    || lower.includes("connection refused")
+    || lower.includes("connection timed out")
+    || lower.includes("timed out")
+    || lower.includes("timeout")
+    || lower.includes("dns error")
+    || lower.includes("failed to lookup address")
+    || lower.includes("network unreachable")
+    || lower.includes("no route to host")
+    || lower.includes("tls handshake")
+    || /\bssl\b/.test(lower)
+    || lower.includes("certificate")
+  ) {
+    return networkLabel;
+  }
+  return msg;
 }
 
 /** invoke 本身 reject（不是后端返回的 ok:false）时，补一份失败结果让卡片显示错误而不是停在旧数据。 */
@@ -1004,7 +1026,6 @@ function AccountQuotaPanel() {
           <QuotaCardShell
             key={key}
             brand="deepseek"
-            icon={<KeyRound size={13} />}
             product="DeepSeek"
             onHide={rawId === "new" ? () => setDsFormOpen(false) : hideProvider}
             frame={frame}
@@ -1039,11 +1060,11 @@ function AccountQuotaPanel() {
       const account = authAccounts.find((a) => a.provider === prefix && a.id === id);
       if (!account) {
         return prefix === "cursor" ? (
-          <QuotaCardShell key={key} brand="cursor" icon={<Square size={12} />} product="Cursor" onHide={hideProvider} frame={frame}>
+          <QuotaCardShell key={key} brand="cursor" product="Cursor" onHide={hideProvider} frame={frame}>
             {authPrompt("cursor")}
           </QuotaCardShell>
         ) : (
-          <QuotaCardShell key={key} brand="grok" icon={<Sparkles size={13} />} product="Grok Bot" onHide={hideProvider} frame={frame}>
+          <QuotaCardShell key={key} brand="grok" product="Grok Bot" onHide={hideProvider} frame={frame}>
             {authPrompt("grok-bot")}
           </QuotaCardShell>
         );
@@ -1068,7 +1089,7 @@ function AccountQuotaPanel() {
       const account = qoderAccounts.find((a) => a.id === id);
       if (!account) {
         return (
-          <QuotaCardShell key={key} brand="qoder" icon={<Braces size={13} />} product="Qoder" onHide={hideProvider} frame={frame}>
+          <QuotaCardShell key={key} brand="qoder" product="Qoder" onHide={hideProvider} frame={frame}>
             {authPrompt("qoder")}
           </QuotaCardShell>
         );
@@ -1092,7 +1113,7 @@ function AccountQuotaPanel() {
       const account = codexAccounts.find((a) => a.id === id);
       if (!account) {
         return (
-          <QuotaCardShell key={key} brand="codex" icon={<Terminal size={13} />} product="Codex" onHide={hideProvider} frame={frame}>
+          <QuotaCardShell key={key} brand="codex" product="Codex" onHide={hideProvider} frame={frame}>
             {authPrompt("codex")}
           </QuotaCardShell>
         );
@@ -1115,7 +1136,7 @@ function AccountQuotaPanel() {
     const account = accounts.find((a) => a.id === id);
     if (!account) {
       return (
-        <QuotaCardShell key={key} brand="wb" icon={<Bot size={14} />} product="WorkBuddy" onHide={hideProvider} frame={frame}>
+        <QuotaCardShell key={key} brand="wb" product="WorkBuddy" onHide={hideProvider} frame={frame}>
           <AuthPrompt
             hint={t("authHint.workbuddy")}
             pending={false}
@@ -1402,7 +1423,7 @@ function AutoCheckinPopover({
           <p className="aq-pop-hint">{tw("checkinHint")}</p>
           {error && (
             <div className="aq-card-error" role="alert">
-              {error}
+              {friendlyQuotaMessage(error, tw("networkFailed")) ?? error}
             </div>
           )}
         </div>
@@ -1432,7 +1453,6 @@ function SummarySegment({
 
 function QuotaCardShell({
   brand,
-  icon,
   product,
   tag,
   at,
@@ -1447,7 +1467,6 @@ function QuotaCardShell({
   children,
 }: {
   brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder";
-  icon: ReactNode;
   product: string;
   tag?: ReactNode;
   /** 结果时间（unix 秒）；有值时卡片底部显示「N 分钟前」。 */
@@ -1501,7 +1520,7 @@ function QuotaCardShell({
             <GripVertical size={13} />
           </span>
         )}
-        <span className="aq-card-icon">{icon}</span>
+        <span className="aq-card-icon"><img src={cardBrandLogoSrc(brand) ?? undefined} alt="" draggable={false} /></span>
         <span className="aq-card-product">{product}</span>
         {tag}
         <span className="aq-card-actions">
@@ -1664,7 +1683,7 @@ function CardMessage({
     const action = quota.needsReauth && onReauth;
     return (
       <div className={`aq-card-error${action ? " has-action" : ""}`} role="alert">
-        <span>{quota.message ?? t("queryFailed")}</span>
+        <span>{friendlyQuotaMessage(quota.message, t("networkFailed")) ?? t("queryFailed")}</span>
         {action && (
           <button type="button" className="btn btn-primary btn-small" onClick={onReauth} disabled={reauthPending}>
             {reauthPending ? <RefreshCw size={12} className="spin" /> : <LogIn size={12} />}
@@ -1785,7 +1804,6 @@ function WorkbuddyCard({
   return (
     <QuotaCardShell
       brand="wb"
-      icon={<Bot size={14} />}
       product="WorkBuddy"
       tag={abnormal ? <span className={`aq-tag aq-tag-${account.status}`}>{t(STATUS_KEYS[account.status])}</span> : null}
       at={quota?.at}
@@ -1913,7 +1931,6 @@ function CursorCard({
   return (
     <QuotaCardShell
       brand="cursor"
-      icon={<Square size={12} />}
       product="Cursor"
       tag={<SeatTag team={cursorIsTeam(quota)} title={quota?.teamName ?? undefined} />}
       at={quota?.at}
@@ -1973,7 +1990,6 @@ function GrokCard({
   return (
     <QuotaCardShell
       brand="grok"
-      icon={<Sparkles size={13} />}
       product="Grok Bot"
       tag={<SeatTag team={quota?.ok ? quota.isTeamSeat : null} />}
       at={quota?.at}
@@ -2150,7 +2166,6 @@ function QoderCard({
   return (
     <QuotaCardShell
       brand="qoder"
-      icon={<Braces size={13} />}
       product="Qoder"
       at={quota?.at}
       loading={loading}
@@ -2229,7 +2244,7 @@ function AuthPrompt({
       <p className="aq-auth-text">{pending ? t("authPendingShort") : hint}</p>
       {error && !pending && (
         <div className="aq-card-error" role="alert">
-          {error}
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
         </div>
       )}
       {pending ? (
@@ -2308,7 +2323,7 @@ function DeepSeekKeyForm({
       />
       {error && (
         <div className="aq-card-error" role="alert">
-          {error}
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
         </div>
       )}
       <div className="aq-key-actions">
@@ -2367,7 +2382,6 @@ function DeepSeekCard({
   return (
     <QuotaCardShell
       brand="deepseek"
-      icon={<KeyRound size={13} />}
       product="DeepSeek"
       tag={quota?.ok && quota.isAvailable === false ? <span className="aq-tag aq-tag-expired">{t("dsUnavailable")}</span> : null}
       at={replacing ? null : quota?.at}
@@ -2453,7 +2467,6 @@ function CodexCard({
   return (
     <QuotaCardShell
       brand="codex"
-      icon={<Terminal size={13} />}
       product="Codex"
       tag={quota?.limitReached ? <span className="aq-tag aq-tag-expired">{t("codexLimitReached")}</span> : null}
       at={quota?.at}

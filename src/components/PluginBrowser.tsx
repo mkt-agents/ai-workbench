@@ -13,8 +13,9 @@ import {
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
   Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown, Code,
   Copy, FileText, Zap, ClipboardCopy, Loader2,
-  ArrowDownAZ, Clock, ToggleLeft,
+  ArrowDownAZ, Clock, ToggleLeft, ToggleRight, MoreHorizontal, MousePointerClick,
 } from "lucide-react";
+import DropdownMenu from "./DropdownMenu";
 
 const VIEW_MODE_KEY = "ai-workbench.webPlugins.viewMode";
 const US_FORM_DRAFT_KEY = "ai-workbench.userscripts.formDraft";
@@ -686,6 +687,22 @@ function PluginBrowser() {
 
   const handleAddressKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && address.trim()) openPlugin(address);
+    else if (e.key === "Escape" && address) setAddress("");
+  };
+
+  const handleFilterKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && filter) {
+      e.stopPropagation();
+      setFilter("");
+    }
+  };
+
+  const handleItemKeyDown = (e: React.KeyboardEvent, p: WebPlugin, parsed: URL | null) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleItemClick(p, parsed);
+    }
   };
 
   const handleFormKeyDown = (e: React.KeyboardEvent) => {
@@ -770,6 +787,68 @@ function PluginBrowser() {
     },
     [userScripts, toggleUserScript, showMsg, t]
   );
+
+  const handleUsExport = async () => {
+    const data = {
+      version: 2,
+      userscripts: userScripts.map((s) => ({
+        name: s.name,
+        description: s.description,
+        matchPatterns: s.matchPatterns,
+        code: s.code,
+        enabled: s.enabled,
+      })),
+    };
+    try {
+      const path = await useGlobalStore.getState().invokeSaveTextFile(
+        JSON.stringify(data, null, 2),
+        "userscripts-backup.json",
+        t("usExport")
+      );
+      showMsg("success", t("exportedTo", { path }));
+    } catch (e) {
+      const msg = String(e);
+      if (!msg.includes("取消")) showMsg("error", msg);
+    }
+  };
+
+  const handleUsImport = async () => {
+    try {
+      const text = await useGlobalStore.getState().invokePickTextFile(t("usImport"));
+      const data = JSON.parse(text);
+      const scripts = data.userscripts || data.scripts || data;
+      if (!Array.isArray(scripts)) {
+        showMsg("error", t("importInvalid"));
+        return;
+      }
+      let imported = 0;
+      for (const s of scripts) {
+        if (!s.name || !s.code) continue;
+        let patterns: string[];
+        if (Array.isArray(s.matchPatterns) && s.matchPatterns.length > 0) {
+          patterns = s.matchPatterns;
+        } else if (s.matchPattern) {
+          patterns = [s.matchPattern];
+        } else {
+          patterns = ["<all_urls>"];
+        }
+        await addUserScript({
+          id: newId("import"),
+          name: s.name,
+          description: s.description || "",
+          matchPatterns: patterns,
+          code: s.code,
+          enabled: s.enabled !== false,
+        });
+        imported++;
+      }
+      showMsg("success", t("imported", { count: imported }));
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("取消")) return;
+      showMsg("error", t("importFailed"));
+    }
+  };
 
   const importScriptFromUrl = useCallback(async (url: string) => {
     setUsImporting(true);
@@ -1134,6 +1213,10 @@ function PluginBrowser() {
         onDrop={(e) => handleDrop(e, p.id)}
         onDragEnd={handleDragEnd}
         onClick={() => handleItemClick(p, parsed)}
+        onKeyDown={(e) => handleItemKeyDown(e, p, parsed)}
+        role="button"
+        tabIndex={0}
+        title={parsed?.href || p.url}
       >
         {canDrag && (
           <div
@@ -1166,7 +1249,7 @@ function PluginBrowser() {
         </div>
         <div className="plugin-item-content">
           <div className="plugin-item-name">
-            {p.name}
+            <span className="plugin-item-title">{p.name}</span>
             {isActive && <span className="plugin-item-badge">{t("active")}</span>}
             {p.hotkey && (
               <span className="plugin-item-hotkey" title={t("hotkeyLabel")}>
@@ -1178,6 +1261,7 @@ function PluginBrowser() {
             <span className="plugin-item-url">{host}</span>
             {p.openCount > 0 && (
               <span className="plugin-item-count" title={t("openCountLabel")}>
+                <MousePointerClick size={10} />
                 {p.openCount}
               </span>
             )}
@@ -1242,6 +1326,10 @@ function PluginBrowser() {
         onDrop={(e) => handleDrop(e, p.id)}
         onDragEnd={handleDragEnd}
         onClick={() => handleItemClick(p, parsed)}
+        onKeyDown={(e) => handleItemKeyDown(e, p, parsed)}
+        role="button"
+        tabIndex={0}
+        title={parsed?.href || p.url}
       >
         <div className="plugin-card-header">
           <div className="plugin-card-icon">
@@ -1313,7 +1401,9 @@ function PluginBrowser() {
 
   const renderGroupHeader = (group: string, items: WebPlugin[]) => {
     const isUngrouped = group === "";
-    const isExpanded = isUngrouped || expandedGroups.has(group) || selectedGroup !== "all";
+    // Searching must never hide a hit behind a collapsed group.
+    const isExpanded =
+      isUngrouped || expandedGroups.has(group) || selectedGroup !== "all" || !!filter.trim();
     return (
       <div
         key={isUngrouped ? "group-ungrouped" : `group-${group}`}
@@ -1370,6 +1460,7 @@ function PluginBrowser() {
   return (
     <div className="plugin-browser">
       <div className="plugin-tabs">
+        <div className="plugin-tab-group" role="tablist">
         <button
           type="button"
           className={`plugin-tab ${activeTab === "plugins" ? "active" : ""}`}
@@ -1387,12 +1478,8 @@ function PluginBrowser() {
           <span>{t("tabUserscripts")}</span>
           <span className="plugin-tab-count">{userScripts.length}</span>
         </button>
-      </div>
-
-      {activeTab === "plugins" && (
-      <div className="plugin-shell">
-        <div className="plugin-toolbar">
-          <div className="plugin-toolbar-label">{t("openUrlLabel")}</div>
+        </div>
+        {activeTab === "plugins" && (
           <div className="plugin-toolbar-url">
             <div className="plugin-url-input-wrapper plugin-url-grow plugin-address-input">
               <Link2 size={13} className="plugin-url-icon" />
@@ -1445,8 +1532,11 @@ function PluginBrowser() {
               ) : null}
             </div>
           </div>
-        </div>
+        )}
+      </div>
 
+      {activeTab === "plugins" && (
+      <div className="plugin-shell">
         <div className="plugin-main">
           <div className="plugin-header">
             <div className="plugin-header-title">
@@ -1515,9 +1605,29 @@ function PluginBrowser() {
                   className="plugin-url-input"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
+                  onKeyDown={handleFilterKeyDown}
                   placeholder={t("searchPlaceholder")}
                   aria-label={t("searchPlaceholder")}
                 />
+                {filter && (
+                  <>
+                    <span className="plugin-filter-hits">
+                      {filteredPlugins.length}/{webPlugins.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="plugin-filter-clear"
+                      onClick={() => {
+                        setFilter("");
+                        filterInputRef.current?.focus();
+                      }}
+                      title={t("clearSearch")}
+                      aria-label={t("clearSearch")}
+                    >
+                      <X size={12} />
+                    </button>
+                  </>
+                )}
               </div>
               <div className="plugin-sort-toggle" role="group" aria-label={t("sortManual")}>
                 <button
@@ -1633,6 +1743,16 @@ function PluginBrowser() {
             ) : filteredPlugins.length === 0 ? (
               <div className="plugin-empty plugin-empty-compact">
                 <p className="plugin-empty-title">{t("noFilterResults")}</p>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={() => {
+                    setFilter("");
+                    setSelectedGroup("all");
+                  }}
+                >
+                  {t("clearFilters")}
+                </button>
               </div>
             ) : selectedGroup !== "all" ? (
               viewMode === "list" ? (
@@ -1668,106 +1788,6 @@ function PluginBrowser() {
               <span className="plugin-count">{userScripts.length}</span>
             </div>
             <div className="plugin-header-actions">
-              {userScripts.length > 0 && (
-                <>
-                  <button
-                    className="btn btn-secondary btn-small"
-                    onClick={() => bulkToggleScripts(true)}
-                    title={t("usEnableAll")}
-                    disabled={userScriptStats.enabled === userScriptStats.total}
-                  >
-                    {t("usEnableAll")}
-                  </button>
-                  <button
-                    className="btn btn-secondary btn-small"
-                    onClick={() => bulkToggleScripts(false)}
-                    title={t("usDisableAll")}
-                    disabled={userScriptStats.enabled === 0}
-                  >
-                    {t("usDisableAll")}
-                  </button>
-                </>
-              )}
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={async () => {
-                  const data = {
-                    version: 2,
-                    userscripts: userScripts.map((s) => ({
-                      name: s.name,
-                      description: s.description,
-                      matchPatterns: s.matchPatterns,
-                      code: s.code,
-                      enabled: s.enabled,
-                    })),
-                  };
-                  try {
-                    const path = await useGlobalStore.getState().invokeSaveTextFile(
-                      JSON.stringify(data, null, 2),
-                      "userscripts-backup.json",
-                      t("usExport")
-                    );
-                    showMsg("success", t("exportedTo", { path }));
-                  } catch (e) {
-                    const msg = String(e);
-                    if (!msg.includes("取消")) showMsg("error", msg);
-                  }
-                }}
-                title={t("usExport")}
-                disabled={userScripts.length === 0}
-              >
-                <Download size={12} /> {t("export")}
-              </button>
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={async () => {
-                  try {
-                    const text = await useGlobalStore.getState().invokePickTextFile(t("usImport"));
-                    const data = JSON.parse(text);
-                    const scripts = data.userscripts || data.scripts || data;
-                    if (!Array.isArray(scripts)) {
-                      showMsg("error", t("importInvalid"));
-                      return;
-                    }
-                    let imported = 0;
-                    for (const s of scripts) {
-                      if (!s.name || !s.code) continue;
-                      let patterns: string[];
-                      if (Array.isArray(s.matchPatterns) && s.matchPatterns.length > 0) {
-                        patterns = s.matchPatterns;
-                      } else if (s.matchPattern) {
-                        patterns = [s.matchPattern];
-                      } else {
-                        patterns = ["<all_urls>"];
-                      }
-                      await addUserScript({
-                        id: newId("import"),
-                        name: s.name,
-                        description: s.description || "",
-                        matchPatterns: patterns,
-                        code: s.code,
-                        enabled: s.enabled !== false,
-                      });
-                      imported++;
-                    }
-                    showMsg("success", t("imported", { count: imported }));
-                  } catch (e) {
-                    const msg = String(e);
-                    if (msg.includes("取消")) return;
-                    showMsg("error", t("importFailed"));
-                  }
-                }}
-                title={t("usImport")}
-              >
-                <Upload size={12} /> {t("import")}
-              </button>
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={() => setUsImportUrlOpen(true)}
-                title={t("usImportUrl")}
-              >
-                <Link2 size={12} /> {t("usImportUrl")}
-              </button>
               <button
                 className="btn btn-secondary btn-small"
                 onClick={() => setUsShowPresets(!usShowPresets)}
@@ -1775,6 +1795,35 @@ function PluginBrowser() {
               >
                 <FileText size={12} /> {t("usPresets")}
               </button>
+              <DropdownMenu
+                label={t("more")}
+                triggerClassName="btn btn-secondary btn-small plugin-more-btn"
+                items={[
+                  { label: t("import"), icon: <Upload size={13} />, onClick: () => void handleUsImport() },
+                  { label: t("usImportUrl"), icon: <Link2 size={13} />, onClick: () => setUsImportUrlOpen(true) },
+                  {
+                    label: t("export"),
+                    icon: <Download size={13} />,
+                    disabled: userScripts.length === 0,
+                    onClick: () => void handleUsExport(),
+                  },
+                  { divider: true },
+                  {
+                    label: t("usEnableAll"),
+                    icon: <ToggleRight size={13} />,
+                    disabled: userScripts.length === 0 || userScriptStats.enabled === userScriptStats.total,
+                    onClick: () => void bulkToggleScripts(true),
+                  },
+                  {
+                    label: t("usDisableAll"),
+                    icon: <ToggleLeft size={13} />,
+                    disabled: userScriptStats.enabled === 0,
+                    onClick: () => void bulkToggleScripts(false),
+                  },
+                ]}
+              >
+                <MoreHorizontal size={14} />
+              </DropdownMenu>
               <button
                 className="btn btn-primary btn-small"
                 onClick={openUsFormAdd}
@@ -1784,7 +1833,6 @@ function PluginBrowser() {
               </button>
             </div>
           </div>
-
           {usShowPresets && (
             <div className="us-presets-bar">
               <div className="us-presets-header">
@@ -1834,9 +1882,23 @@ function PluginBrowser() {
                   className="plugin-url-input"
                   value={usSearch}
                   onChange={(e) => setUsSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && usSearch) setUsSearch("");
+                  }}
                   placeholder={t("usSearchPlaceholder")}
                   aria-label={t("usSearchPlaceholder")}
                 />
+                {usSearch && (
+                  <button
+                    type="button"
+                    className="plugin-filter-clear"
+                    onClick={() => setUsSearch("")}
+                    title={t("clearSearch")}
+                    aria-label={t("clearSearch")}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
               </div>
               <div className="us-toolbar">
                 <div className="us-sort-group">

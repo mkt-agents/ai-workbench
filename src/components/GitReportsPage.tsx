@@ -122,7 +122,7 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
                           onClick={() => onTargetChange({ kind: "repo", path: p.path })}
                         >
                           <GitBranch size={11} />
-                          <span className="tr-tree-name">{p.name}</span>
+                          <span className="tr-tree-name">{p.name || p.path.split(/[\\/]/).filter(Boolean).pop()}</span>
                           {isGit === true ? (
                             <span
                               className={`tr-tree-badge${(summaries[p.path]?.dirtyCount ?? 0) > 0 ? "" : " is-empty"}`}

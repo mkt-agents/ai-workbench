@@ -5,15 +5,19 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   ClipboardList,
+  Copy,
   FolderOpen,
   FolderPlus,
   GitBranch,
-  GitCommitHorizontal,
+  Link2,
   Loader2,
+  MoreHorizontal,
+  Pin,
   RefreshCw,
   Search,
-  Star,
   Trash2,
   User,
   Download,
@@ -37,7 +41,19 @@ import { readStoredArray, writeStoredArray } from "../core/localState";
 import { pathKey, projectNameFromPath } from "../core/pathUtils";
 import { buildRepoGroups, REPOS_COLLAPSED_KEY, type RepoGroup } from "../core/repoGroups";
 import { resolveRepoAccount } from "../core/gitIdentity";
+import {
+  countByFilter,
+  findPreset,
+  identityMatches,
+  matchesFilter,
+  REPO_FILTERS,
+  repoFlags,
+  sortProjects,
+  summarizeGroup,
+  type RepoFilter,
+} from "../core/repoStatus";
 import { useConfirm } from "./ConfirmModal";
+import DropdownMenu from "./DropdownMenu";
 import AccountManagerModal from "./AccountManagerModal";
 import BatchIdentityModal from "./BatchIdentityModal";
 import RepoBindingModal from "./RepoBindingModal";
@@ -52,15 +68,15 @@ type Props = {
 };
 
 const REFRESH_TTL_MS = 30_000;
+const REPO_FILTER_KEY = "workbench-git-repo-filter";
 
-function identityMatches(
-  actual: { name: string; email: string },
-  preset: { userName: string; email: string }
-): boolean {
-  return (
-    actual.name.trim().toLowerCase() === preset.userName.trim().toLowerCase() &&
-    actual.email.trim().toLowerCase() === preset.email.trim().toLowerCase()
-  );
+function readStoredFilter(): RepoFilter {
+  try {
+    const v = localStorage.getItem(REPO_FILTER_KEY);
+    return REPO_FILTERS.includes(v as RepoFilter) ? (v as RepoFilter) : "all";
+  } catch {
+    return "all";
+  }
 }
 
 function GroupSelectCheckbox({
@@ -150,6 +166,9 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const [showBatchBind, setShowBatchBind] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+  const [filter, setFilter] = useState<RepoFilter>(readStoredFilter);
+  const [lastRefreshAt, setLastRefreshAt] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
 
   const lastRefreshAtRef = useRef(0);
   const hasLoadedRef = useRef(false);
@@ -229,6 +248,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
         if (force) invalidateRepos(projects.map((p) => p.path));
         await refreshPaths(projects);
         lastRefreshAtRef.current = Date.now();
+        setLastRefreshAt(lastRefreshAtRef.current);
         hasLoadedRef.current = true;
 
         const applied = await autoApplyHostIdentities();
@@ -253,10 +273,62 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     writeStoredArray(REPOS_COLLAPSED_KEY, [...collapsed]);
   }, [collapsed]);
 
-  const groups: RepoGroup[] = useMemo(
-    () => buildRepoGroups(gitWorkspaces, recentProjects, repoQuery),
-    [gitWorkspaces, recentProjects, repoQuery]
+  useEffect(() => {
+    try {
+      localStorage.setItem(REPO_FILTER_KEY, filter);
+    } catch {
+      /* storage unavailable: the filter just won't persist */
+    }
+  }, [filter]);
+
+  // Keeps the "refreshed N min ago" label moving while the page is visible.
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, [active, lastRefreshAt]);
+
+  const filterCounts = useMemo(
+    () => countByFilter(recentProjects, summaries, repoConfigs),
+    [recentProjects, summaries, repoConfigs]
   );
+
+  const groups: RepoGroup[] = useMemo(() => {
+    const searched = buildRepoGroups(gitWorkspaces, recentProjects, repoQuery);
+    const narrowing = filter !== "all";
+    return searched
+      .map((g) => ({
+        ...g,
+        projects: sortProjects(
+          narrowing
+            ? g.projects.filter((p) =>
+                matchesFilter(repoFlags(summaries[p.path], findPreset(p.path, repoConfigs)), filter)
+              )
+            : g.projects,
+          summaries,
+          repoConfigs,
+          currentGitRepo
+        ),
+      }))
+      .filter((g) => !narrowing || g.projects.length > 0);
+  }, [gitWorkspaces, recentProjects, repoQuery, filter, summaries, repoConfigs, currentGitRepo]);
+
+  const narrowed = repoQuery.trim() !== "" || filter !== "all";
+  const allCollapsed = groups.length > 0 && groups.every((g) => collapsed.has(g.key));
+  const toggleAllCollapsed = () =>
+    setCollapsed(allCollapsed ? new Set() : new Set(groups.map((g) => g.key)));
+
+  const clearNarrowing = () => {
+    setRepoQuery("");
+    setFilter("all");
+  };
+
+  const refreshedLabel = (() => {
+    if (!lastRefreshAt) return null;
+    const mins = Math.floor((now - lastRefreshAt) / 60_000);
+    return mins < 1 ? t("repos.refreshedJustNow") : t("repos.refreshedAgo", { count: mins });
+  })();
 
   const toggleCollapsed = (key: string) => {
     setCollapsed((prev) => {
@@ -511,6 +583,21 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     showMsg("success", t("workbench.selected"));
   };
 
+  const handleGoCommit = (path: string) => {
+    if (!onOpenCommit) return;
+    if (!currentGitRepo || pathKey(currentGitRepo) !== pathKey(path)) setCurrentGitRepo(path);
+    onOpenCommit();
+  };
+
+  const handleCopyPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      showMsg("success", t("repos.pathCopied"));
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
   const handleOpenFolder = async (path: string) => {
     try {
       await invokeOpenRuntimeFolder(path);
@@ -599,7 +686,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     const s = summaries[p.path];
     const isCurrent = !!currentGitRepo && pathKey(currentGitRepo) === pathKey(p.path);
     const actual = identities[p.path];
-    const preset = repoConfigs.find((c) => pathKey(c.path) === pathKey(p.path));
+    const preset = findPreset(p.path, repoConfigs);
     const mismatch = !!preset && !!actual && s?.isGit && !identityMatches(actual, preset);
     const isChecked = selected.has(p.path);
 
@@ -618,18 +705,19 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             <div className="repos-card-title">
               <span className="runtime-ver">{p.name || projectNameFromPath(p.path)}</span>
               {isCurrent && <span className="runtime-badge active">{t("workbench.current")}</span>}
-              {s?.isGit && s.branch && (
-                <span className="commit-branch-badge" title={s.branch}>
-                  <GitBranch size={12} />
-                  <span className="commit-branch-text">{s.branch}</span>
-                </span>
+              {s && s.isGit && s.dirtyCount === 0 && (
+                <span className="repos-status-pill">{t("workbench.clean")}</span>
               )}
-              {s && s.isGit && (
-                <span className="repos-status-pill">
-                  {s.dirtyCount === 0
-                    ? t("workbench.clean")
-                    : t("workbench.dirty", { count: s.dirtyCount })}
-                </span>
+              {s && s.isGit && s.dirtyCount > 0 && (
+                <button
+                  type="button"
+                  className="repos-status-pill is-warn is-action"
+                  title={t("repos.goCommitHint")}
+                  disabled={!onOpenCommit}
+                  onClick={() => handleGoCommit(p.path)}
+                >
+                  {t("workbench.dirty", { count: s.dirtyCount })}
+                </button>
               )}
               {s && s.isGit && (s.ahead > 0 || s.behind > 0) && (
                 <span className="commit-sync-badge">
@@ -642,6 +730,12 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             </div>
             {s?.isGit && (
               <div className="repos-identity-row">
+                {s.branch && (
+                  <span className="commit-branch-badge" title={s.branch}>
+                    <GitBranch size={11} />
+                    <span className="commit-branch-text">{s.branch}</span>
+                  </span>
+                )}
                 <div className="repos-identity-info">
                   <User size={12} />
                   {actual && (actual.name || actual.email) ? (
@@ -661,9 +755,9 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                       type="button"
                       className="repos-identity-link"
                       onClick={() => setBindingPath(p.path)}
-                      title={t("repos.editBinding")}
+                      title={`${t("repos.bound", { name: preset.userName })} · ${t("repos.editBinding")}`}
                     >
-                      {t("repos.bound", { name: preset.userName })}
+                      {t("repos.boundShort")}
                     </button>
                     <button
                       type="button"
@@ -749,22 +843,12 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
               type="button"
               className="btn commit-icon-btn commit-icon-btn-primary"
               disabled={isCurrent || (s ? !s.isGit : false)}
-              title={t("workbench.use")}
+              title={isCurrent ? t("workbench.current") : t("workbench.use")}
+              aria-label={t("workbench.use")}
               onClick={() => handleSelect(p.path)}
             >
-              <Star size={14} />
+              <Pin size={14} />
             </button>
-            {isCurrent && onOpenCommit && (
-              <button
-                type="button"
-                className="btn commit-icon-btn"
-                title={t("workbench.goCommit")}
-                aria-label={t("workbench.goCommit")}
-                onClick={onOpenCommit}
-              >
-                <GitCommitHorizontal size={14} />
-              </button>
-            )}
             {s?.isGit && (
               <button
                 type="button"
@@ -776,14 +860,35 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                 <ClipboardList size={14} />
               </button>
             )}
-            <button
-              type="button"
-              className="btn commit-icon-btn"
-              title={t("workbench.remove")}
-              onClick={() => handleRemove(p.id, p.path)}
+            <DropdownMenu
+              label={t("repos.more")}
+              triggerClassName="btn commit-icon-btn"
+              items={[
+                {
+                  label: t("repos.copyPath"),
+                  icon: <Copy size={13} />,
+                  onClick: () => void handleCopyPath(p.path),
+                },
+                ...(s?.isGit
+                  ? [
+                      {
+                        label: preset ? t("repos.editBinding") : t("repos.bind"),
+                        icon: <Link2 size={13} />,
+                        onClick: () => setBindingPath(p.path),
+                      },
+                    ]
+                  : []),
+                { divider: true as const },
+                {
+                  label: t("workbench.remove"),
+                  icon: <Trash2 size={13} />,
+                  danger: true,
+                  onClick: () => void handleRemove(p.id, p.path),
+                },
+              ]}
             >
-              <Trash2 size={14} />
-            </button>
+              <MoreHorizontal size={14} />
+            </DropdownMenu>
           </div>
         </div>
       </div>
@@ -807,7 +912,14 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                 <span className="runtime-muted">{t("workbench.noCurrent")}</span>
               )}
             </div>
-            <p className="repos-toolbar-subtitle">{t("repos.subtitle")}</p>
+            <p className="repos-toolbar-subtitle">
+              {t("repos.subtitle")}
+              {refreshedLabel && (
+                <span className="repos-refreshed" title={new Date(lastRefreshAt).toLocaleString()}>
+                  · {refreshedLabel}
+                </span>
+              )}
+            </p>
           </div>
           <div className="repos-toolbar-actions">
             <div className="repos-search">
@@ -855,6 +967,35 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             </button>
           </div>
         </div>
+        {recentProjects.length > 0 && (
+          <div className="repos-filter-row">
+            <div className="repos-filter-seg" role="tablist" aria-label={t("repos.filterLabel")}>
+              {REPO_FILTERS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === f}
+                  className={`repos-filter-btn${filter === f ? " is-active" : ""}`}
+                  onClick={() => setFilter(f)}
+                >
+                  {t(`repos.filter.${f}`)}
+                  <span className="repos-filter-count">{filterCounts[f]}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn commit-icon-btn repos-collapse-all"
+              onClick={toggleAllCollapsed}
+              disabled={narrowed || groups.length === 0}
+              title={allCollapsed ? t("repos.expandAll") : t("repos.collapseAll")}
+              aria-label={allCollapsed ? t("repos.expandAll") : t("repos.collapseAll")}
+            >
+              {allCollapsed ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+            </button>
+          </div>
+        )}
       </div>
 
       {selected.size > 0 && (
@@ -945,22 +1086,24 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
           <div>{t("workbench.empty")}</div>
           <div className="runtime-muted">{t("workbench.emptyHint")}</div>
         </div>
-      ) : groups.every((g) => g.projects.length === 0) ? (
+      ) : narrowed && groups.every((g) => g.projects.length === 0) ? (
         <div className="runtime-empty">
           <div>{t("repos.noMatch")}</div>
           <button
             type="button"
             className="btn btn-secondary btn-small"
             style={{ marginTop: 10 }}
-            onClick={() => setRepoQuery("")}
+            onClick={clearNarrowing}
           >
-            {t("repos.clearSearch")}
+            {filter !== "all" ? t("repos.clearFilter") : t("repos.clearSearch")}
           </button>
         </div>
       ) : (
         <div className="runtime-list repos-list">
           {groups.map((g) => {
-            const isCollapsed = collapsed.has(g.key);
+            // Searching / filtering shows every hit; the saved collapse state is left untouched.
+            const isCollapsed = collapsed.has(g.key) && !narrowed;
+            const sum = summarizeGroup(g.projects, summaries, repoConfigs);
             const title = g.workspace ? g.workspace.name : t("workspace.other");
             const Chevron = isCollapsed ? ChevronRight : ChevronDown;
             const selectedInGroup = g.projects.filter((p) => selected.has(p.path)).length;
@@ -997,6 +1140,30 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                     <span className="repos-group-title">{title}</span>
                     <span className="runtime-muted">({g.projects.length})</span>
                   </button>
+                  {(sum.dirty > 0 || sum.behind > 0 || sum.ahead > 0 || sum.identity > 0) && (
+                    <span className="repos-group-summary">
+                      {sum.dirty > 0 && (
+                        <span className="repos-status-pill is-warn" title={t("repos.sumDirtyTitle")}>
+                          {t("repos.sumDirty", { count: sum.dirty })}
+                        </span>
+                      )}
+                      {sum.behind > 0 && (
+                        <span className="repos-status-pill" title={t("repos.sumBehindTitle")}>
+                          ↓{sum.behind}
+                        </span>
+                      )}
+                      {sum.ahead > 0 && (
+                        <span className="repos-status-pill" title={t("repos.sumAheadTitle")}>
+                          ↑{sum.ahead}
+                        </span>
+                      )}
+                      {sum.identity > 0 && (
+                        <span className="repos-status-pill is-danger" title={t("repos.sumIdentityTitle")}>
+                          {t("repos.sumIdentity", { count: sum.identity })}
+                        </span>
+                      )}
+                    </span>
+                  )}
                   {gitRepoPaths.length > 0 && (
                     <button
                       type="button"

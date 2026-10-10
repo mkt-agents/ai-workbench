@@ -1,15 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Copy, Pencil, Check, XCircle, Sparkles, X, Download, Upload, Loader2, FileText, Search, Zap, ChevronDown } from "lucide-react";
+import { Plus, Trash2, Copy, Pencil, Check, XCircle, Sparkles, X, Download, Upload, Loader2, FileText, Search, Zap, ChevronDown, MoreHorizontal, Terminal, ClipboardCopy, CopyPlus } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
 import type { Snippet, SnippetKind } from "../core/types";
 import ModalTitleRow from "./ModalTitleRow";
 import { useConfirm } from "./ConfirmModal";
+import DropdownMenu from "./DropdownMenu";
 import { PROMPT_SCENARIOS } from "../lib/promptOptimize";
 import { fillParams, parseParamNames, splitTags } from "../lib/snippets";
 
 const UNDO_MS = 8000;
+
+const PARAM_SPLIT = /(\{\{\w+\}\})/g;
+const CJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/g;
+
+/** Mostly-ASCII content (commands, config, code) reads better in mono; CJK prose in mono looks cramped. */
+function isCodeLike(content: string) {
+  const sample = content.slice(0, 400);
+  if (!sample.trim()) return false;
+  return (sample.match(CJK)?.length ?? 0) / sample.length < 0.05;
+}
+
+/** Preview text with `{{param}}` placeholders highlighted (same pattern as fillParams). */
+function renderPreview(content: string) {
+  const compact = content.trim().replace(/\n[ \t]*(?:\n[ \t]*)+/g, "\n");
+  return compact.split(PARAM_SPLIT).map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} className="snippet-param-hl">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
 
 type SortMode = "useCount" | "updated";
 type KindFilter = "all" | "text" | "prompt";
@@ -90,10 +115,10 @@ export default function SnippetsManager() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [snippets]);
 
-  const filtered = useMemo(() => {
+  /** Search + tag match, before the kind filter — the kind chips count from this. */
+  const matched = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list = snippets.filter((s) => {
-      if (kindFilter !== "all" && (s.kind ?? "text") !== kindFilter) return false;
+    return snippets.filter((s) => {
       if (tagFilter) {
         const tags = splitTags(s.tags).map((x) => x.toLowerCase());
         if (!tags.includes(tagFilter.toLowerCase())) return false;
@@ -105,6 +130,16 @@ export default function SnippetsManager() {
         s.content.toLowerCase().includes(q)
       );
     });
+  }, [snippets, query, tagFilter]);
+
+  const kindCounts = useMemo(() => {
+    let prompt = 0;
+    for (const s of matched) if (s.kind === "prompt") prompt += 1;
+    return { all: matched.length, text: matched.length - prompt, prompt };
+  }, [matched]);
+
+  const filtered = useMemo(() => {
+    let list = matched.filter((s) => kindFilter === "all" || (s.kind ?? "text") === kindFilter);
     list = [...list].sort((a, b) => {
       if (sortMode === "useCount") {
         return b.useCount - a.useCount || b.updatedAt.localeCompare(a.updatedAt);
@@ -112,7 +147,7 @@ export default function SnippetsManager() {
       return b.updatedAt.localeCompare(a.updatedAt);
     });
     return list;
-  }, [snippets, query, tagFilter, kindFilter, sortMode]);
+  }, [matched, kindFilter, sortMode]);
 
   const openCreate = () => {
     setEditing({ name: "", content: "", tags: "", params: "" });
@@ -372,65 +407,61 @@ export default function SnippetsManager() {
             </button>
           )}
         </div>
-        <div className="snippets-select-wrap">
-          <select
-            className="input-field snippets-sort"
-            value={kindFilter}
-            onChange={(e) => setKindFilter(e.target.value as KindFilter)}
-            aria-label={t("kindLabel")}
+        <div className="snippets-toolbar-right">
+          <div className="snippets-kind-seg" role="tablist" aria-label={t("kindLabel")}>
+            {(["all", "text", "prompt"] as KindFilter[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={kindFilter === k}
+                className={`snippets-kind-btn${kindFilter === k ? " is-active" : ""}`}
+                onClick={() => setKindFilter(k)}
+              >
+                {k === "all" ? t("tagAll") : k === "text" ? t("kindText") : t("kindPrompt")}
+                <span className="snippets-kind-count">{kindCounts[k]}</span>
+              </button>
+            ))}
+          </div>
+          <div className="snippets-select-wrap">
+            <select
+              className="input-field snippets-sort"
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as SortMode)}
+              aria-label={t("sortLabel")}
+            >
+              <option value="useCount">{t("sortUseCount")}</option>
+              <option value="updated">{t("sortUpdated")}</option>
+            </select>
+            <ChevronDown size={12} />
+          </div>
+          <span className="snippets-count" title={t("countLabel", { shown: filtered.length, total: snippets.length })}>
+            {filtered.length}/{snippets.length}
+          </span>
+          <DropdownMenu
+            label={t("more")}
+            triggerClassName="btn btn-secondary btn-icon"
+            items={[
+              {
+                label: t("import"),
+                icon: <Upload size={14} />,
+                disabled: transferBusy !== null,
+                onClick: () => void handleImport(),
+              },
+              {
+                label: t("export"),
+                icon: <Download size={14} />,
+                disabled: transferBusy !== null || snippets.length === 0,
+                onClick: () => void handleExport(),
+              },
+            ]}
           >
-            <option value="all">{t("kindAll")}</option>
-            <option value="text">{t("kindText")}</option>
-            <option value="prompt">{t("kindPrompt")}</option>
-          </select>
-          <ChevronDown size={12} />
+            {transferBusy ? <Loader2 size={14} className="spin" /> : <MoreHorizontal size={14} />}
+          </DropdownMenu>
+          <button type="button" className="btn btn-primary" onClick={openCreate}>
+            <Plus size={14} /> {t("add")}
+          </button>
         </div>
-        <div className="snippets-select-wrap">
-          <select
-            className="input-field snippets-sort"
-            value={sortMode}
-            onChange={(e) => setSortMode(e.target.value as SortMode)}
-            aria-label={t("sortLabel")}
-          >
-            <option value="useCount">{t("sortUseCount")}</option>
-            <option value="updated">{t("sortUpdated")}</option>
-          </select>
-          <ChevronDown size={12} />
-        </div>
-        <span className="snippets-count" title={t("countLabel", { shown: filtered.length, total: snippets.length })}>
-          {filtered.length}/{snippets.length}
-        </span>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() => void handleImport()}
-          disabled={transferBusy !== null}
-          title={t("import")}
-          aria-label={t("import")}
-        >
-          {transferBusy === "import" ? (
-            <Loader2 size={14} className="spin" />
-          ) : (
-            <Upload size={14} />
-          )}
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() => void handleExport()}
-          disabled={transferBusy !== null || snippets.length === 0}
-          title={t("export")}
-          aria-label={t("export")}
-        >
-          {transferBusy === "export" ? (
-            <Loader2 size={14} className="spin" />
-          ) : (
-            <Download size={14} />
-          )}
-        </button>
-        <button type="button" className="btn btn-primary" onClick={openCreate}>
-          <Plus size={14} /> {t("add")}
-        </button>
       </div>
 
       {allTags.length > 0 && (
@@ -459,70 +490,105 @@ export default function SnippetsManager() {
         {filtered.map((s) => {
           const tags = splitTags(s.tags);
           const paramNames = parseParamNames(s.params, s.content);
+          const codeLike = isCodeLike(s.content);
           return (
-            <div key={s.id} className="snippet-card">
+            <div
+              key={s.id}
+              className="snippet-card"
+              tabIndex={0}
+              title={t("cardHint")}
+              onDoubleClick={(e) => {
+                if ((e.target as HTMLElement).closest("button")) return;
+                void handleUse(s);
+              }}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter") void handleUse(s);
+                else if (e.key === "F2") setEditing({ ...s });
+              }}
+            >
               <div className="snippet-card-head">
-                <strong className="snippet-name" title={s.name}>{s.name}</strong>
-                {s.kind === "prompt" && (
-                  <span className="snippet-badge" title={t("kindPromptHint")}>
-                    {t("kindPrompt")}
-                    {s.scenario ? ` · ${ta(`prompts.scenarios.${s.scenario}`)}` : ""}
-                  </span>
-                )}
-                {s.useCount > 0 && (
-                  <span className="snippet-badge" title={t("used", { count: s.useCount })}>
-                    {s.useCount}×
-                  </span>
-                )}
-              </div>
-              {tags.length > 0 && (
-                <div className="snippet-card-tags">
-                  {tags.map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      className="snippet-tag-chip"
-                      onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
-                      title={tagFilter === tag ? t("tagAll") : tag}
+                <span className={`snippet-kind-icon is-${s.kind === "prompt" ? "prompt" : codeLike ? "code" : "text"}`}>
+                  {s.kind === "prompt" ? <Sparkles size={14} /> : codeLike ? <Terminal size={14} /> : <FileText size={14} />}
+                </span>
+                <div className="snippet-head-text">
+                  <div className="snippet-name-row">
+                    <strong className="snippet-name" title={s.name}>{s.name}</strong>
+                    {s.useCount > 0 && (
+                      <span className="snippet-uses" title={t("used", { count: s.useCount })}>
+                        {s.useCount}×
+                      </span>
+                    )}
+                  </div>
+                  <div className="snippet-subline">
+                    <span
+                      className={`snippet-kind-label${s.kind === "prompt" ? " is-prompt" : ""}`}
+                      title={s.kind === "prompt" ? t("kindPromptHint") : undefined}
                     >
-                      {tag}
-                    </button>
-                  ))}
+                      {s.kind === "prompt"
+                        ? s.scenario
+                          ? `${t("kindPrompt")} · ${ta(`prompts.scenarios.${s.scenario}`)}`
+                          : t("kindPrompt")
+                        : t("kindText")}
+                    </span>
+                    {tags.map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={`snippet-tag-link${tagFilter === tag ? " on" : ""}`}
+                        onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
+                        title={tagFilter === tag ? t("tagAll") : tag}
+                      >
+                        #{tag}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              )}
-              {paramNames.length > 0 && (
-                <div className="snippet-card-params" title={t("paramsHint")}>
-                  {paramNames.map((p) => (
-                    <span key={p} className="snippet-param-chip">{`{{${p}}}`}</span>
-                  ))}
-                </div>
-              )}
-              <pre className="snippet-preview">{s.content}</pre>
+              </div>
+              <pre className={`snippet-preview${codeLike ? " is-code" : ""}`}>
+                <span className="snippet-preview-text">{renderPreview(s.content)}</span>
+              </pre>
               <div className="snippet-actions">
-                <button type="button" className="qa-mini-btn primary" onClick={() => void handleUse(s)} title={t("useHint")}>
-                  <Zap size={13} /> {t("use")}
-                </button>
-                <button
-                  type="button"
-                  className="qa-mini-btn"
-                  onClick={() => setEditing({ ...s })}
+                <div
+                  className="snippet-params"
+                  title={paramNames.length > 0 ? t("paramsHint") : undefined}
                 >
-                  <Pencil size={13} /> {t("edit")}
-                </button>
-                <button
-                  type="button"
-                  className="qa-mini-btn"
-                  onClick={() => void handleClone(s)}
-                  title={t("cloneHint")}
-                >
-                  <Copy size={13} /> {t("clone")}
-                </button>
-                <button
-                  type="button"
-                  className="qa-mini-btn danger"
-                  onClick={() => void handleDelete(s)}
-                >
-                  <Trash2 size={13} /> {t("delete")}
+                  {paramNames.map((p) => (
+                    <code key={p} className="snippet-param">{p}</code>
+                  ))}
+                </div>
+                <span className="snippet-actions-tools">
+                  <button
+                    type="button"
+                    className="snippet-icon-btn"
+                    onClick={() => setEditing({ ...s })}
+                    title={t("edit")}
+                    aria-label={t("edit")}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="snippet-icon-btn"
+                    onClick={() => void handleClone(s)}
+                    title={t("cloneHint")}
+                    aria-label={t("clone")}
+                  >
+                    <CopyPlus size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="snippet-icon-btn danger"
+                    onClick={() => void handleDelete(s)}
+                    title={t("delete")}
+                    aria-label={t("delete")}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </span>
+                <button type="button" className="snippet-use-btn" onClick={() => void handleUse(s)} title={t("useHint")}>
+                  {paramNames.length > 0 ? <Zap size={12} /> : <ClipboardCopy size={12} />}
+                  {paramNames.length > 0 ? t("use") : t("copy")}
                 </button>
               </div>
             </div>

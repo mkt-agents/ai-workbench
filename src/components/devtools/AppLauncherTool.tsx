@@ -5,6 +5,7 @@ import {
   Download,
   FolderOpen,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Play,
   Plus,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { useGlobalStore, normalizeAppPath } from "../../core/store";
 import { useConfirm } from "../ConfirmModal";
+import DropdownMenu from "../DropdownMenu";
 import QuickSelect from "../quickAsk/QuickSelect";
 import PortKillerPanel from "./PortKillerPanel";
 import type { InstalledAppInfo, QuickAppLauncher } from "../../core/types";
@@ -175,6 +177,9 @@ interface AppFormData {
 // disable dragging. Persisted to localStorage as a UI preference.
 type SortMode = "custom" | "name" | "nameDesc" | "group" | "running";
 
+/** Group-filter value for apps without a group; real group names can't be empty. */
+const UNGROUPED = "\u0000ungrouped";
+
 function AppLauncherTool() {
   const { t } = useTranslation("devtools");
   const confirm = useConfirm();
@@ -185,6 +190,7 @@ function AppLauncherTool() {
   const invokeLaunchApp = useGlobalStore((s) => s.invokeLaunchApp);
   const invokeKillApp = useGlobalStore((s) => s.invokeKillApp);
   const invokeGetAppVersion = useGlobalStore((s) => s.invokeGetAppVersion);
+  const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
   const invokeScanInstalledApps = useGlobalStore((s) => s.invokeScanInstalledApps);
   const reorderLaunchers = useGlobalStore((s) => s.reorderQuickAppLaunchers);
 
@@ -220,7 +226,7 @@ function AppLauncherTool() {
   const [groupFilter, setGroupFilter] = useState<string>('');
   // Which toolbar popover is open — group filter, sort, and the batch-group
   // picker share one slot so opening one closes the others.
-  const [openPop, setOpenPop] = useState<"" | "group" | "sort" | "batchGroup">("");
+  const [openPop, setOpenPop] = useState<"" | "sort" | "batchGroup">("");
   const [sortBy, setSortBy] = useState<SortMode>(() => {
     const v = typeof localStorage !== "undefined" ? localStorage.getItem("al-sort") : null;
     return v === "name" || v === "nameDesc" || v === "group" || v === "running" ? v : "custom";
@@ -355,7 +361,9 @@ function AppLauncherTool() {
           l.path.toLowerCase().includes(q)
       );
     }
-    if (groupFilter) {
+    if (groupFilter === UNGROUPED) {
+      result = result.filter((l) => !l.group);
+    } else if (groupFilter) {
       result = result.filter((l) => l.group === groupFilter);
     }
     if (sortBy === "custom") return result;
@@ -382,6 +390,23 @@ function AppLauncherTool() {
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b, "zh"));
   }, [groups, launchers]);
+
+  // Chip counts follow the search box but not the group filter itself, so every
+  // chip says how many hits switching to it would show.
+  const groupCounts = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    const hits = q
+      ? launchers.filter((l) => l.name.toLowerCase().includes(q) || l.path.toLowerCase().includes(q))
+      : launchers;
+    const counts = new Map<string, number>();
+    for (const l of hits) {
+      const key = l.group || UNGROUPED;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return { all: hits.length, byGroup: counts };
+  }, [launchers, search]);
+
+  const showCardGroup = !groupFilter && groupCounts.byGroup.size > 1;
 
   // Ensure a group name is in the managed list (used on save / batch / import).
   const ensureGroup = useCallback((name?: string) => {
@@ -653,6 +678,15 @@ function AppLauncherTool() {
     }
   };
 
+  const handleOpenFolder = async (l: QuickAppLauncher) => {
+    const dir = l.path.replace(/[\\/][^\\/]*$/, "");
+    try {
+      await invokeOpenRuntimeFolder(dir || l.path);
+    } catch (e) {
+      setMessage({ type: "error", text: String(e) });
+    }
+  };
+
   // Auto-refresh running status every 5s when enabled.
   useEffect(() => {
     if (!autoRefresh) {
@@ -893,21 +927,48 @@ function AppLauncherTool() {
               </button>
             ))}
           </div>
-          {view === "apps" && (
+          {view === "apps" && launchers.length > 0 && (
             <>
-              <button type="button" className="al-btn al-btn-primary" onClick={openScanDialog} title={t("appLauncher.add")}>
-                <Plus size={14} />
-                <span>{t("appLauncher.add")}</span>
-              </button>
-              <button
-                type="button"
-                className="al-btn"
-                onClick={() => setGroupManagerOpen(true)}
-                title={t("appLauncher.groupManager.title")}
-              >
-                <Tags size={14} />
-                <span>{t("appLauncher.groupManager.title")}</span>
-              </button>
+              <div className="al-search">
+                <Search size={14} className="al-search-icon" />
+                <input
+                  className="al-search-input"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && search) setSearch("");
+                  }}
+                  placeholder={t("appLauncher.searchPlaceholder")}
+                  spellCheck={false}
+                />
+                {search && (
+                  <button
+                    type="button"
+                    className="al-search-clear"
+                    onClick={() => setSearch("")}
+                    title={t("common.clearSearch")}
+                    aria-label={t("common.clearSearch")}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+              <QuickSelect
+                className="al-sort-select"
+                value={sortBy}
+                title={t("appLauncher.sort.title")}
+                options={[
+                  { value: "custom", label: t("appLauncher.sort.custom"), short: t("appLauncher.sort.customShort") },
+                  { value: "name", label: t("appLauncher.sort.name") },
+                  { value: "nameDesc", label: t("appLauncher.sort.nameDesc") },
+                  { value: "group", label: t("appLauncher.sort.group") },
+                  { value: "running", label: t("appLauncher.sort.running") },
+                ]}
+                onChange={(v) => setSortBy(v as SortMode)}
+                alignLeft
+                open={openPop === "sort"}
+                onToggle={() => setOpenPop((v) => (v === "sort" ? "" : "sort"))}
+              />
             </>
           )}
         </div>
@@ -950,47 +1011,6 @@ function AppLauncherTool() {
             </>
           ) : (
             <>
-              {availableGroups.length > 0 && (
-                <QuickSelect
-                  className="al-group-select"
-                  value={groupFilter}
-                  options={[{ value: "", label: t("appLauncher.allGroups") }, ...availableGroups.map((g) => ({ value: g, label: g }))]}
-                  onChange={setGroupFilter}
-                  alignLeft
-                  open={openPop === "group"}
-                  onToggle={() => setOpenPop((v) => (v === "group" ? "" : "group"))}
-                />
-              )}
-              {launchers.length > 0 && (
-                <QuickSelect
-                  className="al-sort-select"
-                  value={sortBy}
-                  title={t("appLauncher.sort.title")}
-                  options={[
-                    { value: "custom", label: t("appLauncher.sort.custom"), short: t("appLauncher.sort.customShort") },
-                    { value: "name", label: t("appLauncher.sort.name") },
-                    { value: "nameDesc", label: t("appLauncher.sort.nameDesc") },
-                    { value: "group", label: t("appLauncher.sort.group") },
-                    { value: "running", label: t("appLauncher.sort.running") },
-                  ]}
-                  onChange={(v) => setSortBy(v as SortMode)}
-                  alignLeft
-                  open={openPop === "sort"}
-                  onToggle={() => setOpenPop((v) => (v === "sort" ? "" : "sort"))}
-                />
-              )}
-              {launchers.length > 0 && (
-                <div className="al-search">
-                  <Search size={14} className="al-search-icon" />
-                  <input
-                    className="al-search-input"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder={t("appLauncher.searchPlaceholder")}
-                    spellCheck={false}
-                  />
-                </div>
-              )}
               {runningCount > 0 && (
                 <span className="al-running-badge">
                   <span className="al-running-dot" />
@@ -998,8 +1018,13 @@ function AppLauncherTool() {
                 </span>
               )}
               <div className="al-icon-group">
-                <div className="al-divider" />
-                <button type="button" className="al-btn al-btn-icon" onClick={() => { void refreshStatus(true); }} title={t("appLauncher.refreshStatus")}>
+                <button
+                  type="button"
+                  className="al-btn al-btn-icon"
+                  onClick={() => { void refreshStatus(true); }}
+                  title={t("appLauncher.refreshStatus")}
+                  aria-label={t("appLauncher.refreshStatus")}
+                >
                   <RefreshCw size={14} />
                 </button>
                 <button
@@ -1007,16 +1032,29 @@ function AppLauncherTool() {
                   className={'al-btn al-btn-icon ' + (autoRefresh ? 'al-btn-active' : '')}
                   onClick={() => setAutoRefresh((v) => !v)}
                   title={t("appLauncher.autoRefresh")}
+                  aria-label={t("appLauncher.autoRefresh")}
+                  aria-pressed={autoRefresh}
                 >
                   <Repeat size={14} className={autoRefresh ? 'spin' : ''} />
                 </button>
-                <button type="button" className="al-btn al-btn-icon" onClick={handleExport} title={t("appLauncher.export")}>
-                  <Upload size={14} />
-                </button>
-                <button type="button" className="al-btn al-btn-icon" onClick={() => fileInputRef.current?.click()} title={t("appLauncher.import")}>
-                  <Download size={14} />
-                </button>
+                <DropdownMenu
+                  label={t("appLauncher.more")}
+                  triggerClassName="al-btn al-btn-icon"
+                  items={[
+                    { label: t("appLauncher.groupManager.title"), icon: <Tags size={14} />, onClick: () => setGroupManagerOpen(true) },
+                    { divider: true },
+                    { label: t("appLauncher.export"), icon: <Upload size={14} />, onClick: handleExport, disabled: launchers.length === 0 },
+                    { label: t("appLauncher.import"), icon: <Download size={14} />, onClick: () => fileInputRef.current?.click() },
+                  ]}
+                >
+                  <MoreHorizontal size={14} />
+                </DropdownMenu>
               </div>
+              <div className="al-divider" />
+              <button type="button" className="al-btn al-btn-primary" onClick={openScanDialog} title={t("appLauncher.add")}>
+                <Plus size={14} />
+                <span>{t("appLauncher.add")}</span>
+              </button>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1039,8 +1077,11 @@ function AppLauncherTool() {
 
       {/* ── Content ── */}
       {view === "ports" ? (
-        <PortKillerPanel />
+        <div className="al-scroll">
+          <PortKillerPanel />
+        </div>
       ) : launchers.length === 0 ? (
+        <div className="al-scroll">
         <div className="al-empty">
           <div className="al-empty-icon-wrap">
             <Rocket size={28} />
@@ -1058,30 +1099,69 @@ function AppLauncherTool() {
             </button>
           </div>
         </div>
-      ) : filteredLaunchers.length === 0 ? (
-        <div className="al-empty al-empty-sm">
-          <Search size={22} className="al-empty-icon" />
-          <span>{t("appLauncher.noMatch")}</span>
         </div>
       ) : (
         <>
           <div className="al-grid-head">
-            <label className="al-select-all">
+            <label className="al-select-all" title={allCardSelected ? t("appLauncher.deselectAll") : t("appLauncher.selectAll")}>
               <input
                 type="checkbox"
                 checked={allCardSelected}
                 onChange={toggleAllCards}
+                disabled={filteredLaunchers.length === 0}
+                aria-label={allCardSelected ? t("appLauncher.deselectAll") : t("appLauncher.selectAll")}
               />
-              <span>{allCardSelected ? t("appLauncher.deselectAll") : t("appLauncher.selectAll")}</span>
             </label>
+            {(availableGroups.length > 0 || groupFilter) && (
+              <div className="al-group-chips" role="tablist">
+                {[
+                  { key: "", label: t("appLauncher.allGroups"), count: groupCounts.all },
+                  ...availableGroups.map((g) => ({ key: g, label: g, count: groupCounts.byGroup.get(g) ?? 0 })),
+                  ...(groupCounts.byGroup.has(UNGROUPED) || groupFilter === UNGROUPED
+                    ? [{ key: UNGROUPED, label: t("appLauncher.ungrouped"), count: groupCounts.byGroup.get(UNGROUPED) ?? 0 }]
+                    : []),
+                ].map((chip) => (
+                  <button
+                    key={chip.key || "all"}
+                    type="button"
+                    role="tab"
+                    aria-selected={groupFilter === chip.key}
+                    className={`al-group-chip${groupFilter === chip.key ? " is-active" : ""}`}
+                    onClick={() => setGroupFilter(chip.key)}
+                  >
+                    <span className="al-group-chip-label">{chip.label}</span>
+                    <span className="al-group-chip-count">{chip.count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <span className="al-count">{filteredLaunchers.length} / {launchers.length}</span>
           </div>
-        <div className="al-grid">
+        <div className="al-scroll">
+        {filteredLaunchers.length === 0 ? (
+          <div className="al-empty al-empty-sm">
+            <Search size={22} className="al-empty-icon" />
+            <span>{t("appLauncher.noMatch")}</span>
+            <button
+              type="button"
+              className="al-btn"
+              onClick={() => {
+                setSearch("");
+                setGroupFilter("");
+              }}
+            >
+              <X size={14} />
+              <span>{t("common.clearSearch")}</span>
+            </button>
+          </div>
+        ) : (
+        <div className={`al-grid${selectedIds.size > 0 ? " is-selecting" : ""}`}>
           {filteredLaunchers.map((l) => {
             const isRunning = runningPids.has(l.id);
             const isLaunching = launching.has(l.id);
             const isKilling = killing.has(l.id);
             const isStatusLoading = statusLoading.has(l.id);
+            const busy = isLaunching || isKilling;
             return (
               <div
                 key={l.id}
@@ -1092,16 +1172,30 @@ function AppLauncherTool() {
                 onDragLeave={handleDragLeave}
                 onDrop={() => handleDrop(l.id)}
                 onDragEnd={handleDragEnd}
+                tabIndex={0}
+                title={isRunning ? undefined : t("appLauncher.cardHint")}
+                onDoubleClick={(e) => {
+                  if ((e.target as HTMLElement).closest("button, input")) return;
+                  if (!isRunning && !busy) void handleLaunch(l);
+                }}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter" && !isRunning && !busy) void handleLaunch(l);
+                  else if (e.key === " ") {
+                    e.preventDefault();
+                    toggleSelect(l.id);
+                  }
+                }}
               >
-                <div className="al-card-top">
-                  <div className="al-card-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(l.id)}
-                      onChange={() => toggleSelect(l.id)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </div>
+                <label className="al-card-checkbox" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(l.id)}
+                    onChange={() => toggleSelect(l.id)}
+                    aria-label={l.name}
+                  />
+                </label>
+                <div className="al-card-main">
                   <div className="al-card-icon">
                     {isStatusLoading ? (
                       <Loader2 size={20} className="spin" />
@@ -1110,30 +1204,22 @@ function AppLauncherTool() {
                     )}
                   </div>
                   <div className="al-card-info">
-                    <div className="al-card-name-row">
-                      <span className="al-card-name">{l.name}</span>
-                      {l.version && (
-                        <span className="al-card-version" title={t("appLauncher.version")}>{l.version}</span>
-                      )}
-                      {l.group && (
-                        <span className="al-card-group">
-                          <span className="al-group-badge">{l.group}</span>
-                        </span>
-                      )}
-                    </div>
-                    <span className="al-card-path" title={l.path}>
-                      <FolderOpen size={10} />
-                      {shortPath(l.path)}
-                    </span>
+                    <span className="al-card-name" title={l.name}>{l.name}</span>
+                    {(isRunning || l.version || (showCardGroup && l.group)) && (
+                      <span className="al-card-meta">
+                        {isRunning && (
+                          <span className="al-card-running">
+                            <span className="al-badge-dot" />
+                            {t("appLauncher.running")}
+                          </span>
+                        )}
+                        {l.version && (
+                          <span className="al-card-version" title={t("appLauncher.version")}>v{l.version}</span>
+                        )}
+                        {showCardGroup && l.group && <span className="al-card-group">{l.group}</span>}
+                      </span>
+                    )}
                   </div>
-                  {isRunning ? (
-                    <span className="al-badge al-badge-green">
-                      <span className="al-badge-dot" />
-                      {t("appLauncher.running")}
-                    </span>
-                  ) : (
-                    <span className="al-status-dot" title={t("appLauncher.notRunning")} />
-                  )}
                 </div>
                 {l.args && (
                   <div className="al-card-args">
@@ -1141,37 +1227,50 @@ function AppLauncherTool() {
                   </div>
                 )}
                 <div className="al-card-footer">
-                  <button
-                    type="button"
-                    className={`al-action al-action-launch ${isRunning ? "is-active" : ""}`}
-                    onClick={() => handleLaunch(l)}
-                    disabled={isLaunching || isKilling || isRunning}
-                    title={t("appLauncher.launch")}
-                  >
-                    {isLaunching ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
-                    <span>{t("appLauncher.launch")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`al-action al-action-kill ${isKilling ? "is-active" : ""}`}
-                    onClick={() => handleKill(l)}
-                    disabled={isLaunching || isKilling || !isRunning}
-                    title={t("appLauncher.kill")}
-                  >
-                    {isKilling ? <Loader2 size={14} className="spin" /> : <Ban size={14} />}
-                    <span>{t("appLauncher.kill")}</span>
-                  </button>
-                  <div className="al-card-spacer" />
-                  <button type="button" className="al-icon-btn" onClick={() => openEditForm(l)} title={t("appLauncher.edit")}>
-                    <Pencil size={14} />
-                  </button>
-                  <button type="button" className="al-icon-btn al-icon-btn-danger" onClick={() => handleDelete(l)} title={t("appLauncher.delete")}>
-                    <Trash2 size={14} />
-                  </button>
+                  <span className="al-card-path" title={l.path}>
+                    <FolderOpen size={11} />
+                    <span>{shortPath(l.path)}</span>
+                  </span>
+                  <span className="al-card-tools">
+                    <button type="button" className="al-icon-btn" onClick={() => void handleOpenFolder(l)} title={t("appLauncher.openFolder")} aria-label={t("appLauncher.openFolder")}>
+                      <FolderOpen size={14} />
+                    </button>
+                    <button type="button" className="al-icon-btn" onClick={() => openEditForm(l)} title={t("appLauncher.edit")} aria-label={t("appLauncher.edit")}>
+                      <Pencil size={14} />
+                    </button>
+                    <button type="button" className="al-icon-btn al-icon-btn-danger" onClick={() => handleDelete(l)} title={t("appLauncher.delete")} aria-label={t("appLauncher.delete")}>
+                      <Trash2 size={14} />
+                    </button>
+                  </span>
+                  {isRunning ? (
+                    <button
+                      type="button"
+                      className="al-action al-action-kill is-active"
+                      onClick={() => handleKill(l)}
+                      disabled={busy}
+                      title={t("appLauncher.kill")}
+                    >
+                      {isKilling ? <Loader2 size={13} className="spin" /> : <Ban size={13} />}
+                      <span>{t("appLauncher.kill")}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="al-action al-action-launch is-active"
+                      onClick={() => handleLaunch(l)}
+                      disabled={busy}
+                      title={t("appLauncher.launch")}
+                    >
+                      {isLaunching ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
+                      <span>{t("appLauncher.launch")}</span>
+                    </button>
+                  )}
                 </div>
               </div>
             );
           })}
+        </div>
+        )}
         </div>
         </>
       )}

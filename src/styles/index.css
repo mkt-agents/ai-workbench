@@ -1,0 +1,34 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* 全局样式入口：分片按原 styles.css 的顺序导入——同优先级规则靠出现顺序生效，
+   调整顺序前先确认不会改变层叠结果。组件私有样式仍跟随组件就近 import。 */
+@import "./tokens.css";
+@import "./theme-glass.css";
+@import "./plugin-browser.css";
+@import "./base.css";
+@import "./git-manager.css";
+@import "./settings.css";
+@import "./layout.css";
+@import "./components.css";
+@import "./account-manager.css";
+@import "./controls.css";
+@import "./hosts.css";
+@import "./cursor.css";
+@import "./modal.css";
+@import "./ai-assistant.css";
+@import "./models.css";
+@import "./harness.css";
+@import "./web-tools.css";
+@import "./update.css";
+@import "./banners.css";
+@import "./responsive.css";
+@import "./runtime.css";
+@import "./prompt.css";
+@import "./git-pages.css";
+@import "./changelog.css";
+@import "./quick-ask.css";
+@import "./dropdown.css";
+@import "./snippets.css";
+@import "./quick-ask-bubble.css";
+@import "./plugin-tabs.css";
+@import "./devtools.css";

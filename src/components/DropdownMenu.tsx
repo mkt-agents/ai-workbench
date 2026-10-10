@@ -19,12 +19,14 @@ export default function DropdownMenu({
   label,
   items,
   children,
+  triggerClassName = "btn btn-secondary btn-icon",
 }: {
   /** aria-label for the trigger button. */
   label: string;
   items: DropdownItem[];
   /** The trigger button's inner content (icon). */
   children: ReactNode;
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -49,10 +51,11 @@ export default function DropdownMenu({
     <div className="dd" ref={ref}>
       <button
         type="button"
-        className="btn btn-secondary btn-icon"
+        className={triggerClassName}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}
+        title={label}
         onClick={() => setOpen((v) => !v)}
       >
         {children}

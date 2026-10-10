@@ -20,6 +20,7 @@
     "clearSearch": "Clear search",
     "bind": "Bind identity",
     "bound": "Bound: {{name}}",
+    "boundShort": "Bound",
     "editBinding": "Edit binding",
     "unbind": "Unbind",
     "unbindTitle": "Unbind preset identity",
@@ -39,7 +40,29 @@
     "applyPreset": "Apply preset",
     "applied": "Preset identity applied",
     "applyFailed": "Apply failed: {{error}}",
-    "autoApplied": "Applied the host-bound identity to {{count}} repos"
+    "autoApplied": "Applied the host-bound identity to {{count}} repos",
+    "more": "More",
+    "copyPath": "Copy path",
+    "pathCopied": "Path copied",
+    "goCommitHint": "Make current and go to Commit",
+    "filterLabel": "Filter by status",
+    "filter": {
+      "all": "All",
+      "dirty": "Changed",
+      "sync": "Needs sync",
+      "identity": "Identity"
+    },
+    "clearFilter": "Clear filter",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all",
+    "refreshedJustNow": "refreshed just now",
+    "refreshedAgo": "refreshed {{count}} min ago",
+    "sumDirty": "{{count}} changed",
+    "sumDirtyTitle": "Repos with uncommitted changes",
+    "sumBehindTitle": "Repos behind their upstream (pull)",
+    "sumAheadTitle": "Repos with local commits to push",
+    "sumIdentity": "{{count}} identity",
+    "sumIdentityTitle": "Repos with no identity or one that differs from the preset"
   },
   "workspace": {
     "other": "Other repos",

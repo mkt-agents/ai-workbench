@@ -106,7 +106,7 @@
   background: linear-gradient(var(--bg-1), var(--bg-1)), var(--aq-pop-base);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--float-shadow, var(--shadow-md));
+  box-shadow: var(--float-shadow);
   font-family: var(--font-sans);
   text-align: left;
 }
@@ -253,6 +253,12 @@
   background: var(--bg-2);
   color: var(--text-1);
   flex-shrink: 0;
+  overflow: hidden;
+}
+.aq-card-icon img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
 }
 
 .aq-card-product {

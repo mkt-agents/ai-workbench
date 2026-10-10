@@ -459,7 +459,11 @@ pub async fn wb_probe_account(state: tauri::State<'_, DbState>, id: i64) -> Resu
             let (status, reason) = probe_outcome(code, self_expired);
             (status.to_string(), reason, exp_from_credential)
         }
-        Err(e) => ("unverified".to_string(), Some(format!("请求失败: {e}")), exp_from_credential),
+        Err(e) => (
+            "unverified".to_string(),
+            Some(crate::config::friendly_http_error(e, "请求失败")),
+            exp_from_credential,
+        ),
     };
     let exp = exp_unix;
 

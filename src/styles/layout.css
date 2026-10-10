@@ -1,0 +1,454 @@
+/* ─── Scrollbar ─── */
+
+/* 全局细滚动条。别在元素上写标准的 scrollbar-width / scrollbar-color：Chromium
+   见到它们会忽略 ::-webkit-scrollbar，回退成更粗的系统 thin 条。 */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+/* 轨道两端内缩，滑块不贴进圆角容器的上下角。 */
+::-webkit-scrollbar-track:vertical { margin-block: 10px; }
+::-webkit-scrollbar-track:horizontal { margin-inline: 10px; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* === LAYOUT === */
+
+.app-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Full-width top chrome line — avoids cut at sidebar/titlebar join */
+.app-layout::after {
+  content: '';
+  position: absolute;
+  top: 40px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--border-subtle);
+  z-index: 60;
+  pointer-events: none;
+}
+
+.right-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-0);
+}
+
+/* === TITLEBAR === */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 40px;
+  flex-shrink: 0;
+  background: var(--bg-1);
+  border-bottom: none;
+  position: relative;
+  z-index: 50;
+}
+
+@media not (prefers-color-scheme: dark) {
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .titlebar {
+    background: var(--chrome-bg);
+    backdrop-filter: blur(40px) saturate(1.08);
+    -webkit-backdrop-filter: blur(40px) saturate(1.08);
+    border-bottom: none;
+    box-shadow: var(--surface-highlight);
+  }
+}
+
+[data-theme="light"] .titlebar {
+  background: var(--chrome-bg);
+  backdrop-filter: blur(40px) saturate(1.08);
+  -webkit-backdrop-filter: blur(40px) saturate(1.08);
+  border-bottom: none;
+  box-shadow: var(--surface-highlight);
+}
+
+.titlebar-drag { flex: 1; height: 100%; -webkit-app-region: drag; }
+
+/* Dev-instance chip next to the window controls — dev server only, never in packaged builds */
+.dev-badge {
+  flex: none;
+  margin-right: 10px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  /* Fixed amber in every theme so a dev window is never mistaken for a release one */
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #f59e0b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  -webkit-app-region: no-drag;
+  user-select: none;
+  cursor: default;
+}
+
+.titlebar-controls {
+  display: flex;
+  -webkit-app-region: no-drag;
+  gap: 0;
+}
+
+.titlebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: none;
+  color: var(--text-2);
+  transition: background var(--transition-fast), color var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn svg { pointer-events: none; }
+
+.titlebar-btn:hover { background: var(--bg-hover); color: var(--text-0); }
+/* Windows caption close red, same across themes to match the OS */
+.titlebar-close:hover { background: #e81123; color: white; }
+
+/* === SIDEBAR === */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 200px;
+  min-width: 200px;
+  height: 100%;
+  background: var(--bg-1);
+  transition: width var(--transition-normal), min-width var(--transition-normal);
+  user-select: none;
+  position: relative;
+  z-index: 40;
+}
+
+@media not (prefers-color-scheme: dark) {
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .sidebar {
+    background: var(--chrome-bg);
+    backdrop-filter: blur(40px) saturate(1.08);
+    -webkit-backdrop-filter: blur(40px) saturate(1.08);
+    box-shadow: var(--surface-highlight);
+  }
+
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .sidebar::after {
+    width: 1px;
+    top: 41px;
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      var(--chrome-line) 8%,
+      var(--chrome-line) 92%,
+      transparent 100%
+    );
+    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.5);
+  }
+}
+
+[data-theme="light"] .sidebar {
+  background: var(--chrome-bg);
+  backdrop-filter: blur(40px) saturate(1.08);
+  -webkit-backdrop-filter: blur(40px) saturate(1.08);
+  box-shadow: var(--surface-highlight);
+}
+
+[data-theme="light"] .sidebar::after {
+  width: 1px;
+  top: 41px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--chrome-line) 8%,
+    var(--chrome-line) 92%,
+    transparent 100%
+  );
+  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.5);
+}
+
+/* Divider only below the title/logo row - avoid a cut through the titlebar */
+.sidebar::after {
+  content: '';
+  position: absolute;
+  top: 40px;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+}
+
+.sidebar.collapsed { width: 48px; min-width: 48px; }
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  border-bottom: none;
+}
+
+.sidebar-logo-icon {
+  flex-shrink: 0;
+  display: block;
+  overflow: visible;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+
+.sidebar-logo-text {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 6px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sidebar-nav-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 6px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: auto;
+}
+
+.sidebar-nav-footer .sidebar-nav-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.sidebar-collapse-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+.sidebar.collapsed .sidebar-nav-footer {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.sidebar.collapsed .sidebar-nav-footer .sidebar-nav-item {
+  flex: none;
+  width: 100%;
+}
+
+.sidebar.collapsed .sidebar-collapse-btn {
+  width: 100%;
+  height: 30px;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 0 10px;
+  height: 30px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  text-align: left;
+  white-space: nowrap;
+  position: relative;
+}
+
+/* Active nav item: left accent tick */
+.sidebar-nav-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  width: 2px;
+  height: 12px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  transition: transform var(--transition-fast);
+}
+
+.sidebar-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+.sidebar-nav-item:hover::before { transform: translateY(-50%) scaleY(1); }
+
+.sidebar-nav-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-nav-item.active::before { transform: translateY(-50%) scaleY(1); }
+
+.sidebar-group {
+  margin-bottom: 10px;
+}
+
+.sidebar-group:last-child {
+  margin-bottom: 4px;
+}
+
+.sidebar-group-collapsed {
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0 10px;
+  height: 22px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sidebar-group-header:hover {
+  background: transparent;
+  color: var(--text-1);
+}
+
+.sidebar-group-header.has-active {
+  color: var(--text-2);
+}
+
+.sidebar-group-header.has-active::before {
+  content: '';
+  width: 2px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--accent);
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-group-chevron {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  transition: transform var(--transition-fast);
+  color: inherit;
+  opacity: 0.7;
+}
+
+.sidebar-group-item { padding-left: 12px; }
+.sidebar-group-item .nav-icon { opacity: 0.7; transform: scale(0.9); }
+.sidebar-group-item { font-size: 12px; }
+
+.sidebar.collapsed .sidebar-logo {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar.collapsed .sidebar-nav-item {
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+
+.sidebar.collapsed .sidebar-nav-item .nav-icon {
+  margin: 0;
+}
+
+.sidebar.collapsed .sidebar-nav-footer .sidebar-nav-item {
+  justify-content: center;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  position: relative;
+  min-height: 0;
+}
+
+.main-header {
+  padding: 14px 24px 0;
+  background: var(--bg-0);
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+}
+
+.main-header.hidden {
+  display: none;
+}
+
+.main-header h1 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: -0.1px;
+  margin: 0;
+}
+
+.main-body {
+  flex: 1;
+  padding: 14px 24px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-in {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+

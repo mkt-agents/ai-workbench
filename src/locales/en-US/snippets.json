@@ -10,7 +10,7 @@
   "sortLabel": "Sort",
   "sortUseCount": "Most used",
   "sortUpdated": "Recently updated",
-  "used": "used {{count}}×",
+  "used": "Used {{count}}×",
   "kindPrompt": "Prompt",
   "kindPromptHint": "Prompt Studio template: used as a rewrite skeleton on the Prompts page; hidden from quick-ask",
   "kindText": "Text snippet",
@@ -52,5 +52,8 @@
   "countLabel": "Showing {{shown}} of {{total}}",
   "paramsHint": "Fill these params on use",
   "nameDuplicate": "A snippet with this name already exists",
-  "preview": "Resolved preview"
+  "preview": "Resolved preview",
+  "more": "More actions",
+  "copy": "Copy",
+  "cardHint": "Double-click or Enter to use, F2 to edit"
 }

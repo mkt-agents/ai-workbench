@@ -1,0 +1,77 @@
+/* Alert / onboarding banners */
+.alert-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  line-height: 1.45;
+  flex-shrink: 0;
+}
+
+.alert-banner-warning {
+  background: color-mix(in srgb, var(--red) 12%, var(--bg-1));
+  border-color: color-mix(in srgb, var(--red) 35%, var(--border-subtle));
+  color: var(--text-0);
+}
+
+.alert-banner-info {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--text-0);
+}
+
+.alert-banner-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.alert-banner-dismiss {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.alert-banner-dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+.onboarding-checklist {
+  align-items: stretch;
+}
+
+.onboarding-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding-title {
+  font-weight: 600;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+}
+
+.onboarding-steps {
+  margin: 0 0 8px 18px;
+  padding: 0;
+  color: var(--text-2);
+}
+
+.onboarding-steps li.done {
+  color: var(--text-1);
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

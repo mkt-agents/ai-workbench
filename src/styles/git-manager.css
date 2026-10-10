@@ -1,0 +1,229 @@
+/* ─── Git Manager (merged accounts / switch / repos) ─── */
+
+.git-manager {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+.git-manager-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+}
+
+.git-subnav {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  margin: 4px 16px 0;
+  padding: 3px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  width: fit-content;
+  max-width: calc(100% - 32px);
+}
+
+.git-subnav-item {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  white-space: nowrap;
+}
+
+.git-subnav-item:hover {
+  color: var(--text-0);
+  background: var(--bg-hover);
+}
+
+.git-subnav-item.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  font-weight: 600;
+}
+
+.git-manager-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: 100%;
+}
+
+.git-tab-panel {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.git-tab-panel.is-active {
+  display: flex;
+}
+
+/* Keep-alive sidebar pages (Git): hide without unmounting */
+.page-panel {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  width: 100%;
+}
+
+.page-panel.is-active {
+  display: flex;
+}
+
+.git-manager-body .page-scrollable {
+  flex: 1;
+  gap: 10px;
+  padding: 12px 16px 16px;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+  width: 100%;
+}
+
+/* Quick Switch layout */
+.qs-page {
+  gap: 10px;
+}
+
+.qs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.qs-current {
+  min-width: 0;
+  flex: 1;
+}
+
+.qs-current-value {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.qs-scope-tabs {
+  flex: 0 0 auto;
+  min-width: 180px;
+}
+
+.qs-scope-tabs .scope-tab {
+  padding: 5px 12px;
+  flex: 1;
+}
+
+.qs-repo .card-body,
+.qs-repo {
+  padding-bottom: 4px;
+}
+
+.qs-path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.qs-path-row .input-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.qs-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+  min-height: 0;
+}
+
+.qs-accounts,
+.qs-manual {
+  min-width: 0;
+  margin: 0;
+}
+
+.qs-accounts .account-list {
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.qs-accounts .account-item {
+  cursor: pointer;
+}
+
+.qs-accounts .account-item.selected {
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+}
+
+.qs-accounts .account-item.in-use {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+}
+
+.account-in-use-badge {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+}
+
+.account-check {
+  color: var(--accent);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.qs-apply-row {
+  margin-top: 8px;
+}
+
+.qs-apply-row .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .qs-main {
+    grid-template-columns: 1fr;
+  }
+
+  .qs-scope-tabs {
+    width: 100%;
+    min-width: 0;
+  }
+}
+

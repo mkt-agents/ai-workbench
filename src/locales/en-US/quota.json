@@ -20,6 +20,7 @@
   "statusExpired": "Expired",
   "statusBanned": "Disabled",
   "queryFailed": "Query failed",
+  "networkFailed": "Network unreachable. Check your connection or proxy, then retry.",
   "parseFailed": "Failed to parse the balance response",
   "creditSummaryPlan": "Plan",
   "creditsLeft": "Credits left",

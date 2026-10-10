@@ -360,7 +360,7 @@ function VersionSwitcher() {
         <div className="git-manager-body" role="tabpanel">
           <div className="page-scrollable runtime-page">
             <div className="runtime-header">
-              <div>
+              <div className="runtime-header-info">
                 <div className="runtime-subtitle">{t("subtitle")}</div>
                 <div className="runtime-current">
                   {loading && !active ? (
@@ -513,37 +513,37 @@ function VersionSwitcher() {
                       <div className="runtime-card-actions">
                         <button
                           type="button"
-                          className="btn btn-secondary"
+                          className="btn btn-secondary btn-small runtime-icon-btn"
                           title={t("copyPath")}
                           onClick={() => handleCopy(item.path)}
                         >
-                          <Copy size={14} />
+                          <Copy size={13} />
                         </button>
                         <button
                           type="button"
-                          className="btn btn-secondary"
+                          className="btn btn-secondary btn-small runtime-icon-btn"
                           title={t("openFolder")}
                           onClick={() => handleOpen(item.path)}
                         >
-                          <FolderOpen size={14} />
+                          <FolderOpen size={13} />
                         </button>
                         <button
                           type="button"
-                          className="btn btn-secondary"
+                          className="btn btn-secondary btn-small runtime-icon-btn"
                           title={t("openTerminal")}
                           onClick={() => handleOpenTerminal(item)}
                         >
-                          <Terminal size={14} />
+                          <Terminal size={13} />
                         </button>
                         <button
                           type="button"
-                          className="btn btn-primary"
+                          className="btn btn-primary btn-small"
                           disabled={item.active || busy || busyPath !== null}
                           onClick={() => handleSwitch(item)}
                         >
                           {busy ? (
                             <>
-                              <Loader2 size={14} className="spin" />
+                              <Loader2 size={13} className="spin" />
                               {t("switching")}
                             </>
                           ) : (
@@ -553,23 +553,23 @@ function VersionSwitcher() {
                         {item.custom && (
                           <button
                             type="button"
-                            className="btn btn-secondary"
+                            className="btn btn-secondary btn-small runtime-icon-btn"
                             title={t("remove")}
                             onClick={() => handleRemove(item)}
                             disabled={busyPath !== null}
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={13} />
                           </button>
                         )}
                         {item.source === "managed" && (
                           <button
                             type="button"
-                            className="btn btn-secondary"
+                            className="btn btn-secondary btn-small runtime-icon-btn"
                             title={t("uninstall")}
                             onClick={() => handleUninstall(item)}
                             disabled={busyPath !== null}
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={13} />
                           </button>
                         )}
                       </div>

@@ -152,3 +152,79 @@ impl std::fmt::Display for WorkbenchError {
 }
 
 impl std::error::Error for WorkbenchError {}
+
+/// 额度 / 签到类 HTTP 传输失败的统一文案。reqwest 原文常是
+/// `error sending request for url (https://…)`，对用户无意义。
+pub const HTTP_NETWORK_MESSAGE: &str = "网络不通，请检查网络或代理后重试";
+
+/// 把 reqwest / 传输层错误收成短中文；网络类走 [`HTTP_NETWORK_MESSAGE`]，
+/// 其它情况保留 `prefix: …`，并去掉 `for url (…)` 尾巴。
+pub fn friendly_http_error(err: impl std::fmt::Display, prefix: &str) -> String {
+    let raw = err.to_string();
+    if is_http_transport_failure(&raw) {
+        return HTTP_NETWORK_MESSAGE.to_string();
+    }
+    let short = strip_http_url_noise(&raw);
+    if short.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}: {short}")
+    }
+}
+
+fn is_http_transport_failure(raw: &str) -> bool {
+    let lower = raw.to_ascii_lowercase();
+    lower.contains("error sending request")
+        || lower.contains("connect error")
+        || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("connection timed out")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("dns error")
+        || lower.contains("failed to lookup address")
+        || lower.contains("name or service not known")
+        || lower.contains("network unreachable")
+        || lower.contains("no route to host")
+        || lower.contains("tls handshake")
+        || lower.contains("ssl")
+        || lower.contains("certificate")
+        || lower.contains("proxy")
+}
+
+/// Drop ` for url (https://…)` / similar tails so residual messages stay short.
+fn strip_http_url_noise(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    for marker in [" for url (", " for url(", " url ("] {
+        if let Some(i) = s.find(marker) {
+            s.truncate(i);
+            break;
+        }
+    }
+    s.trim().trim_end_matches(':').trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{friendly_http_error, HTTP_NETWORK_MESSAGE};
+
+    #[test]
+    fn network_send_failure_is_humanized() {
+        let raw = "error sending request for url (https://chatgpt.com/backend-api/wham/usage)";
+        assert_eq!(friendly_http_error(raw, "请求失败"), HTTP_NETWORK_MESSAGE);
+    }
+
+    #[test]
+    fn timeout_is_humanized() {
+        assert_eq!(
+            friendly_http_error("operation timed out", "续期请求失败"),
+            HTTP_NETWORK_MESSAGE
+        );
+    }
+
+    #[test]
+    fn unrelated_error_keeps_prefix_without_url() {
+        let raw = "unexpected eof for url (https://example.com/x)";
+        assert_eq!(friendly_http_error(raw, "请求失败"), "请求失败: unexpected eof");
+    }
+}

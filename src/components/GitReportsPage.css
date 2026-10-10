@@ -312,7 +312,7 @@
   color: var(--text-3);
   background: var(--bg-2);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .tr-empty-icon svg {

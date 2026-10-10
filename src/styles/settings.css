@@ -1,0 +1,347 @@
+/* ─── Settings Page ─── */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 0 24px;
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+  align-self: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Structured cards: title + body own padding; cancel global .card padding/overflow */
+.settings-page .card {
+  width: 100%;
+  height: auto;
+  min-height: auto;
+  flex-shrink: 0;
+  overflow: visible;
+  padding: 0;
+  margin-bottom: 0;
+}
+
+.settings-page .card-title {
+  margin: 0;
+  padding: 14px 18px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-page .card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 18px 16px;
+}
+
+.settings-page .card-body > .setting-row,
+.settings-page .card-body > .setting-stack {
+  padding: 14px 0;
+}
+
+.settings-page .card-body > .setting-row + .setting-row,
+.settings-page .card-body > .setting-row + .setting-stack,
+.settings-page .card-body > .setting-stack + .setting-row,
+.settings-page .card-body > .setting-stack + .setting-stack,
+.settings-page .card-body > .setting-hint + .setting-hint,
+.settings-page .card-body > .setting-hint + .setting-inline-controls,
+.settings-page .card-body > .setting-inline-controls {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-page .setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: nowrap;
+  min-height: 36px;
+}
+
+.settings-page .setting-label {
+  flex: 0 0 auto;
+  min-width: 5.5em;
+  font-size: 13px;
+  color: var(--text-1);
+  font-weight: 500;
+}
+
+.settings-page .setting-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.settings-page .setting-stack > .setting-label {
+  min-width: 0;
+}
+
+.settings-page .setting-stack-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.settings-page .setting-inline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 0 4px;
+}
+
+.settings-page .setting-shortcut-input {
+  width: min(200px, 100%);
+  min-width: 140px;
+}
+
+.settings-page .setting-hint {
+  margin: 0;
+  padding: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.settings-page .setting-hint + .setting-hint {
+  padding-top: 6px;
+  border-top: none;
+}
+
+.settings-page .setting-value {
+  font-size: 13px;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-page .about-card-body {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* Theme chips: hug content, wrap cleanly — no empty full-width track */
+.settings-page .theme-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+  padding: 4px;
+  background: var(--bg-2);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+}
+
+.settings-page .theme-btn {
+  padding: 6px 11px;
+  font-size: 12px;
+  border-radius: var(--radius-md);
+}
+
+@media (min-width: 1100px) {
+  .settings-page {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-content: start;
+    max-width: 1080px;
+  }
+
+  .settings-page .settings-card-span,
+  .settings-page > .toast {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .settings-page .setting-row {
+    flex-wrap: wrap;
+  }
+}
+
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  letter-spacing: 0.01em;
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.setting-label {
+  font-size: 13px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+/* Theme selector */
+.theme-selector {
+  display: flex;
+  gap: var(--space-1);
+  padding: 3px;
+  background: var(--bg-2);
+  border-radius: var(--radius-lg);
+  border: 0.5px solid var(--border-subtle);
+}
+
+.theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+  position: relative;
+}
+
+.theme-btn svg {
+  width: 13px;
+  height: 13px;
+  opacity: 0.7;
+  transition: opacity var(--transition-fast);
+}
+
+.theme-btn:hover {
+  color: var(--text-1);
+}
+
+.theme-btn:hover svg {
+  opacity: 0.9;
+}
+
+.theme-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.theme-btn.active svg {
+  opacity: 1;
+}
+
+.logo-variant-btn svg,
+.logo-variant-btn img {
+  width: 18px;
+  height: 18px;
+  opacity: 1;
+  flex-shrink: 0;
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--bg-3);
+  border-radius: var(--radius-full);
+  transition: var(--transition-colors-fast);
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: var(--transition-colors-fast);
+  box-shadow: var(--shadow-sm);
+}
+
+.toggle input:checked + .toggle-slider {
+  background: var(--accent);
+}
+
+.toggle input:checked + .toggle-slider::before {
+  transform: translateX(18px);
+}
+
+/* 浅色：关闭态轨道/圆钮提高对比，避免融进白雾卡片 */
+@media not (prefers-color-scheme: dark) {
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .toggle-slider {
+    background: rgba(var(--ink-rgb), 0.2);
+    box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.14);
+  }
+
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .toggle-slider::before {
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(var(--ink-rgb), 0.22), 0 0 0 1px rgba(var(--ink-rgb), 0.08);
+  }
+
+  :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .toggle input:checked + .toggle-slider {
+    background: var(--accent);
+    box-shadow: none;
+  }
+}
+
+[data-theme="light"] .toggle-slider {
+  background: rgba(var(--ink-rgb), 0.2);
+  box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.14);
+}
+
+[data-theme="light"] .toggle-slider::before {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(var(--ink-rgb), 0.22), 0 0 0 1px rgba(var(--ink-rgb), 0.08);
+}
+
+[data-theme="light"] .toggle input:checked + .toggle-slider {
+  background: var(--accent);
+  box-shadow: none;
+}
+

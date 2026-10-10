@@ -85,7 +85,7 @@ pub(crate) async fn request_balance(
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| format!("请求失败: {e}"))?;
+        .map_err(|e| crate::config::friendly_http_error(e, "请求失败"))?;
     let status = resp.status().as_u16();
     if status == 401 || status == 403 {
         return Err(INVALID_KEY_MESSAGE.to_string());

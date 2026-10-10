@@ -1039,7 +1039,12 @@ function CursorManager() {
 
       <div className="card">
         <div className="card-title cursor-card-title">
-          <span>{t("cursor.title")}</span>
+          <span>
+            {t("cursor.accountsTitle")}
+            {cursorAccounts.length > 0 && (
+              <span className="card-title-badge">{cursorAccounts.length}</span>
+            )}
+          </span>
           <button
             type="button"
             className="btn btn-primary btn-small"
@@ -1138,8 +1143,31 @@ function CursorManager() {
                         </span>
                       )}
                     </div>
-                    <div className="account-email">{snap?.authEmail || account.email}</div>
-                    {account.password ? (
+                    <div className="cursor-acct-meta">
+                      <span className="account-email cursor-acct-email">
+                        {snap?.authEmail || account.email}
+                      </span>
+                      <button
+                        type="button"
+                        className="cursor-icon-btn"
+                        onClick={() =>
+                          copyText(snap?.authEmail || account.email, t("cursor.emailCopied"))
+                        }
+                        title={t("cursor.copyEmail")}
+                        aria-label={t("cursor.copyEmail")}
+                        disabled={Boolean(switchingId) || busy}
+                      >
+                        <Copy size={11} />
+                      </button>
+                      {backupSizes[account.id] > 0 && (
+                        <span className="cursor-acct-size">
+                          {t("cursor.backupSize", {
+                            size: formatBytes(backupSizes[account.id]),
+                          })}
+                        </span>
+                      )}
+                    </div>
+                    {account.password && (
                       <div className="cursor-password-row">
                         <span className="account-email cursor-password-value">
                           {t("cursor.password")}:{" "}
@@ -1175,59 +1203,21 @@ function CursorManager() {
                         >
                           <Copy size={12} />
                         </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() =>
-                            copyText(
-                              snap?.authEmail || account.email,
-                              t("cursor.emailCopied")
-                            )
-                          }
-                          title={t("cursor.copyEmail")}
-                          disabled={Boolean(switchingId) || busy}
-                        >
-                          {t("cursor.copyEmail")}
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="cursor-password-row">
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() =>
-                            copyText(
-                              snap?.authEmail || account.email,
-                              t("cursor.emailCopied")
-                            )
-                          }
-                          title={t("cursor.copyEmail")}
-                          disabled={Boolean(switchingId) || busy}
-                        >
-                          <Copy size={12} /> {t("cursor.copyEmail")}
-                        </button>
                       </div>
                     )}
                     {needsInit && (
-                      <div className="account-notes" style={{ color: "#fbbf24" }}>
+                      <div className="account-notes cursor-note-warn">
                         {t("cursor.needsInitHint")}
                       </div>
                     )}
                     {incomplete && !needsInit && (
-                      <div className="account-notes" style={{ color: "var(--red)" }}>
+                      <div className="account-notes cursor-note-error">
                         {t("cursor.snapshotReasonHint", { reason: snap?.reason ?? "" })}
                       </div>
                     )}
                     {snap?.warning && (
-                      <div className="account-notes" style={{ color: "#fbbf24" }}>
+                      <div className="account-notes cursor-note-warn">
                         {snap.warning}
-                      </div>
-                    )}
-                    {backupSizes[account.id] > 0 && (
-                      <div className="account-email" style={{ fontSize: 11, opacity: 0.7 }}>
-                        {t("cursor.backupSize", {
-                          size: formatBytes(backupSizes[account.id]),
-                        })}
                       </div>
                     )}
                   </div>

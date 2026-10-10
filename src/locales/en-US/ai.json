@@ -223,6 +223,7 @@
   },
   "cursor": {
     "title": "Cursor",
+    "accountsTitle": "Accounts",
     "addAccount": "Add Account",
     "switch": "Switch",
     "finishLogin": "Finish Init",

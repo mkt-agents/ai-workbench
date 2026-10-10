@@ -120,7 +120,13 @@ pub async fn grok_bot_quota_fetch(state: tauri::State<'_, DbState>, id: i64) -> 
 
     let resp = match resp {
         Ok(r) => r,
-        Err(e) => return Ok(GrokQuotaDto::err(id, email, format!("请求失败: {e}"))),
+        Err(e) => {
+            return Ok(GrokQuotaDto::err(
+                id,
+                email,
+                crate::config::friendly_http_error(e, "请求失败"),
+            ))
+        }
     };
     let status = resp.status().as_u16();
     if status == 401 || status == 403 {

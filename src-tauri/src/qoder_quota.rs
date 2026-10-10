@@ -394,7 +394,9 @@ async fn refresh_tokens(client: &reqwest::Client, refresh: &str) -> Result<Token
         .json(&serde_json::json!({ "refresh_token": refresh }))
         .send()
         .await
-        .map_err(|e| RefreshError::Transient(format!("续期请求失败: {e}")))?;
+        .map_err(|e| {
+            RefreshError::Transient(crate::config::friendly_http_error(e, "续期请求失败"))
+        })?;
     let status = resp.status().as_u16();
     if matches!(status, 400 | 401 | 403) {
         return Err(RefreshError::Rejected);
@@ -443,7 +445,7 @@ async fn request_usage(client: &reqwest::Client, token: &str) -> Result<QoderUsa
         .header("User-Agent", "Qoder")
         .send()
         .await
-        .map_err(|e| UsageError::Other(format!("请求失败: {e}")))?;
+        .map_err(|e| UsageError::Other(crate::config::friendly_http_error(e, "请求失败")))?;
     let status = resp.status().as_u16();
     if status == 401 || status == 403 {
         return Err(UsageError::Unauthorized);
@@ -544,7 +546,12 @@ async fn request_claim(client: &reqwest::Client, token: &str, campaign_id: &str)
         .await;
     let resp = match resp {
         Ok(r) => r,
-        Err(e) => return ClaimOutcome::Done(QoderClaimResult::fail(format!("请求失败: {e}"))),
+        Err(e) => {
+            return ClaimOutcome::Done(QoderClaimResult::fail(crate::config::friendly_http_error(
+                e,
+                "请求失败",
+            )))
+        }
     };
     let status = resp.status().as_u16();
     if status == 401 {

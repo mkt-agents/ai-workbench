@@ -1,0 +1,113 @@
+/* ─── Plugin Browser ─── */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-url-input-wrapper {
+  background: var(--overlay-2);
+  border-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-url-input-wrapper:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-header {
+  border-bottom-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-count {
+  background: var(--overlay-2);
+  color: var(--text-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item:hover,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item:focus-within {
+  background: var(--overlay-3);
+  border-color: var(--overlay-4);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--accent-border);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-actions {
+  background: color-mix(in srgb, var(--chrome-bg) 82%, black);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-icon {
+  background: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-empty-icon {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-btn:hover {
+  background: var(--overlay-3);
+  color: var(--text-0);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-btn-danger:hover {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-edit-modal-header {
+  border-bottom-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-group-filter-btn {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-group-filter-btn:hover {
+  background: var(--overlay-3);
+  border-color: var(--overlay-4);
+  color: var(--text-0);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-group-filter-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-group-header:hover {
+  background: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-card {
+  background: var(--overlay-2);
+  border-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-card:hover {
+  background: var(--overlay-3);
+  border-color: var(--overlay-4);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-card-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--accent-border);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-card-icon {
+  background: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-card-footer {
+  border-top-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-hotkey,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-card-hotkey {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}

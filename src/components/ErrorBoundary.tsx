@@ -35,8 +35,8 @@ export class ErrorBoundary extends Component<Props, State> {
           style={{
             padding: 24,
             fontFamily: "system-ui, sans-serif",
-            color: "var(--text-primary, #eee)",
-            background: "var(--bg-primary, #1e1e1e)",
+            color: "var(--text-0)",
+            background: "var(--bg-1)",
             minHeight: "100vh",
             display: "flex",
             flexDirection: "column",
@@ -47,9 +47,9 @@ export class ErrorBoundary extends Component<Props, State> {
           <pre
             style={{
               padding: 12,
-              background: "rgba(255,80,80,0.1)",
-              border: "1px solid rgba(255,80,80,0.4)",
-              borderRadius: 6,
+              background: "var(--red-dim)",
+              border: "1px solid var(--red-border)",
+              borderRadius: "var(--radius-sm)",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
               fontSize: 13,
@@ -74,10 +74,10 @@ export class ErrorBoundary extends Component<Props, State> {
               onClick={this.handleReset}
               style={{
                 padding: "6px 14px",
-                borderRadius: 6,
-                border: "1px solid var(--border, #444)",
-                background: "var(--accent, #4a90e2)",
-                color: "#fff",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border)",
+                background: "var(--accent)",
+                color: "var(--on-accent)",
                 cursor: "pointer",
               }}
             >
@@ -87,8 +87,8 @@ export class ErrorBoundary extends Component<Props, State> {
               onClick={() => window.location.reload()}
               style={{
                 padding: "6px 14px",
-                borderRadius: 6,
-                border: "1px solid var(--border, #444)",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border)",
                 background: "transparent",
                 color: "inherit",
                 cursor: "pointer",

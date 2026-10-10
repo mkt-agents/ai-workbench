@@ -1,0 +1,1074 @@
+/* ===== Git 管理页改造：仓库身份区 / 提交页身份快速条 ===== */
+
+.page-scrollable.git-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 24px;
+  box-sizing: border-box;
+}
+
+/* 仓库页顶部工具条（对齐 plugin-toolbar） */
+.repos-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 0;
+  padding: 12px 14px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+
+.repos-toolbar-primary {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.repos-toolbar-context {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.repos-toolbar-context-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.repos-toolbar-subtitle {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.4;
+  max-width: 640px;
+}
+
+.repos-toolbar-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.repos-toolbar-path {
+  font-size: 11.5px;
+  color: var(--text-3);
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Repo filter box in the repos toolbar. */
+.repos-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-3);
+}
+
+.repos-search input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-0);
+  font-size: 12px;
+  width: 150px;
+  padding: 0;
+}
+
+.repos-search input::placeholder {
+  color: var(--text-3);
+}
+
+.repos-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.repos-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.repos-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 36px;
+  padding: 4px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.repos-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.repos-group-title {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-group-path {
+  flex: 1;
+  min-width: 80px;
+  max-width: min(100%, 480px);
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.repos-group-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr));
+  gap: 10px;
+  padding-bottom: 4px;
+}
+
+.repos-group-empty {
+  padding: 8px 4px;
+  font-size: 12px;
+}
+
+.repos-card-check {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  cursor: pointer;
+}
+
+.repos-card-check input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.repos-batch-bar {
+  /* Stays reachable while scrolling a long list — the selection would
+     otherwise vanish together with the progress line. */
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 0;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-subtle));
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  border-left: 3px solid var(--accent);
+}
+
+.repos-batch-count {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+  padding: 2px 8px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
+}
+
+.repos-batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.repos-batch-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.repos-batch-clear:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+}
+
+.repos-batch-clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.repos-group-check {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.repos-group-check input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.repos-group-admin {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.repos-group-admin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.repos-group-admin-btn:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.repos-group-admin-btn.is-danger:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.repos-group-admin-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.batch-identity-modal {
+  max-width: 420px;
+  width: 92%;
+}
+
+.batch-identity-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.batch-identity-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.batch-identity-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.batch-identity-item:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.batch-identity-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.batch-identity-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-0);
+}
+
+.repos-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.repos-card.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
+}
+
+/* Actions sit to the right of the info; once the info would drop under 300px they
+   wrap onto their own line instead of squeezing the title (800px min window). */
+.repos-card-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.repos-card-check {
+  padding-top: 2px;
+}
+
+.repos-card-info {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.repos-card-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.repos-card-path {
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-status-pill {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.repos-status-pill.is-warn {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border-color: var(--yellow-border);
+}
+
+.repos-status-pill.is-danger {
+  color: var(--red);
+  background: var(--red-dim);
+  border-color: var(--red-border);
+}
+
+/* Dirty count doubles as the shortcut to the commit page. */
+.repos-status-pill.is-action {
+  font-family: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.repos-status-pill.is-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--yellow) 22%, transparent);
+  border-color: var(--yellow);
+}
+
+.repos-status-pill.is-action:disabled {
+  cursor: default;
+}
+
+.repos-group-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.repos-refreshed {
+  margin-left: 4px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* Status filter + expand/collapse-all row under the toolbar's primary line. */
+.repos-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.repos-filter-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+}
+
+.repos-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.repos-filter-btn:hover {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+.repos-filter-btn.is-active {
+  color: var(--text-0);
+  background: var(--overlay-4);
+  font-weight: 600;
+}
+
+.repos-filter-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.repos-filter-btn.is-active .repos-filter-count {
+  color: var(--text-1);
+  background: var(--overlay-3);
+}
+
+.repos-collapse-all {
+  margin-left: auto;
+  width: 28px;
+  padding: 0;
+}
+
+.repos-card-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.repos-card-actions .commit-icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.commit-icon-btn-primary {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-subtle));
+  color: var(--accent);
+}
+
+.commit-icon-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg-2));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 仓库卡片身份行：信息 + 文字链，不挤进右侧操作区 */
+.git-workbench .repos-identity-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: nowrap;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+/* Title and identity rows never wrap, so every card is exactly two lines tall and a
+   grid row of cards lines up. Long values truncate: branch and email give way,
+   the bind links never do. */
+.git-workbench .repos-card-title {
+  flex-wrap: nowrap;
+  min-height: 22px;
+}
+
+.git-workbench .repos-card-title .runtime-ver {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-workbench .repos-identity-row .commit-branch-badge {
+  flex: 0 1 auto;
+  min-width: 52px;
+  max-width: 160px;
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.git-workbench .repos-card-title > :not(.runtime-ver) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.git-workbench .repos-identity-info {
+  min-width: 0;
+  flex: 0 3 auto;
+  overflow: hidden;
+}
+
+.git-workbench .repos-identity-text {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.repos-identity-link {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11.5px;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.repos-identity-link:hover {
+  text-decoration: underline;
+}
+
+.repos-identity-link.is-danger {
+  color: var(--text-3);
+}
+
+.repos-identity-link.is-danger:hover {
+  color: var(--red);
+}
+
+.git-workbench .repos-mismatch {
+  margin: 2px 0 0;
+}
+
+/* 仓库卡片身份行（非 workbench 兜底 / 通用） */
+.repos-identity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  font-size: 12.5px;
+}
+
+.repos-identity-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-identity-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 预设不一致警告条（仓库页 + 提交页共用） */
+.repos-mismatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: rgba(214, 158, 46, 0.1);
+  border: 1px solid rgba(214, 158, 46, 0.35);
+  color: var(--text-1);
+  font-size: 12.5px;
+}
+
+.repos-mismatch svg {
+  color: #d69e2e;
+  flex-shrink: 0;
+}
+
+.repos-mismatch-text {
+  flex: 1;
+  min-width: 120px;
+}
+
+/* 提交页：精致顶部工具条 */
+.commit-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.commit-toolbar-compact {
+  margin-bottom: 8px;
+  padding: 6px 12px;
+}
+
+.commit-toolbar-compact .commit-meta-row {
+  margin: 0;
+  width: 100%;
+  justify-content: space-between;
+  border-top: none;
+  padding-top: 0;
+}
+
+.commit-current-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 1;
+  max-width: min(420px, 100%);
+}
+
+.commit-current-repo .runtime-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.commit-current-repo-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-toolbar-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.commit-toolbar-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.commit-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.commit-repo-select {
+  flex: 0 1 220px;
+  width: 100%;
+  min-width: 0;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 28px;
+  background: var(--bg-2);
+  border-color: var(--border-subtle);
+}
+
+.commit-branch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  min-width: 0;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.commit-branch-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-sync-badge {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+
+.commit-icon-btn {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  color: var(--text-2);
+  flex-shrink: 0;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.commit-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-0);
+  border-color: var(--text-3);
+}
+
+.commit-icon-btn:disabled {
+  opacity: 0.5;
+}
+
+.commit-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-2);
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 6px;
+}
+
+.commit-meta-row > .commit-icon-btn:last-child {
+  margin-left: auto;
+}
+
+.commit-meta-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 提交页：身份快速切换 chips */
+.commit-identity-quick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.commit-identity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 3px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 11.5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.commit-identity-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--text-3);
+}
+
+.commit-identity-chip.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--accent);
+  color: var(--text-0);
+}
+
+.commit-identity-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.commit-identity-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+/* 绑定弹窗 */
+.repos-modal-path {
+  margin: -6px 0 10px;
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+/* 多项目扫描弹窗 */
+.scan-repos-modal {
+  max-width: 640px;
+  width: 92%;
+}
+
+.scan-repos-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.scan-repos-hint {
+  flex: 1;
+  min-width: 80px;
+  font-size: 12px;
+}
+
+.scan-repos-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 6px;
+}
+
+.scan-repos-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.scan-repos-item:hover:not(.is-existing) {
+  background: var(--bg-hover);
+}
+
+.scan-repos-item.is-existing {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.scan-repos-item input[type="checkbox"] {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.scan-repos-icon {
+  flex-shrink: 0;
+  color: var(--text-2);
+}
+
+.scan-repos-name {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.scan-repos-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repos-apply-now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.repos-modal-error {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: rgba(220, 76, 92, 0.1);
+  border: 1px solid rgba(220, 76, 92, 0.35);
+  color: var(--red);
+  font-size: 12.5px;
+}
+
+.repos-accounts-modal {
+  max-width: 640px;
+  width: 92%;
+}
+
+/* IDEA-style multi-root changelist */
+.commit-changelist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+.cl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.cl-toolbar-model {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.cl-toolbar-model .prompt-model-menu {
+  left: auto;
+  right: 0;
+}
+

@@ -493,7 +493,7 @@ async fn refresh_tokens(client: &reqwest::Client, refresh_token: &str) -> Result
         }))
         .send()
         .await
-        .map_err(|e| format!("续期请求失败: {e}"))?;
+        .map_err(|e| crate::config::friendly_http_error(e, "续期请求失败"))?;
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
     if status == 400 || status == 401 {
@@ -667,7 +667,7 @@ async fn request_usage(client: &reqwest::Client, access_token: &str, account_id:
     let resp = req
         .send()
         .await
-        .map_err(|e| UsageError::Other(format!("请求失败: {e}")))?;
+        .map_err(|e| UsageError::Other(crate::config::friendly_http_error(e, "请求失败")))?;
     let status = resp.status().as_u16();
     if status == 401 || status == 403 {
         return Err(UsageError::Unauthorized);

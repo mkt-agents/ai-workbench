@@ -1,0 +1,301 @@
+/* === ANIMATIONS === */
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } to { opacity: 1; transform: translateX(-50%) none; } }
+@keyframes pageIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.page-in { animation: pageIn 0.18s cubic-bezier(0.4, 0, 0.2, 1); height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* === MODAL === */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(var(--ink-rgb), 0.42);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fadeIn 0.12s ease;
+}
+
+/* 深色/磨砂主题下纯黑遮罩更有聚焦感；浅色主题的遮罩带墨蓝，避免整屏发灰。 */
+:is([data-theme="dark"], [data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal-overlay {
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.modal {
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: 22px;
+  width: 90%;
+  max-width: min(380px, calc(100vw - 32px));
+  box-sizing: border-box;
+  overflow: hidden;
+  animation: slideUp 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--float-shadow);
+}
+
+/* 磨砂三主题里 --bg-1 只有 3.5%~4.5% alpha —— 卡片贴在桌面上可以，弹框却是压在
+   暗遮罩上的，用它就等于没有底，正文像浮在空气里。这里给弹框单独一层接近实底的
+   磨砂面，顶部一道高光发丝线，不加 backdrop-filter（遮罩已经糊过一层了）。 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.012) 34%),
+    color-mix(in srgb, var(--chrome-bg) 78%, black);
+  border-color: var(--overlay-3);
+}
+
+.modal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 统一弹框标题行：标题（+徽章）在左，X 关闭在右，底部分隔线 */
+.modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-title-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.modal-title-row .card-title-badge {
+  flex-shrink: 0;
+}
+
+.modal-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.modal-close:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+.modal-close:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* 内容多、带滚动区的弹框（升级框）用分区页脚：次要在左、主操作在右，
+   上方一道发丝线与正文分开。 */
+.modal-actions--split {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  justify-content: space-between;
+}
+
+.modal-actions--split .modal-actions-secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modal-actions--split .modal-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Confirm Modal */
+.confirm-modal {
+  max-width: min(400px, calc(100vw - 32px));
+  padding: 22px;
+}
+
+.confirm-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+.confirm-modal-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--red-dim);
+  color: var(--red);
+  flex-shrink: 0;
+}
+
+/* 每种语义色配一圈同色发丝边：深色主题下 *-dim 底色太接近无，只有描边才立得住 */
+.confirm-modal-icon-danger {
+  background: var(--red-dim);
+  color: var(--red);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 28%, transparent);
+}
+
+.confirm-modal-icon-warning {
+  background: var(--yellow-dim);
+  color: var(--yellow);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 28%, transparent);
+}
+
+.confirm-modal-icon-info {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.confirm-modal-icon-question {
+  background: var(--green-dim);
+  color: var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 28%, transparent);
+}
+
+.confirm-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-0);
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+/* 正文与标题左缘对齐（图标 34 + gap 10），否则文字从图标下面穿出来。 */
+.confirm-modal-body {
+  color: var(--text-1);
+  font-size: 12.5px;
+  line-height: 1.65;
+  margin-left: 44px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.confirm-modal-body p {
+  margin: 0 0 6px;
+}
+
+.confirm-modal-message {
+  white-space: pre-line;
+}
+
+.confirm-modal-body strong {
+  color: var(--text-0);
+  font-weight: 500;
+}
+
+/* 之前是 --text-3 !important，在磨砂主题下几乎看不见；改成有色底的影响范围提示。 */
+.confirm-modal-warning {
+  display: block;
+  margin: 10px 0 0;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--yellow-dim);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 22%, transparent);
+  color: var(--text-1) !important;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+/* === TOAST === */
+
+/* ─── 暗黑系：按钮 overrides ─── */
+[data-theme="dark"] .btn-primary,
+.dark .btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+[data-theme="dark"] .btn-primary:hover:not(:disabled),
+.dark .btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+[data-theme="dark"] .btn-primary:active:not(:disabled),
+.dark .btn-primary:active:not(:disabled) {
+  background: var(--accent-strong);
+  opacity: 0.92;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .btn-primary {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .btn-primary:hover:not(:disabled) {
+    background: var(--accent-strong);
+  }
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .btn-primary:active:not(:disabled) {
+    background: var(--accent-strong);
+    opacity: 0.92;
+  }
+}
+
+/* ─── Animations ─── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+.typing-cursor {
+  animation: blink 1s step-end infinite;
+  font-weight: 300;
+  margin-left: 2px;
+}
+

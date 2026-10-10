@@ -214,7 +214,7 @@
   line-height: 1;
   color: var(--text-2);
   background: var(--bg-2);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-variant-numeric: tabular-nums;
   text-transform: none;
   letter-spacing: 0;
@@ -281,7 +281,7 @@
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 1px solid var(--accent-border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 
 .tr-commits ul,
@@ -338,7 +338,7 @@
 .tr-api-kind {
   padding: 1px 6px;
   font-size: 11px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .tr-api-Added {
@@ -440,7 +440,7 @@
   font-size: 11px;
   color: var(--yellow);
   background: var(--yellow-dim);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .tr-risk-sql,
@@ -562,12 +562,12 @@
 
 .tr-file-sha {
   padding: 0 5px;
-  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-2);
   background: var(--bg-2);
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .tr-commit-line {
@@ -888,14 +888,14 @@
 [data-theme="light"] .tr-multiselect-menu {
   background: rgba(252, 253, 255, 0.82);
   border-color: var(--border-subtle);
-  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 12px 40px rgba(var(--ink-rgb), 0.16), 0 4px 12px rgba(var(--ink-rgb), 0.08);
 }
 
 @media not (prefers-color-scheme: dark) {
   :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .tr-multiselect-menu {
     background: rgba(252, 253, 255, 0.82);
     border-color: var(--border-subtle);
-    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 12px 40px rgba(var(--ink-rgb), 0.16), 0 4px 12px rgba(var(--ink-rgb), 0.08);
   }
 }
 
@@ -933,7 +933,7 @@
   -webkit-appearance: none;
   background: color-mix(in srgb, var(--text-3) 16%, transparent);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: var(--transition-colors-fast);
 }
@@ -1039,7 +1039,7 @@
 .tr-history-baseline {
   flex-shrink: 0;
   padding: 0 5px;
-  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-3);
   background: var(--bg-2);
@@ -1102,7 +1102,7 @@
 /* Risk banner above stats on the overview tab */
 .tr-risk-banner { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--yellow) 8%, transparent); border: 1px solid color-mix(in srgb, var(--yellow) 30%, transparent); border-radius: var(--radius-md); font-size: 12px; color: var(--text-1); }
 .tr-risk-banner.is-empty { background: var(--bg-1); border-color: var(--border-subtle); color: var(--text-3); }
-.tr-risk-chip { display: inline-flex; gap: 4px; align-items: center; padding: 2px 9px; font-size: 11px; font-weight: 500; color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); border: 1px solid color-mix(in srgb, var(--yellow) 30%, transparent); border-radius: 999px; cursor: pointer; transition: background var(--transition-colors-fast); }
+.tr-risk-chip { display: inline-flex; gap: 4px; align-items: center; padding: 2px 9px; font-size: 11px; font-weight: 500; color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); border: 1px solid color-mix(in srgb, var(--yellow) 30%, transparent); border-radius: var(--radius-full); cursor: pointer; transition: background var(--transition-colors-fast); }
 .tr-risk-chip:hover { background: color-mix(in srgb, var(--yellow) 22%, transparent); }
 
 .tr-view-all { padding: 0; font-size: 11px; font-weight: 500; color: var(--accent); background: none; border: none; cursor: pointer; transition: color var(--transition-colors-fast); }
@@ -1115,7 +1115,7 @@
 .tr-ai-prompt-toggle svg { transition: transform var(--transition-colors-fast); }
 .tr-ai-prompt-toggle svg.is-open { transform: rotate(180deg); }
 .tr-ai-prompt-body { padding: 0 12px 10px; }
-.tr-ai-prompt textarea { width: 100%; min-height: 56px; padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--text-1); background: var(--bg-0, transparent); border: none; border-top: 1px solid var(--border-subtle); border-radius: 0; resize: vertical; outline: none; }
+.tr-ai-prompt textarea { width: 100%; min-height: 56px; padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--text-1); background: var(--bg-0); border: none; border-top: 1px solid var(--border-subtle); border-radius: 0; resize: vertical; outline: none; }
 .tr-ai-prompt textarea:focus { box-shadow: inset 0 0 0 1px var(--accent-border); }
 
 /* Requirement box: natural language, so it drops the mono face the system-prompt

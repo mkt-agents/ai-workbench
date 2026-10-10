@@ -20,6 +20,7 @@
     "clearSearch": "清空搜索",
     "bind": "绑定身份",
     "bound": "已绑定: {{name}}",
+    "boundShort": "已绑定",
     "editBinding": "编辑绑定",
     "unbind": "解绑",
     "unbindTitle": "解绑预设身份",
@@ -39,7 +40,29 @@
     "applyPreset": "应用预设",
     "applied": "已应用预设身份",
     "applyFailed": "应用失败: {{error}}",
-    "autoApplied": "已按域名绑定为 {{count}} 个仓库应用身份"
+    "autoApplied": "已按域名绑定为 {{count}} 个仓库应用身份",
+    "more": "更多",
+    "copyPath": "复制路径",
+    "pathCopied": "路径已复制",
+    "goCommitHint": "设为当前并去提交",
+    "filterLabel": "按状态筛选",
+    "filter": {
+      "all": "全部",
+      "dirty": "有改动",
+      "sync": "待同步",
+      "identity": "身份问题"
+    },
+    "clearFilter": "清除筛选",
+    "expandAll": "全部展开",
+    "collapseAll": "全部折叠",
+    "refreshedJustNow": "刚刚刷新",
+    "refreshedAgo": "{{count}} 分钟前刷新",
+    "sumDirty": "{{count}} 有改动",
+    "sumDirtyTitle": "有未提交改动的仓库数",
+    "sumBehindTitle": "远端有新提交、待拉取的仓库数",
+    "sumAheadTitle": "本地有提交、待推送的仓库数",
+    "sumIdentity": "{{count}} 身份问题",
+    "sumIdentityTitle": "未配置身份或与预设不一致的仓库数"
   },
   "workspace": {
     "other": "其它仓库",

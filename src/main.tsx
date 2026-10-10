@@ -6,8 +6,7 @@ import QuickAskBubble from "./components/QuickAskBubble";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import ErrorBoundary from "./components/ErrorBoundary";
 import "./i18n/config";
-import "./styles.css";
-import "./devtools.css";
+import "./styles/index.css";
 
 const hash = window.location.hash;
 const isQuickAskBubble = hash.startsWith("#/quick-ask-bubble");

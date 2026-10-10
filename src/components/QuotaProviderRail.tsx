@@ -21,7 +21,28 @@ import {
   type QuotaCardId,
   type QuotaProvider,
 } from "../lib/quotaProviders";
+import { providerLogoSrc } from "../lib/providerLogos";
 import type { CardStatus } from "../lib/quotaCache";
+
+/** 本机安装图标优先，否则用打包的品牌图，再否则首字母。 */
+function ProviderGlyph({
+  providerId,
+  name,
+  installIcon,
+}: {
+  providerId: string;
+  name: string;
+  installIcon?: string | null;
+}) {
+  if (installIcon) {
+    return <img src={`data:image/png;base64,${installIcon}`} alt="" draggable={false} />;
+  }
+  const logo = providerLogoSrc(providerId);
+  if (logo) {
+    return <img src={logo} alt="" draggable={false} />;
+  }
+  return <span aria-hidden="true">{name.charAt(0)}</span>;
+}
 
 /** 右侧栏里的一个已连接账号；`hidden` = 卡片或整个服务商当前不在看板上。 */
 export interface RailAccount {
@@ -162,10 +183,8 @@ function QuotaProviderRail({
                   <span className="aq-rail-mini-icon">
                     {isPending ? (
                       <RefreshCw size={12} className="spin" />
-                    ) : icon ? (
-                      <img src={`data:image/png;base64,${icon}`} alt="" draggable={false} />
                     ) : (
-                      p.name.charAt(0)
+                      <ProviderGlyph providerId={p.id} name={p.name} installIcon={icon} />
                     )}
                   </span>
                   {status && !isPending && <span className={`aq-dot aq-dot-${status}`} />}
@@ -357,11 +376,7 @@ function ProviderRow({
         </button>
       )}
       <span className="aq-rail-icon">
-        {install?.icon ? (
-          <img src={`data:image/png;base64,${install.icon}`} alt="" draggable={false} />
-        ) : (
-          <span aria-hidden="true">{provider.name.charAt(0)}</span>
-        )}
+        <ProviderGlyph providerId={provider.id} name={provider.name} installIcon={install?.icon} />
         {count > 0 && (
           <span className="aq-rail-count" title={t("railAccountCount", { count })}>
             {count}

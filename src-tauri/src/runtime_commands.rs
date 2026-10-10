@@ -1321,7 +1321,8 @@ pub async fn open_runtime_terminal(
 
 #[tauri::command]
 pub fn open_runtime_folder(path: String) -> Result<(), String> {
-    let p = PathBuf::from(path.trim());
+    // explorer 不认正斜杠，`D:/a/b` 会直接打开默认的「文档」而不报错
+    let p = PathBuf::from(path.trim().replace('/', "\\"));
     if !p.exists() {
         return Err("路径不存在".to_string());
     }

@@ -23,7 +23,7 @@
 | 后端 | Tauri v2 + Rust（rusqlite bundled） |
 | 状态 | Zustand 5（业务数据→SQLite，settings→localStorage key `workbench-settings`） |
 | i18n | i18next（`src/locales/zh-CN` / `en-US`） |
-| 样式 | 纯 CSS（`src/styles.css`，`data-theme` 驱动） |
+| 样式 | 纯 CSS（`src/styles/` 按域分片，`index.css` 汇总，`data-theme` 驱动） |
 
 ```
 src/                  # React 前端
@@ -67,7 +67,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ## 主题与视觉风格
 
-设计系统集中在 `src/styles.css`（约 1.3 万行），主题由 `html[data-theme]` 驱动，类型 `AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver'`（默认 `glass`）。
+设计系统在 `src/styles/`：`tokens.css`（全部主题块与 token，**字面色值只该出现在这里**）、`theme-glass.css`（磨砂主题共享覆盖层）、`base.css`（含 `body.resizing` 清单）、`layout.css`（标题栏/侧栏/全局滚动条）、`components.css` / `controls.css` / `modal.css` 等通用件，其余按页面一域一文件（`git-pages.css`、`quick-ask.css`、`devtools.css`…）。`index.css` 按原级联顺序 `@import` 全部分片，**同优先级规则靠源顺序决胜，调整 import 顺序等于改样式**；新页面加分片就追加在末尾。主题由 `html[data-theme]` 驱动，类型 `AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver'`（默认 `glass`）。
 
 | 主题 | 关键字 | 风格 |
 |---|---|---|
@@ -81,16 +81,18 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 **Token 约定**（新增颜色/间距一律用 token，禁止散落硬编码色值）：
 
 - 品牌：`--accent` / `--accent-strong` / `--accent-dim` / `--accent-border` / `--on-accent`
-- 语义色（略降饱和）：`--green` / `--red` / `--yellow` 及对应 `*-dim`
+- 语义色（略降饱和）：`--green` / `--red` / `--yellow` 及对应 `*-dim` / `*-border`；需要别的透明度用 `color-mix(in srgb, var(--red) 14%, transparent)`，不要写 rgba 字面量
+- 叠加层：`--overlay-1..4`（hover / 分隔 / 选中等叠在表面上的浅层，深色主题是白、浅色主题是墨蓝，约 3% / 5% / 8% / 12%）；需要自定透明度的阴影写 `rgba(var(--ink-rgb), a)`
 - 背景层级：`--bg-0`（常为 transparent）/ `--bg-1` / `--bg-2` / `--bg-3` / `--bg-hover` / `--input-bg`
 - 文字四级：`--text-0`（主）/ `--text-1` / `--text-2` / `--text-3`（最弱）
 - 边框：`--border` / `--border-subtle`；圆角 `--radius-sm|md|lg|xl|full`；间距 `--space-1..8`
 - 阴影：`--shadow-xs|sm|md|lg`、`--card-shadow`、`--surface-highlight`（卡片 / 次要按钮的 1px 顶边内高光，与投影用逗号叠加）、`--chrome-bg` / `--chrome-line`（标题栏/侧栏 chrome，**每个主题块都要定义**，漏了会回退到浅色的半透明白）
-- 圆角刻度 sm 5 / md 8（控件）/ lg 12（卡片）/ xl 16（弹框）；主题覆盖层里不要再写死 px 圆角
+- 圆角刻度 sm 5 / md 8（控件）/ lg 12（卡片）/ xl 16（弹框）/ full（胶囊）；只有 1–2px 的细节圆角可以写 px
+- 有意写死的颜色（Windows 关闭键红 `#e81123`、DEV 徽标琥珀、厂商品牌色、原生 `select option` 实底）就地注释原因；`npm run check:css`（`scripts/check-css-tokens.mjs`）会拦 `transition: all`、写死的蓝色、刻度内的 px 圆角、未定义变量和多余的 `var(--x, 回退)`，行尾 `/* token-ok: 原因 */` 可豁免。它不挂在 `build` 上，改样式后手动跑
 
-**视觉语言**：磨砂/半透明分层（玻璃主题）、极轻阴影、发丝边框、`Inter`（正文，`--font-sans`，基础字号 12.5px，`tabular-nums`）+ `JetBrains Mono`（代码 `--font-mono`）；图标统一 `lucide-react`；玻璃主题下侧栏/标题栏/卡片走 `:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"])` 共享覆盖层（约 L392 起）。
+**视觉语言**：磨砂/半透明分层（玻璃主题）、极轻阴影、发丝边框、`Inter`（正文，`--font-sans`，基础字号 12.5px，`tabular-nums`）+ `JetBrains Mono`（代码 `--font-mono`）；图标统一 `lucide-react`；玻璃主题下侧栏/标题栏/卡片走 `:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"])` 共享覆盖层（`theme-glass.css`）。
 
-**主题应用**：`src/lib/theme.ts` 的 `applyDocumentTheme()` 写 `data-theme`；`system` 时移除属性。多窗口（快问）通过 localStorage `workbench-settings` + `app-theme-changed` 事件同步。新主题色必须在 `styles.css` 各主题块补齐全部 token，不能只改一处。
+**主题应用**：`src/lib/theme.ts` 的 `applyDocumentTheme()` 写 `data-theme`；`system` 时移除属性。多窗口（快问）通过 localStorage `workbench-settings` + `app-theme-changed` 事件同步。新主题色必须在 `tokens.css` 各主题块补齐全部 token，不能只改一处。
 
 **Logo**：母版 `docs/brand/logo-silver.png`（冷银）/ `logo-ice.png`（冰蓝）；打包图标 `src-tauri/icons/`；侧栏 `src/assets/logo-silver.png`。
 
@@ -114,7 +116,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ### 质量门槛
 
-- 前端：`npm run build`（tsc）零错误；无独立 ESLint 配置。
+- 前端：`npm run build`（tsc）零错误；无独立 ESLint 配置。改了 CSS 再跑 `npm run check:css`。
 - 后端：`cargo test`（单测内联 `#[cfg(test)] mod tests`，纯函数层优先覆盖解析/判定逻辑）。
 - 新增带 `backdrop-filter` 的 UI：同步加入 `body.resizing` 关闭清单。
 - 提交信息风格：`feat:` / `fix:` / `refactor:` + 中文简述（见 `git log`）。
@@ -135,13 +137,13 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 - **禁止 `transition: all`**，禁止把布局属性（width/padding/margin/font-size/gap…）放进 transition。只用 `--transition-colors-fast` / `--transition-colors`（仅 color/border/shadow/opacity/transform）。
 - 唯一例外：`.sidebar` 折叠宽度、`.dsh-progress-fill`；`App.tsx` resize 期间给 `body` 加 `.resizing` 临时关闭。
-- **新增带 `backdrop-filter` 的界面必须加进 `styles.css` 的 `body.resizing :is(...)` 清单**。
+- **新增带 `backdrop-filter` 的界面必须加进 `src/styles/base.css` 的 `body.resizing :is(...)` 清单**。
 - 拖拽区用 `data-tauri-drag-region`（不是 Electron 的 `-webkit-app-region`）。
 
 ## 页面尺寸与自适应约定（大小窗口都要好看）
 
-- **页面内容宽度只有一个来源**：`styles.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.runtime-page`、`.git-manager-column`、工具页 `.devtools-tool` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。
-- **卡片列表用 `repeat(auto-fill, minmax(<N>px, 1fr))`，不要用 `@media` 切 `1fr 1fr`**。已定：快捷应用 280 / 片段库 320 / 环境变量 340。断点写死列数在宽屏下会把卡片拉到 700px 高、内容飘在顶部。
+- **页面内容宽度只有一个来源**：`tokens.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.runtime-page`、`.git-manager-column`、工具页 `.devtools-tool` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。
+- **卡片列表用 `repeat(auto-fill, minmax(<N>px, 1fr))`，不要用 `@media` 切 `1fr 1fr`**。已定：快捷应用 260 / 片段库 320 / 环境变量 340。断点写死列数在宽屏下会把卡片拉到 700px 高、内容飘在顶部。
 - **输入/输出区靠 flex 长高填满窗口**：`.dt-content` 是 flex 列，工具根节点 `flex: 1 0 auto`（长高但不低于自然高，内容多时页面照常滚动），主区 `flex: 1 1 auto; min-height: <原 px>`；原来的 `max-height: 280/340/360/420px`、`60vh` 等死上限改成 `min-height` 地板。有意不填满的只有：时间戳（单行 input）、HTTP 参数/请求头表格——撑开只会得到空盒子。
 - **textarea 高度交给容器，统一 `resize: none`**（只删声明会让浏览器回退成 `resize: both`，反而能横向拖）。
 - **吸顶工具条**：`position: sticky; top: 0; z-index` 之外，滚动宿主必须 `padding-top: 0`（间距改由吸顶元素 `margin-top` 提供），否则内容会从宿主那圈上内边距里露在吸顶条上方。磨砂表面用 `--chrome-bg` + `blur(20px) saturate(1.08)`（与侧栏同配方），不要 `color-mix(--bg-1 …, transparent)`——`--bg-1` 在磨砂主题下本身就只有 3.5%~4.5% alpha，二次稀释等于没有底色。

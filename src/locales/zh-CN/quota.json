@@ -20,6 +20,7 @@
   "statusExpired": "已过期",
   "statusBanned": "已停用",
   "queryFailed": "查询失败",
+  "networkFailed": "网络不通，请检查网络或代理后重试",
   "parseFailed": "余额响应解析失败",
   "creditSummaryPlan": "套餐",
   "creditsLeft": "可用积分",

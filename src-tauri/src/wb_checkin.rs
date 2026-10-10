@@ -271,7 +271,7 @@ async fn checkin_one(
     let outcome = match (config_error, request) {
         (Some(reason), _) => Err(reason),
         (None, Some(request)) => match wb_commands::execute_outbound(&request).await {
-            Err(e) => Err(format!("请求失败: {e}")),
+            Err(e) => Err(crate::config::friendly_http_error(e, "请求失败")),
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
@@ -607,7 +607,7 @@ async fn status_one(
         Err(reason) => (false, Err(reason)),
         Ok(None) => (false, Err("checkinStatus 端点的 method 为空".to_string())),
         Ok(Some(request)) => match wb_commands::execute_outbound(&request).await {
-            Err(e) => (true, Err(format!("请求失败: {e}"))),
+            Err(e) => (true, Err(crate::config::friendly_http_error(e, "请求失败"))),
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
@@ -768,7 +768,7 @@ async fn quota_one(
         return dto;
     };
     match wb_commands::execute_outbound(&request).await {
-        Err(e) => dto.message = Some(format!("请求失败: {e}")),
+        Err(e) => dto.message = Some(crate::config::friendly_http_error(e, "请求失败")),
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
