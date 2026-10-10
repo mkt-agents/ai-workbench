@@ -308,9 +308,20 @@
   white-space: nowrap;
 }
 
+.ai-model-copyable svg {
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: var(--transition-colors-fast);
+}
+
 .ai-model-copyable:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--overlay-2);
   color: var(--text-0);
+}
+
+.ai-model-copyable:hover:not(:disabled) svg,
+.ai-model-item:hover .ai-model-copyable svg {
+  opacity: 0.9;
 }
 
 .ai-model-copyable:disabled {
@@ -497,15 +508,16 @@
 .ai-model-item {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 14px 14px 10px;
+  padding: 14px 14px 12px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   background: var(--bg-1);
   box-shadow: var(--surface-highlight);
   transition: var(--transition-colors);
   position: relative;
+  overflow: hidden;
 }
 
 .ai-model-item:hover {
@@ -521,28 +533,46 @@
 .ai-model-main {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
   /* leave room for the floating checkbox */
   padding-left: 4px;
 }
 
 .ai-model-item.default {
-  background: color-mix(in srgb, var(--accent) 9%, var(--bg-1));
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  box-shadow: var(--card-shadow);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent) 12%, transparent) 0%,
+      transparent 42%
+    ),
+    color-mix(in srgb, var(--accent) 7%, var(--bg-1));
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
 }
 
 @media not (prefers-color-scheme: dark) {
   :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .ai-model-item.default {
-    background: color-mix(in srgb, var(--accent) 5%, transparent);
+    background:
+      linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--accent) 10%, transparent) 0%,
+        transparent 42%
+      ),
+      color-mix(in srgb, var(--accent) 5%, transparent);
     border-color: color-mix(in srgb, var(--accent) 22%, transparent);
     box-shadow: var(--surface-highlight), var(--card-shadow);
   }
 }
 
 [data-theme="light"] .ai-model-item.default {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent) 10%, transparent) 0%,
+      transparent 42%
+    ),
+    color-mix(in srgb, var(--accent) 5%, transparent);
   border-color: color-mix(in srgb, var(--accent) 22%, transparent);
   box-shadow: var(--surface-highlight), var(--card-shadow);
 }
@@ -552,13 +582,31 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--radius-md);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: -0.2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent); /* token-ok: brand tile highlight */
+}
+
+.ai-model-icon.has-logo {
+  color: var(--text-1);
+  background: var(--bg-2);
+  border-color: var(--border-subtle);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent); /* token-ok: tile highlight */
+  overflow: hidden;
+}
+
+.ai-model-icon img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+  border-radius: var(--radius-sm);
 }
 
 .ai-model-provider {
@@ -593,11 +641,12 @@
 .ai-model-name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--text-0);
+  letter-spacing: -0.015em;
 }
 
 /* A long name gives way before the verdict badge does. */
@@ -650,20 +699,21 @@
   font-size: 10px;
   font-weight: 600;
   color: var(--accent);
-  background: var(--bg-1);
-  padding: 3px 10px;
-  border-radius: var(--radius-lg);
+  background: var(--accent-dim);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--accent-border);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.02em;
 }
 
 .ai-model-detail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--text-2);
-  margin-top: 3px;
-  font-family: "JetBrains Mono", "SF Mono", monospace;
-  /* One line, always — long ids truncate inside the copy button. */
+  margin-top: 5px;
+  font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -674,7 +724,6 @@
   margin-top: 4px;
   display: flex;
   align-items: center;
-  /* Never wraps: the URL gives way first, so card heights stay in lockstep. */
   flex-wrap: nowrap;
   gap: 4px;
 }
@@ -695,11 +744,16 @@
 .ai-model-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   flex-wrap: wrap;
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.ai-model-actions .btn-small {
+  border-radius: var(--radius-full);
+  padding-inline: 10px;
 }
 
 .ai-model-actions .ai-action-label {

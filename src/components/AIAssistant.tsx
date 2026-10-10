@@ -20,6 +20,7 @@ import {
   providerSupportsModelList,
   type ModelPreset,
 } from "../lib/aiProviders";
+import { aiProviderLogoSrc } from "../lib/aiProviderLogos";
 
 type ProviderType = AIModelConfig["provider"];
 
@@ -1134,6 +1135,7 @@ function AIAssistant() {
   const renderConfigCard = (config: AIModelConfig, inGroup = false) => {
     const meta = getProviderMeta(config.provider);
     const providerLabel = meta?.label || config.provider;
+    const logoSrc = aiProviderLogoSrc(config.provider);
     const iconClass = meta ? `provider-${config.provider}` : "provider-custom";
     const last = config.lastTest ?? null;
     const testState = testStateOf(config);
@@ -1158,8 +1160,15 @@ function AIAssistant() {
           />
         </label>
         <div className="ai-model-main">
-          <div className={`ai-model-icon ${iconClass}`}>
-            {providerIconLabel(config.provider)}
+          <div
+            className={`ai-model-icon ${iconClass}${logoSrc ? " has-logo" : ""}`}
+            title={providerLabel}
+          >
+            {logoSrc ? (
+              <img src={logoSrc} alt="" draggable={false} />
+            ) : (
+              providerIconLabel(config.provider)
+            )}
           </div>
           <div className="ai-model-info">
             <div className="ai-model-name">
