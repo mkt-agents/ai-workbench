@@ -85,7 +85,8 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 - 背景层级：`--bg-0`（常为 transparent）/ `--bg-1` / `--bg-2` / `--bg-3` / `--bg-hover` / `--input-bg`
 - 文字四级：`--text-0`（主）/ `--text-1` / `--text-2` / `--text-3`（最弱）
 - 边框：`--border` / `--border-subtle`；圆角 `--radius-sm|md|lg|xl|full`；间距 `--space-1..8`
-- 阴影：`--shadow-xs|sm|md|lg`、`--card-shadow`、`--chrome-bg` / `--chrome-line`（标题栏/侧栏 chrome）
+- 阴影：`--shadow-xs|sm|md|lg`、`--card-shadow`、`--surface-highlight`（卡片 / 次要按钮的 1px 顶边内高光，与投影用逗号叠加）、`--chrome-bg` / `--chrome-line`（标题栏/侧栏 chrome，**每个主题块都要定义**，漏了会回退到浅色的半透明白）
+- 圆角刻度 sm 5 / md 8（控件）/ lg 12（卡片）/ xl 16（弹框）；主题覆盖层里不要再写死 px 圆角
 
 **视觉语言**：磨砂/半透明分层（玻璃主题）、极轻阴影、发丝边框、`Inter`（正文，`--font-sans`，基础字号 12.5px，`tabular-nums`）+ `JetBrains Mono`（代码 `--font-mono`）；图标统一 `lucide-react`；玻璃主题下侧栏/标题栏/卡片走 `:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"])` 共享覆盖层（约 L392 起）。
 

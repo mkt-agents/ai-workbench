@@ -44,11 +44,11 @@
   --text-2: #6a7382;
   --text-3: #939eaf;
 
-  /* 圆角 */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  /* 圆角：控件 md、卡片 lg、浮层 xl；嵌套时内层比外层小一档 */
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-full: 9999px;
 
   /* 间距 */
@@ -71,6 +71,8 @@
   --shadow-lg: 0 4px 8px rgba(15, 23, 42, 0.04), 0 18px 40px rgba(15, 23, 42, 0.07);
   --shadow-glow: none;
   --card-shadow: 0 1px 1px rgba(15, 23, 42, 0.03), 0 8px 24px rgba(15, 23, 42, 0.05);
+  /* 表面顶边高光：卡片 / 次要按钮的 1px 内高光，玻璃质感主要靠它分层 */
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
   /* 浮层投影：弹框 / 下拉菜单 / 浮动确认框共用的单一来源。
      历史上 .modal 等三处引用了 --float-shadow 却从未定义，等于所有浮层零投影。 */
   --float-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.12),
@@ -182,6 +184,11 @@
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.32);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.38);
   --shadow-glow: none;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.22);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+  --chrome-bg: rgba(20, 22, 24, 0.92);
+  --chrome-line: rgba(255, 255, 255, 0.06);
 }
 
 /* 跟随系统 — 与 dark token 一致 */
@@ -221,6 +228,11 @@
     --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.32);
     --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.38);
     --shadow-glow: none;
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.22);
+    --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+    --chrome-bg: rgba(20, 22, 24, 0.92);
+    --chrome-line: rgba(255, 255, 255, 0.06);
   }
 }
 
@@ -261,6 +273,7 @@
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.22);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
   --shadow-glow: 0 0 28px rgba(90, 159, 196, 0.1);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
 
   --chrome-bg: rgba(10, 14, 20, 0.58);
   --chrome-line: rgba(255, 255, 255, 0.06);
@@ -320,6 +333,7 @@
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.22);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
   --shadow-glow: 0 0 28px rgba(184, 192, 204, 0.08);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
 
   --chrome-bg: rgba(12, 14, 18, 0.58);
   --chrome-line: rgba(255, 255, 255, 0.06);
@@ -356,8 +370,9 @@
   --green-dim: rgba(106, 170, 132, 0.12);
   --red: #d47878;
   --red-dim: rgba(212, 120, 120, 0.1);
-  --yellow: #c4b8a8;
-  --yellow-dim: rgba(196, 184, 168, 0.1);
+  /* 警示色必须与香槟 accent 拉开色相，否则「余量偏低」看起来像普通强调 */
+  --yellow: #d2a65c;
+  --yellow-dim: rgba(210, 166, 92, 0.12);
 
   --bg-0: transparent;
   --bg-1: rgba(255, 255, 255, 0.035);
@@ -380,6 +395,7 @@
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.24);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.3);
   --shadow-glow: none;
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 
   --chrome-bg: rgba(12, 12, 11, 0.6);
   --chrome-line: rgba(255, 255, 255, 0.05);
@@ -409,9 +425,11 @@
   content: '';
   position: fixed;
   inset: 0;
+  /* 磨砂面要有东西可糊：左上香槟主光 + 右下暖灰回光，强度压在不抢内容的范围 */
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.028) 0%, transparent 14%),
-    radial-gradient(ellipse 70% 38% at 16% 0%, rgba(216, 207, 195, 0.028) 0%, transparent 50%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 16%),
+    radial-gradient(ellipse 75% 45% at 15% 0%, rgba(216, 207, 195, 0.075) 0%, transparent 55%),
+    radial-gradient(ellipse 55% 45% at 100% 100%, rgba(181, 170, 160, 0.045) 0%, transparent 50%);
   pointer-events: none;
   z-index: 0;
 }
@@ -459,15 +477,15 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card {
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 12px;
-  box-shadow: none;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight);
   transition: border-color 0.18s ease, background 0.18s ease;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card:hover {
   border-color: rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.045);
-  box-shadow: none;
+  box-shadow: var(--surface-highlight);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card-title {
@@ -493,7 +511,7 @@
   background: var(--accent);
   color: var(--on-accent);
   box-shadow: none;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   transition: background 0.12s ease, opacity 0.12s ease;
 }
 
@@ -505,7 +523,8 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-secondary {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--surface-highlight);
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 
@@ -518,7 +537,7 @@
   background: rgba(212, 120, 120, 0.1);
   color: #d47878;
   border: 1px solid rgba(212, 120, 120, 0.22);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-danger:hover:not(:disabled) {
@@ -529,7 +548,7 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .input-field {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 }
 
@@ -554,7 +573,7 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-nav-item {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   transition: background 0.1s ease, color 0.1s ease;
 }
 
@@ -584,7 +603,7 @@
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .account-item,
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .account-card {
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 
@@ -608,17 +627,17 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .status-bar {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .scope-tabs {
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .scope-tab {
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   transition: background 0.1s ease;
 }
 
@@ -658,7 +677,7 @@
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn {
   color: rgba(244, 246, 245, 0.45);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn:hover {
@@ -695,18 +714,18 @@
   border-bottom: 0.25px solid rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tabs {
   background: rgba(255, 255, 255, 0.03);
   border: 0.25px solid rgba(255, 255, 255, 0.07);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab {
   color: rgba(245, 245, 245, 0.4);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab:hover {
@@ -741,7 +760,7 @@
   font-size: 11px;
   background: rgba(255, 255, 255, 0.06);
   padding: 3px 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-item {
@@ -779,7 +798,7 @@
   font-size: 10px;
   font-weight: 500;
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   margin-left: 8px;
 }
 
@@ -838,7 +857,7 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-iframe-container {
   background: rgba(255, 255, 255, 0.02);
   border: 0.25px solid rgba(255, 255, 255, 0.06);
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-bar {
@@ -1659,7 +1678,7 @@ input, select, textarea { font-family: inherit; }
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
 }
 
 .card-title {
@@ -2290,7 +2309,7 @@ input, select, textarea { font-family: inherit; }
   border-radius: var(--radius-lg);
   padding: 16px;
   margin-bottom: 10px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
   overflow: hidden;
 }
@@ -2478,6 +2497,7 @@ input, select, textarea { font-family: inherit; }
   background: var(--bg-1);
   color: var(--text-1);
   border: 1px solid var(--border);
+  box-shadow: var(--surface-highlight), var(--shadow-xs);
 }
 
 .btn-secondary:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-0); border-color: var(--text-3); }
@@ -3845,7 +3865,7 @@ input, select, textarea { font-family: inherit; }
 .modal {
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   padding: 22px;
   width: 90%;
   max-width: min(380px, calc(100vw - 32px));
