@@ -2,13 +2,9 @@
 export const APP_GITHUB_REPO = "mkt-agents/ai-workbench";
 export const APP_RELEASES_URL = `https://github.com/${APP_GITHUB_REPO}/releases`;
 export const APP_RELEASES_API = `https://api.github.com/repos/${APP_GITHUB_REPO}/releases/latest`;
-export const APP_GITEE_URL = `https://gitee.com/${APP_GITHUB_REPO}`;
-export const APP_GITEE_RELEASES_URL = `${APP_GITEE_URL}/releases`;
-/** Gitee v5 has no /latest endpoint — the list comes newest-first, take [0]. */
-export const APP_GITEE_RELEASES_API = `https://gitee.com/api/v5/repos/${APP_GITHUB_REPO}/releases`;
 /**
- * jsDelivr 的 GitHub 包索引：按 git tag 列版本，带 `Access-Control-Allow-Origin: *`
- * 且不占 GitHub API 配额（未登录只有 60 次/小时·IP，超限即 403），所以作为兜底源。
+ * jsDelivr 的 GitHub 包索引（仍读 GitHub tag，不是独立镜像站）：可跨域、不占
+ * api.github.com 配额，作后端探测失败时的兜底。新 tag 可能滞后数分钟～数小时。
  */
 export const APP_JSDELIVR_TAGS_API = `https://data.jsdelivr.com/v1/packages/gh/${APP_GITHUB_REPO}`;
 
@@ -186,30 +182,24 @@ async function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
   return res.json();
 }
 
-/** Newest release tag on Gitee (list is unordered in practice → max by semver). */
-async function fetchGiteeLatest(): Promise<SourceResult> {
+/**
+ * Newest release tag on GitHub.
+ * 优先走后端 `update_latest_tag`：API 被匿名配额打满时会跟网页 `/releases/latest`
+ * 302（不占配额），避免只剩滞后的 jsDelivr 索引时误报「已是最新」。
+ * 后端不可用（纯 Vite 网页调试）再回落浏览器直打 API。
+ */
+async function fetchGithubLatest(): Promise<SourceResult> {
   try {
-    const data = (await fetchJson(APP_GITEE_RELEASES_API, 6000)) as Array<{
-      tag_name?: string;
-      html_url?: string;
-    }>;
-    if (!Array.isArray(data) || data.length === 0) return { reason: "没有任何 release" };
-    let tag = "";
-    let htmlUrl = APP_GITEE_RELEASES_URL;
-    for (const r of data) {
-      if (r.tag_name && compareVersions(r.tag_name, tag || "0") > 0) {
-        tag = r.tag_name;
-        htmlUrl = r.html_url || htmlUrl;
-      }
+    const { invokeUpdateLatestTag } = await import("../core/store/invocations");
+    const tag = await invokeUpdateLatestTag();
+    if (tag) {
+      const normalized = tag.replace(/^v/i, "");
+      return { tag: normalized, htmlUrl: `${APP_RELEASES_URL}/tag/v${normalized}` };
     }
-    return tag ? { tag, htmlUrl } : { reason: "release 都没有 tag" };
-  } catch (e) {
-    return { reason: describeFailure(e) };
+  } catch {
+    /* 非 Tauri 或命令失败 → 浏览器 API */
   }
-}
-
-/** Newest release tag on GitHub. */
-async function fetchGithubLatest(): Promise<SourceResult> {  try {
+  try {
     const res = await fetch(APP_RELEASES_API, {
       headers: { Accept: "application/vnd.github+json" },
       signal: AbortSignal.timeout(8000),
@@ -242,24 +232,19 @@ async function fetchJsDelivrLatest(): Promise<SourceResult> {
 }
 
 /**
- * Multi-source check for the main window's startup banner and the Settings page.
- * 三个源并发查，取最高 tag —— 任何一个"答了但落后"都不会造成降级；全失败才报错，
- * 且报错里逐源给出原因（限流 403 / 仓库 404 / 超时 / 网络不通不再被统称为"不可达"）。
- * jsDelivr 是不占 GitHub 配额、允许跨域的兜底，GitHub API 被限流时它仍能给出新版本。
+ * 版本探测：GitHub 为主（后端 `update_latest_tag`，API 失败会跟网页 302），
+ * jsDelivr 的 GitHub tag 索引作兜底。取最高 tag；全失败才报错。
+ * 无 Gitee——本仓库只发 GitHub。
  */
 export async function checkForUpdatesMultiSource(localVersion: string): Promise<UpdateCheckResult> {
-  const [gitee, github, jsdelivr] = await Promise.all([
-    fetchGiteeLatest(),
-    fetchGithubLatest(),
-    fetchJsDelivrLatest(),
-  ]);
-  const picks = [gitee, github, jsdelivr].filter(isLatest);
+  const [github, jsdelivr] = await Promise.all([fetchGithubLatest(), fetchJsDelivrLatest()]);
+  const why = (r: SourceResult) => ("reason" in r ? r.reason : "无版本号");
+  const picks = [github, jsdelivr].filter(isLatest);
   if (picks.length === 0) {
-    const why = (r: SourceResult) => ("reason" in r ? r.reason : "无版本号");
     return {
       status: "error",
       local: localVersion,
-      message: `Gitee ${why(gitee)}；GitHub ${why(github)}；jsDelivr ${why(jsdelivr)}`,
+      message: `GitHub ${why(github)}；jsDelivr ${why(jsdelivr)}`,
     };
   }
   const best = picks.reduce((a, b) => (compareVersions(b.tag, a.tag) > 0 ? b : a));
@@ -269,6 +254,14 @@ export async function checkForUpdatesMultiSource(localVersion: string): Promise<
       local: localVersion,
       remote: normalizeVersion(best.tag),
       htmlUrl: best.htmlUrl,
+    };
+  }
+  // GitHub 没答上来、只剩可能滞后的 jsDelivr：不能当成「已确认最新」。
+  if (!isLatest(github) && picks.every((p) => !isNewerVersion(localVersion, p.tag))) {
+    return {
+      status: "error",
+      local: localVersion,
+      message: `GitHub 未能确认（${why(github)}）；jsDelivr 最高 ${normalizeVersion(best.tag)}，可能滞后。请稍后重试或打开 GitHub 发布页`,
     };
   }
   return { status: "upToDate", local: localVersion, remote: normalizeVersion(best.tag) };

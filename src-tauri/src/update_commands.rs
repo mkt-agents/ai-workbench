@@ -4,8 +4,8 @@
 //! 为什么必须有看门狗：NSIS 无法覆盖正在运行的 exe，所以「先起安装器、后退本进程」
 //! 这个顺序一定失败，只能是「先排好安装器 → 退本进程 → 安装器才动手」。
 //!
-//! 更新日志与安装包**只走 GitHub**：Gitee 上这个仓库目前是 404，jsDelivr 只有 tag、
-//! 没有正文也没有资产（三源版本探测仍在前端 `src/lib/version.ts`，那是另一件事）。
+//! 更新日志与安装包**只走 GitHub**。版本探测在前端 `src/lib/version.ts`
+//! （GitHub 为主 + jsDelivr tag 索引兜底；无 Gitee）。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -127,6 +127,25 @@ fn pick_msi_asset(assets: &[GhAsset]) -> Option<&GhAsset> {
         let name = a.name.to_ascii_lowercase();
         name.ends_with(".msi") && asset_url_allowed(a.url())
     })
+}
+
+/// 从 GitHub release 页最终 URL 抽出 tag（`…/releases/tag/v0.2.14` → `0.2.14`）。
+/// 走 HTML 跳转探测时用：不占 api.github.com 匿名配额。
+fn tag_from_releases_url(url: &str) -> Option<String> {
+    const MARKER: &str = "/releases/tag/";
+    let idx = url.find(MARKER)?;
+    let rest = &url[idx + MARKER.len()..];
+    let tag = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('v');
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.to_string())
+    }
 }
 
 fn clean_release_notes(body: &str) -> String {
@@ -419,6 +438,52 @@ fn format_size(bytes: u64) -> String {
 // Tauri 命令
 // ---------------------------------------------------------------------------
 
+/// 探测 GitHub 上最新 release 的版本号（不含 `v` 前缀）。
+/// 先打 `/releases/latest` API；匿名配额 403 时改跟网页
+/// `github.com/.../releases/latest` 的 302（不占 API 配额），避免前端只靠滞后的
+/// jsDelivr 索引误判「已是最新」。
+#[tauri::command]
+pub async fn update_latest_tag() -> Result<String, WorkbenchError> {
+    let api = format!("{}/repos/{}/releases/latest", GITHUB_API, GITHUB_REPO);
+    match fetch_release(&api).await {
+        Ok(rel) => {
+            if let Some(tag) = rel
+                .tag_name
+                .as_deref()
+                .map(|t| t.trim().trim_start_matches('v'))
+                .filter(|t| !t.is_empty())
+            {
+                return Ok(tag.to_string());
+            }
+        }
+        Err(_) => { /* 走 HTML 跳转 */ }
+    }
+
+    let url = format!("{}/{}/releases/latest", GITHUB_WEB, GITHUB_REPO);
+    let resp = http_client(Duration::from_secs(15))?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| {
+            err_code(
+                ErrorCode::UpdateSourceUnreachable,
+                format!("请求 GitHub 发布页失败: {}", e),
+            )
+        })?;
+    if !resp.status().is_success() {
+        return Err(err_code(
+            ErrorCode::UpdateSourceUnreachable,
+            format!("GitHub 发布页 HTTP {}", resp.status().as_u16()),
+        ));
+    }
+    tag_from_releases_url(resp.url().as_str()).ok_or_else(|| {
+        err_code(
+            ErrorCode::UpdateSourceUnreachable,
+            format!("无法从发布页 URL 解析版本: {}", resp.url()),
+        )
+    })
+}
+
 /// 取某版本的更新日志与安装包地址。依次尝试 `v{version}` → `{version}` → latest；
 /// API 全废（多半是匿名配额 403）时改用**不占配额**的资产直链探测兜底，
 /// 只在连直链也探不到时才报错——此时前端回落到「在浏览器中打开」。
@@ -701,6 +766,25 @@ mod tests {
             asset("AI.Workbench_x64_en-US.msi", MSI_URL),
         ];
         assert!(pick_setup_asset(&assets).is_none());
+    }
+
+    #[test]
+    fn tag_from_releases_url_strips_v_and_query() {
+        assert_eq!(
+            tag_from_releases_url(
+                "https://github.com/mkt-agents/ai-workbench/releases/tag/v0.2.14"
+            )
+            .as_deref(),
+            Some("0.2.14")
+        );
+        assert_eq!(
+            tag_from_releases_url(
+                "https://github.com/mkt-agents/ai-workbench/releases/tag/0.2.14?foo=1#bar"
+            )
+            .as_deref(),
+            Some("0.2.14")
+        );
+        assert!(tag_from_releases_url("https://github.com/mkt-agents/ai-workbench/releases").is_none());
     }
 
     #[test]

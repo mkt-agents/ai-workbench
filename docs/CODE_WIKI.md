@@ -1200,7 +1200,7 @@ AIWB_AUDIT_WAIT_PID=<已安装实例PID> ...                                    
 >
 > **为什么必须有看门狗**：NSIS 覆盖不了正在运行的 exe，「先起安装器 → 再退本进程」一定失败。也不要试图在退出前直接 `ShellExecute`。
 >
-> **更新日志/资产只走 GitHub**：Gitee 上这个仓库目前 404（前端三源探测仍保留 Gitee 那一路，是为了查版本号时的多源比高），jsDelivr 只有 tag 没有正文与资产。取不到详情就降级为「在浏览器中打开」，不假装成功。
+> **版本探测 / 日志 / 资产只围绕 GitHub**（无 Gitee）：版本号走 `update_latest_tag`（API 失败跟网页 302）+ jsDelivr tag 索引兜底；详情与安装包走 `update_fetch_release_info`，API 打满时资产直链探测。取不到详情就降级为「在浏览器中打开」，不假装成功。
 >
 > **不做摘要校验**：`Cargo.toml` 没有 sha2/md5，完整性口径是 `content_length` 对比落地大小 + 下次启动版本号自然复检。
 

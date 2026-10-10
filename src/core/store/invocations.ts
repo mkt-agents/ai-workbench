@@ -391,6 +391,7 @@ export const invocations: Invocations = {
     tauriInvoke<PortListener[]>('find_port_listeners', { ports }),
   invokeKillPortListeners: (port: number, pids: number[]) =>
     tauriInvoke<PortKillResult>('kill_port_listeners', { port, pids }),
+  invokeUpdateLatestTag: () => tauriInvoke<string>('update_latest_tag'),
   invokeUpdateReleaseInfo: (version: string) =>
     tauriInvoke<ReleaseInfo>('update_fetch_release_info', { version }),
   invokeUpdateDownload: (requestId: string, url: string) =>

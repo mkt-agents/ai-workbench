@@ -554,6 +554,7 @@ pub fn run() {
             app_launcher_commands::get_app_version,
             port_commands::find_port_listeners,
             port_commands::kill_port_listeners,
+            update_commands::update_latest_tag,
             update_commands::update_fetch_release_info,
             update_commands::update_download,
             update_commands::update_install,

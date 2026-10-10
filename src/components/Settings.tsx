@@ -144,7 +144,7 @@ function Settings({ onOpenUpdate }: Props = {}) {
       const local = appVersion === "…" ? await getVersion() : appVersion;
       const result = await checkForUpdates(local);
       if (result.status === "upToDate") {
-        showMsg("success", t("about.upToDate", { version: result.local }));
+        showMsg("success", t("about.upToDate", { version: result.remote }));
       } else if (result.status === "updateAvailable") {
         setUpdateTarget({ version: result.remote, htmlUrl: result.htmlUrl });
         showMsg(

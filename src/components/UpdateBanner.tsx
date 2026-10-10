@@ -17,7 +17,7 @@ type Props = {
 /**
  * Startup update check with a non-blocking bottom-right banner.
  * Silent unless a genuinely newer, non-skipped release is found —
- * every source failing (Gitee / GitHub / jsDelivr) never nags.
+ * every source failing (GitHub / jsDelivr) never nags.
  *
  * 升级闭环的最后一环：上一轮升级重启后，凭 localStorage 的 pending 版本锚点
  * 挂出「已升级到 vX」确认横幅（10s 自动消失）；没装上则静默清锚点，
