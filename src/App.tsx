@@ -7,8 +7,6 @@ import UpdateModal from "./components/UpdateModal";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import {
   GitBranch,
-  ChevronRight,
-  ChevronDown,
   Settings,
   Puzzle,
   Network,
@@ -266,9 +264,9 @@ function App() {
       defaultOpen: true,
       children: [
         { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
+        { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
       ],
     },
-    { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
   ];
 
   const NAV_MAP: Record<string, string> = {
@@ -410,11 +408,9 @@ function App() {
                     className={`sidebar-group-header ${hasActive ? "has-active" : ""}`}
                     onClick={() => toggleGroup(node.group)}
                     type="button"
+                    aria-expanded={isOpen}
                   >
                     <span className="nav-label">{label}</span>
-                    <span className="sidebar-group-chevron">
-                      {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    </span>
                   </button>
                   {isOpen &&
                     node.children.map((child) =>

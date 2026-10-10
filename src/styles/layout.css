@@ -371,15 +371,6 @@
   opacity: 0.7;
 }
 
-.sidebar-group-chevron {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  transition: transform var(--transition-fast);
-  color: inherit;
-  opacity: 0.7;
-}
-
 .sidebar-group-item { padding-left: 12px; }
 .sidebar-group-item .nav-icon { opacity: 0.7; transform: scale(0.9); }
 .sidebar-group-item { font-size: 12px; }
