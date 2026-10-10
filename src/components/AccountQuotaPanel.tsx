@@ -23,13 +23,19 @@ import {
   Terminal,
   Trash2,
   UserPlus,
+  CalendarCheck,
 } from "lucide-react";
 import useTauriEvent from "../hooks/useTauriEvent";
 import {
+  wbCheckinNow,
+  wbGetSettings,
   wbListAccounts,
   wbQuotaStatus,
+  WB_CHECKIN_EVENT,
   WB_QUOTA_EVENT,
   type WbAccount,
+  type WbCheckinResult,
+  type WbSettings,
   type WbCreditPackage,
   type WbQuotaStatus,
 } from "../lib/workbuddy";
@@ -103,6 +109,8 @@ const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
   codex: "codex",
   deepseek: "deepseek",
 };
+
+const RAIL_COLLAPSED_KEY = "aq-rail-collapsed";
 
 const AUTH_PRODUCT: Record<AuthProvider, string> = {
   codex: "Codex",
@@ -299,6 +307,26 @@ function failedWb(account: WbAccount, e: unknown): WbQuotaStatus {
   };
 }
 
+/** 与后端整轮签到 / 额度查询的账号间隔一致（风控端点族）。 */
+const WB_SPACING_MS = 2_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isSameLocalDay(aMs: number, bMs: number): boolean {
+  return new Date(aMs).toDateString() === new Date(bMs).toDateString();
+}
+
+/** 今天是否已签到：只看账号表的 lastCheckin*，不调上游 checkinStatus 端点。 */
+function checkedInToday(account: WbAccount, nowMs: number): boolean {
+  return (
+    account.lastCheckinStatus === "ok" &&
+    account.lastCheckinAt != null &&
+    isSameLocalDay(account.lastCheckinAt * 1000, nowMs)
+  );
+}
+
 function isAccountKey(key: string): boolean {
   return !key.endsWith(":empty") && !key.endsWith(":new");
 }
@@ -325,6 +353,17 @@ function AccountQuotaPanel() {
   const [enabled, setEnabled] = useState<QuotaCardId[]>(loadEnabledCards);
   const [hidden, setHidden] = useState<string[]>(loadHiddenCards);
   const [flashKey, setFlashKey] = useState<string | null>(null);
+  const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((prev) => {
+      try {
+        localStorage.setItem(RAIL_COLLAPSED_KEY, prev ? "0" : "1");
+      } catch {
+        /* private mode / quota — the rail just reopens expanded */
+      }
+      return !prev;
+    });
+  }, []);
   const cursorAccounts = authAccounts.filter((a) => a.provider === "cursor");
   const grokAccounts = authAccounts.filter((a) => a.provider === "grok-bot");
   const dsAccounts = authAccounts.filter((a) => a.provider === "deepseek");
@@ -490,7 +529,62 @@ function AccountQuotaPanel() {
     setLoadingKeys((prev) => prev.filter((k) => k !== key));
   }, []);
 
-  /** 查一张授权类账号卡；按卡片键前缀分发到各家的查询命令。 */
+  /** 进行中的签到账号 id；结果只留本次会话，持久状态以账号表的 lastCheckin* 为准。 */
+  const [checkinBusy, setCheckinBusy] = useState<number[]>([]);
+  const [checkinResults, setCheckinResults] = useState<Record<number, WbCheckinResult>>({});
+  /** 只读本地设置（不碰上游），用于提示每日自动签到。 */
+  const [wbSettings, setWbSettings] = useState<WbSettings | null>(null);
+
+  useEffect(() => {
+    wbGetSettings().then(setWbSettings, () => undefined);
+  }, []);
+
+  useTauriEvent<WbCheckinResult>(WB_CHECKIN_EVENT, (e) => {
+    const r = e.payload;
+    setCheckinResults((prev) => ({ ...prev, [r.accountId]: r }));
+    setCheckinBusy((prev) => prev.filter((id) => id !== r.accountId));
+  }, []);
+
+  /**
+   * 签到一批 WorkBuddy 账号（前端串行、间隔 2s，与后端整轮一致）。
+   * 成功的账号随后再查一次积分，让签到所得立刻可见。
+   */
+  const checkinWb = useCallback(
+    async (ids: number[], wholePool: boolean) => {
+      if (ids.length === 0) return;
+      setCheckinBusy((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+      const succeeded: number[] = [];
+      const record = (list: WbCheckinResult[]) => {
+        setCheckinResults((prev) => {
+          const next = { ...prev };
+          for (const r of list) next[r.accountId] = r;
+          return next;
+        });
+        for (const r of list) if (r.ok) succeeded.push(r.accountId);
+      };
+      try {
+        if (wholePool) {
+          record(await wbCheckinNow(null));
+        } else {
+          for (const [i, id] of ids.entries()) {
+            if (i > 0) await sleep(WB_SPACING_MS);
+            record(await wbCheckinNow(id));
+          }
+        }
+      } catch (e) {
+        const at = Math.floor(Date.now() / 1000);
+        record(ids.map((id) => ({ accountId: id, label: "", ok: false, message: errorText(e), at, disabled: false })));
+      } finally {
+        setCheckinBusy((prev) => prev.filter((id) => !ids.includes(id)));
+        await reloadWb();
+      }
+      for (const id of succeeded) {
+        await sleep(WB_SPACING_MS);
+        await refreshWbRef.current([id]);
+      }
+    },
+    [reloadWb],
+  );
   const fetchKey = useCallback(async (key: string) => {
     if (inflight.current.has(key)) return;
     inflight.current.add(key);
@@ -536,6 +630,8 @@ function AccountQuotaPanel() {
     },
     [accounts],
   );
+  const refreshWbRef = useRef(refreshWb);
+  refreshWbRef.current = refreshWb;
 
   const cancelLogin = useCallback((provider: AuthProvider) => {
     void (provider === "codex" ? codexOauthCancel() : cursorOauthCancel()).catch(() => undefined);
@@ -716,8 +812,31 @@ function AccountQuotaPanel() {
     [enabled, setCardEnabled],
   );
 
+  const uncheckedWbIds = visibleWbIds.filter((id) => {
+    const a = accounts.find((x) => x.id === id);
+    return a != null && a.enabled && !checkedInToday(a, now);
+  });
+  const checkinRunning = checkinBusy.length > 0;
+  const autoCheckinText = wbSettings
+    ? wbSettings.checkinEnabled
+      ? t("checkinAuto", { time: wbSettings.checkinTime })
+      : t("checkinAutoOff")
+    : null;
+  const checkinAll = () => {
+    const enabledIds = accounts.filter((a) => a.enabled).map((a) => a.id);
+    // 看板上可见的未签到账号恰好是整池时交给后端整轮；否则前端逐个。
+    const wholePool =
+      uncheckedWbIds.length === enabledIds.length && enabledIds.every((id) => uncheckedWbIds.includes(id));
+    void checkinWb(uncheckedWbIds, wholePool);
+  };
+
   const railAccounts: RailAccount[] = [
-    ...accounts.map((a) => ({ key: `wb:${a.id}`, card: "workbuddy" as const, name: a.label })),
+    ...accounts.map((a) => ({
+      key: `wb:${a.id}`,
+      card: "workbuddy" as const,
+      name: a.label,
+      checkedIn: checkedInToday(a, now),
+    })),
     ...cursorAccounts.map((a) => ({
       key: `cursor:${a.id}`,
       card: "cursor" as const,
@@ -888,6 +1007,10 @@ function AccountQuotaPanel() {
         onRefresh={() => void refreshWb([account.id])}
         onHide={() => setCardHidden(key, true)}
         onAddAnother={() => setWbScanOpen(true)}
+        checkinBusy={checkinBusy.includes(account.id)}
+        checkinResult={checkinResults[account.id]}
+        autoCheckin={autoCheckinText}
+        onCheckin={() => void checkinWb([account.id], false)}
         frame={frame}
       />
     );
@@ -937,6 +1060,12 @@ function AccountQuotaPanel() {
                       text={t("summaryFailed", { count: summary.failed.length })}
                       onFocus={focusCard}
                     />
+                    <SummarySegment
+                      keys={uncheckedWbIds.map((id) => `wb:${id}`)}
+                      tone="warn"
+                      text={t("summaryUnchecked", { count: uncheckedWbIds.length })}
+                      onFocus={focusCard}
+                    />
                   </span>
                 )}
                 <span className="aq-refreshed-at">
@@ -954,6 +1083,20 @@ function AccountQuotaPanel() {
                   >
                     <Bot size={13} />
                     {wbLoading ? t("refreshing") : t("refreshWb")}
+                  </button>
+                )}
+                {visibleWbIds.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    onClick={checkinAll}
+                    disabled={checkinRunning || uncheckedWbIds.length === 0}
+                    title={[t("checkinAllHint"), autoCheckinText].filter(Boolean).join("\n")}
+                  >
+                    {checkinRunning ? <RefreshCw size={13} className="spin" /> : <CalendarCheck size={13} />}
+                    {uncheckedWbIds.length === 0 && !checkinRunning
+                      ? t("checkinAllDone")
+                      : t("checkinAll", { count: uncheckedWbIds.length })}
                   </button>
                 )}
                 <button
@@ -980,7 +1123,10 @@ function AccountQuotaPanel() {
             enabled={enabled}
             accounts={railAccounts}
             pending={login}
+            collapsed={railCollapsed}
+            onToggleCollapsed={toggleRail}
             onAdd={addAccount}
+            onCancelPending={() => login && cancelLogin(login)}
             onToggleVisible={toggleProvider}
             onFocusAccount={focusCard}
           />
@@ -1044,6 +1190,7 @@ function QuotaCardShell({
   onDelete,
   onHide,
   extraAction,
+  footNote,
   frame,
   children,
 }: {
@@ -1060,6 +1207,8 @@ function QuotaCardShell({
   /** 只从看板拿掉，不动账号本身。 */
   onHide?: () => void;
   extraAction?: ReactNode;
+  /** 底部左侧的附注（如自动签到时间），右侧仍是结果时间。 */
+  footNote?: string | null;
   frame?: CardFrame;
   children: ReactNode;
 }) {
@@ -1140,8 +1289,13 @@ function QuotaCardShell({
         </span>
       </div>
       {children}
-      {(loading || at != null) && (
-        <div className="aq-card-foot">{loading ? t("refreshing") : formatAge(at as number, now, t)}</div>
+      {(loading || at != null || footNote) && (
+        <div className="aq-card-foot">
+          {footNote && <span className="aq-card-foot-note">{footNote}</span>}
+          <span className="aq-card-foot-age">
+            {loading ? t("refreshing") : at != null ? formatAge(at, now, t) : null}
+          </span>
+        </div>
       )}
     </div>
   );
@@ -1262,6 +1416,63 @@ function CardMessage({
   return null;
 }
 
+/** WorkBuddy 卡的签到条：今日已签 / 未签 / 失败 / 被自动停用，未签与失败时可直接签到。 */
+function CheckinRow({
+  account,
+  busy,
+  result,
+  onCheckin,
+}: {
+  account: WbAccount;
+  busy: boolean;
+  result: WbCheckinResult | undefined;
+  onCheckin: () => void;
+}) {
+  const { t } = useTranslation("quota");
+  const now = useContext(NowContext);
+  const done = checkedInToday(account, now);
+  const failedToday =
+    !done &&
+    account.lastCheckinStatus === "fail" &&
+    account.lastCheckinAt != null &&
+    isSameLocalDay(account.lastCheckinAt * 1000, now);
+
+  let tone: "ok" | "bad" | "idle" = "idle";
+  let text = t("checkinNotToday");
+  if (done) {
+    tone = "ok";
+    const time = new Date((account.lastCheckinAt as number) * 1000).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    text = t("checkinDoneToday", { time });
+  } else if (result?.disabled || !account.enabled) {
+    tone = "bad";
+    text = t("checkinDisabled");
+  } else if (result && !result.ok) {
+    tone = "bad";
+    text = t("checkinFailed", { message: result.message });
+  } else if (failedToday) {
+    tone = "bad";
+    text = t("checkinFailedLast");
+  }
+
+  return (
+    <div className={`aq-checkin aq-checkin-${tone}`}>
+      <CalendarCheck size={12} className="aq-checkin-icon" />
+      <span className="aq-checkin-text" title={text}>
+        {text}
+      </span>
+      {!done && account.enabled && !result?.disabled && (
+        <button type="button" className="aq-checkin-btn" onClick={onCheckin} disabled={busy}>
+          {busy ? <RefreshCw size={11} className="spin" /> : null}
+          {tone === "bad" ? t("checkinRetry") : t("checkin")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function WorkbuddyCard({
   account,
   quota,
@@ -1269,6 +1480,10 @@ function WorkbuddyCard({
   onRefresh,
   onHide,
   onAddAnother,
+  checkinBusy,
+  checkinResult,
+  autoCheckin,
+  onCheckin,
   frame,
 }: {
   account: WbAccount;
@@ -1277,6 +1492,11 @@ function WorkbuddyCard({
   onRefresh: () => void;
   onHide: () => void;
   onAddAnother: () => void;
+  checkinBusy: boolean;
+  checkinResult: WbCheckinResult | undefined;
+  /** 每日自动签到的提示文案；设置还没读到时为 null。 */
+  autoCheckin: string | null;
+  onCheckin: () => void;
   frame: CardFrame;
 }) {
   const { t } = useTranslation("quota");
@@ -1310,9 +1530,11 @@ function WorkbuddyCard({
       onRefresh={onRefresh}
       onHide={onHide}
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      footNote={autoCheckin}
       frame={frame}
     >
       <IdentityRow name={account.label} badge={quota?.planName ?? undefined} />
+      <CheckinRow account={account} busy={checkinBusy} result={checkinResult} onCheckin={onCheckin} />
       <CardMessage quota={failure} idleText={t("wbIdle")} />
       {quota?.ok && quota.packages.length > 0 && (
         <div className="aq-card-body">

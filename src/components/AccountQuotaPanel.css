@@ -103,16 +103,16 @@
    用量区再用 margin-top: auto 沉底，进度条在一行里对齐。 */
 .aq-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--space-3);
 }
 
 .quota-page .card.aq-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  min-height: 168px;
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  gap: var(--space-2);
+  min-height: 148px;
+  padding: var(--space-3);
   border: 1px solid var(--border-subtle);
   transition: var(--transition-colors);
 }
@@ -265,11 +265,86 @@
 }
 
 .aq-card-foot {
-  margin-top: calc(-1 * var(--space-2));
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
   font-size: 10.5px;
   color: var(--text-3);
-  text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.aq-card-foot-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-card-foot-age {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* WorkBuddy 签到条：一行状态 + 右侧小按钮。 */
+.aq-checkin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.aq-checkin-ok {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.aq-checkin-bad {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.aq-checkin-icon {
+  flex-shrink: 0;
+}
+
+.aq-checkin-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-checkin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.aq-checkin-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.aq-checkin-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 
 .aq-card-actions {
@@ -297,7 +372,7 @@
 
 .aq-identity-name {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   letter-spacing: -0.01em;
   color: var(--text-0);
   min-width: 0;
@@ -308,7 +383,7 @@
 
 .aq-mono {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
 }
@@ -384,7 +459,7 @@
 /* 数字是主读数：健康时用正文色，只有余量低才上色。 */
 .aq-meter-value {
   margin-left: auto;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text-0);
@@ -477,7 +552,7 @@
 
 .aq-details {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
   gap: var(--space-2) var(--space-3);
   margin: 0;
   padding-top: var(--space-2);
@@ -600,18 +675,25 @@
 
 /* ── 右侧服务商栏 ──
    整高侧栏，左侧发丝线与看板分隔。滚动条宽度沿用全局 6px，只在悬停时显色
-   （只改颜色，不改宽度，不会让内容横跳）。 */
+   （只改颜色，不改宽度，不会让内容横跳）。可收起成 44px 图标条，宽度切换
+   不做动画（resize 约定只给 .sidebar 留了例外）。 */
 
 .aq-rail {
-  width: 272px;
+  width: 240px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-4) var(--space-3) var(--space-4) var(--space-4);
+  padding: var(--space-3);
   border-left: 1px solid var(--border-subtle);
   overflow-y: auto;
   user-select: none;
+}
+
+.aq-rail.is-collapsed {
+  width: 44px;
+  align-items: center;
+  padding: var(--space-3) 0;
 }
 
 .aq-rail::-webkit-scrollbar-thumb {
@@ -633,6 +715,10 @@
     border-top: 1px solid var(--border-subtle);
     overflow: visible;
   }
+
+  .aq-rail-collapse {
+    display: none;
+  }
 }
 
 .aq-rail-heading {
@@ -644,7 +730,7 @@
   letter-spacing: 0.04em;
   color: var(--text-3);
   white-space: nowrap;
-  padding: var(--space-1) 0;
+  padding: 2px 0;
 }
 
 .aq-rail-heading::before,
@@ -653,17 +739,61 @@
   flex: 1;
   height: 1px;
   background: var(--border-subtle);
+  order: 0;
+}
+
+.aq-rail-heading::before {
+  order: -1;
+}
+
+.aq-rail-heading > .aq-icon-btn {
+  order: 1;
+  margin-left: 0;
+  width: 20px;
+  height: 20px;
 }
 
 .aq-rail-heading:not(:first-child) {
   margin-top: var(--space-2);
 }
 
+/* 可折叠节标题：整行是按钮，左侧箭头展开时转 90°。 */
+.aq-rail-heading.is-toggle {
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.aq-rail-heading.is-toggle::before {
+  display: none;
+}
+
+.aq-rail.is-collapsed .aq-rail-collapse {
+  margin-left: 0;
+}
+
+.aq-rail-heading.is-toggle:hover {
+  color: var(--text-1);
+}
+
+.aq-rail-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.aq-rail-heading.is-open .aq-rail-chevron {
+  transform: rotate(90deg);
+}
+
 .aq-rail-empty {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-3);
   text-align: center;
-  padding: var(--space-4) var(--space-2);
+  padding: var(--space-3) var(--space-2);
   border-radius: var(--radius-md);
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
@@ -672,7 +802,7 @@
 .aq-rail-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -681,8 +811,8 @@
 .aq-rail-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 7px 6px 7px 6px;
+  gap: 6px;
+  padding: 4px 4px 4px 4px;
   border-radius: var(--radius-md);
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
@@ -702,11 +832,11 @@
   border-color: var(--accent-border);
 }
 
-/* 不支持查询的服务商：没有 + 按钮，整体弱化，用图标位对齐上一节。 */
+/* 不支持查询的服务商：没有 + 按钮，整体弱化，用 + 的位置对齐上一节。 */
 .aq-rail-row.is-static {
   background: transparent;
   border-color: transparent;
-  padding-left: 38px;
+  padding-left: 32px;
 }
 
 .aq-rail-caption {
@@ -729,8 +859,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -746,6 +876,21 @@
   color: var(--text-0);
 }
 
+/* 授权等待中：平时转圈，悬停换成 ×，点击即取消。 */
+.aq-rail-toggle .aq-rail-cancel-icon,
+.aq-rail-toggle.is-pending:hover .aq-rail-pending-icon {
+  display: none;
+}
+
+.aq-rail-toggle.is-pending:hover .aq-rail-cancel-icon {
+  display: block;
+}
+
+.aq-rail-row .aq-rail-toggle.is-pending:hover {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
 .aq-rail-row.is-added .aq-rail-toggle {
   background: var(--accent-dim);
   color: var(--accent);
@@ -755,51 +900,77 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-sm);
   background: var(--bg-2);
   color: var(--text-1);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
-  overflow: hidden;
+  position: relative;
+}
+
+/* 账号数挂在图标右上角，不占行宽，名字才放得下。 */
+.aq-rail-icon .aq-rail-count {
+  position: absolute;
+  top: -6px;
+  right: -7px;
+  min-width: 14px;
+  padding: 0 3px;
+  font-size: 9.5px;
+  line-height: 13px;
+  box-shadow: 0 0 0 1.5px var(--bg-2);
 }
 
 .aq-rail-icon img {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   object-fit: contain;
 }
 
+/* 单行：名字 + 「未安装」小灰字，域名只放在行的 title 里。 */
 .aq-rail-text {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: 4px;
   min-width: 0;
   flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .aq-rail-name {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-0);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.aq-rail-domain {
-  font-size: 11px;
+.aq-rail-missing {
+  font-size: 10.5px;
   color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.aq-rail-link {
-  flex-shrink: 0;
+/* 外链悬停才出现，浮在行尾（眼睛按钮左侧）而不占位，避免平时挤窄名字。 */
+.aq-rail-row {
+  position: relative;
+}
+
+.aq-rail-row .aq-rail-link {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
   opacity: 0;
+  background: var(--bg-2);
+}
+
+.aq-rail-row.is-toggleable .aq-rail-link {
+  right: 30px;
 }
 
 .aq-rail-row:hover .aq-rail-link,
@@ -809,7 +980,10 @@
 
 .aq-rail-row .aq-rail-eye,
 .aq-rail-row .aq-rail-link {
+  flex-shrink: 0;
   margin-left: 0;
+  width: 22px;
+  height: 22px;
 }
 
 .aq-rail-eye.is-off {
@@ -818,10 +992,10 @@
 }
 
 .aq-rail-count {
-  min-width: 18px;
-  padding: 0 5px;
-  font-size: 10.5px;
-  line-height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 15px;
   font-weight: 600;
   text-align: center;
   border-radius: var(--radius-full);
@@ -833,16 +1007,17 @@
 
 /* ── 右侧栏账号列表 ── */
 
-.aq-rail-group {
+.aq-rail-accounts {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
 .aq-rail-group-name {
-  padding: 2px 6px;
+  padding: 0 6px 1px;
   font-size: 10.5px;
   font-weight: 600;
+  line-height: 16px;
   color: var(--text-3);
 }
 
@@ -855,15 +1030,16 @@
 .aq-rail-acct {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
   width: 100%;
-  padding: 5px 6px;
+  padding: 3px 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-1);
   font: inherit;
   font-size: 12px;
+  line-height: 20px;
   text-align: left;
   cursor: pointer;
   transition: var(--transition-colors-fast);
@@ -886,6 +1062,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.aq-rail-acct-checkin {
+  flex-shrink: 0;
+  color: var(--green);
 }
 
 .aq-rail-acct-hidden {
@@ -919,7 +1100,85 @@
 }
 
 .aq-dot-reauth {
-  background: transparent;
+  background: var(--bg-1);
   box-shadow: inset 0 0 0 1.5px var(--red);
   opacity: 1;
+}
+
+/* ── 收起态：图标竖列，右上角小点是该服务商最差的账号状态（账号数在悬停提示里） ── */
+
+.aq-rail.is-collapsed {
+  gap: 0;
+}
+
+.aq-rail.is-collapsed .aq-rail-collapse {
+  width: 28px;
+  height: 28px;
+}
+
+.aq-rail-mini-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) 0 0;
+  border-top: 1px solid var(--border-subtle);
+  list-style: none;
+}
+
+.aq-rail-mini {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.aq-rail-mini:hover {
+  background: var(--bg-hover);
+}
+
+.aq-rail-mini-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+}
+
+.aq-rail-mini-icon img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+/* 服务商不在看板上：图标弱化。 */
+.aq-rail-mini.is-off .aq-rail-mini-icon {
+  opacity: 0.45;
+}
+
+.aq-rail-mini.is-pending:hover {
+  background: var(--red-dim);
+}
+
+.aq-rail-mini .aq-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
 }

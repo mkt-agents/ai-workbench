@@ -116,5 +116,23 @@
     "error": "查询失败",
     "reauth": "需重新授权"
   },
-  "dsPeak": "最近充值后最高"
+  "dsPeak": "最近充值后最高",
+  "railCollapse": "收起侧栏",
+  "railExpand": "展开侧栏",
+  "railMoreToggle": "展开 / 收起更多服务商",
+  "railCancelAuth": "等待浏览器授权中，点击取消",
+  "checkin": "签到",
+  "checkinRetry": "重试",
+  "checkinDoneToday": "今日已签到 · {{time}}",
+  "checkinDoneShort": "今日已签到",
+  "checkinNotToday": "今日未签到",
+  "checkinFailed": "签到失败：{{message}}",
+  "checkinFailedLast": "今日签到失败",
+  "checkinDisabled": "连续失败已自动停用，去 WorkBuddy 页处理",
+  "checkinAll": "全部签到（{{count}}）",
+  "checkinAllDone": "今日已全部签到",
+  "checkinAllHint": "对看板上今日未签到的 WorkBuddy 账号逐个签到（间隔 2 秒），成功后自动刷新积分。",
+  "checkinAuto": "每日 {{time}} 自动签到",
+  "checkinAutoOff": "未开启自动签到（在 WorkBuddy 页设置）",
+  "summaryUnchecked": "{{count}} 个未签到"
 }

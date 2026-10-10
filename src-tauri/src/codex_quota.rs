@@ -22,6 +22,8 @@ const ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// OpenAI 侧只登记了这个回调地址，端口不能换。
 const CALLBACK_ADDR: &str = "127.0.0.1:1455";
+/// 回调地址写的是 `localhost`，部分浏览器优先解析到 IPv6，两个都要听。
+const CALLBACK_ADDR_V6: &str = "[::1]:1455";
 const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -405,9 +407,26 @@ async fn respond(sock: &mut tokio::net::TcpStream, status: &str, body: &str) {
     let _ = sock.shutdown().await;
 }
 
-async fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, String> {
+struct CallbackListeners {
+    v4: TcpListener,
+    v6: Option<TcpListener>,
+}
+
+impl CallbackListeners {
+    async fn accept(&self) -> std::io::Result<tokio::net::TcpStream> {
+        match &self.v6 {
+            Some(v6) => tokio::select! {
+                r = self.v4.accept() => r.map(|(s, _)| s),
+                r = v6.accept() => r.map(|(s, _)| s),
+            },
+            None => self.v4.accept().await.map(|(s, _)| s),
+        }
+    }
+}
+
+async fn wait_for_code(listener: CallbackListeners, expected_state: &str) -> Result<String, String> {
     loop {
-        let (mut sock, _) = listener.accept().await.map_err(|e| e.to_string())?;
+        let mut sock = listener.accept().await.map_err(|e| e.to_string())?;
         let mut buf = vec![0u8; 8192];
         let n = match tokio::time::timeout(Duration::from_secs(5), sock.read(&mut buf)).await {
             Ok(Ok(n)) => n,
@@ -489,11 +508,15 @@ async fn refresh_tokens(client: &reqwest::Client, refresh_token: &str) -> Result
 /// 进行中的授权的取消开关；新授权会先取消旧的（旧的还占着 1455 端口）。
 static LOGIN_CANCEL: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
 
-async fn bind_callback() -> Result<TcpListener, String> {
+/// IPv4 必须绑上；IPv6 是尽力而为（本机可能禁用了 IPv6）。
+async fn bind_callback() -> Result<CallbackListeners, String> {
     let mut last = String::new();
     for _ in 0..10 {
         match TcpListener::bind(CALLBACK_ADDR).await {
-            Ok(l) => return Ok(l),
+            Ok(v4) => {
+                let v6 = TcpListener::bind(CALLBACK_ADDR_V6).await.ok();
+                return Ok(CallbackListeners { v4, v6 });
+            }
             Err(e) => last = e.to_string(),
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
