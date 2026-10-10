@@ -143,6 +143,40 @@ export const wbCheckinStatus = (accountId?: number | null) =>
 export const WB_CHECKIN_STATUS_EVENT = "wb-checkin-status-done";
 
 // ---------------------------------------------------------------------------
+// 账号额度（quota panel）
+// ---------------------------------------------------------------------------
+
+/** `get-user-resource-summary` 的一个 Packages 条目（2026-10-10 实测：字符串数字容量，无重置时间）。 */
+export interface WbCreditPackage {
+  code: string | null;
+  remain: number;
+  total: number;
+  used: number;
+}
+
+export interface WbQuotaStatus {
+  accountId: number;
+  label: string;
+  /** 协议里没有 creditSummary 端点时为 false。 */
+  configured: boolean;
+  ok: boolean;
+  message: string | null;
+  /** 订阅套餐名（实测「体验版」）；未配置或被风控拦时为 null。 */
+  planName: string | null;
+  paidUser: boolean | null;
+  packages: WbCreditPackage[];
+  creditsLeft: number | null;
+  creditsTotal: number | null;
+  at: number;
+}
+
+/** 只读查询，串行 + 每账号间隔 2s（与签到状态同一风控端点族）；失败不写账号表。 */
+export const wbQuotaStatus = (accountId?: number | null) =>
+  invoke<WbQuotaStatus[]>("wb_quota_status", { accountId: accountId ?? null });
+
+export const WB_QUOTA_EVENT = "wb-quota-done";
+
+// ---------------------------------------------------------------------------
 // 签到动作推送
 // ---------------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 {
   "available": "发现新版本 {{remote}}，可查看更新说明并升级",
+  "installed": "升级完成，AI Workbench 已是 v{{version}}",
   "view": "查看更新",
   "skipVersion": "跳过此版本",
   "close": "关闭",
@@ -21,7 +22,7 @@
   "upgradeConfirmWarning": "进行中的长任务（DeepSeek 服务、内网穿透隧道、AI 生成）会被停止。",
   "downloading": "正在下载安装包",
   "verifying": "正在校验并准备安装…",
-  "restarting": "安装程序已启动，应用即将关闭…",
+  "restarting": "正在安装，完成后应用会自动重启…",
   "progressBytes": "已下载 {{done}} / {{total}}",
   "progressBytesOpen": "已下载 {{done}}",
   "cancelDownload": "取消下载",

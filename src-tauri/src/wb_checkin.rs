@@ -481,11 +481,33 @@ fn week_to_string(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Account credit balance (`get-user-resource-summary`): sum the Packages'
-/// positive cycle remain/total capacities — same algorithm as the client's
-/// `sumSummaryCapacity`. Capacities arrive as string numbers; a missing or
-/// blocked payload yields None (the UI keeps its dash).
-pub fn parse_credit_summary(body: &str) -> Option<(f64, f64)> {
+/// Per-package credit detail from `get-user-resource-summary`（2026-10-10 实测形状：
+/// PackageCode + 字符串数字容量 Cycle{Remain,Total,Used}Capacity；**没有重置时间字段**）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditPackageDto {
+    pub code: Option<String>,
+    pub remain: f64,
+    pub total: f64,
+    pub used: f64,
+}
+
+/// 余额明细：逐包容量 + 聚合（与客户端 `sumSummaryCapacity` 同口径）+ 订阅套餐徽标。
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditSummaryDto {
+    pub packages: Vec<CreditPackageDto>,
+    pub left: f64,
+    pub total: f64,
+    /// 订阅套餐名（实测「体验版」）；未配置或被风控拦时 None。
+    pub plan_name: Option<String>,
+    pub paid_user: Option<bool>,
+}
+
+/// Parse `get-user-resource-summary` into per-package detail. Capacities arrive
+/// as string numbers; a missing or blocked payload yields None (the UI keeps its
+/// dash). Unknown-key tolerant: package code / plan name are best-effort.
+pub fn parse_credit_summary_detail(body: &str) -> Option<CreditSummaryDto> {
     let json = serde_json::from_str::<serde_json::Value>(body.trim()).ok()?;
     let empty = serde_json::Value::Null;
     let data = json.get("data").filter(|v| v.is_object()).unwrap_or(&empty);
@@ -500,24 +522,52 @@ pub fn parse_credit_summary(body: &str) -> Option<(f64, f64)> {
                 .or_else(|| v.as_f64())
         })
     };
-    let mut left = 0.0;
-    let mut total = 0.0;
-    let mut any = false;
+    let str_field = |item: &serde_json::Value, keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| item.get(*k))
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let mut packages = Vec::new();
     for item in arr {
-        if let Some(r) = num(item, &["CycleRemainCapacity", "cycleRemain"]) {
-            if r.is_finite() && r > 0.0 {
-                left += r;
-                any = true;
-            }
+        let remain = num(item, &["CycleRemainCapacity", "cycleRemain"]);
+        let total = num(item, &["CycleTotalCapacity", "cycleTotal"]);
+        let used = num(item, &["CycleUsedCapacity", "cycleUsed"]);
+        if remain.is_none() && total.is_none() && used.is_none() {
+            continue;
         }
-        if let Some(t) = num(item, &["CycleTotalCapacity", "cycleTotal"]) {
-            if t.is_finite() && t > 0.0 {
-                total += t;
-                any = true;
-            }
-        }
+        packages.push(CreditPackageDto {
+            code: str_field(item, &["PackageCode", "packageCode"]),
+            remain: remain.unwrap_or(0.0),
+            total: total.unwrap_or(0.0),
+            used: used.unwrap_or(0.0),
+        });
     }
-    any.then_some((left, total))
+    // 聚合口径与客户端一致：只累加正数容量；没有任何正数容量时整个 payload 视为无效。
+    let left: f64 = packages.iter().map(|p| p.remain).filter(|r| *r > 0.0).sum();
+    let total: f64 = packages.iter().map(|p| p.total).filter(|t| *t > 0.0).sum();
+    if packages.iter().all(|p| p.remain <= 0.0 && p.total <= 0.0) {
+        return None;
+    }
+    let plan_name = str_field(data, &["SubscriptionPackageName", "subscriptionPackageName"]);
+    let paid_user = data
+        .get("IsPaidUser")
+        .or_else(|| data.get("isPaidUser"))
+        .and_then(bool_field);
+    Some(CreditSummaryDto {
+        packages,
+        left,
+        total,
+        plan_name,
+        paid_user,
+    })
+}
+
+/// Aggregate balance (status card uses this): thin wrapper over the detail
+/// parser so both share one payload interpretation.
+pub fn parse_credit_summary(body: &str) -> Option<(f64, f64)> {
+    parse_credit_summary_detail(body).map(|d| (d.left, d.total))
 }
 
 /// Parse a checkin-status body. Accepts the payload at the top level or under
@@ -650,6 +700,128 @@ pub async fn wb_checkin_status(
         }
         let dto = status_one(Arc::clone(&conn), id, label, parsed).await;
         let _ = app.emit("wb-checkin-status-done", dto.clone());
+        results.push(dto);
+    }
+    Ok(results)
+}
+
+/// Quota detail for one account: the creditSummary endpoint only, no checkin
+/// status round-trip. Read-only; any failure lands in `message`, never the pool.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WbQuotaDto {
+    pub account_id: i64,
+    pub label: String,
+    /// False when the profile has no creditSummary endpoint at all.
+    pub configured: bool,
+    pub ok: bool,
+    pub message: Option<String>,
+    pub plan_name: Option<String>,
+    pub paid_user: Option<bool>,
+    pub packages: Vec<CreditPackageDto>,
+    pub credits_left: Option<f64>,
+    pub credits_total: Option<f64>,
+    pub at: i64,
+}
+
+async fn quota_one(
+    conn: Arc<Mutex<Connection>>,
+    account_id: i64,
+    label: String,
+    parsed: ParsedCredential,
+) -> WbQuotaDto {
+    let profile = conn
+        .lock()
+        .ok()
+        .and_then(|g| wb_commands::get_settings(&g).ok())
+        .and_then(|s| s.adapter_json)
+        .filter(|json| !json.trim().is_empty())
+        .and_then(|json| UpstreamProfile::from_json(&json).ok());
+
+    let at = credential::now_unix() * 1000;
+    let mut dto = WbQuotaDto {
+        account_id,
+        label,
+        configured: false,
+        ok: false,
+        message: None,
+        plan_name: None,
+        paid_user: None,
+        packages: Vec::new(),
+        credits_left: None,
+        credits_total: None,
+        at,
+    };
+    let Some(ep) = profile.as_ref().and_then(|p| p.credit_summary.as_ref()) else {
+        dto.message = Some("协议缺少 creditSummary 端点".to_string());
+        return dto;
+    };
+    dto.configured = true;
+    let cx = adapter::RenderContext {
+        credential: &parsed.raw,
+        token: &parsed.token,
+        cookie: &parsed.cookie,
+        model: "",
+    };
+    let Some(request) = adapter::build_request(ep, &cx) else {
+        dto.message = Some("creditSummary 端点的 method 为空".to_string());
+        return dto;
+    };
+    match wb_commands::execute_outbound(&request).await {
+        Err(e) => dto.message = Some(format!("请求失败: {e}")),
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                match parse_credit_summary_detail(&body) {
+                    Some(summary) => {
+                        dto.ok = true;
+                        dto.plan_name = summary.plan_name;
+                        dto.paid_user = summary.paid_user;
+                        dto.packages = summary.packages;
+                        dto.credits_left = Some(summary.left);
+                        dto.credits_total = Some(summary.total);
+                    }
+                    None => dto.message = Some("余额响应解析失败".to_string()),
+                }
+            } else {
+                let note = summarize_failure(&body);
+                dto.message = Some(if note.is_empty() {
+                    format!("上游 {status}")
+                } else {
+                    format!("上游 {status}：{note}")
+                });
+            }
+        }
+    }
+    dto
+}
+
+/// Manual quota query for one account or the whole enabled pool. Serial with
+/// the same 2s spacing as a status round — same risk-gated endpoint family.
+/// Read-only: nothing is written, no fail counter touched. Emits
+/// `wb-quota-done` per account so a big pool can show progress.
+#[tauri::command]
+pub async fn wb_quota_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+    account_id: Option<i64>,
+) -> Result<Vec<WbQuotaDto>, String> {
+    let conn = Arc::clone(&state.conn);
+    let targets = {
+        let guard = conn.lock().map_err(|e| e.to_string())?;
+        checkin_targets(&guard, account_id).map_err(|e| e.to_string())?
+    };
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut results = Vec::with_capacity(targets.len());
+    for (index, (id, label, parsed)) in targets.into_iter().enumerate() {
+        if index > 0 {
+            tokio::time::sleep(BETWEEN_ACCOUNTS).await;
+        }
+        let dto = quota_one(Arc::clone(&conn), id, label, parsed).await;
+        let _ = app.emit("wb-quota-done", dto.clone());
         results.push(dto);
     }
     Ok(results)
@@ -1088,6 +1260,35 @@ mod tests {
         assert!(parse_credit_summary(r#"{"code":0,"data":{}}"#).is_none());
         assert!(parse_credit_summary("not json").is_none());
         assert!(parse_credit_summary(r#"{"code":10085}"#).is_none());
+    }
+
+    #[test]
+    fn credit_summary_detail_splits_packages_and_plan() {
+        // 2026-10-10 真实实测形状（体验版账号）：两个包 + 订阅套餐名，无重置时间字段。
+        let measured = r#"{"code":0,"msg":"OK","requestId":"x","data":{
+            "Packages":[
+                {"PackageCode":"TCACA_code_007_nzdH5h4Nl0","CycleTotalCapacity":"5550","CycleRemainCapacity":"2500","CycleUsedCapacity":"3050","CycleFrozenCapacity":"0","CapacityUnit":"credits","TotalCount":27},
+                {"PackageCode":"TCACA_code_008_cfWoLwvjU4","CycleTotalCapacity":"500","CycleRemainCapacity":"500","CycleUsedCapacity":"0","CycleFrozenCapacity":"0","CapacityUnit":"credits","TotalCount":1}
+            ],
+            "SubscriptionPackageCode":"","SubscriptionPackageName":"体验版","IsPaidUser":false}}"#;
+        let d = parse_credit_summary_detail(measured).unwrap();
+        assert_eq!(d.packages.len(), 2);
+        assert_eq!(d.packages[0].code.as_deref(), Some("TCACA_code_007_nzdH5h4Nl0"));
+        assert!((d.packages[0].remain - 2500.0).abs() < 0.01);
+        assert!((d.packages[0].used - 3050.0).abs() < 0.01);
+        assert_eq!(d.plan_name.as_deref(), Some("体验版"));
+        assert_eq!(d.paid_user, Some(false));
+        assert!((d.left - 3000.0).abs() < 0.01, "left={}", d.left);
+        assert!((d.total - 6050.0).abs() < 0.01, "total={}", d.total);
+
+        // 聚合包装与明细解析同源。
+        let (left, total) = parse_credit_summary(measured).unwrap();
+        assert!((left - d.left).abs() < 0.01 && (total - d.total).abs() < 0.01);
+
+        // 只有 used 的包不参与聚合，也不让 payload 变有效；空包数组与垃圾输入保持 None。
+        assert!(parse_credit_summary_detail(r#"{"code":0,"data":{"Packages":[{"CycleUsedCapacity":"5"}]}}"#).is_none());
+        assert!(parse_credit_summary_detail(r#"{"code":0,"data":{"Packages":[]}}"#).is_none());
+        assert!(parse_credit_summary_detail("not json").is_none());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 {
   "available": "New version {{remote}} — view the release notes and upgrade",
+  "installed": "Upgrade complete — AI Workbench is now v{{version}}",
   "view": "View update",
   "skipVersion": "Skip this version",
   "close": "Close",
@@ -21,7 +22,7 @@
   "upgradeConfirmWarning": "Long-running tasks (DeepSeek service, tunnels, AI generation) will be stopped.",
   "downloading": "Downloading installer",
   "verifying": "Verifying and preparing install…",
-  "restarting": "Installer launched — the app is about to close…",
+  "restarting": "Installing — the app restarts automatically when done…",
   "progressBytes": "{{done}} of {{total}}",
   "progressBytesOpen": "{{done}} downloaded",
   "cancelDownload": "Cancel download",

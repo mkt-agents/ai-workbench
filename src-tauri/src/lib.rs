@@ -22,6 +22,11 @@ pub mod codebuddy;
 mod wb_commands;
 mod wb_checkin;
 mod wb_capture;
+mod codex_quota;
+mod cursor_quota;
+mod deepseek_quota;
+mod grok_bot_quota;
+mod quota_accounts;
 
 pub use config::*;
 
@@ -277,6 +282,8 @@ pub fn run() {
             // its schema lives next to its own code (see report_history.rs).
             report_history::ensure_schema(&conn).expect("failed to init report history schema");
             codebuddy::ensure_schema(&conn).expect("failed to init workbuddy schema");
+            codex_quota::ensure_schema(&conn).expect("failed to init codex account schema");
+            quota_accounts::ensure_schema(&conn).expect("failed to init quota account schema");
 
             // The automated-testing feature was removed; drop the tables it used
             // to own so a stale DB from an older build does not linger. Idempotent.
@@ -419,6 +426,20 @@ pub fn run() {
             wb_commands::wb_update_settings,
             wb_checkin::wb_checkin_now,
             wb_checkin::wb_checkin_status,
+            cursor_quota::cursor_quota_fetch,
+            grok_bot_quota::grok_bot_quota_fetch,
+            codex_quota::codex_quota_fetch,
+            codex_quota::codex_oauth_start,
+            codex_quota::codex_oauth_cancel,
+            codex_quota::codex_list_accounts,
+            codex_quota::codex_delete_account,
+            quota_accounts::cursor_oauth_start,
+            quota_accounts::cursor_oauth_cancel,
+            quota_accounts::deepseek_add_key,
+            quota_accounts::quota_accounts_list,
+            quota_accounts::quota_account_delete,
+            deepseek_quota::deepseek_balance_fetch,
+            wb_checkin::wb_quota_status,
             wb_checkin::wb_checkin_log_list,
             wb_checkin::wb_checkin_log_clear,
             wb_capture::wb_open_cb_login_window,

@@ -259,8 +259,9 @@ fn kill_pid(pid: u32) {
 fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        hidden_cmd("cmd")
-            .args(["/c", "start", "", url])
+        // 不能走 `cmd /c start`：cmd 会把 URL 里的 `&` 当成命令分隔符截断查询串。
+        hidden_cmd("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
             .spawn()
             .map_err(|e| format!("打开链接失败: {}", e))?;
         Ok(())

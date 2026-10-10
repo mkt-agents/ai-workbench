@@ -241,8 +241,14 @@ fn ps_quote(src: &str) -> String {
     format!("'{}'", src.replace('\'', "''"))
 }
 
-/// 看门狗脚本：等 PID 消失（最长 30s）→ 静默装 → 退出码非 0 时改弹交互安装界面，
-/// 让用户至少能看到失败原因（杀软拦截 / 文件占用）。
+/// 静默安装成功后从注册表找安装目录并拉起新版主程序——升级的最后一环是
+/// 「应用自己重新打开」，否则用户面对一个已退出的应用无从得知装没装上。
+/// 找不到注册项就什么都不做：用户手动打开也能靠前端的 pending 版本确认结果。
+/// （单行片段：作为 format! 的**值**插进去，里面的花括号不用转义。）
+const RELAUNCH_SNIPPET: &str = "$e = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -EA SilentlyContinue | Where-Object DisplayName -like 'AI Workbench*' | Select-Object -First 1; if ($e -and $e.InstallLocation) { Start-Process -FilePath (Join-Path $e.InstallLocation.Trim('\\') 'ai_workbench.exe') }";
+
+/// 看门狗脚本：等 PID 消失（最长 30s）→ 静默装 → 成功则拉起新版、失败则改弹
+/// 交互安装界面，让用户至少能看到失败原因（杀软拦截 / 文件占用）。
 ///
 /// NSIS 用 `/S`；MSI（release 里的回落资产）必须走 `msiexec /i … /qb`，
 /// 直接把 `.msi` 交给 `Start-Process` 只会打开资源管理器语义的默认动作。
@@ -265,12 +271,13 @@ fn watchdog_script(installer: &Path, app_pid: u32, max_polls: u32) -> String {
          while ((Get-Process -Id $watchId -ErrorAction SilentlyContinue) -and ($polls -lt {max})) {{ Start-Sleep -Milliseconds 250; $polls++ }}; \
          Start-Sleep -Milliseconds 500; \
          $p = Start-Process -FilePath {silent_file} -ArgumentList {silent_args} -Wait -PassThru; \
-         if (-not $p -or $p.ExitCode -ne 0) {{ Start-Process -FilePath {interactive_file} }}",
+         if (-not $p -or $p.ExitCode -ne 0) {{ Start-Process -FilePath {interactive_file} }} else {{ {relaunch} }}",
         pid = app_pid,
         max = max_polls,
         silent_file = silent_file,
         silent_args = silent_args,
         interactive_file = interactive_file,
+        relaunch = RELAUNCH_SNIPPET,
     )
 }
 
@@ -782,6 +789,10 @@ mod tests {
         assert!(script.contains(&format!("-lt {}", WATCHDOG_MAX_POLLS)));
         // PowerShell 的 $PID 是只读自动变量，覆盖它脚本会当场报错
         assert!(!script.contains("$pid="));
+        // 静默成功才拉起新版，失败走交互安装界面
+        assert!(script.contains("} else {"));
+        assert!(script.contains("'ai_workbench.exe'"));
+        assert!(script.contains("InstallLocation"));
     }
 
     #[test]
@@ -900,7 +911,9 @@ mod tests {
         assert!(script.contains(r#"-ArgumentList '/i', 'C:\updates\AI Workbench_0.2.9_x64_en-US.msi', '/qb'"#));
         assert!(!script.contains("'/S'"));
         // 回落仍然是那个 .msi（双击走安装向导）
-        assert!(script.ends_with("Start-Process -FilePath 'C:\\updates\\AI Workbench_0.2.9_x64_en-US.msi' }"));
+        assert!(script.contains("Start-Process -FilePath 'C:\\updates\\AI Workbench_0.2.9_x64_en-US.msi' }"));
+        // MSI 静默成功后同样拉起新版
+        assert!(script.ends_with("else { $e = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -EA SilentlyContinue | Where-Object DisplayName -like 'AI Workbench*' | Select-Object -First 1; if ($e -and $e.InstallLocation) { Start-Process -FilePath (Join-Path $e.InstallLocation.Trim('\\') 'ai_workbench.exe') } }"));
     }
 
     #[test]

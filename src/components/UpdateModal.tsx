@@ -19,7 +19,7 @@ import MarkdownView from "./MarkdownView";
 import { useConfirm } from "./ConfirmModal";
 import useTauriEvent from "../hooks/useTauriEvent";
 import { parseInvokeError } from "../hooks/useInvokeError";
-import { skipVersion } from "../lib/version";
+import { clearPendingUpdate, markPendingUpdate, skipVersion } from "../lib/version";
 import type { ReleaseInfo, UpdateProgress } from "../core/types";
 
 type Props = {
@@ -134,10 +134,14 @@ function UpdateModal({ version, fallbackHtmlUrl, onClose }: Props) {
     try {
       const file = await invokeUpdateDownload(requestId, assetUrl);
       setPhase("installing");
+      // 先落「待确认升级」锚点再交棒：install 命令执行中应用就会退出，
+      // 重启后横幅靠它确认安装生效；spawn 失败则立刻清掉，不留假凭证。
+      markPendingUpdate(targetVersion);
       await invokeUpdateInstall(file.path);
       // 成功即退出本应用：留在 restarting 态，让用户看到发生了什么。
       setPhase("restarting");
     } catch (e) {
+      clearPendingUpdate();
       finishFailure(e);
     } finally {
       requestIdRef.current = null;

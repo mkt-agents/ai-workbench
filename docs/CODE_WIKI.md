@@ -609,7 +609,7 @@ TrayTunnelUrls { ... }                     // 托盘隧道 URL
 8. `tray::ensure_quick_ask_window()`
 9. `tray::set_quick_ask_bubble_visible_inner()`
 
-**invoke_handler**: **150 条命令**（`lib.rs` 的 `generate_handler!` 实际计数：统计列表内 `模块::命令,` 行，2026-10-09 核对当天为 148 条，其后加了 `port_commands` 的 2 条；此前文档写的 150 是把 `.invoke_handler(tauri::generate_handler![` 与 `.run(tauri::generate_context!())` 两行也算进去了），完整清单见第 10 节。
+**invoke_handler**: **164 条命令**（`lib.rs` 的 `generate_handler!` 实际计数：统计列表内 `模块::命令,` 行，2026-10-10 核对为 164 条，当日新增额度域 14 条：`wb_quota_status`、`cursor_quota_fetch`、`grok_bot_quota_fetch`、Codex 5 条、`quota_accounts.rs` 5 条与 `deepseek_balance_fetch`；此前文档写的 150 是把 `.invoke_handler(tauri::generate_handler![` 与 `.run(tauri::generate_context!())` 两行也算进去了），完整清单见第 10 节。
 
 ### 8.2 `config.rs` — 常量与错误码
 
@@ -1039,6 +1039,8 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `inspect_cursor_update_state` | — | UpdateStateInspect |
 | `cleanup_cursor_update_state` | — | CleanupResult |
 
+> `cursor_quota_fetch`（`cursor_quota.rs`）不在上表：它不属于多身份管理，命令落在额度页——只读打开默认 profile 的 `state.vscdb` 取 `cursorAuth/*` 登录态，POST `DashboardService/GetCurrentPeriodUsage`（Bearer）拉当前账期用量，DTO 不含凭证。见 10.15 之后的 wb 域「额度」行。
+
 ### 10.7 DB Commands（2 条）
 
 | 命令 | 参数 | 返回 |
@@ -1135,6 +1137,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | 账号池 | `wb_list_accounts` · `wb_add_account_manual` · `wb_update_account` · `wb_delete_account` · `wb_refresh_account_credential` · `wb_probe_account` |
 | 设置 | `wb_get_settings` · `wb_update_settings`（上游协议 JSON 整体存 `wb_settings.adapter_json`，端点不写死） |
 | 签到 | `wb_checkin_status` · `wb_checkin_now` · `wb_checkin_log_list` · `wb_checkin_log_clear` |
+| 额度 | `wb_quota_status`（只读查 creditSummary 端点，按积分包拆分容量；事件 `wb-quota-done` 逐账号推送，账号额度页用） · `cursor_oauth_start(provider)` / `cursor_oauth_cancel`（Cursor 浏览器登录 `loginDeepControl` + 轮询 `auth/poll`，Cursor 与 Grok Bot 共用，令牌存 `quota_accounts`） · `deepseek_add_key`（先验余额再存 API Key） · `quota_accounts_list` / `quota_account_delete` · `cursor_quota_fetch(id)`（→ `DashboardService/GetCurrentPeriodUsage`） · `grok_bot_quota_fetch(id)`（→ `DashboardService/GetSandUsageStatus`） · `deepseek_balance_fetch(id)`（→ `api.deepseek.com/user/balance`） · `codex_oauth_start` / `codex_oauth_cancel`（链接授权：auth.openai.com PKCE，本机 `127.0.0.1:1455` 收回调，令牌存 `codex_accounts` 表） · `codex_list_accounts` / `codex_delete_account` · `codex_quota_fetch(id)`（临期自动续期 → `chatgpt.com/backend-api/wham/usage`，5 小时 / 每周限额） |
 | 扫码登录 | `wb_open_cb_login_window` · `wb_close_cb_login_window` · `wb_capture_cb_login_cookies` · `wb_read_cb_login_probe` · `wb_cb_login_selftest` |
 
 ### 10.16 快捷应用 Commands（8 条，`app_launcher_commands.rs`）
@@ -1157,7 +1160,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `find_port_listeners(ports)` | 查这些端口谁在监听：PID / 进程名 / 完整 exe 路径（`QueryFullProcessImageNameW`，无需新增 windows feature）/ IPv4+IPv6 地址（双栈同 PID 合并）/ 保护标记 |
 | `kill_port_listeners(port, pids)` | `taskkill /T /F` 连进程树结束。**杀前重读 netstat**，只杀此刻仍监听该端口的 PID（PID 会被回收）；PID ≤ 4 与 csrss / lsass / svchost 等一律拒绝；返回 `portReleased`（bind 探针 **且** netstat 复检都过） |
 
-> 合计核对（2026-10-09）：`lib.rs` 的 `generate_handler!` 实际注册 **150 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `quick_ask_bubble_ready`；当日 148 条的核对结果之后又加了 `port_commands` 2 条）。此前修正的两处历史计数偏差仍然成立：HTTP 客户端下线使 devtools 域从 1 条变 0 条；`migrate_account_to_profile` 只是 `cursor/mod.rs` 的内部函数、从未注册为命令，Cursor 章节因此是 20 条而非 21 条（更早文档写的 150 还把 `generate_handler!` 前后的两行非命令文本也计入了）。
+> 合计核对（2026-10-10）：`lib.rs` 的 `generate_handler!` 实际注册 **164 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `quick_ask_bubble_ready`；当日新增额度域 14 条：`wb_quota_status`、`cursor_quota_fetch`、`grok_bot_quota_fetch`，Codex 的 `codex_oauth_start`、`codex_oauth_cancel`、`codex_list_accounts`、`codex_delete_account`、`codex_quota_fetch`，`quota_accounts.rs` 的 `cursor_oauth_start`、`cursor_oauth_cancel`、`deepseek_add_key`、`quota_accounts_list`、`quota_account_delete`，以及 `deepseek_balance_fetch`）。此前修正的两处历史计数偏差仍然成立：HTTP 客户端下线使 devtools 域从 1 条变 0 条；`migrate_account_to_profile` 只是 `cursor/mod.rs` 的内部函数、从未注册为命令，Cursor 章节因此是 20 条而非 21 条（更早文档写的 150 还把 `generate_handler!` 前后的两行非命令文本也计入了）。
 
 ### 10.17 Update Commands（3 条，`update_commands.rs`）
 

@@ -114,6 +114,41 @@ export function getSkippedVersion(): string | null {
   }
 }
 
+/**
+ * 「已点升级、等安装结果」的 localStorage 锚点：写入目标版本，应用随后退出、
+ * NSIS 静默安装并拉起新版；重启后据此确认安装是否真的生效（本轮升级唯一凭证）。
+ * 必须在交给 `update_install` **之前**写——那条命令执行中应用就会退出。
+ */
+export const PENDING_UPDATE_KEY = "update-pending-version";
+
+export function markPendingUpdate(version: string): void {
+  try {
+    localStorage.setItem(PENDING_UPDATE_KEY, normalizeVersion(version));
+  } catch {
+    /* 存储不可用：重启后无从确认，横幅静默跳过 */
+  }
+}
+
+export function clearPendingUpdate(): void {
+  try {
+    localStorage.removeItem(PENDING_UPDATE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 取走待确认的升级记录。当前版本 ≥ 记录值 → 安装生效，返回目标版本；否则 null（让常规「发现新版本」横幅接管）。 */
+export function takeInstalledUpdate(localVersion: string): string | null {
+  try {
+    const pending = localStorage.getItem(PENDING_UPDATE_KEY);
+    if (!pending) return null;
+    localStorage.removeItem(PENDING_UPDATE_KEY);
+    return compareVersions(localVersion, pending) >= 0 ? pending : null;
+  } catch {
+    return null;
+  }
+}
+
 export type UpdateCheckResult =
   | { status: "upToDate"; local: string; remote: string }
   | { status: "updateAvailable"; local: string; remote: string; htmlUrl: string }

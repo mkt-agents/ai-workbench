@@ -6913,6 +6913,11 @@ input, select, textarea { font-family: inherit; }
   color: var(--accent);
 }
 
+/* 升级完成确认横幅：图标换语义绿，其余复用横幅本体 */
+.update-banner--success .update-banner-icon {
+  color: var(--green);
+}
+
 .update-banner-text {
   flex: 1;
   min-width: 0;
