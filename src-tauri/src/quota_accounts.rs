@@ -4,6 +4,7 @@
 //!   （`cursor.com/loginDeepControl` + PKCE，后台轮询 `api2.cursor.sh/auth/poll`
 //!   取令牌），同一套令牌分别查 DashboardService 的两个用量端点。
 //! - DeepSeek 没有授权链接，存开放平台 API Key，查 `/user/balance`。
+//! - Qoder（国内版）走它自己的设备授权，令牌约 1 小时过期，续期逻辑在 `qoder_quota.rs`。
 //!
 //! 令牌只存本机 SQLite 的 `quota_accounts` 表（不进数据导出），DTO 不含任何令牌。
 //! Codex 有自己的 OAuth 与续期逻辑，单独在 `codex_quota.rs`。
@@ -32,7 +33,23 @@ const SCHEMA_SQL: &str = r#"
 
 /// Idempotent; called from the setup block next to the other tables.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())
+    conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
+    let has_expires: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('quota_accounts') WHERE name = 'expires_at'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| e.to_string())?;
+    if !has_expires {
+        conn.execute(
+            "ALTER TABLE quota_accounts ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +57,7 @@ pub enum Provider {
     Cursor,
     Grok,
     DeepSeek,
+    Qoder,
 }
 
 impl Provider {
@@ -48,6 +66,7 @@ impl Provider {
             Provider::Cursor => "cursor",
             Provider::Grok => "grok-bot",
             Provider::DeepSeek => "deepseek",
+            Provider::Qoder => "qoder",
         }
     }
 
@@ -56,6 +75,7 @@ impl Provider {
             "cursor" => Ok(Provider::Cursor),
             "grok-bot" => Ok(Provider::Grok),
             "deepseek" => Ok(Provider::DeepSeek),
+            "qoder" => Ok(Provider::Qoder),
             other => Err(format!("不支持的服务商: {other}")),
         }
     }
@@ -75,6 +95,9 @@ pub struct QuotaAccountDto {
 pub(crate) struct StoredToken {
     pub label: Option<String>,
     pub access_token: String,
+    pub refresh_token: String,
+    /// unix 秒；0 = 未知（Cursor 系与 DeepSeek 不记录）。
+    pub expires_at: i64,
 }
 
 /// 同一服务商下同一主体（JWT sub / API Key 掩码）重复授权只更新令牌。
@@ -142,18 +165,39 @@ pub fn list_accounts(conn: &Connection, provider: Option<Provider>) -> Result<Ve
 
 pub(crate) fn load_token(conn: &Connection, id: i64, provider: Provider) -> Result<StoredToken, String> {
     conn.query_row(
-        "SELECT label, access_token FROM quota_accounts WHERE id = ?1 AND provider = ?2",
+        "SELECT label, access_token, refresh_token, expires_at
+           FROM quota_accounts WHERE id = ?1 AND provider = ?2",
         params![id, provider.key()],
         |r| {
             Ok(StoredToken {
                 label: r.get(0)?,
                 access_token: r.get(1)?,
+                refresh_token: r.get(2)?,
+                expires_at: r.get(3)?,
             })
         },
     )
     .optional()
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "该账号已被移除".to_string())
+}
+
+/// 续期后写回令牌对；账号已被删除时静默忽略。
+pub(crate) fn update_tokens(
+    conn: &Connection,
+    id: i64,
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE quota_accounts
+            SET access_token = ?2, refresh_token = ?3, expires_at = ?4, updated_at = ?5
+          WHERE id = ?1",
+        params![id, access_token, refresh_token, expires_at, now_unix()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
@@ -204,7 +248,7 @@ pub fn parse_poll_response(body: &str) -> Option<(String, String)> {
     Some((access.to_string(), refresh.to_string()))
 }
 
-fn random_uuid() -> String {
+pub(crate) fn random_uuid() -> String {
     use rand::RngCore;
     let mut b = [0u8; 16];
     rand::rng().fill_bytes(&mut b);
@@ -244,6 +288,17 @@ async fn fetch_cursor_email(client: &reqwest::Client, token: &str) -> Option<Str
 
 static LOGIN_CANCEL: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
 
+/// 浏览器授权同一时刻只有一个（Cursor 系与 Qoder 共用）：新开一个会取消旧的。
+pub(crate) fn arm_login_cancel() -> tokio::sync::oneshot::Receiver<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    if let Ok(mut slot) = LOGIN_CANCEL.lock() {
+        if let Some(old) = slot.replace(tx) {
+            let _ = old.send(());
+        }
+    }
+    rx
+}
+
 async fn poll_cursor_login(client: &reqwest::Client, uuid: &str, verifier: &str) -> (String, String) {
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -269,15 +324,10 @@ pub async fn cursor_oauth_start(
     provider: String,
 ) -> Result<QuotaAccountDto, String> {
     let provider = Provider::parse(&provider)?;
-    if provider == Provider::DeepSeek {
-        return Err("DeepSeek 不走浏览器授权，请填写 API Key".to_string());
+    if !matches!(provider, Provider::Cursor | Provider::Grok) {
+        return Err("该服务商不走 Cursor 授权".to_string());
     }
-    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    if let Ok(mut slot) = LOGIN_CANCEL.lock() {
-        if let Some(old) = slot.replace(cancel_tx) {
-            let _ = old.send(());
-        }
-    }
+    let cancel_rx = arm_login_cancel();
 
     let verifier = random_b64(32);
     let uuid = random_uuid();
@@ -393,6 +443,18 @@ mod tests {
         assert_eq!(list_accounts(&c, None).unwrap().len(), 2);
         delete_account(&c, a).unwrap();
         assert_eq!(list_accounts(&c, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ensure_schema_adds_expires_at_to_old_tables() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA_SQL).unwrap();
+        ensure_schema(&c).unwrap();
+        ensure_schema(&c).unwrap();
+        let id = upsert_account(&c, Provider::Qoder, "u1", Some("q@x.cn"), "a", "r", 1).unwrap();
+        update_tokens(&c, id, "a2", "r2", 3600).unwrap();
+        let tok = load_token(&c, id, Provider::Qoder).unwrap();
+        assert_eq!((tok.access_token.as_str(), tok.refresh_token.as_str(), tok.expires_at), ("a2", "r2", 3600));
     }
 
     #[test]

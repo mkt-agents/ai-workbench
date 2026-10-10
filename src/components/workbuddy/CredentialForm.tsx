@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { wbAddAccount, wbRefreshAccountCredential, type WbCredentialType } from "../../lib/workbuddy";
 import { useInvokeErrorTranslator } from "../../hooks/useInvokeError";
+import "./WbModal.css";
 
 export interface CredentialPrefill {
   label?: string;

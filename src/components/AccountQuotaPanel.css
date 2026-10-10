@@ -63,6 +63,116 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+/* 信息与按钮各成一组：窄窗口下按钮组整体换行，不会拆散到两行。 */
+.aq-toolbar-info,
+.aq-toolbar-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.aq-toolbar-info,
+.aq-toolbar-buttons {
+  flex-wrap: wrap;
+}
+
+.aq-toolbar-buttons {
+  gap: var(--space-2);
+}
+
+/* 工具条弹层（WorkBuddy 自动签到设置）。--bg-1 在浅色与磨砂主题下是半透明的，
+   直接用会透出下面的卡片：把它叠在一层不透明底色上；不用 backdrop-filter。 */
+.aq-pop-anchor {
+  position: relative;
+}
+
+.aq-pop {
+  --aq-pop-base: #ffffff;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  padding: 12px;
+  background: linear-gradient(var(--bg-1), var(--bg-1)), var(--aq-pop-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--float-shadow, var(--shadow-md));
+  font-family: var(--font-sans);
+  text-align: left;
+}
+
+:is([data-theme="dark"], [data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .aq-pop {
+  --aq-pop-base: #15171b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .aq-pop {
+    --aq-pop-base: #15171b;
+  }
+}
+
+.aq-pop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aq-pop-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-0);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aq-pop-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.aq-pop .aq-pop-time {
+  flex: none;
+  width: 88px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.aq-pop-status,
+.aq-pop-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.aq-pop-status {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.aq-pop-hint {
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+  color: var(--text-3);
 }
 
 /* 工具条摘要：「6 个账号 · 2 个余量低 …」，异常段可点击定位到卡片。 */
@@ -99,8 +209,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 卡片列表用 auto-fill 网格，不写死列数；默认 stretch 让同行卡片等高，
-   用量区再用 margin-top: auto 沉底，进度条在一行里对齐。 */
+/* 卡片列表用 auto-fill 网格，不写死列数；默认 stretch 让同行卡片等高。
+   用量区紧跟身份行（第一条进度条在一行里对齐），签到条放在用量区之后，
+   页脚 margin-top: auto 沉底——用量区若沉底，明细行数不同会让进度条高低错开。 */
 .aq-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -265,9 +376,12 @@
 }
 
 .aq-card-foot {
+  margin-top: auto;
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  min-height: 20px;
   font-size: 10.5px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
@@ -285,17 +399,24 @@
   flex-shrink: 0;
 }
 
-/* WorkBuddy 签到条：一行状态 + 右侧小按钮。 */
+/* WorkBuddy 签到状态：底部行最左侧的胶囊，未签到时尾部带小按钮。 */
 .aq-checkin {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 60%;
   min-width: 0;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
+  padding: 1px 4px 1px 7px;
+  border-radius: var(--radius-full);
   background: var(--bg-2);
-  font-size: 11.5px;
+  font-size: 11px;
+  line-height: 18px;
   color: var(--text-2);
+}
+
+.aq-checkin:not(:has(.aq-checkin-btn)) {
+  padding-right: 8px;
 }
 
 .aq-checkin-ok {
@@ -313,7 +434,6 @@
 }
 
 .aq-checkin-text {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -325,15 +445,15 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  padding: 1px 8px;
+  padding: 0 8px;
   border: 1px solid var(--accent-border);
   border-radius: var(--radius-full);
   background: var(--accent-dim);
   color: var(--accent);
   font: inherit;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
-  line-height: 18px;
+  line-height: 16px;
   cursor: pointer;
   transition: var(--transition-colors-fast);
 }
@@ -406,7 +526,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  margin-top: auto;
 }
 
 .aq-meter {
@@ -552,7 +671,8 @@
 
 .aq-details {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  /* 固定三列，各卡片明细列对齐；不用 auto-fit 1fr，否则两项时会各占半宽。 */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-2) var(--space-3);
   margin: 0;
   padding-top: var(--space-2);
@@ -564,6 +684,10 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.aq-detail.is-wide {
+  grid-column: span 2;
 }
 
 .aq-detail dt {
@@ -1072,6 +1196,28 @@
 .aq-rail-acct-hidden {
   flex-shrink: 0;
   color: var(--text-3);
+}
+
+.aq-rail-acct-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.aq-rail-acct-row > .aq-rail-acct {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 占位常驻、只切透明度：悬停时不挤动名字的截断位置。 */
+.aq-rail-acct-del {
+  flex: none;
+  opacity: 0;
+}
+
+.aq-rail-acct-row:hover > .aq-rail-acct-del,
+.aq-rail-acct-del:focus-visible {
+  opacity: 1;
 }
 
 .aq-dot {

@@ -17,6 +17,7 @@ import { listen } from "@tauri-apps/api/event";
 import ModalTitleRow from "../ModalTitleRow";
 import CredentialForm, { type RenewAccount } from "./CredentialForm";
 import { useInvokeErrorTranslator } from "../../hooks/useInvokeError";
+import "./WbModal.css";
 
 type Phase = "opening" | "waiting" | "confirming" | "verifying" | "saved" | "failed";
 

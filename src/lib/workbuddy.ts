@@ -78,6 +78,20 @@ export const wbGetSettings = () => invoke<WbSettings>("wb_get_settings");
 
 export const wbUpdateSettings = (patch: WbSettingsPatch) => invoke<WbSettings>("wb_update_settings", { patch });
 
+/** 协议 JSON 里配置了某个端点（如 `checkin` / `checkinStatus`）；没配时对应功能必然失败，入口应禁用。 */
+export function hasAdapterEndpoint(settings: WbSettings | null | undefined, key: "checkin" | "checkinStatus"): boolean {
+  const raw = settings?.adapterJson?.trim();
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown> | null;
+    return !!parsed?.[key];
+  } catch {
+    return false;
+  }
+}
+
+export const hasCheckinEndpoint = (settings: WbSettings | null | undefined) => hasAdapterEndpoint(settings, "checkin");
+
 /** epoch 秒 → 本地日期串；无 exp 时给中性提示。 */
 export function formatExpiry(expUnix: number | null): { text: string; tone: "none" | "ok" | "warn" | "bad" } {
   if (expUnix == null) return { text: "—", tone: "none" };

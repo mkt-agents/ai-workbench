@@ -36,9 +36,15 @@ pub struct CursorQuotaDto {
     pub total_percent_used: Option<f64>,
     /// 套餐外赠送用量（美分）；totalSpend = includedSpend + bonusSpend。
     pub bonus_spend: Option<f64>,
-    /// "team" = 企业席位，limit 口径是团队共享池；"individual" = 个人。
+    /// spendLimitUsage 是按量付费（On-Demand）预算，不是套餐额度：
+    /// limitType 表示预算按团队（team）还是按人（user）算，不代表席位类型。
     pub limit_type: Option<String>,
+    /// 团队级按量预算已用 / 上限（美分）。
     pub pooled_used: Option<f64>,
+    pub pooled_limit: Option<f64>,
+    /// 个人按量预算已用 / 上限（美分）。
+    pub individual_used: Option<f64>,
+    pub individual_limit: Option<f64>,
     pub display_message: Option<String>,
     pub needs_reauth: bool,
     pub at: i64,
@@ -67,6 +73,9 @@ impl CursorQuotaDto {
             bonus_spend: None,
             limit_type: None,
             pooled_used: None,
+            pooled_limit: None,
+            individual_used: None,
+            individual_limit: None,
             display_message: None,
             at: now_unix(),
         }
@@ -118,6 +127,9 @@ pub struct PeriodUsage {
     pub bonus_spend: Option<f64>,
     pub limit_type: Option<String>,
     pub pooled_used: Option<f64>,
+    pub pooled_limit: Option<f64>,
+    pub individual_used: Option<f64>,
+    pub individual_limit: Option<f64>,
     pub display_message: Option<String>,
 }
 
@@ -142,6 +154,8 @@ pub fn parse_current_period_usage(body: &str) -> Option<PeriodUsage> {
     if total_spend.is_none() && limit.is_none() {
         return None;
     }
+    let spend = root.get("spendLimitUsage");
+    let spend_num = |k: &str| spend.and_then(|s| s.get(k)).and_then(as_f64);
     Some(PeriodUsage {
         cycle_start_ms: root.get("billingCycleStart").and_then(as_ms),
         cycle_end_ms: root.get("billingCycleEnd").and_then(as_ms),
@@ -153,15 +167,14 @@ pub fn parse_current_period_usage(body: &str) -> Option<PeriodUsage> {
         api_percent_used: plan.get("apiPercentUsed").and_then(as_f64),
         total_percent_used: plan.get("totalPercentUsed").and_then(as_f64),
         bonus_spend: plan.get("bonusSpend").and_then(as_f64),
-        limit_type: root
-            .get("spendLimitUsage")
+        limit_type: spend
             .and_then(|s| s.get("limitType"))
             .and_then(|v| v.as_str())
             .map(str::to_string),
-        pooled_used: root
-            .get("spendLimitUsage")
-            .and_then(|s| s.get("pooledUsed"))
-            .and_then(as_f64),
+        pooled_used: spend_num("pooledUsed"),
+        pooled_limit: spend_num("pooledLimit"),
+        individual_used: spend_num("individualUsed"),
+        individual_limit: spend_num("individualLimit"),
         display_message: root
             .get("displayMessage")
             .and_then(|v| v.as_str())
@@ -224,6 +237,9 @@ pub async fn cursor_quota_fetch(state: tauri::State<'_, DbState>, id: i64) -> Re
         bonus_spend: usage.bonus_spend,
         limit_type: usage.limit_type,
         pooled_used: usage.pooled_used,
+        pooled_limit: usage.pooled_limit,
+        individual_used: usage.individual_used,
+        individual_limit: usage.individual_limit,
         display_message: usage.display_message,
         needs_reauth: false,
         at: now_unix(),
@@ -266,6 +282,17 @@ mod tests {
         assert_eq!(p.limit, Some(2000.0));
         let total = p.total_percent_used.expect("totalPercentUsed");
         assert!((total - 36.313).abs() < 0.01, "total={total}");
+        assert_eq!(p.limit_type.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn parse_current_period_usage_reads_on_demand_budgets() {
+        let body = r#"{"planUsage":{"totalSpend":2000,"limit":2000},"spendLimitUsage":{"totalSpend":1250,"pooledLimit":50000,"pooledUsed":8000,"individualLimit":5000,"individualUsed":1250,"limitType":"user"}}"#;
+        let p = parse_current_period_usage(body).expect("parse");
+        assert_eq!(p.individual_used, Some(1250.0));
+        assert_eq!(p.individual_limit, Some(5000.0));
+        assert_eq!(p.pooled_used, Some(8000.0));
+        assert_eq!(p.pooled_limit, Some(50000.0));
         assert_eq!(p.limit_type.as_deref(), Some("user"));
     }
 

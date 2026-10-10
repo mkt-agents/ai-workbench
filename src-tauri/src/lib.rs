@@ -26,6 +26,7 @@ mod codex_quota;
 mod cursor_quota;
 mod deepseek_quota;
 mod grok_bot_quota;
+mod qoder_quota;
 mod quota_accounts;
 
 pub use config::*;
@@ -435,6 +436,10 @@ pub fn run() {
             codex_quota::codex_delete_account,
             quota_accounts::cursor_oauth_start,
             quota_accounts::cursor_oauth_cancel,
+            qoder_quota::qoder_oauth_start,
+            qoder_quota::qoder_quota_fetch,
+            qoder_quota::qoder_campaign_claim,
+            qoder_quota::qoder_launch_app,
             quota_accounts::deepseek_add_key,
             quota_accounts::quota_accounts_list,
             quota_accounts::quota_account_delete,

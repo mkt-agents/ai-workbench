@@ -1832,9 +1832,15 @@ input, select, textarea { font-family: inherit; }
 
 /* ─── Scrollbar ─── */
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* 全局细滚动条。别在元素上写标准的 scrollbar-width / scrollbar-color：Chromium
+   见到它们会忽略 ::-webkit-scrollbar，回退成更粗的系统 thin 条。 */
+::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+/* 轨道两端内缩，滑块不贴进圆角容器的上下角。 */
+::-webkit-scrollbar-track:vertical { margin-block: 10px; }
+::-webkit-scrollbar-track:horizontal { margin-inline: 10px; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
 /* === LAYOUT === */
@@ -6993,8 +6999,6 @@ input, select, textarea { font-family: inherit; }
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-2);
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text-3) 32%, transparent) transparent;
   /* release 正文里的长路径 / 长 URL 不能把弹框撑破 */
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -8906,7 +8910,7 @@ input, select, textarea { font-family: inherit; }
 }
 
 .prompt-model-menu.is-floating .prompt-model-menu-list::-webkit-scrollbar {
-  width: 4px;
+  width: 3px;
 }
 
 .prompt-model-menu.is-floating .prompt-model-menu-list::-webkit-scrollbar-track {
@@ -8986,7 +8990,7 @@ input, select, textarea { font-family: inherit; }
 }
 
 .prompt-model-menu-list::-webkit-scrollbar {
-  width: 4px;
+  width: 3px;
 }
 
 .prompt-model-menu-list::-webkit-scrollbar-track {
@@ -10817,7 +10821,7 @@ input, select, textarea { font-family: inherit; }
 
 /* Scrollbar — minimal */
 .cl-toolbar-model .prompt-model-menu-list::-webkit-scrollbar {
-  width: 4px;
+  width: 3px;
 }
 
 .cl-toolbar-model .prompt-model-menu-list::-webkit-scrollbar-track {

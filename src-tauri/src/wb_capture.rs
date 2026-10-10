@@ -57,6 +57,9 @@ pub struct CapturedCredential {
 /// can actually find something.
 const CAPTURE_SCRIPT: &str = r#"
 (function () {
+  // WebView2 把 initialization_script 注入到所有子帧；微信二维码是
+  // open.weixin.qq.com 的 iframe，在里面跑 bootstrap 会把它跳成 /keys 白页。
+  if (window.top !== window.self) return;
   if (window.__wbCaptureInstalled) return;
   window.__wbCaptureInstalled = true;
   var HOST = "aiwb-cb-capture.save";
@@ -1003,6 +1006,8 @@ mod tests {
         // 带 "token" 字段，实测它第一个被 latch（browsertdidticket.m.qq.com）。
         assert!(CAPTURE_SCRIPT.contains("codebuddy\\.cn|copilot\\.tencent\\.com|lkeap\\.cloud\\.tencent\\.com"));
         assert!(CAPTURE_SCRIPT.contains("trustedUrl"));
+        // 子帧（微信二维码 iframe）里不能跑，否则引导跳转会把二维码换成白页。
+        assert!(CAPTURE_SCRIPT.contains("window.top !== window.self"));
     }
 
     #[test]

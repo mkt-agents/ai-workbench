@@ -9,6 +9,8 @@ import {
   wbCheckinNow,
   wbCheckinStatus,
   wbUpdateSettings,
+  hasAdapterEndpoint,
+  hasCheckinEndpoint,
   type WbAccount,
   type WbCheckinLogEntry,
   type WbCheckinResult,
@@ -72,27 +74,8 @@ export default function CheckinPanel({
 
   // 协议没配 checkin 端点时，签到必然失败（且旧构建会累计连续失败）：
   // 直接禁用入口比让人点了再看红字诚实。
-  const checkinConfigured = (() => {
-    const raw = settings?.adapterJson?.trim();
-    if (!raw) return false;
-    try {
-      const parsed = JSON.parse(raw) as { checkin?: unknown } | null;
-      return !!parsed?.checkin;
-    } catch {
-      return false;
-    }
-  })();
-
-  const statusConfigured = (() => {
-    const raw = settings?.adapterJson?.trim();
-    if (!raw) return false;
-    try {
-      const parsed = JSON.parse(raw) as { checkinStatus?: unknown } | null;
-      return !!parsed?.checkinStatus;
-    } catch {
-      return false;
-    }
-  })();
+  const checkinConfigured = hasCheckinEndpoint(settings);
+  const statusConfigured = hasAdapterEndpoint(settings, "checkinStatus");
 
   useEffect(() => {
     if (settings) setTime(settings.checkinTime);

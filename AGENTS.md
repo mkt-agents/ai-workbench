@@ -13,7 +13,7 @@
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.2.8`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite，密钥明文，勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/WorkBuddy/账号额度）→ 版本管理（Git 管理/环境变量）→ 网络管理（系统hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置；另有**一个不属于任何分组的顶层叶子「快捷应用」（`app-launcher`）**，它的页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
+- 侧栏分组：AI 工作台（Harness/模型配置/AI 提示词/片段库）→ 账号管理（Cursor/账号额度；WorkBuddy 页已从侧栏与路由下线，`WorkBuddyManager.tsx` 及 `components/workbuddy/` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染三处；扫码加号、签到、自动签到设置都已在账号额度页）→ 版本管理（Git 管理/环境变量）→ 网络管理（系统hosts/内网穿透/网页工具）→ 系统工具（小工具）→ 设置；另有**一个不属于任何分组的顶层叶子「快捷应用」（`app-launcher`）**，它的页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
 
 ## 技术栈与目录
 
@@ -36,7 +36,7 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 150 条注册
+                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 167 条注册
                       # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；原
                       # `devtools_commands.rs` 随 HTTP 客户端一起删除，该文件已不存在）
   纯函数层             # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +

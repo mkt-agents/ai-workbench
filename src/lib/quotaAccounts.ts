@@ -1,10 +1,10 @@
 /**
- * 账号额度看板里授权登录得来的账号（Cursor / Grok Bot / DeepSeek）— IPC 封装。
+ * 账号额度看板里授权登录得来的账号（Cursor / Grok Bot / DeepSeek / Qoder）— IPC 封装。
  * 令牌与 API Key 只存后端 SQLite，这里只拿到 id + 展示名。Codex 见 `codexQuota.ts`。
  */
 import { invoke } from "@tauri-apps/api/core";
 
-export type QuotaAccountProvider = "cursor" | "grok-bot" | "deepseek";
+export type QuotaAccountProvider = "cursor" | "grok-bot" | "deepseek" | "qoder";
 
 export interface QuotaAccount {
   id: number;

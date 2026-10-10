@@ -900,7 +900,7 @@
 }
 
 .tr-multiselect-menu::-webkit-scrollbar {
-  width: 6px;
+  width: 3px;
 }
 
 .tr-multiselect-menu::-webkit-scrollbar-track {

@@ -11,6 +11,7 @@ import {
   PanelRightOpen,
   Plus,
   RefreshCw,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -72,6 +73,7 @@ function QuotaProviderRail({
   onCancelPending,
   onToggleVisible,
   onFocusAccount,
+  onDeleteAccount,
 }: {
   enabled: QuotaCardId[];
   accounts: RailAccount[];
@@ -83,6 +85,8 @@ function QuotaProviderRail({
   onCancelPending: () => void;
   onToggleVisible: (id: QuotaCardId) => void;
   onFocusAccount: (key: string) => void;
+  /** 删除本机保存的账号（调用方负责二次确认）。 */
+  onDeleteAccount: (key: string) => void;
 }) {
   const { t } = useTranslation("quota");
   const [installs, setInstalls] = useState<Record<string, InstallState>>({});
@@ -199,7 +203,7 @@ function QuotaProviderRail({
               <div className="aq-rail-group-name">{provider.name}</div>
               <ul className="aq-rail-accts">
                 {items.map((a) => (
-                  <li key={a.key}>
+                  <li key={a.key} className="aq-rail-acct-row">
                     <button
                       type="button"
                       className={`aq-rail-acct${a.hidden ? " is-hidden" : ""}`}
@@ -212,6 +216,15 @@ function QuotaProviderRail({
                         <CalendarCheck size={11} className="aq-rail-acct-checkin" aria-label={t("checkinDoneShort")} />
                       )}
                       {a.hidden && <EyeOff size={11} className="aq-rail-acct-hidden" aria-label={t("railHiddenMark")} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="aq-icon-btn aq-icon-btn-danger aq-rail-acct-del"
+                      onClick={() => onDeleteAccount(a.key)}
+                      title={t("removeAuth")}
+                      aria-label={`${t("removeAuth")} ${a.name}`}
+                    >
+                      <Trash2 size={11} />
                     </button>
                   </li>
                 ))}

@@ -5,6 +5,7 @@ import ModalTitleRow from "../ModalTitleRow";
 import CredentialForm from "./CredentialForm";
 import { wbRefreshAccountCredential, wbUpdateAccount, type WbAccount, type WbCredentialType } from "../../lib/workbuddy";
 import { useInvokeErrorTranslator } from "../../hooks/useInvokeError";
+import "./WbModal.css";
 
 interface Props {
   /** 传入则为编辑模式：改 label/notes，凭证留空即不改。 */

@@ -25,7 +25,6 @@ import {
   KeyRound,
   Terminal,
   Rocket,
-  Bot,
   Gauge,
   Check,
   XCircle,
@@ -34,7 +33,6 @@ import HostsManager from "./components/HostsManager";
 import AccountQuotaPanel from "./components/AccountQuotaPanel";
 import PluginBrowser from "./components/PluginBrowser";
 import CursorManager from "./components/CursorManager";
-import WorkBuddyManager from "./components/WorkBuddyManager";
 import AIAssistant from "./components/AIAssistant";
 import DeepSeekHarness from "./components/DeepSeekHarness";
 import PromptOptimizer from "./components/PromptOptimizer";
@@ -61,7 +59,6 @@ type Tab =
   | "settings"
   | "plugins"
   | "cursor-accounts"
-  | "workbuddy"
   | "account-quota"
   | "ai-chat"
   | "ai-models"
@@ -95,7 +92,7 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "workbuddy", "account-quota", "ai-chat", "ai-models", "ai-prompt", "runtime", "cloudflared", "snippets", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "ai-prompt", "runtime", "cloudflared", "snippets", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -245,7 +242,6 @@ function App() {
       defaultOpen: true,
       children: [
         { id: "cursor-accounts", labelKey: "cursorAccounts", icon: <KeyRound size={16} /> },
-        { id: "workbuddy", labelKey: "workbuddy", icon: <Bot size={16} /> },
         { id: "account-quota", labelKey: "accountQuota", icon: <Gauge size={16} /> },
       ],
     },
@@ -512,7 +508,6 @@ function App() {
               {activeTab === "hosts" && <HostsManager />}
               {activeTab === "runtime" && <VersionSwitcher />}
               {activeTab === "cursor-accounts" && <CursorManager />}
-              {activeTab === "workbuddy" && <WorkBuddyManager />}
               {activeTab === "account-quota" && <AccountQuotaPanel />}
               {activeTab === "ai-models" && <AIAssistant />}
               {dshMounted && (

@@ -69,7 +69,7 @@ pub async fn launch_app(path: String, args: Option<String>) -> Result<String, St
 }
 
 #[cfg(target_os = "windows")]
-fn launch_app_inner(path: String, args: Option<String>) -> Result<String, String> {
+pub(crate) fn launch_app_inner(path: String, args: Option<String>) -> Result<String, String> {
     {
         use windows::core::{PCWSTR, w};
         use windows::Win32::UI::Shell::ShellExecuteW;
@@ -1969,6 +1969,52 @@ fn pick_main_exe(candidates: &[(String, String)], display_name: Option<&str>) ->
     // No display name: only safe when exactly one candidate exists.
     if candidates.len() == 1 {
         return Some(candidates[0].1.clone());
+    }
+    None
+}
+
+/// Install directory of the first uninstall entry whose `DisplayName` starts with
+/// `name_prefix`: `InstallLocation`, else the directory of `DisplayIcon` / `UninstallString`.
+#[cfg(windows)]
+pub(crate) fn find_install_dir(name_prefix: &str) -> Option<String> {
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY,
+    };
+    use windows::core::PCWSTR;
+
+    let hives = [
+        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ];
+    for (hive, path) in hives {
+        let Ok(subkeys) = enum_subkeys(hive, path) else { continue };
+        for subkey in subkeys {
+            let full: Vec<u16> = format!(r"{path}\{subkey}").encode_utf16().chain(std::iter::once(0)).collect();
+            let mut hkey = HKEY::default();
+            let opened = unsafe {
+                RegOpenKeyExW(hive, PCWSTR(full.as_ptr()), Some(0), KEY_READ | KEY_WOW64_64KEY, &mut hkey)
+            };
+            if opened.is_err() {
+                continue;
+            }
+            let matched = query_string_value(hkey, "DisplayName").is_some_and(|n| n.starts_with(name_prefix));
+            let dir = matched.then(|| {
+                query_string_value(hkey, "InstallLocation")
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| {
+                        query_string_value(hkey, "DisplayIcon")
+                            .and_then(|icon| dir_from_uninstall_string(icon.split(',').next().unwrap_or("")))
+                    })
+                    .or_else(|| {
+                        query_string_value(hkey, "UninstallString").and_then(|u| dir_from_uninstall_string(&u))
+                    })
+            });
+            unsafe { let _ = RegCloseKey(hkey); }
+            if let Some(dir) = dir.flatten() {
+                return Some(dir);
+            }
+        }
     }
     None
 }

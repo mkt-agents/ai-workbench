@@ -387,14 +387,9 @@
 
 /* ---------- Thin scrollbar (content) ---------- */
 
-.dt-content {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text-3) 32%, transparent) transparent;
-}
-
 .dt-content::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 3px;
+  height: 3px;
 }
 
 .dt-content::-webkit-scrollbar-track {
@@ -403,7 +398,7 @@
 
 .dt-content::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--text-3) 28%, transparent);
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 .dt-content::-webkit-scrollbar-thumb:hover {

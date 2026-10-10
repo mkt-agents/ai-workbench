@@ -23,9 +23,14 @@ export interface CursorQuotaDto {
   totalPercentUsed: number | null;
   /** 套餐外赠送用量（美分）；totalSpend = includedSpend + bonusSpend。 */
   bonusSpend: number | null;
-  /** "team" = 企业席位（limit 是团队共享池）；"individual" = 个人。 */
+  /** 按量付费（On-Demand）预算按团队（team）还是按人（user）算；不代表席位类型。 */
   limitType: string | null;
+  /** 团队级按量预算已用 / 上限（美分）。 */
   pooledUsed: number | null;
+  pooledLimit: number | null;
+  /** 个人按量预算已用 / 上限（美分）。 */
+  individualUsed: number | null;
+  individualLimit: number | null;
   displayMessage: string | null;
   /** 令牌失效：卡片给出「重新授权」。 */
   needsReauth: boolean;
