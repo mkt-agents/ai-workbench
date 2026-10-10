@@ -1076,6 +1076,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
         </div>
       )}
 
+      <div className="repos-scroll">
       {!hasLoadedRef.current ? (
         <div className="runtime-empty">
           <Loader2 size={18} className="spin" />
@@ -1224,6 +1225,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
           })}
         </div>
       )}
+      </div>
 
       {bindingPath !== null && (
         <RepoBindingModal

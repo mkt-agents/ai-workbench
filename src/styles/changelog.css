@@ -73,20 +73,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Scrollbar — minimal */
-.cl-toolbar-model .prompt-model-menu-list::-webkit-scrollbar {
-  width: 3px;
-}
-
-.cl-toolbar-model .prompt-model-menu-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.cl-toolbar-model .prompt-model-menu-list::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--accent) 25%, var(--border-subtle));
-  border-radius: var(--radius-full);
-}
-
 /* glass/ice/silver refinements */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .cl-toolbar-model .prompt-model-trigger {
   background: var(--overlay-2);

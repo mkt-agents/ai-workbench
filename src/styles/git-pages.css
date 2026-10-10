@@ -4,8 +4,19 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-bottom: 24px;
+  padding-bottom: 16px;
   box-sizing: border-box;
+  /* 工具条固定，列表区 .repos-scroll 才是滚动宿主（滚动条全局隐藏）。 */
+  overflow: hidden;
+  min-height: 0;
+}
+
+.repos-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* 仓库页顶部工具条（对齐 plugin-toolbar） */
@@ -13,6 +24,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex-shrink: 0;
   margin-bottom: 0;
   padding: 12px 14px;
   background: var(--bg-1);
@@ -191,11 +203,8 @@
 }
 
 .repos-batch-bar {
-  /* Stays reachable while scrolling a long list — the selection would
-     otherwise vanish together with the progress line. */
-  position: sticky;
-  top: 0;
-  z-index: 4;
+  /* 在 .repos-scroll 之上，随工具条一起固定，不跟着列表滚走。 */
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;

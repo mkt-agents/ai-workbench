@@ -4,22 +4,26 @@
    注意：本文件由组件导入，排在 styles.css 之前，覆盖共享基类必须用
    复合选择器提高优先级，单类名会静默失效。 */
 
-/* 双栏：左边看板自己滚动，右边服务商栏是贴边的整高侧栏、各自独立滚动，
-   页面上不会出现两条并排滚动条。窄窗时整页单栏滚动，服务商栏排到看板下方。 */
+/* 双栏各自独立滚动（左看板 / 右侧栏）。滚动条由 layout.css 全局隐藏。
+   窄窗改单列，改由 shell 滚。 */
 .aq-shell {
   flex: 1;
   min-height: 0;
   display: flex;
+  overflow: hidden;
 }
 
 .quota-page .page-scrollable.aq-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   max-width: none;
   margin: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 @media (max-width: 900px) {
@@ -30,6 +34,10 @@
 
   .quota-page .page-scrollable.aq-main {
     flex: none;
+    overflow: visible;
+  }
+
+  .aq-rail {
     overflow: visible;
   }
 }
@@ -809,14 +817,18 @@
    不做动画（resize 约定只给 .sidebar 留了例外）。 */
 
 .aq-rail {
-  width: 240px;
+  width: 252px;
   flex-shrink: 0;
+  min-height: 0;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
   padding: var(--space-3);
   border-left: 1px solid var(--border-subtle);
+  overflow-x: hidden;
   overflow-y: auto;
+  box-sizing: border-box;
   user-select: none;
 }
 
@@ -824,26 +836,16 @@
   width: 44px;
   align-items: center;
   padding: var(--space-3) 0;
-}
-
-.aq-rail::-webkit-scrollbar-thumb {
-  background: transparent;
-}
-
-.aq-rail:hover::-webkit-scrollbar-thumb {
-  background: var(--border);
-}
-
-.aq-rail:hover::-webkit-scrollbar-thumb:hover {
-  background: var(--text-3);
+  gap: 0;
 }
 
 @media (max-width: 900px) {
   .aq-rail {
     width: auto;
+    align-self: auto;
+    min-height: 0;
     border-left: none;
     border-top: 1px solid var(--border-subtle);
-    overflow: visible;
   }
 
   .aq-rail-collapse {
@@ -851,63 +853,51 @@
   }
 }
 
-.aq-rail-heading {
+/* 顶栏：左标题右收起，不再用居中分割线。 */
+.aq-rail-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-height: 28px;
+}
+
+.aq-rail-title {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+}
+
+.aq-rail-head > .aq-icon-btn,
+.aq-rail.is-collapsed .aq-rail-collapse {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  margin-left: 0;
+}
+
+.aq-rail-section-label {
+  margin: 0;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--text-3);
-  white-space: nowrap;
-  padding: 2px 0;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  line-height: 1.2;
 }
 
-.aq-rail-heading::before,
-.aq-rail-heading::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border-subtle);
-  order: 0;
-}
-
-.aq-rail-heading::before {
-  order: -1;
-}
-
-.aq-rail-heading > .aq-icon-btn {
-  order: 1;
-  margin-left: 0;
-  width: 20px;
-  height: 20px;
-}
-
-.aq-rail-heading:not(:first-child) {
-  margin-top: var(--space-2);
-}
-
-/* 可折叠节标题：整行是按钮，左侧箭头展开时转 90°。 */
-.aq-rail-heading.is-toggle {
-  width: 100%;
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  font-family: inherit;
-  cursor: pointer;
-  transition: var(--transition-colors-fast);
-}
-
-.aq-rail-heading.is-toggle::before {
-  display: none;
-}
-
-.aq-rail.is-collapsed .aq-rail-collapse {
-  margin-left: 0;
-}
-
-.aq-rail-heading.is-toggle:hover {
-  color: var(--text-1);
+/* 分区表面：账号列表与添加列表共用，行内不再各自描边。 */
+.aq-rail-panel {
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-1) 72%, transparent);
+  box-shadow: var(--surface-highlight);
 }
 
 .aq-rail-chevron {
@@ -915,37 +905,66 @@
   transition: transform 0.15s ease;
 }
 
-.aq-rail-heading.is-open .aq-rail-chevron {
+.aq-rail-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.aq-rail-more-toggle:hover {
+  color: var(--text-0);
+  background: var(--bg-hover);
+}
+
+.aq-rail-more-toggle.is-open .aq-rail-chevron {
   transform: rotate(90deg);
+}
+
+.aq-rail-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: calc(var(--space-2) * -1);
 }
 
 .aq-rail-empty {
   font-size: 11.5px;
   color: var(--text-3);
   text-align: center;
-  padding: var(--space-3) var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--bg-1);
+  padding: var(--space-4) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-1) 72%, transparent);
   border: 1px solid var(--border-subtle);
 }
 
 .aq-rail-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  gap: 1px;
 }
 
 .aq-rail-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 4px 4px 4px;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px 4px 4px;
   border-radius: var(--radius-md);
-  background: var(--bg-1);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid transparent;
+  background: transparent;
   transition: var(--transition-colors);
 }
 
@@ -954,30 +973,36 @@
 }
 
 .aq-rail-row.is-toggleable:hover {
-  border-color: var(--border);
   background: var(--bg-hover);
 }
 
+/* 已上看板：淡 accent 底 + 右侧留眼睛位。 */
 .aq-rail-row.is-added {
-  border-color: var(--accent-border);
+  padding-right: 30px;
+  background: color-mix(in srgb, var(--accent-dim) 55%, transparent);
 }
 
-/* 不支持查询的服务商：没有 + 按钮，整体弱化，用 + 的位置对齐上一节。 */
+.aq-rail-row.is-added:hover {
+  background: color-mix(in srgb, var(--accent-dim) 80%, var(--bg-hover));
+}
+
+/* 不支持查询的服务商：无 +，整体弱化。 */
 .aq-rail-row.is-static {
-  background: transparent;
-  border-color: transparent;
-  padding-left: 32px;
+  padding-left: 8px;
+  min-height: 30px;
+  cursor: default;
+}
+
+.aq-rail-list.is-static-list .aq-rail-row.is-static:hover {
+  background: var(--bg-hover);
 }
 
 .aq-rail-caption {
-  margin: -4px 0 2px;
+  margin: 0;
+  padding: 0 2px;
   font-size: 10.5px;
+  line-height: 1.35;
   color: var(--text-3);
-  text-align: center;
-}
-
-.aq-rail-row.is-static:hover {
-  background: var(--bg-1);
 }
 
 .aq-rail-row.is-missing .aq-rail-icon,
@@ -989,10 +1014,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: none;
+  border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-2);
@@ -1002,8 +1027,10 @@
 }
 
 .aq-rail-toggle:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-0);
+  border-style: solid;
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 /* 授权等待中：平时转圈，悬停换成 ×，点击即取消。 */
@@ -1017,11 +1044,15 @@
 }
 
 .aq-rail-row .aq-rail-toggle.is-pending:hover {
+  border-style: solid;
+  border-color: var(--red-border);
   background: var(--red-dim);
   color: var(--red);
 }
 
 .aq-rail-row.is-added .aq-rail-toggle {
+  border-style: solid;
+  border-color: var(--accent-border);
   background: var(--accent-dim);
   color: var(--accent);
 }
@@ -1038,32 +1069,20 @@
   font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
-  position: relative;
-}
-
-/* 账号数挂在图标右上角，不占行宽，名字才放得下。 */
-.aq-rail-icon .aq-rail-count {
-  position: absolute;
-  top: -6px;
-  right: -7px;
-  min-width: 14px;
-  padding: 0 3px;
-  font-size: 9.5px;
-  line-height: 13px;
-  box-shadow: 0 0 0 1.5px var(--bg-2);
+  overflow: hidden;
 }
 
 .aq-rail-icon img {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   object-fit: contain;
 }
 
-/* 单行：名字 + 「未安装」小灰字，域名只放在行的 title 里。 */
+/* 单行：名字 + 数量 chip + 「未安装」；域名只放 title。 */
 .aq-rail-text {
   display: flex;
-  align-items: baseline;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -1085,54 +1104,75 @@
   flex-shrink: 0;
 }
 
-/* 外链悬停才出现，浮在行尾（眼睛按钮左侧）而不占位，避免平时挤窄名字。 */
-.aq-rail-row {
-  position: relative;
-}
-
-.aq-rail-row .aq-rail-link {
+.aq-rail-actions {
   position: absolute;
   top: 50%;
   right: 4px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 10px;
   transform: translateY(-50%);
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--bg-1) 92%, transparent) 28%
+  );
   opacity: 0;
-  background: var(--bg-2);
+  pointer-events: none;
+  transition: var(--transition-colors-fast);
 }
 
-.aq-rail-row.is-toggleable .aq-rail-link {
-  right: 30px;
-}
-
-.aq-rail-row:hover .aq-rail-link,
-.aq-rail-link:focus-visible {
+.aq-rail-row:hover .aq-rail-actions,
+.aq-rail-row:focus-within .aq-rail-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .aq-rail-row .aq-rail-eye,
 .aq-rail-row .aq-rail-link {
-  flex-shrink: 0;
-  margin-left: 0;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
+}
+
+/* 已显示在看板时眼睛常驻（弱）；悬停再放出外链。 */
+.aq-rail-row.is-added .aq-rail-actions {
+  opacity: 1;
+  pointer-events: auto;
+  background: none;
+  padding-left: 0;
+}
+
+.aq-rail-row.is-added .aq-rail-link {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.aq-rail-row.is-added .aq-rail-eye:not(.is-off) {
+  opacity: 0.55;
+}
+
+.aq-rail-row.is-added:hover .aq-rail-actions,
+.aq-rail-row.is-added:focus-within .aq-rail-actions {
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--accent-dim) 70%, var(--bg-1)) 28%
+  );
+  padding-left: 10px;
+}
+
+.aq-rail-row.is-added:hover .aq-rail-eye:not(.is-off),
+.aq-rail-row.is-added:focus-within .aq-rail-eye:not(.is-off),
+.aq-rail-row.is-added:hover .aq-rail-link,
+.aq-rail-row.is-added:focus-within .aq-rail-link {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .aq-rail-eye.is-off {
   color: var(--text-3);
-  opacity: 0.6;
-}
-
-.aq-rail-count {
-  min-width: 16px;
-  padding: 0 4px;
-  font-size: 10px;
-  line-height: 15px;
-  font-weight: 600;
-  text-align: center;
-  border-radius: var(--radius-full);
-  background: var(--accent-dim);
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
 }
 
 /* ── 右侧栏账号列表 ── */
@@ -1140,15 +1180,63 @@
 .aq-rail-accounts {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.aq-rail-group + .aq-rail-group {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .aq-rail-group-name {
-  padding: 0 6px 1px;
-  font-size: 10.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 4px;
+  min-width: 0;
+}
+
+.aq-rail-group-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px; /* token-ok: 组头小图标比 radius-sm 更紧 */
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 9px;
+  font-weight: 700;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.aq-rail-group-icon img {
+  width: 12px;
+  height: 12px;
+  object-fit: contain;
+}
+
+.aq-rail-group-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
   font-weight: 600;
   line-height: 16px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-rail-group-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
   color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .aq-rail-accts {
@@ -1160,16 +1248,16 @@
 .aq-rail-acct {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   width: 100%;
-  padding: 3px 6px;
+  padding: 4px 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-1);
   font: inherit;
   font-size: 12px;
-  line-height: 20px;
+  line-height: 18px;
   text-align: left;
   cursor: pointer;
   transition: var(--transition-colors-fast);
@@ -1258,10 +1346,6 @@
 }
 
 /* ── 收起态：图标竖列，右上角小点是该服务商最差的账号状态（账号数在悬停提示里） ── */
-
-.aq-rail.is-collapsed {
-  gap: 0;
-}
 
 .aq-rail.is-collapsed .aq-rail-collapse {
   width: 28px;

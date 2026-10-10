@@ -1,15 +1,12 @@
 /* ─── Scrollbar ─── */
 
-/* 全局细滚动条。别在元素上写标准的 scrollbar-width / scrollbar-color：Chromium
-   见到它们会忽略 ::-webkit-scrollbar，回退成更粗的系统 thin 条。 */
-::-webkit-scrollbar { width: 3px; height: 3px; }
+/* 全局隐藏滚动条；overflow 区域仍可用滚轮 / 触控板滑动。
+   别在元素上写 scrollbar-width / scrollbar-color：Chromium 见到它们会忽略
+   ::-webkit-scrollbar，回退成更粗的系统 thin 条。局部若再写 width:3px 会重新显条。 */
+::-webkit-scrollbar { width: 0; height: 0; }
 ::-webkit-scrollbar-track { background: transparent; }
-/* 轨道两端内缩，滑块不贴进圆角容器的上下角。 */
-::-webkit-scrollbar-track:vertical { margin-block: 10px; }
-::-webkit-scrollbar-track:horizontal { margin-inline: 10px; }
 ::-webkit-scrollbar-corner { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+::-webkit-scrollbar-thumb { background: transparent; }
 
 /* === LAYOUT === */
 

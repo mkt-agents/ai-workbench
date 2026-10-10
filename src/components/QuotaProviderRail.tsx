@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -199,27 +199,36 @@ function QuotaProviderRail({
 
   return (
     <aside className="aq-rail">
-      <RailHeading
-        text={t("railSubscriptions")}
-        action={
-          <button
-            type="button"
-            className="aq-icon-btn aq-rail-collapse"
-            onClick={onToggleCollapsed}
-            title={t("railCollapse")}
-            aria-label={t("railCollapse")}
-          >
-            <PanelRightClose size={13} />
-          </button>
-        }
-      />
+      <header className="aq-rail-head">
+        <h2 className="aq-rail-title">{t("railSubscriptions")}</h2>
+        <button
+          type="button"
+          className="aq-icon-btn aq-rail-collapse"
+          onClick={onToggleCollapsed}
+          title={t("railCollapse")}
+          aria-label={t("railCollapse")}
+        >
+          <PanelRightClose size={13} />
+        </button>
+      </header>
+
       {groups.length === 0 ? (
         <div className="aq-rail-empty">{t("railNoAccounts")}</div>
       ) : (
-        <div className="aq-rail-accounts">
+        <div className="aq-rail-panel aq-rail-accounts">
           {groups.map(({ provider, items }) => (
-            <div key={provider.id}>
-              <div className="aq-rail-group-name">{provider.name}</div>
+            <div key={provider.id} className="aq-rail-group">
+              <div className="aq-rail-group-name">
+                <span className="aq-rail-group-icon">
+                  <ProviderGlyph
+                    providerId={provider.id}
+                    name={provider.name}
+                    installIcon={installs[provider.id]?.icon}
+                  />
+                </span>
+                <span className="aq-rail-group-label">{provider.name}</span>
+                <span className="aq-rail-group-count">{items.length}</span>
+              </div>
               <ul className="aq-rail-accts">
                 {items.map((a) => (
                   <li key={a.key} className="aq-rail-acct-row">
@@ -253,8 +262,8 @@ function QuotaProviderRail({
         </div>
       )}
 
-      <RailHeading text={t("railAddAccount")} />
-      <ul className="aq-rail-list">
+      <div className="aq-rail-section-label">{t("railAddAccount")}</div>
+      <ul className="aq-rail-panel aq-rail-list">
         {supported.map((p) => {
           const card = p.card as QuotaCardId;
           return (
@@ -263,7 +272,6 @@ function QuotaProviderRail({
               provider={p}
               install={installs[p.id]}
               added={enabled.includes(card)}
-              count={accountsOf(card).length}
               pending={pending === card}
               onAdd={() => onAdd(card)}
               onCancel={onCancelPending}
@@ -275,7 +283,7 @@ function QuotaProviderRail({
 
       <button
         type="button"
-        className={`aq-rail-heading is-toggle${moreOpen ? " is-open" : ""}`}
+        className={`aq-rail-more-toggle${moreOpen ? " is-open" : ""}`}
         onClick={toggleMore}
         aria-expanded={moreOpen}
         title={t("railMoreToggle")}
@@ -286,25 +294,16 @@ function QuotaProviderRail({
         </span>
       </button>
       {moreOpen && (
-        <>
+        <div className="aq-rail-more">
           <p className="aq-rail-caption">{t("railMoreHint")}</p>
-          <ul className="aq-rail-list">
+          <ul className="aq-rail-panel aq-rail-list is-static-list">
             {others.map((p) => (
               <ProviderRow key={p.id} provider={p} install={installs[p.id]} added={false} />
             ))}
           </ul>
-        </>
+        </div>
       )}
     </aside>
-  );
-}
-
-function RailHeading({ text, action }: { text: string; action?: ReactNode }) {
-  return (
-    <div className="aq-rail-heading">
-      <span>{text}</span>
-      {action}
-    </div>
   );
 }
 
@@ -312,7 +311,6 @@ function ProviderRow({
   provider,
   install,
   added,
-  count = 0,
   pending = false,
   onAdd,
   onCancel,
@@ -321,7 +319,6 @@ function ProviderRow({
   provider: QuotaProvider;
   install: InstallState | undefined;
   added: boolean;
-  count?: number;
   pending?: boolean;
   onAdd?: () => void;
   /** 授权等待中时，转圈按钮改为取消。 */
@@ -371,46 +368,43 @@ function ProviderRow({
               <X size={13} className="aq-rail-cancel-icon" />
             </>
           ) : (
-            <Plus size={13} />
+            <Plus size={14} strokeWidth={2.25} />
           )}
         </button>
       )}
       <span className="aq-rail-icon">
         <ProviderGlyph providerId={provider.id} name={provider.name} installIcon={install?.icon} />
-        {count > 0 && (
-          <span className="aq-rail-count" title={t("railAccountCount", { count })}>
-            {count}
-          </span>
-        )}
       </span>
       <span className="aq-rail-text">
         <span className="aq-rail-name">{provider.name}</span>
         {notInstalled && <span className="aq-rail-missing">{t("railNotInstalled")}</span>}
       </span>
-      {onToggleVisible && (
+      <span className="aq-rail-actions">
+        {onToggleVisible && (
+          <button
+            type="button"
+            className={`aq-icon-btn aq-rail-eye${added ? "" : " is-off"}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleVisible();
+            }}
+            title={eyeTitle}
+            aria-label={`${eyeTitle} ${provider.name}`}
+            aria-pressed={added}
+          >
+            {added ? <Eye size={13} /> : <EyeOff size={13} />}
+          </button>
+        )}
         <button
           type="button"
-          className={`aq-icon-btn aq-rail-eye${added ? "" : " is-off"}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleVisible();
-          }}
-          title={eyeTitle}
-          aria-label={`${eyeTitle} ${provider.name}`}
-          aria-pressed={added}
+          className="aq-icon-btn aq-rail-link"
+          onClick={openSite}
+          title={t("railOpenSite")}
+          aria-label={`${t("railOpenSite")} ${provider.name}`}
         >
-          {added ? <Eye size={12} /> : <EyeOff size={12} />}
+          <ExternalLink size={12} />
         </button>
-      )}
-      <button
-        type="button"
-        className="aq-icon-btn aq-rail-link"
-        onClick={openSite}
-        title={t("railOpenSite")}
-        aria-label={`${t("railOpenSite")} ${provider.name}`}
-      >
-        <ExternalLink size={12} />
-      </button>
+      </span>
     </li>
   );
 }

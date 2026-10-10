@@ -82,19 +82,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.prompt-model-menu.is-floating .prompt-model-menu-list::-webkit-scrollbar {
-  width: 3px;
-}
-
-.prompt-model-menu.is-floating .prompt-model-menu-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.prompt-model-menu.is-floating .prompt-model-menu-list::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--accent) 25%, var(--border-subtle));
-  border-radius: var(--radius-full);
-}
-
 /* glass/ice/silver refinements for floating menu */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .prompt-model-menu.is-floating {
   background: rgba(24, 28, 32, 0.95);
@@ -160,19 +147,6 @@
   min-height: 0;
   max-height: 220px;
   flex: 1;
-}
-
-.prompt-model-menu-list::-webkit-scrollbar {
-  width: 3px;
-}
-
-.prompt-model-menu-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.prompt-model-menu-list::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--accent) 25%, var(--border-subtle));
-  border-radius: var(--radius-full);
 }
 
 .prompt-model-menu.is-floating .prompt-model-menu-list,
