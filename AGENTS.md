@@ -142,7 +142,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ## 页面尺寸与自适应约定（大小窗口都要好看）
 
-- **页面内容宽度只有一个来源**：`tokens.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.runtime-page`、`.git-manager-column`、工具页 `.devtools-tool` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。
+- **页面内容宽度只有一个来源**：`tokens.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.runtime-page`、`.models-container`、`.git-manager-column`、工具页 `.devtools-tool` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。卡片网格已定：快捷应用 260 / 片段库 320 / 模型配置与环境变量 340。
 - **卡片列表用 `repeat(auto-fill, minmax(<N>px, 1fr))`，不要用 `@media` 切 `1fr 1fr`**。已定：快捷应用 260 / 片段库 320 / 环境变量 340。断点写死列数在宽屏下会把卡片拉到 700px 高、内容飘在顶部。
 - **输入/输出区靠 flex 长高填满窗口**：`.dt-content` 是 flex 列，工具根节点 `flex: 1 0 auto`（长高但不低于自然高，内容多时页面照常滚动），主区 `flex: 1 1 auto; min-height: <原 px>`；原来的 `max-height: 280/340/360/420px`、`60vh` 等死上限改成 `min-height` 地板。有意不填满的只有：时间戳（单行 input）、HTTP 参数/请求头表格——撑开只会得到空盒子。
 - **textarea 高度交给容器，统一 `resize: none`**（只删声明会让浏览器回退成 `resize: both`，反而能横向拖）。

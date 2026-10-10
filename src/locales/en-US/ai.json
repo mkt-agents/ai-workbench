@@ -99,6 +99,7 @@
     "exportDone": "Exported to {{path}}",
     "exportFailed": "Export failed: {{error}}",
     "importConfigs": "Import configs",
+    "more": "More actions",
     "importDone": "Import finished: {{added}} added, {{skipped}} skipped",
     "importInvalid": "Unrecognized file: no model configs found",
     "importFailed": "Import failed: {{error}}",

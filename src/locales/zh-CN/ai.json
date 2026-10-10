@@ -99,6 +99,7 @@
     "exportDone": "已导出到 {{path}}",
     "exportFailed": "导出失败: {{error}}",
     "importConfigs": "导入配置",
+    "more": "更多操作",
     "importDone": "导入完成：新增 {{added}} 个，跳过 {{skipped}} 个",
     "importInvalid": "文件格式不正确，未找到模型配置",
     "importFailed": "导入失败: {{error}}",

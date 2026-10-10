@@ -3,8 +3,9 @@ import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle } from "lucide-react";
+import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle, MoreHorizontal } from "lucide-react";
 import AppLogoMark from "./AppLogoMark";
+import DropdownMenu from "./DropdownMenu";
 import { useGlobalStore } from "../core/store";
 import { MODEL_TEST_CONCURRENCY, mapPool } from "../core/asyncPool";
 import { useConfirm } from "./ConfirmModal";
@@ -1144,9 +1145,11 @@ function AIAssistant() {
     return (
       <div
         key={config.id}
-        className={`ai-model-item ${config.isDefault ? "default" : ""}`}
+        className={`ai-model-item${config.isDefault ? " default" : ""}${
+          selectedIds.includes(config.id) ? " is-selected" : ""
+        }`}
       >
-        <label className="ai-model-select">
+        <label className="ai-model-select" onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={selectedIds.includes(config.id)}
@@ -1154,69 +1157,71 @@ function AIAssistant() {
             aria-label={config.name}
           />
         </label>
-        <div className={`ai-model-icon ${iconClass}`}>
-          {providerIconLabel(config.provider)}
-        </div>
-        <div className="ai-model-info">
-          <div className="ai-model-name">
-            <span className="ai-model-name-text">{config.name}</span>
-            {config.isDefault && (
-              <span className="ai-model-badge">{t("models.default")}</span>
-            )}
-            <span className={`ai-model-state is-${testState}`} title={lastTestTitle}>
-              <span className="ai-model-state-dot" />
-              {last
-                ? `${last.ok ? t("models.testPassed") : t("models.testFailed")} · ${formatSince(
-                    last.at,
-                    t
-                  )}`
-                : t("models.testNever")}
-            </span>
+        <div className="ai-model-main">
+          <div className={`ai-model-icon ${iconClass}`}>
+            {providerIconLabel(config.provider)}
           </div>
-          <div className="ai-model-detail">
-            {!inGroup && <>{providerLabel} · </>}
-            <button
-              type="button"
-              className="ai-model-copyable"
-              title={t("models.copyModelId")}
-              onClick={() => void copyValue(`${config.id}:model`, config.model)}
-            >
-              <span className="ai-model-copyable-text">{config.model}</span>
-              {copiedField === `${config.id}:model` ? (
-                <Check size={11} />
-              ) : (
-                <Copy size={11} />
-              )}
-            </button>
-          </div>
-          <div className="ai-model-meta">
-            <button
-              type="button"
-              className="ai-model-copyable"
-              disabled={!config.baseUrl}
-              title={config.baseUrl || t("models.urlMissing")}
-              onClick={() => void copyValue(`${config.id}:url`, config.baseUrl)}
-            >
-              <span className="ai-model-copyable-text">
-                {config.baseUrl ? truncateUrl(config.baseUrl) : t("models.urlMissing")}
+          <div className="ai-model-info">
+            <div className="ai-model-name">
+              <span className="ai-model-name-text" title={config.name}>
+                {config.name}
               </span>
-              {copiedField === `${config.id}:url` ? (
-                <Check size={11} />
-              ) : config.baseUrl ? (
-                <Copy size={11} />
-              ) : null}
-            </button>
-            <span className="ai-model-meta-sep">·</span>
-            <span className="ai-model-meta-fixed">
-              {config.apiKey?.trim()
-                ? t("models.keyConfigured")
-                : t("models.keyMissing")}
-            </span>
+              {config.isDefault && (
+                <span className="ai-model-badge">{t("models.default")}</span>
+              )}
+              <span className={`ai-model-state is-${testState}`} title={lastTestTitle}>
+                <span className="ai-model-state-dot" />
+                {last
+                  ? `${last.ok ? t("models.testPassed") : t("models.testFailed")} · ${formatSince(
+                      last.at,
+                      t
+                    )}`
+                  : t("models.testNever")}
+              </span>
+            </div>
+            <div className="ai-model-detail">
+              {!inGroup && <span className="ai-model-provider">{providerLabel}</span>}
+              {!inGroup && <span className="ai-model-meta-sep">·</span>}
+              <button
+                type="button"
+                className="ai-model-copyable"
+                title={t("models.copyModelId")}
+                onClick={() => void copyValue(`${config.id}:model`, config.model)}
+              >
+                <span className="ai-model-copyable-text">{config.model}</span>
+                {copiedField === `${config.id}:model` ? <Check size={11} /> : <Copy size={11} />}
+              </button>
+            </div>
+            <div className="ai-model-meta">
+              <button
+                type="button"
+                className="ai-model-copyable"
+                disabled={!config.baseUrl}
+                title={config.baseUrl || t("models.urlMissing")}
+                onClick={() => void copyValue(`${config.id}:url`, config.baseUrl)}
+              >
+                <span className="ai-model-copyable-text">
+                  {config.baseUrl ? truncateUrl(config.baseUrl) : t("models.urlMissing")}
+                </span>
+                {copiedField === `${config.id}:url` ? (
+                  <Check size={11} />
+                ) : config.baseUrl ? (
+                  <Copy size={11} />
+                ) : null}
+              </button>
+              <span className="ai-model-meta-sep">·</span>
+              <span
+                className={`ai-model-meta-fixed${config.apiKey?.trim() ? "" : " is-missing"}`}
+              >
+                {config.apiKey?.trim() ? t("models.keyConfigured") : t("models.keyMissing")}
+              </span>
+            </div>
           </div>
         </div>
         <div className="ai-model-actions">
           {!config.isDefault && (
             <button
+              type="button"
               className="btn btn-secondary btn-small"
               onClick={() => handleSetDefault(config.id)}
               title={t("models.setDefaultAction")}
@@ -1226,6 +1231,7 @@ function AIAssistant() {
             </button>
           )}
           <button
+            type="button"
             className={`btn btn-secondary btn-small${
               last ? (last.ok ? " is-ok" : " is-fail") : ""
             }`}
@@ -1233,14 +1239,11 @@ function AIAssistant() {
             disabled={testingId === config.id || bulkBusy !== null}
             title={lastTestTitle}
           >
-            {testingId === config.id ? (
-              <Loader2 size={12} className="spin" />
-            ) : (
-              <Zap size={12} />
-            )}
+            {testingId === config.id ? <Loader2 size={12} className="spin" /> : <Zap size={12} />}
             <span className="ai-action-label">{t("models.testFromList")}</span>
           </button>
           <button
+            type="button"
             className="btn btn-secondary btn-small"
             onClick={() => handleSyncToDsh(config)}
             disabled={syncingId === config.id}
@@ -1251,30 +1254,37 @@ function AIAssistant() {
             ) : (
               <ArrowRightCircle size={12} />
             )}
-            <span className="ai-action-label">{t("models.syncToDsh")}</span>
+            <span className="ai-action-label ai-action-label-wide">{t("models.syncToDsh")}</span>
           </button>
-          <button
-            className="btn btn-secondary btn-small"
-            onClick={() => void handleClone(config)}
-            title={t("models.clone")}
-          >
-            <CopyPlus size={12} />
-          </button>
-          <button
-            className="btn btn-secondary btn-small"
-            onClick={() => handleEdit(config)}
-            title={t("models.edit")}
-          >
-            <Edit2 size={12} />
-            <span className="ai-action-label">{t("models.edit")}</span>
-          </button>
-          <button
-            className="btn btn-danger btn-small"
-            onClick={() => handleDelete(config.id)}
-            title={t("models.deleteModel")}
-          >
-            <Trash2 size={12} />
-          </button>
+          <span className="ai-model-actions-tools">
+            <button
+              type="button"
+              className="ai-model-icon-btn"
+              onClick={() => void handleClone(config)}
+              title={t("models.clone")}
+              aria-label={t("models.clone")}
+            >
+              <CopyPlus size={13} />
+            </button>
+            <button
+              type="button"
+              className="ai-model-icon-btn"
+              onClick={() => handleEdit(config)}
+              title={t("models.edit")}
+              aria-label={t("models.edit")}
+            >
+              <Edit2 size={13} />
+            </button>
+            <button
+              type="button"
+              className="ai-model-icon-btn danger"
+              onClick={() => handleDelete(config.id)}
+              title={t("models.deleteModel")}
+              aria-label={t("models.deleteModel")}
+            >
+              <Trash2 size={13} />
+            </button>
+          </span>
         </div>
       </div>
     );
@@ -1345,6 +1355,29 @@ function AIAssistant() {
                     : aiModels.length}
                 </span>
               </div>
+              {aiModels.length > 0 && selectedConfigs.length === 0 && (
+                <div className="models-search">
+                  <Search size={12} aria-hidden />
+                  <input
+                    type="search"
+                    value={listQuery}
+                    onChange={(e) => setListQuery(e.target.value)}
+                    placeholder={t("models.searchConfigs")}
+                    aria-label={t("models.searchConfigs")}
+                  />
+                  {listQuery && (
+                    <button
+                      type="button"
+                      className="models-search-clear"
+                      onClick={() => setListQuery("")}
+                      aria-label={t("models.clearSearch")}
+                      title={t("models.clearSearch")}
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="models-header-actions">
                 {selectedConfigs.length > 0 ? (
                   <>
@@ -1371,7 +1404,8 @@ function AIAssistant() {
                       ) : (
                         <Zap size={12} />
                       )}
-                      {t("models.testFromList")} ({selectedConfigs.length})
+                      <span className="ai-action-label">{t("models.testFromList")}</span>
+                      <span className="models-bulk-n">({selectedConfigs.length})</span>
                     </button>
                     <button
                       className="btn btn-secondary btn-small"
@@ -1384,7 +1418,8 @@ function AIAssistant() {
                       ) : (
                         <ArrowRightCircle size={12} />
                       )}
-                      {t("models.syncToDsh")} ({selectedConfigs.length})
+                      <span className="ai-action-label ai-action-label-wide">{t("models.syncToDsh")}</span>
+                      <span className="models-bulk-n">({selectedConfigs.length})</span>
                     </button>
                     <button
                       className="btn btn-danger btn-small"
@@ -1393,7 +1428,7 @@ function AIAssistant() {
                       title={t("models.bulkDeleteTitle")}
                     >
                       <Trash2 size={12} />
-                      {t("models.deleteModel")}
+                      <span className="ai-action-label">{t("models.deleteModel")}</span>
                     </button>
                     <button
                       className="btn btn-secondary btn-small"
@@ -1402,7 +1437,7 @@ function AIAssistant() {
                       title={t("models.bulkClear")}
                     >
                       <X size={12} />
-                      {t("models.bulkClear")}
+                      <span className="ai-action-label">{t("models.bulkClear")}</span>
                     </button>
                   </>
                 ) : (
@@ -1414,20 +1449,8 @@ function AIAssistant() {
                           checked={allFilteredSelected}
                           onChange={toggleSelectFiltered}
                         />
-                        {t("models.selectAll")}
+                        <span className="ai-action-label">{t("models.selectAll")}</span>
                       </label>
-                    )}
-                    {aiModels.length > 0 && (
-                      <div className="models-search">
-                        <Search size={12} aria-hidden />
-                        <input
-                          type="search"
-                          value={listQuery}
-                          onChange={(e) => setListQuery(e.target.value)}
-                          placeholder={t("models.searchConfigs")}
-                          aria-label={t("models.searchConfigs")}
-                        />
-                      </div>
                     )}
                     {aiModels.length > 0 && (
                       <select
@@ -1466,7 +1489,7 @@ function AIAssistant() {
                     {aiModels.length > 0 && (
                       <button
                         type="button"
-                        className={`btn btn-secondary btn-small${groupByProvider ? " is-active" : ""}`}
+                        className={`btn btn-secondary btn-small btn-icon${groupByProvider ? " is-active" : ""}`}
                         onClick={() => setGroupByProvider((v) => !v)}
                         title={t("models.groupByProvider")}
                         aria-label={t("models.groupByProvider")}
@@ -1478,7 +1501,7 @@ function AIAssistant() {
                     {groupByProvider && groupedConfigs.length > 1 && (
                       <button
                         type="button"
-                        className="btn btn-secondary btn-small"
+                        className="btn btn-secondary btn-small btn-icon"
                         onClick={toggleAllGroups}
                         title={
                           allGroupsCollapsed
@@ -1498,32 +1521,26 @@ function AIAssistant() {
                         )}
                       </button>
                     )}
-                    <button
-                      className="btn btn-secondary btn-small"
-                      onClick={() => void handleImportConfigs()}
-                      disabled={transferBusy !== null}
-                      title={t("models.importConfigs")}
-                      aria-label={t("models.importConfigs")}
+                    <DropdownMenu
+                      label={t("models.more")}
+                      triggerClassName="btn btn-secondary btn-small btn-icon"
+                      items={[
+                        {
+                          label: t("models.importConfigs"),
+                          icon: <Upload size={14} />,
+                          disabled: transferBusy !== null,
+                          onClick: () => void handleImportConfigs(),
+                        },
+                        {
+                          label: t("models.exportConfigs"),
+                          icon: <Download size={14} />,
+                          disabled: transferBusy !== null || aiModels.length === 0,
+                          onClick: () => void handleExportConfigs(),
+                        },
+                      ]}
                     >
-                      {transferBusy === "import" ? (
-                        <Loader2 size={12} className="spin" />
-                      ) : (
-                        <Upload size={12} />
-                      )}
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-small"
-                      onClick={() => void handleExportConfigs()}
-                      disabled={transferBusy !== null || aiModels.length === 0}
-                      title={t("models.exportConfigs")}
-                      aria-label={t("models.exportConfigs")}
-                    >
-                      {transferBusy === "export" ? (
-                        <Loader2 size={12} className="spin" />
-                      ) : (
-                        <Download size={12} />
-                      )}
-                    </button>
+                      {transferBusy ? <Loader2 size={14} className="spin" /> : <MoreHorizontal size={14} />}
+                    </DropdownMenu>
                     <button
                       className="btn btn-primary btn-small"
                       onClick={openCreateModal}
@@ -1550,42 +1567,44 @@ function AIAssistant() {
                 )}
               </div>
             )}
-            {aiModels.length === 0 ? (
-              <div className="models-empty">
-                <div className="models-empty-icon">
-                  <AppLogoMark size={40} />
+            <div className="models-scroll">
+              {aiModels.length === 0 ? (
+                <div className="models-empty">
+                  <div className="models-empty-icon">
+                    <AppLogoMark size={40} />
+                  </div>
+                  <div className="models-empty-title">{t("models.noModels")}</div>
+                  <div className="models-empty-desc">{t("models.emptyDesc")}</div>
+                  <button className="btn btn-primary" onClick={openCreateModal}>
+                    <Plus size={14} /> {t("models.addModel")}
+                  </button>
                 </div>
-                <div className="models-empty-title">{t("models.noModels")}</div>
-                <div className="models-empty-desc">{t("models.emptyDesc")}</div>
-                <button className="btn btn-primary" onClick={openCreateModal}>
-                  <Plus size={14} /> {t("models.addModel")}
-                </button>
-              </div>
-            ) : filteredConfigs.length === 0 ? (
-              <div className="models-empty">
-                <div className="models-empty-title">{t("models.noMatch")}</div>
-                <div className="models-empty-desc">
-                  {statusFilter === "all"
-                    ? t("models.noMatchHint")
-                    : t("models.noMatchFiltered")}
+              ) : filteredConfigs.length === 0 ? (
+                <div className="models-empty">
+                  <div className="models-empty-title">{t("models.noMatch")}</div>
+                  <div className="models-empty-desc">
+                    {statusFilter === "all"
+                      ? t("models.noMatchHint")
+                      : t("models.noMatchFiltered")}
+                  </div>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setListQuery("");
+                      setStatusFilter("all");
+                    }}
+                  >
+                    {statusFilter === "all" ? t("models.clearSearch") : t("models.clearFilters")}
+                  </button>
                 </div>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setListQuery("");
-                    setStatusFilter("all");
-                  }}
-                >
-                  {statusFilter === "all" ? t("models.clearSearch") : t("models.clearFilters")}
-                </button>
-              </div>
-            ) : (
-              <div className={`ai-model-list${groupByProvider ? "" : " is-flat"}`}>
-                {groupByProvider
-                  ? groupedConfigs.map((group) => renderGroup(group))
-                  : filteredConfigs.map((config) => renderConfigCard(config))}
-              </div>
-            )}
+              ) : (
+                <div className={`ai-model-list${groupByProvider ? "" : " is-flat"}`}>
+                  {groupByProvider
+                    ? groupedConfigs.map((group) => renderGroup(group))
+                    : filteredConfigs.map((config) => renderConfigCard(config))}
+                </div>
+              )}
+            </div>
           </div>
 
           {showModal && (

@@ -12,14 +12,6 @@
     padding: 12px 14px;
   }
 
-  .models-container {
-    padding: 16px 14px;
-  }
-
-  .ai-model-list {
-    grid-template-columns: 1fr;
-  }
-
   .plugin-list {
     grid-template-columns: 1fr;
   }
@@ -27,30 +19,12 @@
   .account-actions {
     flex-wrap: wrap;
   }
-
-  .ai-model-item {
-    flex-wrap: wrap;
-  }
-
-  .ai-model-actions .ai-action-label {
-    display: none;
-  }
-
-  .models-header-actions .ai-action-label {
-    display: none;
-  }
 }
 
 /* Near min-width: compact grids and stack headers */
 @media (max-width: 720px) {
   .account-grid {
     grid-template-columns: 1fr;
-  }
-
-  .models-header {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
   }
 
   .status-bar {
@@ -93,11 +67,4 @@
     margin-right: 0;
   }
 
-  .models-container .ai-model-list,
-  .models-container .models-header,
-  .models-container .models-empty {
-    max-width: 1100px;
-    margin-left: auto;
-    margin-right: auto;
-  }
 }
