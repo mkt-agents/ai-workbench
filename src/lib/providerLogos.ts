@@ -39,6 +39,8 @@ const BY_CARD_BRAND: Record<string, string> = {
   codex: chatgpt,
   deepseek,
   qoder,
+  claude,
+  zcode,
 };
 
 export function providerLogoSrc(providerId: string): string | null {

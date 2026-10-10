@@ -1221,6 +1221,26 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn newest_version_exe_finds_hash_nested_layout() {
+        // Claude Code: `<root>\<ver>\<hash>\claude.exe`
+        let base = std::env::temp_dir().join(format!("al_ver_nest_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let nested = base.join("2.1.293").join("83cb0bd7fed4");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("claude.exe"), b"x").unwrap();
+        let older = base.join("2.1.284").join("aaaaaaaaaaaa");
+        std::fs::create_dir_all(&older).unwrap();
+        std::fs::write(older.join("claude.exe"), b"x").unwrap();
+        let got = newest_version_exe(&base, "claude.exe").unwrap();
+        assert!(
+            got.contains(r"2.1.293\") && got.ends_with("claude.exe"),
+            "got {got}"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
     #[test]
     fn path_key_normalizes_case_separators_and_trailing_slash() {
         assert_eq!(normalize_path_key("C:/App/exe"), normalize_path_key("c:\\app\\exe"));
@@ -1382,6 +1402,8 @@ pub(crate) fn scan_installed_apps_sync() -> Result<Vec<InstalledAppInfo>, String
     // A curated set of per-user CLI/dev tools that register no uninstall key and
     // ship no shortcut, so no standard "installed apps" source sees them.
     scan_cli_tool_apps(&mut apps, &mut seen);
+    // Store / Electron apps the registry + shortcut scan miss (Claude Desktop AppX 等)。
+    scan_special_desktop_apps(&mut apps, &mut seen);
 
     // Sort by display name for a stable list.
     apps.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
@@ -1592,7 +1614,9 @@ fn scan_cli_tool_apps(apps: &mut Vec<InstalledAppInfo>, seen: &mut std::collecti
 }
 
 /// Pick `exe` from the highest version-numbered subdirectory of `root`
-/// (e.g. `claude-code\2.1.281\claude.exe` wins over `2.1.280`).
+/// (e.g. `claude-code\2.1.281\claude.exe` wins over `2.1.280`)。
+/// Claude Code 现行布局是 `\<ver>\<hash>\claude.exe`，所以版本目录下没有 exe 时
+/// 再往下扫一层子目录。
 #[cfg(windows)]
 fn newest_version_exe(root: &std::path::Path, exe: &str) -> Option<String> {
     let mut best: Option<(Vec<u32>, std::path::PathBuf)> = None;
@@ -1606,15 +1630,167 @@ fn newest_version_exe(root: &std::path::Path, exe: &str) -> Option<String> {
         if ver.is_empty() {
             continue;
         }
-        let cand = dir.join(exe);
-        if !cand.is_file() {
+        let Some(cand) = find_exe_in_version_dir(&dir, exe) else {
             continue;
-        }
+        };
         if best.as_ref().map(|(bv, _)| ver > *bv).unwrap_or(true) {
             best = Some((ver, cand));
         }
     }
     best.map(|(_, p)| p.to_string_lossy().to_string())
+}
+
+/// `dir\exe` 优先；否则取 `dir\*\exe` 中任意一个（Claude Code 的 hash 子目录）。
+#[cfg(windows)]
+fn find_exe_in_version_dir(dir: &std::path::Path, exe: &str) -> Option<std::path::PathBuf> {
+    let direct = dir.join(exe);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let child = e.path();
+        if !child.is_dir() {
+            continue;
+        }
+        let cand = child.join(exe);
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Microsoft Store / 纯 Electron 桌面端：无 Uninstall 项、快捷方式常指向
+/// `WindowsApps` 占位 exe（被 shortcut 过滤丢掉），靠固定路径与配置目录补齐。
+#[cfg(windows)]
+fn scan_special_desktop_apps(
+    apps: &mut Vec<InstalledAppInfo>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let local = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    let roaming = std::env::var_os("APPDATA").map(std::path::PathBuf::from);
+
+    // Claude Desktop（Store）：`%LOCALAPPDATA%\Microsoft\WindowsApps\claude-desktop.exe`
+    // 以及 `%APPDATA%\Claude\config.json`（装过就会有）。
+    if let Some(local) = &local {
+        let stub = local
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("claude-desktop.exe");
+        if stub.is_file() {
+            let key = normalize_path_key(&stub.to_string_lossy());
+            if seen.insert(key) {
+                let version = get_app_version_sync(stub.to_string_lossy().to_string()).unwrap_or_default();
+                apps.push(InstalledAppInfo {
+                    display_name: "Claude Desktop".to_string(),
+                    exe_path: stub.to_string_lossy().to_string(),
+                    publisher: "Anthropic".to_string(),
+                    version,
+                    icon: None,
+                });
+            }
+        }
+    }
+    if let Some(roaming) = &roaming {
+        let config = roaming.join("Claude").join("config.json");
+        if config.is_file() {
+            let key = normalize_path_key(&format!("appdata-claude-desktop:{}", config.display()));
+            if seen.insert(key) {
+                let version = std::fs::read_to_string(&config)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .and_then(|v| {
+                        v.get("updaterLastSeenVersion")
+                            .and_then(|x| x.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_default();
+                let exe = local
+                    .as_ref()
+                    .map(|l| {
+                        l.join("Microsoft")
+                            .join("WindowsApps")
+                            .join("claude-desktop.exe")
+                    })
+                    .filter(|p| p.is_file())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| config.to_string_lossy().to_string());
+                // 若 stub 已加过，seen 里已有真实 exe key；这里用配置路径作兜底键。
+                if !apps.iter().any(|a| a.display_name == "Claude Desktop") {
+                    apps.push(InstalledAppInfo {
+                        display_name: "Claude Desktop".to_string(),
+                        exe_path: exe,
+                        publisher: "Anthropic".to_string(),
+                        version,
+                        icon: None,
+                    });
+                }
+            }
+        }
+
+        // ZCode 桌面端：配置在 `%APPDATA%\ZCode`，安装器常挂 `@zcodedesktop-updater`。
+        let zcode_data = roaming.join("ZCode");
+        if zcode_data.is_dir() {
+            let exe = local
+                .as_ref()
+                .and_then(|l| {
+                    let updater = l.join("@zcodedesktop-updater");
+                    newest_file_named(&updater, "ZCode.exe")
+                        .or_else(|| newest_file_named(&updater, "zcode.exe"))
+                })
+                .unwrap_or_else(|| zcode_data.to_string_lossy().to_string());
+            let key = normalize_path_key(&exe);
+            if seen.insert(key) {
+                apps.push(InstalledAppInfo {
+                    display_name: "ZCode".to_string(),
+                    exe_path: exe,
+                    publisher: String::new(),
+                    version: String::new(),
+                    icon: None,
+                });
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn newest_file_named(root: &std::path::Path, file_name: &str) -> Option<String> {
+    if !root.is_dir() {
+        return None;
+    }
+    let mut best: Option<std::path::PathBuf> = None;
+    let mut stack = vec![root.to_path_buf()];
+    let mut steps = 0usize;
+    while let Some(dir) = stack.pop() {
+        steps += 1;
+        if steps > 64 {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(file_name))
+            {
+                best = Some(p);
+            }
+        }
+    }
+    best.map(|p| p.to_string_lossy().to_string())
+}
+
+#[cfg(not(windows))]
+fn scan_special_desktop_apps(
+    _apps: &mut Vec<InstalledAppInfo>,
+    _seen: &mut std::collections::HashSet<String>,
+) {
 }
 
 /// Acceptance filter for a Start Menu shortcut's resolved exe target.

@@ -58,6 +58,10 @@ pub enum Provider {
     Grok,
     DeepSeek,
     Qoder,
+    /// Claude Code / Claude Desktop 共用 OAuth（查 api.anthropic.com/api/oauth/usage）。
+    Claude,
+    /// ZCode（智谱 BigModel API Key，查 open.bigmodel.cn 用量配额）。
+    Zcode,
 }
 
 impl Provider {
@@ -67,6 +71,8 @@ impl Provider {
             Provider::Grok => "grok-bot",
             Provider::DeepSeek => "deepseek",
             Provider::Qoder => "qoder",
+            Provider::Claude => "claude",
+            Provider::Zcode => "zcode",
         }
     }
 
@@ -76,6 +82,8 @@ impl Provider {
             "grok-bot" => Ok(Provider::Grok),
             "deepseek" => Ok(Provider::DeepSeek),
             "qoder" => Ok(Provider::Qoder),
+            "claude" => Ok(Provider::Claude),
+            "zcode" => Ok(Provider::Zcode),
             other => Err(format!("不支持的服务商: {other}")),
         }
     }

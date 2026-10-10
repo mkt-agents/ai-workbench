@@ -3,7 +3,7 @@ import invocations from "../core/store/invocations";
 import type { InstalledAppInfo } from "../core/types";
 
 /** 能查额度、能加到看板的服务商。 */
-export type QuotaCardId = "workbuddy" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder";
+export type QuotaCardId = "workbuddy" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode";
 
 export interface QuotaProvider {
   id: string;
@@ -12,26 +12,26 @@ export interface QuotaProvider {
   url: string;
   /** 匹配注册表 display_name（小写包含）；空数组 = 纯网页 / CLI 服务，不显示安装状态。 */
   keywords: string[];
-  /** 有额度查询实现时才是卡片 id。 */
+  /** 有额度查询实现时才是卡片 id。Claude Code / Desktop 共用 `claude` 账号池。 */
   card: QuotaCardId | null;
 }
 
 export const QUOTA_PROVIDERS: QuotaProvider[] = [
   { id: "chatgpt", name: "ChatGPT / Codex", domain: "openai.com", url: "https://chatgpt.com", keywords: [], card: "codex" },
-  { id: "claude-code", name: "Claude Code", domain: "claude.ai", url: "https://claude.ai/code", keywords: [], card: null },
-  { id: "claude-desktop", name: "Claude Desktop", domain: "claude.com", url: "https://claude.com/download", keywords: ["claude"], card: null },
+  { id: "claude-code", name: "Claude Code", domain: "claude.ai", url: "https://claude.ai/code", keywords: ["claude code"], card: "claude" },
+  { id: "claude-desktop", name: "Claude Desktop", domain: "claude.com", url: "https://claude.com/download", keywords: ["claude desktop"], card: "claude" },
   { id: "deepseek", name: "DeepSeek Harness", domain: "www.deepseek.com", url: "https://www.deepseek.com", keywords: ["deepseek"], card: "deepseek" },
   { id: "workbuddy", name: "WorkBuddy", domain: "www.codebuddy.cn", url: "https://www.codebuddy.cn", keywords: ["codebuddy", "workbuddy"], card: "workbuddy" },
   { id: "cursor", name: "Cursor", domain: "cursor.com", url: "https://cursor.com", keywords: ["cursor"], card: "cursor" },
   { id: "grok-bot", name: "Grok Bot", domain: "x.ai", url: "https://x.ai", keywords: ["grok bot"], card: "grok-bot" },
   { id: "qoder", name: "Qoder", domain: "qoder.cn", url: "https://qoder.cn", keywords: ["qoder"], card: "qoder" },
+  { id: "zcode", name: "ZCode", domain: "bigmodel.cn", url: "https://bigmodel.cn", keywords: ["zcode"], card: "zcode" },
   { id: "workbuddy-ai", name: "WorkBuddy AI", domain: "www.workbuddy.ai", url: "https://www.workbuddy.ai", keywords: ["workbuddy ai"], card: null },
   { id: "antigravity", name: "Antigravity", domain: "antigravity.google", url: "https://antigravity.google", keywords: ["antigravity"], card: null },
-  { id: "zcode", name: "ZCode", domain: "bigmodel.cn", url: "https://bigmodel.cn", keywords: ["zcode"], card: null },
   { id: "grok-build", name: "Grok Build", domain: "x.ai", url: "https://x.ai", keywords: ["grok build"], card: null },
 ];
 
-const ALL_CARDS: QuotaCardId[] = ["workbuddy", "cursor", "grok-bot", "codex", "deepseek", "qoder"];
+const ALL_CARDS: QuotaCardId[] = ["workbuddy", "cursor", "grok-bot", "codex", "deepseek", "qoder", "claude", "zcode"];
 const CARDS_KEY = "aq-cards";
 
 export function loadEnabledCards(): QuotaCardId[] {

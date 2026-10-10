@@ -132,6 +132,7 @@ export interface Invocations {
   invokeUpdateDownload: (requestId: string, url: string) => Promise<DownloadedInstaller>;
   invokeUpdateInstall: (path: string) => Promise<void>;
   invokeCancelRequest: (id: string) => Promise<void>;
+  invokeUpdateLatestTag: () => Promise<string>;
 }
 
 export const invocations: Invocations = {

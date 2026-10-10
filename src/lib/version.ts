@@ -190,8 +190,8 @@ async function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
  */
 async function fetchGithubLatest(): Promise<SourceResult> {
   try {
-    const { invokeUpdateLatestTag } = await import("../core/store/invocations");
-    const tag = await invokeUpdateLatestTag();
+    const mod = await import("../core/store/invocations");
+    const tag = await mod.default.invokeUpdateLatestTag();
     if (tag) {
       const normalized = tag.replace(/^v/i, "");
       return { tag: normalized, htmlUrl: `${APP_RELEASES_URL}/tag/v${normalized}` };

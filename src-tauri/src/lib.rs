@@ -22,12 +22,14 @@ pub mod codebuddy;
 mod wb_commands;
 mod wb_checkin;
 mod wb_capture;
+mod claude_quota;
 mod codex_quota;
 mod cursor_quota;
 mod deepseek_quota;
 mod grok_bot_quota;
 mod qoder_quota;
 mod quota_accounts;
+mod zcode_quota;
 
 pub use config::*;
 
@@ -444,6 +446,11 @@ pub fn run() {
             quota_accounts::quota_accounts_list,
             quota_accounts::quota_account_delete,
             deepseek_quota::deepseek_balance_fetch,
+            claude_quota::claude_import_local,
+            claude_quota::claude_add_token,
+            claude_quota::claude_quota_fetch,
+            zcode_quota::zcode_add_key,
+            zcode_quota::zcode_quota_fetch,
             wb_checkin::wb_quota_status,
             wb_checkin::wb_checkin_log_list,
             wb_checkin::wb_checkin_log_clear,

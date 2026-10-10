@@ -138,7 +138,15 @@ function QuotaProviderRail({
   const supported = QUOTA_PROVIDERS.filter((p) => p.card != null);
   const others = QUOTA_PROVIDERS.filter((p) => p.card == null);
   const accountsOf = (card: QuotaCardId) => accounts.filter((a) => a.card === card);
+  // Claude Code / Desktop 共用一张卡：账号分组按 card 去重，避免同一批账号出现两次。
+  const seenCards = new Set<QuotaCardId>();
   const groups = supported
+    .filter((p) => {
+      const card = p.card as QuotaCardId;
+      if (seenCards.has(card)) return false;
+      seenCards.add(card);
+      return true;
+    })
     .map((p) => ({ provider: p, items: accountsOf(p.card as QuotaCardId) }))
     .filter((g) => g.items.length > 0);
 

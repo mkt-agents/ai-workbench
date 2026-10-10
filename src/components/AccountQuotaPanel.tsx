@@ -65,14 +65,21 @@ import {
   type CodexWindow,
 } from "../lib/codexQuota";
 import {
+  claudeAddToken,
+  claudeImportLocal,
+  claudeQuotaFetch,
   cursorOauthCancel,
   cursorOauthStart,
   deepseekAddKey,
   deepseekBalanceFetch,
   quotaAccountDelete,
   quotaAccountsList,
+  zcodeAddKey,
+  zcodeQuotaFetch,
+  type ClaudeQuotaDto,
   type DeepSeekQuotaDto,
   type QuotaAccount,
+  type ZcodeQuotaDto,
 } from "../lib/quotaAccounts";
 import { useConfirm } from "./ConfirmModal";
 import { cardBrandLogoSrc } from "../lib/providerLogos";
@@ -113,7 +120,7 @@ import "./AccountQuotaPanel.css";
 type Tone = "ok" | "warn" | "bad";
 
 /** 卡片键前缀；只有 WorkBuddy 的前缀（wb）和服务商 id（workbuddy）不同。 */
-type CardPrefix = "wb" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder";
+type CardPrefix = "wb" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode";
 type AuthProvider = "codex" | "cursor" | "grok-bot" | "qoder";
 
 const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
@@ -123,6 +130,8 @@ const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
   codex: "codex",
   deepseek: "deepseek",
   qoder: "qoder",
+  claude: "claude",
+  zcode: "zcode",
 };
 
 const RAIL_COLLAPSED_KEY = "aq-rail-collapsed";
@@ -285,6 +294,17 @@ function codexRemainPct(q: CodexQuotaDto): number | null {
   return used.length > 0 ? clampPct(100 - Math.max(...used)) : null;
 }
 
+function claudeRemainPct(q: ClaudeQuotaDto): number | null {
+  if (!q.windows?.length) return null;
+  return clampPct(100 - Math.max(...q.windows.map((w) => w.usedPercent)));
+}
+
+function zcodeRemainPct(q: ZcodeQuotaDto): number | null {
+  const limits = q.limits?.filter((l) => l.limit > 0) ?? [];
+  if (limits.length === 0) return null;
+  return Math.min(...limits.map((l) => clampPct(((l.limit - l.usage) / l.limit) * 100)));
+}
+
 /** 单币种余额占峰值的百分比；没有峰值记录时按「有余额即满」。 */
 function balancePct(total: number, peak: number | undefined): number {
   if (total <= 0) return 0;
@@ -313,6 +333,10 @@ function remainPctFor(key: string, r: QuotaResultBase, peaks: Record<string, num
       return deepseekRemainPct(key, r as DeepSeekQuotaDto, peaks);
     case "qoder":
       return qoderRemainPct(r as QoderQuotaDto);
+    case "claude":
+      return claudeRemainPct(r as ClaudeQuotaDto);
+    case "zcode":
+      return zcodeRemainPct(r as ZcodeQuotaDto);
   }
 }
 
@@ -432,6 +456,10 @@ function AccountQuotaPanel() {
   const [loginError, setLoginError] = useState<Partial<Record<AuthProvider, string>>>({});
   const [dsFormOpen, setDsFormOpen] = useState(false);
   const [dsReplaceId, setDsReplaceId] = useState<number | null>(null);
+  const [claudeFormOpen, setClaudeFormOpen] = useState(false);
+  const [claudeReplaceId, setClaudeReplaceId] = useState<number | null>(null);
+  const [zcodeFormOpen, setZcodeFormOpen] = useState(false);
+  const [zcodeReplaceId, setZcodeReplaceId] = useState<number | null>(null);
   const [wbScanOpen, setWbScanOpen] = useState(false);
   const [wbManualOpen, setWbManualOpen] = useState(false);
   const [enabled, setEnabled] = useState<QuotaCardId[]>(loadEnabledCards);
@@ -452,6 +480,8 @@ function AccountQuotaPanel() {
   const grokAccounts = authAccounts.filter((a) => a.provider === "grok-bot");
   const dsAccounts = authAccounts.filter((a) => a.provider === "deepseek");
   const qoderAccounts = authAccounts.filter((a) => a.provider === "qoder");
+  const claudeAccounts = authAccounts.filter((a) => a.provider === "claude");
+  const zcodeAccounts = authAccounts.filter((a) => a.provider === "zcode");
 
   useEffect(() => saveQuotaCache(results), [results]);
 
@@ -682,6 +712,8 @@ function AccountQuotaPanel() {
       else if (prefix === "grok-bot") dto = await grokBotQuotaFetch(id).catch((e) => failedDto(e, { id }));
       else if (prefix === "codex") dto = await codexQuotaFetch(id).catch((e) => failedDto(e, { id }));
       else if (prefix === "qoder") dto = await qoderQuotaFetch(id).catch((e) => failedDto(e, { id }));
+      else if (prefix === "claude") dto = await claudeQuotaFetch(id).catch((e) => failedDto(e, { id, windows: [] }));
+      else if (prefix === "zcode") dto = await zcodeQuotaFetch(id).catch((e) => failedDto(e, { id, limits: [] }));
       else dto = await deepseekBalanceFetch(id).catch((e) => failedDto(e, { id, balances: [] }));
       setResults((prev) => ({ ...prev, [key]: dto }));
     } finally {
@@ -795,6 +827,68 @@ function AccountQuotaPanel() {
     [fetchKey],
   );
 
+  const addClaudeAccount = useCallback(
+    async (mode: "import" | "token", accessToken?: string) => {
+      const account = mode === "import" ? await claudeImportLocal() : await claudeAddToken(accessToken ?? "");
+      setAuthAccounts(await quotaAccountsList());
+      setClaudeFormOpen(false);
+      void fetchKey(`claude:${account.id}`);
+    },
+    [fetchKey],
+  );
+
+  const replaceClaudeToken = useCallback(
+    async (old: QuotaAccount, accessToken: string) => {
+      const account = await claudeAddToken(accessToken);
+      const oldKey = `claude:${old.id}`;
+      const newKey = `claude:${account.id}`;
+      if (account.id !== old.id) {
+        await quotaAccountDelete(old.id).catch(() => undefined);
+        dropResult(oldKey);
+        setOrder((prev) => {
+          const next = prev.map((k) => (k === oldKey ? newKey : k));
+          saveCardOrder(next);
+          return next;
+        });
+      }
+      setAuthAccounts(await quotaAccountsList());
+      setClaudeReplaceId(null);
+      void fetchKey(newKey);
+    },
+    [fetchKey],
+  );
+
+  const addZcodeKey = useCallback(
+    async (apiKey: string) => {
+      const account = await zcodeAddKey(apiKey);
+      setAuthAccounts(await quotaAccountsList());
+      setZcodeFormOpen(false);
+      void fetchKey(`zcode:${account.id}`);
+    },
+    [fetchKey],
+  );
+
+  const replaceZcodeKey = useCallback(
+    async (old: QuotaAccount, apiKey: string) => {
+      const account = await zcodeAddKey(apiKey);
+      const oldKey = `zcode:${old.id}`;
+      const newKey = `zcode:${account.id}`;
+      if (account.id !== old.id) {
+        await quotaAccountDelete(old.id).catch(() => undefined);
+        dropResult(oldKey);
+        setOrder((prev) => {
+          const next = prev.map((k) => (k === oldKey ? newKey : k));
+          saveCardOrder(next);
+          return next;
+        });
+      }
+      setAuthAccounts(await quotaAccountsList());
+      setZcodeReplaceId(null);
+      void fetchKey(newKey);
+    },
+    [fetchKey],
+  );
+
   const removeAuthAccount = useCallback(
     async (account: QuotaAccount) => {
       const ok = await confirm({
@@ -863,6 +957,8 @@ function AccountQuotaPanel() {
     codex: codexAccounts.map((a) => `codex:${a.id}`),
     deepseek: dsAccounts.map((a) => `deepseek:${a.id}`),
     qoder: qoderAccounts.map((a) => `qoder:${a.id}`),
+    claude: claudeAccounts.map((a) => `claude:${a.id}`),
+    zcode: zcodeAccounts.map((a) => `zcode:${a.id}`),
   };
 
   /** 服务商关着 → 不出卡；没账号 → 授权空卡；账号全被隐藏 → 什么都不出。 */
@@ -878,7 +974,11 @@ function AccountQuotaPanel() {
     ...keysOf("codex"),
     ...keysOf("qoder"),
     ...keysOf("deepseek"),
+    ...keysOf("claude"),
+    ...keysOf("zcode"),
     ...(enabled.includes("deepseek") && dsFormOpen && dsAccounts.length > 0 ? ["deepseek:new"] : []),
+    ...(enabled.includes("claude") && claudeFormOpen && claudeAccounts.length > 0 ? ["claude:new"] : []),
+    ...(enabled.includes("zcode") && zcodeFormOpen && zcodeAccounts.length > 0 ? ["zcode:new"] : []),
   ];
   const visibleKeys = sortByOrder(
     naturalKeys.map((key) => ({ key })),
@@ -919,11 +1019,30 @@ function AccountQuotaPanel() {
         focusCard(dsAccounts.length > 0 ? "deepseek:new" : "deepseek:empty");
         return;
       }
+      if (card === "claude") {
+        setClaudeFormOpen(true);
+        focusCard(claudeAccounts.length > 0 ? "claude:new" : "claude:empty");
+        return;
+      }
+      if (card === "zcode") {
+        setZcodeFormOpen(true);
+        focusCard(zcodeAccounts.length > 0 ? "zcode:new" : "zcode:empty");
+        return;
+      }
       void startLogin(card);
       const hasAccounts = card === "codex" ? codexAccounts.length > 0 : authAccounts.some((a) => a.provider === card);
       if (!hasAccounts) focusCard(`${card}:empty`);
     },
-    [setCardEnabled, focusCard, startLogin, dsAccounts.length, codexAccounts.length, authAccounts],
+    [
+      setCardEnabled,
+      focusCard,
+      startLogin,
+      dsAccounts.length,
+      claudeAccounts.length,
+      zcodeAccounts.length,
+      codexAccounts.length,
+      authAccounts,
+    ],
   );
 
   const toggleProvider = useCallback(
@@ -976,6 +1095,12 @@ function AccountQuotaPanel() {
       name: (results[`qoder:${a.id}`] as QoderQuotaDto | undefined)?.label ?? a.label ?? `#${a.id}`,
     })),
     ...dsAccounts.map((a) => ({ key: `deepseek:${a.id}`, card: "deepseek" as const, name: a.label ?? `#${a.id}` })),
+    ...claudeAccounts.map((a) => ({
+      key: `claude:${a.id}`,
+      card: "claude" as const,
+      name: (results[`claude:${a.id}`] as ClaudeQuotaDto | undefined)?.label ?? a.label ?? `#${a.id}`,
+    })),
+    ...zcodeAccounts.map((a) => ({ key: `zcode:${a.id}`, card: "zcode" as const, name: a.label ?? `#${a.id}` })),
   ].map((a) => ({
     ...a,
     status: cardStatus(a.key, results[a.key], dsPeaks),
@@ -1129,6 +1254,79 @@ function AccountQuotaPanel() {
           onAddAnother={addAnother("codex")}
           frame={frame}
           {...reauthFor("codex")}
+        />
+      );
+    }
+
+    if (prefix === "claude") {
+      const account = claudeAccounts.find((a) => a.id === id);
+      if (!account) {
+        return (
+          <QuotaCardShell
+            key={key}
+            brand="claude"
+            product="Claude"
+            onHide={rawId === "new" ? () => setClaudeFormOpen(false) : hideProvider}
+            frame={frame}
+          >
+            <ClaudeAuthForm
+              onImport={() => addClaudeAccount("import")}
+              onSubmitToken={(token) => addClaudeAccount("token", token)}
+              onCancel={rawId === "new" ? () => setClaudeFormOpen(false) : undefined}
+            />
+          </QuotaCardShell>
+        );
+      }
+      return (
+        <ClaudeCard
+          key={key}
+          account={account}
+          quota={quota as ClaudeQuotaDto | undefined}
+          loading={loading}
+          replacing={claudeReplaceId === account.id}
+          onRefresh={() => void fetchKey(key)}
+          onDelete={() => void removeAuthAccount(account)}
+          onReplace={(token) => replaceClaudeToken(account, token)}
+          onStartReplace={() => setClaudeReplaceId(account.id)}
+          onCancelReplace={() => setClaudeReplaceId(null)}
+          onAddAnother={claudeFormOpen ? undefined : () => setClaudeFormOpen(true)}
+          frame={frame}
+        />
+      );
+    }
+
+    if (prefix === "zcode") {
+      const account = zcodeAccounts.find((a) => a.id === id);
+      if (!account) {
+        return (
+          <QuotaCardShell
+            key={key}
+            brand="zcode"
+            product="ZCode"
+            onHide={rawId === "new" ? () => setZcodeFormOpen(false) : hideProvider}
+            frame={frame}
+          >
+            <ZcodeKeyForm
+              onSubmit={addZcodeKey}
+              onCancel={rawId === "new" ? () => setZcodeFormOpen(false) : undefined}
+            />
+          </QuotaCardShell>
+        );
+      }
+      return (
+        <ZcodeCard
+          key={key}
+          account={account}
+          quota={quota as ZcodeQuotaDto | undefined}
+          loading={loading}
+          replacing={zcodeReplaceId === account.id}
+          onRefresh={() => void fetchKey(key)}
+          onDelete={() => void removeAuthAccount(account)}
+          onReplace={(apiKey) => replaceZcodeKey(account, apiKey)}
+          onStartReplace={() => setZcodeReplaceId(account.id)}
+          onCancelReplace={() => setZcodeReplaceId(null)}
+          onAddAnother={zcodeFormOpen ? undefined : () => setZcodeFormOpen(true)}
+          frame={frame}
         />
       );
     }
@@ -1466,7 +1664,7 @@ function QuotaCardShell({
   frame,
   children,
 }: {
-  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder";
+  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode";
   product: string;
   tag?: ReactNode;
   /** 结果时间（unix 秒）；有值时卡片底部显示「N 分钟前」。 */
@@ -2498,6 +2696,294 @@ function CodexCard({
             );
           })}
           <DetailGrid items={details} />
+        </div>
+      )}
+    </QuotaCardShell>
+  );
+}
+
+function ClaudeAuthForm({
+  onImport,
+  onSubmitToken,
+  onCancel,
+  hint,
+  submitText,
+  showImport = true,
+}: {
+  onImport?: () => Promise<void>;
+  onSubmitToken: (accessToken: string) => Promise<void>;
+  onCancel?: () => void;
+  hint?: string;
+  submitText?: string;
+  showImport?: boolean;
+}) {
+  const { t } = useTranslation("quota");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState<"import" | "token" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const run = async (mode: "import" | "token") => {
+    if (busy) return;
+    if (mode === "token" && !token.trim()) return;
+    setBusy(mode);
+    setError(null);
+    try {
+      if (mode === "import") await onImport?.();
+      else await onSubmitToken(token.trim());
+      setToken("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <form
+      className="aq-auth aq-key-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run("token");
+      }}
+    >
+      <p className="aq-auth-text">{hint ?? t("authHint.claude")}</p>
+      {showImport && onImport && (
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => void run("import")} disabled={busy != null}>
+          {busy === "import" ? <RefreshCw size={13} className="spin" /> : <LogIn size={13} />}
+          {busy === "import" ? t("dsVerifying") : t("claudeImportLocal")}
+        </button>
+      )}
+      <p className="aq-auth-text aq-auth-sub">{t("claudePasteToken")}</p>
+      <input
+        className="input-field aq-mono"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder={t("claudeTokenPlaceholder")}
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        disabled={busy != null}
+        autoFocus={onCancel != null && !showImport}
+      />
+      {error && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
+        </div>
+      )}
+      <div className="aq-key-actions">
+        {onCancel && (
+          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel} disabled={busy != null}>
+            {t("authCancel")}
+          </button>
+        )}
+        <button type="submit" className="btn btn-primary btn-small" disabled={busy != null || !token.trim()}>
+          {busy === "token" ? <RefreshCw size={13} className="spin" /> : <KeyRound size={13} />}
+          {busy === "token" ? t("dsVerifying") : (submitText ?? t("claudeSaveToken"))}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ClaudeCard({
+  account,
+  quota,
+  loading,
+  replacing,
+  onRefresh,
+  onDelete,
+  onReplace,
+  onStartReplace,
+  onCancelReplace,
+  onAddAnother,
+  frame,
+}: {
+  account: QuotaAccount;
+  quota: ClaudeQuotaDto | undefined;
+  loading: boolean;
+  replacing: boolean;
+  onRefresh: () => void;
+  onDelete: () => void;
+  onReplace: (accessToken: string) => Promise<void>;
+  onStartReplace: () => void;
+  onCancelReplace: () => void;
+  onAddAnother?: () => void;
+  frame: CardFrame;
+}) {
+  const { t } = useTranslation("quota");
+  const now = useContext(NowContext);
+  const ok = quota?.ok === true && !replacing;
+  return (
+    <QuotaCardShell
+      brand="claude"
+      product="Claude"
+      at={replacing ? null : quota?.at}
+      loading={loading}
+      onRefresh={onRefresh}
+      onDelete={onDelete}
+      extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      frame={frame}
+    >
+      <IdentityRow name={quota?.label ?? account.label} badge={quota?.plan ?? "OAuth"} mono />
+      {replacing ? (
+        <ClaudeAuthForm
+          onSubmitToken={onReplace}
+          onCancel={onCancelReplace}
+          hint={t("claudeReplaceHint")}
+          submitText={t("claudeReplaceToken")}
+          showImport={false}
+        />
+      ) : (
+        <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onStartReplace} reauthText={t("claudeReplaceToken")} />
+      )}
+      {ok && (quota.windows?.length ?? 0) === 0 && <div className="aq-card-idle">{t("claudeNoWindows")}</div>}
+      {ok && (quota.windows?.length ?? 0) > 0 && (
+        <div className="aq-card-body">
+          {quota.windows.map((w) => {
+            const remainPct = clampPct(100 - w.usedPercent);
+            return (
+              <MeterRow
+                key={w.label}
+                label={w.label}
+                countdown={compactCountdown(w.resetsAt != null ? w.resetsAt * 1000 : null, now)}
+                value={`${remainPct}%`}
+                percent={remainPct}
+              />
+            );
+          })}
+        </div>
+      )}
+    </QuotaCardShell>
+  );
+}
+
+function ZcodeKeyForm({
+  onSubmit,
+  onCancel,
+  hint,
+  submitText,
+}: {
+  onSubmit: (apiKey: string) => Promise<void>;
+  onCancel?: () => void;
+  hint?: string;
+  submitText?: string;
+}) {
+  const { t } = useTranslation("quota");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async () => {
+    if (!key.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(key.trim());
+      setKey("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      className="aq-auth aq-key-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <p className="aq-auth-text">{hint ?? t("authHint.zcode")}</p>
+      <input
+        className="input-field aq-mono"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="…api key"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        disabled={busy}
+        autoFocus={onCancel != null}
+      />
+      {error && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
+        </div>
+      )}
+      <div className="aq-key-actions">
+        {onCancel && (
+          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel} disabled={busy}>
+            {t("authCancel")}
+          </button>
+        )}
+        <button type="submit" className="btn btn-primary btn-small" disabled={busy || !key.trim()}>
+          {busy ? <RefreshCw size={13} className="spin" /> : <KeyRound size={13} />}
+          {busy ? t("dsVerifying") : (submitText ?? t("zcodeSaveKey"))}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ZcodeCard({
+  account,
+  quota,
+  loading,
+  replacing,
+  onRefresh,
+  onDelete,
+  onReplace,
+  onStartReplace,
+  onCancelReplace,
+  onAddAnother,
+  frame,
+}: {
+  account: QuotaAccount;
+  quota: ZcodeQuotaDto | undefined;
+  loading: boolean;
+  replacing: boolean;
+  onRefresh: () => void;
+  onDelete: () => void;
+  onReplace: (apiKey: string) => Promise<void>;
+  onStartReplace: () => void;
+  onCancelReplace: () => void;
+  onAddAnother?: () => void;
+  frame: CardFrame;
+}) {
+  const { t } = useTranslation("quota");
+  const ok = quota?.ok === true && !replacing;
+  return (
+    <QuotaCardShell
+      brand="zcode"
+      product="ZCode"
+      at={replacing ? null : quota?.at}
+      loading={loading}
+      onRefresh={onRefresh}
+      onDelete={onDelete}
+      extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      frame={frame}
+    >
+      <IdentityRow name={account.label} badge="API" mono />
+      {replacing ? (
+        <ZcodeKeyForm onSubmit={onReplace} onCancel={onCancelReplace} hint={t("zcodeReplaceHint")} submitText={t("zcodeReplaceKey")} />
+      ) : (
+        <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onStartReplace} reauthText={t("zcodeReplaceKey")} />
+      )}
+      {ok && (quota.limits?.length ?? 0) === 0 && <div className="aq-card-idle">{t("zcodeNoLimits")}</div>}
+      {ok && (quota.limits?.length ?? 0) > 0 && (
+        <div className="aq-card-body">
+          {quota.limits.map((l) => {
+            const remainPct = l.limit > 0 ? clampPct(((l.limit - l.usage) / l.limit) * 100) : 0;
+            return (
+              <MeterRow
+                key={l.label}
+                label={l.label}
+                value={t("zcodeUsage", {
+                  usage: formatCredits(l.usage),
+                  limit: formatCredits(l.limit),
+                })}
+                percent={remainPct}
+              />
+            );
+          })}
         </div>
       )}
     </QuotaCardShell>

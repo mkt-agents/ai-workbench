@@ -786,6 +786,12 @@
   color: var(--text-2);
 }
 
+.aq-auth-sub {
+  margin-top: var(--space-2);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
 .aq-auth-status {
   display: inline-flex;
   align-items: center;
