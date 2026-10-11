@@ -12,8 +12,12 @@
  * the dsh progress fill). New blurred surface? Add it here.
  *
  * `animation` is deliberately untouched: all 18 keyframes animate transform/opacity
- * only, and killing them froze the test/AI spinners for 300ms after any resize. */
-body.resizing :is(
+ * only, and killing them froze the test/AI spinners for 300ms after any resize.
+ *
+ * `.sidebar-collapsing` shares the blur kill: folding the sidebar is a continuous
+ * width change, and re-blurring every frame is what makes that animation stutter.
+ * It does not cancel the width transition (resize does, on purpose). */
+body:is(.resizing, .sidebar-collapsing) :is(
   .sidebar,
   .titlebar,
   .ai-header,
@@ -26,6 +30,10 @@ body.resizing :is(
   .qa-focus-pop,
   .tr-multiselect-menu,
   .dd-menu,
+  .plugin-item-actions,
+  .userscript-actions,
+  .ai-mode-dropdown,
+  .devtools-history-menu,
   .update-banner,
   .quick-ask-toolbar .qa-focus-btn
 ) {
@@ -36,7 +44,7 @@ body.resizing :is(
 /* `.card` is listed separately because a page can carry hundreds of them and the
    invalidation walk grows with the number matched. It only has a blur in the glass
    theme, so only glass pays for the match — see the backdrop-filter rules below. */
-html[data-theme="glass"] body.resizing .card {
+html[data-theme="glass"] body:is(.resizing, .sidebar-collapsing) .card {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -64,7 +72,7 @@ body {
 /* 浅色：柔冷灰底 + 弥散氛围（克制、可透） */
 @media not (prefers-color-scheme: dark) {
   :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) body {
-    background: #e2e7ef;
+    background: #e6ebf2;
     background-attachment: fixed;
   }
 
@@ -93,7 +101,7 @@ body {
 }
 
 [data-theme="light"] body {
-  background: #e2e7ef;
+  background: #e6ebf2;
   background-attachment: fixed;
 }
 
@@ -118,6 +126,37 @@ body {
 
 [data-theme="light"] .app-layout::after {
   background: var(--chrome-line);
+}
+
+/* 深色：实底不变，只在画布顶部留一层很轻的冷光，避免整屏一块死炭。 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) body {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 22%),
+      radial-gradient(ellipse 70% 38% at 14% -8%, rgba(107, 143, 189, 0.07) 0%, transparent 58%),
+      #0c0d0f;
+    background-attachment: fixed;
+  }
+
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .right-area,
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .main-content,
+  :root:not([data-theme="light"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .main-header {
+    background: transparent;
+  }
+}
+
+[data-theme="dark"] body {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 22%),
+    radial-gradient(ellipse 70% 38% at 14% -8%, rgba(107, 143, 189, 0.07) 0%, transparent 58%),
+    #0c0d0f;
+  background-attachment: fixed;
+}
+
+[data-theme="dark"] .right-area,
+[data-theme="dark"] .main-content,
+[data-theme="dark"] .main-header {
+  background: transparent;
 }
 
 button { font-family: inherit; cursor: pointer; }

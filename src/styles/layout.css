@@ -122,10 +122,14 @@
   display: flex;
   flex-direction: column;
   width: 200px;
-  min-width: 200px;
+  /* 下限钉在折叠宽度，真正变化的只有 width，且不许被 flex 压窄。
+     缓出：一开始就动，避免慢启动看起来像卡了一下。 */
+  min-width: 48px;
+  flex-shrink: 0;
   height: 100%;
   background: var(--bg-1);
-  transition: width var(--transition-normal), min-width var(--transition-normal);
+  overflow: hidden;
+  transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
   position: relative;
   z-index: 40;
@@ -185,14 +189,14 @@
   pointer-events: none;
 }
 
-.sidebar.collapsed { width: 48px; min-width: 48px; }
+.sidebar.collapsed { width: 48px; }
 
 .sidebar-logo {
   display: flex;
   align-items: center;
   gap: 10px;
   height: 40px;
-  padding: 0 12px;
+  padding: 0 10px;
   flex-shrink: 0;
   border-bottom: none;
 }
@@ -210,6 +214,13 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  transition: opacity 0.14s ease;
+}
+
+.sidebar.collapsed .sidebar-logo-text {
+  opacity: 0;
 }
 
 .sidebar-nav {
@@ -286,7 +297,26 @@
   transition: color var(--transition-fast), background var(--transition-fast);
   text-align: left;
   white-space: nowrap;
+  overflow: hidden;
   position: relative;
+}
+
+.nav-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease;
+}
+
+.nav-label {
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity 0.14s ease;
+}
+
+/* 导航自身有 6px 内边距，项再留 10px，图标在 48px 轨道里已经居中。
+   不要在折叠时改 justify / padding，否则图标会先跳到宽栏中央。 */
+.sidebar.collapsed .nav-label {
+  opacity: 0;
 }
 
 /* Active nav item: left accent tick */
@@ -320,6 +350,11 @@
 
 .sidebar-group {
   margin-bottom: 10px;
+  transition: margin-bottom 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar.collapsed .sidebar-group {
+  margin-bottom: 2px;
 }
 
 .sidebar-group:last-child {
@@ -347,9 +382,17 @@
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  transition: color var(--transition-fast), background var(--transition-fast);
+  overflow: hidden;
+  transition: height 0.26s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.14s ease, color var(--transition-fast), background var(--transition-fast);
   text-align: left;
   white-space: nowrap;
+}
+
+.sidebar.collapsed .sidebar-group-header {
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .sidebar-group-header:hover {
@@ -375,23 +418,14 @@
 .sidebar-group-item .nav-icon { opacity: 0.7; transform: scale(0.9); }
 .sidebar-group-item { font-size: 12px; }
 
-.sidebar.collapsed .sidebar-logo {
-  justify-content: center;
-  padding: 0;
+.sidebar.collapsed .sidebar-group-item {
+  padding-left: 10px;
+  font-size: 12.5px;
 }
 
-.sidebar.collapsed .sidebar-nav-item {
-  justify-content: center;
-  padding: 0;
-  gap: 0;
-}
-
-.sidebar.collapsed .sidebar-nav-item .nav-icon {
-  margin: 0;
-}
-
-.sidebar.collapsed .sidebar-nav-footer .sidebar-nav-item {
-  justify-content: center;
+.sidebar.collapsed .sidebar-group-item .nav-icon {
+  opacity: 1;
+  transform: none;
 }
 
 .main-content {

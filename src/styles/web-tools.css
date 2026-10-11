@@ -480,8 +480,8 @@
   padding: 2px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-1);
-  box-shadow: var(--shadow-sm);
+  background: var(--float-bg);
+  box-shadow: var(--float-shadow);
   opacity: 0;
   pointer-events: none;
   transform: translate(4px, -50%);
@@ -1120,7 +1120,6 @@
   z-index: 1000;
   animation: toast-in 0.2s ease;
   /* toast 也是浮层：用与弹框同一套投影 token，不要用 --shadow-md（深底上几乎看不出） */
-  box-shadow: var(--float-shadow);
   white-space: normal;
   text-align: left;
   max-width: min(420px, 90vw);
@@ -1128,13 +1127,16 @@
   border: 1px solid var(--border-subtle);
   border-left-width: 3px;
   border-left-color: var(--border);
-  background: var(--bg-1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
   color: var(--text-0);
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
 }
 
 .toast-icon {

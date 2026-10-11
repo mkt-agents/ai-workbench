@@ -80,6 +80,8 @@
      历史上 .modal 等三处引用了 --float-shadow 却从未定义，等于所有浮层零投影。 */
   --float-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.12),
     0 28px 64px rgba(15, 23, 42, 0.1);
+  /* 浮层实底：弹框 / 下拉 / toast 压在内容上时必须用它，不能拿半透明的 --bg-1 / --chrome-bg。 */
+  --float-bg: rgba(252, 253, 255, 0.94);
 
   --chrome-bg: rgba(255, 255, 255, 0.48);
   --chrome-line: rgba(15, 23, 42, 0.08);
@@ -153,6 +155,8 @@
      历史上 .modal 等三处引用了 --float-shadow 却从未定义，等于所有浮层零投影。 */
   --float-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.12),
     0 28px 64px rgba(15, 23, 42, 0.1);
+  /* 浮层实底：弹框 / 下拉 / toast 压在内容上时必须用它，不能拿半透明的 --bg-1 / --chrome-bg。 */
+  --float-bg: rgba(252, 253, 255, 0.94);
 
   --chrome-bg: rgba(255, 255, 255, 0.48);
   --chrome-line: rgba(15, 23, 42, 0.08);
@@ -216,6 +220,7 @@
 
   --chrome-bg: rgba(20, 22, 24, 0.92);
   --chrome-line: rgba(255, 255, 255, 0.06);
+  --float-bg: #1a1c20;
 
   /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
   --overlay-1: rgba(255, 255, 255, 0.03);
@@ -272,6 +277,7 @@
 
     --chrome-bg: rgba(20, 22, 24, 0.92);
     --chrome-line: rgba(255, 255, 255, 0.06);
+    --float-bg: #1a1c20;
 
     /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
     --overlay-1: rgba(255, 255, 255, 0.03);
@@ -286,11 +292,11 @@
 /* ─── Ice Theme (冰蓝玻璃) ─── */
 [data-theme="ice"] {
   color-scheme: dark;
-  --accent: #7EB6D9;
-  --accent-strong: #5A9FC4;
-  --accent-dim: rgba(126, 182, 217, 0.14);
-  --accent-border: rgba(126, 182, 217, 0.34);
-  --on-accent: #0c0e12;
+  --accent: #8EC4E6;
+  --accent-strong: #68AED2;
+  --accent-dim: rgba(142, 196, 230, 0.16);
+  --accent-border: rgba(142, 196, 230, 0.36);
+  --on-accent: #0b1016;
 
   --green: #6aaa84;
   --green-dim: rgba(106, 170, 132, 0.12);
@@ -305,29 +311,30 @@
 
   --bg-0: transparent;
   --bg-1: rgba(255, 255, 255, 0.045);
-  --bg-2: rgba(126, 182, 217, 0.04);
+  --bg-2: rgba(142, 196, 230, 0.045);
   --bg-3: rgba(255, 255, 255, 0.075);
-  --bg-hover: rgba(126, 182, 217, 0.08);
+  --bg-hover: rgba(142, 196, 230, 0.09);
 
   --input-bg: rgba(8, 14, 20, 0.6);
 
-  --border: rgba(255, 255, 255, 0.1);
-  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.12);
+  --border-subtle: rgba(255, 255, 255, 0.07);
 
-  --text-0: #e8f0f6;
-  --text-1: rgba(232, 240, 246, 0.88);
-  --text-2: rgba(232, 240, 246, 0.55);
-  --text-3: rgba(232, 240, 246, 0.32);
+  --text-0: #eef4f8;
+  --text-1: rgba(238, 244, 248, 0.88);
+  --text-2: rgba(238, 244, 248, 0.64);
+  --text-3: rgba(238, 244, 248, 0.4);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.22);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
-  --shadow-glow: 0 0 28px rgba(90, 159, 196, 0.1);
-  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --shadow-glow: 0 0 28px rgba(104, 174, 210, 0.12);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 
-  --chrome-bg: rgba(10, 14, 20, 0.58);
+  --chrome-bg: rgba(10, 16, 24, 0.5);
   --chrome-line: rgba(255, 255, 255, 0.06);
+  --float-bg: rgba(16, 22, 30, 0.95);
 
   /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
   --overlay-1: rgba(255, 255, 255, 0.03);
@@ -349,9 +356,9 @@
   position: fixed;
   inset: 0;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, transparent 18%),
-    radial-gradient(ellipse 80% 45% at 18% 0%, rgba(126, 182, 217, 0.12) 0%, transparent 52%),
-    radial-gradient(ellipse 55% 40% at 100% 85%, rgba(90, 159, 196, 0.07) 0%, transparent 48%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 24%),
+    radial-gradient(ellipse 78% 48% at 8% 0%, rgba(142, 196, 230, 0.3) 0%, transparent 58%),
+    radial-gradient(ellipse 46% 36% at 100% 100%, rgba(90, 160, 200, 0.1) 0%, transparent 52%);
   pointer-events: none;
   z-index: 0;
 }
@@ -359,11 +366,11 @@
 /* ─── Silver Theme (冷银玻璃) ─── */
 [data-theme="silver"] {
   color-scheme: dark;
-  --accent: #B8C0CC;
-  --accent-strong: #8E96A3;
-  --accent-dim: rgba(184, 192, 204, 0.14);
-  --accent-border: rgba(184, 192, 204, 0.32);
-  --on-accent: #0e1014;
+  --accent: #D0D6E0;
+  --accent-strong: #A8B0BC;
+  --accent-dim: rgba(208, 214, 224, 0.15);
+  --accent-border: rgba(208, 214, 224, 0.34);
+  --on-accent: #101216;
 
   --green: #6aaa84;
   --green-dim: rgba(106, 170, 132, 0.12);
@@ -378,29 +385,30 @@
 
   --bg-0: transparent;
   --bg-1: rgba(255, 255, 255, 0.045);
-  --bg-2: rgba(184, 192, 204, 0.035);
+  --bg-2: rgba(208, 214, 224, 0.04);
   --bg-3: rgba(255, 255, 255, 0.075);
-  --bg-hover: rgba(184, 192, 204, 0.07);
+  --bg-hover: rgba(208, 214, 224, 0.08);
 
   --input-bg: rgba(8, 12, 18, 0.6);
 
-  --border: rgba(255, 255, 255, 0.1);
-  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.12);
+  --border-subtle: rgba(255, 255, 255, 0.07);
 
-  --text-0: #e8eaee;
-  --text-1: rgba(232, 234, 238, 0.88);
-  --text-2: rgba(232, 234, 238, 0.55);
-  --text-3: rgba(232, 234, 238, 0.32);
+  --text-0: #f2f4f7;
+  --text-1: rgba(242, 244, 247, 0.88);
+  --text-2: rgba(242, 244, 247, 0.64);
+  --text-3: rgba(242, 244, 247, 0.4);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.22);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
-  --shadow-glow: 0 0 28px rgba(184, 192, 204, 0.08);
-  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --shadow-glow: 0 0 28px rgba(208, 214, 224, 0.1);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 
-  --chrome-bg: rgba(12, 14, 18, 0.58);
+  --chrome-bg: rgba(14, 16, 22, 0.5);
   --chrome-line: rgba(255, 255, 255, 0.06);
+  --float-bg: rgba(20, 22, 28, 0.95);
 
   /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
   --overlay-1: rgba(255, 255, 255, 0.03);
@@ -422,9 +430,10 @@
   position: fixed;
   inset: 0;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 18%),
-    radial-gradient(ellipse 80% 45% at 18% 0%, rgba(184, 192, 204, 0.1) 0%, transparent 52%),
-    radial-gradient(ellipse 55% 40% at 100% 85%, rgba(142, 150, 163, 0.06) 0%, transparent 48%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 18%),
+    linear-gradient(112deg, transparent 6%, rgba(208, 214, 224, 0.07) 40%, transparent 70%),
+    radial-gradient(ellipse 80% 42% at 10% 0%, rgba(208, 214, 224, 0.26) 0%, transparent 58%),
+    radial-gradient(ellipse 48% 36% at 100% 100%, rgba(160, 168, 180, 0.08) 0%, transparent 52%);
   pointer-events: none;
   z-index: 0;
 }
@@ -432,12 +441,12 @@
 /* ─── Glass Theme (香槟金 Pearl Champagne) ─── */
 [data-theme="glass"] {
   color-scheme: dark;
-  /* Pearl champagne: luminous, low-mud, not yellow-gold or taupe */
-  --accent: #D8CFC3;
-  --accent-strong: #B5AAA0;
-  --accent-dim: rgba(216, 207, 195, 0.12);
-  --accent-border: rgba(216, 207, 195, 0.28);
-  --on-accent: #121110;
+  /* Pearl champagne: warm enough to read as pearl, not yellow-gold or gray taupe */
+  --accent: #E8D9C8;
+  --accent-strong: #CDBBA8;
+  --accent-dim: rgba(232, 217, 200, 0.18);
+  --accent-border: rgba(232, 217, 200, 0.38);
+  --on-accent: #1c1612;
 
   --green: #6aaa84;
   --green-dim: rgba(106, 170, 132, 0.12);
@@ -455,27 +464,28 @@
   --bg-1: rgba(255, 255, 255, 0.035);
   --bg-2: rgba(255, 255, 255, 0.025);
   --bg-3: rgba(255, 255, 255, 0.065);
-  --bg-hover: rgba(216, 207, 195, 0.05);
+  --bg-hover: rgba(232, 217, 200, 0.08);
 
   --input-bg: rgba(8, 8, 7, 0.6);
 
-  --border: rgba(255, 255, 255, 0.09);
-  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border: rgba(255, 255, 255, 0.11);
+  --border-subtle: rgba(255, 255, 255, 0.065);
 
-  --text-0: #f4f3f1;
-  --text-1: rgba(244, 243, 241, 0.86);
-  --text-2: rgba(244, 243, 241, 0.52);
-  --text-3: rgba(244, 243, 241, 0.3);
+  --text-0: #f6f4f1;
+  --text-1: rgba(246, 244, 241, 0.88);
+  --text-2: rgba(246, 244, 241, 0.64);
+  --text-3: rgba(246, 244, 241, 0.4);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.18);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.24);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.3);
   --shadow-glow: none;
-  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 
-  --chrome-bg: rgba(12, 12, 11, 0.6);
+  --chrome-bg: rgba(18, 16, 14, 0.52);
   --chrome-line: rgba(255, 255, 255, 0.05);
+  --float-bg: rgba(24, 28, 32, 0.95);
 
   /* 叠加层四档：在当前底色上提亮（深色）或压暗（浅色），取代散落的透明白 / 墨蓝 */
   --overlay-1: rgba(255, 255, 255, 0.03);
@@ -511,11 +521,12 @@
   content: '';
   position: fixed;
   inset: 0;
-  /* 磨砂面要有东西可糊：左上香槟主光 + 右下暖灰回光，强度压在不抢内容的范围 */
+  /* 磨砂面要有东西可糊：左上珍珠主光 + 右上冷边 + 右下暖灰回光 */
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 16%),
-    radial-gradient(ellipse 75% 45% at 15% 0%, rgba(216, 207, 195, 0.075) 0%, transparent 55%),
-    radial-gradient(ellipse 55% 45% at 100% 100%, rgba(181, 170, 160, 0.045) 0%, transparent 50%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, transparent 26%),
+    radial-gradient(ellipse 76% 46% at 8% 0%, rgba(232, 217, 200, 0.28) 0%, transparent 58%),
+    radial-gradient(ellipse 36% 26% at 96% 0%, rgba(255, 255, 255, 0.07) 0%, transparent 52%),
+    radial-gradient(ellipse 52% 42% at 100% 100%, rgba(205, 187, 168, 0.12) 0%, transparent 54%);
   pointer-events: none;
   z-index: 0;
 }

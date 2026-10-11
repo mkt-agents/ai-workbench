@@ -1,11 +1,26 @@
 import type { AppTheme } from "../core/types";
 
+const VALID_THEMES: ReadonlySet<string> = new Set([
+  "light",
+  "dark",
+  "system",
+  "glass",
+  "ice",
+  "silver",
+]);
+
+/** Coerce removed / unknown theme ids (e.g. old localStorage) back to default. */
+export function normalizeAppTheme(theme: string | null | undefined): AppTheme {
+  return theme && VALID_THEMES.has(theme) ? (theme as AppTheme) : "glass";
+}
+
 /** Apply theme to the current document (each Tauri webview has its own). */
 export function applyDocumentTheme(theme: AppTheme): void {
-  if (theme === "system") {
+  const next = normalizeAppTheme(theme);
+  if (next === "system") {
     document.documentElement.removeAttribute("data-theme");
   } else {
-    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute("data-theme", next);
   }
 }
 
@@ -18,16 +33,7 @@ export function readPersistedTheme(): AppTheme | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { state?: { settings?: { theme?: string } } };
     const theme = parsed?.state?.settings?.theme;
-    if (
-      theme === "light" ||
-      theme === "dark" ||
-      theme === "system" ||
-      theme === "glass" ||
-      theme === "ice" ||
-      theme === "silver"
-    ) {
-      return theme;
-    }
+    if (theme && VALID_THEMES.has(theme)) return theme as AppTheme;
   } catch {
     /* ignore */
   }

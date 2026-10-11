@@ -495,7 +495,7 @@ bootApp(): Promise<void>
 
 | 模块 | 导出 | 功能 |
 |------|------|------|
-| `theme.ts` | `applyDocumentTheme(theme)` | 根据 AppTheme 设置 CSS 类（支持 glass/ice/silver/light/dark/system） |
+| `theme.ts` | `applyDocumentTheme(theme)` | 根据 AppTheme 设置 `data-theme`（支持 glass/ice/silver/light/dark/system） |
 | `quickAskShortcut.ts` | `registerQuickAskShortcut(shortcut)` | 调用 `registerShortcut` + navigate |
 | `aiProviders.ts` | `AI_PROVIDERS: ProviderMeta[]` | provider 显示名 + 默认 baseUrl |
 | `aiProviderLogos.ts` | `aiProviderLogoUrl(id)` 等 | 模型配置页品牌图 URL（`public/ai-providers/`） |

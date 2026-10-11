@@ -24,49 +24,50 @@
   position: fixed;
   inset: 0;
   background: rgba(var(--ink-rgb), 0.42);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(6px) saturate(1.05);
+  -webkit-backdrop-filter: blur(6px) saturate(1.05);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
-  animation: fadeIn 0.12s ease;
+  animation: fadeIn 0.14s ease;
 }
 
 /* 深色/磨砂主题下纯黑遮罩更有聚焦感；浅色主题的遮罩带墨蓝，避免整屏发灰。 */
 :is([data-theme="dark"], [data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal-overlay {
-  background: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.58);
 }
 
 .modal {
-  background: var(--bg-1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, transparent 38%),
+    var(--float-bg);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl);
-  padding: 22px;
+  padding: 20px 22px 18px;
   width: 90%;
   max-width: min(380px, calc(100vw - 32px));
   box-sizing: border-box;
   overflow: hidden;
-  animation: slideUp 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: var(--float-shadow);
+  animation: slideUp 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
 }
 
-/* 磨砂三主题里 --bg-1 只有 3.5%~4.5% alpha —— 卡片贴在桌面上可以，弹框却是压在
-   暗遮罩上的，用它就等于没有底，正文像浮在空气里。这里给弹框单独一层接近实底的
-   磨砂面，顶部一道高光发丝线，不加 backdrop-filter（遮罩已经糊过一层了）。 */
+/* 磨砂主题：浮层实底 + 顶缘高光；遮罩已经糊过一层，弹框本身不再加 backdrop-filter。 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.012) 34%),
-    color-mix(in srgb, var(--chrome-bg) 78%, black);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.015) 36%),
+    var(--float-bg);
   border-color: var(--overlay-3);
 }
 
 .modal-title {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-0);
-  margin-bottom: 18px;
-  padding-bottom: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--border-subtle);
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -77,12 +78,18 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-0);
   margin-bottom: 16px;
-  padding-bottom: 10px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal-title,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal-title-row {
+  border-bottom-color: var(--overlay-2);
 }
 
 .modal-title-text {
@@ -101,18 +108,20 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   background: none;
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  color: var(--text-2);
+  color: var(--text-3);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background var(--transition-colors-fast), color var(--transition-colors-fast),
+    border-color var(--transition-colors-fast);
 }
 
 .modal-close:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
   color: var(--text-0);
 }
 
@@ -121,7 +130,18 @@
   cursor: default;
 }
 
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .modal-actions {
+  border-top-color: var(--overlay-2);
+}
 
 /* 内容多、带滚动区的弹框（升级框）用分区页脚：次要在左、主操作在右，
    上方一道发丝线与正文分开。 */
@@ -149,13 +169,13 @@
 /* Confirm Modal */
 .confirm-modal {
   max-width: min(400px, calc(100vw - 32px));
-  padding: 22px;
+  padding: 22px 22px 18px;
 }
 
 .confirm-modal-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   margin-bottom: 12px;
   min-width: 0;
 }
@@ -164,9 +184,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-lg);
   background: var(--red-dim);
   color: var(--red);
   flex-shrink: 0;
@@ -200,6 +220,7 @@
 .confirm-modal-title {
   font-size: 14px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-0);
   min-width: 0;
   flex: 1;
@@ -208,12 +229,12 @@
   line-height: 1.45;
 }
 
-/* 正文与标题左缘对齐（图标 34 + gap 10），否则文字从图标下面穿出来。 */
+/* 正文与标题左缘对齐（图标 36 + gap 12），否则文字从图标下面穿出来。 */
 .confirm-modal-body {
   color: var(--text-1);
   font-size: 12.5px;
   line-height: 1.65;
-  margin-left: 44px;
+  margin-left: 48px;
   overflow-wrap: anywhere;
   word-break: break-word;
 }

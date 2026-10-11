@@ -306,12 +306,6 @@ function DevTools({ active = true }: { active?: boolean }) {
           )}
         </div>
 
-        {activeToolMeta && (
-          <span className="dt-toolbar-desc" title={t(activeToolMeta.descriptionKey)}>
-            {t(activeToolMeta.descriptionKey)}
-          </span>
-        )}
-
         <div className="dt-toolbar-search">
           <Search size={13} />
           <input
@@ -339,6 +333,11 @@ function DevTools({ active = true }: { active?: boolean }) {
           {!search && <kbd className="dt-search-kbd">/</kbd>}
         </div>
         </div>
+        {activeToolMeta && (
+          <p className="dt-toolbar-desc" title={t(activeToolMeta.descriptionKey)}>
+            {t(activeToolMeta.descriptionKey)}
+          </p>
+        )}
       </header>
 
       <main className="dt-main">

@@ -259,14 +259,23 @@
   bottom: 100%;
   left: 0;
   margin-bottom: 6px;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  box-shadow: var(--float-shadow);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
   z-index: 100;
   min-width: 200px;
   overflow: hidden;
-  padding: 4px;
+  padding: 5px;
+  animation: dd-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-mode-dropdown {
+  border-color: var(--overlay-3);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
 }
 
 .ai-mode-option {

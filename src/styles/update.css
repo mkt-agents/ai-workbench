@@ -12,13 +12,19 @@
   padding: 10px 12px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
-  background: var(--bg-1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
   color: var(--text-0);
   font-size: 12.5px;
-  box-shadow: var(--float-shadow);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
   animation: update-banner-in 0.2s ease;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .update-banner {
+  border-color: var(--overlay-3);
 }
 
 @keyframes update-banner-in {
@@ -231,18 +237,20 @@
 }
 
 /* Glass Theme Toast — same structure, neutral frosted surface.
-   投影留给 --float-shadow（各主题已定好），这里只换表面与描边。 */
+   投影留给 --float-shadow（各主题已定好），表面用 --float-bg。 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast {
-  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
+  background: var(--float-bg);
   border-color: var(--overlay-4);
   border-left-width: 3px;
-  color: #f5f5f5;
+  color: var(--text-0);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-success {
   border-left-color: color-mix(in srgb, var(--accent) 85%, transparent);
-  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
-  color: #f5f5f5;
+  background: var(--float-bg);
+  color: var(--text-0);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-success .toast-icon {
@@ -250,19 +258,19 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-error {
-  border-left-color: rgba(239, 83, 80, 0.85);
-  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
-  color: #f5f5f5;
+  border-left-color: rgba(239, 83, 80, 0.85); /* token-ok: toast left accent stays vivid across themes */
+  background: var(--float-bg);
+  color: var(--text-0);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-error .toast-icon {
-  color: #e57373;
+  color: #e57373; /* token-ok: toast icon accent stays vivid across themes */
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-warning {
-  border-left-color: rgba(255, 167, 38, 0.85);
-  background: color-mix(in srgb, var(--chrome-bg) 88%, black);
-  color: #f5f5f5;
+  border-left-color: rgba(255, 167, 38, 0.85); /* token-ok: toast left accent stays vivid across themes */
+  background: var(--float-bg);
+  color: var(--text-0);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toast-warning .toast-icon {

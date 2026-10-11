@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import GitManager from "./components/GitManager";
 import SettingsPage from "./components/Settings";
@@ -45,7 +45,7 @@ import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { registerQuickAskShortcut } from "./lib/quickAskShortcut";
 import { syncPluginHotkeys } from "./lib/pluginHotkeys";
-import { applyDocumentTheme } from "./lib/theme";
+import { applyDocumentTheme, normalizeAppTheme } from "./lib/theme";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import "./styles/index.css";
 
@@ -96,6 +96,7 @@ function App() {
     null
   );
   const collapsed = settings.sidebarCollapsed;
+  const collapseMotionSkip = useRef(true);
   const autoCollapsedByWidth = useRef(false);
   const userOverrideCollapse = useRef(false);
 
@@ -170,7 +171,11 @@ function App() {
         }
       })
       .catch(console.error);
-    applyDocumentTheme(settings.theme);
+    {
+      const theme = normalizeAppTheme(settings.theme);
+      if (theme !== settings.theme) setSettings({ theme });
+      applyDocumentTheme(theme);
+    }
     if (i18n.language !== settings.language) {
       i18n.changeLanguage(settings.language);
     }
@@ -288,9 +293,37 @@ function App() {
       title={t(leaf.labelKey)}
     >
       <span className="nav-icon">{leaf.icon}</span>
-      {!collapsed && <span className="nav-label">{t(leaf.labelKey)}</span>}
+      <span className="nav-label">{t(leaf.labelKey)}</span>
     </button>
   );
+
+  useLayoutEffect(() => {
+    if (collapseMotionSkip.current) {
+      collapseMotionSkip.current = false;
+      return;
+    }
+    // Before paint, so the first frame of the width change is already unblurred.
+    // useEffect would run after that frame and the blur would eat the animation.
+    const sidebar = document.querySelector<HTMLElement>(".sidebar");
+    document.body.classList.add("sidebar-collapsing");
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      requestAnimationFrame(() => document.body.classList.remove("sidebar-collapsing"));
+    };
+    const onEnd = (event: Event) => {
+      const transition = event as TransitionEvent;
+      if (transition.target === sidebar && transition.propertyName === "width") finish();
+    };
+    sidebar?.addEventListener("transitionend", onEnd);
+    const timer = window.setTimeout(finish, 400);
+    return () => {
+      sidebar?.removeEventListener("transitionend", onEnd);
+      window.clearTimeout(timer);
+      document.body.classList.remove("sidebar-collapsing");
+    };
+  }, [collapsed]);
 
   useEffect(() => {
     let idleTimer: number | undefined;
@@ -386,22 +419,18 @@ function App() {
             size={28}
             className="sidebar-logo-icon"
           />
-          {!collapsed && <span className="sidebar-logo-text">{tc("app.name")}</span>}
+          <span className="sidebar-logo-text">{tc("app.name")}</span>
         </div>
 
         <nav className="sidebar-nav">
           {NAV_NODES.map((node) => {
             if ("group" in node) {
-              if (collapsed) {
-                return (
-                  <div key={node.group} className="sidebar-group sidebar-group-collapsed">
-                    {node.children.map((child) => renderLeafButton(child))}
-                  </div>
-                );
-              }
               const isOpen = openGroups.has(node.group);
               const hasActive = node.children.some((c) => c.id === activeTab);
               const label = t(node.labelKey);
+              // Collapsed rail still lists every page. Headers stay mounted and
+              // collapse via CSS so the list doesn't remount mid-animation.
+              const showChildren = collapsed || isOpen;
               return (
                 <div key={node.group} className="sidebar-group">
                   <button
@@ -409,10 +438,11 @@ function App() {
                     onClick={() => toggleGroup(node.group)}
                     type="button"
                     aria-expanded={isOpen}
+                    tabIndex={collapsed ? -1 : undefined}
                   >
                     <span className="nav-label">{label}</span>
                   </button>
-                  {isOpen &&
+                  {showChildren &&
                     node.children.map((child) =>
                       renderLeafButton(child, "sidebar-group-item")
                     )}
@@ -433,7 +463,7 @@ function App() {
             <span className="nav-icon">
               <Settings size={16} />
             </span>
-            {!collapsed && <span className="nav-label">{t("settings")}</span>}
+            <span className="nav-label">{t("settings")}</span>
           </button>
           <button
             onClick={() => setCollapsed(!collapsed)}

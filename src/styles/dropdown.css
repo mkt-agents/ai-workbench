@@ -2,58 +2,97 @@
 .dd { position: relative; display: inline-flex; }
 .dd-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   right: 0;
   z-index: 30;
-  min-width: 210px;
-  padding: 4px;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
+  min-width: 200px;
+  padding: 5px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
   display: flex;
   flex-direction: column;
-  animation: dd-in 120ms ease-out;
+  gap: 1px;
+  animation: dd-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: top right;
 }
-/* --bg-1 is only a few % alpha in the frosted themes; the menu needs a real floor. */
+/* 磨砂主题：实底 + 轻糊，避免底下卡片文字透上来。 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dd-menu {
-  background: color-mix(in srgb, var(--chrome-bg) 78%, black);
   border-color: var(--overlay-3);
-  backdrop-filter: blur(20px) saturate(1.08);
-  -webkit-backdrop-filter: blur(20px) saturate(1.08);
-}
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dd-item:hover:not(:disabled) {
-  background: var(--overlay-3);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
 }
 @keyframes dd-in {
-  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  from { opacity: 0; transform: translateY(-5px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .dd-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   width: 100%;
-  padding: 8px 10px;
+  min-height: 32px;
+  padding: 0 10px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-1);
   font-size: 12px;
+  font-weight: 500;
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 100ms ease;
+  transition: background var(--transition-colors-fast), color var(--transition-colors-fast);
 }
-.dd-item svg { opacity: 0.8; }
-.dd-item:hover:not(:disabled) { background: var(--bg-hover); }
-.dd-item:hover:not(:disabled) svg { opacity: 1; }
-.dd-item:disabled { opacity: 0.4; cursor: default; }
-.dd-item.is-danger { color: var(--red); }
-.dd-item.is-danger:hover:not(:disabled) { background: var(--red-dim); }
+.dd-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.72;
+  color: var(--text-2);
+  transition: opacity var(--transition-colors-fast), color var(--transition-colors-fast);
+}
+.dd-item:hover:not(:disabled) {
+  background: var(--overlay-3);
+  color: var(--text-0);
+}
+.dd-item:hover:not(:disabled) svg {
+  opacity: 1;
+  color: var(--accent);
+}
+.dd-item:active:not(:disabled) {
+  background: var(--overlay-4);
+}
+.dd-item:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.dd-item.is-danger {
+  color: var(--red);
+}
+.dd-item.is-danger svg {
+  color: var(--red);
+  opacity: 0.85;
+}
+.dd-item.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
+.dd-item.is-danger:hover:not(:disabled) svg {
+  color: var(--red);
+  opacity: 1;
+}
 .dd-divider {
   height: 1px;
-  margin: 3px 6px;
-  background: var(--border);
+  margin: 4px 8px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--border-subtle) 12%,
+    var(--border-subtle) 88%,
+    transparent 100%
+  );
 }
-

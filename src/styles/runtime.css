@@ -641,8 +641,10 @@
   padding: 6px;
   border-radius: var(--radius-md);
   border: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border-subtle));
-  background: var(--bg-0);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.2);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 42%),
+    var(--float-bg);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
   display: flex;
   flex-direction: column;
   gap: 4px;

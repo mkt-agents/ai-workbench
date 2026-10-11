@@ -14,20 +14,40 @@
 .dt-toolbar {
   flex-shrink: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   /* 左右内边距与 .dt-content 一致，工具条内容才能和下面的工具左右对齐 */
-  padding: 6px 20px;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 20px 0;
+  background: transparent;
+  border-bottom: none;
 }
 
 .dt-toolbar-inner {
+  --dt-track: var(--bg-1);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
   min-width: 0;
   width: 100%;
   max-width: var(--page-max-width);
   margin: 0 auto;
+  padding: 3px;
+  background: var(--dt-track);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dt-toolbar-inner {
+  --dt-track: rgba(255, 255, 255, 0.055);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, transparent 58%),
+    var(--dt-track);
+  border-color: var(--overlay-3);
+}
+
+.dt-toolbar-inner:has(.dt-toolbar-search:focus-within) {
+  border-color: var(--accent-border);
 }
 
 .dt-toolbar-search {
@@ -35,19 +55,19 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  width: 150px;
-  padding: 4px 8px;
-  background: var(--input-bg);
-  border: 1px solid var(--border);
+  width: 168px;
+  height: 28px;
+  margin-left: 2px;
+  padding: 0 8px 0 10px;
+  background: transparent;
+  border: none;
   border-radius: var(--radius-md);
-  transition: border-color var(--transition-colors-fast), box-shadow var(--transition-colors-fast);
+  box-shadow: inset 1px 0 0 var(--border-subtle);
+  transition: box-shadow var(--transition-colors-fast);
 }
 
 .dt-toolbar-search:focus-within {
-  /* 聚焦打字时借走工具条空间，否则 1024 默认窗宽下最后一个 chip 会被挤出去 */
-  width: 200px;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 1px 0 0 var(--accent-border);
 }
 
 .dt-toolbar-search > svg {
@@ -149,8 +169,8 @@
   padding-left: 2px;
   background: linear-gradient(
     to right,
-    var(--bg-1) 28%,
-    color-mix(in srgb, var(--bg-1) 55%, transparent) 72%,
+    var(--dt-track) 28%,
+    color-mix(in srgb, var(--dt-track) 55%, transparent) 72%,
     transparent
   );
 }
@@ -161,8 +181,8 @@
   padding-right: 2px;
   background: linear-gradient(
     to left,
-    var(--bg-1) 28%,
-    color-mix(in srgb, var(--bg-1) 55%, transparent) 72%,
+    var(--dt-track) 28%,
+    color-mix(in srgb, var(--dt-track) 55%, transparent) 72%,
     transparent
   );
 }
@@ -202,18 +222,21 @@
   flex-shrink: 0;
   align-self: center;
   width: 1px;
-  height: 18px;
-  background: var(--border);
+  height: 14px;
+  margin: 0 3px;
+  background: var(--border-subtle);
 }
 
-/* 当前工具说明：原来独占一条 46px 横条，现在并进工具条，窄窗口先隐藏它 */
+/* 当前工具说明：放在轨道下方一行，不和芯片、搜索抢同一条 */
 .dt-toolbar-desc {
-  flex: 0 1 auto;
-  min-width: 0;
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin: 6px auto 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
+  line-height: 1.4;
   color: var(--text-3);
   user-select: none;
 }
@@ -241,9 +264,10 @@
 .dt-tool-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex-shrink: 0;
-  padding: 4px 9px;
+  height: 28px;
+  padding: 0 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
@@ -253,12 +277,12 @@
   white-space: nowrap;
   cursor: pointer;
   transition: background var(--transition-colors-fast), color var(--transition-colors-fast),
-    border-color var(--transition-colors-fast);
-  line-height: 1.5;
+    border-color var(--transition-colors-fast), box-shadow var(--transition-colors-fast);
+  line-height: 1;
 }
 
 .dt-tool-item:hover {
-  background: var(--bg-hover);
+  background: var(--overlay-2);
   color: var(--text-0);
 }
 
@@ -279,14 +303,15 @@
 
 .dt-search-kbd {
   flex-shrink: 0;
-  min-width: 15px;
-  height: 15px;
+  min-width: 14px;
+  height: 14px;
   padding: 0 3px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
+  background: var(--overlay-1);
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-3);
@@ -297,10 +322,11 @@
 }
 
 .dt-tool-item.active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: transparent;
   color: var(--accent);
   font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
 .dt-tool-icon {
@@ -323,31 +349,27 @@
   min-width: 0;
 }
 
-/* 快捷键数字常驻占位，避免切换时 chip 宽度跳动 */
+/* 快捷键数字常驻占位，避免切换时 chip 宽度跳动。不要再套小方框。 */
 .dt-tool-kbd {
   flex-shrink: 0;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 3px;
+  min-width: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-family: var(--font-mono);
-  font-size: 9.5px;
-  font-weight: 600;
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
   color: var(--text-3);
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  opacity: 0.5;
-  transition: opacity var(--transition-colors-fast);
+  background: none;
+  border: none;
+  opacity: 0.8;
 }
 
-.dt-tool-item:hover .dt-tool-kbd,
-.dt-tool-item:focus-visible .dt-tool-kbd,
 .dt-tool-item.active .dt-tool-kbd {
-  opacity: 1;
+  color: var(--accent);
+  opacity: 0.72;
 }
 
 /* Empty state inside the strip (search with no matches) */
@@ -1282,11 +1304,17 @@
   width: 360px;
   max-height: 320px;
   overflow-y: auto;
-  background: var(--bg-1);
+  background: var(--float-bg);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--float-shadow);
   z-index: 100;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .devtools-history-menu {
+  border-color: var(--overlay-3);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
 }
 
 .devtools-history-header {
@@ -5098,14 +5126,23 @@
 /* ── App Launcher Modal ── */
 
 .app-launcher-tool .modal-card {
-  background: var(--bg-1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, transparent 38%),
+    var(--float-bg);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   width: 90%;
   max-width: min(420px, calc(100vw - 32px));
-  box-shadow: var(--float-shadow);
-  animation: slideUp 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
+  animation: slideUp 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
   overflow: hidden;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .app-launcher-tool .modal-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.015) 36%),
+    var(--float-bg);
+  border-color: var(--overlay-3);
 }
 
 .app-launcher-tool .modal-header {
@@ -5193,6 +5230,7 @@
 /* ── App Launcher (Quick Apps) ── */
 
 .app-launcher-tool {
+  --al-control-h: 28px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -5232,12 +5270,13 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  column-gap: 8px;
-  row-gap: 6px;
-  padding: 8px 10px;
+  column-gap: 10px;
+  row-gap: 8px;
+  padding: 4px;
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight);
   /* 吸顶固定：卡片从下面滚过时藏在它后面 */
   position: sticky;
   top: 0;
@@ -5249,7 +5288,10 @@
    卡片从下面滚过时是透过磨砂玻璃看到模糊轮廓，而不是撞上一块实心板。
    light/dark 主题的 --bg-1 本就接近不透明，保持原样不加模糊。 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .al-toolbar {
-  background: var(--chrome-bg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, transparent 58%),
+    rgba(255, 255, 255, 0.055);
+  border-color: var(--overlay-3);
   backdrop-filter: blur(20px) saturate(1.08);
   -webkit-backdrop-filter: blur(20px) saturate(1.08);
 }
@@ -5258,13 +5300,13 @@
 .al-toolbar-left {
   display: flex;
   align-items: center;
-  column-gap: 8px;
+  column-gap: 6px;
   flex: 1 1 320px;
   min-width: 0;
 }
 
 .al-toolbar-left .al-search {
-  max-width: 340px;
+  max-width: 280px;
 }
 
 .al-toolbar-right {
@@ -5274,7 +5316,7 @@
      gets tight the whole right side drops under the left buttons as one
      clean line instead of scattering selects/icons across ragged rows. */
   flex-wrap: nowrap;
-  column-gap: 8px;
+  column-gap: 6px;
   flex: 0 0 auto;
   margin-left: auto;
   justify-content: flex-end;
@@ -5283,8 +5325,17 @@
 .al-icon-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 1px;
   flex-shrink: 0;
+  padding: 1px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .al-icon-group {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
 }
 
 .al-toolbar-spacer {
@@ -5293,8 +5344,8 @@
 
 .al-divider {
   width: 1px;
-  height: 20px;
-  background: var(--border);
+  height: 14px;
+  background: var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -5303,14 +5354,17 @@
 .al-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  justify-content: center;
+  gap: 5px;
+  height: var(--al-control-h);
+  padding: 0 10px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-2);
-  background: var(--bg-0);
-  border: 1px solid var(--border);
+  background: var(--overlay-2);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+  box-shadow: var(--surface-highlight);
   cursor: pointer;
   transition: var(--transition-colors-fast);
   white-space: nowrap;
@@ -5318,8 +5372,8 @@
 
 .al-btn:hover:not(:disabled) {
   color: var(--text-0);
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-color: var(--overlay-4);
+  background: var(--overlay-3);
 }
 
 .al-btn:disabled {
@@ -5329,14 +5383,20 @@
 
 .al-btn-primary {
   color: var(--on-accent);
-  background: var(--accent);
-  border-color: var(--accent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 76%, white) 0%,
+    var(--accent) 100%
+  );
+  border-color: color-mix(in srgb, var(--accent) 62%, black);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .al-btn-primary:hover:not(:disabled) {
   color: var(--on-accent);
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-strong) 100%);
+  border-color: color-mix(in srgb, var(--accent-strong) 70%, black);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .al-btn-danger-outline {
@@ -5351,19 +5411,44 @@
 }
 
 .al-btn-icon {
-  padding: 6px 7px;
+  width: var(--al-control-h);
+  padding: 0;
+}
+
+.al-icon-group .al-btn-icon {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+}
+
+.al-icon-group .al-btn-icon:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--overlay-3);
+  border-color: transparent;
+}
+
+.al-icon-group .al-btn-active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
 .al-btn-ghost {
   border-color: transparent;
   background: transparent;
+  box-shadow: none;
 }
 
 /* Toggle pressed state (auto refresh) — accent language, not a solid fill. */
 .al-btn-active {
   color: var(--accent);
   background: var(--accent-dim);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  border-color: var(--accent-border);
+  box-shadow: none;
 }
 
 .al-icon-btn {
@@ -5398,15 +5483,22 @@
 .al-search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  background: var(--input-bg);
-  border: 1px solid var(--border);
+  gap: 6px;
+  height: var(--al-control-h);
+  padding: 0 10px;
+  background: var(--overlay-2);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  transition: border-color 0.15s ease;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: border-color var(--transition-colors-fast), box-shadow var(--transition-colors-fast);
   flex: 1;
   min-width: 96px;
   max-width: 180px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .al-search {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
 }
 
 /* Compact QuickSelect trigger for the group filter and sort selector. */
@@ -5421,7 +5513,7 @@
 .al-group-select .qa-focus-btn,
 .al-sort-select .qa-focus-btn,
 .al-batch-group-select .qa-focus-btn {
-  height: 30px;
+  height: var(--al-control-h);
   padding: 0 10px;
   font-size: 12px;
   border-radius: var(--radius-md);
@@ -5500,8 +5592,8 @@
 }
 
 .al-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--accent-border);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 3px var(--accent-dim);
 }
 
 .al-search-icon {
@@ -5513,8 +5605,9 @@
   flex: 1;
   border: none;
   background: transparent;
-  padding: 3px 0;
+  padding: 0;
   min-height: auto;
+  font-size: 12px;
   font-size: 12.5px;
   color: var(--text-0);
   outline: none;
@@ -5530,13 +5623,14 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  height: var(--al-control-h);
+  padding: 0 10px;
   font-size: 11px;
   font-weight: 500;
   color: var(--green);
   background: color-mix(in srgb, var(--green) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--green) 25%, transparent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   white-space: nowrap;
 }
 
@@ -6316,17 +6410,24 @@
 .al-view-tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
+  height: var(--al-control-h);
   padding: 2px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-0);
-  margin-right: 6px;
+  background: var(--overlay-1);
+  margin-right: 2px;
   flex-shrink: 0;
 }
 
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .al-view-tabs {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
 .al-view-tab {
-  padding: 4px 10px;
+  height: 100%;
+  padding: 0 11px;
   font-size: 12px;
   font-weight: 500;
   border: 1px solid transparent;
@@ -6340,12 +6441,14 @@
 
 .al-view-tab:hover {
   color: var(--text-0);
-  background: var(--bg-hover);
+  background: var(--overlay-2);
 }
 
 .al-view-tab.active {
   color: var(--accent);
-  background: var(--accent-dim);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+  font-weight: 600;
 }
 
 /* ── 端口查杀面板 ── */

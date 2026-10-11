@@ -84,11 +84,13 @@
 
 /* glass/ice/silver refinements for floating menu */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .prompt-model-menu.is-floating {
-  background: rgba(24, 28, 32, 0.95);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-color: color-mix(in srgb, var(--accent) 15%, var(--overlay-3));
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  border-color: var(--overlay-3);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .prompt-model-menu.is-floating .prompt-model-search {
@@ -104,16 +106,18 @@
 .dark .prompt-model-menu,
 [data-theme="dark"] .ai-model-menu,
 .dark .ai-model-menu {
-  background: #1a1e1c;
+  background: var(--float-bg);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .prompt-model-menu,
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-menu {
-  background: rgba(24, 28, 32, 0.95);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-color: color-mix(in srgb, var(--accent) 12%, var(--overlay-3));
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.25);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  border-color: var(--overlay-3);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
 }
 
 .prompt-model-search,
@@ -306,15 +310,17 @@
 
 [data-theme="dark"] .prompt-template-menu,
 .dark .prompt-template-menu {
-  background: #1a1e1c;
+  background: var(--float-bg);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .prompt-template-menu {
-  background: rgba(28, 34, 30, 0.96);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
   border-color: var(--overlay-3);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
 }
 
 .prompt-template-menu-label {

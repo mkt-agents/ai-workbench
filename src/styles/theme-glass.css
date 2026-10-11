@@ -17,7 +17,13 @@
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar::after {
   top: 41px;
-  background: var(--chrome-line);
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--chrome-line) 12%,
+    var(--chrome-line) 88%,
+    transparent 100%
+  );
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-logo {
@@ -25,8 +31,8 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-logo-text {
-  color: rgba(244, 246, 245, 0.72);
-  letter-spacing: 1.2px;
+  color: color-mix(in srgb, var(--text-0) 74%, transparent);
+  letter-spacing: 0.12em;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .titlebar {
@@ -39,17 +45,21 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card {
-  background: var(--overlay-1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, transparent 40%),
+    rgba(255, 255, 255, 0.06);
   border: 1px solid var(--overlay-3);
   border-radius: var(--radius-lg);
-  box-shadow: var(--surface-highlight);
-  transition: border-color 0.18s ease, background 0.18s ease;
+  box-shadow: var(--surface-highlight), 0 10px 28px rgba(0, 0, 0, 0.16);
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card:hover {
-  border-color: var(--overlay-3);
-  background: var(--overlay-2);
-  box-shadow: var(--surface-highlight);
+  border-color: var(--overlay-4);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, transparent 40%),
+    rgba(255, 255, 255, 0.08);
+  box-shadow: var(--surface-highlight), 0 14px 32px rgba(0, 0, 0, 0.2);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .card-title {
@@ -72,21 +82,26 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-primary {
-  background: var(--accent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 76%, white) 0%,
+    var(--accent) 100%
+  );
   color: var(--on-accent);
-  box-shadow: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 62%, black);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
   border-radius: var(--radius-md);
-  transition: background 0.12s ease, opacity 0.12s ease;
+  transition: background 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  box-shadow: none;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-strong) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .btn-secondary {
-  background: var(--overlay-2);
-  border: 1px solid var(--overlay-3);
+  background: var(--overlay-3);
+  border: 1px solid var(--overlay-4);
   border-radius: var(--radius-md);
   box-shadow: var(--surface-highlight);
   transition: background 0.12s ease, border-color 0.12s ease;
@@ -113,12 +128,13 @@
   background: var(--overlay-2);
   border: 1px solid var(--overlay-3);
   border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.28);
   transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .input-field:focus {
   border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px var(--accent-dim);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 3px var(--accent-dim);
   background: var(--overlay-2);
 }
 
@@ -126,8 +142,8 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select option,
 [data-theme="dark"] select option,
 .dark select option {
-  background-color: #1e2420;
-  color: #f4f6f5;
+  background-color: #1a1c20; /* token-ok: native option list ignores variables and needs a solid floor */
+  color: #f4f3f1;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select,
@@ -144,7 +160,7 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-nav-item.active {
   background: var(--accent-dim);
   color: var(--accent);
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .sidebar-group-header {
@@ -240,19 +256,19 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn {
-  color: rgba(244, 246, 245, 0.45);
+  color: var(--text-3);
   border-radius: var(--radius-sm);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn:hover {
-  color: rgba(244, 246, 245, 0.75);
+  color: var(--text-1);
   background: var(--overlay-2);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .theme-btn.active {
   background: var(--accent-dim);
   color: var(--accent);
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .toggle-slider {
@@ -288,18 +304,18 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab {
-  color: rgba(245, 245, 245, 0.4);
+  color: var(--text-3);
   border-radius: var(--radius-lg);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab:hover {
-  color: rgba(245, 245, 245, 0.65);
+  color: var(--text-2);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-tab.active {
   background: var(--overlay-2);
-  color: #f5f5f5;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.05);
+  color: var(--text-0);
+  box-shadow: var(--surface-highlight), 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-container {
@@ -311,13 +327,13 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-title h2 {
-  color: #f5f5f5;
+  color: var(--text-0);
   font-size: 15px;
   font-weight: 600;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-count {
-  color: rgba(245, 245, 245, 0.4);
+  color: var(--text-3);
   font-size: 11px;
   background: var(--overlay-2);
   padding: 3px 10px;
@@ -348,7 +364,7 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-name {
-  color: #f5f5f5;
+  color: var(--text-0);
   font-size: 13px;
   font-weight: 500;
 }
@@ -364,13 +380,13 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-detail {
-  color: rgba(245, 245, 245, 0.4);
+  color: var(--text-3);
   font-size: 11px;
   margin-top: 2px;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-meta {
-  color: rgba(245, 245, 245, 0.35);
+  color: var(--text-3);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-actions {
@@ -392,13 +408,13 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-title {
-  color: rgba(245, 245, 245, 0.7);
+  color: var(--text-1);
   font-size: 15px;
   font-weight: 500;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-desc {
-  color: rgba(245, 245, 245, 0.4);
+  color: var(--text-3);
   font-size: 12px;
   max-width: 280px;
   text-align: center;
@@ -444,7 +460,7 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label {
-  color: rgba(245, 245, 245, 0.6);
+  color: var(--text-2);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-version-label svg {
@@ -462,7 +478,7 @@
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-update-msg {
   background: var(--overlay-1);
   border-color: var(--overlay-2);
-  color: rgba(245, 245, 245, 0.8);
+  color: var(--text-1);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-progress-bar {
@@ -470,6 +486,6 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-progress-fill {
-  background: linear-gradient(90deg, var(--accent), #60a5fa);
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
 }
 
