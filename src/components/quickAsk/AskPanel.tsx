@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
   BookmarkPlus, Check, Copy, Download, ExternalLink, MessageSquarePlus,
-  RefreshCw, Send, Square,
+  RefreshCw, Send, Sparkles, Square,
 } from "lucide-react";
 import MarkdownView from "../MarkdownView";
 
@@ -27,23 +27,22 @@ type Props = {
   onSaveSnippet: () => void;
   onOpenDeepSeek: () => void;
   onExport: () => void;
-  onNewChat: () => void;
   onQuote: () => void;
   onCopySelection: () => void;
 };
 
-/** Input card + action bar + streaming answer area with quote-follow-up bar. */
+/** Answer stage (flex) + composer card; answer actions live with the answer. */
 export default function AskPanel(props: Props) {
   const { t } = useTranslation("quickask");
   const {
     input, setInput, inputRef, busy, error, answer, historyCount, canRegenerate,
     copied, snippetSaved, exportDone, selectedText, setSelectedText,
     onSend, onStop, onRegenerate, onCopyAnswer, onSaveSnippet, onOpenDeepSeek,
-    onExport, onNewChat, onQuote, onCopySelection,
+    onExport, onQuote, onCopySelection,
   } = props;
   const answerRef = useRef<HTMLDivElement | null>(null);
+  const showAnswer = Boolean(answer || busy);
 
-  // Track text selected inside the answer area for the quote-follow-up bar.
   useEffect(() => {
     const onSelect = () => {
       const sel = window.getSelection();
@@ -63,7 +62,85 @@ export default function AskPanel(props: Props) {
   }, [setSelectedText]);
 
   return (
-    <>
+    <div className="qa-stage">
+      {showAnswer ? (
+        <div className={`qa-answer-card${busy ? " is-streaming" : ""}`}>
+          <div className="qa-answer-toolbar">
+            <button
+              type="button"
+              className="qa-mini-btn"
+              disabled={busy || !canRegenerate}
+              onClick={onRegenerate}
+              title={t("regenerate")}
+            >
+              <RefreshCw size={13} /> {t("regenerate")}
+            </button>
+            <button
+              type="button"
+              className="qa-mini-btn"
+              disabled={!answer}
+              onClick={onCopyAnswer}
+              title={t("copy")}
+            >
+              {copied ? <Check size={13} /> : <Copy size={13} />}{" "}
+              {copied ? t("copied") : t("copy")}
+            </button>
+            <button
+              type="button"
+              className="qa-mini-btn"
+              disabled={!answer}
+              onClick={onSaveSnippet}
+              title={t("saveSnippet")}
+            >
+              {snippetSaved ? <Check size={13} /> : <BookmarkPlus size={13} />}{" "}
+              {snippetSaved ? t("savedSnippet") : t("saveSnippet")}
+            </button>
+            {historyCount > 0 && (
+              <button
+                type="button"
+                className="qa-mini-btn"
+                onClick={onExport}
+                title={t("exportSession")}
+              >
+                {exportDone ? <Check size={13} /> : <Download size={13} />}{" "}
+                {exportDone ? t("exported") : t("exportSession")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="qa-mini-btn"
+              onClick={onOpenDeepSeek}
+              title={t("openDeepseek")}
+            >
+              <ExternalLink size={13} /> {t("openDeepseek")}
+            </button>
+          </div>
+          <div ref={answerRef} className="quick-ask-answer">
+            <MarkdownView text={answer} />
+            {busy && <span className="qa-caret">▍</span>}
+            {selectedText && !busy && (
+              <div className="qa-selection-bar">
+                <span className="qa-selection-text">{selectedText.trim().slice(0, 60)}</span>
+                <button type="button" className="btn btn-secondary btn-small" onClick={onQuote}>
+                  <MessageSquarePlus size={13} /> {t("followUp")}
+                </button>
+                <button type="button" className="btn btn-secondary btn-small" onClick={onCopySelection}>
+                  <Copy size={13} /> {t("copySelection")}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="qa-empty">
+          <Sparkles size={22} strokeWidth={1.5} className="qa-empty-icon" />
+          <p className="qa-empty-title">{t("emptyHint")}</p>
+          <p className="qa-empty-sub">{t("emptyHintSub")}</p>
+        </div>
+      )}
+
+      {error && <div className="quick-ask-error">{error}</div>}
+
       <div className="qa-input-card">
         <textarea
           ref={inputRef}
@@ -73,7 +150,6 @@ export default function AskPanel(props: Props) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== "Enter") return;
-            // Ctrl/Cmd+Enter always sends; plain Enter sends too, Shift+Enter = newline.
             if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
             e.preventDefault();
             if (!busy) onSend();
@@ -81,6 +157,7 @@ export default function AskPanel(props: Props) {
           rows={3}
         />
         <div className="qa-input-foot">
+          <span className="qa-input-hint">{t("sendHint")}</span>
           {busy ? (
             <button
               type="button"
@@ -104,76 +181,6 @@ export default function AskPanel(props: Props) {
           )}
         </div>
       </div>
-
-      <div className="quick-ask-actions">
-        <button
-          type="button"
-          className="qa-mini-btn"
-          disabled={busy || !canRegenerate}
-          onClick={onRegenerate}
-          title={t("regenerate")}
-        >
-          <RefreshCw size={13} /> {t("regenerate")}
-        </button>
-        <button type="button" className="qa-mini-btn" disabled={!answer} onClick={onCopyAnswer}>
-          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? t("copied") : t("copy")}
-        </button>
-        <button
-          type="button"
-          className="qa-mini-btn"
-          disabled={!answer}
-          onClick={onSaveSnippet}
-          title={t("saveSnippet")}
-        >
-          {snippetSaved ? <Check size={13} /> : <BookmarkPlus size={13} />}{" "}
-          {snippetSaved ? t("savedSnippet") : t("saveSnippet")}
-        </button>
-        <button type="button" className="qa-mini-btn" onClick={onOpenDeepSeek}>
-          <ExternalLink size={13} /> {t("openDeepseek")}
-        </button>
-        {historyCount > 0 && (
-          <button
-            type="button"
-            className="qa-mini-btn"
-            onClick={onExport}
-            title={t("exportSession")}
-          >
-            {exportDone ? <Check size={13} /> : <Download size={13} />}{" "}
-            {exportDone ? t("exported") : t("exportSession")}
-          </button>
-        )}
-        {(historyCount > 0 || answer) && (
-          <button
-            type="button"
-            className="qa-mini-btn"
-            disabled={busy}
-            onClick={onNewChat}
-            title={t("newChat")}
-          >
-            <MessageSquarePlus size={13} /> {t("newChat")}
-          </button>
-        )}
-      </div>
-
-      {error && <div className="quick-ask-error">{error}</div>}
-
-      {(answer || busy) && (
-        <div ref={answerRef} className={`quick-ask-answer${busy ? " is-streaming" : ""}`}>
-          <MarkdownView text={answer} />
-          {busy && <span className="qa-caret">▍</span>}
-          {selectedText && !busy && (
-            <div className="qa-selection-bar">
-              <span className="qa-selection-text">{selectedText.trim().slice(0, 60)}</span>
-              <button type="button" className="btn btn-secondary btn-small" onClick={onQuote}>
-                <MessageSquarePlus size={13} /> {t("followUp")}
-              </button>
-              <button type="button" className="btn btn-secondary btn-small" onClick={onCopySelection}>
-                <Copy size={13} /> {t("copySelection")}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </>
+    </div>
   );
 }

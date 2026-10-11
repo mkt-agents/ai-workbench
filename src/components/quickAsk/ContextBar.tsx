@@ -16,6 +16,8 @@ type Props = {
   ctxTruncated: boolean;
 };
 
+const CHIP_KEYS: (keyof QuickAskChips)[] = ["workspace", "git", "dirty", "clipboard"];
+
 /** Context chips + quick tools (paste/snippets/preview) + context preview. */
 export default function ContextBar(props: Props) {
   const { t } = useTranslation("quickask");
@@ -26,31 +28,18 @@ export default function ContextBar(props: Props) {
   return (
     <>
       <div className="quick-ask-chips">
-        <div className="qa-chip-group">
-          <label className={`qa-chip ${chips.workspace ? "on" : ""}`}>
-            <input
-              type="checkbox"
-              checked={chips.workspace}
-              onChange={(e) => setChip("workspace", e.target.checked)}
-            />
-            {t("chip.workspace")}
-          </label>
-          <label className={`qa-chip ${chips.git ? "on" : ""}`}>
-            <input type="checkbox" checked={chips.git} onChange={(e) => setChip("git", e.target.checked)} />
-            {t("chip.git")}
-          </label>
-          <label className={`qa-chip ${chips.dirty ? "on" : ""}`}>
-            <input type="checkbox" checked={chips.dirty} onChange={(e) => setChip("dirty", e.target.checked)} />
-            {t("chip.dirty")}
-          </label>
-          <label className={`qa-chip ${chips.clipboard ? "on" : ""}`}>
-            <input
-              type="checkbox"
-              checked={chips.clipboard}
-              onChange={(e) => setChip("clipboard", e.target.checked)}
-            />
-            {t("chip.clipboard")}
-          </label>
+        <div className="qa-chip-group" role="group" aria-label={t("contextGroup")}>
+          {CHIP_KEYS.map((key) => (
+            <button
+              key={key}
+              type="button"
+              className={`qa-chip${chips[key] ? " on" : ""}`}
+              aria-pressed={chips[key]}
+              onClick={() => setChip(key, !chips[key])}
+            >
+              {t(`chip.${key}`)}
+            </button>
+          ))}
         </div>
         <div className="qa-tool-group">
           <button

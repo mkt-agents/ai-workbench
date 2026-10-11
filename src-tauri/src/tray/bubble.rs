@@ -81,12 +81,11 @@ pub(crate) mod vis {
 pub const QUICK_ASK_LABEL: &str = "quick-ask";
 pub(crate) const QUICK_ASK_BUBBLE_LABEL: &str = "quick-ask-bubble";
 pub(crate) const MAIN_LABEL: &str = "main";
-/// Bounding window size = 44px visible orb (`.qa-bubble-orb` in styles.css).
-/// The window stays a plain (uncut) rectangle: the DWM blur-behind
-/// transparency makes the corners around the CSS-rounded orb see-through,
-/// and the orb fills the window so no opaque backing can leak through.
-/// Keep the orb size in styles.css in sync with this.
-const BUBBLE_SIZE: f64 = 44.0;
+/// Bounding window size (logical px). Visible disc is smaller (`.qa-bubble-orb`);
+/// the extra padding holds the soft aura / hover ring. Keep CSS in sync.
+/// The window stays a plain (uncut) rectangle: DWM blur-behind makes the
+/// corners around the CSS-rounded disc see-through.
+const BUBBLE_SIZE: f64 = 56.0;
 const BUBBLE_MARGIN: f64 = 24.0;
 /// Keep the bubble out of the top chrome band so it cannot cover main titlebar buttons.
 const BUBBLE_TOP_SAFE_LOGICAL: f64 = 96.0;

@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Check, FileText, MessageSquarePlus, Trash2, X } from "lucide-react";
+import { Check, MessageSquarePlus, Pencil, Trash2, X } from "lucide-react";
 import type { QuickAskSession } from "../../core/types";
 
 type Props = {
@@ -84,7 +84,7 @@ export default function SessionHistory(props: Props) {
                   onClick={() => onStartRename(s)}
                   title={t("renameSession")}
                 >
-                  <FileText size={13} />
+                  <Pencil size={13} />
                 </button>
                 <button
                   type="button"

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { History, Sparkles, Terminal, X } from "lucide-react";
+import { History, MessageSquarePlus, Sparkles, Terminal, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -247,7 +247,13 @@ function QuickAskApp() {
     if (stream.busy) return;
     stream.resetChat();
     setActiveSessionId(null);
+    setHistoryOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const sendAsk = () => {
+    setHistoryOpen(false);
+    void stream.send();
   };
 
   useEffect(() => {
@@ -301,15 +307,20 @@ function QuickAskApp() {
     setOpenPop((cur) => (cur === id ? null : id));
   };
 
-  // Switching modes unmounts the toolbar; drop any popover that was open.
+  // Switching modes unmounts ask chrome; drop popovers / history drawer.
   useEffect(() => {
     setOpenPop(null);
+    setHistoryOpen(false);
   }, [mode]);
 
-  // Re-showing the window after it was hidden with a popover open: start clean.
+  // Re-showing the window: drop popovers/history and park focus in the composer.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen("quick-ask-shown", () => setOpenPop(null)).then((fn) => {
+    void listen("quick-ask-shown", () => {
+      setOpenPop(null);
+      setHistoryOpen(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }).then((fn) => {
       unlisten = fn;
     });
     return () => unlisten?.();
@@ -468,13 +479,15 @@ function QuickAskApp() {
     <div className="quick-ask-root">
       <header className="quick-ask-header" data-tauri-drag-region>
         <div className="quick-ask-title" data-tauri-drag-region>
-          <Sparkles size={16} />
+          <Sparkles size={15} strokeWidth={1.75} />
           <span>{t("title")}</span>
         </div>
         <div className="quick-ask-header-actions">
-          <div className="qa-mode-tabs">
+          <div className="qa-mode-tabs" role="tablist" aria-label={t("title")}>
             <button
               type="button"
+              role="tab"
+              aria-selected={mode === "ask"}
               className={`qa-mode-btn${mode === "ask" ? " active" : ""}`}
               onClick={() => setMode("ask")}
               title={`${t("modeAsk")} (Alt+1)`}
@@ -483,6 +496,8 @@ function QuickAskApp() {
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={mode === "tools"}
               className={`qa-mode-btn${mode === "tools" ? " active" : ""}`}
               onClick={() => setMode("tools")}
               title={`${t("modeTools")} (Alt+2)`}
@@ -490,14 +505,28 @@ function QuickAskApp() {
               <Terminal size={11} /> {t("modeTools")}
             </button>
           </div>
-          <button
-            type="button"
-            className={`btn-icon qa-history-btn${historyOpen ? " on" : ""}`}
-            onClick={() => setHistoryOpen((v) => !v)}
-            title={t("history")}
-          >
-            <History size={15} />
-          </button>
+          {mode === "ask" && (
+            <>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={startNewChat}
+                disabled={stream.busy}
+                title={`${t("newChat")} (Ctrl+N)`}
+              >
+                <MessageSquarePlus size={15} />
+              </button>
+              <button
+                type="button"
+                className={`btn-icon qa-history-btn${historyOpen ? " on" : ""}`}
+                onClick={() => setHistoryOpen((v) => !v)}
+                title={t("history")}
+                aria-expanded={historyOpen}
+              >
+                <History size={15} />
+              </button>
+            </>
+          )}
           <button type="button" className="btn-icon" onClick={() => void hide()} title={t("close")}>
             <X size={16} />
           </button>
@@ -508,118 +537,128 @@ function QuickAskApp() {
         <ToolsPanel onJump={() => void jumpToDevtools()} />
       ) : (
         <>
-      <div className="quick-ask-toolbar">
-        <QuickSelect
-          value={selectedModel?.id || ""}
-          options={models.map((m) => ({ value: m.id, label: `${m.name} (${m.model})` }))}
-          onChange={setModelId}
-          placeholder={t("noModel")}
-          alignLeft
-          open={openPop === "model"}
-          onToggle={() => togglePop("model")}
-        />
-        <QuickSelect
-          value={task}
-          options={TASK_KINDS.map((k) => ({ value: k, label: t(`task.${k}`) }))}
-          onChange={(v) => changeTask(v as TaskKind)}
-          alignLeft
-          open={openPop === "task"}
-          onToggle={() => togglePop("task")}
-        />
-        <FocusPicker
-          open={openPop === "focus"}
-          onToggleOpen={() => togglePop("focus")}
-          candidates={availableRepos}
-          selected={focusedRepos}
-          onToggle={toggleFocus}
-          onClear={() => commitFocus([])}
-          onScanFolder={() => void scanFolder()}
-          scanning={scanning}
-        />
-      </div>
+          <div className="quick-ask-toolbar">
+            <QuickSelect
+              value={selectedModel?.id || ""}
+              options={models.map((m) => ({ value: m.id, label: `${m.name} (${m.model})` }))}
+              onChange={setModelId}
+              placeholder={t("noModel")}
+              alignLeft
+              open={openPop === "model"}
+              onToggle={() => togglePop("model")}
+            />
+            <QuickSelect
+              value={task}
+              options={TASK_KINDS.map((k) => ({ value: k, label: t(`task.${k}`) }))}
+              onChange={(v) => changeTask(v as TaskKind)}
+              alignLeft
+              open={openPop === "task"}
+              onToggle={() => togglePop("task")}
+            />
+            <FocusPicker
+              open={openPop === "focus"}
+              onToggleOpen={() => togglePop("focus")}
+              candidates={availableRepos}
+              selected={focusedRepos}
+              onToggle={toggleFocus}
+              onClear={() => commitFocus([])}
+              onScanFolder={() => void scanFolder()}
+              scanning={scanning}
+            />
+          </div>
 
-      <ContextBar
-        chips={chips}
-        setChip={setChip}
-        onFillClipboard={() => void fillClipboard()}
-        hasSnippets={(snippets.snippets?.length ?? 0) > 0}
-        snippetOpen={snippets.snippetOpen}
-        onToggleSnippets={() => snippets.setSnippetOpen((v) => !v)}
-        ctxOpen={ctxOpen}
-        onToggleCtx={() => setCtxOpen((v) => !v)}
-        ctxLoading={ctx.ctxLoading}
-        ctxPreview={ctx.ctxPreview}
-        ctxTruncated={ctx.ctxTruncated}
-      />
+          <ContextBar
+            chips={chips}
+            setChip={setChip}
+            onFillClipboard={() => void fillClipboard()}
+            hasSnippets={(snippets.snippets?.length ?? 0) > 0}
+            snippetOpen={snippets.snippetOpen}
+            onToggleSnippets={() => snippets.setSnippetOpen((v) => !v)}
+            ctxOpen={ctxOpen}
+            onToggleCtx={() => setCtxOpen((v) => !v)}
+            ctxLoading={ctx.ctxLoading}
+            ctxPreview={ctx.ctxPreview}
+            ctxTruncated={ctx.ctxTruncated}
+          />
 
-      {snippets.snippetOpen && (
-        <SnippetPicker
-          snippetQuery={snippets.snippetQuery}
-          setSnippetQuery={snippets.setSnippetQuery}
-          snippetChoices={snippets.snippetChoices}
-          onPick={snippets.pickSnippet}
-        />
-      )}
+          {snippets.snippetOpen && (
+            <SnippetPicker
+              snippetQuery={snippets.snippetQuery}
+              setSnippetQuery={snippets.setSnippetQuery}
+              snippetChoices={snippets.snippetChoices}
+              onPick={snippets.pickSnippet}
+            />
+          )}
 
-      {historyOpen && (
-        <SessionHistory
-          sessions={sessions.quickAskSessions}
-          activeSessionId={activeSessionId}
-          busy={stream.busy}
-          renamingId={renamingId}
-          renameDraft={renameDraft}
-          setRenameDraft={setRenameDraft}
-          onStartRename={(s) => {
-            setRenamingId(s.id);
-            setRenameDraft(s.title || "");
-          }}
-          onCommitRename={(id, title) => void commitRename(id, title)}
-          onCancelRename={() => setRenamingId(null)}
-          onOpen={openSession}
-          onRemove={(id) => void sessions.removeSession(id)}
-          onNewChat={startNewChat}
-          relativeTime={sessions.relativeTime}
-        />
-      )}
+          {task === "optimize" && <OptimizeBar value={optimize} onChange={changeOptimize} />}
 
-      {task === "optimize" && <OptimizeBar value={optimize} onChange={changeOptimize} />}
+          <AskPanel
+            input={input}
+            setInput={setInput}
+            inputRef={inputRef}
+            busy={stream.busy}
+            error={stream.error}
+            answer={stream.answer}
+            historyCount={stream.history.length}
+            canRegenerate={Boolean(stream.lastQuestionRef.current)}
+            copied={copied}
+            snippetSaved={snippetSaved}
+            exportDone={exportDone}
+            selectedText={selectedText}
+            setSelectedText={setSelectedText}
+            onSend={sendAsk}
+            onStop={() => void stream.stopStream()}
+            onRegenerate={() =>
+              void stream.send(stream.lastQuestionRef.current, stream.lastHistoryRef.current)
+            }
+            onCopyAnswer={() => void copyAnswer()}
+            onSaveSnippet={() => void saveAnswerAsSnippet()}
+            onOpenDeepSeek={() => void openDeepSeek()}
+            onExport={() => void handleExport()}
+            onQuote={quoteSelection}
+            onCopySelection={() => void copySelection()}
+          />
 
-      <AskPanel
-        input={input}
-        setInput={setInput}
-        inputRef={inputRef}
-        busy={stream.busy}
-        error={stream.error}
-        answer={stream.answer}
-        historyCount={stream.history.length}
-        canRegenerate={Boolean(stream.lastQuestionRef.current)}
-        copied={copied}
-        snippetSaved={snippetSaved}
-        exportDone={exportDone}
-        selectedText={selectedText}
-        setSelectedText={setSelectedText}
-        onSend={() => void stream.send()}
-        onStop={() => void stream.stopStream()}
-        onRegenerate={() =>
-          void stream.send(stream.lastQuestionRef.current, stream.lastHistoryRef.current)
-        }
-        onCopyAnswer={() => void copyAnswer()}
-        onSaveSnippet={() => void saveAnswerAsSnippet()}
-        onOpenDeepSeek={() => void openDeepSeek()}
-        onExport={() => void handleExport()}
-        onNewChat={startNewChat}
-        onQuote={quoteSelection}
-        onCopySelection={() => void copySelection()}
-      />
+          {historyOpen && (
+            <div
+              className="qa-history-overlay"
+              role="dialog"
+              aria-label={t("history")}
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setHistoryOpen(false);
+              }}
+            >
+              <div className="qa-history-panel">
+                <SessionHistory
+                  sessions={sessions.quickAskSessions}
+                  activeSessionId={activeSessionId}
+                  busy={stream.busy}
+                  renamingId={renamingId}
+                  renameDraft={renameDraft}
+                  setRenameDraft={setRenameDraft}
+                  onStartRename={(s) => {
+                    setRenamingId(s.id);
+                    setRenameDraft(s.title || "");
+                  }}
+                  onCommitRename={(id, title) => void commitRename(id, title)}
+                  onCancelRename={() => setRenamingId(null)}
+                  onOpen={openSession}
+                  onRemove={(id) => void sessions.removeSession(id)}
+                  onNewChat={startNewChat}
+                  relativeTime={sessions.relativeTime}
+                />
+              </div>
+            </div>
+          )}
 
-      {snippets.paramTarget && (
-        <ParamModal
-          paramValues={snippets.paramValues}
-          setParamValues={snippets.setParamValues}
-          onClose={() => snippets.setParamTarget(null)}
-          onConfirm={() => void snippets.confirmSnippetParams()}
-        />
-      )}
+          {snippets.paramTarget && (
+            <ParamModal
+              paramValues={snippets.paramValues}
+              setParamValues={snippets.setParamValues}
+              onClose={() => snippets.setParamTarget(null)}
+              onConfirm={() => void snippets.confirmSnippetParams()}
+            />
+          )}
         </>
       )}
     </div>

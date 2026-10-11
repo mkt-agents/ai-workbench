@@ -1,15 +1,17 @@
-/* ===== Quick Ask window ===== */
+/* ===== Quick Ask window =====
+   窗体走 --bg-1，让 glass/ice/silver 的 body 氛围层透出来；
+   不要铺 --float-bg（那是弹层实底，会盖死香槟光）。 */
 .quick-ask-root {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 10px 14px 14px;
+  padding: 10px 14px 12px;
   box-sizing: border-box;
   background: var(--bg-1);
   color: var(--text-1);
   gap: 8px;
-  /* The answer area owns scrolling; never let the 520px window itself scroll
-     (that would drag the header/toolbar out of view). */
+  /* Stage owns scrolling; never let the window itself scroll the chrome away. */
   overflow: hidden;
 }
 .quick-ask-root.loading {
@@ -20,12 +22,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
   user-select: none;
 }
 .quick-ask-header-actions {
   display: flex;
   align-items: center;
   gap: 2px;
+  flex-shrink: 0;
 }
 .quick-ask-title {
   display: flex;
@@ -33,11 +38,18 @@
   gap: 8px;
   font-weight: 600;
   font-size: 14px;
+  color: var(--text-0);
+  min-width: 0;
+}
+.quick-ask-title svg {
+  color: var(--accent);
+  flex-shrink: 0;
 }
 .quick-ask-toolbar {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-shrink: 0;
 }
 /* All three controls are custom popovers (QuickSelect / FocusPicker) sharing
    the .qa-focus shell — native select popups are OS-drawn and can't match the
@@ -191,11 +203,12 @@
   gap: 6px;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 .qa-chip-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 4px;
   align-items: center;
   min-width: 0;
 }
@@ -208,14 +221,15 @@
 .qa-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   font-size: 11px;
   padding: 3px 9px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
+  background: transparent;
   color: var(--text-2);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  transition: border-color var(--transition-colors-fast), color var(--transition-colors-fast),
+    background var(--transition-colors-fast);
   white-space: nowrap;
 }
 .qa-chip:hover {
@@ -225,9 +239,8 @@
 .qa-chip.on {
   border-color: var(--accent);
   color: var(--text-1);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: var(--accent-dim);
 }
-.qa-chip input { margin: 0; accent-color: var(--accent); }
 /* Optimize task: scenario/goal chip rows above the input card */
 .qa-optimize-bar {
   display: flex;
@@ -420,7 +433,68 @@
   max-height: 120px;
   overflow: auto;
 }
-/* ===== Quick Ask input card ===== */
+/* ===== Stage: answer (flex) + composer (bottom) ===== */
+.qa-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 8px;
+}
+.qa-empty {
+  flex: 1 1 auto;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+  text-align: center;
+}
+.qa-empty-icon {
+  color: var(--accent);
+  opacity: 0.85;
+  margin-bottom: 2px;
+}
+.qa-empty-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.qa-empty-sub {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  max-width: 280px;
+  line-height: 1.45;
+}
+.qa-answer-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  overflow: hidden;
+  box-shadow: var(--surface-highlight);
+}
+.qa-answer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  align-items: center;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  flex-shrink: 0;
+}
 .qa-input-card {
   display: flex;
   flex-direction: column;
@@ -428,21 +502,40 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-0);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  box-shadow: var(--surface-highlight);
+  transition: border-color var(--transition-colors-fast), box-shadow var(--transition-colors-fast);
 }
 .qa-input-card:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+/* 与主窗 .card 同配方，快问表面跟主题磨砂一致 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-empty,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-card,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-input-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, transparent 40%),
+    rgba(255, 255, 255, 0.06);
+  border-color: var(--overlay-3);
+  box-shadow: var(--surface-highlight), 0 10px 28px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-toolbar {
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom-color: var(--overlay-2);
 }
 .quick-ask-input {
   width: 100%;
   resize: none;
-  min-height: 64px;
+  min-height: 72px;
   max-height: 160px;
   font-family: inherit;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--text-1);
+  color: var(--text-0);
   background: transparent;
   border: none;
   outline: none;
@@ -454,9 +547,17 @@
 .qa-input-foot {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px 8px 8px;
+  padding: 4px 8px 8px;
+}
+.qa-input-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .qa-send-btn {
   display: inline-flex;
@@ -467,9 +568,11 @@
   border: none;
   border-radius: var(--radius-md);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
-  transition: filter 0.15s, opacity 0.15s, transform 0.1s;
+  flex-shrink: 0;
+  transition: filter var(--transition-colors-fast), opacity var(--transition-colors-fast),
+    transform var(--transition-colors-fast);
 }
 .qa-send-btn:hover:not(:disabled) {
   filter: brightness(1.12);
@@ -493,29 +596,24 @@
   color: var(--red);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s;
+  flex-shrink: 0;
+  transition: background var(--transition-colors-fast);
 }
 .qa-stop-btn:hover {
   background: color-mix(in srgb, var(--red) 12%, transparent);
-}
-.quick-ask-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  align-items: center;
 }
 .qa-mini-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
-  padding: 4px 8px;
+  font-size: 11.5px;
+  padding: 4px 7px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--transition-colors-fast), color var(--transition-colors-fast);
   white-space: nowrap;
 }
 .qa-mini-btn:hover:not(:disabled) {
@@ -529,18 +627,19 @@
 .quick-ask-error {
   font-size: 12px;
   color: var(--red);
+  flex-shrink: 0;
 }
 .quick-ask-answer {
   margin: 0;
   padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--bg-2);
-  border: 1px solid var(--border);
+  border: none;
+  border-radius: 0;
+  background: transparent;
   word-break: break-word;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
   flex: 1 1 auto;
-  min-height: 90px;
+  min-height: 0;
   overflow: auto;
   position: relative;
 }
@@ -550,28 +649,60 @@
 .qa-history-btn.on {
   border-color: var(--accent);
   color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* History as overlay — never push the composer out of the first viewport */
+.qa-history-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 48px 10px 10px;
+  background: color-mix(in srgb, var(--bg-0) 35%, rgba(0, 0, 0, 0.28));
+  animation: qa-hist-fade 140ms ease-out;
+}
+.qa-history-panel {
+  width: min(320px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  animation: qa-hist-slide 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .quick-ask-sessions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-0);
+  padding: 10px;
+  height: 100%;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--float-bg);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
+}
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-sessions {
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
 }
 .qa-sessions-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
-  color: var(--text-2);
+  font-weight: 500;
+  color: var(--text-1);
+  flex-shrink: 0;
 }
 .qa-session-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 200px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 .qa-session-item {
@@ -581,9 +712,21 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-2);
+  transition: border-color var(--transition-colors-fast), background var(--transition-colors-fast);
+}
+.qa-session-item:hover {
+  background: var(--bg-hover);
 }
 .qa-session-item.active {
   border-color: var(--accent);
+}
+@keyframes qa-hist-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes qa-hist-slide {
+  from { transform: translateX(12px); opacity: 0.6; }
+  to { transform: translateX(0); opacity: 1; }
 }
 .qa-session-actions {
   display: flex;
