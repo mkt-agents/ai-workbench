@@ -253,9 +253,9 @@ function App() {
       labelKey: "networkManagement",
       defaultOpen: true,
       children: [
-        { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
         { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
         { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
+        { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
       ],
     },
     {
