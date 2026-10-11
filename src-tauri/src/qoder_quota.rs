@@ -3,12 +3,15 @@
 //! 令牌约 1 小时过期，用 `/api/v1/deviceToken/refresh` 续期后写回 `quota_accounts`；
 //! 用量查 `/sash/api/v2/me/usage`。DTO 不含任何 token 字段。
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 use crate::codex_quota::{http_client, now_unix, pkce_challenge, random_b64, with_db, REAUTH_MESSAGE};
+use crate::daily_schedule::{self, ScheduleState};
 use crate::quota_accounts::{
     arm_login_cancel, list_accounts, random_uuid, token_for, update_tokens, upsert_account, Provider,
     QuotaAccountDto,
@@ -680,6 +683,238 @@ pub async fn qoder_oauth_start(state: tauri::State<'_, DbState>) -> Result<Quota
             .ok_or_else(|| "保存账号失败".to_string())
     })
     .await
+}
+
+// ---------------------------------------------------------------------------
+// 每日自动领积分（与 WorkBuddy 自动签到同形：设置 + 每分钟 tick）
+// ---------------------------------------------------------------------------
+
+const CLAIM_GAP: Duration = daily_schedule::BETWEEN_ACCOUNTS;
+
+const SETTINGS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS qoder_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        claim_enabled INTEGER NOT NULL DEFAULT 0,
+        claim_time TEXT NOT NULL DEFAULT '09:30',
+        last_auto_claim_date TEXT
+    );
+    INSERT OR IGNORE INTO qoder_settings (id) VALUES (1);
+"#;
+
+pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(SETTINGS_SQL).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QoderSettings {
+    pub claim_enabled: bool,
+    pub claim_time: String,
+    pub last_auto_claim_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QoderSettingsPatch {
+    pub claim_enabled: Option<bool>,
+    pub claim_time: Option<String>,
+    pub last_auto_claim_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QoderAutoClaimResult {
+    pub id: i64,
+    pub label: Option<String>,
+    pub ok: bool,
+    /// 无可领活动，本轮跳过。
+    pub skipped: bool,
+    pub message: Option<String>,
+    pub risk: bool,
+    pub needs_reauth: bool,
+}
+
+pub fn get_settings(conn: &Connection) -> Result<QoderSettings, String> {
+    conn.query_row(
+        "SELECT claim_enabled, claim_time, last_auto_claim_date FROM qoder_settings WHERE id = 1",
+        [],
+        |row| {
+            Ok(QoderSettings {
+                claim_enabled: row.get::<_, i64>(0)? != 0,
+                claim_time: row.get(1)?,
+                last_auto_claim_date: row.get(2)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+pub fn update_settings(conn: &Connection, patch: &QoderSettingsPatch) -> Result<QoderSettings, String> {
+    conn.execute(
+        "UPDATE qoder_settings SET
+            claim_enabled = COALESCE(?1, claim_enabled),
+            claim_time = COALESCE(?2, claim_time),
+            last_auto_claim_date = COALESCE(?3, last_auto_claim_date)
+          WHERE id = 1",
+        params![
+            patch.claim_enabled.map(i64::from),
+            patch.claim_time.as_deref(),
+            patch.last_auto_claim_date.as_deref(),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    get_settings(conn)
+}
+
+#[tauri::command]
+pub async fn qoder_get_settings(state: tauri::State<'_, DbState>) -> Result<QoderSettings, String> {
+    with_db(Arc::clone(&state.conn), get_settings).await
+}
+
+#[tauri::command]
+pub async fn qoder_update_settings(
+    state: tauri::State<'_, DbState>,
+    patch: QoderSettingsPatch,
+) -> Result<QoderSettings, String> {
+    with_db(Arc::clone(&state.conn), move |c| update_settings(c, &patch)).await
+}
+
+async fn claim_account_auto(
+    state_conn: Arc<Mutex<Connection>>,
+    id: i64,
+    label: Option<String>,
+) -> QoderAutoClaimResult {
+    let client = match http_client() {
+        Ok(c) => c,
+        Err(e) => {
+            return QoderAutoClaimResult {
+                id,
+                label,
+                ok: false,
+                skipped: false,
+                message: Some(e),
+                risk: false,
+                needs_reauth: false,
+            }
+        }
+    };
+    let state = DbState {
+        conn: Arc::clone(&state_conn),
+    };
+    let (label, mut token, refresh, refreshed) = match usable_token(&state, &client, id).await {
+        Ok(t) => t,
+        Err((label, m)) => {
+            return QoderAutoClaimResult {
+                id,
+                label,
+                ok: false,
+                skipped: false,
+                message: Some(m),
+                risk: false,
+                needs_reauth: true,
+            }
+        }
+    };
+    let mut campaign = request_campaigns(&client, &token).await;
+    if campaign.is_none() && !refreshed {
+        if let Ok(t) = refresh_and_store(&state, &client, id, &refresh).await {
+            token = t;
+            campaign = request_campaigns(&client, &token).await;
+        }
+    }
+    let Some(campaign) = campaign.filter(|c| c.claimable) else {
+        return QoderAutoClaimResult {
+            id,
+            label,
+            ok: true,
+            skipped: true,
+            message: None,
+            risk: false,
+            needs_reauth: false,
+        };
+    };
+    let result = match request_claim(&client, &token, &campaign.campaign_id).await {
+        ClaimOutcome::Done(r) => r,
+        ClaimOutcome::Unauthorized if refreshed => QoderClaimResult::fail(REAUTH_MESSAGE),
+        ClaimOutcome::Unauthorized => match refresh_and_store(&state, &client, id, &refresh).await {
+            Ok(t) => match request_claim(&client, &t, &campaign.campaign_id).await {
+                ClaimOutcome::Done(r) => r,
+                ClaimOutcome::Unauthorized => QoderClaimResult::fail(REAUTH_MESSAGE),
+            },
+            Err(m) => QoderClaimResult::fail(m),
+        },
+    };
+    QoderAutoClaimResult {
+        id,
+        label,
+        ok: result.ok,
+        skipped: false,
+        message: result.message,
+        risk: result.risk,
+        needs_reauth: result.needs_reauth,
+    }
+}
+
+async fn run_auto_claim_round(conn: Arc<Mutex<Connection>>) -> Result<Vec<QoderAutoClaimResult>, String> {
+    let accounts = {
+        let guard = conn.lock().map_err(|e| e.to_string())?;
+        list_accounts(&guard, Some(Provider::Qoder))?
+    };
+    let mut results = Vec::new();
+    for (i, a) in accounts.into_iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(CLAIM_GAP).await;
+        }
+        results.push(claim_account_auto(Arc::clone(&conn), a.id, a.label).await);
+    }
+    Ok(results)
+}
+
+/// 手动「领取全部」：对每个账号查活动并尝试领取（风控失败不弹客户端）。
+#[tauri::command]
+pub async fn qoder_claim_all(state: tauri::State<'_, DbState>) -> Result<Vec<QoderAutoClaimResult>, String> {
+    run_auto_claim_round(Arc::clone(&state.conn)).await
+}
+
+/// 由 `daily_schedule::spawn` 每分钟调用一次。
+pub async fn auto_tick(app: &tauri::AppHandle) -> Result<(), String> {
+    let conn = daily_schedule::conn_of(app);
+    let app = app.clone();
+    let _ran = daily_schedule::run_if_due(
+        Arc::clone(&conn),
+        "qoder-claim",
+        |c| {
+            let s = get_settings(c)?;
+            Ok(ScheduleState {
+                enabled: s.claim_enabled,
+                time: s.claim_time,
+                last_run_date: s.last_auto_claim_date,
+            })
+        },
+        |c, due| {
+            update_settings(
+                c,
+                &QoderSettingsPatch {
+                    last_auto_claim_date: Some(due.to_string()),
+                    ..Default::default()
+                },
+            )
+            .map(|_| ())
+        },
+        move |conn| {
+            let app = app.clone();
+            async move {
+                let results = run_auto_claim_round(conn).await?;
+                let attempted: Vec<_> = results.into_iter().filter(|r| !r.skipped).collect();
+                if !attempted.is_empty() {
+                    let _ = app.emit("qoder-auto-claim-done", &attempted);
+                }
+                Ok(())
+            }
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

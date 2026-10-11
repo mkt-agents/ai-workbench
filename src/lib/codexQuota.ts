@@ -8,6 +8,8 @@ export interface CodexAccount {
   id: number;
   email: string | null;
   planType: string | null;
+  /** 用户自定义短标签。 */
+  tag: string | null;
   createdAt: number;
 }
 
@@ -41,4 +43,6 @@ export const codexOauthStart = () => invoke<CodexAccount>("codex_oauth_start");
 export const codexOauthCancel = () => invoke<void>("codex_oauth_cancel");
 export const codexListAccounts = () => invoke<CodexAccount[]>("codex_list_accounts");
 export const codexDeleteAccount = (id: number) => invoke<void>("codex_delete_account", { id });
+export const codexSetAccountTag = (id: number, tag: string | null) =>
+  invoke<void>("codex_set_account_tag", { id, tag });
 export const codexQuotaFetch = (id: number) => invoke<CodexQuotaDto>("codex_quota_fetch", { id });

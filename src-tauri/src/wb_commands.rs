@@ -81,15 +81,40 @@ fn row_to_dto(row: &rusqlite::Row) -> rusqlite::Result<WbAccountDto> {
         last_checkin_status: row.get(9)?,
         checkin_fail_count: row.get(10)?,
         notes: row.get(11)?,
-        created_at: row.get(12)?,
+        tag: row.get(12)?,
+        created_at: row.get(13)?,
     })
 }
 
 const LIST_SQL: &str = r#"
     SELECT id, label, credential_type, credential, email, exp_unix, status, enabled,
-           last_checkin_at, last_checkin_status, checkin_fail_count, notes, created_at
+           last_checkin_at, last_checkin_status, checkin_fail_count, notes, tag, created_at
       FROM codebuddy_accounts
      ORDER BY id DESC"#;
+
+const TAG_MAX_CHARS: usize = 24;
+
+fn normalize_tag(tag: Option<String>) -> Option<String> {
+    let s: String = tag?.trim().chars().take(TAG_MAX_CHARS).collect();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+pub fn set_account_tag(conn: &Connection, id: i64, tag: Option<String>) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE codebuddy_accounts SET tag = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, normalize_tag(tag), crate::codebuddy::credential::now_unix() * 1000],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("账号 {id} 不存在"));
+    }
+    Ok(())
+}
 
 pub fn list_accounts(conn: &Connection) -> Result<Vec<WbAccountDto>, String> {
     let mut stmt = conn.prepare(LIST_SQL).map_err(|e| e.to_string())?;
@@ -362,6 +387,21 @@ pub async fn wb_add_account_manual(
     })
     .await
     .map_err(|e| format!("添加失败: {}", e))?
+}
+
+#[tauri::command]
+pub async fn wb_set_account_tag(
+    state: tauri::State<'_, DbState>,
+    id: i64,
+    tag: Option<String>,
+) -> Result<(), String> {
+    let conn = std::sync::Arc::clone(&state.conn);
+    tokio::task::spawn_blocking(move || {
+        let guard = conn.lock().map_err(|e| e.to_string())?;
+        set_account_tag(&guard, id, tag)
+    })
+    .await
+    .map_err(|e| format!("更新失败: {}", e))?
 }
 
 #[tauri::command]

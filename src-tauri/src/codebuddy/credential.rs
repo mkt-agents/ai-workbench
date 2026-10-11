@@ -149,6 +149,8 @@ pub struct WbAccountDto {
     pub last_checkin_status: Option<String>,
     pub checkin_fail_count: i64,
     pub notes: Option<String>,
+    /// 看板自定义短标签；与 notes 独立。
+    pub tag: Option<String>,
     pub created_at: i64,
 }
 

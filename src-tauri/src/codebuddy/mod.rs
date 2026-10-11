@@ -51,5 +51,18 @@ pub const SCHEMA_SQL: &str = r#"
 "#;
 
 pub fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
-    conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())
+    conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
+    let has_tag: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('codebuddy_accounts') WHERE name = 'tag'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| e.to_string())?;
+    if !has_tag {
+        conn.execute("ALTER TABLE codebuddy_accounts ADD COLUMN tag TEXT", [])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

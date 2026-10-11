@@ -51,50 +51,111 @@
   border-radius: var(--radius-md);
 }
 
+/* 说明独占一行；摘要左、操作右（弹层 right:0 才不会被裁切）。 */
 .aq-toolbar {
+  position: relative;
+  z-index: 40;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  overflow: visible;
 }
 
 .aq-subtitle {
   margin: 0;
   color: var(--text-3);
   font-size: 12px;
+  line-height: 1.45;
+  max-width: 52rem;
 }
 
-.aq-toolbar-actions {
+.aq-toolbar-row {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-2) var(--space-3);
+  overflow: visible;
+}
+
+.aq-toolbar-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  flex: 1 1 12rem;
   min-width: 0;
 }
 
-/* 信息与按钮各成一组：窄窗口下按钮组整体换行，不会拆散到两行。 */
-.aq-toolbar-info,
 .aq-toolbar-buttons {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--space-2) var(--space-3);
-  min-width: 0;
-}
-
-.aq-toolbar-info,
-.aq-toolbar-buttons {
-  flex-wrap: wrap;
-}
-
-.aq-toolbar-buttons {
   gap: var(--space-2);
+  flex: 0 1 auto;
+  margin-left: auto;
+  min-width: 0;
+  overflow: visible;
 }
 
-/* 工具条弹层（WorkBuddy 自动签到设置）。--bg-1 在浅色与磨砂主题下是半透明的，
-   直接用会透出下面的卡片：把它叠在一层不透明底色上；不用 backdrop-filter。 */
+.aq-refresh-chevron {
+  margin-left: 2px;
+  opacity: 0.7;
+}
+
+.aq-pop-menu {
+  width: auto;
+  min-width: 10rem;
+  padding: 4px;
+  gap: 2px;
+}
+
+.aq-pop-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-0);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aq-pop-menu-item:hover:not(:disabled) {
+  background: var(--overlay-2);
+}
+
+.aq-pop-menu-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.aq-pop-jobs {
+  width: min(280px, calc(100vw - 48px));
+  gap: 8px;
+}
+
+.aq-pop-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.aq-pop-section-divided {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* 工具条弹层。--bg-1 在浅色与磨砂主题下是半透明的，叠不透明底；不用 backdrop-filter。 */
 .aq-pop-anchor {
   position: relative;
 }
@@ -104,12 +165,13 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 30;
+  left: auto;
+  z-index: 50;
   display: flex;
   flex-direction: column;
   gap: 10px;
   width: 280px;
-  max-width: calc(100vw - 32px);
+  max-width: min(280px, calc(100vw - 48px));
   padding: 12px;
   background: linear-gradient(var(--bg-1), var(--bg-1)), var(--aq-pop-base);
   border: 1px solid var(--border);
@@ -117,6 +179,7 @@
   box-shadow: var(--float-shadow);
   font-family: var(--font-sans);
   text-align: left;
+  box-sizing: border-box;
 }
 
 :is([data-theme="dark"], [data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .aq-pop {
@@ -504,6 +567,14 @@
   min-width: 0;
 }
 
+.aq-identity-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+}
+
 .aq-identity-name {
   font-weight: 600;
   font-size: 13px;
@@ -513,6 +584,51 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.aq-custom-tag,
+.aq-custom-tag-add {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  line-height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  font: inherit;
+}
+
+.aq-custom-tag-add {
+  border-style: dashed;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-3);
+}
+
+.aq-custom-tag:hover,
+.aq-custom-tag-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.aq-custom-tag-input {
+  flex: 0 1 9em;
+  min-width: 4.5em;
+  max-width: 9em;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--accent-border);
+  background: var(--input-bg);
+  color: var(--text-0);
+  font-size: 10.5px;
+  outline: none;
 }
 
 .aq-mono {

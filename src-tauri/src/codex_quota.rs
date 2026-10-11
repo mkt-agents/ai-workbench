@@ -46,7 +46,31 @@ const SCHEMA_SQL: &str = r#"
 
 /// Idempotent; called from the setup block next to the other tables.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())
+    conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
+    let has_tag: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('codex_accounts') WHERE name = 'tag'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| e.to_string())?;
+    if !has_tag {
+        conn.execute("ALTER TABLE codex_accounts ADD COLUMN tag TEXT", [])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+const TAG_MAX_CHARS: usize = 24;
+
+fn normalize_tag(tag: Option<String>) -> Option<String> {
+    let s: String = tag?.trim().chars().take(TAG_MAX_CHARS).collect();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +83,8 @@ pub struct CodexAccountDto {
     pub id: i64,
     pub email: Option<String>,
     pub plan_type: Option<String>,
+    /// 用户自定义短标签；OAuth 续期不覆盖。
+    pub tag: Option<String>,
     pub created_at: i64,
 }
 
@@ -265,7 +291,7 @@ pub fn update_tokens(conn: &Connection, id: i64, tokens: &TokenSet, now: i64) ->
 
 pub fn list_accounts(conn: &Connection) -> Result<Vec<CodexAccountDto>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, email, plan_type, created_at FROM codex_accounts ORDER BY id")
+        .prepare("SELECT id, email, plan_type, tag, created_at FROM codex_accounts ORDER BY id")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -273,11 +299,25 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<CodexAccountDto>, String> 
                 id: r.get(0)?,
                 email: r.get(1)?,
                 plan_type: r.get(2)?,
-                created_at: r.get(3)?,
+                tag: r.get(3)?,
+                created_at: r.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+pub fn set_account_tag(conn: &Connection, id: i64, tag: Option<String>) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE codex_accounts SET tag = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, normalize_tag(tag), now_unix()],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("该账号已被移除".to_string());
+    }
+    Ok(())
 }
 
 fn load_account(conn: &Connection, id: i64) -> Result<StoredAccount, String> {
@@ -576,6 +616,15 @@ pub async fn codex_list_accounts(state: tauri::State<'_, DbState>) -> Result<Vec
 #[tauri::command]
 pub async fn codex_delete_account(state: tauri::State<'_, DbState>, id: i64) -> Result<(), String> {
     with_db(Arc::clone(&state.conn), move |c| delete_account(c, id)).await
+}
+
+#[tauri::command]
+pub async fn codex_set_account_tag(
+    state: tauri::State<'_, DbState>,
+    id: i64,
+    tag: Option<String>,
+) -> Result<(), String> {
+    with_db(Arc::clone(&state.conn), move |c| set_account_tag(c, id, tag)).await
 }
 
 // ---------------------------------------------------------------------------

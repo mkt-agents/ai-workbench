@@ -26,6 +26,7 @@ const BY_PROVIDER: Record<string, string> = {
   "workbuddy-ai": workbuddyAi,
   antigravity,
   zcode,
+  mimo: "/ai-providers/mimo.png",
   "grok-build": xai,
 };
 
@@ -41,6 +42,7 @@ const BY_CARD_BRAND: Record<string, string> = {
   qoder,
   claude,
   zcode,
+  mimo: "/ai-providers/mimo.png",
 };
 
 export function providerLogoSrc(providerId: string): string | null {

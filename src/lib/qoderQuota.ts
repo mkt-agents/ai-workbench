@@ -61,5 +61,34 @@ export const qoderQuotaFetch = (id: number) => invoke<QoderQuotaDto>("qoder_quot
 /** 直调一次领取接口，不重试。 */
 export const qoderCampaignClaim = (id: number, campaignId: string) =>
   invoke<QoderClaimResult>("qoder_campaign_claim", { id, campaignId });
+
+export interface QoderSettings {
+  claimEnabled: boolean;
+  claimTime: string;
+  lastAutoClaimDate: string | null;
+}
+
+export interface QoderSettingsPatch {
+  claimEnabled?: boolean;
+  claimTime?: string;
+}
+
+export interface QoderAutoClaimResult {
+  id: number;
+  label: string | null;
+  ok: boolean;
+  skipped: boolean;
+  message: string | null;
+  risk: boolean;
+  needsReauth: boolean;
+}
+
+export const QODER_AUTO_CLAIM_EVENT = "qoder-auto-claim-done";
+
+export const qoderGetSettings = () => invoke<QoderSettings>("qoder_get_settings");
+export const qoderUpdateSettings = (patch: QoderSettingsPatch) =>
+  invoke<QoderSettings>("qoder_update_settings", { patch });
+/** 对全部 Qoder 账号查活动并尝试领取（自动调度同源，不弹客户端）。 */
+export const qoderClaimAll = () => invoke<QoderAutoClaimResult[]>("qoder_claim_all");
 /** 启动本机 Qoder CN 客户端。 */
 export const qoderLaunchApp = () => invoke<string>("qoder_launch_app");

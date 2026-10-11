@@ -3,7 +3,7 @@ import invocations from "../core/store/invocations";
 import type { InstalledAppInfo } from "../core/types";
 
 /** 能查额度、能加到看板的服务商。 */
-export type QuotaCardId = "workbuddy" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode";
+export type QuotaCardId = "workbuddy" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo";
 
 export interface QuotaProvider {
   id: string;
@@ -26,12 +26,13 @@ export const QUOTA_PROVIDERS: QuotaProvider[] = [
   { id: "grok-bot", name: "Grok Bot", domain: "x.ai", url: "https://x.ai", keywords: ["grok bot"], card: "grok-bot" },
   { id: "qoder", name: "Qoder", domain: "qoder.cn", url: "https://qoder.cn", keywords: ["qoder"], card: "qoder" },
   { id: "zcode", name: "ZCode", domain: "bigmodel.cn", url: "https://bigmodel.cn", keywords: ["zcode"], card: "zcode" },
+  { id: "mimo", name: "小米 MiMo", domain: "platform.xiaomimimo.com", url: "https://platform.xiaomimimo.com", keywords: ["mimo", "xiaomi mimo"], card: "mimo" },
   { id: "workbuddy-ai", name: "WorkBuddy AI", domain: "www.workbuddy.ai", url: "https://www.workbuddy.ai", keywords: ["workbuddy ai"], card: null },
   { id: "antigravity", name: "Antigravity", domain: "antigravity.google", url: "https://antigravity.google", keywords: ["antigravity"], card: null },
   { id: "grok-build", name: "Grok Build", domain: "x.ai", url: "https://x.ai", keywords: ["grok build"], card: null },
 ];
 
-const ALL_CARDS: QuotaCardId[] = ["workbuddy", "cursor", "grok-bot", "codex", "deepseek", "qoder", "claude", "zcode"];
+const ALL_CARDS: QuotaCardId[] = ["workbuddy", "cursor", "grok-bot", "codex", "deepseek", "qoder", "claude", "zcode", "mimo"];
 const CARDS_KEY = "aq-cards";
 
 export function loadEnabledCards(): QuotaCardId[] {

@@ -7,19 +7,19 @@
 //! rounds in a row is taken out of rotation rather than kept being poked — that
 //! pattern is what gets an IP flagged.
 //!
-//! The decision logic (`due_today`, `apply_result`) is pure and unit-tested;
-//! only the HTTP call and the loop live on the async side.
+//! The decision logic (`apply_result`) is pure and unit-tested;
+//! daily HH:MM scheduling lives in `daily_schedule` (shared with Qoder claim).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Local, Timelike};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use tauri::Emitter;
 
 use crate::codebuddy::adapter::{self, UpstreamProfile};
 use crate::codebuddy::credential::{self, CredentialKind, ParsedCredential};
+use crate::daily_schedule::{self, ScheduleState};
 use crate::wb_commands::{self, WbSettingsPatch};
 use crate::DbState;
 
@@ -28,12 +28,10 @@ use crate::DbState;
 const MAX_LOG_ROWS: i64 = 500;
 /// Consecutive failures before the account is disabled.
 const FAIL_LIMIT: i64 = 5;
+
 /// Pause between accounts, so a pool of ten does not look like one client
 /// hammering the endpoint.
-const BETWEEN_ACCOUNTS: Duration = Duration::from_secs(2);
-/// Schedule granularity the UI offers is "daily at HH:MM", so a minute tick is
-/// plenty.
-const TICK_SECS: u64 = 60;
+const BETWEEN_ACCOUNTS: Duration = daily_schedule::BETWEEN_ACCOUNTS;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,41 +54,6 @@ pub struct CheckinLogEntry {
     pub ok: bool,
     pub message: Option<String>,
     pub created_at: i64,
-}
-
-// ---------------------------------------------------------------------------
-// Schedule decision (pure)
-// ---------------------------------------------------------------------------
-
-/// Minutes since midnight for "HH:MM"; None when malformed, which keeps a typo
-/// in the settings row from panicking the loop.
-pub fn parse_hhmm(raw: &str) -> Option<u32> {
-    let (h, m) = raw.trim().split_once(':')?;
-    let h: u32 = h.parse().ok()?;
-    let m: u32 = m.parse().ok()?;
-    if h < 24 && m < 60 {
-        Some(h * 60 + m)
-    } else {
-        None
-    }
-}
-
-/// Local date key used for "already ran today" (`YYYY-MM-DD`).
-pub fn date_key(now: DateTime<Local>) -> String {
-    now.format("%Y-%m-%d").to_string()
-}
-
-/// Today's schedule is due when the clock has passed `time` and the stored
-/// last-run date is not today. Comparing ">= the scheduled minute" rather than
-/// "== it" is what makes an app that was closed at 09:30 still check in at 10:00.
-pub fn due_today(time: &str, last_run_date: Option<&str>, now: DateTime<Local>) -> Option<String> {
-    let scheduled = parse_hhmm(time)?;
-    let today = date_key(now);
-    if last_run_date == Some(today.as_str()) {
-        return None;
-    }
-    let minutes_now = now.hour() * 60 + now.minute();
-    (minutes_now >= scheduled).then_some(today)
 }
 
 // ---------------------------------------------------------------------------
@@ -858,50 +821,43 @@ async fn run_round(
 // Schedule loop
 // ---------------------------------------------------------------------------
 
-/// Daily check-in loop, started from setup. Same shape as the tray status poll:
-/// sleep, decide, act — no cron engine, because the only schedule the UI offers
-/// is "every day at HH:MM".
-pub fn spawn_loop(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(TICK_SECS)).await;
-            if let Err(e) = tick(&app).await {
-                eprintln!("[workbuddy] check-in tick failed: {e}");
+/// 由 `daily_schedule::spawn` 每分钟调用一次。
+pub async fn auto_tick(app: &tauri::AppHandle) -> Result<(), String> {
+    let conn = daily_schedule::conn_of(app);
+    let app = app.clone();
+    let _ran = daily_schedule::run_if_due(
+        Arc::clone(&conn),
+        "workbuddy-checkin",
+        |c| {
+            let s = wb_commands::get_settings(c)?;
+            Ok(ScheduleState {
+                enabled: s.checkin_enabled,
+                time: s.checkin_time,
+                last_run_date: s.last_auto_checkin_date,
+            })
+        },
+        |c, due| {
+            wb_commands::update_settings(
+                c,
+                &WbSettingsPatch {
+                    last_auto_checkin_date: Some(due.to_string()),
+                    ..Default::default()
+                },
+            )
+            .map(|_| ())
+        },
+        move |conn| {
+            let app = app.clone();
+            async move {
+                let results = run_round(&app, conn, None).await?;
+                if !results.is_empty() {
+                    let _ = app.emit("wb-checkin-round", &results);
+                }
+                Ok(())
             }
-        }
-    });
-}
-
-async fn tick(app: &tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-    let conn = Arc::clone(&app.state::<DbState>().conn);
-    let due = {
-        let guard = conn.lock().map_err(|e| e.to_string())?;
-        let settings = wb_commands::get_settings(&guard)?;
-        if !settings.checkin_enabled {
-            return Ok(());
-        }
-        match due_today(&settings.checkin_time, settings.last_auto_checkin_date.as_deref(), Local::now()) {
-            Some(today) => today,
-            None => return Ok(()),
-        }
-    };
-    // Claim the day before running: a round that takes minutes must not be
-    // started twice by two ticks.
-    {
-        let guard = conn.lock().map_err(|e| e.to_string())?;
-        wb_commands::update_settings(
-            &guard,
-            &WbSettingsPatch {
-                last_auto_checkin_date: Some(due),
-                ..Default::default()
-            },
-        )?;
-    }
-    let results = run_round(app, conn, None).await?;
-    if !results.is_empty() {
-        let _ = app.emit("wb-checkin-round", &results);
-    }
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -948,11 +904,6 @@ pub async fn wb_checkin_log_clear(state: tauri::State<'_, DbState>) -> Result<us
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
-
-    fn at(y: i32, mo: u32, d: u32, h: u32, min: u32) -> DateTime<Local> {
-        Local.with_ymd_and_hms(y, mo, d, h, min, 0).unwrap()
-    }
 
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -968,46 +919,6 @@ mod tests {
         )
         .unwrap();
         c.last_insert_rowid()
-    }
-
-    // ---- schedule ----
-
-    #[test]
-    fn hhmm_parsing_is_strict() {
-        assert_eq!(parse_hhmm("09:30"), Some(9 * 60 + 30));
-        assert_eq!(parse_hhmm(" 00:00 "), Some(0));
-        assert_eq!(parse_hhmm("23:59"), Some(23 * 60 + 59));
-        for bad in ["9:30x", "24:00", "09:60", "abc", "", "09"] {
-            assert_eq!(parse_hhmm(bad), None, "{bad} must not parse");
-        }
-    }
-
-    #[test]
-    fn schedule_fires_once_per_day_after_the_time() {
-        let nine_thirty = at(2026, 9, 26, 9, 30);
-        // Before the slot: not due.
-        assert_eq!(due_today("09:30", None, nine_thirty - chrono::Duration::minutes(1)), None);
-        // Exactly at it, and anything after, is due.
-        assert_eq!(due_today("09:30", None, nine_thirty).as_deref(), Some("2026-09-26"));
-        assert_eq!(due_today("09:30", None, nine_thirty + chrono::Duration::hours(5)).as_deref(), Some("2026-09-26"));
-        // Already ran today -> nothing more, however late it gets.
-        assert_eq!(due_today("09:30", Some("2026-09-26"), nine_thirty + chrono::Duration::hours(9)), None);
-    }
-
-    #[test]
-    fn a_late_startup_catches_the_missed_round() {
-        // The app was closed at 09:30 and opened at 21:00: the round is due.
-        assert_eq!(due_today("09:30", Some("2026-09-25"), at(2026, 9, 26, 21, 0)).as_deref(), Some("2026-09-26"));
-    }
-
-    #[test]
-    fn next_day_resumes_immediately() {
-        assert_eq!(due_today("00:05", Some("2026-09-26"), at(2026, 9, 27, 0, 10)).as_deref(), Some("2026-09-27"));
-    }
-
-    #[test]
-    fn a_broken_time_setting_disables_the_schedule_rather_than_panicking() {
-        assert_eq!(due_today("25:99", None, at(2026, 9, 26, 12, 0)), None);
     }
 
     // ---- result bookkeeping ----

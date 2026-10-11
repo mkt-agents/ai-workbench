@@ -22,6 +22,8 @@ export interface WbAccount {
   lastCheckinStatus: string | null;
   checkinFailCount: number;
   notes: string | null;
+  /** 看板自定义短标签；与 notes 独立。 */
+  tag: string | null;
   createdAt: number;
 }
 
@@ -65,6 +67,9 @@ export const wbAddAccount = (input: WbAddAccountInput) => invoke<number>("wb_add
 
 export const wbUpdateAccount = (id: number, patch: WbAccountPatch) =>
   invoke<void>("wb_update_account", { id, patch });
+
+export const wbSetAccountTag = (id: number, tag: string | null) =>
+  invoke<void>("wb_set_account_tag", { id, tag });
 
 export const wbDeleteAccount = (id: number) => invoke<void>("wb_delete_account", { id });
 

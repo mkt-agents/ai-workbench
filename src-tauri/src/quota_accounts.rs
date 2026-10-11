@@ -31,25 +31,43 @@ const SCHEMA_SQL: &str = r#"
     );
 "#;
 
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'"),
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .map_err(|e| e.to_string())
+}
+
 /// Idempotent; called from the setup block next to the other tables.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
-    let has_expires: bool = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('quota_accounts') WHERE name = 'expires_at'",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|n| n > 0)
-        .map_err(|e| e.to_string())?;
-    if !has_expires {
+    if !has_column(conn, "quota_accounts", "expires_at")? {
         conn.execute(
             "ALTER TABLE quota_accounts ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
             [],
         )
         .map_err(|e| e.to_string())?;
     }
+    if !has_column(conn, "quota_accounts", "tag")? {
+        conn.execute("ALTER TABLE quota_accounts ADD COLUMN tag TEXT", [])
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
+}
+
+const TAG_MAX_CHARS: usize = 24;
+
+/// trim；空 → None；超长截断。
+pub(crate) fn normalize_tag(tag: Option<String>) -> Option<String> {
+    let s: String = tag?.trim().chars().take(TAG_MAX_CHARS).collect();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +80,8 @@ pub enum Provider {
     Claude,
     /// ZCode（智谱 BigModel API Key，查 open.bigmodel.cn 用量配额）。
     Zcode,
+    /// 小米 MiMo（sk- 按量 / tp- Token Plan）。
+    Mimo,
 }
 
 impl Provider {
@@ -73,6 +93,7 @@ impl Provider {
             Provider::Qoder => "qoder",
             Provider::Claude => "claude",
             Provider::Zcode => "zcode",
+            Provider::Mimo => "mimo",
         }
     }
 
@@ -84,6 +105,7 @@ impl Provider {
             "qoder" => Ok(Provider::Qoder),
             "claude" => Ok(Provider::Claude),
             "zcode" => Ok(Provider::Zcode),
+            "mimo" => Ok(Provider::Mimo),
             other => Err(format!("不支持的服务商: {other}")),
         }
     }
@@ -96,6 +118,8 @@ pub struct QuotaAccountDto {
     pub provider: String,
     /// 邮箱（Cursor 系）或掩码后的 API Key（DeepSeek）。
     pub label: Option<String>,
+    /// 用户自定义短标签（看板区分多账号）；OAuth 续期不覆盖。
+    pub tag: Option<String>,
     pub created_at: i64,
 }
 
@@ -153,7 +177,7 @@ pub fn upsert_account(
 pub fn list_accounts(conn: &Connection, provider: Option<Provider>) -> Result<Vec<QuotaAccountDto>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, provider, label, created_at FROM quota_accounts
+            "SELECT id, provider, label, tag, created_at FROM quota_accounts
               WHERE ?1 IS NULL OR provider = ?1
               ORDER BY id",
         )
@@ -164,11 +188,25 @@ pub fn list_accounts(conn: &Connection, provider: Option<Provider>) -> Result<Ve
                 id: r.get(0)?,
                 provider: r.get(1)?,
                 label: r.get(2)?,
-                created_at: r.get(3)?,
+                tag: r.get(3)?,
+                created_at: r.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+pub fn set_account_tag(conn: &Connection, id: i64, tag: Option<String>) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE quota_accounts SET tag = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, normalize_tag(tag), now_unix()],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("该账号已被移除".to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn load_token(conn: &Connection, id: i64, provider: Provider) -> Result<StoredToken, String> {
@@ -423,6 +461,15 @@ pub async fn quota_account_delete(state: tauri::State<'_, DbState>, id: i64) -> 
     with_db(Arc::clone(&state.conn), move |c| delete_account(c, id)).await
 }
 
+#[tauri::command]
+pub async fn quota_account_set_tag(
+    state: tauri::State<'_, DbState>,
+    id: i64,
+    tag: Option<String>,
+) -> Result<(), String> {
+    with_db(Arc::clone(&state.conn), move |c| set_account_tag(c, id, tag)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +478,21 @@ mod tests {
         let c = Connection::open_in_memory().unwrap();
         ensure_schema(&c).unwrap();
         c
+    }
+
+    #[test]
+    fn set_tag_normalizes_and_survives_upsert() {
+        let c = mem();
+        let id = upsert_account(&c, Provider::Cursor, "sub-tag", Some("a@b.com"), "t1", "r1", 1).unwrap();
+        set_account_tag(&c, id, Some("  公司账号  ".into())).unwrap();
+        let listed = list_accounts(&c, Some(Provider::Cursor)).unwrap();
+        assert_eq!(listed[0].tag.as_deref(), Some("公司账号"));
+        upsert_account(&c, Provider::Cursor, "sub-tag", Some("a@b.com"), "t2", "r2", 2).unwrap();
+        let listed = list_accounts(&c, Some(Provider::Cursor)).unwrap();
+        assert_eq!(listed[0].tag.as_deref(), Some("公司账号"));
+        set_account_tag(&c, id, Some("   ".into())).unwrap();
+        let listed = list_accounts(&c, Some(Provider::Cursor)).unwrap();
+        assert_eq!(listed[0].tag, None);
     }
 
     #[test]

@@ -27,6 +27,8 @@ mod codex_quota;
 mod cursor_quota;
 mod deepseek_quota;
 mod grok_bot_quota;
+mod mimo_quota;
+mod daily_schedule;
 mod qoder_quota;
 mod quota_accounts;
 mod zcode_quota;
@@ -287,6 +289,7 @@ pub fn run() {
             codebuddy::ensure_schema(&conn).expect("failed to init workbuddy schema");
             codex_quota::ensure_schema(&conn).expect("failed to init codex account schema");
             quota_accounts::ensure_schema(&conn).expect("failed to init quota account schema");
+            qoder_quota::ensure_schema(&conn).expect("failed to init qoder settings schema");
 
             // The automated-testing feature was removed; drop the tables it used
             // to own so a stale DB from an older build does not linger. Idempotent.
@@ -356,10 +359,8 @@ pub fn run() {
                 }
             });
 
-            // WorkBuddy daily check-in scheduler. Started only after the real
-            // connection has been swapped into DbState above — the loop reads
-            // wb_settings on its first tick.
-            wb_checkin::spawn_loop(app.handle().clone());
+            // 每日定点任务（WB 签到 / Qoder 领积分…）共用一个 tick；须在 DbState 就绪后启动。
+            daily_schedule::spawn(app.handle().clone());
 
             #[cfg(desktop)]
             {
@@ -422,6 +423,7 @@ pub fn run() {
             wb_commands::wb_list_accounts,
             wb_commands::wb_add_account_manual,
             wb_commands::wb_update_account,
+            wb_commands::wb_set_account_tag,
             wb_commands::wb_delete_account,
             wb_commands::wb_refresh_account_credential,
             wb_commands::wb_probe_account,
@@ -436,21 +438,33 @@ pub fn run() {
             codex_quota::codex_oauth_cancel,
             codex_quota::codex_list_accounts,
             codex_quota::codex_delete_account,
+            codex_quota::codex_set_account_tag,
             quota_accounts::cursor_oauth_start,
             quota_accounts::cursor_oauth_cancel,
             qoder_quota::qoder_oauth_start,
             qoder_quota::qoder_quota_fetch,
             qoder_quota::qoder_campaign_claim,
+            qoder_quota::qoder_claim_all,
+            qoder_quota::qoder_get_settings,
+            qoder_quota::qoder_update_settings,
             qoder_quota::qoder_launch_app,
             quota_accounts::deepseek_add_key,
             quota_accounts::quota_accounts_list,
             quota_accounts::quota_account_delete,
+            quota_accounts::quota_account_set_tag,
             deepseek_quota::deepseek_balance_fetch,
             claude_quota::claude_import_local,
             claude_quota::claude_add_token,
             claude_quota::claude_quota_fetch,
             zcode_quota::zcode_add_key,
             zcode_quota::zcode_quota_fetch,
+            mimo_quota::mimo_add_key,
+            mimo_quota::mimo_quota_fetch,
+            mimo_quota::mimo_set_cookie,
+            mimo_quota::mimo_open_login_window,
+            mimo_quota::mimo_close_login_window,
+            mimo_quota::mimo_capture_login_cookies,
+            mimo_quota::mimo_bind_login_session,
             wb_checkin::wb_quota_status,
             wb_checkin::wb_checkin_log_list,
             wb_checkin::wb_checkin_log_clear,

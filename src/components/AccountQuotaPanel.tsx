@@ -18,12 +18,13 @@ import {
   GripVertical,
   KeyRound,
   LogIn,
+  ChevronDown,
   RefreshCw,
   Trash2,
   UserPlus,
   CalendarCheck,
-  CalendarClock,
 } from "lucide-react";
+import DailyJobsPopover, { type DailyScheduleSection } from "./quota/DailySchedulePopover";
 import useTauriEvent from "../hooks/useTauriEvent";
 import {
   wbCheckinNow,
@@ -31,6 +32,7 @@ import {
   wbGetSettings,
   wbListAccounts,
   wbQuotaStatus,
+  wbSetAccountTag,
   wbUpdateSettings,
   hasCheckinEndpoint,
   WB_CHECKIN_EVENT,
@@ -45,13 +47,19 @@ import { cursorQuotaFetch, type CursorQuotaDto } from "../lib/cursorQuota";
 import { grokBotQuotaFetch, type GrokQuotaDto } from "../lib/grokBotQuota";
 import {
   qoderCampaignClaim,
+  qoderClaimAll,
+  qoderGetSettings,
   qoderLaunchApp,
   qoderOauthStart,
   qoderQuotaFetch,
+  qoderUpdateSettings,
+  QODER_AUTO_CLAIM_EVENT,
+  type QoderAutoClaimResult,
   type QoderCampaign,
   type QoderClaimResult,
   type QoderQuota,
   type QoderQuotaDto,
+  type QoderSettings,
 } from "../lib/qoderQuota";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -60,6 +68,7 @@ import {
   codexOauthCancel,
   codexOauthStart,
   codexQuotaFetch,
+  codexSetAccountTag,
   type CodexAccount,
   type CodexQuotaDto,
   type CodexWindow,
@@ -73,11 +82,19 @@ import {
   deepseekAddKey,
   deepseekBalanceFetch,
   quotaAccountDelete,
+  quotaAccountSetTag,
   quotaAccountsList,
+  mimoAddKey,
+  mimoBindLoginSession,
+  mimoCloseLoginWindow,
+  mimoOpenLoginWindow,
+  mimoQuotaFetch,
+  mimoSetCookie,
   zcodeAddKey,
   zcodeQuotaFetch,
   type ClaudeQuotaDto,
   type DeepSeekQuotaDto,
+  type MimoQuotaDto,
   type QuotaAccount,
   type ZcodeQuotaDto,
 } from "../lib/quotaAccounts";
@@ -120,7 +137,7 @@ import "./AccountQuotaPanel.css";
 type Tone = "ok" | "warn" | "bad";
 
 /** 卡片键前缀；只有 WorkBuddy 的前缀（wb）和服务商 id（workbuddy）不同。 */
-type CardPrefix = "wb" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode";
+type CardPrefix = "wb" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo";
 type AuthProvider = "codex" | "cursor" | "grok-bot" | "qoder";
 
 const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
@@ -132,6 +149,7 @@ const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
   qoder: "qoder",
   claude: "claude",
   zcode: "zcode",
+  mimo: "mimo",
 };
 
 const RAIL_COLLAPSED_KEY = "aq-rail-collapsed";
@@ -305,6 +323,16 @@ function zcodeRemainPct(q: ZcodeQuotaDto): number | null {
   return Math.min(...limits.map((l) => clampPct(((l.limit - l.usage) / l.limit) * 100)));
 }
 
+function mimoRemainPct(key: string, q: MimoQuotaDto, peaks: Record<string, number>): number | null {
+  const windows = q.windows?.filter((w) => w.limit > 0) ?? [];
+  if (windows.length > 0) {
+    return Math.min(...windows.map((w) => clampPct(((w.limit - w.used) / w.limit) * 100)));
+  }
+  const balances = q.balances ?? [];
+  if (balances.length === 0) return null;
+  return Math.min(...balances.map((b) => balancePct(b.amount, peaks[`${key}:${b.currency}:${b.label}`])));
+}
+
 /** 单币种余额占峰值的百分比；没有峰值记录时按「有余额即满」。 */
 function balancePct(total: number, peak: number | undefined): number {
   if (total <= 0) return 0;
@@ -337,6 +365,8 @@ function remainPctFor(key: string, r: QuotaResultBase, peaks: Record<string, num
       return claudeRemainPct(r as ClaudeQuotaDto);
     case "zcode":
       return zcodeRemainPct(r as ZcodeQuotaDto);
+    case "mimo":
+      return mimoRemainPct(key, r as MimoQuotaDto, peaks);
   }
 }
 
@@ -441,6 +471,7 @@ function isAccountKey(key: string): boolean {
 
 function AccountQuotaPanel() {
   const { t } = useTranslation("quota");
+  const { t: tw } = useTranslation("workbuddy");
   const confirm = useConfirm();
   const now = useNow(60_000);
   const [accounts, setAccounts] = useState<WbAccount[]>([]);
@@ -460,6 +491,8 @@ function AccountQuotaPanel() {
   const [claudeReplaceId, setClaudeReplaceId] = useState<number | null>(null);
   const [zcodeFormOpen, setZcodeFormOpen] = useState(false);
   const [zcodeReplaceId, setZcodeReplaceId] = useState<number | null>(null);
+  const [mimoFormOpen, setMimoFormOpen] = useState(false);
+  const [mimoReplaceId, setMimoReplaceId] = useState<number | null>(null);
   const [wbScanOpen, setWbScanOpen] = useState(false);
   const [wbManualOpen, setWbManualOpen] = useState(false);
   const [enabled, setEnabled] = useState<QuotaCardId[]>(loadEnabledCards);
@@ -482,6 +515,7 @@ function AccountQuotaPanel() {
   const qoderAccounts = authAccounts.filter((a) => a.provider === "qoder");
   const claudeAccounts = authAccounts.filter((a) => a.provider === "claude");
   const zcodeAccounts = authAccounts.filter((a) => a.provider === "zcode");
+  const mimoAccounts = authAccounts.filter((a) => a.provider === "mimo");
 
   useEffect(() => saveQuotaCache(results), [results]);
 
@@ -493,10 +527,17 @@ function AccountQuotaPanel() {
     setDsPeaks((prev) => {
       let next = prev;
       for (const [key, r] of Object.entries(results)) {
-        if (!key.startsWith("deepseek:") || !r.ok) continue;
-        for (const b of (r as DeepSeekQuotaDto).balances ?? []) {
-          const peakKey = `${key}:${b.currency}`;
-          if (b.total > (next[peakKey] ?? 0)) next = { ...next, [peakKey]: b.total };
+        if (!r.ok) continue;
+        if (key.startsWith("deepseek:")) {
+          for (const b of (r as DeepSeekQuotaDto).balances ?? []) {
+            const peakKey = `${key}:${b.currency}`;
+            if (b.total > (next[peakKey] ?? 0)) next = { ...next, [peakKey]: b.total };
+          }
+        } else if (key.startsWith("mimo:")) {
+          for (const b of (r as MimoQuotaDto).balances ?? []) {
+            const peakKey = `${key}:${b.currency}:${b.label}`;
+            if (b.amount > (next[peakKey] ?? 0)) next = { ...next, [peakKey]: b.amount };
+          }
         }
       }
       return next;
@@ -610,6 +651,21 @@ function AccountQuotaPanel() {
     setAccounts(await wbListAccounts().catch(() => []));
   }, []);
 
+  const saveAuthTag = useCallback(async (id: number, tag: string | null) => {
+    await quotaAccountSetTag(id, tag);
+    setAuthAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, tag } : a)));
+  }, []);
+
+  const saveCodexTag = useCallback(async (id: number, tag: string | null) => {
+    await codexSetAccountTag(id, tag);
+    setCodexAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, tag } : a)));
+  }, []);
+
+  const saveWbTag = useCallback(async (id: number, tag: string | null) => {
+    await wbSetAccountTag(id, tag);
+    setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, tag } : a)));
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
@@ -649,15 +705,24 @@ function AccountQuotaPanel() {
   const [checkinResults, setCheckinResults] = useState<Record<number, WbCheckinResult>>({});
   /** 本地设置（不碰上游）：页脚提示与工具条的自动签到弹层。 */
   const [wbSettings, setWbSettings] = useState<WbSettings | null>(null);
+  const [qoderSettings, setQoderSettings] = useState<QoderSettings | null>(null);
+  const [qoderClaimBusy, setQoderClaimBusy] = useState(false);
 
   useEffect(() => {
     wbGetSettings().then(setWbSettings, () => undefined);
+    qoderGetSettings().then(setQoderSettings, () => undefined);
   }, []);
 
   useTauriEvent<WbCheckinResult>(WB_CHECKIN_EVENT, (e) => {
     const r = e.payload;
     setCheckinResults((prev) => ({ ...prev, [r.accountId]: r }));
     setCheckinBusy((prev) => prev.filter((id) => id !== r.accountId));
+  }, []);
+
+  useTauriEvent<QoderAutoClaimResult[]>(QODER_AUTO_CLAIM_EVENT, (e) => {
+    const ids = e.payload.filter((r) => r.ok && !r.skipped).map((r) => r.id);
+    for (const id of ids) void fetchKey(`qoder:${id}`);
+    qoderGetSettings().then(setQoderSettings, () => undefined);
   }, []);
 
   /**
@@ -714,6 +779,7 @@ function AccountQuotaPanel() {
       else if (prefix === "qoder") dto = await qoderQuotaFetch(id).catch((e) => failedDto(e, { id }));
       else if (prefix === "claude") dto = await claudeQuotaFetch(id).catch((e) => failedDto(e, { id, windows: [] }));
       else if (prefix === "zcode") dto = await zcodeQuotaFetch(id).catch((e) => failedDto(e, { id, limits: [] }));
+      else if (prefix === "mimo") dto = await mimoQuotaFetch(id).catch((e) => failedDto(e, { id, balances: [], windows: [] }));
       else dto = await deepseekBalanceFetch(id).catch((e) => failedDto(e, { id, balances: [] }));
       setResults((prev) => ({ ...prev, [key]: dto }));
     } finally {
@@ -790,7 +856,7 @@ function AccountQuotaPanel() {
       delete next[key];
       return next;
     });
-    if (key.startsWith("deepseek:")) {
+    if (key.startsWith("deepseek:") || key.startsWith("mimo:")) {
       setDsPeaks((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith(`${key}:`))));
     }
   };
@@ -889,6 +955,37 @@ function AccountQuotaPanel() {
     [fetchKey],
   );
 
+  const addMimoKey = useCallback(
+    async (apiKey: string) => {
+      const account = await mimoAddKey(apiKey);
+      setAuthAccounts(await quotaAccountsList());
+      setMimoFormOpen(false);
+      void fetchKey(`mimo:${account.id}`);
+    },
+    [fetchKey],
+  );
+
+  const replaceMimoKey = useCallback(
+    async (old: QuotaAccount, apiKey: string) => {
+      const account = await mimoAddKey(apiKey);
+      const oldKey = `mimo:${old.id}`;
+      const newKey = `mimo:${account.id}`;
+      if (account.id !== old.id) {
+        await quotaAccountDelete(old.id).catch(() => undefined);
+        dropResult(oldKey);
+        setOrder((prev) => {
+          const next = prev.map((k) => (k === oldKey ? newKey : k));
+          saveCardOrder(next);
+          return next;
+        });
+      }
+      setAuthAccounts(await quotaAccountsList());
+      setMimoReplaceId(null);
+      void fetchKey(newKey);
+    },
+    [fetchKey],
+  );
+
   const removeAuthAccount = useCallback(
     async (account: QuotaAccount) => {
       const ok = await confirm({
@@ -959,6 +1056,7 @@ function AccountQuotaPanel() {
     qoder: qoderAccounts.map((a) => `qoder:${a.id}`),
     claude: claudeAccounts.map((a) => `claude:${a.id}`),
     zcode: zcodeAccounts.map((a) => `zcode:${a.id}`),
+    mimo: mimoAccounts.map((a) => `mimo:${a.id}`),
   };
 
   /** 服务商关着 → 不出卡；没账号 → 授权空卡；账号全被隐藏 → 什么都不出。 */
@@ -976,9 +1074,11 @@ function AccountQuotaPanel() {
     ...keysOf("deepseek"),
     ...keysOf("claude"),
     ...keysOf("zcode"),
+    ...keysOf("mimo"),
     ...(enabled.includes("deepseek") && dsFormOpen && dsAccounts.length > 0 ? ["deepseek:new"] : []),
     ...(enabled.includes("claude") && claudeFormOpen && claudeAccounts.length > 0 ? ["claude:new"] : []),
     ...(enabled.includes("zcode") && zcodeFormOpen && zcodeAccounts.length > 0 ? ["zcode:new"] : []),
+    ...(enabled.includes("mimo") && mimoFormOpen && mimoAccounts.length > 0 ? ["mimo:new"] : []),
   ];
   const visibleKeys = sortByOrder(
     naturalKeys.map((key) => ({ key })),
@@ -1029,6 +1129,11 @@ function AccountQuotaPanel() {
         focusCard(zcodeAccounts.length > 0 ? "zcode:new" : "zcode:empty");
         return;
       }
+      if (card === "mimo") {
+        setMimoFormOpen(true);
+        focusCard(mimoAccounts.length > 0 ? "mimo:new" : "mimo:empty");
+        return;
+      }
       void startLogin(card);
       const hasAccounts = card === "codex" ? codexAccounts.length > 0 : authAccounts.some((a) => a.provider === card);
       if (!hasAccounts) focusCard(`${card}:empty`);
@@ -1040,6 +1145,7 @@ function AccountQuotaPanel() {
       dsAccounts.length,
       claudeAccounts.length,
       zcodeAccounts.length,
+      mimoAccounts.length,
       codexAccounts.length,
       authAccounts,
     ],
@@ -1058,18 +1164,99 @@ function AccountQuotaPanel() {
     (k) => k.startsWith("qoder:") && liveQoderCampaign(results[k] as QoderQuotaDto | undefined, now)?.claimable === true,
   );
   const checkinRunning = checkinBusy.length > 0;
+  const dailyTodoBusy = checkinRunning || qoderClaimBusy;
   const autoCheckinText = wbSettings
     ? wbSettings.checkinEnabled
       ? t("checkinAuto", { time: wbSettings.checkinTime })
       : t("checkinAutoOff")
     : null;
-  const checkinAll = () => {
+  const autoQoderClaimText = qoderSettings
+    ? qoderSettings.claimEnabled
+      ? t("qoderAutoClaim", { time: qoderSettings.claimTime })
+      : t("qoderAutoClaimOff")
+    : null;
+  const checkinAll = async () => {
+    if (uncheckedWbIds.length === 0) return;
     const enabledIds = accounts.filter((a) => a.enabled).map((a) => a.id);
     // 看板上可见的未签到账号恰好是整池时交给后端整轮；否则前端逐个。
     const wholePool =
       uncheckedWbIds.length === enabledIds.length && enabledIds.every((id) => uncheckedWbIds.includes(id));
-    void checkinWb(uncheckedWbIds, wholePool);
+    await checkinWb(uncheckedWbIds, wholePool);
   };
+  const claimAllQoder = async () => {
+    if (qoderClaimBusy || claimableQoderKeys.length === 0) return;
+    setQoderClaimBusy(true);
+    try {
+      const results = await qoderClaimAll();
+      for (const r of results) {
+        if (!r.skipped) void fetchKey(`qoder:${r.id}`);
+      }
+      setQoderSettings(await qoderGetSettings().catch(() => qoderSettings));
+    } finally {
+      setQoderClaimBusy(false);
+    }
+  };
+  const runDailyTodo = async () => {
+    if (dailyTodoBusy) return;
+    if (uncheckedWbIds.length > 0) await checkinAll();
+    if (claimableQoderKeys.length > 0) await claimAllQoder();
+  };
+  const dailyTodoLabel = (() => {
+    const parts: string[] = [];
+    if (uncheckedWbIds.length > 0) parts.push(t("dailyTodoCheckin", { count: uncheckedWbIds.length }));
+    if (claimableQoderKeys.length > 0) parts.push(t("dailyTodoClaim", { count: claimableQoderKeys.length }));
+    return parts.join(t("dailyTodoSep"));
+  })();
+  const dailyJobSections: DailyScheduleSection[] = [];
+  if (visibleWbIds.length > 0) {
+    dailyJobSections.push({
+      id: "wb-checkin",
+      settings: wbSettings
+        ? {
+            enabled: wbSettings.checkinEnabled,
+            time: wbSettings.checkinTime,
+            lastRunDate: wbSettings.lastAutoCheckinDate,
+          }
+        : null,
+      configured: hasCheckinEndpoint(wbSettings),
+      copy: {
+        title: tw("checkinDaily"),
+        lastRun: (date) => tw("checkinLastAuto", { date }),
+        scheduleOff: tw("checkinScheduleOff"),
+        hint: tw("checkinHint"),
+        notConfigured: tw("checkinNoEndpoint"),
+      },
+      onSave: async (enabled, time) => {
+        setWbSettings(await wbUpdateSettings({ checkinEnabled: enabled, checkinTime: time }));
+      },
+      formatError: (raw) => friendlyQuotaMessage(raw, tw("networkFailed")) ?? raw,
+    });
+  }
+  if (qoderAccounts.length > 0) {
+    dailyJobSections.push({
+      id: "qoder-claim",
+      settings: qoderSettings
+        ? {
+            enabled: qoderSettings.claimEnabled,
+            time: qoderSettings.claimTime,
+            lastRunDate: qoderSettings.lastAutoClaimDate,
+          }
+        : null,
+      copy: {
+        title: t("qoderAutoClaimDaily"),
+        lastRun: (date) => t("qoderAutoClaimLast", { date }),
+        scheduleOff: t("qoderAutoClaimScheduleOff"),
+        hint: t("qoderAutoClaimHint"),
+      },
+      onSave: async (enabled, time) => {
+        setQoderSettings(await qoderUpdateSettings({ claimEnabled: enabled, claimTime: time }));
+      },
+      formatError: errorText,
+    });
+  }
+  const dailyJobsEnabled = dailyJobSections.filter((s) => s.settings?.enabled).length;
+  const dailyJobsButtonLabel =
+    dailyJobsEnabled === 0 ? t("dailyJobsOff") : t("dailyJobsOn", { count: dailyJobsEnabled });
 
   const railAccounts: RailAccount[] = [
     ...accounts.map((a) => ({
@@ -1101,6 +1288,7 @@ function AccountQuotaPanel() {
       name: (results[`claude:${a.id}`] as ClaudeQuotaDto | undefined)?.label ?? a.label ?? `#${a.id}`,
     })),
     ...zcodeAccounts.map((a) => ({ key: `zcode:${a.id}`, card: "zcode" as const, name: a.label ?? `#${a.id}` })),
+    ...mimoAccounts.map((a) => ({ key: `mimo:${a.id}`, card: "mimo" as const, name: a.label ?? `#${a.id}` })),
   ].map((a) => ({
     ...a,
     status: cardStatus(a.key, results[a.key], dsPeaks),
@@ -1176,6 +1364,7 @@ function AccountQuotaPanel() {
           onStartReplace={() => setDsReplaceId(account.id)}
           onCancelReplace={() => setDsReplaceId(null)}
           onAddAnother={dsFormOpen ? undefined : () => setDsFormOpen(true)}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
           frame={frame}
         />
       );
@@ -1200,6 +1389,7 @@ function AccountQuotaPanel() {
         onRefresh: () => void fetchKey(key),
         onDelete: () => void removeAuthAccount(account),
         onAddAnother: addAnother(prefix),
+        onSaveTag: (tag: string | null) => saveAuthTag(account.id, tag),
         frame,
         ...reauthFor(prefix),
       };
@@ -1228,6 +1418,8 @@ function AccountQuotaPanel() {
           onRefresh={() => void fetchKey(key)}
           onDelete={() => void removeAuthAccount(account)}
           onAddAnother={addAnother("qoder")}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
+          autoClaim={autoQoderClaimText}
           frame={frame}
           {...reauthFor("qoder")}
         />
@@ -1252,6 +1444,7 @@ function AccountQuotaPanel() {
           onRefresh={() => void fetchKey(key)}
           onDelete={() => void removeCodexAccount(account)}
           onAddAnother={addAnother("codex")}
+          onSaveTag={(tag) => saveCodexTag(account.id, tag)}
           frame={frame}
           {...reauthFor("codex")}
         />
@@ -1290,6 +1483,7 @@ function AccountQuotaPanel() {
           onStartReplace={() => setClaudeReplaceId(account.id)}
           onCancelReplace={() => setClaudeReplaceId(null)}
           onAddAnother={claudeFormOpen ? undefined : () => setClaudeFormOpen(true)}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
           frame={frame}
         />
       );
@@ -1326,6 +1520,46 @@ function AccountQuotaPanel() {
           onStartReplace={() => setZcodeReplaceId(account.id)}
           onCancelReplace={() => setZcodeReplaceId(null)}
           onAddAnother={zcodeFormOpen ? undefined : () => setZcodeFormOpen(true)}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
+          frame={frame}
+        />
+      );
+    }
+
+    if (prefix === "mimo") {
+      const account = mimoAccounts.find((a) => a.id === id);
+      if (!account) {
+        return (
+          <QuotaCardShell
+            key={key}
+            brand="mimo"
+            product="MiMo"
+            onHide={rawId === "new" ? () => setMimoFormOpen(false) : hideProvider}
+            frame={frame}
+          >
+            <MimoKeyForm
+              onSubmit={addMimoKey}
+              onCancel={rawId === "new" ? () => setMimoFormOpen(false) : undefined}
+            />
+          </QuotaCardShell>
+        );
+      }
+      return (
+        <MimoCard
+          key={key}
+          account={account}
+          quota={quota as MimoQuotaDto | undefined}
+          loading={loading}
+          peaks={dsPeaks}
+          replacing={mimoReplaceId === account.id}
+          onRefresh={() => void fetchKey(key)}
+          onDelete={() => void removeAuthAccount(account)}
+          onReplace={(apiKey) => replaceMimoKey(account, apiKey)}
+          onStartReplace={() => setMimoReplaceId(account.id)}
+          onCancelReplace={() => setMimoReplaceId(null)}
+          onAddAnother={mimoFormOpen ? undefined : () => setMimoFormOpen(true)}
+          onQuota={(dto) => setResults((prev) => ({ ...prev, [key]: dto }))}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
           frame={frame}
         />
       );
@@ -1360,6 +1594,7 @@ function AccountQuotaPanel() {
         checkinResult={checkinResults[account.id]}
         autoCheckin={autoCheckinText}
         onCheckin={() => void checkinWb([account.id], false)}
+        onSaveTag={(tag) => saveWbTag(account.id, tag)}
         frame={frame}
       />
     );
@@ -1379,95 +1614,90 @@ function AccountQuotaPanel() {
           <div className="page-scrollable aq-main">
             <div className="aq-toolbar">
               <p className="aq-subtitle">{t("subtitle")}</p>
-              <div className="aq-toolbar-actions">
-                <div className="aq-toolbar-info">
-                {pendingInToolbar && login && (
-                  <span className="aq-auth-status">
-                    {t("authPending", { name: AUTH_PRODUCT[login] })}
-                    <button type="button" className="aq-auth-cancel" onClick={() => cancelLogin(login)}>
-                      {t("authCancel")}
-                    </button>
+              <div className="aq-toolbar-row">
+                <div className="aq-toolbar-meta">
+                  {pendingInToolbar && login && (
+                    <span className="aq-auth-status">
+                      {t("authPending", { name: AUTH_PRODUCT[login] })}
+                      <button type="button" className="aq-auth-cancel" onClick={() => cancelLogin(login)}>
+                        {t("authCancel")}
+                      </button>
+                    </span>
+                  )}
+                  {!pendingInToolbar && toolbarError && (
+                    <span className="aq-auth-status aq-tone-bad" title={toolbarError[1]}>
+                      {AUTH_PRODUCT[toolbarError[0]]}：{toolbarError[1]}
+                    </span>
+                  )}
+                  {summary.total > 0 && (
+                    <span className="aq-summary">
+                      <span>{t("summaryAccounts", { count: summary.total })}</span>
+                      <SummarySegment keys={summary.low} tone="warn" text={t("summaryLow", { count: summary.low.length })} onFocus={focusCard} />
+                      <SummarySegment
+                        keys={summary.reauth}
+                        tone="bad"
+                        text={t("summaryReauth", { count: summary.reauth.length })}
+                        onFocus={focusCard}
+                      />
+                      <SummarySegment
+                        keys={summary.failed}
+                        tone="bad"
+                        text={t("summaryFailed", { count: summary.failed.length })}
+                        onFocus={focusCard}
+                      />
+                      <SummarySegment
+                        keys={uncheckedWbIds.map((id) => `wb:${id}`)}
+                        tone="warn"
+                        text={t("summaryUnchecked", { count: uncheckedWbIds.length })}
+                        onFocus={focusCard}
+                      />
+                      <SummarySegment
+                        keys={claimableQoderKeys}
+                        tone="warn"
+                        text={t("qoderClaimableCount", { count: claimableQoderKeys.length })}
+                        onFocus={focusCard}
+                      />
+                    </span>
+                  )}
+                  <span className="aq-refreshed-at">
+                    {lastAt != null
+                      ? t("lastRefreshed", { time: new Date(lastAt * 1000).toLocaleTimeString() })
+                      : t("neverRefreshed")}
                   </span>
-                )}
-                {!pendingInToolbar && toolbarError && (
-                  <span className="aq-auth-status aq-tone-bad" title={toolbarError[1]}>
-                    {AUTH_PRODUCT[toolbarError[0]]}：{toolbarError[1]}
-                  </span>
-                )}
-                {summary.total > 0 && (
-                  <span className="aq-summary">
-                    <span>{t("summaryAccounts", { count: summary.total })}</span>
-                    <SummarySegment keys={summary.low} tone="warn" text={t("summaryLow", { count: summary.low.length })} onFocus={focusCard} />
-                    <SummarySegment
-                      keys={summary.reauth}
-                      tone="bad"
-                      text={t("summaryReauth", { count: summary.reauth.length })}
-                      onFocus={focusCard}
-                    />
-                    <SummarySegment
-                      keys={summary.failed}
-                      tone="bad"
-                      text={t("summaryFailed", { count: summary.failed.length })}
-                      onFocus={focusCard}
-                    />
-                    <SummarySegment
-                      keys={uncheckedWbIds.map((id) => `wb:${id}`)}
-                      tone="warn"
-                      text={t("summaryUnchecked", { count: uncheckedWbIds.length })}
-                      onFocus={focusCard}
-                    />
-                    <SummarySegment
-                      keys={claimableQoderKeys}
-                      tone="warn"
-                      text={t("qoderClaimableCount", { count: claimableQoderKeys.length })}
-                      onFocus={focusCard}
-                    />
-                  </span>
-                )}
-                <span className="aq-refreshed-at">
-                  {lastAt != null
-                    ? t("lastRefreshed", { time: new Date(lastAt * 1000).toLocaleTimeString() })
-                    : t("neverRefreshed")}
-                </span>
                 </div>
                 <div className="aq-toolbar-buttons">
-                {visibleWbIds.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={refreshWbVisible}
-                    disabled={wbLoading}
-                    title={t("refreshWbHint")}
-                  >
-                    <Bot size={13} />
-                    {wbLoading ? t("refreshing") : t("refreshWb")}
-                  </button>
-                )}
-                {visibleWbIds.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={checkinAll}
-                    disabled={checkinRunning || uncheckedWbIds.length === 0}
-                    title={[t("checkinAllHint"), autoCheckinText].filter(Boolean).join("\n")}
-                  >
-                    {checkinRunning ? <RefreshCw size={13} className="spin" /> : <CalendarCheck size={13} />}
-                    {uncheckedWbIds.length === 0 && !checkinRunning
-                      ? t("checkinAllDone")
-                      : t("checkinAll", { count: uncheckedWbIds.length })}
-                  </button>
-                )}
-                {visibleWbIds.length > 0 && <AutoCheckinPopover settings={wbSettings} onSaved={setWbSettings} />}
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-small"
-                  onClick={refreshAll}
-                  disabled={authLoading || visibleAuthKeys.length === 0}
-                  title={t("refreshAllHint")}
-                >
-                  <RefreshCw size={13} className={authLoading ? "spin" : undefined} />
-                  {authLoading ? t("refreshing") : t("refreshAll")}
-                </button>
+                  <RefreshSplitButton
+                    onRefreshAll={refreshAll}
+                    onRefreshWb={refreshWbVisible}
+                    showWb={visibleWbIds.length > 0}
+                    authLoading={authLoading}
+                    wbLoading={wbLoading}
+                    authDisabled={visibleAuthKeys.length === 0}
+                    refreshAllHint={t("refreshAllHint")}
+                    refreshWbLabel={t("refreshWb")}
+                    refreshWbHint={t("refreshWbHint")}
+                    refreshAllLabel={t("refreshAll")}
+                    refreshingLabel={t("refreshing")}
+                  />
+                  {(uncheckedWbIds.length > 0 || claimableQoderKeys.length > 0) && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => void runDailyTodo()}
+                      disabled={dailyTodoBusy}
+                      title={[t("dailyTodoHint"), autoCheckinText, autoQoderClaimText].filter(Boolean).join("\n")}
+                    >
+                      {dailyTodoBusy ? <RefreshCw size={13} className="spin" /> : <CalendarCheck size={13} />}
+                      {dailyTodoLabel}
+                    </button>
+                  )}
+                  {dailyJobSections.length > 0 && (
+                    <DailyJobsPopover
+                      sections={dailyJobSections}
+                      buttonLabel={dailyJobsButtonLabel}
+                      dialogLabel={t("dailyJobsDialog")}
+                    />
+                  )}
                 </div>
               </div>
             </div>
@@ -1520,28 +1750,35 @@ function AccountQuotaPanel() {
   );
 }
 
-/** 工具条摘要里的一段；为 0 时不出现，点击定位到第一张匹配的卡。 */
-/** 工具条上的 WorkBuddy 每日自动签到设置；与 WorkBuddy 页签到区是同一份设置。 */
-function AutoCheckinPopover({
-  settings,
-  onSaved,
+/** 无 WB：直接全部刷新。有 WB：单颗按钮展开菜单（全部刷新 / 刷新 WorkBuddy），避免分裂按钮缝隙。 */
+function RefreshSplitButton({
+  onRefreshAll,
+  onRefreshWb,
+  showWb,
+  authLoading,
+  wbLoading,
+  authDisabled,
+  refreshAllHint,
+  refreshWbLabel,
+  refreshWbHint,
+  refreshAllLabel,
+  refreshingLabel,
 }: {
-  settings: WbSettings | null;
-  onSaved: (s: WbSettings) => void;
+  onRefreshAll: () => void;
+  onRefreshWb: () => void;
+  showWb: boolean;
+  authLoading: boolean;
+  wbLoading: boolean;
+  authDisabled: boolean;
+  refreshAllHint: string;
+  refreshWbLabel: string;
+  refreshWbHint: string;
+  refreshAllLabel: string;
+  refreshingLabel: string;
 }) {
-  const { t } = useTranslation("quota");
-  const { t: tw } = useTranslation("workbuddy");
   const [open, setOpen] = useState(false);
-  const [time, setTime] = useState(settings?.checkinTime ?? "09:30");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const configured = hasCheckinEndpoint(settings);
-  const enabled = settings?.checkinEnabled ?? false;
-
-  useEffect(() => {
-    if (settings) setTime(settings.checkinTime);
-  }, [settings]);
+  const busy = authLoading || wbLoading;
 
   useEffect(() => {
     if (!open) return;
@@ -1559,20 +1796,20 @@ function AutoCheckinPopover({
     };
   }, [open]);
 
-  const save = async (nextEnabled: boolean, nextTime: string) => {
-    setSaving(true);
-    setError(null);
-    try {
-      onSaved(await wbUpdateSettings({ checkinEnabled: nextEnabled, checkinTime: nextTime }));
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const saveTimeIfChanged = () => {
-    if (settings && time && time !== settings.checkinTime) void save(enabled, time);
-  };
+  if (!showWb) {
+    return (
+      <button
+        type="button"
+        className="btn btn-secondary btn-small"
+        onClick={onRefreshAll}
+        disabled={authLoading || authDisabled}
+        title={refreshAllHint}
+      >
+        <RefreshCw size={13} className={authLoading ? "spin" : undefined} />
+        {authLoading ? refreshingLabel : refreshAllLabel}
+      </button>
+    );
+  }
 
   return (
     <div className="aq-pop-anchor" ref={rootRef}>
@@ -1581,49 +1818,41 @@ function AutoCheckinPopover({
         className="btn btn-secondary btn-small"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        disabled={!settings}
+        aria-haspopup="menu"
+        title={[refreshAllHint, refreshWbHint].join("\n")}
       >
-        <CalendarClock size={13} />
-        {settings && enabled ? t("autoCheckinButton", { time: settings.checkinTime }) : t("autoCheckinOff")}
+        <RefreshCw size={13} className={busy ? "spin" : undefined} />
+        {busy ? refreshingLabel : refreshAllLabel}
+        <ChevronDown size={12} className="aq-refresh-chevron" />
       </button>
-      {open && settings && (
-        <div className="aq-pop" role="dialog" aria-label={tw("checkinDaily")}>
-          <div className="aq-pop-row">
-            <label className="aq-pop-check">
-              <input
-                type="checkbox"
-                checked={enabled}
-                disabled={saving || !configured}
-                onChange={(e) => void save(e.target.checked, time)}
-              />
-              <span>{tw("checkinDaily")}</span>
-            </label>
-            <input
-              className="input-field aq-pop-time"
-              type="time"
-              value={time}
-              disabled={saving || !configured}
-              onChange={(e) => setTime(e.target.value)}
-              onBlur={saveTimeIfChanged}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveTimeIfChanged();
-              }}
-            />
-            {saving && <RefreshCw size={12} className="spin" />}
-          </div>
-          <p className={`aq-pop-status${configured ? "" : " aq-tone-bad"}`}>
-            {!configured
-              ? tw("checkinNoEndpoint")
-              : enabled
-                ? tw("checkinLastAuto", { date: settings.lastAutoCheckinDate ?? "—" })
-                : tw("checkinScheduleOff")}
-          </p>
-          <p className="aq-pop-hint">{tw("checkinHint")}</p>
-          {error && (
-            <div className="aq-card-error" role="alert">
-              {friendlyQuotaMessage(error, tw("networkFailed")) ?? error}
-            </div>
-          )}
+      {open && (
+        <div className="aq-pop aq-pop-menu" role="menu">
+          <button
+            type="button"
+            className="aq-pop-menu-item"
+            role="menuitem"
+            disabled={authLoading || authDisabled}
+            onClick={() => {
+              onRefreshAll();
+              setOpen(false);
+            }}
+          >
+            <RefreshCw size={13} className={authLoading ? "spin" : undefined} />
+            {authLoading ? refreshingLabel : refreshAllLabel}
+          </button>
+          <button
+            type="button"
+            className="aq-pop-menu-item"
+            role="menuitem"
+            disabled={wbLoading}
+            onClick={() => {
+              onRefreshWb();
+              setOpen(false);
+            }}
+          >
+            {wbLoading ? <RefreshCw size={13} className="spin" /> : <Bot size={13} />}
+            {wbLoading ? refreshingLabel : refreshWbLabel}
+          </button>
         </div>
       )}
     </div>
@@ -1664,7 +1893,7 @@ function QuotaCardShell({
   frame,
   children,
 }: {
-  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode";
+  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo";
   product: string;
   tag?: ReactNode;
   /** 结果时间（unix 秒）；有值时卡片底部显示「N 分钟前」。 */
@@ -1777,13 +2006,108 @@ function QuotaCardShell({
   );
 }
 
-function IdentityRow({ name, badge, mono }: { name: string | null; badge?: ReactNode; mono?: boolean }) {
-  if (!name && !badge) return null;
+const CUSTOM_TAG_MAX = 24;
+
+function CustomTagEditor({
+  tag,
+  onSave,
+}: {
+  tag?: string | null;
+  onSave?: (tag: string | null) => Promise<void>;
+}) {
+  const { t } = useTranslation("quota");
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(tag ?? "");
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    setDraft(tag ?? "");
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editing, tag]);
+
+  if (!onSave) {
+    return tag ? <span className="aq-custom-tag">{tag}</span> : null;
+  }
+
+  const commit = async () => {
+    const next = draft.trim().slice(0, CUSTOM_TAG_MAX) || null;
+    const prev = tag?.trim() || null;
+    setEditing(false);
+    if (next === prev) return;
+    setBusy(true);
+    try {
+      await onSave(next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="aq-custom-tag-input"
+        value={draft}
+        maxLength={CUSTOM_TAG_MAX}
+        placeholder={t("customTagPlaceholder")}
+        disabled={busy}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  if (tag) {
+    return (
+      <button type="button" className="aq-custom-tag" onClick={() => setEditing(true)} title={t("customTagPlaceholder")}>
+        {tag}
+      </button>
+    );
+  }
+
+  return (
+    <button type="button" className="aq-custom-tag aq-custom-tag-add" onClick={() => setEditing(true)} disabled={busy}>
+      {t("customTagAdd")}
+    </button>
+  );
+}
+
+function IdentityRow({
+  name,
+  badge,
+  mono,
+  tag,
+  onSaveTag,
+}: {
+  name: string | null;
+  badge?: ReactNode;
+  mono?: boolean;
+  tag?: string | null;
+  onSaveTag?: (tag: string | null) => Promise<void>;
+}) {
+  if (!name && !badge && !tag && !onSaveTag) return null;
   return (
     <div className="aq-identity">
-      <span className={`aq-identity-name${mono ? " aq-mono" : ""}`} title={name ?? undefined}>
-        {name ?? "—"}
-      </span>
+      <div className="aq-identity-main">
+        <span className={`aq-identity-name${mono ? " aq-mono" : ""}`} title={name ?? undefined}>
+          {name ?? "—"}
+        </span>
+        <CustomTagEditor tag={tag} onSave={onSaveTag} />
+      </div>
       {badge && <span className="aq-badge">{badge}</span>}
     </div>
   );
@@ -1963,6 +2287,7 @@ function WorkbuddyCard({
   checkinResult,
   autoCheckin,
   onCheckin,
+  onSaveTag,
   frame,
 }: {
   account: WbAccount;
@@ -1977,28 +2302,18 @@ function WorkbuddyCard({
   /** 每日自动签到的提示文案；设置还没读到时为 null。 */
   autoCheckin: string | null;
   onCheckin: () => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
   frame: CardFrame;
 }) {
   const { t } = useTranslation("quota");
+  const now = useContext(NowContext);
   const abnormal = account.status !== "active";
   const failure =
     quota && !quota.ok
       ? { ok: false, message: quota.configured ? `${t("queryFailed")}：${quota.message ?? ""}` : t("notConfigured") }
       : quota;
-  const details: Detail[] = [];
-  if (quota?.ok && quota.creditsLeft != null) {
-    details.push({
-      label: t("wbTotal"),
-      value:
-        quota.creditsTotal != null
-          ? `${formatCredits(quota.creditsLeft)} / ${formatCredits(quota.creditsTotal)}`
-          : formatCredits(quota.creditsLeft),
-    });
-  }
-  if (quota?.ok && account.expUnix != null) {
-    details.push({ label: t("expiry"), value: formatDate(account.expUnix * 1000) });
-  }
-
+  const expMs = account.expUnix != null ? account.expUnix * 1000 : null;
+  const expCountdown = compactCountdown(expMs, now);
   return (
     <QuotaCardShell
       brand="wb"
@@ -2014,7 +2329,12 @@ function WorkbuddyCard({
       footNote={autoCheckin}
       frame={frame}
     >
-      <IdentityRow name={account.label} badge={quota?.planName ?? undefined} />
+      <IdentityRow
+        name={account.label}
+        badge={quota?.planName ?? undefined}
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
       <CardMessage quota={failure} idleText={t("wbIdle")} />
       {quota?.ok && quota.packages.length > 0 && (
         <div className="aq-card-body">
@@ -2022,9 +2342,22 @@ function WorkbuddyCard({
             const kind = packageKind(p.code);
             const label =
               kind === "base" ? t("packageBase") : kind === "reward" ? t("packageReward") : t("packageLabel", { index: i + 1 });
-            return <MeterRow key={p.code ?? i} label={label} value={formatCredits(p.remain)} percent={packagePct(p)} />;
+            const pct = packagePct(p);
+            return (
+              <MeterRow
+                key={p.code ?? i}
+                label={label}
+                countdown={i === 0 ? expCountdown : null}
+                value={`${pct}%`}
+                percent={pct}
+                hint={t("wbPackageHint", {
+                  used: formatCredits(p.used),
+                  total: formatCredits(p.total),
+                  remaining: formatCredits(p.remain),
+                })}
+              />
+            );
           })}
-          <DetailGrid items={details} />
         </div>
       )}
       {quota?.ok && quota.packages.length === 0 && (
@@ -2061,6 +2394,17 @@ function cursorIsTeam(quota: CursorQuotaDto | undefined): boolean | null {
   return quota.limitType?.toLowerCase() === "team" ? true : null;
 }
 
+/** 优先接口 isTeamSeat；个人席位常为 null，再用关联 Cursor 套餐名兜底（与 Cursor 卡同一套名单）。 */
+function grokIsTeam(quota: GrokQuotaDto | undefined): boolean | null {
+  if (!quota?.ok) return null;
+  if (quota.isTeamSeat != null) return quota.isTeamSeat;
+  const plan = quota.cursorPlanName?.trim().toLowerCase();
+  if (!plan) return null;
+  if (plan === "enterprise" || plan === "team") return true;
+  if (CURSOR_PERSONAL_PLANS.includes(plan)) return false;
+  return null;
+}
+
 type AuthCardProps = {
   account: QuotaAccount;
   loading: boolean;
@@ -2069,6 +2413,7 @@ type AuthCardProps = {
   onAddAnother?: () => void;
   onReauth: () => void;
   reauthPending: boolean;
+  onSaveTag: (tag: string | null) => Promise<void>;
   frame: CardFrame;
 };
 
@@ -2081,6 +2426,7 @@ function CursorCard({
   onAddAnother,
   onReauth,
   reauthPending,
+  onSaveTag,
   frame,
 }: AuthCardProps & { quota: CursorQuotaDto | undefined }) {
   const { t } = useTranslation("quota");
@@ -2096,14 +2442,7 @@ function CursorCard({
     if (quota.apiPercentUsed != null) {
       details.push({ label: t("cursorApiPool"), value: `${clampPct(100 - cursorUsedPct(quota.apiPercentUsed))}%` });
     }
-    // totalSpend 含套餐外赠送用量；套餐内花费只看 includedSpend，赠送单列。
-    if (quota.limit != null) {
-      details.push({
-        label: t("cursorSpendLabel"),
-        value: t("cursorSpend", { spend: formatSpend(included), limit: formatSpend(quota.limit) }),
-        tone: included != null && included >= quota.limit ? "warn" : undefined,
-      });
-    }
+    // 套餐额度放到主条 hint；网格只留分池 / 按量 / 赠送。
     // 按量付费预算：套餐用完后才开始扣；没开（上限为 0）且没花过时不占位。
     const onDemand = (used: number | null, limit: number | null) =>
       limit != null && limit > 0
@@ -2138,7 +2477,13 @@ function CursorCard({
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
       frame={frame}
     >
-      <IdentityRow name={quota?.email ?? account.label} badge={quota?.membershipType ?? undefined} mono />
+      <IdentityRow
+        name={quota?.email ?? account.label}
+        badge={quota?.membershipType ?? undefined}
+        mono
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
       <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onReauth} reauthPending={reauthPending} />
       {ok && remainPct != null && (
         <div className="aq-card-body">
@@ -2147,6 +2492,11 @@ function CursorCard({
             countdown={compactCountdown(quota.cycleEndMs, now)}
             value={`${remainPct}%`}
             percent={remainPct}
+            hint={
+              quota.limit != null
+                ? t("cursorSpend", { spend: formatSpend(included), limit: formatSpend(quota.limit) })
+                : undefined
+            }
           />
           <DetailGrid items={details} />
         </div>
@@ -2164,6 +2514,7 @@ function GrokCard({
   onAddAnother,
   onReauth,
   reauthPending,
+  onSaveTag,
   frame,
 }: AuthCardProps & { quota: GrokQuotaDto | undefined }) {
   const { t } = useTranslation("quota");
@@ -2189,7 +2540,7 @@ function GrokCard({
     <QuotaCardShell
       brand="grok"
       product="Grok Bot"
-      tag={<SeatTag team={quota?.ok ? quota.isTeamSeat : null} />}
+      tag={<SeatTag team={grokIsTeam(quota)} />}
       at={quota?.at}
       loading={loading}
       onRefresh={onRefresh}
@@ -2197,7 +2548,13 @@ function GrokCard({
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
       frame={frame}
     >
-      <IdentityRow name={quota?.email ?? account.label} badge={plan ?? undefined} mono />
+      <IdentityRow
+        name={quota?.email ?? account.label}
+        badge={plan ?? undefined}
+        mono
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
       <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onReauth} reauthPending={reauthPending} />
       {ok && remainPct != null && (
         <div className="aq-card-body">
@@ -2334,8 +2691,10 @@ function QoderCard({
   onAddAnother,
   onReauth,
   reauthPending,
+  onSaveTag,
+  autoClaim,
   frame,
-}: AuthCardProps & { quota: QoderQuotaDto | undefined }) {
+}: AuthCardProps & { quota: QoderQuotaDto | undefined; autoClaim: string | null }) {
   const { t } = useTranslation("quota");
   const now = useContext(NowContext);
   const ok = quota?.ok === true;
@@ -2370,9 +2729,19 @@ function QoderCard({
       onRefresh={onRefresh}
       onDelete={onDelete}
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      footLead={
+        campaign ? <QoderCheckinRow accountId={account.id} campaign={campaign} onClaimed={onRefresh} /> : undefined
+      }
+      footNote={autoClaim}
       frame={frame}
     >
-      <IdentityRow name={quota?.label ?? account.label} badge={quota?.userType ?? undefined} mono />
+      <IdentityRow
+        name={quota?.label ?? account.label}
+        badge={quota?.userType ?? undefined}
+        mono
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
       <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onReauth} reauthPending={reauthPending} />
       {ok && quota.enterpriseUrl && (
         <div className="aq-card-idle">
@@ -2406,7 +2775,6 @@ function QoderCard({
           <DetailGrid items={details} />
         </div>
       )}
-      {campaign && <QoderCheckinRow accountId={account.id} campaign={campaign} onClaimed={onRefresh} />}
     </QuotaCardShell>
   );
 }
@@ -2559,6 +2927,7 @@ function DeepSeekCard({
   onStartReplace,
   onCancelReplace,
   onAddAnother,
+  onSaveTag,
   frame,
 }: {
   account: QuotaAccount;
@@ -2573,6 +2942,7 @@ function DeepSeekCard({
   onStartReplace: () => void;
   onCancelReplace: () => void;
   onAddAnother?: () => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
   frame: CardFrame;
 }) {
   const { t } = useTranslation("quota");
@@ -2589,7 +2959,7 @@ function DeepSeekCard({
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
       frame={frame}
     >
-      <IdentityRow name={account.label} badge="API" mono />
+      <IdentityRow name={account.label} badge="API" mono tag={account.tag} onSaveTag={onSaveTag} />
       {replacing ? (
         <DeepSeekKeyForm onSubmit={onReplace} onCancel={onCancelReplace} hint={t("dsReplaceHint")} submitText={t("dsReplaceKey")} />
       ) : (
@@ -2632,6 +3002,7 @@ function CodexCard({
   onAddAnother,
   onReauth,
   reauthPending,
+  onSaveTag,
   frame,
 }: {
   account: CodexAccount;
@@ -2642,6 +3013,7 @@ function CodexCard({
   onAddAnother?: () => void;
   onReauth: () => void;
   reauthPending: boolean;
+  onSaveTag: (tag: string | null) => Promise<void>;
   frame: CardFrame;
 }) {
   const { t } = useTranslation("quota");
@@ -2678,6 +3050,8 @@ function CodexCard({
         name={quota?.email ?? account.email}
         badge={quota?.planType ?? account.planType ?? undefined}
         mono
+        tag={account.tag}
+        onSaveTag={onSaveTag}
       />
       <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onReauth} reauthPending={reauthPending} />
       {ok && windows.length === 0 && <div className="aq-card-idle">{t("codexNoLimits")}</div>}
@@ -2692,6 +3066,7 @@ function CodexCard({
                 countdown={compactCountdown(w.resetAtMs, now)}
                 value={`${remainPct}%`}
                 percent={remainPct}
+                hint={t("usedPercentHint", { pct: clampPct(w.usedPercent) })}
               />
             );
           })}
@@ -2794,6 +3169,7 @@ function ClaudeCard({
   onStartReplace,
   onCancelReplace,
   onAddAnother,
+  onSaveTag,
   frame,
 }: {
   account: QuotaAccount;
@@ -2806,6 +3182,7 @@ function ClaudeCard({
   onStartReplace: () => void;
   onCancelReplace: () => void;
   onAddAnother?: () => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
   frame: CardFrame;
 }) {
   const { t } = useTranslation("quota");
@@ -2822,7 +3199,13 @@ function ClaudeCard({
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
       frame={frame}
     >
-      <IdentityRow name={quota?.label ?? account.label} badge={quota?.plan ?? "OAuth"} mono />
+      <IdentityRow
+        name={quota?.label ?? account.label}
+        badge={quota?.plan ?? "OAuth"}
+        mono
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
       {replacing ? (
         <ClaudeAuthForm
           onSubmitToken={onReplace}
@@ -2846,6 +3229,7 @@ function ClaudeCard({
                 countdown={compactCountdown(w.resetsAt != null ? w.resetsAt * 1000 : null, now)}
                 value={`${remainPct}%`}
                 percent={remainPct}
+                hint={t("usedPercentHint", { pct: clampPct(w.usedPercent) })}
               />
             );
           })}
@@ -2934,6 +3318,7 @@ function ZcodeCard({
   onStartReplace,
   onCancelReplace,
   onAddAnother,
+  onSaveTag,
   frame,
 }: {
   account: QuotaAccount;
@@ -2946,6 +3331,7 @@ function ZcodeCard({
   onStartReplace: () => void;
   onCancelReplace: () => void;
   onAddAnother?: () => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
   frame: CardFrame;
 }) {
   const { t } = useTranslation("quota");
@@ -2961,7 +3347,7 @@ function ZcodeCard({
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
       frame={frame}
     >
-      <IdentityRow name={account.label} badge="API" mono />
+      <IdentityRow name={account.label} badge="API" mono tag={account.tag} onSaveTag={onSaveTag} />
       {replacing ? (
         <ZcodeKeyForm onSubmit={onReplace} onCancel={onCancelReplace} hint={t("zcodeReplaceHint")} submitText={t("zcodeReplaceKey")} />
       ) : (
@@ -2976,14 +3362,321 @@ function ZcodeCard({
               <MeterRow
                 key={l.label}
                 label={l.label}
-                value={t("zcodeUsage", {
+                value={`${remainPct}%`}
+                percent={remainPct}
+                hint={t("zcodeUsage", {
                   usage: formatCredits(l.usage),
                   limit: formatCredits(l.limit),
                 })}
-                percent={remainPct}
               />
             );
           })}
+        </div>
+      )}
+    </QuotaCardShell>
+  );
+}
+
+function MimoKeyForm({
+  onSubmit,
+  onCancel,
+  hint,
+  submitText,
+}: {
+  onSubmit: (apiKey: string) => Promise<void>;
+  onCancel?: () => void;
+  hint?: string;
+  submitText?: string;
+}) {
+  const { t } = useTranslation("quota");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async () => {
+    if (!key.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(key.trim());
+      setKey("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      className="aq-auth aq-key-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <p className="aq-auth-text">{hint ?? t("authHint.mimo")}</p>
+      <input
+        className="input-field aq-mono"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="sk-… / tp-…"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        disabled={busy}
+        autoFocus={onCancel != null}
+      />
+      {error && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
+        </div>
+      )}
+      <div className="aq-key-actions">
+        {onCancel && (
+          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel} disabled={busy}>
+            {t("authCancel")}
+          </button>
+        )}
+        <button type="submit" className="btn btn-primary btn-small" disabled={busy || !key.trim()}>
+          {busy ? <RefreshCw size={13} className="spin" /> : <KeyRound size={13} />}
+          {busy ? t("dsVerifying") : (submitText ?? t("mimoSaveKey"))}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function MimoCard({
+  account,
+  quota,
+  loading,
+  peaks,
+  replacing,
+  onRefresh,
+  onDelete,
+  onReplace,
+  onStartReplace,
+  onCancelReplace,
+  onAddAnother,
+  onQuota,
+  onSaveTag,
+  frame,
+}: {
+  account: QuotaAccount;
+  quota: MimoQuotaDto | undefined;
+  loading: boolean;
+  peaks: Record<string, number>;
+  replacing: boolean;
+  onRefresh: () => void;
+  onDelete: () => void;
+  onReplace: (apiKey: string) => Promise<void>;
+  onStartReplace: () => void;
+  onCancelReplace: () => void;
+  onAddAnother?: () => void;
+  onQuota: (dto: MimoQuotaDto) => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
+  frame: CardFrame;
+}) {
+  const { t } = useTranslation("quota");
+  const now = useContext(NowContext);
+  const [loginPending, setLoginPending] = useState(false);
+  const [cookieOpen, setCookieOpen] = useState(false);
+  const [cookie, setCookie] = useState("");
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const ok = quota?.ok === true && !replacing;
+  const badge =
+    quota?.expired
+      ? t("mimoExpired")
+      : quota?.mode === "token_plan"
+        ? (quota.plan ?? "Token Plan")
+        : quota?.mode === "payg"
+          ? t("mimoPayg")
+          : "API";
+  const hasWindows = (quota?.windows?.length ?? 0) > 0;
+  const hasBalances = (quota?.balances?.length ?? 0) > 0;
+  const periodEndMs = ok && quota.periodEndMs != null ? quota.periodEndMs : null;
+  const periodCountdown = compactCountdown(periodEndMs, now);
+  const isTokenPlan =
+    quota?.mode === "token_plan"
+    || /^t?tp-/i.test(account.label ?? "");
+  const reauthSession =
+    quota?.needsReauth === true
+    && (quota.message?.includes("登录") || quota.message?.includes("Session") || quota.message?.includes("过期"));
+  // 有用量条则不再催登录；会话过期再显示登录入口。
+  const needSession =
+    !replacing
+    && isTokenPlan
+    && (!(hasWindows || hasBalances) || reauthSession || loginPending || cookieOpen);
+
+  const startLogin = async () => {
+    setSessionError(null);
+    setCookieOpen(false);
+    setLoginPending(true);
+    try {
+      await mimoOpenLoginWindow();
+    } catch (e) {
+      setSessionError(errorText(e));
+      setLoginPending(false);
+    }
+  };
+
+  const finishLogin = async () => {
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const dto = await mimoBindLoginSession(account.id);
+      onQuota(dto);
+      setLoginPending(false);
+    } catch (e) {
+      setSessionError(errorText(e));
+    } finally {
+      setSessionBusy(false);
+    }
+  };
+
+  const cancelLogin = () => {
+    void mimoCloseLoginWindow().catch(() => undefined);
+    setLoginPending(false);
+    setSessionError(null);
+  };
+
+  const submitCookie = async () => {
+    if (!cookie.trim() || sessionBusy) return;
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const dto = await mimoSetCookie(account.id, cookie.trim());
+      onQuota(dto);
+      setCookie("");
+      setCookieOpen(false);
+    } catch (e) {
+      setSessionError(errorText(e));
+    } finally {
+      setSessionBusy(false);
+    }
+  };
+
+  return (
+    <QuotaCardShell
+      brand="mimo"
+      product="MiMo"
+      tag={quota?.expired ? <span className="aq-tag aq-tag-expired">{t("mimoExpired")}</span> : null}
+      at={replacing ? null : quota?.at}
+      loading={loading || sessionBusy}
+      onRefresh={onRefresh}
+      onDelete={onDelete}
+      extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      frame={frame}
+    >
+      <IdentityRow
+        name={quota?.label ?? account.label}
+        badge={badge}
+        mono
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
+      {replacing ? (
+        <MimoKeyForm onSubmit={onReplace} onCancel={onCancelReplace} hint={t("mimoReplaceHint")} submitText={t("mimoReplaceKey")} />
+      ) : reauthSession ? (
+        <CardMessage
+          quota={quota}
+          idleText={t("neverRefreshed")}
+          onReauth={() => void startLogin()}
+          reauthText={t("mimoLoginUsage")}
+        />
+      ) : (
+        <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onStartReplace} reauthText={t("mimoReplaceKey")} />
+      )}
+      {ok && !hasWindows && !hasBalances && (
+        <div className="aq-card-idle">{quota.message || t("mimoVerifiedNoUsage")}</div>
+      )}
+      {needSession && !cookieOpen && (
+        <div className="aq-key-actions" style={{ marginTop: 8 }}>
+          {loginPending ? (
+            <>
+              <span className="aq-auth-text">{t("mimoLoginPending")}</span>
+              <button type="button" className="btn btn-ghost btn-small" onClick={cancelLogin} disabled={sessionBusy}>
+                {t("authCancel")}
+              </button>
+              <button type="button" className="btn btn-primary btn-small" onClick={() => void finishLogin()} disabled={sessionBusy}>
+                {sessionBusy ? <RefreshCw size={13} className="spin" /> : <LogIn size={13} />}
+                {t("mimoLoginDone")}
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn btn-primary btn-small" onClick={() => void startLogin()}>
+                <LogIn size={13} />
+                {t("mimoLoginUsage")}
+              </button>
+              <button type="button" className="btn btn-secondary btn-small" onClick={() => setCookieOpen(true)}>
+                {t("mimoPasteCookie")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {needSession && cookieOpen && (
+        <form
+          className="aq-auth aq-key-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submitCookie();
+          }}
+        >
+          <p className="aq-auth-text">{t("mimoCookieHint")}</p>
+          <textarea
+            className="input-field aq-mono"
+            rows={3}
+            spellCheck={false}
+            placeholder={t("mimoCookiePlaceholder")}
+            value={cookie}
+            onChange={(e) => setCookie(e.target.value)}
+            disabled={sessionBusy}
+            autoFocus
+          />
+          <div className="aq-key-actions">
+            <button type="button" className="btn btn-ghost btn-small" onClick={() => setCookieOpen(false)} disabled={sessionBusy}>
+              {t("authCancel")}
+            </button>
+            <button type="submit" className="btn btn-primary btn-small" disabled={sessionBusy || !cookie.trim()}>
+              {sessionBusy ? <RefreshCw size={13} className="spin" /> : <KeyRound size={13} />}
+              {t("mimoCookieSave")}
+            </button>
+          </div>
+        </form>
+      )}
+      {sessionError && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(sessionError, t("networkFailed")) ?? sessionError}
+        </div>
+      )}
+      {ok && (hasWindows || hasBalances) && (
+        <div className="aq-card-body">
+          {quota.windows.map((w, i) => {
+            const remainPct = w.limit > 0 ? clampPct(((w.limit - w.used) / w.limit) * 100) : 0;
+            return (
+              <MeterRow
+                key={w.label}
+                label={w.label}
+                countdown={i === 0 ? periodCountdown : null}
+                value={`${remainPct}%`}
+                percent={remainPct}
+                hint={t("mimoUsage", {
+                  usage: formatCredits(w.used),
+                  limit: formatCredits(w.limit),
+                })}
+              />
+            );
+          })}
+          {quota.balances.map((b) => (
+            <MeterRow
+              key={`${b.currency}:${b.label}`}
+              label={b.label}
+              value={formatMoney(b.amount, b.currency)}
+              percent={balancePct(b.amount, peaks[`${frame.cardKey}:${b.currency}:${b.label}`])}
+            />
+          ))}
         </div>
       )}
     </QuotaCardShell>
