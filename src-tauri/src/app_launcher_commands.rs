@@ -1004,8 +1004,8 @@ mod tests {
     #[test]
     fn uninstall_string_yields_install_dir() {
         assert_eq!(
-            dir_from_uninstall_string("\"D:\\w_app\\Tencent\\QQNT\\Uninstall.exe\"").as_deref(),
-            Some("D:\\w_app\\Tencent\\QQNT")
+            dir_from_uninstall_string("\"D:\\Apps\\Tencent\\QQNT\\Uninstall.exe\"").as_deref(),
+            Some("D:\\Apps\\Tencent\\QQNT")
         );
         assert_eq!(
             dir_from_uninstall_string("C:\\Program Files\\App\\unins000.exe /SILENT").as_deref(),
@@ -1115,9 +1115,9 @@ mod tests {
 
     #[test]
     fn start_menu_filter_accepts_apps_rejects_housekeeping() {
-        assert!(is_valid_start_menu_target("d:\\w_app\\7-zip\\7zfm.exe"));
+        assert!(is_valid_start_menu_target("d:\\Apps\\7-zip\\7zfm.exe"));
         assert!(is_valid_start_menu_target("c:\\program files\\google\\chrome\\application\\chrome.exe"));
-        assert!(is_valid_start_menu_target("d:\\w_app\\grok bot\\grok bot.exe"));
+        assert!(is_valid_start_menu_target("d:\\Apps\\grok bot\\grok bot.exe"));
         assert!(!is_valid_start_menu_target("c:\\windows\\system32\\cleanmgr.exe"));
         assert!(!is_valid_start_menu_target("c:\\programdata\\package cache\\{guid}\\vcredist_x64.exe"));
         assert!(!is_valid_start_menu_target("d:\\app\\unins000.exe"));

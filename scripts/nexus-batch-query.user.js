@@ -7,7 +7,7 @@
  *   代码：粘贴本文件全文
  *
  * 功能：在 Nexus 2 页面右上角注入悬浮面板，粘贴多行构件名批量查询最新 RELEASE 版本。
- *   - 每行一个关键词（如 pmys.saas.parent.pom），或 group:artifact 精确查（如 com.pmys.saas:pmys.saas.account.sdk）
+ *   - 每行一个关键词（如 demo.shop.parent.pom），或 group:artifact 精确查（如 com.example.shop:demo.shop.account.sdk）
  *   - 走 Nexus 自带 REST：/service/local/lucene/search，登录态自动带上（同源 fetch）
  *   - 结果按输入顺序呈现，查询中/失败/无结果三态分明，失败行可单行重试；未查询时列表区显示引导空态
  *   - 最新版本点击复制 g:a:v；发布时间取该版本在 Nexus 的上传时间戳；升级版本（末段+1，满 999 向前进位）点击复制 artifactId+新版本
@@ -221,7 +221,7 @@
       '<span class="sp"></span>' +
       '<button id="aiwb-nx-min" title="最小化">—</button>' +
       '<button id="aiwb-nx-close" title="关闭">×</button></div>' +
-      '<div id="aiwb-nx-body"><textarea id="aiwb-nx-input" placeholder="pmys.saas.parent.pom\npmys.saas.account.sdk"></textarea>' +
+      '<div id="aiwb-nx-body"><textarea id="aiwb-nx-input" placeholder="demo.shop.parent.pom\ndemo.shop.account.sdk"></textarea>' +
       '<div id="aiwb-nx-btns"><button class="pri" id="aiwb-nx-go">批量查询</button>' +
       '<button id="aiwb-nx-copy">复制全部 (TSV)</button>' +
       '<button id="aiwb-nx-copy-up">复制升级版本 (TSV)</button>' +

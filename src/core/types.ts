@@ -36,7 +36,7 @@ export interface RecentProject {
   lastOpenedAt: string;
 }
 
-/** Parent folder that groups multiple git repos (e.g. D:\\d_project\\tct\\p3) */
+/** Parent folder that groups multiple git repos (e.g. D:\\dev\\projects\\workspace) */
 export interface GitWorkspace {
   id: number;
   path: string;

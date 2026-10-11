@@ -1,7 +1,7 @@
 # Git 多项目文件夹支持改造计划
 
 > 状态：✅ 已实施（2025-09-10）  
-> 背景：Git 管理只支持单仓库添加，一个文件夹下有多个 Git 仓库时无法识别（例：`D:\d_project\tct\p3`，实测含 21 个子仓库）  
+> 背景：Git 管理只支持单仓库添加，一个文件夹下有多个 Git 仓库时无法识别（例：`D:\dev\projects\workspace`，实测含 21 个子仓库）  
 > 结果：后端 `git_scan_repos`（3 单元测试全过）+ 扫描勾选弹窗 + 批量入库；顺手修复 id 碰撞与 20 条截断两个存量 bug  
 > 产品说明以根目录 [README.md](../README.md) 为准；工作区分组见 `git_workspaces` 与仓库页。
 
@@ -21,13 +21,13 @@
 
 选到多项目文件夹时**没有任何出路**——不扫描、不提示，只有一句报错。
 
-### 1.2 实测案例：`D:\d_project\tct\p3`
+### 1.2 实测案例：`D:\dev\projects\workspace`
 
 ```
-p3/                          ← 本身不是 Git 仓库（无 .git）
+workspace/                   ← 本身不是 Git 仓库（无 .git）
 ├── .idea/ .cursor/ ...      ← 工具目录
 ├── doc/                     ← 普通目录
-└── pmys.saas.*.*/           ← 21 个独立 Git 仓库！
+└── demo.shop.*.*/           ← 21 个独立 Git 仓库！
     ├── account.sdk      .git ✓
     ├── account.service  .git ✓
     ├── aio.ui           .git ✓
@@ -92,8 +92,8 @@ pub struct GitScannedRepo { path: String, name: String }
 ┌─ 发现 21 个 Git 仓库                    [X] ─┐
 │ [全选] [反选]           （已收藏 3 个自动跳过）│
 │ ┌──────────────────────────────────────────┐ │
-│ │ ☑ pmys.saas.account.sdk     D:\...\p3\… │ │
-│ │ ☑ pmys.saas.account.service              │ │
+│ │ ☑ demo.shop.account.sdk     D:\...\workspace\… │ │
+│ │ ☑ demo.shop.account.service              │ │
 │ │ ☐ ...（可滚动列表）                      │ │
 │ └──────────────────────────────────────────┘ │
 │                       [取消] [添加选中的 18 个] │
@@ -146,7 +146,7 @@ invokeGitScanRepos: (path: string, maxDepth?: number) => Promise<GitScannedRepo[
 
 ### Phase 4 — 验证
 10. `tsc --noEmit` + `npm run build`
-11. 用 `D:\d_project\tct\p3` 实测：扫描出 21 个 → 全选添加 → 卡片列表出现 21 项（不止 20）→ 移除某个不误删别人
+11. 用多仓父目录实测：扫描出 21 个 → 全选添加 → 卡片列表出现 21 项（不止 20）→ 移除某个不误删别人
 
 ---
 
