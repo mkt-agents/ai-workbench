@@ -1406,15 +1406,15 @@ mod tests {
 
     #[test]
     fn java_module_layer_and_test_pairing() {
-        let path = "pmys.saas.account.service/src/main/java/com/x/web/AccountController.java";
-        assert_eq!(module_of(path), "pmys.saas.account.service");
+        let path = "demo.shop.account.service/src/main/java/com/x/web/AccountController.java";
+        assert_eq!(module_of(path), "demo.shop.account.service");
         assert_eq!(layer_of(path), "api");
         assert_eq!(
             test_candidates(path),
             vec![
-                "pmys.saas.account.service/src/test/java/com/x/web/AccountControllerTest.java",
-                "pmys.saas.account.service/src/test/java/com/x/web/AccountControllerTests.java",
-                "pmys.saas.account.service/src/test/java/com/x/web/AccountControllerIT.java",
+                "demo.shop.account.service/src/test/java/com/x/web/AccountControllerTest.java",
+                "demo.shop.account.service/src/test/java/com/x/web/AccountControllerTests.java",
+                "demo.shop.account.service/src/test/java/com/x/web/AccountControllerIT.java",
             ]
         );
         assert_eq!(module_of("src/main/java/X.java"), "(root)");

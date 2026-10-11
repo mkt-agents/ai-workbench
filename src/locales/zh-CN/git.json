@@ -115,7 +115,7 @@
     "refresh": "刷新",
     "addRepo": "添加仓库",
     "empty": "还没有收藏的仓库",
-    "emptyHint": "点击「添加仓库」：可选单个 Git 仓，或含多个子仓的文件夹（如 D:\\\\d_project\\\\tct\\\\p3）",
+    "emptyHint": "点击「添加仓库」：可选单个 Git 仓，或含多个子仓的文件夹（如 D:\\\\dev\\\\projects\\\\workspace）",
     "notGitRepo": "所选目录不是 Git 仓库",
     "added": "已添加仓库",
     "removed": "已移除",

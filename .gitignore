@@ -4,6 +4,7 @@ node_modules/
 # Build outputs
 dist/
 src-tauri/target/
+/target/
 
 # Rust
 src-tauri/Cargo.lock
@@ -22,6 +23,9 @@ Thumbs.db
 _gen.js
 _lines_b64.txt
 _test_b64.txt
+
+# Local screenshots that may contain personal/work data
+/screen.png
 
 # Local app data / assistant data (never commit)
 .codebuddy/

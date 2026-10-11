@@ -115,7 +115,7 @@
     "refresh": "Refresh",
     "addRepo": "Add repo",
     "empty": "No favorite repos yet",
-    "emptyHint": "Click \"Add repo\": a single Git folder, or a parent with many repos (e.g. D:\\\\d_project\\\\tct\\\\p3)",
+    "emptyHint": "Click \"Add repo\": a single Git folder, or a parent with many repos (e.g. D:\\\\dev\\\\projects\\\\workspace)",
     "notGitRepo": "Selected folder is not a Git repository",
     "added": "Repo added",
     "removed": "Removed",
