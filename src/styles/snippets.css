@@ -12,32 +12,101 @@
   min-height: 0;
   container: snippets-page / inline-size;
 }
+/* 上行：搜索有上限、操作靠右；下行：类型 | 标签。 */
 .snippets-toolbar {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-}
-.snippets-search {
-  position: relative;
-  flex: 1 1 200px;
-  min-width: 160px;
-  max-width: 420px;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-/* 筛选 + 操作整组不拆行；窄窗时整组换到第二行并靠右 */
-.snippets-toolbar-right {
+.snippets-search {
+  position: relative;
+  flex: 1 1 16rem;
+  min-width: 8rem;
+  /* 宽窗封顶，避免搜索条拖成整行；窄窗仍可吃满剩余空间 */
+  max-width: min(22rem, 100%);
+}
+
+.snippets-toolbar-actions {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 6px;
   flex: 0 0 auto;
+  min-width: 0;
   margin-left: auto;
 }
 
-@container snippets-page (max-width: 680px) {
+.snippets-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.snippets-filter-bar .snippets-kind-seg {
+  flex: 0 0 auto;
+}
+
+.snippets-filter-bar .snippets-tags {
+  flex: 1 1 10rem;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-subtle);
+}
+
+@container snippets-page (max-width: 640px) {
+  .snippets-count {
+    display: none;
+  }
+
+  .snippets-select-wrap select {
+    min-width: 0;
+    width: 6.5rem;
+  }
+
+  .snippets-toolbar-actions .btn-primary {
+    padding-inline: 8px;
+  }
+
+  .snippets-toolbar-actions .btn-primary .snippets-add-label {
+    display: none;
+  }
+}
+
+@container snippets-page (max-width: 480px) {
+  .snippets-toolbar {
+    flex-wrap: wrap;
+  }
+
   .snippets-search {
-    flex-basis: 100%;
+    flex: 1 1 100%;
     max-width: none;
+  }
+
+  .snippets-toolbar-actions {
+    flex: 1 1 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+
+  .snippets-filter-bar .snippets-kind-seg {
+    width: 100%;
+  }
+
+  .snippets-kind-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .snippets-filter-bar .snippets-tags {
+    padding-left: 0;
+    border-left: 0;
+    flex-basis: 100%;
   }
 }
 
@@ -152,9 +221,11 @@
 .snippets-select-wrap select {
   appearance: none;
   width: auto;
-  min-width: 108px;
-  padding-right: 26px;
+  min-width: 96px;
+  height: 28px;
+  padding: 0 26px 0 8px;
   cursor: pointer;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--text-1);
 }
@@ -179,13 +250,16 @@
   font-size: 11px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
-  padding: 0 2px;
+  padding: 0 4px;
+  line-height: 28px;
 }
 .snippets-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  flex: 1 1 12rem;
+  min-width: 0;
 }
 .snippets-tag-chip {
   border: 1px solid var(--border-subtle);
@@ -233,6 +307,7 @@
   background: var(--bg-1);
   box-shadow: var(--surface-highlight);
   min-width: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -350,41 +425,36 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
-/* 卡片里固定 4 行高：不再套一层滚动条，长内容截断，全文在编辑/使用弹窗里看。
-   截断放在内层——外层 overflow 只裁到 padding 边，下一行会露在下内边距里 */
+/* 卡片预览统一占位高度，同行底栏对齐；长文截断，全文在编辑/使用弹窗看。 */
 .snippet-card .snippet-preview {
-  --preview-lh: 1.7;
+  --preview-lines: 4;
+  --preview-lh: 1.6;
+  --preview-fs: 11.5px;
+  --preview-pad-y: 6px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
   margin: 0;
-  padding: 0;
-  flex-shrink: 0;
+  height: calc(
+    var(--preview-lines) * var(--preview-lh) * var(--preview-fs) + 2 * var(--preview-pad-y)
+  );
+  padding: var(--preview-pad-y) 10px;
+  overflow: hidden;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--preview-fs);
   line-height: var(--preview-lh);
   color: var(--text-2);
-  background: none;
-  border: 0;
-  border-radius: 0;
-}
-.snippet-card .snippet-preview.is-code {
-  --preview-lh: 1.6;
-  padding: 6px 10px;
-  box-sizing: content-box;
-  height: calc(4 * var(--preview-lh) * 1em);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--text-1);
   background: var(--overlay-1);
+  border: 0;
   border-radius: var(--radius-md);
 }
-.snippet-card .snippet-preview:not(.is-code) {
-  /* 与代码块等高，保证同一行卡片底栏对齐 */
-  height: calc(4 * 1.6 * 11.5px + 12px);
+.snippet-card .snippet-preview.is-code {
+  font-family: var(--font-mono);
+  color: var(--text-1);
 }
 .snippet-preview-text {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
-  max-height: 100%;
   overflow: hidden;
 }
 .snippet-param-hl {
@@ -546,6 +616,26 @@
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.snippets-params-hint {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.snippets-params-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.snippets-params-derived {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 22px;
 }
 
 .toast .toast-action {

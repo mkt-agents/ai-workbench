@@ -164,12 +164,14 @@ export default function SnippetsManager() {
     try {
       const kind: SnippetKind = editing.kind === "prompt" ? "prompt" : "text";
       const scenario = kind === "prompt" ? editing.scenario ?? "general" : undefined;
+      // Params are derived from {{name}} in content — keep DB in sync, no hand-edit.
+      const params = parseParamNames("", editing.content).join(", ");
       if (editing.id) {
         await updateSnippet(editing.id, {
           name: editing.name.trim(),
           content: editing.content,
           tags: editing.tags || "",
-          params: editing.params || "",
+          params,
           kind,
           scenario,
         });
@@ -178,7 +180,7 @@ export default function SnippetsManager() {
           name: editing.name.trim(),
           content: editing.content,
           tags: editing.tags || "",
-          params: editing.params || "",
+          params,
           kind,
           scenario,
         });
@@ -324,7 +326,7 @@ export default function SnippetsManager() {
 
   /** 无参数片段一键复制；有参数才弹填参窗（少两次点击） */
   const handleUse = async (s: Snippet) => {
-    const names = parseParamNames(s.params, s.content);
+    const names = parseParamNames("", s.content);
     if (names.length === 0) {
       try {
         await invokeCopyToClipboard(s.content);
@@ -339,7 +341,7 @@ export default function SnippetsManager() {
   };
 
   const startUse = (s: Snippet) => {
-    const names = parseParamNames(s.params, s.content);
+    const names = parseParamNames("", s.content);
     if (names.length === 0) {
       setParamValues({});
       setUseTarget(s);
@@ -407,29 +409,7 @@ export default function SnippetsManager() {
             </button>
           )}
         </div>
-        <div className="snippets-toolbar-right">
-          <div className="snippets-kind-seg" role="tablist" aria-label={t("kindLabel")}>
-            {(["all", "text", "prompt"] as KindFilter[]).map((k) => (
-              <button
-                key={k}
-                type="button"
-                role="tab"
-                aria-selected={kindFilter === k}
-                className={`snippets-kind-btn${kindFilter === k ? " is-active" : ""}`}
-                onClick={() => setKindFilter(k)}
-              >
-                {k === "text" ? (
-                  <FileText size={12} className="snippets-kind-icon" aria-hidden />
-                ) : k === "prompt" ? (
-                  <Sparkles size={12} className="snippets-kind-icon" aria-hidden />
-                ) : null}
-                <span className="snippets-kind-label">
-                  {k === "all" ? t("kindAll") : k === "text" ? t("kindText") : t("kindPrompt")}
-                </span>
-                <span className="snippets-kind-count">{kindCounts[k]}</span>
-              </button>
-            ))}
-          </div>
+        <div className="snippets-toolbar-actions">
           <div className="snippets-select-wrap">
             <select
               className="input-field snippets-sort"
@@ -465,38 +445,58 @@ export default function SnippetsManager() {
           >
             {transferBusy ? <Loader2 size={14} className="spin" /> : <MoreHorizontal size={14} />}
           </DropdownMenu>
-          <button type="button" className="btn btn-primary" onClick={openCreate}>
-            <Plus size={14} /> {t("add")}
+          <button type="button" className="btn btn-primary btn-small" onClick={openCreate} title={t("add")}>
+            <Plus size={14} />
+            <span className="snippets-add-label">{t("add")}</span>
           </button>
         </div>
       </div>
 
-      {allTags.length > 0 && (
-        <div className="snippets-tags">
-          <button
-            type="button"
-            className={`snippets-tag-chip${!tagFilter ? " on" : ""}`}
-            onClick={() => setTagFilter("")}
-          >
-            {t("tagAll")}
-          </button>
-          {allTags.map((tag) => (
+      <div className="snippets-filter-bar">
+        <div className="snippets-kind-seg" role="tablist" aria-label={t("kindLabel")}>
+          {(["all", "text", "prompt"] as KindFilter[]).map((k) => (
             <button
-              key={tag}
+              key={k}
               type="button"
-              className={`snippets-tag-chip${tagFilter === tag ? " on" : ""}`}
-              onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
+              role="tab"
+              aria-selected={kindFilter === k}
+              className={`snippets-kind-btn${kindFilter === k ? " is-active" : ""}`}
+              onClick={() => setKindFilter(k)}
+              title={k === "prompt" ? t("kindPromptHint") : undefined}
             >
-              {tag}
+              {k === "text" ? (
+                <FileText size={12} className="snippets-kind-icon" aria-hidden />
+              ) : k === "prompt" ? (
+                <Sparkles size={12} className="snippets-kind-icon" aria-hidden />
+              ) : null}
+              <span className="snippets-kind-label">
+                {k === "all" ? t("kindAll") : k === "text" ? t("kindText") : t("kindPrompt")}
+              </span>
+              <span className="snippets-kind-count">{kindCounts[k]}</span>
             </button>
           ))}
         </div>
-      )}
+        {allTags.length > 0 && (
+          <div className="snippets-tags" role="group" aria-label={t("tags")}>
+            {allTags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className={`snippets-tag-chip${tagFilter === tag ? " on" : ""}`}
+                onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
+                title={tagFilter === tag ? t("tagClear") : tag}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="snippets-list">
         {filtered.map((s) => {
           const tags = splitTags(s.tags);
-          const paramNames = parseParamNames(s.params, s.content);
+          const paramNames = parseParamNames("", s.content);
           const codeLike = isCodeLike(s.content);
           return (
             <div
@@ -616,6 +616,7 @@ export default function SnippetsManager() {
                 onClick={() => {
                   setQuery("");
                   setTagFilter("");
+                  setKindFilter("all");
                 }}
               >
                 {t("clearSearch")}
@@ -681,14 +682,6 @@ export default function SnippetsManager() {
               />
             </div>
             <div className="input-group">
-              <label className="input-label">{t("params")}</label>
-              <input
-                className="input-field"
-                value={editing.params || ""}
-                onChange={(e) => setEditing({ ...editing, params: e.target.value })}
-              />
-            </div>
-            <div className="input-group">
               <label className="input-label">{t("content")}</label>
               <textarea
                 className="input-field snippets-content-editor"
@@ -697,6 +690,24 @@ export default function SnippetsManager() {
                 onChange={(e) => setEditing({ ...editing, content: e.target.value })}
                 spellCheck={false}
               />
+            </div>
+            <div className="input-group">
+              <label className="input-label">{t("params")}</label>
+              <p className="snippets-params-hint">{t("paramsDerivedHint")}</p>
+              {(() => {
+                const derived = parseParamNames("", editing.content || "");
+                return derived.length > 0 ? (
+                  <div className="snippets-params-derived" aria-live="polite">
+                    {derived.map((p) => (
+                      <code key={p} className="snippet-param">
+                        {p}
+                      </code>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="snippets-params-empty">{t("paramsNone")}</p>
+                );
+              })()}
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>
