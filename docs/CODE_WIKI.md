@@ -531,7 +531,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 ### 6.11 页面内容宽度与自适应（2026-09-30 统一）
 
 - **宽度单一来源**：`src/styles/tokens.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)`）、`.snippets-page` / `.runtime-page` / `.models-container` / `.git-manager-column`、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。`.settings-page` 720px 是有意窄表单列；`.userscript-list`（≥1100 强制两列）尚未并入。
-- **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、片段库 `.snippets-list` 320、模型配置与环境变量（`.models-*` / `.runtime-list`）340。
+- **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、模板片段 `.snippets-list` 320、模型配置与环境变量（`.models-*` / `.runtime-list`）340。
 - **小工具页（`DevTools.tsx` + `src/styles/devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
 - **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）。工具内 textarea 统一 `resize: none`。
 - **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。

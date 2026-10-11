@@ -418,7 +418,14 @@ export default function SnippetsManager() {
                 className={`snippets-kind-btn${kindFilter === k ? " is-active" : ""}`}
                 onClick={() => setKindFilter(k)}
               >
-                {k === "all" ? t("tagAll") : k === "text" ? t("kindText") : t("kindPrompt")}
+                {k === "text" ? (
+                  <FileText size={12} className="snippets-kind-icon" aria-hidden />
+                ) : k === "prompt" ? (
+                  <Sparkles size={12} className="snippets-kind-icon" aria-hidden />
+                ) : null}
+                <span className="snippets-kind-label">
+                  {k === "all" ? t("kindAll") : k === "text" ? t("kindText") : t("kindPrompt")}
+                </span>
                 <span className="snippets-kind-count">{kindCounts[k]}</span>
               </button>
             ))}

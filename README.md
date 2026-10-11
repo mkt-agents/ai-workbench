@@ -26,7 +26,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 - **Harness**：启动/停止本地 `@deepseek-ai/dsh`，iframe 内嵌 Web UI；侧栏切走后保活；自定义启动端口；浏览器打开；空态内嵌「安装」按钮；可选进入页面自动启动（记忆开关）；运行中每 8 秒探测进程，外部关闭服务后状态自动回落
 - **快问**：托盘常驻；默认 `Ctrl+Alt+K`；桌面浮漂；流式问答；多轮追问 / 重新生成；可选工作区 / Git / Dirty / 剪贴板上下文
 - **模型配置**：多厂商与 OpenAI 兼容接口；增删改查、连接测试、批量测试/同步/删除、分组视图（按提供商纵向面板，组头失败 / 未测试计数，可一键展开折叠；扁平与分组共用 `auto-fill minmax(min(100%, 340px), 1fr)` 卡片网格）、同步 DSH；批量测试并发 4 路并显示进度，结果落库；按测试状态筛选与排序；随机度 / 最长输出档位化（1K→1M）。页面宽引 `--page-max-width`；工具条含搜索 / 筛选 / 「更多」(导入导出)；提供商品牌图标见 `public/ai-providers/`；窄窗工具条换行、列表独立滚动
-- **片段库**：本地 CRUD，`{{param}}` 替换后复制或插入快问；JSON 导入导出、克隆；卡片网格 `auto-fill minmax(min(100%, 320px), 1fr)`；类型分段筛选、固定 4 行预览、双击/回车使用
+- **模板片段**：本地 CRUD，`{{param}}` 替换后复制或插入快问；JSON 导入导出、克隆；卡片网格 `auto-fill minmax(min(100%, 320px), 1fr)`；类型分段筛选、固定 4 行预览、双击/回车使用
 - **AI 提示词**（独立页面已暂时下线；`PromptOptimizer.tsx` 保留，快问「优化提示词」仍可用）
 
 ### 账号与 Git
@@ -62,7 +62,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 AI 工作台
 ├── Harness
 ├── 模型配置
-└── 片段库
+└── 模板片段
 
 账号管理
 ├── Cursor
