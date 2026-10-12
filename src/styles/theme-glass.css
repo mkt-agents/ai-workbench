@@ -375,8 +375,7 @@
   font-size: 10px;
   font-weight: 500;
   padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  margin-left: 8px;
+  border-radius: var(--radius-full);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-detail {

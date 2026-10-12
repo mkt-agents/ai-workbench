@@ -704,6 +704,8 @@
   border-radius: var(--radius-full);
   border: 1px solid var(--accent-border);
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ai-model-detail {
