@@ -75,9 +75,11 @@
      only child here, so without the span the whole script list would live in the left
      column and do its own column math inside half the page. */
   grid-column: 1 / -1;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-  gap: var(--space-2);
+  /* 340 与模型配置卡片同刻度：中等窗宽也能两列，窄窗 min(100%) 自动单列 */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: var(--space-3);
   padding: 4px 0;
+  align-items: stretch;
 }
 
 /* Row cards keep equal height (grid default stretch); only an expanded
@@ -91,9 +93,11 @@
   flex-direction: column;
   position: relative;
   overflow: hidden;
+  min-width: 0;
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight), var(--shadow-xs);
   transition: var(--transition-colors);
 }
 
@@ -114,8 +118,7 @@
 
 .userscript-item:hover {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
-  transform: translateY(-1px);
+  box-shadow: var(--surface-highlight), var(--shadow-md);
 }
 
 .userscript-item:hover::before {
@@ -137,24 +140,27 @@
    lines up; the body fills the rest. */
 .userscript-main {
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   gap: 12px;
-  padding: 12px 12px 12px 14px;
+  padding: 14px 14px 10px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* Leading letter badge, mirrors `.plugin-fallback-icon` in the plugin list. */
 .userscript-icon {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-lg);
+  width: 36px;
+  height: 36px;
+  margin-top: 1px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: #fff;
+  font-family: var(--font-sans);
+  color: var(--on-accent);
   background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 50%, var(--green)));
   position: relative;
   overflow: hidden;
@@ -166,7 +172,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0) 55%);
+  background: linear-gradient(180deg, var(--overlay-4) 0%, transparent 55%);
   border-radius: inherit;
   pointer-events: none;
 }
@@ -181,20 +187,25 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 8px;
 }
 
 /* Single-line header: name + controls never wrap onto separate lines, which
    is what made neighbouring cards different heights in the narrow view. */
 .userscript-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .userscript-info {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .userscript-name-row {
@@ -202,6 +213,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .userscript-name {
@@ -212,6 +224,8 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .userscript-status {
@@ -238,11 +252,7 @@
 .userscript-desc {
   font-size: 11.5px;
   color: var(--text-2);
-  margin-top: 3px;
   line-height: 1.45;
-  /* Reserve two lines even when empty, so every card is the same height
-     regardless of whether it has a description. */
-  min-height: calc(11.5px * 1.45 * 2);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -253,12 +263,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 3px;
   font-size: 11px;
   color: var(--text-3);
   min-width: 0;
-  /* Reserve one line even when empty for uniform card height. */
-  min-height: 16px;
 }
 
 .userscript-source-link {
@@ -315,42 +322,49 @@
 .userscript-meta-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 5px;
+  gap: 6px;
   min-width: 0;
+  margin-top: auto;
+  padding: 6px 8px;
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
 }
 
 .userscript-match {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 5px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   overflow: hidden;
   font-size: 10.5px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   color: var(--accent);
-  padding: 2px 7px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border-radius: var(--radius-sm);
-  flex: 1;
   min-width: 0;
+  width: 100%;
+}
+
+.userscript-match > svg {
+  flex-shrink: 0;
+  opacity: 0.75;
 }
 
 .us-pattern-tag {
   display: inline-block;
   padding: 1px 6px;
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-radius: var(--radius-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
+  max-width: min(100%, 280px);
 }
 
 .us-pattern-more {
   font-size: 10px;
   color: var(--text-3);
   padding: 1px 4px;
+  flex-shrink: 0;
 }
 
 /* Multi-pattern editor */
@@ -457,17 +471,12 @@
   color: var(--text-0);
 }
 
-.userscript-stats {
-  font-size: 10.5px;
-  color: var(--text-3);
-  flex-shrink: 0;
-}
-
 .userscript-controls {
   position: relative;
   display: flex;
   align-items: center;
   flex-shrink: 0;
+  padding-top: 2px;
 }
 
 /* Floats left of the always-visible toggle instead of reserving width, so the
@@ -564,9 +573,9 @@
 .userscript-code-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 12px;
   font-size: 11px;
   font-weight: 500;
   color: var(--text-2);
@@ -574,45 +583,58 @@
   border: 0;
   cursor: pointer;
   user-select: none;
-  transition: color 0.15s ease;
+  transition: var(--transition-colors-fast);
+  min-width: 0;
 }
 
 .userscript-code-toggle:hover {
   color: var(--text-0);
-  background: color-mix(in srgb, var(--bg-0) 50%, transparent);
+  background: var(--overlay-1);
+}
+
+.userscript-code-meta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .userscript-code-size {
-  margin-left: auto;
-  font-size: 10px;
   color: var(--text-3);
-  font-family: ui-monospace, monospace;
 }
 
 .userscript-code {
   margin: 0;
   padding: 10px 12px;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.55;
   color: var(--text-1);
   background: var(--bg-0);
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 200px;
+  max-height: min(280px, 40vh);
   overflow: auto;
   border-top: 1px solid var(--border-subtle);
 }
 
 /* Presets bar */
 .us-presets-bar {
-  margin: 0 0 12px;
-  padding: 12px 16px;
+  margin: 0 0 4px;
+  padding: 12px 14px;
   background: linear-gradient(135deg,
     color-mix(in srgb, var(--accent) 5%, transparent),
     color-mix(in srgb, var(--green) 5%, transparent));
   border: 1px solid color-mix(in srgb, var(--accent) 15%, var(--border));
   border-radius: var(--radius-lg);
+  flex-shrink: 0;
 }
 
 .us-presets-header {
@@ -645,7 +667,7 @@
 
 .us-presets-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
   gap: 8px;
 }
 
@@ -815,21 +837,24 @@
 .us-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
   flex: 1 1 auto;
+  min-width: 0;
 }
 
 .us-sort-group,
 .us-filter-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 3px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .us-sort-btn,
@@ -878,11 +903,60 @@
   background: var(--overlay-3);
   color: var(--text-2);
   margin-left: 2px;
+  font-variant-numeric: tabular-nums;
 }
 
 .us-filter-btn.active .us-filter-count {
   background: var(--accent);
   color: var(--on-accent);
+}
+
+/* Narrow window: single-column cards, compact toolbar labels, always-visible actions */
+@media (max-width: 720px) {
+  .userscript-list {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .userscript-main {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .userscript-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+  }
+
+  .userscript-actions {
+    opacity: 1;
+    transform: translate(0, -50%);
+    pointer-events: auto;
+  }
+
+  .us-sort-btn span,
+  .us-filter-btn {
+    padding-inline: 8px;
+  }
+
+  .us-sort-btn span {
+    display: none;
+  }
+
+  .userscript-code-meta {
+    gap: 4px;
+  }
+
+  .us-presets-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) and (min-width: 721px) {
+  .userscript-list {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  }
 }
 
 /* Import from URL modal */

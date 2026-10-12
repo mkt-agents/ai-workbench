@@ -2490,15 +2490,17 @@ function UserscriptCard({
           <div className="userscript-header">
             <div className="userscript-info">
               <div className="userscript-name-row">
-                <span className="userscript-name">{script.name}</span>
+                <span className="userscript-name" title={script.name}>{script.name}</span>
                 <span className={`userscript-status ${script.enabled ? "is-enabled" : "is-disabled"}`}>
                   {script.enabled ? t("usEnabled") : t("usDisabled")}
                 </span>
               </div>
-              <div className="userscript-desc">{script.description || ""}</div>
-              <div className="userscript-source" title={script.sourceUrl || ""}>
-                {script.sourceUrl && <Link2 size={11} />}
-                {script.sourceUrl && (
+              {script.description ? (
+                <div className="userscript-desc" title={script.description}>{script.description}</div>
+              ) : null}
+              {script.sourceUrl ? (
+                <div className="userscript-source" title={script.sourceUrl}>
+                  <Link2 size={11} />
                   <button
                     type="button"
                     className="userscript-source-link"
@@ -2506,30 +2508,8 @@ function UserscriptCard({
                   >
                     {script.sourceUrl}
                   </button>
-                )}
-              </div>
-              <div className="userscript-meta-row">
-                <div className="userscript-match">
-                  <Link2 size={11} />
-                  {script.matchPatterns.length === 1 && script.matchPatterns[0] === "<all_urls>" ? (
-                    <span>{t("usMatchesAll")}</span>
-                  ) : script.matchPatterns.length <= 2 ? (
-                    script.matchPatterns.map((p, i) => (
-                      <span key={i} className="us-pattern-tag">{p}</span>
-                    ))
-                  ) : (
-                    <>
-                      {script.matchPatterns.slice(0, 2).map((p, i) => (
-                        <span key={i} className="us-pattern-tag">{p}</span>
-                      ))}
-                      <span className="us-pattern-more">+{script.matchPatterns.length - 2}</span>
-                    </>
-                  )}
                 </div>
-                <span className="userscript-stats">
-                  {lineLabel} · {timeAgo}
-                </span>
-              </div>
+              ) : null}
             </div>
             <div className="userscript-controls">
               <div className="userscript-actions">
@@ -2584,6 +2564,23 @@ function UserscriptCard({
               </label>
             </div>
           </div>
+          <div className="userscript-meta-row">
+            <div className="userscript-match" title={script.matchPatterns.join("\n")}>
+              <Link2 size={11} />
+              {script.matchPatterns.length === 1 && script.matchPatterns[0] === "<all_urls>" ? (
+                <span className="us-pattern-tag">{t("usMatchesAll")}</span>
+              ) : (
+                <>
+                  {script.matchPatterns.slice(0, 2).map((p, i) => (
+                    <span key={i} className="us-pattern-tag">{p}</span>
+                  ))}
+                  {script.matchPatterns.length > 2 ? (
+                    <span className="us-pattern-more">+{script.matchPatterns.length - 2}</span>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
       <div
@@ -2597,7 +2594,11 @@ function UserscriptCard({
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <Code size={12} />
           <span>{t("usViewCode")}</span>
-          <span className="userscript-code-size">{charLabel}</span>
+          <span className="userscript-code-meta">
+            <span>{lineLabel}</span>
+            {timeAgo ? <span>· {timeAgo}</span> : null}
+            <span className="userscript-code-size">{charLabel}</span>
+          </span>
         </button>
         {expanded && (
           <pre className="userscript-code">{script.code}</pre>

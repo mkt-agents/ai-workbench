@@ -113,3 +113,22 @@
   background: var(--overlay-2);
   border-color: var(--overlay-3);
 }
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .userscript-item {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .userscript-item:hover {
+  background: var(--overlay-3);
+  border-color: var(--overlay-4);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .userscript-meta-row {
+  background: var(--overlay-1);
+  border-color: var(--overlay-2);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .userscript-code-section {
+  border-top-color: var(--overlay-2);
+}

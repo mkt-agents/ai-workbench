@@ -163,12 +163,14 @@
   gap: 8px;
   flex-wrap: wrap;
   padding: 2px 0 6px;
+  min-width: 0;
 }
 
 .plugin-filter-input {
   max-width: 340px;
   width: 100%;
   flex: 1 1 200px;
+  min-width: 0;
 }
 
 .plugin-sort-toggle {
