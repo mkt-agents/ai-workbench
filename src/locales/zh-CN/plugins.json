@@ -141,5 +141,12 @@
   "usImportUrlFailed": "导入失败：{{error}}",
   "usSourceUrl": "导入链接",
   "usSourceUrlHint": "此脚本原始导入的网址，可点击在浏览器中打开",
+  "usUpdate": "更新",
+  "usPresetUpdate": "更新到最新模板",
+  "usUpdateAvailable": "可更新",
+  "usUpdateConfirm": "用最新代码覆盖「{{name}}」的本地代码？匹配规则与启用状态会保留。",
+  "usUpdateDone": "脚本已更新",
+  "usUpdateLatest": "已是最新",
+  "usUpdateFailed": "更新失败：{{error}}",
   "justNow": "刚刚"
 }

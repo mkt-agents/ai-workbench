@@ -141,5 +141,12 @@
   "usImportUrlFailed": "Import failed: {{error}}",
   "usSourceUrl": "Source URL",
   "usSourceUrlHint": "The URL this script was originally imported from; click to open in browser",
+  "usUpdate": "Update",
+  "usPresetUpdate": "Update to latest template",
+  "usUpdateAvailable": "Update",
+  "usUpdateConfirm": "Overwrite local code for \"{{name}}\" with the latest version? Match patterns and enabled state are kept.",
+  "usUpdateDone": "Script updated",
+  "usUpdateLatest": "Already up to date",
+  "usUpdateFailed": "Update failed: {{error}}",
   "justNow": "just now"
 }

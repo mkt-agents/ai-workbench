@@ -10,7 +10,7 @@
  *   - 每行一个关键词（如 demo.shop.parent.pom），或 group:artifact 精确查（如 com.example.shop:demo.shop.account.sdk）
  *   - 走 Nexus 自带 REST：/service/local/lucene/search，登录态自动带上（同源 fetch）
  *   - 结果按输入顺序呈现，查询中/失败/无结果三态分明，失败行可单行重试；未查询时列表区显示引导空态
- *   - 最新版本点击复制 g:a:v；发布时间取该版本在 Nexus 的上传时间戳；升级版本（末段+1，满 999 向前进位）点击复制 artifactId+新版本
+ *   - 最新版本点击复制 g:a:v；发布时间优先 lucene，缺则补查仓库 content 目录的 lastModified（与详情页 Uploaded Date 同源）；升级版本点击复制 artifactId+新版本
  *   - 一键复制全部（TSV）/ 一键复制 artifactId+升级版本（TSV）
  *   - 并发 4，Ctrl+Enter 直接查询；输入内容与面板位置自动记忆（localStorage）
  *   - 面板可拖动 / 右下角改尺寸 / 最小化；宽高与位置记忆；窄屏自动收紧
@@ -76,18 +76,35 @@
     return nums.join('.') + (m[2] || '');
   }
 
-  // 最新版本生成时间：Nexus 2 的 lucene 结果里时间字段命名不统一，且 collapseresults 后
-  // 顶层 timestamp 未必对应我们选中的那个版本，所以优先按版本号在 artifactHits 里找。
+  // 时间：lucene/collapseresults 常不带 timestamp；详情页的 Uploaded Date 来自仓库 content 的 lastModified。
+  function parseTime(t) {
+    if (t == null || t === '') return 0;
+    var n = Number(t);
+    if (!isNaN(n) && n > 0) {
+      // 秒级时间戳补成毫秒
+      if (n < 1e12) n *= 1000;
+      return n;
+    }
+    var ms = Date.parse(String(t));
+    return isNaN(ms) ? 0 : ms;
+  }
   function tsOf(o) {
     if (!o) return 0;
-    var t = o.timestamp != null ? o.timestamp : (o.lastUpdated != null ? o.lastUpdated : o.dateCreated);
-    var n = Number(t);
-    return n > 0 ? n : 0;
+    return parseTime(
+      o.lastModified != null ? o.lastModified
+        : (o.timestamp != null ? o.timestamp
+          : (o.lastUpdated != null ? o.lastUpdated
+            : (o.dateCreated != null ? o.dateCreated : o.created)))
+    );
   }
   function hitTime(h, ver) {
     var hits = (h && h.artifactHits) || [];
     for (var i = 0; i < hits.length; i++) {
       if (String(hits[i].version) === String(ver) && tsOf(hits[i])) return tsOf(hits[i]);
+    }
+    for (var j = 0; j < hits.length; j++) {
+      var t = tsOf(hits[j]);
+      if (t) return t;
     }
     return tsOf(h);
   }
@@ -95,9 +112,15 @@
     var d = new Date(ms), p = function (n) { return (n < 10 ? '0' : '') + n; };
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
-  function fmtDay(ms) {
-    var d = new Date(ms), p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  function jsonGet(url) {
+    return fetch(url, {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    }).then(function (r) {
+      if (r.status === 401 || r.status === 403) throw new Error('未登录(401/403)，请先在 Nexus 页面登录');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
   }
 
   function searchOne(term) {
@@ -111,14 +134,72 @@
     }
     // Nexus 2 默认回 XML（JSON.parse 报 Unexpected token '<'），必须显式要 JSON；
     // collapseresults=true 让服务端直接给每个构件的最新版，否则单构件 700+ 个版本全量返回。
-    return fetch(url + '&collapseresults=true', {
-      credentials: 'same-origin',
-      headers: { 'Accept': 'application/json' }
-    }).then(function (r) {
-      if (r.status === 401 || r.status === 403) throw new Error('未登录(401/403)，请先在 Nexus 页面登录');
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    }).then(function (j) { return (j && j.data) || []; });
+    return jsonGet(url + '&collapseresults=true').then(function (j) { return (j && j.data) || []; });
+  }
+
+  function versionContentUrl(row) {
+    var path = String(row.g || '').split('.').join('/') + '/' + row.a + '/' + row.ver + '/';
+    return nexusBase() + '/service/local/repositories/' + encodeURIComponent(row.repo) + '/content/' + path;
+  }
+
+  // 与 Nexus 详情「Uploaded Date / Last Modified」同源：仓库 content 列表或 pom 元数据。
+  function fetchArtifactTime(row) {
+    if (!row.repo || !row.g || !row.a || !row.ver) return Promise.resolve(0);
+    var dirUrl = versionContentUrl(row);
+    var prefer = (row.a + '-' + row.ver).toLowerCase();
+
+    function bestFromItems(items) {
+      var best = 0, preferred = 0;
+      (items || []).forEach(function (it) {
+        var t = tsOf(it);
+        if (!t) return;
+        var name = String(it.text || it.name || it.leaf || '').toLowerCase();
+        if (name.indexOf(prefer) === 0 || /\.(pom|jar|war)$/.test(name)) {
+          if (t > preferred) preferred = t;
+        }
+        if (t > best) best = t;
+      });
+      return preferred || best;
+    }
+
+    return jsonGet(dirUrl).then(function (j) {
+      var data = j && j.data;
+      var items = Array.isArray(data) ? data : (data ? [data] : []);
+      var t = bestFromItems(items);
+      if (t) return t;
+      // 目录无时间时，直接读主 pom 元数据
+      return jsonGet(dirUrl + encodeURIComponent(row.a + '-' + row.ver + '.pom')).then(function (j2) {
+        var d = j2 && j2.data;
+        if (Array.isArray(d)) return bestFromItems(d);
+        return tsOf(d);
+      });
+    }).catch(function () { return 0; });
+  }
+
+  function applyRowTime(row, ms) {
+    if (!ms) return;
+    row.ts = ms;
+    if (row.tmEl) {
+      row.tmEl.textContent = fmtTs(ms);
+      row.tmEl.title = fmtTs(ms);
+    }
+  }
+
+  function enrichMissingTimes(rows) {
+    var need = (rows || []).filter(function (r) { return r && !r.ts && r.repo; });
+    if (!need.length) return Promise.resolve();
+    var i = 0, conc = 4;
+    function worker() {
+      if (i >= need.length) return Promise.resolve();
+      var row = need[i++];
+      return fetchArtifactTime(row).then(function (ms) {
+        applyRowTime(row, ms);
+        return worker();
+      });
+    }
+    var jobs = [];
+    for (var c = 0; c < conc && c < need.length; c++) jobs.push(worker());
+    return Promise.all(jobs).then(function () {});
   }
 
   var CSS = [
@@ -438,12 +519,13 @@
           '<td class="g" title="' + esc(row.g) + '">' + esc(row.g) + '</td>' +
           '<td class="a" title="' + esc(row.a) + '">' + esc(row.a) + '</td>' +
           '<td class="ver" title="点击复制 ' + esc(row.g + ':' + row.a + ':' + row.ver) + '"><span class="chip chip-ver">' + esc(row.ver) + '</span></td>' +
-          '<td class="tm" title="' + (row.ts ? esc(fmtTs(row.ts)) : '') + '">' + (row.ts ? esc(fmtDay(row.ts)) : '—') + '</td>' +
+          '<td class="tm" title="' + (row.ts ? esc(fmtTs(row.ts)) : '补查上传时间…') + '">' + (row.ts ? esc(fmtTs(row.ts)) : '…') + '</td>' +
           '<td class="up" title="点击复制 ' + esc(row.a + '\t' + up) + '"><span class="chip chip-up">' + esc(up) + '</span></td>' +
           '<td class="repo"><span class="repo-tag">' + esc(row.repo) + '</span><span class="hit" title="命中数">×' + row.n + '</span></td>' +
           '<td></td>';
         var act = tr.lastChild;
         act.appendChild(openBtn(row));
+        row.tmEl = tr.querySelector('.tm');
         var verTd = tr.querySelector('.ver'), upTd = tr.querySelector('.up');
         verTd.onclick = function () { copyText(row.g + ':' + row.a + ':' + row.ver); flashChip(verTd); };
         upTd.onclick = function () { copyText(row.a + '\t' + up); flashChip(upTd); };
@@ -464,6 +546,14 @@
     setSlotPending(slot);
     return searchOne(slot.term).then(function (hits) {
       setSlotResult(slot, hits);
+      return enrichMissingTimes(slot.rows).then(function () {
+        (slot.rows || []).forEach(function (r) {
+          if (!r.ts && r.tmEl) {
+            r.tmEl.textContent = '—';
+            r.tmEl.title = '未取到上传时间';
+          }
+        });
+      });
     }).catch(function (e) {
       setSlotError(slot, e.message);
     });

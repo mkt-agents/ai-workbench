@@ -265,6 +265,8 @@ export interface UserScript {
   updatedAt: string;
   /** 从网址导入时记录的原始链接，本地手写的脚本为空 */
   sourceUrl?: string;
+  /** 来自内置预设模板时的预设 id（如 nexus-batch），用于一键更新 */
+  presetId?: string;
 }
 
 export interface CursorAccount {

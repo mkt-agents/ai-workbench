@@ -700,6 +700,9 @@
 }
 
 .us-preset-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-0);
@@ -707,6 +710,32 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.us-preset-card.has-update {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.us-update-badge {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  line-height: 1.35;
+}
+
+.plugin-item-btn.is-accent {
+  color: var(--accent);
+}
+
+.plugin-item-btn.is-accent:hover {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .us-preset-desc {

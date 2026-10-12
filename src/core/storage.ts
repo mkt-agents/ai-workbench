@@ -175,6 +175,7 @@ export const storage = {
           code: (r['code'] as string) || '',
           enabled: Boolean(r['enabled']),
           sourceUrl: (r['source_url'] as string) || undefined,
+          presetId: (r['preset_id'] as string) || undefined,
           createdAt: (r['created_at'] as string) || '',
           updatedAt: (r['updated_at'] as string) || '',
         };
@@ -190,6 +191,7 @@ export const storage = {
         code: item.code,
         enabled: item.enabled ? 1 : 0,
         source_url: item.sourceUrl || '',
+        preset_id: item.presetId || '',
         created_at: item.createdAt,
         updated_at: item.updatedAt,
       })));

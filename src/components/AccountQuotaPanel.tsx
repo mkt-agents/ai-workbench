@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Trash2,
   UserPlus,
+  AlarmClock,
   CalendarCheck,
 } from "lucide-react";
 import DailyJobsPopover, { type DailyScheduleSection } from "./quota/DailySchedulePopover";
@@ -200,6 +201,12 @@ function formatCredits(n: number): string {
   return Number.isInteger(n) ? n.toLocaleString() : n.toFixed(1);
 }
 
+/** 上游标签可能带单位后缀，如「本月 Credits（亿）」→ name「本月 Credits」+ unit「亿」。 */
+function splitLabelUnit(label: string): { name: string; unit: string } {
+  const m = label.match(/^(.*?)\s*[（(]([^（）()]+)[）)]\s*$/);
+  return m && m[1] ? { name: m[1], unit: m[2] } : { name: label, unit: "" };
+}
+
 /** 上游 totalSpend / limit 是美分（Pro 的 limit=2000 即 $20）。 */
 function formatSpend(cents: number | null): string {
   if (cents == null) return "—";
@@ -271,8 +278,9 @@ function wbRemainPct(q: WbQuotaStatus): number | null {
 /**
  * Cursor 个人与团队/企业额度口径不同（见官方 Teams pricing + OpenUsage #1080）：
  * - 个人 Pro：双池百分比 + 真实的套餐美元 includedSpend/limit。
- * - Teams/Enterprise 双池模型：看板只认 Cursor Models / Other Models 百分比；
- *   planUsage.limit=$20 是过时字段，不能当主条。
+ * - Teams/Enterprise 双池：Auto 按路由到的模型分别扣 Cursor Models / Other Models（路由到第三方就扣
+ *   Other，2026-10-12 实测 Auto 用户 auto=0、api=37.2）；Other 用完自动切 Cursor Models。
+ *   planUsage.limit=$20 与双池百分比对不上，仅作旁注。
  * - 真·企业共享池：spendLimitUsage.pooledLimit > 0 时用团队美元池。
  */
 /** Cursor 设置页的取整：用过一点（0~1%）就显示 1%，不会因四舍五入显示成没用。 */
@@ -296,12 +304,12 @@ function cursorHasUsableModelPools(q: CursorQuotaDto): boolean {
   return true;
 }
 
-/** 双池剩余：取更紧的那一池（工具条「额度偏低」与卡片告警用）。 */
-function cursorDualPoolRemainPct(q: CursorQuotaDto): number | null {
+/** 双池剩余（工具条「额度偏低」与卡片告警用）：个人取更紧的一池，团队 / 企业取更宽的一池。 */
+function cursorDualPoolRemainPct(q: CursorQuotaDto, team: boolean): number | null {
   if (!cursorHasUsableModelPools(q)) return null;
   const auto = clampPct(100 - cursorUsedPct(q.autoPercentUsed!));
   const api = clampPct(100 - cursorUsedPct(q.apiPercentUsed!));
-  return Math.min(auto, api);
+  return team ? Math.max(auto, api) : Math.min(auto, api);
 }
 
 function cursorDollarRemainPct(used: number | null, limit: number | null): number | null {
@@ -315,8 +323,8 @@ function cursorRemainPct(q: CursorQuotaDto): number | null {
   if (team && q.pooledLimit != null && q.pooledLimit > 0) {
     return cursorDollarRemainPct(q.pooledUsed ?? 0, q.pooledLimit);
   }
-  // 双池模型（个人 / 团队）：告警跟更紧的那一池。
-  const dual = cursorDualPoolRemainPct(q);
+  // 双池告警：个人跟更紧的那一池；团队 / 企业的 Other Models 用完会自动切到 Cursor Models，两池都低才算紧。
+  const dual = cursorDualPoolRemainPct(q, team);
   if (dual != null) return dual;
   if (q.totalPercentUsed != null) return clampPct(100 - cursorUsedPct(q.totalPercentUsed));
   return cursorDollarRemainPct(q.includedSpend ?? q.totalSpend ?? null, q.limit);
@@ -1225,6 +1233,14 @@ function AccountQuotaPanel() {
         : t("qoderAutoClaim", { time: qoderSettings.claimTime })
       : t("qoderAutoClaimOff")
     : null;
+  const autoCheckin: FootSchedule | null =
+    wbSettings && autoCheckinText
+      ? { full: autoCheckinText, short: wbSettings.checkinEnabled ? wbSettings.checkinTime : t("autoOffShort") }
+      : null;
+  const autoQoderClaim: FootSchedule | null =
+    qoderSettings && autoQoderClaimText
+      ? { full: autoQoderClaimText, short: qoderSettings.claimEnabled ? qoderSettings.claimTime : t("autoOffShort") }
+      : null;
   const checkinAll = async () => {
     if (uncheckedWbIds.length === 0) return;
     const enabledIds = accounts.filter((a) => a.enabled).map((a) => a.id);
@@ -1469,7 +1485,7 @@ function AccountQuotaPanel() {
           onDelete={() => void removeAuthAccount(account)}
           onAddAnother={addAnother("qoder")}
           onSaveTag={(tag) => saveAuthTag(account.id, tag)}
-          autoClaim={autoQoderClaimText}
+          autoClaim={autoQoderClaim}
           frame={frame}
           {...reauthFor("qoder")}
         />
@@ -1642,7 +1658,7 @@ function AccountQuotaPanel() {
         onAddAnother={() => setWbScanOpen(true)}
         checkinBusy={checkinBusy.includes(account.id)}
         checkinResult={checkinResults[account.id]}
-        autoCheckin={autoCheckinText}
+        autoCheckin={autoCheckin}
         onCheckin={() => void checkinWb([account.id], false)}
         onSaveTag={(tag) => saveWbTag(account.id, tag)}
         frame={frame}
@@ -2042,7 +2058,7 @@ function QuotaCardShell({
       {(loading || at != null || footNote || footLead) && (
         <div className="aq-card-foot">
           {footLead}
-          {footNote && (
+          {footNote && !footLead && (
             <span className="aq-card-foot-note" title={footNote}>
               {footNote}
             </span>
@@ -2164,8 +2180,26 @@ function IdentityRow({
 }
 
 type Detail = { label: string; value: string; tone?: Tone };
+/** 每日定点任务：short 并进签到 / 领取胶囊尾部，full 作悬停说明。 */
+type FootSchedule = { short: string; full: string };
+
+function ScheduleTail({ schedule }: { schedule: FootSchedule | null | undefined }) {
+  if (!schedule) return null;
+  return (
+    <span className="aq-checkin-sched" title={schedule.full}>
+      <AlarmClock size={11} />
+      {schedule.short}
+    </span>
+  );
+}
 /** 明细固定三列；超过这个字数（如 `2,900 / 5,950`）的值占两列，窄卡片里也不被截断。 */
 const DETAIL_WIDE_CHARS = 11;
+/** 按半角字符计宽：中日韩全角字符约占两个拉丁字符宽。 */
+function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) w += /[\u2E80-\uFFEF]/.test(ch) ? 2 : 1;
+  return w;
+}
 /** 一行用量：左名称 + 倒计时，右剩余值，下方剩余条。 */
 function MeterRow({
   label,
@@ -2180,20 +2214,28 @@ function MeterRow({
   percent: number;
   hint?: string;
 }) {
+  const { t } = useTranslation("quota");
+  const isPct = value.endsWith("%");
   const fillTone = toneOf(percent);
+  const valueTone = !isPct && percent <= 0 ? "muted" : fillTone;
   return (
     <div className="aq-meter">
       <div className="aq-meter-head">
-        {label && <span className="aq-meter-label">{label}</span>}
+        {label && (
+          <span className="aq-meter-label" title={label}>
+            {label}
+          </span>
+        )}
         {countdown && (
           <span className={`aq-countdown aq-chip-${countdown.tone}`}>
             <Clock size={10} />
             {countdown.text}
           </span>
         )}
-        <span className={`aq-meter-value aq-value-${fillTone}`}>
-          {value.endsWith("%") ? (
+        <span className={`aq-meter-value aq-value-${valueTone}`}>
+          {isPct ? (
             <>
+              <span className="aq-meter-prefix">{t("meterRemain")}</span>
               {value.slice(0, -1)}
               <small>%</small>
             </>
@@ -2205,6 +2247,7 @@ function MeterRow({
       <div
         className={`aq-track aq-track-${fillTone}`}
         role="meter"
+        aria-label={t("meterRemainAria", { pct: percent })}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent}
@@ -2224,7 +2267,7 @@ function DetailGrid({ items }: { items: Detail[] }) {
   return (
     <dl className="aq-details">
       {items.map((d) => (
-        <div className={d.value.length > DETAIL_WIDE_CHARS ? "aq-detail is-wide" : "aq-detail"} key={d.label}>
+        <div className={displayWidth(d.value) > DETAIL_WIDE_CHARS ? "aq-detail is-wide" : "aq-detail"} key={d.label}>
           <dt>{d.label}</dt>
           <dd className={d.tone ? `aq-tone-${d.tone}` : undefined} title={d.value}>
             {d.value}
@@ -2274,11 +2317,13 @@ function CheckinRow({
   busy,
   result,
   onCheckin,
+  schedule,
 }: {
   account: WbAccount;
   busy: boolean;
   result: WbCheckinResult | undefined;
   onCheckin: () => void;
+  schedule: FootSchedule | null;
 }) {
   const { t } = useTranslation("quota");
   const now = useContext(NowContext);
@@ -2315,6 +2360,7 @@ function CheckinRow({
       <span className="aq-checkin-text" title={text}>
         {text}
       </span>
+      <ScheduleTail schedule={schedule} />
       {!done && account.enabled && !result?.disabled && (
         <button type="button" className="aq-checkin-btn" onClick={onCheckin} disabled={busy}>
           {busy ? <RefreshCw size={11} className="spin" /> : null}
@@ -2350,7 +2396,7 @@ function WorkbuddyCard({
   checkinBusy: boolean;
   checkinResult: WbCheckinResult | undefined;
   /** 每日自动签到的提示文案；设置还没读到时为 null。 */
-  autoCheckin: string | null;
+  autoCheckin: FootSchedule | null;
   onCheckin: () => void;
   onSaveTag: (tag: string | null) => Promise<void>;
   frame: CardFrame;
@@ -2375,8 +2421,15 @@ function WorkbuddyCard({
       onHide={onHide}
       onDelete={onDelete}
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
-      footLead={<CheckinRow account={account} busy={checkinBusy} result={checkinResult} onCheckin={onCheckin} />}
-      footNote={autoCheckin}
+      footLead={
+        <CheckinRow
+          account={account}
+          busy={checkinBusy}
+          result={checkinResult}
+          onCheckin={onCheckin}
+          schedule={autoCheckin}
+        />
+      }
       frame={frame}
     >
       <IdentityRow
@@ -2485,9 +2538,10 @@ function CursorCard({
   const ok = quota?.ok === true;
   const included = quota?.includedSpend ?? quota?.totalSpend ?? null;
   const remainPct = ok ? cursorRemainPct(quota) : null;
-  const usablePools = ok && cursorHasUsableModelPools(quota);
   const pooledPrimary =
     ok && cursorIsTeamSeat(quota) && quota.pooledLimit != null && quota.pooledLimit > 0;
+  const usablePools = ok && cursorHasUsableModelPools(quota);
+  const teamSeat = ok && cursorIsTeamSeat(quota);
   // 赠送用量并进第一条 hint，避免单独占 DetailGrid 一行把卡撑高、打乱同行对齐。
   const dollarPart =
     ok && quota.limit != null
@@ -2498,6 +2552,8 @@ function CursorCard({
       ? t("cursorBonusHint", { spend: formatSpend(quota.bonusSpend) })
       : null;
   const dollarHint = [dollarPart, bonusPart].filter(Boolean).join(" · ") || undefined;
+  // 团队 / 企业的 Auto 按路由到的模型分别扣两池（官方 Teams pricing），在条下注明各池含哪些模型。
+  const apiPoolHint = teamSeat ? t("cursorApiPoolHint") : undefined;
   const details: Detail[] = [];
   if (ok) {
     // 按量付费预算：套餐用完后才开始扣；没开（上限为 0）且没花过时不占位。
@@ -2561,6 +2617,7 @@ function CursorCard({
             label={t("cursorApiPool")}
             value={`${apiRemain}%`}
             percent={apiRemain}
+            hint={apiPoolHint}
           />
           <DetailGrid items={details} />
         </div>
@@ -2712,10 +2769,12 @@ function QoderCheckinRow({
   accountId,
   campaign,
   onClaimed,
+  schedule,
 }: {
   accountId: number;
   campaign: QoderCampaign;
   onClaimed: () => void;
+  schedule: FootSchedule | null;
 }) {
   const { t } = useTranslation("quota");
   const [busy, setBusy] = useState(false);
@@ -2779,6 +2838,7 @@ function QoderCheckinRow({
       <span className="aq-checkin-text" title={text}>
         {text}
       </span>
+      <ScheduleTail schedule={schedule} />
       {campaign.claimable && (
         <button
           type="button"
@@ -2806,7 +2866,7 @@ function QoderCard({
   onSaveTag,
   autoClaim,
   frame,
-}: AuthCardProps & { quota: QoderQuotaDto | undefined; autoClaim: string | null }) {
+}: AuthCardProps & { quota: QoderQuotaDto | undefined; autoClaim: FootSchedule | null }) {
   const { t } = useTranslation("quota");
   const now = useContext(NowContext);
   const ok = quota?.ok === true;
@@ -2842,9 +2902,11 @@ function QoderCard({
       onDelete={onDelete}
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
       footLead={
-        campaign ? <QoderCheckinRow accountId={account.id} campaign={campaign} onClaimed={onRefresh} /> : undefined
+        campaign ? (
+          <QoderCheckinRow accountId={account.id} campaign={campaign} onClaimed={onRefresh} schedule={autoClaim} />
+        ) : undefined
       }
-      footNote={autoClaim}
+      footNote={autoClaim?.full}
       frame={frame}
     >
       <IdentityRow
@@ -3767,17 +3829,19 @@ function MimoCard({
         <div className="aq-card-body">
           {quota.windows.map((w, i) => {
             const remainPct = w.limit > 0 ? clampPct(((w.limit - w.used) / w.limit) * 100) : 0;
+            const { name, unit } = splitLabelUnit(w.label);
             return (
               <MeterRow
                 key={w.label}
-                label={w.label}
+                label={name}
                 countdown={i === 0 ? periodCountdown : null}
                 value={`${remainPct}%`}
                 percent={remainPct}
                 hint={t("mimoUsage", {
                   usage: formatCredits(w.used),
                   limit: formatCredits(w.limit),
-                })}
+                  unit,
+                }).trim()}
               />
             );
           })}

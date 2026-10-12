@@ -165,6 +165,7 @@ pub fn run() {
                     code TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
                     source_url TEXT,
+                    preset_id TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -336,6 +337,8 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE user_scripts ADD COLUMN match_patterns TEXT NOT NULL DEFAULT '[\"<all_urls>\"]';");
             // user_scripts: record the origin URL for scripts imported from a URL
             let _ = conn.execute_batch("ALTER TABLE user_scripts ADD COLUMN source_url TEXT;");
+            // user_scripts: built-in preset id for one-click update
+            let _ = conn.execute_batch("ALTER TABLE user_scripts ADD COLUMN preset_id TEXT;");
             // Snippets: 'text' fragments vs 'prompt' (Prompt Studio custom templates)
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN kind TEXT NOT NULL DEFAULT 'text';");
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN scenario TEXT;");

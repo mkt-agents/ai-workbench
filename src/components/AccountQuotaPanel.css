@@ -482,7 +482,7 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  max-width: 60%;
+  max-width: 78%;
   min-width: 0;
   padding: 1px 4px 1px 7px;
   border-radius: var(--radius-full);
@@ -514,6 +514,21 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 每日定点时间并进胶囊尾部：同色、细分隔线、略淡，完整说明走 title。 */
+.aq-checkin-sched {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  margin-left: 2px;
+  padding-left: 6px;
+  border-left: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  line-height: 12px;
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -673,6 +688,9 @@
 }
 
 .aq-meter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 11.5px;
   color: var(--text-2);
   white-space: nowrap;
@@ -688,6 +706,8 @@
   padding: 0 6px;
   border-radius: var(--radius-full);
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .aq-chip-ok {
@@ -707,12 +727,22 @@
 
 /* 数字是主读数：健康时用正文色，只有余量低才上色。 */
 .aq-meter-value {
+  flex-shrink: 0;
   margin-left: auto;
+  white-space: nowrap;
   font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text-0);
   font-variant-numeric: tabular-nums;
+}
+
+.aq-meter-prefix {
+  margin-right: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  letter-spacing: 0;
 }
 
 .aq-meter-value small {
@@ -729,6 +759,11 @@
 
 .aq-value-bad {
   color: var(--red);
+}
+
+/* 按量付费余额为 0 是常态，不当告警。 */
+.aq-value-muted {
+  color: var(--text-2);
 }
 
 .aq-tone-ok {

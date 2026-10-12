@@ -12,7 +12,7 @@ import {
   X, Plus, Trash2, Edit2, Check, Globe, ExternalLink, Search, Link2,
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
   Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown, Code,
-  Copy, FileText, Zap, ClipboardCopy, Loader2,
+  Copy, FileText, Zap, ClipboardCopy, Loader2, RefreshCw,
   ArrowDownAZ, Clock, ToggleLeft, ToggleRight, MoreHorizontal, MousePointerClick,
 } from "lucide-react";
 import DropdownMenu from "./DropdownMenu";
@@ -225,6 +225,67 @@ function checkScriptSyntax(code: string): string | null {
   }
 }
 
+/** GreasyFork / GitHub blob → 可直接拉取的脚本 URL */
+function normalizeUserscriptFetchUrl(url: string): string {
+  let fetchUrl = url.trim();
+  const gfMatch = fetchUrl.match(/greasyfork\.org\/\w+\/scripts\/(\d+)/);
+  if (gfMatch) {
+    fetchUrl = `https://greasyfork.org/scripts/${gfMatch[1]}.user.js`;
+  }
+  if (fetchUrl.includes("github.com") && fetchUrl.includes("/blob/")) {
+    fetchUrl = fetchUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
+  }
+  return fetchUrl;
+}
+
+function parseUserscriptMeta(code: string): {
+  name: string;
+  description: string;
+  matchPatterns: string[];
+} {
+  let name = "";
+  let description = "";
+  const matchPatterns: string[] = [];
+  const metaMatch = code.match(/\/\/ ==UserScript==([\s\S]*?)\/\/ ==\/UserScript==/);
+  if (metaMatch) {
+    const meta = metaMatch[1];
+    const nameMatch = meta.match(/@name\s+(.+)/);
+    if (nameMatch) name = nameMatch[1].trim();
+    const descMatch = meta.match(/@description\s+(.+)/);
+    if (descMatch) description = descMatch[1].trim();
+    const matchLines = meta.match(/@match\s+(.+)/g);
+    if (matchLines) {
+      for (const line of matchLines) {
+        const p = line.replace(/@match\s*/, "").trim();
+        if (p) matchPatterns.push(p);
+      }
+    }
+  }
+  return { name, description, matchPatterns };
+}
+
+function findPresetForScript(
+  script: UserScript,
+  resolveName: (nameKey: string) => string
+): ScriptPreset | undefined {
+  if (script.presetId) {
+    const byId = SCRIPT_PRESETS.find((p) => p.id === script.presetId);
+    if (byId) return byId;
+  }
+  return SCRIPT_PRESETS.find((p) => resolveName(p.nameKey) === script.name);
+}
+
+function findInstalledForPreset(
+  preset: ScriptPreset,
+  scripts: UserScript[],
+  resolveName: (nameKey: string) => string
+): UserScript | undefined {
+  return (
+    scripts.find((s) => s.presetId === preset.id) ||
+    scripts.find((s) => s.name === resolveName(preset.nameKey))
+  );
+}
+
 function PluginBrowser() {
   const { t } = useTranslation("plugins");
   const { t: tc } = useTranslation("common");
@@ -289,6 +350,9 @@ function PluginBrowser() {
   const [usImportUrl, setUsImportUrl] = useState("");
   const [usImporting, setUsImporting] = useState(false);
   const [usSyntaxError, setUsSyntaxError] = useState<string | null>(null);
+  /** 从预设打开「新建」表单时带上，保存时写入 script.presetId */
+  const [usPendingPresetId, setUsPendingPresetId] = useState<string | null>(null);
+  const [usUpdatingId, setUsUpdatingId] = useState<string | null>(null);
   const usCodeRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-save form drafts to localStorage
@@ -558,6 +622,7 @@ function PluginBrowser() {
   const openUsFormAdd = () => {
     // Only an abnormal close leaves a draft; restoring it is what makes the auto-save
     // worth having.
+    setUsPendingPresetId(null);
     const draft = loadUsFormDraft();
     openUsForm(
       {
@@ -734,11 +799,13 @@ function PluginBrowser() {
           matchPatterns: finalPatterns,
           code: usCode,
           enabled: true,
+          ...(usPendingPresetId ? { presetId: usPendingPresetId } : {}),
         });
         showMsg("success", t("usAdded"));
       }
       setUsFormOpen(false);
       setUsEditingId(null);
+      setUsPendingPresetId(null);
       setUsFormName("");
       setUsDesc("");
       setUsMatch(["<all_urls>"]);
@@ -853,57 +920,28 @@ function PluginBrowser() {
   const importScriptFromUrl = useCallback(async (url: string) => {
     setUsImporting(true);
     try {
-      // Normalize URL - handle GreasyFork page URLs
-      let fetchUrl = url.trim();
-      // Convert GreasyFork page URL to direct script URL
-      const gfMatch = fetchUrl.match(/greasyfork\.org\/\w+\/scripts\/(\d+)/);
-      if (gfMatch) {
-        fetchUrl = `https://greasyfork.org/scripts/${gfMatch[1]}.user.js`;
-      }
-      // Convert GitHub blob URL to raw URL
-      if (fetchUrl.includes("github.com") && fetchUrl.includes("/blob/")) {
-        fetchUrl = fetchUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
-      }
-
+      const fetchUrl = normalizeUserscriptFetchUrl(url);
       // Rust does the request: script hosts do not send CORS headers, so a webview
       // `fetch()` fails for exactly the sites this feature is meant for.
       const code = await invoke<string>("fetch_userscript_source", { url: fetchUrl });
-
-      // Try to parse UserScript metadata
-      let name = "";
-      let description = "";
-      const matchPatterns: string[] = [];
-      const metaMatch = code.match(/\/\/ ==UserScript==([\s\S]*?)\/\/ ==\/UserScript==/);
-      if (metaMatch) {
-        const meta = metaMatch[1];
-        const nameMatch = meta.match(/@name\s+(.+)/);
-        if (nameMatch) name = nameMatch[1].trim();
-        const descMatch = meta.match(/@description\s+(.+)/);
-        if (descMatch) description = descMatch[1].trim();
-        const matchLines = meta.match(/@match\s+(.+)/g);
-        if (matchLines) {
-          for (const line of matchLines) {
-            const p = line.replace(/@match\s*/, "").trim();
-            if (p) matchPatterns.push(p);
-          }
-        }
-      }
+      const meta = parseUserscriptMeta(code);
+      let name = meta.name;
       if (!name) {
-        // Use filename or default
         const urlObj = new URL(fetchUrl);
         const parts = urlObj.pathname.split("/");
         name = parts[parts.length - 1].replace(/\.user\.js$|\.js$/, "") || "Imported Script";
       }
+      const description = meta.description;
+      const matchPatterns = meta.matchPatterns.length > 0 ? meta.matchPatterns : ["<all_urls>"];
 
-      // Check if a script with the same name already exists → update in place
       const existing = userScripts.find(
-        (s) => s.name.toLowerCase() === name.toLowerCase()
+        (s) => s.sourceUrl === fetchUrl || s.name.toLowerCase() === name.toLowerCase()
       );
 
       if (existing) {
         await updateUserScript(existing.id, {
           description,
-          matchPatterns: matchPatterns.length > 0 ? matchPatterns : ["<all_urls>"],
+          matchPatterns,
           code,
           sourceUrl: fetchUrl,
         });
@@ -912,7 +950,7 @@ function PluginBrowser() {
           id: newId("import-url"),
           name,
           description,
-          matchPatterns: matchPatterns.length > 0 ? matchPatterns : ["<all_urls>"],
+          matchPatterns,
           code,
           enabled: true,
           sourceUrl: fetchUrl,
@@ -923,13 +961,94 @@ function PluginBrowser() {
       setUsImportUrl("");
       showMsg("success", existing ? t("usImportUpdated") : t("usImportSuccess"));
     } catch (e) {
-      // The reason is the useful part: a 404 and a refused connection look identical
-      // otherwise.
       showMsg("error", t("usImportUrlFailed", { error: formatInvokeError(e) }));
     } finally {
       setUsImporting(false);
     }
   }, [addUserScript, updateUserScript, userScripts, showMsg, t]);
+
+  const updateFromPreset = useCallback(
+    async (script: UserScript, preset: ScriptPreset) => {
+      const nextDesc = t(preset.descKey);
+      if (script.code === preset.code && script.description === nextDesc && script.presetId === preset.id) {
+        showMsg("success", t("usUpdateLatest"));
+        return;
+      }
+      const ok = await confirm({
+        title: t("usUpdate"),
+        message: t("usUpdateConfirm", { name: script.name }),
+        confirmText: t("usUpdate"),
+        icon: "warning",
+      });
+      if (!ok) return;
+      setUsUpdatingId(script.id);
+      try {
+        await updateUserScript(script.id, {
+          code: preset.code,
+          description: nextDesc,
+          presetId: preset.id,
+        });
+        showMsg("success", t("usUpdateDone"));
+      } catch (e) {
+        showMsg("error", t("usUpdateFailed", { error: formatInvokeError(e) }));
+      } finally {
+        setUsUpdatingId(null);
+      }
+    },
+    [confirm, updateUserScript, showMsg, t]
+  );
+
+  const updateFromUrl = useCallback(
+    async (script: UserScript) => {
+      if (!script.sourceUrl?.trim()) return;
+      const ok = await confirm({
+        title: t("usUpdate"),
+        message: t("usUpdateConfirm", { name: script.name }),
+        confirmText: t("usUpdate"),
+        icon: "warning",
+      });
+      if (!ok) return;
+      setUsUpdatingId(script.id);
+      try {
+        const fetchUrl = normalizeUserscriptFetchUrl(script.sourceUrl);
+        const code = await invoke<string>("fetch_userscript_source", { url: fetchUrl });
+        const meta = parseUserscriptMeta(code);
+        if (script.code === code) {
+          showMsg("success", t("usUpdateLatest"));
+          if (script.sourceUrl !== fetchUrl) {
+            await updateUserScript(script.id, { sourceUrl: fetchUrl });
+          }
+          return;
+        }
+        await updateUserScript(script.id, {
+          code,
+          description: meta.description || script.description,
+          matchPatterns: meta.matchPatterns.length > 0 ? meta.matchPatterns : script.matchPatterns,
+          sourceUrl: fetchUrl,
+        });
+        showMsg("success", t("usUpdateDone"));
+      } catch (e) {
+        showMsg("error", t("usUpdateFailed", { error: formatInvokeError(e) }));
+      } finally {
+        setUsUpdatingId(null);
+      }
+    },
+    [confirm, updateUserScript, showMsg, t]
+  );
+
+  const handleScriptUpdate = useCallback(
+    async (script: UserScript) => {
+      const preset = findPresetForScript(script, (key) => t(key));
+      if (preset) {
+        await updateFromPreset(script, preset);
+        return;
+      }
+      if (script.sourceUrl) {
+        await updateFromUrl(script);
+      }
+    },
+    [t, updateFromPreset, updateFromUrl]
+  );
 
   const clearDragClasses = () => {
     document
@@ -1847,29 +1966,51 @@ function PluginBrowser() {
                 </button>
               </div>
               <div className="us-presets-grid">
-                {SCRIPT_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    className="us-preset-card"
-                    onClick={() => {
-                      openUsForm(
-                        { name: t(preset.nameKey), description: t(preset.descKey), matchPatterns: preset.matchPatterns, code: preset.code },
-                        null
-                      );
-                      setUsShowPresets(false);
-                    }}
-                    type="button"
-                  >
-                    <Code size={16} />
-                    <span className="us-preset-name">{t(preset.nameKey)}</span>
-                    <span className="us-preset-desc" title={t(preset.descKey)}>
-                      {t(preset.descKey)}
-                    </span>
-                    <span className="us-preset-match" title={preset.matchPatterns.join("\n")}>
-                      {preset.matchPatterns.join(", ")}
-                    </span>
-                  </button>
-                ))}
+                {SCRIPT_PRESETS.map((preset) => {
+                  const installed = findInstalledForPreset(preset, userScripts, (key) => t(key));
+                  const outdated = !!installed && installed.code !== preset.code;
+                  return (
+                    <button
+                      key={preset.id}
+                      className={`us-preset-card${outdated ? " has-update" : ""}`}
+                      onClick={() => {
+                        if (installed) {
+                          void updateFromPreset(installed, preset);
+                          return;
+                        }
+                        setUsPendingPresetId(preset.id);
+                        openUsForm(
+                          {
+                            name: t(preset.nameKey),
+                            description: t(preset.descKey),
+                            matchPatterns: preset.matchPatterns,
+                            code: preset.code,
+                          },
+                          null
+                        );
+                        setUsShowPresets(false);
+                      }}
+                      type="button"
+                      disabled={!!installed && usUpdatingId === installed.id}
+                    >
+                      <Code size={16} />
+                      <span className="us-preset-name">
+                        {t(preset.nameKey)}
+                        {outdated ? <span className="us-update-badge">{t("usUpdateAvailable")}</span> : null}
+                      </span>
+                      <span className="us-preset-desc" title={t(preset.descKey)}>
+                        {t(preset.descKey)}
+                      </span>
+                      <span className="us-preset-match" title={preset.matchPatterns.join("\n")}>
+                        {installed
+                          ? outdated
+                            ? t("usPresetUpdate")
+                            : t("usUpdate")
+                          : preset.matchPatterns.join(", ")}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1991,19 +2132,28 @@ function PluginBrowser() {
               </div>
             ) : (
               <div className="userscript-list">
-                {filteredUserScripts.map((s) => (
+                {filteredUserScripts.map((s) => {
+                  const linkedPreset = findPresetForScript(s, (key) => t(key));
+                  const canUpdate = !!linkedPreset || !!s.sourceUrl?.trim();
+                  const updateAvailable = !!linkedPreset && s.code !== linkedPreset.code;
+                  return (
                   <UserscriptCard
                     key={s.id}
                     script={s}
                     t={t}
                     tc={tc}
+                    canUpdate={canUpdate}
+                    updateAvailable={updateAvailable}
+                    updating={usUpdatingId === s.id}
+                    onUpdate={() => void handleScriptUpdate(s)}
                     onToggle={() => toggleUserScript(s.id)}
-                    onEdit={() =>
+                    onEdit={() => {
+                      setUsPendingPresetId(null);
                       openUsForm(
                         { name: s.name, description: s.description, matchPatterns: s.matchPatterns, code: s.code, sourceUrl: s.sourceUrl },
                         s.id
-                      )
-                    }
+                      );
+                    }}
                     onDelete={async () => {
                       const ok = await confirm({
                         title: t("deleteTitle"),
@@ -2058,7 +2208,8 @@ function PluginBrowser() {
                       });
                     }}
                   />
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2178,7 +2329,7 @@ function PluginBrowser() {
       )}
 
       {usFormOpen && (
-        <div className="modal-overlay" onClick={() => setUsFormOpen(false)}>
+        <div className="modal-overlay" onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); }}>
           <div className="modal plugin-edit-modal us-edit-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleUsFormKeyDown}>
             <div className="plugin-edit-modal-header">
               {usEditingId ? <Edit2 size={16} /> : <Plus size={16} />}
@@ -2186,7 +2337,7 @@ function PluginBrowser() {
               <button
                 type="button"
                 className="modal-close"
-                onClick={() => setUsFormOpen(false)}
+                onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); }}
                 aria-label={tc("actions.close")}
                 title={tc("actions.close")}
               >
@@ -2348,7 +2499,7 @@ function PluginBrowser() {
               </div>
             </div>
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => { setUsFormOpen(false); setUsTestUrl(""); }} type="button">
+              <button className="btn btn-secondary" onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); setUsTestUrl(""); }} type="button">
                 {tc("actions.cancel")}
               </button>
               <button
@@ -2440,6 +2591,10 @@ function UserscriptCard({
   script,
   t,
   tc,
+  canUpdate,
+  updateAvailable,
+  updating,
+  onUpdate,
   onToggle,
   onEdit,
   onDelete,
@@ -2452,6 +2607,10 @@ function UserscriptCard({
   script: UserScript;
   t: (key: string) => string;
   tc: (key: string) => string;
+  canUpdate: boolean;
+  updateAvailable: boolean;
+  updating: boolean;
+  onUpdate: () => void;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -2494,6 +2653,9 @@ function UserscriptCard({
                 <span className={`userscript-status ${script.enabled ? "is-enabled" : "is-disabled"}`}>
                   {script.enabled ? t("usEnabled") : t("usDisabled")}
                 </span>
+                {updateAvailable ? (
+                  <span className="us-update-badge">{t("usUpdateAvailable")}</span>
+                ) : null}
               </div>
               {script.description ? (
                 <div className="userscript-desc" title={script.description}>{script.description}</div>
@@ -2513,6 +2675,17 @@ function UserscriptCard({
             </div>
             <div className="userscript-controls">
               <div className="userscript-actions">
+                {canUpdate ? (
+                  <button
+                    className={`plugin-item-btn${updateAvailable ? " is-accent" : ""}`}
+                    onClick={onUpdate}
+                    title={updateAvailable ? t("usPresetUpdate") : t("usUpdate")}
+                    type="button"
+                    disabled={updating}
+                  >
+                    <RefreshCw size={11} className={updating ? "spin" : undefined} />
+                  </button>
+                ) : null}
                 <button
                   className="plugin-item-btn"
                   onClick={onEdit}
