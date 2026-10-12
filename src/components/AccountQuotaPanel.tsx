@@ -269,21 +269,57 @@ function wbRemainPct(q: WbQuotaStatus): number | null {
 }
 
 /**
- * 主读数与 Cursor 设置页「Included in Pro / Team」的 Total 一致：totalPercentUsed，个人与团队同一口径。
- * （编辑器底部用量条与「used N%」提示用的是套餐花费 / 限额，两者在 Cursor 里本来就不同。）
- * 旧响应没有该字段时退回较满的那个模型池，再退回套餐花费口径。
+ * Cursor 个人与团队/企业额度口径不同（见官方 Teams pricing + OpenUsage #1080）：
+ * - 个人 Pro：双池百分比 + 真实的套餐美元 includedSpend/limit。
+ * - Teams/Enterprise 双池模型：看板只认 Cursor Models / Other Models 百分比；
+ *   planUsage.limit=$20 是过时字段，不能当主条。
+ * - 真·企业共享池：spendLimitUsage.pooledLimit > 0 时用团队美元池。
  */
 /** Cursor 设置页的取整：用过一点（0~1%）就显示 1%，不会因四舍五入显示成没用。 */
 function cursorUsedPct(v: number): number {
   return v > 0 && v < 1 ? 1 : Math.min(Math.max(v, 0), 100);
 }
 
+function cursorIsTeamSeat(q: CursorQuotaDto): boolean {
+  const plan = q.membershipType?.toLowerCase();
+  if (plan === "enterprise" || plan === "team") return true;
+  if (q.limitType?.toLowerCase() === "team") return true;
+  return q.pooledLimit != null && q.pooledLimit > 0;
+}
+
+/** 双池是否可信：两池都有数，且不是「有花费却两池都是 0」的旧占位。 */
+function cursorHasUsableModelPools(q: CursorQuotaDto): boolean {
+  if (q.autoPercentUsed == null || q.apiPercentUsed == null) return false;
+  if (q.autoPercentUsed < 0 || q.apiPercentUsed < 0) return false;
+  const spend = q.includedSpend ?? q.totalSpend ?? 0;
+  if (q.autoPercentUsed === 0 && q.apiPercentUsed === 0 && spend > 0) return false;
+  return true;
+}
+
+/** 双池剩余：取更紧的那一池（工具条「额度偏低」与卡片告警用）。 */
+function cursorDualPoolRemainPct(q: CursorQuotaDto): number | null {
+  if (!cursorHasUsableModelPools(q)) return null;
+  const auto = clampPct(100 - cursorUsedPct(q.autoPercentUsed!));
+  const api = clampPct(100 - cursorUsedPct(q.apiPercentUsed!));
+  return Math.min(auto, api);
+}
+
+function cursorDollarRemainPct(used: number | null, limit: number | null): number | null {
+  if (used == null || limit == null || limit <= 0) return null;
+  return clampPct(100 - (used / limit) * 100);
+}
+
 function cursorRemainPct(q: CursorQuotaDto): number | null {
+  const team = cursorIsTeamSeat(q);
+  // 企业共享池优先于过时的 $20 planUsage。
+  if (team && q.pooledLimit != null && q.pooledLimit > 0) {
+    return cursorDollarRemainPct(q.pooledUsed ?? 0, q.pooledLimit);
+  }
+  // 双池模型（个人 / 团队）：告警跟更紧的那一池。
+  const dual = cursorDualPoolRemainPct(q);
+  if (dual != null) return dual;
   if (q.totalPercentUsed != null) return clampPct(100 - cursorUsedPct(q.totalPercentUsed));
-  const pools = [q.autoPercentUsed, q.apiPercentUsed].filter((v): v is number => v != null);
-  if (pools.length > 0) return clampPct(100 - cursorUsedPct(Math.max(...pools)));
-  const included = q.includedSpend ?? q.totalSpend ?? null;
-  return included != null && q.limit ? clampPct(100 - (included / q.limit) * 100) : null;
+  return cursorDollarRemainPct(q.includedSpend ?? q.totalSpend ?? null, q.limit);
 }
 
 function grokRemainPct(q: GrokQuotaDto): number | null {
@@ -2391,6 +2427,7 @@ function cursorIsTeam(quota: CursorQuotaDto | undefined): boolean | null {
   const plan = quota.membershipType?.toLowerCase();
   if (plan === "enterprise" || plan === "team") return true;
   if (plan && CURSOR_PERSONAL_PLANS.includes(plan)) return false;
+  if (quota.pooledLimit != null && quota.pooledLimit > 0) return true;
   return quota.limitType?.toLowerCase() === "team" ? true : null;
 }
 
@@ -2434,15 +2471,15 @@ function CursorCard({
   const ok = quota?.ok === true;
   const included = quota?.includedSpend ?? quota?.totalSpend ?? null;
   const remainPct = ok ? cursorRemainPct(quota) : null;
+  const usablePools = ok && cursorHasUsableModelPools(quota);
+  const pooledPrimary =
+    ok && cursorIsTeamSeat(quota) && quota.pooledLimit != null && quota.pooledLimit > 0;
+  const dollarHint =
+    ok && quota.limit != null
+      ? t("cursorSpend", { spend: formatSpend(included), limit: formatSpend(quota.limit) })
+      : undefined;
   const details: Detail[] = [];
   if (ok) {
-    if (quota.autoPercentUsed != null) {
-      details.push({ label: t("cursorAutoPool"), value: `${clampPct(100 - cursorUsedPct(quota.autoPercentUsed))}%` });
-    }
-    if (quota.apiPercentUsed != null) {
-      details.push({ label: t("cursorApiPool"), value: `${clampPct(100 - cursorUsedPct(quota.apiPercentUsed))}%` });
-    }
-    // 套餐额度放到主条 hint；网格只留分池 / 按量 / 赠送。
     // 按量付费预算：套餐用完后才开始扣；没开（上限为 0）且没花过时不占位。
     const onDemand = (used: number | null, limit: number | null) =>
       limit != null && limit > 0
@@ -2458,12 +2495,21 @@ function CursorCard({
         tone: quota.individualLimit && (quota.individualUsed ?? 0) >= quota.individualLimit ? "warn" : undefined,
       });
     }
-    const team = onDemand(quota.pooledUsed, quota.pooledLimit);
-    if (team) details.push({ label: t("cursorTeamPool"), value: team });
+    // 主条已经是团队共享池时，明细里不再重复。
+    if (!pooledPrimary) {
+      const teamPool = onDemand(quota.pooledUsed, quota.pooledLimit);
+      if (teamPool) details.push({ label: t("cursorTeamPool"), value: teamPool });
+    }
     if (quota.bonusSpend != null && quota.bonusSpend > 0) {
       details.push({ label: t("cursorBonus"), value: formatSpend(quota.bonusSpend) });
     }
   }
+
+  const cycleCountdown = compactCountdown(quota?.cycleEndMs ?? null, now);
+  const autoRemain =
+    usablePools && quota ? clampPct(100 - cursorUsedPct(quota.autoPercentUsed!)) : null;
+  const apiRemain =
+    usablePools && quota ? clampPct(100 - cursorUsedPct(quota.apiPercentUsed!)) : null;
 
   return (
     <QuotaCardShell
@@ -2485,18 +2531,46 @@ function CursorCard({
         onSaveTag={onSaveTag}
       />
       <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onReauth} reauthPending={reauthPending} />
-      {ok && remainPct != null && (
+      {ok && usablePools && autoRemain != null && apiRemain != null && (
+        <div className="aq-card-body">
+          <MeterRow
+            label={t("cursorAutoPool")}
+            countdown={cycleCountdown}
+            value={`${autoRemain}%`}
+            percent={autoRemain}
+            hint={dollarHint}
+          />
+          <MeterRow
+            label={t("cursorApiPool")}
+            value={`${apiRemain}%`}
+            percent={apiRemain}
+          />
+          <DetailGrid items={details} />
+        </div>
+      )}
+      {ok && !usablePools && pooledPrimary && remainPct != null && (
+        <div className="aq-card-body">
+          <MeterRow
+            label={t("cursorTeamPool")}
+            countdown={cycleCountdown}
+            value={`${remainPct}%`}
+            percent={remainPct}
+            hint={t("cursorSpend", {
+              spend: formatSpend(quota.pooledUsed ?? 0),
+              limit: formatSpend(quota.pooledLimit),
+            })}
+          />
+          <DetailGrid items={details} />
+        </div>
+      )}
+      {ok && !usablePools && !pooledPrimary && remainPct != null && (
         <div className="aq-card-body">
           <MeterRow
             label={t("cursorIncluded")}
-            countdown={compactCountdown(quota.cycleEndMs, now)}
+            countdown={cycleCountdown}
             value={`${remainPct}%`}
             percent={remainPct}
-            hint={
-              quota.limit != null
-                ? t("cursorSpend", { spend: formatSpend(included), limit: formatSpend(quota.limit) })
-                : undefined
-            }
+            hint={dollarHint}
           />
           <DetailGrid items={details} />
         </div>
