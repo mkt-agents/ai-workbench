@@ -354,7 +354,7 @@ export interface DshInstance {
   auth_patch_warning?: string;
 }
 
-export type RuntimeKind = "node" | "jdk";
+export type RuntimeKind = "node" | "jdk" | "maven" | "python";
 
 export interface RuntimeVersion {
   kind: string;
@@ -378,6 +378,8 @@ export interface RuntimeSwitchResult {
   verified: boolean;
   verifiedVersion?: string | null;
   elevated: boolean;
+  /** Version list after the switch, so the page needn't rescan. */
+  list?: RuntimeVersion[];
 }
 
 /** A runtime release that can be downloaded and installed by the app. */

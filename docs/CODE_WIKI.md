@@ -31,7 +31,7 @@
 |--------|------|
 | **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 快问（含流式 + 多轮）、代码片段管理；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
 | **账号管理** | Cursor 多身份一键切换（独立 profile 目录）、账号额度看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
-| **版本管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK 运行时切换（改注册表 PATH，页面名「环境变量」） |
+| **版本管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK / Maven / Python 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
 | **系统工具** | 小工具页 8 个本地开发工具（顶部工具条；HTTP 客户端已移除）、快捷应用（本机应用扫描 / 启动 / 运行态 + 「端口查杀」面板） |
 
@@ -120,7 +120,7 @@ ai-workbench/
 │   │   ├── GitReposPage.tsx      # Git 仓库列表页
 │   │   ├── CommitChangelist.tsx  # 文件变更列表组件
 │   │   ├── CursorManager.tsx     # Cursor 多账号管理（切换 / 初始化 / 诊断）
-│   │   ├── VersionSwitcher.tsx   # Node.js / JDK 版本切换
+│   │   ├── VersionSwitcher.tsx   # Node.js / JDK / Maven / Python 版本切换
 │   │   ├── CloudflaredManager.tsx# 内网穿透（临时 / 命名隧道 + 日志流）
 │   │   ├── HostsManager.tsx      # 系统 Hosts 读写 + 备份恢复
 │   │   ├── PluginBrowser.tsx     # 网页工具（书签 + 用户脚本，弹窗浏览器打开 http(s)）
@@ -196,7 +196,7 @@ ai-workbench/
 │   │   ├── dsh_commands.rs        # DeepSeek Harness 生命周期（start/stop/install/update + auth patch）
 │   │   ├── cloudflared_commands.rs# Cloudflare Tunnel（快速 / 命名 + 日志 + config.yml）
 │   │   ├── hosts_commands.rs      # 系统 Hosts（读 / 写 / 备份 / 还原 / 原子替换）
-│   │   ├── runtime_commands.rs    # Node.js / JDK 版本切换（修改注册表 PATH）
+│   │   ├── runtime_commands.rs    # Node.js / JDK / Maven / Python 版本切换（修改注册表 PATH）
 │   │   ├── plugin_commands.rs     # 网页工具（建带浮动工具栏的弹窗 + 注入脚本 + 脚本抓取）
 │   │   ├── app_launcher_commands.rs # 快捷应用：开始菜单 / Program Files 扫描、.lnk 解析、图标提取
 │   │   ├── port_commands.rs      # netstat/taskkill 共享原语 + 端口查杀命令（DSH 也 use 这里）
@@ -579,7 +579,7 @@ openGroups: Set<string>       // 分组展开状态
 | `GitCommitPanel` | Git 提交 | 多仓 diff + AI 生成 commit message |
 | `CloudflaredManager` | 内网穿透 | 临时隧道 / 命名隧道 / 日志流 / config.yml 编辑 |
 | `HostsManager` | Hosts 管理 | 读写 + 原子替换 + 备份恢复 |
-| `VersionSwitcher` | 运行时切换 | Node.js / JDK PATH 写入注册表 |
+| `VersionSwitcher` | 运行时切换 | Node.js / JDK / Maven / Python PATH 写入注册表 |
 | `PluginBrowser` | 网页工具 | 书签 + 用户脚本两个页签；弹窗浏览器打开 http(s)（脚本按 `@match` 注入） |
 | `Settings` | 设置 | 主题 / 语言 / 自启 / 快捷键 / 数据导出导入 |
 
@@ -592,7 +592,7 @@ openGroups: Set<string>       // 分组展开状态
 | `BatchIdentityModal` | 批量设置仓库身份 |
 | `RepoBindingModal` | 仓库绑定 Git 账号 |
 | `ScanReposModal` | 扫描目录找 Git 仓库 |
-| `RuntimeInstallModal` | 安装新版本 Node/JDK |
+| `RuntimeInstallModal` | 安装新版本 Node/JDK/Maven/Python |
 | `AccountManagerModal` | Cursor 账号编辑弹窗 |
 
 ---

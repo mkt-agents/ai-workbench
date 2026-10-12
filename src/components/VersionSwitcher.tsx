@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  ArrowLeftRight,
   Check,
   Copy,
   Download,
@@ -41,6 +42,18 @@ function sourceLabel(source: string, t: (key: string) => string): string {
       return t("sourcePath");
     case "jvman":
       return t("sourceJvman");
+    case "wrapper":
+      return t("sourceWrapper");
+    case "scoop":
+      return t("sourceScoop");
+    case "registry":
+      return t("sourceRegistry");
+    case "uv":
+      return t("sourceUv");
+    case "pyenv":
+      return t("sourcePyenv");
+    case "conda":
+      return t("sourceConda");
     case "managed":
       return t("sourceManaged");
     default:
@@ -53,8 +66,20 @@ type CacheMap = Partial<Record<RuntimeKind, RuntimeVersion[]>>;
 /** Remembered sub-tab, so returning to this page keeps the last runtime kind. */
 const SUBTAB_STORAGE_KEY = "workbench-runtime-subtab";
 
+/** Languages first, then the Java toolchain kept together (Maven runs on the JDK). */
+const RUNTIME_KINDS: RuntimeKind[] = ["node", "python", "jdk", "maven"];
+
+/** Commands that behave the same in cmd and PowerShell (`where` / `%VAR%` do not). */
+const VERIFY_COMMANDS: Record<RuntimeKind, string[]> = {
+  node: ["node -v", "npm -v"],
+  python: ["python -V", "pip -V"],
+  jdk: ["java -version", "javac -version"],
+  maven: ["mvn -v"],
+};
+
 function readStoredSubTab(): RuntimeKind {
-  return localStorage.getItem(SUBTAB_STORAGE_KEY) === "jdk" ? "jdk" : "node";
+  const stored = localStorage.getItem(SUBTAB_STORAGE_KEY);
+  return RUNTIME_KINDS.find((k) => k === stored) ?? "node";
 }
 
 function VersionSwitcher() {
@@ -254,7 +279,13 @@ function VersionSwitcher() {
     try {
       const result = await invokeSwitchRuntime(subTab, item.path);
       showMsg(result.verified ? "success" : "error", result.message || t("switchOk"));
-      await refresh();
+      if (result.list?.length) {
+        scanSeq.current += 1;
+        setLoading(false);
+        applyList(subTab, result.list);
+      } else {
+        await refresh();
+      }
       // DSH runs on Node.js, so a JDK switch cannot leave it stale.
       if (result.verified && subTab === "node") {
         await offerDshRestart();
@@ -297,9 +328,13 @@ function VersionSwitcher() {
 
   const handleUninstall = async (item: RuntimeVersion) => {
     if (busyPath) return;
+    const external = item.source !== "managed";
     const ok = await confirm({
       title: t("uninstallTitle"),
       message: t("uninstallMessage", { version: item.version, path: item.path }),
+      warning: external
+        ? t("uninstallExternalWarning", { source: sourceLabel(item.source, t) })
+        : undefined,
       confirmText: t("uninstall"),
       icon: "danger",
     });
@@ -325,6 +360,15 @@ function VersionSwitcher() {
     }
   };
 
+  const handleCopyCommand = async (cmd: string) => {
+    try {
+      await invokeCopyToClipboard(cmd);
+      showMsg("success", t("verifyCopied", { cmd }));
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
   const handleOpen = async (path: string) => {
     try {
       await invokeOpenRuntimeFolder(path);
@@ -337,24 +381,18 @@ function VersionSwitcher() {
     <div className="git-manager">
       <div className="git-manager-column">
         <div className="git-subnav" role="tablist" aria-label={tn("runtime")}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={subTab === "node"}
-            className={`git-subnav-item ${subTab === "node" ? "active" : ""}`}
-            onClick={() => setSubTab("node")}
-          >
-            {t("node")}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={subTab === "jdk"}
-            className={`git-subnav-item ${subTab === "jdk" ? "active" : ""}`}
-            onClick={() => setSubTab("jdk")}
-          >
-            {t("jdk")}
-          </button>
+          {RUNTIME_KINDS.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              role="tab"
+              aria-selected={subTab === kind}
+              className={`git-subnav-item ${subTab === kind ? "active" : ""}`}
+              onClick={() => setSubTab(kind)}
+            >
+              {t(kind)}
+            </button>
+          ))}
         </div>
 
         <div className="git-manager-body" role="tabpanel">
@@ -412,7 +450,23 @@ function VersionSwitcher() {
               </div>
             )}
 
-            <div className="runtime-hint">{t("hintRestart")}</div>
+            <div className="runtime-hint runtime-hint-row">
+              <span>{t("hintRestart")}</span>
+              <span className="runtime-verify">
+                <span>{t("verifyLabel")}</span>
+                {VERIFY_COMMANDS[subTab].map((cmd) => (
+                  <button
+                    key={cmd}
+                    type="button"
+                    className="runtime-verify-cmd"
+                    title={t("verifyCopy")}
+                    onClick={() => handleCopyCommand(cmd)}
+                  >
+                    {cmd}
+                  </button>
+                ))}
+              </span>
+            </div>
             {hasMachineConflict && (
               <div className="runtime-hint runtime-hint-warn">{t("elevateConfirmWarning")}</div>
             )}
@@ -511,67 +565,70 @@ function VersionSwitcher() {
                         </div>
                       </div>
                       <div className="runtime-card-actions">
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small runtime-icon-btn"
-                          title={t("copyPath")}
-                          onClick={() => handleCopy(item.path)}
-                        >
-                          <Copy size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small runtime-icon-btn"
-                          title={t("openFolder")}
-                          onClick={() => handleOpen(item.path)}
-                        >
-                          <FolderOpen size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small runtime-icon-btn"
-                          title={t("openTerminal")}
-                          onClick={() => handleOpenTerminal(item)}
-                        >
-                          <Terminal size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-small"
-                          disabled={item.active || busy || busyPath !== null}
-                          onClick={() => handleSwitch(item)}
-                        >
-                          {busy ? (
-                            <>
-                              <Loader2 size={13} className="spin" />
-                              {t("switching")}
-                            </>
-                          ) : (
-                            t("switch")
-                          )}
-                        </button>
-                        {item.custom && (
+                        <div className="runtime-tool-group">
                           <button
                             type="button"
-                            className="btn btn-secondary btn-small runtime-icon-btn"
-                            title={t("remove")}
-                            onClick={() => handleRemove(item)}
-                            disabled={busyPath !== null}
+                            className="runtime-tool-btn"
+                            title={t("copyPath")}
+                            aria-label={t("copyPath")}
+                            onClick={() => handleCopy(item.path)}
                           >
-                            <Trash2 size={13} />
+                            <Copy size={14} />
                           </button>
-                        )}
-                        {item.source === "managed" && (
                           <button
                             type="button"
-                            className="btn btn-secondary btn-small runtime-icon-btn"
-                            title={t("uninstall")}
-                            onClick={() => handleUninstall(item)}
-                            disabled={busyPath !== null}
+                            className="runtime-tool-btn"
+                            title={t("openFolder")}
+                            aria-label={t("openFolder")}
+                            onClick={() => handleOpen(item.path)}
                           >
-                            <Trash2 size={13} />
+                            <FolderOpen size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="runtime-tool-btn"
+                            title={t("openTerminal")}
+                            aria-label={t("openTerminal")}
+                            onClick={() => handleOpenTerminal(item)}
+                          >
+                            <Terminal size={14} />
+                          </button>
+                        </div>
+                        {item.active ? (
+                          <span className="runtime-in-use">
+                            <Check size={13} />
+                            {t("inUse")}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-primary runtime-switch-btn"
+                            disabled={busy || busyPath !== null}
+                            onClick={() => handleSwitch(item)}
+                          >
+                            {busy ? (
+                              <>
+                                <Loader2 size={13} className="spin" />
+                                {t("switching")}
+                              </>
+                            ) : (
+                              <>
+                                <ArrowLeftRight size={13} />
+                                {t("switch")}
+                              </>
+                            )}
                           </button>
                         )}
+                        <button
+                          type="button"
+                          className="runtime-tool-btn is-danger"
+                          title={item.active ? t("uninstallActiveHint") : item.custom ? t("remove") : t("uninstall")}
+                          aria-label={item.custom ? t("remove") : t("uninstall")}
+                          onClick={() => (item.custom ? handleRemove(item) : handleUninstall(item))}
+                          disabled={busyPath !== null || (item.active && !item.custom)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     </div>
                   );

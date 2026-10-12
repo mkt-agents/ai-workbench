@@ -94,6 +94,46 @@
   color: var(--yellow);
 }
 
+.runtime-hint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.runtime-verify {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 等宽胶囊，点击复制；与卡片路径同为弱化文字色，悬停才提亮。 */
+.runtime-verify-cmd {
+  padding: 1px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-1);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.runtime-verify-cmd:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.runtime-verify-cmd:focus-visible {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
 .runtime-toolbar {
   display: flex;
   align-items: center;
@@ -249,15 +289,94 @@
 .runtime-card-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   flex-shrink: 0;
   margin-left: auto;
+  align-self: center;
 }
 
-.runtime-card-actions .runtime-icon-btn {
-  width: 26px;
-  padding: 0;
+/* 三个工具图标收进一枚分段胶囊，取代三颗各自带边框的小灰块。 */
+.runtime-tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  box-shadow: var(--surface-highlight);
+}
+
+.runtime-tool-btn {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.runtime-tool-btn:hover:not(:disabled) {
+  background: var(--overlay-3);
+  color: var(--text-0);
+}
+
+.runtime-tool-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.runtime-tool-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
+.runtime-tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 删除单独放在最右、不进胶囊：危险操作和常用工具分开，悬停才露红。 */
+.runtime-tool-btn.is-danger {
+  height: 30px;
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-3);
+}
+
+.runtime-tool-btn.is-danger:hover:not(:disabled) {
+  background: var(--red-dim);
+  border-color: var(--red-border);
+  color: var(--red);
+}
+
+.runtime-switch-btn {
+  height: 30px;
+  padding: 0 14px;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+}
+
+.runtime-in-use {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Git workbench / commit / identity */
