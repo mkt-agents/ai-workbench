@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check:css": "node scripts/check-css-tokens.mjs",
-    "tauri": "tauri"
+    "clean:installers": "node scripts/clean-installers.mjs",
+    "tauri": "tauri",
+    "tauri:build": "npm run clean:installers && npm run tauri -- build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
