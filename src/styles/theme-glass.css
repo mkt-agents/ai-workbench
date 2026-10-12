@@ -390,11 +390,7 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-actions {
-  display: flex;
   gap: 4px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  opacity: 1;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty {

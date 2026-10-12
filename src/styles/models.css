@@ -741,14 +741,22 @@
   flex-shrink: 0;
 }
 
+/* 一行到底：按钮靠左、悬停工具靠右。不换行——换行时按钮数不同（默认卡片少一个「设为默认」）
+   会让有的卡片挤成两行右对齐、有的单行左对齐；窄了就按卡片自身宽度收起文字，见下方 model-card 容器查询。 */
 .ai-model-actions {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.ai-model-actions .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .ai-model-actions .btn-small {
@@ -802,6 +810,24 @@
 @container models-page (max-width: 560px) {
   .ai-action-label-wide,
   .models-header-actions .ai-action-label {
+    display: none;
+  }
+}
+
+/* 按卡片自身宽度收文字（网格列数随窗口变，页面宽度推不出卡片宽度）：
+   先收最长的「同步到 DSH」，再窄就全部只留图标，悬停 title 仍可读。 */
+.ai-model-item {
+  container: model-card / inline-size;
+}
+
+@container model-card (max-width: 420px) {
+  .ai-model-actions .ai-action-label-wide {
+    display: none;
+  }
+}
+
+@container model-card (max-width: 300px) {
+  .ai-model-actions .ai-action-label {
     display: none;
   }
 }
