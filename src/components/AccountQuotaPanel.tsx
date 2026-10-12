@@ -322,8 +322,17 @@ function cursorRemainPct(q: CursorQuotaDto): number | null {
   return cursorDollarRemainPct(q.includedSpend ?? q.totalSpend ?? null, q.limit);
 }
 
+/** 与官方客户端一致：共享池 / 无包含额度时不画个人百分比条。 */
+function grokMeterUsable(q: GrokQuotaDto): boolean {
+  if (q.usesPooledEnterpriseAllowance === true) return false;
+  if (q.includedLimitZero === true) return false;
+  if (q.hasNonZeroIncludedLimit === false) return false;
+  return q.usagePercent != null;
+}
+
 function grokRemainPct(q: GrokQuotaDto): number | null {
-  return q.usagePercent != null ? clampPct(100 - q.usagePercent) : null;
+  if (!grokMeterUsable(q)) return null;
+  return clampPct(100 - q.usagePercent!);
 }
 
 /** 可用 Credits = 本期套餐 + 加油包（只算有总量的）；免费 / 用完的账号本期总量是 0，额度全在加油包里。 */
@@ -2594,6 +2603,7 @@ function GrokCard({
   const { t } = useTranslation("quota");
   const now = useContext(NowContext);
   const ok = quota?.ok === true;
+  const meterOk = ok && grokMeterUsable(quota);
   const remainPct = ok ? grokRemainPct(quota) : null;
   const plan = quota?.grokPlanLabel ?? quota?.cursorPlanName ?? null;
   const details: Detail[] = [];
@@ -2601,14 +2611,21 @@ function GrokCard({
     if (quota.grokPlanLabel && quota.cursorPlanName) {
       details.push({ label: t("grokCursorPlan"), value: quota.cursorPlanName });
     }
-    details.push({
-      label: t("grokResetAt"),
-      value: quota.nextResetMs != null ? formatDate(quota.nextResetMs) : t("grokResetNone"),
-    });
+    if (meterOk) {
+      details.push({
+        label: t("grokResetAt"),
+        value: quota.nextResetMs != null ? formatDate(quota.nextResetMs) : t("grokResetNone"),
+      });
+    }
     if (quota.periodStartMs != null) {
       details.push({ label: t("grokPeriodStart"), value: formatDate(quota.periodStartMs) });
     }
   }
+  const noMeterNote = ok && !meterOk
+    ? quota.usesPooledEnterpriseAllowance === true
+      ? t("grokPooledEnterprise")
+      : t("grokNoIncluded")
+    : null;
 
   return (
     <QuotaCardShell
@@ -2639,6 +2656,12 @@ function GrokCard({
             percent={remainPct}
             hint={quota.hasAvailableUsage === false && remainPct === 0 ? t("grokExhausted") : undefined}
           />
+          <DetailGrid items={details} />
+        </div>
+      )}
+      {ok && noMeterNote && (
+        <div className="aq-card-body">
+          <div className="aq-card-idle">{noMeterNote}</div>
           <DetailGrid items={details} />
         </div>
       )}

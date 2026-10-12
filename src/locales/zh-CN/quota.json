@@ -38,6 +38,8 @@
   "cursorCycle": "账期剩余",
   "grokResetAt": "下次重置",
   "grokExhausted": "本周期额度已用完",
+  "grokPooledEnterprise": "企业共享额度，无个人百分比",
+  "grokNoIncluded": "当前账号没有 Grok Bot 包含额度",
   "seatTeam": "团队",
   "seatPersonal": "个人",
   "grokCursorPlan": "Cursor 套餐",

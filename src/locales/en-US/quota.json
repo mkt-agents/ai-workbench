@@ -38,6 +38,8 @@
   "cursorCycle": "Cycle ends in",
   "grokResetAt": "Resets in",
   "grokExhausted": "Included usage exhausted for this cycle",
+  "grokPooledEnterprise": "Enterprise pooled allowance — no personal percentage",
+  "grokNoIncluded": "This account has no Grok Bot included allowance",
   "seatTeam": "Team",
   "seatPersonal": "Personal",
   "grokCursorPlan": "Cursor plan",

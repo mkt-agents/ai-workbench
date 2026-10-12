@@ -30,6 +30,11 @@ pub struct GrokQuotaDto {
     pub period_start_ms: Option<i64>,
     pub has_available_usage: Option<bool>,
     pub is_team_seat: Option<bool>,
+    /// 企业共享池：无个人百分比，官方客户端也不画用量条。
+    pub uses_pooled_enterprise_allowance: Option<bool>,
+    /// 是否有非零包含额度；false / includedLimitZero 时不应展示百分比。
+    pub has_non_zero_included_limit: Option<bool>,
+    pub included_limit_zero: Option<bool>,
     pub needs_reauth: bool,
     pub at: i64,
 }
@@ -50,6 +55,9 @@ impl GrokQuotaDto {
             period_start_ms: None,
             has_available_usage: None,
             is_team_seat: None,
+            uses_pooled_enterprise_allowance: None,
+            has_non_zero_included_limit: None,
+            included_limit_zero: None,
             at: now_unix(),
         }
     }
@@ -65,6 +73,9 @@ pub struct SandUsage {
     pub period_start_ms: Option<i64>,
     pub has_available_usage: Option<bool>,
     pub is_team_seat: Option<bool>,
+    pub uses_pooled_enterprise_allowance: Option<bool>,
+    pub has_non_zero_included_limit: Option<bool>,
+    pub included_limit_zero: Option<bool>,
 }
 
 fn as_f64(v: &serde_json::Value) -> Option<f64> {
@@ -80,8 +91,18 @@ pub fn parse_sand_usage_status(body: &str) -> Option<SandUsage> {
     let root: serde_json::Value = serde_json::from_str(body).ok()?;
     let usage_percent = root.get("usagePercent").and_then(as_f64);
     let next_reset_ms = root.get("nextResetTimestampUtc").and_then(as_ms);
-    // 两个字段全空视为响应不对。
-    if usage_percent.is_none() && next_reset_ms.is_none() {
+    let uses_pooled = root
+        .get("usesPooledEnterpriseAllowance")
+        .and_then(|v| v.as_bool());
+    let has_nonzero = root.get("hasNonZeroIncludedLimit").and_then(|v| v.as_bool());
+    let included_zero = root.get("includedLimitZero").and_then(|v| v.as_bool());
+    // 用量 / 重置 / 额度门控字段至少要有一个，否则当响应不对。
+    if usage_percent.is_none()
+        && next_reset_ms.is_none()
+        && uses_pooled.is_none()
+        && has_nonzero.is_none()
+        && included_zero.is_none()
+    {
         return None;
     }
     Some(SandUsage {
@@ -98,6 +119,9 @@ pub fn parse_sand_usage_status(body: &str) -> Option<SandUsage> {
         period_start_ms: root.get("currentPeriodStart").and_then(as_ms),
         has_available_usage: root.get("hasAvailableUsage").and_then(|v| v.as_bool()),
         is_team_seat: root.get("isTeamSeat").and_then(|v| v.as_bool()),
+        uses_pooled_enterprise_allowance: uses_pooled,
+        has_non_zero_included_limit: has_nonzero,
+        included_limit_zero: included_zero,
     })
 }
 
@@ -152,6 +176,9 @@ pub async fn grok_bot_quota_fetch(state: tauri::State<'_, DbState>, id: i64) -> 
         period_start_ms: usage.period_start_ms,
         has_available_usage: usage.has_available_usage,
         is_team_seat: usage.is_team_seat,
+        uses_pooled_enterprise_allowance: usage.uses_pooled_enterprise_allowance,
+        has_non_zero_included_limit: usage.has_non_zero_included_limit,
+        included_limit_zero: usage.included_limit_zero,
         needs_reauth: false,
         at: now_unix(),
     })
@@ -173,6 +200,9 @@ mod tests {
         assert_eq!(u.period_start_ms, Some(1_790_930_925_000));
         assert_eq!(u.has_available_usage, Some(false));
         assert_eq!(u.is_team_seat, Some(false));
+        assert_eq!(u.uses_pooled_enterprise_allowance, Some(false));
+        assert_eq!(u.has_non_zero_included_limit, Some(true));
+        assert_eq!(u.included_limit_zero, Some(false));
     }
 
     #[test]
@@ -182,6 +212,16 @@ mod tests {
         assert_eq!(u.usage_percent, Some(42.5));
         assert_eq!(u.next_reset_ms, Some(1_791_800_000_000));
         assert_eq!(u.grok_plan_label, None);
+    }
+
+    #[test]
+    fn parse_sand_usage_status_reads_pooled_enterprise_without_percent() {
+        let body = r#"{"usesPooledEnterpriseAllowance":true,"hasNonZeroIncludedLimit":false,"includedLimitZero":true,"hasAvailableUsage":true,"isTeamSeat":true,"cursorPlanName":"enterprise","grokPlanLabel":"Grok Bot Plan"}"#;
+        let u = parse_sand_usage_status(body).expect("parse");
+        assert_eq!(u.usage_percent, None);
+        assert_eq!(u.uses_pooled_enterprise_allowance, Some(true));
+        assert_eq!(u.has_non_zero_included_limit, Some(false));
+        assert_eq!(u.included_limit_zero, Some(true));
     }
 
     #[test]

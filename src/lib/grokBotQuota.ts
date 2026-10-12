@@ -17,6 +17,11 @@ export interface GrokQuotaDto {
   periodStartMs: number | null;
   hasAvailableUsage: boolean | null;
   isTeamSeat: boolean | null;
+  /** 企业共享池：无个人百分比。 */
+  usesPooledEnterpriseAllowance: boolean | null;
+  /** 是否有非零包含额度。 */
+  hasNonZeroIncludedLimit: boolean | null;
+  includedLimitZero: boolean | null;
   /** 令牌失效：卡片给出「重新授权」。 */
   needsReauth: boolean;
   at: number;
