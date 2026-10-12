@@ -263,8 +263,10 @@ fn ps_quote(src: &str) -> String {
 /// 静默安装成功后从注册表找安装目录并拉起新版主程序——升级的最后一环是
 /// 「应用自己重新打开」，否则用户面对一个已退出的应用无从得知装没装上。
 /// 找不到注册项就什么都不做：用户手动打开也能靠前端的 pending 版本确认结果。
+/// Tauri NSIS 写的 `InstallLocation` 自带双引号（`"D:\x\AI Workbench"`），不剥掉 Join-Path 会把
+/// `"D:` 当盘符报错，而脚本是 SilentlyContinue，表现为装完静默不启动。
 /// （单行片段：作为 format! 的**值**插进去，里面的花括号不用转义。）
-const RELAUNCH_SNIPPET: &str = "$e = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -EA SilentlyContinue | Where-Object DisplayName -like 'AI Workbench*' | Select-Object -First 1; if ($e -and $e.InstallLocation) { Start-Process -FilePath (Join-Path $e.InstallLocation.Trim('\\') 'ai_workbench.exe') }";
+const RELAUNCH_SNIPPET: &str = "$e = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -EA SilentlyContinue | Where-Object DisplayName -like 'AI Workbench*' | Select-Object -First 1; if ($e -and $e.InstallLocation) { $exe = Join-Path $e.InstallLocation.Trim('\"', '\\') 'ai_workbench.exe'; if (Test-Path -LiteralPath $exe) { Start-Process -FilePath $exe } }";
 
 /// 看门狗脚本：等 PID 消失（最长 30s）→ 静默装 → 成功则拉起新版、失败则改弹
 /// 交互安装界面，让用户至少能看到失败原因（杀软拦截 / 文件占用）。
@@ -877,6 +879,8 @@ mod tests {
         assert!(script.contains("} else {"));
         assert!(script.contains("'ai_workbench.exe'"));
         assert!(script.contains("InstallLocation"));
+        // 注册表里的 InstallLocation 带引号，必须剥掉再 Join-Path
+        assert!(script.contains(r#"InstallLocation.Trim('"', '\')"#));
     }
 
     #[test]
@@ -997,7 +1001,7 @@ mod tests {
         // 回落仍然是那个 .msi（双击走安装向导）
         assert!(script.contains("Start-Process -FilePath 'C:\\updates\\AI Workbench_0.2.9_x64_en-US.msi' }"));
         // MSI 静默成功后同样拉起新版
-        assert!(script.ends_with("else { $e = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -EA SilentlyContinue | Where-Object DisplayName -like 'AI Workbench*' | Select-Object -First 1; if ($e -and $e.InstallLocation) { Start-Process -FilePath (Join-Path $e.InstallLocation.Trim('\\') 'ai_workbench.exe') } }"));
+        assert!(script.ends_with(&format!("else {{ {RELAUNCH_SNIPPET} }}")));
     }
 
     #[test]
