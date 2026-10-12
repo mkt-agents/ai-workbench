@@ -380,10 +380,6 @@
   flex-shrink: 0;
 }
 
-.plugin-fallback-wrapper.hidden {
-  display: none;
-}
-
 .plugin-fallback-icon {
   display: flex;
   align-items: center;

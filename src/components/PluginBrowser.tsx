@@ -6,6 +6,7 @@ import { findHotkeyConflict, matchUrlPattern, newId, normalizeHttpUrl, validateH
 import skywalkingPresetCode from "../../scripts/skywalking-log-query.user.js?raw";
 import nexusPresetCode from "../../scripts/nexus-batch-query.user.js?raw";
 import { useGlobalStore } from "../core/store";
+import invocations from "../core/store/invocations";
 import { useConfirm } from "./ConfirmModal";
 import type { WebPlugin, UserScript } from "../core/types";
 import {
@@ -156,6 +157,37 @@ function FallbackIcon({ name, host, size = 14 }: { name: string; host?: string; 
       <span className="plugin-fallback-letter">{initial}</span>
     </div>
   );
+}
+
+/** 同一站点多处渲染只请求一次；后端还有落盘缓存，重启后也很快。 */
+const siteIconRequests = new Map<string, Promise<string | null>>();
+
+function loadSiteIcon(url: string): Promise<string | null> {
+  let req = siteIconRequests.get(url);
+  if (!req) {
+    req = invocations.invokeFetchSiteIcon(url).catch(() => null);
+    siteIconRequests.set(url, req);
+  }
+  return req;
+}
+
+/** 站点图标：后端代取页面声明的 icon / favicon（直接 <img> 常被站点拒绝），取不到显示首字母色块。 */
+function SiteIcon({ url, name, host, size }: { url: string; name: string; host: string; size: number }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setSrc(null);
+    setBroken(false);
+    void loadSiteIcon(url).then((s) => {
+      if (alive) setSrc(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+  if (!src || broken) return <FallbackIcon name={name} host={host} size={size} />;
+  return <img src={src} alt="" draggable={false} onError={() => setBroken(true)} />;
 }
 
 /** Preset script templates — users can start from these */
@@ -1348,23 +1380,12 @@ function PluginBrowser() {
         )}
         <div className="plugin-item-icon">
           {parsed ? (
-            <img
-              src={`${parsed.origin}/favicon.ico`}
-              alt=""
-              draggable={false}
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-                (e.target as HTMLImageElement).nextElementSibling?.classList.remove("hidden");
-              }}
-            />
-          ) : null}
-          <span className={`plugin-fallback-wrapper ${parsed ? "hidden" : ""}`}>
-            {parsed ? (
-              <FallbackIcon name={p.name} host={parsed.hostname} size={14} />
-            ) : (
+            <SiteIcon url={parsed.href} name={p.name} host={parsed.hostname} size={14} />
+          ) : (
+            <span className="plugin-fallback-wrapper">
               <Globe size={14} />
-            )}
-          </span>
+            </span>
+          )}
         </div>
         <div className="plugin-item-content">
           <div className="plugin-item-name">
@@ -1453,23 +1474,12 @@ function PluginBrowser() {
         <div className="plugin-card-header">
           <div className="plugin-card-icon">
             {parsed ? (
-              <img
-                src={`${parsed.origin}/favicon.ico`}
-                alt=""
-                draggable={false}
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                  (e.target as HTMLImageElement).nextElementSibling?.classList.remove("hidden");
-                }}
-              />
-            ) : null}
-            <span className={`plugin-fallback-wrapper ${parsed ? "hidden" : ""}`}>
-              {parsed ? (
-                <FallbackIcon name={p.name} host={parsed.hostname} size={20} />
-              ) : (
+              <SiteIcon url={parsed.href} name={p.name} host={parsed.hostname} size={20} />
+            ) : (
+              <span className="plugin-fallback-wrapper">
                 <Globe size={20} />
-              )}
-            </span>
+              </span>
+            )}
           </div>
           <div className="plugin-card-actions">
             <button

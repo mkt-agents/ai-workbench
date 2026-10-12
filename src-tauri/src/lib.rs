@@ -1,6 +1,7 @@
 mod git_commands;
 mod hosts_commands;
 mod plugin_commands;
+mod site_icon;
 mod db_commands;
 pub mod cursor;
 mod ai_commands;
@@ -486,6 +487,7 @@ pub fn run() {
             plugin_commands::navigate_browser_window,
             plugin_commands::open_browser_window_with_toolbar,
             plugin_commands::fetch_userscript_source,
+            site_icon::fetch_site_icon,
             db_commands::db_load,
             db_commands::db_save,
             cursor::inspect_cursor_backup,

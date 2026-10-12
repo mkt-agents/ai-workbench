@@ -134,6 +134,7 @@ export interface Invocations {
   invokeUpdateInstall: (path: string) => Promise<void>;
   invokeCancelRequest: (id: string) => Promise<void>;
   invokeUpdateLatestTag: () => Promise<string>;
+  invokeFetchSiteIcon: (url: string) => Promise<string | null>;
 }
 
 export const invocations: Invocations = {
@@ -402,6 +403,7 @@ export const invocations: Invocations = {
     tauriInvoke<DownloadedInstaller>('update_download', { requestId, url }),
   invokeUpdateInstall: (path: string) => tauriInvoke<void>('update_install', { path }),
   invokeCancelRequest: (id: string) => tauriInvoke<void>('cancel_request', { id }),
+  invokeFetchSiteIcon: (url: string) => tauriInvoke<string | null>('fetch_site_icon', { url }),
 };
 
 export default invocations;
