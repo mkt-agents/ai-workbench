@@ -1,6 +1,6 @@
 # AI Workbench (AI 工作台)
 
-基于 **Tauri v2 + React + Rust/SQLite** 的 Windows 桌面应用，定位为 **AI 驱动的开发工具箱**。核心是 **DeepSeek 本地服务**，辅以模型配置、模板片段、Git / Cursor 多身份与账号额度，以及内网穿透、网页工具、Hosts 配置等能力。
+基于 **Tauri v2 + React + Rust/SQLite** 的 Windows 桌面应用，定位为 **AI 驱动的开发工具箱**。核心是 **DeepSeek 本地服务**，辅以模型配置、模板片段、Git / Cursor 多身份与账号额度，以及内网穿透、网页工具、Hosts 管理等能力。
 
 ## 效果图
 
@@ -43,7 +43,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 - **内网穿透**：基于 cloudflared 的临时 / 命名隧道（[文档](docs/cloudflared.md)）
 - **网页工具**：常用站点书签与油猴式用户脚本，独立弹窗打开
-- **Hosts配置**：读写系统 hosts，多套配置切换与备份恢复（需管理员）
+- **Hosts 管理**：读写系统 hosts，多套配置切换与备份恢复（需管理员）
 
 ### 系统工具
 
@@ -74,7 +74,7 @@ AI 工作台
 网络管理
 ├── 内网穿透
 ├── 网页工具
-└── Hosts配置
+└── Hosts 管理
 
 系统工具
 ├── 小工具

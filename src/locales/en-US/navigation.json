@@ -12,7 +12,7 @@
   "gitManagement": "Git Management",
   "runtimeVersion": "Environment",
   "networkManagement": "Network Management",
-  "hosts": "Hosts Config",
+  "hosts": "Hosts Manager",
   "cloudflared": "Tunnel",
   "plugins": "Web Tools",
   "systemUtils": "System Tools",

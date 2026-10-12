@@ -681,16 +681,18 @@
 
 .aq-meter-head {
   display: flex;
-  align-items: flex-end;
+  align-items: baseline;
   gap: var(--space-2);
   min-width: 0;
   line-height: 1;
 }
 
+/* overflow: hidden 会按行盒裁字，line-height: 1 时中文字形的上下沿会被切掉，这里单独放宽。 */
 .aq-meter-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.4;
   font-size: 11.5px;
   color: var(--text-2);
   white-space: nowrap;
