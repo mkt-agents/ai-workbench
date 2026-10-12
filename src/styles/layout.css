@@ -467,6 +467,11 @@
   overflow: hidden;
 }
 
+/* Harness: light inset (not page-wide 24px, not flush-to-chrome zero). */
+.main-body.is-flush {
+  padding: 10px 12px 12px;
+}
+
 .page-in {
   flex: 1;
   min-height: 0;

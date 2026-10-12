@@ -31,6 +31,36 @@ function dshUrl(port: number) {
 
 const DSH_PORT_KEY = "workbench-dsh-port";
 const DSH_AUTO_START_KEY = "workbench-dsh-autostart";
+/** Same-origin inject: widen DSH's reading column (default clamp tops out ~920px). */
+const DSH_EMBED_STYLE_ID = "ai-workbench-dsh-embed";
+const DSH_EMBED_CSS = `
+.wSkVaW_body,
+.wSkVaW_embeddedBody {
+  --dsh-chat-user-width: min(calc(100% - 48px), 1320px) !important;
+  --dsh-chat-content-width: var(--dsh-chat-user-width) !important;
+  --dsh-composer-card-max-width: min(
+    calc(100% - 24px),
+    calc(var(--dsh-chat-content-width) + 32px)
+  ) !important;
+}
+`;
+
+function injectDshEmbedStyles(iframe: HTMLIFrameElement | null) {
+  try {
+    const doc = iframe?.contentDocument;
+    if (!doc?.head) return false;
+    let style = doc.getElementById(DSH_EMBED_STYLE_ID) as HTMLStyleElement | null;
+    if (!style) {
+      style = doc.createElement("style");
+      style.id = DSH_EMBED_STYLE_ID;
+      doc.head.appendChild(style);
+    }
+    if (style.textContent !== DSH_EMBED_CSS) style.textContent = DSH_EMBED_CSS;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function loadStartPort(): number {
   try {
@@ -193,6 +223,14 @@ function DeepSeekHarness() {
 
     setIframeLoading(true);
     clearIframeTimers();
+    let embedTries = 0;
+    let embedTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tryEmbedStyles = () => {
+      if (injectDshEmbedStyles(el)) return;
+      if (embedTries++ >= 12) return;
+      embedTimer = setTimeout(tryEmbedStyles, 250);
+    };
 
     const finishLoading = () => {
       // First successful load: soft remount while mask stays up (avoids brief white flash).
@@ -201,10 +239,12 @@ function DeepSeekHarness() {
         remountIframe();
         return;
       }
+      tryEmbedStyles();
       setIframeLoading(false);
     };
 
     const onLoad = () => {
+      injectDshEmbedStyles(el);
       if (iframeTimerRef.current) {
         clearTimeout(iframeTimerRef.current);
         iframeTimerRef.current = null;
@@ -224,6 +264,7 @@ function DeepSeekHarness() {
     return () => {
       el.removeEventListener("load", onLoad);
       clearIframeTimers();
+      if (embedTimer) clearTimeout(embedTimer);
     };
   }, [isRunning, iframeKey, serviceUrl, clearIframeTimers, remountIframe]);
 
@@ -799,9 +840,14 @@ function DeepSeekHarness() {
               )}
 
               {installing && (
-                <button type="button" className="btn commit-icon-btn" disabled>
+                <button
+                  type="button"
+                  className="btn commit-icon-btn"
+                  disabled
+                  title={t("dsh.installing")}
+                  aria-label={t("dsh.installing")}
+                >
                   <Loader2 size={14} className="spin" />
-                  <span>{t("dsh.installing")}</span>
                 </button>
               )}
 
@@ -829,22 +875,18 @@ function DeepSeekHarness() {
                 </>
               )}
 
+              {/* Status text on the left already says 「启动中…」— only offer cancel here. */}
               {starting && (
-                <>
-                  <button type="button" className="btn commit-icon-btn" disabled>
-                    <Loader2 size={14} className="spin" />
-                    <span>{t("dsh.starting")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn commit-icon-btn"
-                    onClick={cancelStartWait}
-                    title={t("dsh.cancelWaitTitle")}
-                  >
-                    <X size={14} />
-                    <span>{t("dsh.cancelWait")}</span>
-                  </button>
-                </>
+                <button
+                  type="button"
+                  className="btn commit-icon-btn dsh-cancel-btn"
+                  onClick={cancelStartWait}
+                  title={t("dsh.cancelWaitTitle")}
+                  aria-label={t("dsh.cancelWait")}
+                >
+                  <X size={14} />
+                  <span>{t("dsh.cancelWait")}</span>
+                </button>
               )}
 
               {(isRunning || stopping) && !starting && (

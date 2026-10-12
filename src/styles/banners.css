@@ -12,6 +12,11 @@
   flex-shrink: 0;
 }
 
+/* Harness already insets via .main-body.is-flush — don't double the gutter. */
+.main-body.is-flush .alert-banner {
+  margin: 0 0 8px;
+}
+
 .alert-banner-warning {
   background: color-mix(in srgb, var(--red) 12%, var(--bg-1));
   border-color: color-mix(in srgb, var(--red) 35%, var(--border-subtle));

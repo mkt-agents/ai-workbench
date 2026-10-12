@@ -21,6 +21,7 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .sidebar,
   .titlebar,
   .ai-header,
+  .dsh-toolbar,
   .modal-overlay,
   .toast,
   .prompt-model-menu,

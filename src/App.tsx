@@ -517,7 +517,7 @@ function App() {
           <div className={`main-header ${["ai-chat", "ai-models"].includes(activeTab) ? "hidden" : ""}`}>
             <h1>{NAV_MAP[activeTab]}</h1>
           </div>
-          <div className="main-body">
+          <div className={`main-body${activeTab === "ai-chat" ? " is-flush" : ""}`}>
             <div className="page-in">
               {gitMounted && (
                 <div

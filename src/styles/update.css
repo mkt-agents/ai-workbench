@@ -288,84 +288,133 @@
   }
 }
 
+/* Shared chrome strip — idle and running use the same bar so the page doesn't
+   jump from "floating card" to "edge toolbar" when the service starts. */
 .dsh-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 8px 10px 0;
-  padding: 6px 10px;
-  background: var(--bg-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  gap: 0;
+  margin: 0;
+  padding: 0 12px;
+  min-height: 36px;
+  justify-content: center;
+  background: var(--chrome-bg);
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
   flex-shrink: 0;
 }
 
+/* Inset panel: fills the flush gutter, keeps a soft gap from the window chrome. */
 .dsh-stage {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-}
-
-.dsh-stage.is-running {
-  margin: 8px 10px 10px;
+  margin: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-1);
   overflow: hidden;
-}
-
-.dsh-stage.is-running .dsh-toolbar {
-  margin: 0;
-  padding: 4px 8px;
-  border: none;
-  border-bottom: 1px solid var(--border-subtle);
-  border-radius: 0;
-  background: var(--bg-1);
-  gap: 4px;
-  min-height: 32px;
-}
-
-.dsh-stage.is-running .dsh-toolbar-primary {
-  flex-wrap: nowrap;
-  min-height: 28px;
 }
 
 .dsh-stage.is-running .dsh-status-text {
   display: none;
 }
 
-.dsh-stage.is-running .dsh-url-badge {
-  height: 24px;
-  padding: 0 6px;
+.dsh-toolbar .dsh-url-badge {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-1);
+  background: var(--overlay-2);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-full);
 }
 
-.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn {
+.dsh-toolbar .dsh-url-badge:hover {
+  color: var(--text-0);
+  background: var(--overlay-3);
+  border-color: var(--border);
+}
+
+.dsh-toolbar .dsh-version-group {
+  height: 26px;
+  padding: 0;
+  gap: 6px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.dsh-toolbar .dsh-version-label {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+}
+
+.dsh-toolbar .dsh-version-select,
+.dsh-toolbar .dsh-port-input {
+  height: 26px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-1);
+  border-color: var(--border-subtle);
+  color: var(--text-1);
+  font-size: 11px;
+}
+
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn {
   width: 28px;
   height: 28px;
   padding: 0;
+  border-radius: var(--radius-full);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
-/* Stop keeps its label and a warning tint in the icon-only running toolbar, so it
-   can't be mistaken for a generic tool (or for the auto-start toggle next door). */
-.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn {
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn:hover:not(:disabled) {
+  background: var(--overlay-2);
+  color: var(--text-0);
+}
+
+/* Any labeled action must grow — fixed 28px was clipping 「取消等待」over 「启动中」. */
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn:has(span) {
   width: auto;
-  padding: 0 10px;
-  color: var(--red);
+  min-width: 28px;
+  padding: 0 12px;
+  gap: 5px;
   transition: var(--transition-colors-fast);
 }
 
-.dsh-stage.is-running .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn.commit-icon-btn-primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border: 1px solid var(--accent-border);
 }
 
-.dsh-stage.is-running .dsh-iframe-container {
-  margin: 0;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  flex: 1;
-  min-height: 0;
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn.commit-icon-btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  color: var(--on-accent);
+}
+
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn,
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn.dsh-cancel-btn {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 28%, transparent);
+}
+
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn.dsh-stop-btn:hover:not(:disabled),
+.dsh-toolbar .dsh-toolbar-actions .commit-icon-btn.dsh-cancel-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red);
 }
 
 .dsh-toolbar-primary {
@@ -374,13 +423,14 @@
   justify-content: space-between;
   gap: 6px 8px;
   min-width: 0;
-  flex-wrap: wrap;
+  min-height: 36px;
+  flex-wrap: nowrap;
 }
 
 .dsh-toolbar-context {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   /* Growing here pushed the actions onto their own line and left the right
      half of the toolbar empty, even in a wide window. */
   flex: 0 1 auto;
@@ -391,7 +441,7 @@
 .dsh-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
   flex-wrap: wrap;
 }
@@ -477,10 +527,11 @@
   min-height: 0;
   overflow: hidden;
   position: relative;
-  border-radius: var(--radius-md);
-  margin: 8px 10px 10px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-1);
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
 .dsh-iframe {
