@@ -6,7 +6,7 @@ import { Check, Copy } from "lucide-react";
  * Lightweight dependency-free Markdown renderer for quick-ask answers.
  * Builds React elements only (no innerHTML) so streamed/untrusted model
  * output cannot inject markup. Supports: fenced code blocks (with language
- * label + copy), headings, ordered/unordered lists, quotes, hr, inline
+ * label + copy), headings, ordered/unordered lists, quotes, hr, GFM tables, inline
  * code/bold/italic/links. An unclosed fence renders as a code block so the
  * view stays sane while streaming.
  */
@@ -17,13 +17,32 @@ type Block =
   | { kind: "list"; ordered: boolean; items: string[] }
   | { kind: "quote"; lines: string[] }
   | { kind: "hr" }
+  | { kind: "table"; align: CellAlign[]; head: string[]; rows: string[][] }
   | { kind: "paragraph"; text: string };
+
+type CellAlign = "left" | "center" | "right" | undefined;
 
 const FENCE_RE = /^```(\S*)\s*$/;
 const HEADING_RE = /^(#{1,4})\s+(.*)$/;
 const UL_RE = /^[-*+]\s+(.*)$/;
 const OL_RE = /^\d+[.)]\s+(.*)$/;
 const HR_RE = /^(?:-{3,}|\*{3,}|_{3,})\s*$/;
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+const TABLE_SEP_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+function splitRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+}
+
+function parseAlign(cell: string): CellAlign {
+  const left = cell.startsWith(":");
+  const right = cell.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  if (left) return "left";
+  return undefined;
+}
 
 function parseBlocks(src: string): Block[] {
   const lines = src.replace(/\r\n/g, "\n").split("\n");
@@ -56,6 +75,19 @@ function parseBlocks(src: string): Block[] {
     if (HR_RE.test(line)) {
       blocks.push({ kind: "hr" });
       i++;
+      continue;
+    }
+
+    if (TABLE_ROW_RE.test(line) && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1])) {
+      const head = splitRow(line);
+      const align = splitRow(lines[i + 1]).map(parseAlign);
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length && TABLE_ROW_RE.test(lines[i])) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      blocks.push({ kind: "table", align, head, rows });
       continue;
     }
 
@@ -102,7 +134,8 @@ function parseBlocks(src: string): Block[] {
         UL_RE.test(cur) ||
         OL_RE.test(cur) ||
         HR_RE.test(cur) ||
-        cur.startsWith(">")
+        cur.startsWith(">") ||
+        (TABLE_ROW_RE.test(cur) && TABLE_SEP_RE.test(lines[i + 1] ?? ""))
       ) {
         break;
       }
@@ -240,6 +273,33 @@ export default function MarkdownView({ text }: { text: string }) {
             );
           case "hr":
             return <hr key={key} />;
+          case "table":
+            return (
+              <div key={key} className="qa-md-table">
+                <table>
+                  <thead>
+                    <tr>
+                      {b.head.map((cell, j) => (
+                        <th key={j} style={{ textAlign: b.align[j] }}>
+                          {renderInline(cell, `${key}-h${j}`)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {b.rows.map((row, r) => (
+                      <tr key={r}>
+                        {b.head.map((_, j) => (
+                          <td key={j} style={{ textAlign: b.align[j] }}>
+                            {renderInline(row[j] ?? "", `${key}-${r}-${j}`)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
           case "paragraph":
             // Single newlines inside a paragraph become <br> — friendlier for
             // CJK answers where markdown-style line merging would jam text.

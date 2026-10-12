@@ -1,56 +1,67 @@
-import type { QuickAskChips } from "../../core/types";
+import type { AIModelConfig, QuickAskChips } from "../../core/types";
 import { DEFAULT_PROMPT_GOALS } from "../../lib/promptOptimize";
 import type { PromptGoal, PromptScenario } from "../../lib/promptOptimize";
+import type { AskMode } from "./route";
 
+/** Only appended when a non-empty workbench context block is actually attached. */
 export const CONTEXT_RULES =
-  " You have access to context from the user's workbench below. Proactively use ALL relevant context to give specific, actionable answers. Never say 'I cannot access files' — the context includes everything available. If context is insufficient, say what is missing and still answer from what is given. Answer directly in the user's language; do not ask them to run git/shell commands themselves.";
+  " Context collected from the user's workbench (repos, uncommitted changes, recent commits, clipboard) is attached after the question. Use the relevant parts to give specific, actionable answers, citing file names and changes. Never claim you cannot access files — the context is everything available. If it is insufficient, say exactly what is missing and still answer from what is given. Do not ask the user to run git/shell commands themselves.";
 
-export const BASE_SYSTEM =
-  "You are an expert developer assistant embedded in AI Workbench. You help developers understand, debug, and improve their code. Be concise but thorough. When you see code changes, explain what they do and why. When you see errors, suggest fixes. Anticipate follow-up needs.";
+/** Plain conversation: a capable general assistant, no repo assumptions. */
+export const CHAT_SYSTEM =
+  "You are a capable, friendly general-purpose AI assistant. Answer the question directly and concisely; use structure (lists, short code blocks, tables) only when it helps. Do not mention or ask for project files, repositories or workbench context unless the user brings them up. Reply in the user's language.";
+
+/** Project mode: developer assistant grounded in the attached workbench context. */
+export const PROJECT_SYSTEM =
+  "You are an expert developer assistant embedded in AI Workbench. You help developers understand, debug, and improve their code. Be concise but thorough. When you see code changes, explain what they do and why. When you see errors, suggest fixes. Reply in the user's language.";
 
 export type TaskKind = "none" | "debug" | "explain" | "polish" | "translate" | "summarize" | "optimize";
 
-export const TASK_KINDS: TaskKind[] = [
-  "none",
-  "debug",
-  "explain",
-  "polish",
-  "translate",
-  "summarize",
-  "optimize",
-];
+/** One-shot quick actions shown in the composer (everything except plain "none"). */
+export const QUICK_TASKS: TaskKind[] = ["explain", "debug", "polish", "translate", "summarize", "optimize"];
 
-export const TASK_SYSTEM: Record<TaskKind, string> = {
-  none:
-    BASE_SYSTEM +
-    " Adapt your style to the question: conceptual explanations, code review, debugging, or planning." +
-    CONTEXT_RULES,
+/** Task-specific instruction appended after the mode prompt. */
+export const TASK_HINT: Record<TaskKind, string> = {
+  none: "",
   debug:
-    BASE_SYSTEM +
-    " Focus on diagnosing the problem. Read error messages and diffs carefully. Explain root cause, then give concrete fix steps. If the error is in shown code, point to the exact line." +
-    CONTEXT_RULES,
+    " Task: diagnose the problem. Read error messages and diffs carefully. Explain the root cause, then give concrete fix steps; point to the exact file/line when visible.",
   explain:
-    BASE_SYSTEM +
-    " Explain the code or concept clearly. Use examples from the provided context when possible. Structure complex explanations with bullet points or numbered steps." +
-    CONTEXT_RULES,
+    " Task: explain the code or concept clearly, with examples. Structure complex explanations with bullet points or numbered steps.",
   polish:
-    BASE_SYSTEM +
-    " Improve the text for clarity, tone, and professionalism. Return only the improved text unless asked otherwise. Match the user's language and intent." +
-    CONTEXT_RULES,
+    " Task: polish the user's text for clarity, tone and professionalism. Return only the improved text unless asked otherwise. Match the user's language and intent.",
   translate:
-    BASE_SYSTEM +
-    " Translate the given text faithfully. Use the target language the user specifies; if none is given, translate between Chinese and English (the opposite of the source). Preserve formatting, terminology, names and numbers. Output only the translation unless asked otherwise." +
-    CONTEXT_RULES,
+    " Task: translate the given text faithfully. Use the target language the user specifies; if none, translate between Chinese and English (the opposite of the source). Preserve formatting, terms, names and numbers. Output only the translation.",
   summarize:
-    BASE_SYSTEM +
-    " Summarize the given text or code changes: key points first, then structured details. Be concise; keep numbers, names and technical terms exact." +
-    CONTEXT_RULES,
+    " Task: summarize the given text or changes — key points first, then structured details. Keep numbers, names and technical terms exact.",
   // Fallback only: the optimize flow uses buildPromptOptimizeMessages instead.
-  optimize:
-    BASE_SYSTEM +
-    " Rewrite the user's draft into a clearer, actionable prompt. Output only the improved prompt." +
-    CONTEXT_RULES,
+  optimize: " Task: rewrite the user's draft into a clearer, actionable prompt. Output only the improved prompt.",
 };
+
+/**
+ * Self-knowledge block prepended to every system prompt, so "which model are
+ * you" is answered from facts instead of guessed from (absent) context.
+ */
+export function buildMeta(model: AIModelConfig, now: Date = new Date()): string {
+  const date = now.toISOString().slice(0, 10);
+  return (
+    `[Environment] You are answering inside "AI Workbench · Quick Ask", a local Windows desktop developer toolbox. ` +
+    `The model serving this conversation is configured as "${model.name}" (model id: ${model.model}, provider: ${model.provider}). ` +
+    `If the user asks which model / who you are, answer with exactly this configuration — do not guess another vendor or model. ` +
+    `Today is ${date}.\n\n`
+  );
+}
+
+/** Full system prompt for one request. Project rules apply only when context is attached. */
+export function buildSystem(
+  model: AIModelConfig,
+  mode: AskMode,
+  task: TaskKind,
+  hasProjectContext: boolean,
+): string {
+  const base = mode === "project" ? PROJECT_SYSTEM : CHAT_SYSTEM;
+  const rules = mode === "project" && hasProjectContext ? CONTEXT_RULES : "";
+  return buildMeta(model) + base + TASK_HINT[task] + rules;
+}
 
 export const DEFAULT_CHIPS: QuickAskChips = {
   workspace: true,
@@ -83,7 +94,7 @@ export function parseTask(value: string): { task: TaskKind; optimize: OptimizeCo
     };
   }
   return {
-    task: TASK_KINDS.includes(value as TaskKind) ? (value as TaskKind) : "none",
+    task: (QUICK_TASKS as string[]).includes(value) ? (value as TaskKind) : "none",
     optimize: DEFAULT_OPTIMIZE,
   };
 }
@@ -122,8 +133,10 @@ export function makeTitle(question: string, fallback: string): string {
 export const CONTEXT_LIMIT = 12000;
 export const SNIPPET_PICK_LIMIT = 24;
 export const DIRTY_FILE_LIMIT = 30;
-/** Follow-up context: keep the last N Q&A pairs, clipped per turn. */
+/** Follow-up context: send the last N Q&A pairs to the model, clipped per turn. */
 export const MAX_HISTORY_TURNS = 6;
+/** Transcript kept on screen and in the saved session (Q&A pairs). */
+export const MAX_SAVED_TURNS = 40;
 export const MAX_TURN_CHARS = 4000;
 /** Max diff bytes per file when including dirty content in quick-ask context. */
 export const MAX_DIFF_PER_FILE = 2000;

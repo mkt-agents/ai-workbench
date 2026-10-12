@@ -1948,15 +1948,18 @@ pub async fn get_git_config(scope: Option<String>) -> Result<(String, String), S
 
 /// Native folder picker. Returns None if the user cancels.
 #[tauri::command]
-pub async fn pick_directory() -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(pick_directory_sync)
+pub async fn pick_directory(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || pick_directory_sync(&window))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
-fn pick_directory_sync() -> Result<Option<String>, String> {
+/// Owned by the calling window so the dialog stays above it even when that window is
+/// always-on-top (the pinned quick-ask window would otherwise cover it).
+fn pick_directory_sync(window: &tauri::WebviewWindow) -> Result<Option<String>, String> {
     let folder = rfd::FileDialog::new()
         .set_title("选择 Git 仓库目录")
+        .set_parent(window)
         .pick_folder();
     Ok(folder.map(|p| p.to_string_lossy().to_string()))
 }

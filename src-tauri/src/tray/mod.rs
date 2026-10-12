@@ -306,6 +306,11 @@ pub fn hide_quick_ask(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn set_quick_ask_pinned(app: AppHandle, pinned: bool) -> Result<(), String> {
+    bubble::set_quick_ask_pinned(&app, pinned)
+}
+
+#[tauri::command]
 pub fn open_main_deepseek(app: AppHandle) -> Result<(), String> {
     bubble::show_main_window(&app);
     let _ = app.emit("navigate-tab", "ai-chat");

@@ -50,6 +50,7 @@ export interface Invocations {
   invokeGetGitConfig: (scope?: string) => Promise<[string, string]>;
   invokeGetRepoGitConfig: (repoPath: string) => Promise<[string, string]>;
   invokePickDirectory: () => Promise<string | null>;
+  invokeSetQuickAskPinned: (pinned: boolean) => Promise<void>;
   invokeGitRepoSummary: (path: string) => Promise<GitRepoSummary>;
   invokeGitStatus: (path: string) => Promise<GitStatusEntry[]>;
   invokeGitStage: (path: string, files: string[]) => Promise<string>;
@@ -269,6 +270,8 @@ export const invocations: Invocations = {
     tauriInvoke<[string, string]>('get_repo_git_config', { repoPath }),
   invokePickDirectory: () =>
     tauriInvoke<string | null>('pick_directory'),
+  invokeSetQuickAskPinned: (pinned: boolean) =>
+    tauriInvoke<void>('set_quick_ask_pinned', { pinned }),
   invokeGitRepoSummary: (path: string) =>
     tauriInvoke<GitRepoSummary>('git_repo_summary', { path }),
   invokeGitStatus: (path: string) =>

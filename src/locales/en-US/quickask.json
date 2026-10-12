@@ -2,18 +2,35 @@
   "title": "Quick Ask",
   "loading": "Loading…",
   "close": "Close",
+  "pin": "Keep on top",
+  "unpin": "Stop keeping on top",
   "noModel": "Configure an AI model in the main window first",
   "emptyInput": "Enter a question",
-  "placeholder": "Ask something…",
-  "sendHint": "Enter to send · Shift+Enter for newline",
+  "placeholder": "Ask something… (Enter to send · Shift+Enter for newline)",
   "emptyHint": "Start with a question",
-  "emptyHintSub": "Toggle context chips, or open history to continue",
-  "contextGroup": "Context",
+  "emptyHintSub": "Questions about code, errors or repos pull in project context automatically; everything else is a plain chat",
   "send": "Send",
   "stop": "Stop",
   "copy": "Copy answer",
   "copied": "Copied",
   "regenerate": "Regenerate",
+  "threadMeta": "Round {{n}} · last {{max}} rounds sent",
+  "phase": {
+    "context": "Reading changes in {{repo}}…",
+    "waiting": "{{model}} is thinking…"
+  },
+  "jumpLatest": "Latest",
+  "retry": "Retry",
+  "retryAsChat": "Retry as plain chat",
+  "dismiss": "Dismiss",
+  "sendHintFull": "Send (Enter to send · Shift+Enter newline · Esc to stop · ↑ recalls last question)",
+  "examples": {
+    "recent": "What changed recently?",
+    "error": "Explain this error: ",
+    "model": "Which model are you?"
+  },
+  "you": "You",
+  "assistant": "Assistant",
   "newChat": "New chat",
   "openDeepseek": "Open DeepSeek",
   "pasteClipboard": "Paste clipboard",
@@ -21,8 +38,7 @@
   "snippetSearch": "Search snippets…",
   "snippetEmpty": "No matching snippets",
   "truncated": "Context truncated",
-  "showContext": "Show context",
-  "hideContext": "Hide context",
+  "showContext": "Preview project context",
   "fillParams": "Fill parameters",
   "insertSnippet": "Insert into input",
   "cancel": "Cancel",
@@ -35,8 +51,6 @@
   "renameCancel": "Cancel",
   "exportSession": "Export chat",
   "exported": "Exported",
-  "focusRepo": "Specify which repo to analyze in detail",
-  "focusRepoAuto": "Auto (current repo)",
   "focusNSelected": "{{n}} repos selected",
   "focusClear": "Clear",
   "focusEmpty": "No repos yet — scan a folder",
@@ -57,17 +71,92 @@
   "modeTools": "Tools",
   "task": {
     "none": "General",
-    "debug": "Debug error",
+    "debug": "Debug error (uses project context)",
     "explain": "Explain",
     "polish": "Polish text",
+    "translate": "Translate (zh ⇄ en)",
+    "summarize": "Summarize",
+    "optimize": "Optimize prompt"
+  },
+  "taskShort": {
+    "none": "General",
+    "debug": "Debug",
+    "explain": "Explain",
+    "polish": "Polish",
     "translate": "Translate",
     "summarize": "Summarize",
     "optimize": "Optimize prompt"
   },
+  "taskPlaceholder": {
+    "none": "Ask something… (Enter to send · Shift+Enter for newline)",
+    "debug": "Paste an error or log to diagnose with project context…",
+    "explain": "Paste code, a command or a concept to explain…",
+    "polish": "Paste the text to polish…",
+    "translate": "Paste text to translate (zh ⇄ en)…",
+    "summarize": "Paste the content to summarize…",
+    "optimize": "Write the prompt to optimize…"
+  },
+  "taskClear": "Cancel this task",
   "chip": {
     "workspace": "Workspace",
     "git": "Git identity",
-    "dirty": "Dirty summary",
+    "dirty": "Changes",
+    "clipboard": "Clipboard"
+  },
+  "chipTip": {
+    "workspace": "Project mode: attach repo list and current branches",
+    "git": "Project mode: attach current Git user name and email",
+    "dirty": "Project mode: attach uncommitted changes of the selected repos",
+    "clipboard": "Attached in every mode"
+  },
+  "ctx": {
+    "title": "Choose project context",
+    "autoRepo": "Auto · {{name}}",
+    "noRepo": "No project",
+    "reposHead": "Workspaces / services to analyze",
+    "groupAll": "{{name}} · all",
+    "groupSome": "{{name}} · {{n}} services",
+    "groupOne": "{{name}} / {{svc}}",
+    "nRepos": "{{n}} workspaces",
+    "otherGroup": "Other repos",
+    "filter": "Filter workspaces or services…",
+    "selectAll": "Select the whole workspace (services added later are included too)",
+    "partsHead": "Attach",
+    "note": "These are only sent in Project mode; plain chat only includes the clipboard (if checked).",
+    "previewEmpty": "No project context to attach right now"
+  },
+  "route": {
+    "pillProject": "Project · {{label}}",
+    "pillProjectNoRepo": "Project · no repo found",
+    "pillChat": "Chat",
+    "autoTag": "Auto",
+    "menuTitle": "How to answer this question",
+    "overrideOnce": "this question only",
+    "auto": "Auto",
+    "chat": "Chat",
+    "project": "With project",
+    "autoDesc": "Decide from the question; mentions of code, errors or repos bring in project context",
+    "chatDesc": "Send no project information, just answer",
+    "projectDesc": "Attach the selected project's context",
+    "reason": {
+      "override": "Set manually",
+      "meta": "A question about the assistant itself — answered as chat",
+      "textTask": "Text task — no project information needed",
+      "projectTask": "Debug task — uses project context",
+      "signal": "Mentions code, errors or paths — project context attached",
+      "followUp": "Follow-up to the previous project question",
+      "default": "No project cues — answered as chat"
+    }
+  },
+  "source": {
+    "project": "Based on project",
+    "chat": "Chat",
+    "noProjectData": "no project data collected"
+  },
+  "part": {
+    "workspace": "Workspace",
+    "git": "Git identity",
+    "dirty": "Changes",
     "clipboard": "Clipboard"
   }
 }

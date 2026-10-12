@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../../core/store";
+import { findWorkspaceForRepo } from "../../core/pathUtils";
 import type { GitRepoSummary, GitStatusEntry, QuickAskChips } from "../../core/types";
 import {
   CONTEXT_LIMIT,
@@ -12,9 +13,15 @@ import {
   MAX_SECONDARY_REPOS,
   truncate,
 } from "./config";
+import type { AskMode } from "./route";
 
 /** Max concurrent git processes to avoid saturating the thread pool. */
 const GIT_CONCURRENCY = 4;
+/** Several focused services: commit logs from at most this many. */
+const MULTI_LOG_REPOS = 4;
+/** Several dirty focused services share this many full-diff files in total. */
+const MULTI_DIFF_FILE_BUDGET = 12;
+const MULTI_DIFF_PER_FILE = 1200;
 
 /** Run async tasks with a concurrency cap to avoid overwhelming the git backend. */
 async function withConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
@@ -35,14 +42,28 @@ function statusMark(e: GitStatusEntry): string {
   return e.group === "untracked" ? "??" : `${e.indexStatus || " "}${e.workTreeStatus || " "}`;
 }
 
+export type ContextPart = keyof QuickAskChips;
+
+/** What one request actually carried — shown in the answer source line. */
+export type ContextSummary = { repos: string[]; parts: ContextPart[] };
+
+export type ContextResult = { text: string; truncated: boolean; summary: ContextSummary };
+
+const EMPTY_SUMMARY: ContextSummary = { repos: [], parts: [] };
+
+function repoName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
 /**
  * Workbench context collection (workspace / git identity / dirty diffs / clipboard)
  * with a TTL cache so a burst of sends doesn't re-spawn git for every question.
  *
- * `focusedRepos` are the repos given FULL diff context (multi-select in the
- * toolbar, optionally populated by scanning a folder). When empty it falls back
- * to the current repo. Every other dirty recent project is summarised with only
- * status + a couple of small diffs so the 12k budget isn't blown.
+ * `focusedRepos` are resolved service paths (workspace tokens already expanded
+ * by `resolveFocus`). When empty it falls back to the current repo. With a
+ * single focus repo, other dirty recent projects are summarised with status +
+ * a couple of small diffs; with several, the diff budget is shared between the
+ * dirty services and nothing outside the selection is added.
  */
 export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
   const currentGitRepo = useGlobalStore((s) => s.settings.currentGitRepo);
@@ -58,13 +79,19 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
   const [ctxTruncated, setCtxTruncated] = useState(false);
   const [ctxLoading, setCtxLoading] = useState(false);
   /** Context cache: avoid re-fetching git data on every send. */
-  const cachedContextRef = useRef<{ text: string; truncated: boolean; at: number } | null>(null);
+  const cachedContextRef = useRef<(ContextResult & { at: number }) | null>(null);
   /** Chips signature to detect changes that invalidate cache. */
   const chipsSigRef = useRef<string>("");
 
-  const refreshContext = useCallback(async (): Promise<{ text: string; truncated: boolean }> => {
+  /**
+   * Project parts (workspace / git / dirty) are only collected in project mode;
+   * the clipboard is independent of the repo and rides along in both modes.
+   */
+  const refreshContext = useCallback(async (mode: AskMode): Promise<ContextResult> => {
     const parts: string[] = [];
+    const included = new Set<ContextPart>();
     let truncatedFlag = false;
+    const project = mode === "project";
 
     // Focus set drives which repos get full diffs; empty = auto (current repo).
     const focusList = focusedRepos.length
@@ -76,44 +103,76 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
     // The "primary" for the workspace line + recent commits is the first focus repo.
     const primaryRepo = focusList[0] || null;
 
-    if (chips.workspace) {
-      const ws = gitWorkspaces[0];
-      if (ws) parts.push(`Workspace: ${ws.path}`);
-      if (focusList.length === 1 && primaryRepo) parts.push(`Current repo: ${primaryRepo}`);
-      else if (focusList.length > 1)
-        parts.push(`Focused repos: ${focusList.map((p) => p.split(/[\\/]/).pop() || p).join(", ")}`);
+    if (project && chips.workspace) {
+      const before = parts.length;
+      if (focusList.length === 1 && primaryRepo) {
+        const ws = findWorkspaceForRepo(primaryRepo, gitWorkspaces);
+        if (ws) parts.push(`Workspace: ${ws.path}`);
+        parts.push(`Current repo: ${primaryRepo}`);
+      } else if (focusList.length > 1) {
+        // Group the focus set by owning workspace: "car-trade (a, b) / ai-workbench".
+        const byWs = new Map<string, { label: string; services: string[] }>();
+        const loose: string[] = [];
+        for (const p of focusList) {
+          const ws = findWorkspaceForRepo(p, gitWorkspaces);
+          if (!ws) {
+            loose.push(repoName(p));
+            continue;
+          }
+          const entry = byWs.get(ws.path) || { label: ws.name || repoName(ws.path), services: [] };
+          entry.services.push(repoName(p));
+          byWs.set(ws.path, entry);
+        }
+        const segments = [
+          ...Array.from(byWs, ([path, e]) => `${e.label} [${path}] (${e.services.join(", ")})`),
+          ...loose,
+        ];
+        parts.push(`Focused: ${segments.join(" / ")}`);
+      }
+      if (parts.length > before) included.add("workspace");
     }
 
-    // Git identity: fetch config + recent commits for the primary repo only.
-    if (chips.git) {
+    // Git identity + recent commits: 5 for a single repo, 2 each for up to 4 repos.
+    if (project && chips.git) {
+      const before = parts.length;
       try {
         const [name, email] = await invokeGetGitConfig("global");
         if (name || email) parts.push(`Git identity: ${name} <${email}>`);
-        if (primaryRepo) {
-          try {
-            const commits = await invokeGitLog(primaryRepo, 5);
-            if (commits.length > 0) {
-              parts.push(
-                "Recent commits:\n" +
-                  commits.map((c) => `  ${c[0]} ${c[1]} (${c[2]})`).join("\n")
-              );
-            }
-          } catch {
-            /* ignore */
-          }
-        }
       } catch {
         /* ignore */
       }
+      const logRepos = focusList.slice(0, focusList.length === 1 ? 1 : MULTI_LOG_REPOS);
+      const perRepo = focusList.length === 1 ? 5 : 2;
+      const logs = await withConcurrency(
+        logRepos.map((repo) => async () => {
+          try {
+            const commits = await invokeGitLog(repo, perRepo);
+            if (commits.length === 0) return null;
+            const head = focusList.length === 1 ? "Recent commits:" : `Recent commits (${repoName(repo)}):`;
+            return head + "\n" + commits.map((c) => `  ${c[0]} ${c[1]} (${c[2]})`).join("\n");
+          } catch {
+            return null;
+          }
+        }),
+        GIT_CONCURRENCY
+      );
+      for (const l of logs) if (l) parts.push(l);
+      if (parts.length > before) included.add("git");
     }
 
+    const repoNames: string[] = [];
+
     // Dirty repos: focus set gets full diffs, others get status only.
-    if (chips.dirty) {
+    if (project && chips.dirty) {
       // Collect candidate paths: focus repos first, then recent projects.
+      // Picking several services (e.g. a whole workspace) is already the scope;
+      // padding it with unrelated dirty repos would only eat the budget.
       const candidates: string[] = [];
       for (const p of focusList) candidates.push(p);
-      for (const p of (recentProjects || []).slice(0, MAX_SECONDARY_REPOS)) {
-        if (!focusSet.has(p.path)) candidates.push(p.path);
+      if (focusList.length <= 1) {
+        for (const p of (recentProjects || []).slice(0, MAX_SECONDARY_REPOS)) {
+          if (!focusSet.has(p.path)) candidates.push(p.path);
+        }
       }
 
       const summaries = await withConcurrency(
@@ -129,18 +188,25 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
       );
       const valid = summaries.filter((r): r is { path: string; summary: GitRepoSummary } => r !== null);
 
-      const focusEntries = valid.filter((r) => focusSet.has(r.path));
+      const focusEntries = valid.filter((r) => focusSet.has(r.path) && r.summary.isGit);
       const secondaryEntries = valid.filter(
         (r) => !focusSet.has(r.path) && r.summary.isGit && r.summary.dirtyCount > 0
       );
+      // Dirty services first (most changes first); clean ones collapse into one line.
+      const dirtyFocus = focusEntries
+        .filter((r) => r.summary.dirtyCount > 0)
+        .sort((a, b) => b.summary.dirtyCount - a.summary.dirtyCount);
+      const cleanFocus = focusEntries.filter((r) => r.summary.dirtyCount === 0);
+      // Share the diff budget across dirty services instead of 8 full files each.
+      const diffFilesPerRepo =
+        dirtyFocus.length <= 1
+          ? MAX_DIFF_FILES_PRIMARY
+          : Math.max(2, Math.floor(MULTI_DIFF_FILE_BUDGET / dirtyFocus.length));
+      const diffCharsPerFile = dirtyFocus.length <= 1 ? MAX_DIFF_PER_FILE : MULTI_DIFF_PER_FILE;
 
-      // Full-diff block for every focused repo (concurrency-capped across repos).
+      // Full-diff block for every dirty focused repo (concurrency-capped across repos).
       const focusLines = await withConcurrency(
-        focusEntries.map(({ path: repo, summary: s }) => async (): Promise<string | null> => {
-          if (!s.isGit) return null;
-          if (s.dirtyCount === 0) {
-            return `[FOCUS] ${s.name || repo} (${s.branch}): clean`;
-          }
+        dirtyFocus.map(({ path: repo, summary: s }) => async (): Promise<string | null> => {
           const lines: string[] = [`[FOCUS] ${s.name || repo} (${s.branch}): ${s.dirtyCount} changes`];
           try {
             const entries = await invokeGitStatus(repo);
@@ -149,15 +215,15 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
             if (entries.length > DIRTY_FILE_LIMIT) {
               lines.push(`  …(+${entries.length - DIRTY_FILE_LIMIT} more)`);
             }
-            const diffFiles = entries.filter((e) => e.group !== "untracked").slice(0, MAX_DIFF_FILES_PRIMARY);
+            const diffFiles = entries.filter((e) => e.group !== "untracked").slice(0, diffFilesPerRepo);
             if (diffFiles.length > 0) {
               const diffs = await withConcurrency(
                 diffFiles.map((e) => async () => {
                   try {
                     const diff = await invokeGitDiff(repo, e.path, false);
                     if (!diff || diff === "（无差异）") return null;
-                    const clipped = diff.length > MAX_DIFF_PER_FILE
-                      ? diff.slice(0, MAX_DIFF_PER_FILE) + "\n  …(truncated)"
+                    const clipped = diff.length > diffCharsPerFile
+                      ? diff.slice(0, diffCharsPerFile) + "\n  …(truncated)"
                       : diff;
                     return `  --- ${e.path} ---\n  ${clipped.split("\n").join("\n  ")}`;
                   } catch {
@@ -180,7 +246,18 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
         GIT_CONCURRENCY
       );
       const focusBlocks = focusLines.filter((b): b is string => !!b);
-      if (focusBlocks.length > 0) parts.push(focusBlocks.join("\n\n"));
+      if (cleanFocus.length > 0) {
+        focusBlocks.push(
+          `[FOCUS] Clean (no uncommitted changes): ${cleanFocus
+            .map(({ path, summary: s }) => `${s.name || repoName(path)} (${s.branch})`)
+            .join(", ")}`
+        );
+      }
+      if (focusBlocks.length > 0) {
+        parts.push(focusBlocks.join("\n\n"));
+        included.add("dirty");
+        for (const { path, summary: s } of focusEntries) repoNames.push(s.name || repoName(path));
+      }
 
       // Secondary repos — status marks + a couple of small diffs.
       if (secondaryEntries.length > 0) {
@@ -223,6 +300,10 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
         const validResults = secondaryResults.filter(Boolean);
         if (validResults.length > 0) {
           parts.push("Other dirty repos:\n" + validResults.slice(0, 4).join("\n\n"));
+          included.add("dirty");
+          for (const { path, summary: s } of secondaryEntries.slice(0, 4)) {
+            repoNames.push(s.name || repoName(path));
+          }
         }
       }
     }
@@ -233,6 +314,7 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
         if (clip.trim()) {
           const tclip = truncate(clip.trim(), 800);
           parts.push("Clipboard:\n" + tclip.text);
+          included.add("clipboard");
           if (tclip.truncated) truncatedFlag = true;
         }
       } catch {
@@ -240,15 +322,21 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
       }
     }
 
+    // Project mode with nothing dirty still names the repo it was about.
+    if (project && repoNames.length === 0 && included.size > 0) {
+      repoNames.push(...focusList.map(repoName));
+    }
+
     const joined = parts.join("\n\n");
-    const enabledChips: string[] = [];
-    if (chips.workspace) enabledChips.push("workspace");
-    if (chips.git) enabledChips.push("git");
-    if (chips.dirty) enabledChips.push("dirty");
-    if (chips.clipboard) enabledChips.push("clipboard");
-    const header = `Active context: ${enabledChips.join(", ") || "none"}`;
-    const result = truncate(header + "\n\n" + joined, CONTEXT_LIMIT);
-    const out = { text: result.text, truncated: truncatedFlag || result.truncated };
+    const result = joined ? truncate(joined, CONTEXT_LIMIT) : { text: "", truncated: false };
+    const out: ContextResult = {
+      text: result.text,
+      truncated: truncatedFlag || result.truncated,
+      summary: {
+        repos: Array.from(new Set(repoNames)),
+        parts: (["dirty", "git", "workspace", "clipboard"] as ContextPart[]).filter((p) => included.has(p)),
+      },
+    };
     setCtxPreview(out.text);
     setCtxTruncated(out.truncated);
     return out;
@@ -268,20 +356,27 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
     invokeGitLog,
   ]);
 
-  /** Get context: use cache if fresh, otherwise rebuild. */
-  const getContext = useCallback((): Promise<{ text: string; truncated: boolean }> => {
-    const sig = `${chips.workspace}|${chips.git}|${chips.dirty}|${chips.clipboard}|${currentGitRepo}|${focusedRepos.join(",")}`;
+  /** Get context for a mode: use cache if fresh, otherwise rebuild. */
+  const getContext = useCallback((mode: AskMode = "project"): Promise<ContextResult> => {
+    const sig = `${mode}|${chips.workspace}|${chips.git}|${chips.dirty}|${chips.clipboard}|${currentGitRepo}|${focusedRepos.join(",")}`;
     const cached = cachedContextRef.current;
     const now = Date.now();
     if (cached && chipsSigRef.current === sig && now - cached.at < CONTEXT_TTL_MS) {
-      return Promise.resolve({ text: cached.text, truncated: cached.truncated });
+      setCtxPreview(cached.text);
+      setCtxTruncated(cached.truncated);
+      return Promise.resolve({ text: cached.text, truncated: cached.truncated, summary: cached.summary });
     }
-    // Rebuild and cache
+    // Chat mode without the clipboard needs nothing — skip the git round trips.
+    if (mode === "chat" && !chips.clipboard) {
+      setCtxPreview("");
+      setCtxTruncated(false);
+      return Promise.resolve({ text: "", truncated: false, summary: EMPTY_SUMMARY });
+    }
     chipsSigRef.current = sig;
     setCtxLoading(true);
-    return refreshContext()
+    return refreshContext(mode)
       .then((out) => {
-        cachedContextRef.current = { text: out.text, truncated: out.truncated, at: Date.now() };
+        cachedContextRef.current = { ...out, at: Date.now() };
         return out;
       })
       .finally(() => setCtxLoading(false));

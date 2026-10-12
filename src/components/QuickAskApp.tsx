@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { History, MessageSquarePlus, Sparkles, Terminal, X } from "lucide-react";
+import { History, MessageSquarePlus, Pin, PinOff, Sparkles, Terminal, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -10,9 +10,15 @@ import { bootApp } from "../core/boot";
 import { projectNameFromPath } from "../core/pathUtils";
 import { applyDocumentTheme } from "../lib/theme";
 import AskPanel from "./quickAsk/AskPanel";
-import ContextBar from "./quickAsk/ContextBar";
-import FocusPicker from "./quickAsk/FocusPicker";
-import type { RepoOption } from "./quickAsk/FocusPicker";
+import ContextPicker from "./quickAsk/ContextPicker";
+import {
+  buildPickerGroups,
+  describeSelection,
+  resolveFocus,
+  toggleGroup,
+  toggleService,
+} from "./quickAsk/repoSelection";
+import type { PickerGroup } from "./quickAsk/repoSelection";
 import OptimizeBar from "./quickAsk/OptimizeBar";
 import ParamModal from "./quickAsk/ParamModal";
 import QuickSelect from "./quickAsk/QuickSelect";
@@ -22,12 +28,13 @@ import ToolsPanel from "./quickAsk/ToolsPanel";
 import {
   DEFAULT_CHIPS,
   DEFAULT_OPTIMIZE,
-  TASK_KINDS,
   encodeTask,
   makeTitle,
   parseTask,
 } from "./quickAsk/config";
 import type { OptimizeConfig, TaskKind } from "./quickAsk/config";
+import { routeQuestion } from "./quickAsk/route";
+import type { RouteOverride } from "./quickAsk/route";
 import { useAskContext } from "./quickAsk/useAskContext";
 import { useAskEvents } from "./quickAsk/useAskEvents";
 import { useAskSessions } from "./quickAsk/useAskSessions";
@@ -36,29 +43,41 @@ import { useAskStream } from "./quickAsk/useAskStream";
 
 type QaTurn = QuickAskTurn;
 
+const PINNED_KEY = "qa-pinned";
+
 function QuickAskApp() {
   const { t, i18n } = useTranslation("quickask");
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const recentProjects = useGlobalStore((s) => s.recentProjects);
+  const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
   const addSnippet = useGlobalStore((s) => s.addSnippet);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeGitScanRepos = useGlobalStore((s) => s.invokeGitScanRepos);
   const invokeGitIsRepo = useGlobalStore((s) => s.invokeGitIsRepo);
   const invokePickDirectory = useGlobalStore((s) => s.invokePickDirectory);
+  const invokeSetQuickAskPinned = useGlobalStore((s) => s.invokeSetQuickAskPinned);
 
   const [ready, setReady] = useState(false);
+  const [pinned, setPinned] = useState(() => localStorage.getItem(PINNED_KEY) === "1");
+  useEffect(() => {
+    localStorage.setItem(PINNED_KEY, pinned ? "1" : "0");
+    void invokeSetQuickAskPinned(pinned).catch(() => {});
+  }, [pinned, invokeSetQuickAskPinned]);
+  const togglePinned = () => setPinned((v) => !v);
   const [mode, setMode] = useState<"ask" | "tools">("ask");
   const [input, setInput] = useState("");
   const [task, setTask] = useState<TaskKind>("none");
   const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const chips = settings.quickAskChips ?? DEFAULT_CHIPS;
-  /** Repos given full-diff context (multi-select); empty = auto (current repo). */
+  /** Workspace tokens (`ws:<id>`) and/or service paths; empty = auto (current repo). */
   const [focusedRepos, setFocusedRepos] = useState<string[]>(settings.quickAskFocusRepos ?? []);
-  /** Which toolbar popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "task" | "focus">(null);
+  /** Which popover is open — only one at a time (mutual exclusion). */
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "route">(null);
+  /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
+  const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
   /** Extra candidates pulled in by a folder scan (session-only). */
   const [extraRepos, setExtraRepos] = useState<GitScannedRepo[]>([]);
   const [scanning, setScanning] = useState(false);
@@ -71,12 +90,20 @@ function QuickAskApp() {
   const [renameDraft, setRenameDraft] = useState("");
   /** Text currently selected inside the answer area (for quote follow-up). */
   const [selectedText, setSelectedText] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [snippetSaved, setSnippetSaved] = useState(false);
+  /** Transcript index of the assistant message that was just copied / saved. */
+  const [copied, setCopied] = useState<number | null>(null);
+  const [snippetSaved, setSnippetSaved] = useState<number | null>(null);
   const [exportDone, setExportDone] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const ctx = useAskContext(chips, focusedRepos);
+  const repoGroups = useMemo(
+    () =>
+      buildPickerGroups(gitWorkspaces, recentProjects, extraRepos, settings.currentGitRepo, focusedRepos),
+    [gitWorkspaces, recentProjects, extraRepos, settings.currentGitRepo, focusedRepos],
+  );
+  const resolvedFocus = useMemo(() => resolveFocus(focusedRepos, repoGroups), [focusedRepos, repoGroups]);
+
+  const ctx = useAskContext(chips, resolvedFocus);
 
   const models = aiModels as AIModelConfig[];
   const selectedModel = useMemo(() => {
@@ -95,6 +122,12 @@ function QuickAskApp() {
     setInput,
     setSelectedText,
     getContext: ctx.getContext,
+    routeOverride,
+    onSent: () => {
+      // Quick actions and the pill override are one-shot.
+      setTask("none");
+      setRouteOverride("auto");
+    },
     persistTurns: (turns, q) => {
       void persistRef.current(turns, q);
     },
@@ -124,6 +157,7 @@ function QuickAskApp() {
       // never into the hidden input while the tools panel is up.
       setMode("ask");
     },
+    // An external prefill carrying a task arms it as a one-shot quick action.
     onPrefillTask: (raw) => {
       const parsed = parseTask(raw);
       setMode("ask");
@@ -131,6 +165,20 @@ function QuickAskApp() {
       setOptimize(parsed.optimize);
     },
   });
+
+  const deferredInput = useDeferredValue(input);
+  const routePreview = useMemo(
+    () =>
+      routeQuestion({
+        question: deferredInput,
+        task,
+        lastMode: stream.lastModeRef.current,
+        override: routeOverride,
+      }),
+    // lastModeRef changes only on send, which also re-renders via `answer`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deferredInput, task, routeOverride, stream.answer, stream.history.length],
+  );
 
   const setChip = (key: keyof typeof chips, value: boolean) => {
     setSettings({
@@ -143,13 +191,9 @@ function QuickAskApp() {
     setSettings({ quickAskFocusRepos: next });
   };
 
-  const toggleFocus = (path: string) => {
-    commitFocus(
-      focusedRepos.includes(path)
-        ? focusedRepos.filter((p) => p !== path)
-        : [...focusedRepos, path]
-    );
-  };
+  const onToggleGroup = (group: PickerGroup) => commitFocus(toggleGroup(focusedRepos, group));
+  const onToggleService = (group: PickerGroup, path: string) =>
+    commitFocus(toggleService(focusedRepos, group, path));
 
   /** Pick a folder, scan it for git repos, add them as candidates and select all. */
   const scanFolder = async () => {
@@ -206,26 +250,24 @@ function QuickAskApp() {
     if (!modelId && selectedModel) setModelId(selectedModel.id);
   }, [modelId, selectedModel]);
 
-  // Restore the last used task once, after settings finish loading.
-  const lastTaskRestoredRef = useRef(false);
+  // Only the optimize scenario/goals are remembered; the task itself is one-shot
+  // and always starts as plain Q&A.
+  const optimizeRestoredRef = useRef(false);
   useEffect(() => {
-    if (!ready || lastTaskRestoredRef.current || !settings.quickAskLastTask) return;
-    lastTaskRestoredRef.current = true;
+    if (!ready || optimizeRestoredRef.current || !settings.quickAskLastTask) return;
+    optimizeRestoredRef.current = true;
     const parsed = parseTask(settings.quickAskLastTask);
-    setTask(parsed.task);
-    setOptimize(parsed.optimize);
+    if (parsed.task === "optimize") setOptimize(parsed.optimize);
   }, [ready, settings.quickAskLastTask]);
 
   const changeTask = (next: TaskKind) => {
     setTask(next);
-    setSettings({ quickAskLastTask: encodeTask(next, optimize) });
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const changeOptimize = (next: OptimizeConfig) => {
     setOptimize(next);
-    if (task === "optimize") {
-      setSettings({ quickAskLastTask: encodeTask("optimize", next) });
-    }
+    setSettings({ quickAskLastTask: encodeTask("optimize", next) });
   };
 
   const hide = async () => {
@@ -246,6 +288,8 @@ function QuickAskApp() {
   const startNewChat = () => {
     if (stream.busy) return;
     stream.resetChat();
+    setTask("none");
+    setRouteOverride("auto");
     setActiveSessionId(null);
     setHistoryOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -260,8 +304,12 @@ function QuickAskApp() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      // Layered escape: modal > snippet panel > session panel > context panel >
-      // clear input > hide window.
+      // Layered escape: stop generating > modal > snippet panel > session panel >
+      // context panel > clear input > hide window.
+      if (stream.busy) {
+        void stream.stopStream();
+        return;
+      }
       if (snippets.paramTarget) {
         snippets.setParamTarget(null);
         return;
@@ -280,6 +328,10 @@ function QuickAskApp() {
       }
       if (ctxOpen) {
         setCtxOpen(false);
+        return;
+      }
+      if (task !== "none") {
+        setTask("none");
         return;
       }
       if (input.trim()) {
@@ -301,7 +353,7 @@ function QuickAskApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [snippets.paramTarget, snippets.snippetOpen, openPop, historyOpen, ctxOpen, input, stream.busy]);
+  }, [snippets.paramTarget, snippets.snippetOpen, openPop, historyOpen, ctxOpen, task, input, stream.busy]);
 
   const togglePop = (id: NonNullable<typeof openPop>) => {
     setOpenPop((cur) => (cur === id ? null : id));
@@ -368,9 +420,8 @@ function QuickAskApp() {
     if (stream.busy) return;
     const turns = s.turns || [];
     stream.loadSession(turns);
-    const parsed = parseTask(s.task);
-    setTask(parsed.task);
-    setOptimize(parsed.optimize);
+    setTask("none");
+    setRouteOverride("auto");
     setActiveSessionId(s.id);
     setHistoryOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -393,24 +444,28 @@ function QuickAskApp() {
     }
   };
 
-  const saveAnswerAsSnippet = async () => {
-    if (!stream.answer) return;
-    const name = makeTitle(stream.lastQuestionRef.current || stream.answer, t("saveSnippet"));
+  /** `index` points at an assistant turn in the transcript. */
+  const saveAnswerAsSnippet = async (index: number) => {
+    const text = stream.history[index]?.content;
+    if (!text) return;
+    const question = stream.history[index - 1]?.content;
+    const name = makeTitle(question || text, t("saveSnippet"));
     try {
-      await addSnippet({ name, content: stream.answer, tags: "quickask,ai", params: "" });
-      setSnippetSaved(true);
-      window.setTimeout(() => setSnippetSaved(false), 1500);
+      await addSnippet({ name, content: text, tags: "quickask,ai", params: "" });
+      setSnippetSaved(index);
+      window.setTimeout(() => setSnippetSaved((cur) => (cur === index ? null : cur)), 1500);
     } catch (e) {
       stream.setError(String(e));
     }
   };
 
-  const copyAnswer = async () => {
-    if (!stream.answer) return;
+  const copyAnswer = async (index: number) => {
+    const text = stream.history[index]?.content;
+    if (!text) return;
     try {
-      await invokeCopyToClipboard(stream.answer);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      await invokeCopyToClipboard(text);
+      setCopied(index);
+      window.setTimeout(() => setCopied((cur) => (cur === index ? null : cur)), 1500);
     } catch (e) {
       stream.setError(String(e));
     }
@@ -457,19 +512,28 @@ function QuickAskApp() {
     }
   };
 
-  // Deduplicated repo candidates for the focus picker: current + recent +
-  // folder-scanned + anything already selected (so scanned repos stay visible).
-  const availableRepos = useMemo<RepoOption[]>(() => {
-    const byPath = new Map<string, string>();
-    const add = (path: string, name?: string) => {
-      if (path && !byPath.has(path)) byPath.set(path, name || projectNameFromPath(path));
-    };
-    if (settings.currentGitRepo) add(settings.currentGitRepo);
-    for (const p of recentProjects) add(p.path, p.name);
-    for (const r of extraRepos) add(r.path, r.name);
-    for (const p of focusedRepos) add(p);
-    return Array.from(byPath, ([path, name]) => ({ path, name }));
-  }, [settings.currentGitRepo, recentProjects, extraRepos, focusedRepos]);
+  const autoRepoName = settings.currentGitRepo ? projectNameFromPath(settings.currentGitRepo) : null;
+  /** Selection label for the composer pill in project mode; null = nothing to analyze. */
+  const projectLabel = useMemo(
+    () => describeSelection(focusedRepos, repoGroups, autoRepoName, (k, p) => t(k, p)),
+    [focusedRepos, repoGroups, autoRepoName, t],
+  );
+  const pickerLabel =
+    focusedRepos.length === 0 || !projectLabel
+      ? autoRepoName
+        ? t("ctx.autoRepo", { name: autoRepoName })
+        : t("ctx.noRepo")
+      : projectLabel;
+
+  const previewContext = async () => {
+    if (ctxOpen) {
+      setCtxOpen(false);
+      return;
+    }
+    await ctx.getContext("project");
+    setCtxOpen(true);
+    setOpenPop(null);
+  };
 
   if (!ready) {
     return <div className="quick-ask-root loading">{t("loading")}</div>;
@@ -527,6 +591,15 @@ function QuickAskApp() {
               </button>
             </>
           )}
+          <button
+            type="button"
+            className={`btn-icon qa-pin-btn${pinned ? " is-active" : ""}`}
+            onClick={togglePinned}
+            title={pinned ? t("unpin") : t("pin")}
+            aria-pressed={pinned}
+          >
+            {pinned ? <Pin size={14} /> : <PinOff size={14} />}
+          </button>
           <button type="button" className="btn-icon" onClick={() => void hide()} title={t("close")}>
             <X size={16} />
           </button>
@@ -547,39 +620,29 @@ function QuickAskApp() {
               open={openPop === "model"}
               onToggle={() => togglePop("model")}
             />
-            <QuickSelect
-              value={task}
-              options={TASK_KINDS.map((k) => ({ value: k, label: t(`task.${k}`) }))}
-              onChange={(v) => changeTask(v as TaskKind)}
-              alignLeft
-              open={openPop === "task"}
-              onToggle={() => togglePop("task")}
-            />
-            <FocusPicker
+            <ContextPicker
               open={openPop === "focus"}
               onToggleOpen={() => togglePop("focus")}
-              candidates={availableRepos}
-              selected={focusedRepos}
-              onToggle={toggleFocus}
+              groups={repoGroups}
+              selection={focusedRepos}
+              label={pickerLabel}
+              currentRepo={settings.currentGitRepo || null}
+              onToggleGroup={onToggleGroup}
+              onToggleService={onToggleService}
               onClear={() => commitFocus([])}
               onScanFolder={() => void scanFolder()}
               scanning={scanning}
+              chips={chips}
+              setChip={setChip}
+              onPreview={() => void previewContext()}
+              previewLoading={ctx.ctxLoading}
             />
           </div>
 
-          <ContextBar
-            chips={chips}
-            setChip={setChip}
-            onFillClipboard={() => void fillClipboard()}
-            hasSnippets={(snippets.snippets?.length ?? 0) > 0}
-            snippetOpen={snippets.snippetOpen}
-            onToggleSnippets={() => snippets.setSnippetOpen((v) => !v)}
-            ctxOpen={ctxOpen}
-            onToggleCtx={() => setCtxOpen((v) => !v)}
-            ctxLoading={ctx.ctxLoading}
-            ctxPreview={ctx.ctxPreview}
-            ctxTruncated={ctx.ctxTruncated}
-          />
+          {ctx.ctxTruncated && ctxOpen && <div className="quick-ask-hint">{t("truncated")}</div>}
+          {ctxOpen && (
+            <pre className="quick-ask-ctx-preview">{ctx.ctxPreview || t("ctx.previewEmpty")}</pre>
+          )}
 
           {snippets.snippetOpen && (
             <SnippetPicker
@@ -597,22 +660,45 @@ function QuickAskApp() {
             setInput={setInput}
             inputRef={inputRef}
             busy={stream.busy}
+            phase={stream.phase}
+            modelName={selectedModel?.name || ""}
             error={stream.error}
+            failedMode={stream.failedMode}
+            onRetry={(asChat) => stream.retry(asChat)}
+            onDismissError={stream.dismissError}
+            lastQuestion={stream.lastQuestionRef.current}
+            onExample={(text, exampleTask) => {
+              setInput(text);
+              if (exampleTask) changeTask(exampleTask);
+              else requestAnimationFrame(() => inputRef.current?.focus());
+            }}
             answer={stream.answer}
-            historyCount={stream.history.length}
+            turns={stream.history}
+            pending={stream.pending}
+            source={stream.source}
             canRegenerate={Boolean(stream.lastQuestionRef.current)}
             copied={copied}
             snippetSaved={snippetSaved}
             exportDone={exportDone}
             selectedText={selectedText}
             setSelectedText={setSelectedText}
+            route={routePreview}
+            routeOverride={routeOverride}
+            onRouteOverride={setRouteOverride}
+            routeMenuOpen={openPop === "route"}
+            onToggleRouteMenu={() => togglePop("route")}
+            projectLabel={projectLabel}
+            task={task}
+            onTask={changeTask}
+            hasSnippets={(snippets.snippets?.length ?? 0) > 0}
+            snippetOpen={snippets.snippetOpen}
+            onToggleSnippets={() => snippets.setSnippetOpen((v) => !v)}
+            onPasteClipboard={() => void fillClipboard()}
             onSend={sendAsk}
             onStop={() => void stream.stopStream()}
-            onRegenerate={() =>
-              void stream.send(stream.lastQuestionRef.current, stream.lastHistoryRef.current)
-            }
-            onCopyAnswer={() => void copyAnswer()}
-            onSaveSnippet={() => void saveAnswerAsSnippet()}
+            onRegenerate={() => void stream.regenerate()}
+            onCopyAnswer={(i) => void copyAnswer(i)}
+            onSaveSnippet={(i) => void saveAnswerAsSnippet(i)}
             onOpenDeepSeek={() => void openDeepSeek()}
             onExport={() => void handleExport()}
             onQuote={quoteSelection}

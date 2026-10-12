@@ -25,12 +25,18 @@ pub(crate) mod vis {
     use tauri::{Runtime, WebviewWindow};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SWP_SHOWWINDOW,
+        GetForegroundWindow, IsWindowVisible, SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
     };
 
     fn hwnd_of<R: Runtime>(win: &WebviewWindow<R>) -> Option<HWND> {
         win.hwnd().ok().map(|h| HWND(h.0 as *mut _))
+    }
+
+    /// Whether the window currently owns the foreground (i.e. is not covered/inactive).
+    pub fn is_foreground<R: Runtime>(win: &WebviewWindow<R>) -> Option<bool> {
+        let hwnd = hwnd_of(win)?;
+        Some(unsafe { GetForegroundWindow() } == hwnd)
     }
 
     /// True on-screen visibility, bypassing tao's cached flag.
@@ -73,6 +79,10 @@ pub(crate) mod vis {
         None
     }
 
+    pub fn is_foreground<R: Runtime>(_win: &WebviewWindow<R>) -> Option<bool> {
+        None
+    }
+
     pub fn force_visible<R: Runtime>(_win: &WebviewWindow<R>, _visible: bool) -> bool {
         false
     }
@@ -107,7 +117,7 @@ pub fn ensure_quick_ask_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
         .inner_size(560.0, 520.0)
         .resizable(true)
         .decorations(false)
-        .always_on_top(true)
+        .always_on_top(false)
         .skip_taskbar(true)
         .visible(false)
         .center()
@@ -362,7 +372,16 @@ pub fn toggle_quick_ask<R: Runtime>(app: &AppHandle<R>) {
     // Judge from the real window, not from `is_visible()` — tao's cached flag desyncs
     // when `ShowWindow` is ignored, which made this toggle a permanent no-op.
     let visible = vis::really_visible(&win).unwrap_or_else(|| win.is_visible().unwrap_or(false));
-    if visible {
+    // Unpinned, the window can sit behind others and has no taskbar button, so a
+    // covered window is raised instead of hidden. Clicking the bubble moves the
+    // foreground onto the bubble itself, which still counts as "in front".
+    let in_front = win.is_always_on_top().unwrap_or(false)
+        || vis::is_foreground(&win).unwrap_or(true)
+        || app
+            .get_webview_window(QUICK_ASK_BUBBLE_LABEL)
+            .and_then(|b| vis::is_foreground(&b))
+            .unwrap_or(false);
+    if visible && in_front {
         if let Err(e) = win.hide() {
             eprintln!("[tray] hide quick-ask failed: {e}");
         }
@@ -410,6 +429,13 @@ pub fn show_quick_ask<R: Runtime>(app: &AppHandle<R>) {
 /// which tao resolves through its cached flag diff — once that cache desyncs (because
 /// the real window was shown with `SetWindowPos`) the call becomes a no-op, so Esc /
 /// the close button could not dismiss the window. Route it through Rust instead.
+pub fn set_quick_ask_pinned<R: Runtime>(app: &AppHandle<R>, pinned: bool) -> Result<(), String> {
+    let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) else {
+        return Ok(());
+    };
+    win.set_always_on_top(pinned).map_err(|e| e.to_string())
+}
+
 pub fn hide_quick_ask<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) {
         if let Err(e) = win.hide() {

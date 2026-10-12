@@ -536,6 +536,7 @@ pub fn run() {
             tray::open_quick_ask_with_text,
             tray::tray_toggle_quick_ask,
             tray::hide_quick_ask,
+            tray::set_quick_ask_pinned,
             tray::open_main_deepseek,
             tray::open_main_tab,
             tray::set_quick_ask_bubble_visible,
