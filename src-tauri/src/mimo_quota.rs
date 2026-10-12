@@ -2,7 +2,8 @@
 //! - `sk-…` 按量：Bearer/api-key 查 `api.xiaomimimo.com/v1/user/balance`
 //! - `tp-…` / `ttp-…` Token Plan：Key 只用于验证；用量走开放平台 Cookie
 //!   `GET platform.xiaomimimo.com/api/v1/tokenPlan/usage`
-//!   （需要 `api-platform_serviceToken` + `userId`，Cookie 存 `quota_accounts.refresh_token`）
+//!   （需要 `api-platform_serviceToken` + `userId`；全量 Cookie 存 `quota_accounts.refresh_token`，
+//!    请求时再 normalize。短效 serviceToken 过期时用隐藏 WebView 复用通行证静默换票。）
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +25,10 @@ const PLATFORM_API: &str = "https://platform.xiaomimimo.com/api/v1";
 const PLATFORM_USAGE: &str = "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage";
 const PLATFORM_LOGIN: &str = "https://platform.xiaomimimo.com/#/console/plan-manage";
 const WINDOW_LABEL: &str = "mimo-platform-login";
+const RENEW_LABEL: &str = "mimo-platform-renew";
 const CLOSE_DELAY: Duration = Duration::from_millis(250);
+const RENEW_TIMEOUT: Duration = Duration::from_secs(20);
+const RENEW_POLL: Duration = Duration::from_secs(1);
 
 const INVALID_KEY: &str = "API Key 无效或已失效，请更换";
 const SESSION_EXPIRED: &str = "开放平台登录已过期，请重新登录查询用量";
@@ -273,9 +277,16 @@ pub fn parse_balance(body: &str, mode: MimoMode) -> Result<(Option<String>, Vec<
     Ok((plan, balances, windows))
 }
 
+fn strip_cookie_prefix(raw: &str) -> &str {
+    raw.trim()
+        .trim_start_matches("Cookie:")
+        .trim_start_matches("cookie:")
+        .trim()
+}
+
 /// 抽出用量接口需要的 Cookie；缺 `api-platform_serviceToken` / `userId` 则失败。
 pub fn normalize_cookie_header(raw: &str) -> Result<String, String> {
-    let raw = raw.trim().trim_start_matches("Cookie:").trim_start_matches("cookie:").trim();
+    let raw = strip_cookie_prefix(raw);
     let known = [
         "api-platform_serviceToken",
         "userId",
@@ -316,6 +327,16 @@ pub fn normalize_cookie_header(raw: &str) -> Result<String, String> {
         .map(|(n, v)| format!("{n}={v}"))
         .collect::<Vec<_>>()
         .join("; "))
+}
+
+/// 校验可查用量后，保留全量 Cookie 入库（含通行证长效字段，供静默续期）。
+pub fn persistable_cookie_header(raw: &str) -> Result<String, String> {
+    let full = strip_cookie_prefix(raw).to_string();
+    let _ = normalize_cookie_header(&full)?;
+    if full.is_empty() {
+        return Err("Cookie 为空".to_string());
+    }
+    Ok(full)
 }
 
 async fn get_json_key(client: &reqwest::Client, url: &str, key: &str) -> Result<(u16, String), String> {
@@ -597,7 +618,7 @@ pub async fn mimo_add_key(state: tauri::State<'_, DbState>, api_key: String) -> 
     .await
 }
 
-/// 粘贴开放平台 Cookie，验证用量接口后写入该账号（refresh_token）。
+/// 粘贴开放平台 Cookie，验证用量接口后写入该账号（refresh_token = 全量 Cookie）。
 #[tauri::command]
 pub async fn mimo_set_cookie(
     state: tauri::State<'_, DbState>,
@@ -606,8 +627,8 @@ pub async fn mimo_set_cookie(
 ) -> Result<MimoQuotaDto, String> {
     let client = http_client()?;
     let c = fetch_usage_with_cookie(&client, &cookie).await?;
-    let normalized = normalize_cookie_header(&cookie)?;
-    save_session_cookie(Arc::clone(&state.conn), id, normalized).await?;
+    let full = persistable_cookie_header(&cookie)?;
+    save_session_cookie(Arc::clone(&state.conn), id, full).await?;
     let stored = token_for(Arc::clone(&state.conn), id, Provider::Mimo).await.ok();
     Ok(MimoQuotaDto::ok(
         id,
@@ -623,29 +644,38 @@ pub async fn mimo_set_cookie(
     ))
 }
 
+fn dto_from_fetch(id: i64, label: Option<String>, has_session: bool, ok: FetchOk) -> MimoQuotaDto {
+    MimoQuotaDto::ok(
+        id,
+        label,
+        ok.plan,
+        ok.mode,
+        ok.balances,
+        ok.windows,
+        ok.period_end_ms,
+        ok.expired,
+        has_session && ok.message.as_deref() != Some(NEED_SESSION),
+        ok.message,
+    )
+}
+
 #[tauri::command]
-pub async fn mimo_quota_fetch(state: tauri::State<'_, DbState>, id: i64) -> Result<MimoQuotaDto, String> {
+pub async fn mimo_quota_fetch(app: AppHandle, state: tauri::State<'_, DbState>, id: i64) -> Result<MimoQuotaDto, String> {
     let stored = match token_for(Arc::clone(&state.conn), id, Provider::Mimo).await {
         Ok(t) => t,
         Err(m) => return Ok(MimoQuotaDto::err(id, None, false, m)),
     };
     let has_session = !stored.refresh_token.trim().is_empty();
     match fetch_quota(&http_client()?, &stored.access_token, &stored.refresh_token).await {
-        Ok(ok) => Ok(MimoQuotaDto::ok(
-            id,
-            stored.label,
-            ok.plan,
-            ok.mode,
-            ok.balances,
-            ok.windows,
-            ok.period_end_ms,
-            ok.expired,
-            has_session && ok.message.as_deref() != Some(NEED_SESSION),
-            ok.message,
-        )),
+        Ok(ok) => Ok(dto_from_fetch(id, stored.label, has_session, ok)),
         Err(m) if m == SESSION_EXPIRED => {
-            let _ = clear_session_cookie(Arc::clone(&state.conn), id).await;
-            Ok(MimoQuotaDto::err(id, stored.label, false, m))
+            match silent_renew(&app, Arc::clone(&state.conn), id, stored.label.clone()).await {
+                Ok(dto) => Ok(dto),
+                Err(_) => {
+                    let _ = clear_session_cookie(Arc::clone(&state.conn), id).await;
+                    Ok(MimoQuotaDto::err(id, stored.label, false, SESSION_EXPIRED))
+                }
+            }
         }
         Err(m) => Ok(MimoQuotaDto::err(id, stored.label, has_session, m)),
     }
@@ -700,14 +730,40 @@ fn domain_matches(host: &str, cookie_domain: &str) -> bool {
     !d.is_empty() && (h == d || h.ends_with(&format!(".{d}")))
 }
 
-/// 读登录窗 Cookie；具备用量所需字段时 `ready=true`。
-#[tauri::command]
-pub async fn mimo_capture_login_cookies(app: AppHandle) -> Result<MimoCookieCapture, String> {
+fn join_platform_cookies(host: &str, cookies: &[(String, String, String)]) -> (String, Vec<String>) {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (name, value, domain) in cookies {
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        if !domain_matches(host, domain)
+            && !domain.to_ascii_lowercase().contains("xiaomi")
+            && !domain.to_ascii_lowercase().contains("xiaomimimo")
+        {
+            continue;
+        }
+        if let Some(existing) = pairs.iter_mut().find(|(n, _)| n == name) {
+            existing.1 = value.clone();
+        } else {
+            pairs.push((name.clone(), value.clone()));
+        }
+    }
+    let names: Vec<String> = pairs.iter().map(|(n, _)| n.clone()).collect();
+    let joined = pairs
+        .into_iter()
+        .map(|(n, v)| format!("{n}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    (joined, names)
+}
+
+async fn capture_window_cookies(app: &AppHandle, label: &str) -> Result<MimoCookieCapture, String> {
     let handle = app.clone();
+    let label = label.to_string();
     let (page_url, host, cookies) = tokio::task::spawn_blocking(move || -> Result<(String, String, Vec<(String, String, String)>), String> {
         let win = handle
-            .get_webview_window(WINDOW_LABEL)
-            .ok_or_else(|| "登录窗已关闭，请重新打开".to_string())?;
+            .get_webview_window(&label)
+            .ok_or_else(|| format!("窗口 {label} 已关闭"))?;
         let url = win.url().map_err(|e| e.to_string())?;
         let host = url.host_str().unwrap_or_default().to_string();
         let cookies = win
@@ -727,35 +783,121 @@ pub async fn mimo_capture_login_cookies(app: AppHandle) -> Result<MimoCookieCapt
     .await
     .map_err(|e| e.to_string())??;
 
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    for (name, value, domain) in &cookies {
-        if name.is_empty() || value.is_empty() {
-            continue;
-        }
-        if !domain_matches(&host, domain)
-            && !domain.to_ascii_lowercase().contains("xiaomi")
-            && !domain.to_ascii_lowercase().contains("xiaomimimo")
-        {
-            continue;
-        }
-        if let Some(existing) = pairs.iter_mut().find(|(n, _)| n == name) {
-            existing.1 = value.clone();
-        } else {
-            pairs.push((name.clone(), value.clone()));
-        }
-    }
-    let joined = pairs
-        .iter()
-        .map(|(n, v)| format!("{n}={v}"))
-        .collect::<Vec<_>>()
-        .join("; ");
+    let (joined, names) = join_platform_cookies(&host, &cookies);
     let ready = normalize_cookie_header(&joined).is_ok();
     Ok(MimoCookieCapture {
         page_url,
         ready,
         cookie_header: joined,
-        names: pairs.into_iter().map(|(n, _)| n).collect(),
+        names,
     })
+}
+
+/// 读登录窗 Cookie；具备用量所需字段时 `ready=true`。
+#[tauri::command]
+pub async fn mimo_capture_login_cookies(app: AppHandle) -> Result<MimoCookieCapture, String> {
+    capture_window_cookies(&app, WINDOW_LABEL)
+        .await
+        .map_err(|e| {
+            if e.contains("已关闭") {
+                "登录窗已关闭，请重新打开".to_string()
+            } else {
+                e
+            }
+        })
+}
+
+fn close_labeled_window(app: &AppHandle, label: &str) {
+    if let Some(win) = app.get_webview_window(label) {
+        let _ = win.close();
+    }
+}
+
+async fn ensure_renew_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window(RENEW_LABEL) {
+        let _ = existing.eval(&format!("window.location.href = {}", serde_json::to_string(PLATFORM_LOGIN).unwrap_or_else(|_| "''".into())));
+        return Ok(());
+    }
+    let parsed = Url::parse(PLATFORM_LOGIN).map_err(|e| format!("登录 URL 非法: {e}"))?;
+    WebviewWindowBuilder::new(app, RENEW_LABEL, WebviewUrl::External(parsed))
+        .title("MiMo session renew")
+        .inner_size(480.0, 360.0)
+        .visible(false)
+        .skip_taskbar(true)
+        .focused(false)
+        .build()
+        .map_err(|e| format!("创建续期窗口失败: {e}"))?;
+    Ok(())
+}
+
+/// 隐藏 WebView 加载控制台，复用 WebView2 里的通行证 Cookie 静默换票。
+async fn silent_renew(
+    app: &AppHandle,
+    conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
+    id: i64,
+    label: Option<String>,
+) -> Result<MimoQuotaDto, String> {
+    // 若用户登录窗还开着，优先直接抓它（已登录态）。
+    if let Ok(capture) = capture_window_cookies(app, WINDOW_LABEL).await {
+        if capture.ready {
+            if let Ok(dto) = bind_captured_cookie(conn.clone(), id, label.clone(), &capture.cookie_header).await {
+                return Ok(dto);
+            }
+        }
+    }
+
+    ensure_renew_window(app).await?;
+    let deadline = std::time::Instant::now() + RENEW_TIMEOUT;
+    let mut last_err = "静默续期超时".to_string();
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(RENEW_POLL).await;
+        let capture = match capture_window_cookies(app, RENEW_LABEL).await {
+            Ok(c) => c,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        if !capture.ready {
+            last_err = "续期窗尚未拿到 serviceToken".to_string();
+            continue;
+        }
+        match bind_captured_cookie(conn.clone(), id, label.clone(), &capture.cookie_header).await {
+            Ok(dto) => {
+                close_labeled_window(app, RENEW_LABEL);
+                return Ok(dto);
+            }
+            Err(e) => {
+                last_err = e;
+            }
+        }
+    }
+    close_labeled_window(app, RENEW_LABEL);
+    Err(last_err)
+}
+
+async fn bind_captured_cookie(
+    conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
+    id: i64,
+    label: Option<String>,
+    cookie: &str,
+) -> Result<MimoQuotaDto, String> {
+    let client = http_client()?;
+    let c = fetch_usage_with_cookie(&client, cookie).await?;
+    let full = persistable_cookie_header(cookie)?;
+    save_session_cookie(conn, id, full).await?;
+    Ok(MimoQuotaDto::ok(
+        id,
+        label,
+        c.plan,
+        MimoMode::TokenPlan,
+        c.balances,
+        c.windows,
+        c.period_end_ms,
+        c.expired,
+        true,
+        None,
+    ))
 }
 
 /// 从已打开的登录窗抓 Cookie → 验证用量 → 绑定到账号 → 关窗。
@@ -765,7 +907,14 @@ pub async fn mimo_bind_login_session(app: AppHandle, state: tauri::State<'_, DbS
     if !capture.ready {
         return Err("尚未登录完成：请在打开的窗口里登录小米账号，进入套餐/用量页后再点「完成」".to_string());
     }
-    let dto = mimo_set_cookie(state, id, capture.cookie_header).await?;
+    let stored = token_for(Arc::clone(&state.conn), id, Provider::Mimo).await.ok();
+    let dto = bind_captured_cookie(
+        Arc::clone(&state.conn),
+        id,
+        stored.and_then(|s| s.label),
+        &capture.cookie_header,
+    )
+    .await?;
     let _ = mimo_close_login_window(app).await;
     Ok(dto)
 }
@@ -819,6 +968,17 @@ mod tests {
         .unwrap();
         assert!(ok.contains("api-platform_serviceToken=tok"));
         assert!(ok.contains("userId=123"));
+    }
+
+    #[test]
+    fn persistable_keeps_full_jar_after_validate() {
+        let raw = "api-platform_serviceToken=tok; userId=123; passport_token=long; other=x";
+        let full = persistable_cookie_header(raw).unwrap();
+        assert!(full.contains("passport_token=long"));
+        assert!(full.contains("other=x"));
+        let slim = normalize_cookie_header(&full).unwrap();
+        assert!(slim.contains("api-platform_serviceToken=tok"));
+        assert!(!slim.contains("passport_token"));
     }
 
     #[test]
