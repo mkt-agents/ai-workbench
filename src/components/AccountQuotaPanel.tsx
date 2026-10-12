@@ -765,8 +765,8 @@ function AccountQuotaPanel() {
   }, []);
 
   useTauriEvent<QoderAutoClaimResult[]>(QODER_AUTO_CLAIM_EVENT, (e) => {
-    const ids = e.payload.filter((r) => r.ok && !r.skipped).map((r) => r.id);
-    for (const id of ids) void fetchKey(`qoder:${id}`);
+    // 成功 / 跳过 / 失败都刷一遍：跳过也要更新「已领取」；设置里的上次自动领取日期一并刷新。
+    for (const r of e.payload) void fetchKey(`qoder:${r.id}`);
     qoderGetSettings().then(setQoderSettings, () => undefined);
   }, []);
 
@@ -1217,7 +1217,12 @@ function AccountQuotaPanel() {
     : null;
   const autoQoderClaimText = qoderSettings
     ? qoderSettings.claimEnabled
-      ? t("qoderAutoClaim", { time: qoderSettings.claimTime })
+      ? qoderSettings.lastAutoClaimDate
+        ? t("qoderAutoClaimWithLast", {
+            time: qoderSettings.claimTime,
+            date: qoderSettings.lastAutoClaimDate,
+          })
+        : t("qoderAutoClaim", { time: qoderSettings.claimTime })
       : t("qoderAutoClaimOff")
     : null;
   const checkinAll = async () => {
@@ -2483,10 +2488,16 @@ function CursorCard({
   const usablePools = ok && cursorHasUsableModelPools(quota);
   const pooledPrimary =
     ok && cursorIsTeamSeat(quota) && quota.pooledLimit != null && quota.pooledLimit > 0;
-  const dollarHint =
+  // 赠送用量并进第一条 hint，避免单独占 DetailGrid 一行把卡撑高、打乱同行对齐。
+  const dollarPart =
     ok && quota.limit != null
       ? t("cursorSpend", { spend: formatSpend(included), limit: formatSpend(quota.limit) })
-      : undefined;
+      : null;
+  const bonusPart =
+    ok && quota.bonusSpend != null && quota.bonusSpend > 0
+      ? t("cursorBonusHint", { spend: formatSpend(quota.bonusSpend) })
+      : null;
+  const dollarHint = [dollarPart, bonusPart].filter(Boolean).join(" · ") || undefined;
   const details: Detail[] = [];
   if (ok) {
     // 按量付费预算：套餐用完后才开始扣；没开（上限为 0）且没花过时不占位。
@@ -2508,9 +2519,6 @@ function CursorCard({
     if (!pooledPrimary) {
       const teamPool = onDemand(quota.pooledUsed, quota.pooledLimit);
       if (teamPool) details.push({ label: t("cursorTeamPool"), value: teamPool });
-    }
-    if (quota.bonusSpend != null && quota.bonusSpend > 0) {
-      details.push({ label: t("cursorBonus"), value: formatSpend(quota.bonusSpend) });
     }
   }
 
@@ -2564,10 +2572,17 @@ function CursorCard({
             countdown={cycleCountdown}
             value={`${remainPct}%`}
             percent={remainPct}
-            hint={t("cursorSpend", {
-              spend: formatSpend(quota.pooledUsed ?? 0),
-              limit: formatSpend(quota.pooledLimit),
-            })}
+            hint={
+              [
+                t("cursorSpend", {
+                  spend: formatSpend(quota.pooledUsed ?? 0),
+                  limit: formatSpend(quota.pooledLimit),
+                }),
+                bonusPart,
+              ]
+                .filter(Boolean)
+                .join(" · ") || undefined
+            }
           />
           <DetailGrid items={details} />
         </div>
@@ -2797,8 +2812,8 @@ function QoderCard({
   const ok = quota?.ok === true;
   const expiresAtMs = ok && quota.expiresAtMs != null && quota.expiresAtMs < QODER_NO_EXPIRY_MS ? quota.expiresAtMs : null;
   const campaign = liveQoderCampaign(quota, now);
-  // 与 Qoder「我的用量」一致：套餐内 Credits 与资源包各一条；卡片整体状态仍按两池之和。
-  // 只要有一池非空，空的套餐池也画成 0% 条，两池上下对齐。
+  // 与 Qoder「我的用量」一致：套餐内 Credits 与资源包各一条。
+  // 有任一池有额度时，套餐池即便 total=0 也画出来（personal_standard 常见），两池上下对齐。
   const allPools = ok
     ? [
         { key: "plan", label: t("qoderCredits"), q: quota.user, countdown: compactCountdown(expiresAtMs, now) },

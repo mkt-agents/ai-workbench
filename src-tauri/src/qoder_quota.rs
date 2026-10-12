@@ -904,12 +904,27 @@ pub async fn auto_tick(app: &tauri::AppHandle) -> Result<(), String> {
         move |conn| {
             let app = app.clone();
             async move {
-                let results = run_auto_claim_round(conn).await?;
-                let attempted: Vec<_> = results.into_iter().filter(|r| !r.skipped).collect();
-                if !attempted.is_empty() {
-                    let _ = app.emit("qoder-auto-claim-done", &attempted);
+                match run_auto_claim_round(Arc::clone(&conn)).await {
+                    Ok(results) => {
+                        // 含 skipped：前端好刷新「已领取」与上次自动领取日期。
+                        let _ = app.emit("qoder-auto-claim-done", &results);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        // 整轮失败则清掉今日占位，下一分钟可重试（风控单账号失败仍算跑过，不在此列）。
+                        let _ = with_db(conn, |c| {
+                            update_settings(
+                                c,
+                                &QoderSettingsPatch {
+                                    last_auto_claim_date: Some(String::new()),
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                        .await;
+                        Err(e)
+                    }
                 }
-                Ok(())
             }
         },
     )

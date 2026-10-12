@@ -797,6 +797,9 @@
 .aq-meter-hint {
   font-size: 11px;
   color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .aq-details {
