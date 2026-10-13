@@ -50,8 +50,19 @@ pub const SCHEMA_SQL: &str = r#"
     );
 "#;
 
+/// 实测可用的协议（2026-10 抓包，与开发机 `wb_settings.adapter_json` 一致）。
+/// 新装没有它时登录窗打不开、签到 / 积分全不可用；只含 `{token}` 占位符，不含任何凭证。
+pub const DEFAULT_PROFILE_JSON: &str = include_str!("default_profile.json");
+
 pub fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
+    // 只填空值：用户在「协议配置」里改过的保持不动；清空后下次启动会重新填回默认。
+    conn.execute(
+        "UPDATE wb_settings SET adapter_json = ?1
+          WHERE id = 1 AND (adapter_json IS NULL OR trim(adapter_json) = '')",
+        [DEFAULT_PROFILE_JSON],
+    )
+    .map_err(|e| e.to_string())?;
     let has_tag: bool = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('codebuddy_accounts') WHERE name = 'tag'",

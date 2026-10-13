@@ -36,8 +36,50 @@ function renderPreview(content: string) {
   );
 }
 
-type SortMode = "useCount" | "updated";
+type SortMode = "useCount" | "updated" | "manual";
 type KindFilter = "all" | "text" | "prompt";
+
+const SORT_KEY = "snippets-sort";
+const ORDER_KEY = "snippets-order";
+
+function loadSortMode(): SortMode {
+  const v = localStorage.getItem(SORT_KEY);
+  return v === "updated" || v === "manual" ? v : "useCount";
+}
+
+function loadOrder(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(ORDER_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function persist(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* private mode / quota — order just isn't remembered */
+  }
+}
+
+/** 按当前排序方式排全部片段；手动序里没有的（新建 / 导入）排最前，按更新时间倒序。 */
+function sortSnippets(list: Snippet[], mode: SortMode, order: string[]): Snippet[] {
+  const byUpdated = (a: Snippet, b: Snippet) => b.updatedAt.localeCompare(a.updatedAt);
+  if (mode === "useCount") return [...list].sort((a, b) => b.useCount - a.useCount || byUpdated(a, b));
+  if (mode === "updated") return [...list].sort(byUpdated);
+  const rank = new Map(order.map((id, i) => [id, i]));
+  return [...list].sort((a, b) => {
+    const ra = rank.get(a.id);
+    const rb = rank.get(b.id);
+    if (ra === undefined || rb === undefined) {
+      if (ra === rb) return byUpdated(a, b);
+      return ra === undefined ? -1 : 1;
+    }
+    return ra - rb;
+  });
+}
 
 export default function SnippetsManager() {
   const { t } = useTranslation("snippets");
@@ -59,7 +101,10 @@ export default function SnippetsManager() {
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState<string>("");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
-  const [sortMode, setSortMode] = useState<SortMode>("useCount");
+  const [sortMode, setSortModeState] = useState<SortMode>(loadSortMode);
+  const [order, setOrder] = useState<string[]>(loadOrder);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Partial<Snippet> | null>(null);
   const [useTarget, setUseTarget] = useState<Snippet | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
@@ -138,16 +183,45 @@ export default function SnippetsManager() {
     return { all: matched.length, text: matched.length - prompt, prompt };
   }, [matched]);
 
-  const filtered = useMemo(() => {
-    let list = matched.filter((s) => kindFilter === "all" || (s.kind ?? "text") === kindFilter);
-    list = [...list].sort((a, b) => {
-      if (sortMode === "useCount") {
-        return b.useCount - a.useCount || b.updatedAt.localeCompare(a.updatedAt);
-      }
-      return b.updatedAt.localeCompare(a.updatedAt);
-    });
-    return list;
-  }, [matched, kindFilter, sortMode]);
+  const filtered = useMemo(
+    () =>
+      sortSnippets(
+        matched.filter((s) => kindFilter === "all" || (s.kind ?? "text") === kindFilter),
+        sortMode,
+        order,
+      ),
+    [matched, kindFilter, sortMode, order],
+  );
+
+  const setSortMode = (mode: SortMode) => {
+    setSortModeState(mode);
+    persist(SORT_KEY, mode);
+  };
+
+  const endDrag = () => {
+    setDragId(null);
+    setOverId(null);
+  };
+
+  /** 拖放后切到手动排序。筛选中只重排可见的那几张：它们在全量顺序里占的位置不变，
+   *  被筛掉的片段留在原位，取消筛选后不会被挤到末尾。 */
+  const dropOn = (targetId: string) => {
+    if (!dragId || dragId === targetId) return endDrag();
+    const visible = filtered.map((s) => s.id);
+    const from = visible.indexOf(dragId);
+    const to = visible.indexOf(targetId);
+    if (from === -1 || to === -1) return endDrag();
+    visible.splice(to, 0, ...visible.splice(from, 1));
+
+    const full = sortSnippets(snippets, sortMode, order).map((s) => s.id);
+    const visibleSet = new Set(visible);
+    let i = 0;
+    const next = full.map((id) => (visibleSet.has(id) ? visible[i++] : id));
+    setOrder(next);
+    persist(ORDER_KEY, JSON.stringify(next));
+    setSortMode("manual");
+    endDrag();
+  };
 
   const openCreate = () => {
     setEditing({ name: "", content: "", tags: "", params: "" });
@@ -419,6 +493,7 @@ export default function SnippetsManager() {
             >
               <option value="useCount">{t("sortUseCount")}</option>
               <option value="updated">{t("sortUpdated")}</option>
+              <option value="manual">{t("sortManual")}</option>
             </select>
             <ChevronDown size={12} />
           </div>
@@ -501,9 +576,31 @@ export default function SnippetsManager() {
           return (
             <div
               key={s.id}
-              className="snippet-card"
+              className={`snippet-card${dragId === s.id ? " is-dragging" : ""}${
+                overId === s.id && dragId !== s.id ? " is-drop-target" : ""
+              }`}
               tabIndex={0}
               title={t("cardHint")}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", s.name);
+                setDragId(s.id);
+              }}
+              onDragOver={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (overId !== s.id) setOverId(s.id);
+              }}
+              onDragLeave={(e) => {
+                if (overId === s.id && !e.currentTarget.contains(e.relatedTarget as Node | null)) setOverId(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                dropOn(s.id);
+              }}
+              onDragEnd={endDrag}
               onDoubleClick={(e) => {
                 if ((e.target as HTMLElement).closest("button")) return;
                 void handleUse(s);

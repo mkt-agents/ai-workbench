@@ -1,0 +1,50 @@
+{
+  "loginUrl": "https://www.codebuddy.cn/login/?platform=usercenter&state=0&redirect_uri=https%3A%2F%2Fwww.codebuddy.cn%2Fprofile%2Fplan",
+  "credentialProbe": {
+    "method": "GET",
+    "url": "https://www.codebuddy.cn/console/api/client/v1/api-keys?page=1&page_size=10&user_enterprise_id=personal",
+    "headers": [
+      ["authorization", "Bearer {token}"],
+      ["x-client-platform", "web"]
+    ]
+  },
+  "checkin": {
+    "method": "POST",
+    "url": "https://copilot.tencent.com/billing/meter/daily-checkin",
+    "headers": [
+      ["authorization", "Bearer {token}"],
+      ["content-type", "application/json"]
+    ],
+    "body": "{}"
+  },
+  "checkinStatus": {
+    "method": "POST",
+    "url": "https://copilot.tencent.com/billing/meter/checkin-activity-status",
+    "headers": [
+      ["authorization", "Bearer {token}"],
+      ["content-type", "application/json"]
+    ],
+    "body": "{}"
+  },
+  "creditSummary": {
+    "method": "POST",
+    "url": "https://copilot.tencent.com/billing/meter/get-user-resource-summary",
+    "headers": [
+      ["authorization", "Bearer {token}"],
+      ["content-type", "application/json"],
+      ["x-client-platform", "web"],
+      ["User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"]
+    ],
+    "body": "{}"
+  },
+  "chat": {
+    "method": "POST",
+    "url": "https://copilot.tencent.com/v2/chat/completions",
+    "headers": [
+      ["authorization", "Bearer {token}"],
+      ["content-type", "application/json"]
+    ]
+  },
+  "models": null,
+  "fallbackModels": ["deepseek-chat"]
+}

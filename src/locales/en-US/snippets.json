@@ -11,6 +11,7 @@
   "sortLabel": "Sort",
   "sortUseCount": "Most used",
   "sortUpdated": "Recently updated",
+  "sortManual": "Manual order",
   "used": "Used {{count}}×",
   "kindPrompt": "Prompt",
   "kindPromptHint": "Prompt template: used as a rewrite skeleton; hidden from the Quick Ask picker",
@@ -58,5 +59,5 @@
   "preview": "Resolved preview",
   "more": "More actions",
   "copy": "Copy",
-  "cardHint": "Double-click or Enter to use, F2 to edit"
+  "cardHint": "Double-click or Enter to use, F2 to edit, drag to reorder"
 }

@@ -661,7 +661,29 @@ mod tests {
         let conn = mem_conn();
         let s = get_settings(&conn).unwrap();
         assert_eq!(s.checkin_time, "09:30");
-        assert!(s.adapter_json.is_none());
+        // 新装即带可用协议，登录窗 / 签到 / 积分开箱可用。
+        let profile = load_profile(&conn).unwrap().expect("默认协议应已写入");
+        assert!(profile.login_url.starts_with("https://www.codebuddy.cn/login/"));
+        assert!(profile.credential_probe.is_some());
+        assert!(profile.checkin.is_some() && profile.checkin_status.is_some() && profile.credit_summary.is_some());
+        let json = s.adapter_json.unwrap();
+        assert!(!json.contains("eyJ"), "默认协议里不能混进真实 token");
+    }
+
+    #[test]
+    fn schema_keeps_user_profile_and_refills_cleared_one() {
+        let conn = mem_conn();
+        let custom = r#"{ "loginUrl": "https://x.test/login" }"#;
+        update_settings(&conn, &WbSettingsPatch { adapter_json: Some(custom.into()), ..Default::default() }).unwrap();
+        crate::codebuddy::ensure_schema(&conn).unwrap();
+        assert_eq!(get_settings(&conn).unwrap().adapter_json.as_deref(), Some(custom));
+
+        update_settings(&conn, &WbSettingsPatch { adapter_json: Some("  ".into()), ..Default::default() }).unwrap();
+        crate::codebuddy::ensure_schema(&conn).unwrap();
+        assert_eq!(
+            get_settings(&conn).unwrap().adapter_json.as_deref(),
+            Some(crate::codebuddy::DEFAULT_PROFILE_JSON)
+        );
     }
 
     #[test]
