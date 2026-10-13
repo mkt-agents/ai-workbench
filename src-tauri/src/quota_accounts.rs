@@ -274,7 +274,13 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub fn cursor_login_url(challenge: &str, uuid: &str) -> String {
     url::Url::parse_with_params(
         CURSOR_LOGIN_URL,
-        &[("challenge", challenge), ("uuid", uuid), ("mode", "login")],
+        &[
+            ("challenge", challenge),
+            ("uuid", uuid),
+            ("mode", "login"),
+            // 官方客户端都带；缺了它，属于团队的账号在网页端点确认后会报 "Unable to complete sign-in"
+            ("supportsSelectedTeamLogin", "true"),
+        ],
     )
     .map(|u| u.to_string())
     .unwrap_or_default()
@@ -351,6 +357,7 @@ async fn poll_cursor_login(client: &reqwest::Client, uuid: &str, verifier: &str)
         let resp = client
             .get(CURSOR_POLL_URL)
             .query(&[("uuid", uuid), ("verifier", verifier)])
+            .header("x-cursor-client-type", "ide")
             .send()
             .await;
         let Ok(resp) = resp else { continue };
@@ -543,6 +550,7 @@ mod tests {
         assert_eq!(q["challenge"], "chal");
         assert_eq!(q["uuid"], "uu");
         assert_eq!(q["mode"], "login");
+        assert_eq!(q["supportsSelectedTeamLogin"], "true");
     }
 
     #[test]
