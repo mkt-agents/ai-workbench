@@ -1768,11 +1768,13 @@ function AccountQuotaPanel() {
               </div>
             </div>
 
-            {visibleKeys.length === 0 ? (
-              <div className="aq-board-empty">{t("boardEmpty")}</div>
-            ) : (
-              <div className="aq-grid">{visibleKeys.map(renderCard)}</div>
-            )}
+            <div className="aq-board">
+              {visibleKeys.length === 0 ? (
+                <div className="aq-board-empty">{t("boardEmpty")}</div>
+              ) : (
+                <div className="aq-grid">{visibleKeys.map(renderCard)}</div>
+              )}
+            </div>
           </div>
 
           <QuotaProviderRail

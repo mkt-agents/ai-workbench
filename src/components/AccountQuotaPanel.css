@@ -4,8 +4,8 @@
    注意：本文件由组件导入，排在 styles.css 之前，覆盖共享基类必须用
    复合选择器提高优先级，单类名会静默失效。 */
 
-/* 双栏各自独立滚动（左看板 / 右侧栏）。滚动条由 layout.css 全局隐藏。
-   窄窗改单列，改由 shell 滚。 */
+/* 双栏各自独立滚动（左看板 / 右侧栏）；左栏工具条固定，只有卡片区 .aq-board 滚。
+   滚动条由 layout.css 全局隐藏。窄窗改单列，改由 shell 滚。 */
 .aq-shell {
   flex: 1;
   min-height: 0;
@@ -22,8 +22,17 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  overflow: visible;
+}
+
+/* 2px 内边距 + 负外边距：给卡片聚焦描边 / 阴影留位，免得被滚动容器裁掉。 */
+.aq-board {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  padding: 2px;
+  margin: -2px;
 }
 
 @media (max-width: 900px) {
@@ -33,6 +42,11 @@
   }
 
   .quota-page .page-scrollable.aq-main {
+    flex: none;
+    overflow: visible;
+  }
+
+  .aq-board {
     flex: none;
     overflow: visible;
   }
@@ -55,6 +69,7 @@
 .aq-toolbar {
   position: relative;
   z-index: 40;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;
