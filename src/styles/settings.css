@@ -131,6 +131,23 @@
   color: var(--text-2);
 }
 
+/* 有新版本时跟在版本号后面：「0.2.24 → 0.2.25 [升级]」，按钮栏只留常驻操作。 */
+.settings-page .about-version {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.settings-page .about-version-next {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.settings-page .about-upgrade-btn {
+  min-height: 22px;
+  padding: 0 10px;
+}
+
 /* Theme chips: hug content, wrap cleanly — no empty full-width track */
 .settings-page .theme-selector {
   display: flex;

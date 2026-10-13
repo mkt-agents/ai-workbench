@@ -307,7 +307,27 @@ function Settings({ onOpenUpdate }: Props = {}) {
         <div className="card-body about-card-body">
           <div className="setting-row">
             <span className="setting-label">{t("about.version")}</span>
-            <span className="setting-value">{appVersion}</span>
+            <span className="setting-value about-version">
+              {appVersion}
+              {updateTarget && (
+                <>
+                  <span className="about-version-next">→ {updateTarget.version}</span>
+                  <button
+                    className="btn btn-primary btn-small about-upgrade-btn"
+                    title={t("about.upgradeNow")}
+                    onClick={() => {
+                      if (onOpenUpdate) onOpenUpdate(updateTarget);
+                      else {
+                        const url = updateTarget.htmlUrl || APP_RELEASES_URL;
+                        invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
+                      }
+                    }}
+                  >
+                    {t("about.upgrade")}
+                  </button>
+                </>
+              )}
+            </span>
           </div>
           <div className="setting-row">
             <span className="setting-label">{t("about.license")}</span>
@@ -328,20 +348,6 @@ function Settings({ onOpenUpdate }: Props = {}) {
                 t("about.checkUpdate")
               )}
             </button>
-            {updateTarget && (
-              <button
-                className="btn btn-primary btn-small"
-                onClick={() => {
-                  if (onOpenUpdate) onOpenUpdate(updateTarget);
-                  else {
-                    const url = updateTarget.htmlUrl || APP_RELEASES_URL;
-                    invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
-                  }
-                }}
-              >
-                {t("about.upgradeNow")}
-              </button>
-            )}
             <button
               className="btn btn-secondary btn-small"
               onClick={() => {

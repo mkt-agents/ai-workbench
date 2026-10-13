@@ -51,6 +51,7 @@
     "updateAvailable": "发现新版本 {{remote}}（当前 {{local}}）",
     "openReleases": "打开发布页",
     "upgradeNow": "查看更新说明并升级",
+    "upgrade": "升级",
     "clearSkip": "清除已跳过的 v{{version}}",
     "clearSkipHint": "清除后就绪会重新提示 v{{version}}",
     "skippedCleared": "已清除对 v{{version}} 的跳过，下次启动会重新提示",

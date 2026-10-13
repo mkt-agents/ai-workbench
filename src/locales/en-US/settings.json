@@ -51,6 +51,7 @@
     "updateAvailable": "Update available: {{remote}} (current {{local}})",
     "openReleases": "Open Releases",
     "upgradeNow": "View notes & upgrade",
+    "upgrade": "Upgrade",
     "clearSkip": "Un-skip v{{version}}",
     "clearSkipHint": "After clearing, v{{version}} will be offered again",
     "skippedCleared": "Un-skipped v{{version}} — it will be offered again on next start",
