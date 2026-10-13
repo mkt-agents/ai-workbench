@@ -98,9 +98,11 @@ export interface Invocations {
   invokeDeleteReportAiHistory: (id: number) => Promise<void>;
   invokeReadSystemHosts: () => Promise<string>;
   invokeIsAdmin: () => Promise<boolean>;
+  invokeRelaunchAsAdmin: () => Promise<void>;
   invokeWriteSystemHosts: (content: string) => Promise<string>;
   invokeListHostBackups: () => Promise<Array<{ path: string; name: string }>>;
   invokeRestoreHostBackup: (path: string) => Promise<string>;
+  invokeDeleteHostBackup: (path: string) => Promise<void>;
   invokeSetAutoStart: (enabled: boolean) => Promise<void>;
   invokeGetAutoStart: () => Promise<boolean>;
   invokeCopyToClipboard: (text: string) => Promise<void>;
@@ -337,9 +339,11 @@ export const invocations: Invocations = {
   // Hosts
   invokeReadSystemHosts: () => tauriInvoke<string>('read_system_hosts'),
   invokeIsAdmin: () => tauriInvoke<boolean>('is_admin'),
+  invokeRelaunchAsAdmin: () => tauriInvoke<void>('relaunch_as_admin'),
   invokeWriteSystemHosts: (content: string) => tauriInvoke<string>('write_system_hosts', { content }),
   invokeListHostBackups: () => tauriInvoke<{ path: string; name: string }[]>('list_host_backups'),
   invokeRestoreHostBackup: (path: string) => tauriInvoke<string>('restore_host_backup', { path }),
+  invokeDeleteHostBackup: (path: string) => tauriInvoke<void>('delete_host_backup', { path }),
 
   // System
   invokeSetAutoStart: (enabled: boolean) =>

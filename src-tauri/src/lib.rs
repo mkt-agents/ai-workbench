@@ -479,6 +479,8 @@ pub fn run() {
             wb_capture::wb_close_cb_login_window,
             hosts_commands::read_system_hosts,
             hosts_commands::is_admin,
+            hosts_commands::relaunch_as_admin,
+            hosts_commands::delete_host_backup,
             hosts_commands::write_system_hosts,
             hosts_commands::list_host_backups,
             hosts_commands::restore_host_backup,

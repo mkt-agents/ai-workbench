@@ -205,7 +205,7 @@
 * [x] 页面内容宽度收敛到唯一 token `--page-max-width: 1440px`，替换掉并存的 960（`.page-scrollable` 宽屏块）/ 1080（片段库、环境变量、Git 列）三套常量——Cursor / WorkBuddy / Hosts / 快捷应用在 ≥1400px 宽屏被压到 960px 的问题一并解决
 * [x] 输入 / 输出区按 flex 长高填满窗口（`.dt-content` 改 flex 列 + 根节点 `flex:1 0 auto` + 主区 `flex:1 1 auto`），原 `max-height: 280/340/360/420px`、`60vh` 等死上限改为 `min-height` 地板；textarea 统一 `resize: none`
 * [x] 卡片列表改自适应列数（快捷应用 260 / 片段库 320 / 模型配置与环境变量 340，写法 `minmax(min(100%, Npx), 1fr)`），删掉「≥900 强制单列」「≥1100 固定两列」这类断点
-* [x] Hosts 系统编辑器高度跟随窗口（`clamp(300px, 45vh, 560px)`），弹窗内那个「内容」框用 `.hosts-editor-page` 区分、保持原样
+* [x] Hosts 页双栏：页面宽 > 860px（容器查询 `hosts-page`）时左编辑器 / 右栏按黄金比 1.618 : 1 分列、高度锁定为窗口剩余高度（各自内部滚动，矮于 420px 退回整页滚动）；更窄叠成一列、编辑器回到 `clamp(280px, 50vh, 520px)`。弹窗内那个「内容」框用 `.hosts-editor-page` 区分、保持原样
 * [x] 快捷应用：工具条吸顶固定（sticky + 宿主 `padding-top:0`，避免内容从宿主上内边距露出），磨砂主题下与侧栏同配方 `--chrome-bg` + `blur(20px) saturate(1.08)`，并登记进 `body.resizing` 关闭清单；首屏空态垂直居中
 * [x] `.models-container` 已并入 `--page-max-width`（工具条 / 滚动区 / 提供商品牌图标同步优化）；Git 页 / 报告弹窗本就自适应；提示词独立页已下线
 * [ ] 后续可选：`.userscript-list`（≥1100 强制两列）尚未并入统一策略；`.settings-page` 是**有意**的 720px 窄表单列，不跟 token

@@ -776,6 +776,8 @@ TunnelSession { id, pid, mode, local_url, public_url?, profile_id?, child }
 - `ipconfig /flushdns` 刷新 DNS
 - **编码处理**: UTF-8 / UTF-16LE / UTF-16BE / GBK 自动识别
 - 备份目录路径白名单校验
+- `relaunch_as_admin`：PowerShell `Start-Process -Verb RunAs` 提权一个隐藏 PowerShell，它先等 1.5s 再启动本 exe（等当前实例退出，否则 single-instance 插件会把提权实例交回给旧进程）；UAC 被拒返回 Err，成功后当前实例 `app.exit(0)`
+- 前端 `HostsManager.tsx`：宽窗双栏（编辑器 + 配置 / 备份）、行号槽、`Ctrl+S` 写入、`Ctrl+/` 切换注释、「撤销修改」、与系统内容一致的配置标「当前」
 
 ### 8.10 `runtime_commands.rs` — 版本切换
 
@@ -1024,6 +1026,8 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 |------|------|------|
 | `read_system_hosts` | — | String |
 | `is_admin` | — | bool |
+| `relaunch_as_admin` | — | ()（UAC 被拒 → Err） |
+| `delete_host_backup` | `path` | ()（与还原同一白名单：仅备份目录内 `.bak`，无需管理员） |
 | `write_system_hosts` | content: String | String |
 | `list_host_backups` | — | Vec\<HostBackup\> |
 | `restore_host_backup` | path: String | String |

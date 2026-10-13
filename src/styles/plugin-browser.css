@@ -34,13 +34,6 @@
   border-color: var(--accent-border);
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-actions {
-  background: var(--float-bg);
-  border-color: var(--overlay-3);
-  backdrop-filter: blur(16px) saturate(1.08);
-  -webkit-backdrop-filter: blur(16px) saturate(1.08);
-}
-
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .plugin-item-icon {
   background: var(--overlay-2);
 }

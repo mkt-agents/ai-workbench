@@ -5,7 +5,26 @@ import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
 import type { HostProfile } from "../core/types";
-import { Network, Globe, HardDrive, Check, XCircle } from "lucide-react";
+import {
+  Archive,
+  Check,
+  CheckCircle2,
+  FileText,
+  Globe,
+  HardDrive,
+  History,
+  Network,
+  Pencil,
+  Plus,
+  RotateCw,
+  Save,
+  ShieldAlert,
+  ShieldCheck,
+  Trash2,
+  Undo2,
+  Upload,
+  XCircle,
+} from "lucide-react";
 
 /** Count active mappings vs comment lines for the editor header stats. */
 function parseHostsStats(content: string): { active: number; comments: number } {
@@ -20,6 +39,43 @@ function parseHostsStats(content: string): { active: number; comments: number } 
   return { active, comments };
 }
 
+/** Line-ending / trailing-whitespace insensitive, so a profile written verbatim still reads as current. */
+function normalizeHosts(content: string): string {
+  return content.replace(/\r\n/g, "\n").trim();
+}
+
+/** `hosts-20261010-202244.bak` → `2026-10-10 20:22:44`; anything else is shown as-is. */
+function formatBackupName(name: string): string {
+  const m = /^hosts-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.bak$/.exec(name);
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : name;
+}
+
+/**
+ * Comment / uncomment every line touched by the selection: if all non-empty lines are
+ * already commented, strip one `#`; otherwise prefix `#`. Returns the new text and the
+ * selection re-spanning the same lines.
+ */
+function toggleCommentLines(text: string, selStart: number, selEnd: number) {
+  const lineStart = text.lastIndexOf("\n", selStart - 1) + 1;
+  const endProbe = selEnd > selStart && text[selEnd - 1] === "\n" ? selEnd - 1 : selEnd;
+  const nl = text.indexOf("\n", endProbe);
+  const lineEnd = nl === -1 ? text.length : nl;
+  const lines = text.slice(lineStart, lineEnd).split("\n");
+  const filled = lines.filter((l) => l.trim());
+  const uncomment = filled.length > 0 && filled.every((l) => l.trimStart().startsWith("#"));
+  const next = lines
+    .map((l) => {
+      if (!l.trim()) return l;
+      return uncomment ? l.replace(/^(\s*)#\s?/, "$1") : `#${l}`;
+    })
+    .join("\n");
+  return {
+    text: text.slice(0, lineStart) + next + text.slice(lineEnd),
+    selStart: lineStart,
+    selEnd: lineStart + next.length,
+  };
+}
+
 function HostsManager() {
   const { t } = useTranslation("hosts");
   const { t: tc } = useTranslation("common");
@@ -32,9 +88,11 @@ function HostsManager() {
 
   const invokeReadSystemHosts = useGlobalStore((s) => s.invokeReadSystemHosts);
   const invokeIsAdmin = useGlobalStore((s) => s.invokeIsAdmin);
+  const invokeRelaunchAsAdmin = useGlobalStore((s) => s.invokeRelaunchAsAdmin);
   const invokeWriteSystemHosts = useGlobalStore((s) => s.invokeWriteSystemHosts);
   const invokeListHostBackups = useGlobalStore((s) => s.invokeListHostBackups);
   const invokeRestoreHostBackup = useGlobalStore((s) => s.invokeRestoreHostBackup);
+  const invokeDeleteHostBackup = useGlobalStore((s) => s.invokeDeleteHostBackup);
 
   const [systemContent, setSystemContent] = useState("");
   /** Content as last read from / written to the system file; difference = unsaved edits. */
@@ -71,6 +129,16 @@ function HostsManager() {
 
   const hostStats = useMemo(() => parseHostsStats(systemContent), [systemContent]);
   const editorDirty = systemContent !== baseline;
+  const lineCount = useMemo(() => systemContent.split("\n").length, [systemContent]);
+  const baselineNorm = useMemo(() => normalizeHosts(baseline), [baseline]);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const [relaunching, setRelaunching] = useState(false);
+
+  const editContent = (next: string) => {
+    readGen.current += 1;
+    setSystemContent(next);
+  };
 
   useEffect(() => {
     refreshMeta();
@@ -89,6 +157,15 @@ function HostsManager() {
   }, [showModal]);
 
   const readSystem = async () => {
+    if (editorDirty) {
+      const ok = await confirm({
+        title: t("discardTitle"),
+        message: t("discardMessage"),
+        confirmText: t("read"),
+        icon: "warning",
+      });
+      if (!ok) return;
+    }
     try {
       await reloadEditor();
       showMsg("success", t("readOk"));
@@ -254,138 +331,280 @@ function HostsManager() {
     }
   };
 
+  const deleteBackup = async (path: string, name: string) => {
+    const ok = await confirm({
+      title: t("deleteBackupTitle"),
+      message: t("deleteBackupMessage", { name: formatBackupName(name) }),
+      confirmText: tc("actions.delete"),
+      icon: "danger",
+    });
+    if (!ok) return;
+    try {
+      await invokeDeleteHostBackup(path);
+      setBackups((prev) => prev.filter((b) => b.path !== path));
+      showMsg("success", t("deleted"));
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
+  const relaunchAsAdmin = async () => {
+    if (relaunching) return;
+    if (editorDirty) {
+      const ok = await confirm({
+        title: t("relaunchAdmin"),
+        message: t("relaunchDirty"),
+        confirmText: t("relaunchAdmin"),
+        icon: "warning",
+      });
+      if (!ok) return;
+    }
+    setRelaunching(true);
+    try {
+      await invokeRelaunchAsAdmin();
+    } catch (e) {
+      showMsg("error", String(e));
+      setRelaunching(false);
+    }
+  };
+
+  const onEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key === "s") {
+      e.preventDefault();
+      void writeSystem();
+    } else if (key === "/") {
+      e.preventDefault();
+      const el = e.currentTarget;
+      const r = toggleCommentLines(el.value, el.selectionStart, el.selectionEnd);
+      editContent(r.text);
+      requestAnimationFrame(() => {
+        el.setSelectionRange(r.selStart, r.selEnd);
+      });
+    }
+  };
+
   return (
     <div className="page-scrollable hosts-page">
-      {!canWrite && <div className="admin-warning">{t("adminWarning")}</div>}
+      {!canWrite && (
+        <div className="hosts-admin-banner">
+          <ShieldAlert size={15} />
+          <span className="hosts-admin-text">{t("adminWarning")}</span>
+          <button
+            className="btn btn-secondary btn-small"
+            onClick={() => void relaunchAsAdmin()}
+            disabled={relaunching}
+          >
+            {relaunching ? <RotateCw size={12} className="spin" /> : <ShieldCheck size={12} />}
+            {t("relaunchAdmin")}
+          </button>
+        </div>
+      )}
 
-      <div className="card">
-        <div className="card-title">
-          {t("systemEditor")}
-          {editorDirty && <span className="hosts-unsaved">{t("unsaved")}</span>}
-          <span className="hosts-title-meta">
-            {t("statsEntries", hostStats)}
-          </span>
-        </div>
-        <textarea
-          className="hosts-editor hosts-editor-page"
-          value={systemContent}
-          onChange={(e) => {
-            readGen.current += 1;
-            setSystemContent(e.target.value);
-          }}
-          spellCheck={false}
-        />
-        <div className="btn-group">
-          <button className="btn btn-secondary" onClick={readSystem}>
-            {t("read")}
-          </button>
-          <button className="btn btn-primary" onClick={writeSystem} disabled={!canWrite}>
-            {t("write")}
-          </button>
-          <button
-            className="btn btn-secondary"
-            onClick={handleSaveAsProfile}
-            disabled={!systemContent.trim()}
-            title={t("saveAsProfile")}
-          >
-            {t("saveAsProfile")}
-          </button>
-          <button
-            className="btn btn-secondary"
-            onClick={() => void handleBackupNow()}
-            disabled={backupBusy}
-            title={t("backupNow")}
-          >
-            {t("backupNow")}
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title">
-          {t("profiles")}
-          <button
-            className="btn btn-primary btn-small"
-            style={{ float: "right", marginTop: "-4px" }}
-            onClick={handleAdd}
-          >
-            + {t("addProfile")}
-          </button>
-        </div>
-        {hostProfiles.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-icon">
-              <Globe size={32} strokeWidth={1.5} />
+      <div className="hosts-layout">
+        <section className="card hosts-card hosts-editor-card">
+          <header className="hosts-card-head">
+            <h3 className="hosts-card-title">
+              <FileText size={14} />
+              {t("systemEditor")}
+            </h3>
+            {editorDirty && <span className="hosts-unsaved">{t("unsaved")}</span>}
+            <span className="hosts-title-meta">{t("statsEntries", hostStats)}</span>
+          </header>
+          <div className="hosts-editor-wrap">
+            <div className="hosts-gutter" ref={gutterRef} aria-hidden>
+              {Array.from({ length: lineCount }, (_, i) => (
+                <div key={i}>{i + 1}</div>
+              ))}
             </div>
-            <p>{t("noProfiles")}</p>
+            <textarea
+              ref={editorRef}
+              className="hosts-editor hosts-editor-page"
+              value={systemContent}
+              onChange={(e) => editContent(e.target.value)}
+              onKeyDown={onEditorKeyDown}
+              onScroll={(e) => {
+                if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+              }}
+              wrap="off"
+              spellCheck={false}
+            />
           </div>
-        ) : (
-          <ul className="account-list">
-            {hostProfiles.map((p) => (
-              <li key={p.id} className="account-item">
-                <div className="account-avatar">
-                  <Network size={16} />
-                </div>
-                <div className="account-info" title={p.content.slice(0, 400)}>
-                  <div className="account-name">{p.name}</div>
-                  <div className="account-email">
-                    {t("entriesCount", {
-                      count: p.content
-                        .split("\n")
-                        .filter((l) => l.trim() && !l.trim().startsWith("#")).length,
-                    })}
-                  </div>
-                </div>
-                <div className="account-actions">
-                  <button
-                    className="btn btn-primary btn-small"
-                    onClick={() => applyProfile(p)}
-                    disabled={!canWrite}
-                  >
-                    {t("apply")}
-                  </button>
-                  <button className="btn btn-secondary btn-small" onClick={() => handleEdit(p)}>
-                    {tc("actions.edit")}
-                  </button>
-                  <button className="btn btn-danger btn-small" onClick={() => handleDelete(p.id)}>
-                    {tc("actions.delete")}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="card-title">{t("backups")}</div>
-        {backups.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-icon">
-              <HardDrive size={32} strokeWidth={1.5} />
+          <footer className="hosts-editor-actions">
+            <div className="hosts-actions-group">
+              <button className="btn btn-secondary btn-small" onClick={readSystem}>
+                <RotateCw size={12} />
+                {t("read")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => void handleBackupNow()}
+                disabled={backupBusy}
+              >
+                <Archive size={12} />
+                {t("backupNow")}
+              </button>
+              <span className="hosts-shortcuts">{t("shortcutsHint")}</span>
             </div>
-            <p>{t("noBackups")}</p>
-          </div>
-        ) : (
-          <ul className="account-list">
-            {backups.map((b) => (
-              <li key={b.path} className="account-item">
-                <div className="account-info">
-                  <div className="account-name">{b.name}</div>
-                </div>
-                <div className="account-actions">
-                  <button
-                    className="btn btn-secondary btn-small"
-                    onClick={() => restoreBackup(b.path, b.name)}
-                    disabled={!canWrite}
-                  >
-                    {t("restore")}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+            <div className="hosts-actions-group">
+              {editorDirty && (
+                <button
+                  className="btn btn-secondary btn-small"
+                  onClick={() => {
+                    editContent(baseline);
+                    editorRef.current?.focus();
+                  }}
+                >
+                  <Undo2 size={12} />
+                  {t("revert")}
+                </button>
+              )}
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={handleSaveAsProfile}
+                disabled={!systemContent.trim()}
+              >
+                <Save size={12} />
+                {t("saveAsProfile")}
+              </button>
+              <button
+                className="btn btn-primary btn-small"
+                onClick={writeSystem}
+                disabled={!canWrite || !editorDirty}
+                title={!canWrite ? t("cannotWrite") : !editorDirty ? t("noChanges") : undefined}
+              >
+                <Upload size={12} />
+                {t("write")}
+              </button>
+            </div>
+          </footer>
+        </section>
+
+        <aside className="hosts-side">
+          <section className="card hosts-card">
+            <header className="hosts-card-head">
+              <h3 className="hosts-card-title">
+                <Network size={14} />
+                {t("profiles")}
+              </h3>
+              <button className="btn btn-secondary btn-small hosts-head-btn" onClick={handleAdd}>
+                <Plus size={12} />
+                {t("addProfile")}
+              </button>
+            </header>
+            {hostProfiles.length === 0 ? (
+              <div className="hosts-empty">
+                <Globe size={22} strokeWidth={1.5} />
+                <p>{t("noProfiles")}</p>
+              </div>
+            ) : (
+              <ul className="hosts-list">
+                {hostProfiles.map((p) => {
+                  const isCurrent = baselineNorm !== "" && normalizeHosts(p.content) === baselineNorm;
+                  return (
+                  <li key={p.id} className={`hosts-row${isCurrent ? " is-current" : ""}`}>
+                    <span className="hosts-row-icon">
+                      {isCurrent ? <CheckCircle2 size={13} /> : <Network size={13} />}
+                    </span>
+                    <div className="hosts-row-info" title={p.content.slice(0, 400)}>
+                      <div className="hosts-row-name">
+                        {p.name}
+                        {isCurrent && <span className="hosts-current-tag">{t("current")}</span>}
+                      </div>
+                      <div className="hosts-row-sub">
+                        {t("entriesCount", {
+                          count: p.content
+                            .split("\n")
+                            .filter((l) => l.trim() && !l.trim().startsWith("#")).length,
+                        })}
+                      </div>
+                    </div>
+                    <div className="hosts-row-actions">
+                      <button
+                        type="button"
+                        className="hosts-icon-btn"
+                        onClick={() => handleEdit(p)}
+                        title={tc("actions.edit")}
+                        aria-label={`${tc("actions.edit")} ${p.name}`}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="hosts-icon-btn is-danger"
+                        onClick={() => handleDelete(p.id)}
+                        title={tc("actions.delete")}
+                        aria-label={`${tc("actions.delete")} ${p.name}`}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                      {!isCurrent && (
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => applyProfile(p)}
+                          disabled={!canWrite}
+                          title={!canWrite ? t("cannotWrite") : undefined}
+                        >
+                          {t("apply")}
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          <section className="card hosts-card">
+            <header className="hosts-card-head">
+              <h3 className="hosts-card-title">
+                <HardDrive size={14} />
+                {t("backups")}
+              </h3>
+              {backups.length > 0 && <span className="hosts-title-meta">{backups.length}</span>}
+            </header>
+            {backups.length === 0 ? (
+              <div className="hosts-empty">
+                <HardDrive size={22} strokeWidth={1.5} />
+                <p>{t("noBackups")}</p>
+              </div>
+            ) : (
+              <ul className="hosts-list">
+                {backups.map((b) => (
+                  <li key={b.path} className="hosts-row">
+                    <span className="hosts-row-icon">
+                      <History size={13} />
+                    </span>
+                    <div className="hosts-row-info" title={b.path}>
+                      <div className="hosts-row-name hosts-row-mono">{formatBackupName(b.name)}</div>
+                    </div>
+                    <div className="hosts-row-actions">
+                      <button
+                        type="button"
+                        className="hosts-icon-btn is-danger"
+                        onClick={() => void deleteBackup(b.path, b.name)}
+                        title={tc("actions.delete")}
+                        aria-label={`${tc("actions.delete")} ${formatBackupName(b.name)}`}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-small"
+                        onClick={() => restoreBackup(b.path, b.name)}
+                        disabled={!canWrite}
+                        title={!canWrite ? t("cannotWrite") : undefined}
+                      >
+                        {t("restore")}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </aside>
       </div>
 
       {showModal && (

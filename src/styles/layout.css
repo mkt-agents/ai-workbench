@@ -75,20 +75,52 @@
 
 /* Dev-instance chip next to the window controls — dev server only, never in packaged builds */
 .dev-badge {
-  flex: none;
-  margin-right: 10px;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
   /* Fixed amber in every theme so a dev window is never mistaken for a release one */
-  background: rgba(245, 158, 11, 0.16);
-  border: 1px solid rgba(245, 158, 11, 0.45);
-  color: #f59e0b;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1px;
+  --dev-amber: #f5a524; /* token-ok: DEV 徽标固定琥珀，不随主题 */
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  margin-right: 17px;
+  padding: 0 9px 0 8px;
+  box-sizing: border-box;
+  border-radius: var(--radius-full);
+  background: var(--overlay-1);
+  box-shadow: var(--surface-highlight);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.14em;
   -webkit-app-region: no-drag;
   user-select: none;
   cursor: default;
+}
+
+/* 琥珀只留在圆点上：一眼能认出是开发窗口，又不抢标题栏。 */
+.dev-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--dev-amber);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--dev-amber) 18%, transparent),
+    0 0 6px color-mix(in srgb, var(--dev-amber) 55%, transparent);
+}
+
+/* 与窗口按钮之间的一道发丝分隔。 */
+.dev-badge::after {
+  content: "";
+  position: absolute;
+  right: -9px;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  background: var(--border-subtle);
 }
 
 .titlebar-controls {

@@ -576,12 +576,15 @@ function PluginBrowser() {
     return null;
   }, [formHotkey, webPlugins, editingId, t]);
 
+  /** 分组的唯一顺序：按站点手动排序取首次出现，筛选标签与分组列表共用，「最近」排序也不打乱。 */
   const groups = useMemo(() => {
     const groupSet = new Set<string>();
-    webPlugins.forEach((p) => {
-      if (p.group) groupSet.add(p.group);
-    });
-    return Array.from(groupSet).sort();
+    [...webPlugins]
+      .sort((a, b) => a.order - b.order)
+      .forEach((p) => {
+        if (p.group) groupSet.add(p.group);
+      });
+    return Array.from(groupSet);
   }, [webPlugins]);
 
   // Default-expand newly seen groups (preserves user collapses)
@@ -1893,9 +1896,9 @@ function PluginBrowser() {
               )
             ) : (
               <>
-                {Array.from(groupedPlugins.entries())
-                  .filter(([g]) => g !== "")
-                  .map(([group, items]) => renderGroupHeader(group, items))}
+                {groups
+                  .filter((g) => groupedPlugins.has(g))
+                  .map((g) => renderGroupHeader(g, groupedPlugins.get(g)!))}
                 {/* Ungrouped sites render as their own section, always last,
                     so they never look like stray cards of the group above */}
                 {groupedPlugins.has("") &&

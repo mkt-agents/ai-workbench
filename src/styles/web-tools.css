@@ -467,19 +467,16 @@
 }
 
 /* Floats over the row instead of reserving width, so names aren't truncated by
-   buttons that are invisible until hover. */
+   buttons that are invisible until hover. No chrome of its own: on hover the text
+   underneath fades out via a mask (works on translucent glass rows too, where a
+   solid gradient scrim would not match the background). */
 .plugin-item-actions {
   position: absolute;
   top: 50%;
-  right: 8px;
+  right: 10px;
   z-index: 1;
   display: flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--float-bg);
-  box-shadow: var(--float-shadow);
+  gap: 1px;
   opacity: 0;
   pointer-events: none;
   transform: translate(4px, -50%);
@@ -493,12 +490,18 @@
   transform: translate(0, -50%);
 }
 
+.plugin-item:hover .plugin-item-content,
+.plugin-item:focus-within .plugin-item-content {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 128px), transparent calc(100% - 104px));
+  mask-image: linear-gradient(to right, black calc(100% - 128px), transparent calc(100% - 104px));
+}
+
 .plugin-item-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;

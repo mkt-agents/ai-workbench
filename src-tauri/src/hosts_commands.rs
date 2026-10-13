@@ -236,6 +236,15 @@ fn restore_host_backup_sync(path: String) -> Result<String, String> {
     Ok("已从备份还原并尝试刷新 DNS".to_string())
 }
 
+/// Delete one backup. Same whitelist as restore: only `.bak` files inside the backups dir.
+/// Needs no elevation — backups live under %APPDATA%.
+#[tauri::command]
+pub fn delete_host_backup(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    path_under_backups(p)?;
+    fs::remove_file(p).map_err(|e| format!("删除备份失败: {}", e))
+}
+
 /// Manual on-demand snapshot, exposed so the UI can back up before risky edits.
 #[tauri::command]
 pub async fn backup_hosts_now() -> Result<String, String> {
@@ -244,6 +253,84 @@ pub async fn backup_hosts_now() -> Result<String, String> {
         .map_err(|e| format!("Task failed: {e}"))?
 }
 
+/// PowerShell single-quoted literal: only `'` needs escaping (doubled).
+fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// `-EncodedCommand` payload (base64 of UTF-16LE), sidestepping Start-Process's
+/// unquoted `-ArgumentList` joining.
+fn ps_encode(script: &str) -> String {
+    use base64::Engine;
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Outer script: UAC-elevate a hidden PowerShell that waits for this instance to quit
+/// before starting the exe again — the single-instance plugin would otherwise hand the
+/// elevated launch back to the still-running unelevated process.
+fn elevate_script(exe: &str) -> String {
+    let inner = format!(
+        "Start-Sleep -Milliseconds 1500; Start-Process -FilePath {}",
+        ps_quote(exe)
+    );
+    format!(
+        "try {{ Start-Process -FilePath powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile -WindowStyle Hidden -EncodedCommand {}' -ErrorAction Stop }} catch {{ exit 1 }}",
+        ps_encode(&inner)
+    )
+}
+
+/// Relaunch elevated so hosts can be written. Returns Err when the UAC prompt is
+/// declined; on success the current instance exits.
+#[tauri::command]
+pub async fn relaunch_as_admin(app: tauri::AppHandle) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("无法定位程序路径: {e}"))?;
+    let script = elevate_script(&exe.to_string_lossy());
+    let status = tokio::task::spawn_blocking(move || {
+        hidden_cmd("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .status()
+    })
+    .await
+    .map_err(|e| format!("Task failed: {e}"))?
+    .map_err(|e| format!("启动 PowerShell 失败: {e}"))?;
+    if !status.success() {
+        return Err("已取消管理员授权".to_string());
+    }
+    app.exit(0);
+    Ok(())
+}
+
 fn chrono_stamp() -> String {
     Local::now().format("%Y%m%d-%H%M%S").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ps_quote_doubles_single_quotes() {
+        assert_eq!(
+            ps_quote(r"C:\Program Files\it's\app.exe"),
+            r"'C:\Program Files\it''s\app.exe'"
+        );
+    }
+
+    #[test]
+    fn elevate_script_encodes_the_delayed_relaunch() {
+        use base64::Engine;
+        let script = elevate_script(r"C:\Apps\AI Workbench\ai-workbench.exe");
+        assert!(script.contains("-Verb RunAs"));
+        let encoded = script
+            .split("-EncodedCommand ")
+            .nth(1)
+            .and_then(|s| s.split('\'').next())
+            .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        let units: Vec<u16> = bytes.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let inner = String::from_utf16(&units).unwrap();
+        assert!(inner.starts_with("Start-Sleep"));
+        assert!(inner.ends_with(r"'C:\Apps\AI Workbench\ai-workbench.exe'"));
+    }
 }
