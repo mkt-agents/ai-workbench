@@ -932,6 +932,39 @@
   gap: var(--space-2);
 }
 
+/* 应用内登录窗等待中：提示独占一行，操作右对齐（取消次要 + 完成主按钮）。 */
+.aq-login-pending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background: var(--accent-dim);
+}
+
+.aq-login-pending-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-1);
+}
+
+.aq-login-pending-text svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.aq-login-pending-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 /* Codex 链接授权：未授权卡片里的提示 + 按钮，以及工具条上的授权进行中状态。 */
 .aq-auth {
   margin-top: auto;

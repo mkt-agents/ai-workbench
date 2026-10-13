@@ -3074,7 +3074,7 @@ function DeepSeekKeyForm({
       )}
       <div className="aq-key-actions">
         {onCancel && (
-          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel} disabled={busy}>
+          <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
             {t("authCancel")}
           </button>
         )}
@@ -3325,7 +3325,7 @@ function ClaudeAuthForm({
       )}
       <div className="aq-key-actions">
         {onCancel && (
-          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel} disabled={busy != null}>
+          <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy != null}>
             {t("authCancel")}
           </button>
         )}
@@ -3474,7 +3474,7 @@ function ZcodeKeyForm({
       )}
       <div className="aq-key-actions">
         {onCancel && (
-          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel} disabled={busy}>
+          <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
             {t("authCancel")}
           </button>
         )}
@@ -3612,7 +3612,7 @@ function MimoKeyForm({
       )}
       <div className="aq-key-actions">
         {onCancel && (
-          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel} disabled={busy}>
+          <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
             {t("authCancel")}
           </button>
         )}
@@ -3770,30 +3770,32 @@ function MimoCard({
       {ok && !hasWindows && !hasBalances && (
         <div className="aq-card-idle">{quota.message || t("mimoVerifiedNoUsage")}</div>
       )}
-      {needSession && !cookieOpen && (
+      {needSession && !cookieOpen && loginPending && (
+        <div className="aq-login-pending">
+          <p className="aq-login-pending-text">
+            <RefreshCw size={12} className="spin" aria-hidden />
+            {t("mimoLoginPending")}
+          </p>
+          <div className="aq-login-pending-actions">
+            <button type="button" className="btn btn-secondary btn-small" onClick={cancelLogin} disabled={sessionBusy}>
+              {t("authCancel")}
+            </button>
+            <button type="button" className="btn btn-primary btn-small" onClick={() => void finishLogin()} disabled={sessionBusy}>
+              {sessionBusy ? <RefreshCw size={13} className="spin" /> : <LogIn size={13} />}
+              {t("mimoLoginDone")}
+            </button>
+          </div>
+        </div>
+      )}
+      {needSession && !cookieOpen && !loginPending && (
         <div className="aq-key-actions" style={{ marginTop: 8 }}>
-          {loginPending ? (
-            <>
-              <span className="aq-auth-text">{t("mimoLoginPending")}</span>
-              <button type="button" className="btn btn-ghost btn-small" onClick={cancelLogin} disabled={sessionBusy}>
-                {t("authCancel")}
-              </button>
-              <button type="button" className="btn btn-primary btn-small" onClick={() => void finishLogin()} disabled={sessionBusy}>
-                {sessionBusy ? <RefreshCw size={13} className="spin" /> : <LogIn size={13} />}
-                {t("mimoLoginDone")}
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="btn btn-primary btn-small" onClick={() => void startLogin()}>
-                <LogIn size={13} />
-                {t("mimoLoginUsage")}
-              </button>
-              <button type="button" className="btn btn-secondary btn-small" onClick={() => setCookieOpen(true)}>
-                {t("mimoPasteCookie")}
-              </button>
-            </>
-          )}
+          <button type="button" className="btn btn-primary btn-small" onClick={() => void startLogin()}>
+            <LogIn size={13} />
+            {t("mimoLoginUsage")}
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setCookieOpen(true)}>
+            {t("mimoPasteCookie")}
+          </button>
         </div>
       )}
       {needSession && cookieOpen && (
@@ -3816,7 +3818,7 @@ function MimoCard({
             autoFocus
           />
           <div className="aq-key-actions">
-            <button type="button" className="btn btn-ghost btn-small" onClick={() => setCookieOpen(false)} disabled={sessionBusy}>
+            <button type="button" className="btn btn-secondary btn-small" onClick={() => setCookieOpen(false)} disabled={sessionBusy}>
               {t("authCancel")}
             </button>
             <button type="submit" className="btn btn-primary btn-small" disabled={sessionBusy || !cookie.trim()}>
