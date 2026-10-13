@@ -123,6 +123,8 @@
   "dragToReorder": "Drag to reorder",
   "boardEmpty": "No cards on the board yet — click + under \"Add account\" on the right to authorize one.",
   "railSubscriptions": "Providers & accounts",
+  "railFoldAccounts": "Click to collapse accounts",
+  "railExpandAccounts": "Click to expand accounts",
   "railNotInstalled": "not installed",
   "removeAuth": "Remove authorization",
   "hideCard": "Hide from board",

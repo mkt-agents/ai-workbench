@@ -1027,7 +1027,7 @@
    不做动画（resize 约定只给 .sidebar 留了例外）。 */
 
 .aq-rail {
-  width: 252px;
+  width: 264px;
   flex-shrink: 0;
   min-height: 0;
   align-self: stretch;
@@ -1115,11 +1115,14 @@
   gap: 1px;
 }
 
-/* 有账号的服务商成组：上下各留一道分隔，与无账号的紧凑行区分开。 */
-.aq-rail-group.has-accts + .aq-rail-group,
-.aq-rail-group + .aq-rail-group.has-accts {
-  margin-top: 3px;
-  padding-top: 3px;
+/* 只在「有账号」与「没账号」两段之间画一道分隔，组与组之间靠间距区分。 */
+.aq-rail-group.has-accts + .aq-rail-group.has-accts {
+  margin-top: 2px;
+}
+
+.aq-rail-group.has-accts + .aq-rail-group:not(.has-accts) {
+  margin-top: 4px;
+  padding-top: 4px;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -1141,13 +1144,8 @@
   background: var(--bg-hover);
 }
 
-/* 已上看板：淡 accent 底。 */
-.aq-rail-row.is-added {
-  background: color-mix(in srgb, var(--accent-dim) 55%, transparent);
-}
-
-.aq-rail-row.is-added:hover {
-  background: color-mix(in srgb, var(--accent-dim) 80%, var(--bg-hover));
+.aq-rail-row:focus-within {
+  background: var(--overlay-1);
 }
 
 .aq-rail-row.is-missing .aq-rail-icon,
@@ -1202,7 +1200,6 @@
 }
 
 .aq-rail-icon {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1214,6 +1211,7 @@
   font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .aq-rail-icon img {
@@ -1222,11 +1220,12 @@
   object-fit: contain;
 }
 
-/* 单行：名字 + 「未安装」；域名只放 title。 */
+/* 单行：名字 + 折叠箭头 + 「未安装」；域名只放 title。
+   空间不够时「未安装」先让位（大 shrink 系数），名字尽量完整。 */
 .aq-rail-text {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -1234,6 +1233,7 @@
 }
 
 .aq-rail-name {
+  flex: 0 1 auto;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-0);
@@ -1242,38 +1242,74 @@
   text-overflow: ellipsis;
 }
 
-/* 账号数：图标右上角的角标，外圈描一道面板色把它从图标上「切」出来。 */
-.aq-rail-count {
-  position: absolute;
-  top: -5px;
-  right: -6px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--on-accent);
-  box-shadow: 0 0 0 1.5px var(--bg-2);
-  font-family: var(--font-sans);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+/* 折叠箭头：展开朝下，折叠转 -90° 朝右。平时隐藏（折叠态已由行尾数量胶囊、
+   展开态由下方账号列表表达），只在悬停 / 键盘聚焦行时淡出提示可点。 */
+.aq-rail-fold {
+  flex-shrink: 0;
+  color: var(--text-3);
+  opacity: 0;
+  transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
-/* 未上看板的服务商：角标跟着弱化，不抢眼。 */
-.aq-rail-row:not(.is-added) .aq-rail-count {
-  background: var(--bg-3);
-  color: var(--text-1);
+.aq-rail-fold.is-folded {
+  transform: rotate(-90deg);
+}
+
+.aq-rail-row:hover .aq-rail-fold,
+.aq-rail-row:focus-within .aq-rail-fold {
+  opacity: 0.7;
 }
 
 .aq-rail-missing {
+  flex: 0 1000 auto;
+  min-width: 0;
+  margin-left: 2px;
   font-size: 10.5px;
   color: var(--text-3);
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 账号数胶囊与眼睛叠在同一格：平时显示数量（折叠时带最差状态点，
+   问题账号收起来也看得见），悬停行时换成眼睛。 */
+.aq-rail-slot {
+  display: grid;
+  align-items: center;
+  justify-items: end;
+}
+
+.aq-rail-slot > * {
+  grid-area: 1 / 1;
+}
+
+.aq-rail-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  transition: var(--transition-colors-fast);
+}
+
+.aq-rail-count .aq-dot {
+  width: 6px;
+  height: 6px;
+  opacity: 1;
+}
+
+.aq-rail-row:hover .aq-rail-count,
+.aq-rail-row:focus-within .aq-rail-count {
+  opacity: 0;
 }
 
 /* 操作区（眼睛 + 添加）在文档流里固定占位，名字在剩余空间截断；眼睛悬停只切透明度，
@@ -1293,8 +1329,8 @@
   pointer-events: none;
 }
 
-/* 已上看板：眼睛常驻（弱）。 */
-.aq-rail-row.is-added .aq-rail-eye {
+/* 没账号但已上看板：眼睛常驻（弱）；有账号的那格平时让给数量胶囊。 */
+.aq-rail-row.is-added:not(.has-count) .aq-rail-eye {
   opacity: 0.55;
   pointer-events: auto;
 }

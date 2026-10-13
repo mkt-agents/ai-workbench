@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   CalendarCheck,
+  ChevronDown,
   Eye,
   EyeOff,
   PanelRightClose,
@@ -52,6 +53,17 @@ export interface RailAccount {
   dailyDone?: string;
 }
 
+const FOLDED_KEY = "aq-rail-folded";
+
+function loadFolded(): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
 /** 与 CSS 里栏目排到看板下方的断点一致；窄窗下忽略收起状态。 */
 const NARROW_QUERY = "(max-width: 900px)";
 /** 收起态图标上的状态点取最差的一个账号。 */
@@ -75,8 +87,9 @@ function useMediaQuery(query: string): boolean {
 
 /**
  * 账号额度页右侧栏，兼做账号管理：
- * - 一个列表按服务商分组：服务商行整行 / + 都是新增账号，眼睛按钮单独控制该服务商是否上看板；
+ * - 一个列表按服务商分组：行尾 + 新增账号，眼睛按钮单独控制该服务商是否上看板；
  * - 已连接账号缩进挂在服务商行下（状态点，点击定位到看板卡片），有账号的服务商排前面；
+ *   有账号时点服务商行折叠 / 展开账号（偏好存 localStorage），没账号时点整行 = 新增账号；
  * 安装状态来自注册表扫描（后台、失败不影响操作）。
  * 整栏可收起成图标条，图标点击同样是添加账号。
  */
@@ -107,7 +120,21 @@ function QuotaProviderRail({
 }) {
   const { t } = useTranslation("quota");
   const [installs, setInstalls] = useState<Record<string, InstallState>>({});
+  const [folded, setFolded] = useState<Set<string>>(loadFolded);
   const narrow = useMediaQuery(NARROW_QUERY);
+
+  const toggleFold = (providerId: string) => {
+    setFolded((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(providerId)) next.add(providerId);
+      try {
+        localStorage.setItem(FOLDED_KEY, JSON.stringify([...next]));
+      } catch {
+        /* private mode / quota — fold state just isn't remembered */
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -206,19 +233,24 @@ function QuotaProviderRail({
 
       {!hasAnyAccount && <p className="aq-rail-caption">{t("railNoAccounts")}</p>}
       <ul className="aq-rail-panel aq-rail-list">
-        {groups.map(({ provider, card, items }) => (
+        {groups.map(({ provider, card, items }) => {
+          const isFolded = items.length > 0 && folded.has(provider.id);
+          return (
           <li key={provider.id} className={`aq-rail-group${items.length > 0 ? " has-accts" : ""}`}>
             <ProviderRow
               provider={provider}
               install={installs[provider.id]}
               count={items.length}
+              worst={worstStatus(items)}
+              folded={isFolded}
+              onToggleFold={() => toggleFold(provider.id)}
               added={enabled.includes(card)}
               pending={pending === card}
               onAdd={() => onAdd(card)}
               onCancel={onCancelPending}
               onToggleVisible={() => onToggleVisible(card)}
             />
-            {items.length > 0 && (
+            {items.length > 0 && !isFolded && (
               <ul className="aq-rail-accts">
                 {items.map((a) => (
                   <li key={a.key} className="aq-rail-acct-row">
@@ -251,7 +283,8 @@ function QuotaProviderRail({
               </ul>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </aside>
   );
@@ -261,6 +294,9 @@ function ProviderRow({
   provider,
   install,
   count,
+  worst,
+  folded,
+  onToggleFold,
   added,
   pending,
   onAdd,
@@ -269,8 +305,12 @@ function ProviderRow({
 }: {
   provider: QuotaProvider;
   install: InstallState | undefined;
-  /** 该服务商下已连接的账号数。 */
+  /** 该服务商下已连接的账号数；> 0 时整行点击 = 折叠 / 展开。 */
   count: number;
+  /** 折叠后在名字旁露出最差的账号状态，问题账号不会被藏起来。 */
+  worst: CardStatus | null;
+  folded: boolean;
+  onToggleFold: () => void;
   added: boolean;
   pending: boolean;
   onAdd: () => void;
@@ -283,40 +323,53 @@ function ProviderRow({
   const addTitle = t("railAddAccountTo", { name: provider.name });
   const eyeTitle = added ? t("railHide") : t("railShow");
 
-  const cls = ["aq-rail-row", added && "is-added", notInstalled && "is-missing"].filter(Boolean).join(" ");
+  const foldable = count > 0;
+  const foldTitle = folded ? t("railExpandAccounts") : t("railFoldAccounts");
+  const cls = ["aq-rail-row", added && "is-added", notInstalled && "is-missing", folded && "has-count"]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div
       className={cls}
-      onClick={pending ? undefined : onAdd}
-      title={`${addTitle} · ${provider.domain}`}
+      onClick={foldable ? onToggleFold : pending ? undefined : onAdd}
+      aria-expanded={foldable ? !folded : undefined}
+      title={[provider.domain, foldable ? t("railAccountCount", { count }) : null, foldable ? foldTitle : addTitle]
+        .filter(Boolean)
+        .join("\n")}
     >
       <span className="aq-rail-icon">
         <ProviderGlyph providerId={provider.id} name={provider.name} installIcon={install?.icon} />
-        {count > 0 && (
-          <span className="aq-rail-count" title={t("railAccountCount", { count })}>
-            {count}
-          </span>
-        )}
       </span>
       <span className="aq-rail-text">
         <span className="aq-rail-name">{provider.name}</span>
+        {foldable && (
+          <ChevronDown size={12} className={`aq-rail-fold${folded ? " is-folded" : ""}`} aria-hidden />
+        )}
         {notInstalled && <span className="aq-rail-missing">{t("railNotInstalled")}</span>}
       </span>
       <span className="aq-rail-actions">
-        <button
-          type="button"
-          className={`aq-icon-btn aq-rail-eye${added ? "" : " is-off"}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleVisible();
-          }}
-          title={eyeTitle}
-          aria-label={`${eyeTitle} ${provider.name}`}
-          aria-pressed={added}
-        >
-          {added ? <Eye size={13} /> : <EyeOff size={13} />}
-        </button>
+        <span className="aq-rail-slot">
+          {folded && (
+            <span className="aq-rail-count">
+              {worst && <span className={`aq-dot aq-dot-${worst}`} />}
+              {count}
+            </span>
+          )}
+          <button
+            type="button"
+            className={`aq-icon-btn aq-rail-eye${added ? "" : " is-off"}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleVisible();
+            }}
+            title={eyeTitle}
+            aria-label={`${eyeTitle} ${provider.name}`}
+            aria-pressed={added}
+          >
+            {added ? <Eye size={13} /> : <EyeOff size={13} />}
+          </button>
+        </span>
         <button
           type="button"
           className={`aq-rail-toggle${pending ? " is-pending" : ""}`}

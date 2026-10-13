@@ -123,6 +123,8 @@
   "dragToReorder": "拖动调整顺序",
   "boardEmpty": "看板上还没有卡片，从右侧「添加账号」里点 + 授权一个账号。",
   "railSubscriptions": "服务商与账号",
+  "railFoldAccounts": "点击收起账号",
+  "railExpandAccounts": "点击展开账号",
   "railNotInstalled": "未安装",
   "removeAuth": "删除授权",
   "hideCard": "从看板隐藏",
