@@ -29,6 +29,13 @@
     "bubble": "Desktop floating button",
     "bubbleHint": "Always-on-top button (bottom-right). Click to open Quick Ask; drag to move; right-click to hide. Shortcut and tray still work."
   },
+  "usage": {
+    "title": "Local AI usage",
+    "hint": "Counts Quick Ask / report / commit calls and estimated tokens on this device only — no cloud billing.",
+    "empty": "No usage recorded yet.",
+    "row": "{{calls}} calls · ~{{tokens}} tok",
+    "clear": "Clear stats"
+  },
   "data": {
     "title": "Data",
     "export": "Export data",

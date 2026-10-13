@@ -12,8 +12,8 @@
 - **明确不做**：内置多模型流式对话（AI 走 DeepSeek 外部集成）、AI 工具执行循环（shell/文件/Git 自动操作）、多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.2.8`
-- 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite，密钥明文，勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/模板片段；**提示词页已从侧栏与路由下线**，`PromptOptimizer.tsx` 与 `lib/promptOptimize.ts` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染与 `import`；快问里的「优化提示词」不受影响）→ 账号管理（Cursor/账号额度；WorkBuddy 页已从侧栏与路由下线，`WorkBuddyManager.tsx` 及 `components/workbuddy/` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染三处；扫码加号、签到、自动签到设置都已在账号额度页）→ 版本管理（Git 管理/环境变量）→ 网络管理（内网穿透/网页工具/Hosts 管理）→ 系统工具（小工具 / 快捷应用 `app-launcher`）→ 设置。快捷应用页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
+- 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite；`ai_models.api_key` 落库用 Windows DPAPI `enc:v1:` 前缀，导出 JSON 仍为明文并有警告；勿打包进安装包）
+- 侧栏分组：AI 工作台（Harness/模型配置/模板片段；模型配置页内含「配置列表 / 模型对比」与场景模型绑定、本机 Ollama/LM Studio 探测；快问另有 Profile / 轻附件 / `/` 片段，用量台账在设置页；**提示词页已从侧栏与路由下线**，`PromptOptimizer.tsx` 与 `lib/promptOptimize.ts` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染与 `import`；快问里的「优化提示词」不受影响）→ 账号管理（Cursor/账号额度；WorkBuddy 页已从侧栏与路由下线，`WorkBuddyManager.tsx` 及 `components/workbuddy/` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染三处；扫码加号、签到、自动签到设置都已在账号额度页）→ 版本管理（Git 管理/环境变量）→ 网络管理（网页工具/内网穿透/Hosts 管理）→ 系统工具（小工具 / 快捷应用 `app-launcher`）→ 设置。快捷应用页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
 
 ## 技术栈与目录
 
@@ -36,9 +36,10 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 191 条注册
-                      # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；原
-                      # `devtools_commands.rs` 随 HTTP 客户端一起删除，该文件已不存在）
+                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 193 条注册
+                      # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；含
+                      # `detect_local_ai_endpoints` / `regenerate_test_report_ai_section`；
+                      # 原 `devtools_commands.rs` 随 HTTP 客户端一起删除，该文件已不存在）
   纯函数层             # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +
                       # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
                       # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO

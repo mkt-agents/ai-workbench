@@ -609,25 +609,32 @@ function HostsManager() {
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <ModalTitleRow title={editing ? t("editProfile") : t("addProfile")} onClose={() => setShowModal(false)} />
-            <div className="input-group">
-              <label className="input-label">{t("name")}</label>
-              <input
-                className="input-field"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              />
-            </div>
-            <div className="input-group">
-              <label className="input-label">{t("content")}</label>
-              <textarea
-                className="hosts-editor"
-                style={{ height: "200px" }}
-                value={formData.content}
-                onChange={(e) => setFormData({ ...formData, content: e.target.value })}
-                spellCheck={false}
-              />
+          <div
+            className="modal hosts-profile-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ModalTitleRow
+              title={editing ? t("editProfile") : t("addProfile")}
+              onClose={() => setShowModal(false)}
+            />
+            <div className="hosts-profile-modal-body">
+              <div className="input-group">
+                <label className="input-label">{t("name")}</label>
+                <input
+                  className="input-field"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                />
+              </div>
+              <div className="input-group hosts-profile-content-group">
+                <label className="input-label">{t("content")}</label>
+                <textarea
+                  className="hosts-editor hosts-profile-editor"
+                  value={formData.content}
+                  onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+                  spellCheck={false}
+                />
+              </div>
             </div>
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowModal(false)}>

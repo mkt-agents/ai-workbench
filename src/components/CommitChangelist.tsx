@@ -28,6 +28,7 @@ import {
 } from "../core/gitCache";
 import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
 import { describePushTargets, isPushable } from "../core/gitPushScope";
+import { recordAiUsage } from "../lib/aiUsage";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import type {
   AIModelConfig,
@@ -842,6 +843,11 @@ function CommitChangelist({
         onToast("error", t("commit.generateFailed"));
         return;
       }
+      recordAiUsage({
+        modelId: selectedModel.id,
+        modelName: selectedModel.name,
+        estimatedTokens: Math.max(1, Math.round((user.length + cleaned.length) / 4)),
+      });
       setMessage(cleaned);
       onToast("success", t("commit.generateOk"));
     } catch (e) {

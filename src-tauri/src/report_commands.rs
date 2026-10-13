@@ -905,6 +905,78 @@ pub fn cancel_test_report_ai(report_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Regenerate a single `##` section and return only that section's body
+/// (without the heading). The frontend splices it into the existing markdown.
+#[tauri::command]
+pub async fn regenerate_test_report_ai_section(
+    app: AppHandle,
+    report_id: String,
+    config: AIModelConfig,
+    section: String,
+    system: Option<String>,
+    requirement: Option<String>,
+) -> Result<AiResult, String> {
+    let _guard = CancelGuard::new(&report_id);
+    let entry = cache_get(&report_id).ok_or("报告已过期，请重新采集")?;
+    let project_name = entry.repo_name;
+    let report = entry.report;
+    let patch = entry.ai_patch;
+    let requirement: String = requirement
+        .unwrap_or_default()
+        .chars()
+        .take(MAX_REQUIREMENT_CHARS)
+        .collect();
+    let section = section.trim().to_string();
+    if section.is_empty() {
+        return Err("章节标题不能为空".to_string());
+    }
+
+    let mut config = config;
+    config.temperature = 0.2;
+    config.max_tokens = AI_REDUCE_TOKENS;
+    let system_prompt = system.unwrap_or_else(|| AI_SYSTEM.to_string());
+
+    emit_ai_progress(&app, &report_id, 0, 1);
+    let user = build_ai_section_prompt(&project_name, &report, &patch, &requirement, &section);
+    let body = send_with_retry(config, system_prompt, user)
+        .await
+        .map_err(|e| format!("{} 章节重生成失败：{}", project_name, e))?;
+    emit_ai_progress(&app, &report_id, 1, 1);
+
+    // Strip a leading ## heading if the model echoed it.
+    let mut markdown = body.trim().to_string();
+    if let Some(rest) = markdown.strip_prefix("##") {
+        if let Some(nl) = rest.find('\n') {
+            markdown = rest[nl + 1..].trim().to_string();
+        }
+    }
+    let warnings = change_report::verify_ai_against_report(&markdown, &report);
+    Ok(AiResult { markdown, warnings })
+}
+
+fn build_ai_section_prompt(
+    project_name: &str,
+    report: &ChangeReport,
+    patch: &str,
+    requirement: &str,
+    section: &str,
+) -> String {
+    let ask = requirement_block(requirement, None);
+    let full = build_ai_prompt(project_name, report, patch, requirement);
+    // Reuse the full context but ask for a single section only.
+    format!(
+        "{}\n\n\
+         ———\n\
+         本次只重新生成「## {}」这一个章节。\n\
+         不要输出其它二级标题；不要复述项目概况。\n\
+         直接输出该章节正文（每条以 - 开头的列表），格式规则与上文一致。\n\
+         {}",
+        full,
+        section,
+        if ask.is_empty() { "" } else { "若该章节是「需求覆盖对照」，务必对照粘贴的需求逐条判断。" }
+    )
+}
+
 /// How much of a pasted requirement the map pass sees. The reduce pass gets the
 /// full text; the map pass only needs enough to know which ask a module serves,
 /// and it runs once per chunk (4 at a time), so it stays bounded on purpose.

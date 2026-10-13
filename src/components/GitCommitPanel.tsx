@@ -6,6 +6,7 @@ import { pathKey, projectNameFromPath } from "../core/pathUtils";
 import { readStoredString, writeStoredString } from "../core/localState";
 import { getRepoSnapshot, invalidateRepos, refreshRepos, subscribeRepos } from "../core/gitCache";
 import { resolveRepoAccount } from "../core/gitIdentity";
+import { resolveSceneModel } from "../lib/aiSceneModels";
 import { useConfirm } from "./ConfirmModal";
 import AccountManagerModal from "./AccountManagerModal";
 import CommitChangelist from "./CommitChangelist";
@@ -60,6 +61,7 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeGitUndoLastCommit = useGlobalStore((s) => s.invokeGitUndoLastCommit);
   const aiModels = useGlobalStore((s) => s.aiModels);
+  const aiSceneModels = useGlobalStore((s) => s.settings.aiSceneModels);
   const loadAIModels = useGlobalStore((s) => s.loadAIModels);
 
   const repoItems = useSyncExternalStore(subscribeRepos, getRepoSnapshot);
@@ -73,18 +75,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     readStoredString(CL_MODEL_KEY)
   );
 
-  const defaultModel = useMemo(
-    () => aiModels.find((m) => m.isDefault) || aiModels[0] || null,
-    [aiModels]
+  const selectedModelProp = useMemo(
+    () => resolveSceneModel("commit", aiModels, aiSceneModels, selectedModelId),
+    [selectedModelId, aiModels, aiSceneModels]
   );
-
-  const selectedModelProp = useMemo(() => {
-    if (selectedModelId) {
-      const found = aiModels.find((m) => m.id === selectedModelId);
-      if (found) return found;
-    }
-    return defaultModel;
-  }, [selectedModelId, aiModels, defaultModel]);
 
   useEffect(() => {
     writeStoredString(CL_MODEL_KEY, selectedModelId);

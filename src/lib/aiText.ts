@@ -39,3 +39,22 @@ export function markdownSections(text: string): Record<string, string> {
   flush();
   return sections;
 }
+
+/** Replace one `## title` section body; keeps other sections and order. */
+export function replaceMarkdownSection(
+  markdown: string,
+  title: string,
+  newBody: string
+): string {
+  const sections = markdownSections(markdown);
+  const order = Object.keys(sections);
+  const normalized = title.trim();
+  if (!order.includes(normalized)) {
+    order.push(normalized);
+  }
+  sections[normalized] = newBody.trim();
+  return order
+    .map((t) => `## ${t}\n\n${sections[t] || ""}`.trimEnd())
+    .join("\n\n")
+    .trim() + "\n";
+}

@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AIModelConfig, QuickAskTurn } from "../../core/types";
 import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
+import { recordAiUsage } from "../../lib/aiUsage";
+import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
 import { MAX_HISTORY_TURNS, MAX_SAVED_TURNS, MAX_TURN_CHARS, buildMeta, buildSystem } from "./config";
 import type { OptimizeConfig, TaskKind } from "./config";
 import { routeQuestion } from "./route";
@@ -16,6 +18,12 @@ export type AnswerSource = {
   summary: ContextSummary;
   modelName: string;
   task: TaskKind;
+  /** Wall-clock ms for the completed stream (when known). */
+  elapsedMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  /** Fallback estimate (~chars/4) when the provider omitted usage. */
+  estimatedTokens?: number;
 };
 
 type QaTurn = QuickAskTurn;
@@ -58,6 +66,11 @@ export type AskStreamOptions = {
   onSent: () => void;
   /** Persist the completed exchange as a session (wired to useAskSessions). */
   persistTurns: (turns: QaTurn[], firstQuestion: string) => void;
+  /** Active profile: extra system role + optional temperature override. */
+  profileSystemRole?: string;
+  profileTemperature?: number;
+  /** Light code/file attachments appended to the user message. */
+  attachments?: AskAttachment[];
 };
 
 /**
@@ -69,6 +82,7 @@ export function useAskStream(opts: AskStreamOptions) {
   const {
     selectedModel, task, optimize, input, setInput, setSelectedText, getContext,
     routeOverride, onSent, persistTurns,
+    profileSystemRole, profileTemperature, attachments = [],
   } = opts;
 
   const [answer, setAnswer] = useState("");
@@ -188,16 +202,21 @@ export function useAskStream(opts: AskStreamOptions) {
         summary = ctxResult.summary;
         const hasProject = summary.parts.some((p) => p !== "clipboard");
         system = buildSystem(selectedModel, route.mode, sendTask, hasProject);
+        if (profileSystemRole?.trim()) {
+          system += `\n\n[Profile] ${profileSystemRole.trim()}`;
+        }
         const ctx = ctxResult.text;
         user = ctx
           ? `${question}\n\n---\nContext from workbench:\n${ctx}`
           : question;
+        user += formatAttachmentsBlock(attachments);
       }
       if (streamIdRef.current === myGen) setPhase("waiting");
       setSource({ mode: route.mode, summary, modelName: selectedModel.name, task: sendTask });
       lastModeRef.current = route.mode;
       lastTaskRef.current = sendTask;
       if (!replay) onSent();
+      const streamStarted = performance.now();
 
       const onChunk = async (event: { payload?: { id: string; text: string } }) => {
         const payload = event.payload;
@@ -206,15 +225,44 @@ export function useAskStream(opts: AskStreamOptions) {
         full += payload.text || "";
         setAnswer((prev) => prev + (payload.text || ""));
       };
-      const onDone = async (event: { payload?: { id: string } }) => {
+      const onDone = async (event: {
+        payload?: {
+          id: string;
+          elapsedMs?: number;
+          promptTokens?: number;
+          completionTokens?: number;
+        };
+      }) => {
         const payload = event.payload;
         if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
         if (!settled) {
           settled = true;
           setBusy(false);
-          // Completed exchange becomes follow-up context (plain text, no ctx dump).
-          if (full.trim()) finishTurn(full);
-          else failTurn(false);
+          const elapsedMs =
+            payload.elapsedMs ?? Math.round(performance.now() - streamStarted);
+          const promptTokens = payload.promptTokens;
+          const completionTokens = payload.completionTokens;
+          const estimatedTokens =
+            promptTokens != null || completionTokens != null
+              ? undefined
+              : Math.max(1, Math.round((question.length + full.length) / 4));
+          setSource((prev) =>
+            prev
+              ? { ...prev, elapsedMs, promptTokens, completionTokens, estimatedTokens }
+              : prev
+          );
+          if (full.trim()) {
+            recordAiUsage({
+              modelId: selectedModel.id,
+              modelName: selectedModel.name,
+              promptTokens,
+              completionTokens,
+              estimatedTokens,
+            });
+            finishTurn(full);
+          } else {
+            failTurn(false);
+          }
         }
         activeReqRef.current = null;
         teardown();
@@ -237,13 +285,24 @@ export function useAskStream(opts: AskStreamOptions) {
       };
 
       unlisteners.push(await listen<{ id: string; text: string }>("generate-text-chunk", onChunk));
-      unlisteners.push(await listen<{ id: string }>("generate-text-done", onDone));
+      unlisteners.push(
+        await listen<{
+          id: string;
+          elapsedMs?: number;
+          promptTokens?: number;
+          completionTokens?: number;
+        }>("generate-text-done", onDone)
+      );
       unlisteners.push(await listen<{ id: string; error: string }>("generate-text-error", onError));
 
       const maxTokens = Math.max(selectedModel.maxTokens || 0, 1536);
+      const temperature =
+        typeof profileTemperature === "number" && Number.isFinite(profileTemperature)
+          ? Math.min(2, Math.max(0, profileTemperature))
+          : selectedModel.temperature;
       await invoke("generate_text_stream", {
         req: {
-          config: { ...selectedModel, maxTokens },
+          config: { ...selectedModel, maxTokens, temperature },
           system,
           user,
           requestId: reqId,

@@ -492,6 +492,12 @@ struct StreamChunkPayload {
 #[serde(rename_all = "camelCase")]
 struct StreamDonePayload {
     id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completion_tokens: Option<u32>,
 }
 
 #[derive(Clone, Serialize)]
@@ -623,10 +629,13 @@ pub async fn generate_text_stream(
             "max_tokens": max_tokens,
             "temperature": req.config.temperature.clamp(0.0, 1.0),
             "stream": true,
+            // Ask OpenAI-compatible providers for a final usage chunk when supported.
+            "stream_options": { "include_usage": true },
         });
         (url, body, false)
     };
 
+    let started = std::time::Instant::now();
     let http_req = apply_auth_headers(client.post(&url).json(&body), &req.config, use_anthropic);
     let resp = match http_req.send().await {
         Ok(r) => r,
@@ -652,6 +661,8 @@ pub async fn generate_text_stream(
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
     let mut saw_text = false;
+    let mut prompt_tokens: Option<u32> = None;
+    let mut completion_tokens: Option<u32> = None;
 
     let mut consume_line = |line_raw: &str| {
         let line = line_raw.trim();
@@ -668,6 +679,25 @@ pub async fn generate_text_stream(
         let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else {
             return;
         };
+        if let Some(usage) = json.get("usage") {
+            if let Some(n) = usage.get("prompt_tokens").and_then(|v| v.as_u64()) {
+                prompt_tokens = Some(n as u32);
+            }
+            if let Some(n) = usage.get("completion_tokens").and_then(|v| v.as_u64()) {
+                completion_tokens = Some(n as u32);
+            }
+            // Anthropic-style keys
+            if prompt_tokens.is_none() {
+                if let Some(n) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+                    prompt_tokens = Some(n as u32);
+                }
+            }
+            if completion_tokens.is_none() {
+                if let Some(n) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+                    completion_tokens = Some(n as u32);
+                }
+            }
+        }
         let piece = if use_anthropic {
             anthropic_delta_text(&json)
         } else {
@@ -733,7 +763,88 @@ pub async fn generate_text_stream(
         "generate-text-done",
         StreamDonePayload {
             id: request_id.clone(),
+            elapsed_ms: Some(started.elapsed().as_millis() as u64),
+            prompt_tokens,
+            completion_tokens,
         },
     );
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAiEndpoint {
+    pub kind: String,
+    pub base_url: String,
+    pub label: String,
+    pub reachable: bool,
+    pub models: Vec<String>,
+}
+
+/// Probe common local OpenAI-compatible servers (Ollama / LM Studio).
+#[tauri::command]
+pub async fn detect_local_ai_endpoints() -> Result<Vec<LocalAiEndpoint>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+
+    let candidates = [
+        ("ollama", "http://127.0.0.1:11434/v1", "Ollama"),
+        ("lmstudio", "http://127.0.0.1:1234/v1", "LM Studio"),
+    ];
+
+    let mut out = Vec::new();
+    for (kind, base, label) in candidates {
+        let models_url = format!("{}/models", base.trim_end_matches('/'));
+        match client.get(&models_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let mut models = Vec::new();
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(arr) = json.get("data").and_then(|d| d.as_array()) {
+                        for item in arr {
+                            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                                models.push(id.to_string());
+                            }
+                        }
+                    }
+                }
+                // Ollama native /api/tags fallback when /v1/models is empty
+                if models.is_empty() && kind == "ollama" {
+                    if let Ok(tags) = client
+                        .get("http://127.0.0.1:11434/api/tags")
+                        .send()
+                        .await
+                    {
+                        if let Ok(json) = tags.json::<serde_json::Value>().await {
+                            if let Some(arr) = json.get("models").and_then(|m| m.as_array()) {
+                                for item in arr {
+                                    if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                                        models.push(name.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                out.push(LocalAiEndpoint {
+                    kind: kind.to_string(),
+                    base_url: base.to_string(),
+                    label: label.to_string(),
+                    reachable: true,
+                    models,
+                });
+            }
+            _ => {
+                out.push(LocalAiEndpoint {
+                    kind: kind.to_string(),
+                    base_url: base.to_string(),
+                    label: label.to_string(),
+                    reachable: false,
+                    models: vec![],
+                });
+            }
+        }
+    }
+    Ok(out)
 }

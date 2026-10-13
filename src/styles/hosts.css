@@ -383,6 +383,52 @@
 
 .hosts-editor::placeholder { color: var(--text-3); }
 
+/* 添加/编辑配置：与 models-modal / us-edit-modal 同宽（盖过全局 .modal 380px） */
+.modal.hosts-profile-modal {
+  display: flex;
+  flex-direction: column;
+  width: 640px;
+  max-width: 92vw;
+  max-height: 88vh;
+  padding-bottom: 16px;
+}
+
+.hosts-profile-modal .modal-title-row {
+  flex-shrink: 0;
+}
+
+.hosts-profile-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hosts-profile-content-group {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0;
+}
+
+.hosts-profile-editor {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 320px;
+  max-height: none;
+  height: clamp(320px, 48vh, 560px);
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.hosts-profile-modal .modal-actions {
+  flex-shrink: 0;
+  margin-top: 14px;
+}
+
 .admin-warning {
   padding: 10px 14px;
   margin-bottom: 12px;

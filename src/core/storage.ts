@@ -407,6 +407,7 @@ export const storage = {
         updatedAt: r['updated_at'] as string,
         kind: r['kind'] === 'prompt' ? 'prompt' : 'text',
         scenario: (r['scenario'] as string) || undefined,
+        taskBind: (r['task_bind'] as Snippet['taskBind']) || undefined,
       }));
     },
     save: async (items: Snippet[]): Promise<void> => {
@@ -423,6 +424,7 @@ export const storage = {
           updated_at: item.updatedAt,
           kind: item.kind ?? 'text',
           scenario: item.scenario ?? null,
+          task_bind: item.taskBind || null,
         }))
       );
     },

@@ -322,8 +322,19 @@
   background: transparent;
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-header {
-  border-bottom-color: var(--overlay-2);
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-search {
+  background: var(--input-bg);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-scene-panel {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-scene-card {
+  background: var(--overlay-1);
+  border-color: var(--overlay-3);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-title h2 {
@@ -358,9 +369,8 @@
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-group {
-  background: var(--overlay-1);
-  border-color: var(--overlay-2);
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-group-band {
+  border-top-color: var(--overlay-2);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-name {
@@ -390,6 +400,17 @@
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-actions {
   gap: 4px;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .model-compare-composer,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .model-compare-card {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .model-compare-empty {
+  background: color-mix(in srgb, var(--overlay-1) 80%, transparent);
+  border-color: var(--overlay-3);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty {

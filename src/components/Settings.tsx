@@ -13,6 +13,7 @@ import {
 } from "../lib/version";
 import { registerQuickAskShortcut, DEFAULT_SHORTCUT } from "../lib/quickAskShortcut";
 import { applyDocumentTheme, APP_THEME_CHANGED_EVENT } from "../lib/theme";
+import { clearAiUsage, usageList, type AiUsageEntry } from "../lib/aiUsage";
 import { useConfirm } from "./ConfirmModal";
 import { emit } from "@tauri-apps/api/event";
 
@@ -29,6 +30,16 @@ function Settings({ onOpenUpdate }: Props = {}) {
 
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
+  const [usageRows, setUsageRows] = useState<AiUsageEntry[]>(() => usageList());
+  useEffect(() => {
+    const refresh = () => setUsageRows(usageList());
+    window.addEventListener("ai-usage-changed", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("ai-usage-changed", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
   const invokeSetAutoStart = useGlobalStore((s) => s.invokeSetAutoStart);
   const invokeGetAutoStart = useGlobalStore((s) => s.invokeGetAutoStart);
   const invokeExportData = useGlobalStore((s) => s.invokeExportData);
@@ -266,6 +277,46 @@ function Settings({ onOpenUpdate }: Props = {}) {
             </label>
           </div>
           <p className="setting-hint">{t("quickAsk.bubbleHint")}</p>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">{t("usage.title")}</div>
+        <div className="card-body">
+          <p className="setting-hint">{t("usage.hint")}</p>
+          {usageRows.length === 0 ? (
+            <p className="setting-hint">{t("usage.empty")}</p>
+          ) : (
+            <ul className="settings-usage-list">
+              {usageRows.slice(0, 12).map((row) => {
+                const tokens =
+                  row.promptTokens + row.completionTokens > 0
+                    ? row.promptTokens + row.completionTokens
+                    : row.estimatedTokens;
+                return (
+                  <li key={row.modelId}>
+                    <strong>{row.modelName}</strong>
+                    <span className="runtime-muted">
+                      {t("usage.row", { calls: row.calls, tokens })}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <div className="setting-inline-controls">
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              disabled={usageRows.length === 0}
+              onClick={() => {
+                clearAiUsage();
+                setUsageRows([]);
+              }}
+            >
+              {t("usage.clear")}
+            </button>
+          </div>
         </div>
       </div>
 

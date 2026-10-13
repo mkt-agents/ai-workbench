@@ -217,6 +217,20 @@ export default function AskPanel(props: Props) {
     if (source.summary.parts.includes("clipboard")) bits.push(t("part.clipboard"));
     if (source.task !== "none") bits.push(t(`taskShort.${source.task}`));
     bits.push(source.modelName);
+    if (source.elapsedMs != null) {
+      bits.push(
+        source.elapsedMs >= 1000
+          ? t("source.elapsedSec", { n: (source.elapsedMs / 1000).toFixed(1) })
+          : t("source.elapsedMs", { n: source.elapsedMs })
+      );
+    }
+    if (source.promptTokens != null || source.completionTokens != null) {
+      const p = source.promptTokens ?? 0;
+      const c = source.completionTokens ?? 0;
+      bits.push(t("source.tokens", { n: p + c, in: p, out: c }));
+    } else if (source.estimatedTokens != null) {
+      bits.push(t("source.tokensEst", { n: source.estimatedTokens }));
+    }
     return bits.join(" · ");
   })();
 

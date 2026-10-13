@@ -18,6 +18,7 @@ import {
   GitCommitHorizontal,
   History,
   Loader2,
+  RefreshCw,
   Search,
   ShieldAlert,
   Sparkles,
@@ -26,7 +27,9 @@ import {
 import { useGlobalStore } from "../core/store"
 import { refreshRepos } from "../core/gitCache"
 import { readStoredString, writeStoredString } from "../core/localState"
-import { markdownSections } from "../lib/aiText"
+import { markdownSections, replaceMarkdownSection } from "../lib/aiText"
+import { resolveSceneModel } from "../lib/aiSceneModels"
+import { recordAiUsage } from "../lib/aiUsage"
 import { parseAiLine } from "../lib/reportAi"
 import { projectNameFromPath } from "../core/pathUtils"
 import { isCancelledError, cleanErrorMessage } from "./testReportTypes"
@@ -156,6 +159,7 @@ export default function TestReportPanel(props: Props) {
   const collect = useGlobalStore((s) => s.invokeCollectTestReport)
   const collectFolder = useGlobalStore((s) => s.invokeCollectFolderReport)
   const generateAi = useGlobalStore((s) => s.invokeGenerateTestReportAi)
+  const regenerateAiSection = useGlobalStore((s) => s.invokeRegenerateTestReportAiSection)
   const cancelAi = useGlobalStore((s) => s.invokeCancelTestReportAi)
   const saveReportHistory = useGlobalStore((s) => s.invokeSaveReportAiHistory)
   const listReportHistory = useGlobalStore((s) => s.invokeListReportAiHistory)
@@ -163,6 +167,7 @@ export default function TestReportPanel(props: Props) {
   const saveTextFile = useGlobalStore((s) => s.invokeSaveTextFile)
   const copyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard)
   const aiModels = useGlobalStore((s) => s.aiModels)
+  const aiSceneModels = useGlobalStore((s) => s.settings.aiSceneModels)
   const loadAIModels = useGlobalStore((s) => s.loadAIModels)
 
   const [mode, setMode] = useState<Mode>("uncommitted")
@@ -183,6 +188,8 @@ export default function TestReportPanel(props: Props) {
   const [aiRequirement, setAiRequirement] = useState("")
   const [aiBusy, setAiBusy] = useState(false)
   const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null)
+  /** Section title currently being regenerated (live answer only). */
+  const [sectionBusy, setSectionBusy] = useState<string | null>(null)
 
   // Past answers, newest first. Loaded lazily when the section is opened and only
   // ever rendered read-only — it never writes back into `ai`, so the live report
@@ -214,14 +221,10 @@ export default function TestReportPanel(props: Props) {
   const displayName = isFolder ? folderName : projectNameFromPath(repoPath)
   const modeStorageKey = repoPath ? "workbench-report-mode:" + repoPath : ""
 
-  const defaultModel = useMemo(() => aiModels.find((m) => m.isDefault) || aiModels[0] || null, [aiModels])
-  const selectedModel: AIModelConfig | null = useMemo(() => {
-    if (selectedModelId) {
-      const found = aiModels.find((m) => m.id === selectedModelId)
-      if (found) return found
-    }
-    return defaultModel
-  }, [selectedModelId, aiModels, defaultModel])
+  const selectedModel: AIModelConfig | null = useMemo(
+    () => resolveSceneModel("report", aiModels, aiSceneModels, selectedModelId),
+    [selectedModelId, aiModels, aiSceneModels]
+  )
 
   const filtered = useFilteredFiles(report?.files ?? [], fileFilter)
   const { visible, total, options } = filtered
@@ -324,6 +327,11 @@ export default function TestReportPanel(props: Props) {
         setAi(result.markdown)
         setAiWarnings(result.warnings)
         setAiRequirement(ask)
+        recordAiUsage({
+          modelId: selectedModel.id,
+          modelName: selectedModel.name,
+          estimatedTokens: Math.max(1, Math.round(result.markdown.length / 4)),
+        })
         // Keep the answer: it cost a map-reduce round trip and it is the artefact
         // the tester works from. The report itself is never stored — it is a
         // projection of the working tree, recomputed on every selection.
@@ -523,14 +531,78 @@ export default function TestReportPanel(props: Props) {
 
   const aiSections = useMemo(() => Object.entries(markdownSections(ai)), [ai])
 
+  const regenerateSection = useCallback(
+    async (title: string) => {
+      if (!viewingId || !selectedModel || aiBusy || sectionBusy) return
+      const gen = genRef.current
+      const ask = requirement.trim()
+      setSectionBusy(title)
+      setError("")
+      try {
+        const result = await regenerateAiSection(
+          viewingId,
+          selectedModel,
+          title,
+          customSystem.trim() || undefined,
+          ask || undefined
+        )
+        if (genRef.current !== gen) return
+        setAi((prev) => replaceMarkdownSection(prev, title, result.markdown))
+        if (result.warnings.length) setAiWarnings(result.warnings)
+        recordAiUsage({
+          modelId: selectedModel.id,
+          modelName: selectedModel.name,
+          estimatedTokens: Math.max(1, Math.round(result.markdown.length / 4)),
+        })
+        showMsg("success", t("testReport.ai.sectionDone", { title, defaultValue: `已重生成「${title}」` }))
+      } catch (e) {
+        if (genRef.current !== gen) return
+        if (isCancelledError(e)) {
+          showMsg("success", t("testReport.aiCancelled"))
+        } else {
+          showMsg("error", t("testReport.ai.sectionFailed", {
+            title,
+            error: cleanErrorMessage(e),
+            defaultValue: `「${title}」重生成失败：${cleanErrorMessage(e)}`,
+          }))
+        }
+      } finally {
+        if (genRef.current === gen) setSectionBusy(null)
+      }
+    },
+    [
+      viewingId,
+      selectedModel,
+      aiBusy,
+      sectionBusy,
+      requirement,
+      regenerateAiSection,
+      customSystem,
+      showMsg,
+      t,
+    ]
+  )
+
   /** Shared by the live answer and the history entries: both are the same shape of
    *  markdown, so both get P0/P1/P2 case cards and per-section copy. */
-  const renderAiSections = (markdownText: string) => (
+  const renderAiSections = (markdownText: string, allowRegen = false) => (
     <div className="tr-ai-body">
       {Object.entries(markdownSections(markdownText)).map(([title, body]) => (
         <section key={title} className="tr-ai-block">
           <h4>
             {title}
+            <span className="tr-ai-block-actions">
+            {allowRegen && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-small tr-ai-block-copy"
+                disabled={aiBusy || !!sectionBusy}
+                onClick={() => void regenerateSection(title)}
+                title={t("testReport.ai.regenSection", { defaultValue: "重新生成该章节" })}
+              >
+                {sectionBusy === title ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-secondary btn-small tr-ai-block-copy"
@@ -539,6 +611,7 @@ export default function TestReportPanel(props: Props) {
             >
               <Copy size={12} />
             </button>
+            </span>
           </h4>
           <ul>
             {body
@@ -1385,7 +1458,7 @@ export default function TestReportPanel(props: Props) {
                     })}
                   </p>
                 )}
-                {aiSections.length > 0 && renderAiSections(ai)}
+                {aiSections.length > 0 && renderAiSections(ai, true)}
                 {ai && !aiBusy && aiSections.length === 0 && (
                   <div className="tr-ai-raw">
                     {ai.split("\n").map((line, i) => (

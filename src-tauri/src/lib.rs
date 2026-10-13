@@ -5,6 +5,7 @@ mod site_icon;
 mod db_commands;
 pub mod cursor;
 mod ai_commands;
+mod secret_protect;
 mod dsh_commands;
 mod runtime_commands;
 mod cloudflared_commands;
@@ -240,7 +241,8 @@ pub fn run() {
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     kind TEXT NOT NULL DEFAULT 'text',
-                    scenario TEXT
+                    scenario TEXT,
+                    task_bind TEXT
                 );
                 CREATE TABLE IF NOT EXISTS web_plugin_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,6 +345,7 @@ pub fn run() {
             // Snippets: 'text' fragments vs 'prompt' (Prompt Studio custom templates)
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN kind TEXT NOT NULL DEFAULT 'text';");
             let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN scenario TEXT;");
+            let _ = conn.execute_batch("ALTER TABLE snippets ADD COLUMN task_bind TEXT;");
             {
                 let state = app.state::<DbState>();
                 let mut guard = state.conn.lock().map_err(|e| e.to_string())?;
@@ -420,6 +423,7 @@ pub fn run() {
             report_commands::collect_test_report,
             report_commands::collect_folder_report,
             report_commands::generate_test_report_ai,
+            report_commands::regenerate_test_report_ai_section,
             report_commands::cancel_test_report_ai,
             report_history::save_report_ai_history,
             report_history::list_report_ai_history,
@@ -516,6 +520,7 @@ pub fn run() {
             ai_commands::list_provider_models,
             ai_commands::generate_text,
             ai_commands::generate_text_stream,
+            ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::stop_dsh,
             dsh_commands::list_dsh,

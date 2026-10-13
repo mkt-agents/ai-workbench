@@ -84,6 +84,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   quickAskBubbleEnabled: true,
   quickAskBubblePos: undefined,
   trayHintShown: false,
+  aiSceneModels: {},
+  quickAskProfiles: [],
+  quickAskProfileId: undefined,
 };
 
 /** Preset web tools sites — shown as suggestions when user has no plugins yet. */

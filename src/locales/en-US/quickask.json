@@ -5,6 +5,20 @@
   "pin": "Keep on top",
   "unpin": "Stop keeping on top",
   "noModel": "Configure an AI model in the main window first",
+  "profile": {
+    "none": "Default profile",
+    "code": "Code assistant",
+    "translate": "Translate",
+    "polish": "Polish"
+  },
+  "attach": {
+    "file": "Attach file",
+    "fromInput": "Attach input",
+    "remove": "Remove attachment",
+    "pickTitle": "Pick a text file",
+    "tooMany": "At most 3 attachments",
+    "tooLarge": "Attachments exceed the ~12K character budget"
+  },
   "emptyInput": "Enter a question",
   "placeholder": "Ask something… (Enter to send · Shift+Enter for newline)",
   "emptyHint": "Start with a question",
@@ -151,7 +165,11 @@
   "source": {
     "project": "Based on project",
     "chat": "Chat",
-    "noProjectData": "no project data collected"
+    "noProjectData": "no project data collected",
+    "elapsedMs": "{{n}} ms",
+    "elapsedSec": "{{n}} s",
+    "tokens": "{{n}} tok (↑{{in}} ↓{{out}})",
+    "tokensEst": "~{{n}} tok"
   },
   "part": {
     "workspace": "Workspace",

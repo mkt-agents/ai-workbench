@@ -7,7 +7,7 @@ pub struct SqlRow {
     pub columns: serde_json::Map<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DbTable {
     GitAccounts,
@@ -313,7 +313,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "id")?,
                     json_str(obj, "name")?,
                     json_str(obj, "provider")?,
-                    json_str(obj, "api_key")?,
+                    crate::secret_protect::protect_secret(&json_str(obj, "api_key")?)?,
                     json_opt_str(obj, "auth_type").unwrap_or_else(|| "api".to_string()),
                     json_str(obj, "base_url")?,
                     json_str(obj, "model")?,
@@ -346,7 +346,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
         }
         DbTable::Snippets => {
             tx.execute(
-                "INSERT INTO snippets (id, name, content, tags, params, use_count, created_at, updated_at, kind, scenario) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO snippets (id, name, content, tags, params, use_count, created_at, updated_at, kind, scenario, task_bind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     json_str(obj, "id")?,
                     json_str(obj, "name")?,
@@ -358,6 +358,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "updated_at")?,
                     json_opt_str(obj, "kind").unwrap_or_else(|| "text".to_string()),
                     json_opt_str(obj, "scenario"),
+                    json_opt_str(obj, "task_bind"),
                 ],
             ).map_err(|e| e.to_string())?;
         }
@@ -431,6 +432,18 @@ pub async fn db_load(state: tauri::State<'_, DbState>, table: DbTable) -> Result
         results.push(SqlRow {
             columns: row_to_map(row, &column_names)?,
         });
+    }
+    if table == DbTable::AiModels {
+        for row in &mut results {
+            if let Some(serde_json::Value::String(key)) = row.columns.get_mut("api_key") {
+                match crate::secret_protect::unprotect_secret(key) {
+                    Ok(plain) => *key = plain,
+                    Err(e) => {
+                        eprintln!("[ai_models] api_key unprotect failed: {e}");
+                    }
+                }
+            }
+        }
     }
     Ok(results)
 }

@@ -5,6 +5,20 @@
   "pin": "置顶窗口",
   "unpin": "取消置顶",
   "noModel": "请先在主窗口配置 AI 模型",
+  "profile": {
+    "none": "默认 Profile",
+    "code": "代码助手",
+    "translate": "翻译",
+    "polish": "润色"
+  },
+  "attach": {
+    "file": "附加文件",
+    "fromInput": "附加当前输入",
+    "remove": "移除附件",
+    "pickTitle": "选择文本文件",
+    "tooMany": "最多附加 3 个文件",
+    "tooLarge": "附件总长度超限（约 12K 字符）"
+  },
   "emptyInput": "请输入问题",
   "placeholder": "问一句…（Enter 发送 · Shift+Enter 换行）",
   "emptyHint": "从一句问题开始",
@@ -151,7 +165,11 @@
   "source": {
     "project": "基于项目",
     "chat": "普通对话",
-    "noProjectData": "未采集到项目数据"
+    "noProjectData": "未采集到项目数据",
+    "elapsedMs": "{{n}} ms",
+    "elapsedSec": "{{n}} s",
+    "tokens": "{{n}} tok（↑{{in}} ↓{{out}}）",
+    "tokensEst": "~{{n}} tok"
   },
   "part": {
     "workspace": "工作区",

@@ -1,5 +1,469 @@
 /* === MODELS CENTER === */
 
+.models-view-tabs {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+  padding: 3px;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+
+.models-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--transition-colors-fast), background var(--transition-colors-fast);
+}
+
+.models-view-tab:hover { color: var(--text-0); background: var(--overlay-1); }
+.models-view-tab.is-active {
+  color: var(--text-0);
+  background: var(--overlay-3);
+  font-weight: 560;
+}
+
+.models-scene-panel {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+}
+
+.models-scene-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+
+.models-scene-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.models-scene-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.models-scene-title {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.models-scene-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: 8px;
+}
+
+.models-scene-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  cursor: pointer;
+  transition: border-color var(--transition-colors-fast), background var(--transition-colors-fast);
+}
+
+.models-scene-card:hover {
+  border-color: var(--accent-border);
+}
+
+.models-scene-card.is-bound {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+}
+
+.models-scene-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.models-scene-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-2);
+  color: var(--text-2);
+}
+
+.models-scene-card.is-bound .models-scene-card-icon {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.models-scene-card-name {
+  font-size: 12px;
+  font-weight: 560;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-scene-select {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* 说明 → 输入卡 → 结果；整页可上下滚 */
+.model-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-bottom: 8px;
+}
+
+.model-compare-hint {
+  margin: 0;
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.model-compare-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+}
+
+.model-compare-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.model-compare-field > span {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.model-compare-prompt {
+  min-height: 64px;
+  max-height: 160px;
+  resize: none;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-y: auto;
+}
+
+.model-compare-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.model-compare-pick-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.model-compare-pick-count {
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.model-compare-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-compare-chip {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--transition-colors-fast), border-color var(--transition-colors-fast), background var(--transition-colors-fast);
+}
+
+.model-compare-chip:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--text-0);
+}
+
+.model-compare-chip.is-on {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-0);
+  font-weight: 500;
+}
+
+.model-compare-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.model-compare-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.model-compare-actions .btn {
+  height: 28px;
+  white-space: nowrap;
+}
+
+.model-compare-results {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.model-compare-grid {
+  display: grid;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.model-compare-grid.cols-1 { grid-template-columns: minmax(0, 1fr); }
+.model-compare-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.model-compare-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.model-compare-card {
+  display: flex;
+  flex-direction: column;
+  height: min(420px, 58vh);
+  min-height: 200px;
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  overflow: hidden;
+  box-shadow: var(--surface-highlight);
+}
+
+.model-compare-card.is-fail {
+  border-color: color-mix(in srgb, var(--red) 40%, var(--border));
+}
+
+.model-compare-card.is-pending {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border-subtle));
+}
+
+.model-compare-pending {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 20px 12px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.model-compare-pending .spin {
+  color: var(--accent);
+}
+
+.model-compare-latency.is-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.model-compare-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-2) 80%, transparent);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.model-compare-card header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.model-compare-latency {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-compare-latency.is-fail {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.model-compare-out {
+  margin: 0;
+  padding: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-0);
+}
+
+.model-compare-err {
+  margin: 0;
+  padding: 12px;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
+}
+
+.model-compare-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 180px;
+  padding: 32px 20px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-1) 55%, transparent);
+  text-align: center;
+}
+
+.model-compare-empty.is-busy .model-compare-empty-icon {
+  color: var(--accent);
+}
+
+.model-compare-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-2);
+  color: var(--text-3);
+}
+
+.model-compare-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.model-compare-empty-desc {
+  max-width: 300px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+@container models-page (max-width: 900px) {
+  .model-compare-grid.cols-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .model-compare-card {
+    height: min(360px, 50vh);
+  }
+}
+
+@container models-page (max-width: 640px) {
+  .model-compare-grid.cols-2,
+  .model-compare-grid.cols-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-compare-card {
+    height: auto;
+    max-height: 360px;
+  }
+}
+
 .models-container {
   display: flex;
   flex-direction: column;
@@ -14,16 +478,19 @@
   container: models-page / inline-size;
 }
 
-/* Header / toolbar — title + search + actions; narrow: search alone on row 1 */
+/* 标题单独一行；搜索 + 按钮同一工具行（够宽并排，不够则整组按钮换行） */
+.models-chrome {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
 .models-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 10px;
-  flex-shrink: 0;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
 }
 
 .models-title {
@@ -31,6 +498,7 @@
   align-items: baseline;
   gap: 10px;
   flex: 0 0 auto;
+  min-width: 0;
   white-space: nowrap;
 }
 
@@ -52,14 +520,31 @@
   font-variant-numeric: tabular-nums;
 }
 
-.models-header-actions {
+.models-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* min(100%, max-content)：并排时按内容宽度占位；放不下就整组换到下一行 */
+.models-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
   gap: 6px;
-  flex: 0 1 auto;
-  margin-left: auto;
+  flex: 1 1 auto;
+  min-width: min(100%, max-content);
+}
+
+.models-actions-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--border-subtle);
+  flex-shrink: 0;
 }
 
 .models-scroll {
@@ -73,14 +558,31 @@
   margin: -3px;
 }
 
-@container models-page (max-width: 720px) {
-  .models-search {
-    flex: 1 1 100%;
-    max-width: none;
-    order: 2;
+@container models-page (max-width: 960px) {
+  .models-toolbar-actions .ai-action-label-wide {
+    display: none;
   }
-  .models-header-actions {
-    order: 3;
+}
+
+@container models-page (max-width: 560px) {
+  .models-count {
+    display: none;
+  }
+
+  .models-toolbar-actions .ai-action-label {
+    display: none;
+  }
+
+  .models-toolbar-actions .btn-primary {
+    padding-inline: 8px;
+  }
+
+  .models-select-all .ai-action-label {
+    display: none;
+  }
+
+  .models-actions-sep {
+    display: none;
   }
 }
 
@@ -114,16 +616,13 @@
   color: var(--text-2);
 }
 
-/* Toolbar selects: same 28px band as the search box. A native <select> sizes
-   itself to its widest option, which left dead space before the arrow, so it
-   sizes to content and draws its own chevron instead. */
+/* Fixed-ish width so Chinese labels (全部状态 / 默认优先) don't get crushed. */
 .models-pick {
-  field-sizing: content;
   -webkit-appearance: none;
   appearance: none;
-  width: auto;
-  min-width: 0;
-  max-width: 168px;
+  width: 8.5rem;
+  min-width: 7.5rem;
+  max-width: 100%;
   height: 28px;
   padding: 0 24px 0 10px;
   font-size: 12px;
@@ -138,6 +637,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .models-pick:hover {
@@ -149,16 +649,17 @@
   outline-offset: 1px;
 }
 
-/* One size for every control in the toolbar row: 28px tall, 12px text. */
-.models-header-actions > .btn,
-.models-header-actions .btn {
+/* One size for every control in the header actions row: 28px tall, 12px text. */
+.models-toolbar-actions > .btn,
+.models-toolbar-actions .btn {
   height: 28px;
   padding-top: 0;
   padding-bottom: 0;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
-.models-header-actions .btn-icon {
+.models-toolbar-actions .btn-icon {
   width: 28px;
   padding-left: 0;
   padding-right: 0;
@@ -234,20 +735,22 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
-  flex: 1 1 180px;
-  min-width: 140px;
-  max-width: 320px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
+  height: 30px;
+  /* 与按钮并排时吃剩余宽度；不够放按钮时按钮整组换行，搜索仍留在上行 */
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
-  background: var(--bg-1);
+  background: var(--input-bg);
   color: var(--text-3);
   transition: var(--transition-colors-fast);
+  box-sizing: border-box;
 }
 
 .models-search:focus-within {
   border-color: var(--accent);
+  color: var(--text-2);
 }
 
 .models-search input {
@@ -366,36 +869,27 @@
   line-height: 1.6;
 }
 
-/* Model list — panels stack full width; the card grid inside each panel (and the
-   flat view) is the same, so a card is the same size whichever view it renders
-   in. auto-fill (not auto-fit) keeps the empty slot of a single-model group, or
-   every card would get its own width. */
+/* Always a responsive card grid — never a single stretched column of full-bleed cards. */
 .ai-model-list {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-}
-
-/* Flat view has no panels to fill the width, so it uses the same card grid as a
-   group body — otherwise every card stretches edge to edge and the page reads
-   as half-empty on wide windows. */
-.ai-model-list.is-flat {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   gap: 10px;
+  align-content: start;
 }
 
-/* ─── Provider groups (foldable) ─── */
+/* ─── Provider bands (span the grid; cards below stay multi-column) ─── */
 
-/* Each group is its own surface: header, health flags and rows read as one block,
-   and stacked panels never fight each other for row height. */
-.ai-model-group {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: 6px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-2) 60%, transparent);
+.ai-model-group-band {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ai-model-list > .ai-model-group-band:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 .ai-model-group-header {
@@ -403,7 +897,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 6px 4px;
   border: none;
   background: transparent;
   color: var(--text-1);
@@ -417,7 +911,7 @@
 
 .ai-model-group-header:hover {
   color: var(--text-0);
-  background: var(--bg-hover);
+  background: var(--overlay-1);
 }
 
 .ai-model-group-chevron {
@@ -448,8 +942,6 @@
   flex-shrink: 0;
 }
 
-/* Health flags on the group header: visible even when the group is folded, so a
-   collapsed list still shows which provider needs a test or a fix. */
 .ai-model-group-flag {
   display: inline-flex;
   align-items: center;
@@ -479,25 +971,6 @@
   background: color-mix(in srgb, var(--yellow) 12%, transparent);
 }
 
-.ai-model-group-body {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
-  gap: 10px;
-}
-
-/* Inside a panel the surface is already drawn, so a row keeps its fill but only
-   shows a border on hover — no card-inside-a-card double outline. */
-.ai-model-group .ai-model-item {
-  border-color: transparent;
-}
-
-.ai-model-group .ai-model-item:hover {
-  border-color: var(--border-subtle);
-  background: var(--bg-hover);
-  box-shadow: none;
-  transform: none;
-}
-
 /* Active state for the group-by toggle (and any icon-only toggle button). */
 .btn.is-active {
   color: var(--accent);
@@ -508,9 +981,9 @@
 .ai-model-item {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  padding: 14px 14px 12px;
+  padding: 12px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   background: var(--bg-1);
@@ -808,13 +1281,6 @@
   color: var(--red);
 }
 
-/* 窄内容宽：收起「同步到 DSH」长文案与批量操作长标签，图标+title 仍可用 */
-@container models-page (max-width: 560px) {
-  .ai-action-label-wide,
-  .models-header-actions .ai-action-label {
-    display: none;
-  }
-}
 
 /* 按卡片自身宽度收文字（网格列数随窗口变，页面宽度推不出卡片宽度）：
    先收最长的「同步到 DSH」，再窄就全部只留图标，悬停 title 仍可读。 */

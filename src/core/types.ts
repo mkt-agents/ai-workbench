@@ -58,6 +58,11 @@ export interface QuickAskChips {
   clipboard: boolean;
 }
 
+/** AI call sites that can bind a preferred model (else fall back to default). */
+export type AiScene = 'quickAsk' | 'report' | 'commit' | 'optimize';
+
+export type AiSceneModels = Partial<Record<AiScene, string>>;
+
 export interface AppSettings {
   theme: AppTheme;
   language: 'zh-CN' | 'en-US';
@@ -81,9 +86,36 @@ export interface AppSettings {
   quickAskBubblePos?: { x: number; y: number };
   /** One-shot tip after first close-to-tray */
   trayHintShown?: boolean;
+  /** Preferred model id per AI scene (missing → global default). */
+  aiSceneModels?: AiSceneModels;
+  /** User-defined Quick Ask profiles (builtins are merged at runtime). */
+  quickAskProfiles?: QuickAskProfile[];
+  /** Active Quick Ask profile id (builtin:* or custom). */
+  quickAskProfileId?: string;
+}
+
+/** Named Quick Ask preset: role + optional temperature/model. */
+export interface QuickAskProfile {
+  id: string;
+  name: string;
+  /** i18n key for built-in display names (quickask namespace). */
+  nameKey?: string;
+  /** Extra system guidance appended after the mode prompt. */
+  systemRole?: string;
+  temperature?: number;
+  modelId?: string;
+  builtin?: boolean;
 }
 
 export type SnippetKind = 'text' | 'prompt';
+
+/** Quick-ask one-shot tasks a snippet can auto-bind to (not `none` / `optimize`). */
+export type SnippetTaskBind =
+  | 'debug'
+  | 'explain'
+  | 'polish'
+  | 'translate'
+  | 'summarize';
 
 export interface Snippet {
   id: string;
@@ -99,6 +131,8 @@ export interface Snippet {
   kind?: SnippetKind;
   /** Prompt Studio scenario key (PROMPT_SCENARIOS) when kind === 'prompt' */
   scenario?: string;
+  /** When set, picking this Quick Ask task inserts the snippet if the composer is empty. */
+  taskBind?: SnippetTaskBind | '';
 }
 
 /** One Q&A exchange inside a quick-ask session. */

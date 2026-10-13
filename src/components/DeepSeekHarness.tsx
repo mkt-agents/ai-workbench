@@ -20,6 +20,7 @@ import {
 import { useGlobalStore } from "../core/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { readDshSyncMeta, type DshSyncMeta } from "../lib/dshSyncMeta";
 import { useConfirm } from "./ConfirmModal";
 
 const DSH_HOST = "127.0.0.1";
@@ -116,6 +117,18 @@ function DeepSeekHarness() {
   const [installing, setInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState(0);
   const [installMsg, setInstallMsg] = useState<string | null>(null);
+  const [syncMeta, setSyncMeta] = useState<DshSyncMeta | null>(() => readDshSyncMeta());
+
+  useEffect(() => {
+    const refresh = () => setSyncMeta(readDshSyncMeta());
+    const onChanged = () => refresh();
+    window.addEventListener("dsh-sync-meta-changed", onChanged);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("dsh-sync-meta-changed", onChanged);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
   const [versions, setVersions] = useState<string[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>("");
@@ -428,7 +441,7 @@ function DeepSeekHarness() {
       const result = await invokeStartDsh(port);
       if (result?.auth_patch_warning) {
         showCriticalAlert(
-          `${t("dsh.authPatchFailed")}: ${result.auth_patch_warning}`
+          `${t("dsh.authPatchFailed")}: ${result.auth_patch_warning}. ${t("dsh.authPatchHint")}`
         );
       }
       const portUsed = result?.port ?? port;
@@ -697,6 +710,20 @@ function DeepSeekHarness() {
           </button>
         </div>
       )}
+      {syncMeta && (
+        <div className="dsh-sync-bar" title={syncMeta.at}>
+          <span className="dsh-sync-bar-label">{t("dsh.syncStatusLabel")}</span>
+          <span className="dsh-sync-bar-model">
+            {syncMeta.modelName}
+            <span className="runtime-muted"> · {syncMeta.modelId}</span>
+          </span>
+          <span className="dsh-sync-bar-time runtime-muted">
+            {t("dsh.syncStatusAt", {
+              time: new Date(syncMeta.at).toLocaleString(),
+            })}
+          </span>
+        </div>
+      )}
       {showOnboarding && !isRunning && (
         <div className="alert-banner alert-banner-info onboarding-checklist">
           <div className="onboarding-body">
@@ -704,13 +731,31 @@ function DeepSeekHarness() {
             <ol className="onboarding-steps">
               <li className={dshNodejsInstalled ? "done" : ""}>
                 {t("dsh.onboardingStep1")}
+                {dshNodejsInstalled === false ? (
+                  <a
+                    className="dsh-onboarding-link"
+                    href="https://nodejs.org/"
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void invoke("open_in_browser", { url: "https://nodejs.org/" }).catch(() => {});
+                    }}
+                  >
+                    {t("dsh.nodejsDownload")}
+                  </a>
+                ) : null}
                 {dshNodejsInstalled ? " ✓" : ""}
               </li>
               <li className={dshVersion ? "done" : ""}>
                 {t("dsh.onboardingStep2")}
                 {dshVersion ? " ✓" : ""}
               </li>
-              <li>{t("dsh.onboardingStep3")}</li>
+              <li className={syncMeta ? "done" : ""}>
+                {t("dsh.onboardingStep3")}
+                {syncMeta ? " ✓" : ""}
+              </li>
+              <li className="dsh-onboarding-tip">{t("dsh.onboardingTipAuth")}</li>
             </ol>
             <div className="onboarding-actions">
               <button type="button" className="btn btn-secondary btn-small" onClick={dismissOnboarding}>

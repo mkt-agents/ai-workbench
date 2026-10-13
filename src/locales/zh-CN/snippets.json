@@ -19,6 +19,16 @@
   "kindAll": "全部",
   "kindLabel": "类型",
   "scenarioLabel": "所属场景",
+  "taskBindLabel": "快问任务绑定",
+  "taskBindHint": "在快问点对应任务且输入框为空时，自动填入该模板。",
+  "taskBind": {
+    "none": "不绑定",
+    "debug": "诊断",
+    "explain": "解释",
+    "polish": "润色",
+    "translate": "翻译",
+    "summarize": "总结"
+  },
   "addTitle": "新建模板",
   "editTitle": "编辑模板",
   "name": "名称",

@@ -19,6 +19,9 @@ export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
   invokeGenerateText: (params: { config: AIModelConfig; system: string; user: string }) => Promise<string>;
   invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) => Promise<{ success: boolean; models: { id: string; label?: string }[]; message?: string }>;
+  invokeDetectLocalAiEndpoints: () => Promise<
+    Array<{ kind: string; baseUrl: string; label: string; reachable: boolean; models: string[] }>
+  >;
   invokeStartDsh: (port?: number) => Promise<DshInstance>;
   invokeStopDsh: (port: number) => Promise<string>;
   invokeListDsh: () => Promise<DshInstance[]>;
@@ -92,6 +95,13 @@ export interface Invocations {
     system?: string,
     requirement?: string,
   ) => Promise<AiResult>;
+  invokeRegenerateTestReportAiSection: (
+    reportId: string,
+    config: AIModelConfig,
+    section: string,
+    system?: string,
+    requirement?: string,
+  ) => Promise<AiResult>;
   invokeCancelTestReportAi: (reportId: string) => Promise<void>;
   invokeSaveReportAiHistory: (entry: ReportAiHistoryInput) => Promise<number>;
   invokeListReportAiHistory: () => Promise<ReportAiHistoryEntry[]>;
@@ -151,6 +161,10 @@ export const invocations: Invocations = {
       'list_provider_models',
       { config: params },
     ),
+  invokeDetectLocalAiEndpoints: () =>
+    tauriInvoke<
+      Array<{ kind: string; baseUrl: string; label: string; reachable: boolean; models: string[] }>
+    >('detect_local_ai_endpoints'),
 
   // DeepSeek Harness
   invokeStartDsh: (port?: number) =>
@@ -328,6 +342,20 @@ export const invocations: Invocations = {
     }),
   invokeGenerateTestReportAi: (reportId: string, config: AIModelConfig, system?: string, requirement?: string) =>
     tauriInvoke<AiResult>('generate_test_report_ai', { reportId, config, system, requirement }),
+  invokeRegenerateTestReportAiSection: (
+    reportId: string,
+    config: AIModelConfig,
+    section: string,
+    system?: string,
+    requirement?: string,
+  ) =>
+    tauriInvoke<AiResult>('regenerate_test_report_ai_section', {
+      reportId,
+      config,
+      section,
+      system,
+      requirement,
+    }),
   invokeCancelTestReportAi: (reportId: string) =>
     tauriInvoke<void>('cancel_test_report_ai', { reportId }),
   invokeSaveReportAiHistory: (entry: ReportAiHistoryInput) =>

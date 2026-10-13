@@ -3,15 +3,16 @@ import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle, MoreHorizontal } from "lucide-react";
+import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle, MoreHorizontal, Radar, Columns2, Link2, MessageSquare, FileBarChart2, GitCommitHorizontal, Sparkles } from "lucide-react";
 import AppLogoMark from "./AppLogoMark";
 import DropdownMenu from "./DropdownMenu";
+import ModelComparePlayground from "./ModelComparePlayground";
 import { useGlobalStore } from "../core/store";
 import { MODEL_TEST_CONCURRENCY, mapPool } from "../core/asyncPool";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
 import { computeFloatingMenuStyle, type FloatingMenuStyle } from "../lib/floatingMenu";
-import type { AIModelConfig, AuthType } from "../core/types";
+import type { AIModelConfig, AiScene, AuthType } from "../core/types";
 import {
   AI_PROVIDERS,
   getDefaultUrl,
@@ -21,6 +22,8 @@ import {
   type ModelPreset,
 } from "../lib/aiProviders";
 import { aiProviderLogoSrc } from "../lib/aiProviderLogos";
+import { AI_SCENES, AI_SCENE_I18N_KEY } from "../lib/aiSceneModels";
+import { writeDshSyncMeta } from "../lib/dshSyncMeta";
 
 type ProviderType = AIModelConfig["provider"];
 
@@ -187,7 +190,8 @@ function truncateUrl(url: string, max = 42): string {
 }
 
 /** List-view prefs (grouping, folds, sort, filter) survive page remounts. */
-const MODELS_VIEW_PREFS_KEY = "workbench-models-view";
+/* v2: default flat multi-column grid (old key kept group-by-on and looked sparse). */
+const MODELS_VIEW_PREFS_KEY = "workbench-models-view-v2";
 
 function loadModelsViewPrefs(): {
   groupByProvider?: boolean;
@@ -289,10 +293,16 @@ function AIAssistant() {
   const invokeSyncModelToDsh = useGlobalStore((s) => s.invokeSyncModelToDsh);
   const invokeTestModelConnection = useGlobalStore((s) => s.invokeTestModelConnection);
   const invokeListProviderModels = useGlobalStore((s) => s.invokeListProviderModels);
+  const invokeDetectLocalAiEndpoints = useGlobalStore((s) => s.invokeDetectLocalAiEndpoints);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeSaveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
   const invokePickTextFile = useGlobalStore((s) => s.invokePickTextFile);
+  const setSettings = useGlobalStore((s) => s.setSettings);
+  const aiSceneModels = useGlobalStore((s) => s.settings.aiSceneModels) || {};
 
+  const [pageView, setPageView] = useState<"list" | "compare">("list");
+  const [detectingLocal, setDetectingLocal] = useState(false);
+  const [sceneOpen, setSceneOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState(emptyForm);
@@ -315,7 +325,7 @@ function AIAssistant() {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [listQuery, setListQuery] = useState("");
   const [groupByProvider, setGroupByProvider] = useState(
-    () => loadModelsViewPrefs().groupByProvider ?? true
+    () => loadModelsViewPrefs().groupByProvider ?? false
   );
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set(loadModelsViewPrefs().collapsedGroups ?? [])
@@ -1075,6 +1085,60 @@ function AIAssistant() {
     }
   };
 
+  const setSceneModel = (scene: AiScene, modelId: string) => {
+    const next = { ...aiSceneModels };
+    if (!modelId) delete next[scene];
+    else next[scene] = modelId;
+    setSettings({ aiSceneModels: next });
+  };
+
+  const handleDetectLocal = async () => {
+    if (detectingLocal) return;
+    setDetectingLocal(true);
+    try {
+      const endpoints = await invokeDetectLocalAiEndpoints();
+      const live = endpoints.filter((e) => e.reachable);
+      if (live.length === 0) {
+        showMsg("error", t("models.detectNone"));
+        return;
+      }
+      let added = 0;
+      for (const ep of live) {
+        const provider: ProviderType = ep.kind === "ollama" ? "ollama" : "custom";
+        const modelId = ep.models[0] || (ep.kind === "ollama" ? "llama3.2" : "local-model");
+        const name = `${ep.label} · ${modelId}`;
+        const exists = aiModels.some(
+          (m) =>
+            m.baseUrl.replace(/\/+$/, "") === ep.baseUrl.replace(/\/+$/, "") &&
+            m.model === modelId
+        );
+        if (exists) continue;
+        await addAIModel({
+          name,
+          provider,
+          apiKey: "",
+          authType: "api",
+          baseUrl: ep.baseUrl,
+          model: modelId,
+          temperature: 0.7,
+          maxTokens: 4096,
+          isDefault: aiModels.length === 0 && added === 0,
+        });
+        added += 1;
+      }
+      showMsg(
+        "success",
+        added > 0
+          ? t("models.detectAdded", { count: added, labels: live.map((e) => e.label).join(" / ") })
+          : t("models.detectExists", { labels: live.map((e) => e.label).join(" / ") })
+      );
+    } catch (e) {
+      showMsg("error", t("models.detectFailed", { error: String(e) }));
+    } finally {
+      setDetectingLocal(false);
+    }
+  };
+
   const handleSyncToDsh = async (config: AIModelConfig) => {
     if (config.provider !== "ollama" && !config.apiKey.trim()) {
       showMsg("error", t("models.syncNoKey"));
@@ -1089,6 +1153,11 @@ function AIAssistant() {
         baseUrl: config.baseUrl,
         model: config.model,
         maxTokens: config.maxTokens,
+      });
+      writeDshSyncMeta({
+        modelName: config.name,
+        provider: config.provider,
+        modelId: config.model,
       });
       let text = msg || t("models.synced");
       let running = false;
@@ -1299,269 +1368,368 @@ function AIAssistant() {
     );
   };
 
-  // One foldable provider panel; shared by the single-column list and each balanced column.
-  const renderGroup = (group: (typeof groupedConfigs)[number]) => (
-    <section className="ai-model-group" key={group.provider}>
-      <button
-        type="button"
-        className="ai-model-group-header"
-        onClick={() => toggleGroup(group.provider)}
-        aria-expanded={!collapsedGroups.has(group.provider)}
-        title={
-          collapsedGroups.has(group.provider)
-            ? t("models.groupExpand")
-            : t("models.groupCollapse")
-        }
-      >
-        <ChevronDown
-          size={14}
-          className={`ai-model-group-chevron ${
-            collapsedGroups.has(group.provider) ? "collapsed" : ""
-          }`}
-        />
-        <span className="ai-model-group-name">{group.label}</span>
-        {group.failed > 0 && (
-          <span
-            className="ai-model-group-flag is-fail"
-            title={t("models.filterFailed", { count: group.failed })}
+  /** Provider band + cards share one grid so grouping never stretches a lone card full-bleed. */
+  const renderGroupedList = () =>
+    groupedConfigs.flatMap((group) => {
+      const collapsed = collapsedGroups.has(group.provider);
+      const band = (
+        <div className="ai-model-group-band" key={`band-${group.provider}`}>
+          <button
+            type="button"
+            className="ai-model-group-header"
+            onClick={() => toggleGroup(group.provider)}
+            aria-expanded={!collapsed}
+            title={collapsed ? t("models.groupExpand") : t("models.groupCollapse")}
           >
-            <span className="ai-model-group-flag-dot" />
-            {group.failed}
-          </span>
-        )}
-        {group.untested > 0 && (
-          <span
-            className="ai-model-group-flag is-untested"
-            title={t("models.filterUntested", { count: group.untested })}
-          >
-            <span className="ai-model-group-flag-dot" />
-            {group.untested}
-          </span>
-        )}
-        <span className="ai-model-group-count">{group.configs.length}</span>
-      </button>
-      {!collapsedGroups.has(group.provider) && (
-        <div className="ai-model-group-body">
-          {group.configs.map((config) => renderConfigCard(config, true))}
+            <ChevronDown
+              size={14}
+              className={`ai-model-group-chevron${collapsed ? " collapsed" : ""}`}
+            />
+            <span className="ai-model-group-name">{group.label}</span>
+            {group.failed > 0 && (
+              <span
+                className="ai-model-group-flag is-fail"
+                title={t("models.filterFailed", { count: group.failed })}
+              >
+                <span className="ai-model-group-flag-dot" />
+                {group.failed}
+              </span>
+            )}
+            {group.untested > 0 && (
+              <span
+                className="ai-model-group-flag is-untested"
+                title={t("models.filterUntested", { count: group.untested })}
+              >
+                <span className="ai-model-group-flag-dot" />
+                {group.untested}
+              </span>
+            )}
+            <span className="ai-model-group-count">{group.configs.length}</span>
+          </button>
         </div>
-      )}
-    </section>
-  );
+      );
+      if (collapsed) return [band];
+      return [band, ...group.configs.map((config) => renderConfigCard(config, true))];
+    });
 
   return (
     <div className="ai-assistant">
       <>
           <div className="models-container">
-            <div className="models-header">
-              <div className="models-title">
-                <h2>{t("models.title")}</h2>
-                <span className="models-count">
-                  {listQueryNorm
-                    ? t("models.countFiltered", {
-                        shown: filteredConfigs.length,
-                        total: aiModels.length,
-                      })
-                    : aiModels.length}
-                </span>
+            <div className="models-view-tabs" role="tablist" aria-label={t("models.viewTabs")}>
+              <button
+                type="button"
+                role="tab"
+                className={`models-view-tab${pageView === "list" ? " is-active" : ""}`}
+                aria-selected={pageView === "list"}
+                onClick={() => setPageView("list")}
+              >
+                <Layers size={13} /> {t("models.viewList")}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={`models-view-tab${pageView === "compare" ? " is-active" : ""}`}
+                aria-selected={pageView === "compare"}
+                onClick={() => setPageView("compare")}
+              >
+                <Columns2 size={13} /> {t("models.viewCompare")}
+              </button>
+            </div>
+            {pageView === "compare" ? (
+              <ModelComparePlayground />
+            ) : (
+            <>
+            <div className="models-chrome">
+              <div className="models-header">
+                <div className="models-title">
+                  <h2>{t("models.title")}</h2>
+                  <span className="models-count">
+                    {listQueryNorm
+                      ? t("models.countFiltered", {
+                          shown: filteredConfigs.length,
+                          total: aiModels.length,
+                        })
+                      : aiModels.length}
+                  </span>
+                </div>
               </div>
-              {aiModels.length > 0 && selectedConfigs.length === 0 && (
-                <div className="models-search">
-                  <Search size={12} aria-hidden />
-                  <input
-                    type="search"
-                    value={listQuery}
-                    onChange={(e) => setListQuery(e.target.value)}
-                    placeholder={t("models.searchConfigs")}
-                    aria-label={t("models.searchConfigs")}
-                  />
-                  {listQuery && (
-                    <button
-                      type="button"
-                      className="models-search-clear"
-                      onClick={() => setListQuery("")}
-                      aria-label={t("models.clearSearch")}
-                      title={t("models.clearSearch")}
-                    >
-                      <X size={11} />
-                    </button>
+              <div className="models-toolbar">
+                {aiModels.length > 0 && selectedConfigs.length === 0 && (
+                  <div className="models-search">
+                    <Search size={12} aria-hidden />
+                    <input
+                      type="search"
+                      value={listQuery}
+                      onChange={(e) => setListQuery(e.target.value)}
+                      placeholder={t("models.searchConfigs")}
+                      aria-label={t("models.searchConfigs")}
+                    />
+                    {listQuery && (
+                      <button
+                        type="button"
+                        className="models-search-clear"
+                        onClick={() => setListQuery("")}
+                        aria-label={t("models.clearSearch")}
+                        title={t("models.clearSearch")}
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
+                  </div>
+                )}
+                <div className="models-toolbar-actions">
+                  {selectedConfigs.length > 0 ? (
+                    <>
+                      <span className="models-bulk-count">
+                        {t("models.selectedCount", { count: selectedConfigs.length })}
+                      </span>
+                      {bulkBusy === "test" && bulkProgress && (
+                        <span className="runtime-muted models-bulk-progress">
+                          <Loader2 size={12} className="spin" />
+                          {t("models.bulkTestProgress", {
+                            done: bulkProgress.done,
+                            total: bulkProgress.total,
+                          })}
+                        </span>
+                      )}
+                      <button
+                        className="btn btn-secondary btn-small"
+                        onClick={() => void handleBulkTest(selectedConfigs)}
+                        disabled={bulkBusy !== null}
+                        title={t("models.testFromList")}
+                      >
+                        {bulkBusy === "test" ? (
+                          <Loader2 size={12} className="spin" />
+                        ) : (
+                          <Zap size={12} />
+                        )}
+                        <span className="ai-action-label">{t("models.testFromList")}</span>
+                        <span className="models-bulk-n">({selectedConfigs.length})</span>
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-small"
+                        onClick={() => void handleBulkSync(selectedConfigs)}
+                        disabled={bulkBusy !== null}
+                        title={t("models.syncToDsh")}
+                      >
+                        {bulkBusy === "sync" ? (
+                          <Loader2 size={12} className="spin" />
+                        ) : (
+                          <ArrowRightCircle size={12} />
+                        )}
+                        <span className="ai-action-label ai-action-label-wide">{t("models.syncToDsh")}</span>
+                        <span className="models-bulk-n">({selectedConfigs.length})</span>
+                      </button>
+                      <button
+                        className="btn btn-danger btn-small"
+                        onClick={() => void handleBulkDelete(selectedConfigs)}
+                        disabled={bulkBusy !== null}
+                        title={t("models.bulkDeleteTitle")}
+                      >
+                        <Trash2 size={12} />
+                        <span className="ai-action-label">{t("models.deleteModel")}</span>
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-small"
+                        onClick={() => setSelectedIds([])}
+                        disabled={bulkBusy !== null}
+                        title={t("models.bulkClear")}
+                      >
+                        <X size={12} />
+                        <span className="ai-action-label">{t("models.bulkClear")}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {aiModels.length > 0 && filteredConfigs.length > 0 && (
+                        <label className="models-select-all">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={toggleSelectFiltered}
+                          />
+                          <span className="ai-action-label">{t("models.selectAll")}</span>
+                        </label>
+                      )}
+                      {aiModels.length > 0 && (
+                        <>
+                          <select
+                            className="input-field models-pick"
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            aria-label={t("models.filterByState")}
+                            title={t("models.filterByState")}
+                          >
+                            <option value="all">{t("models.filterAll")}</option>
+                            <option value="failed">
+                              {t("models.filterFailed", { count: testStateCounts.failed })}
+                            </option>
+                            <option value="untested">
+                              {t("models.filterUntested", { count: testStateCounts.untested })}
+                            </option>
+                            <option value="passed">
+                              {t("models.filterPassed", { count: testStateCounts.passed })}
+                            </option>
+                          </select>
+                          <select
+                            className="input-field models-pick"
+                            value={sortBy}
+                            onChange={(e) => setSortBy(e.target.value)}
+                            aria-label={t("models.sortBy")}
+                            title={t("models.sortBy")}
+                          >
+                            <option value="default">{t("models.sortDefault")}</option>
+                            <option value="name">{t("models.sortName")}</option>
+                            <option value="provider">{t("models.sortProvider")}</option>
+                            <option value="recentTest">{t("models.sortRecentTest")}</option>
+                          </select>
+                          <button
+                            type="button"
+                            className={`btn btn-secondary btn-small btn-icon${groupByProvider ? " is-active" : ""}`}
+                            onClick={() => setGroupByProvider((v) => !v)}
+                            title={t("models.groupByProvider")}
+                            aria-label={t("models.groupByProvider")}
+                            aria-pressed={groupByProvider}
+                          >
+                            <Layers size={12} />
+                          </button>
+                          {groupByProvider && groupedConfigs.length > 1 && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-small btn-icon"
+                              onClick={toggleAllGroups}
+                              title={
+                                allGroupsCollapsed
+                                  ? t("models.groupExpandAll")
+                                  : t("models.groupCollapseAll")
+                              }
+                              aria-label={
+                                allGroupsCollapsed
+                                  ? t("models.groupExpandAll")
+                                  : t("models.groupCollapseAll")
+                              }
+                            >
+                              {allGroupsCollapsed ? (
+                                <ChevronsUpDown size={12} />
+                              ) : (
+                                <ChevronsDownUp size={12} />
+                              )}
+                            </button>
+                          )}
+                          <DropdownMenu
+                            label={t("models.more")}
+                            triggerClassName="btn btn-secondary btn-small btn-icon"
+                            items={[
+                              {
+                                label: t("models.importConfigs"),
+                                icon: <Upload size={14} />,
+                                disabled: transferBusy !== null,
+                                onClick: () => void handleImportConfigs(),
+                              },
+                              {
+                                label: t("models.exportConfigs"),
+                                icon: <Download size={14} />,
+                                disabled: transferBusy !== null || aiModels.length === 0,
+                                onClick: () => void handleExportConfigs(),
+                              },
+                            ]}
+                          >
+                            {transferBusy ? (
+                              <Loader2 size={14} className="spin" />
+                            ) : (
+                              <MoreHorizontal size={14} />
+                            )}
+                          </DropdownMenu>
+                          <span className="models-actions-sep" aria-hidden />
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className={`btn btn-secondary btn-small${sceneOpen ? " is-active" : ""}`}
+                        onClick={() => setSceneOpen((v) => !v)}
+                        title={t("models.sceneBindings")}
+                      >
+                        <Link2 size={14} />
+                        <span className="ai-action-label ai-action-label-wide">{t("models.sceneBindings")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => void handleDetectLocal()}
+                        disabled={detectingLocal}
+                        title={t("models.detectLocal")}
+                      >
+                        {detectingLocal ? <Loader2 size={14} className="spin" /> : <Radar size={14} />}
+                        <span className="ai-action-label ai-action-label-wide">{t("models.detectLocal")}</span>
+                      </button>
+                      <button
+                        className="btn btn-primary btn-small"
+                        onClick={openCreateModal}
+                        title={t("models.addModel")}
+                      >
+                        <Plus size={14} />
+                        <span className="ai-action-label">{t("models.addModel")}</span>
+                      </button>
+                    </>
                   )}
                 </div>
-              )}
-              <div className="models-header-actions">
-                {selectedConfigs.length > 0 ? (
-                  <>
-                    <span className="models-bulk-count">
-                      {t("models.selectedCount", { count: selectedConfigs.length })}
-                    </span>
-                    {bulkBusy === "test" && bulkProgress && (
-                      <span className="runtime-muted models-bulk-progress">
-                        <Loader2 size={12} className="spin" />
-                        {t("models.bulkTestProgress", {
-                          done: bulkProgress.done,
-                          total: bulkProgress.total,
-                        })}
-                      </span>
-                    )}
-                    <button
-                      className="btn btn-secondary btn-small"
-                      onClick={() => void handleBulkTest(selectedConfigs)}
-                      disabled={bulkBusy !== null}
-                      title={t("models.testFromList")}
-                    >
-                      {bulkBusy === "test" ? (
-                        <Loader2 size={12} className="spin" />
-                      ) : (
-                        <Zap size={12} />
-                      )}
-                      <span className="ai-action-label">{t("models.testFromList")}</span>
-                      <span className="models-bulk-n">({selectedConfigs.length})</span>
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-small"
-                      onClick={() => void handleBulkSync(selectedConfigs)}
-                      disabled={bulkBusy !== null}
-                      title={t("models.syncToDsh")}
-                    >
-                      {bulkBusy === "sync" ? (
-                        <Loader2 size={12} className="spin" />
-                      ) : (
-                        <ArrowRightCircle size={12} />
-                      )}
-                      <span className="ai-action-label ai-action-label-wide">{t("models.syncToDsh")}</span>
-                      <span className="models-bulk-n">({selectedConfigs.length})</span>
-                    </button>
-                    <button
-                      className="btn btn-danger btn-small"
-                      onClick={() => void handleBulkDelete(selectedConfigs)}
-                      disabled={bulkBusy !== null}
-                      title={t("models.bulkDeleteTitle")}
-                    >
-                      <Trash2 size={12} />
-                      <span className="ai-action-label">{t("models.deleteModel")}</span>
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-small"
-                      onClick={() => setSelectedIds([])}
-                      disabled={bulkBusy !== null}
-                      title={t("models.bulkClear")}
-                    >
-                      <X size={12} />
-                      <span className="ai-action-label">{t("models.bulkClear")}</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {filteredConfigs.length > 0 && (
-                      <label className="models-select-all">
-                        <input
-                          type="checkbox"
-                          checked={allFilteredSelected}
-                          onChange={toggleSelectFiltered}
-                        />
-                        <span className="ai-action-label">{t("models.selectAll")}</span>
-                      </label>
-                    )}
-                    {aiModels.length > 0 && (
-                      <select
-                        className="input-field models-pick"
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        aria-label={t("models.filterByState")}
-                        title={t("models.filterByState")}
-                      >
-                        <option value="all">{t("models.filterAll")}</option>
-                        <option value="failed">
-                          {t("models.filterFailed", { count: testStateCounts.failed })}
-                        </option>
-                        <option value="untested">
-                          {t("models.filterUntested", { count: testStateCounts.untested })}
-                        </option>
-                        <option value="passed">
-                          {t("models.filterPassed", { count: testStateCounts.passed })}
-                        </option>
-                      </select>
-                    )}
-                    {aiModels.length > 0 && (
-                      <select
-                        className="input-field models-pick"
-                        value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value)}
-                        aria-label={t("models.sortBy")}
-                        title={t("models.sortBy")}
-                      >
-                        <option value="default">{t("models.sortDefault")}</option>
-                        <option value="name">{t("models.sortName")}</option>
-                        <option value="provider">{t("models.sortProvider")}</option>
-                        <option value="recentTest">{t("models.sortRecentTest")}</option>
-                      </select>
-                    )}
-                    {aiModels.length > 0 && (
-                      <button
-                        type="button"
-                        className={`btn btn-secondary btn-small btn-icon${groupByProvider ? " is-active" : ""}`}
-                        onClick={() => setGroupByProvider((v) => !v)}
-                        title={t("models.groupByProvider")}
-                        aria-label={t("models.groupByProvider")}
-                        aria-pressed={groupByProvider}
-                      >
-                        <Layers size={12} />
-                      </button>
-                    )}
-                    {groupByProvider && groupedConfigs.length > 1 && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small btn-icon"
-                        onClick={toggleAllGroups}
-                        title={
-                          allGroupsCollapsed
-                            ? t("models.groupExpandAll")
-                            : t("models.groupCollapseAll")
-                        }
-                        aria-label={
-                          allGroupsCollapsed
-                            ? t("models.groupExpandAll")
-                            : t("models.groupCollapseAll")
-                        }
-                      >
-                        {allGroupsCollapsed ? (
-                          <ChevronsUpDown size={12} />
-                        ) : (
-                          <ChevronsDownUp size={12} />
-                        )}
-                      </button>
-                    )}
-                    <DropdownMenu
-                      label={t("models.more")}
-                      triggerClassName="btn btn-secondary btn-small btn-icon"
-                      items={[
-                        {
-                          label: t("models.importConfigs"),
-                          icon: <Upload size={14} />,
-                          disabled: transferBusy !== null,
-                          onClick: () => void handleImportConfigs(),
-                        },
-                        {
-                          label: t("models.exportConfigs"),
-                          icon: <Download size={14} />,
-                          disabled: transferBusy !== null || aiModels.length === 0,
-                          onClick: () => void handleExportConfigs(),
-                        },
-                      ]}
-                    >
-                      {transferBusy ? <Loader2 size={14} className="spin" /> : <MoreHorizontal size={14} />}
-                    </DropdownMenu>
-                    <button
-                      className="btn btn-primary btn-small"
-                      onClick={openCreateModal}
-                      title={t("models.addModel")}
-                    >
-                      <Plus size={14} />
-                      <span className="ai-action-label">{t("models.addModel")}</span>
-                    </button>
-                  </>
-                )}
               </div>
             </div>
+            {sceneOpen && (
+              <div className="models-scene-panel">
+                <div className="models-scene-head">
+                  <div className="models-scene-head-text">
+                    <span className="models-scene-kicker">
+                      <Link2 size={13} aria-hidden />
+                      {t("models.sceneBindings")}
+                    </span>
+                    <p className="models-scene-title">{t("models.sceneBindingsHint")}</p>
+                  </div>
+                </div>
+                <div className="models-scene-grid">
+                  {AI_SCENES.map((scene) => {
+                    const SceneIcon =
+                      scene === "quickAsk"
+                        ? MessageSquare
+                        : scene === "report"
+                          ? FileBarChart2
+                          : scene === "commit"
+                            ? GitCommitHorizontal
+                            : Sparkles;
+                    const bound = !!aiSceneModels[scene];
+                    return (
+                      <label
+                        key={scene}
+                        className={`models-scene-card${bound ? " is-bound" : ""}`}
+                      >
+                        <span className="models-scene-card-top">
+                          <span className="models-scene-card-icon" aria-hidden>
+                            <SceneIcon size={14} />
+                          </span>
+                          <span className="models-scene-card-name">
+                            {t(AI_SCENE_I18N_KEY[scene])}
+                          </span>
+                        </span>
+                        <select
+                          className="input-field models-scene-select"
+                          value={aiSceneModels[scene] || ""}
+                          onChange={(e) => setSceneModel(scene, e.target.value)}
+                        >
+                          <option value="">{t("models.sceneUseDefault")}</option>
+                          {aiModels.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}
+                              {m.isDefault ? ` (${t("models.default")})` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {aiModels.length > 0 && !defaultConfig && (
               <div className="models-default-banner">
                 <AlertCircle size={14} className="models-default-banner-icon" />
@@ -1607,13 +1775,15 @@ function AIAssistant() {
                   </button>
                 </div>
               ) : (
-                <div className={`ai-model-list${groupByProvider ? "" : " is-flat"}`}>
+                <div className="ai-model-list">
                   {groupByProvider
-                    ? groupedConfigs.map((group) => renderGroup(group))
+                    ? renderGroupedList()
                     : filteredConfigs.map((config) => renderConfigCard(config))}
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
 
           {showModal && (

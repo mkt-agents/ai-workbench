@@ -19,6 +19,16 @@
   "kindAll": "All",
   "kindLabel": "Type",
   "scenarioLabel": "Prompt scenario",
+  "taskBindLabel": "Quick Ask task bind",
+  "taskBindHint": "When that Quick Ask task is selected and the composer is empty, this template is inserted.",
+  "taskBind": {
+    "none": "None",
+    "debug": "Debug",
+    "explain": "Explain",
+    "polish": "Polish",
+    "translate": "Translate",
+    "summarize": "Summarize"
+  },
   "addTitle": "New template",
   "editTitle": "Edit template",
   "name": "Name",
