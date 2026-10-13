@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
   CalendarCheck,
-  ChevronRight,
   ExternalLink,
   Eye,
   EyeOff,
@@ -55,7 +54,6 @@ export interface RailAccount {
   checkedIn?: boolean;
 }
 
-const MORE_KEY = "aq-rail-more";
 /** 与 CSS 里栏目排到看板下方的断点一致；窄窗下忽略收起状态。 */
 const NARROW_QUERY = "(max-width: 900px)";
 /** 收起态图标上的状态点取最差的一个账号。 */
@@ -79,9 +77,9 @@ function useMediaQuery(query: string): boolean {
 
 /**
  * 账号额度页右侧栏，兼做账号管理：
- * - 「账号及订阅服务商」按服务商列出已连接账号与状态点，点击定位到看板卡片；
+ * - 「已连接账号」按服务商列出已连接账号与状态点，点击定位到看板卡片；
  * - 「添加账号」整行 / + 都是新增一个账号，眼睛按钮单独控制该服务商是否上看板；
- * - 「更多服务商」只留外链，默认折叠。安装状态来自注册表扫描（后台、失败不影响操作）。
+ * 安装状态来自注册表扫描（后台、失败不影响操作）。
  * 整栏可收起成图标条，图标点击同样是添加账号。
  */
 function QuotaProviderRail({
@@ -111,7 +109,6 @@ function QuotaProviderRail({
 }) {
   const { t } = useTranslation("quota");
   const [installs, setInstalls] = useState<Record<string, InstallState>>({});
-  const [moreOpen, setMoreOpen] = useState(() => localStorage.getItem(MORE_KEY) === "1");
   const narrow = useMediaQuery(NARROW_QUERY);
 
   useEffect(() => {
@@ -124,19 +121,7 @@ function QuotaProviderRail({
     };
   }, []);
 
-  const toggleMore = () => {
-    setMoreOpen((open) => {
-      try {
-        localStorage.setItem(MORE_KEY, open ? "0" : "1");
-      } catch {
-        /* private mode / quota — the section just reopens collapsed */
-      }
-      return !open;
-    });
-  };
-
   const supported = QUOTA_PROVIDERS.filter((p) => p.card != null);
-  const others = QUOTA_PROVIDERS.filter((p) => p.card == null);
   const accountsOf = (card: QuotaCardId) => accounts.filter((a) => a.card === card);
   // Claude Code / Desktop 共用一张卡：账号分组按 card 去重，避免同一批账号出现两次。
   const seenCards = new Set<QuotaCardId>();
@@ -288,29 +273,6 @@ function QuotaProviderRail({
           );
         })}
       </ul>
-
-      <button
-        type="button"
-        className={`aq-rail-more-toggle${moreOpen ? " is-open" : ""}`}
-        onClick={toggleMore}
-        aria-expanded={moreOpen}
-        title={t("railMoreToggle")}
-      >
-        <ChevronRight size={12} className="aq-rail-chevron" />
-        <span>
-          {t("railMore")} · {others.length}
-        </span>
-      </button>
-      {moreOpen && (
-        <div className="aq-rail-more">
-          <p className="aq-rail-caption">{t("railMoreHint")}</p>
-          <ul className="aq-rail-panel aq-rail-list is-static-list">
-            {others.map((p) => (
-              <ProviderRow key={p.id} provider={p} install={installs[p.id]} added={false} />
-            ))}
-          </ul>
-        </div>
-      )}
     </aside>
   );
 }
