@@ -1057,16 +1057,7 @@
   margin-left: 0;
 }
 
-.aq-rail-section-label {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--text-2);
-  line-height: 1.2;
-}
-
-/* 分区表面：账号列表与添加列表共用，行内不再各自描边。 */
+/* 服务商列表的表面，行内不再各自描边。 */
 .aq-rail-panel {
   margin: 0;
   padding: var(--space-1);
@@ -1077,14 +1068,12 @@
   box-shadow: var(--surface-highlight);
 }
 
-.aq-rail-empty {
-  font-size: 11.5px;
+.aq-rail-caption {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--text-3);
-  text-align: center;
-  padding: var(--space-4) var(--space-3);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-1) 72%, transparent);
-  border: 1px solid var(--border-subtle);
 }
 
 .aq-rail-list {
@@ -1093,30 +1082,34 @@
   gap: 1px;
 }
 
+/* 有账号的服务商成组：上下各留一道分隔，与无账号的紧凑行区分开。 */
+.aq-rail-group.has-accts + .aq-rail-group,
+.aq-rail-group + .aq-rail-group.has-accts {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .aq-rail-row {
   position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 34px;
-  padding: 4px 6px 4px 4px;
+  padding: 4px 4px 4px 6px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
+  cursor: pointer;
   transition: var(--transition-colors);
 }
 
-.aq-rail-row.is-toggleable {
-  cursor: pointer;
-}
-
-.aq-rail-row.is-toggleable:hover {
+.aq-rail-row:hover {
   background: var(--bg-hover);
 }
 
-/* 已上看板：淡 accent 底 + 右侧留眼睛位。 */
+/* 已上看板：淡 accent 底。 */
 .aq-rail-row.is-added {
-  padding-right: 30px;
   background: color-mix(in srgb, var(--accent-dim) 55%, transparent);
 }
 
@@ -1124,24 +1117,18 @@
   background: color-mix(in srgb, var(--accent-dim) 80%, var(--bg-hover));
 }
 
-/* 不支持查询的服务商：无 +，整体弱化。 */
-.aq-rail-row.is-static {
-  padding-left: 8px;
-  min-height: 30px;
-  cursor: default;
-}
-
 .aq-rail-row.is-missing .aq-rail-icon,
 .aq-rail-row.is-missing .aq-rail-text {
   opacity: 0.55;
 }
 
+/* 行尾的 +：未上看板是虚线框（邀请添加），已上看板退成幽灵按钮，不和账号抢视线。 */
 .aq-rail-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
@@ -1176,14 +1163,13 @@
   color: var(--red);
 }
 
-.aq-rail-row.is-added .aq-rail-toggle {
-  border-style: solid;
-  border-color: var(--accent-border);
-  background: var(--accent-dim);
-  color: var(--accent);
+.aq-rail-row.is-added .aq-rail-toggle:not(:hover) {
+  border-color: transparent;
+  color: var(--text-3);
 }
 
 .aq-rail-icon {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1195,7 +1181,6 @@
   font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
-  overflow: hidden;
 }
 
 .aq-rail-icon img {
@@ -1204,7 +1189,7 @@
   object-fit: contain;
 }
 
-/* 单行：名字 + 数量 chip + 「未安装」；域名只放 title。 */
+/* 单行：名字 + 「未安装」；域名只放 title。 */
 .aq-rail-text {
   display: flex;
   align-items: center;
@@ -1224,75 +1209,65 @@
   text-overflow: ellipsis;
 }
 
+/* 账号数：图标右上角的角标，外圈描一道面板色把它从图标上「切」出来。 */
+.aq-rail-count {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 0 0 1.5px var(--bg-2);
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 未上看板的服务商：角标跟着弱化，不抢眼。 */
+.aq-rail-row:not(.is-added) .aq-rail-count {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+
 .aq-rail-missing {
   font-size: 10.5px;
   color: var(--text-3);
   flex-shrink: 0;
 }
 
+/* 操作区（眼睛 + 添加）在文档流里固定占位，名字在剩余空间截断；眼睛悬停只切透明度，
+   不会盖住「未安装」，也不会挤动截断位置。 */
 .aq-rail-actions {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  z-index: 1;
   display: inline-flex;
   align-items: center;
-  gap: 1px;
-  padding-left: 10px;
-  transform: translateY(-50%);
-  background: linear-gradient(
-    to right,
-    transparent,
-    color-mix(in srgb, var(--bg-1) 92%, transparent) 28%
-  );
-  opacity: 0;
-  pointer-events: none;
-  transition: var(--transition-colors-fast);
+  gap: 2px;
+  flex-shrink: 0;
 }
 
-.aq-rail-row:hover .aq-rail-actions,
-.aq-rail-row:focus-within .aq-rail-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.aq-rail-row .aq-rail-eye,
-.aq-rail-row .aq-rail-link {
-  width: 24px;
-  height: 24px;
-}
-
-/* 已显示在看板时眼睛常驻（弱）；悬停再放出外链。 */
-.aq-rail-row.is-added .aq-rail-actions {
-  opacity: 1;
-  pointer-events: auto;
-  background: none;
-  padding-left: 0;
-}
-
-.aq-rail-row.is-added .aq-rail-link {
+.aq-rail-row .aq-rail-eye {
+  width: 22px;
+  height: 22px;
+  margin-left: 0;
   opacity: 0;
   pointer-events: none;
 }
 
-.aq-rail-row.is-added .aq-rail-eye:not(.is-off) {
+/* 已上看板：眼睛常驻（弱）。 */
+.aq-rail-row.is-added .aq-rail-eye {
   opacity: 0.55;
+  pointer-events: auto;
 }
 
-.aq-rail-row.is-added:hover .aq-rail-actions,
-.aq-rail-row.is-added:focus-within .aq-rail-actions {
-  background: linear-gradient(
-    to right,
-    transparent,
-    color-mix(in srgb, var(--accent-dim) 70%, var(--bg-1)) 28%
-  );
-  padding-left: 10px;
-}
-
-.aq-rail-row.is-added:hover .aq-rail-eye:not(.is-off),
-.aq-rail-row.is-added:focus-within .aq-rail-eye:not(.is-off),
-.aq-rail-row.is-added:hover .aq-rail-link,
-.aq-rail-row.is-added:focus-within .aq-rail-link {
+.aq-rail-row:hover .aq-rail-eye,
+.aq-rail-row:focus-within .aq-rail-eye {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1301,74 +1276,26 @@
   color: var(--text-3);
 }
 
-/* ── 右侧栏账号列表 ── */
-
-.aq-rail-accounts {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2);
-}
-
-.aq-rail-group + .aq-rail-group {
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.aq-rail-group-name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 4px 4px;
-  min-width: 0;
-}
-
-.aq-rail-group-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px; /* token-ok: 组头小图标比 radius-sm 更紧 */
-  background: var(--bg-2);
-  color: var(--text-2);
-  font-size: 9px;
-  font-weight: 700;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.aq-rail-group-icon img {
-  width: 12px;
-  height: 12px;
-  object-fit: contain;
-}
-
-.aq-rail-group-label {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aq-rail-group-count {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
+/* ── 服务商行下的账号：状态点居中对齐服务商图标，账号名对齐服务商名 ──
+   服务商行：1px 边框 + 6px 内边距 + 22px 图标（中心 18px）+ 8px 间距 → 名字起点 37px。 */
 
 .aq-rail-accts {
-  margin: 0;
+  margin: 0 0 2px;
   padding: 0;
   list-style: none;
+}
+
+.aq-rail-accts .aq-rail-acct {
+  padding-left: 14px;
+}
+
+/* 删除按钮与行尾 + 竖向对齐（两者中心都距右缘 16px）。 */
+.aq-rail-accts .aq-rail-acct-row {
+  padding-right: 4px;
+}
+
+.aq-rail-accts .aq-rail-acct > .aq-dot {
+  margin-right: 9px;
 }
 
 .aq-rail-acct {
@@ -1409,6 +1336,7 @@
 }
 
 .aq-rail-acct-checkin {
+  display: inline-flex;
   flex-shrink: 0;
   color: var(--green);
 }

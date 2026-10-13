@@ -1329,7 +1329,7 @@ function AccountQuotaPanel() {
       key: `wb:${a.id}`,
       card: "workbuddy" as const,
       name: a.label,
-      checkedIn: checkedInToday(a, now),
+      dailyDone: checkedInToday(a, now) ? t("checkinDoneShort") : undefined,
     })),
     ...cursorAccounts.map((a) => ({
       key: `cursor:${a.id}`,
@@ -1346,6 +1346,10 @@ function AccountQuotaPanel() {
       key: `qoder:${a.id}`,
       card: "qoder" as const,
       name: (results[`qoder:${a.id}`] as QoderQuotaDto | undefined)?.label ?? a.label ?? `#${a.id}`,
+      dailyDone:
+        liveQoderCampaign(results[`qoder:${a.id}`] as QoderQuotaDto | undefined, now)?.claimable === false
+          ? t("claimDoneShort")
+          : undefined,
     })),
     ...dsAccounts.map((a) => ({ key: `deepseek:${a.id}`, card: "deepseek" as const, name: a.label ?? `#${a.id}` })),
     ...claudeAccounts.map((a) => ({

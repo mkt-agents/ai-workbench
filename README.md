@@ -31,7 +31,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 ### 账号管理
 
 - **Cursor**：多账号一键切换，工作区与扩展数据共享、登录态互不覆盖
-- **账号额度**：Cursor / WorkBuddy / DeepSeek / Claude / Qoder / MiMo 等额度看板；支持签到、领积分与每日定点
+- **账号额度**：Cursor / WorkBuddy / DeepSeek / Claude / Qoder / MiMo 等额度看板；支持签到、领积分与每日定点；右侧「服务商与账号」栏统一管理各服务商的账号添加、看板显隐与本机安装状态（含微软商店应用）
 
 ### 版本管理
 

@@ -158,6 +158,7 @@ ai-workbench/
 │   │   ├── aiProviders.ts       # AI 厂商 provider 列表 + 显示元数据
 │   │   ├── aiProviderLogos.ts   # 模型配置页提供商品牌图（指向 public/ai-providers/）
 │   │   ├── providerLogos.ts     # 账号额度侧栏/卡片品牌图（src/assets/providers/ + 本机图标）
+│   │   ├── quotaProviders.ts    # 额度侧栏服务商目录（数组序 = 侧栏序）+ 看板卡片偏好 + 安装检测（注册表 + 商店包）
 │   │   ├── aiText.ts             # AI 纯文本的围栏剥离 / `##` 章节切分
 │   │   ├── browser.ts            # 打开浏览器窗口（webview）+ 用户脚本注入筛选
 │   │   ├── webTools.ts           # URL 规范化 / `@match` 通配判定 / newId（唯一主键）
@@ -570,7 +571,8 @@ openGroups: Set<string>       // 分组展开状态
 | `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `public/ai-providers/` |
 | `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md；快问优化仍用 |
 | `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 + 类型分段筛选 |
-| `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
+| `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
+| `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（账号数角标 / 未安装 / 眼睛 / `+` 添加）下挂已连接账号；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
 | `QuickAskApp` | 快问主窗口（`#/quick-ask`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
 | `QuickAskBubble` | 桌面气泡（`#/quick-ask-bubble`） | 快捷唤起，全局置顶 |
 | `CursorManager` | Cursor 多账号 | 初始化 profile + 切换 + 诊断导出 |
@@ -1158,6 +1160,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | 命令 | 用途 |
 |------|------|
 | `scan_installed_apps` | 注册表 + 安装目录 + 开始菜单/桌面 `.lnk` 扫描（直接解析二进制，含 per-user CLI 精选清单） |
+| `scan_store_packages` | 当前用户的微软商店（MSIX）包名（`PackageManager`，免管理员）；账号额度侧栏用它检测 OpenAI Codex / ChatGPT 等商店应用 |
 | `launch_app` / `kill_app` | 启动 / 关闭（先正常退出，超时再强杀） |
 | `is_app_running` / `check_apps_running` | 单个 / 批量运行态（tasklist 一次查询 + 缓存） |
 | `extract_app_icon` | 提取真实图标（PNG 落临时文件回传路径） |

@@ -10,22 +10,25 @@ export interface QuotaProvider {
   name: string;
   domain: string;
   url: string;
-  /** 匹配注册表 display_name（小写包含）；空数组 = 纯网页 / CLI 服务，不显示安装状态。 */
+  /** 匹配注册表 display_name 或商店包名（小写包含）；空数组 = 纯网页 / CLI 服务，不显示安装状态。
+   *  商店应用用包名前缀（如 `openai.codex`），避免裸词误中同名第三方程序（如 Codex++）。 */
   keywords: string[];
   /** 有额度查询实现时才是卡片 id。Claude Code / Desktop 共用 `claude` 账号池。 */
   card: QuotaCardId | null;
 }
 
+/** 顺序即右侧栏顺序（栏内再把有账号的提前，组内保持此序）：
+ *  编程 IDE / 插件（Grok Bot 共用 Cursor 账号，紧跟其后）→ 模型订阅 → API 余额。 */
 export const QUOTA_PROVIDERS: QuotaProvider[] = [
-  { id: "chatgpt", name: "ChatGPT / Codex", domain: "openai.com", url: "https://chatgpt.com", keywords: [], card: "codex" },
-  { id: "claude-code", name: "Claude Code", domain: "claude.ai", url: "https://claude.ai/code", keywords: ["claude code"], card: "claude" },
-  { id: "claude-desktop", name: "Claude Desktop", domain: "claude.com", url: "https://claude.com/download", keywords: ["claude desktop"], card: "claude" },
-  { id: "deepseek", name: "DeepSeek Harness", domain: "www.deepseek.com", url: "https://www.deepseek.com", keywords: ["deepseek"], card: "deepseek" },
-  { id: "workbuddy", name: "WorkBuddy", domain: "www.codebuddy.cn", url: "https://www.codebuddy.cn", keywords: ["codebuddy", "workbuddy"], card: "workbuddy" },
   { id: "cursor", name: "Cursor", domain: "cursor.com", url: "https://cursor.com", keywords: ["cursor"], card: "cursor" },
   { id: "grok-bot", name: "Grok Bot", domain: "x.ai", url: "https://x.ai", keywords: ["grok bot"], card: "grok-bot" },
   { id: "qoder", name: "Qoder", domain: "qoder.cn", url: "https://qoder.cn", keywords: ["qoder"], card: "qoder" },
+  { id: "workbuddy", name: "WorkBuddy", domain: "www.codebuddy.cn", url: "https://www.codebuddy.cn", keywords: ["codebuddy", "workbuddy"], card: "workbuddy" },
   { id: "zcode", name: "ZCode", domain: "bigmodel.cn", url: "https://bigmodel.cn", keywords: ["zcode"], card: "zcode" },
+  { id: "chatgpt", name: "ChatGPT / Codex", domain: "openai.com", url: "https://chatgpt.com", keywords: ["openai.codex", "openai.chatgpt"], card: "codex" },
+  { id: "claude-code", name: "Claude Code", domain: "claude.ai", url: "https://claude.ai/code", keywords: ["claude code"], card: "claude" },
+  { id: "claude-desktop", name: "Claude Desktop", domain: "claude.com", url: "https://claude.com/download", keywords: ["claude desktop"], card: "claude" },
+  { id: "deepseek", name: "DeepSeek Harness", domain: "www.deepseek.com", url: "https://www.deepseek.com", keywords: ["deepseek"], card: "deepseek" },
   { id: "mimo", name: "小米 MiMo", domain: "platform.xiaomimimo.com", url: "https://platform.xiaomimimo.com", keywords: ["mimo", "xiaomi mimo"], card: "mimo" },
   { id: "workbuddy-ai", name: "WorkBuddy AI", domain: "www.workbuddy.ai", url: "https://www.workbuddy.ai", keywords: ["workbuddy ai"], card: null },
   { id: "antigravity", name: "Antigravity", domain: "antigravity.google", url: "https://antigravity.google", keywords: ["antigravity"], card: null },
@@ -113,6 +116,7 @@ export interface InstallState {
 }
 
 let scanTask: Promise<InstalledAppInfo[]> | null = null;
+let storeTask: Promise<string[]> | null = null;
 
 /** 注册表扫描较慢（含图标提取），整个会话只扫一次；失败时清空缓存，下次进页再试。 */
 function scanOnce(): Promise<InstalledAppInfo[]> {
@@ -125,9 +129,23 @@ function scanOnce(): Promise<InstalledAppInfo[]> {
   return scanTask;
 }
 
-/** 按关键字匹配每家服务商的安装状态；纯网页服务（无关键字）不出现在结果里。 */
+/** 微软商店包名（小写），同样整个会话只扫一次。 */
+function scanStoreOnce(): Promise<string[]> {
+  if (!storeTask) {
+    storeTask = invocations
+      .invokeScanStorePackages()
+      .then((names) => names.map((n) => n.toLowerCase()))
+      .catch(() => {
+        storeTask = null;
+        return [];
+      });
+  }
+  return storeTask;
+}
+
+/** 按关键字匹配每家服务商的安装状态（注册表显示名 + 商店包名）；纯网页服务（无关键字）不出现在结果里。 */
 export async function detectInstalled(): Promise<Record<string, InstallState>> {
-  const apps = await scanOnce();
+  const [apps, storePackages] = await Promise.all([scanOnce(), scanStoreOnce()]);
   const result: Record<string, InstallState> = {};
   for (const p of QUOTA_PROVIDERS) {
     if (p.keywords.length === 0) continue;
@@ -135,8 +153,9 @@ export async function detectInstalled(): Promise<Record<string, InstallState>> {
       const name = a.display_name.toLowerCase();
       return p.keywords.some((k) => name.includes(k));
     });
+    const inStore = storePackages.some((name) => p.keywords.some((k) => name.includes(k)));
     result[p.id] = {
-      installed: matches.length > 0,
+      installed: matches.length > 0 || inStore,
       icon: matches.find((a) => a.icon)?.icon ?? null,
     };
   }

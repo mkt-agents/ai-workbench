@@ -126,6 +126,7 @@ export interface Invocations {
   invokeKillApp: (processName: string) => Promise<string>;
   invokeIsAppRunning: (processName: string) => Promise<boolean>;
   invokeScanInstalledApps: () => Promise<InstalledAppInfo[]>;
+  invokeScanStorePackages: () => Promise<string[]>;
   invokeGetAppVersion: (path: string) => Promise<string>;
   invokeFindPortListeners: (ports: number[]) => Promise<PortListener[]>;
   invokeKillPortListeners: (port: number, pids: number[]) => Promise<PortKillResult>;
@@ -390,6 +391,8 @@ export const invocations: Invocations = {
     tauriInvoke<boolean>('is_app_running', { processName }),
   invokeScanInstalledApps: () =>
     tauriInvoke<InstalledAppInfo[]>('scan_installed_apps'),
+  invokeScanStorePackages: () =>
+    tauriInvoke<string[]>('scan_store_packages'),
   invokeGetAppVersion: (path: string) =>
     tauriInvoke<string>('get_app_version', { path }),
   invokeFindPortListeners: (ports: number[]) =>

@@ -577,6 +577,7 @@ pub fn run() {
             app_launcher_commands::is_app_running,
             app_launcher_commands::check_apps_running,
             app_launcher_commands::scan_installed_apps,
+            app_launcher_commands::scan_store_packages,
             app_launcher_commands::extract_app_icon,
             app_launcher_commands::get_app_version,
             port_commands::find_port_listeners,

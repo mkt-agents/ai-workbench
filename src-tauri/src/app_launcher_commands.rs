@@ -967,6 +967,14 @@ pub async fn browse_app_file() -> Result<String, String> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn store_package_scan_returns_bare_package_names() {
+        let names = scan_store_packages_sync().unwrap();
+        assert!(!names.is_empty(), "每台 Windows 都有系统商店包");
+        assert!(names.iter().all(|n| !n.contains('_')), "只要包名，不要带版本/架构的全名");
+    }
+
     #[test]
     fn normalize_image_name_strips_exe() {
         assert_eq!(normalize_image_name("Cursor.exe"), "Cursor");
@@ -1350,6 +1358,45 @@ pub async fn scan_installed_apps() -> Result<Vec<InstalledAppInfo>, String> {
     {
         Err("当前系统不支持扫描已安装应用".into())
     }
+}
+
+/// 当前用户已安装的微软商店（MSIX）包名，如 `OpenAI.Codex`。
+///
+/// 商店应用不写 Uninstall 注册表，`scan_installed_apps` 看不到；也不总在
+/// AppModel\Repository 注册表里（实测 OpenAI.Codex 就不在），所以走 PackageManager。
+#[tauri::command]
+pub async fn scan_store_packages() -> Result<Vec<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        tokio::task::spawn_blocking(scan_store_packages_sync)
+            .await
+            .map_err(|e| format!("扫描任务失败: {}", e))?
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(windows)]
+fn scan_store_packages_sync() -> Result<Vec<String>, String> {
+    use windows::core::HSTRING;
+    use windows::Management::Deployment::PackageManager;
+
+    let manager = PackageManager::new().map_err(|e| e.to_string())?;
+    // 空 SID = 当前用户，不需要管理员权限。
+    let packages = manager
+        .FindPackagesByUserSecurityId(&HSTRING::new())
+        .map_err(|e| e.to_string())?;
+    let mut names: Vec<String> = packages
+        .into_iter()
+        .filter_map(|p| p.Id().ok()?.Name().ok())
+        .map(|n| n.to_string())
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 /// Synchronous body of the scan — split out so tests can run it directly.

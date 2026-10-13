@@ -1,9 +1,7 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import {
   CalendarCheck,
-  ExternalLink,
   Eye,
   EyeOff,
   PanelRightClose,
@@ -50,8 +48,8 @@ export interface RailAccount {
   name: string;
   status: CardStatus;
   hidden: boolean;
-  /** 仅 WorkBuddy：今天已签到。 */
-  checkedIn?: boolean;
+  /** 今天的每日任务已完成（WorkBuddy 签到 / Qoder 领取）时的提示文案。 */
+  dailyDone?: string;
 }
 
 /** 与 CSS 里栏目排到看板下方的断点一致；窄窗下忽略收起状态。 */
@@ -77,8 +75,8 @@ function useMediaQuery(query: string): boolean {
 
 /**
  * 账号额度页右侧栏，兼做账号管理：
- * - 「已连接账号」按服务商列出已连接账号与状态点，点击定位到看板卡片；
- * - 「添加账号」整行 / + 都是新增一个账号，眼睛按钮单独控制该服务商是否上看板；
+ * - 一个列表按服务商分组：服务商行整行 / + 都是新增账号，眼睛按钮单独控制该服务商是否上看板；
+ * - 已连接账号缩进挂在服务商行下（状态点，点击定位到看板卡片），有账号的服务商排前面；
  * 安装状态来自注册表扫描（后台、失败不影响操作）。
  * 整栏可收起成图标条，图标点击同样是添加账号。
  */
@@ -122,18 +120,19 @@ function QuotaProviderRail({
   }, []);
 
   const supported = QUOTA_PROVIDERS.filter((p) => p.card != null);
+
   const accountsOf = (card: QuotaCardId) => accounts.filter((a) => a.card === card);
-  // Claude Code / Desktop 共用一张卡：账号分组按 card 去重，避免同一批账号出现两次。
+  // Claude Code / Desktop 共用一张卡：账号只挂在第一个服务商下，避免同一批账号出现两次。
   const seenCards = new Set<QuotaCardId>();
-  const groups = supported
-    .filter((p) => {
-      const card = p.card as QuotaCardId;
-      if (seenCards.has(card)) return false;
-      seenCards.add(card);
-      return true;
-    })
-    .map((p) => ({ provider: p, items: accountsOf(p.card as QuotaCardId) }))
-    .filter((g) => g.items.length > 0);
+  const groups = supported.map((p) => {
+    const card = p.card as QuotaCardId;
+    const first = !seenCards.has(card);
+    seenCards.add(card);
+    return { provider: p, card, items: first ? accountsOf(card) : [] };
+  });
+  // 有账号的服务商排前面（sort 稳定，组内保持注册顺序）。
+  groups.sort((a, b) => Number(b.items.length > 0) - Number(a.items.length > 0));
+  const hasAnyAccount = accounts.length > 0;
 
   if (collapsed && !narrow) {
     return (
@@ -148,7 +147,7 @@ function QuotaProviderRail({
           <PanelRightOpen size={14} />
         </button>
         <ul className="aq-rail-mini-list">
-          {supported.map((p) => {
+          {groups.map(({ provider: p }) => {
             const card = p.card as QuotaCardId;
             const items = accountsOf(card);
             const status = worstStatus(items);
@@ -205,23 +204,21 @@ function QuotaProviderRail({
         </button>
       </header>
 
-      {groups.length === 0 ? (
-        <div className="aq-rail-empty">{t("railNoAccounts")}</div>
-      ) : (
-        <div className="aq-rail-panel aq-rail-accounts">
-          {groups.map(({ provider, items }) => (
-            <div key={provider.id} className="aq-rail-group">
-              <div className="aq-rail-group-name">
-                <span className="aq-rail-group-icon">
-                  <ProviderGlyph
-                    providerId={provider.id}
-                    name={provider.name}
-                    installIcon={installs[provider.id]?.icon}
-                  />
-                </span>
-                <span className="aq-rail-group-label">{provider.name}</span>
-                <span className="aq-rail-group-count">{items.length}</span>
-              </div>
+      {!hasAnyAccount && <p className="aq-rail-caption">{t("railNoAccounts")}</p>}
+      <ul className="aq-rail-panel aq-rail-list">
+        {groups.map(({ provider, card, items }) => (
+          <li key={provider.id} className={`aq-rail-group${items.length > 0 ? " has-accts" : ""}`}>
+            <ProviderRow
+              provider={provider}
+              install={installs[provider.id]}
+              count={items.length}
+              added={enabled.includes(card)}
+              pending={pending === card}
+              onAdd={() => onAdd(card)}
+              onCancel={onCancelPending}
+              onToggleVisible={() => onToggleVisible(card)}
+            />
+            {items.length > 0 && (
               <ul className="aq-rail-accts">
                 {items.map((a) => (
                   <li key={a.key} className="aq-rail-acct-row">
@@ -233,8 +230,10 @@ function QuotaProviderRail({
                     >
                       <span className={`aq-dot aq-dot-${a.status}`} title={t(`status.${a.status}`)} />
                       <span className="aq-rail-acct-name">{a.name}</span>
-                      {a.checkedIn && (
-                        <CalendarCheck size={11} className="aq-rail-acct-checkin" aria-label={t("checkinDoneShort")} />
+                      {a.dailyDone && (
+                        <span className="aq-rail-acct-checkin" title={a.dailyDone}>
+                          <CalendarCheck size={11} aria-label={a.dailyDone} />
+                        </span>
                       )}
                       {a.hidden && <EyeOff size={11} className="aq-rail-acct-hidden" aria-label={t("railHiddenMark")} />}
                     </button>
@@ -250,28 +249,9 @@ function QuotaProviderRail({
                   </li>
                 ))}
               </ul>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="aq-rail-section-label">{t("railAddAccount")}</div>
-      <ul className="aq-rail-panel aq-rail-list">
-        {supported.map((p) => {
-          const card = p.card as QuotaCardId;
-          return (
-            <ProviderRow
-              key={p.id}
-              provider={p}
-              install={installs[p.id]}
-              added={enabled.includes(card)}
-              pending={pending === card}
-              onAdd={() => onAdd(card)}
-              onCancel={onCancelPending}
-              onToggleVisible={() => onToggleVisible(card)}
-            />
-          );
-        })}
+            )}
+          </li>
+        ))}
       </ul>
     </aside>
   );
@@ -280,56 +260,72 @@ function QuotaProviderRail({
 function ProviderRow({
   provider,
   install,
+  count,
   added,
-  pending = false,
+  pending,
   onAdd,
   onCancel,
   onToggleVisible,
 }: {
   provider: QuotaProvider;
   install: InstallState | undefined;
+  /** 该服务商下已连接的账号数。 */
+  count: number;
   added: boolean;
-  pending?: boolean;
-  onAdd?: () => void;
+  pending: boolean;
+  onAdd: () => void;
   /** 授权等待中时，转圈按钮改为取消。 */
-  onCancel?: () => void;
-  onToggleVisible?: () => void;
+  onCancel: () => void;
+  onToggleVisible: () => void;
 }) {
   const { t } = useTranslation("quota");
   const notInstalled = install != null && !install.installed;
   const addTitle = t("railAddAccountTo", { name: provider.name });
   const eyeTitle = added ? t("railHide") : t("railShow");
 
-  const openSite = (e: MouseEvent) => {
-    e.stopPropagation();
-    invoke("open_in_browser", { url: provider.url }).catch(() => window.open(provider.url, "_blank"));
-  };
-
-  const cls = [
-    "aq-rail-row",
-    onAdd ? "is-toggleable" : "is-static",
-    added && "is-added",
-    notInstalled && "is-missing",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const cls = ["aq-rail-row", added && "is-added", notInstalled && "is-missing"].filter(Boolean).join(" ");
 
   return (
-    <li
+    <div
       className={cls}
       onClick={pending ? undefined : onAdd}
-      title={onAdd ? `${addTitle} · ${provider.domain}` : provider.domain}
+      title={`${addTitle} · ${provider.domain}`}
     >
-      {onAdd && (
+      <span className="aq-rail-icon">
+        <ProviderGlyph providerId={provider.id} name={provider.name} installIcon={install?.icon} />
+        {count > 0 && (
+          <span className="aq-rail-count" title={t("railAccountCount", { count })}>
+            {count}
+          </span>
+        )}
+      </span>
+      <span className="aq-rail-text">
+        <span className="aq-rail-name">{provider.name}</span>
+        {notInstalled && <span className="aq-rail-missing">{t("railNotInstalled")}</span>}
+      </span>
+      <span className="aq-rail-actions">
+        <button
+          type="button"
+          className={`aq-icon-btn aq-rail-eye${added ? "" : " is-off"}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleVisible();
+          }}
+          title={eyeTitle}
+          aria-label={`${eyeTitle} ${provider.name}`}
+          aria-pressed={added}
+        >
+          {added ? <Eye size={13} /> : <EyeOff size={13} />}
+        </button>
         <button
           type="button"
           className={`aq-rail-toggle${pending ? " is-pending" : ""}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (pending) onCancel?.();
+            if (pending) onCancel();
             else onAdd();
           }}
-          title={pending ? t("railCancelAuth") : undefined}
+          title={pending ? t("railCancelAuth") : addTitle}
           aria-label={pending ? t("railCancelAuth") : addTitle}
         >
           {pending ? (
@@ -338,44 +334,11 @@ function ProviderRow({
               <X size={13} className="aq-rail-cancel-icon" />
             </>
           ) : (
-            <Plus size={14} strokeWidth={2.25} />
+            <Plus size={13} strokeWidth={2.25} />
           )}
         </button>
-      )}
-      <span className="aq-rail-icon">
-        <ProviderGlyph providerId={provider.id} name={provider.name} installIcon={install?.icon} />
       </span>
-      <span className="aq-rail-text">
-        <span className="aq-rail-name">{provider.name}</span>
-        {notInstalled && <span className="aq-rail-missing">{t("railNotInstalled")}</span>}
-      </span>
-      <span className="aq-rail-actions">
-        {onToggleVisible && (
-          <button
-            type="button"
-            className={`aq-icon-btn aq-rail-eye${added ? "" : " is-off"}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleVisible();
-            }}
-            title={eyeTitle}
-            aria-label={`${eyeTitle} ${provider.name}`}
-            aria-pressed={added}
-          >
-            {added ? <Eye size={13} /> : <EyeOff size={13} />}
-          </button>
-        )}
-        <button
-          type="button"
-          className="aq-icon-btn aq-rail-link"
-          onClick={openSite}
-          title={t("railOpenSite")}
-          aria-label={`${t("railOpenSite")} ${provider.name}`}
-        >
-          <ExternalLink size={12} />
-        </button>
-      </span>
-    </li>
+    </div>
   );
 }
 
