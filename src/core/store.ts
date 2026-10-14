@@ -12,8 +12,16 @@ import { matchCursorAccount } from './cursorMatch';
 import { normalizePath, pathKey, projectNameFromPath } from './pathUtils';
 import { compareVersions } from '../lib/version';
 import { takeLegacyCustomTemplates } from '../lib/promptOptimize';
-import { buildSeedSnippets, optimisticUpdate, tauriInvoke, withTable } from './store/helpers';
+import {
+  buildExampleSnippet,
+  EXAMPLE_SNIPPET_SEEDED_KEY,
+  isUntouchedLegacySeed,
+  optimisticUpdate,
+  tauriInvoke,
+  withTable,
+} from './store/helpers';
 import { invocations, type Invocations } from './store/invocations';
+import { readStoredString, writeStoredString } from './localState';
 
 /** True when `v1` is older than `v2`; prerelease-aware (see `compareVersions`). */
 const isOlderVersion = (v1: string, v2: string): boolean =>
@@ -1146,18 +1154,20 @@ export const useGlobalStore = create<StoreState>()(
 
       loadSnippets: async () => withTable("snippets", async () => {
         let snippets = await storage.snippets.load();
-        const now = new Date().toISOString();
-        const seeds = buildSeedSnippets(now);
-        if (snippets.length === 0) {
-          snippets = seeds;
+        // Default templates are no longer shipped; drop the copies older builds
+        // seeded, unless the user edited them into their own.
+        const kept = snippets.filter((s) => !isUntouchedLegacySeed(s));
+        if (kept.length !== snippets.length) {
+          snippets = kept;
           await storage.snippets.save(snippets);
-        } else {
-          const existing = new Set(snippets.map((s) => s.id));
-          const missing = seeds.filter((s) => !existing.has(s.id));
-          if (missing.length > 0) {
-            snippets = [...missing, ...snippets];
+        }
+        // One example on a fresh table; offered once so deleting it sticks.
+        if (readStoredString(EXAMPLE_SNIPPET_SEEDED_KEY) !== '1') {
+          if (snippets.length === 0) {
+            snippets = [buildExampleSnippet()];
             await storage.snippets.save(snippets);
           }
+          writeStoredString(EXAMPLE_SNIPPET_SEEDED_KEY, '1');
         }
         // One-shot migration: legacy Prompt Studio custom templates (localStorage)
         // become kind='prompt' snippets; keeps original ids so re-runs dedupe.

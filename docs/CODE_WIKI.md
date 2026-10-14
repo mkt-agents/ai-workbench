@@ -430,7 +430,7 @@ GlobalState = {
 | Cursor | `loadCursorAccounts`, `addCursorAccount`, `switchCursorAccount`, `deleteCursorAccount` | 调 Rust cursor 命令 |
 | AI 模型 | `loadAIModels`, `addAIModel`, `updateAIModel`, `deleteAIModel`, `setDefaultAIModel` | 首项自动 default |
 | Cloudflared | `loadCloudflaredProfiles`, `addCloudflaredProfile`, ... | — |
-| Snippets | `loadSnippets`, `addSnippet`, `deleteSnippet`, `bumpSnippetUse` | 首次加载注入种子片段 |
+| Snippets | `loadSnippets`, `addSnippet`, `deleteSnippet`, `bumpSnippetUse` | 空表时放一条示例「报错诊断」（只放一次，localStorage `snippets-example-seeded`）；加载时删掉旧版其余 4 条未改过的 `seed-*` 片段 |
 | 持久化 | `initialize()` | Promise.all 并行加载 10 类数据 |
 | DSH 状态 | `loadDshStatus`, `refreshDshStatus` | 缓存 nodejs_installed / dshVersion / hasUpdate |
 | Cursor invoke | `invoke*` 系列 | 纯透传到 `store/invocations.ts` |
@@ -439,7 +439,8 @@ GlobalState = {
 - `withTable(table, fn)` — 锁表日志
 - `optimisticUpdate(old, next, set, persist)` — 乐观更新模式
 - `tauriInvoke<T>(cmd, args)` — 封装 tauri invoke + 错误处理
-- `buildSeedSnippets(now)` — 内置 6 个种子片段
+- `buildExampleSnippet(now)` — 唯一的示例模板「报错诊断」（id `seed-debug`，演示 `{{error}}` 参数）
+- `isUntouchedLegacySeed(s)` — 判断片段是否为旧版注入的其余默认模板且名称/内容未改过（`loadSnippets` 据此清理）
 
 ### 6.3 `core/storage.ts` — SQLite 适配层
 
@@ -1471,18 +1472,9 @@ t('myKey')
 
 ---
 
-## 附录 B：种子片段（内置 6 个）
+## 附录 B：示例模板
 
-`store/helpers.ts` `buildSeedSnippets()`:
-
-| ID | 名称 | 用途 |
-|----|------|------|
-| snip-seed-1 | Code Review Prompt | 代码审查提示词模板 |
-| snip-seed-2 | Git Commit Message | AI 生成 commit message 模板 |
-| snip-seed-3 | Refactoring | 重构建议模板 |
-| snip-seed-4 | Bug Analysis | Bug 分析模板 |
-| snip-seed-5 | Test Generation | 测试生成模板 |
-| snip-seed-6 | Documentation | 文档生成模板 |
+模板片段页只保留一个示例「报错诊断」（`buildExampleSnippet()`，id `seed-debug`）：片段表为空时放入，只放一次（localStorage `snippets-example-seeded` 置 `1`），用户删掉后不再补回。旧版曾注入 5 个 `seed-*` 片段并在缺失时按 id 补回；其余 4 条（git status 简报 / curl JSON POST / 角色提示框架 / Commit message 模板）现在由 `loadSnippets` 删除，前提是名称与内容仍是原样，用户改过的保留。原文在 `store/helpers.ts` 的 `LEGACY_SEED_SNIPPETS`，仅用于比对。
 
 ---
 
