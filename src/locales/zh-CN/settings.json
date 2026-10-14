@@ -12,10 +12,7 @@
     "themeGlass": "香槟金",
     "autoStart": "开机自启",
     "autoStartReadFailed": "读取开机自启状态失败: {{error}}",
-    "autoStartUpdateFailed": "更新开机自启失败: {{error}}"
-  },
-  "appearance": {
-    "title": "外观",
+    "autoStartUpdateFailed": "更新开机自启失败: {{error}}",
     "sidebarCollapsed": "侧边栏折叠"
   },
   "quickAsk": {

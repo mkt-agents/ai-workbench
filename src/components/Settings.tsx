@@ -217,6 +217,17 @@ function Settings({ onOpenUpdate }: Props = {}) {
               <span className="toggle-slider" />
             </label>
           </div>
+          <div className="setting-row">
+            <span className="setting-label">{t("general.sidebarCollapsed")}</span>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={settings.sidebarCollapsed}
+                onChange={handleSidebarToggle}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
         </div>
       </div>
 
@@ -332,23 +343,6 @@ function Settings({ onOpenUpdate }: Props = {}) {
             <button type="button" className="btn btn-secondary" disabled={dataBusy} onClick={() => void handleImport()}>
               {t("data.import")}
             </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title">{t("appearance.title")}</div>
-        <div className="card-body">
-          <div className="setting-row">
-            <span className="setting-label">{t("appearance.sidebarCollapsed")}</span>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={settings.sidebarCollapsed}
-                onChange={handleSidebarToggle}
-              />
-              <span className="toggle-slider" />
-            </label>
           </div>
         </div>
       </div>

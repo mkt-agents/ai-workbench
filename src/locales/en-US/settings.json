@@ -12,10 +12,7 @@
     "themeGlass": "Champagne",
     "autoStart": "Auto Start",
     "autoStartReadFailed": "Failed to read auto-start: {{error}}",
-    "autoStartUpdateFailed": "Failed to update auto-start: {{error}}"
-  },
-  "appearance": {
-    "title": "Appearance",
+    "autoStartUpdateFailed": "Failed to update auto-start: {{error}}",
     "sidebarCollapsed": "Collapse Sidebar"
   },
   "quickAsk": {
