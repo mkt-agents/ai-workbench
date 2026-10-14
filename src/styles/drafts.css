@@ -12,32 +12,107 @@
   min-height: 0;
 }
 
+/* ---- Composer: heading + one-piece note editor + action row ---- */
 .drafts-compose {
   display: flex;
   flex-direction: column;
   gap: 10px;
   flex-shrink: 0;
-  padding: 14px 16px;
+  padding: 14px 16px 12px;
 }
 
-.drafts-compose > .input-group {
-  margin-bottom: 0;
+.drafts-compose-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
-.drafts-compose-body {
-  flex: 1 1 auto;
-  min-height: 0;
+.drafts-compose-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.drafts-compose-heading {
   display: flex;
   flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
-.drafts-compose-editor {
+.drafts-compose-heading strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
+}
+
+.drafts-compose-heading span {
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drafts-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  transition: var(--transition-colors-fast);
+}
+
+.drafts-editor:hover {
+  border-color: var(--accent-border);
+}
+
+.drafts-editor:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.drafts-editor-title,
+.drafts-editor-body {
   width: 100%;
-  resize: none;
+  box-sizing: border-box;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-0);
+}
+
+.drafts-editor-title {
+  padding: 9px 12px 8px;
+  border-bottom: 1px dashed var(--border-subtle);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.drafts-editor-body {
+  flex: 1 1 auto;
   min-height: 120px;
+  padding: 9px 12px 10px;
+  resize: none;
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.6;
+}
+
+.drafts-editor-title::placeholder,
+.drafts-editor-body::placeholder {
+  color: var(--text-3);
+  font-weight: 400;
 }
 
 .drafts-compose-actions {
@@ -47,12 +122,67 @@
   gap: 10px;
 }
 
+.drafts-compose-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drafts-kbd-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.drafts-kbd-hint > span {
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drafts-kbd-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-1);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* ---- Toolbar: search left, count + cleanup right ---- */
+.drafts-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.drafts-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
 .drafts-count {
   font-size: 11px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Card grid ---- */
 .drafts-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
@@ -74,26 +204,46 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 48px 16px;
+  padding: 44px 16px;
   color: var(--text-3);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-1);
 }
 
-.drafts-empty svg {
-  opacity: 0.45;
+.drafts-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-lg);
+  color: var(--text-2);
+  background: var(--overlay-2);
 }
 
 .drafts-empty p {
   margin: 0;
   font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.drafts-page .setting-hint {
+  display: block;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+  text-align: center;
 }
 
 .draft-card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
   padding: 12px 14px 10px;
   border: 1px solid var(--border-subtle);
@@ -108,15 +258,44 @@
   box-shadow: var(--surface-highlight), var(--shadow-sm);
 }
 
+/* Pinned: accent hairline on the left edge instead of a loud border. */
 .draft-card.is-pinned {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-subtle));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
+}
+
+.draft-card.is-pinned::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: -1px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
 }
 
 .draft-card-head {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
+}
+
+.draft-card-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  color: var(--text-2);
+  background: var(--overlay-2);
+}
+
+.draft-card.is-pinned .draft-card-icon {
+  color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .draft-card-titles {
@@ -142,59 +321,119 @@
   font-size: 11px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
-}
-
-.draft-pin-badge {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  background: var(--accent-dim);
-}
-
-.draft-card-preview {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.draft-card-time.is-stale {
+  color: var(--yellow);
+}
+
+/* Fixed 4-line box so cards in one row keep their footers aligned. */
+.draft-card-preview {
+  --preview-lines: 4;
+  --preview-lh: 1.6;
+  --preview-fs: 11.5px;
+  --preview-pad-y: 6px;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: calc(
+    var(--preview-lines) * var(--preview-lh) * var(--preview-fs) + 2 * var(--preview-pad-y) + 2px
+  );
+  margin: 0;
+  padding: var(--preview-pad-y) 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--preview-fs);
+  line-height: var(--preview-lh);
+  text-align: left;
+  cursor: text;
+  transition: var(--transition-colors-fast);
+}
+
+.draft-card-preview:hover {
+  border-color: var(--accent-border);
+  color: var(--text-0);
+}
+
+.draft-card-preview:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.draft-card-preview-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.draft-card-preview-empty {
+  color: var(--text-3);
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+/* Footer: hover tools on the left, quick-ask + copy (primary) on the right. */
 .draft-card-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  min-height: 26px;
   margin-top: auto;
-  padding-top: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
 }
 
+.draft-card-tools {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  gap: 1px;
+  opacity: 0;
+  transition: var(--transition-colors-fast);
+}
+
+.draft-card:hover .draft-card-tools,
+.draft-card:focus-within .draft-card-tools {
+  opacity: 1;
+}
+
+.draft-card-ask:hover {
+  color: var(--accent);
+}
+
+.snippet-use-btn.is-done {
+  border-color: var(--green-border);
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+/* ---- Edit modal ---- */
 .modal.drafts-modal {
   display: flex;
   flex-direction: column;
   padding-bottom: 16px;
 }
 
-.drafts-modal .input-group {
-  margin-bottom: 12px;
+.drafts-modal .drafts-editor {
+  margin-top: 4px;
 }
 
-.drafts-modal .drafts-compose-editor {
-  min-height: 200px;
+.drafts-modal .drafts-editor-body {
+  min-height: 240px;
+  max-height: 56vh;
 }
 
-.drafts-page .setting-hint {
-  display: block;
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--text-3);
-  text-align: center;
+.drafts-modal .modal-actions .drafts-modal-hint {
+  align-self: center;
+  margin-right: auto;
 }

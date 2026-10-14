@@ -313,6 +313,9 @@ interface StoreState extends GlobalState, Invocations {
   addDraft: (draft: Omit<Draft, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   updateDraft: (id: string, updates: Partial<Draft>) => Promise<void>;
   deleteDraft: (id: string) => Promise<void>;
+  deleteDrafts: (ids: string[]) => Promise<void>;
+  /** Undo: put previously deleted drafts back with their original id and timestamps. */
+  restoreDrafts: (items: Draft[]) => Promise<void>;
 
   // Quick-ask sessions
   loadQuickAskSessions: () => Promise<void>;
@@ -1247,8 +1250,11 @@ export const useGlobalStore = create<StoreState>()(
       }),
 
       updateDraft: async (id, updates) => withTable("drafts", async () => {
+        // Pinning is not an edit: bumping updatedAt would reorder the list and lie about age.
+        const touches = 'title' in updates || 'content' in updates;
+        const now = new Date().toISOString();
         const drafts = get().drafts.map((d) =>
-          d.id === id ? { ...d, ...updates, updatedAt: new Date().toISOString() } : d
+          d.id === id ? { ...d, ...updates, ...(touches ? { updatedAt: now } : {}) } : d
         );
         await storage.drafts.save(drafts);
         set({ drafts });
@@ -1256,6 +1262,20 @@ export const useGlobalStore = create<StoreState>()(
 
       deleteDraft: async (id) => withTable("drafts", async () => {
         const drafts = get().drafts.filter((d) => d.id !== id);
+        await storage.drafts.save(drafts);
+        set({ drafts });
+      }),
+
+      deleteDrafts: async (ids) => withTable("drafts", async () => {
+        const drop = new Set(ids);
+        const drafts = get().drafts.filter((d) => !drop.has(d.id));
+        await storage.drafts.save(drafts);
+        set({ drafts });
+      }),
+
+      restoreDrafts: async (items) => withTable("drafts", async () => {
+        const present = new Set(get().drafts.map((d) => d.id));
+        const drafts = [...items.filter((d) => !present.has(d.id)), ...get().drafts];
         await storage.drafts.save(drafts);
         set({ drafts });
       }),
