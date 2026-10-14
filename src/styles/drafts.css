@@ -1,0 +1,200 @@
+/* ===== Drafts (scratch inbox) ===== */
+.drafts-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 4px 24px;
+  height: 100%;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin-inline: auto;
+  min-height: 0;
+}
+
+.drafts-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 14px 16px;
+}
+
+.drafts-compose > .input-group {
+  margin-bottom: 0;
+}
+
+.drafts-compose-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drafts-compose-editor {
+  width: 100%;
+  resize: none;
+  min-height: 120px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.drafts-compose-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.drafts-count {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.drafts-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  min-height: 0;
+  flex: 1;
+  padding: 3px;
+  margin: -3px;
+}
+
+.drafts-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 16px;
+  color: var(--text-3);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+}
+
+.drafts-empty svg {
+  opacity: 0.45;
+}
+
+.drafts-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.draft-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+  transition: var(--transition-colors);
+}
+
+.draft-card:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
+}
+
+.draft-card.is-pinned {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-subtle));
+}
+
+.draft-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.draft-card-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.draft-card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-card-time {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.draft-pin-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.draft-card-preview {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.modal.drafts-modal {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 16px;
+}
+
+.drafts-modal .input-group {
+  margin-bottom: 12px;
+}
+
+.drafts-modal .drafts-compose-editor {
+  min-height: 200px;
+}
+
+.drafts-page .setting-hint {
+  display: block;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+  text-align: center;
+}

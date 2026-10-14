@@ -33,6 +33,15 @@ function finiteOr(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Default config name for create flow: `DS · deepseek-chat`. */
+function suggestConfigName(provider: string, model: string): string {
+  const short = getProviderMeta(provider)?.shortLabel ?? provider;
+  const m = model.trim();
+  return m ? `${short} · ${m}` : short;
+}
+
+type ModalStatus = { type: "success" | "error" | "info"; text: string };
+
 /** Temperature presets, named by what they do rather than by the number. */
 const TEMPERATURE_PRESETS = [
   { value: 0.2, key: "tempPresetPrecise" },
@@ -312,6 +321,12 @@ function AIAssistant() {
     testing: boolean;
     result: { success: boolean; message: string } | null;
   }>({ testing: false, result: null });
+  /** Inline feedback inside the modal (refresh etc.) — page toasts sit under the overlay. */
+  const [modalStatus, setModalStatus] = useState<ModalStatus | null>(null);
+  /** User edited the name; stop auto-suggesting on create. */
+  const [nameTouched, setNameTouched] = useState(false);
+  /** After a successful list fetch, open the picker once the trigger mounts. */
+  const [openPickerAfterRefresh, setOpenPickerAfterRefresh] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -356,10 +371,32 @@ function AIAssistant() {
     setPickerMenuStyle(null);
   };
 
+  /** Drop stale list / test / status after credentials or endpoint change. */
+  const invalidateCredentialDerived = () => {
+    setFetchedModels(null);
+    closeModelPicker();
+    setOpenPickerAfterRefresh(false);
+    setModalStatus(null);
+    setTestStatus((cur) => (cur.testing ? cur : { testing: false, result: null }));
+  };
+
+  /** Model id / temp change invalidates a prior connection verdict only. */
+  const invalidateTestResult = () => {
+    setModalStatus(null);
+    setTestStatus((cur) => (cur.testing || !cur.result ? cur : { testing: false, result: null }));
+  };
+
   const commitModel = (id: string) => {
     const value = id.trim();
     if (!value) return;
-    setFormData((cur) => ({ ...cur, model: value }));
+    invalidateTestResult();
+    setFormData((cur) => {
+      const next = { ...cur, model: value };
+      if (!editingId && !nameTouched) {
+        next.name = suggestConfigName(cur.provider, value);
+      }
+      return next;
+    });
     closeModelPicker();
   };
 
@@ -411,16 +448,18 @@ function AIAssistant() {
     }
   }, [groupByProvider, collapsedGroups, sortBy, statusFilter]);
 
-  // Esc closes the edit modal, matching the overlay-click affordance.
+  // Picker Esc must win over ModalTitleRow (capture) so the menu closes first.
   useEffect(() => {
-    if (!showModal) return;
+    if (!pickerOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeModal();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeModelPicker();
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showModal]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [pickerOpen]);
 
   // Keep the floating menu glued to its trigger while the modal body scrolls.
   useLayoutEffect(() => {
@@ -446,8 +485,6 @@ function AIAssistant() {
   const supportsList = providerSupportsModelList(formData.provider);
   const listedModels = fetchedModels ?? [];
   const showModelSelect = listedModels.length > 0;
-  // Without a fetched list there is nothing to choose from, so the plain input stays.
-  const showCustomModelInput = !showModelSelect;
   const modelQueryNorm = pickerQuery.trim().toLowerCase();
   const filteredModels = useMemo(
     () =>
@@ -569,16 +606,45 @@ function AIAssistant() {
     ? t("models.refreshNoListSupport")
     : !formData.baseUrl.trim() || (!isOllama && !formData.apiKey.trim())
       ? t("models.refreshNeedCredentials")
-      : undefined;
+      : !isValidHttpUrl(formData.baseUrl.trim())
+        ? t("models.validation.urlInvalid")
+        : undefined;
   const canTest =
     Boolean(formData.baseUrl.trim() && formData.model.trim()) &&
     (!keyRequired || Boolean(formData.apiKey.trim()));
   const canSubmit =
     Boolean(formData.name.trim() && formData.baseUrl.trim() && formData.model.trim()) &&
     (!keyRequired || Boolean(formData.apiKey.trim()));
+  const modalBusy = fetchingModels || testStatus.testing;
+
+  const missingSubmitFields = useMemo(() => {
+    const items: string[] = [];
+    if (!formData.name.trim()) items.push(t("models.name"));
+    if (keyRequired && !formData.apiKey.trim()) items.push(t("models.apiKey"));
+    if (!formData.baseUrl.trim()) items.push(t("models.baseUrl"));
+    else if (!isValidHttpUrl(formData.baseUrl.trim())) items.push(t("models.baseUrl"));
+    if (!formData.model.trim()) items.push(t("models.model"));
+    return items;
+  }, [formData.name, formData.apiKey, formData.baseUrl, formData.model, keyRequired, t]);
+
+  const missingTestFields = useMemo(() => {
+    const items: string[] = [];
+    if (keyRequired && !formData.apiKey.trim()) items.push(t("models.apiKey"));
+    if (!formData.baseUrl.trim()) items.push(t("models.baseUrl"));
+    if (!formData.model.trim()) items.push(t("models.model"));
+    return items;
+  }, [formData.apiKey, formData.baseUrl, formData.model, keyRequired, t]);
+
+  // List fetch just finished — open picker once the trigger is in the DOM.
+  useEffect(() => {
+    if (!openPickerAfterRefresh || !showModelSelect) return;
+    setPickerOpen(true);
+    setOpenPickerAfterRefresh(false);
+  }, [openPickerAfterRefresh, showModelSelect]);
 
   const resetModalState = () => {
     const form = emptyForm();
+    form.name = suggestConfigName(form.provider, form.model);
     setFormData(form);
     closeModelPicker();
     setFetchedModels(null);
@@ -586,9 +652,13 @@ function AIAssistant() {
     setEditingId(null);
     setShowApiKey(false);
     setTestStatus({ testing: false, result: null });
+    setModalStatus(null);
+    setNameTouched(false);
+    setOpenPickerAfterRefresh(false);
   };
 
   const closeModal = () => {
+    if (modalBusy) return;
     resetModalState();
     setShowModal(false);
   };
@@ -601,8 +671,7 @@ function AIAssistant() {
   const handleProviderChange = (provider: string) => {
     const next = getProviderMeta(provider);
     const prev = getProviderMeta(formData.provider);
-    setFetchedModels(null);
-    closeModelPicker();
+    invalidateCredentialDerived();
     setFormData((cur) => {
       const prevDefaultUrl = prev ? getDefaultUrl(prev.value, cur.authType) : "";
       const urlMatchesPrevDefault = !prev || !cur.baseUrl || cur.baseUrl === prevDefaultUrl;
@@ -611,15 +680,18 @@ function AIAssistant() {
       const authType: AuthType = provider === "mimo" ? cur.authType : "api";
       const newModel =
         isCreate || modelMatchesPrevDefault ? next?.defaultModel ?? "" : cur.model;
+      const baseUrl =
+        isCreate || urlMatchesPrevDefault
+          ? getDefaultUrl(provider, authType)
+          : cur.baseUrl;
       return {
         ...cur,
         provider: provider as ProviderType,
         authType,
-        baseUrl:
-          isCreate || urlMatchesPrevDefault
-            ? getDefaultUrl(provider, authType)
-            : cur.baseUrl,
+        baseUrl,
         model: newModel,
+        name:
+          isCreate && !nameTouched ? suggestConfigName(provider, newModel) : cur.name,
       };
     });
   };
@@ -627,8 +699,7 @@ function AIAssistant() {
   const handleAuthTypeChange = (authType: AuthType) => {
     const prevUrl = getDefaultUrl("mimo", formData.authType);
     const urlMatches = !formData.baseUrl || formData.baseUrl === prevUrl;
-    setFetchedModels(null);
-    closeModelPicker();
+    invalidateCredentialDerived();
     setFormData((cur) => ({
       ...cur,
       authType,
@@ -637,23 +708,32 @@ function AIAssistant() {
   };
 
   const handleCustomModelChange = (model: string) => {
-    setFormData((cur) => ({ ...cur, model }));
+    invalidateTestResult();
+    setFormData((cur) => ({
+      ...cur,
+      model,
+      name: !editingId && !nameTouched ? suggestConfigName(cur.provider, model) : cur.name,
+    }));
   };
 
   const handleRefreshModels = async () => {
     if (!supportsList) {
-      showMsg("error", t("models.refreshNoListSupport"));
+      setModalStatus({ type: "error", text: t("models.refreshNoListSupport") });
       return;
     }
     if (!canRefreshModels && !fetchingModels) {
-      showMsg("error", t("models.refreshNeedCredentials"));
+      setModalStatus({
+        type: "error",
+        text: refreshDisabledReason || t("models.refreshNeedCredentials"),
+      });
       return;
     }
     if (!isValidHttpUrl(formData.baseUrl.trim())) {
-      showMsg("error", t("models.validation.urlInvalid"));
+      setModalStatus({ type: "error", text: t("models.validation.urlInvalid") });
       return;
     }
     setFetchingModels(true);
+    setModalStatus({ type: "info", text: t("models.refreshingList") });
     try {
       const result = await invokeListProviderModels({
         provider: formData.provider,
@@ -661,14 +741,24 @@ function AIAssistant() {
         baseUrl: formData.baseUrl.trim().replace(/\/+$/, ""),
       });
       if (!result.success) {
-        showMsg("error", t("models.refreshFailed", { error: result.message || "unknown" }));
+        setModalStatus({
+          type: "error",
+          text: t("models.refreshFailed", { error: result.message || "unknown" }),
+        });
         return;
       }
       const fetched = result.models.map((m) => ({ id: m.id, label: m.label || m.id }));
       setFetchedModels(fetched);
-      showMsg("success", t("models.refreshSuccess", { count: fetched.length }));
+      setModalStatus({
+        type: "success",
+        text: t("models.refreshSuccess", { count: fetched.length }),
+      });
+      if (fetched.length > 0) setOpenPickerAfterRefresh(true);
     } catch (error) {
-      showMsg("error", t("models.refreshFailed", { error: String(error) }));
+      setModalStatus({
+        type: "error",
+        text: t("models.refreshFailed", { error: String(error) }),
+      });
     } finally {
       setFetchingModels(false);
     }
@@ -691,6 +781,9 @@ function AIAssistant() {
     closeModelPicker();
     setShowApiKey(false);
     setTestStatus({ testing: false, result: null });
+    setModalStatus(null);
+    setNameTouched(true);
+    setOpenPickerAfterRefresh(false);
     setShowModal(true);
   };
 
@@ -720,33 +813,34 @@ function AIAssistant() {
   };
 
   const handleSubmit = async () => {
+    if (modalBusy) return;
     if (!formData.name.trim()) {
-      showMsg("error", t("models.validation.nameRequired"));
+      setModalStatus({ type: "error", text: t("models.validation.nameRequired") });
       return;
     }
     const nameNorm = formData.name.trim().toLowerCase();
     if (aiModels.some((m) => m.id !== editingId && m.name.trim().toLowerCase() === nameNorm)) {
-      showMsg("error", t("models.validation.nameDuplicate"));
+      setModalStatus({ type: "error", text: t("models.validation.nameDuplicate") });
       return;
     }
     if (formData.maxTokens < 1) {
-      showMsg("error", t("models.validation.maxTokensInvalid"));
+      setModalStatus({ type: "error", text: t("models.validation.maxTokensInvalid") });
       return;
     }
     if (keyRequired && !formData.apiKey.trim()) {
-      showMsg("error", t("models.validation.keyRequired"));
+      setModalStatus({ type: "error", text: t("models.validation.keyRequired") });
       return;
     }
     if (!formData.baseUrl.trim()) {
-      showMsg("error", t("models.validation.urlRequired"));
+      setModalStatus({ type: "error", text: t("models.validation.urlRequired") });
       return;
     }
     if (!isValidHttpUrl(formData.baseUrl.trim())) {
-      showMsg("error", t("models.validation.urlInvalid"));
+      setModalStatus({ type: "error", text: t("models.validation.urlInvalid") });
       return;
     }
     if (!formData.model.trim()) {
-      showMsg("error", t("models.validation.modelRequired"));
+      setModalStatus({ type: "error", text: t("models.validation.modelRequired") });
       return;
     }
 
@@ -766,11 +860,30 @@ function AIAssistant() {
         await addAIModel(payload);
         showMsg("success", t("models.saved"));
       }
-      closeModal();
+      // Force-close even if a refresh somehow overlapped (should be idle here).
+      resetModalState();
+      setShowModal(false);
     } catch (e) {
-      showMsg("error", t("models.validation.saveFailed", { error: e }));
+      setModalStatus({
+        type: "error",
+        text: t("models.validation.saveFailed", { error: e }),
+      });
     }
   };
+
+  // Ctrl/Cmd+Enter saves when the form is ready.
+  useEffect(() => {
+    if (!showModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== "Enter") return;
+      if (modalBusy || !canSubmit) return;
+      e.preventDefault();
+      void handleSubmit();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showModal, modalBusy, canSubmit, formData, editingId]);
 
   const runConnectionTest = async (config: AIModelConfig) => {
     return invokeTestModelConnection({
@@ -907,16 +1020,22 @@ function AIAssistant() {
 
   const handleTestConnection = async () => {
     if (!canTest) {
-      showMsg(
-        "error",
-        isOllama ? t("models.validation.testRequiredOllama") : t("models.validation.testRequired")
-      );
+      setModalStatus({
+        type: "error",
+        text:
+          missingTestFields.length > 0
+            ? t("models.missingFields", { fields: missingTestFields.join(t("models.missingSep")) })
+            : isOllama
+              ? t("models.validation.testRequiredOllama")
+              : t("models.validation.testRequired"),
+      });
       return;
     }
     if (!isValidHttpUrl(formData.baseUrl.trim())) {
-      showMsg("error", t("models.validation.urlInvalid"));
+      setModalStatus({ type: "error", text: t("models.validation.urlInvalid") });
       return;
     }
+    setModalStatus(null);
     setTestStatus({ testing: true, result: null });
     try {
       const result = await runConnectionTest(formData as AIModelConfig);
@@ -1787,11 +1906,12 @@ function AIAssistant() {
           </div>
 
           {showModal && (
-            <div className="modal-overlay" onClick={closeModal}>
-              <div className="modal models-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-overlay">
+              <div className="modal models-modal">
                 <ModalTitleRow
                   title={editingId ? t("models.editModel") : t("models.addModel")}
                   onClose={closeModal}
+                  disabled={modalBusy}
                 />
                 <div className="ai-modal-content">
                   <div className="ai-form">
@@ -1802,8 +1922,13 @@ function AIAssistant() {
                         <input
                           className="input-field"
                           value={formData.name}
-                          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                          onChange={(e) => {
+                            setNameTouched(true);
+                            setFormData({ ...formData, name: e.target.value });
+                          }}
                           placeholder={t("models.namePlaceholder")}
+                          autoFocus={!editingId}
+                          disabled={modalBusy}
                         />
                       </div>
                       <div className="input-group">
@@ -1812,6 +1937,7 @@ function AIAssistant() {
                           className="input-field"
                           value={formData.provider}
                           onChange={(e) => handleProviderChange(e.target.value)}
+                          disabled={modalBusy}
                         >
                           {AI_PROVIDERS.map((p) => (
                             <option key={p.value} value={p.value}>
@@ -1827,6 +1953,7 @@ function AIAssistant() {
                             className="input-field"
                             value={formData.authType}
                             onChange={(e) => handleAuthTypeChange(e.target.value as AuthType)}
+                            disabled={modalBusy}
                           >
                             <option value="api">{t("models.mimoAuthApi")}</option>
                             <option value="token_plan">{t("models.mimoAuthTokenPlan")}</option>
@@ -1846,18 +1973,24 @@ function AIAssistant() {
                             className="input-field"
                             type={showApiKey ? "text" : "password"}
                             value={formData.apiKey}
-                            onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
+                            onChange={(e) => {
+                              const apiKey = e.target.value;
+                              invalidateCredentialDerived();
+                              setFormData((cur) => ({ ...cur, apiKey }));
+                            }}
                             placeholder={
                               isOllama
                                 ? t("models.apiKeyOllamaPlaceholder")
                                 : t("models.apiKeyPlaceholder")
                             }
+                            disabled={modalBusy}
                           />
                           <button
                             type="button"
                             className="input-toggle-btn"
                             onClick={() => setShowApiKey(!showApiKey)}
                             title={showApiKey ? t("models.hideKey") : t("models.showKey")}
+                            disabled={modalBusy}
                           >
                             {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
                           </button>
@@ -1869,36 +2002,51 @@ function AIAssistant() {
                           className="input-field"
                           value={formData.baseUrl}
                           onChange={(e) => {
-                            setFetchedModels(null);
-                            setFormData({ ...formData, baseUrl: e.target.value });
+                            const baseUrl = e.target.value;
+                            invalidateCredentialDerived();
+                            setFormData((cur) => ({ ...cur, baseUrl }));
                           }}
                           placeholder="https://api.openai.com/v1"
+                          disabled={modalBusy}
                         />
                       </div>
                       <div className="input-group ai-form-span">
                         <div className="ai-model-preset-header">
-                          <label className="input-label">{t("models.modelPreset")}</label>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-small"
-                            onClick={handleRefreshModels}
-                            disabled={!canRefreshModels}
-                            title={
-                              refreshDisabledReason ||
-                              (fetchingModels ? t("models.refreshingList") : t("models.refreshList"))
-                            }
-                          >
-                            {fetchingModels ? (
-                              <Loader2 size={12} className="spin" />
-                            ) : (
-                              <RefreshCw size={12} />
-                            )}
-                            <span className="ai-action-label">
-                              {fetchingModels ? t("models.refreshingList") : t("models.refreshList")}
-                            </span>
-                          </button>
+                          <label className="input-label" htmlFor="models-modal-model">
+                            {t("models.model")}
+                          </label>
+                          {supportsList && (
+                            <button
+                              type="button"
+                              className="ai-model-refresh-btn"
+                              onClick={() => void handleRefreshModels()}
+                              disabled={!canRefreshModels || modalBusy}
+                              title={
+                                refreshDisabledReason ||
+                                (fetchingModels
+                                  ? t("models.refreshingList")
+                                  : t("models.refreshList"))
+                              }
+                              aria-label={
+                                fetchingModels
+                                  ? t("models.refreshingList")
+                                  : t("models.refreshList")
+                              }
+                            >
+                              {fetchingModels ? (
+                                <Loader2 size={13} className="spin" />
+                              ) : (
+                                <RefreshCw size={13} />
+                              )}
+                              <span className="ai-model-refresh-label">
+                                {fetchingModels
+                                  ? t("models.refreshingList")
+                                  : t("models.refreshList")}
+                              </span>
+                            </button>
+                          )}
                         </div>
-                        {showModelSelect && (
+                        {showModelSelect ? (
                           <div className="ai-model-picker" ref={pickerRootRef}>
                             <button
                               type="button"
@@ -1908,6 +2056,7 @@ function AIAssistant() {
                               aria-expanded={pickerOpen}
                               title={formData.model || t("models.model")}
                               onClick={() => setPickerOpen((v) => !v)}
+                              disabled={modalBusy}
                             >
                               <span className="ai-model-trigger-label">
                                 {formData.model || t("models.model")}
@@ -1936,6 +2085,8 @@ function AIAssistant() {
                                     onChange={(e) => setPickerQuery(e.target.value)}
                                     onKeyDown={(e) => {
                                       if (e.key === "Escape") {
+                                        e.preventDefault();
+                                        e.stopPropagation();
                                         closeModelPicker();
                                         return;
                                       }
@@ -2015,19 +2166,26 @@ function AIAssistant() {
                                 document.body
                               )}
                           </div>
-                        )}
-                      </div>
-                      {showCustomModelInput && (
-                        <div className="input-group ai-form-span">
-                          <label className="input-label">{t("models.model")}</label>
+                        ) : (
                           <input
+                            id="models-modal-model"
                             className="input-field"
                             value={formData.model}
                             onChange={(e) => handleCustomModelChange(e.target.value)}
                             placeholder={t("models.modelCustomPlaceholder")}
+                            disabled={modalBusy}
                           />
-                        </div>
-                      )}
+                        )}
+                        {modalStatus && (
+                          <p
+                            className={`ai-modal-status is-${modalStatus.type}`}
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {modalStatus.text}
+                          </p>
+                        )}
+                      </div>
                     </div>
 
                     <div className="ai-form-section">
@@ -2035,11 +2193,17 @@ function AIAssistant() {
                       <div className="ai-preset-grid">
                         <TemperatureField
                           value={formData.temperature}
-                          onPick={(temperature) => setFormData({ ...formData, temperature })}
+                          onPick={(temperature) => {
+                            invalidateTestResult();
+                            setFormData({ ...formData, temperature });
+                          }}
                         />
                         <TokenField
                           value={formData.maxTokens}
-                          onPick={(maxTokens) => setFormData({ ...formData, maxTokens })}
+                          onPick={(maxTokens) => {
+                            invalidateTestResult();
+                            setFormData({ ...formData, maxTokens });
+                          }}
                         />
                       </div>
                       <label className="ai-checkbox">
@@ -2049,47 +2213,72 @@ function AIAssistant() {
                           onChange={(e) =>
                             setFormData({ ...formData, isDefault: e.target.checked })
                           }
+                          disabled={modalBusy}
                         />
                         {t("models.setDefaultCheckbox")}
                       </label>
                     </div>
-
-                    <div className="ai-test-row">
-                      <button
-                        className="btn btn-secondary btn-small"
-                        onClick={handleTestConnection}
-                        disabled={testStatus.testing || !canTest}
-                      >
-                        {testStatus.testing ? (
-                          <Loader2 size={12} className="spin" />
-                        ) : (
-                          <Check size={12} />
-                        )}
-                        {testStatus.testing ? t("models.testing") : t("models.testConnection")}
-                      </button>
-                      {testStatus.result && (
-                        <span
-                          className={`ai-test-result ${
-                            testStatus.result.success ? "success" : "error"
-                          }`}
-                        >
-                          {testStatus.result.message}
-                        </span>
-                      )}
-                    </div>
                   </div>
                 </div>
-                <div className="modal-actions">
-                  <button className="btn btn-secondary" onClick={closeModal}>
-                    {t("models.cancel")}
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                  >
-                    {editingId ? t("models.save") : t("models.addModel")}
-                  </button>
+                <div className="modal-actions modal-actions--split">
+                  <div className="modal-actions-secondary">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => void handleTestConnection()}
+                      disabled={modalBusy || !canTest}
+                      title={
+                        !canTest && missingTestFields.length > 0
+                          ? t("models.missingFields", {
+                              fields: missingTestFields.join(t("models.missingSep")),
+                            })
+                          : undefined
+                      }
+                    >
+                      {testStatus.testing ? (
+                        <Loader2 size={12} className="spin" />
+                      ) : (
+                        <Check size={12} />
+                      )}
+                      {testStatus.testing ? t("models.testing") : t("models.testConnection")}
+                    </button>
+                    {testStatus.result && (
+                      <span
+                        className={`ai-test-result ${
+                          testStatus.result.success ? "success" : "error"
+                        }`}
+                        title={testStatus.result.message}
+                      >
+                        {testStatus.result.message}
+                      </span>
+                    )}
+                  </div>
+                  <div className="modal-actions-primary">
+                    {!canSubmit && !modalBusy && missingSubmitFields.length > 0 && (
+                      <span className="ai-modal-missing" title={missingSubmitFields.join(", ")}>
+                        {t("models.missingFields", {
+                          fields: missingSubmitFields.join(t("models.missingSep")),
+                        })}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={closeModal}
+                      disabled={modalBusy}
+                    >
+                      {t("models.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void handleSubmit()}
+                      disabled={!canSubmit || modalBusy}
+                      title={t("models.submitShortcut")}
+                    >
+                      {editingId ? t("models.save") : t("models.addModel")}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

@@ -5132,7 +5132,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl);
   width: 90%;
-  max-width: min(420px, calc(100vw - 32px));
+  max-width: min(var(--modal-sm), calc(100vw - 32px));
   box-shadow: var(--surface-highlight), var(--float-shadow);
   animation: slideUp 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
   overflow: hidden;
@@ -6396,10 +6396,24 @@
   color: var(--text-2);
 }
 
-/* ── Modal card wide ── */
+/* ── Modal card wide（扫描应用等）；选择器须压过 .app-launcher-tool .modal-card 的 sm 上限 ── */
 
-.modal-card-wide {
-  max-width: min(680px, calc(100vw - 32px));
+.app-launcher-tool .modal-card.modal-card-wide {
+  max-width: min(var(--modal-lg), calc(100vw - 32px));
+  max-height: var(--modal-max-vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.app-launcher-tool .modal-card.modal-card-wide .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-launcher-tool .modal-card.modal-card-wide .al-scan-list {
+  flex: 1 1 auto;
+  max-height: min(60vh, 560px);
 }
 
 /* 卡片网格交给 auto-fill 自己收敛列数，不再用断点强制单列：

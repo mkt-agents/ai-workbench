@@ -383,13 +383,10 @@
 
 .hosts-editor::placeholder { color: var(--text-3); }
 
-/* 添加/编辑配置：与 models-modal / us-edit-modal 同宽（盖过全局 .modal 380px） */
+/* 添加/编辑配置：宽度走 modal.css 的 lg 档 */
 .modal.hosts-profile-modal {
   display: flex;
   flex-direction: column;
-  width: 640px;
-  max-width: 92vw;
-  max-height: 88vh;
   padding-bottom: 16px;
 }
 

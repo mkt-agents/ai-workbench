@@ -67,6 +67,14 @@
      工具页 .devtools-tool）都引用它，不要再各写一个 px 值。 */
   --page-max-width: 1440px;
 
+  /* 弹框宽度三档（.modal 默认 sm；表单/列表用 md/lg）。
+     域样式只加语义类，不要再写独立 px 宽度。 */
+  --modal-sm: 400px;
+  --modal-md: 560px;
+  --modal-lg: 640px;
+  --modal-max-vw: 92vw;
+  --modal-max-vh: 88vh;
+
   /* 阴影 — 极轻分层 */
   --shadow-xs: 0 1px 1px rgba(15, 23, 42, 0.03);
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 3px 12px rgba(15, 23, 42, 0.04);

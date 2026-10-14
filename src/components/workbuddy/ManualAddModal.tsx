@@ -48,8 +48,8 @@ export default function ManualAddModal({ editAccount, onClose, onSaved }: Props)
   };
 
   return (
-    <div className="modal-overlay" onClick={saving ? undefined : onClose}>
-      <div className="modal wb-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal wb-modal">
         <ModalTitleRow title={t(editAccount ? "editAccount" : "manualAdd")} onClose={onClose} disabled={saving} />
         {editAccount ? (
           <>

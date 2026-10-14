@@ -13,8 +13,8 @@ export default function ParamModal(props: Props) {
   const { t } = useTranslation("quickask");
   const { paramValues, setParamValues, onClose, onConfirm } = props;
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal snippets-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal snippets-modal">
         <ModalTitleRow title={t("fillParams")} onClose={onClose} />
         {Object.keys(paramValues).map((key) => (
           <div className="input-group" key={key}>

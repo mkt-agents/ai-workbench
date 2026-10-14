@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, QuickAskSession, QuickAskTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, QuickAskSession, QuickAskTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -40,6 +40,7 @@ type DbTable =
   | 'ai_models'
   | 'cloudflared_profiles'
   | 'snippets'
+  | 'drafts'
   | 'quick_ask_sessions'
   | 'json_tool_history'
   | 'quick_app_launchers';
@@ -425,6 +426,32 @@ export const storage = {
           kind: item.kind ?? 'text',
           scenario: item.scenario ?? null,
           task_bind: item.taskBind || null,
+        }))
+      );
+    },
+  },
+  drafts: {
+    load: async (): Promise<Draft[]> => {
+      const rows = await loadRows('drafts');
+      return rows.map((r) => ({
+        id: r['id'] as string,
+        title: (r['title'] as string) || '',
+        content: (r['content'] as string) || '',
+        pinned: Boolean(Number(r['pinned'] ?? 0)),
+        createdAt: r['created_at'] as string,
+        updatedAt: r['updated_at'] as string,
+      }));
+    },
+    save: async (items: Draft[]): Promise<void> => {
+      await saveRows(
+        'drafts',
+        items.map((item) => ({
+          id: item.id,
+          title: item.title || '',
+          content: item.content,
+          pinned: item.pinned ? 1 : 0,
+          created_at: item.createdAt,
+          updated_at: item.updatedAt,
         }))
       );
     },

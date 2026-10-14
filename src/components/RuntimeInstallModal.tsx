@@ -91,8 +91,8 @@ function RuntimeInstallModal({ kind, onClose, onInstalled }: Props) {
     : "";
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+    <div className="modal-overlay">
+      <div className="modal modal-md">
         <ModalTitleRow
           title={t("installTitle", { name: t(kind) })}
           onClose={onClose}

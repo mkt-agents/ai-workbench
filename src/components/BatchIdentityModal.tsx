@@ -29,8 +29,8 @@ function BatchIdentityModal({ selectedCount, onClose, onPick }: Props) {
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal batch-identity-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal batch-identity-modal">
         <ModalTitleRow
           title={t("batch.bindTitle", { count: selectedCount })}
           onClose={onClose}

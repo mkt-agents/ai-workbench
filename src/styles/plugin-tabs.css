@@ -759,19 +759,10 @@
   white-space: nowrap;
 }
 
-/* Edit modal wider for code */
-.us-edit-modal {
-  width: 640px;
-  max-width: calc(100vw - 48px) !important;
-}
+/* us-edit：宽度走 modal.css 的 lg 档 */
 
-/* Narrow windows: stack the top row and let the modal breathe */
+/* Narrow windows: stack the top row */
 @media (max-width: 560px) {
-  .us-edit-modal {
-    width: calc(100vw - 24px);
-    max-width: calc(100vw - 24px) !important;
-  }
-
   .us-form-top {
     flex-direction: column;
     gap: 12px;
@@ -989,9 +980,7 @@
 }
 
 /* Import from URL modal */
-.us-import-modal {
-  max-width: 480px !important;
-}
+/* us-import：宽度走 modal.css 的 md 档 */
 
 .us-import-body {
   padding: 16px 20px;

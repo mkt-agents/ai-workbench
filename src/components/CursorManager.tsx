@@ -1487,8 +1487,8 @@ function CursorManager() {
       </div>
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => !busy && setShowModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal">
             <ModalTitleRow
               title={editingAccount ? t("cursor.editTitle") : t("cursor.addTitle")}
               onClose={() => setShowModal(false)}

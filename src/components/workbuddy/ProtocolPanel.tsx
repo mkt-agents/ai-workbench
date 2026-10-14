@@ -266,8 +266,8 @@ export default function ProtocolPanel({ settings, onClose, onSaved }: Props) {
   };
 
   return (
-    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
-      <div className="modal wb-modal wb-modal-wide" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal wb-modal wb-modal-wide">
         <ModalTitleRow title={t("protocolTitle")} onClose={onClose} disabled={busy} />
 
         <section className="wb-probe">

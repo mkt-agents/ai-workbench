@@ -245,8 +245,8 @@ export default function ScanAddFlow({ onClose, onSaved, onFallBackToPaste, onOpe
     : "";
 
   return (
-    <div className="modal-overlay" onClick={busy ? undefined : close}>
-      <div className={`modal wb-modal ${phase === "confirming" ? "wb-modal-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className={`modal wb-modal ${phase === "confirming" ? "wb-modal-wide" : ""}`}>
         <ModalTitleRow
           title={renewAccount ? t("renewTitle", { label: renewAccount.label }) : t("scanTitle")}
           onClose={close}

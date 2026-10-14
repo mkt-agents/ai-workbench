@@ -1,11 +1,38 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useGlobalStore } from "../core/store";
+import type { AppTheme } from "../core/types";
 import { matchUrlPattern } from "./webTools";
+import {
+  APP_THEME_CHANGED_EVENT,
+  normalizeAppTheme,
+  readPersistedTheme,
+  toNativeTheme,
+} from "./theme";
 
 /** logical key → WebviewWindow (survives for focus/close in this session) */
 const windows = new Map<string, WebviewWindow>();
 let defaultWindow: WebviewWindow | null = null;
+let browserThemeSyncStarted = false;
+
+function currentNativeTheme() {
+  return toNativeTheme(normalizeAppTheme(readPersistedTheme() ?? "glass"));
+}
+
+/** Keep open tool windows' title bars in sync when Settings changes theme. */
+function ensureBrowserThemeSync() {
+  if (browserThemeSyncStarted) return;
+  browserThemeSyncStarted = true;
+  void listen<AppTheme>(APP_THEME_CHANGED_EVENT, (event) => {
+    const native = toNativeTheme(normalizeAppTheme(event.payload));
+    for (const win of windows.values()) {
+      void win.setTheme(native).catch(() => {
+        /* window may have closed */
+      });
+    }
+  });
+}
 
 type ClosedListener = (key: string) => void;
 const closedListeners = new Set<ClosedListener>();
@@ -110,11 +137,15 @@ async function createBrowserWindow(url: string, width: number, height: number, m
   // Recover after main-window reload: label may still exist
   const preexisting = await WebviewWindow.getByLabel(label);
   if (preexisting) {
+    ensureBrowserThemeSync();
     windows.set(mapKey, preexisting);
     preexisting.once("tauri://destroyed", () => {
       windows.delete(mapKey);
       if (defaultWindow === preexisting) defaultWindow = null;
       notifyClosed(mapKey);
+    });
+    void preexisting.setTheme(currentNativeTheme()).catch(() => {
+      /* ignore */
     });
     await focusWindow(preexisting);
     return preexisting;
@@ -131,18 +162,26 @@ async function createBrowserWindow(url: string, width: number, height: number, m
     parsed = new URL("about:blank");
   }
   const userscripts = getMatchingUserscripts(parsed.href);
+  ensureBrowserThemeSync();
   await invoke<string>("open_browser_window_with_toolbar", {
     url,
     width,
     height,
     label,
     userscripts,
+    theme: currentNativeTheme(),
   });
 
   const win = await WebviewWindow.getByLabel(label);
   if (!win) {
     throw new Error("窗口创建后无法获取实例");
   }
+
+  // Builder theme covers create; set again in case the window was reused
+  // before the theme arg existed, or the OS ignored the builder hint.
+  void win.setTheme(currentNativeTheme()).catch(() => {
+    /* ignore */
+  });
 
   windows.set(mapKey, win);
   win.once("tauri://destroyed", () => {

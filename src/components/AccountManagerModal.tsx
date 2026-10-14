@@ -211,8 +211,8 @@ function AccountManagerModal({ onClose }: Props) {
   }, [hostConfigs]);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal repos-accounts-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal repos-accounts-modal">
         {view === "list" ? (
           <>
             <ModalTitleRow

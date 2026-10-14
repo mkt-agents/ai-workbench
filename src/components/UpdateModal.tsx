@@ -187,8 +187,8 @@ function UpdateModal({ version, fallbackHtmlUrl, onClose }: Props) {
       : "";
 
   return (
-    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
-      <div className="modal update-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal update-modal" role="dialog" aria-modal="true">
         <ModalTitleRow
           title={t("title", { version: targetVersion })}
           onClose={onClose}

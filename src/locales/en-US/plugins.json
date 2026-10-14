@@ -44,6 +44,7 @@
   "list": "Site list",
   "open": "Open",
   "hint": "Click a site to open it in a separate window",
+  "networkOpenTip": "Can't open an internal or test site? Connect to VPN first, then check Hosts / system proxy — or try the same URL in your system browser.",
   "urlPlaceholder": "Enter a URL (https:// optional) and Open…",
   "openUrlLabel": "Open URL",
   "active": "Open",

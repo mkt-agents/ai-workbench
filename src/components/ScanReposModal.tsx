@@ -106,8 +106,8 @@ function ScanReposModal({ rootPath, initialRepos, onClose, onAdded }: Props) {
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal scan-repos-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal scan-repos-modal">
         <ModalTitleRow
           title={t("scan.title", { count: repos.length })}
           onClose={onClose}

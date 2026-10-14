@@ -4,7 +4,7 @@ import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
   RecentProject, WebPlugin, UserScript, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
-  Snippet, QuickAskSession, CursorUpdateState, CursorCleanupResult,
+  Snippet, Draft, QuickAskSession, CursorUpdateState, CursorCleanupResult,
   QuickAppLauncher,
 } from './types';
 import { storage } from './storage';
@@ -308,6 +308,12 @@ interface StoreState extends GlobalState, Invocations {
   restoreSnippet: (snippet: Snippet) => Promise<void>;
   bumpSnippetUse: (id: string) => Promise<void>;
 
+  // Drafts (mid-task scratch)
+  loadDrafts: () => Promise<void>;
+  addDraft: (draft: Omit<Draft, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateDraft: (id: string, updates: Partial<Draft>) => Promise<void>;
+  deleteDraft: (id: string) => Promise<void>;
+
   // Quick-ask sessions
   loadQuickAskSessions: () => Promise<void>;
   /** Insert or update a session (by id); caps the stored list at 30 by updatedAt. */
@@ -356,6 +362,7 @@ export const useGlobalStore = create<StoreState>()(
       aiModels: [],
       cloudflaredProfiles: [],
       snippets: [],
+      drafts: [],
       quickAskSessions: [],
       quickAppLaunchers: [],
 
@@ -1221,6 +1228,38 @@ export const useGlobalStore = create<StoreState>()(
         set({ snippets });
       }),
 
+      loadDrafts: async () => withTable("drafts", async () => {
+        const drafts = await storage.drafts.load();
+        set({ drafts });
+      }),
+
+      addDraft: async (draft) => withTable("drafts", async () => {
+        const now = new Date().toISOString();
+        const next: Draft = {
+          ...draft,
+          id: `draft-${crypto.randomUUID()}`,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const drafts = [next, ...get().drafts];
+        await storage.drafts.save(drafts);
+        set({ drafts });
+      }),
+
+      updateDraft: async (id, updates) => withTable("drafts", async () => {
+        const drafts = get().drafts.map((d) =>
+          d.id === id ? { ...d, ...updates, updatedAt: new Date().toISOString() } : d
+        );
+        await storage.drafts.save(drafts);
+        set({ drafts });
+      }),
+
+      deleteDraft: async (id) => withTable("drafts", async () => {
+        const drafts = get().drafts.filter((d) => d.id !== id);
+        await storage.drafts.save(drafts);
+        set({ drafts });
+      }),
+
       loadQuickAskSessions: async () => withTable("quick_ask_sessions", async () => {
         const sessions = await storage.quickAskSessions.load();
         set({ quickAskSessions: sessions });
@@ -1366,6 +1405,7 @@ export const useGlobalStore = create<StoreState>()(
           get().loadAIModels(),
           get().loadCloudflaredProfiles(),
           get().loadSnippets(),
+          get().loadDrafts(),
           get().loadQuickAskSessions(),
           get().loadQuickAppLaunchers(),
         ]);

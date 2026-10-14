@@ -17,6 +17,7 @@ import {
   Layers,
   Cloud,
   FileText,
+  StickyNote,
   PanelLeftClose,
   PanelLeftOpen,
   KeyRound,
@@ -35,6 +36,7 @@ import DeepSeekHarness from "./components/DeepSeekHarness";
 import VersionSwitcher from "./components/VersionSwitcher";
 import CloudflaredManager from "./components/CloudflaredManager";
 import SnippetsManager from "./components/SnippetsManager";
+import DraftsManager from "./components/DraftsManager";
 import DevTools from "./components/DevTools";
 import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
@@ -61,6 +63,7 @@ type Tab =
   | "runtime"
   | "cloudflared"
   | "snippets"
+  | "drafts"
   | "devtools"
   | "app-launcher";
 
@@ -87,7 +90,7 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -233,6 +236,7 @@ function App() {
         },
         { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
         { id: "snippets", labelKey: "snippets", icon: <FileText size={16} /> },
+        { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
       ],
     },
     {
@@ -541,6 +545,7 @@ function App() {
                 </div>
               )}
               {activeTab === "snippets" && <SnippetsManager />}
+              {activeTab === "drafts" && <DraftsManager />}
               {activeTab === "plugins" && <PluginBrowser />}
               {activeTab === "cloudflared" && <CloudflaredManager />}
               {activeTab === "devtools" && (

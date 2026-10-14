@@ -46,11 +46,42 @@
   border-radius: var(--radius-xl);
   padding: 20px 22px 18px;
   width: 90%;
-  max-width: min(380px, calc(100vw - 32px));
+  max-width: min(var(--modal-sm), calc(100vw - 32px));
   box-sizing: border-box;
   overflow: hidden;
   animation: slideUp 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
   box-shadow: var(--surface-highlight), var(--float-shadow);
+}
+
+/* 尺寸档：sm=默认 400 / md=560 / lg=640。语义类挂在这里，避免各页再写宽度。 */
+.modal.modal-md,
+.modal.drafts-modal,
+.modal.update-modal,
+.modal.repos-accounts-modal,
+.modal.wb-modal,
+.modal.plugin-edit-modal,
+.modal.us-import-modal {
+  width: var(--modal-md);
+  max-width: min(var(--modal-md), var(--modal-max-vw));
+  max-height: var(--modal-max-vh);
+}
+
+.modal.modal-lg,
+.modal.models-modal,
+.modal.snippets-modal,
+.modal.hosts-profile-modal,
+.modal.scan-repos-modal,
+.modal.us-edit-modal,
+.modal.wb-modal-wide {
+  width: var(--modal-lg);
+  max-width: min(var(--modal-lg), var(--modal-max-vw));
+  max-height: var(--modal-max-vh);
+}
+
+/* WorkBuddy：内容可能很高，允许弹框自身滚动（关闭钮始终够得着） */
+.modal.wb-modal,
+.modal.wb-modal-wide {
+  overflow-y: auto;
 }
 
 /* 磨砂主题：浮层实底 + 顶缘高光；遮罩已经糊过一层，弹框本身不再加 backdrop-filter。 */
@@ -168,7 +199,7 @@
 
 /* Confirm Modal */
 .confirm-modal {
-  max-width: min(400px, calc(100vw - 32px));
+  max-width: min(var(--modal-sm), calc(100vw - 32px));
   padding: 22px 22px 18px;
 }
 

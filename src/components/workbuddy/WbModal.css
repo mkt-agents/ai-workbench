@@ -18,25 +18,7 @@
   line-height: 1.5;
 }
 
-/* `.modal` 的 max-width: min(380px, …) 在 styles.css 里、层叠更晚，单类覆盖会被压回
-   380px。必须用 .modal.wb-modal-* 双类把宽度与上限一起抬起来。
-   另外 .modal 是 overflow:hidden 且没有高度上限：探针表 + 16 行 JSON 会把弹窗顶出视口，
-   标题行的关闭 X 都点不到，所以这里补上 max-height 让弹窗内部滚动。 */
-.modal.wb-modal,
-.modal.wb-modal-wide {
-  max-height: calc(100vh - 32px);
-  overflow-y: auto;
-}
-
-.modal.wb-modal {
-  width: min(460px, 92vw);
-  max-width: min(460px, calc(100vw - 32px));
-}
-
-.modal.wb-modal-wide {
-  width: min(560px, 94vw);
-  max-width: min(560px, calc(100vw - 32px));
-}
+/* 宽度 / overflow 走 modal.css 的 md / lg 档 */
 
 .wb-segmented {
   display: inline-flex;

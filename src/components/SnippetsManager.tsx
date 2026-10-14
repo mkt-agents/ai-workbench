@@ -749,109 +749,117 @@ export default function SnippetsManager() {
       </div>
 
       {editing && (
-        <div className="modal-overlay" onClick={() => setEditing(null)}>
-          <div className="modal snippets-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal snippets-modal">
             <ModalTitleRow title={editing.id ? t("editTitle") : t("addTitle")} onClose={() => setEditing(null)} />
-            <div className="input-group">
-              <label className="input-label">{t("name")}</label>
-              <input
-                className="input-field"
-                value={editing.name || ""}
-                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                autoFocus
-              />
-            </div>
-            <div className="input-group">
-              <label className="input-label">{t("kindLabel")}</label>
-              <select
-                className="input-field"
-                value={editing.kind ?? "text"}
-                onChange={(e) => {
-                  const kind = e.target.value as SnippetKind;
-                  setEditing({
-                    ...editing,
-                    kind,
-                    scenario: kind === "prompt" ? editing.scenario ?? "general" : undefined,
-                  });
-                }}
-              >
-                <option value="text">{t("kindText")}</option>
-                <option value="prompt">{t("kindPrompt")}</option>
-              </select>
-            </div>
-            {(editing.kind ?? "text") !== "prompt" && (
-              <div className="input-group">
-                <label className="input-label">{t("taskBindLabel")}</label>
-                <select
-                  className="input-field"
-                  value={editing.taskBind || ""}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      taskBind: e.target.value as SnippetTaskBind | "",
-                    })
-                  }
-                >
-                  {TASK_BIND_OPTIONS.map((opt) => (
-                    <option key={opt || "none"} value={opt}>
-                      {opt ? t(`taskBind.${opt}`) : t("taskBind.none")}
-                    </option>
-                  ))}
-                </select>
-                <span className="setting-hint">{t("taskBindHint")}</span>
+            <div className="snippets-modal-body">
+              <div className="snippets-modal-row">
+                <div className="input-group">
+                  <label className="input-label">{t("name")}</label>
+                  <input
+                    className="input-field"
+                    value={editing.name || ""}
+                    onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                    autoFocus
+                  />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">{t("kindLabel")}</label>
+                  <select
+                    className="input-field"
+                    value={editing.kind ?? "text"}
+                    onChange={(e) => {
+                      const kind = e.target.value as SnippetKind;
+                      setEditing({
+                        ...editing,
+                        kind,
+                        scenario: kind === "prompt" ? editing.scenario ?? "general" : undefined,
+                        taskBind: kind === "prompt" ? "" : editing.taskBind,
+                      });
+                    }}
+                  >
+                    <option value="text">{t("kindText")}</option>
+                    <option value="prompt">{t("kindPrompt")}</option>
+                  </select>
+                </div>
               </div>
-            )}
-            {editing.kind === "prompt" && (
-              <div className="input-group">
-                <label className="input-label">{t("scenarioLabel")}</label>
-                <select
-                  className="input-field"
-                  value={editing.scenario ?? "general"}
-                  onChange={(e) => setEditing({ ...editing, scenario: e.target.value })}
-                >
-                  {PROMPT_SCENARIOS.map((sc) => (
-                    <option key={sc} value={sc}>
-                      {ta(`prompts.scenarios.${sc}`)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <div className="input-group">
-              <label className="input-label">{t("tags")}</label>
-              <input
-                className="input-field"
-                value={editing.tags || ""}
-                onChange={(e) => setEditing({ ...editing, tags: e.target.value })}
-              />
-            </div>
-            <div className="input-group">
-              <label className="input-label">{t("content")}</label>
-              <textarea
-                className="input-field snippets-content-editor"
-                rows={8}
-                value={editing.content || ""}
-                onChange={(e) => setEditing({ ...editing, content: e.target.value })}
-                spellCheck={false}
-              />
-            </div>
-            <div className="input-group">
-              <label className="input-label">{t("params")}</label>
-              <p className="snippets-params-hint">{t("paramsDerivedHint")}</p>
-              {(() => {
-                const derived = parseParamNames("", editing.content || "");
-                return derived.length > 0 ? (
-                  <div className="snippets-params-derived" aria-live="polite">
-                    {derived.map((p) => (
-                      <code key={p} className="snippet-param">
-                        {p}
-                      </code>
-                    ))}
+              <div className="snippets-modal-row">
+                {(editing.kind ?? "text") !== "prompt" ? (
+                  <div className="input-group">
+                    <label className="input-label">{t("taskBindLabel")}</label>
+                    <select
+                      className="input-field"
+                      value={editing.taskBind || ""}
+                      onChange={(e) =>
+                        setEditing({
+                          ...editing,
+                          taskBind: e.target.value as SnippetTaskBind | "",
+                        })
+                      }
+                    >
+                      {TASK_BIND_OPTIONS.map((opt) => (
+                        <option key={opt || "none"} value={opt}>
+                          {opt ? t(`taskBind.${opt}`) : t("taskBind.none")}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="setting-hint">{t("taskBindHint")}</span>
                   </div>
                 ) : (
-                  <p className="snippets-params-empty">{t("paramsNone")}</p>
-                );
-              })()}
+                  <div className="input-group">
+                    <label className="input-label">{t("scenarioLabel")}</label>
+                    <select
+                      className="input-field"
+                      value={editing.scenario ?? "general"}
+                      onChange={(e) => setEditing({ ...editing, scenario: e.target.value })}
+                    >
+                      {PROMPT_SCENARIOS.map((sc) => (
+                        <option key={sc} value={sc}>
+                          {ta(`prompts.scenarios.${sc}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="input-group">
+                  <label className="input-label">{t("tags")}</label>
+                  <input
+                    className="input-field"
+                    value={editing.tags || ""}
+                    onChange={(e) => setEditing({ ...editing, tags: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="input-group snippets-modal-content">
+                <label className="input-label">{t("content")}</label>
+                <textarea
+                  className="input-field snippets-content-editor"
+                  rows={10}
+                  value={editing.content || ""}
+                  onChange={(e) => setEditing({ ...editing, content: e.target.value })}
+                  spellCheck={false}
+                />
+              </div>
+              <div className="snippets-params-block">
+                <div className="snippets-params-block-head">
+                  <span className="input-label">{t("params")}</span>
+                  <span className="snippets-params-hint">{t("paramsDerivedHint")}</span>
+                </div>
+                {(() => {
+                  const derived = parseParamNames("", editing.content || "");
+                  return derived.length > 0 ? (
+                    <div className="snippets-params-derived" aria-live="polite">
+                      {derived.map((p) => (
+                        <code key={p} className="snippet-param">
+                          {p}
+                        </code>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="snippets-params-empty">{t("paramsNone")}</p>
+                  );
+                })()}
+              </div>
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>
@@ -871,8 +879,8 @@ export default function SnippetsManager() {
       )}
 
       {useTarget && (
-        <div className="modal-overlay" onClick={() => setUseTarget(null)}>
-          <div className="modal snippets-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal snippets-modal">
             <ModalTitleRow
               title={Object.keys(paramValues).length ? t("fillParams") : t("useTitle")}
               onClose={() => setUseTarget(null)}

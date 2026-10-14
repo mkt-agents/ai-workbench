@@ -1277,8 +1277,8 @@ function AppLauncherTool() {
 
       {/* ── Add/Edit Modal ── */}
       {showForm && (
-        <div className="modal-overlay" onClick={() => setShowForm(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal-card">
             <div className="modal-header">
               <span className="modal-title">
                 {editingId ? t("appLauncher.editTitle") : t("appLauncher.addTitle")}
@@ -1342,8 +1342,8 @@ function AppLauncherTool() {
 
       {/* ── Scan Modal ── */}
       {scanDialogOpen && (
-        <div className="modal-overlay" onClick={closeScanDialog}>
-          <div className="modal-card modal-card-wide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal-card modal-card-wide">
             <div className="modal-header">
               <span className="modal-title">{t("appLauncher.scan.title")}</span>
               <button type="button" className="modal-close-btn" onClick={closeScanDialog} aria-label={t("common.clearSearch")}>
@@ -1442,8 +1442,8 @@ function AppLauncherTool() {
 
       {/* ── Group Manager Modal ── */}
       {groupManagerOpen && (
-        <div className="modal-overlay" onClick={() => { setGroupManagerOpen(false); setEditingGroup(null); }}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal-card">
             <div className="modal-header">
               <span className="modal-title">{t("appLauncher.groupManager.title")}</span>
               <button

@@ -43,6 +43,7 @@
   "list": "站点列表",
   "open": "打开",
   "hint": "点击站点在独立窗口打开网页",
+  "networkOpenTip": "内网或测试站打不开时：先连 VPN，再检查本机 Hosts / 系统代理；也可先用系统浏览器打开同一地址对照。",
   "urlPlaceholder": "输入网址（可省略 https://）后打开…",
   "openUrlLabel": "打开网页",
   "active": "已打开",

@@ -596,38 +596,123 @@
   font-size: 13px;
 }
 
-.snippets-modal {
-  max-width: min(520px, calc(100vw - 32px));
+/* 新建/编辑/使用：宽度走 modal.css 的 lg 档 */
+.modal.snippets-modal {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 16px;
+}
+
+.snippets-modal .modal-title-row {
+  flex-shrink: 0;
+}
+
+.snippets-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.snippets-modal-body > .input-group,
+.snippets-modal-row > .input-group {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.snippets-modal-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  min-width: 0;
+}
+
+.snippets-modal-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.snippets-modal-content .snippets-content-editor {
+  flex: 1 1 auto;
+  min-height: 180px;
+}
+
+@media (max-width: 560px) {
+  .snippets-modal-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.snippets-modal .modal-actions {
+  flex-shrink: 0;
+  margin-top: 14px;
+}
+
+.snippets-modal .setting-hint {
+  display: block;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
 }
 
 /* Live resolved-text preview inside the "use snippet" modal. */
 .snippets-use-preview {
   margin: 0;
-  max-height: 160px;
+  max-height: 200px;
   overflow: auto;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-2);
   width: 100%;
   box-sizing: border-box;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.55;
   word-break: break-word;
 }
 
 .snippets-content-editor {
   width: 100%;
-  resize: vertical;
-  min-height: 140px;
+  resize: none;
+  min-height: 180px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
 }
 
+.snippets-params-block {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+}
+
+.snippets-params-block-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.snippets-params-block-head .input-label {
+  margin: 0;
+}
+
 .snippets-params-hint {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-3);
@@ -644,6 +729,13 @@
   flex-wrap: wrap;
   gap: 6px;
   min-height: 22px;
+}
+
+.snippets-params-derived .snippet-param {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .toast .toast-action {

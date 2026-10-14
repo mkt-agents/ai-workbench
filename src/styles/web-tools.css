@@ -298,6 +298,15 @@
   line-height: 1.6;
 }
 
+.plugin-network-tip {
+  margin: 0;
+  padding: 6px 14px 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
 .plugin-item {
   display: flex;
   align-items: center;
@@ -524,9 +533,7 @@
 
 /* Edit Modal */
 .plugin-edit-modal {
-  width: 440px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 32px);
+  /* 宽度走 modal.css 的 md 档（us-edit 另挂 lg） */
   padding: 0;
   border-radius: var(--radius-xl);
   overflow: hidden;

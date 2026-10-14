@@ -608,11 +608,8 @@ function HostsManager() {
       </div>
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div
-            className="modal hosts-profile-modal"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="modal-overlay">
+          <div className="modal hosts-profile-modal">
             <ModalTitleRow
               title={editing ? t("editProfile") : t("addProfile")}
               onClose={() => setShowModal(false)}

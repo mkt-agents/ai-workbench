@@ -72,10 +72,7 @@
 
 /* ---------- Update modal (changelog preview + in-app upgrade) ---------- */
 
-/* .modal 默认 380px 窄框，装不下更新日志；这里只放宽自身，不动全局弹框。 */
-.update-modal {
-  max-width: min(560px, calc(100vw - 32px));
-}
+/* 宽度走 modal.css 的 md 档 */
 
 /* 元信息行：从哪个版本升上来、装的是哪种安装包、多大。
    没有这一行时用户只能从标题猜"点了会发生什么"。 */

@@ -121,8 +121,8 @@ function RepoBindingModal({ repoPath, onClose, onSaved }: Props) {
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal">
         <ModalTitleRow
           title={existing ? t("repos.editBindingTitle") : t("repos.bindTitle")}
           onClose={onClose}

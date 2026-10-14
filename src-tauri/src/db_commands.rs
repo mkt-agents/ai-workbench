@@ -23,6 +23,7 @@ pub enum DbTable {
     AiModels,
     CloudflaredProfiles,
     Snippets,
+    Drafts,
     WebPluginHistory,
     QuickAskSessions,
     JsonToolHistory,
@@ -47,6 +48,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "ai_models" => Some(DbTable::AiModels),
         "cloudflared_profiles" => Some(DbTable::CloudflaredProfiles),
         "snippets" => Some(DbTable::Snippets),
+        "drafts" => Some(DbTable::Drafts),
         "web_plugin_history" => Some(DbTable::WebPluginHistory),
         "quick_ask_sessions" => Some(DbTable::QuickAskSessions),
         "json_tool_history" => Some(DbTable::JsonToolHistory),
@@ -70,6 +72,7 @@ pub(crate) fn load_sql(table: DbTable) -> &'static str {
         DbTable::AiModels => "SELECT * FROM ai_models ORDER BY is_default DESC, created_at ASC",
         DbTable::CloudflaredProfiles => "SELECT * FROM cloudflared_profiles ORDER BY created_at DESC",
         DbTable::Snippets => "SELECT * FROM snippets ORDER BY use_count DESC, updated_at DESC",
+        DbTable::Drafts => "SELECT * FROM drafts ORDER BY pinned DESC, updated_at DESC",
         DbTable::WebPluginHistory => "SELECT * FROM web_plugin_history ORDER BY opened_at DESC LIMIT 100",
         DbTable::QuickAskSessions => "SELECT * FROM quick_ask_sessions ORDER BY updated_at DESC LIMIT 30",
         DbTable::JsonToolHistory => "SELECT * FROM json_tool_history ORDER BY id DESC LIMIT 20",
@@ -94,6 +97,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::AiModels => "DELETE FROM ai_models",
         DbTable::CloudflaredProfiles => "DELETE FROM cloudflared_profiles",
         DbTable::Snippets => "DELETE FROM snippets",
+        DbTable::Drafts => "DELETE FROM drafts",
         DbTable::WebPluginHistory => "DELETE FROM web_plugin_history",
         DbTable::QuickAskSessions => "DELETE FROM quick_ask_sessions",
         DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
@@ -359,6 +363,19 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_opt_str(obj, "kind").unwrap_or_else(|| "text".to_string()),
                     json_opt_str(obj, "scenario"),
                     json_opt_str(obj, "task_bind"),
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::Drafts => {
+            tx.execute(
+                "INSERT INTO drafts (id, title, content, pinned, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_opt_str(obj, "title").unwrap_or_default(),
+                    json_str(obj, "content")?,
+                    json_bool_as_i64(obj, "pinned")?,
+                    json_str(obj, "created_at")?,
+                    json_str(obj, "updated_at")?,
                 ],
             ).map_err(|e| e.to_string())?;
         }

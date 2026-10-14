@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::time::Duration;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
 use url::Url;
 
@@ -297,6 +297,11 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       '@keyframes aiwbPulse{50%{transform:scale(1.2);color:#34d399;}}' +
       '.url{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8;padding:0 8px;height:30px;display:inline-flex;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;cursor:pointer;border-radius:7px;transition:background 0.15s,color 0.15s;flex:none;}' +
       '.url:hover{color:#fff;background:rgba(255,255,255,0.1);}' +
+      // Tip above the bar when Chromium shows chrome-error:// (VPN / Hosts / proxy).
+      '.net-tip{display:none;max-width:min(420px,calc(100vw - 32px));margin:0 0 8px;padding:8px 10px;border-radius:10px;background:rgba(17,24,39,0.92);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:11.5px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,0.35);}' +
+      '.net-tip.is-on{display:block;}' +
+      '.net-tip strong{color:#fbbf24;font-weight:600;}' +
+      '.host-hidden .net-tip{display:none !important;}' +
       'button.restore{position:fixed;right:12px;bottom:12px;width:32px;height:32px;border-radius:50%;background:rgba(17,24,39,0.78);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);color:#9ca3af;opacity:0.45;box-shadow:0 4px 16px rgba(0,0,0,0.3);transition:opacity 0.2s,background 0.2s,color 0.2s;}' +
       'button.restore:hover{opacity:1;color:#fff;background:rgba(17,24,39,0.95);}' +
       // Shown only while dragging: keeps pointer events flowing when the
@@ -305,6 +310,9 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       '.drag-mask{position:fixed;inset:0;z-index:2147483647;display:none;cursor:grabbing;}' +
       '@media (prefers-reduced-motion:reduce){.bar,.exp,button,.zoom-display,button.restore{transition:none !important;animation:none !important;}}' +
       '</style>' +
+      '<div class="net-tip" id="net-tip" role="status">' +
+      '<strong>打不开？</strong>先确认已连公司 VPN，并检查本机 Hosts / 系统代理；也可点右侧「外开」用系统浏览器试同一地址。' +
+      '</div>' +
       '<div class="bar" id="bar">' +
       '<button class="grip" id="grip" title="拖动工具栏（双击复位）" aria-label="拖动工具栏">' + svg(ICONS.grip) + '</button>' +
       '<span class="badge">AI</span>' +
@@ -353,6 +361,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     var hide = root.getElementById('hide');
     var restoreBtn = root.getElementById('restore');
     var dragMask = root.getElementById('drag-mask');
+    var netTip = root.getElementById('net-tip');
 
     // ---- Zoom ----
     var zoomLevel = parseFloat(store.get(ZOOM_KEY));
@@ -388,6 +397,19 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     zoomReset.addEventListener('click', function () { setZoom(1.0); });
     zoomDisplay.addEventListener('click', function () { setZoom(1.0); });
 
+    // Chromium error interstitial (ERR_CONNECTION_CLOSED etc.) uses chrome-error://
+    // and often shows chromewebdata in the address strip.
+    function isChromeErrorPage() {
+      try {
+        var href = String(location.href || '');
+        return location.protocol === 'chrome-error:'
+          || href.indexOf('chrome-error://') === 0
+          || href.indexOf('chromewebdata') !== -1;
+      } catch (_) {
+        return false;
+      }
+    }
+
     // ---- URL state ----
     function updateState() {
       // 展示精简地址（去掉协议和默认端口，只留域名+路径），完整地址见 title / 复制按钮
@@ -395,6 +417,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       urlEl.textContent = short; // CSS ellipsis handles truncation
       urlEl.title = location.href;
       back.disabled = window.history.length <= 1;
+      if (netTip) netTip.classList.toggle('is-on', isChromeErrorPage());
     }
     window.addEventListener('popstate', updateState);
     window.addEventListener('hashchange', updateState);
@@ -507,11 +530,14 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     // after a page navigation).
     hide.addEventListener('click', function () {
       bar.style.display = 'none';
+      host.classList.add('host-hidden');
       restoreBtn.style.display = 'inline-flex';
     });
     restoreBtn.addEventListener('click', function () {
       bar.style.display = '';
+      host.classList.remove('host-hidden');
       restoreBtn.style.display = 'none';
+      if (netTip) netTip.classList.toggle('is-on', isChromeErrorPage());
     });
 
     // ---- Positioning: drag, re-dock, clamp, persist ----
@@ -690,6 +716,10 @@ pub async fn open_browser_window_with_toolbar(
     height: Option<f64>,
     label: Option<String>,
     userscripts: Option<Vec<UserscriptInit>>,
+    // Frontend-mapped: "light" / "dark" / None|"system" = follow OS.
+    // Do not inherit main.theme() — main is undecorated and reports OS light,
+    // ignoring glass/ice/silver.
+    theme: Option<String>,
 ) -> Result<String, String> {
     if !is_safe_url(&url) {
         return Err("仅允许 http/https 地址".to_string());
@@ -722,13 +752,15 @@ pub async fn open_browser_window_with_toolbar(
     // inject into external-URL webviews).
     let app_handle_for_nav = app.clone();
 
-    // Inherit the main window's theme so the new browser window's title bar
-    // matches the app's current light/dark setting instead of always
-    // falling back to the OS default (which on Windows renders as black
-    // when the Mica effect is not applied).
-    let inherited_theme = app
-        .get_webview_window("main")
-        .and_then(|w| w.theme().ok());
+    // Native title-bar theme comes from the app setting (mapped on the JS
+    // side). Falling back to main.theme() would stick to the OS light bar
+    // while the workbench itself uses glass/ice/silver.
+    let window_theme: Option<Theme> = match theme.as_deref() {
+        Some("light") => Some(Theme::Light),
+        Some("dark") => Some(Theme::Dark),
+        Some("system") | None => None,
+        _ => Some(Theme::Dark),
+    };
 
     // Build combined initialization script: toolbar + matching userscripts
     let mut init_script = String::from(BROWSER_TOOLBAR_INIT_JS);
@@ -759,7 +791,7 @@ pub async fn open_browser_window_with_toolbar(
         .resizable(true)
         .decorations(true)
         .focused(true)
-        .theme(inherited_theme)
+        .theme(window_theme)
         // On Windows, Tauri's default drag-drop handler disables HTML5 drag
         // and drop APIs in the WebView2. These popup windows are plain web
         // tools; page-internal DnD (drag-sort boards, whiteboards, upload

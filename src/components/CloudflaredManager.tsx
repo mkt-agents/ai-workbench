@@ -1361,8 +1361,8 @@ function CloudflaredManager() {
       </div>
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal modal-md">
             <ModalTitleRow title={editing ? t("namedEdit") : t("namedAdd")} onClose={() => setShowModal(false)} />
             <div className="input-group">
               <label className="input-label">{t("namedName")}</label>

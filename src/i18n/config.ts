@@ -13,6 +13,7 @@ import zhCNRuntime from '../locales/zh-CN/runtime.json';
 import zhCNCloudflared from '../locales/zh-CN/cloudflared.json';
 import zhCNQuickask from '../locales/zh-CN/quickask.json';
 import zhCNSnippets from '../locales/zh-CN/snippets.json';
+import zhCNDrafts from '../locales/zh-CN/drafts.json';
 import zhCNDevtools from '../locales/zh-CN/devtools.json';
 import zhCNUpdate from '../locales/zh-CN/update.json';
 import zhCNWorkbuddy from '../locales/zh-CN/workbuddy.json';
@@ -29,6 +30,7 @@ import enUSRuntime from '../locales/en-US/runtime.json';
 import enUSCloudflared from '../locales/en-US/cloudflared.json';
 import enUSQuickask from '../locales/en-US/quickask.json';
 import enUSSnippets from '../locales/en-US/snippets.json';
+import enUSDrafts from '../locales/en-US/drafts.json';
 import enUSDevtools from '../locales/en-US/devtools.json';
 import enUSUpdate from '../locales/en-US/update.json';
 import enUSWorkbuddy from '../locales/en-US/workbuddy.json';
@@ -47,6 +49,7 @@ const resources = {
     cloudflared: zhCNCloudflared,
     quickask: zhCNQuickask,
     snippets: zhCNSnippets,
+    drafts: zhCNDrafts,
     devtools: zhCNDevtools,
     update: zhCNUpdate,
     workbuddy: zhCNWorkbuddy,
@@ -64,6 +67,7 @@ const resources = {
     cloudflared: enUSCloudflared,
     quickask: enUSQuickask,
     snippets: enUSSnippets,
+    drafts: enUSDrafts,
     devtools: enUSDevtools,
     update: enUSUpdate,
     workbuddy: enUSWorkbuddy,
@@ -79,7 +83,7 @@ i18n
     fallbackLng: 'zh-CN',
     supportedLngs: ['zh-CN', 'en-US'],
     defaultNS: 'common',
-    ns: ['common', 'navigation', 'git', 'settings', 'ai', 'hosts', 'plugins', 'runtime', 'cloudflared', 'quickask', 'snippets', 'devtools', 'update', 'workbuddy', 'quota'],
+    ns: ['common', 'navigation', 'git', 'settings', 'ai', 'hosts', 'plugins', 'runtime', 'cloudflared', 'quickask', 'snippets', 'drafts', 'devtools', 'update', 'workbuddy', 'quota'],
 
     detection: {
       order: ['localStorage', 'navigator'],

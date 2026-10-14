@@ -97,8 +97,8 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
   return (
     <>
       {children}
-      <div className="modal-overlay" onClick={() => settle("cancel")}>
-        <div className="modal confirm-modal" role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-overlay">
+        <div className="modal confirm-modal" role="alertdialog" aria-modal="true">
           <div className="confirm-modal-header">
             <div className={`confirm-modal-icon confirm-modal-icon-${state.icon || "danger"}`}>
               {iconMap[state.icon || "danger"]}

@@ -1629,6 +1629,7 @@ function PluginBrowser() {
                 className="btn btn-primary btn-small"
                 onClick={() => address.trim() && openPlugin(address)}
                 disabled={loading || !address.trim()}
+                title={t("networkOpenTip")}
               >
                 <ExternalLink size={12} /> {t("open")}
               </button>
@@ -1666,6 +1667,11 @@ function PluginBrowser() {
           </div>
         )}
       </div>
+      {activeTab === "plugins" && (
+        <p className="plugin-network-tip" role="note">
+          {t("networkOpenTip")}
+        </p>
+      )}
 
       {activeTab === "plugins" && (
       <div className="plugin-shell">
@@ -1855,6 +1861,7 @@ function PluginBrowser() {
                 </div>
                 <p className="plugin-empty-title">{t("noPlugins")}</p>
                 <p className="plugin-hint-text">{t("hint")}</p>
+                <p className="plugin-hint-text">{t("networkOpenTip")}</p>
                 <div className="plugin-empty-actions">
                   <button
                     className="btn btn-primary btn-small"
@@ -2231,8 +2238,8 @@ function PluginBrowser() {
       )}
 
       {formOpen && (
-        <div className="modal-overlay" onClick={closeForm}>
-          <div className="modal plugin-edit-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal plugin-edit-modal">
             <div className="plugin-edit-modal-header">
               {formMode === "edit" ? <Edit2 size={16} /> : <Plus size={16} />}
               {formMode === "edit" ? t("editPlugin") : t("addPlugin")}
@@ -2342,8 +2349,8 @@ function PluginBrowser() {
       )}
 
       {usFormOpen && (
-        <div className="modal-overlay" onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); }}>
-          <div className="modal plugin-edit-modal us-edit-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleUsFormKeyDown}>
+        <div className="modal-overlay">
+          <div className="modal plugin-edit-modal us-edit-modal" onKeyDown={handleUsFormKeyDown}>
             <div className="plugin-edit-modal-header">
               {usEditingId ? <Edit2 size={16} /> : <Plus size={16} />}
               {usEditingId ? t("usEditScript") : t("usAddScript")}
@@ -2529,8 +2536,8 @@ function PluginBrowser() {
       )}
 
       {usImportUrlOpen && (
-        <div className="modal-overlay" onClick={() => { if (!usImporting) setUsImportUrlOpen(false); }}>
-          <div className="modal us-import-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal us-import-modal">
             <div className="plugin-edit-modal-header">
               <Link2 size={16} />
               {t("usImportUrlTitle")}

@@ -135,6 +135,17 @@ export interface Snippet {
   taskBind?: SnippetTaskBind | '';
 }
 
+/** Mid-task scratch note (prompts / scripts); promote to Snippet when lasting. */
+export interface Draft {
+  id: string;
+  /** Optional; list falls back to first line of content when empty. */
+  title: string;
+  content: string;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** One Q&A exchange inside a quick-ask session. */
 export interface QuickAskTurn {
   role: 'user' | 'assistant';
@@ -213,6 +224,7 @@ export interface GlobalState {
   aiModels: AIModelConfig[];
   cloudflaredProfiles: CloudflaredNamedProfile[];
   snippets: Snippet[];
+  drafts: Draft[];
   quickAskSessions: QuickAskSession[];
   quickAppLaunchers: QuickAppLauncher[];
 }
