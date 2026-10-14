@@ -137,4 +137,18 @@ export const mimoSetCookie = (id: number, cookie: string) =>
   invoke<MimoQuotaDto>("mimo_set_cookie", { id, cookie });
 export const mimoOpenLoginWindow = () => invoke<string>("mimo_open_login_window");
 export const mimoCloseLoginWindow = () => invoke<void>("mimo_close_login_window");
-export const mimoBindLoginSession = (id: number) => invoke<MimoQuotaDto>("mimo_bind_login_session", { id });
+
+export interface MimoLoginResult {
+  account: QuotaAccount;
+  quota: MimoQuotaDto;
+}
+
+/**
+ * 轮询登录窗：登好了就入库、关窗并返回账号与额度；还没登好返回 null。
+ * `id` 省略时按小米 ID 新建扫码账号卡（不需要 API Key）。
+ */
+export const mimoPollLogin = (id?: number) =>
+  invoke<MimoLoginResult | null>("mimo_poll_login", { id: id ?? null });
+
+/** 扫码账号的 label 是「小米 ID …」，Key 账号是掩码后的 sk- / tp- / ttp-。 */
+export const isMimoSessionAccount = (label: string | null | undefined) => !/^(sk|t?tp)-/i.test(label ?? "");

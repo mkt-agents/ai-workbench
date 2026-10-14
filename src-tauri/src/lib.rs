@@ -480,7 +480,7 @@ pub fn run() {
             mimo_quota::mimo_open_login_window,
             mimo_quota::mimo_close_login_window,
             mimo_quota::mimo_capture_login_cookies,
-            mimo_quota::mimo_bind_login_session,
+            mimo_quota::mimo_poll_login,
             wb_checkin::wb_quota_status,
             wb_checkin::wb_checkin_log_list,
             wb_checkin::wb_checkin_log_clear,

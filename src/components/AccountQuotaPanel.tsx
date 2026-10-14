@@ -85,16 +85,18 @@ import {
   quotaAccountDelete,
   quotaAccountSetTag,
   quotaAccountsList,
+  isMimoSessionAccount,
   mimoAddKey,
-  mimoBindLoginSession,
   mimoCloseLoginWindow,
   mimoOpenLoginWindow,
+  mimoPollLogin,
   mimoQuotaFetch,
   mimoSetCookie,
   zcodeAddKey,
   zcodeQuotaFetch,
   type ClaudeQuotaDto,
   type DeepSeekQuotaDto,
+  type MimoLoginResult,
   type MimoQuotaDto,
   type QuotaAccount,
   type ZcodeQuotaDto,
@@ -1008,15 +1010,11 @@ function AccountQuotaPanel() {
     [fetchKey],
   );
 
-  const addMimoKey = useCallback(
-    async (apiKey: string) => {
-      const account = await mimoAddKey(apiKey);
-      setAuthAccounts(await quotaAccountsList());
-      setMimoFormOpen(false);
-      void fetchKey(`mimo:${account.id}`);
-    },
-    [fetchKey],
-  );
+  const addMimoSession = useCallback(async ({ account, quota }: MimoLoginResult) => {
+    setResults((prev) => ({ ...prev, [`mimo:${account.id}`]: quota }));
+    setAuthAccounts(await quotaAccountsList());
+    setMimoFormOpen(false);
+  }, []);
 
   const replaceMimoKey = useCallback(
     async (old: QuotaAccount, apiKey: string) => {
@@ -1607,8 +1605,8 @@ function AccountQuotaPanel() {
             onHide={rawId === "new" ? () => setMimoFormOpen(false) : hideProvider}
             frame={frame}
           >
-            <MimoKeyForm
-              onSubmit={addMimoKey}
+            <MimoAddForm
+              onLoggedIn={addMimoSession}
               onCancel={rawId === "new" ? () => setMimoFormOpen(false) : undefined}
             />
           </QuotaCardShell>
@@ -3557,6 +3555,132 @@ function ZcodeCard({
   );
 }
 
+const MIMO_LOGIN_POLL_MS = 2000;
+
+/**
+ * MiMo 登录窗流程：打开窗口后每 2 秒问一次后端，登好了自动入库、关窗；
+ * 「完成」只是立即再问一次的兜底。`accountId` 为空 = 扫码新建账号。
+ */
+function useMimoLogin(accountId: number | undefined, onDone: (r: MimoLoginResult) => void) {
+  const { t } = useTranslation("quota");
+  const [pending, setPending] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
+  const poll = useCallback(
+    async (manual: boolean) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      if (manual) setBusy(true);
+      try {
+        const result = await mimoPollLogin(accountId);
+        if (result) {
+          setPending(false);
+          setError(null);
+          onDoneRef.current(result);
+        } else if (manual) {
+          setError(t("mimoLoginNotReady"));
+        }
+      } catch (e) {
+        const msg = errorText(e);
+        if (msg.includes("已关闭")) setPending(false);
+        setError(msg);
+      } finally {
+        inFlight.current = false;
+        if (manual) setBusy(false);
+      }
+    },
+    [accountId, t],
+  );
+
+  useEffect(() => {
+    if (!pending) return;
+    const timer = window.setInterval(() => void poll(false), MIMO_LOGIN_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [pending, poll]);
+
+  const start = async () => {
+    setError(null);
+    setPending(true);
+    try {
+      await mimoOpenLoginWindow();
+    } catch (e) {
+      setError(errorText(e));
+      setPending(false);
+    }
+  };
+
+  const cancel = () => {
+    void mimoCloseLoginWindow().catch(() => undefined);
+    setPending(false);
+    setError(null);
+  };
+
+  return { pending, busy, error, start, cancel, finish: () => void poll(true) };
+}
+
+function MimoLoginPending({ busy, onCancel, onFinish }: { busy: boolean; onCancel: () => void; onFinish: () => void }) {
+  const { t } = useTranslation("quota");
+  return (
+    <div className="aq-login-pending">
+      <p className="aq-login-pending-text">
+        <RefreshCw size={12} className="spin" aria-hidden />
+        {t("mimoLoginPending")}
+      </p>
+      <div className="aq-login-pending-actions">
+        <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
+          {t("authCancel")}
+        </button>
+        <button type="button" className="btn btn-primary btn-small" onClick={onFinish} disabled={busy}>
+          {busy ? <RefreshCw size={13} className="spin" /> : <LogIn size={13} />}
+          {t("mimoLoginDone")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 新建 MiMo 卡：只走扫码登录，不需要 Key。 */
+function MimoAddForm({
+  onLoggedIn,
+  onCancel,
+}: {
+  onLoggedIn: (r: MimoLoginResult) => void;
+  onCancel?: () => void;
+}) {
+  const { t } = useTranslation("quota");
+  const login = useMimoLogin(undefined, onLoggedIn);
+
+  return (
+    <div className="aq-auth">
+      <p className="aq-auth-text">{t("authHint.mimo")}</p>
+      {login.error && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(login.error, t("networkFailed")) ?? login.error}
+        </div>
+      )}
+      {login.pending ? (
+        <MimoLoginPending busy={login.busy} onCancel={login.cancel} onFinish={login.finish} />
+      ) : (
+        <div className="aq-key-actions">
+          {onCancel && (
+            <button type="button" className="btn btn-secondary btn-small" onClick={onCancel}>
+              {t("authCancel")}
+            </button>
+          )}
+          <button type="button" className="btn btn-primary btn-small" onClick={() => void login.start()}>
+            <LogIn size={13} />
+            {t("mimoScanLogin")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MimoKeyForm({
   onSubmit,
   onCancel,
@@ -3658,11 +3782,15 @@ function MimoCard({
 }) {
   const { t } = useTranslation("quota");
   const now = useContext(NowContext);
-  const [loginPending, setLoginPending] = useState(false);
+  const login = useMimoLogin(account.id, (r) => onQuota(r.quota));
+  const loginPending = login.pending;
   const [cookieOpen, setCookieOpen] = useState(false);
   const [cookie, setCookie] = useState("");
-  const [sessionBusy, setSessionBusy] = useState(false);
-  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [cookieBusy, setCookieBusy] = useState(false);
+  const [cookieError, setCookieError] = useState<string | null>(null);
+  const sessionBusy = cookieBusy || login.busy;
+  const sessionError = cookieError ?? login.error;
+  const isSession = isMimoSessionAccount(account.label);
   const ok = quota?.ok === true && !replacing;
   const badge =
     quota?.expired
@@ -3677,7 +3805,8 @@ function MimoCard({
   const periodEndMs = ok && quota.periodEndMs != null ? quota.periodEndMs : null;
   const periodCountdown = compactCountdown(periodEndMs, now);
   const isTokenPlan =
-    quota?.mode === "token_plan"
+    isSession
+    || quota?.mode === "token_plan"
     || /^t?tp-/i.test(account.label ?? "");
   const reauthSession =
     quota?.needsReauth === true
@@ -3689,50 +3818,24 @@ function MimoCard({
     && (!(hasWindows || hasBalances) || reauthSession || loginPending || cookieOpen);
 
   const startLogin = async () => {
-    setSessionError(null);
+    setCookieError(null);
     setCookieOpen(false);
-    setLoginPending(true);
-    try {
-      await mimoOpenLoginWindow();
-    } catch (e) {
-      setSessionError(errorText(e));
-      setLoginPending(false);
-    }
-  };
-
-  const finishLogin = async () => {
-    setSessionBusy(true);
-    setSessionError(null);
-    try {
-      const dto = await mimoBindLoginSession(account.id);
-      onQuota(dto);
-      setLoginPending(false);
-    } catch (e) {
-      setSessionError(errorText(e));
-    } finally {
-      setSessionBusy(false);
-    }
-  };
-
-  const cancelLogin = () => {
-    void mimoCloseLoginWindow().catch(() => undefined);
-    setLoginPending(false);
-    setSessionError(null);
+    await login.start();
   };
 
   const submitCookie = async () => {
     if (!cookie.trim() || sessionBusy) return;
-    setSessionBusy(true);
-    setSessionError(null);
+    setCookieBusy(true);
+    setCookieError(null);
     try {
       const dto = await mimoSetCookie(account.id, cookie.trim());
       onQuota(dto);
       setCookie("");
       setCookieOpen(false);
     } catch (e) {
-      setSessionError(errorText(e));
+      setCookieError(errorText(e));
     } finally {
-      setSessionBusy(false);
+      setCookieBusy(false);
     }
   };
 
@@ -3757,7 +3860,7 @@ function MimoCard({
       />
       {replacing ? (
         <MimoKeyForm onSubmit={onReplace} onCancel={onCancelReplace} hint={t("mimoReplaceHint")} submitText={t("mimoReplaceKey")} />
-      ) : reauthSession ? (
+      ) : reauthSession || isSession ? (
         <CardMessage
           quota={quota}
           idleText={t("neverRefreshed")}
@@ -3771,21 +3874,7 @@ function MimoCard({
         <div className="aq-card-idle">{quota.message || t("mimoVerifiedNoUsage")}</div>
       )}
       {needSession && !cookieOpen && loginPending && (
-        <div className="aq-login-pending">
-          <p className="aq-login-pending-text">
-            <RefreshCw size={12} className="spin" aria-hidden />
-            {t("mimoLoginPending")}
-          </p>
-          <div className="aq-login-pending-actions">
-            <button type="button" className="btn btn-secondary btn-small" onClick={cancelLogin} disabled={sessionBusy}>
-              {t("authCancel")}
-            </button>
-            <button type="button" className="btn btn-primary btn-small" onClick={() => void finishLogin()} disabled={sessionBusy}>
-              {sessionBusy ? <RefreshCw size={13} className="spin" /> : <LogIn size={13} />}
-              {t("mimoLoginDone")}
-            </button>
-          </div>
-        </div>
+        <MimoLoginPending busy={sessionBusy} onCancel={login.cancel} onFinish={login.finish} />
       )}
       {needSession && !cookieOpen && !loginPending && (
         <div className="aq-key-actions" style={{ marginTop: 8 }}>
@@ -3818,7 +3907,15 @@ function MimoCard({
             autoFocus
           />
           <div className="aq-key-actions">
-            <button type="button" className="btn btn-secondary btn-small" onClick={() => setCookieOpen(false)} disabled={sessionBusy}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => {
+                setCookieOpen(false);
+                setCookieError(null);
+              }}
+              disabled={sessionBusy}
+            >
               {t("authCancel")}
             </button>
             <button type="submit" className="btn btn-primary btn-small" disabled={sessionBusy || !cookie.trim()}>

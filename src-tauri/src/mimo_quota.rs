@@ -1,15 +1,20 @@
 //! 小米 MiMo 额度：
+//! - 扫码登录账号（推荐）：不存 Key（`access_token` 为空，subject = `uid:<userId>`），
+//!   用量全走开放平台 Cookie `GET platform.xiaomimimo.com/api/v1/tokenPlan/usage`
 //! - `sk-…` 按量：Bearer/api-key 查 `api.xiaomimimo.com/v1/user/balance`
-//! - `tp-…` / `ttp-…` Token Plan：Key 只用于验证；用量走开放平台 Cookie
-//!   `GET platform.xiaomimimo.com/api/v1/tokenPlan/usage`
-//!   （需要 `api-platform_serviceToken` + `userId`；全量 Cookie 存 `quota_accounts.refresh_token`，
-//!    请求时再 normalize。短效 serviceToken 过期时用隐藏 WebView 复用通行证静默换票。）
+//! - `tp-…` / `ttp-…` Token Plan Key：Key 只用于验证，用量同样走 Cookie
+//!
+//! Cookie 需要 `api-platform_serviceToken` + `userId`，全量存 `quota_accounts.refresh_token`，
+//! 请求时再 normalize。serviceToken 只有 24 小时（平台 Cookie 声明），过期后隐藏 WebView 走
+//! `genLoginUrl` → `account.xiaomi.com/pass/serviceLogin?sid=api-platform`：通行证 passToken
+//! 还有效时会自动 302 回 `/sts` 种新票。只打开控制台页不行——SPA 过期后只显示登录按钮，不会自己跳。
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
+use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
@@ -23,16 +28,21 @@ const TOKEN_PLAN_SGP: &str = "https://token-plan-sgp.xiaomimimo.com/v1";
 const TOKEN_PLAN_AMS: &str = "https://token-plan-ams.xiaomimimo.com/v1";
 const PLATFORM_API: &str = "https://platform.xiaomimimo.com/api/v1";
 const PLATFORM_USAGE: &str = "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage";
-const PLATFORM_LOGIN: &str = "https://platform.xiaomimimo.com/#/console/plan-manage";
+const LOGIN_ENTRY: &str = "https://platform.xiaomimimo.com/api/v1/genLoginUrl?currentPath=%2Fconsole%2Fplan-manage";
+const PASSPORT_HOST: &str = "account.xiaomi.com";
 const WINDOW_LABEL: &str = "mimo-platform-login";
 const RENEW_LABEL: &str = "mimo-platform-renew";
 const CLOSE_DELAY: Duration = Duration::from_millis(250);
-const RENEW_TIMEOUT: Duration = Duration::from_secs(20);
+const RENEW_TIMEOUT: Duration = Duration::from_secs(30);
 const RENEW_POLL: Duration = Duration::from_secs(1);
+/// 续期窗停在通行证登录页这么久，说明长效登录也失效了，需要用户扫码。
+const PASSPORT_STALL: Duration = Duration::from_secs(8);
+const SESSION_SUBJECT_PREFIX: &str = "uid:";
 
 const INVALID_KEY: &str = "API Key 无效或已失效，请更换";
-const SESSION_EXPIRED: &str = "开放平台登录已过期，请重新登录查询用量";
-const NEED_SESSION: &str = "请登录开放平台以查询 Token Plan 用量";
+const SESSION_EXPIRED: &str = "登录已过期且自动续期没成功，请点「扫码登录」重新登录";
+const NEED_SESSION: &str = "请点「扫码登录」登录开放平台以查询 Token Plan 用量";
+const USER_MISMATCH: &str = "登录的小米账号与这张卡片不是同一个，请换回原账号重新登录";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -339,6 +349,35 @@ pub fn persistable_cookie_header(raw: &str) -> Result<String, String> {
     Ok(full)
 }
 
+/// Cookie 串里某个字段的值（同名取最后一个，与浏览器合并顺序一致）。
+pub fn cookie_value(raw: &str, name: &str) -> Option<String> {
+    strip_cookie_prefix(raw)
+        .split(';')
+        .filter_map(|chunk| chunk.trim().split_once('='))
+        .filter(|(n, v)| n.trim() == name && !v.trim().is_empty())
+        .map(|(_, v)| v.trim().trim_matches('"').to_string())
+        .last()
+}
+
+fn service_token(raw: &str) -> Option<String> {
+    cookie_value(raw, "api-platform_serviceToken").or_else(|| cookie_value(raw, "serviceToken"))
+}
+
+fn session_subject(uid: &str) -> String {
+    format!("{SESSION_SUBJECT_PREFIX}{uid}")
+}
+
+/// 扫码账号（subject = uid:…）要求换回来的 Cookie 属于同一个小米 ID；Key 账号不校验。
+fn ensure_same_user(subject: Option<&str>, cookie: &str) -> Result<(), String> {
+    let Some(expected) = subject.and_then(|s| s.strip_prefix(SESSION_SUBJECT_PREFIX)) else {
+        return Ok(());
+    };
+    match cookie_value(cookie, "userId") {
+        Some(uid) if uid == expected => Ok(()),
+        _ => Err(USER_MISMATCH.to_string()),
+    }
+}
+
 async fn get_json_key(client: &reqwest::Client, url: &str, key: &str) -> Result<(u16, String), String> {
     for (name, value) in [("api-key", key.to_string()), ("Authorization", format!("Bearer {key}"))] {
         let resp = client
@@ -508,6 +547,21 @@ struct FetchOk {
 }
 
 async fn fetch_quota(client: &reqwest::Client, key: &str, session_cookie: &str) -> Result<FetchOk, String> {
+    if key.trim().is_empty() {
+        if session_cookie.trim().is_empty() {
+            return Err(SESSION_EXPIRED.to_string());
+        }
+        let c = fetch_usage_with_cookie(client, session_cookie).await?;
+        return Ok(FetchOk {
+            mode: MimoMode::TokenPlan,
+            plan: c.plan,
+            balances: c.balances,
+            windows: c.windows,
+            period_end_ms: c.period_end_ms,
+            expired: c.expired,
+            message: None,
+        });
+    }
     if is_token_plan_key(key) {
         let _base = detect_token_plan_base(client, key)
             .await?
@@ -599,6 +653,19 @@ async fn clear_session_cookie(conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
     save_session_cookie(conn, id, String::new()).await
 }
 
+async fn account_subject(conn: Arc<std::sync::Mutex<rusqlite::Connection>>, id: i64) -> Option<String> {
+    with_db(conn, move |c| {
+        c.query_row(
+            "SELECT subject FROM quota_accounts WHERE id = ?1 AND provider = ?2",
+            rusqlite::params![id, Provider::Mimo.key()],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .ok()
+}
+
 /// 先查一次额度 / 校验 Key，通过才入库。
 #[tauri::command]
 pub async fn mimo_add_key(state: tauri::State<'_, DbState>, api_key: String) -> Result<QuotaAccountDto, String> {
@@ -626,6 +693,8 @@ pub async fn mimo_set_cookie(
     cookie: String,
 ) -> Result<MimoQuotaDto, String> {
     let client = http_client()?;
+    let subject = account_subject(Arc::clone(&state.conn), id).await;
+    ensure_same_user(subject.as_deref(), &cookie)?;
     let c = fetch_usage_with_cookie(&client, &cookie).await?;
     let full = persistable_cookie_header(&cookie)?;
     save_session_cookie(Arc::clone(&state.conn), id, full).await?;
@@ -669,7 +738,9 @@ pub async fn mimo_quota_fetch(app: AppHandle, state: tauri::State<'_, DbState>, 
     match fetch_quota(&http_client()?, &stored.access_token, &stored.refresh_token).await {
         Ok(ok) => Ok(dto_from_fetch(id, stored.label, has_session, ok)),
         Err(m) if m == SESSION_EXPIRED => {
-            match silent_renew(&app, Arc::clone(&state.conn), id, stored.label.clone()).await {
+            let subject = account_subject(Arc::clone(&state.conn), id).await;
+            let stale = service_token(&stored.refresh_token);
+            match silent_renew(&app, Arc::clone(&state.conn), id, stored.label.clone(), subject, stale).await {
                 Ok(dto) => Ok(dto),
                 Err(_) => {
                     let _ = clear_session_cookie(Arc::clone(&state.conn), id).await;
@@ -681,13 +752,14 @@ pub async fn mimo_quota_fetch(app: AppHandle, state: tauri::State<'_, DbState>, 
     }
 }
 
+/// 打开可见登录窗：直接进 `LOGIN_ENTRY`（小米通行证页，可扫码）；通行证仍有效时会自动回跳。
 #[tauri::command]
 pub async fn mimo_open_login_window(app: AppHandle) -> Result<String, String> {
-    let parsed = Url::parse(PLATFORM_LOGIN).map_err(|e| format!("登录 URL 非法: {e}"))?;
+    let parsed = Url::parse(LOGIN_ENTRY).map_err(|e| format!("登录 URL 非法: {e}"))?;
     if let Some(existing) = app.get_webview_window(WINDOW_LABEL) {
         let _ = existing.unminimize();
         let _ = existing.set_focus();
-        return Ok(PLATFORM_LOGIN.to_string());
+        return Ok(LOGIN_ENTRY.to_string());
     }
     let window = WebviewWindowBuilder::new(&app, WINDOW_LABEL, WebviewUrl::External(parsed))
         .title("小米 MiMo 开放平台登录")
@@ -700,7 +772,7 @@ pub async fn mimo_open_login_window(app: AppHandle) -> Result<String, String> {
         .build()
         .map_err(|e| format!("创建登录窗口失败: {e}"))?;
     let _ = window.set_focus();
-    Ok(PLATFORM_LOGIN.to_string())
+    Ok(LOGIN_ENTRY.to_string())
 }
 
 #[tauri::command]
@@ -800,7 +872,7 @@ pub async fn mimo_capture_login_cookies(app: AppHandle) -> Result<MimoCookieCapt
         .await
         .map_err(|e| {
             if e.contains("已关闭") {
-                "登录窗已关闭，请重新打开".to_string()
+                "登录窗已关闭，请重新点「扫码登录」".to_string()
             } else {
                 e
             }
@@ -814,42 +886,59 @@ fn close_labeled_window(app: &AppHandle, label: &str) {
 }
 
 async fn ensure_renew_window(app: &AppHandle) -> Result<(), String> {
+    let parsed = Url::parse(LOGIN_ENTRY).map_err(|e| format!("登录 URL 非法: {e}"))?;
     if let Some(existing) = app.get_webview_window(RENEW_LABEL) {
-        let _ = existing.eval(&format!("window.location.href = {}", serde_json::to_string(PLATFORM_LOGIN).unwrap_or_else(|_| "''".into())));
+        existing.navigate(parsed).map_err(|e| format!("续期窗跳转失败: {e}"))?;
         return Ok(());
     }
-    let parsed = Url::parse(PLATFORM_LOGIN).map_err(|e| format!("登录 URL 非法: {e}"))?;
     WebviewWindowBuilder::new(app, RENEW_LABEL, WebviewUrl::External(parsed))
         .title("MiMo session renew")
         .inner_size(480.0, 360.0)
         .visible(false)
         .skip_taskbar(true)
         .focused(false)
+        // 隐藏窗口默认会被节流，回跳 /sts 的脚本可能迟迟不跑。
+        .background_throttling(BackgroundThrottlingPolicy::Disabled)
         .build()
         .map_err(|e| format!("创建续期窗口失败: {e}"))?;
     Ok(())
 }
 
-/// 隐藏 WebView 加载控制台，复用 WebView2 里的通行证 Cookie 静默换票。
+fn on_passport(page_url: &str) -> bool {
+    Url::parse(page_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.eq_ignore_ascii_case(PASSPORT_HOST)))
+        .unwrap_or(false)
+}
+
+/// 隐藏 WebView 走 `LOGIN_ENTRY`，复用 WebView2 里的小米通行证 Cookie 静默换票。
+/// `stale` 是库里那张已过期的 serviceToken：WebView 里可能还留着它，抓到同一张不算续上。
 async fn silent_renew(
     app: &AppHandle,
     conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
     id: i64,
     label: Option<String>,
+    subject: Option<String>,
+    stale: Option<String>,
 ) -> Result<MimoQuotaDto, String> {
+    let fresh = |cookie: &str| service_token(cookie).is_some() && service_token(cookie) != stale;
+
     // 若用户登录窗还开着，优先直接抓它（已登录态）。
     if let Ok(capture) = capture_window_cookies(app, WINDOW_LABEL).await {
-        if capture.ready {
-            if let Ok(dto) = bind_captured_cookie(conn.clone(), id, label.clone(), &capture.cookie_header).await {
+        if capture.ready && fresh(&capture.cookie_header) {
+            if let Ok(dto) =
+                bind_captured_cookie(conn.clone(), id, label.clone(), subject.as_deref(), &capture.cookie_header).await
+            {
                 return Ok(dto);
             }
         }
     }
 
     ensure_renew_window(app).await?;
-    let deadline = std::time::Instant::now() + RENEW_TIMEOUT;
+    let deadline = Instant::now() + RENEW_TIMEOUT;
+    let mut passport_since: Option<Instant> = None;
     let mut last_err = "静默续期超时".to_string();
-    while std::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         tokio::time::sleep(RENEW_POLL).await;
         let capture = match capture_window_cookies(app, RENEW_LABEL).await {
             Ok(c) => c,
@@ -858,11 +947,20 @@ async fn silent_renew(
                 continue;
             }
         };
-        if !capture.ready {
-            last_err = "续期窗尚未拿到 serviceToken".to_string();
+        if on_passport(&capture.page_url) {
+            let since = *passport_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= PASSPORT_STALL {
+                last_err = "小米通行证登录已失效，需要重新扫码".to_string();
+                break;
+            }
             continue;
         }
-        match bind_captured_cookie(conn.clone(), id, label.clone(), &capture.cookie_header).await {
+        passport_since = None;
+        if !capture.ready || !fresh(&capture.cookie_header) {
+            last_err = "续期窗尚未拿到新的 serviceToken".to_string();
+            continue;
+        }
+        match bind_captured_cookie(conn.clone(), id, label.clone(), subject.as_deref(), &capture.cookie_header).await {
             Ok(dto) => {
                 close_labeled_window(app, RENEW_LABEL);
                 return Ok(dto);
@@ -880,8 +978,10 @@ async fn bind_captured_cookie(
     conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
     id: i64,
     label: Option<String>,
+    subject: Option<&str>,
     cookie: &str,
 ) -> Result<MimoQuotaDto, String> {
+    ensure_same_user(subject, cookie)?;
     let client = http_client()?;
     let c = fetch_usage_with_cookie(&client, cookie).await?;
     let full = persistable_cookie_header(cookie)?;
@@ -900,23 +1000,73 @@ async fn bind_captured_cookie(
     ))
 }
 
-/// 从已打开的登录窗抓 Cookie → 验证用量 → 绑定到账号 → 关窗。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MimoLoginResult {
+    pub account: QuotaAccountDto,
+    pub quota: MimoQuotaDto,
+}
+
+/// 轮询登录窗：拿到可用的会话就入库并关窗，返回账号与额度；还没登好返回 `None`。
+/// `id` 为空时按小米 ID 新建（或更新）一张扫码账号卡；有值时把会话绑到那张卡上。
 #[tauri::command]
-pub async fn mimo_bind_login_session(app: AppHandle, state: tauri::State<'_, DbState>, id: i64) -> Result<MimoQuotaDto, String> {
+pub async fn mimo_poll_login(
+    app: AppHandle,
+    state: tauri::State<'_, DbState>,
+    id: Option<i64>,
+) -> Result<Option<MimoLoginResult>, String> {
     let capture = mimo_capture_login_cookies(app.clone()).await?;
     if !capture.ready {
-        return Err("尚未登录完成：请在打开的窗口里登录小米账号，进入套餐/用量页后再点「完成」".to_string());
+        return Ok(None);
     }
-    let stored = token_for(Arc::clone(&state.conn), id, Provider::Mimo).await.ok();
-    let dto = bind_captured_cookie(
-        Arc::clone(&state.conn),
-        id,
-        stored.and_then(|s| s.label),
-        &capture.cookie_header,
-    )
+    let cookie = capture.cookie_header;
+    if let Some(id) = id {
+        let subject = account_subject(Arc::clone(&state.conn), id).await;
+        ensure_same_user(subject.as_deref(), &cookie)?;
+    }
+    // 登录窗里可能还留着过期的旧票：用量接口说过期就当「还没登好」继续等。
+    let c = match fetch_usage_with_cookie(&http_client()?, &cookie).await {
+        Ok(c) => c,
+        Err(m) if m == SESSION_EXPIRED => return Ok(None),
+        Err(m) => return Err(m),
+    };
+    let full = persistable_cookie_header(&cookie)?;
+    let account_id = match id {
+        Some(id) => {
+            save_session_cookie(Arc::clone(&state.conn), id, full).await?;
+            id
+        }
+        None => {
+            let uid = cookie_value(&full, "userId").ok_or_else(|| "登录 Cookie 缺少 userId".to_string())?;
+            let subject = session_subject(&uid);
+            let label = format!("小米 ID {uid}");
+            with_db(Arc::clone(&state.conn), move |c| {
+                upsert_account(c, Provider::Mimo, &subject, Some(&label), "", &full, now_unix())
+            })
+            .await?
+        }
+    };
+    let account = with_db(Arc::clone(&state.conn), move |c| {
+        crate::quota_accounts::list_accounts(c, Some(Provider::Mimo))?
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| "保存账号失败".to_string())
+    })
     .await?;
+    let quota = MimoQuotaDto::ok(
+        account_id,
+        account.label.clone(),
+        c.plan,
+        MimoMode::TokenPlan,
+        c.balances,
+        c.windows,
+        c.period_end_ms,
+        c.expired,
+        true,
+        None,
+    );
     let _ = mimo_close_login_window(app).await;
-    Ok(dto)
+    Ok(Some(MimoLoginResult { account, quota }))
 }
 
 #[cfg(test)]
@@ -957,6 +1107,36 @@ mod tests {
         assert_eq!(windows[0].label, "本月 Credits（亿）");
         assert!((windows[0].used - 41.0).abs() < 0.01);
         assert!((windows[0].limit - 110.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn cookie_value_takes_last_non_empty() {
+        let raw = r#"Cookie: userId=1; api-platform_serviceToken="old"; x=; api-platform_serviceToken=new"#;
+        assert_eq!(cookie_value(raw, "userId").as_deref(), Some("1"));
+        assert_eq!(service_token(raw).as_deref(), Some("new"));
+        assert_eq!(cookie_value(raw, "x"), None);
+        assert_eq!(service_token("serviceToken=st; userId=2").as_deref(), Some("st"));
+    }
+
+    #[test]
+    fn session_accounts_must_stay_on_the_same_xiaomi_id() {
+        let subject = session_subject("42");
+        assert!(ensure_same_user(Some(&subject), "userId=42; api-platform_serviceToken=t").is_ok());
+        assert_eq!(
+            ensure_same_user(Some(&subject), "userId=7; api-platform_serviceToken=t").unwrap_err(),
+            USER_MISMATCH
+        );
+        assert!(ensure_same_user(Some(&subject), "api-platform_serviceToken=t").is_err());
+        // Key 账号（subject 是掩码 Key）不做小米 ID 校验。
+        assert!(ensure_same_user(Some("tp-abc…wxyz"), "userId=7").is_ok());
+        assert!(ensure_same_user(None, "userId=7").is_ok());
+    }
+
+    #[test]
+    fn passport_page_detection() {
+        assert!(on_passport("https://account.xiaomi.com/fe/service/login/password?sid=api-platform"));
+        assert!(!on_passport("https://platform.xiaomimimo.com/console/plan-manage"));
+        assert!(!on_passport("not a url"));
     }
 
     #[test]
