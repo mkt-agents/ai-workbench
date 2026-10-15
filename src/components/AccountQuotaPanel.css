@@ -226,6 +226,13 @@
   cursor: pointer;
 }
 
+/* 标题过长时收缩为省略号，不压到右侧时间输入框。 */
+.aq-pop-check > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .aq-pop-check input {
   width: 14px;
   height: 14px;

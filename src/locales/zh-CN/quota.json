@@ -242,5 +242,9 @@
   "dailyTodoHint": "按顺序处理今日未完成的 WorkBuddy 签到、Qoder 领积分与 Trae 签到（有则执行）。",
   "dailyJobsOff": "每日定点：关",
   "dailyJobsOn": "每日定点 · {{count}} 项",
-  "dailyJobsDialog": "每日定点"
+  "dailyJobsDialog": "每日定点",
+  "dailyJobsSectionWb": "每日自动签到 · WorkBuddy",
+  "dailyJobsSectionTrae": "每日自动签到 · Trae",
+  "dailyJobsSectionQoder": "每日自动领积分 · Qoder",
+  "dailyJobsLastRun": "上次自动执行：{{date}}"
 }

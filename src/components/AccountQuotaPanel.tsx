@@ -1391,38 +1391,17 @@ function AccountQuotaPanel() {
         : null,
       configured: hasCheckinEndpoint(wbSettings),
       copy: {
-        title: tw("checkinDaily"),
-        lastRun: (date) => tw("checkinLastAuto", { date }),
+        title: t("dailyJobsSectionWb"),
+        lastRun: (date) => t("dailyJobsLastRun", { date }),
         scheduleOff: tw("checkinScheduleOff"),
         hint: tw("checkinHint"),
         notConfigured: tw("checkinNoEndpoint"),
       },
+      group: "checkin",
       onSave: async (enabled, time) => {
         setWbSettings(await wbUpdateSettings({ checkinEnabled: enabled, checkinTime: time }));
       },
       formatError: (raw) => friendlyQuotaMessage(raw, tw("networkFailed")) ?? raw,
-    });
-  }
-  if (qoderAccounts.length > 0) {
-    dailyJobSections.push({
-      id: "qoder-claim",
-      settings: qoderSettings
-        ? {
-            enabled: qoderSettings.claimEnabled,
-            time: qoderSettings.claimTime,
-            lastRunDate: qoderSettings.lastAutoClaimDate,
-          }
-        : null,
-      copy: {
-        title: t("qoderAutoClaimDaily"),
-        lastRun: (date) => t("qoderAutoClaimLast", { date }),
-        scheduleOff: t("qoderAutoClaimScheduleOff"),
-        hint: t("qoderAutoClaimHint"),
-      },
-      onSave: async (enabled, time) => {
-        setQoderSettings(await qoderUpdateSettings({ claimEnabled: enabled, claimTime: time }));
-      },
-      formatError: errorText,
     });
   }
   if (traeAccounts.length > 0) {
@@ -1436,8 +1415,8 @@ function AccountQuotaPanel() {
           }
         : null,
       copy: {
-        title: t("traeAutoCheckinDaily"),
-        lastRun: (date) => t("traeAutoCheckinLast", { date }),
+        title: t("dailyJobsSectionTrae"),
+        lastRun: (date) => t("dailyJobsLastRun", { date }),
         scheduleOff: t("traeAutoCheckinScheduleOff"),
         hint: t("traeAutoCheckinHint"),
       },
@@ -1445,6 +1424,30 @@ function AccountQuotaPanel() {
         setTraeSettings(await traeUpdateSettings({ checkinEnabled: enabled, checkinTime: time }));
       },
       formatError: errorText,
+      group: "checkin",
+    });
+  }
+  if (qoderAccounts.length > 0) {
+    dailyJobSections.push({
+      id: "qoder-claim",
+      settings: qoderSettings
+        ? {
+            enabled: qoderSettings.claimEnabled,
+            time: qoderSettings.claimTime,
+            lastRunDate: qoderSettings.lastAutoClaimDate,
+          }
+        : null,
+      copy: {
+        title: t("dailyJobsSectionQoder"),
+        lastRun: (date) => t("dailyJobsLastRun", { date }),
+        scheduleOff: t("qoderAutoClaimScheduleOff"),
+        hint: t("qoderAutoClaimHint"),
+      },
+      onSave: async (enabled, time) => {
+        setQoderSettings(await qoderUpdateSettings({ claimEnabled: enabled, claimTime: time }));
+      },
+      formatError: errorText,
+      group: "claim",
     });
   }
   const dailyJobsEnabled = dailyJobSections.filter((s) => s.settings?.enabled).length;

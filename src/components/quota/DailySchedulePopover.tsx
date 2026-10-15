@@ -23,9 +23,11 @@ export type DailyScheduleSection = {
   copy: DailyScheduleSectionCopy;
   onSave: (enabled: boolean, time: string) => Promise<void>;
   formatError?: (raw: string) => string;
+  /** 同组段落连排不画分隔线，组变化时才分隔（如「签到」组 vs「领积分」组）。 */
+  group?: string;
 };
 
-/** 额度工具条「每日定点」：一段或多段（WB 签到 / Qoder 领积分）共用一个弹层。 */
+/** 额度工具条「每日定点」：一段或多段（WB / Trae 签到 / Qoder 领积分）共用一个弹层；`group` 相同的段连排不分隔。 */
 export default function DailyJobsPopover({
   sections,
   buttonLabel,
@@ -70,7 +72,11 @@ export default function DailyJobsPopover({
       {open && ready && (
         <div className="aq-pop aq-pop-jobs" role="dialog" aria-label={dialogLabel}>
           {sections.map((section, i) => (
-            <ScheduleSection key={section.id} section={section} divided={i > 0} />
+            <ScheduleSection
+              key={section.id}
+              section={section}
+              divided={i > 0 && section.group !== sections[i - 1].group}
+            />
           ))}
         </div>
       )}

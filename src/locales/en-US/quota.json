@@ -242,5 +242,9 @@
   "dailyTodoHint": "Run unfinished WorkBuddy check-ins, Qoder claims and Trae check-ins for today, in that order.",
   "dailyJobsOff": "Daily schedule: off",
   "dailyJobsOn": "Daily schedule · {{count}}",
-  "dailyJobsDialog": "Daily schedule"
+  "dailyJobsDialog": "Daily schedule",
+  "dailyJobsSectionWb": "Daily auto check-in · WorkBuddy",
+  "dailyJobsSectionTrae": "Daily auto check-in · Trae",
+  "dailyJobsSectionQoder": "Daily auto-claim · Qoder",
+  "dailyJobsLastRun": "Last auto run: {{date}}"
 }
