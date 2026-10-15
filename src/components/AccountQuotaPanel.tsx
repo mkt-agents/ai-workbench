@@ -4320,7 +4320,9 @@ function TraeCard({
         </div>
       )}
       {ok && quota?.credits != null && (
-        <div className="aq-card-idle">{t("traeCredits", { credits: formatCredits(quota.credits) })}</div>
+        <div className="aq-card-idle" title={t("traeCreditsHint")}>
+          {t("traeCredits", { credits: formatCredits(quota.credits) })}
+        </div>
       )}
     </QuotaCardShell>
   );
