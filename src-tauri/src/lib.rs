@@ -30,6 +30,7 @@ mod cursor_quota;
 mod deepseek_quota;
 mod grok_bot_quota;
 mod mimo_quota;
+mod trae_quota;
 mod daily_schedule;
 mod qoder_quota;
 mod quota_accounts;
@@ -302,6 +303,7 @@ pub fn run() {
             codex_quota::ensure_schema(&conn).expect("failed to init codex account schema");
             quota_accounts::ensure_schema(&conn).expect("failed to init quota account schema");
             qoder_quota::ensure_schema(&conn).expect("failed to init qoder settings schema");
+            trae_quota::ensure_schema(&conn).expect("failed to init trae settings schema");
 
             // The automated-testing feature was removed; drop the tables it used
             // to own so a stale DB from an older build does not linger. Idempotent.
@@ -481,6 +483,14 @@ pub fn run() {
             mimo_quota::mimo_close_login_window,
             mimo_quota::mimo_capture_login_cookies,
             mimo_quota::mimo_poll_login,
+            trae_quota::trae_add_refresh_token,
+            trae_quota::trae_oauth_start,
+            trae_quota::trae_device_identity,
+            trae_quota::trae_quota_fetch,
+            trae_quota::trae_checkin_now,
+            trae_quota::trae_checkin_all,
+            trae_quota::trae_get_settings,
+            trae_quota::trae_update_settings,
             wb_checkin::wb_quota_status,
             wb_checkin::wb_checkin_log_list,
             wb_checkin::wb_checkin_log_clear,

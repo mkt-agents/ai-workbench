@@ -82,6 +82,8 @@ pub enum Provider {
     Zcode,
     /// 小米 MiMo（sk- 按量 / tp- Token Plan）。
     Mimo,
+    /// Trae CN（trae.cn，refreshToken 查用量 + 每日签到）。
+    Trae,
 }
 
 impl Provider {
@@ -94,6 +96,7 @@ impl Provider {
             Provider::Claude => "claude",
             Provider::Zcode => "zcode",
             Provider::Mimo => "mimo",
+            Provider::Trae => "trae",
         }
     }
 
@@ -106,6 +109,7 @@ impl Provider {
             "claude" => Ok(Provider::Claude),
             "zcode" => Ok(Provider::Zcode),
             "mimo" => Ok(Provider::Mimo),
+            "trae" => Ok(Provider::Trae),
             other => Err(format!("不支持的服务商: {other}")),
         }
     }

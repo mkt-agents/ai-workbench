@@ -4,7 +4,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 
-export type QuotaAccountProvider = "cursor" | "grok-bot" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo";
+export type QuotaAccountProvider = "cursor" | "grok-bot" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae";
 
 export interface QuotaAccount {
   id: number;
@@ -152,3 +152,81 @@ export const mimoPollLogin = (id?: number) =>
 
 /** 扫码账号的 label 是「小米 ID …」，Key 账号是掩码后的 sk- / tp- / ttp-。 */
 export const isMimoSessionAccount = (label: string | null | undefined) => !/^(sk|t?tp)-/i.test(label ?? "");
+
+export interface TraeWindow {
+  plan: string;
+  used: number;
+  limit: number;
+}
+
+export interface TraeQuotaDto {
+  id: number;
+  ok: boolean;
+  message: string | null;
+  label: string | null;
+  /** 积分余额。 */
+  credits: number | null;
+  windows: TraeWindow[];
+  /** 今日是否已签到。 */
+  checkedIn: boolean | null;
+  /** 今日签到成功的本地时刻（unix 秒）；未签 / 跨天为 null。 */
+  checkedInAt: number | null;
+  /** 签到功能是否开放。 */
+  checkinEnabled: boolean | null;
+  needsReauth: boolean;
+  at: number;
+}
+
+export interface TraeCheckinResult {
+  id: number;
+  label: string | null;
+  ok: boolean;
+  /** 今日已签 / 功能未开放，本轮跳过。 */
+  skipped: boolean;
+  points: number | null;
+  credits: number | null;
+  message: string | null;
+  needsReauth: boolean;
+}
+
+export interface TraeSettings {
+  checkinEnabled: boolean;
+  checkinTime: string;
+  lastAutoCheckinDate: string | null;
+}
+
+export interface TraeSettingsPatch {
+  checkinEnabled?: boolean;
+  checkinTime?: string;
+}
+
+/** 粘贴 Trae 客户端 refreshToken 新增账号；设备密钥可选（新版续期需要）。 */
+export const traeAddRefreshToken = (
+  refreshToken: string,
+  keys?: { deviceId?: string; machineId?: string; deviceKeyPem?: string; devicePubPem?: string },
+) =>
+  invoke<QuotaAccount>("trae_add_refresh_token", {
+    refreshToken,
+    deviceId: keys?.deviceId ?? null,
+    machineId: keys?.machineId ?? null,
+    deviceKeyPem: keys?.deviceKeyPem ?? null,
+    devicePubPem: keys?.devicePubPem ?? null,
+  });
+
+/** 本机 Trae 客户端设备身份（授权登录依赖它）。 */
+export interface TraeDeviceIdentity {
+  deviceId: string;
+  publicKeyPem: string;
+  machineId: string;
+}
+export const traeDeviceIdentity = () => invoke<TraeDeviceIdentity>("trae_device_identity");
+
+/** 打开官网授权页，本机 17388 端口接回调，换取令牌并入库（最长 5 分钟）。 */
+export const traeOauthStart = () => invoke<QuotaAccount>("trae_oauth_start");
+export const traeQuotaFetch = (id: number) => invoke<TraeQuotaDto>("trae_quota_fetch", { id });
+export const traeCheckinNow = (id: number) => invoke<TraeCheckinResult>("trae_checkin_now", { id });
+export const traeCheckinAll = () => invoke<TraeCheckinResult[]>("trae_checkin_all");
+export const traeGetSettings = () => invoke<TraeSettings>("trae_get_settings");
+export const traeUpdateSettings = (patch: TraeSettingsPatch) => invoke<TraeSettings>("trae_update_settings", { patch });
+
+export const TRAE_AUTO_CHECKIN_EVENT = "trae-auto-checkin-done";

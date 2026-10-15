@@ -66,7 +66,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   codexDeleteAccount,
   codexListAccounts,
-  codexOauthCancel,
   codexOauthStart,
   codexQuotaFetch,
   codexSetAccountTag,
@@ -94,6 +93,17 @@ import {
   mimoSetCookie,
   zcodeAddKey,
   zcodeQuotaFetch,
+  traeAddRefreshToken,
+  traeCheckinAll,
+  traeCheckinNow,
+  traeGetSettings,
+  traeOauthStart,
+  traeQuotaFetch,
+  traeUpdateSettings,
+  TRAE_AUTO_CHECKIN_EVENT,
+  type TraeCheckinResult,
+  type TraeQuotaDto,
+  type TraeSettings,
   type ClaudeQuotaDto,
   type DeepSeekQuotaDto,
   type MimoLoginResult,
@@ -140,8 +150,8 @@ import "./AccountQuotaPanel.css";
 type Tone = "ok" | "warn" | "bad";
 
 /** 卡片键前缀；只有 WorkBuddy 的前缀（wb）和服务商 id（workbuddy）不同。 */
-type CardPrefix = "wb" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo";
-type AuthProvider = "codex" | "cursor" | "grok-bot" | "qoder";
+type CardPrefix = "wb" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae";
+type AuthProvider = "codex" | "cursor" | "grok-bot" | "qoder" | "trae";
 
 const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
   wb: "workbuddy",
@@ -153,6 +163,7 @@ const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
   claude: "claude",
   zcode: "zcode",
   mimo: "mimo",
+  trae: "trae",
 };
 
 const RAIL_COLLAPSED_KEY = "aq-rail-collapsed";
@@ -162,6 +173,7 @@ const AUTH_PRODUCT: Record<AuthProvider, string> = {
   cursor: "Cursor",
   "grok-bot": "Grok Bot",
   qoder: "Qoder",
+  trae: "Trae CN",
 };
 
 /** 一张卡的外框绑定：定位用的卡片键、高亮，以及拖拽（手柄按下才 armed）。 */
@@ -388,6 +400,12 @@ function mimoRemainPct(key: string, q: MimoQuotaDto, peaks: Record<string, numbe
   return Math.min(...balances.map((b) => balancePct(b.amount, peaks[`${key}:${b.currency}:${b.label}`])));
 }
 
+function traeRemainPct(q: TraeQuotaDto): number | null {
+  const windows = q.windows?.filter((w) => w.limit > 0) ?? [];
+  if (windows.length === 0) return null;
+  return Math.min(...windows.map((w) => clampPct(((w.limit - w.used) / w.limit) * 100)));
+}
+
 /** 单币种余额占峰值的百分比；没有峰值记录时按「有余额即满」。 */
 function balancePct(total: number, peak: number | undefined): number {
   if (total <= 0) return 0;
@@ -422,6 +440,8 @@ function remainPctFor(key: string, r: QuotaResultBase, peaks: Record<string, num
       return zcodeRemainPct(r as ZcodeQuotaDto);
     case "mimo":
       return mimoRemainPct(key, r as MimoQuotaDto, peaks);
+    case "trae":
+      return traeRemainPct(r as TraeQuotaDto);
   }
 }
 
@@ -548,6 +568,7 @@ function AccountQuotaPanel() {
   const [zcodeReplaceId, setZcodeReplaceId] = useState<number | null>(null);
   const [mimoFormOpen, setMimoFormOpen] = useState(false);
   const [mimoReplaceId, setMimoReplaceId] = useState<number | null>(null);
+  const [traeReplaceId, setTraeReplaceId] = useState<number | null>(null);
   const [wbScanOpen, setWbScanOpen] = useState(false);
   const [wbManualOpen, setWbManualOpen] = useState(false);
   const [enabled, setEnabled] = useState<QuotaCardId[]>(loadEnabledCards);
@@ -571,6 +592,7 @@ function AccountQuotaPanel() {
   const claudeAccounts = authAccounts.filter((a) => a.provider === "claude");
   const zcodeAccounts = authAccounts.filter((a) => a.provider === "zcode");
   const mimoAccounts = authAccounts.filter((a) => a.provider === "mimo");
+  const traeAccounts = authAccounts.filter((a) => a.provider === "trae");
 
   useEffect(() => saveQuotaCache(results), [results]);
 
@@ -762,10 +784,13 @@ function AccountQuotaPanel() {
   const [wbSettings, setWbSettings] = useState<WbSettings | null>(null);
   const [qoderSettings, setQoderSettings] = useState<QoderSettings | null>(null);
   const [qoderClaimBusy, setQoderClaimBusy] = useState(false);
+  const [traeSettings, setTraeSettings] = useState<TraeSettings | null>(null);
+  const [traeCheckinBusy, setTraeCheckinBusy] = useState(false);
 
   useEffect(() => {
     wbGetSettings().then(setWbSettings, () => undefined);
     qoderGetSettings().then(setQoderSettings, () => undefined);
+    traeGetSettings().then(setTraeSettings, () => undefined);
   }, []);
 
   useTauriEvent<WbCheckinResult>(WB_CHECKIN_EVENT, (e) => {
@@ -778,6 +803,11 @@ function AccountQuotaPanel() {
     // 成功 / 跳过 / 失败都刷一遍：跳过也要更新「已领取」；设置里的上次自动领取日期一并刷新。
     for (const r of e.payload) void fetchKey(`qoder:${r.id}`);
     qoderGetSettings().then(setQoderSettings, () => undefined);
+  }, []);
+
+  useTauriEvent<TraeCheckinResult[]>(TRAE_AUTO_CHECKIN_EVENT, (e) => {
+    for (const r of e.payload) void fetchKey(`trae:${r.id}`);
+    traeGetSettings().then(setTraeSettings, () => undefined);
   }, []);
 
   /**
@@ -835,6 +865,7 @@ function AccountQuotaPanel() {
       else if (prefix === "claude") dto = await claudeQuotaFetch(id).catch((e) => failedDto(e, { id, windows: [] }));
       else if (prefix === "zcode") dto = await zcodeQuotaFetch(id).catch((e) => failedDto(e, { id, limits: [] }));
       else if (prefix === "mimo") dto = await mimoQuotaFetch(id).catch((e) => failedDto(e, { id, balances: [], windows: [] }));
+      else if (prefix === "trae") dto = await traeQuotaFetch(id).catch((e) => failedDto(e, { id, windows: [] }));
       else dto = await deepseekBalanceFetch(id).catch((e) => failedDto(e, { id, balances: [] }));
       setResults((prev) => ({ ...prev, [key]: dto }));
     } finally {
@@ -872,10 +903,10 @@ function AccountQuotaPanel() {
   const refreshWbRef = useRef(refreshWb);
   refreshWbRef.current = refreshWb;
 
-  const cancelLogin = useCallback((provider: AuthProvider) => {
-    void (provider === "codex" ? codexOauthCancel() : cursorOauthCancel()).catch(() => undefined);
+  const cancelLogin = useCallback((_provider: AuthProvider) => {
+    // Trae 的后端授权被共用取消槽管理：直接调 cursor_oauth_cancel 也会打断它。
+    void cursorOauthCancel().catch(() => undefined);
   }, []);
-
   /**
    * 链接授权：后端打开浏览器并等结果，成功后立刻查一次该账号额度。
    * 同一账号重新授权时后端按身份去重，更新的是原卡片。
@@ -890,6 +921,10 @@ function AccountQuotaPanel() {
           const account = await codexOauthStart();
           setCodexAccounts(await codexListAccounts());
           void fetchKey(`codex:${account.id}`);
+        } else if (provider === "trae") {
+          const account = await traeOauthStart();
+          setAuthAccounts(await quotaAccountsList());
+          void fetchKey(`trae:${account.id}`);
         } else {
           const account = provider === "qoder" ? await qoderOauthStart() : await cursorOauthStart(provider);
           setAuthAccounts(await quotaAccountsList());
@@ -1037,6 +1072,52 @@ function AccountQuotaPanel() {
     [fetchKey],
   );
 
+  const replaceTraeToken = useCallback(
+    async (old: QuotaAccount, refreshToken: string) => {
+      const account = await traeAddRefreshToken(refreshToken);
+      const oldKey = `trae:${old.id}`;
+      const newKey = `trae:${account.id}`;
+      if (account.id !== old.id) {
+        await quotaAccountDelete(old.id).catch(() => undefined);
+        dropResult(oldKey);
+        setOrder((prev) => {
+          const next = prev.map((k) => (k === oldKey ? newKey : k));
+          saveCardOrder(next);
+          return next;
+        });
+      }
+      setAuthAccounts(await quotaAccountsList());
+      setTraeReplaceId(null);
+      void fetchKey(newKey);
+    },
+    [fetchKey],
+  );
+
+  const checkinTrae = useCallback(
+    async (id: number) => {
+      try {
+        const r = await traeCheckinNow(id);
+        if (!r.skipped) void fetchKey(`trae:${id}`);
+      } catch {
+        /* 卡片自己会显示错误态 */
+      }
+    },
+    [fetchKey],
+  );
+
+  const checkinAllTrae = useCallback(async () => {
+    setTraeCheckinBusy(true);
+    try {
+      const results = await traeCheckinAll();
+      for (const r of results) {
+        if (!r.skipped) void fetchKey(`trae:${r.id}`);
+      }
+      setTraeSettings(await traeGetSettings().catch(() => traeSettings));
+    } finally {
+      setTraeCheckinBusy(false);
+    }
+  }, [fetchKey, traeSettings]);
+
   const removeAuthAccount = useCallback(
     async (account: QuotaAccount) => {
       const ok = await confirm({
@@ -1108,6 +1189,7 @@ function AccountQuotaPanel() {
     claude: claudeAccounts.map((a) => `claude:${a.id}`),
     zcode: zcodeAccounts.map((a) => `zcode:${a.id}`),
     mimo: mimoAccounts.map((a) => `mimo:${a.id}`),
+    trae: traeAccounts.map((a) => `trae:${a.id}`),
   };
 
   /** 服务商关着 → 不出卡；没账号 → 授权空卡；账号全被隐藏 → 什么都不出。 */
@@ -1126,6 +1208,7 @@ function AccountQuotaPanel() {
     ...keysOf("claude"),
     ...keysOf("zcode"),
     ...keysOf("mimo"),
+    ...keysOf("trae"),
     ...(enabled.includes("deepseek") && dsFormOpen && dsAccounts.length > 0 ? ["deepseek:new"] : []),
     ...(enabled.includes("claude") && claudeFormOpen && claudeAccounts.length > 0 ? ["claude:new"] : []),
     ...(enabled.includes("zcode") && zcodeFormOpen && zcodeAccounts.length > 0 ? ["zcode:new"] : []),
@@ -1185,6 +1268,11 @@ function AccountQuotaPanel() {
         focusCard(mimoAccounts.length > 0 ? "mimo:new" : "mimo:empty");
         return;
       }
+      if (card === "trae") {
+        void startLogin("trae");
+        if (traeAccounts.length === 0) focusCard("trae:empty");
+        return;
+      }
       void startLogin(card);
       const hasAccounts = card === "codex" ? codexAccounts.length > 0 : authAccounts.some((a) => a.provider === card);
       if (!hasAccounts) focusCard(`${card}:empty`);
@@ -1197,11 +1285,11 @@ function AccountQuotaPanel() {
       claudeAccounts.length,
       zcodeAccounts.length,
       mimoAccounts.length,
+      traeAccounts.length,
       codexAccounts.length,
       authAccounts,
     ],
   );
-
   const toggleProvider = useCallback(
     (card: QuotaCardId) => setCardEnabled(card, !enabled.includes(card)),
     [enabled, setCardEnabled],
@@ -1214,8 +1302,14 @@ function AccountQuotaPanel() {
   const claimableQoderKeys = boardAccountKeys.filter(
     (k) => k.startsWith("qoder:") && liveQoderCampaign(results[k] as QoderQuotaDto | undefined, now)?.claimable === true,
   );
+  /** 看板上今日未签到的 Trae 账号（查询成功且明确未签）。 */
+  const uncheckedTraeKeys = boardAccountKeys.filter((k) => {
+    if (!k.startsWith("trae:")) return false;
+    const q = results[k] as TraeQuotaDto | undefined;
+    return q?.ok === true && q.checkedIn === false;
+  });
   const checkinRunning = checkinBusy.length > 0;
-  const dailyTodoBusy = checkinRunning || qoderClaimBusy;
+  const dailyTodoBusy = checkinRunning || qoderClaimBusy || traeCheckinBusy;
   const autoCheckinText = wbSettings
     ? wbSettings.checkinEnabled
       ? t("checkinAuto", { time: wbSettings.checkinTime })
@@ -1238,6 +1332,17 @@ function AccountQuotaPanel() {
   const autoQoderClaim: FootSchedule | null =
     qoderSettings && autoQoderClaimText
       ? { full: autoQoderClaimText, short: qoderSettings.claimEnabled ? qoderSettings.claimTime : t("autoOffShort") }
+      : null;
+  const autoTraeCheckinText = traeSettings
+    ? traeSettings.checkinEnabled
+      ? traeSettings.lastAutoCheckinDate
+        ? t("traeAutoCheckinWithLast", { time: traeSettings.checkinTime, date: traeSettings.lastAutoCheckinDate })
+        : t("traeAutoCheckin", { time: traeSettings.checkinTime })
+      : t("traeAutoCheckinOff")
+    : null;
+  const autoTraeCheckin: FootSchedule | null =
+    traeSettings && autoTraeCheckinText
+      ? { full: autoTraeCheckinText, short: traeSettings.checkinEnabled ? traeSettings.checkinTime : t("autoOffShort") }
       : null;
   const checkinAll = async () => {
     if (uncheckedWbIds.length === 0) return;
@@ -1264,11 +1369,13 @@ function AccountQuotaPanel() {
     if (dailyTodoBusy) return;
     if (uncheckedWbIds.length > 0) await checkinAll();
     if (claimableQoderKeys.length > 0) await claimAllQoder();
+    if (uncheckedTraeKeys.length > 0) await checkinAllTrae();
   };
   const dailyTodoLabel = (() => {
     const parts: string[] = [];
     if (uncheckedWbIds.length > 0) parts.push(t("dailyTodoCheckin", { count: uncheckedWbIds.length }));
     if (claimableQoderKeys.length > 0) parts.push(t("dailyTodoClaim", { count: claimableQoderKeys.length }));
+    if (uncheckedTraeKeys.length > 0) parts.push(t("traeDailyTodoCheckin", { count: uncheckedTraeKeys.length }));
     return parts.join(t("dailyTodoSep"));
   })();
   const dailyJobSections: DailyScheduleSection[] = [];
@@ -1318,6 +1425,28 @@ function AccountQuotaPanel() {
       formatError: errorText,
     });
   }
+  if (traeAccounts.length > 0) {
+    dailyJobSections.push({
+      id: "trae-checkin",
+      settings: traeSettings
+        ? {
+            enabled: traeSettings.checkinEnabled,
+            time: traeSettings.checkinTime,
+            lastRunDate: traeSettings.lastAutoCheckinDate,
+          }
+        : null,
+      copy: {
+        title: t("traeAutoCheckinDaily"),
+        lastRun: (date) => t("traeAutoCheckinLast", { date }),
+        scheduleOff: t("traeAutoCheckinScheduleOff"),
+        hint: t("traeAutoCheckinHint"),
+      },
+      onSave: async (enabled, time) => {
+        setTraeSettings(await traeUpdateSettings({ checkinEnabled: enabled, checkinTime: time }));
+      },
+      formatError: errorText,
+    });
+  }
   const dailyJobsEnabled = dailyJobSections.filter((s) => s.settings?.enabled).length;
   const dailyJobsButtonLabel =
     dailyJobsEnabled === 0 ? t("dailyJobsOff") : t("dailyJobsOn", { count: dailyJobsEnabled });
@@ -1357,6 +1486,13 @@ function AccountQuotaPanel() {
     })),
     ...zcodeAccounts.map((a) => ({ key: `zcode:${a.id}`, card: "zcode" as const, name: a.label ?? `#${a.id}` })),
     ...mimoAccounts.map((a) => ({ key: `mimo:${a.id}`, card: "mimo" as const, name: a.label ?? `#${a.id}` })),
+    ...traeAccounts.map((a) => ({
+      key: `trae:${a.id}`,
+      card: "trae" as const,
+      name: a.label ?? `#${a.id}`,
+      dailyDone:
+        (results[`trae:${a.id}`] as TraeQuotaDto | undefined)?.checkedIn === true ? t("checkinDoneShort") : undefined,
+    })),
   ].map((a) => ({
     ...a,
     status: cardStatus(a.key, results[a.key], dsPeaks),
@@ -1633,6 +1769,43 @@ function AccountQuotaPanel() {
       );
     }
 
+    if (prefix === "trae") {
+      const account = traeAccounts.find((a) => a.id === id);
+      if (!account) {
+        return (
+          <QuotaCardShell
+            key={key}
+            brand="trae"
+            product="Trae CN"
+            onHide={hideProvider}
+            frame={frame}
+          >
+            {authPrompt("trae")}
+          </QuotaCardShell>
+        );
+      }
+      return (
+        <TraeCard
+          key={key}
+          account={account}
+          quota={quota as TraeQuotaDto | undefined}
+          loading={loading}
+          checkinBusy={traeCheckinBusy}
+          replacing={traeReplaceId === account.id}
+          onRefresh={() => void fetchKey(key)}
+          onDelete={() => void removeAuthAccount(account)}
+          onCheckin={() => void checkinTrae(account.id)}
+          onReplace={(token) => replaceTraeToken(account, token)}
+          onStartReplace={() => setTraeReplaceId(account.id)}
+          onCancelReplace={() => setTraeReplaceId(null)}
+          onAddAnother={addAnother("trae")}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
+          autoCheckin={autoTraeCheckin}
+          frame={frame}
+        />
+      );
+    }
+
     const account = accounts.find((a) => a.id === id);
     if (!account) {
       return (
@@ -1725,6 +1898,12 @@ function AccountQuotaPanel() {
                         text={t("qoderClaimableCount", { count: claimableQoderKeys.length })}
                         onFocus={focusCard}
                       />
+                      <SummarySegment
+                        keys={uncheckedTraeKeys}
+                        tone="warn"
+                        text={t("traeUncheckedCount", { count: uncheckedTraeKeys.length })}
+                        onFocus={focusCard}
+                      />
                     </span>
                   )}
                   <span className="aq-refreshed-at">
@@ -1747,7 +1926,7 @@ function AccountQuotaPanel() {
                     refreshAllLabel={t("refreshAll")}
                     refreshingLabel={t("refreshing")}
                   />
-                  {(uncheckedWbIds.length > 0 || claimableQoderKeys.length > 0) && (
+                  {(uncheckedWbIds.length > 0 || claimableQoderKeys.length > 0 || uncheckedTraeKeys.length > 0) && (
                     <button
                       type="button"
                       className="btn btn-secondary btn-small"
@@ -1963,7 +2142,7 @@ function QuotaCardShell({
   frame,
   children,
 }: {
-  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo";
+  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae";
   product: string;
   tag?: ReactNode;
   /** 结果时间（unix 秒）；有值时卡片底部显示「N 分钟前」。 */
@@ -3959,6 +4138,189 @@ function MimoCard({
             />
           ))}
         </div>
+      )}
+    </QuotaCardShell>
+  );
+}
+
+/** Trae refreshToken 表单（新增 / 更换共用）。 */
+function TraeTokenForm({
+  onSubmit,
+  onCancel,
+  hint,
+  submitText,
+}: {
+  onSubmit: (refreshToken: string) => Promise<void>;
+  onCancel?: () => void;
+  hint?: string;
+  submitText?: string;
+}) {
+  const { t } = useTranslation("quota");
+  const [token, setToken] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(token.trim());
+      setToken("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      className="aq-auth aq-key-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <p className="aq-auth-text">{hint ?? t("authHint.trae")}</p>
+      <input
+        className="input-field aq-mono"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="AbCdEf…=.18dxxx"
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        disabled={busy}
+        autoFocus={onCancel != null}
+      />
+      {error && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
+        </div>
+      )}
+      <div className="aq-key-actions">
+        {onCancel && (
+          <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
+            {t("authCancel")}
+          </button>
+        )}
+        <button type="submit" className="btn btn-primary btn-small" disabled={busy || !token.trim()}>
+          {busy ? <RefreshCw size={13} className="spin" /> : <KeyRound size={13} />}
+          {busy ? t("dsVerifying") : (submitText ?? t("traeSaveToken"))}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function TraeCard({
+  account,
+  quota,
+  loading,
+  checkinBusy,
+  replacing,
+  onRefresh,
+  onDelete,
+  onCheckin,
+  onReplace,
+  onStartReplace,
+  onCancelReplace,
+  onAddAnother,
+  onSaveTag,
+  autoCheckin,
+  frame,
+}: {
+  account: QuotaAccount;
+  quota: TraeQuotaDto | undefined;
+  loading: boolean;
+  /** 「全部签到」整轮进行中（单账号签到不加锁，后端有幂等）。 */
+  checkinBusy: boolean;
+  replacing: boolean;
+  onRefresh: () => void;
+  onDelete: () => void;
+  onCheckin: () => void;
+  onReplace: (refreshToken: string) => Promise<void>;
+  onStartReplace: () => void;
+  onCancelReplace: () => void;
+  onAddAnother?: () => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
+  autoCheckin: FootSchedule | null;
+  frame: CardFrame;
+}) {
+  const { t } = useTranslation("quota");
+  const ok = quota?.ok === true && !replacing;
+  const checkedIn = quota?.checkedIn === true;
+  const checkinEnabled = ok && quota?.checkinEnabled !== false;
+  const tone: "ok" | "idle" | "bad" = !checkinEnabled ? "idle" : checkedIn ? "ok" : "idle";
+  // 与 WorkBuddy 一致：已签显示打卡时刻（本地时间 HH:MM）；本地无记录（历史签到）时退回短文案。
+  const checkinText = !checkinEnabled
+    ? t("traeCheckinClosed")
+    : checkedIn
+      ? quota?.checkedInAt
+        ? t("checkinDoneToday", {
+            time: new Date(quota.checkedInAt * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+          })
+        : t("checkinDoneShort")
+      : t("traeNotCheckedIn");
+  return (
+    <QuotaCardShell
+      brand="trae"
+      product="Trae CN"
+      at={replacing ? null : quota?.at}
+      loading={loading || checkinBusy}
+      onRefresh={onRefresh}
+      onDelete={onDelete}
+      extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      footLead={
+        ok && checkinEnabled !== false ? (
+          <div className={`aq-checkin aq-checkin-${tone}`}>
+            <CalendarCheck size={12} className="aq-checkin-icon" />
+            <span className="aq-checkin-text" title={checkinText}>
+              {checkinText}
+            </span>
+            <ScheduleTail schedule={autoCheckin} />
+            {!checkedIn && (
+              <button type="button" className="aq-checkin-btn" onClick={onCheckin} disabled={checkinBusy}>
+                {checkinBusy ? <RefreshCw size={11} className="spin" /> : null}
+                {t("checkin")}
+              </button>
+            )}
+          </div>
+        ) : undefined
+      }
+      frame={frame}
+    >
+      <IdentityRow name={quota?.label ?? account.label} badge="TRAE" mono tag={account.tag} onSaveTag={onSaveTag} />
+      {replacing ? (
+        <TraeTokenForm onSubmit={onReplace} onCancel={onCancelReplace} hint={t("traeReplaceHint")} submitText={t("traeReplaceToken")} />
+      ) : (
+        <CardMessage quota={quota} idleText={t("neverRefreshed")} onReauth={onStartReplace} reauthText={t("traeReplaceToken")} />
+      )}
+      {ok && (quota.windows?.length ?? 0) === 0 && (
+        <div className="aq-card-idle">{t("traeNoWindows")}</div>
+      )}
+      {ok && (quota.windows?.length ?? 0) > 0 && (
+        <div className="aq-card-body">
+          {quota.windows.map((w) => {
+            const remainPct = w.limit > 0 ? clampPct(((w.limit - w.used) / w.limit) * 100) : 0;
+            return (
+              <MeterRow
+                key={w.plan}
+                label={w.plan}
+                value={`${remainPct}%`}
+                percent={remainPct}
+                hint={t("traeUsage", {
+                  used: formatCredits(w.used),
+                  limit: formatCredits(w.limit),
+                  remaining: formatCredits(w.limit - w.used),
+                })}
+              />
+            );
+          })}
+        </div>
+      )}
+      {ok && quota?.credits != null && (
+        <div className="aq-card-idle">{t("traeCredits", { credits: formatCredits(quota.credits) })}</div>
       )}
     </QuotaCardShell>
   );

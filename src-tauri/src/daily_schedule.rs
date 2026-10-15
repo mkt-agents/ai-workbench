@@ -98,6 +98,9 @@ pub fn spawn(app: tauri::AppHandle) {
             if let Err(e) = crate::qoder_quota::auto_tick(&app).await {
                 eprintln!("[qoder] auto-claim tick failed: {e}");
             }
+            if let Err(e) = crate::trae_quota::auto_tick(&app).await {
+                eprintln!("[trae] auto-checkin tick failed: {e}");
+            }
         }
     });
 }

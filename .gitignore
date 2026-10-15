@@ -5,6 +5,7 @@ node_modules/
 dist/
 src-tauri/target/
 /target/
+.cargo-target/
 
 # Rust
 src-tauri/Cargo.lock

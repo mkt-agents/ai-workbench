@@ -12,6 +12,7 @@ import workbuddyAi from "../assets/providers/workbuddy-ai.png";
 import antigravity from "../assets/providers/antigravity.png";
 import zcode from "../assets/providers/zcode.png";
 import xai from "../assets/providers/xai.png";
+import trae from "../assets/providers/trae.png";
 
 /** `QUOTA_PROVIDERS[].id` → 资源 URL */
 const BY_PROVIDER: Record<string, string> = {
@@ -28,6 +29,7 @@ const BY_PROVIDER: Record<string, string> = {
   zcode,
   mimo: "/ai-providers/mimo.png",
   "grok-build": xai,
+  trae,
 };
 
 /** 看板卡片 `brand`（`QuotaCardShell`）→ 资源 URL */
@@ -43,6 +45,7 @@ const BY_CARD_BRAND: Record<string, string> = {
   claude,
   zcode,
   mimo: "/ai-providers/mimo.png",
+  trae,
 };
 
 export function providerLogoSrc(providerId: string): string | null {
