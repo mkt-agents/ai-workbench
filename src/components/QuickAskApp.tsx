@@ -8,8 +8,10 @@ import { useGlobalStore } from "../core/store";
 import type { AIModelConfig, GitScannedRepo, QuickAskSession, QuickAskTurn, SnippetTaskBind } from "../core/types";
 import { bootApp } from "../core/boot";
 import { projectNameFromPath } from "../core/pathUtils";
+import { writeStoredString } from "../core/localState";
 import { applyDocumentTheme } from "../lib/theme";
 import { resolveSceneModel } from "../lib/aiSceneModels";
+import { DEVTOOLS_TOOL_KEY } from "./DevTools";
 import {
   canAddAttachment,
   makeAttachment,
@@ -586,9 +588,11 @@ function QuickAskApp() {
     }
   };
 
-  /** Editor-class tools live in the main window: switch tab and get out of the way. */
-  const jumpToDevtools = async () => {
+  /** Editor-class tools live in the main window: select the tool (shared localStorage +
+      storage 事件让已挂载的 DevTools 跟着切), switch tab and get out of the way. */
+  const jumpToDevtools = async (toolId?: string) => {
     try {
+      if (toolId) writeStoredString(DEVTOOLS_TOOL_KEY, toolId);
       await invoke("open_main_tab", { tab: "devtools" });
       await hide();
     } catch {
@@ -691,7 +695,7 @@ function QuickAskApp() {
       </header>
 
       {mode === "tools" ? (
-        <ToolsPanel onJump={() => void jumpToDevtools()} />
+        <ToolsPanel onJump={(toolId) => void jumpToDevtools(toolId)} />
       ) : (
         <>
           <div className="quick-ask-toolbar">

@@ -20,11 +20,11 @@ import { emit } from "@tauri-apps/api/event";
 const THEME_OPTIONS: AppTheme[] = ["ice", "silver", "glass", "light", "dark", "system"];
 
 type Props = {
-  /** 打开升级弹窗（更新日志预览 + 应用内升级）。没传时回落到「打开发布页」。 */
-  onOpenUpdate?: (target: { version: string; htmlUrl: string }) => void;
+  /** 手动检查发现新版：挂右下角「发现新版本」浮框（与启动自动检查同一条）。 */
+  onNoticeUpdate?: (target: { version: string; htmlUrl: string }) => void;
 };
 
-function Settings({ onOpenUpdate }: Props = {}) {
+function Settings({ onNoticeUpdate }: Props = {}) {
   const { t, i18n } = useTranslation("settings");
   const confirm = useConfirm();
 
@@ -158,10 +158,15 @@ function Settings({ onOpenUpdate }: Props = {}) {
         showMsg("success", t("about.upToDate", { version: result.remote }));
       } else if (result.status === "updateAvailable") {
         setUpdateTarget({ version: result.remote, htmlUrl: result.htmlUrl });
-        showMsg(
-          "success",
-          t("about.updateAvailable", { remote: result.remote, local: result.local })
-        );
+        // 发现新版走右下角浮框；没接线时（纯浏览器 dev）退回 toast
+        if (onNoticeUpdate) {
+          onNoticeUpdate({ version: result.remote, htmlUrl: result.htmlUrl });
+        } else {
+          showMsg(
+            "success",
+            t("about.updateAvailable", { remote: result.remote, local: result.local })
+          );
+        }
       } else {
         showMsg("error", t("about.checkFailed", { error: result.message }));
       }
@@ -363,21 +368,6 @@ function Settings({ onOpenUpdate }: Props = {}) {
           </div>
           <p className="setting-hint">{t("about.privacyNote")}</p>
           <div className="setting-inline-controls">
-            {updateTarget && (
-              <button
-                className="btn btn-primary btn-small about-upgrade-btn"
-                title={t("about.upgradeNow")}
-                onClick={() => {
-                  if (onOpenUpdate) onOpenUpdate(updateTarget);
-                  else {
-                    const url = updateTarget.htmlUrl || APP_RELEASES_URL;
-                    invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
-                  }
-                }}
-              >
-                {t("about.upgrade")}
-              </button>
-            )}
             <button
               className="btn btn-secondary btn-small"
               disabled={checking}

@@ -98,6 +98,11 @@ function App() {
   const [updateTarget, setUpdateTarget] = useState<{ version: string; htmlUrl: string } | null>(
     null
   );
+  /** 设置页手动检查发现的新版：交给 UpdateBanner 挂浮框（与启动检查同一条）。 */
+  const [updateNotice, setUpdateNotice] = useState<{
+    version: string;
+    htmlUrl: string;
+  } | null>(null);
   const collapsed = settings.sidebarCollapsed;
   const collapseMotionSkip = useRef(true);
   const autoCollapsedByWidth = useRef(false);
@@ -558,7 +563,9 @@ function App() {
                   </div>
                 </div>
               )}
-              {activeTab === "settings" && <SettingsPage onOpenUpdate={setUpdateTarget} />}
+              {activeTab === "settings" && (
+                <SettingsPage onNoticeUpdate={setUpdateNotice} />
+              )}
               {trayToast && (
                 <div className="toast toast-success" role="status">
                   <span className="toast-icon">
@@ -575,7 +582,11 @@ function App() {
                   <span className="toast-text">{hotkeyToast}</span>
                 </div>
               )}
-              <UpdateBanner onOpen={setUpdateTarget} />
+              <UpdateBanner
+                onOpen={setUpdateTarget}
+                external={updateNotice}
+                onClearExternal={() => setUpdateNotice(null)}
+              />
               {updateTarget && (
                 <UpdateModal
                   version={updateTarget.version}

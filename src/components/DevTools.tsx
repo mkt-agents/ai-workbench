@@ -25,7 +25,8 @@ import RegexTool from "./devtools/RegexTool";
 import HashTool from "./devtools/HashTool";
 import CalculatorTool from "./devtools/CalculatorTool";
 
-const STORAGE_KEY = "workbench-devtools-tool";
+/** 当前工具 id；快问跳转写它（storage 事件跨窗同步），本页监听切换。 */
+export const DEVTOOLS_TOOL_KEY = "workbench-devtools-tool";
 const ORDER_KEY = "workbench-devtools-order";
 
 type ToolDef = {
@@ -111,15 +112,26 @@ function DevTools({ active = true }: { active?: boolean }) {
   );
 
   const [activeTool, setActiveTool] = useState<string>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    const stored = localStorage.getItem(DEVTOOLS_TOOL_KEY);
     return stored && TOOL_BY_ID.has(stored) ? stored : "json";
   });
 
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, activeTool);
+    localStorage.setItem(DEVTOOLS_TOOL_KEY, activeTool);
   }, [activeTool]);
+
+  // 跨窗同步：快问「跳转」写入该 key 时切到对应工具（storage 事件只在别的窗口触发，
+  // 覆盖本页已挂载的场景；未挂载时走 mount 时的 init 读取）。
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== DEVTOOLS_TOOL_KEY || e.newValue == null) return;
+      if (TOOL_BY_ID.has(e.newValue)) setActiveTool(e.newValue);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(ORDER_KEY, JSON.stringify(toolOrder));

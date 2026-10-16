@@ -156,12 +156,22 @@ pub fn parse_current_period_usage(body: &str) -> Option<PeriodUsage> {
     }
     let spend = root.get("spendLimitUsage");
     let spend_num = |k: &str| spend.and_then(|s| s.get(k)).and_then(as_f64);
+    let remaining = plan.get("remaining").and_then(as_f64);
+    // 个人 Pro 账期初（无用量记录）上游不返回 totalSpend/includedSpend（实测 2026-10-16：
+    // planUsage 只有 remaining/limit/百分比），套餐内已用按 limit - remaining 推导。
+    let included_spend = plan
+        .get("includedSpend")
+        .and_then(as_f64)
+        .or_else(|| match (limit, remaining) {
+            (Some(l), Some(r)) => Some((l - r).max(0.0)),
+            _ => None,
+        });
     Some(PeriodUsage {
         cycle_start_ms: root.get("billingCycleStart").and_then(as_ms),
         cycle_end_ms: root.get("billingCycleEnd").and_then(as_ms),
         total_spend,
-        included_spend: plan.get("includedSpend").and_then(as_f64),
-        remaining: plan.get("remaining").and_then(as_f64),
+        included_spend,
+        remaining,
         limit,
         auto_percent_used: plan.get("autoPercentUsed").and_then(as_f64),
         api_percent_used: plan.get("apiPercentUsed").and_then(as_f64),
@@ -289,6 +299,27 @@ mod tests {
         let total = p.total_percent_used.expect("totalPercentUsed");
         assert!((total - 36.313).abs() < 0.01, "total={total}");
         assert_eq!(p.limit_type.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn parse_derives_included_spend_when_upstream_omits_it() {
+        // 2026-10-16 实测个人 Pro（账期内无用量记录）：上游不给 totalSpend/includedSpend，
+        // 套餐内已用按 limit - remaining 推导 = 0，卡片才能显示 $0 / $20 而不是 — / $20。
+        let body = r#"{"billingCycleStart":"1792124525000","billingCycleEnd":"1794802925000","planUsage":{"remaining":2000,"limit":2000,"remainingBonus":false,"autoPercentUsed":0,"apiPercentUsed":0,"totalPercentUsed":0},"spendLimitUsage":{"limitType":"user"}}"#;
+        let p = parse_current_period_usage(body).expect("parse");
+        assert_eq!(p.total_spend, None);
+        assert_eq!(p.included_spend, Some(0.0));
+        assert_eq!(p.remaining, Some(2000.0));
+        assert_eq!(p.limit, Some(2000.0));
+    }
+
+    #[test]
+    fn parse_derives_partial_included_spend_from_remaining() {
+        // 用了一部分但上游仍不给金额字段：推导 = limit - remaining。
+        let body = r#"{"planUsage":{"remaining":1614,"limit":2000,"totalPercentUsed":19.3}}"#;
+        let p = parse_current_period_usage(body).expect("parse");
+        assert_eq!(p.total_spend, None);
+        assert_eq!(p.included_spend, Some(386.0));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "available": "New version {{remote}} — view the release notes and upgrade",
+  "available": "New version {{remote}}",
   "installed": "Upgrade complete — AI Workbench is now v{{version}}",
   "view": "View update",
   "skipVersion": "Skip this version",

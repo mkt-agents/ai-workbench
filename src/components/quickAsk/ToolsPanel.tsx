@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ExternalLink } from "lucide-react";
 import { readStoredString, writeStoredString } from "../../core/localState";
+import CalculatorTool from "../devtools/CalculatorTool";
 import EncoderTool from "../devtools/EncoderTool";
 import HashTool from "../devtools/HashTool";
 import JwtTool from "../devtools/JwtTool";
@@ -14,10 +15,15 @@ const EMBEDDED = [
   { id: "encoder", label: "encoder.title", C: EncoderTool },
   { id: "hash", label: "hash.title", C: HashTool },
   { id: "jwt", label: "jwt.title", C: JwtTool },
+  { id: "calc", label: "calc.title", C: CalculatorTool },
 ] as const;
 
-/** Editor-class tools need the wide main-window layout — jump instead. */
-const JUMP_ONLY = ["json.title", "cron.title", "regex.title"] as const;
+/** Editor-class tools need the wide main-window layout — jump instead (carrying the tool id). */
+const JUMP_ONLY = [
+  { id: "json", label: "json.title" },
+  { id: "cron", label: "cron.title" },
+  { id: "regex", label: "regex.title" },
+] as const;
 
 type EmbeddedId = (typeof EMBEDDED)[number]["id"];
 
@@ -28,7 +34,7 @@ function loadTool(): EmbeddedId {
   return EMBEDDED.some((e) => e.id === stored) ? (stored as EmbeddedId) : "timestamp";
 }
 
-export default function ToolsPanel({ onJump }: { onJump: () => void }) {
+export default function ToolsPanel({ onJump }: { onJump: (toolId: string) => void }) {
   const { t: td } = useTranslation("devtools");
   // Survives mode switches — the panel unmounts every time the user leaves tools.
   const [tool, setTool] = useState<EmbeddedId>(loadTool);
@@ -53,9 +59,14 @@ export default function ToolsPanel({ onJump }: { onJump: () => void }) {
           ))}
         </div>
         <div className="qa-tools-row">
-          {JUMP_ONLY.map((label) => (
-            <button key={label} type="button" className="qa-opt-chip" onClick={onJump}>
-              <ExternalLink size={11} /> {td(label)}
+          {JUMP_ONLY.map((tool) => (
+            <button
+              key={tool.id}
+              type="button"
+              className="qa-opt-chip"
+              onClick={() => onJump(tool.id)}
+            >
+              <ExternalLink size={11} /> {td(tool.label)}
             </button>
           ))}
         </div>

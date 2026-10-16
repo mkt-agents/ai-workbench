@@ -6423,22 +6423,15 @@
 
 /* ── 快捷应用页的视图切换（应用 / 端口查杀） ── */
 
+/* 视图切换不再套容器壳（工具条 → 容器 → 激活片三层太重）：tab 直接坐在工具条上，
+   激活态用 accent 胶囊，与右侧 al-btn / devtools chip 同一套语言 */
 .al-view-tabs {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 4px;
   height: var(--al-control-h);
-  padding: 2px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--overlay-1);
-  margin-right: 2px;
+  margin-right: 4px;
   flex-shrink: 0;
-}
-
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .al-view-tabs {
-  background: var(--overlay-2);
-  border-color: var(--overlay-3);
 }
 
 .al-view-tab {
@@ -6447,7 +6440,7 @@
   font-size: 12px;
   font-weight: 500;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
@@ -6457,7 +6450,7 @@
 
 .al-view-tab:hover {
   color: var(--text-0);
-  background: var(--overlay-2);
+  background: var(--overlay-1);
 }
 
 .al-view-tab.active {
