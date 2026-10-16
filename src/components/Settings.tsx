@@ -354,24 +354,7 @@ function Settings({ onOpenUpdate }: Props = {}) {
             <span className="setting-label">{t("about.version")}</span>
             <span className="setting-value about-version">
               {appVersion}
-              {updateTarget && (
-                <>
-                  <span className="about-version-next">→ {updateTarget.version}</span>
-                  <button
-                    className="btn btn-primary btn-small about-upgrade-btn"
-                    title={t("about.upgradeNow")}
-                    onClick={() => {
-                      if (onOpenUpdate) onOpenUpdate(updateTarget);
-                      else {
-                        const url = updateTarget.htmlUrl || APP_RELEASES_URL;
-                        invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
-                      }
-                    }}
-                  >
-                    {t("about.upgrade")}
-                  </button>
-                </>
-              )}
+              {updateTarget && <span className="about-version-next">→ {updateTarget.version}</span>}
             </span>
           </div>
           <div className="setting-row">
@@ -380,6 +363,21 @@ function Settings({ onOpenUpdate }: Props = {}) {
           </div>
           <p className="setting-hint">{t("about.privacyNote")}</p>
           <div className="setting-inline-controls">
+            {updateTarget && (
+              <button
+                className="btn btn-primary btn-small about-upgrade-btn"
+                title={t("about.upgradeNow")}
+                onClick={() => {
+                  if (onOpenUpdate) onOpenUpdate(updateTarget);
+                  else {
+                    const url = updateTarget.htmlUrl || APP_RELEASES_URL;
+                    invoke("open_in_browser", { url }).catch(() => window.open(url, "_blank"));
+                  }
+                }}
+              >
+                {t("about.upgrade")}
+              </button>
+            )}
             <button
               className="btn btn-secondary btn-small"
               disabled={checking}

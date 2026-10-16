@@ -153,7 +153,7 @@
   color: var(--text-2);
 }
 
-/* 有新版本时跟在版本号后面：「0.2.24 → 0.2.25 [升级]」，按钮栏只留常驻操作。 */
+/* 有新版本时版本号后跟「0.2.24 → 0.2.25」；「升级」主按钮在下方按钮栏首位，与常驻操作并排。 */
 .settings-page .about-version {
   display: inline-flex;
   align-items: center;
@@ -166,8 +166,9 @@
 }
 
 .settings-page .about-upgrade-btn {
-  min-height: 22px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 0 12px;
+  font-weight: 600;
 }
 
 /* Theme chips: hug content, wrap cleanly — no empty full-width track */
