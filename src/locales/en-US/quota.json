@@ -103,6 +103,7 @@
   "zcodeSaveKey": "Verify & save",
   "zcodeReplaceKey": "Replace key",
   "zcodeReplaceHint": "Enter a new API key; it replaces this card after verification (the old key is removed).",
+  "zcodeAccountPlaceholder": "Account / note (optional, e.g. phone number)",
   "zcodeNoLimits": "No quota information returned",
   "zcodeUsage": "Used {{usage}} / {{limit}}",
   "traeSaveToken": "Verify & save",

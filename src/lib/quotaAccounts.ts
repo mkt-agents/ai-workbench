@@ -56,9 +56,15 @@ export interface ClaudeQuotaDto {
 
 export interface ZcodeLimit {
   label: string;
-  usage: number;
-  limit: number;
-  unit: string | null;
+  /** 已用（上游 currentValue）。 */
+  used: number;
+  /** 窗口总量（上游 usage）；只给百分比的条目为 0。 */
+  total: number;
+  remaining: number | null;
+  /** 已用百分比；缺失时前端按 used/total 推导。 */
+  usedPercent: number | null;
+  /** 窗口重置时间（毫秒时间戳）。 */
+  resetAt: number | null;
 }
 
 export interface ZcodeQuotaDto {
@@ -66,6 +72,8 @@ export interface ZcodeQuotaDto {
   ok: boolean;
   message: string | null;
   label: string | null;
+  /** 套餐等级（lite / pro 等）。 */
+  level: string | null;
   limits: ZcodeLimit[];
   needsReauth: boolean;
   at: number;
@@ -93,7 +101,8 @@ export const claudeAddToken = (accessToken: string, refreshToken?: string) =>
 export const claudeQuotaFetch = (id: number) => invoke<ClaudeQuotaDto>("claude_quota_fetch", { id });
 
 /** 智谱 BigModel API Key；先查配额验证通过才入库。 */
-export const zcodeAddKey = (apiKey: string) => invoke<QuotaAccount>("zcode_add_key", { apiKey });
+export const zcodeAddKey = (apiKey: string, label?: string) =>
+  invoke<QuotaAccount>("zcode_add_key", { apiKey, label: label ?? null });
 export const zcodeQuotaFetch = (id: number) => invoke<ZcodeQuotaDto>("zcode_quota_fetch", { id });
 
 export type MimoMode = "payg" | "token_plan";

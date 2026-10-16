@@ -385,9 +385,15 @@ function claudeRemainPct(q: ClaudeQuotaDto): number | null {
 }
 
 function zcodeRemainPct(q: ZcodeQuotaDto): number | null {
-  const limits = q.limits?.filter((l) => l.limit > 0) ?? [];
+  const limits = q.limits?.filter((l) => l.usedPercent != null || l.total > 0) ?? [];
   if (limits.length === 0) return null;
-  return Math.min(...limits.map((l) => clampPct(((l.limit - l.usage) / l.limit) * 100)));
+  return Math.min(
+    ...limits.map((l) =>
+      l.usedPercent != null
+        ? clampPct(100 - l.usedPercent)
+        : clampPct(((l.total - l.used) / l.total) * 100),
+    ),
+  );
 }
 
 function mimoRemainPct(key: string, q: MimoQuotaDto, peaks: Record<string, number>): number | null {
@@ -1030,8 +1036,8 @@ function AccountQuotaPanel() {
   );
 
   const addZcodeKey = useCallback(
-    async (apiKey: string) => {
-      const account = await zcodeAddKey(apiKey);
+    async (apiKey: string, label: string) => {
+      const account = await zcodeAddKey(apiKey, label);
       setAuthAccounts(await quotaAccountsList());
       setZcodeFormOpen(false);
       void fetchKey(`zcode:${account.id}`);
@@ -1040,8 +1046,8 @@ function AccountQuotaPanel() {
   );
 
   const replaceZcodeKey = useCallback(
-    async (old: QuotaAccount, apiKey: string) => {
-      const account = await zcodeAddKey(apiKey);
+    async (old: QuotaAccount, apiKey: string, label: string) => {
+      const account = await zcodeAddKey(apiKey, label);
       const oldKey = `zcode:${old.id}`;
       const newKey = `zcode:${account.id}`;
       if (account.id !== old.id) {
@@ -1738,7 +1744,7 @@ function AccountQuotaPanel() {
           replacing={zcodeReplaceId === account.id}
           onRefresh={() => void fetchKey(key)}
           onDelete={() => void removeAuthAccount(account)}
-          onReplace={(apiKey) => replaceZcodeKey(account, apiKey)}
+          onReplace={(apiKey, label) => replaceZcodeKey(account, apiKey, label)}
           onStartReplace={() => setZcodeReplaceId(account.id)}
           onCancelReplace={() => setZcodeReplaceId(null)}
           onAddAnother={zcodeFormOpen ? undefined : () => setZcodeFormOpen(true)}
@@ -3620,13 +3626,14 @@ function ZcodeKeyForm({
   hint,
   submitText,
 }: {
-  onSubmit: (apiKey: string) => Promise<void>;
+  onSubmit: (apiKey: string, label: string) => Promise<void>;
   onCancel?: () => void;
   hint?: string;
   submitText?: string;
 }) {
   const { t } = useTranslation("quota");
   const [key, setKey] = useState("");
+  const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async () => {
@@ -3634,8 +3641,9 @@ function ZcodeKeyForm({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit(key.trim());
+      await onSubmit(key.trim(), label.trim());
       setKey("");
+      setLabel("");
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -3661,6 +3669,17 @@ function ZcodeKeyForm({
         onChange={(e) => setKey(e.target.value)}
         disabled={busy}
         autoFocus={onCancel != null}
+      />
+      <input
+        className="input-field"
+        type="text"
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={40}
+        placeholder={t("zcodeAccountPlaceholder")}
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        disabled={busy}
       />
       {error && (
         <div className="aq-card-error" role="alert">
@@ -3702,7 +3721,7 @@ function ZcodeCard({
   replacing: boolean;
   onRefresh: () => void;
   onDelete: () => void;
-  onReplace: (apiKey: string) => Promise<void>;
+  onReplace: (apiKey: string, label: string) => Promise<void>;
   onStartReplace: () => void;
   onCancelReplace: () => void;
   onAddAnother?: () => void;
@@ -3710,7 +3729,11 @@ function ZcodeCard({
   frame: CardFrame;
 }) {
   const { t } = useTranslation("quota");
+  const now = useContext(NowContext);
   const ok = quota?.ok === true && !replacing;
+  const badge = quota?.level
+    ? quota.level.charAt(0).toUpperCase() + quota.level.slice(1)
+    : "API";
   return (
     <QuotaCardShell
       brand="zcode"
@@ -3722,7 +3745,7 @@ function ZcodeCard({
       extraAction={<AddAnotherButton onClick={onAddAnother} />}
       frame={frame}
     >
-      <IdentityRow name={account.label} badge="API" mono tag={account.tag} onSaveTag={onSaveTag} />
+      <IdentityRow name={account.label} badge={badge} mono tag={account.tag} onSaveTag={onSaveTag} />
       {replacing ? (
         <ZcodeKeyForm onSubmit={onReplace} onCancel={onCancelReplace} hint={t("zcodeReplaceHint")} submitText={t("zcodeReplaceKey")} />
       ) : (
@@ -3731,18 +3754,33 @@ function ZcodeCard({
       {ok && (quota.limits?.length ?? 0) === 0 && <div className="aq-card-idle">{t("zcodeNoLimits")}</div>}
       {ok && (quota.limits?.length ?? 0) > 0 && (
         <div className="aq-card-body">
-          {quota.limits.map((l) => {
-            const remainPct = l.limit > 0 ? clampPct(((l.limit - l.usage) / l.limit) * 100) : 0;
+          {quota.limits.map((l, i) => {
+            const remainPct =
+              l.usedPercent != null
+                ? clampPct(100 - l.usedPercent)
+                : l.total > 0
+                  ? clampPct(((l.total - l.used) / l.total) * 100)
+                  : 0;
+            const hintParts: string[] = [];
+            if (l.total > 0) {
+              hintParts.push(
+                t("zcodeUsage", {
+                  usage: formatCredits(l.used),
+                  limit: formatCredits(l.total),
+                }),
+              );
+            }
+            if (l.usedPercent != null) {
+              hintParts.push(t("usedPercentHint", { pct: clampPct(l.usedPercent) }));
+            }
             return (
               <MeterRow
-                key={l.label}
+                key={`${l.label}-${i}`}
                 label={l.label}
+                countdown={compactCountdown(l.resetAt, now)}
                 value={`${remainPct}%`}
                 percent={remainPct}
-                hint={t("zcodeUsage", {
-                  usage: formatCredits(l.usage),
-                  limit: formatCredits(l.limit),
-                })}
+                hint={hintParts.join(" · ")}
               />
             );
           })}

@@ -103,6 +103,7 @@
   "zcodeSaveKey": "验证并保存",
   "zcodeReplaceKey": "更换 Key",
   "zcodeReplaceHint": "填写新的 API Key，验证通过后替换这张卡片（旧 Key 随之删除）。",
+  "zcodeAccountPlaceholder": "账号 / 备注（可选，如手机号）",
   "zcodeNoLimits": "没有返回配额信息",
   "zcodeUsage": "已用 {{usage}} / {{limit}}",
   "traeSaveToken": "验证并保存",
