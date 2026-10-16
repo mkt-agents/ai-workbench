@@ -413,28 +413,18 @@
   border-color: var(--overlay-3);
 }
 
+/* 玻璃主题下 --bg-1 本身只有 ~4% alpha，空态面板底色改用 overlay 叠加层 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty {
-  padding: 80px 24px;
-  gap: 14px;
+  border-color: var(--overlay-3);
+  background: color-mix(in srgb, var(--overlay-1) 80%, transparent);
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-icon {
-  opacity: 0.3;
-  color: var(--accent);
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-icon-hero::after {
+  border-color: var(--overlay-3);
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-title {
-  color: var(--text-1);
-  font-size: 15px;
-  font-weight: 500;
-}
-
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-desc {
-  color: var(--text-3);
-  font-size: 12px;
-  max-width: 280px;
-  text-align: center;
-  line-height: 1.5;
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty-scene {
+  background: color-mix(in srgb, var(--overlay-2) 70%, transparent);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-container {

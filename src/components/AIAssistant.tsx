@@ -27,6 +27,14 @@ import { writeDshSyncMeta } from "../lib/dshSyncMeta";
 
 type ProviderType = AIModelConfig["provider"];
 
+/** 场景图标唯一来源：场景绑定面板与空态提示行共用同一套。 */
+const SCENE_ICONS: Record<AiScene, typeof MessageSquare> = {
+  quickAsk: MessageSquare,
+  report: FileBarChart2,
+  commit: GitCommitHorizontal,
+  optimize: Sparkles,
+};
+
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
   const n = typeof value === "number" ? value : Number(value);
@@ -1574,7 +1582,7 @@ function AIAssistant() {
                 </div>
               </div>
               <div className="models-toolbar">
-                {aiModels.length > 0 && selectedConfigs.length === 0 && (
+                {selectedConfigs.length === 0 && (
                   <div className="models-search">
                     <Search size={12} aria-hidden />
                     <input
@@ -1671,98 +1679,94 @@ function AIAssistant() {
                           <span className="ai-action-label">{t("models.selectAll")}</span>
                         </label>
                       )}
-                      {aiModels.length > 0 && (
-                        <>
-                          <select
-                            className="input-field models-pick"
-                            value={statusFilter}
-                            onChange={(e) => setStatusFilter(e.target.value)}
-                            aria-label={t("models.filterByState")}
-                            title={t("models.filterByState")}
-                          >
-                            <option value="all">{t("models.filterAll")}</option>
-                            <option value="failed">
-                              {t("models.filterFailed", { count: testStateCounts.failed })}
-                            </option>
-                            <option value="untested">
-                              {t("models.filterUntested", { count: testStateCounts.untested })}
-                            </option>
-                            <option value="passed">
-                              {t("models.filterPassed", { count: testStateCounts.passed })}
-                            </option>
-                          </select>
-                          <select
-                            className="input-field models-pick"
-                            value={sortBy}
-                            onChange={(e) => setSortBy(e.target.value)}
-                            aria-label={t("models.sortBy")}
-                            title={t("models.sortBy")}
-                          >
-                            <option value="default">{t("models.sortDefault")}</option>
-                            <option value="name">{t("models.sortName")}</option>
-                            <option value="provider">{t("models.sortProvider")}</option>
-                            <option value="recentTest">{t("models.sortRecentTest")}</option>
-                          </select>
-                          <button
-                            type="button"
-                            className={`btn btn-secondary btn-small btn-icon${groupByProvider ? " is-active" : ""}`}
-                            onClick={() => setGroupByProvider((v) => !v)}
-                            title={t("models.groupByProvider")}
-                            aria-label={t("models.groupByProvider")}
-                            aria-pressed={groupByProvider}
-                          >
-                            <Layers size={12} />
-                          </button>
-                          {groupByProvider && groupedConfigs.length > 1 && (
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-small btn-icon"
-                              onClick={toggleAllGroups}
-                              title={
-                                allGroupsCollapsed
-                                  ? t("models.groupExpandAll")
-                                  : t("models.groupCollapseAll")
-                              }
-                              aria-label={
-                                allGroupsCollapsed
-                                  ? t("models.groupExpandAll")
-                                  : t("models.groupCollapseAll")
-                              }
-                            >
-                              {allGroupsCollapsed ? (
-                                <ChevronsUpDown size={12} />
-                              ) : (
-                                <ChevronsDownUp size={12} />
-                              )}
-                            </button>
+                      <select
+                        className="input-field models-pick"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        aria-label={t("models.filterByState")}
+                        title={t("models.filterByState")}
+                      >
+                        <option value="all">{t("models.filterAll")}</option>
+                        <option value="failed">
+                          {t("models.filterFailed", { count: testStateCounts.failed })}
+                        </option>
+                        <option value="untested">
+                          {t("models.filterUntested", { count: testStateCounts.untested })}
+                        </option>
+                        <option value="passed">
+                          {t("models.filterPassed", { count: testStateCounts.passed })}
+                        </option>
+                      </select>
+                      <select
+                        className="input-field models-pick"
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        aria-label={t("models.sortBy")}
+                        title={t("models.sortBy")}
+                      >
+                        <option value="default">{t("models.sortDefault")}</option>
+                        <option value="name">{t("models.sortName")}</option>
+                        <option value="provider">{t("models.sortProvider")}</option>
+                        <option value="recentTest">{t("models.sortRecentTest")}</option>
+                      </select>
+                      <button
+                        type="button"
+                        className={`btn btn-secondary btn-small btn-icon${groupByProvider ? " is-active" : ""}`}
+                        onClick={() => setGroupByProvider((v) => !v)}
+                        title={t("models.groupByProvider")}
+                        aria-label={t("models.groupByProvider")}
+                        aria-pressed={groupByProvider}
+                      >
+                        <Layers size={12} />
+                      </button>
+                      {groupByProvider && groupedConfigs.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small btn-icon"
+                          onClick={toggleAllGroups}
+                          title={
+                            allGroupsCollapsed
+                              ? t("models.groupExpandAll")
+                              : t("models.groupCollapseAll")
+                          }
+                          aria-label={
+                            allGroupsCollapsed
+                              ? t("models.groupExpandAll")
+                              : t("models.groupCollapseAll")
+                          }
+                        >
+                          {allGroupsCollapsed ? (
+                            <ChevronsUpDown size={12} />
+                          ) : (
+                            <ChevronsDownUp size={12} />
                           )}
-                          <DropdownMenu
-                            label={t("models.more")}
-                            triggerClassName="btn btn-secondary btn-small btn-icon"
-                            items={[
-                              {
-                                label: t("models.importConfigs"),
-                                icon: <Upload size={14} />,
-                                disabled: transferBusy !== null,
-                                onClick: () => void handleImportConfigs(),
-                              },
-                              {
-                                label: t("models.exportConfigs"),
-                                icon: <Download size={14} />,
-                                disabled: transferBusy !== null || aiModels.length === 0,
-                                onClick: () => void handleExportConfigs(),
-                              },
-                            ]}
-                          >
-                            {transferBusy ? (
-                              <Loader2 size={14} className="spin" />
-                            ) : (
-                              <MoreHorizontal size={14} />
-                            )}
-                          </DropdownMenu>
-                          <span className="models-actions-sep" aria-hidden />
-                        </>
+                        </button>
                       )}
+                      <DropdownMenu
+                        label={t("models.more")}
+                        triggerClassName="btn btn-secondary btn-small btn-icon"
+                        items={[
+                          {
+                            label: t("models.importConfigs"),
+                            icon: <Upload size={14} />,
+                            disabled: transferBusy !== null,
+                            onClick: () => void handleImportConfigs(),
+                          },
+                          {
+                            label: t("models.exportConfigs"),
+                            icon: <Download size={14} />,
+                            disabled: transferBusy !== null || aiModels.length === 0,
+                            onClick: () => void handleExportConfigs(),
+                          },
+                        ]}
+                      >
+                        {transferBusy ? (
+                          <Loader2 size={14} className="spin" />
+                        ) : (
+                          <MoreHorizontal size={14} />
+                        )}
+                      </DropdownMenu>
+                      <span className="models-actions-sep" aria-hidden />
                       <button
                         type="button"
                         className={`btn btn-secondary btn-small${sceneOpen ? " is-active" : ""}`}
@@ -1808,14 +1812,7 @@ function AIAssistant() {
                 </div>
                 <div className="models-scene-grid">
                   {AI_SCENES.map((scene) => {
-                    const SceneIcon =
-                      scene === "quickAsk"
-                        ? MessageSquare
-                        : scene === "report"
-                          ? FileBarChart2
-                          : scene === "commit"
-                            ? GitCommitHorizontal
-                            : Sparkles;
+                    const SceneIcon = SCENE_ICONS[scene];
                     const bound = !!aiSceneModels[scene];
                     return (
                       <label
@@ -1866,32 +1863,81 @@ function AIAssistant() {
             <div className="models-scroll">
               {aiModels.length === 0 ? (
                 <div className="models-empty">
-                  <div className="models-empty-icon">
-                    <AppLogoMark size={40} />
+                  <div className="models-empty-icon models-empty-icon-hero">
+                    <span className="models-empty-logo">
+                      <AppLogoMark size={40} />
+                    </span>
                   </div>
                   <div className="models-empty-title">{t("models.noModels")}</div>
                   <div className="models-empty-desc">{t("models.emptyDesc")}</div>
-                  <button className="btn btn-primary" onClick={openCreateModal}>
-                    <Plus size={14} /> {t("models.addModel")}
-                  </button>
+                  <div className="models-empty-actions">
+                    <button className="btn btn-primary" onClick={openCreateModal}>
+                      <Plus size={14} /> {t("models.addModel")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleDetectLocal()}
+                      disabled={detectingLocal}
+                    >
+                      {detectingLocal ? (
+                        <Loader2 size={14} className="spin" />
+                      ) : (
+                        <Radar size={14} />
+                      )}
+                      {t("models.detectLocal")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleImportConfigs()}
+                      disabled={transferBusy !== null}
+                    >
+                      {transferBusy ? (
+                        <Loader2 size={14} className="spin" />
+                      ) : (
+                        <Upload size={14} />
+                      )}
+                      {t("models.importConfigs")}
+                    </button>
+                  </div>
+                  <div className="models-empty-scenes">
+                    <span className="models-empty-scenes-label">
+                      {t("models.emptyScenesLabel")}
+                    </span>
+                    {AI_SCENES.map((scene) => {
+                      const SceneIcon = SCENE_ICONS[scene];
+                      return (
+                        <span key={scene} className="models-empty-scene">
+                          <SceneIcon size={12} aria-hidden />
+                          {t(AI_SCENE_I18N_KEY[scene])}
+                        </span>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : filteredConfigs.length === 0 ? (
-                <div className="models-empty">
+                <div className="models-empty is-filter">
+                  <div className="models-empty-icon">
+                    <Search size={18} aria-hidden />
+                  </div>
                   <div className="models-empty-title">{t("models.noMatch")}</div>
                   <div className="models-empty-desc">
                     {statusFilter === "all"
                       ? t("models.noMatchHint")
                       : t("models.noMatchFiltered")}
                   </div>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      setListQuery("");
-                      setStatusFilter("all");
-                    }}
-                  >
-                    {statusFilter === "all" ? t("models.clearSearch") : t("models.clearFilters")}
-                  </button>
+                  <div className="models-empty-actions">
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setListQuery("");
+                        setStatusFilter("all");
+                      }}
+                    >
+                      {statusFilter === "all" ? t("models.clearSearch") : t("models.clearFilters")}
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="ai-model-list">

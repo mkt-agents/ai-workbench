@@ -16,6 +16,7 @@
     "default": "默认",
     "noModels": "暂无模型配置",
     "emptyDesc": "添加 API 模型配置，可测试连接并同步到 DeepSeek",
+    "emptyScenesLabel": "添加后可用于",
     "saved": "模型配置已添加",
     "updated": "模型配置已更新",
     "deleted": "已删除模型",

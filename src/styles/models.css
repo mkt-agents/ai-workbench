@@ -831,42 +831,123 @@
   cursor: default;
 }
 
-/* Empty state */
+/* Empty state — 虚线发丝面板，与 .model-compare-empty 同一外壳语言 */
 .models-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  padding: 80px 24px;
+  gap: 12px;
+  min-height: max(320px, 100%);
+  padding: 48px 24px;
+  box-sizing: border-box;
   text-align: center;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-1) 55%, transparent);
 }
 
 .models-empty-icon {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
-  border-radius: var(--radius-xl);
-  background: var(--bg-2);
-  color: var(--accent);
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-3);
   border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-sm);
-  margin-bottom: 8px;
+}
+
+/* 主空态（无数据）：accent 光晕 + 同心发丝环，呼应 ice/silver 主题的径向光斑 */
+.models-empty-icon-hero {
+  width: 76px;
+  height: 76px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.models-empty-icon-hero::before {
+  content: "";
+  position: absolute;
+  inset: -38px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--accent) 14%, transparent),
+    color-mix(in srgb, var(--accent) 5%, transparent) 58%,
+    transparent 74%
+  );
+  pointer-events: none;
+}
+
+.models-empty-icon-hero::after {
+  content: "";
+  position: absolute;
+  inset: -16px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  pointer-events: none;
+}
+
+.models-empty-logo {
+  position: relative;
+  display: inline-flex;
 }
 
 .models-empty-title {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-1);
 }
 
 .models-empty-desc {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--text-3);
-  max-width: 280px;
+  max-width: 340px;
   line-height: 1.6;
+}
+
+.models-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.models-empty-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.models-empty-scenes-label {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.models-empty-scene {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+}
+
+.models-empty-scene svg {
+  color: var(--text-3);
 }
 
 /* Always a responsive card grid — never a single stretched column of full-bleed cards. */

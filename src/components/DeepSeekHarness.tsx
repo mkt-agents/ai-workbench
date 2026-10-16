@@ -20,7 +20,12 @@ import {
 import { useGlobalStore } from "../core/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { readDshSyncMeta, type DshSyncMeta } from "../lib/dshSyncMeta";
+import {
+  dismissDshSyncMeta,
+  readDshSyncDismissedAt,
+  readDshSyncMeta,
+  type DshSyncMeta,
+} from "../lib/dshSyncMeta";
 import { useConfirm } from "./ConfirmModal";
 
 const DSH_HOST = "127.0.0.1";
@@ -118,9 +123,16 @@ function DeepSeekHarness() {
   const [installProgress, setInstallProgress] = useState(0);
   const [installMsg, setInstallMsg] = useState<string | null>(null);
   const [syncMeta, setSyncMeta] = useState<DshSyncMeta | null>(() => readDshSyncMeta());
+  const [syncDismissedAt, setSyncDismissedAt] = useState<string | null>(() =>
+    readDshSyncDismissedAt(),
+  );
+  const syncBarVisible = !!syncMeta && syncDismissedAt !== syncMeta.at;
 
   useEffect(() => {
-    const refresh = () => setSyncMeta(readDshSyncMeta());
+    const refresh = () => {
+      setSyncMeta(readDshSyncMeta());
+      setSyncDismissedAt(readDshSyncDismissedAt());
+    };
     const onChanged = () => refresh();
     window.addEventListener("dsh-sync-meta-changed", onChanged);
     window.addEventListener("storage", refresh);
@@ -710,7 +722,7 @@ function DeepSeekHarness() {
           </button>
         </div>
       )}
-      {syncMeta && (
+      {syncBarVisible && syncMeta && (
         <div className="dsh-sync-bar" title={syncMeta.at}>
           <span className="dsh-sync-bar-label">{t("dsh.syncStatusLabel")}</span>
           <span className="dsh-sync-bar-model">
@@ -722,6 +734,17 @@ function DeepSeekHarness() {
               time: new Date(syncMeta.at).toLocaleString(),
             })}
           </span>
+          <button
+            type="button"
+            className="dsh-sync-bar-dismiss"
+            onClick={() => {
+              dismissDshSyncMeta(syncMeta.at);
+              setSyncDismissedAt(syncMeta.at);
+            }}
+            aria-label={t("dsh.dismiss")}
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
       {showOnboarding && !isRunning && (

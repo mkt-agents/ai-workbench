@@ -33,6 +33,23 @@
   font-family: var(--font-mono);
 }
 
+.dsh-sync-bar-dismiss {
+  align-self: center;
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.dsh-sync-bar-dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
 .dsh-onboarding-link {
   margin-left: 8px;
   color: var(--accent);

@@ -16,6 +16,7 @@
     "default": "Default",
     "noModels": "No models configured",
     "emptyDesc": "Add an API model config, test the connection, and sync to DeepSeek",
+    "emptyScenesLabel": "Once added, available for",
     "saved": "Model config added",
     "updated": "Model config updated",
     "deleted": "Model deleted",
