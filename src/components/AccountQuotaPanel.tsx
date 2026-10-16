@@ -571,6 +571,10 @@ function AccountQuotaPanel() {
   const [claudeFormOpen, setClaudeFormOpen] = useState(false);
   const [claudeReplaceId, setClaudeReplaceId] = useState<number | null>(null);
   const [zcodeFormOpen, setZcodeFormOpen] = useState(false);
+  /** 概要胶囊的过滤模式：点胶囊只看该类卡片，再点一次恢复全部；仅作用于渲染，不影响刷新与统计。 */
+  const [statusFilter, setStatusFilter] = useState<
+    "low" | "reauth" | "failed" | "wb-todo" | "qoder-todo" | "trae-todo" | null
+  >(null);
   const [zcodeReplaceId, setZcodeReplaceId] = useState<number | null>(null);
   const [mimoFormOpen, setMimoFormOpen] = useState(false);
   const [mimoReplaceId, setMimoReplaceId] = useState<number | null>(null);
@@ -1530,6 +1534,26 @@ function AccountQuotaPanel() {
     reauth: boardAccountKeys.filter((k) => statusOf(k) === "reauth"),
     failed: boardAccountKeys.filter((k) => statusOf(k) === "error"),
   };
+  /** 过滤模式只裁剪渲染列表：:empty/:new 表单卡没有查询状态，天然被排除。 */
+  const matchesStatusFilter = (key: string): boolean => {
+    switch (statusFilter) {
+      case null:
+        return true;
+      case "low":
+        return ["warn", "bad"].includes(statusOf(key));
+      case "reauth":
+        return statusOf(key) === "reauth";
+      case "failed":
+        return statusOf(key) === "error";
+      case "wb-todo":
+        return key.startsWith("wb:") && uncheckedWbIds.includes(Number(key.slice(3)));
+      case "qoder-todo":
+        return claimableQoderKeys.includes(key);
+      case "trae-todo":
+        return uncheckedTraeKeys.includes(key);
+    }
+  };
+  const shownKeys = statusFilter ? visibleKeys.filter(matchesStatusFilter) : visibleKeys;
   const lastAt = boardAccountKeys.reduce<number | null>((max, k) => {
     const at = results[k]?.at;
     return at != null && (max == null || at > max) ? at : max;
@@ -1897,36 +1921,53 @@ function AccountQuotaPanel() {
                   {summary.total > 0 && (
                     <span className="aq-summary">
                       <span>{t("summaryAccounts", { count: summary.total })}</span>
-                      <SummarySegment keys={summary.low} tone="warn" text={t("summaryLow", { count: summary.low.length })} onFocus={focusCard} />
                       <SummarySegment
-                        keys={summary.reauth}
+                        count={summary.low.length}
+                        tone="warn"
+                        text={t("summaryLow", { count: summary.low.length })}
+                        active={statusFilter === "low"}
+                        onToggle={() => setStatusFilter(statusFilter === "low" ? null : "low")}
+                        title={t("summaryFilterHint")}
+                      />
+                      <SummarySegment
+                        count={summary.reauth.length}
                         tone="bad"
                         text={t("summaryReauth", { count: summary.reauth.length })}
-                        onFocus={focusCard}
+                        active={statusFilter === "reauth"}
+                        onToggle={() => setStatusFilter(statusFilter === "reauth" ? null : "reauth")}
+                        title={t("summaryFilterHint")}
                       />
                       <SummarySegment
-                        keys={summary.failed}
+                        count={summary.failed.length}
                         tone="bad"
                         text={t("summaryFailed", { count: summary.failed.length })}
-                        onFocus={focusCard}
+                        active={statusFilter === "failed"}
+                        onToggle={() => setStatusFilter(statusFilter === "failed" ? null : "failed")}
+                        title={t("summaryFilterHint")}
                       />
                       <SummarySegment
-                        keys={uncheckedWbIds.map((id) => `wb:${id}`)}
+                        count={uncheckedWbIds.length}
                         tone="warn"
                         text={t("summaryUnchecked", { count: uncheckedWbIds.length })}
-                        onFocus={focusCard}
+                        active={statusFilter === "wb-todo"}
+                        onToggle={() => setStatusFilter(statusFilter === "wb-todo" ? null : "wb-todo")}
+                        title={t("summaryFilterHint")}
                       />
                       <SummarySegment
-                        keys={claimableQoderKeys}
+                        count={claimableQoderKeys.length}
                         tone="warn"
                         text={t("qoderClaimableCount", { count: claimableQoderKeys.length })}
-                        onFocus={focusCard}
+                        active={statusFilter === "qoder-todo"}
+                        onToggle={() => setStatusFilter(statusFilter === "qoder-todo" ? null : "qoder-todo")}
+                        title={t("summaryFilterHint")}
                       />
                       <SummarySegment
-                        keys={uncheckedTraeKeys}
+                        count={uncheckedTraeKeys.length}
                         tone="warn"
                         text={t("traeUncheckedCount", { count: uncheckedTraeKeys.length })}
-                        onFocus={focusCard}
+                        active={statusFilter === "trae-todo"}
+                        onToggle={() => setStatusFilter(statusFilter === "trae-todo" ? null : "trae-todo")}
+                        title={t("summaryFilterHint")}
                       />
                     </span>
                   )}
@@ -1976,8 +2017,21 @@ function AccountQuotaPanel() {
             <div className="aq-board">
               {visibleKeys.length === 0 ? (
                 <div className="aq-board-empty">{t("boardEmpty")}</div>
+              ) : shownKeys.length === 0 ? (
+                <div className="aq-board-empty">
+                  {t("filterEmpty")}
+                  <div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => setStatusFilter(null)}
+                    >
+                      {t("filterClear")}
+                    </button>
+                  </div>
+                </div>
               ) : (
-                <div className="aq-grid">{visibleKeys.map(renderCard)}</div>
+                <div className="aq-grid">{shownKeys.map(renderCard)}</div>
               )}
             </div>
           </div>
@@ -2133,19 +2187,29 @@ function RefreshSplitButton({
 }
 
 function SummarySegment({
-  keys,
+  count,
   tone,
   text,
-  onFocus,
+  active,
+  onToggle,
+  title,
 }: {
-  keys: string[];
+  count: number;
   tone: Tone;
   text: string;
-  onFocus: (key: string) => void;
+  active: boolean;
+  onToggle: () => void;
+  title: string;
 }) {
-  if (keys.length === 0) return null;
+  if (count === 0) return null;
   return (
-    <button type="button" className={`aq-summary-seg aq-tone-${tone}`} onClick={() => onFocus(keys[0])}>
+    <button
+      type="button"
+      className={`aq-summary-seg aq-tone-${tone}${active ? " is-active" : ""}`}
+      onClick={onToggle}
+      title={title}
+      aria-pressed={active}
+    >
       {text}
     </button>
   );
@@ -3419,7 +3483,6 @@ function CodexCard({
     <QuotaCardShell
       brand="codex"
       product="Codex"
-      tag={quota?.limitReached ? <span className="aq-tag aq-tag-expired">{t("codexLimitReached")}</span> : null}
       at={quota?.at}
       loading={loading}
       onRefresh={onRefresh}

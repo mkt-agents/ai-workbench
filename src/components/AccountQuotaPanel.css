@@ -68,6 +68,10 @@
   border-radius: var(--radius-md);
 }
 
+.aq-board-empty .btn {
+  margin-top: var(--space-3);
+}
+
 /* 说明独占一行；摘要左、操作右（弹层 right:0 才不会被裁切）。 */
 .aq-toolbar {
   position: relative;
@@ -295,6 +299,12 @@
 }
 
 .aq-summary-seg:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 过滤模式激活：下划线常驻，与悬停态区分靠 aria-pressed 的语义而不是变色。 */
+.aq-summary-seg.is-active {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
