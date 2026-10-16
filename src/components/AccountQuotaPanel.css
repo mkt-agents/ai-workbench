@@ -25,12 +25,15 @@
   overflow: visible;
 }
 
-/* 2px 内边距 + 负外边距：给卡片聚焦描边 / 阴影留位，免得被滚动容器裁掉。 */
+/* 2px 内边距 + 负外边距：给卡片聚焦描边 / 阴影留位，免得被滚动容器裁掉。
+   overflow-anchor: none —— 刷新时卡片高度变化会触发浏览器滚动锚定补偿，
+   看板内容整体跳位、卡片像被挤走；这里关掉，让滚动位置只由用户控制。 */
 .aq-board {
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 2px;
   margin: -2px;
 }
@@ -319,6 +322,13 @@
   padding: var(--space-3);
   border: 1px solid var(--border-subtle);
   transition: var(--transition-colors);
+}
+
+/* 刷新中的卡片：内容轻微降透明度示意加载中，但不改布局尺寸（防网格重排跳动）。 */
+.quota-page .card.aq-card.is-loading .aq-card-body,
+.quota-page .card.aq-card.is-loading .aq-details {
+  opacity: 0.55;
+  transition: opacity var(--transition-fast);
 }
 
 .quota-page .card.aq-card:hover {

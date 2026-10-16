@@ -674,6 +674,21 @@ function AccountQuotaPanel() {
     return () => window.removeEventListener("pointerup", disarm);
   }, [armedKey]);
 
+  // 拖拽中途刷新 / 滚动会让 dragend 不触发，dragKey 永远清不掉 → 卡片一直半透明。
+  // 用 pointerup 全局兜底：任何抬起（没有按键修饰）都结束拖拽态。
+  useEffect(() => {
+    if (!dragKey) return;
+    const clear = () => endDrag();
+    window.addEventListener("pointerup", clear);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("pointerup", clear);
+      window.removeEventListener("blur", clear);
+    };
+    // endDrag 稳定（useState setters），无需进依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragKey]);
+
   const endDrag = () => {
     setDragKey(null);
     setOverKey(null);
