@@ -95,11 +95,13 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
           const list = await invokeGitListBranches(path);
           const key = pathKey(path);
           const localSet = new Set(list.local);
+          const remoteSet = new Set(list.remote);
+          // Both sets may hold the same branch name (local + remote-tracking).
           for (const b of new Set([...list.local, ...list.remote])) {
             const u = repos.get(b) ?? { count: new Set<string>(), local: new Set<string>(), remote: new Set<string>() };
             u.count.add(key);
             if (localSet.has(b)) u.local.add(key);
-            else u.remote.add(key);
+            if (remoteSet.has(b)) u.remote.add(key);
             repos.set(b, u);
           }
         } catch {
@@ -236,7 +238,13 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
                   >
                     <GitBranch size={12} className="bb-item-icon" />
                     <span className="branch-pick-name">{b.name}</span>
-                    {b.localCount === 0 && <span className="bb-tag">{t("branchModal.remoteOnly")}</span>}
+                    <span className="bb-tag">
+                      {b.localCount === 0
+                        ? t("branchModal.remoteOnly")
+                        : b.remoteCount === 0
+                          ? t("branchModal.localOnly")
+                          : t("branchModal.localAndRemote")}
+                    </span>
                     <span
                       className="branch-pick-count"
                       title={t("branchModal.usageDetail", { local: b.localCount, remote: b.remoteCount })}

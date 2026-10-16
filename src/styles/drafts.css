@@ -159,14 +159,21 @@
   line-height: 1;
 }
 
-/* ---- Toolbar: search left, count + cleanup right ---- */
+/* ---- Toolbar: search left (same width as the first card column), count + cleanup right ---- */
 .drafts-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
   flex-shrink: 0;
   min-width: 0;
+  /* 与 .drafts-list 同一套轨道模板：搜索框天然等于第一列卡片的宽度 */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 10px;
+  align-items: center;
+}
+
+/* 覆写片段库搜索的 flex/上限：这里由网格轨道决定宽度 */
+.drafts-toolbar .snippets-search {
+  flex: none;
+  max-width: none;
 }
 
 .drafts-toolbar-actions {
@@ -174,6 +181,25 @@
   align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
+  grid-row: 1;
+  grid-column: 2 / -1;
+  justify-self: end;
+}
+
+@media (max-width: 720px) {
+  .drafts-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .drafts-toolbar .snippets-search {
+    grid-column: 1;
+  }
+
+  .drafts-toolbar-actions {
+    grid-row: auto;
+    grid-column: 1;
+    justify-self: end;
+  }
 }
 
 .drafts-count {

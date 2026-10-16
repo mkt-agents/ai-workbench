@@ -1245,14 +1245,18 @@ fn git_switch_branch_sync(repo_path: String, name: String) -> Result<String, Str
 }
 
 /// Local and remote-tracking refs only — no network. Feeds the switch modal's
-/// branch picker. `origin/HEAD` is a symbolic pointer, not a branch.
+/// branch picker. `remote` carries plain branch names with the remote segment
+/// stripped (`refs/remotes/origin/feature/x` → `feature/x`, any remote), so the
+/// frontend can merge "local master" and "origin master" into one switchable
+/// entry; a bare remote ref like `refs/remotes/origin` lstrips to empty and a
+/// symbolic `…/HEAD` are both dropped.
 fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
     ensure_git_repo(&repo_path)?;
     let current =
         git_stdout(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let mut local: Vec<String> = git_stdout(
         &repo_path,
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        &["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"],
     )
     .unwrap_or_default()
     .lines()
@@ -1261,15 +1265,18 @@ fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
     .collect();
     let mut remote: Vec<String> = git_stdout(
         &repo_path,
-        &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+        &["for-each-ref", "--format=%(refname:lstrip=3)", "refs/remotes"],
     )
     .unwrap_or_default()
     .lines()
     .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty() && !s.ends_with("/HEAD"))
+    .filter(|s| !s.is_empty() && s != "HEAD")
     .collect();
     local.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
     remote.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    // The same branch on several remotes (origin/x + upstream/x) collapses to one name.
+    local.dedup();
+    remote.dedup();
     Ok(GitBranchList { current, local, remote })
 }
 
@@ -2531,8 +2538,11 @@ mod branch_tests {
         assert_eq!(list.current, "master");
         assert!(list.local.contains(&"master".to_string()));
         assert!(!list.local.iter().any(|b| b == "feature/x"));
-        assert!(list.remote.contains(&"origin/feature/x".to_string()));
-        assert!(!list.remote.iter().any(|b| b.ends_with("/HEAD")));
+        // Remote refs carry plain branch names — `origin/feature/x` lstrips to
+        // `feature/x`, so it can merge with the local list in the UI.
+        assert!(list.remote.contains(&"feature/x".to_string()));
+        assert!(list.remote.contains(&"master".to_string()));
+        assert!(!list.remote.iter().any(|b| b == "HEAD" || b.is_empty()));
 
         git_switch_branch_sync(dir.clone(), "feature/x".into()).expect("DWIM switch");
         let after = git_list_branches_sync(dir).unwrap();

@@ -130,6 +130,8 @@
     "refresh": "刷新",
     "listHint": "读取所选仓库的本地与远端分支，点击条目即可填入分支名。",
     "remoteOnly": "仅远端",
+    "localOnly": "仅本地",
+    "localAndRemote": "本地+远端",
     "usageDetail": "本地 {{local}} · 远端 {{remote}}",
     "alreadyHave": "{{count}} 个仓库本地已存在该分支",
     "invalid": {

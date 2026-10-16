@@ -129,7 +129,9 @@
     "matchCount": "{{count}}/{{total}} match",
     "refresh": "Refresh",
     "listHint": "Reads local and remote branches from the selected repos — click one to fill it in.",
-    "remoteOnly": "remote",
+    "remoteOnly": "remote only",
+    "localOnly": "local only",
+    "localAndRemote": "local + remote",
     "usageDetail": "{{local}} local · {{remote}} remote",
     "alreadyHave": "{{count}} repos already have this branch locally",
     "invalid": {

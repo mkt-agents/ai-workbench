@@ -49,7 +49,9 @@ export interface GitScannedRepo {
   name: string;
 }
 
-/** Result of `git_list_branches`: local heads + remote-tracking refs (no network). */
+/** Result of `git_list_branches`: local heads, plus remote-tracking refs with
+ *  the remote segment stripped (`origin/feature/x` → `feature/x`) so both
+ *  lists key on the same plain branch name. No network. */
 export interface GitBranchList {
   current: string;
   local: string[];
