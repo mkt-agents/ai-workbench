@@ -227,37 +227,25 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
 }
 
+/* 未选中：中性化配色并撤掉 accent 左边条与投影，避免「空操作条」看起来像待执行状态 */
+.repos-batch-bar.is-empty {
+  background: var(--bg-1);
+  border-color: var(--border-subtle);
+  border-left: 3px solid var(--border-subtle);
+  box-shadow: none;
+}
+
+.repos-batch-bar.is-empty .repos-batch-count {
+  background: var(--overlay-1);
+  color: var(--text-2);
+}
+
 .repos-batch-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
   margin-left: auto;
-}
-
-.repos-batch-clear {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.repos-batch-clear:hover:not(:disabled) {
-  color: var(--text-1);
-  background: var(--bg-hover);
-  border-color: var(--border-subtle);
-}
-
-.repos-batch-clear:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .repos-group-check {
@@ -359,6 +347,193 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--text-0);
+}
+
+/* batch-branch：宽度挂 modal.css md 档（560）；主体可滚、底栏固定，矮窗不裁内容 */
+
+.batch-branch-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: var(--modal-max-vh);
+}
+
+.bb-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.bb-name-input {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.bb-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--yellow);
+}
+
+.bb-warn svg {
+  flex-shrink: 0;
+}
+
+.bb-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.bb-callout svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.bb-switch-existing {
+  margin-bottom: 2px;
+}
+
+.bb-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px;
+}
+
+.bb-section-head .input-label {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.bb-filter {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  color: var(--text-0);
+  font-size: 12px;
+}
+
+.bb-filter::placeholder {
+  color: var(--text-3);
+}
+
+.bb-filter:disabled {
+  opacity: 0.55;
+}
+
+.bb-refresh {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bb-refresh:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-hover);
+}
+
+.bb-refresh:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.bb-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 12px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bb-item-icon {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.bb-tag {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-size: 10.5px;
+}
+
+.branch-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.branch-pick-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.branch-pick-item:hover {
+  background: var(--bg-hover);
+}
+
+.branch-pick-item.is-active {
+  border-color: var(--accent-border);
+  color: var(--text-0);
+}
+
+.branch-pick-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-pick-count {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .repos-card {
@@ -536,8 +711,6 @@
 
 .repos-collapse-all {
   margin-left: auto;
-  width: 28px;
-  padding: 0;
 }
 
 .repos-card-actions {

@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller } from '../types';
+import type { AIModelConfig, DshInstance, GitBranchList, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -61,6 +61,9 @@ export interface Invocations {
   invokeGitCommit: (path: string, message: string) => Promise<string>;
   invokeGitPush: (path: string) => Promise<string>;
   invokeGitPull: (path: string) => Promise<string>;
+  invokeGitCreateBranch: (path: string, name: string) => Promise<string>;
+  invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
+  invokeGitListBranches: (path: string) => Promise<GitBranchList>;
   invokeGitDiff: (path: string, filePath: string, staged: boolean) => Promise<string>;
   invokeGitLog: (path: string, count: number) => Promise<string[][]>;
   invokeGitDiscard: (
@@ -304,6 +307,12 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_push', { path }),
   invokeGitPull: (path: string) =>
     tauriInvoke<string>('git_pull', { path }),
+  invokeGitCreateBranch: (path: string, name: string) =>
+    tauriInvoke<string>('git_create_branch', { path, name }),
+  invokeGitSwitchBranch: (path: string, name: string) =>
+    tauriInvoke<string>('git_switch_branch', { path, name }),
+  invokeGitListBranches: (path: string) =>
+    tauriInvoke<GitBranchList>('git_list_branches', { path }),
   invokeGitDiff: (path: string, filePath: string, staged: boolean) =>
     tauriInvoke<string>('git_diff', { path, filePath, staged }),
   invokeGitLog: (path: string, count: number) =>

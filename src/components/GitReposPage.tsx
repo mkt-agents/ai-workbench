@@ -12,6 +12,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  GitBranchPlus,
   Link2,
   Loader2,
   MoreHorizontal,
@@ -36,7 +37,6 @@ import {
   reposLoaded,
   subscribeRepos,
 } from "../core/gitCache";
-import { describePushTargets, isPushable } from "../core/gitPushScope";
 import { readStoredArray, writeStoredArray } from "../core/localState";
 import { pathKey, projectNameFromPath } from "../core/pathUtils";
 import { buildRepoGroups, REPOS_COLLAPSED_KEY, type RepoGroup } from "../core/repoGroups";
@@ -56,6 +56,7 @@ import { useConfirm } from "./ConfirmModal";
 import DropdownMenu from "./DropdownMenu";
 import AccountManagerModal from "./AccountManagerModal";
 import BatchIdentityModal from "./BatchIdentityModal";
+import BatchBranchModal, { type BranchModalMode } from "./BatchBranchModal";
 import RepoBindingModal from "./RepoBindingModal";
 import ScanReposModal from "./ScanReposModal";
 import type { ReportTarget } from "./testReportTypes";
@@ -135,6 +136,9 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const invokeGitScanRepos = useGlobalStore((s) => s.invokeGitScanRepos);
   const invokeGitPush = useGlobalStore((s) => s.invokeGitPush);
   const invokeGitPull = useGlobalStore((s) => s.invokeGitPull);
+  const invokeGitCreateBranch = useGlobalStore((s) => s.invokeGitCreateBranch);
+  const invokeGitSwitchBranch = useGlobalStore((s) => s.invokeGitSwitchBranch);
+  const invokeGitListBranches = useGlobalStore((s) => s.invokeGitListBranches);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
 
@@ -166,6 +170,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const [showBatchBind, setShowBatchBind] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+  const [branchModal, setBranchModal] = useState<BranchModalMode | null>(null);
   const [filter, setFilter] = useState<RepoFilter>(readStoredFilter);
   const [lastRefreshAt, setLastRefreshAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -375,18 +380,30 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     setBatchProgress({ done: 0, total: paths.length });
     let ok = 0;
     let fail = 0;
+    let errors: string[] = [];
     try {
       const result = await mapPoolCounted(paths, GIT_CONCURRENCY, fn, {
         onProgress: (done, total) => setBatchProgress({ done, total }),
       });
       ok = result.ok;
       fail = result.fail;
+      errors = result.errors;
     } finally {
       releaseRepos(paths);
       setBatchBusy(false);
       setBatchProgress(null);
     }
-    showMsg(fail > 0 ? "error" : "success", t("batch.done", { ok, fail }));
+    // "3 failed" alone is useless — the reasons (a dirty-tree conflict, a
+    // missing remote) are what the user acts on.
+    const parts: string[] = [t("batch.done", { ok, fail })];
+    if (errors.length > 0) {
+      const shown = errors
+        .slice(0, 3)
+        .map((e) => (e.length > 100 ? `${e.slice(0, 100)}…` : e));
+      parts.push(shown.join(" ｜ "));
+      if (errors.length > 3) parts.push(t("batch.moreErrors", { count: errors.length - 3 }));
+    }
+    showMsg(fail > 0 ? "error" : "success", parts.join(" ｜ "));
     // The writes landed after these paths were last read, so force a re-read.
     await refreshPaths(
       paths.map((path) => {
@@ -435,32 +452,89 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     });
   };
 
-  const handleBatchPush = async () => {
-    const paths = [...selected].filter((path) => isPushable(summaries[path]));
-    if (paths.length === 0) {
-      showMsg("error", t("batch.noneToPush"));
+  /** Ensure `<name>` exists locally and on origin in every selected repo. */
+  const runBranchCreate = async (name: string, switchExisting: boolean) => {
+    const rows = [...selected]
+      .map((path) => ({ path, summary: summaries[path] }))
+      .filter((row): row is { path: string; summary: RepoBatchItem } => !!row.summary?.isGit);
+    const noCommits = rows.filter((row) => !row.summary.hasCommits);
+    const runnable = rows.filter((row) => row.summary.hasCommits);
+    if (runnable.length === 0) {
+      showMsg("error", t("batch.noneToBranch"));
       return;
     }
-    // A no-upstream repo gets `push -u origin HEAD`, i.e. a brand new remote
-    // branch — never do that silently for a whole selection.
-    const rows = paths
-      .map((path) => ({
-        label: recentProjects.find((p) => p.path === path)?.name || projectNameFromPath(path),
-        summary: summaries[path],
-      }))
-      .filter((row): row is { label: string; summary: RepoBatchItem } => !!row.summary);
-    const { message, warning } = describePushTargets(rows, t);
+    const noRemote = runnable.filter((row) => !row.summary.originUrl);
+    const lines = runnable.map((row) => `• ${row.summary.name} — ${row.summary.branch}`);
+    const warnings: string[] = [];
+    if (noCommits.length > 0) {
+      warnings.push(
+        t("batch.branchNoCommitsWarning", {
+          names: noCommits.map((row) => row.summary.name).join(", "),
+        })
+      );
+    }
+    if (noRemote.length > 0) {
+      warnings.push(t("batch.branchNoRemoteWarning", { count: noRemote.length }));
+    }
+    if (switchExisting) {
+      warnings.push(t("batch.branchSwitchExistingNote", { name }));
+    }
     const ok = await confirm({
-      title: t("batch.pushTitle"),
-      message,
-      warning,
-      confirmText: t("batch.push"),
-      icon: warning ? "warning" : "info",
+      title: t("batch.branchCreateTitle"),
+      message: `${t("batch.branchCreateConfirmMessage", { count: runnable.length, name })}\n${lines.join("\n")}`,
+      warning: warnings.length > 0 ? warnings.join("\n") : undefined,
+      confirmText: t("batch.createBranch"),
+      icon: warnings.length > 0 ? "warning" : "info",
     });
     if (!ok) return;
-    void runBatch(paths, async (path) => {
-      void (await invokeGitPush(path));
+    await runBatch(
+      runnable.map((row) => row.path),
+      async (path) => {
+        // Decide per repo: an existing local branch either fails the item or —
+        // with the opt-in — becomes a plain switch.
+        const list = await invokeGitListBranches(path);
+        if (list.local.includes(name)) {
+          if (!switchExisting) throw new Error(t("batch.branchExistsLocal", { name }));
+          await invokeGitSwitchBranch(path, name);
+        } else {
+          await invokeGitCreateBranch(path, name);
+        }
+        // A fresh branch has no upstream, so git_push takes its `-u origin HEAD` path.
+        await invokeGitPush(path);
+      }
+    );
+  };
+
+  const runBranchSwitch = async (name: string) => {
+    const rows = [...selected].filter((path) => summaries[path]?.isGit);
+    if (rows.length === 0) {
+      showMsg("error", t("batch.noneToBranch"));
+      return;
+    }
+    const dirtyCount = rows.filter((path) => (summaries[path]?.dirtyCount ?? 0) > 0).length;
+    const lines = rows.map((path) => {
+      const s = summaries[path]!;
+      const label = recentProjects.find((p) => p.path === path)?.name || s.name;
+      return `• ${label} — ${s.branch}`;
     });
+    const ok = await confirm({
+      title: t("batch.branchSwitchTitle"),
+      message: `${t("batch.branchSwitchConfirmMessage", { count: rows.length, name })}\n${lines.join("\n")}`,
+      warning: dirtyCount > 0 ? t("batch.branchDirtyWarning", { count: dirtyCount }) : undefined,
+      confirmText: t("batch.switchBranch"),
+      icon: dirtyCount > 0 ? "warning" : "info",
+    });
+    if (!ok) return;
+    await runBatch(rows, async (path) => {
+      await invokeGitSwitchBranch(path, name);
+    });
+  };
+
+  const handleBranchConfirm = (name: string, options: { switchExisting: boolean }) => {
+    const mode = branchModal;
+    setBranchModal(null);
+    if (mode === "create") void runBranchCreate(name, options.switchExisting);
+    if (mode === "switch") void runBranchSwitch(name);
   };
 
   const handleBatchRefresh = () => {
@@ -473,10 +547,11 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
         // One batched read for the whole selection, not one per repo.
         invalidateRepos(paths);
         await refreshRepos(paths);
-        setBatchProgress({ done: paths.length, total: paths.length });
         showMsg("success", t("batch.done", { ok: paths.length, fail: 0 }));
       } finally {
         setBatchBusy(false);
+        // 批量刷新不走 runBatch，必须自己收尾：漏掉这行，「处理中 N/N」会永远挂在栏上。
+        setBatchProgress(null);
       }
     })();
   };
@@ -993,13 +1068,15 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
               aria-label={allCollapsed ? t("repos.expandAll") : t("repos.collapseAll")}
             >
               {allCollapsed ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+              <span>{allCollapsed ? t("repos.expandAll") : t("repos.collapseAll")}</span>
             </button>
           </div>
         )}
       </div>
 
-      {selected.size > 0 && (
-        <div className="repos-batch-bar">
+      {/* 常驻批量栏：未选中时按钮禁用、中性配色，操作入口位置稳定不跳动。 */}
+      {recentProjects.length > 0 && (
+        <div className={`repos-batch-bar${selected.size > 0 ? "" : " is-empty"}`}>
           <span className="repos-batch-count">{t("batch.selected", { count: selected.size })}</span>
           {batchProgress && (
             <span className="runtime-muted">
@@ -1010,7 +1087,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             <button
               type="button"
               className="btn commit-icon-btn"
-              disabled={batchBusy || accounts.length === 0}
+              disabled={batchBusy || selected.size === 0 || accounts.length === 0}
               onClick={() => setShowBatchBind(true)}
             >
               <User size={14} />
@@ -1019,7 +1096,27 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             <button
               type="button"
               className="btn commit-icon-btn"
-              disabled={batchBusy}
+              disabled={batchBusy || selected.size === 0}
+              onClick={() => setBranchModal("create")}
+              title={t("branchModal.createTitle")}
+            >
+              <GitBranchPlus size={14} />
+              <span>{t("batch.createBranch")}</span>
+            </button>
+            <button
+              type="button"
+              className="btn commit-icon-btn"
+              disabled={batchBusy || selected.size === 0}
+              onClick={() => setBranchModal("switch")}
+              title={t("branchModal.switchTitle")}
+            >
+              <GitBranch size={14} />
+              <span>{t("batch.switchBranch")}</span>
+            </button>
+            <button
+              type="button"
+              className="btn commit-icon-btn"
+              disabled={batchBusy || selected.size === 0}
               onClick={handleBatchPull}
             >
               <Download size={14} />
@@ -1028,16 +1125,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             <button
               type="button"
               className="btn commit-icon-btn"
-              disabled={batchBusy}
-              onClick={() => void handleBatchPush()}
-            >
-              <Upload size={14} />
-              <span>{t("batch.push")}</span>
-            </button>
-            <button
-              type="button"
-              className="btn commit-icon-btn"
-              disabled={batchBusy}
+              disabled={batchBusy || selected.size === 0}
               onClick={handleBatchRefresh}
             >
               <RefreshCw size={14} />
@@ -1046,7 +1134,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             <button
               type="button"
               className="btn commit-icon-btn"
-              disabled={batchBusy}
+              disabled={batchBusy || selected.size === 0}
               onClick={() => void handleBatchRemove()}
               title={t("batch.removeTitle")}
             >
@@ -1055,8 +1143,8 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             </button>
             <button
               type="button"
-              className="btn repos-batch-clear"
-              disabled={batchBusy}
+              className="btn commit-icon-btn"
+              disabled={batchBusy || selected.size === 0}
               onClick={clearSelected}
               title={t("batch.clear")}
             >
@@ -1252,6 +1340,15 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
           selectedCount={selected.size}
           onClose={() => setShowBatchBind(false)}
           onPick={handleBatchBind}
+        />
+      )}
+
+      {branchModal && (
+        <BatchBranchModal
+          mode={branchModal}
+          paths={[...selected]}
+          onClose={() => setBranchModal(null)}
+          onConfirm={handleBranchConfirm}
         />
       )}
 

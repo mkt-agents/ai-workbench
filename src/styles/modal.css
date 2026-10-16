@@ -60,7 +60,8 @@
 .modal.repos-accounts-modal,
 .modal.wb-modal,
 .modal.plugin-edit-modal,
-.modal.us-import-modal {
+.modal.us-import-modal,
+.modal.batch-branch-modal {
   width: var(--modal-md);
   max-width: min(var(--modal-md), var(--modal-max-vw));
   max-height: var(--modal-max-vh);

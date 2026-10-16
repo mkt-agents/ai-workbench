@@ -49,6 +49,13 @@ export interface GitScannedRepo {
   name: string;
 }
 
+/** Result of `git_list_branches`: local heads + remote-tracking refs (no network). */
+export interface GitBranchList {
+  current: string;
+  local: string[];
+  remote: string[];
+}
+
 export type AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver';
 
 export interface QuickAskChips {

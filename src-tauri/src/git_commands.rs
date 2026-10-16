@@ -44,6 +44,50 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Branch name rules per `git check-ref-format`. The frontend mirrors this for
+/// instant feedback; this is the gatekeeper that runs before any git call.
+fn validate_branch_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("分支名不能为空".to_string());
+    }
+    if name.starts_with('-') {
+        return Err("分支名不能以 - 开头".to_string());
+    }
+    if name.starts_with('/') || name.ends_with('/') {
+        return Err("分支名不能以 / 开头或结尾".to_string());
+    }
+    if name.ends_with(".lock") {
+        return Err("分支名不能以 .lock 结尾".to_string());
+    }
+    if name.contains("..") {
+        return Err("分支名不能包含 ..".to_string());
+    }
+    if name.contains("@{") {
+        return Err("分支名不能包含 @{".to_string());
+    }
+    if name == "@" {
+        return Err("分支名不能只是 @".to_string());
+    }
+    for ch in name.chars() {
+        if matches!(ch, ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\\') {
+            return Err(format!("分支名不能包含字符 “{}”", ch));
+        }
+    }
+    // Each slash-separated component must be non-empty and start/end with a
+    // non-dot (the trailing-slash cases were rejected above; this catches `//`,
+    // `.feature/x` and `feature/x.`).
+    for part in name.split('/') {
+        if part.is_empty() {
+            return Err("分支名不能包含连续的 /".to_string());
+        }
+        if part.starts_with('.') || part.ends_with('.') {
+            return Err(format!("分支名的分段 “{}” 不能以 . 开头或结尾", part));
+        }
+    }
+    Ok(())
+}
+
 fn git_command() -> Command {
     let mut cmd = Command::new("git");
     #[cfg(target_os = "windows")]
@@ -1139,6 +1183,96 @@ fn git_pull_sync(repo_path: String) -> Result<String, String> {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchList {
+    pub current: String,
+    pub local: Vec<String>,
+    pub remote: Vec<String>,
+}
+
+/// Create a local branch at HEAD and switch to it. Pushing to the remote is a
+/// separate step: the frontend reuses `git_push`, whose no-upstream path is
+/// exactly `push -u origin HEAD`.
+fn git_create_branch_sync(repo_path: String, name: String) -> Result<String, String> {
+    let name = name.trim().to_string();
+    validate_branch_name(&name)?;
+    ensure_git_repo(&repo_path)?;
+
+    // An unborn HEAD has nothing to branch from — "first commit" is the fix,
+    // and saying so beats git's generic fatal output.
+    if git_stdout(&repo_path, &["rev-parse", "--verify", "HEAD"]).is_err() {
+        return Err("当前分支还没有任何提交，无法创建新分支".into());
+    }
+    if git_stdout(&repo_path, &["rev-parse", "--verify", &format!("refs/heads/{}", name)]).is_ok() {
+        return Err(format!("本地已存在分支 {}，如需切换请使用「批量切换分支」", name));
+    }
+
+    let output = git_output(&repo_path, &["checkout", "-b", &name])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(stderr.trim().to_string());
+    }
+    Ok(format!("已创建并切换到分支 {}", name))
+}
+
+/// `git checkout <name>`. Git's DWIM covers the remote-only case: when only
+/// `origin/<name>` exists locally, checkout creates a local tracking branch.
+fn git_switch_branch_sync(repo_path: String, name: String) -> Result<String, String> {
+    let name = name.trim().to_string();
+    validate_branch_name(&name)?;
+    ensure_git_repo(&repo_path)?;
+
+    let output = git_output(&repo_path, &["checkout", &name])?;
+    if !output.status.success() {
+        let combined = format!(
+            "{} {}",
+            String::from_utf8_lossy(&output.stderr).trim(),
+            String::from_utf8_lossy(&output.stdout).trim()
+        )
+        .trim()
+        .to_string();
+        // git's own "pathspec did not match" says nothing about where it looked.
+        if combined.contains("did not match") {
+            return Err(format!(
+                "分支 {} 不存在（本地与远端跟踪引用中均未找到，可先批量拉取）",
+                name
+            ));
+        }
+        return Err(combined);
+    }
+    Ok(format!("已切换到分支 {}", name))
+}
+
+/// Local and remote-tracking refs only — no network. Feeds the switch modal's
+/// branch picker. `origin/HEAD` is a symbolic pointer, not a branch.
+fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
+    ensure_git_repo(&repo_path)?;
+    let current =
+        git_stdout(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    let mut local: Vec<String> = git_stdout(
+        &repo_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .collect();
+    let mut remote: Vec<String> = git_stdout(
+        &repo_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty() && !s.ends_with("/HEAD"))
+    .collect();
+    local.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    remote.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    Ok(GitBranchList { current, local, remote })
+}
+
 fn git_diff_sync(repo_path: String, file_path: String, staged: bool) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
     validate_repo_rel_path(&file_path)?;
@@ -1474,6 +1608,27 @@ pub async fn git_push(path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn git_pull(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || git_pull_sync(path))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_create_branch(path: String, name: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_create_branch_sync(path, name))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_switch_branch(path: String, name: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_switch_branch_sync(path, name))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_list_branches(path: String) -> Result<GitBranchList, String> {
+    tokio::task::spawn_blocking(move || git_list_branches_sync(path))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
@@ -2269,5 +2424,157 @@ mod v2_tests {
             !v1_paths.is_empty(),
             "fixture produced no changes; the comparison would be vacuous"
         );
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::{
+        git_command, git_create_branch_sync, git_list_branches_sync, git_stdout,
+        git_switch_branch_sync, validate_branch_name,
+    };
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn branch_name_validation_rules() {
+        for ok in ["main", "feature/x", "release-1.2", "v2.0.1", "user@host", "a/b/c"] {
+            assert!(validate_branch_name(ok).is_ok(), "{ok} 应当合法");
+        }
+        for bad in [
+            "", "  ", "-lead", "lead/", "/root", "a//b", "hot.fix.lock", "a..b", "a@{x", "@",
+            "a b", "a~b", "a^b", "a:b", "a?b", "a*b", "a[b", "a\\b", ".dot", "dot.", "a/.b",
+        ] {
+            assert!(validate_branch_name(bad).is_err(), "{bad} 应当被拒绝");
+        }
+    }
+
+    fn git_run(dir: &Path, args: &[&str]) -> Result<(), String> {
+        let out = git_command()
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    }
+
+    /// origin (bare) + work1 clone with `master` committed and pushed.
+    /// Returns (temp root, origin dir, work1 dir).
+    fn seed_remote(tag: &str) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+        let root = std::env::temp_dir().join(format!("aiwb-branch-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let origin = root.join("origin.git");
+        let work1 = root.join("work1");
+        std::fs::create_dir_all(&origin).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&work1).map_err(|e| e.to_string())?;
+        git_run(&origin, &["init", "-q", "--bare", "-b", "master"])?;
+        git_run(&work1, &["init", "-q", "-b", "master"])?;
+        git_run(&work1, &["config", "user.email", "branch-test@example.com"])?;
+        git_run(&work1, &["config", "user.name", "Branch Test"])?;
+        std::fs::write(work1.join("file.txt"), "one\n").map_err(|e| e.to_string())?;
+        git_run(&work1, &["add", "-A"])?;
+        git_run(&work1, &["commit", "-q", "-m", "seed"])?;
+        git_run(
+            &work1,
+            &["remote", "add", "origin", &origin.to_string_lossy()],
+        )?;
+        git_run(&work1, &["push", "-q", "-u", "origin", "master"])?;
+        Ok((root, origin, work1))
+    }
+
+    #[test]
+    #[ignore = "creates throwaway git repositories and shells out to git"]
+    fn create_branch_switches_and_rejects_duplicates() {
+        let (root, _origin, work1) = seed_remote("create").expect("seed remote");
+        let dir = work1.to_string_lossy().to_string();
+
+        git_create_branch_sync(dir.clone(), "feature/x".into()).expect("create branch");
+        assert_eq!(
+            git_stdout(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            "feature/x",
+            "create must land on the new branch"
+        );
+
+        let dup = git_create_branch_sync(dir.clone(), "feature/x".into()).unwrap_err();
+        assert!(dup.contains("已存在"), "重复创建应报已存在，实际: {dup}");
+        assert!(git_create_branch_sync(dir.clone(), "-lead".into()).is_err());
+
+        // An unborn HEAD (no commits) cannot branch.
+        let empty = root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        git_run(&empty, &["init", "-q", "-b", "master"]).unwrap();
+        git_run(&empty, &["config", "user.email", "branch-test@example.com"]).unwrap();
+        git_run(&empty, &["config", "user.name", "Branch Test"]).unwrap();
+        let err = git_create_branch_sync(empty.to_string_lossy().to_string(), "x".into())
+            .unwrap_err();
+        assert!(err.contains("没有任何提交"), "unborn HEAD 应报无提交，实际: {err}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[ignore = "creates throwaway git repositories and shells out to git"]
+    fn switch_branch_dwims_to_remote_only_branch() {
+        let (root, origin, work1) = seed_remote("dwim").expect("seed remote");
+        // Publish a branch work2 will only have as a remote-tracking ref.
+        git_run(&work1, &["branch", "feature/x"]).unwrap();
+        git_run(&work1, &["push", "-q", "origin", "feature/x"]).unwrap();
+
+        git_run(&root, &["clone", "-q", &origin.to_string_lossy(), "work2"]).unwrap();
+        let work2 = root.join("work2");
+        let dir = work2.to_string_lossy().to_string();
+
+        let list = git_list_branches_sync(dir.clone()).expect("list branches");
+        assert_eq!(list.current, "master");
+        assert!(list.local.contains(&"master".to_string()));
+        assert!(!list.local.iter().any(|b| b == "feature/x"));
+        assert!(list.remote.contains(&"origin/feature/x".to_string()));
+        assert!(!list.remote.iter().any(|b| b.ends_with("/HEAD")));
+
+        git_switch_branch_sync(dir.clone(), "feature/x".into()).expect("DWIM switch");
+        let after = git_list_branches_sync(dir).unwrap();
+        assert_eq!(after.current, "feature/x");
+        assert!(after.local.contains(&"feature/x".to_string()));
+
+        // A branch nobody has anywhere must say so plainly.
+        let missing = git_switch_branch_sync(root.join("work2").to_string_lossy().to_string(), "nope".into())
+            .unwrap_err();
+        assert!(missing.contains("不存在"), "缺失分支应报不存在，实际: {missing}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[ignore = "creates throwaway git repositories and shells out to git"]
+    fn switch_branch_refuses_conflicting_dirty_tree() {
+        let (root, _origin, work1) = seed_remote("conflict").expect("seed remote");
+        let dir = work1.to_string_lossy().to_string();
+
+        // dev carries a different content of file.txt.
+        git_run(&work1, &["checkout", "-q", "-b", "dev"]).unwrap();
+        std::fs::write(work1.join("file.txt"), "two\n").unwrap();
+        git_run(&work1, &["commit", "-q", "-am", "dev change"]).unwrap();
+        git_run(&work1, &["checkout", "-q", "master"]).unwrap();
+
+        // Uncommitted edit to the same file: git must refuse, we must not force.
+        std::fs::write(work1.join("file.txt"), "three\n").unwrap();
+        assert!(
+            git_switch_branch_sync(dir.clone(), "dev".into()).is_err(),
+            "冲突脏树切换必须失败"
+        );
+
+        // Restore via git (not a manual write): autocrlf means a hand-written
+        // "one\n" can still count as modified on Windows.
+        git_run(&work1, &["checkout", "--", "file.txt"]).unwrap();
+        git_switch_branch_sync(dir.clone(), "dev".into()).expect("clean switch");
+        assert_eq!(
+            git_stdout(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            "dev"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

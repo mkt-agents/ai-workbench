@@ -36,7 +36,7 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 
 ### 版本管理
 
-- **Git 管理**：多仓库扫描、身份绑定、批量拉推；提交页查看 diff 与 AI 生成说明
+- **Git 管理**：多仓库扫描、身份绑定、批量拉取/建分支/切分支；提交页查看 diff 与 AI 生成说明
 - **Git 报告**：按 diff 静态分析改动与风险，可选 AI 补充覆盖与必测场景；支持按章节重新生成
 - **环境变量**：本机开发运行时相关配置
 

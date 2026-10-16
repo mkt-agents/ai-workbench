@@ -36,7 +36,7 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 193 条注册
+                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 204 条注册
                       # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；含
                       # `detect_local_ai_endpoints` / `regenerate_test_report_ai_section`；
                       # 原 `devtools_commands.rs` 随 HTTP 客户端一起删除，该文件已不存在）
