@@ -3,7 +3,8 @@
   "group": {
     "convert": "Convert",
     "generate": "Generate",
-    "parse": "Parse"
+    "parse": "Parse",
+    "calc": "Calculate"
   },
   "json": {
     "title": "JSON",
@@ -181,6 +182,17 @@
     "expiresAt": "Expires in {{time}}",
     "active": "Active",
     "notYetActive": "Not yet active"
+  },
+  "calc": {
+    "title": "Calculator",
+    "description": "Arithmetic calculator with expression input, keyboard support and history (local only)",
+    "percentHint": "% is treated as percent: 50% = 0.5, 200×10% = 20",
+    "history": "History",
+    "historyEmpty": "No calculations yet",
+    "clearHistory": "Clear history",
+    "copy": "Copy result",
+    "error": "Cannot evaluate this expression",
+    "divZero": "Division by zero"
   },
   "regex": {
     "title": "Regex",
@@ -381,6 +393,7 @@
     "noResults": "No results",
     "clearSearch": "Clear search",
     "scrollLeft": "Scroll left",
-    "scrollRight": "Scroll right"
+    "scrollRight": "Scroll right",
+    "dragHint": "Drag to reorder"
   }
 }

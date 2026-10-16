@@ -3,7 +3,8 @@
   "group": {
     "convert": "转换",
     "generate": "生成",
-    "parse": "解析"
+    "parse": "解析",
+    "calc": "计算"
   },
   "json": {
     "title": "JSON",
@@ -181,6 +182,17 @@
     "expiresAt": "将于 {{time}} 过期",
     "active": "已生效",
     "notYetActive": "尚未生效"
+  },
+  "calc": {
+    "title": "计算器",
+    "description": "四则运算计算器：表达式求值、键盘输入与历史记录（纯本机）",
+    "percentHint": "% 按百分数处理：50% = 0.5，200×10% = 20",
+    "history": "历史记录",
+    "historyEmpty": "还没有计算记录",
+    "clearHistory": "清空历史",
+    "copy": "复制结果",
+    "error": "无法计算，请检查表达式",
+    "divZero": "除数为零"
   },
   "regex": {
     "title": "正则",
@@ -381,6 +393,7 @@
     "noResults": "无匹配结果",
     "clearSearch": "清除搜索",
     "scrollLeft": "向左滚动",
-    "scrollRight": "向右滚动"
+    "scrollRight": "向右滚动",
+    "dragHint": "拖动可调整顺序"
   }
 }

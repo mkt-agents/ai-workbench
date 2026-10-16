@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useTranslation } from "react-i18next";
 import {
   Braces,
+  Calculator,
   CalendarClock,
   ChevronLeft,
   ChevronRight,
@@ -22,8 +23,10 @@ import UuidTool from "./devtools/UuidTool";
 import JwtTool from "./devtools/JwtTool";
 import RegexTool from "./devtools/RegexTool";
 import HashTool from "./devtools/HashTool";
+import CalculatorTool from "./devtools/CalculatorTool";
 
 const STORAGE_KEY = "workbench-devtools-tool";
+const ORDER_KEY = "workbench-devtools-order";
 
 type ToolDef = {
   id: string;
@@ -61,7 +64,37 @@ const TOOL_GROUPS: ToolGroup[] = [
       { id: "regex", labelKey: "regex.title", icon: <Regex size={16} />, descriptionKey: "regex.description" },
     ],
   },
+  {
+    groupKey: "group.calc",
+    tools: [
+      { id: "calc", labelKey: "calc.title", icon: <Calculator size={16} />, descriptionKey: "calc.description" },
+    ],
+  },
 ];
+
+/** id → 工具定义（带所属分组，供分隔线与 tooltip 用）。 */
+const TOOL_BY_ID: Map<string, ToolDef & { groupKey: string }> = new Map(
+  TOOL_GROUPS.flatMap((g) => g.tools.map((t) => [t.id, { ...t, groupKey: g.groupKey }]))
+);
+
+/** 默认平铺顺序：常用文本/数据工具在前，计算器紧跟（不垫底），低频的 Cron/JWT/正则靠后。 */
+const DEFAULT_TOOL_ORDER = ["json", "encoder", "calc", "timestamp", "cron", "uuid", "hash", "jwt", "regex"];
+
+/** 读取持久化顺序：未知 id 丢弃、新工具追加到末尾，保证与注册表一致。 */
+function loadToolOrder(allIds: string[]): string[] {
+  try {
+    const raw = localStorage.getItem(ORDER_KEY);
+    if (!raw) return allIds;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return allIds;
+    const known = new Set(allIds);
+    const cleaned = parsed.filter((x): x is string => typeof x === "string" && known.has(x));
+    const missing = allIds.filter((id) => !cleaned.includes(id));
+    return [...cleaned, ...missing];
+  } catch {
+    return allIds;
+  }
+}
 
 /** Global 1-based index of a tool across all groups; used for the 1-9 hotkeys. */
 function toolHotkeyIndex(allTools: ToolDef[], id: string): number {
@@ -71,11 +104,15 @@ function toolHotkeyIndex(allTools: ToolDef[], id: string): number {
 function DevTools({ active = true }: { active?: boolean }) {
   const { t } = useTranslation("devtools");
 
-  const allTools = useMemo(() => TOOL_GROUPS.flatMap((g) => g.tools), []);
+  const [toolOrder, setToolOrder] = useState<string[]>(() => loadToolOrder(DEFAULT_TOOL_ORDER));
+  const allTools = useMemo(
+    () => toolOrder.map((id) => TOOL_BY_ID.get(id)).filter((t): t is NonNullable<typeof t> => !!t),
+    [toolOrder]
+  );
 
   const [activeTool, setActiveTool] = useState<string>(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored && allTools.some((tool) => tool.id === stored) ? stored : "json";
+    return stored && TOOL_BY_ID.has(stored) ? stored : "json";
   });
 
   const [search, setSearch] = useState("");
@@ -83,6 +120,10 @@ function DevTools({ active = true }: { active?: boolean }) {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, activeTool);
   }, [activeTool]);
+
+  useEffect(() => {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(toolOrder));
+  }, [toolOrder]);
 
   const stripRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -187,31 +228,71 @@ function DevTools({ active = true }: { active?: boolean }) {
     return () => window.removeEventListener("keydown", handler);
   }, [active, allTools]);
 
-  // Filter tools based on search
-  const filteredGroups = useMemo(() => {
-    if (!search.trim()) return TOOL_GROUPS;
+  // Filter tools based on search (over the current drag-ordered flat list)
+  const filteredTools = useMemo(() => {
+    if (!search.trim()) return allTools;
     const searchLower = search.toLowerCase();
-    return TOOL_GROUPS.map((group) => ({
-      ...group,
-      tools: group.tools.filter(
-        (tool) =>
-          t(tool.labelKey).toLowerCase().includes(searchLower) ||
-          t(tool.descriptionKey).toLowerCase().includes(searchLower)
-      ),
-    })).filter((group) => group.tools.length > 0);
-  }, [search, t]);
+    return allTools.filter(
+      (tool) =>
+        t(tool.labelKey).toLowerCase().includes(searchLower) ||
+        t(tool.descriptionKey).toLowerCase().includes(searchLower)
+    );
+  }, [search, allTools, t]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       if (search) setSearch("");
       else e.currentTarget.blur();
     } else if (e.key === "Enter") {
-      const first = filteredGroups[0]?.tools[0];
+      const first = filteredTools[0];
       if (!first) return;
       setActiveTool(first.id);
       setSearch("");
       e.currentTarget.blur();
     }
+  };
+
+  // --- 工具条拖动排序（HTML5 DnD；搜索过滤时禁用，避免相对位置歧义） ---
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropHint, setDropHint] = useState<{ id: string; side: "before" | "after" } | null>(null);
+
+  const clearDrag = useCallback(() => {
+    setDragId(null);
+    setDropHint(null);
+  }, []);
+
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    if (search.trim()) {
+      e.preventDefault();
+      return;
+    }
+    setDragId(id);
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox 需要 setData 才会启动拖拽
+    e.dataTransfer.setData("text/plain", id);
+  };
+
+  const handleDragOver = (e: React.DragEvent, id: string) => {
+    if (!dragId || dragId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = e.currentTarget.getBoundingClientRect();
+    const side = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+    setDropHint((prev) => (prev?.id === id && prev.side === side ? prev : { id, side }));
+  };
+
+  const handleDrop = (e: React.DragEvent, overId: string) => {
+    e.preventDefault();
+    const dragging = dragId;
+    clearDrag();
+    if (!dragging || dragging === overId) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const after = e.clientX >= rect.left + rect.width / 2;
+    setToolOrder((prev) => {
+      const next = prev.filter((x) => x !== dragging);
+      next.splice(next.indexOf(overId) + (after ? 1 : 0), 0, dragging);
+      return next;
+    });
   };
 
   const activeToolMeta = useMemo(() => allTools.find((t) => t.id === activeTool), [activeTool, allTools]);
@@ -226,23 +307,32 @@ function DevTools({ active = true }: { active?: boolean }) {
       case "jwt":          return <JwtTool />;
       case "regex":        return <RegexTool />;
       case "hash":         return <HashTool />;
+      case "calc":         return <CalculatorTool />;
       default:             return <JsonTool />;
     }
   };
 
   /** Chip in the top tool strip — group name is carried by the tooltip. */
-  const renderToolButton = (tool: ToolDef, groupKey: string) => {
+  const renderToolButton = (tool: ToolDef & { groupKey: string }) => {
     const hotkey = toolHotkeyIndex(allTools, tool.id);
     const isActive = activeTool === tool.id;
-    const isFirstMatch = !!search.trim() && filteredGroups[0]?.tools[0]?.id === tool.id;
+    const isFirstMatch = !!search.trim() && filteredTools[0]?.id === tool.id;
+    const canDrag = !search.trim();
     return (
       <button
         key={tool.id}
         type="button"
         data-tool-id={tool.id}
-        className={`dt-tool-item${isActive ? " active" : ""}${isFirstMatch ? " is-first-match" : ""}`}
+        className={`dt-tool-item${isActive ? " active" : ""}${isFirstMatch ? " is-first-match" : ""}${
+          dragId === tool.id ? " is-dragging" : ""
+        }${dropHint?.id === tool.id ? ` drop-${dropHint.side}` : ""}`}
         onClick={() => setActiveTool(tool.id)}
-        title={`${t(groupKey)} · ${t(tool.descriptionKey)}`}
+        draggable={canDrag}
+        onDragStart={(e) => handleDragStart(e, tool.id)}
+        onDragOver={(e) => handleDragOver(e, tool.id)}
+        onDrop={(e) => handleDrop(e, tool.id)}
+        onDragEnd={clearDrag}
+        title={`${t(tool.groupKey)} · ${t(tool.descriptionKey)}${canDrag ? ` · ${t("common.dragHint")}` : ""}`}
         aria-pressed={isActive}
       >
         <span className="dt-tool-icon">{tool.icon}</span>
@@ -254,7 +344,7 @@ function DevTools({ active = true }: { active?: boolean }) {
     );
   };
 
-  const noResults = search.trim() !== "" && filteredGroups.length === 0;
+  const noResults = search.trim() !== "" && filteredTools.length === 0;
 
   return (
     <div className="dt-layout">
@@ -262,10 +352,13 @@ function DevTools({ active = true }: { active?: boolean }) {
         <div className="dt-toolbar-inner">
         <div className="dt-strip-wrap">
           <nav ref={stripRef} className="dt-toolstrip" role="navigation" aria-label={t("title")}>
-            {filteredGroups.map((group, i) => (
-              <Fragment key={group.groupKey}>
-                {i > 0 && <span className="dt-strip-divider" aria-hidden="true" />}
-                <div className="dt-strip-group">{group.tools.map((tool) => renderToolButton(tool, group.groupKey))}</div>
+            {filteredTools.map((tool, i) => (
+              <Fragment key={tool.id}>
+                {/* 分组分隔线跟随当前顺序：相邻工具分组不同才画线（拖动跨组后依然成立） */}
+                {i > 0 && tool.groupKey !== filteredTools[i - 1].groupKey && (
+                  <span className="dt-strip-divider" aria-hidden="true" />
+                )}
+                {renderToolButton(tool)}
               </Fragment>
             ))}
 

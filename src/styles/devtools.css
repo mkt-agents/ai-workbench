@@ -155,7 +155,7 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--text-2);
+  color: var(--text-1);
   cursor: pointer;
   opacity: 1;
   pointer-events: auto;
@@ -169,8 +169,8 @@
   padding-left: 2px;
   background: linear-gradient(
     to right,
-    var(--dt-track) 28%,
-    color-mix(in srgb, var(--dt-track) 55%, transparent) 72%,
+    var(--dt-track) 40%,
+    color-mix(in srgb, var(--dt-track) 70%, transparent) 72%,
     transparent
   );
 }
@@ -181,30 +181,31 @@
   padding-right: 2px;
   background: linear-gradient(
     to left,
-    var(--dt-track) 28%,
-    color-mix(in srgb, var(--dt-track) 55%, transparent) 72%,
+    var(--dt-track) 40%,
+    color-mix(in srgb, var(--dt-track) 70%, transparent) 72%,
     transparent
   );
 }
 
-/* The chevron itself: a refined pill that lights up on hover / press. */
+/* The chevron itself: a refined pill that lights up on hover / press.
+   表面用 bg-3 + --border（而非 bg-2 + border-subtle）：深色主题下暗对暗会整颗融进底下的 chip。 */
 .dt-strip-arrow svg {
   display: block;
   width: 22px;
   height: 22px;
   padding: 3px;
   border-radius: var(--radius-full);
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-xs);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   transition: background var(--transition-colors-fast), color var(--transition-colors-fast),
     border-color var(--transition-colors-fast), transform var(--transition-colors-fast);
 }
 
 .dt-strip-arrow:hover svg {
-  background: var(--bg-hover);
+  background: var(--bg-3);
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .dt-strip-arrow:active svg {
@@ -262,6 +263,7 @@
 }
 
 .dt-tool-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -6549,4 +6551,249 @@
 
 .ports-chev-open {
   transform: rotate(90deg);
+}
+
+/* ---------- Calculator ---------- */
+
+/* 整体是一张面板卡片（与其他工具的双栏一致）：卡片撑满工具区，内容顶对齐，
+   计算器保持自然尺寸不随窗口膨胀——min-height 是矮窗口时的地板 */
+.calc-layout {
+  flex: 1 1 auto;
+  min-height: 360px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+}
+
+.calc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: clamp(320px, 28%, 400px);
+  max-width: 100%;
+}
+
+.calc-display {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+}
+
+.calc-display.has-error {
+  border-color: var(--red-border);
+}
+
+.calc-input {
+  border: none;
+  background: none;
+  color: var(--text-0);
+  font-family: var(--font-mono);
+  font-size: 22px;
+  text-align: right;
+  outline: none;
+  width: 100%;
+}
+
+.calc-preview {
+  min-height: 16px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.calc-preview.is-error {
+  color: var(--red);
+}
+
+/* 键盘固定舒适行高：大窗口不膨胀 */
+.calc-pad {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: minmax(44px, 1fr);
+  gap: 8px;
+}
+
+.calc-key {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  color: var(--text-0);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  transition: background var(--transition-colors-fast), border-color var(--transition-colors-fast);
+}
+
+.calc-key:hover {
+  background: var(--bg-3);
+}
+
+.calc-key:focus-visible {
+  outline: 1px solid var(--accent-border);
+}
+
+.calc-key.op {
+  color: var(--accent);
+}
+
+.calc-key.util {
+  color: var(--text-2);
+}
+
+.calc-key.equals {
+  grid-column: span 4;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+}
+
+.calc-key.equals:hover {
+  background: var(--accent-strong);
+}
+
+.calc-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.calc-history {
+  flex: 1 1 260px;
+  align-self: stretch;
+  min-width: 260px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.calc-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.calc-history-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.calc-history-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+/* 历史多时在面板内滚动，不把工具区整体撑高 */
+.calc-history-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.calc-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.calc-history-item:hover {
+  background: var(--overlay-1);
+}
+
+.calc-history-expr {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calc-history-result {
+  margin-left: auto;
+  color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.calc-history-copy {
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.calc-history-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+/* ---------- 工具条拖动排序 ---------- */
+
+/* 插入位置指示线：画在目标 chip 的前/后缘，用伪元素避免覆盖 active 的 box-shadow */
+.dt-tool-item::before,
+.dt-tool-item::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-colors-fast);
+}
+
+.dt-tool-item::before {
+  left: -3px;
+}
+
+.dt-tool-item::after {
+  right: -3px;
+}
+
+.dt-tool-item.drop-before::before {
+  opacity: 1;
+}
+
+.dt-tool-item.drop-after::after {
+  opacity: 1;
+}
+
+.dt-tool-item.is-dragging {
+  opacity: 0.35;
 }
