@@ -11,8 +11,8 @@ import {
   RefreshCw,
   RotateCcw,
   Sparkles,
-  Trash2,
   Upload,
+  Undo2,
   X,
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
@@ -732,6 +732,80 @@ function CommitChangelist({
     }
   };
 
+  /** IDEA 式回滚：把勾选文件的未提交改动恢复到上次提交的状态（未跟踪文件删除）。 */
+  const runRollbackChecked = async () => {
+    const pairs: { repoPath: string; repoName: string; entry: GitStatusEntry }[] = [];
+    for (const [repoPath, fileSet] of selected) {
+      if (fileSet.size === 0) continue;
+      if (!scopedPathKeys.has(pathKey(repoPath))) continue;
+      const repoName =
+        recentProjects.find((p) => p.path === repoPath)?.name || projectNameFromPath(repoPath);
+      for (const entry of statuses[repoPath] || []) {
+        if (fileSet.has(selectionKey(entry))) pairs.push({ repoPath, repoName, entry });
+      }
+    }
+    if (pairs.length === 0) return;
+
+    const labels = pairs.map(({ repoName, entry }) => `${repoName}/${entry.path}`);
+    const listText =
+      labels.slice(0, 10).join("\n") +
+      (labels.length > 10 ? `\n${t("commit.rollbackCheckedMore", { count: labels.length - 10 })}` : "");
+    const ok = await confirm({
+      title: t("commit.rollbackCheckedTitle"),
+      message: `${t("commit.rollbackCheckedConfirm", { count: labels.length })}\n${listText}`,
+      warning: t("commit.rollbackCheckedWarn"),
+      confirmText: t("commit.rollbackChecked"),
+      icon: "danger",
+    });
+    if (!ok) return;
+
+    holdRepos([...new Set(pairs.map(({ repoPath }) => repoPath))]);
+    setBusy(true);
+    setProgress({ done: 0, total: pairs.length });
+    let okCount = 0;
+    let fail = 0;
+    let errors: string[] = [];
+    try {
+      const result = await mapPoolCounted(
+        pairs,
+        GIT_CONCURRENCY,
+        async ({ repoPath, entry }) => {
+          await invokeGitDiscard(
+            repoPath,
+            entry.path,
+            entry.group === "untracked",
+            entry.group === "staged"
+          );
+        },
+        {
+          onProgress: (done, total) => setProgress({ done, total }),
+          describeError: (_path, e) => formatInvokeError(e),
+        }
+      );
+      okCount = result.ok;
+      fail = result.fail;
+      errors = result.errors;
+    } finally {
+      setBusy(false);
+      setProgress(null);
+      releaseRepos([...new Set(pairs.map(({ repoPath }) => repoPath))]);
+    }
+
+    // 正在查看的 diff 若刚被回滚，关掉以免展示已失效内容
+    const target = diffTargetRef.current;
+    if (target && pairs.some(({ repoPath, entry }) => repoPath === target.repoPath && entry.path === target.filePath)) {
+      closeDiff();
+    }
+
+    if (fail > 0) {
+      const detail = errors[0] ? `: ${truncateError(errors[0])}` : "";
+      onToast("error", `${t("commit.rollbackCheckedDone", { ok: okCount, fail })}${detail}`);
+    } else {
+      onToast("success", t("commit.rollbackCheckedDone", { ok: okCount, fail: 0 }));
+    }
+    void refreshAfterWrite([...new Set(pairs.map(({ repoPath }) => repoPath))]);
+  };
+
   const runGenerateMessage = async () => {
     if (busy || generating) return;
     if (!selectedModel) {
@@ -1241,7 +1315,7 @@ function CommitChangelist({
                       void runDiscard(p.path, e);
                     }}
                   >
-                    <Trash2 size={12} />
+                    <Undo2 size={12} />
                   </button>
                 </li>
               );
@@ -1437,6 +1511,16 @@ function CommitChangelist({
             >
               {generating ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
               {generating ? t("commit.generating") : t("commit.generate")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy || generating || selectedCount === 0}
+              onClick={() => void runRollbackChecked()}
+              title={selectedCount > 0 ? t("commit.rollbackCheckedTitle") : t("commit.rollbackCheckedNeedFiles")}
+            >
+              {busy ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
+              {t("commit.rollbackChecked")}
             </button>
             {onUndoLastCommit ? (
               <button
