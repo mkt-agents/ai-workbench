@@ -240,6 +240,40 @@
   color: var(--text-2);
 }
 
+.repos-batch-hint {
+  color: var(--text-2);
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.repos-batch-clear {
+  border: 0;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.repos-batch-clear:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+.repos-batch-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.repos-batch-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
 .repos-batch-actions {
   display: flex;
   align-items: center;
@@ -299,17 +333,30 @@
   cursor: not-allowed;
 }
 
-/* batch-identity：宽度走 modal.css 默认 sm 档 */
+/* batch-identity：宽度挂 modal.css md 档 */
+
+.bi-hint {
+  margin: 0 0 10px;
+}
+
+.bi-empty {
+  padding: 20px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12px;
+}
 
 .batch-identity-list {
   list-style: none;
-  margin: 0 0 12px;
+  margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   max-height: 320px;
   overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
 }
 
 .batch-identity-item {
@@ -317,22 +364,48 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-2);
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-1);
   cursor: pointer;
   text-align: left;
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+
+.batch-identity-list li:last-child .batch-identity-item {
+  box-shadow: none;
 }
 
 .batch-identity-item:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
+.batch-identity-item:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+}
+
+.batch-identity-item.is-active {
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 -1px 0 var(--border-subtle);
+}
+
+.batch-identity-list li:last-child .batch-identity-item.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .batch-identity-item:disabled {
   opacity: 0.7;
   cursor: default;
+}
+
+.batch-identity-item .commit-identity-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
 }
 
 .batch-identity-meta {
@@ -347,20 +420,39 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* batch-branch：宽度挂 modal.css md 档（560）；主体可滚、底栏固定，矮窗不裁内容 */
+.bi-email {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bi-check {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+/* batch-branch：宽度挂 modal.css lg 档；列表占满剩余高度，底栏固定 */
 
 .batch-branch-modal {
   display: flex;
   flex-direction: column;
+  height: min(560px, var(--modal-max-vh));
   max-height: var(--modal-max-vh);
 }
 
 .bb-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .bb-name-input {
@@ -368,11 +460,45 @@
   font-size: 12.5px;
 }
 
+.bb-name {
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+.bb-panel .bb-name {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--overlay-1);
+}
+
+.bb-panel .bb-name .input-label {
+  margin: 0;
+}
+
+.bb-panel .bb-name .repos-modal-error,
+.bb-panel .bb-name .input-hint,
+.bb-panel .bb-name .bb-collide {
+  grid-column: 1 / -1;
+}
+
+.bb-collide {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border-subtle));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--yellow) 8%, var(--bg-2));
+}
+
 .bb-warn {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 6px;
   font-size: 12px;
   color: var(--yellow);
 }
@@ -381,51 +507,55 @@
   flex-shrink: 0;
 }
 
-.bb-callout {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  background: var(--overlay-1);
-  color: var(--text-2);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.bb-callout svg {
-  flex-shrink: 0;
-  margin-top: 2px;
-  color: var(--accent);
-}
-
 .bb-switch-existing {
-  margin-bottom: 2px;
+  margin-top: 6px;
 }
 
-.bb-section-head {
+.bb-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.bb-panel-bar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 16px 0 8px;
+  gap: 4px;
+  padding: 6px 6px 6px 8px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.bb-section-head .input-label {
-  flex-shrink: 0;
-  margin: 0;
+.bb-filter-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  color: var(--text-3);
+}
+
+.bb-filter-wrap:focus-within {
+  color: var(--text-1);
 }
 
 .bb-filter {
   flex: 1;
   min-width: 0;
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--input-bg);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--text-0);
   font-size: 12px;
+  outline: none;
 }
 
 .bb-filter::placeholder {
@@ -440,14 +570,13 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  width: 26px;
   height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
+  color: var(--text-3);
   cursor: pointer;
 }
 
@@ -461,10 +590,25 @@
   cursor: default;
 }
 
+.bb-colhead {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-3);
+  font-size: 11px;
+}
+
 .bb-empty {
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
-  padding: 14px 12px;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px 12px;
   text-align: center;
   color: var(--text-3);
   font-size: 12px;
@@ -476,23 +620,12 @@
   color: var(--text-3);
 }
 
-.bb-tag {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  border-radius: var(--radius-full);
-  background: var(--overlay-2);
-  color: var(--text-2);
-  font-size: 10.5px;
-}
-
 .branch-pick-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 300px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -501,13 +634,23 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-2);
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-1);
   cursor: pointer;
   text-align: left;
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+
+.branch-pick-list li:last-child .branch-pick-item {
+  box-shadow: none;
+}
+
+.branch-pick-item:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
 }
 
 .branch-pick-item:hover {
@@ -515,8 +658,17 @@
 }
 
 .branch-pick-item.is-active {
-  border-color: var(--accent-border);
   color: var(--text-0);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 -1px 0 var(--border-subtle);
+}
+
+.branch-pick-list li:last-child .branch-pick-item.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.branch-pick-item.is-active .bb-item-icon {
+  color: var(--accent);
 }
 
 .branch-pick-name {
@@ -529,11 +681,34 @@
   white-space: nowrap;
 }
 
-.branch-pick-count {
+.bb-where {
   flex-shrink: 0;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: 11px;
+}
+
+.branch-pick-count {
+  flex-shrink: 0;
+  min-width: 3.2em;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.branch-pick-item.is-partial .branch-pick-count {
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+}
+
+.bb-actions .btn-primary {
+  max-width: 68%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .repos-card {
@@ -1024,6 +1199,17 @@
   background: var(--bg-hover);
   color: var(--text-0);
   border-color: var(--text-3);
+}
+
+.repos-batch-actions .repos-batch-remove {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 35%, var(--border));
+}
+
+.repos-batch-actions .repos-batch-remove:hover:not(:disabled) {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
 }
 
 .commit-icon-btn:disabled {

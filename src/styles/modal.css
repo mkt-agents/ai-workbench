@@ -61,7 +61,6 @@
 .modal.wb-modal,
 .modal.plugin-edit-modal,
 .modal.us-import-modal,
-.modal.batch-branch-modal,
 .modal.batch-identity-modal {
   width: var(--modal-md);
   max-width: min(var(--modal-md), var(--modal-max-vw));
@@ -74,6 +73,7 @@
 .modal.hosts-profile-modal,
 .modal.scan-repos-modal,
 .modal.us-edit-modal,
+.modal.batch-branch-modal,
 .modal.wb-modal-wide {
   width: var(--modal-lg);
   max-width: min(var(--modal-lg), var(--modal-max-vw));

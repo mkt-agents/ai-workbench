@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Loader2, PenLine, Plus, Tag, User } from "lucide-react";
+import { Check, Loader2, PenLine, Plus, Tag, Trash2, User } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
@@ -219,7 +219,9 @@ function AccountManagerModal({ onClose }: Props) {
               title={t("accountManager.title")}
               onClose={onClose}
               badge={
-                <span className="card-title-badge">{accounts.length}</span>
+                <span className="card-title-badge">
+                  {t("accountManager.count", { count: accounts.length })}
+                </span>
               }
             />
             {/* Global git config (email / author) */}
@@ -294,9 +296,13 @@ function AccountManagerModal({ onClose }: Props) {
             </div>
 
             {/* Binding rule hint */}
-            <div className="account-rule-hint">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-              <span>{t("accountManager.bindingRule")}</span>
+            <div className="account-rule">
+              <span className="account-rule-label">{t("accountManager.ruleLabel")}</span>
+              <span>{t("accountManager.rulePath")}</span>
+              <span className="account-rule-sep" aria-hidden="true" />
+              <span>{t("accountManager.ruleHost")}</span>
+              <span className="account-rule-sep" aria-hidden="true" />
+              <span>{t("accountManager.ruleGit")}</span>
             </div>
 
             <div className="account-scroll-area">
@@ -311,43 +317,53 @@ function AccountManagerModal({ onClose }: Props) {
                 <div className="account-grid">
                   {accounts.map((account) => (
                     <div key={account.id} className="account-card">
-                      <div className="account-card-header">
-                        <div className="account-avatar" style={{ background: account.color }}>
-                          {account.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="account-info">
-                          <div className="account-name">{account.name}</div>
-                          <div className="account-email">{account.email}</div>
-                          {account.note?.trim() ? (
-                            <div className="account-note" title={account.note.trim()}>
-                              {account.note.trim()}
-                            </div>
-                          ) : null}
-                          {(accountHosts.get(account.id)?.length ?? 0) > 0 && (
-                            <div className="account-hosts">
-                              <Tag size={11} />
-                              {accountHosts.get(account.id)!.map((host) => (
-                                <span key={host} className="account-host-tag" title={t("accountManager.hostHint")}>
-                                  {host}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                      <div className="account-avatar" style={{ background: account.color }}>
+                        {account.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="account-info">
+                        <div className="account-name">{account.name}</div>
+                        <div className="account-email">{account.email}</div>
+                        {(account.note?.trim() || (accountHosts.get(account.id)?.length ?? 0) > 0) && (
+                          <div className="account-tags">
+                            {account.note?.trim() ? (
+                              <span className="account-note" title={account.note.trim()}>
+                                {account.note.trim()}
+                              </span>
+                            ) : null}
+                            {accountHosts.get(account.id)?.map((host) => (
+                              <span key={host} className="account-host-tag" title={t("accountManager.hostHint")}>
+                                <Tag size={10} />
+                                {host}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div className="account-card-actions">
-                        <button className="btn btn-secondary btn-small" onClick={() => openEdit(account)}>
-                          {tc("actions.edit")}
+                        <button
+                          type="button"
+                          className="account-icon-btn"
+                          title={tc("actions.edit")}
+                          aria-label={tc("actions.edit")}
+                          onClick={() => openEdit(account)}
+                        >
+                          <PenLine size={13} />
                         </button>
-                        <button className="btn btn-danger btn-small" onClick={() => handleDelete(account.id)}>
-                          {tc("actions.delete")}
+                        <button
+                          type="button"
+                          className="account-icon-btn is-danger"
+                          title={tc("actions.delete")}
+                          aria-label={tc("actions.delete")}
+                          onClick={() => handleDelete(account.id)}
+                        >
+                          <Trash2 size={13} />
                         </button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-              {error && <div className="repos-modal-error" style={{ margin: "0 16px" }}>{error}</div>}
+              {error && <div className="repos-modal-error account-list-error">{error}</div>}
             </div>
 
             <div className="account-add-btn-row">
@@ -391,7 +407,6 @@ function AccountManagerModal({ onClose }: Props) {
                   value={formData.note}
                   onChange={(e) => setFormData({ ...formData, note: e.target.value })}
                   placeholder={t("accountManager.notePlaceholder")}
-                  style={{ resize: "vertical" }}
                 />
               </div>
               <div className="input-group">
@@ -402,9 +417,8 @@ function AccountManagerModal({ onClose }: Props) {
                   value={hostsInput}
                   onChange={(e) => setHostsInput(e.target.value)}
                   placeholder={t("accountManager.bindHostsPlaceholder")}
-                  style={{ resize: "vertical" }}
                 />
-                <span className="runtime-muted" style={{ fontSize: 12 }}>
+                <span className="input-hint">
                   {t("accountManager.hostHint")}
                 </span>
               </div>
