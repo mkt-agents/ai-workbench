@@ -194,11 +194,11 @@ fn git_output_timed(
     finish_git_child(child, args.first().copied().unwrap_or(""), timeout, false)
 }
 
-/// Push/pull: fail instead of waiting on a stalled socket or a hidden prompt.
+/// Push/pull. A Windows credential dialog is allowed (same path IDEA uses).
+/// A stalled transfer still fails after about 20 seconds; a dialog that is
+/// never answered is stopped at the hard deadline.
 fn git_network_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
     let child = git_command()
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "Never")
         .args([
             "-c",
             "http.lowSpeedLimit=1000",
@@ -1062,6 +1062,7 @@ fn friendly_push_error(raw: &str) -> String {
         || lower.contains("403")
         || lower.contains("401")
         || lower.contains("fatal: user cancelled dialog")
+        || lower.contains("user interactivity has been disabled")
     {
         return "推送失败：远程认证失败，请检查凭据或 SSH 密钥".into();
     }
@@ -1186,6 +1187,7 @@ fn friendly_pull_error(raw: &str) -> String {
         || lower.contains("authentication failed")
         || lower.contains("403")
         || lower.contains("401")
+        || lower.contains("user interactivity has been disabled")
     {
         return "拉取失败：远程认证失败，请检查凭据或 SSH 密钥".into();
     }
@@ -2329,6 +2331,14 @@ mod tests {
     fn push_error_translates_timeout() {
         let msg = friendly_push_error("git push 超时（>60s），已跳过");
         assert!(msg.contains("无法连接远程仓库"), "got: {msg}");
+    }
+
+    #[test]
+    fn push_error_translates_disabled_prompt() {
+        let msg = friendly_push_error(
+            "fatal: Cannot prompt because user interactivity has been disabled.",
+        );
+        assert!(msg.contains("认证失败"), "got: {msg}");
     }
 
     #[test]
