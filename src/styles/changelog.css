@@ -414,22 +414,132 @@
 .cl-commit-msg {
   width: 100%;
   resize: none;
-  min-height: 44px;
+  min-height: 52px;
+  padding: 8px 10px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cl-commit-bar .cl-commit-msg:focus {
+  border: 0;
+  outline: none;
+}
+
+.cl-composer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   background: var(--input-bg);
 }
 
-.cl-commit-tools {
+.cl-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.cl-composer-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: 8px 10px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.cl-amend {
+.cl-mode {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+}
+
+.cl-mode button {
+  height: 22px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cl-mode button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.cl-mode button.is-on {
+  background: var(--float-bg);
+  color: var(--text-0);
+  box-shadow: var(--shadow-xs);
+}
+
+.cl-mode button.is-amend {
+  color: var(--accent-strong);
+}
+
+.cl-mode-hint {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cl-mode-hint.is-amend {
+  color: var(--text-1);
+}
+
+.cl-composer-side {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.cl-recent .btn,
+.cl-composer-side .btn {
+  height: 26px;
+  box-shadow: none;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+
+.cl-recent .btn:hover:not(:disabled),
+.cl-composer-side .btn:hover:not(:disabled) {
+  background: var(--overlay-2);
+  border-color: transparent;
+  color: var(--text-0);
+}
+
+.cl-stash {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  color: var(--text-1);
+  gap: 2px;
+}
+
+.cl-stash-count {
+  min-width: 22px;
+  padding-inline: 6px;
+  border-radius: var(--radius-full);
+  font-variant-numeric: tabular-nums;
+}
+
+.cl-stash-count.is-on {
+  color: var(--accent-strong);
+  background: var(--accent-dim);
 }
 
 .cl-recent {
@@ -462,7 +572,8 @@
 }
 
 .cl-recent-item,
-.cl-recent-empty {
+.cl-recent-empty,
+.cl-menu-note {
   display: block;
   width: 100%;
   text-align: left;
@@ -473,12 +584,26 @@
   color: var(--text-0);
 }
 
+.cl-menu-note {
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.cl-stash-menu {
+  left: auto;
+  right: 0;
+  width: min(360px, 70vw);
+}
+
+.cl-stash-row {
+  padding: 2px 4px;
+}
+
 .cl-recent-item:hover {
   background: var(--bg-hover);
 }
 
-.cl-hunks,
-.cl-stash-list {
+.cl-hunks {
   display: flex;
   flex-direction: column;
   gap: 4px;

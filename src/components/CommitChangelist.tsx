@@ -558,6 +558,8 @@ function CommitChangelist({
   const [diffLoading, setDiffLoading] = useState(false);
   const refreshGen = useRef(0);
   const diffGen = useRef(0);
+  const recentRef = useRef<HTMLDivElement>(null);
+  const stashRef = useRef<HTMLDivElement>(null);
   /** Until the first read lands, an empty changelist proves nothing. */
   const loadedOnce = useRef(false);
   /** Keys each repo showed on the previous refresh, to tell "new" from "still there". */
@@ -580,6 +582,32 @@ function CommitChangelist({
   useEffect(() => {
     writeStoredString(CL_DRAFT_KEY, message);
   }, [message]);
+
+  useEffect(() => {
+    if (!recentOpen && !stashOpen) return;
+    const onOutside = (e: MouseEvent) => {
+      const node = e.target as Node;
+      if (recentOpen && recentRef.current && !recentRef.current.contains(node)) {
+        setRecentOpen(false);
+      }
+      if (stashOpen && stashRef.current && !stashRef.current.contains(node)) {
+        setStashOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.querySelector(".modal-overlay")) return;
+      e.stopPropagation();
+      setRecentOpen(false);
+      setStashOpen(false);
+    };
+    document.addEventListener("mousedown", onOutside);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [recentOpen, stashOpen]);
 
   const closeDiff = useCallback(() => {
     ++diffGen.current; // drop an in-flight diff response
@@ -986,6 +1014,7 @@ function CommitChangelist({
       setRecentOpen(false);
       return;
     }
+    setStashOpen(false);
     const local = readStoredArray<string>(CL_RECENT_KEY).slice(0, RECENT_LOCAL);
     let fromLog: string[] = [];
     if (currentGitRepo) {
@@ -1926,105 +1955,139 @@ function CommitChangelist({
       </div>
 
       <div className="cl-commit-bar">
-        <textarea
-          className="git-commit-message cl-commit-msg"
-          rows={2}
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder={t("commit.messagePlaceholder")}
-          disabled={busy || generating}
-        />
-        <div className="cl-commit-tools">
-          <label className="cl-amend">
-            <input
-              type="checkbox"
-              checked={amend}
-              disabled={busy || generating}
-              onChange={(e) => setAmend(e.target.checked)}
-            />
-            {t("commit.amend")}
-          </label>
-          <div className="cl-recent">
-            <button
-              type="button"
-              className="btn btn-secondary btn-small"
-              disabled={busy || generating}
-              onClick={() => void openRecent()}
-            >
-              <History size={13} />
-              {t("commit.recentMessages")}
-            </button>
-            {recentOpen && (
-              <div className="cl-recent-menu">
-                {recentSubjects.length === 0 ? (
-                  <div className="cl-recent-empty runtime-muted">{t("commit.recentEmpty")}</div>
-                ) : (
-                  recentSubjects.map((subject) => (
-                    <button
-                      key={subject}
-                      type="button"
-                      className="cl-recent-item"
-                      onClick={() => {
-                        setMessage(subject);
-                        setRecentOpen(false);
-                      }}
-                    >
-                      {subject}
-                    </button>
-                  ))
+        <div className="cl-composer">
+          <textarea
+            className="git-commit-message cl-commit-msg"
+            rows={2}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder={t("commit.messagePlaceholder")}
+            disabled={busy || generating}
+          />
+          <div className="cl-composer-foot">
+            <div className="cl-recent" ref={recentRef}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                disabled={busy || generating}
+                title={t("commit.recentMessagesTip")}
+                onClick={() => void openRecent()}
+              >
+                <History size={13} />
+                {t("commit.recentMessages")}
+              </button>
+              {recentOpen && (
+                <div className="cl-recent-menu">
+                  <div className="cl-menu-note runtime-muted">{t("commit.recentMessagesTip")}</div>
+                  {recentSubjects.length === 0 ? (
+                    <div className="cl-recent-empty runtime-muted">{t("commit.recentEmpty")}</div>
+                  ) : (
+                    recentSubjects.map((subject) => (
+                      <button
+                        key={subject}
+                        type="button"
+                        className="cl-recent-item"
+                        onClick={() => {
+                          setMessage(subject);
+                          setRecentOpen(false);
+                        }}
+                      >
+                        {subject}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="cl-mode" role="radiogroup" aria-label={t("commit.amendMode")}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!amend}
+                className={!amend ? "is-on" : ""}
+                disabled={busy || generating}
+                onClick={() => setAmend(false)}
+              >
+                {t("commit.commitNew")}
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={amend}
+                className={amend ? "is-on is-amend" : ""}
+                disabled={busy || generating}
+                onClick={() => setAmend(true)}
+              >
+                {t("commit.commitAmend")}
+              </button>
+            </div>
+            <p className={`cl-mode-hint${amend ? " is-amend" : ""}`}>
+              {amend ? t("commit.amendHint") : t("commit.commitNewHint")}
+            </p>
+            <div className="cl-composer-side">
+              <div className="cl-stash" ref={stashRef}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={busy || generating || !currentGitRepo}
+                  title={t("commit.stashPushTip")}
+                  onClick={() => {
+                    setRecentOpen(false);
+                    void runStashPush();
+                  }}
+                >
+                  <Archive size={13} />
+                  {t("commit.stashPush")}
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-secondary btn-small cl-stash-count${stashOpen ? " is-on" : ""}`}
+                  disabled={!currentGitRepo}
+                  title={t("commit.stashListTip")}
+                  aria-expanded={stashOpen}
+                  aria-label={t("commit.stashList", { count: stashes.length })}
+                  onClick={() => {
+                    setRecentOpen(false);
+                    setStashOpen((open) => !open);
+                  }}
+                >
+                  {stashes.length}
+                </button>
+                {stashOpen && (
+                  <div className="cl-recent-menu cl-stash-menu">
+                    <div className="cl-menu-note runtime-muted">{t("commit.stashPushTip")}</div>
+                    {stashes.length === 0 ? (
+                      <div className="cl-recent-empty runtime-muted">{t("commit.stashEmpty")}</div>
+                    ) : (
+                      stashes.map((entry) => (
+                        <div key={entry.index} className="cl-stash-row">
+                          <span className="cl-stash-msg">{entry.message || t("commit.stashUntitled")}</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            disabled={busy}
+                            onClick={() => void runStashPop(entry.index)}
+                          >
+                            {t("commit.stashPop")}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            disabled={busy}
+                            onClick={() => void runStashDrop(entry.index, entry.message)}
+                            aria-label={t("commit.stashDrop")}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 )}
               </div>
-            )}
+            </div>
           </div>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            disabled={busy || generating || !currentGitRepo}
-            onClick={() => void runStashPush()}
-            title={t("commit.stashPushTip")}
-          >
-            <Archive size={13} />
-            {t("commit.stashPush")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            disabled={!currentGitRepo}
-            onClick={() => setStashOpen((open) => !open)}
-          >
-            {t("commit.stashList", { count: stashes.length })}
-          </button>
         </div>
-        {stashOpen && (
-          <div className="cl-stash-list">
-            {stashes.length === 0 ? (
-              <div className="runtime-muted">{t("commit.stashEmpty")}</div>
-            ) : (
-              stashes.map((entry) => (
-                <div key={entry.index} className="cl-stash-row">
-                  <span className="cl-stash-msg">{entry.message || t("commit.stashUntitled")}</span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    disabled={busy}
-                    onClick={() => void runStashPop(entry.index)}
-                  >
-                    {t("commit.stashPop")}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    disabled={busy}
-                    onClick={() => void runStashDrop(entry.index, entry.message)}
-                    aria-label={t("commit.stashDrop")}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
         <div className="cl-commit-foot">
           <div className="cl-commit-actions-secondary">
             <button
@@ -2104,7 +2167,7 @@ function CommitChangelist({
               onClick={() => void runCommit(false)}
             >
               {busy ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-              {t("commit.changelistCommit")}
+              {amend ? t("commit.commitAmendAction") : t("commit.changelistCommit")}
             </button>
             <button
               type="button"
@@ -2135,7 +2198,7 @@ function CommitChangelist({
               onClick={() => void runCommit(true)}
             >
               {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
-              {t("commit.changelistCommitPush")}
+              {amend ? t("commit.commitAmendPush") : t("commit.changelistCommitPush")}
             </button>
           </div>
         </div>
