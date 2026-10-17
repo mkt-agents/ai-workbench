@@ -1068,6 +1068,33 @@ mod tests {
     }
 
     #[test]
+    fn pick_main_exe_uses_the_only_real_exe_when_the_name_does_not_match() {
+        // 微信 installs as Weixin.exe next to Uninstall.exe.
+        let exes = vec![cand("uninstall"), cand("weixin")];
+        assert_eq!(
+            pick_main_exe(&exes, Some("微信")).as_deref(),
+            Some("C:\\app\\weixin.exe")
+        );
+    }
+
+    #[test]
+    fn display_icon_strips_quotes_and_icon_index() {
+        assert_eq!(
+            exe_from_display_icon(r#""C:\Program Files\Tencent\Weixin\Weixin.exe""#).as_deref(),
+            Some(r"C:\Program Files\Tencent\Weixin\Weixin.exe")
+        );
+        assert_eq!(
+            exe_from_display_icon(r"C:\App\app.exe,0").as_deref(),
+            Some(r"C:\App\app.exe")
+        );
+        assert_eq!(exe_from_display_icon(r"C:\App\app.dll,0"), None);
+        assert_eq!(
+            unquote_path(r#""C:\Program Files\Tencent\Weixin""#),
+            r"C:\Program Files\Tencent\Weixin"
+        );
+    }
+
+    #[test]
     fn pick_main_exe_single_candidate_without_name_is_safe() {
         let exes = vec![cand("onlyone")];
         assert_eq!(
@@ -1255,6 +1282,26 @@ mod tests {
         assert_eq!(normalize_path_key("C:\\App\\"), normalize_path_key("c:\\app"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn desktop_scan_includes_wechat_shortcut_when_present() {
+        let lnk = std::path::Path::new(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\微信\微信.lnk");
+        if !lnk.is_file() {
+            return;
+        }
+        let bytes = std::fs::read(lnk).unwrap();
+        let target = parse_lnk_local_path(&bytes);
+        assert_eq!(
+            target.as_deref(),
+            Some(r"C:\Program Files\Tencent\Weixin\Weixin.exe"),
+            "parsed {target:?}"
+        );
+        let apps = scan_desktop_apps_sync();
+        let hit = apps.iter().find(|a| a.exe_path.to_lowercase().contains("weixin.exe"));
+        assert!(hit.is_some(), "desktop scan missed weixin; count {}", apps.len());
+        assert_eq!(hit.unwrap().display_name, "微信");
+    }
+
     /// Audit helper: run the real scan on this machine and dump results next to
     /// the Start Menu ground truth for offline diffing. `cargo test -- --ignored`.
     #[test]
@@ -1338,6 +1385,35 @@ pub struct InstalledAppInfo {
     pub publisher: String,
     pub version: String,
     pub icon: Option<String>,
+}
+
+/// Desktop apps the user can launch: Start Menu and Desktop shortcuts only.
+///
+/// The uninstall registry and Program Files walks also contain runtimes, SDKs
+/// and helper executables, which are not what the launcher scan is for.
+#[tauri::command]
+pub async fn scan_desktop_apps() -> Result<Vec<InstalledAppInfo>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let results = tokio::task::spawn_blocking(scan_desktop_apps_sync)
+            .await
+            .map_err(|e| format!("扫描任务失败: {}", e))?;
+        Ok(results)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前系统不支持扫描桌面应用".into())
+    }
+}
+
+#[cfg(windows)]
+fn scan_desktop_apps_sync() -> Vec<InstalledAppInfo> {
+    let mut apps: Vec<InstalledAppInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    scan_shortcut_apps(&mut apps, &mut seen);
+    apps.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+    apps
 }
 
 /// Scan the registry for installed applications.
@@ -1593,7 +1669,22 @@ fn scan_shortcut_apps(apps: &mut Vec<InstalledAppInfo>, seen: &mut std::collecti
         if !is_valid_start_menu_target(&target.to_lowercase()) || !std::path::Path::new(&target).is_file() {
             continue;
         }
-        if seen.insert(normalize_path_key(&target)) {
+        let key = normalize_path_key(&target);
+        if !seen.insert(key.clone()) {
+            // Directory sweep names the app after the folder ("Weixin"). The Start
+            // Menu shortcut is what the user actually calls it ("微信").
+            let stem = std::path::Path::new(&target)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            if let Some(app) = apps.iter_mut().find(|a| normalize_path_key(&a.exe_path) == key) {
+                if app.display_name.eq_ignore_ascii_case(stem) && !name.eq_ignore_ascii_case(stem) {
+                    app.display_name = name;
+                }
+            }
+            continue;
+        }
+        {
             let version = get_app_version_sync(target.clone()).unwrap_or_default();
             apps.push(InstalledAppInfo {
                 display_name: name,
@@ -1962,16 +2053,26 @@ fn read_app_info(
     let publisher = query_string_value(hkey, "Publisher").unwrap_or_default();
     let version = query_string_value(hkey, "DisplayVersion").unwrap_or_default();
 
+    // DisplayIcon is the exe Windows itself shows (often with quotes and ",0").
+    // InstallLocation for 微信 is `"C:\Program Files\Tencent\Weixin"` — quotes
+    // included — and the exe is Weixin.exe, which does not match the name 微信.
+    let mut exe_path = query_string_value(hkey, "DisplayIcon")
+        .as_deref()
+        .and_then(exe_from_display_icon)
+        .filter(|p| std::path::Path::new(p).is_file())
+        .filter(|p| !is_auxiliary_exe_stem(&exe_stem_lower(p)))
+        .unwrap_or_default();
+
     // Prefer InstallLocation (installation directory) to find the actual exe.
     // UninstallString points to the uninstaller, not the main application.
-    let install_location = query_string_value(hkey, "InstallLocation");
-
-    // Try to find the main exe in the install directory.
-    let mut exe_path = install_location
-        .as_deref()
-        .map(|loc| find_exe_in_dir(loc, display_name.as_deref()))
-        .flatten()
-        .unwrap_or_default();
+    if exe_path.is_empty() {
+        let install_location = query_string_value(hkey, "InstallLocation").map(|s| unquote_path(&s));
+        exe_path = install_location
+            .as_deref()
+            .filter(|loc| !loc.is_empty())
+            .and_then(|loc| find_exe_in_dir(loc, display_name.as_deref()))
+            .unwrap_or_default();
+    }
 
     // Many vendors (QQ, old Win32 apps) leave InstallLocation empty; fall back
     // to the uninstaller's own directory, which is the install dir in practice.
@@ -2187,6 +2288,11 @@ fn pick_main_exe(candidates: &[(String, String)], display_name: Option<&str>) ->
         {
             return Some(path.clone());
         }
+        // 微信 → Weixin.exe: the display name and the file share no characters.
+        // One non-auxiliary exe in that install dir is the product.
+        if candidates.len() == 1 {
+            return Some(candidates[0].1.clone());
+        }
         return None;
     }
     // No display name: only safe when exactly one candidate exists.
@@ -2244,6 +2350,35 @@ pub(crate) fn find_install_dir(name_prefix: &str) -> Option<String> {
 
 /// Parent directory of an UninstallString like `"C:\app\unins000.exe" /S`
 /// (quotes optional). Returns None if no path separator is present.
+/// `"C:\Program Files\App"` and `C:\Program Files\App` both become a usable path.
+fn unquote_path(raw: &str) -> String {
+    let s = raw.trim();
+    if let Some(rest) = s.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("").trim().to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// `DisplayIcon` is an exe path, sometimes quoted, sometimes with a `,0` icon index.
+fn exe_from_display_icon(raw: &str) -> Option<String> {
+    let path = unquote_path(raw);
+    let path = path.split(',').next().unwrap_or(path.as_str()).trim().to_string();
+    if path.to_lowercase().ends_with(".exe") {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn exe_stem_lower(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+}
+
 fn dir_from_uninstall_string(raw: &str) -> Option<String> {
     let s = raw.trim();
     let path_part = if let Some(rest) = s.strip_prefix('"') {

@@ -1647,21 +1647,67 @@ pub async fn git_diff(path: String, file_path: String, staged: bool) -> Result<S
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// `git log --since` only accepts a calendar stamp we generate (`YYYY-MM-DD` or with time).
+fn git_since_arg(since: &str) -> Result<String, String> {
+    let s = since.trim();
+    let ok = s.len() == 10 && s.as_bytes()[4] == b'-' && s.as_bytes()[7] == b'-'
+        || (s.len() >= 19 && s.len() <= 19 && s.as_bytes()[4] == b'-' && s.as_bytes()[7] == b'-' && (s.as_bytes()[10] == b' ' || s.as_bytes()[10] == b'T'));
+    if !ok || !s.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'-' | b':' | b' ' | b'T')) {
+        return Err("invalid since".to_string());
+    }
+    Ok(format!("--since={s}"))
+}
+
+#[cfg(test)]
+mod since_tests {
+    use super::git_since_arg;
+
+    #[test]
+    fn since_accepts_a_local_day_start() {
+        assert_eq!(
+            git_since_arg("2026-10-17 00:00:00").unwrap(),
+            "--since=2026-10-17 00:00:00"
+        );
+        assert_eq!(git_since_arg("2026-10-17").unwrap(), "--since=2026-10-17");
+        assert!(git_since_arg("--all").is_err());
+        assert!(git_since_arg("yesterday").is_err());
+    }
+
+    #[test]
+    fn log_files_parse_subject_and_paths() {
+        let raw = "\u{1e}fix ask\u{1f}2 hours ago\nsrc/a.ts\nsrc/b.rs\n\n\u{1e}wip\u{1f}3 hours ago\n";
+        let rows = super::parse_log_files(raw);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].subject, "fix ask");
+        assert_eq!(rows[0].files, vec!["src/a.ts".to_string(), "src/b.rs".to_string()]);
+        assert_eq!(rows[1].subject, "wip");
+        assert!(rows[1].files.is_empty());
+    }
+}
+
 /// Get recent commits (short format: hash + subject + relative date).
+/// `since` limits the walk to a local calendar start, e.g. `2026-10-17 00:00:00`.
 #[tauri::command]
-pub async fn git_log(path: String, count: i64) -> Result<Vec<Vec<String>>, String> {
+pub async fn git_log(path: String, count: i64, since: Option<String>) -> Result<Vec<Vec<String>>, String> {
     tokio::task::spawn_blocking(move || {
         ensure_git_repo(&path)?;
         let count = count.clamp(1, 50);
-        let output = git_output(
-            &path,
-            &[
-                "log",
-                &format!("-{}", count),
-                "--pretty=format:%h|%s|%cr",
-                "--no-merges",
-            ],
-        )?;
+        let since_arg = match since.as_deref() {
+            Some(s) if !s.trim().is_empty() => Some(git_since_arg(s)?),
+            _ => None,
+        };
+        let count_arg = format!("-{count}");
+        let mut args = vec![
+            "log".to_string(),
+            count_arg,
+            "--pretty=format:%h|%s|%cr".to_string(),
+            "--no-merges".to_string(),
+        ];
+        if let Some(s) = since_arg {
+            args.push(s);
+        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = git_output(&path, &arg_refs)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(stderr.trim().to_string());
@@ -1673,6 +1719,78 @@ pub async fn git_log(path: String, count: i64) -> Result<Vec<Vec<String>>, Strin
             .map(|line| line.splitn(3, '|').map(String::from).collect())
             .collect();
         Ok(commits)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitFiles {
+    pub subject: String,
+    pub when: String,
+    pub files: Vec<String>,
+}
+
+/// `git log --pretty=format:%x1e%s%x1f%cr --name-only` records, split on `\x1e`.
+fn parse_log_files(text: &str) -> Vec<GitCommitFiles> {
+    let mut out = Vec::new();
+    for chunk in text.split('\u{1e}') {
+        let chunk = chunk.trim();
+        if chunk.is_empty() {
+            continue;
+        }
+        let mut lines = chunk.lines();
+        let Some(head) = lines.next() else { continue };
+        let mut parts = head.splitn(2, '\u{1f}');
+        let subject = parts.next().unwrap_or("").trim().to_string();
+        let when = parts.next().unwrap_or("").trim().to_string();
+        if subject.is_empty() {
+            continue;
+        }
+        let files = lines
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        out.push(GitCommitFiles { subject, when, files });
+    }
+    out
+}
+
+/// Recent commits with the paths they touched. No patches.
+#[tauri::command]
+pub async fn git_log_files(
+    path: String,
+    count: i64,
+    since: Option<String>,
+) -> Result<Vec<GitCommitFiles>, String> {
+    tokio::task::spawn_blocking(move || {
+        ensure_git_repo(&path)?;
+        let count = count.clamp(1, 50);
+        let since_arg = match since.as_deref() {
+            Some(s) if !s.trim().is_empty() => Some(git_since_arg(s)?),
+            _ => None,
+        };
+        let count_arg = format!("-{count}");
+        let mut args = vec![
+            "log".to_string(),
+            count_arg,
+            "--pretty=format:%x1e%s%x1f%cr".to_string(),
+            "--name-only".to_string(),
+            "--no-merges".to_string(),
+        ];
+        if let Some(s) = since_arg {
+            args.push(s);
+        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = git_output(&path, &arg_refs)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(stderr.trim().to_string());
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_log_files(&text))
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?

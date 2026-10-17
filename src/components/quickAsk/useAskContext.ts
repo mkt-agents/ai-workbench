@@ -13,6 +13,7 @@ import {
   MAX_SECONDARY_REPOS,
   truncate,
 } from "./config";
+import { formatDailyNotes, localDayStart, type DailyRepoNote } from "./dailyReport";
 import type { AskMode } from "./route";
 
 /** Max concurrent git processes to avoid saturating the thread pool. */
@@ -73,6 +74,7 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
   const invokeGitStatus = useGlobalStore((s) => s.invokeGitStatus);
   const invokeGitDiff = useGlobalStore((s) => s.invokeGitDiff);
   const invokeGitLog = useGlobalStore((s) => s.invokeGitLog);
+  const invokeGitLogFiles = useGlobalStore((s) => s.invokeGitLogFiles);
   const invokeGetGitConfig = useGlobalStore((s) => s.invokeGetGitConfig);
 
   const [ctxPreview, setCtxPreview] = useState("");
@@ -387,5 +389,57 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
     chipsSigRef.current = "";
   }, []);
 
-  return { ctxPreview, ctxTruncated, ctxLoading, getContext, invalidateContext };
+  /**
+   * Today's commits plus a coarse "still dirty" area list. No patches — a daily
+   * report should talk about the work, not quote the diff.
+   */
+  const collectDailyBrief = useCallback(async (): Promise<{ text: string; repos: string[] }> => {
+    const focusList = focusedRepos.length
+      ? focusedRepos
+      : currentGitRepo
+        ? [currentGitRepo]
+        : [];
+    const since = localDayStart();
+    const notes = await withConcurrency(
+      focusList.slice(0, 6).map((repo) => async (): Promise<DailyRepoNote | null> => {
+        try {
+          const summary = await invokeGitRepoSummary(repo);
+          if (!summary.isGit) return null;
+          const commits = await invokeGitLogFiles(repo, 30, since);
+          let dirtyPaths: string[] = [];
+          if (summary.dirtyCount > 0) {
+            try {
+              const entries = await invokeGitStatus(repo);
+              dirtyPaths = entries.slice(0, DIRTY_FILE_LIMIT).map((e) => e.path);
+            } catch {
+              dirtyPaths = [];
+            }
+          }
+          return {
+            name: summary.name || repoName(repo),
+            commits: commits
+              .map((c) => ({
+                subject: (c.subject || "").trim(),
+                when: c.when || "",
+                files: c.files || [],
+              }))
+              .filter((c) => c.subject),
+            dirtyPaths,
+          };
+        } catch {
+          return {
+            name: repoName(repo),
+            commits: [],
+            dirtyPaths: [],
+            unreadable: true,
+          };
+        }
+      }),
+      GIT_CONCURRENCY,
+    );
+    const repos = notes.filter((n): n is DailyRepoNote => n !== null);
+    return { text: formatDailyNotes(repos), repos: repos.map((r) => r.name) };
+  }, [focusedRepos, currentGitRepo, invokeGitRepoSummary, invokeGitLogFiles, invokeGitStatus]);
+
+  return { ctxPreview, ctxTruncated, ctxLoading, getContext, invalidateContext, collectDailyBrief };
 }

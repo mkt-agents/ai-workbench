@@ -6326,6 +6326,14 @@
   border-color: var(--accent);
 }
 
+.al-scan-item.is-saved {
+  cursor: default;
+}
+
+.al-scan-item.is-saved .al-scan-check {
+  visibility: hidden;
+}
+
 .al-scan-icon {
   display: flex;
   align-items: center;

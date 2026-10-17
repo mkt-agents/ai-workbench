@@ -191,7 +191,7 @@ function AppLauncherTool() {
   const invokeKillApp = useGlobalStore((s) => s.invokeKillApp);
   const invokeGetAppVersion = useGlobalStore((s) => s.invokeGetAppVersion);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
-  const invokeScanInstalledApps = useGlobalStore((s) => s.invokeScanInstalledApps);
+  const invokeScanDesktopApps = useGlobalStore((s) => s.invokeScanDesktopApps);
   const reorderLaunchers = useGlobalStore((s) => s.reorderQuickAppLaunchers);
 
   // Batch check running status for multiple processes in one call.
@@ -486,9 +486,21 @@ function AppLauncherTool() {
     setSelectedApps(new Set());
     setScanSearch("");
     try {
-      const results = await invokeScanInstalledApps();
+      const results = await invokeScanDesktopApps();
       if (!cancelled.current) {
         setScanResults(results);
+        // A previous scan saved Weixin.exe as "Weixin". The shortcut is named 微信.
+        for (const app of results) {
+          if (!app.display_name) continue;
+          const saved = launchers.find(
+            (l) => normalizeAppPath(l.path) === normalizeAppPath(app.exe_path),
+          );
+          if (!saved) continue;
+          const stem = exeNameFromPath(saved.path);
+          if (saved.name.localeCompare(stem, undefined, { sensitivity: "accent" }) === 0 && saved.name !== app.display_name) {
+            await updateLauncher(saved.id, { name: app.display_name });
+          }
+        }
       }
     } catch (e) {
       if (!cancelled.current) {
@@ -548,11 +560,9 @@ function AppLauncherTool() {
   };
 
   const filteredScanResults = useMemo(() => {
-    // Applications already saved (by normalized path) don't need re-adding.
-    const savedPaths = new Set(launchers.map((l) => normalizeAppPath(l.path)));
     const q = scanSearch.toLowerCase().trim();
     return scanResults.filter((app) => {
-      if (!app.exe_path || savedPaths.has(normalizeAppPath(app.exe_path))) return false;
+      if (!app.exe_path) return false;
       if (!q) return true;
       return (
         app.display_name.toLowerCase().includes(q) ||
@@ -560,24 +570,34 @@ function AppLauncherTool() {
         (app.publisher && app.publisher.toLowerCase().includes(q))
       );
     });
-  }, [scanResults, scanSearch, launchers]);
+  }, [scanResults, scanSearch]);
+
+  const savedScanPaths = useMemo(
+    () => new Set(launchers.map((l) => normalizeAppPath(l.path))),
+    [launchers],
+  );
+
+  const selectableScanResults = useMemo(
+    () => filteredScanResults.filter((app) => !savedScanPaths.has(normalizeAppPath(app.exe_path))),
+    [filteredScanResults, savedScanPaths],
+  );
 
   const allFilteredSelected = useMemo(() => {
-    if (filteredScanResults.length === 0) return false;
-    return filteredScanResults.every((app) => selectedApps.has(app.exe_path));
-  }, [filteredScanResults, selectedApps]);
+    if (selectableScanResults.length === 0) return false;
+    return selectableScanResults.every((app) => selectedApps.has(app.exe_path));
+  }, [selectableScanResults, selectedApps]);
 
   const toggleAllFiltered = () => {
     if (allFilteredSelected) {
       setSelectedApps((prev) => {
         const next = new Set(prev);
-        for (const app of filteredScanResults) next.delete(app.exe_path);
+        for (const app of selectableScanResults) next.delete(app.exe_path);
         return next;
       });
     } else {
       setSelectedApps((prev) => {
         const next = new Set(prev);
-        for (const app of filteredScanResults) next.add(app.exe_path);
+        for (const app of selectableScanResults) next.add(app.exe_path);
         return next;
       });
     }
@@ -1379,7 +1399,7 @@ function AppLauncherTool() {
                       type="button"
                       className={`al-btn ${allFilteredSelected ? "al-btn-primary" : ""}`}
                       onClick={toggleAllFiltered}
-                      disabled={filteredScanResults.length === 0}
+                      disabled={selectableScanResults.length === 0}
                     >
                       <Check size={13} />
                       <span>{allFilteredSelected ? t("appLauncher.scan.deselectAll") : t("appLauncher.scan.selectAll")}</span>
@@ -1387,12 +1407,15 @@ function AppLauncherTool() {
                   </div>
                   <div className="al-scan-list">
                     {filteredScanResults.map((app) => {
-                      const isSelected = selectedApps.has(app.exe_path);
+                      const isSaved = savedScanPaths.has(normalizeAppPath(app.exe_path));
+                      const isSelected = !isSaved && selectedApps.has(app.exe_path);
                       return (
                         <div
                           key={app.exe_path}
-                          className={`al-scan-item ${isSelected ? "selected" : ""}`}
-                          onClick={() => toggleAppSelection(app.exe_path)}
+                          className={`al-scan-item ${isSelected ? "selected" : ""}${isSaved ? " is-saved" : ""}`}
+                          onClick={() => {
+                            if (!isSaved) toggleAppSelection(app.exe_path);
+                          }}
                         >
                           <span className="al-scan-check">
                             {isSelected && <Check size={12} />}
@@ -1407,6 +1430,7 @@ function AppLauncherTool() {
                               {app.display_name || exeNameFromPath(app.exe_path)}
                             </span>
                             <span className="al-scan-meta">
+                              {isSaved && <span className="al-scan-publisher">{t("appLauncher.scan.alreadyAdded")}</span>}
                               {app.publisher && <span className="al-scan-publisher">{app.publisher}</span>}
                               {app.version && <span className="al-scan-version">{app.version}</span>}
                             </span>

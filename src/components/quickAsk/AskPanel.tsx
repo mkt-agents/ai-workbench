@@ -2,19 +2,25 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { QuickAskTurn } from "../../core/types";
 import {
-  AlertCircle, ArrowDown, BookmarkPlus, Check, ClipboardPaste, Copy, Download, ExternalLink,
+  AlertCircle, ArrowDown, BookmarkPlus, Bot, Check, ClipboardPaste, Copy, Download, ExternalLink,
   FileText, FolderGit2, MessageCircle, MessageSquarePlus, RefreshCw, Send, Sparkles, Square, X,
 } from "lucide-react";
 import MarkdownView from "../MarkdownView";
 import { MAX_HISTORY_TURNS, QUICK_TASKS } from "./config";
 import type { TaskKind } from "./config";
 import type { AskMode, RouteOverride, RouteResult } from "./route";
-import type { AnswerSource, AskPhase } from "./useAskStream";
+import type { AnswerSource, AskPhase, AgentApproval, AgentStep } from "./useAskStream";
+import type { OpenSuggestion } from "./localActions";
+import { keepableAnswer } from "./keepable";
 
 /** Empty-state starters: filled into the input (never auto-sent). */
 const EXAMPLES: { key: string; task?: TaskKind }[] = [
+  { key: "daily" },
   { key: "recent" },
+  { key: "impact" },
   { key: "error", task: "debug" },
+  { key: "polish", task: "polish" },
+  { key: "open" },
   { key: "model" },
 ];
 const INPUT_MAX_HEIGHT = 160;
@@ -59,11 +65,21 @@ type Props = {
   projectLabel: string | null;
   task: TaskKind;
   onTask: (task: TaskKind) => void;
+  onDaily: () => void;
+  agentOn: boolean;
+  onToggleAgent: () => void;
+  agentSteps: AgentStep[];
+  agentApproval: AgentApproval | null;
+  stopping: boolean;
+  onDecideAgent: (allow: boolean) => void;
   hasSnippets: boolean;
   snippetOpen: boolean;
   onToggleSnippets: () => void;
   onPasteClipboard: () => void;
   onSend: () => void;
+  /** Non-null while the composer is an "open …" phrase (empty = nothing matched). */
+  openList: OpenSuggestion[] | null;
+  onRunOpen: (item: OpenSuggestion) => void;
   onStop: () => void;
   onRegenerate: () => void;
   onCopyAnswer: (index: number) => void;
@@ -86,11 +102,22 @@ export default function AskPanel(props: Props) {
     lastQuestion, onExample, answer, turns, pending, source, canRegenerate,
     copied, snippetSaved, exportDone, selectedText, setSelectedText,
     route, routeOverride, onRouteOverride, routeMenuOpen, onToggleRouteMenu, projectLabel,
-    task, onTask, hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard,
-    onSend, onStop, onRegenerate, onCopyAnswer, onSaveSnippet, onOpenDeepSeek,
+    task, onTask, onDaily, agentOn, onToggleAgent, agentSteps, agentApproval, stopping, onDecideAgent,
+    hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard,
+    onSend, openList, onRunOpen, onStop, onRegenerate, onCopyAnswer, onSaveSnippet, onOpenDeepSeek,
     onExport, onQuote, onCopySelection,
   } = props;
   const answerRef = useRef<HTMLDivElement | null>(null);
+  const [openHi, setOpenHi] = useState(0);
+  const openListRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    setOpenHi(0);
+  }, [input]);
+  useEffect(() => {
+    openListRef.current
+      ?.querySelector(".qa-open-item.is-active")
+      ?.scrollIntoView({ block: "nearest" });
+  }, [openHi, openList]);
   const showThread = turns.length > 0 || Boolean(pending) || busy;
   const rounds = Math.ceil(turns.length / 2) + (pending ? 1 : 0);
   /** Follow new output unless the user scrolled up to read. */
@@ -272,23 +299,28 @@ export default function AskPanel(props: Props) {
                 <div key={i} className={`qa-msg is-ai${isNew(i) ? " is-new" : ""}`} aria-label={t("assistant")}>
                   <MarkdownView text={turn.content} />
                   <div className="qa-msg-actions">
+                    {(() => {
+                      const kept = keepableAnswer(turn.content, turn.keep === "whole");
+                      const code = kept.kind === "code";
+                      return (
+                        <>
                     <button
                       type="button"
                       className="qa-mini-btn"
                       onClick={() => onCopyAnswer(i)}
-                      title={t("copy")}
+                      title={code ? t("copyCode") : t("copy")}
                     >
                       {copied === i ? <Check size={12} className="qa-pop" /> : <Copy size={12} />}{" "}
-                      {copied === i ? t("copied") : t("copy")}
+                      {copied === i ? t("copied") : code ? t("copyCode") : t("copy")}
                     </button>
                     <button
                       type="button"
                       className="qa-mini-btn"
                       onClick={() => onSaveSnippet(i)}
-                      title={t("saveSnippet")}
+                      title={code ? t("saveCode") : t("saveSnippet")}
                     >
                       {snippetSaved === i ? <Check size={12} className="qa-pop" /> : <BookmarkPlus size={12} />}{" "}
-                      {snippetSaved === i ? t("savedSnippet") : t("saveSnippet")}
+                      {snippetSaved === i ? t("savedSnippet") : code ? t("saveCode") : t("saveSnippet")}
                     </button>
                     {i === lastAssistant && !pending && (
                       <button
@@ -301,6 +333,9 @@ export default function AskPanel(props: Props) {
                         <RefreshCw size={12} /> {t("regenerate")}
                       </button>
                     )}
+                        </>
+                      );
+                    })()}
                   </div>
                   {i === lastAssistant && !pending && sourceLine && (
                     <div className={`qa-answer-source is-${source?.mode}`} title={sourceLine}>
@@ -326,7 +361,7 @@ export default function AskPanel(props: Props) {
                     {busy && <span className="qa-caret" aria-hidden />}
                   </>
                 ) : (
-                  busy && (
+                  busy && agentSteps.length === 0 && !agentApproval && (
                     <div className="qa-thinking" role="status">
                       <span className="qa-thinking-dots" aria-hidden>
                         <i />
@@ -334,12 +369,45 @@ export default function AskPanel(props: Props) {
                         <i />
                       </span>
                       <span className="qa-thinking-text">
-                        {phase === "context"
+                        {stopping
+                          ? t("phase.stopping")
+                          : phase === "context"
                           ? t("phase.context", { repo: projectLabel || t("ctx.noRepo") })
                           : t("phase.waiting", { model: modelName })}
                       </span>
                     </div>
                   )
+                )}
+                {stopping && (answer || agentSteps.length > 0 || agentApproval) && (
+                  <div className="qa-thinking" role="status">
+                    <span className="qa-thinking-text">{t("phase.stopping")}</span>
+                  </div>
+                )}
+                {agentSteps.length > 0 && (
+                  <ol className="qa-agent-steps">
+                    {agentSteps.map((step, i) => (
+                      <li key={`${step.tool}-${i}`} className={`qa-agent-step is-${step.status}`}>
+                        <span className="qa-agent-tool">{t(`agent.tool.${step.tool}`, { defaultValue: step.tool })}</span>
+                        <span className="qa-agent-summary">{step.summary}</span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {agentApproval && (
+                  <div className="qa-agent-approve" role="group" aria-label={t("agent.confirm")}>
+                    <div className="qa-agent-approve-title">{agentApproval.summary}</div>
+                    {agentApproval.preview && (
+                      <pre className="qa-agent-preview">{agentApproval.preview}</pre>
+                    )}
+                    <div className="qa-agent-approve-actions">
+                      <button type="button" className="qa-agent-allow" onClick={() => onDecideAgent(true)}>
+                        {t("agent.allow")}
+                      </button>
+                      <button type="button" className="qa-agent-deny" onClick={() => onDecideAgent(false)}>
+                        {t("agent.deny")}
+                      </button>
+                    </div>
+                  </div>
                 )}
                 {sourceLine && answer && (
                   <div className={`qa-answer-source is-${source?.mode}`} title={sourceLine}>
@@ -473,10 +541,42 @@ export default function AskPanel(props: Props) {
       </div>
 
       <div className="qa-input-card">
+        {openList && (
+          <div ref={openListRef} className="qa-open-suggest" role="listbox" aria-label={t("openList")}>
+            {openList.length === 0 ? (
+              <div className="qa-open-empty">{t("openNone")}</div>
+            ) : (
+              openList.map((item, i) => {
+                const showHead = i === 0 || openList[i - 1].group !== item.group;
+                return (
+                  <div key={item.id}>
+                    {showHead && <div className="qa-open-head">{t(`openGroup.${item.group}`)}</div>}
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={i === openHi}
+                      className={`qa-open-item${i === openHi ? " is-active" : ""}`}
+                      onMouseEnter={() => setOpenHi(i)}
+                      onClick={() => onRunOpen(item)}
+                    >
+                      {item.label}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
         <textarea
           ref={inputRef}
           className="quick-ask-input"
-          placeholder={task !== "none" ? t(`taskPlaceholder.${task}`) : t("placeholder")}
+          placeholder={
+            openList
+              ? t("openPlaceholder")
+              : task !== "none"
+                ? t(`taskPlaceholder.${task}`)
+                : t("placeholder")
+          }
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -490,10 +590,23 @@ export default function AskPanel(props: Props) {
               });
               return;
             }
+            if (openList && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+              e.preventDefault();
+              if (openList.length === 0) return;
+              const step = e.key === "ArrowDown" ? 1 : -1;
+              setOpenHi((i) => (i + step + openList.length) % openList.length);
+              return;
+            }
             if (e.key !== "Enter") return;
             if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
             e.preventDefault();
-            if (!busy) onSend();
+            if (busy) return;
+            if (openList) {
+              const pick = openList[openHi] ?? openList[0];
+              if (pick) onRunOpen(pick);
+              return;
+            }
+            onSend();
           }}
           rows={2}
         />
@@ -530,12 +643,40 @@ export default function AskPanel(props: Props) {
                 {t(`taskShort.${k}`)}
               </button>
             ))}
+            <span className="qa-compose-sep" aria-hidden />
+            <button
+              type="button"
+              className="qa-task-btn qa-daily-btn"
+              onClick={onDaily}
+              disabled={busy}
+              title={t("dailyTip")}
+            >
+              {t("dailyShort")}
+            </button>
+            <button
+              type="button"
+              className={`qa-task-btn qa-agent-btn${agentOn ? " on" : ""}`}
+              onClick={onToggleAgent}
+              disabled={busy}
+              title={t("agent.tip")}
+              aria-pressed={agentOn}
+            >
+              <Bot size={12} />
+              {t("agent.label")}
+            </button>
           </div>
           {/* One key, two states: morphs in place so the footer never shifts. */}
           <button
             type="button"
             className={`qa-send-btn${busy ? " is-busy" : ""}`}
-            onClick={busy ? onStop : onSend}
+            onClick={busy ? onStop : () => {
+              if (openList) {
+                const pick = openList[openHi] ?? openList[0];
+                if (pick) onRunOpen(pick);
+                return;
+              }
+              onSend();
+            }}
             disabled={!busy && !input.trim()}
             title={busy ? `${t("stop")} (Esc)` : t("sendHintFull")}
             aria-label={busy ? t("stop") : t("send")}

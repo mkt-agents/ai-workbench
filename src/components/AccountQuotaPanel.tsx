@@ -3396,7 +3396,6 @@ function DeepSeekCard({
     <QuotaCardShell
       brand="deepseek"
       product="DeepSeek"
-      tag={quota?.ok && quota.isAvailable === false ? <span className="aq-tag aq-tag-expired">{t("dsUnavailable")}</span> : null}
       at={replacing ? null : quota?.at}
       loading={loading}
       onRefresh={onRefresh}

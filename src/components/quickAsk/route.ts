@@ -1,4 +1,5 @@
 import type { TaskKind } from "./config";
+import { isDailyReport } from "./dailyReport";
 
 export type AskMode = "chat" | "project";
 export type RouteOverride = "auto" | AskMode;
@@ -58,6 +59,7 @@ export function routeQuestion(input: RouteInput): RouteResult {
 
   const q = input.question.trim();
   if (META_RE.test(q)) return { mode: "chat", reason: "meta" };
+  if (isDailyReport(q)) return { mode: "project", reason: "projectTask" };
   if (TEXT_TASKS.includes(input.task)) return { mode: "chat", reason: "textTask" };
   if (PROJECT_TASKS.includes(input.task)) return { mode: "project", reason: "projectTask" };
   if (PROJECT_WORD_RE.test(q) || PATH_RE.test(q) || TRACE_RE.test(q)) {

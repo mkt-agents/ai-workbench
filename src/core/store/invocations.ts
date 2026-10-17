@@ -65,7 +65,12 @@ export interface Invocations {
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
   invokeGitDiff: (path: string, filePath: string, staged: boolean) => Promise<string>;
-  invokeGitLog: (path: string, count: number) => Promise<string[][]>;
+  invokeGitLog: (path: string, count: number, since?: string) => Promise<string[][]>;
+  invokeGitLogFiles: (
+    path: string,
+    count: number,
+    since?: string,
+  ) => Promise<Array<{ subject: string; when: string; files: string[] }>>;
   invokeGitDiscard: (
     path: string,
     filePath: string,
@@ -141,6 +146,7 @@ export interface Invocations {
   invokeKillApp: (processName: string) => Promise<string>;
   invokeIsAppRunning: (processName: string) => Promise<boolean>;
   invokeScanInstalledApps: () => Promise<InstalledAppInfo[]>;
+  invokeScanDesktopApps: () => Promise<InstalledAppInfo[]>;
   invokeScanStorePackages: () => Promise<string[]>;
   invokeGetAppVersion: (path: string) => Promise<string>;
   invokeFindPortListeners: (ports: number[]) => Promise<PortListener[]>;
@@ -315,8 +321,14 @@ export const invocations: Invocations = {
     tauriInvoke<GitBranchList>('git_list_branches', { path }),
   invokeGitDiff: (path: string, filePath: string, staged: boolean) =>
     tauriInvoke<string>('git_diff', { path, filePath, staged }),
-  invokeGitLog: (path: string, count: number) =>
-    tauriInvoke<string[][]>('git_log', { path, count }),
+  invokeGitLog: (path: string, count: number, since?: string) =>
+    tauriInvoke<string[][]>('git_log', { path, count, since: since ?? null }),
+  invokeGitLogFiles: (path: string, count: number, since?: string) =>
+    tauriInvoke<Array<{ subject: string; when: string; files: string[] }>>('git_log_files', {
+      path,
+      count,
+      since: since ?? null,
+    }),
   invokeGitDiscard: (path: string, filePath: string, untracked: boolean, staged: boolean) =>
     tauriInvoke<string>('git_discard', { path, filePath, untracked, staged }),
   invokeGitUndoLastCommit: (path: string) =>
@@ -432,6 +444,8 @@ export const invocations: Invocations = {
     tauriInvoke<boolean>('is_app_running', { processName }),
   invokeScanInstalledApps: () =>
     tauriInvoke<InstalledAppInfo[]>('scan_installed_apps'),
+  invokeScanDesktopApps: () =>
+    tauriInvoke<InstalledAppInfo[]>('scan_desktop_apps'),
   invokeScanStorePackages: () =>
     tauriInvoke<string[]>('scan_store_packages'),
   invokeGetAppVersion: (path: string) =>

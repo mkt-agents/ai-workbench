@@ -5,6 +5,7 @@ mod site_icon;
 mod db_commands;
 pub mod cursor;
 mod ai_commands;
+mod agent;
 mod secret_protect;
 mod dsh_commands;
 mod runtime_commands;
@@ -427,6 +428,7 @@ pub fn run() {
             git_commands::git_list_branches,
             git_commands::git_diff,
             git_commands::git_log,
+            git_commands::git_log_files,
             git_commands::git_discard,
             git_commands::git_undo_last_commit,
             git_commands::git_commit_context,
@@ -541,6 +543,8 @@ pub fn run() {
             ai_commands::list_provider_models,
             ai_commands::generate_text,
             ai_commands::generate_text_stream,
+            agent::agent_run,
+            agent::agent_decide,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::dsh_set_embed,
@@ -606,6 +610,7 @@ pub fn run() {
             app_launcher_commands::is_app_running,
             app_launcher_commands::check_apps_running,
             app_launcher_commands::scan_installed_apps,
+            app_launcher_commands::scan_desktop_apps,
             app_launcher_commands::scan_store_packages,
             app_launcher_commands::extract_app_icon,
             app_launcher_commands::get_app_version,

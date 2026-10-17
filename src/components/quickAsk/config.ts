@@ -5,11 +5,11 @@ import type { AskMode } from "./route";
 
 /** Only appended when a non-empty workbench context block is actually attached. */
 export const CONTEXT_RULES =
-  " Context collected from the user's workbench (repos, uncommitted changes, recent commits, clipboard) is attached after the question. Use the relevant parts to give specific, actionable answers, citing file names and changes. Never claim you cannot access files — the context is everything available. If it is insufficient, say exactly what is missing and still answer from what is given. Do not ask the user to run git/shell commands themselves.";
+  " Context collected from the user's workbench (repos, uncommitted changes, recent commits, clipboard) is attached after the question. Use the relevant parts to give specific, actionable answers, citing file names and changes only when the user asked about those files. Never claim you cannot access files — the context is everything available. If it is insufficient, say exactly what is missing and still answer from what is given. Do not ask the user to run git/shell commands themselves. Do not echo the context block, git identity, or workspace paths back. The user copies and saves the reply as-is, so leave out preambles and closing offers.";
 
 /** Plain conversation: a capable general assistant, no repo assumptions. */
 export const CHAT_SYSTEM =
-  "You are a capable, friendly general-purpose AI assistant. Answer the question directly and concisely; use structure (lists, short code blocks, tables) only when it helps. Do not mention or ask for project files, repositories or workbench context unless the user brings them up. Reply in the user's language.";
+  "You are a capable, friendly general-purpose AI assistant. Answer the question directly and concisely; use structure (lists, short code blocks, tables) only when it helps. Do not mention or ask for project files, repositories or workbench context unless the user brings them up. Reply in the user's language. The user copies and saves your reply as-is: do not restate hidden context, and do not add a closing offer to continue.";
 
 /** Project mode: developer assistant grounded in the attached workbench context. */
 export const PROJECT_SYSTEM =

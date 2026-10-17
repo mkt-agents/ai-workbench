@@ -43,6 +43,9 @@ import {
 } from "./quickAsk/config";
 import type { OptimizeConfig, TaskKind } from "./quickAsk/config";
 import { routeQuestion } from "./quickAsk/route";
+import { keepableAnswer } from "./quickAsk/keepable";
+import { openSuggestions, type OpenSuggestion } from "./quickAsk/localActions";
+import { GIT_SUBTAB_KEY } from "./GitManager";
 import type { RouteOverride } from "./quickAsk/route";
 import { useAskContext } from "./quickAsk/useAskContext";
 import { useAskEvents } from "./quickAsk/useAskEvents";
@@ -62,6 +65,8 @@ function QuickAskApp() {
   const recentProjects = useGlobalStore((s) => s.recentProjects);
   const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
   const addSnippet = useGlobalStore((s) => s.addSnippet);
+  const quickAppLaunchers = useGlobalStore((s) => s.quickAppLaunchers);
+  const invokeLaunchApp = useGlobalStore((s) => s.invokeLaunchApp);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeGitScanRepos = useGlobalStore((s) => s.invokeGitScanRepos);
   const invokeGitIsRepo = useGlobalStore((s) => s.invokeGitIsRepo);
@@ -71,6 +76,14 @@ function QuickAskApp() {
 
   const [ready, setReady] = useState(false);
   const [pinned, setPinned] = useState(() => localStorage.getItem(PINNED_KEY) === "1");
+  const [agentOn, setAgentOn] = useState(() => localStorage.getItem("qa-agent") === "1");
+  const toggleAgent = () => {
+    setAgentOn((on) => {
+      const next = !on;
+      localStorage.setItem("qa-agent", next ? "1" : "0");
+      return next;
+    });
+  };
   useEffect(() => {
     localStorage.setItem(PINNED_KEY, pinned ? "1" : "0");
     void invokeSetQuickAskPinned(pinned).catch(() => {});
@@ -143,6 +156,7 @@ function QuickAskApp() {
     setInput,
     setSelectedText,
     getContext: ctx.getContext,
+    collectDailyBrief: ctx.collectDailyBrief,
     routeOverride,
     onSent: () => {
       // Quick actions and the pill override are one-shot.
@@ -156,6 +170,15 @@ function QuickAskApp() {
     profileSystemRole: activeProfile?.systemRole,
     profileTemperature: activeProfile?.temperature,
     attachments,
+    agent: {
+      enabled: agentOn,
+      repoPath: resolvedFocus[0] || settings.currentGitRepo || "",
+      apps: quickAppLaunchers.map((app) => ({
+        name: app.name,
+        path: app.path,
+        args: app.args || "",
+      })),
+    },
   });
   const sessions = useAskSessions({
     task: encodeTask(task, optimize),
@@ -381,9 +404,43 @@ function QuickAskApp() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
+  const openList = useMemo(
+    () => openSuggestions(input, quickAppLaunchers),
+    [input, quickAppLaunchers],
+  );
+
+  const runOpen = (item: OpenSuggestion) => {
+    if (stream.busy) return;
+    const question = input.trim();
+    setHistoryOpen(false);
+    void (async () => {
+      try {
+        const action = item.action;
+        if (action.kind === "tab") {
+          if (action.gitSub) writeStoredString(GIT_SUBTAB_KEY, action.gitSub);
+          if (action.toolId) writeStoredString(DEVTOOLS_TOOL_KEY, action.toolId);
+          await invoke("open_main_tab", { tab: action.tab });
+        } else {
+          await invokeLaunchApp(action.path, action.args || undefined);
+        }
+        stream.noteLocal(question, t("actionDone", { name: action.label }));
+        await hide();
+      } catch (e) {
+        stream.setError(String(e));
+      }
+    })();
+  };
+
   const sendAsk = () => {
     setHistoryOpen(false);
     void stream.send();
+  };
+
+  const askDaily = () => {
+    if (stream.busy) return;
+    setHistoryOpen(false);
+    setInput("");
+    void stream.send(t("examples.daily"));
   };
 
   useEffect(() => {
@@ -532,7 +589,10 @@ function QuickAskApp() {
 
   /** `index` points at an assistant turn in the transcript. */
   const saveAnswerAsSnippet = async (index: number) => {
-    const text = stream.history[index]?.content;
+    const text = keepableAnswer(
+      stream.history[index]?.content || "",
+      stream.history[index]?.keep === "whole",
+    ).text;
     if (!text) return;
     const question = stream.history[index - 1]?.content;
     const name = makeTitle(question || text, t("saveSnippet"));
@@ -546,7 +606,10 @@ function QuickAskApp() {
   };
 
   const copyAnswer = async (index: number) => {
-    const text = stream.history[index]?.content;
+    const text = keepableAnswer(
+      stream.history[index]?.content || "",
+      stream.history[index]?.keep === "whole",
+    ).text;
     if (!text) return;
     try {
       await invokeCopyToClipboard(text);
@@ -831,11 +894,20 @@ function QuickAskApp() {
             projectLabel={projectLabel}
             task={task}
             onTask={changeTask}
+            onDaily={askDaily}
+            agentOn={agentOn}
+            onToggleAgent={toggleAgent}
+            agentSteps={stream.agentSteps}
+            agentApproval={stream.agentApproval}
+            stopping={stream.stopping}
+            onDecideAgent={(allow) => void stream.decideAgent(allow)}
             hasSnippets={(snippets.snippets?.length ?? 0) > 0}
             snippetOpen={snippets.snippetOpen}
             onToggleSnippets={() => snippets.openManual()}
             onPasteClipboard={() => void fillClipboard()}
             onSend={sendAsk}
+            openList={openList}
+            onRunOpen={runOpen}
             onStop={() => void stream.stopStream()}
             onRegenerate={() => void stream.regenerate()}
             onCopyAnswer={(i) => void copyAnswer(i)}

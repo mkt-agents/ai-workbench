@@ -26,12 +26,15 @@
   "send": "Send",
   "stop": "Stop",
   "copy": "Copy answer",
+  "copyCode": "Copy code",
+  "saveCode": "Save code",
   "copied": "Copied",
   "regenerate": "Regenerate",
   "threadMeta": "Round {{n}} · last {{max}} rounds sent",
   "phase": {
     "context": "Reading changes in {{repo}}…",
-    "waiting": "{{model}} is thinking…"
+    "waiting": "{{model}} is thinking…",
+    "stopping": "Stopping…"
   },
   "jumpLatest": "Latest",
   "retry": "Retry",
@@ -39,9 +42,41 @@
   "dismiss": "Dismiss",
   "sendHintFull": "Send (Enter to send · Shift+Enter newline · Esc to stop · ↑ recalls last question)",
   "examples": {
-    "recent": "What changed recently?",
-    "error": "Explain this error: ",
-    "model": "Which model are you?"
+    "daily": "Write a paste-ready report from today's commits",
+    "recent": "What did the latest commits each change?",
+    "impact": "What will this change affect?",
+    "error": "What's causing this error: ",
+    "polish": "Rewrite this so I can paste it in chat: ",
+    "open": "Open the commit page",
+    "model": "Which model is answering?"
+  },
+  "actionDone": "Opened “{{name}}”",
+  "openList": "Pages and apps you can open",
+  "openNone": "No page or app with that name",
+  "openPlaceholder": "Pick one, Enter to open",
+  "openGroup": {
+    "page": "Page",
+    "tool": "Tool",
+    "app": "App"
+  },
+  "dailyShort": "Daily",
+  "dailyTip": "Write a paste-ready report from today's commits and uncommitted files",
+  "agent": {
+    "label": "Agent",
+    "tip": "Read, search, write, and run commands in the current repo. Writes and commands ask first.",
+    "confirm": "Confirm action",
+    "allow": "Allow",
+    "deny": "Deny",
+    "noRepo": "The agent needs a repo. Select a project here, or open the current Git repo.",
+    "tool": {
+      "read_file": "Read",
+      "list_dir": "List",
+      "grep": "Search",
+      "write_file": "Write",
+      "run_command": "Command",
+      "open_page": "Open page",
+      "launch_app": "Launch app"
+    }
   },
   "you": "You",
   "assistant": "Assistant",

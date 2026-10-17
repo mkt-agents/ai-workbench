@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import GitManager from "./components/GitManager";
+import GitManager, { GIT_SUBTAB_KEY } from "./components/GitManager";
 import SettingsPage from "./components/Settings";
 import UpdateBanner from "./components/UpdateBanner";
 import UpdateModal from "./components/UpdateModal";
@@ -196,6 +196,13 @@ function App() {
     const tab = event.payload as Tab;
     if (tab) setActiveTab(tab);
   }, [setActiveTab]);
+
+  useTauriEvent<string>("navigate-git-subtab", (event) => {
+    const sub = event.payload;
+    if (sub !== "repos" && sub !== "commit" && sub !== "report") return;
+    localStorage.setItem(GIT_SUBTAB_KEY, sub);
+    window.dispatchEvent(new Event("workbench-git-subtab"));
+  });
 
   useTauriEvent("tray-minimized", () => {
     const s = useGlobalStore.getState().settings;

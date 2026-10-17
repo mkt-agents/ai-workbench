@@ -7,6 +7,7 @@ import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
 import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
 import { MAX_HISTORY_TURNS, MAX_SAVED_TURNS, MAX_TURN_CHARS, buildMeta, buildSystem } from "./config";
+import { DAILY_REPORT_SYSTEM, isDailyReport, isDailyRevision } from "./dailyReport";
 import type { OptimizeConfig, TaskKind } from "./config";
 import { routeQuestion } from "./route";
 import type { AskMode, RouteOverride } from "./route";
@@ -30,6 +31,26 @@ type QaTurn = QuickAskTurn;
 
 export type AskPhase = "idle" | "context" | "waiting" | "streaming";
 
+export type AgentStep = {
+  tool: string;
+  status: "running" | "done" | "denied" | "error" | string;
+  summary: string;
+  detail: string;
+};
+
+export type AgentApproval = {
+  callId: string;
+  tool: string;
+  summary: string;
+  preview: string;
+};
+
+export type AgentRunOptions = {
+  enabled: boolean;
+  repoPath: string;
+  apps: { name: string; path: string; args: string }[];
+};
+
 function clipTurn(text: string): string {
   return text.length > MAX_TURN_CHARS
     ? text.slice(0, MAX_TURN_CHARS) + "\n…(truncated)"
@@ -37,18 +58,21 @@ function clipTurn(text: string): string {
 }
 
 /** Full transcript (displayed + persisted), bounded so the session row stays small. */
-function appendTurn(prev: QaTurn[], question: string, answer: string): QaTurn[] {
+function appendTurn(prev: QaTurn[], question: string, answer: string, keepWhole = false): QaTurn[] {
   const next: QaTurn[] = [
     ...prev,
     { role: "user", content: question },
-    { role: "assistant", content: answer },
+    { role: "assistant", content: answer, ...(keepWhole ? { keep: "whole" as const } : {}) },
   ];
   return next.slice(-MAX_SAVED_TURNS * 2);
 }
 
 /** Only the most recent rounds go to the model, each clipped. */
 function requestHistory(turns: QaTurn[]): QaTurn[] {
-  return turns.slice(-MAX_HISTORY_TURNS * 2).map((t) => ({ ...t, content: clipTurn(t.content) }));
+  return turns.slice(-MAX_HISTORY_TURNS * 2).map((t) => ({
+    role: t.role,
+    content: clipTurn(t.content),
+  }));
 }
 
 export type AskStreamOptions = {
@@ -60,6 +84,8 @@ export type AskStreamOptions = {
   setInput: (updater: string | ((prev: string) => string)) => void;
   setSelectedText: (text: string) => void;
   getContext: (mode: AskMode) => Promise<ContextResult>;
+  /** Today's commit notes, used instead of the raw diff dump for a daily report. */
+  collectDailyBrief: () => Promise<{ text: string; repos: string[] }>;
   /** User override from the composer pill; "auto" = let routeQuestion decide. */
   routeOverride: RouteOverride;
   /** Called once a request is dispatched: one-shot task + override reset. */
@@ -71,6 +97,8 @@ export type AskStreamOptions = {
   profileTemperature?: number;
   /** Light code/file attachments appended to the user message. */
   attachments?: AskAttachment[];
+  /** When enabled, this question runs the repo tool loop instead of one completion. */
+  agent?: AgentRunOptions;
 };
 
 /**
@@ -80,15 +108,18 @@ export type AskStreamOptions = {
 export function useAskStream(opts: AskStreamOptions) {
   const { t } = useTranslation("quickask");
   const {
-    selectedModel, task, optimize, input, setInput, setSelectedText, getContext,
+    selectedModel, task, optimize, input, setInput, setSelectedText, getContext, collectDailyBrief,
     routeOverride, onSent, persistTurns,
-    profileSystemRole, profileTemperature, attachments = [],
+    profileSystemRole, profileTemperature, attachments = [], agent,
   } = opts;
 
   const [answer, setAnswer] = useState("");
   const [source, setSource] = useState<AnswerSource | null>(null);
   /** Mode of the previous exchange, so short follow-ups stay on the project. */
   const lastModeRef = useRef<AskMode | null>(null);
+  /** Notes from the last daily report, so a short rewrite stays on the same facts. */
+  const lastDailyBriefRef = useRef("");
+  const lastDailyReposRef = useRef<string[]>([]);
   /** Task the last question was sent with, so regenerate replays it. */
   const lastTaskRef = useRef<TaskKind>("none");
   const [busy, setBusy] = useState(false);
@@ -99,6 +130,9 @@ export function useAskStream(opts: AskStreamOptions) {
   const [pending, setPending] = useState<{ question: string } | null>(null);
   /** Where the in-flight request is: collecting context → waiting for the first token → streaming. */
   const [phase, setPhase] = useState<AskPhase>("idle");
+  const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
+  const [agentApproval, setAgentApproval] = useState<AgentApproval | null>(null);
+  const [stopping, setStopping] = useState(false);
   /** Last request that failed (not stopped), so the error card can offer a retry. */
   const failedRef = useRef<{ question: string; history: QaTurn[]; task: TaskKind; mode: AskMode } | null>(null);
   const [failedMode, setFailedMode] = useState<AskMode | null>(null);
@@ -108,6 +142,8 @@ export function useAskStream(opts: AskStreamOptions) {
   const streamIdRef = useRef(0);
   /** Request id of the stream currently in flight, so it can be cancelled. */
   const activeReqRef = useRef<string | null>(null);
+  /** Set when the user hits stop, including before the backend command is active. */
+  const stopRequestedRef = useRef(false);
 
   /** Persist (or create) the active session after a completed exchange. */
   const persistRef = useRef(persistTurns);
@@ -130,6 +166,10 @@ export function useAskStream(opts: AskStreamOptions) {
       setError(t("emptyInput"));
       return;
     }
+    if (agent?.enabled && !agent.repoPath.trim()) {
+      setError(t("agent.noRepo"));
+      return;
+    }
     // The context dump is per-request; history carries only the plain Q&A pairs.
     const baseHistory = historyOverride ?? history;
     // Regenerate replaces the last pair: hide it now, restore it if the retry fails.
@@ -138,9 +178,13 @@ export function useAskStream(opts: AskStreamOptions) {
     const reqId = `qa-${Date.now()}-${++streamIdRef.current}`;
     const myGen = streamIdRef.current;
     activeReqRef.current = reqId;
+    stopRequestedRef.current = false;
     setBusy(true);
     setError(null);
     setAnswer("");
+    setAgentSteps([]);
+    setAgentApproval(null);
+    setStopping(false);
     setSelectedText("");
     setPending({ question });
     setPhase("waiting");
@@ -148,12 +192,14 @@ export function useAskStream(opts: AskStreamOptions) {
     setFailedMode(null);
     if (!rawInput) setInput("");
     let sentMode: AskMode = replay?.mode ?? "chat";
+    let keepWhole = false;
     const finishTurn = (text: string) => {
-      const nextTurns = appendTurn(baseHistory, question, text);
+      const nextTurns = appendTurn(baseHistory, question, text, keepWhole);
       setHistory(nextTurns);
       setPending(null);
       setPhase("idle");
       setAnswer("");
+      setStopping(false);
       lastQuestionRef.current = question;
       lastHistoryRef.current = baseHistory;
       persistRef.current(nextTurns, question);
@@ -163,6 +209,7 @@ export function useAskStream(opts: AskStreamOptions) {
       setPending(null);
       setPhase("idle");
       setAnswer("");
+      setStopping(false);
       if (historyOverride) setHistory(shownBefore);
       else setInput((prev) => prev || question);
       if (failed) {
@@ -178,6 +225,16 @@ export function useAskStream(opts: AskStreamOptions) {
       unlisteners.length = 0;
     };
     const unlisteners: Array<() => void> = [];
+    const stoppedEarly = () => {
+      if (settled) return true;
+      if (!stopRequestedRef.current && streamIdRef.current === myGen) return false;
+      settled = true;
+      failTurn(false);
+      setBusy(false);
+      activeReqRef.current = null;
+      teardown();
+      return true;
+    };
 
     try {
       let system: string;
@@ -198,22 +255,54 @@ export function useAskStream(opts: AskStreamOptions) {
         system = buildMeta(selectedModel) + built.system;
         user = built.user;
       } else {
-        const ctxResult = await getContext(route.mode);
-        summary = ctxResult.summary;
-        const hasProject = summary.parts.some((p) => p !== "clipboard");
-        system = buildSystem(selectedModel, route.mode, sendTask, hasProject);
-        if (profileSystemRole?.trim()) {
-          system += `\n\n[Profile] ${profileSystemRole.trim()}`;
+        const reviseDaily = isDailyRevision(question) && Boolean(lastDailyBriefRef.current);
+        if (isDailyReport(question) || reviseDaily) {
+          setPhase("context");
+          const brief = isDailyReport(question)
+            ? await collectDailyBrief()
+            : { text: lastDailyBriefRef.current, repos: lastDailyReposRef.current };
+          if (isDailyReport(question)) {
+            lastDailyBriefRef.current = brief.text;
+            lastDailyReposRef.current = brief.repos;
+          }
+          summary = { repos: brief.repos, parts: ["git", "dirty"] };
+          system = buildMeta(selectedModel) + DAILY_REPORT_SYSTEM;
+          if (reviseDaily) {
+            system +=
+              " The user is revising the report you just wrote. Keep the same facts from the notes and apply only their instruction.";
+          }
+          if (profileSystemRole?.trim()) {
+            system += `\n\n[Profile] ${profileSystemRole.trim()}`;
+          }
+          user =
+            `${question}\n\n---\nToday's notes (source only — write the report, do not copy this structure):\n${brief.text}`;
+          user += formatAttachmentsBlock(attachments);
+          sentMode = "project";
+          keepWhole = true;
+          if (stoppedEarly()) return;
+        } else {
+          lastDailyBriefRef.current = "";
+          lastDailyReposRef.current = [];
+          const ctxResult = await getContext(route.mode);
+          summary = ctxResult.summary;
+          const hasProject = summary.parts.some((p) => p !== "clipboard");
+          system = buildSystem(selectedModel, route.mode, sendTask, hasProject);
+          if (profileSystemRole?.trim()) {
+            system += `\n\n[Profile] ${profileSystemRole.trim()}`;
+          }
+          const ctx = ctxResult.text;
+          user = ctx
+            ? `${question}\n\n---\nContext from workbench:\n${ctx}`
+            : question;
+          user += formatAttachmentsBlock(attachments);
+          keepWhole =
+            sendTask === "polish" || sendTask === "translate" || sendTask === "summarize";
+          if (stoppedEarly()) return;
         }
-        const ctx = ctxResult.text;
-        user = ctx
-          ? `${question}\n\n---\nContext from workbench:\n${ctx}`
-          : question;
-        user += formatAttachmentsBlock(attachments);
       }
       if (streamIdRef.current === myGen) setPhase("waiting");
-      setSource({ mode: route.mode, summary, modelName: selectedModel.name, task: sendTask });
-      lastModeRef.current = route.mode;
+      setSource({ mode: sentMode, summary, modelName: selectedModel.name, task: sendTask });
+      lastModeRef.current = sentMode;
       lastTaskRef.current = sendTask;
       if (!replay) onSent();
       const streamStarted = performance.now();
@@ -294,21 +383,83 @@ export function useAskStream(opts: AskStreamOptions) {
         }>("generate-text-done", onDone)
       );
       unlisteners.push(await listen<{ id: string; error: string }>("generate-text-error", onError));
+      if (agent?.enabled) {
+        unlisteners.push(
+          await listen<{
+            id: string;
+            tool: string;
+            status: string;
+            summary: string;
+            detail: string;
+          }>("agent-step", (event) => {
+            const payload = event.payload;
+            if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
+            if (payload.status !== "running") setAgentApproval(null);
+            setAgentSteps((prev) => {
+              const last = prev[prev.length - 1];
+              const step: AgentStep = {
+                tool: payload.tool,
+                status: payload.status,
+                summary: payload.summary,
+                detail: payload.detail || "",
+              };
+              if (last && last.tool === step.tool && last.status === "running" && last.summary === step.summary) {
+                return [...prev.slice(0, -1), step];
+              }
+              return [...prev, step];
+            });
+          }),
+        );
+        unlisteners.push(
+          await listen<{
+            id: string;
+            callId: string;
+            tool: string;
+            summary: string;
+            preview: string;
+          }>("agent-approval", (event) => {
+            const payload = event.payload;
+            if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
+            setAgentApproval({
+              callId: payload.callId,
+              tool: payload.tool,
+              summary: payload.summary,
+              preview: payload.preview || "",
+            });
+          }),
+        );
+      }
 
       const maxTokens = Math.max(selectedModel.maxTokens || 0, 1536);
       const temperature =
         typeof profileTemperature === "number" && Number.isFinite(profileTemperature)
           ? Math.min(2, Math.max(0, profileTemperature))
           : selectedModel.temperature;
-      await invoke("generate_text_stream", {
-        req: {
-          config: { ...selectedModel, maxTokens, temperature },
-          system,
-          user,
-          requestId: reqId,
-          history: requestHistory(baseHistory),
-        },
-      });
+      const config = { ...selectedModel, maxTokens, temperature };
+      if (stoppedEarly()) return;
+      if (agent?.enabled) {
+        await invoke("agent_run", {
+          req: {
+            config,
+            system,
+            user,
+            requestId: reqId,
+            repoPath: agent.repoPath,
+            history: requestHistory(baseHistory),
+            apps: agent.apps,
+          },
+        });
+      } else {
+        await invoke("generate_text_stream", {
+          req: {
+            config,
+            system,
+            user,
+            requestId: reqId,
+            history: requestHistory(baseHistory),
+          },
+        });
+      }
       if (streamIdRef.current === myGen) {
         lastQuestionRef.current = question;
         lastHistoryRef.current = baseHistory;
@@ -334,10 +485,12 @@ export function useAskStream(opts: AskStreamOptions) {
   const stopStream = async () => {
     const id = activeReqRef.current;
     if (!id) return;
-    activeReqRef.current = null;
+    stopRequestedRef.current = true;
+    setStopping(true);
     try {
       await invoke("cancel_request", { id });
     } catch (e) {
+      setStopping(false);
       setError(String(e));
     }
   };
@@ -364,6 +517,11 @@ export function useAskStream(opts: AskStreamOptions) {
     lastHistoryRef.current = [];
     lastModeRef.current = null;
     lastTaskRef.current = "none";
+    lastDailyBriefRef.current = "";
+    lastDailyReposRef.current = [];
+    setAgentSteps([]);
+    setAgentApproval(null);
+    setStopping(false);
   }, [setSelectedText]);
 
   /** Point the chat state at a restored session's turns. */
@@ -372,6 +530,11 @@ export function useAskStream(opts: AskStreamOptions) {
     setSource(null);
     lastModeRef.current = null;
     lastTaskRef.current = "none";
+    lastDailyBriefRef.current = "";
+    lastDailyReposRef.current = [];
+    setAgentSteps([]);
+    setAgentApproval(null);
+    setStopping(false);
     const lastUser = [...turns].reverse().find((t) => t.role === "user");
     setAnswer("");
     setPending(null);
@@ -406,6 +569,31 @@ export function useAskStream(opts: AskStreamOptions) {
     setFailedMode(null);
   };
 
+  /** Record a local action (open a page / launch an app) without calling the model. */
+  const noteLocal = (question: string, answer: string) => {
+    if (busy) return;
+    const q = question.trim();
+    if (!q || !answer.trim()) return;
+    const nextTurns = appendTurn(history, q, answer.trim());
+    setHistory(nextTurns);
+    setInput("");
+    setError(null);
+    lastQuestionRef.current = q;
+    persistRef.current(nextTurns, q);
+  };
+
+  const decideAgent = async (allow: boolean) => {
+    const id = activeReqRef.current;
+    const callId = agentApproval?.callId;
+    if (!id || !callId) return;
+    setAgentApproval(null);
+    try {
+      await invoke("agent_decide", { requestId: id, callId, allow });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   return {
     /** Streaming text of the in-flight answer (empty once it lands in `history`). */
     answer,
@@ -424,8 +612,13 @@ export function useAskStream(opts: AskStreamOptions) {
     lastQuestionRef,
     lastHistoryRef,
     send,
+    noteLocal,
     regenerate,
     stopStream,
+    agentSteps,
+    agentApproval,
+    stopping,
+    decideAgent,
     resetChat,
     loadSession,
   };

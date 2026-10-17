@@ -239,7 +239,7 @@ fn parse_openai_models_response(text: &str) -> Vec<ListedModel> {
     models
 }
 
-fn trim_trailing_slash(s: &str) -> String {
+pub(crate) fn trim_trailing_slash(s: &str) -> String {
     s.trim_end_matches('/').to_string()
 }
 
@@ -251,7 +251,7 @@ pub struct GenerateTextRequest {
     pub user: String,
 }
 
-fn apply_auth_headers(
+pub(crate) fn apply_auth_headers(
     mut req: reqwest::RequestBuilder,
     config: &AIModelConfig,
     use_anthropic: bool,

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import GitReposPage from "./GitReposPage";
 import GitCommitPanel from "./GitCommitPanel";
@@ -6,6 +6,14 @@ import GitReportsPage from "./GitReportsPage";
 import type { ReportTarget } from "./testReportTypes";
 
 type GitSubTab = "repos" | "commit" | "report";
+
+/** Quick Ask writes this, then opens the Git tab. Consumed once. */
+export const GIT_SUBTAB_KEY = "workbench-git-subtab";
+
+function readGitSubtab(value: string | null): GitSubTab | null {
+  if (value === "repos" || value === "commit" || value === "report") return value;
+  return null;
+}
 
 const SUB_TABS: { id: GitSubTab; labelKey: string }[] = [
   { id: "repos", labelKey: "tabs.repos" },
@@ -21,6 +29,26 @@ type Props = {
 function GitManager({ active = true }: Props) {
   const { t } = useTranslation("git");
   const [subTab, setSubTab] = useState<GitSubTab>("repos");
+
+  useEffect(() => {
+    const apply = () => {
+      const pending = readGitSubtab(localStorage.getItem(GIT_SUBTAB_KEY));
+      if (!pending) return;
+      setSubTab(pending);
+      localStorage.removeItem(GIT_SUBTAB_KEY);
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== GIT_SUBTAB_KEY) return;
+      apply();
+    };
+    apply();
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("workbench-git-subtab", apply);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("workbench-git-subtab", apply);
+    };
+  }, []);
   // Which repo/folder the report panel is pointed at. Lives here (not in the
   // repos page) so a card/group-header jump and a tree click drive one source.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);

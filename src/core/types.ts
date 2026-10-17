@@ -159,6 +159,8 @@ export interface Draft {
 export interface QuickAskTurn {
   role: 'user' | 'assistant';
   content: string;
+  /** Copy and save keep the whole reply (polish, translate, summary, daily report). */
+  keep?: 'whole';
 }
 
 /** A persisted quick-ask conversation (multi-turn). */

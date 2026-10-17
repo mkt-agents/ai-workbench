@@ -338,6 +338,9 @@ pub fn open_main_tab(app: AppHandle, tab: String) -> Result<(), String> {
         "cloudflared",
         "plugins",
         "devtools",
+        "drafts",
+        "account-quota",
+        "app-launcher",
         "settings",
     ];
     if !ALLOWED.contains(&tab.as_str()) {

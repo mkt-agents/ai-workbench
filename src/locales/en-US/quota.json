@@ -56,7 +56,8 @@
   "codexPrimary": "Short-term limit",
   "codexSecondary": "Long-term limit",
   "codexCredits": "Extra credits",
-  "codexCreditsUnlimited": "Unlimited",
+  "codexCreditsUnlimited": "Unlimited",
+
   "codexNoLimits": "No limit windows returned for this plan",
   "authLogin": "Authorize",
   "authHint": {
@@ -135,7 +136,6 @@
   "dsBalance": "Balance",
   "dsToppedUp": "Topped up",
   "dsGranted": "Granted",
-  "dsUnavailable": "Insufficient balance",
   "dsNoBalance": "No balance information returned",
   "wbTotal": "Total available",
   "wbPackageHint": "Used {{used}} / {{total}} · {{remaining}} left",
