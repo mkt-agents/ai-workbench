@@ -153,6 +153,26 @@ pub(crate) fn git_stdout(repo_path: &str, args: &[&str]) -> Result<String, Strin
 /// killed. Reads only, so killing is always safe.
 const GIT_BATCH_TIMEOUT_SECS: u64 = 4;
 
+/// Hard stop for push/pull. Git's own HTTP stall limit is shorter; this
+/// catches SSH and credential helpers that never exit.
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn stop_git_child(child: &mut std::process::Child, tree: bool) {
+    if tree {
+        #[cfg(windows)]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &child.id().to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Run git with a hard deadline and captured pipes.
 ///
 /// The batch summary runs many repos in one IPC, so one wedged call — a stale
@@ -164,14 +184,47 @@ fn git_output_timed(
     args: &[&str],
     timeout: Duration,
 ) -> Result<std::process::Output, String> {
-    let mut child = git_command()
+    let child = git_command()
         .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(map_git_spawn_err)?;
+    finish_git_child(child, args.first().copied().unwrap_or(""), timeout, false)
+}
 
+/// Push/pull: fail instead of waiting on a stalled socket or a hidden prompt.
+fn git_network_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    let child = git_command()
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .args([
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=20",
+        ])
+        .args(args)
+        .current_dir(repo_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(map_git_spawn_err)?;
+    finish_git_child(
+        child,
+        args.first().copied().unwrap_or(""),
+        GIT_NETWORK_TIMEOUT,
+        true,
+    )
+}
+
+fn finish_git_child(
+    mut child: std::process::Child,
+    verb: &str,
+    timeout: Duration,
+    tree_kill: bool,
+) -> Result<std::process::Output, String> {
     let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<u8>)>();
     // Drain both pipes on their own threads: a full 64KB stderr buffer would
     // otherwise deadlock git before it can exit.
@@ -193,15 +246,13 @@ fn git_output_timed(
     }
     drop(tx);
 
-    let verb = args.first().copied().unwrap_or("");
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    stop_git_child(&mut child, tree_kill);
                     return Err(format!(
                         "git {verb} 超时（>{}s），已跳过",
                         timeout.as_secs()
@@ -210,7 +261,7 @@ fn git_output_timed(
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
-                let _ = child.kill();
+                stop_git_child(&mut child, tree_kill);
                 return Err(format!("等待 git {verb} 失败: {}", e));
             }
         }
@@ -1000,6 +1051,7 @@ fn friendly_push_error(raw: &str) -> String {
         || lower.contains("could not resolve host")
         || lower.contains("network unreachable")
         || lower.contains("ssl_connect")
+        || raw.contains("超时")
     {
         return "推送失败：无法连接远程仓库（网络不通、超时或被墙）。请检查网络/代理；若仓库配置了其它远程，可改推那个远程，本地提交不受影响。".into();
     }
@@ -1051,10 +1103,10 @@ fn git_push_sync(repo_path: String) -> Result<String, String> {
         return Err("没有配置远程仓库，请先添加 remote（例如 origin）".into());
     }
 
-    let output = if has_upstream(&repo_path) {
-        git_output(&repo_path, &["push"])?
+    let output = match if has_upstream(&repo_path) {
+        git_network_output(&repo_path, &["push"])
     } else if has_remote(&repo_path, "origin") {
-        git_output(&repo_path, &["push", "-u", "origin", "HEAD"])?
+        git_network_output(&repo_path, &["push", "-u", "origin", "HEAD"])
     } else {
         let first = remotes.lines().next().unwrap_or("").trim();
         if first.is_empty() {
@@ -1064,6 +1116,9 @@ fn git_push_sync(repo_path: String) -> Result<String, String> {
             "当前分支没有上游，且未找到 origin。可用远程: {}。请先设置上游后再推送。",
             remotes.split_whitespace().collect::<Vec<_>>().join(", ")
         ));
+    } {
+        Ok(output) => output,
+        Err(err) => return Err(friendly_push_error(&err)),
     };
 
     if !output.status.success() {
@@ -1109,6 +1164,16 @@ fn validate_repo_rel_path(path: &str) -> Result<(), String> {
 
 fn friendly_pull_error(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
+    if lower.contains("unable to access")
+        || lower.contains("failed to connect")
+        || lower.contains("connection timed out")
+        || lower.contains("could not resolve host")
+        || lower.contains("network unreachable")
+        || lower.contains("ssl_connect")
+        || raw.contains("超时")
+    {
+        return "拉取失败：无法连接远程仓库（网络不通、超时或被墙）。请检查网络/代理。".into();
+    }
     if lower.contains("not possible to fast-forward")
         || lower.contains("diverging branches")
         || lower.contains("need to specify how to reconcile")
@@ -1158,7 +1223,10 @@ fn git_pull_sync(repo_path: String) -> Result<String, String> {
     if !has_upstream(&repo_path) {
         return Err("当前分支没有上游，无法拉取".into());
     }
-    let output = git_output(&repo_path, &["pull", "--ff-only"])?;
+    let output = match git_network_output(&repo_path, &["pull", "--ff-only"]) {
+        Ok(output) => output,
+        Err(err) => return Err(friendly_pull_error(&err)),
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -2255,6 +2323,12 @@ mod tests {
         let msg = friendly_push_error(raw);
         assert!(msg.contains("无法连接远程仓库"), "got: {msg}");
         assert!(msg.contains("本地提交不受影响"), "got: {msg}");
+    }
+
+    #[test]
+    fn push_error_translates_timeout() {
+        let msg = friendly_push_error("git push 超时（>60s），已跳过");
+        assert!(msg.contains("无法连接远程仓库"), "got: {msg}");
     }
 
     #[test]
