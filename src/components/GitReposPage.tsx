@@ -38,7 +38,7 @@ import {
   subscribeRepos,
 } from "../core/gitCache";
 import { readStoredArray, writeStoredArray } from "../core/localState";
-import { pathKey, projectNameFromPath } from "../core/pathUtils";
+import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
 import { buildRepoGroups, REPOS_COLLAPSED_KEY, type RepoGroup } from "../core/repoGroups";
 import { resolveRepoAccount } from "../core/gitIdentity";
 import {
@@ -826,6 +826,10 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     : currentGitRepo
       ? projectNameFromPath(currentGitRepo)
       : null;
+  const currentScopeLabel = currentGitRepo
+    ? findWorkspaceForRepo(currentGitRepo, gitWorkspaces)?.name ??
+      (gitWorkspaces.length > 0 ? t("workspace.other") : null)
+    : null;
 
   const renderCard = (p: RecentProject) => {
     const s = summaries[p.path];
@@ -1047,12 +1051,23 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
           <div className="repos-toolbar-context">
             <div className="repos-toolbar-context-row">
               {currentGitRepo && currentRepoName ? (
-                <>
-                  <span className="runtime-badge active">{t("workbench.current")}</span>
-                  <span className="repos-toolbar-name" title={currentGitRepo}>
-                    {currentRepoName}
-                  </span>
-                </>
+                <div
+                  className="commit-scope"
+                  title={
+                    currentScopeLabel
+                      ? `${currentScopeLabel} · ${currentGitRepo}`
+                      : currentGitRepo
+                  }
+                >
+                  <span className="commit-scope-mark">{t("workbench.current")}</span>
+                  <span className="commit-scope-name">{currentScopeLabel || currentRepoName}</span>
+                  {currentScopeLabel && currentScopeLabel !== currentRepoName && (
+                    <>
+                      <span className="commit-scope-dot" aria-hidden />
+                      <span className="commit-scope-repo">{currentRepoName}</span>
+                    </>
+                  )}
+                </div>
               ) : (
                 <span className="runtime-muted">{t("workbench.noCurrent")}</span>
               )}

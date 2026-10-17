@@ -116,6 +116,20 @@ function isRepoDirty(
   return !!s?.isGit && ((s.dirtyCount ?? 0) > 0 || (statusEntries?.length ?? 0) > 0);
 }
 
+/** A workspace id, or "other". Null when there are no groups yet — the list stays unscoped. */
+function scopeFilterForRepo<T extends { id: number; path: string }>(
+  repoPath: string | undefined,
+  workspaces: T[]
+): string | null {
+  if (workspaces.length === 0) return null;
+  if (repoPath) {
+    const ws = findWorkspaceForRepo(repoPath, workspaces);
+    if (ws) return `ws-${ws.id}`;
+    return "other";
+  }
+  return `ws-${workspaces[0].id}`;
+}
+
 function projectsInFilter<T extends { id: number; path: string }>(
   filter: string,
   projects: RecentProject[],
@@ -493,6 +507,16 @@ function CommitChangelist({
     () => projectsInFilter(filter, scanProjects, gitWorkspaces),
     [filter, gitWorkspaces, scanProjects]
   );
+
+  const filterIsGroup =
+    filter === "other" || gitWorkspaces.some((w) => filter === `ws-${w.id}`);
+
+  // "全部仓库" is gone. A saved "all" (or a deleted group) lands on the current repo's group.
+  useEffect(() => {
+    if (gitWorkspaces.length === 0 || filterIsGroup) return;
+    const next = scopeFilterForRepo(currentGitRepo, gitWorkspaces);
+    if (next) setFilter(next);
+  }, [filterIsGroup, gitWorkspaces, currentGitRepo]);
 
   // The dropdown is a workspace scope. The header "当前" and the identity row
   // follow it, so picking car-trade stops showing a repo that lives elsewhere.
@@ -1431,11 +1455,11 @@ function CommitChangelist({
       <div className="cl-toolbar">
         <select
           className="input-field commit-batch-filter"
-          value={filter}
+          value={filterIsGroup ? filter : scopeFilterForRepo(currentGitRepo, gitWorkspaces) ?? "other"}
           onChange={(e) => setFilter(e.target.value)}
-          disabled={busy}
+          disabled={busy || gitWorkspaces.length === 0}
+          hidden={gitWorkspaces.length === 0}
         >
-          <option value="all">{t("commit.changelistFilterAll")}</option>
           {gitWorkspaces.map((ws) => (
             <option key={ws.id} value={`ws-${ws.id}`}>
               {ws.name}
@@ -1494,7 +1518,10 @@ function CommitChangelist({
                     <button
                       type="button"
                       className="btn btn-secondary btn-small"
-                      onClick={() => setFilter("all")}
+                      onClick={() => {
+                        const next = scopeFilterForRepo(allDirtyRepos[0]?.path, gitWorkspaces);
+                        if (next) setFilter(next);
+                      }}
                     >
                       {t("commit.changelistShowAllDirty", { count: allDirtyRepos.length })}
                     </button>

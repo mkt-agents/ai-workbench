@@ -58,17 +58,15 @@
   flex-wrap: wrap;
 }
 
+.repos-toolbar-context .commit-scope {
+  max-width: 100%;
+}
+
 .repos-toolbar-subtitle {
   font-size: 12px;
   color: var(--text-3);
   line-height: 1.4;
   max-width: 640px;
-}
-
-.repos-toolbar-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-0);
 }
 
 .repos-toolbar-path {
