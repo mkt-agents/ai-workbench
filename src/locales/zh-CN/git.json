@@ -450,7 +450,7 @@
     },
     "aiSection": "AI 测试建议",
     "aiModel": "模型",
-    "aiGenerate": "AI 生成测试场景",
+    "aiGenerate": "生成报告",
     "aiRegenerate": "重新生成",
     "aiProgress": "生成中 {{done}}/{{total}}",
     "aiCancel": "取消",

@@ -8,6 +8,40 @@ use std::thread;
 use std::time::Duration;
 use tauri::Manager;
 
+/// `about:blank` and the local DSH origin stay inside a WebView2 popup so
+/// sign-in can script the window it just opened. Anything else is an
+/// account-platform link and belongs in the system browser.
+fn dsh_popup_stays_in_webview(url: &url::Url) -> bool {
+    match url.scheme() {
+        "http" | "https" => matches!(
+            url.host_str(),
+            Some("127.0.0.1") | Some("localhost") | Some("::1")
+        ),
+        _ => true,
+    }
+}
+
+fn open_dsh_external(url: &str) -> Result<(), String> {
+    crate::cloudflared_commands::open_url(url)
+}
+
+/// The shell plugin listens for `target=_blank` clicks and calls `shell.open`,
+/// which on Windows does not follow the browser chosen in Settings. Stopping
+/// the event before that listener lets this webview's new-window handler launch
+/// the registered browser instead.
+const DSH_EXTERNAL_LINK_SCRIPT: &str = r#"(function () {
+  document.addEventListener("click", function (event) {
+    var el = event.target;
+    while (el && el.tagName !== "A") el = el.parentElement;
+    if (!el) return;
+    if (String(el.getAttribute("target") || "").toLowerCase() !== "_blank") return;
+    var href = el.href || "";
+    if (href.indexOf("http://") !== 0 && href.indexOf("https://") !== 0) return;
+    event.stopPropagation();
+  }, true);
+})();
+"#;
+
 /// Child webview that loads the launch-token URL as its own top-level page.
 /// An iframe cannot: DSH sets a SameSite=Strict cookie, which a cross-site
 /// parent (the workbench origin) is not allowed to send back.
@@ -994,10 +1028,21 @@ pub async fn dsh_set_embed(
     )
     .focused(false)
     .background_color(tauri::webview::Color(15, 17, 19, 255))
-    // DSH sign-in does window.open("about:blank") on the click, then
-    // location.replace(authorizeUrl). With no handler, WebView2 cancels that
-    // open, window.open returns null, and the UI only shows the copy-link dialog.
-    .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Allow);
+    .initialization_script(DSH_EXTERNAL_LINK_SCRIPT)
+    // Sign-in does window.open("about:blank") and then location.replace.
+    // WebView2 drops that open unless a handler allows it, so the login UI
+    // only shows the copy-link dialog. Account links (usage, top-up, the
+    // platform home) are target=_blank to an external host. The default
+    // popup from this child webview never appears, so those clicks do
+    // nothing — send them to the system browser instead.
+    .on_new_window(|url, _features| {
+        if dsh_popup_stays_in_webview(&url) {
+            tauri::webview::NewWindowResponse::Allow
+        } else {
+            let _ = open_dsh_external(url.as_str());
+            tauri::webview::NewWindowResponse::Deny
+        }
+    });
     window
         .add_child(
             builder,
@@ -1442,7 +1487,27 @@ pub fn sync_model_to_dsh(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_dsh_web_line;
+    use super::{dsh_popup_stays_in_webview, parse_dsh_web_line};
+
+    #[test]
+    fn login_popup_stays_in_the_embed() {
+        let blank = url::Url::parse("about:blank").unwrap();
+        let local = url::Url::parse("http://127.0.0.1:3080/").unwrap();
+        assert!(dsh_popup_stays_in_webview(&blank));
+        assert!(dsh_popup_stays_in_webview(&local));
+    }
+
+    #[test]
+    fn account_links_leave_the_embed() {
+        for raw in [
+            "https://platform.deepseek.com/usage",
+            "https://platform.deepseek.com/",
+            "https://platform.deepseek.com/top_up",
+        ] {
+            let parsed = url::Url::parse(raw).unwrap();
+            assert!(!dsh_popup_stays_in_webview(&parsed), "{raw}");
+        }
+    }
 
     #[test]
     fn reads_the_launch_token_url() {

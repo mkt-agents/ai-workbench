@@ -256,15 +256,170 @@ fn kill_pid(pid: u32) {
     }
 }
 
-fn open_url(url: &str) -> Result<(), String> {
+/// Split a registered browser command (`"C:\browser.exe" -- "%1"`) into the
+/// executable and arguments, with `%1` replaced by the URL.
+///
+/// `rundll32 url.dll,FileProtocolHandler` ignores the user's default browser
+/// on current Windows and always opens Edge. The https UserChoice command is
+/// the association Windows itself shows in Settings.
+fn browser_command_args(template: &str, url: &str) -> Option<(String, Vec<String>)> {
+    let template = template.trim();
+    if template.is_empty() {
+        return None;
+    }
+    let (exe, rest) = if let Some(stripped) = template.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        (stripped[..end].to_string(), stripped[end + 1..].trim())
+    } else {
+        let mut parts = template.splitn(2, char::is_whitespace);
+        (parts.next()?.to_string(), parts.next().unwrap_or("").trim())
+    };
+    if exe.is_empty() {
+        return None;
+    }
+    let mut args = Vec::new();
+    let mut replaced = false;
+    for token in split_command_args(rest) {
+        if token.eq_ignore_ascii_case("%1") || token.eq_ignore_ascii_case("%l") {
+            args.push(url.to_string());
+            replaced = true;
+        } else if token.contains("%1") || token.contains("%L") || token.contains("%l") {
+            args.push(
+                token
+                    .replace("%1", url)
+                    .replace("%L", url)
+                    .replace("%l", url),
+            );
+            replaced = true;
+        } else {
+            args.push(token);
+        }
+    }
+    if !replaced {
+        args.push(url.to_string());
+    }
+    Some((exe, args))
+}
+
+fn split_command_args(rest: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for ch in rest.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
+#[cfg(target_os = "windows")]
+fn safe_prog_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && id.len() <= 80
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+#[cfg(target_os = "windows")]
+fn reg_sz(
+    root: windows::Win32::System::Registry::HKEY,
+    path: &str,
+    value_name: Option<&str>,
+) -> Option<String> {
+    use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+    use windows::core::PCWSTR;
+
+    let path_w: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_w: Vec<u16> = value_name
+        .unwrap_or("")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let name = match value_name {
+        Some(_) => PCWSTR(name_w.as_ptr()),
+        None => PCWSTR::null(),
+    };
+    let mut bytes: u32 = 0;
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(path_w.as_ptr()),
+            name,
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut bytes),
+        )
+    };
+    if status.is_err() || bytes < 2 {
+        return None;
+    }
+    let mut buf = vec![0u16; bytes as usize / 2 + 1];
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(path_w.as_ptr()),
+            name,
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut bytes),
+        )
+    };
+    if status.is_err() {
+        return None;
+    }
+    let len = (bytes as usize / 2).saturating_sub(1);
+    let text = String::from_utf16_lossy(&buf[..len]);
+    let text = text.trim_end_matches('\u{0}').trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn default_browser_command(url: &str) -> Option<(String, Vec<String>)> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+    let prog_id = reg_sz(
+        HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+        Some("ProgId"),
+    )?;
+    if !safe_prog_id(&prog_id) {
+        return None;
+    }
+    let rel = format!(r"Software\Classes\{prog_id}\shell\open\command");
+    let template = reg_sz(HKEY_CURRENT_USER, &rel, None)
+        .or_else(|| reg_sz(HKEY_LOCAL_MACHINE, &rel, None))?;
+    browser_command_args(&template, url)
+}
+
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // 不能走 `cmd /c start`：cmd 会把 URL 里的 `&` 当成命令分隔符截断查询串。
-        hidden_cmd("rundll32")
-            .args(["url.dll,FileProtocolHandler", url])
+        let (exe, args) = default_browser_command(url)
+            .ok_or_else(|| "没有读到系统默认浏览器".to_string())?;
+        let mut cmd = Command::new(exe);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.args(args)
             .spawn()
-            .map_err(|e| format!("打开链接失败: {}", e))?;
-        Ok(())
+            .map_err(|e| format!("打开链接失败: {e}"))?;
+        return Ok(());
     }
     #[cfg(target_os = "macos")]
     {
@@ -1256,7 +1411,27 @@ fn replace_file(dest: &Path, replacement: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{explain_cloudflared_line, route_dns_target_exists};
+    use super::{browser_command_args, explain_cloudflared_line, route_dns_target_exists};
+
+    #[test]
+    fn browser_command_uses_the_registered_executable() {
+        let (exe, args) = browser_command_args(
+            r#""D:\w_app\360esx\360ChromeX\Chrome\Application\360ChromeX.exe" -- "%1""#,
+            "https://platform.deepseek.com/usage?a=1&b=2",
+        )
+        .unwrap();
+        assert_eq!(
+            exe,
+            r"D:\w_app\360esx\360ChromeX\Chrome\Application\360ChromeX.exe"
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--".to_string(),
+                "https://platform.deepseek.com/usage?a=1&b=2".to_string()
+            ]
+        );
+    }
 
     #[test]
     fn route_dns_existing_record_is_idempotent() {

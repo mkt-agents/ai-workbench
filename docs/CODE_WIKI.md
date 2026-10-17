@@ -722,7 +722,7 @@ DshState { instances: Mutex<Vec<DshInstance>> }
 3. 定位 DSH 安装（`npm root -g` / `node_modules` / 直接 node 启动入口）
 4. `spawn_dsh_server` — `--no-open --trusted-host 127.0.0.1`，stdout 解析 `dsh web: http://…?token=`
 5. `wait_for_port` — 30s 超时轮询
-6. 有令牌则 `dsh_set_embed` 用子 webview 打开（SameSite=Strict，iframe 带不走 cookie）。不再改写安装文件
+6. 有令牌则 `dsh_set_embed` 用子 webview 打开（SameSite=Strict，iframe 带不走 cookie）。不再改写安装文件。登录的 `about:blank` 弹窗留在 WebView2 里。账号页的 `target=_blank` 外链交给系统已登记的默认浏览器（读 https UserChoice，不用 `url.dll`，否则 Windows 会打开 Edge）
 
 **认证补丁**：启动不再写入。若磁盘上仍有本工具留下的补丁标记或备份，`start_dsh` 会先还原再拉起进程。
 

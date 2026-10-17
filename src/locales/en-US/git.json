@@ -450,7 +450,7 @@
     },
     "aiSection": "AI testing suggestions",
     "aiModel": "Model",
-    "aiGenerate": "Ask AI for scenarios",
+    "aiGenerate": "Generate report",
     "aiRegenerate": "Regenerate",
     "aiProgress": "Generating {{done}}/{{total}}",
     "aiCancel": "Cancel",
