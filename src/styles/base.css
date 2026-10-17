@@ -35,6 +35,7 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .userscript-actions,
   .ai-mode-dropdown,
   .devtools-history-menu,
+  .cl-recent-menu,
   .update-banner,
   .quick-ask-toolbar .qa-focus-btn,
   .quick-ask-sessions,

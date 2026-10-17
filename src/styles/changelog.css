@@ -447,8 +447,18 @@
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-1);
-  box-shadow: var(--shadow-md);
+  background: var(--float-bg);
+  box-shadow: var(--float-shadow);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .cl-recent-menu {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%),
+    var(--float-bg);
+  border-color: var(--overlay-3);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
 }
 
 .cl-recent-item,
