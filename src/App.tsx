@@ -546,7 +546,7 @@ function App() {
                   className={activeTab === "ai-chat" ? "page-panel is-active" : "page-panel"}
                   aria-hidden={activeTab !== "ai-chat"}
                 >
-                  <DeepSeekHarness />
+                  <DeepSeekHarness active={activeTab === "ai-chat"} />
                 </div>
               )}
               {activeTab === "snippets" && <SnippetsManager />}

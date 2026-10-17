@@ -543,6 +543,7 @@ pub fn run() {
             ai_commands::generate_text_stream,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
+            dsh_commands::dsh_set_embed,
             dsh_commands::stop_dsh,
             dsh_commands::list_dsh,
             dsh_commands::check_dsh_port,

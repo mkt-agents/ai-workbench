@@ -718,18 +718,16 @@ DshState { instances: Mutex<Vec<DshInstance>> }
 
 **启动流程** `start_dsh(port)`:
 1. `prune_dead_instances` — 清理已死实例
-2. 端口占用检查 → 如已被 DSH 服务接管则 adopt
+2. 端口占用：旧版已在提供页面则接管；0.2 的 401 登录墙则停掉再拉起，以便读到新的启动令牌
 3. 定位 DSH 安装（`npm root -g` / `node_modules` / 直接 node 启动入口）
-4. `spawn_dsh_server` — 传 `--trusted-host 127.0.0.1`
+4. `spawn_dsh_server` — `--no-open --trusted-host 127.0.0.1`，stdout 解析 `dsh web: http://…?token=`
 5. `wait_for_port` — 30s 超时轮询
-6. HTTP 探测 → `401` → 应用认证补丁 → 重启 → 再探测
+6. 有令牌则 `dsh_set_embed` 用子 webview 打开（SameSite=Strict，iframe 带不走 cookie）。不再改写安装文件
 
-**认证补丁** `patch_dsh_auth`:
+**认证补丁** `patch_dsh_auth`（启动不再调用；「还原认证补丁」仍可用）:
 - 目标: `dsh-client-connection/lib/index.js`
 - 备份: 原文件 → `.js.ai-workbench-backup`
-- 替换: `browserAuth.isAuthenticated` → `return void 0`
-- Sentinel: `/* ai-workbench:dsh-auth-bypass */` 标记已补丁
-- 幂等: 多次调用安全
+- Sentinel: `/* ai-workbench:dsh-auth-bypass */`
 
 **停止** `stop_dsh(port)`:
 - 先从追踪列表移除

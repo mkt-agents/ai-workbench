@@ -23,6 +23,7 @@ export interface Invocations {
     Array<{ kind: string; baseUrl: string; label: string; reachable: boolean; models: string[] }>
   >;
   invokeStartDsh: (port?: number) => Promise<DshInstance>;
+  invokeDshSetEmbed: (params: { url: string; x: number; y: number; width: number; height: number; visible: boolean }) => Promise<void>;
   invokeStopDsh: (port: number) => Promise<string>;
   invokeListDsh: () => Promise<DshInstance[]>;
   invokeCheckDshPort: (port: number) => Promise<boolean>;
@@ -172,6 +173,8 @@ export const invocations: Invocations = {
   // DeepSeek Harness
   invokeStartDsh: (port?: number) =>
     tauriInvoke<DshInstance>('start_dsh', { port }),
+  invokeDshSetEmbed: (params) =>
+    tauriInvoke<void>('dsh_set_embed', params),
   invokeStopDsh: (port: number) =>
     tauriInvoke<string>('stop_dsh', { port }),
   invokeListDsh: () =>

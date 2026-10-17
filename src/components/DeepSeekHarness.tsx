@@ -86,9 +86,10 @@ function loadAutoStart(): boolean {
   }
 }
 
-function DeepSeekHarness() {
+function DeepSeekHarness({ active = true }: { active?: boolean }) {
   const { t } = useTranslation("ai");
   const invokeStartDsh = useGlobalStore((s) => s.invokeStartDsh);
+  const invokeDshSetEmbed = useGlobalStore((s) => s.invokeDshSetEmbed);
   const invokeStopDsh = useGlobalStore((s) => s.invokeStopDsh);
   const invokeListDsh = useGlobalStore((s) => s.invokeListDsh);
   const invokeCheckDshHttp = useGlobalStore((s) => s.invokeCheckDshHttp);
@@ -107,6 +108,8 @@ function DeepSeekHarness() {
   const dshHasUpdate = useGlobalStore((s) => s.dshHasUpdate);
 
   const [isRunning, setIsRunning] = useState(false);
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [embedSuspended, setEmbedSuspended] = useState(false);
   const [activePort, setActivePort] = useState(DEFAULT_PORT);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -189,6 +192,9 @@ function DeepSeekHarness() {
   const iframeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeElRef = useRef<HTMLIFrameElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const authUrlRef = useRef<string | null>(null);
+  authUrlRef.current = authUrl;
   /** One soft remount after first paint — DSH often returns 200 before SPA is ready (white screen). */
   const autoReloadDoneRef = useRef(false);
   const startCancelledRef = useRef(false);
@@ -224,13 +230,20 @@ function DeepSeekHarness() {
       if (list.length > 0) {
         const instance = list.find((i) => i.port === DEFAULT_PORT) ?? list[0];
         setActivePort(instance.port);
+        setAuthUrl(instance.auth_url ?? null);
         setIsRunning(true);
         setStatus(t("dsh.running"));
-        // Show mask + remount so we don't stick on a blank first paint.
-        autoReloadDoneRef.current = false;
-        setIframeLoading(true);
-        setIframeKey((k) => k + 1);
+        if (instance.auth_patch_warning) showCriticalAlert(instance.auth_patch_warning);
+        if (!instance.auth_url) {
+          // Legacy build serves the page with no launch token. Remount so a blank first paint doesn't stick.
+          autoReloadDoneRef.current = false;
+          setIframeLoading(true);
+          setIframeKey((k) => k + 1);
+        } else {
+          setIframeLoading(false);
+        }
       } else {
+        setAuthUrl(null);
         setIsRunning(false);
         setIframeLoading(false);
       }
@@ -238,7 +251,7 @@ function DeepSeekHarness() {
       setIsRunning(false);
       setIframeLoading(false);
     }
-  }, [invokeListDsh, t]);
+  }, [invokeListDsh, showCriticalAlert, t]);
 
   // Stable load/settle handling (avoids ref-callback resetting timers on every render).
   useEffect(() => {
@@ -367,6 +380,7 @@ function DeepSeekHarness() {
         try {
           const list = await invokeListDsh();
           if (list.length === 0) {
+            setAuthUrl(null);
             setIsRunning(false);
             setIframeLoading(false);
             autoReloadDoneRef.current = false;
@@ -380,6 +394,72 @@ function DeepSeekHarness() {
     }, 8000);
     return () => clearInterval(timer);
   }, [isRunning, starting, stopping, updating, installing, invokeListDsh, t, clearStatusAfter]);
+
+  const embedQueue = useRef(Promise.resolve());
+  const embedErrorShown = useRef(false);
+  const pushEmbed = useCallback(
+    (visible: boolean) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      const job = embedQueue.current.then(() =>
+        invokeDshSetEmbed({
+          url: authUrlRef.current ?? "",
+          x: rect?.x ?? 0,
+          y: rect?.y ?? 0,
+          width: rect?.width ?? 0,
+          height: rect?.height ?? 0,
+          visible,
+        }),
+      );
+      embedQueue.current = job.then(
+        () => undefined,
+        (error: unknown) => {
+          if (visible && !embedErrorShown.current) {
+            embedErrorShown.current = true;
+            showCriticalAlert(String(error));
+          }
+        },
+      );
+      return job;
+    },
+    [invokeDshSetEmbed, showCriticalAlert],
+  );
+
+  // DSH 0.2's login cookie is SameSite=Strict, so it has to load as the top-level
+  // document of its own webview. The slot below is only the positioning target.
+  useEffect(() => {
+    const wants =
+      active && isRunning && !!authUrl && !embedSuspended && !starting && !stopping;
+    if (!wants) {
+      void pushEmbed(false);
+      return;
+    }
+    let frame = 0;
+    const sync = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        void pushEmbed(true);
+      });
+    };
+    sync();
+    const observer = new ResizeObserver(sync);
+    if (containerRef.current) observer.observe(containerRef.current);
+    window.addEventListener("resize", sync);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", sync);
+      void pushEmbed(false);
+    };
+  }, [active, isRunning, authUrl, embedSuspended, starting, stopping, pushEmbed]);
+
+  const pauseEmbed = async () => {
+    setEmbedSuspended(true);
+    try {
+      await pushEmbed(false);
+    } catch {
+      /* the dialog still has to open over the page */
+    }
+  };
 
   useEffect(() => {
     const unlisten = listen<{ stage: string; percent: number; message: string }>(
@@ -451,10 +531,9 @@ function DeepSeekHarness() {
     setStatus(t("dsh.starting"));
     try {
       const result = await invokeStartDsh(port);
+      setAuthUrl(result?.auth_url ?? null);
       if (result?.auth_patch_warning) {
-        showCriticalAlert(
-          `${t("dsh.authPatchFailed")}: ${result.auth_patch_warning}. ${t("dsh.authPatchHint")}`
-        );
+        showCriticalAlert(result.auth_patch_warning);
       }
       const portUsed = result?.port ?? port;
       setActivePort(portUsed);
@@ -467,7 +546,8 @@ function DeepSeekHarness() {
       autoReloadDoneRef.current = false;
       setIsRunning(true);
       setStatus(t("dsh.running"));
-      remountIframe();
+      if (result?.auth_url) setIframeLoading(false);
+      else remountIframe();
     } catch (error) {
       const msg = String(error);
       setStatus(t("dsh.startFailed", { error: msg }));
@@ -486,7 +566,7 @@ function DeepSeekHarness() {
 
   const handleOpenInBrowser = async () => {
     try {
-      await invoke("open_in_browser", { url: serviceUrl });
+      await invoke("open_in_browser", { url: authUrl || serviceUrl });
     } catch (error) {
       setStatus(t("dsh.startFailed", { error: String(error) }));
       clearStatusAfter(5000);
@@ -506,13 +586,17 @@ function DeepSeekHarness() {
   };
 
   const handleStop = async () => {
+    await pauseEmbed();
     const ok = await confirm({
       title: t("dsh.stopTitle"),
       message: t("dsh.stopMessage"),
       confirmText: t("dsh.stopConfirm"),
       cancelText: t("models.cancel"),
     });
-    if (!ok) return;
+    if (!ok) {
+      setEmbedSuspended(false);
+      return;
+    }
 
     // Abort any in-flight start poll
     startCancelledRef.current = true;
@@ -534,6 +618,7 @@ function DeepSeekHarness() {
         clearStatusAfter(5000);
         return;
       }
+      setAuthUrl(null);
       setIsRunning(false);
       setIframeLoading(false);
       autoReloadDoneRef.current = false;
@@ -555,11 +640,18 @@ function DeepSeekHarness() {
       if (list.length > 0) {
         const instance = list.find((i) => i.port === activePort) ?? list[0];
         setActivePort(instance.port);
+        setAuthUrl(instance.auth_url ?? null);
         setIsRunning(true);
         setStatus(t("dsh.running"));
-        autoReloadDoneRef.current = false;
-        remountIframe();
+        if (instance.auth_patch_warning) showCriticalAlert(instance.auth_patch_warning);
+        if (instance.auth_url) {
+          setIframeLoading(false);
+        } else {
+          autoReloadDoneRef.current = false;
+          remountIframe();
+        }
       } else {
+        setAuthUrl(null);
         setIsRunning(false);
         setIframeLoading(false);
         setStatus(t("dsh.notRunning"));
@@ -577,13 +669,17 @@ function DeepSeekHarness() {
   /// versions need no patch) instead of failing; its message is surfaced as-is.
   const handleRestoreAuth = async () => {
     if (busy) return;
+    await pauseEmbed();
     const ok = await confirm({
       title: t("dsh.restoreAuthTitle"),
       message: t("dsh.restoreAuthMessage"),
       confirmText: t("dsh.restoreAuth"),
       icon: "warning",
     });
-    if (!ok) return;
+    if (!ok) {
+      setEmbedSuspended(false);
+      return;
+    }
     setRestoringAuth(true);
     try {
       const msg = await invokeRestoreDshAuth();
@@ -594,18 +690,23 @@ function DeepSeekHarness() {
       clearStatusAfter(6000);
     } finally {
       setRestoringAuth(false);
+      setEmbedSuspended(false);
     }
   };
 
   const handleUpdate = async () => {
     if (isRunning) {
+      await pauseEmbed();
       const ok = await confirm({
         title: t("dsh.updateTitle"),
         message: t("dsh.updateMessageRunning"),
         confirmText: t("dsh.updateConfirm"),
         cancelText: t("models.cancel"),
       });
-      if (!ok) return;
+      if (!ok) {
+        setEmbedSuspended(false);
+        return;
+      }
     }
 
     setUpdating(true);
@@ -649,6 +750,7 @@ function DeepSeekHarness() {
       setUpdateProgress(0);
       setUpdateMsg(t("dsh.updateFailed", { error: String(error) }));
     } finally {
+      setEmbedSuspended(false);
       setUpdating(false);
       setTimeout(() => {
         setUpdateMsg(null);
@@ -1027,8 +1129,9 @@ function DeepSeekHarness() {
           )}
         </div>
 
-        <div className="dsh-iframe-container">
+        <div className="dsh-iframe-container" ref={containerRef}>
           {isRunning ? (
+            authUrl ? null : (
             <>
               <iframe
                 key={iframeKey}
@@ -1045,6 +1148,7 @@ function DeepSeekHarness() {
                 </div>
               )}
             </>
+            )
           ) : (
             <div className="dsh-empty-state">
               <div className="dsh-empty-state-icon">

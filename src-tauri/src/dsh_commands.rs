@@ -3,9 +3,16 @@ use std::process::Command;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::Manager;
+
+/// Child webview that loads the launch-token URL as its own top-level page.
+/// An iframe cannot: DSH sets a SameSite=Strict cookie, which a cross-site
+/// parent (the workbench origin) is not allowed to send back.
+const DSH_EMBED_LABEL: &str = "dsh-embed";
+static DSH_EMBED_URL: Mutex<Option<String>> = Mutex::new(None);
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -207,6 +214,9 @@ pub struct DshPatchResult {
     pub warning: Option<String>,
 }
 
+/// Kept so an old install can still be recognised. Startup no longer calls this:
+/// DSH 0.2 exchanges a launch token for a cookie instead of this file rewrite.
+#[allow(dead_code)]
 /// Patch DSH connection package to bypass browser cookie authentication for iframe embedding.
 /// Keeps the Host/Origin trust fence intact. Idempotent — safe to call multiple times.
 ///
@@ -346,18 +356,43 @@ fn dsh_index_status(port: u16) -> Option<u16> {
 enum IndexAuth {
     /// The app is being served: the iframe can load it as-is.
     Serving,
-    /// Explicitly refused: this build needs the auth patch.
-    Refused,
+    /// Trusted, but this process still wants its launch token (DSH 0.2+).
+    LoginRequired,
+    /// Host/Origin fence rejected the request. A token cannot fix this.
+    Forbidden,
     /// Not answering yet. DSH serves `404` for roughly the first 1.4s after the port
-    /// opens, and that must not be read as a refusal — patching cannot fix a boot.
+    /// opens, and that must not be read as a refusal.
     NotReady,
+}
+
+/// `dsh web:` lines carry the process launch token. Other `dsh web:` lines are status text.
+fn parse_dsh_web_line(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("dsh web:")?.trim();
+    if rest.starts_with("http://") || rest.starts_with("https://") {
+        Some(rest.to_string())
+    } else {
+        None
+    }
+}
+
+/// Plain `GET /` is DSH's login wall (no cookie, no token). The HTML marker is absent
+/// on that response, so a port check alone cannot tell this apart from a foreign program.
+fn dsh_needs_login(port: u16) -> bool {
+    dsh_plain_get(port, 4096)
+        .map(|body| {
+            let lower = body.to_ascii_lowercase();
+            lower.contains("dsh web authentication required")
+                || (lower.contains(" 401 ") && lower.contains("@deepseek-ai/dsh"))
+        })
+        .unwrap_or(false)
 }
 
 fn probe_index_auth(port: u16) -> IndexAuth {
     match dsh_index_status(port) {
         Some(status) if (200..400).contains(&status) => IndexAuth::Serving,
         // DSH answers 401 when its authorization refuses the request.
-        Some(401) | Some(403) => IndexAuth::Refused,
+        Some(401) => IndexAuth::LoginRequired,
+        Some(403) => IndexAuth::Forbidden,
         _ => IndexAuth::NotReady,
     }
 }
@@ -393,19 +428,41 @@ fn dsh_web_args(port: u16) -> Vec<String> {
 
 /// Environment and flags shared by every launch attempt.
 fn configure_dsh_command(cmd: &mut Command, path_value: &str) {
-    cmd.env("DSH_SKIP_AUTH", "1");
     apply_path_value(cmd, path_value);
-    cmd.stdout(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::null());
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
-/// Spawn the DSH web server. `--no-open` keeps it from launching a browser, and
-/// `--trusted-host` authorizes the loopback iframe this app embeds (that is `extra` in
-/// DSH's `resolveLanTrust`, which does not include loopback on its own).
-fn spawn_dsh_server(port: u16, path_value: &str) -> Result<std::process::Child, String> {
+struct SpawnedDsh {
+    child: std::process::Child,
+    /// First `dsh web: http…` line. The reader keeps draining stdout afterwards.
+    auth_url: mpsc::Receiver<String>,
+}
+
+fn watch_launch_url(child: &mut std::process::Child) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    let Some(stdout) = child.stdout.take() else {
+        return rx;
+    };
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            if let Some(url) = parse_dsh_web_line(&line) {
+                let _ = tx.send(url);
+            }
+        }
+    });
+    rx
+}
+
+/// Spawn the DSH web server. `--no-open` keeps it from launching a browser.
+/// `--trusted-host` passes the Host/Origin fence; identity is the launch token
+/// printed on stdout (`dsh web: http://127.0.0.1:<port>/?token=…`).
+fn spawn_dsh_server(port: u16, path_value: &str) -> Result<SpawnedDsh, String> {
     let args = dsh_web_args(port);
     let mut previous: Option<String> = None;
 
@@ -432,7 +489,12 @@ fn spawn_dsh_server(port: u16, path_value: &str) -> Result<std::process::Child, 
             cmd.arg(&entry).args(&args);
             configure_dsh_command(&mut cmd, path_value);
             match cmd.spawn() {
-                Ok(child) => return Ok(child),
+                Ok(mut child) => {
+                    return Ok(SpawnedDsh {
+                        auth_url: watch_launch_url(&mut child),
+                        child,
+                    });
+                }
                 Err(e) => previous = Some(format!("node 直接启动失败: {e}")),
             }
         }
@@ -442,7 +504,7 @@ fn spawn_dsh_server(port: u16, path_value: &str) -> Result<std::process::Child, 
     let mut cmd = Command::new("cmd");
     cmd.args(["/c", "npx", "@deepseek-ai/dsh"]).args(&args);
     configure_dsh_command(&mut cmd, path_value);
-    cmd.spawn().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         let hint = if e.kind() == std::io::ErrorKind::NotFound {
             "未找到 Node.js，请先安装，或在「版本切换」里选择可用的 Node"
         } else {
@@ -452,6 +514,10 @@ fn spawn_dsh_server(port: u16, path_value: &str) -> Result<std::process::Child, 
             Some(prev) => format!("{hint}: {e}（{prev}）"),
             None => format!("{hint}: {e}"),
         }
+    })?;
+    Ok(SpawnedDsh {
+        auth_url: watch_launch_url(&mut child),
+        child,
     })
 }
 
@@ -649,8 +715,6 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
     .map_err(|e| format!("Install failed: {}", e))?;
 
     if result.success() {
-        // Apply auth bypass patch after install
-        let _ = patch_dsh_auth();
         window.emit("dsh:install_progress", serde_json::json!({
             "stage": "done",
             "percent": 100,
@@ -671,19 +735,23 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
 fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstance, String> {
     // Fixed port contract: never silently remap (FE embeds the requested port).
     let target_port = port.unwrap_or(DSH_DEFAULT_PORT);
-    {
+    let existing = {
         let state = window.state::<DshState>();
         prune_dead_instances(&state)?;
         let instances = state.instances.lock().map_err(|e| e.to_string())?;
-        if let Some(existing) = instances.iter().find(|i| i.port == target_port).cloned() {
+        instances.iter().find(|i| i.port == target_port).cloned()
+    };
+    // A tracked server that already handed us a launch URL can be reused. One that is
+    // only sitting on the login wall has to be replaced so we can read a fresh token.
+    if let Some(existing) = existing {
+        if existing.auth_url.is_some() || !dsh_needs_login(target_port) {
             return Ok(existing);
         }
     }
     if is_port_in_use(target_port) {
         // Occupied yet untracked: `DshState` is in-memory, so after an app restart an
-        // already-running DSH looks "not started" while its port stays taken. Adopting
-        // it satisfies the request (and re-enables Stop) instead of failing.
-        if dsh_is_serving(target_port) {
+        // already-running DSH looks "not started" while its port stays taken.
+        if dsh_is_serving(target_port) && !dsh_needs_login(target_port) {
             let instance = DshInstance {
                 pid: 0, // discovered by port, not spawned here
                 port: target_port,
@@ -698,11 +766,29 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
             }
             return Ok(instance);
         }
-        return Err(format!(
-            "端口 {} 已被其他程序占用，且探测发现它不是 DeepSeek 服务{}。请关闭该程序后重试。",
-            target_port,
-            port_owner_description(target_port)
-        ));
+        if dsh_needs_login(target_port) {
+            // The process is up but this app never saw its launch token (stdout was
+            // discarded, or it was started outside the app). Restart it so the new
+            // process prints a token we can log in with. The signing secret is durable,
+            // so a browser that already completed login keeps its cookie.
+            match stop_dsh_sync(target_port, window.clone()) {
+                Ok(_) => {}
+                Err(_) if !is_port_in_use(target_port) => {}
+                Err(e) => return Err(e),
+            }
+            if is_port_in_use(target_port) {
+                return Err(format!(
+                    "端口 {target_port} 上的 DeepSeek 仍在运行，无法重新启动以获取登录地址{}",
+                    port_owner_description(target_port)
+                ));
+            }
+        } else {
+            return Err(format!(
+                "端口 {} 已被其他程序占用，且探测发现它不是 DeepSeek 服务{}。请关闭该程序后重试。",
+                target_port,
+                port_owner_description(target_port)
+            ));
+        }
     }
 
     // One registry read for the whole start: every child below must see the PATH
@@ -715,69 +801,42 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
         return Err(format!("[{}] DeepSeek Harness is not installed. Please install it first.", crate::config::ErrorCode::DshNotInstalled.as_str()));
     }
 
-    // The auth patch rewrites DSH's own package, and the code it targets changes between
-    // releases (it matched 0.1.5-rc.2 but not 0.1.5-rc.1). Newer builds also authorize the
-    // loopback iframe through `--trusted-host`, which needs no file edit at all — so start
-    // first and probe what the server actually does, instead of editing on faith.
-    let mut child = spawn_dsh_server(target_port, &path_value)?;
+    // Do not rewrite DSH's install. 0.2+ mints a launch token and exchanges it for a
+    // signed cookie; editing connection/index.js no longer matches that build.
+    let mut launch = spawn_dsh_server(target_port, &path_value)?;
     if !wait_for_port(target_port) {
-        stop_child(&mut child);
+        stop_child(&mut launch.child);
         return Err(format!(
             "DSH 启动超时（{} 秒）: 端口 {} 未监听。请尝试手动运行 `npx @deepseek-ai/dsh web --port {}` 查看错误。",
             DSH_START_TIMEOUT_SECS, target_port, target_port
         ));
     }
 
-    let mut auth_patch_warning: Option<String> = None;
-    if wait_for_index_auth(target_port) == IndexAuth::Refused {
-        // Explicitly refused, so this build does need the patch. DSH reads its files at
-        // process start, hence the restart after patching.
-        match patch_dsh_auth() {
-            Ok(result) if result.patched => {
-                auth_patch_warning = result.warning;
-                stop_child(&mut child);
-                wait_for_port_release(target_port);
-                child = spawn_dsh_server(target_port, &path_value)?;
-                if !wait_for_port(target_port) {
-                    stop_child(&mut child);
-                    return Err(format!(
-                        "DSH 启动超时（{} 秒）: 应用认证补丁后端口 {} 仍未监听。",
-                        DSH_START_TIMEOUT_SECS, target_port
-                    ));
-                }
-                match wait_for_index_auth(target_port) {
-                    IndexAuth::Serving => {}
-                    IndexAuth::Refused => {
-                        auth_patch_warning = Some(
-                            "已应用认证补丁，但服务仍拒绝免认证访问，内嵌页面可能无法加载".into(),
-                        );
-                    }
-                    // Still booting after the patch: say so, but do not claim it failed.
-                    IndexAuth::NotReady => {
-                        auth_patch_warning = Some(
-                            "已应用认证补丁，但服务尚未就绪，页面可能空白，可稍后刷新".into(),
-                        );
-                    }
-                }
-            }
-            // Targets gone (auth code changed again) or a hard error: a restart would not
-            // help, and the server already listening stays usable.
-            Ok(DshPatchResult {
-                message, warning, ..
-            }) => {
-                auth_patch_warning = warning.or_else(|| {
-                    Some(format!("服务未授权回环访问，且认证补丁不适用：{message}"))
-                });
-            }
-            Err(e) => auth_patch_warning = Some(format!("DSH 认证补丁失败: {e}")),
+    let auth_url = launch
+        .auth_url
+        .recv_timeout(Duration::from_secs(8))
+        .ok();
+    let auth_patch_warning = match (wait_for_index_auth(target_port), auth_url.is_some()) {
+        (IndexAuth::Serving, _) => None,
+        (IndexAuth::LoginRequired | IndexAuth::NotReady, true) => None,
+        (IndexAuth::LoginRequired, false) => Some(
+            "服务要求授权登录，但没有读到启动时打印的登录地址。可点「外开浏览器」手动打开 dsh 打印的地址。"
+                .into(),
+        ),
+        (IndexAuth::Forbidden, _) => Some(
+            "服务拒绝了回环地址（403）。请确认本机 DSH 接受 --trusted-host 127.0.0.1。".into(),
+        ),
+        (IndexAuth::NotReady, false) => {
+            Some("服务尚未就绪，页面可能空白，可稍后刷新。".into())
         }
-    }
+    };
 
+    let child = launch.child;
     let spawned_pid = child.id();
     let instance = DshInstance {
         pid: spawned_pid,
         port: target_port,
-        auth_url: None,
+        auth_url,
         auth_patch_warning,
     };
 
@@ -807,7 +866,17 @@ pub async fn start_dsh(port: Option<u16>, window: tauri::Window) -> Result<DshIn
 /// Blocking core of `stop_dsh`: kill the owned Child (if any), then fall back to
 /// netstat → taskkill by port. Success requires the port to be free and DSH HTTP
 /// to stop answering — otherwise refresh would re-adopt a surviving server.
+fn close_dsh_embed(app: &tauri::AppHandle) {
+    if let Some(webview) = app.get_webview(DSH_EMBED_LABEL) {
+        let _ = webview.close();
+    }
+    if let Ok(mut slot) = DSH_EMBED_URL.lock() {
+        *slot = None;
+    }
+}
+
 fn stop_dsh_sync(port: u16, window: tauri::Window) -> Result<String, String> {
+    close_dsh_embed(window.app_handle());
     let state = window.state::<DshState>();
 
     let mut owned_child = {
@@ -866,6 +935,71 @@ fn stop_dsh_sync(port: u16, window: tauri::Window) -> Result<String, String> {
     }
 
     Ok(format!("Stopped DSH on port {port}"))
+}
+
+/// Show, move, or hide the authorized Harness page. The URL is the launch-token
+/// address from `start_dsh`; resizing sends the same URL again and must not reload.
+#[tauri::command]
+pub async fn dsh_set_embed(
+    app: tauri::AppHandle,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    let show = visible && width > 1.0 && height > 1.0 && !url.is_empty();
+    if !show {
+        if let Some(webview) = app.get_webview(DSH_EMBED_LABEL) {
+            webview.hide().map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    let parsed = url
+        .parse::<url::Url>()
+        .map_err(|e| format!("登录地址无效: {e}"))?;
+    if let Some(webview) = app.get_webview(DSH_EMBED_LABEL) {
+        webview
+            .set_position(tauri::LogicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+        webview
+            .set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+        webview.show().map_err(|e| e.to_string())?;
+        let changed = DSH_EMBED_URL.lock().ok().and_then(|slot| slot.clone()) != Some(url.clone());
+        if changed {
+            webview.navigate(parsed).map_err(|e| e.to_string())?;
+            if let Ok(mut slot) = DSH_EMBED_URL.lock() {
+                *slot = Some(url);
+            }
+        }
+        return Ok(());
+    }
+
+    let window = app.get_window("main").ok_or("主窗口不存在")?;
+    let builder = tauri::webview::WebviewBuilder::new(
+        DSH_EMBED_LABEL,
+        tauri::WebviewUrl::External(parsed),
+    )
+    .focused(false)
+    .background_color(tauri::webview::Color(15, 17, 19, 255))
+    // DSH sign-in does window.open("about:blank") on the click, then
+    // location.replace(authorizeUrl). With no handler, WebView2 cancels that
+    // open, window.open returns null, and the UI only shows the copy-link dialog.
+    .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Allow);
+    window
+        .add_child(
+            builder,
+            tauri::LogicalPosition::new(x, y),
+            tauri::LogicalSize::new(width, height),
+        )
+        .map_err(|e| format!("无法嵌入登录页: {e}"))?;
+    if let Ok(mut slot) = DSH_EMBED_URL.lock() {
+        *slot = Some(url);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1149,8 +1283,6 @@ pub async fn update_dsh(
     .map_err(|e| format!("Update failed: {}", e))?;
 
     if result.success() {
-        // Apply auth bypass patch after update
-        let _ = patch_dsh_auth();
         // npm exits 0 even when it changed nothing, so report the version that is really
         // installed: a silent no-op must not read as a successful update.
         let installed = tokio::task::spawn_blocking(installed_dsh_version)
@@ -1297,4 +1429,26 @@ pub fn sync_model_to_dsh(
         "已同步 {} 到 DeepSeek（已写入 ~/.dsh settings 与 credentials）",
         model
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_dsh_web_line;
+
+    #[test]
+    fn reads_the_launch_token_url() {
+        assert_eq!(
+            parse_dsh_web_line("dsh web: http://127.0.0.1:3080/?token=abc"),
+            Some("http://127.0.0.1:3080/?token=abc".into())
+        );
+    }
+
+    #[test]
+    fn ignores_status_lines() {
+        assert_eq!(
+            parse_dsh_web_line("dsh web: opening the default browser; pass --no-open to disable"),
+            None
+        );
+        assert_eq!(parse_dsh_web_line("npm warn deprecated"), None);
+    }
 }
