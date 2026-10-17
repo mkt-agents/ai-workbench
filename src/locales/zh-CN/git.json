@@ -292,8 +292,6 @@
     "changelistEmptyUnfavorited": "未收藏，已临时纳入扫描",
     "changelistEmptyHint": "刚改过文件？确认仓库路径后点刷新",
     "changelistEmptyFiltered": "当前筛选下没有改动",
-    "changelistEmptyOutside": "当前仓库不在这个筛选里，所以这里看不到它",
-    "changelistFocusCurrent": "切到当前仓库",
     "changelistInSync": "与远程一致，没有可推送或拉取的提交",
     "changelistNothingToCommit": "当前没有可提交的改动",
     "changelistStatusParseEmpty": "检测到改动，但文件列表解析失败。请点「刷新」；若仍为空请反馈。",

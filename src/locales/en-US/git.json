@@ -292,8 +292,6 @@
     "changelistEmptyUnfavorited": "Not favorited — included for this scan only",
     "changelistEmptyHint": "Just edited? Confirm the repo path, then Refresh",
     "changelistEmptyFiltered": "No changes in this filter",
-    "changelistEmptyOutside": "The current repo is outside this filter, so it does not appear here",
-    "changelistFocusCurrent": "Show current repo",
     "changelistInSync": "In sync with remote — nothing to push or pull",
     "changelistNothingToCommit": "Nothing to commit right now",
     "changelistStatusParseEmpty": "Changes detected, but the file list failed to parse. Click Refresh; report if it stays empty.",

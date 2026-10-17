@@ -74,6 +74,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const [selectedModelId, setSelectedModelId] = useState<string>(() =>
     readStoredString(CL_MODEL_KEY)
   );
+  const [scopeLabel, setScopeLabel] = useState<string | null>(null);
+  const onScopeLabel = useCallback((label: string | null) => {
+    setScopeLabel(label);
+  }, []);
 
   const selectedModelProp = useMemo(
     () => resolveSceneModel("commit", aiModels, aiSceneModels, selectedModelId),
@@ -266,23 +270,33 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     <div className="page-scrollable git-commit-page">
       <div className="commit-toolbar commit-toolbar-compact">
         <div className="commit-meta-row">
-          <div className="commit-current-repo" title={repoPath || undefined}>
-            {currentRepoName ? (
+          <div
+            className="commit-scope"
+            title={
+              scopeLabel && repoPath
+                ? `${scopeLabel} · ${repoPath}`
+                : repoPath || undefined
+            }
+          >
+            {scopeLabel || currentRepoName ? (
               <>
-                <span className="runtime-badge active">{t("workbench.current")}</span>
-                <span className="commit-current-repo-name">{currentRepoName}</span>
+                <span className="commit-scope-mark">{t("workbench.current")}</span>
+                <span className="commit-scope-name">{scopeLabel || currentRepoName}</span>
+                {scopeLabel && currentRepoName && scopeLabel !== currentRepoName && (
+                  <>
+                    <span className="commit-scope-dot" aria-hidden />
+                    <span className="commit-scope-repo">{currentRepoName}</span>
+                  </>
+                )}
               </>
             ) : (
               <span className="runtime-muted">{t("commit.changelistPickRepo")}</span>
             )}
           </div>
-          <div className="commit-meta-identity">
-            <User size={14} />
-            <span title={`${author.name} <${author.email}>`}>
-              {t("commit.currentIdentity")}{" "}
-              {author.name || "—"}
-              {author.email ? ` <${author.email}>` : ""}
-            </span>
+          <div className="commit-meta-identity" title={`${author.name} <${author.email}>`}>
+            <User size={13} />
+            <span className="commit-identity-name">{author.name || "—"}</span>
+            {author.email && <span className="commit-identity-mail">{author.email}</span>}
           </div>
           {accounts.length > 0 && (
             <div className="commit-identity-quick">
@@ -365,6 +379,7 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
         selectedModel={selectedModelProp}
         selectedModelId={selectedModelId}
         onModelChange={setSelectedModelId}
+        onScopeLabel={onScopeLabel}
       />
 
       {showAccountsModal && (

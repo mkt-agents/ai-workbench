@@ -116,6 +116,33 @@ function isRepoDirty(
   return !!s?.isGit && ((s.dirtyCount ?? 0) > 0 || (statusEntries?.length ?? 0) > 0);
 }
 
+function projectsInFilter<T extends { id: number; path: string }>(
+  filter: string,
+  projects: RecentProject[],
+  workspaces: T[]
+): RecentProject[] {
+  if (filter === "all") return projects;
+  if (filter === "other") {
+    return projects.filter((p) => !findWorkspaceForRepo(p.path, workspaces));
+  }
+  const wsId = Number(filter.replace(/^ws-/, ""));
+  const ws = workspaces.find((w) => w.id === wsId);
+  if (!ws) return projects;
+  return projects.filter((p) => findWorkspaceForRepo(p.path, [ws])?.id === ws.id);
+}
+
+/** Keep the focused repo when it already sits in the scope; otherwise prefer a dirty one. */
+function pickRepoInScope(
+  scope: RecentProject[],
+  current: string | undefined,
+  summaries: Record<string, RepoBatchItem>,
+  statuses: Record<string, GitStatusEntry[]>
+): string | undefined {
+  if (current && scope.some((p) => pathKey(p.path) === pathKey(current))) return current;
+  const dirty = scope.find((p) => isRepoDirty(p.path, summaries, statuses));
+  return (dirty ?? scope[0])?.path;
+}
+
 function statusCode(entry: GitStatusEntry): string {
   if (entry.group === "untracked") return "?";
   if (entry.group === "staged") return (entry.indexStatus || "M").trim() || "M";
@@ -248,6 +275,8 @@ type Props = {
   selectedModelId: string;
   /** Notifies parent when the user picks a different model. */
   onModelChange: (id: string) => void;
+  /** Workspace name while a group filter is active; null means "follow the repo". */
+  onScopeLabel?: (label: string | null) => void;
 };
 
 function IndeterminateCheckbox({
@@ -366,6 +395,7 @@ function CommitChangelist({
   selectedModel,
   selectedModelId,
   onModelChange,
+  onScopeLabel,
 }: Props) {
   const { t } = useTranslation("git");
   const confirm = useConfirm();
@@ -459,16 +489,39 @@ function CommitChangelist({
     [aiModels]
   );
 
-  const scopedProjects = useMemo(() => {
-    if (filter === "all") return scanProjects;
-    if (filter === "other") {
-      return scanProjects.filter((p) => !findWorkspaceForRepo(p.path, gitWorkspaces));
+  const scopedProjects = useMemo(
+    () => projectsInFilter(filter, scanProjects, gitWorkspaces),
+    [filter, gitWorkspaces, scanProjects]
+  );
+
+  // The dropdown is a workspace scope. The header "当前" and the identity row
+  // follow it, so picking car-trade stops showing a repo that lives elsewhere.
+  useEffect(() => {
+    if (filter === "all") {
+      onScopeLabel?.(null);
+      return;
     }
-    const wsId = Number(filter.replace(/^ws-/, ""));
-    const ws = gitWorkspaces.find((w) => w.id === wsId);
-    if (!ws) return scanProjects;
-    return scanProjects.filter((p) => findWorkspaceForRepo(p.path, [ws])?.id === ws.id);
-  }, [filter, gitWorkspaces, scanProjects]);
+    const label =
+      filter === "other"
+        ? t("workspace.other")
+        : gitWorkspaces.find((w) => w.id === Number(filter.replace(/^ws-/, "")))?.name ?? null;
+    onScopeLabel?.(label);
+    if (scopedProjects.length === 0) return;
+    const picked = pickRepoInScope(scopedProjects, currentGitRepo, summaries, statuses);
+    if (picked && pathKey(picked) !== pathKey(currentGitRepo || "")) {
+      setCurrentGitRepo(picked);
+    }
+  }, [
+    filter,
+    scopedProjects,
+    gitWorkspaces,
+    currentGitRepo,
+    summaries,
+    statuses,
+    setCurrentGitRepo,
+    onScopeLabel,
+    t,
+  ]);
 
   const refresh = useCallback(async () => {
     const gen = ++refreshGen.current;
@@ -580,9 +633,7 @@ function CommitChangelist({
 
   // The filter is the user's choice (and is restored between visits): a clean
   // workspace must stay selectable. The empty state offers a one-click jump to
-  // the repos that do have changes instead of overriding it here.
-
-  // currentGitRepo only changes on user click (or first-time unset during refresh) — never steal it.
+  // the repos that do have changes instead of widening the filter here.
 
   const scopedPathKeys = useMemo(
     () => new Set(scopedProjects.map((p) => pathKey(p.path))),
@@ -631,16 +682,6 @@ function CommitChangelist({
 
   const currentSummary = summaryForPath(currentGitRepo);
   const currentIsFavorited = !!findProjectByPath(recentProjects, currentGitRepo);
-  const currentInScope = !!currentGitRepo && scopedPathKeys.has(pathKey(currentGitRepo));
-
-  const focusCurrentRepo = () => {
-    if (!currentGitRepo) {
-      setFilter("all");
-      return;
-    }
-    const ws = findWorkspaceForRepo(currentGitRepo, gitWorkspaces);
-    setFilter(ws ? `ws-${ws.id}` : "all");
-  };
 
   const canCommit = selectedCount > 0 && !!message.trim() && !busy && !generating;
   const commitBlockReason =
@@ -837,6 +878,10 @@ function CommitChangelist({
 
   const runGenerateMessage = async () => {
     if (busy || generating) return;
+    if (selectedCount === 0) {
+      onToast("error", t("commit.changelistNeedFiles"));
+      return;
+    }
     if (!selectedModel) {
       onToast("error", t("commit.generateNeedModel"));
       return;
@@ -1443,34 +1488,16 @@ function CommitChangelist({
           ) : dirtyRepos.length === 0 ? (
             <div className="cl-panel cl-empty">
               <div className="cl-empty-body">
-                {filter !== "all" && (!currentInScope || allDirtyRepos.length > 0) ? (
+                {filter !== "all" && allDirtyRepos.length > 0 ? (
                   <>
                     <div className="cl-empty-title">{t("commit.changelistEmptyFiltered")}</div>
-                    {!currentInScope && currentGitRepo && (
-                      <div className="cl-empty-note runtime-muted">
-                        {t("commit.changelistEmptyOutside")}
-                      </div>
-                    )}
-                    <div className="cl-empty-actions">
-                      {!currentInScope && currentGitRepo && (
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-small"
-                          onClick={focusCurrentRepo}
-                        >
-                          {t("commit.changelistFocusCurrent")}
-                        </button>
-                      )}
-                      {allDirtyRepos.length > 0 && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() => setFilter("all")}
-                        >
-                          {t("commit.changelistShowAllDirty", { count: allDirtyRepos.length })}
-                        </button>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => setFilter("all")}
+                    >
+                      {t("commit.changelistShowAllDirty", { count: allDirtyRepos.length })}
+                    </button>
                   </>
                 ) : (
                   <>
@@ -1581,41 +1608,21 @@ function CommitChangelist({
           placeholder={t("commit.messagePlaceholder")}
           disabled={busy || generating}
         />
-        {selectedRepoCount > 1 && (
-          <div className="cl-commit-hint runtime-muted">
-            {t("commit.changelistSameMessageHint", { count: selectedRepoCount })}
-          </div>
-        )}
-        {commitBlockReason && (
-          <div className="cl-commit-hint">{commitBlockReason}</div>
-        )}
-        {pushableCount > 0 && (
-          <div className="cl-commit-hint">
-            {t("commit.aheadHint", {
-              count: pushableRepos.reduce((n, p) => n + (summaries[p.path]?.ahead ?? 0), 0),
-            })}
-          </div>
-        )}
-        {pullableCount > 0 && (
-          <div className="cl-commit-hint cl-commit-hint-warn">
-            {t("commit.behindHint", { count: behindTotal })}
-          </div>
-        )}
-        <div className="cl-commit-actions">
+        <div className="cl-commit-foot">
           <div className="cl-commit-actions-secondary">
             <button
               type="button"
               className="btn btn-secondary cl-commit-ai"
-              disabled={busy || generating || (selectedCount === 0 && dirtyRepos.length === 0)}
+              disabled={busy || generating || selectedCount === 0}
               onClick={() => void runGenerateMessage()}
-              title={t("commit.generate")}
+              title={selectedCount === 0 ? t("commit.changelistNeedFiles") : t("commit.generate")}
             >
               {generating ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
               {generating ? t("commit.generating") : t("commit.generate")}
             </button>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary cl-commit-quiet"
               disabled={busy || generating || selectedCount === 0}
               onClick={() => void runRollbackChecked()}
               title={selectedCount > 0 ? t("commit.rollbackCheckedTitle") : t("commit.rollbackCheckedNeedFiles")}
@@ -1626,7 +1633,7 @@ function CommitChangelist({
             {onUndoLastCommit ? (
               <button
                 type="button"
-                className="btn btn-secondary"
+                className="btn btn-secondary cl-commit-quiet"
                 disabled={busy || generating || undoing || undoDisabled}
                 onClick={() => onUndoLastCommit()}
                 title={undoTitle || t("commit.undoLast")}
@@ -1636,7 +1643,28 @@ function CommitChangelist({
               </button>
             ) : null}
           </div>
+          <div className="cl-commit-status">
+            {commitBlockReason && <div className="cl-commit-hint">{commitBlockReason}</div>}
+            {selectedRepoCount > 1 && (
+              <div className="cl-commit-hint runtime-muted">
+                {t("commit.changelistSameMessageHint", { count: selectedRepoCount })}
+              </div>
+            )}
+            {pullableCount > 0 && (
+              <div className="cl-commit-hint cl-commit-hint-warn">
+                {t("commit.behindHint", { count: behindTotal })}
+              </div>
+            )}
+            {pushableCount > 0 && pullableCount === 0 && (
+              <div className="cl-commit-hint">
+                {t("commit.aheadHint", {
+                  count: pushableRepos.reduce((n, p) => n + (summaries[p.path]?.ahead ?? 0), 0),
+                })}
+              </div>
+            )}
+          </div>
           <div className="cl-commit-actions-primary">
+            <div className="cl-commit-sync">
             <button
               type="button"
               className="btn btn-secondary"
@@ -1681,6 +1709,7 @@ function CommitChangelist({
               {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
               {t("commit.changelistPush")}
             </button>
+            </div>
             <button
               type="button"
               className="btn btn-primary"

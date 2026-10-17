@@ -391,7 +391,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 10px 12px 8px;
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
@@ -414,41 +414,123 @@
 .cl-commit-msg {
   width: 100%;
   resize: none;
-  min-height: 60px;
+  min-height: 44px;
+  background: var(--input-bg);
+}
+
+.cl-commit-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cl-commit-status {
+  flex: 1 1 80px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .cl-commit-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   line-height: 1.4;
+  color: var(--text-2);
 }
 
 .cl-commit-hint-warn {
   color: var(--yellow);
 }
 
-.cl-commit-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .cl-commit-actions-secondary,
 .cl-commit-actions-primary {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-/* Keep AI generate + undo buttons together on narrow windows */
-.cl-commit-actions-secondary {
-  flex-wrap: nowrap;
+.cl-commit-ai {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-strong);
+  border: 1px solid var(--accent-border);
+  box-shadow: none;
 }
 
-.cl-commit-actions-primary {
-  margin-left: auto;
+.cl-commit-ai:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+  border-color: var(--accent);
+}
+
+.cl-commit-quiet {
+  height: 28px;
+  padding: 0 8px;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+}
+
+.cl-commit-quiet:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  border-color: transparent;
+  color: var(--red);
+}
+
+.cl-commit-sync {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.cl-commit-sync .btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cl-commit-sync .btn + .btn {
+  box-shadow: inset 1px 0 0 var(--border-subtle);
+}
+
+.cl-commit-sync .btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+.cl-commit-actions-primary > .btn-primary {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+}
+
+@media (max-width: 960px) {
+  .cl-commit-foot {
+    flex-wrap: wrap;
+  }
+
+  .cl-commit-status {
+    flex-basis: 100%;
+    order: 3;
+  }
+
+  .cl-commit-actions-primary {
+    margin-left: auto;
+  }
 }
 
 
