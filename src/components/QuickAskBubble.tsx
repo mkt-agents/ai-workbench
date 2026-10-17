@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import {
   currentMonitor,
   getCurrentWindow,
@@ -50,8 +50,8 @@ function BubbleMark({ className }: { className?: string }) {
 }
 
 /**
- * Desktop floating bubble: click toggles Quick Ask; drag moves; release snaps
- * to the nearer left/right edge. Crystal disc + aura live inside a padded HWND.
+ * Desktop floating bubble: click shows Quick Ask; right-click hides it; drag
+ * moves and release snaps to the nearer left/right edge.
  */
 export default function QuickAskBubble() {
   const { t } = useTranslation("quickask");
@@ -213,25 +213,11 @@ export default function QuickAskBubble() {
     }
     playFire();
     try {
-      await invoke("tray_toggle_quick_ask");
+      await invoke("show_quick_ask");
     } catch (err) {
       console.error(err);
     }
   };
-
-  const hideBubble = useCallback(async () => {
-    setSettings({ quickAskBubbleEnabled: false });
-    try {
-      await emit("quick-ask-bubble-enabled", false);
-      await invoke("set_quick_ask_bubble_visible", {
-        visible: false,
-        x: null,
-        y: null,
-      });
-    } catch {
-      /* ignore */
-    }
-  }, [setSettings]);
 
   return (
     <div
@@ -242,7 +228,7 @@ export default function QuickAskBubble() {
       onPointerCancel={(e) => void endPointer(e, true)}
       onContextMenu={(e) => {
         e.preventDefault();
-        void hideBubble();
+        void invoke("hide_quick_ask").catch((err) => console.error(err));
       }}
       title={t("bubbleTip")}
     >

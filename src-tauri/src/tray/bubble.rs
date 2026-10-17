@@ -24,9 +24,11 @@ use tauri::{
 pub(crate) mod vis {
     use tauri::{Runtime, WebviewWindow};
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, IsWindowVisible, SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        GetForegroundWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos, HWND_NOTOPMOST,
+        HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        SWP_SHOWWINDOW,
     };
 
     fn hwnd_of<R: Runtime>(win: &WebviewWindow<R>) -> Option<HWND> {
@@ -69,6 +71,39 @@ pub(crate) mod vis {
             }
         }
     }
+
+    /// Another app owns the foreground, so a plain `set_focus` is rejected and the
+    /// window stays buried. Lift it above that app, then give it the keyboard.
+    /// `SWP_NOACTIVATE` must not be used here: that flag is what left the first
+    /// bubble click after an app switch looking like a no-op.
+    pub fn bring_to_front<R: Runtime>(win: &WebviewWindow<R>) -> bool {
+        let Some(hwnd) = hwnd_of(win) else {
+            eprintln!("[tray] bring_to_front: window handle unavailable");
+            return false;
+        };
+        let stay_top = win.is_always_on_top().unwrap_or(false);
+        let show = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW;
+        unsafe {
+            if let Err(e) = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, show) {
+                eprintln!("[tray] bring_to_front topmost failed: {e}");
+                return false;
+            }
+            if !SetForegroundWindow(hwnd).as_bool() {
+                // An Alt tap is the documented way past the foreground lock once
+                // the originating click has already been dispatched.
+                keybd_event(VK_MENU.0 as u8, 0, Default::default(), 0);
+                keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+                let _ = SetForegroundWindow(hwnd);
+            }
+            if !stay_top {
+                if let Err(e) = SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, show) {
+                    eprintln!("[tray] bring_to_front drop topmost failed: {e}");
+                }
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+        true
+    }
 }
 
 #[cfg(not(windows))]
@@ -84,6 +119,10 @@ pub(crate) mod vis {
     }
 
     pub fn force_visible<R: Runtime>(_win: &WebviewWindow<R>, _visible: bool) -> bool {
+        false
+    }
+
+    pub fn bring_to_front<R: Runtime>(_win: &WebviewWindow<R>) -> bool {
         false
     }
 }
@@ -372,15 +411,11 @@ pub fn toggle_quick_ask<R: Runtime>(app: &AppHandle<R>) {
     // Judge from the real window, not from `is_visible()` — tao's cached flag desyncs
     // when `ShowWindow` is ignored, which made this toggle a permanent no-op.
     let visible = vis::really_visible(&win).unwrap_or_else(|| win.is_visible().unwrap_or(false));
-    // Unpinned, the window can sit behind others and has no taskbar button, so a
-    // covered window is raised instead of hidden. Clicking the bubble moves the
-    // foreground onto the bubble itself, which still counts as "in front".
-    let in_front = win.is_always_on_top().unwrap_or(false)
-        || vis::is_foreground(&win).unwrap_or(true)
-        || app
-            .get_webview_window(QUICK_ASK_BUBBLE_LABEL)
-            .and_then(|b| vis::is_foreground(&b))
-            .unwrap_or(false);
+    // Covered by another app: raise it. Hide only when this window itself is the
+    // one the user is looking at. The bubble click steals the foreground before
+    // this runs, so the bubble being in front must not count — that turned the
+    // first click after an app switch into a hide, and the second click into a show.
+    let in_front = vis::is_foreground(&win).unwrap_or(false);
     if visible && in_front {
         if let Err(e) = win.hide() {
             eprintln!("[tray] hide quick-ask failed: {e}");
@@ -393,12 +428,13 @@ pub fn toggle_quick_ask<R: Runtime>(app: &AppHandle<R>) {
         if let Err(e) = win.unminimize() {
             eprintln!("[tray] unminimize quick-ask failed: {e}");
         }
-        if let Err(e) = win.set_focus() {
-            eprintln!("[tray] focus quick-ask failed: {e}");
-        }
-        // tao's own calls can be dropped silently, so force the real visibility last.
-        if !vis::force_visible(&win, true) {
-            eprintln!("[tray] quick-ask still hidden after force_visible");
+        if !vis::bring_to_front(&win) {
+            if let Err(e) = win.set_focus() {
+                eprintln!("[tray] focus quick-ask failed: {e}");
+            }
+            if !vis::force_visible(&win, true) {
+                eprintln!("[tray] quick-ask still hidden after force_visible");
+            }
         }
         let _ = app.emit("quick-ask-shown", ());
     }
@@ -416,11 +452,13 @@ pub fn show_quick_ask<R: Runtime>(app: &AppHandle<R>) {
     if let Err(e) = win.unminimize() {
         eprintln!("[tray] unminimize quick-ask failed: {e}");
     }
-    if let Err(e) = win.set_focus() {
-        eprintln!("[tray] focus quick-ask failed: {e}");
-    }
-    if !vis::force_visible(&win, true) {
-        eprintln!("[tray] quick-ask still hidden after force_visible");
+    if !vis::bring_to_front(&win) {
+        if let Err(e) = win.set_focus() {
+            eprintln!("[tray] focus quick-ask failed: {e}");
+        }
+        if !vis::force_visible(&win, true) {
+            eprintln!("[tray] quick-ask still hidden after force_visible");
+        }
     }
     let _ = app.emit("quick-ask-shown", ());
 }

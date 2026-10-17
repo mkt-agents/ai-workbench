@@ -80,7 +80,7 @@
   "followUp": "Ask about selection",
   "copySelection": "Copy selection",
   "quotePrefix": "About \"{{text}}\": ",
-  "bubbleTip": "Quick Ask · click to open · drag to snap · right-click to hide",
+  "bubbleTip": "Quick Ask · click to open · drag to snap · right-click to close",
   "modeAsk": "AI Q&A",
   "modeTools": "Tools",
   "task": {

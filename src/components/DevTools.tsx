@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Braces,
@@ -364,15 +364,7 @@ function DevTools({ active = true }: { active?: boolean }) {
         <div className="dt-toolbar-inner">
         <div className="dt-strip-wrap">
           <nav ref={stripRef} className="dt-toolstrip" role="navigation" aria-label={t("title")}>
-            {filteredTools.map((tool, i) => (
-              <Fragment key={tool.id}>
-                {/* 分组分隔线跟随当前顺序：相邻工具分组不同才画线（拖动跨组后依然成立） */}
-                {i > 0 && tool.groupKey !== filteredTools[i - 1].groupKey && (
-                  <span className="dt-strip-divider" aria-hidden="true" />
-                )}
-                {renderToolButton(tool)}
-              </Fragment>
-            ))}
+            {filteredTools.map((tool) => renderToolButton(tool))}
 
             {noResults && (
               <div className="dt-strip-empty">

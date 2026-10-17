@@ -300,6 +300,12 @@ pub fn tray_toggle_quick_ask(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn show_quick_ask(app: AppHandle) -> Result<(), String> {
+    bubble::show_quick_ask(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn hide_quick_ask(app: AppHandle) -> Result<(), String> {
     bubble::hide_quick_ask(&app);
     Ok(())

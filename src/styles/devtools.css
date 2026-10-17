@@ -26,15 +26,15 @@
   --dt-track: var(--bg-1);
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
   min-width: 0;
   width: 100%;
   max-width: var(--page-max-width);
   margin: 0 auto;
-  padding: 3px;
+  padding: 4px;
   background: var(--dt-track);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--surface-highlight);
 }
 
@@ -55,19 +55,20 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  width: 168px;
-  height: 28px;
-  margin-left: 2px;
+  width: 176px;
+  height: 30px;
+  margin-left: 0;
   padding: 0 8px 0 10px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-md);
-  box-shadow: inset 1px 0 0 var(--border-subtle);
-  transition: box-shadow var(--transition-colors-fast);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  box-shadow: none;
+  transition: border-color var(--transition-colors-fast);
 }
 
 .dt-toolbar-search:focus-within {
-  box-shadow: inset 1px 0 0 var(--accent-border);
+  border-color: var(--accent-border);
+  box-shadow: none;
 }
 
 .dt-toolbar-search > svg {
@@ -219,15 +220,6 @@
   flex-shrink: 0;
 }
 
-.dt-strip-divider {
-  flex-shrink: 0;
-  align-self: center;
-  width: 1px;
-  height: 14px;
-  margin: 0 3px;
-  background: var(--border-subtle);
-}
-
 /* 当前工具说明：放在轨道下方一行，不和芯片、搜索抢同一条 */
 .dt-toolbar-desc {
   width: 100%;
@@ -266,12 +258,12 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-shrink: 0;
-  height: 28px;
-  padding: 0 8px;
+  height: 30px;
+  padding: 0 8px 0 9px;
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-2);
   font-size: 12px;
@@ -324,11 +316,11 @@
 }
 
 .dt-tool-item.active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border-color: transparent;
-  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-2));
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--accent-border);
+  box-shadow: none;
 }
 
 .dt-tool-icon {
@@ -351,27 +343,29 @@
   min-width: 0;
 }
 
-/* 快捷键数字常驻占位，避免切换时 chip 宽度跳动。不要再套小方框。 */
+/* 快捷键数字常驻占位，避免切换时芯片宽度跳动。做成浅胶囊，和工具名分开。 */
 .dt-tool-kbd {
   flex-shrink: 0;
-  min-width: 8px;
+  min-width: 14px;
+  height: 14px;
+  margin-left: 1px;
+  padding: 0 3px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   color: var(--text-3);
-  background: none;
-  border: none;
-  opacity: 0.8;
 }
 
 .dt-tool-item.active .dt-tool-kbd {
-  color: var(--accent);
-  opacity: 0.72;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
 }
 
 /* Empty state inside the strip (search with no matches) */

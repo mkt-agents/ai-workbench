@@ -568,6 +568,7 @@ pub fn run() {
             tool_commands::read_text_file,
             tray::open_quick_ask_with_text,
             tray::tray_toggle_quick_ask,
+            tray::show_quick_ask,
             tray::hide_quick_ask,
             tray::set_quick_ask_pinned,
             tray::open_main_deepseek,
