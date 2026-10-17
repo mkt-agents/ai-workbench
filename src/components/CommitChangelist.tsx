@@ -631,6 +631,28 @@ function CommitChangelist({
 
   const currentSummary = summaryForPath(currentGitRepo);
   const currentIsFavorited = !!findProjectByPath(recentProjects, currentGitRepo);
+  const currentInScope = !!currentGitRepo && scopedPathKeys.has(pathKey(currentGitRepo));
+
+  const focusCurrentRepo = () => {
+    if (!currentGitRepo) {
+      setFilter("all");
+      return;
+    }
+    const ws = findWorkspaceForRepo(currentGitRepo, gitWorkspaces);
+    setFilter(ws ? `ws-${ws.id}` : "all");
+  };
+
+  const canCommit = selectedCount > 0 && !!message.trim() && !busy && !generating;
+  const commitBlockReason =
+    selectedCount === 0 && dirtyRepos.length === 0
+      ? message.trim()
+        ? t("commit.changelistNothingToCommit")
+        : null
+      : !message.trim() && selectedCount > 0
+        ? t("commit.changelistNeedMessage")
+        : selectedCount === 0 && dirtyRepos.length > 0
+          ? t("commit.changelistNeedFiles")
+          : null;
 
   /**
    * Show what a batch push will do before doing it: publishing a branch that
@@ -1122,6 +1144,26 @@ function CommitChangelist({
     void refreshAfterWrite(targetPaths);
   };
 
+  const actionsRef = useRef({ runCommit, canCommit, busy, generating });
+  actionsRef.current = { runCommit, canCommit, busy, generating };
+
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== "Enter" || e.altKey) return;
+      if (document.querySelector(".modal-overlay")) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, select, [contenteditable='true']")) return;
+      if (target?.tagName === "TEXTAREA" && !target.classList.contains("cl-commit-msg")) return;
+      const actions = actionsRef.current;
+      if (actions.busy || actions.generating || !actions.canCommit) return;
+      e.preventDefault();
+      void actions.runCommit(e.shiftKey);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
+
   const runPush = async () => {
     if (pushableRepos.length === 0) {
       onToast("error", t("commit.changelistPushNeedAhead"));
@@ -1295,7 +1337,10 @@ function CommitChangelist({
                 <li
                   key={fileKey(p.path, e.path, e.group)}
                   className={`cl-file ${isDiff ? "is-selected" : ""}`}
-                  onClick={() => void loadDiff(p.path, e)}
+                  onClick={() => {
+                    if (!checked) toggleFile(p.path, e);
+                    void loadDiff(p.path, e);
+                  }}
                 >
                   <IndeterminateCheckbox
                     checked={checked}
@@ -1304,6 +1349,9 @@ function CommitChangelist({
                     onChange={() => toggleFile(p.path, e)}
                   />
                   <span className={`git-file-badge ${statusClass(code)}`}>{statusLabel(code)}</span>
+                  {e.group === "staged" && (
+                    <span className="cl-file-staged">{t("commit.statusStaged")}</span>
+                  )}
                   <span className="cl-file-path" title={e.path}>
                     <span className="cl-file-name">{e.path.slice(e.path.lastIndexOf("/") + 1)}</span>
                     {e.path.includes("/") && (
@@ -1395,16 +1443,34 @@ function CommitChangelist({
           ) : dirtyRepos.length === 0 ? (
             <div className="cl-panel cl-empty">
               <div className="cl-empty-body">
-                {filter !== "all" && allDirtyRepos.length > 0 ? (
+                {filter !== "all" && (!currentInScope || allDirtyRepos.length > 0) ? (
                   <>
                     <div className="cl-empty-title">{t("commit.changelistEmptyFiltered")}</div>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      onClick={() => setFilter("all")}
-                    >
-                      {t("commit.changelistShowAllDirty", { count: allDirtyRepos.length })}
-                    </button>
+                    {!currentInScope && currentGitRepo && (
+                      <div className="cl-empty-note runtime-muted">
+                        {t("commit.changelistEmptyOutside")}
+                      </div>
+                    )}
+                    <div className="cl-empty-actions">
+                      {!currentInScope && currentGitRepo && (
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-small"
+                          onClick={focusCurrentRepo}
+                        >
+                          {t("commit.changelistFocusCurrent")}
+                        </button>
+                      )}
+                      {allDirtyRepos.length > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          onClick={() => setFilter("all")}
+                        >
+                          {t("commit.changelistShowAllDirty", { count: allDirtyRepos.length })}
+                        </button>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <>
@@ -1434,6 +1500,24 @@ function CommitChangelist({
                         {t("commit.changelistEmptyUnfavorited")}
                       </div>
                     )}
+                    {currentSummary?.isGit && currentSummary.behind > 0 && (
+                      <div className="cl-empty-note cl-commit-hint-warn">
+                        {t("commit.behindHint", { count: currentSummary.behind })}
+                      </div>
+                    )}
+                    {currentSummary?.isGit && currentSummary.behind === 0 && currentSummary.ahead > 0 && (
+                      <div className="cl-empty-note">
+                        {t("commit.aheadHint", { count: currentSummary.ahead })}
+                      </div>
+                    )}
+                    {currentSummary?.isGit &&
+                      currentSummary.hasUpstream &&
+                      currentSummary.ahead === 0 &&
+                      currentSummary.behind === 0 && (
+                        <div className="cl-empty-note runtime-muted">
+                          {t("commit.changelistInSync")}
+                        </div>
+                      )}
                     <button
                       type="button"
                       className="btn btn-secondary btn-small cl-empty-action"
@@ -1502,6 +1586,16 @@ function CommitChangelist({
             {t("commit.changelistSameMessageHint", { count: selectedRepoCount })}
           </div>
         )}
+        {commitBlockReason && (
+          <div className="cl-commit-hint">{commitBlockReason}</div>
+        )}
+        {pushableCount > 0 && (
+          <div className="cl-commit-hint">
+            {t("commit.aheadHint", {
+              count: pushableRepos.reduce((n, p) => n + (summaries[p.path]?.ahead ?? 0), 0),
+            })}
+          </div>
+        )}
         {pullableCount > 0 && (
           <div className="cl-commit-hint cl-commit-hint-warn">
             {t("commit.behindHint", { count: behindTotal })}
@@ -1560,14 +1654,8 @@ function CommitChangelist({
             <button
               type="button"
               className="btn btn-secondary"
-              disabled={busy || generating || selectedCount === 0 || !message.trim()}
-              title={
-                !message.trim()
-                  ? t("commit.changelistNeedMessage")
-                  : selectedCount === 0
-                    ? t("commit.changelistNeedFiles")
-                    : undefined
-              }
+              disabled={!canCommit}
+              title={commitBlockReason ?? t("commit.changelistShortcutCommit")}
               onClick={() => void runCommit(false)}
             >
               {busy ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
@@ -1596,14 +1684,8 @@ function CommitChangelist({
             <button
               type="button"
               className="btn btn-primary"
-              disabled={busy || generating || selectedCount === 0 || !message.trim()}
-              title={
-                !message.trim()
-                  ? t("commit.changelistNeedMessage")
-                  : selectedCount === 0
-                    ? t("commit.changelistNeedFiles")
-                    : undefined
-              }
+              disabled={!canCommit}
+              title={commitBlockReason ?? t("commit.changelistShortcutCommitPush")}
               onClick={() => void runCommit(true)}
             >
               {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}

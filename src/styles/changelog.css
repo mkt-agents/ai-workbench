@@ -252,6 +252,23 @@
   gap: 6px;
 }
 
+.cl-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.cl-file-staged {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-strong);
+  font-size: 11px;
+  line-height: 18px;
+}
+
 .cl-repo {
   border-radius: var(--radius-sm);
 }
