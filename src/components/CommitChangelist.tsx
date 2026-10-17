@@ -559,6 +559,7 @@ function CommitChangelist({
   const refreshGen = useRef(0);
   const diffGen = useRef(0);
   const recentRef = useRef<HTMLDivElement>(null);
+  const recentGen = useRef(0);
   const stashRef = useRef<HTMLDivElement>(null);
   /** Until the first read lands, an empty changelist proves nothing. */
   const loadedOnce = useRef(false);
@@ -585,9 +586,11 @@ function CommitChangelist({
 
   useEffect(() => {
     if (!recentOpen && !stashOpen) return;
-    const onOutside = (e: MouseEvent) => {
-      const node = e.target as Node;
+    const onOutside = (e: Event) => {
+      const node = e.target;
+      if (!(node instanceof Node)) return;
       if (recentOpen && recentRef.current && !recentRef.current.contains(node)) {
+        recentGen.current += 1;
         setRecentOpen(false);
       }
       if (stashOpen && stashRef.current && !stashRef.current.contains(node)) {
@@ -598,13 +601,14 @@ function CommitChangelist({
       if (e.key !== "Escape") return;
       if (document.querySelector(".modal-overlay")) return;
       e.stopPropagation();
+      recentGen.current += 1;
       setRecentOpen(false);
       setStashOpen(false);
     };
-    document.addEventListener("mousedown", onOutside);
+    window.addEventListener("pointerdown", onOutside, true);
     window.addEventListener("keydown", onKey, true);
     return () => {
-      document.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("pointerdown", onOutside, true);
       window.removeEventListener("keydown", onKey, true);
     };
   }, [recentOpen, stashOpen]);
@@ -1011,9 +1015,11 @@ function CommitChangelist({
 
   const openRecent = async () => {
     if (recentOpen) {
+      recentGen.current += 1;
       setRecentOpen(false);
       return;
     }
+    const gen = ++recentGen.current;
     setStashOpen(false);
     const local = readStoredArray<string>(CL_RECENT_KEY).slice(0, RECENT_LOCAL);
     let fromLog: string[] = [];
@@ -1025,6 +1031,7 @@ function CommitChangelist({
         fromLog = [];
       }
     }
+    if (gen !== recentGen.current) return;
     const merged: string[] = [];
     for (const item of [...local, ...fromLog]) {
       if (!merged.includes(item)) merged.push(item);
