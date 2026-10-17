@@ -1001,7 +1001,7 @@ fn friendly_push_error(raw: &str) -> String {
         || lower.contains("network unreachable")
         || lower.contains("ssl_connect")
     {
-        return "推送失败：无法连接远程仓库（网络不通、超时或被墙）。请检查网络/代理；若仓库配置了其它远程（如 gitee），可改推那个远程，本地提交不受影响。".into();
+        return "推送失败：无法连接远程仓库（网络不通、超时或被墙）。请检查网络/代理；若仓库配置了其它远程，可改推那个远程，本地提交不受影响。".into();
     }
     if lower.contains("could not read from remote")
         || lower.contains("permission denied")
