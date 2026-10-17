@@ -10,6 +10,7 @@
     "folderNode": "合并该文件夹下所有仓库",
     "noGitInFolder": "该文件夹下没有 Git 仓库",
     "notGit": "不是 Git 仓库",
+    "loadingTree": "正在读取仓库状态",
     "treeBadge": "该仓库改动文件数",
     "expand": "展开",
     "collapse": "折叠"

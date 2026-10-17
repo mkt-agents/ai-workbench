@@ -561,6 +561,12 @@ function CommitChangelist({
     return scanProjects.filter((p) => isRepoDirty(p.path, summaries, statuses));
   }, [scanProjects, statuses, summaries]);
 
+  const labelPath = useCallback(
+    (path: string) =>
+      recentProjects.find((p) => pathKey(p.path) === pathKey(path))?.name || projectNameFromPath(path),
+    [recentProjects]
+  );
+
   const summaryForPath = useCallback(
     (path?: string) => {
       if (!path) return undefined;
@@ -779,7 +785,8 @@ function CommitChangelist({
         },
         {
           onProgress: (done, total) => setProgress({ done, total }),
-          describeError: (_path, e) => formatInvokeError(e),
+          describeError: (pair, e) =>
+            `${pair.repoName}/${pair.entry.path}：${formatInvokeError(e)}`,
         }
       );
       okCount = result.ok;
@@ -1093,7 +1100,7 @@ function CommitChangelist({
         },
         {
           onProgress: (done, total) => setProgress({ done, total }),
-          describeError: (_path, e) => formatInvokeError(e),
+          describeError: (repoPath, e) => `${labelPath(repoPath)}：${formatInvokeError(e)}`,
         }
       );
       ok = result.ok;
@@ -1137,7 +1144,7 @@ function CommitChangelist({
         },
         {
           onProgress: (done, total) => setProgress({ done, total }),
-          describeError: (_path, e) => formatInvokeError(e),
+          describeError: (repoPath, e) => `${labelPath(repoPath)}：${formatInvokeError(e)}`,
         }
       );
       ok = result.ok;
@@ -1179,7 +1186,7 @@ function CommitChangelist({
         },
         {
           onProgress: (done, total) => setProgress({ done, total }),
-          describeError: (_path, e) => formatInvokeError(e),
+          describeError: (repoPath, e) => `${labelPath(repoPath)}：${formatInvokeError(e)}`,
         }
       );
       ok = result.ok;
@@ -1553,7 +1560,14 @@ function CommitChangelist({
             <button
               type="button"
               className="btn btn-secondary"
-              disabled={busy || generating || selectedCount === 0}
+              disabled={busy || generating || selectedCount === 0 || !message.trim()}
+              title={
+                !message.trim()
+                  ? t("commit.changelistNeedMessage")
+                  : selectedCount === 0
+                    ? t("commit.changelistNeedFiles")
+                    : undefined
+              }
               onClick={() => void runCommit(false)}
             >
               {busy ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
@@ -1582,7 +1596,14 @@ function CommitChangelist({
             <button
               type="button"
               className="btn btn-primary"
-              disabled={busy || generating || selectedCount === 0}
+              disabled={busy || generating || selectedCount === 0 || !message.trim()}
+              title={
+                !message.trim()
+                  ? t("commit.changelistNeedMessage")
+                  : selectedCount === 0
+                    ? t("commit.changelistNeedFiles")
+                    : undefined
+              }
               onClick={() => void runCommit(true)}
             >
               {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}

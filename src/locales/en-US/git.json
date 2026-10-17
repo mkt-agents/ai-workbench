@@ -10,6 +10,7 @@
     "folderNode": "Merge all repos in this folder",
     "noGitInFolder": "No Git repos in this folder",
     "notGit": "Not a Git repo",
+    "loadingTree": "Reading repository status",
     "treeBadge": "Changed files in this repo",
     "expand": "Expand",
     "collapse": "Collapse"

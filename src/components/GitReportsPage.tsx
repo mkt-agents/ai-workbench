@@ -80,6 +80,7 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
           {groups.map((g) => {
             const isCollapsed = collapsed.has(g.key);
             const name = g.workspace ? g.workspace.name : t("workspace.other");
+            const pending = g.projects.some((p) => !summaries[p.path]);
             const gitPaths = g.projects.filter((p) => summaries[p.path]?.isGit).map((p) => p.path);
             const folderTarget: ReportTarget = { kind: "folder", name, paths: gitPaths };
             const folderSelected = sameTarget(target, folderTarget);
@@ -99,7 +100,13 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
                     type="button"
                     className="tr-tree-folder-label"
                     disabled={gitPaths.length === 0}
-                    title={gitPaths.length === 0 ? t("reports.noGitInFolder") : t("reports.folderNode")}
+                    title={
+                      gitPaths.length === 0
+                        ? pending
+                          ? t("reports.loadingTree")
+                          : t("reports.noGitInFolder")
+                        : t("reports.folderNode")
+                    }
                     onClick={() => onTargetChange(folderTarget)}
                   >
                     <Folder size={12} />
@@ -110,15 +117,22 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
                 {!isCollapsed && (
                   <div className="tr-tree-children">
                     {g.projects.map((p) => {
-                      const isGit = summaries[p.path]?.isGit;
+                      const summary = summaries[p.path];
+                      const isGit = summary?.isGit;
                       const selected = target?.kind === "repo" && target.path === p.path;
                       return (
                         <button
                           key={p.path}
                           type="button"
                           className={`tr-tree-repo${selected ? " is-selected" : ""}`}
-                          disabled={isGit !== true}
-                          title={isGit === false ? t("reports.notGit") : p.path}
+                          disabled={isGit === false}
+                          title={
+                            !summary
+                              ? t("reports.loadingTree")
+                              : isGit === false
+                                ? t("reports.notGit")
+                                : p.path
+                          }
                           onClick={() => onTargetChange({ kind: "repo", path: p.path })}
                         >
                           <GitBranch size={11} />
