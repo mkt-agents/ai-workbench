@@ -91,7 +91,7 @@ export default function GitReportsPage({ active = true, target, onTargetChange }
                     type="button"
                     className="tr-tree-caret"
                     onClick={() => toggleCollapsed(g.key)}
-                    aria-label={isCollapsed ? "expand" : "collapse"}
+                    aria-label={isCollapsed ? t("reports.expand") : t("reports.collapse")}
                   >
                     <Chevron size={12} />
                   </button>

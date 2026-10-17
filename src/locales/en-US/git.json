@@ -10,7 +10,9 @@
     "folderNode": "Merge all repos in this folder",
     "noGitInFolder": "No Git repos in this folder",
     "notGit": "Not a Git repo",
-    "treeBadge": "Changed files in this repo"
+    "treeBadge": "Changed files in this repo",
+    "expand": "Expand",
+    "collapse": "Collapse"
   },
   "repos": {
     "subtitle": "Favorite repos, bind identities, and run everyday Git actions in one place",
@@ -67,14 +69,16 @@
   "workspace": {
     "other": "Other repos",
     "rescan": "Rescan",
-    "selectGroup": "Select group",
+    "selectGroup": "Select all {{count}} repos in this group",
+    "selectedInGroup": "{{count}} selected",
+    "selectedInGroupTitle": "Repos selected in this group. Expand to change them one by one",
     "remove": "Remove workspace",
     "removeTitle": "Remove workspace",
     "removeConfirm": "Remove workspace \"{{name}}\"? (grouping only; repos stay in the list)",
     "removed": "Workspace removed"
   },
   "batch": {
-    "selected": "{{count}} selected",
+    "selected": "{{count}} repos selected",
     "hint": "Select repositories to bind, branch, pull, or remove them from the list",
     "clear": "Clear",
     "bind": "Bind identity",

@@ -371,11 +371,13 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     });
   };
 
-  const toggleGroupSelection = (projects: RecentProject[]) => {
+  const toggleGroupSelection = (key: string, projects: RecentProject[]) => {
     if (projects.length === 0) return;
+    let selecting = false;
     setSelected((prev) => {
       const next = new Set(prev);
       const allSelected = projects.every((p) => next.has(p.path));
+      selecting = !allSelected;
       if (allSelected) {
         for (const p of projects) next.delete(p.path);
       } else {
@@ -383,6 +385,15 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
       }
       return next;
     });
+    // A collapsed group only shows one checkbox. Open it so the count matches the cards.
+    if (selecting) {
+      setCollapsed((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
   };
 
   const clearSelected = () => setSelected(new Set());
@@ -1135,7 +1146,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
 
       {recentProjects.length > 0 && (
         <div className={`repos-batch-bar${selected.size > 0 ? "" : " is-empty"}`}>
-          <span className="repos-batch-count">{t("batch.selected", { count: selected.size })}</span>
+          <span className="repos-batch-count">{t("batch.selected", { count: batchPaths.length })}</span>
           {selected.size === 0 ? (
             <span className="repos-batch-hint">{t("batch.hint")}</span>
           ) : (
@@ -1280,15 +1291,15 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                   {g.projects.length > 0 && (
                     <label
                       className="repos-group-check"
-                      title={t("workspace.selectGroup")}
+                      title={t("workspace.selectGroup", { count: g.projects.length })}
                       onClick={(e) => e.stopPropagation()}
                     >
                       <GroupSelectCheckbox
                         checked={groupAllSelected}
                         indeterminate={groupPartialSelected}
                         disabled={batchBusy}
-                        onChange={() => toggleGroupSelection(g.projects)}
-                        ariaLabel={t("workspace.selectGroup")}
+                        onChange={() => toggleGroupSelection(g.key, g.projects)}
+                        ariaLabel={t("workspace.selectGroup", { count: g.projects.length })}
                       />
                     </label>
                   )}
@@ -1302,8 +1313,13 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                     <span className="repos-group-title">{title}</span>
                     <span className="runtime-muted">({g.projects.length})</span>
                   </button>
-                  {(sum.dirty > 0 || sum.behind > 0 || sum.ahead > 0 || sum.identity > 0) && (
+                  {(sum.dirty > 0 || sum.behind > 0 || sum.ahead > 0 || sum.identity > 0 || (isCollapsed && selectedInGroup > 0)) && (
                     <span className="repos-group-summary">
+                      {isCollapsed && selectedInGroup > 0 && (
+                        <span className="repos-status-pill" title={t("workspace.selectedInGroupTitle")}>
+                          {t("workspace.selectedInGroup", { count: selectedInGroup })}
+                        </span>
+                      )}
                       {sum.dirty > 0 && (
                         <span className="repos-status-pill is-warn" title={t("repos.sumDirtyTitle")}>
                           {t("repos.sumDirty", { count: sum.dirty })}

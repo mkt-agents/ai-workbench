@@ -10,7 +10,9 @@
     "folderNode": "合并该文件夹下所有仓库",
     "noGitInFolder": "该文件夹下没有 Git 仓库",
     "notGit": "不是 Git 仓库",
-    "treeBadge": "该仓库改动文件数"
+    "treeBadge": "该仓库改动文件数",
+    "expand": "展开",
+    "collapse": "折叠"
   },
   "repos": {
     "subtitle": "收藏仓库、绑定身份，一步完成日常 Git 操作",
@@ -67,14 +69,16 @@
   "workspace": {
     "other": "其它仓库",
     "rescan": "再扫",
-    "selectGroup": "全选本组",
+    "selectGroup": "全选本组 {{count}} 个仓库",
+    "selectedInGroup": "已选 {{count}}",
+    "selectedInGroupTitle": "本组已选的仓库，展开后可以逐个取消",
     "remove": "移除工作区",
     "removeTitle": "移除工作区",
     "removeConfirm": "移除工作区「{{name}}」？（仅取消分组，仓库仍留在列表）",
     "removed": "已移除工作区"
   },
   "batch": {
-    "selected": "已选 {{count}}",
+    "selected": "已选 {{count}} 个仓库",
     "hint": "勾选仓库后，可在这里批量绑定、建分支、拉取或从列表移除",
     "clear": "清除选择",
     "bind": "批量绑定",
