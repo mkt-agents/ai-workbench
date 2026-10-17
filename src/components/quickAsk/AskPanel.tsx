@@ -581,47 +581,49 @@ export default function AskPanel(props: Props) {
         />
         <div className="qa-input-foot">
           <div className="qa-compose-tools">
-            <button
-              type="button"
-              className="qa-tool-btn"
-              onClick={onAttachFile}
-              title={t("attach.file")}
-              disabled={busy}
-            >
-              <FilePlus2 size={14} />
-            </button>
-            <button
-              type="button"
-              className="qa-tool-btn"
-              onClick={onPasteClipboard}
-              title={t("pasteClipboard")}
-            >
-              <ClipboardPaste size={14} />
-            </button>
-            {hasSnippets && (
+            <div className="qa-tool-cluster">
               <button
                 type="button"
-                className={`qa-tool-btn${snippetOpen ? " on" : ""}`}
-                onClick={onToggleSnippets}
-                title={t("snippets")}
+                className="qa-tool-btn"
+                onClick={onAttachFile}
+                title={t("attach.file")}
+                disabled={busy}
               >
-                <FileText size={14} />
+                <FilePlus2 size={14} />
               </button>
-            )}
-            <span className="qa-compose-sep" aria-hidden />
-            {QUICK_TASKS.map((k) => (
               <button
-                key={k}
                 type="button"
-                className={`qa-task-btn${task === k ? " on" : ""}`}
-                onClick={() => onTask(task === k ? "none" : k)}
-                title={t(`task.${k}`)}
-                aria-pressed={task === k}
+                className="qa-tool-btn"
+                onClick={onPasteClipboard}
+                title={t("pasteClipboard")}
               >
-                {t(`taskShort.${k}`)}
+                <ClipboardPaste size={14} />
               </button>
-            ))}
-            <span className="qa-compose-sep" aria-hidden />
+              {hasSnippets && (
+                <button
+                  type="button"
+                  className={`qa-tool-btn${snippetOpen ? " on" : ""}`}
+                  onClick={onToggleSnippets}
+                  title={t("snippets")}
+                >
+                  <FileText size={14} />
+                </button>
+              )}
+            </div>
+            <div className="qa-task-track">
+              {QUICK_TASKS.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`qa-task-btn${task === k ? " on" : ""}`}
+                  onClick={() => onTask(task === k ? "none" : k)}
+                  title={t(`task.${k}`)}
+                  aria-pressed={task === k}
+                >
+                  {t(`taskShort.${k}`)}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               className="qa-task-btn qa-daily-btn"

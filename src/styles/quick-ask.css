@@ -820,7 +820,7 @@
   background: transparent;
   border: none;
   outline: none;
-  padding: 10px 12px 4px;
+  padding: 8px 12px 8px;
 }
 .quick-ask-input::placeholder {
   color: var(--text-3);
@@ -829,21 +829,44 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 2px;
-  padding: 2px 8px 8px;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--border-subtle);
   overflow: visible;
 }
 .qa-compose-tools {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
   width: 100%;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
+.qa-tool-cluster,
+.qa-task-track {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px;
+  background: var(--overlay-1);
+}
+.qa-tool-cluster {
+  border-radius: var(--radius-md);
+}
+.qa-tool-cluster .qa-tool-btn {
+  width: 24px;
+  height: 24px;
+}
+.qa-task-track {
+  gap: 1px;
+  border-radius: var(--radius-full);
+}
+.qa-task-track .qa-task-btn {
+  height: 22px;
+}
 .qa-input-card > .qa-compose-meta {
-  padding: 6px 8px 0;
+  padding: 8px 10px 0;
 }
 .qa-compose-meta {
   display: flex;
@@ -904,7 +927,7 @@
   justify-content: flex-start;
   gap: 6px;
   width: 100%;
-  min-height: 32px;
+  min-height: 30px;
   flex-shrink: 0;
 }
 .qa-compose-end .qa-send-btn {
@@ -1082,11 +1105,16 @@
   background: var(--bg-2);
 }
 .qa-daily-btn {
-  color: var(--accent-strong);
+  height: 26px;
+  padding: 0 10px;
+  color: var(--text-1);
+  background: var(--overlay-1);
+  border-color: transparent;
 }
 .qa-daily-btn:hover:not(:disabled) {
-  color: var(--text-0);
+  color: var(--accent-strong);
   background: var(--accent-dim);
+  border-color: var(--accent-border);
 }
 .qa-daily-btn:disabled {
   opacity: 0.45;
