@@ -60,7 +60,7 @@ export interface Invocations {
   invokeGitUnstage: (path: string, files: string[]) => Promise<string>;
   invokeGitCommit: (path: string, message: string) => Promise<string>;
   invokeGitPush: (path: string) => Promise<string>;
-  invokeGitPull: (path: string) => Promise<string>;
+  invokeGitPull: (path: string, merge?: boolean) => Promise<string>;
   invokeGitCreateBranch: (path: string, name: string) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
@@ -311,8 +311,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_commit', { path, message }),
   invokeGitPush: (path: string) =>
     tauriInvoke<string>('git_push', { path }),
-  invokeGitPull: (path: string) =>
-    tauriInvoke<string>('git_pull', { path }),
+  invokeGitPull: (path: string, merge?: boolean) =>
+    tauriInvoke<string>('git_pull', { path, merge: merge ?? false }),
   invokeGitCreateBranch: (path: string, name: string) =>
     tauriInvoke<string>('git_create_branch', { path, name }),
   invokeGitSwitchBranch: (path: string, name: string) =>

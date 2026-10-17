@@ -153,9 +153,10 @@ pub(crate) fn git_stdout(repo_path: &str, args: &[&str]) -> Result<String, Strin
 /// killed. Reads only, so killing is always safe.
 const GIT_BATCH_TIMEOUT_SECS: u64 = 4;
 
-/// Hard stop for push/pull. Git's own HTTP stall limit is shorter; this
-/// catches SSH and credential helpers that never exit.
-const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(60);
+/// Safety net for a push or pull that never exits (dead socket, unanswered
+/// dialog). Slow transfers are left alone; IntelliJ does not impose a
+/// low-speed cutoff either.
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn stop_git_child(child: &mut std::process::Child, tree: bool) {
     if tree {
@@ -194,17 +195,11 @@ fn git_output_timed(
     finish_git_child(child, args.first().copied().unwrap_or(""), timeout, false)
 }
 
-/// Push/pull. A Windows credential dialog is allowed (same path IDEA uses).
-/// A stalled transfer still fails after about 20 seconds; a dialog that is
-/// never answered is stopped at the hard deadline.
+/// Push/pull. A Windows credential dialog is allowed, the same way IntelliJ
+/// lets Git Credential Manager ask. A transfer that never finishes is stopped
+/// at the hard deadline so the button cannot spin forever.
 fn git_network_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
     let child = git_command()
-        .args([
-            "-c",
-            "http.lowSpeedLimit=1000",
-            "-c",
-            "http.lowSpeedTime=20",
-        ])
         .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::piped())
@@ -900,8 +895,8 @@ fn friendly_commit_error(raw: &str) -> String {
         return "没有已暂存的改动。请先暂存文件，或使用「暂存全部并提交」。".into();
     }
     let trimmed = raw.trim();
-    if trimmed.chars().count() > 240 {
-        let short: String = trimmed.chars().take(200).collect();
+    if trimmed.chars().count() > 800 {
+        let short: String = trimmed.chars().take(700).collect();
         format!("{short}…")
     } else {
         trimmed.to_string()
@@ -1220,12 +1215,17 @@ fn truncate_diff_text(s: String) -> String {
     format!("{}…\n\n[diff 过长，已截断]", &s[..end])
 }
 
-fn git_pull_sync(repo_path: String) -> Result<String, String> {
+fn git_pull_sync(repo_path: String, merge: bool) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
     if !has_upstream(&repo_path) {
         return Err("当前分支没有上游，无法拉取".into());
     }
-    let output = match git_network_output(&repo_path, &["pull", "--ff-only"]) {
+    let args: &[&str] = if merge {
+        &["pull", "--no-rebase", "--autostash"]
+    } else {
+        &["pull", "--ff-only"]
+    };
+    let output = match git_network_output(&repo_path, args) {
         Ok(output) => output,
         Err(err) => return Err(friendly_pull_error(&err)),
     };
@@ -1235,6 +1235,13 @@ fn git_pull_sync(repo_path: String) -> Result<String, String> {
         let combined = format!("{} {}", stderr.trim(), stdout.trim())
             .trim()
             .to_string();
+        if merge {
+            let lower = combined.to_ascii_lowercase();
+            if lower.contains("conflict") || lower.contains("fix conflicts") {
+                let _ = git_output(&repo_path, &["merge", "--abort"]);
+                return Err("合并远程时出现冲突，已中止合并。请在仓库里解决冲突后再推送。".into());
+            }
+        }
         return Err(friendly_pull_error(&combined));
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1683,8 +1690,9 @@ pub async fn git_push(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn git_pull(path: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || git_pull_sync(path))
+pub async fn git_pull(path: String, merge: Option<bool>) -> Result<String, String> {
+    let merge = merge.unwrap_or(false);
+    tokio::task::spawn_blocking(move || git_pull_sync(path, merge))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }

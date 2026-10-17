@@ -438,7 +438,7 @@ function CommitChangelist({
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number; label?: string } | null>(null);
   const [message, setMessage] = useState(() => readStoredString(CL_DRAFT_KEY));
   const [summaries, setSummaries] = useState<Record<string, RepoBatchItem>>({});
   const [statuses, setStatuses] = useState<Record<string, GitStatusEntry[]>>({});
@@ -741,6 +741,31 @@ function CommitChangelist({
     });
   };
 
+  /** One repo at a time, so a credential window is not covered by the next push. */
+  const noteRepo = (repoPath: string) => {
+    setProgress((prev) =>
+      prev ? { ...prev, label: labelPath(repoPath) } : { done: 0, total: 1, label: labelPath(repoPath) }
+    );
+  };
+
+  const pushWithUpdate = async (repoPath: string) => {
+    try {
+      await invokeGitPush(repoPath);
+    } catch (e) {
+      const text = formatInvokeError(e);
+      if (!text.includes("请先拉取再推送")) throw e;
+      const ok = await confirm({
+        title: t("commit.pushRejectedTitle"),
+        message: t("commit.pushRejectedMessage", { name: labelPath(repoPath) }),
+        confirmText: t("commit.pushRejectedMerge"),
+        icon: "warning",
+      });
+      if (!ok) throw e;
+      await invokeGitPull(repoPath, true);
+      await invokeGitPush(repoPath);
+    }
+  };
+
   const toggleCollapsed = (repoPath: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -871,7 +896,7 @@ function CommitChangelist({
           );
         },
         {
-          onProgress: (done, total) => setProgress({ done, total }),
+          onProgress: (done, total) => setProgress((prev) => ({ done, total, label: prev?.label })),
           describeError: (pair, e) =>
             `${pair.repoName}/${pair.entry.path}：${formatInvokeError(e)}`,
         }
@@ -1145,8 +1170,9 @@ function CommitChangelist({
     try {
       const result = await mapPoolCounted(
         targetPaths,
-        GIT_CONCURRENCY,
+        withPush ? 1 : GIT_CONCURRENCY,
         async (repoPath) => {
+          if (withPush) noteRepo(repoPath);
           const files = selected.get(repoPath) || new Set<string>();
           if (files.size === 0) return;
           const entries = statuses[repoPath] || [];
@@ -1179,7 +1205,7 @@ function CommitChangelist({
           }
           if (withPush) {
             try {
-              await invokeGitPush(repoPath);
+              await pushWithUpdate(repoPath);
             } catch (e) {
               throw new Error(
                 t("commit.changelistCommitOkPushFail", {
@@ -1190,7 +1216,7 @@ function CommitChangelist({
           }
         },
         {
-          onProgress: (done, total) => setProgress({ done, total }),
+          onProgress: (done, total) => setProgress((prev) => ({ done, total, label: prev?.label })),
           describeError: (repoPath, e) => `${labelPath(repoPath)}：${formatInvokeError(e)}`,
         }
       );
@@ -1249,12 +1275,13 @@ function CommitChangelist({
     try {
       const result = await mapPoolCounted(
         targetPaths,
-        GIT_CONCURRENCY,
+        1,
         async (repoPath) => {
-          await invokeGitPush(repoPath);
+          noteRepo(repoPath);
+          await pushWithUpdate(repoPath);
         },
         {
-          onProgress: (done, total) => setProgress({ done, total }),
+          onProgress: (done, total) => setProgress((prev) => ({ done, total, label: prev?.label })),
           describeError: (repoPath, e) => `${labelPath(repoPath)}：${formatInvokeError(e)}`,
         }
       );
@@ -1291,12 +1318,13 @@ function CommitChangelist({
     try {
       const result = await mapPoolCounted(
         targetPaths,
-        GIT_CONCURRENCY,
+        1,
         async (repoPath) => {
+          noteRepo(repoPath);
           await invokeGitPull(repoPath);
         },
         {
-          onProgress: (done, total) => setProgress({ done, total }),
+          onProgress: (done, total) => setProgress((prev) => ({ done, total, label: prev?.label })),
           describeError: (repoPath, e) => `${labelPath(repoPath)}：${formatInvokeError(e)}`,
         }
       );
@@ -1484,7 +1512,11 @@ function CommitChangelist({
         </span>
         {progress && (
           <span className="runtime-muted">
-            {t("commit.changelistRunning", { done: progress.done, total: progress.total })}
+            {t("commit.changelistRunning", {
+              done: progress.done,
+              total: progress.total,
+              name: progress.label ? ` · ${progress.label}` : "",
+            })}
           </span>
         )}
         <div
