@@ -11,24 +11,6 @@ export const BUILTIN_PROFILES: QuickAskProfile[] = [
     temperature: 0.3,
     builtin: true,
   },
-  {
-    id: "builtin:translate",
-    name: "翻译",
-    nameKey: "profile.translate",
-    systemRole:
-      "You are a careful translator. Preserve meaning, formatting, and technical terms. Output only the translation unless asked otherwise.",
-    temperature: 0.2,
-    builtin: true,
-  },
-  {
-    id: "builtin:polish",
-    name: "润色",
-    nameKey: "profile.polish",
-    systemRole:
-      "You polish writing for clarity and professionalism while keeping the author's intent and language. Return only the improved text unless asked otherwise.",
-    temperature: 0.5,
-    builtin: true,
-  },
 ];
 
 export function mergeProfiles(custom: QuickAskProfile[] | undefined): QuickAskProfile[] {

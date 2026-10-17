@@ -161,6 +161,8 @@ export interface QuickAskTurn {
   content: string;
   /** Copy and save keep the whole reply (polish, translate, summary, daily report). */
   keep?: 'whole';
+  /** Tool steps from an agent turn. Not sent as the visible answer. */
+  steps?: { tool: string; status: string; summary: string }[];
 }
 
 /** A persisted quick-ask conversation (multi-turn). */

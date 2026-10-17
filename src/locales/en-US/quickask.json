@@ -5,15 +5,8 @@
   "pin": "Keep on top",
   "unpin": "Stop keeping on top",
   "noModel": "Configure an AI model in the main window first",
-  "profile": {
-    "none": "Default profile",
-    "code": "Code assistant",
-    "translate": "Translate",
-    "polish": "Polish"
-  },
   "attach": {
     "file": "Attach file",
-    "fromInput": "Attach input",
     "remove": "Remove attachment",
     "pickTitle": "Pick a text file",
     "tooMany": "At most 3 attachments",
@@ -63,6 +56,10 @@
   "dailyTip": "Write a paste-ready report from today's commits and uncommitted files",
   "agent": {
     "label": "Agent",
+    "note": "Current repo. Writes and commands ask first.",
+    "steps": "{{n}} actions",
+    "continue": "Continue",
+    "continuePrompt": "Continue the unfinished work.",
     "tip": "Read, search, write, and run commands in the current repo. Writes and commands ask first.",
     "confirm": "Confirm action",
     "allow": "Allow",
@@ -81,7 +78,6 @@
   "you": "You",
   "assistant": "Assistant",
   "newChat": "New chat",
-  "openDeepseek": "Open DeepSeek",
   "pasteClipboard": "Paste clipboard",
   "snippets": "Snippets",
   "snippetSearch": "Search snippets…",
@@ -114,7 +110,6 @@
   "saveSnippet": "Save snippet",
   "savedSnippet": "Saved",
   "followUp": "Ask about selection",
-  "copySelection": "Copy selection",
   "quotePrefix": "About \"{{text}}\": ",
   "bubbleTip": "Quick Ask · click to open · drag to snap · right-click to close",
   "modeAsk": "AI Q&A",
@@ -150,14 +145,12 @@
   "chip": {
     "workspace": "Workspace",
     "git": "Git identity",
-    "dirty": "Changes",
-    "clipboard": "Clipboard"
+    "dirty": "Changes"
   },
   "chipTip": {
     "workspace": "Project mode: attach repo list and current branches",
     "git": "Project mode: attach current Git user name and email",
-    "dirty": "Project mode: attach uncommitted changes of the selected repos",
-    "clipboard": "Attached in every mode"
+    "dirty": "Project mode: attach uncommitted changes of the selected repos"
   },
   "ctx": {
     "title": "Choose project context",
@@ -172,7 +165,7 @@
     "filter": "Filter workspaces or services…",
     "selectAll": "Select the whole workspace (services added later are included too)",
     "partsHead": "Attach",
-    "note": "These are only sent in Project mode; plain chat only includes the clipboard (if checked).",
+    "note": "These are only sent in Project mode.",
     "previewEmpty": "No project context to attach right now"
   },
   "route": {

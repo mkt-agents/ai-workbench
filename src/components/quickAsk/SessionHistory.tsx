@@ -1,11 +1,10 @@
 import { useTranslation } from "react-i18next";
-import { Check, MessageSquarePlus, Pencil, Trash2, X } from "lucide-react";
+import { Check, Pencil, Trash2, X } from "lucide-react";
 import type { QuickAskSession } from "../../core/types";
 
 type Props = {
   sessions: QuickAskSession[];
   activeSessionId: string | null;
-  busy: boolean;
   renamingId: string | null;
   renameDraft: string;
   setRenameDraft: (v: string) => void;
@@ -14,7 +13,6 @@ type Props = {
   onCancelRename: () => void;
   onOpen: (s: QuickAskSession) => void;
   onRemove: (id: string) => void;
-  onNewChat: () => void;
   relativeTime: (iso: string) => string;
 };
 
@@ -22,16 +20,13 @@ type Props = {
 export default function SessionHistory(props: Props) {
   const { t } = useTranslation("quickask");
   const {
-    sessions, activeSessionId, busy, renamingId, renameDraft, setRenameDraft,
-    onStartRename, onCommitRename, onCancelRename, onOpen, onRemove, onNewChat, relativeTime,
+    sessions, activeSessionId, renamingId, renameDraft, setRenameDraft,
+    onStartRename, onCommitRename, onCancelRename, onOpen, onRemove, relativeTime,
   } = props;
   return (
     <div className="quick-ask-sessions">
       <div className="qa-sessions-head">
         <span>{t("history")}</span>
-        <button type="button" className="btn btn-secondary btn-small" onClick={onNewChat} disabled={busy}>
-          <MessageSquarePlus size={13} /> {t("newChat")}
-        </button>
       </div>
       <div className="qa-session-list">
         {sessions.map((s) => (

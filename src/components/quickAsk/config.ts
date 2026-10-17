@@ -5,7 +5,7 @@ import type { AskMode } from "./route";
 
 /** Only appended when a non-empty workbench context block is actually attached. */
 export const CONTEXT_RULES =
-  " Context collected from the user's workbench (repos, uncommitted changes, recent commits, clipboard) is attached after the question. Use the relevant parts to give specific, actionable answers, citing file names and changes only when the user asked about those files. Never claim you cannot access files — the context is everything available. If it is insufficient, say exactly what is missing and still answer from what is given. Do not ask the user to run git/shell commands themselves. Do not echo the context block, git identity, or workspace paths back. The user copies and saves the reply as-is, so leave out preambles and closing offers.";
+  " Context collected from the user's workbench (repos, uncommitted changes, recent commits) is attached after the question. Use the relevant parts to give specific, actionable answers, citing file names and changes only when the user asked about those files. Never claim you cannot access files — the context is everything available. If it is insufficient, say exactly what is missing and still answer from what is given. Do not ask the user to run git/shell commands themselves. Do not echo the context block, git identity, or workspace paths back. The user copies and saves the reply as-is, so leave out preambles and closing offers.";
 
 /** Plain conversation: a capable general assistant, no repo assumptions. */
 export const CHAT_SYSTEM =

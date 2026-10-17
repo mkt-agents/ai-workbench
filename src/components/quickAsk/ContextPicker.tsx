@@ -6,7 +6,7 @@ import { pathKey } from "../../core/pathUtils";
 import { groupState, isServiceSelected } from "./repoSelection";
 import type { PickerGroup } from "./repoSelection";
 
-const PART_KEYS: (keyof QuickAskChips)[] = ["dirty", "git", "workspace", "clipboard"];
+const PART_KEYS: (keyof QuickAskChips)[] = ["dirty", "git", "workspace"];
 const FILTER_MIN_REPOS = 8;
 
 type Props = {
@@ -31,8 +31,7 @@ type Props = {
 /**
  * One place for "what project context a project-mode question carries":
  * which workspaces / services (empty = current repo) and which parts (changes /
- * commits / workspace / clipboard). Plain-chat questions ignore everything here
- * except the clipboard.
+ * commits / workspace). Plain-chat questions ignore this picker.
  */
 export default function ContextPicker(props: Props) {
   const { t } = useTranslation("quickask");

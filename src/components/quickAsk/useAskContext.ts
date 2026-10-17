@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../../core/store";
 import { findWorkspaceForRepo } from "../../core/pathUtils";
 import type { GitRepoSummary, GitStatusEntry, QuickAskChips } from "../../core/types";
@@ -57,7 +56,7 @@ function repoName(path: string): string {
 }
 
 /**
- * Workbench context collection (workspace / git identity / dirty diffs / clipboard)
+ * Workbench context collection (workspace / git identity / dirty diffs).
  * with a TTL cache so a burst of sends doesn't re-spawn git for every question.
  *
  * `focusedRepos` are resolved service paths (workspace tokens already expanded
@@ -85,10 +84,7 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
   /** Chips signature to detect changes that invalidate cache. */
   const chipsSigRef = useRef<string>("");
 
-  /**
-   * Project parts (workspace / git / dirty) are only collected in project mode;
-   * the clipboard is independent of the repo and rides along in both modes.
-   */
+  /** Project parts (workspace / git / dirty) are only collected in project mode. */
   const refreshContext = useCallback(async (mode: AskMode): Promise<ContextResult> => {
     const parts: string[] = [];
     const included = new Set<ContextPart>();
@@ -310,33 +306,18 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
       }
     }
 
-    if (chips.clipboard) {
-      try {
-        const clip = await invoke<string>("read_clipboard");
-        if (clip.trim()) {
-          const tclip = truncate(clip.trim(), 800);
-          parts.push("Clipboard:\n" + tclip.text);
-          included.add("clipboard");
-          if (tclip.truncated) truncatedFlag = true;
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-
-    // Project mode with nothing dirty still names the repo it was about.
+    const joined = parts.join("\n\n");
     if (project && repoNames.length === 0 && included.size > 0) {
       repoNames.push(...focusList.map(repoName));
     }
 
-    const joined = parts.join("\n\n");
     const result = joined ? truncate(joined, CONTEXT_LIMIT) : { text: "", truncated: false };
     const out: ContextResult = {
       text: result.text,
       truncated: truncatedFlag || result.truncated,
       summary: {
         repos: Array.from(new Set(repoNames)),
-        parts: (["dirty", "git", "workspace", "clipboard"] as ContextPart[]).filter((p) => included.has(p)),
+        parts: (["dirty", "git", "workspace"] as ContextPart[]).filter((p) => included.has(p)),
       },
     };
     setCtxPreview(out.text);
@@ -346,7 +327,6 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
     chips.workspace,
     chips.git,
     chips.dirty,
-    chips.clipboard,
     gitWorkspaces,
     recentProjects,
     currentGitRepo,
@@ -360,7 +340,7 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
 
   /** Get context for a mode: use cache if fresh, otherwise rebuild. */
   const getContext = useCallback((mode: AskMode = "project"): Promise<ContextResult> => {
-    const sig = `${mode}|${chips.workspace}|${chips.git}|${chips.dirty}|${chips.clipboard}|${currentGitRepo}|${focusedRepos.join(",")}`;
+    const sig = `${mode}|${chips.workspace}|${chips.git}|${chips.dirty}|${currentGitRepo}|${focusedRepos.join(",")}`;
     const cached = cachedContextRef.current;
     const now = Date.now();
     if (cached && chipsSigRef.current === sig && now - cached.at < CONTEXT_TTL_MS) {
@@ -368,8 +348,7 @@ export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
       setCtxTruncated(cached.truncated);
       return Promise.resolve({ text: cached.text, truncated: cached.truncated, summary: cached.summary });
     }
-    // Chat mode without the clipboard needs nothing — skip the git round trips.
-    if (mode === "chat" && !chips.clipboard) {
+    if (mode === "chat") {
       setCtxPreview("");
       setCtxTruncated(false);
       return Promise.resolve({ text: "", truncated: false, summary: EMPTY_SUMMARY });

@@ -195,11 +195,147 @@ fn git_output_timed(
     finish_git_child(child, args.first().copied().unwrap_or(""), timeout, false)
 }
 
+/// `host:port`, `http://host:port`, or `http=...;https=...;socks=...`.
+fn parse_proxy_server(raw: &str) -> Option<(String, String)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if !raw.contains('=') {
+        let url = proxy_url(raw, "http");
+        return Some((url.clone(), url));
+    }
+    let mut http = None;
+    let mut https = None;
+    let mut socks = None;
+    for part in raw.split([';', ' ']) {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match key.trim().to_ascii_lowercase().as_str() {
+            "http" => http = Some(proxy_url(value, "http")),
+            "https" => https = Some(proxy_url(value, "http")),
+            "socks" | "socks5" => socks = Some(proxy_url(value, "socks5h")),
+            _ => {}
+        }
+    }
+    let fallback = socks.clone().or(http.clone()).or(https.clone())?;
+    Some((http.or(socks.clone()).unwrap_or_else(|| fallback.clone()), https.unwrap_or(fallback)))
+}
+
+fn proxy_url(value: &str, scheme: &str) -> String {
+    let value = value.trim();
+    if value.contains("://") {
+        value.to_string()
+    } else {
+        format!("{scheme}://{value}")
+    }
+}
+
+fn proxy_env_present() -> bool {
+    ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"]
+        .iter()
+        .any(|key| std::env::var(key).map(|v| !v.trim().is_empty()).unwrap_or(false))
+}
+
+fn git_config_has_proxy(repo_path: &str) -> bool {
+    ["http.proxy", "https.proxy"].iter().any(|key| {
+        git_stdout(repo_path, &["config", "--get", key])
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    })
+}
+
+/// IntelliJ applies the IDE/system proxy to git. A GUI process does not, so a
+/// push fails with "unable to access" while IDEA succeeds.
+fn system_proxy_for_git(repo_path: &str) -> Option<(String, String)> {
+    if proxy_env_present() || git_config_has_proxy(repo_path) {
+        return None;
+    }
+    windows_system_proxy()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_system_proxy() -> Option<(String, String)> {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
+    use windows::core::PCWSTR;
+
+    let path: Vec<u16> = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let enable_name: Vec<u16> = "ProxyEnable".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut enabled: u32 = 0;
+    let mut bytes: u32 = 4;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            PCWSTR(enable_name.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut enabled as *mut u32).cast()),
+            Some(&mut bytes),
+        )
+    };
+    if status.is_err() || enabled == 0 {
+        return None;
+    }
+    let server_name: Vec<u16> = "ProxyServer".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut size: u32 = 0;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            PCWSTR(server_name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut size),
+        )
+    };
+    if status.is_err() || size < 2 {
+        return None;
+    }
+    let mut buf = vec![0u16; size as usize / 2 + 1];
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            PCWSTR(server_name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    if status.is_err() {
+        return None;
+    }
+    let len = (size as usize / 2).saturating_sub(1);
+    let text = String::from_utf16_lossy(&buf[..len]);
+    parse_proxy_server(text.trim_end_matches('\u{0}').trim())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_system_proxy() -> Option<(String, String)> {
+    None
+}
+
 /// Push/pull. A Windows credential dialog is allowed, the same way IntelliJ
 /// lets Git Credential Manager ask. A transfer that never finishes is stopped
 /// at the hard deadline so the button cannot spin forever.
 fn git_network_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
-    let child = git_command()
+    let mut cmd = git_command();
+    if let Some((http_proxy, https_proxy)) = system_proxy_for_git(repo_path) {
+        cmd.env("http_proxy", &http_proxy);
+        cmd.env("https_proxy", &https_proxy);
+    }
+    let child = cmd
         .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::piped())
@@ -1038,18 +1174,6 @@ fn has_remote(repo_path: &str, name: &str) -> bool {
 
 fn friendly_push_error(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
-    // Network is the most common push failure and the one the user can actually
-    // fix without re-entering credentials — name the symptom and the escape hatches.
-    if lower.contains("unable to access")
-        || lower.contains("failed to connect")
-        || lower.contains("connection timed out")
-        || lower.contains("could not resolve host")
-        || lower.contains("network unreachable")
-        || lower.contains("ssl_connect")
-        || raw.contains("超时")
-    {
-        return "推送失败：无法连接远程仓库（网络不通、超时或被墙）。请检查网络/代理；若仓库配置了其它远程，可改推那个远程，本地提交不受影响。".into();
-    }
     if lower.contains("could not read from remote")
         || lower.contains("permission denied")
         || lower.contains("authentication failed")
@@ -1060,6 +1184,37 @@ fn friendly_push_error(raw: &str) -> String {
         || lower.contains("user interactivity has been disabled")
     {
         return "推送失败：远程认证失败，请检查凭据或 SSH 密钥".into();
+    }
+    if raw.contains("git push 超时") || raw.contains("git pull 超时") {
+        return "推送超时：超过 10 分钟还没完成，已停止。本地提交不受影响。".into();
+    }
+    // Network is the most common push failure and the one the user can actually
+    // fix without re-entering credentials — name the symptom and the escape hatches.
+    if lower.contains("unable to access")
+        || lower.contains("failed to connect")
+        || lower.contains("connection timed out")
+        || lower.contains("could not resolve host")
+        || lower.contains("network unreachable")
+        || lower.contains("ssl_connect")
+    {
+        let detail = raw
+            .lines()
+            .map(str::trim)
+            .find(|line| {
+                let line = line.to_ascii_lowercase();
+                line.contains("fatal:") || line.contains("unable to access") || line.contains("timed out")
+            })
+            .unwrap_or("")
+            .chars()
+            .take(160)
+            .collect::<String>();
+        return if detail.is_empty() {
+            "推送失败：无法连接远程仓库（网络不通、超时或被墙）。请检查网络/代理；若仓库配置了其它远程，可改推那个远程，本地提交不受影响。".into()
+        } else {
+            format!(
+                "推送失败：无法连接远程仓库。{detail} 请检查网络或系统代理，本地提交不受影响。"
+            )
+        };
     }
     if lower.contains("non-fast-forward")
         || lower.contains("fetch first")
@@ -2324,7 +2479,7 @@ fn pick_directory_sync(window: &tauri::WebviewWindow) -> Result<Option<String>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{friendly_push_error, parse_porcelain_line, validate_email, validate_name};
+    use super::{friendly_push_error, parse_porcelain_line, parse_proxy_server, validate_email, validate_name};
 
     #[test]
     fn push_error_translates_network_failure() {
@@ -2337,8 +2492,31 @@ mod tests {
 
     #[test]
     fn push_error_translates_timeout() {
-        let msg = friendly_push_error("git push 超时（>60s），已跳过");
-        assert!(msg.contains("无法连接远程仓库"), "got: {msg}");
+        let msg = friendly_push_error("git push 超时（>600s），已跳过");
+        assert!(msg.contains("推送超时"), "got: {msg}");
+        assert!(msg.contains("本地提交不受影响"), "got: {msg}");
+    }
+
+    #[test]
+    fn push_error_keeps_403_inside_unable_to_access() {
+        let msg = friendly_push_error(
+            "fatal: unable to access 'https://github.com/x.git/': The requested URL returned error: 403",
+        );
+        assert!(msg.contains("认证失败"), "got: {msg}");
+    }
+
+    #[test]
+    fn proxy_server_plain_host_applies_to_http_and_https() {
+        let (http, https) = parse_proxy_server("127.0.0.1:7890").unwrap();
+        assert_eq!(http, "http://127.0.0.1:7890");
+        assert_eq!(https, "http://127.0.0.1:7890");
+    }
+
+    #[test]
+    fn proxy_server_splits_protocols() {
+        let (http, https) = parse_proxy_server("http=127.0.0.1:7890;https=127.0.0.1:7891").unwrap();
+        assert_eq!(http, "http://127.0.0.1:7890");
+        assert_eq!(https, "http://127.0.0.1:7891");
     }
 
     #[test]

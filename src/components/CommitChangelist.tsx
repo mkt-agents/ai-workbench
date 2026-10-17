@@ -181,7 +181,7 @@ function formatInvokeError(err: unknown): string {
   return text || "操作失败";
 }
 
-function truncateError(err: string, max = 180): string {
+function truncateError(err: string, max = 360): string {
   const s = err.trim();
   if (s.length <= max) return s;
   return `${s.slice(0, max)}…`;

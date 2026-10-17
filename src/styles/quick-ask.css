@@ -92,24 +92,26 @@
 
 .quick-ask-toolbar {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   flex-shrink: 0;
 }
-/* All three controls are custom popovers (QuickSelect / FocusPicker) sharing
-   the .qa-focus shell — native select popups are OS-drawn and can't match the
-   window's frosted surface. Model names run long, so the first gets more room. */
+/* Model and project share the row; the agent switch stays a fixed segment. */
 .quick-ask-toolbar > .qa-focus {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
 }
-.quick-ask-toolbar > .qa-focus:first-child { flex: 1.5; }
+.quick-ask-toolbar .qa-focus-btn {
+  height: 32px;
+  box-sizing: border-box;
+}
 .quick-ask-toolbar .qa-focus-btn:hover {
   border-color: var(--accent-border);
 }
 /* Frosted controls: --bg-0/.input-field are near-transparent in the translucent
    themes and the window itself lets the desktop through. */
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-toolbar .qa-focus-btn {
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-toolbar .qa-focus-btn,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-agent-toggle {
   background-color: var(--float-bg);
   backdrop-filter: blur(16px) saturate(1.08);
   -webkit-backdrop-filter: blur(16px) saturate(1.08);
@@ -805,16 +807,57 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px 8px;
+  gap: 6px;
+  padding: 2px 6px 6px;
 }
-/* Composer meta row: route pill + one-shot task tag */
+.qa-input-card > .qa-compose-meta {
+  padding: 6px 8px 0;
+}
 .qa-compose-meta {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
   min-width: 0;
+}
+.qa-agent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-agent-toggle.on {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--text-0);
+}
+.qa-agent-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.qa-agent-log {
+  margin-top: 6px;
+}
+.qa-agent-log-toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.qa-agent-log-toggle:hover {
+  color: var(--text-0);
 }
 .qa-route {
   min-width: 0;
@@ -823,12 +866,14 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  height: 26px;
   max-width: 100%;
-  padding: 3px 9px;
-  font-size: 11px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-size: 11.5px;
   color: var(--text-2);
-  background: var(--bg-1);
-  border: 1px solid var(--border-subtle);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
   cursor: pointer;
   transition: var(--transition-colors-fast);
@@ -924,10 +969,14 @@
   flex-shrink: 0;
 }
 .qa-task-btn {
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
-  padding: 3px 7px;
-  font-size: 11px;
-  color: var(--text-3);
+  height: 24px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-size: 11.5px;
+  color: var(--text-2);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-full);

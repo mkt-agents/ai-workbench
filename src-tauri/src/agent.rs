@@ -15,7 +15,8 @@ use tokio::sync::oneshot;
 use crate::ai_commands::{apply_auth_headers, trim_trailing_slash, AIModelConfig, ChatTurn};
 use crate::cancellation::{is_cancelled, CancelGuard};
 
-const MAX_STEPS: usize = 8;
+const MAX_ACTION_STEPS: usize = 32;
+const MAX_ROUNDS: usize = 48;
 const READ_CAP: usize = 20_000;
 const WRITE_CAP: usize = 200_000;
 const PREVIEW_CAP: usize = 2_000;
@@ -723,6 +724,26 @@ fn parse_anthropic(body: &Value) -> Result<ModelTurn, String> {
     })
 }
 
+fn round_is_action(names: &[String]) -> bool {
+    names.iter().any(|name| !matches!(name.as_str(), "read_file" | "list_dir" | "grep"))
+}
+
+fn limit_message(action_limited: bool, notes: &[String]) -> String {
+    let mut msg = if action_limited {
+        format!("已达到 {MAX_ACTION_STEPS} 步操作上限，停在这里。发送「继续」可接着做。")
+    } else {
+        format!("已达到 {MAX_ROUNDS} 轮上限，停在这里。发送「继续」可接着做。")
+    };
+    if !notes.is_empty() {
+        msg.push_str("\n已做操作：");
+        for note in notes.iter().take(24) {
+            msg.push_str("\n- ");
+            msg.push_str(note);
+        }
+    }
+    msg
+}
+
 fn cancelled_message() -> String {
     format!(
         "[{}] 已取消",
@@ -867,7 +888,14 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     }
 
     let mut final_text = String::new();
-    for _step in 0..MAX_STEPS {
+    let mut rounds = 0usize;
+    let mut action_steps = 0usize;
+    let mut notes: Vec<String> = Vec::new();
+    loop {
+        if rounds >= MAX_ROUNDS || action_steps >= MAX_ACTION_STEPS {
+            break;
+        }
+        rounds += 1;
         if is_cancelled(&request_id) {
             let msg = format!("[{}] 已取消", crate::config::ErrorCode::AiRequestCancelled.as_str());
             emit_err(&app, &request_id, &msg);
@@ -943,6 +971,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 };
                 if !allow {
                     emit_step(&app, &request_id, &call.name, "denied", &summary, "用户拒绝");
+                    notes.push(format!("{summary}（已拒绝）"));
                     tool_results.push((call.id.clone(), "用户拒绝了这个操作".to_string()));
                     continue;
                 }
@@ -960,6 +989,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             match result {
                 Ok(text) => {
                     emit_step(&app, &request_id, &call.name, "done", &summary, &clip(&text, 500));
+                    notes.push(summary);
                     tool_results.push((call.id.clone(), text));
                 }
                 Err(err) if err.contains("AI_REQUEST_CANCELLED") => {
@@ -968,9 +998,13 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 }
                 Err(err) => {
                     emit_step(&app, &request_id, &call.name, "error", &summary, &err);
+                    notes.push(format!("{summary}（失败）"));
                     tool_results.push((call.id.clone(), format!("错误: {err}")));
                 }
             }
+        }
+        if round_is_action(&turn.calls.iter().map(|c| c.name.clone()).collect::<Vec<_>>()) {
+            action_steps += 1;
         }
         if anthropic {
             let blocks: Vec<Value> = tool_results
@@ -990,16 +1024,26 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             }
         }
     }
-    let msg = "已达到 8 步上限，停在这里。";
-    emit_text(&app, &request_id, msg);
+    let msg = limit_message(action_steps >= MAX_ACTION_STEPS, &notes);
+    emit_text(&app, &request_id, &msg);
     emit_done(&app, &request_id, started);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{command_blocked, resolve_in_repo};
+    use super::{command_blocked, limit_message, resolve_in_repo, round_is_action};
     use std::fs;
+
+    #[test]
+    fn read_only_rounds_do_not_count_as_actions() {
+        assert!(!round_is_action(&["read_file".into(), "grep".into()]));
+        assert!(round_is_action(&["read_file".into(), "write_file".into()]));
+        let msg = limit_message(true, &["读取 README.md".into()]);
+        assert!(msg.contains("32"));
+        assert!(msg.contains("继续"));
+        assert!(msg.contains("读取 README.md"));
+    }
 
     #[test]
     fn blocks_shutdown_and_format() {

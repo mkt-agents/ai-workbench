@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { QuickAskTurn } from "../../core/types";
 import {
-  AlertCircle, ArrowDown, BookmarkPlus, Bot, Check, ClipboardPaste, Copy, Download, ExternalLink,
+  AlertCircle, ArrowDown, BookmarkPlus, Check, ClipboardPaste, Copy, Download, FilePlus2,
   FileText, FolderGit2, MessageCircle, MessageSquarePlus, RefreshCw, Send, Sparkles, Square, X,
 } from "lucide-react";
 import MarkdownView from "../MarkdownView";
@@ -14,12 +14,9 @@ import type { OpenSuggestion } from "./localActions";
 import { keepableAnswer } from "./keepable";
 
 /** Empty-state starters: filled into the input (never auto-sent). */
-const EXAMPLES: { key: string; task?: TaskKind }[] = [
-  { key: "daily" },
+const EXAMPLES: { key: string }[] = [
   { key: "recent" },
   { key: "impact" },
-  { key: "error", task: "debug" },
-  { key: "polish", task: "polish" },
   { key: "open" },
   { key: "model" },
 ];
@@ -66,16 +63,16 @@ type Props = {
   task: TaskKind;
   onTask: (task: TaskKind) => void;
   onDaily: () => void;
-  agentOn: boolean;
-  onToggleAgent: () => void;
   agentSteps: AgentStep[];
   agentApproval: AgentApproval | null;
   stopping: boolean;
   onDecideAgent: (allow: boolean) => void;
+  onContinue: () => void;
   hasSnippets: boolean;
   snippetOpen: boolean;
   onToggleSnippets: () => void;
   onPasteClipboard: () => void;
+  onAttachFile: () => void;
   onSend: () => void;
   /** Non-null while the composer is an "open …" phrase (empty = nothing matched). */
   openList: OpenSuggestion[] | null;
@@ -84,15 +81,41 @@ type Props = {
   onRegenerate: () => void;
   onCopyAnswer: (index: number) => void;
   onSaveSnippet: (index: number) => void;
-  onOpenDeepSeek: () => void;
   onExport: () => void;
   onQuote: () => void;
-  onCopySelection: () => void;
 };
 
 const ROUTE_OPTIONS: RouteOverride[] = ["auto", "chat", "project"];
 /** Within this many px of the bottom the thread keeps following new output. */
 const STICK_THRESHOLD = 80;
+
+function AgentStepLog({ steps }: { steps: { tool: string; status: string; summary: string }[] }) {
+  const { t } = useTranslation("quickask");
+  const [open, setOpen] = useState(false);
+  if (steps.length === 0) return null;
+  return (
+    <div className="qa-agent-log">
+      <button
+        type="button"
+        className="qa-agent-log-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        {t("agent.steps", { n: steps.length })}
+      </button>
+      {open && (
+        <ol className="qa-agent-steps">
+          {steps.map((step, i) => (
+            <li key={`${step.tool}-${i}`} className={`qa-agent-step is-${step.status}`}>
+              <span className="qa-agent-tool">{t(`agent.tool.${step.tool}`, { defaultValue: step.tool })}</span>
+              <span className="qa-agent-summary">{step.summary}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
 
 /** Answer stage (flex) + composer card; answer actions live with the answer. */
 export default function AskPanel(props: Props) {
@@ -102,10 +125,10 @@ export default function AskPanel(props: Props) {
     lastQuestion, onExample, answer, turns, pending, source, canRegenerate,
     copied, snippetSaved, exportDone, selectedText, setSelectedText,
     route, routeOverride, onRouteOverride, routeMenuOpen, onToggleRouteMenu, projectLabel,
-    task, onTask, onDaily, agentOn, onToggleAgent, agentSteps, agentApproval, stopping, onDecideAgent,
-    hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard,
-    onSend, openList, onRunOpen, onStop, onRegenerate, onCopyAnswer, onSaveSnippet, onOpenDeepSeek,
-    onExport, onQuote, onCopySelection,
+    task, onTask, onDaily, agentSteps, agentApproval, stopping, onDecideAgent, onContinue,
+    hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard, onAttachFile,
+    onSend, openList, onRunOpen, onStop, onRegenerate, onCopyAnswer, onSaveSnippet,
+    onExport, onQuote,
   } = props;
   const answerRef = useRef<HTMLDivElement | null>(null);
   const [openHi, setOpenHi] = useState(0);
@@ -280,14 +303,6 @@ export default function AskPanel(props: Props) {
                 {exportDone ? t("exported") : t("exportSession")}
               </button>
             )}
-            <button
-              type="button"
-              className="qa-mini-btn"
-              onClick={onOpenDeepSeek}
-              title={t("openDeepseek")}
-            >
-              <ExternalLink size={13} /> {t("openDeepseek")}
-            </button>
           </div>
           <div ref={answerRef} className="qa-thread" onScroll={onThreadScroll}>
             {turns.map((turn, i) =>
@@ -322,6 +337,16 @@ export default function AskPanel(props: Props) {
                       {snippetSaved === i ? <Check size={12} className="qa-pop" /> : <BookmarkPlus size={12} />}{" "}
                       {snippetSaved === i ? t("savedSnippet") : code ? t("saveCode") : t("saveSnippet")}
                     </button>
+                    {i === lastAssistant && !pending && turn.content.includes("发送「继续」") && (
+                      <button
+                        type="button"
+                        className="qa-mini-btn"
+                        disabled={busy}
+                        onClick={onContinue}
+                      >
+                        {t("agent.continue")}
+                      </button>
+                    )}
                     {i === lastAssistant && !pending && (
                       <button
                         type="button"
@@ -337,6 +362,7 @@ export default function AskPanel(props: Props) {
                       );
                     })()}
                   </div>
+                  {turn.steps && turn.steps.length > 0 && <AgentStepLog steps={turn.steps} />}
                   {i === lastAssistant && !pending && sourceLine && (
                     <div className={`qa-answer-source is-${source?.mode}`} title={sourceLine}>
                       {source?.mode === "project" ? <FolderGit2 size={11} /> : <MessageCircle size={11} />}
@@ -423,9 +449,6 @@ export default function AskPanel(props: Props) {
                 <button type="button" className="btn btn-secondary btn-small" onClick={onQuote}>
                   <MessageSquarePlus size={13} /> {t("followUp")}
                 </button>
-                <button type="button" className="btn btn-secondary btn-small" onClick={onCopySelection}>
-                  <Copy size={13} /> {t("copySelection")}
-                </button>
               </div>
             )}
           </div>
@@ -446,7 +469,7 @@ export default function AskPanel(props: Props) {
                 key={ex.key}
                 type="button"
                 className="qa-example"
-                onClick={() => onExample(t(`examples.${ex.key}`), ex.task)}
+                onClick={() => onExample(t(`examples.${ex.key}`))}
               >
                 {t(`examples.${ex.key}`)}
               </button>
@@ -477,7 +500,8 @@ export default function AskPanel(props: Props) {
         </div>
       )}
 
-      <div className="qa-compose-meta">
+      <div className="qa-input-card">
+        <div className="qa-compose-meta">
         <div className="qa-focus qa-route">
           <button
             type="button"
@@ -538,9 +562,7 @@ export default function AskPanel(props: Props) {
             </button>
           </span>
         )}
-      </div>
-
-      <div className="qa-input-card">
+        </div>
         {openList && (
           <div ref={openListRef} className="qa-open-suggest" role="listbox" aria-label={t("openList")}>
             {openList.length === 0 ? (
@@ -615,6 +637,15 @@ export default function AskPanel(props: Props) {
             <button
               type="button"
               className="qa-tool-btn"
+              onClick={onAttachFile}
+              title={t("attach.file")}
+              disabled={busy}
+            >
+              <FilePlus2 size={14} />
+            </button>
+            <button
+              type="button"
+              className="qa-tool-btn"
               onClick={onPasteClipboard}
               title={t("pasteClipboard")}
             >
@@ -652,17 +683,6 @@ export default function AskPanel(props: Props) {
               title={t("dailyTip")}
             >
               {t("dailyShort")}
-            </button>
-            <button
-              type="button"
-              className={`qa-task-btn qa-agent-btn${agentOn ? " on" : ""}`}
-              onClick={onToggleAgent}
-              disabled={busy}
-              title={t("agent.tip")}
-              aria-pressed={agentOn}
-            >
-              <Bot size={12} />
-              {t("agent.label")}
             </button>
           </div>
           {/* One key, two states: morphs in place so the footer never shifts. */}

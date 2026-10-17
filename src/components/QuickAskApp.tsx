@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FilePlus2, History, MessageSquarePlus, Pin, PinOff, Sparkles, Terminal, X } from "lucide-react";
+import { Bot, History, MessageSquarePlus, Pin, PinOff, Sparkles, Terminal, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -17,7 +17,6 @@ import {
   makeAttachment,
   type AskAttachment,
 } from "../lib/askAttachments";
-import { findProfile, mergeProfiles } from "../lib/quickAskProfiles";
 import AskPanel from "./quickAsk/AskPanel";
 import ContextPicker from "./quickAsk/ContextPicker";
 import {
@@ -99,7 +98,7 @@ function QuickAskApp() {
   /** Workspace tokens (`ws:<id>`) and/or service paths; empty = auto (current repo). */
   const [focusedRepos, setFocusedRepos] = useState<string[]>(settings.quickAskFocusRepos ?? []);
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "route" | "profile">(null);
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "route">(null);
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
   /** Extra candidates pulled in by a folder scan (session-only). */
@@ -130,19 +129,10 @@ function QuickAskApp() {
   const ctx = useAskContext(chips, resolvedFocus);
 
   const models = aiModels as AIModelConfig[];
-  const profiles = useMemo(
-    () => mergeProfiles(settings.quickAskProfiles),
-    [settings.quickAskProfiles]
-  );
-  const activeProfile = useMemo(
-    () => findProfile(settings.quickAskProfileId, settings.quickAskProfiles),
-    [settings.quickAskProfileId, settings.quickAskProfiles]
-  );
   const selectedModel = useMemo(() => {
     const scene = task === "optimize" ? "optimize" : "quickAsk";
-    const override = modelId || activeProfile?.modelId || null;
-    return resolveSceneModel(scene, models, settings.aiSceneModels, override) ?? undefined;
-  }, [models, modelId, task, settings.aiSceneModels, activeProfile?.modelId]);
+    return resolveSceneModel(scene, models, settings.aiSceneModels, modelId || null) ?? undefined;
+  }, [models, modelId, task, settings.aiSceneModels]);
 
   // stream <-> sessions reference each other's callbacks; bridge via ref.
   const persistRef = useRef<(turns: QaTurn[], firstQuestion: string) => Promise<void>>(
@@ -167,8 +157,6 @@ function QuickAskApp() {
     persistTurns: (turns, q) => {
       void persistRef.current(turns, q);
     },
-    profileSystemRole: activeProfile?.systemRole,
-    profileTemperature: activeProfile?.temperature,
     attachments,
     agent: {
       enabled: agentOn,
@@ -332,18 +320,6 @@ function QuickAskApp() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const applyProfile = (id: string) => {
-    if (!id) {
-      setSettings({ quickAskProfileId: undefined });
-      return;
-    }
-    setSettings({ quickAskProfileId: id });
-    const p = findProfile(id, settings.quickAskProfiles);
-    if (p?.modelId && models.some((m) => m.id === p.modelId)) {
-      setModelId(p.modelId);
-    }
-  };
-
   const addAttachmentFromFile = async () => {
     try {
       const text = await invokePickTextFile(t("attach.pickTitle"));
@@ -359,18 +335,6 @@ function QuickAskApp() {
       if (String(e).includes("已取消") || String(e).toLowerCase().includes("cancel")) return;
       stream.setError(String(e));
     }
-  };
-
-  const addAttachmentFromInput = () => {
-    const text = input.trim();
-    if (!text) return;
-    const name = `paste-${attachments.length + 1}.txt`;
-    const check = canAddAttachment(attachments, { name, content: text });
-    if (!check.ok) {
-      stream.setError(t(check.reason === "count" ? "attach.tooMany" : "attach.tooLarge"));
-      return;
-    }
-    setAttachments((prev) => [...prev, makeAttachment(name, text)]);
   };
 
   const changeOptimize = (next: OptimizeConfig) => {
@@ -631,26 +595,6 @@ function QuickAskApp() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const copySelection = async () => {
-    if (!selectedText) return;
-    try {
-      await invokeCopyToClipboard(selectedText);
-      setSelectedText("");
-      window.getSelection()?.removeAllRanges();
-    } catch (e) {
-      stream.setError(String(e));
-    }
-  };
-
-  const openDeepSeek = async () => {
-    try {
-      await invoke("open_main_deepseek");
-      await hide();
-    } catch (e) {
-      stream.setError(String(e));
-    }
-  };
-
   /** Editor-class tools live in the main window: select the tool (shared localStorage +
       storage 事件让已挂载的 DevTools 跟着切), switch tab and get out of the way. */
   const jumpToDevtools = async (toolId?: string) => {
@@ -767,21 +711,6 @@ function QuickAskApp() {
         <>
           <div className="quick-ask-toolbar">
             <QuickSelect
-              value={settings.quickAskProfileId || ""}
-              options={[
-                { value: "", label: t("profile.none") },
-                ...profiles.map((p) => ({
-                  value: p.id,
-                  label: p.nameKey ? t(p.nameKey) : p.name,
-                })),
-              ]}
-              onChange={applyProfile}
-              placeholder={t("profile.none")}
-              alignLeft
-              open={openPop === "profile"}
-              onToggle={() => togglePop("profile")}
-            />
-            <QuickSelect
               value={selectedModel?.id || ""}
               options={models.map((m) => ({ value: m.id, label: `${m.name} (${m.model})` }))}
               onChange={setModelId}
@@ -790,6 +719,17 @@ function QuickAskApp() {
               open={openPop === "model"}
               onToggle={() => togglePop("model")}
             />
+            <button
+              type="button"
+              className={`qa-agent-toggle${agentOn ? " on" : ""}`}
+              onClick={toggleAgent}
+              disabled={stream.busy}
+              title={agentOn ? t("agent.note") : t("agent.tip")}
+              aria-pressed={agentOn}
+            >
+              <Bot size={12} />
+              {t("agent.label")}
+            </button>
             <ContextPicker
               open={openPop === "focus"}
               onToggleOpen={() => togglePop("focus")}
@@ -809,39 +749,23 @@ function QuickAskApp() {
             />
           </div>
 
-          <div className="qa-attach-bar">
-            <button
-              type="button"
-              className="qa-mini-btn"
-              onClick={() => void addAttachmentFromFile()}
-              title={t("attach.file")}
-              disabled={stream.busy}
-            >
-              <FilePlus2 size={13} /> {t("attach.file")}
-            </button>
-            <button
-              type="button"
-              className="qa-mini-btn"
-              onClick={addAttachmentFromInput}
-              title={t("attach.fromInput")}
-              disabled={stream.busy || !input.trim()}
-            >
-              {t("attach.fromInput")}
-            </button>
-            {attachments.map((a) => (
-              <span key={a.id} className="qa-attach-chip" title={`${a.name} · ${a.content.length} chars`}>
-                {a.name}
-                <button
-                  type="button"
-                  className="qa-attach-chip-x"
-                  onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
-                  aria-label={t("attach.remove")}
-                >
-                  <X size={11} />
-                </button>
-              </span>
-            ))}
-          </div>
+          {attachments.length > 0 && (
+            <div className="qa-attach-bar">
+              {attachments.map((a) => (
+                <span key={a.id} className="qa-attach-chip" title={`${a.name} · ${a.content.length} chars`}>
+                  {a.name}
+                  <button
+                    type="button"
+                    className="qa-attach-chip-x"
+                    onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                    aria-label={t("attach.remove")}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
 
           {ctx.ctxTruncated && ctxOpen && <div className="quick-ask-hint">{t("truncated")}</div>}
           {ctxOpen && (
@@ -895,16 +819,16 @@ function QuickAskApp() {
             task={task}
             onTask={changeTask}
             onDaily={askDaily}
-            agentOn={agentOn}
-            onToggleAgent={toggleAgent}
             agentSteps={stream.agentSteps}
             agentApproval={stream.agentApproval}
             stopping={stream.stopping}
             onDecideAgent={(allow) => void stream.decideAgent(allow)}
+            onContinue={() => void stream.send(t("agent.continuePrompt"))}
             hasSnippets={(snippets.snippets?.length ?? 0) > 0}
             snippetOpen={snippets.snippetOpen}
             onToggleSnippets={() => snippets.openManual()}
             onPasteClipboard={() => void fillClipboard()}
+            onAttachFile={() => void addAttachmentFromFile()}
             onSend={sendAsk}
             openList={openList}
             onRunOpen={runOpen}
@@ -912,10 +836,8 @@ function QuickAskApp() {
             onRegenerate={() => void stream.regenerate()}
             onCopyAnswer={(i) => void copyAnswer(i)}
             onSaveSnippet={(i) => void saveAnswerAsSnippet(i)}
-            onOpenDeepSeek={() => void openDeepSeek()}
             onExport={() => void handleExport()}
             onQuote={quoteSelection}
-            onCopySelection={() => void copySelection()}
           />
 
           {historyOpen && (
@@ -931,7 +853,6 @@ function QuickAskApp() {
                 <SessionHistory
                   sessions={sessions.quickAskSessions}
                   activeSessionId={activeSessionId}
-                  busy={stream.busy}
                   renamingId={renamingId}
                   renameDraft={renameDraft}
                   setRenameDraft={setRenameDraft}
@@ -943,7 +864,6 @@ function QuickAskApp() {
                   onCancelRename={() => setRenamingId(null)}
                   onOpen={openSession}
                   onRemove={(id) => void sessions.removeSession(id)}
-                  onNewChat={startNewChat}
                   relativeTime={sessions.relativeTime}
                 />
               </div>

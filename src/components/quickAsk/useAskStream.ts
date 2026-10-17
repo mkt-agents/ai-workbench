@@ -58,20 +58,42 @@ function clipTurn(text: string): string {
 }
 
 /** Full transcript (displayed + persisted), bounded so the session row stays small. */
-function appendTurn(prev: QaTurn[], question: string, answer: string, keepWhole = false): QaTurn[] {
+function appendTurn(
+  prev: QaTurn[],
+  question: string,
+  answer: string,
+  keepWhole = false,
+  steps?: AgentStep[],
+): QaTurn[] {
+  const kept = steps?.filter((s) => s.summary).map((s) => ({
+    tool: s.tool,
+    status: s.status,
+    summary: s.summary,
+  }));
   const next: QaTurn[] = [
     ...prev,
     { role: "user", content: question },
-    { role: "assistant", content: answer, ...(keepWhole ? { keep: "whole" as const } : {}) },
+    {
+      role: "assistant",
+      content: answer,
+      ...(keepWhole ? { keep: "whole" as const } : {}),
+      ...(kept && kept.length > 0 ? { steps: kept } : {}),
+    },
   ];
   return next.slice(-MAX_SAVED_TURNS * 2);
+}
+
+function historyContent(turn: QaTurn): string {
+  if (turn.role !== "assistant" || !turn.steps?.length) return turn.content;
+  const lines = turn.steps.map((s) => `- ${s.summary}`).join("\n");
+  return `${turn.content}\n\n[操作]\n${lines}`;
 }
 
 /** Only the most recent rounds go to the model, each clipped. */
 function requestHistory(turns: QaTurn[]): QaTurn[] {
   return turns.slice(-MAX_HISTORY_TURNS * 2).map((t) => ({
     role: t.role,
-    content: clipTurn(t.content),
+    content: clipTurn(historyContent(t)),
   }));
 }
 
@@ -131,6 +153,14 @@ export function useAskStream(opts: AskStreamOptions) {
   /** Where the in-flight request is: collecting context → waiting for the first token → streaming. */
   const [phase, setPhase] = useState<AskPhase>("idle");
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
+  const agentStepsRef = useRef<AgentStep[]>([]);
+  const rememberSteps = (next: AgentStep[] | ((prev: AgentStep[]) => AgentStep[])) => {
+    setAgentSteps((prev) => {
+      const value = typeof next === "function" ? next(prev) : next;
+      agentStepsRef.current = value;
+      return value;
+    });
+  };
   const [agentApproval, setAgentApproval] = useState<AgentApproval | null>(null);
   const [stopping, setStopping] = useState(false);
   /** Last request that failed (not stopped), so the error card can offer a retry. */
@@ -182,7 +212,7 @@ export function useAskStream(opts: AskStreamOptions) {
     setBusy(true);
     setError(null);
     setAnswer("");
-    setAgentSteps([]);
+    rememberSteps([]);
     setAgentApproval(null);
     setStopping(false);
     setSelectedText("");
@@ -194,7 +224,7 @@ export function useAskStream(opts: AskStreamOptions) {
     let sentMode: AskMode = replay?.mode ?? "chat";
     let keepWhole = false;
     const finishTurn = (text: string) => {
-      const nextTurns = appendTurn(baseHistory, question, text, keepWhole);
+      const nextTurns = appendTurn(baseHistory, question, text, keepWhole, agentStepsRef.current);
       setHistory(nextTurns);
       setPending(null);
       setPhase("idle");
@@ -395,7 +425,7 @@ export function useAskStream(opts: AskStreamOptions) {
             const payload = event.payload;
             if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
             if (payload.status !== "running") setAgentApproval(null);
-            setAgentSteps((prev) => {
+            rememberSteps((prev) => {
               const last = prev[prev.length - 1];
               const step: AgentStep = {
                 tool: payload.tool,
@@ -519,7 +549,7 @@ export function useAskStream(opts: AskStreamOptions) {
     lastTaskRef.current = "none";
     lastDailyBriefRef.current = "";
     lastDailyReposRef.current = [];
-    setAgentSteps([]);
+    rememberSteps([]);
     setAgentApproval(null);
     setStopping(false);
   }, [setSelectedText]);
@@ -532,7 +562,7 @@ export function useAskStream(opts: AskStreamOptions) {
     lastTaskRef.current = "none";
     lastDailyBriefRef.current = "";
     lastDailyReposRef.current = [];
-    setAgentSteps([]);
+    rememberSteps([]);
     setAgentApproval(null);
     setStopping(false);
     const lastUser = [...turns].reverse().find((t) => t.role === "user");
