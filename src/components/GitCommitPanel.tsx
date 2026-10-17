@@ -60,6 +60,8 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const updateRepoConfig = useGlobalStore((s) => s.updateRepoConfig);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeGitUndoLastCommit = useGlobalStore((s) => s.invokeGitUndoLastCommit);
+  const invokeGitListBranches = useGlobalStore((s) => s.invokeGitListBranches);
+  const invokeGitSwitchBranch = useGlobalStore((s) => s.invokeGitSwitchBranch);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const aiSceneModels = useGlobalStore((s) => s.settings.aiSceneModels);
   const loadAIModels = useGlobalStore((s) => s.loadAIModels);
@@ -75,6 +77,8 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     readStoredString(CL_MODEL_KEY)
   );
   const [scopeLabel, setScopeLabel] = useState<string | null>(null);
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchBusy, setBranchBusy] = useState(false);
   const onScopeLabel = useCallback((label: string | null) => {
     setScopeLabel(label);
   }, []);
@@ -115,6 +119,42 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     const key = pathKey(repoPath);
     return Object.values(repoItems).find((item) => pathKey(item.path) === key) ?? null;
   }, [repoItems, repoPath]);
+
+  useEffect(() => {
+    if (!active || !repoPath) {
+      setBranches([]);
+      return;
+    }
+    let cancelled = false;
+    invokeGitListBranches(repoPath)
+      .then((list) => {
+        if (cancelled) return;
+        const names = [...new Set([list.current, ...list.local].filter(Boolean))];
+        setBranches(names);
+      })
+      .catch(() => {
+        if (!cancelled) setBranches([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, repoPath, refreshNonce, invokeGitListBranches]);
+
+  const switchBranch = async (name: string) => {
+    if (!repoPath || !name || name === summary?.branch || branchBusy) return;
+    setBranchBusy(true);
+    try {
+      await invokeGitSwitchBranch(repoPath, name);
+      invalidateRepos([repoPath]);
+      await refreshRepos([repoPath], { withStatus: true });
+      setRefreshNonce((n) => n + 1);
+      showMsg("success", t("commit.branchSwitched", { name }));
+    } catch (e) {
+      showMsg("error", formatInvokeError(e));
+    } finally {
+      setBranchBusy(false);
+    }
+  };
 
   const author = summary
     ? { name: summary.userName || "", email: summary.userEmail || "" }
@@ -287,6 +327,23 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
                     <span className="commit-scope-dot" aria-hidden />
                     <span className="commit-scope-repo">{currentRepoName}</span>
                   </>
+                )}
+                {summary?.branch && (
+                  <select
+                    className="commit-branch-select"
+                    value={summary.branch}
+                    disabled={branchBusy || switching || !repoPath}
+                    aria-label={t("commit.branch")}
+                    onChange={(e) => void switchBranch(e.target.value)}
+                  >
+                    {(branches.includes(summary.branch) ? branches : [summary.branch, ...branches]).map(
+                      (name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      )
+                    )}
+                  </select>
                 )}
               </>
             ) : (

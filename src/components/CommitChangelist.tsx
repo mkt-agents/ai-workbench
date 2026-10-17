@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Archive,
   Bot,
   Check,
   ChevronDown,
   ChevronRight,
   Download,
   GitBranch,
+  History,
   Loader2,
   RefreshCw,
   RotateCcw,
   Sparkles,
+  Trash2,
   Upload,
   Undo2,
   X,
@@ -78,6 +81,9 @@ const AI_CONTEXT_MAX = 12_000;
 const CL_FILTER_KEY = "workbench-commit-filter";
 const CL_COLLAPSED_KEY = "workbench-commit-collapsed-repos";
 const CL_DRAFT_KEY = "workbench-commit-draft";
+const CL_RECENT_KEY = "workbench-commit-recent-messages";
+const RECENT_LOG = 12;
+const RECENT_LOCAL = 10;
 /** Rendering more than this many diff lines as individual spans gets sluggish. */
 const DIFF_RENDER_LINES = 2000;
 
@@ -236,17 +242,106 @@ function diffLineClass(line: string): string {
   return "diff-line";
 }
 
-function DiffPreview({ text }: { text: string }) {
+type DiffHunk = { header: string; text: string };
+
+function splitDiffHunks(text: string): { preamble: string; hunks: DiffHunk[] } | null {
+  const norm = text.replace(/\r\n/g, "\n");
+  if (!norm.includes("@@")) return null;
+  const lines = norm.split("\n");
+  const pre: string[] = [];
+  const hunks: string[][] = [];
+  let current: string[] | null = null;
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      if (current) hunks.push(current);
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    } else {
+      pre.push(line);
+    }
+  }
+  if (current) hunks.push(current);
+  if (hunks.length === 0) return null;
+  return {
+    preamble: pre.join("\n"),
+    hunks: hunks.map((rows) => ({ header: rows[0], text: rows.join("\n") })),
+  };
+}
+
+function buildHunkPatch(preamble: string, hunks: DiffHunk[]): string {
+  const body = [preamble.trimEnd(), ...hunks.map((h) => h.text)].filter(Boolean).join("\n");
+  return body.endsWith("\n") ? body : `${body}\n`;
+}
+
+function DiffPreview({
+  text,
+  wholeFile,
+  staged,
+  busy,
+  onApply,
+}: {
+  text: string;
+  wholeFile: boolean;
+  staged: boolean;
+  busy: boolean;
+  onApply?: (patch: string) => void;
+}) {
   const { t } = useTranslation("git");
   const [expanded, setExpanded] = useState(false);
+  const [picked, setPicked] = useState<Set<number>>(() => new Set());
+  const split = useMemo(() => (wholeFile ? null : splitDiffHunks(text)), [text, wholeFile]);
   useEffect(() => {
     setExpanded(false);
+    setPicked(new Set());
   }, [text]);
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const hidden = !expanded && lines.length > DIFF_RENDER_LINES;
   const shown = hidden ? lines.slice(0, DIFF_RENDER_LINES) : lines;
+  const binary = /binary file/i.test(text);
   return (
     <>
+      {wholeFile || !split ? (
+        <div className="cl-hunk-note runtime-muted">
+          {binary
+            ? t("commit.hunkBinary")
+            : wholeFile
+              ? t("commit.hunkUntracked")
+              : t("commit.hunkUnavailable")}
+        </div>
+      ) : (
+        <div className="cl-hunks">
+          {split.hunks.map((hunk, i) => (
+            <label key={`${hunk.header}-${i}`} className="cl-hunk">
+              <input
+                type="checkbox"
+                checked={picked.has(i)}
+                disabled={busy}
+                onChange={() => {
+                  setPicked((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(i)) next.delete(i);
+                    else next.add(i);
+                    return next;
+                  });
+                }}
+              />
+              <code>{hunk.header}</code>
+            </label>
+          ))}
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={busy || picked.size === 0 || !onApply}
+            onClick={() => {
+              if (!onApply || !split) return;
+              onApply(buildHunkPatch(split.preamble, split.hunks.filter((_, i) => picked.has(i))));
+            }}
+          >
+            {staged ? t("commit.hunkUnstage") : t("commit.hunkStage")}
+          </button>
+        </div>
+      )}
       {hidden && (
         <div className="cl-diff-more">
           <button
@@ -273,6 +368,7 @@ type DiffTarget = {
   repoPath: string;
   filePath: string;
   staged: boolean;
+  wholeFile: boolean;
 };
 
 type Props = {
@@ -428,6 +524,12 @@ function CommitChangelist({
   const invokeGitPush = useGlobalStore((s) => s.invokeGitPush);
   const invokeGitPull = useGlobalStore((s) => s.invokeGitPull);
   const invokeGitDiff = useGlobalStore((s) => s.invokeGitDiff);
+  const invokeGitApplyCached = useGlobalStore((s) => s.invokeGitApplyCached);
+  const invokeGitLog = useGlobalStore((s) => s.invokeGitLog);
+  const invokeGitStashPush = useGlobalStore((s) => s.invokeGitStashPush);
+  const invokeGitStashList = useGlobalStore((s) => s.invokeGitStashList);
+  const invokeGitStashPop = useGlobalStore((s) => s.invokeGitStashPop);
+  const invokeGitStashDrop = useGlobalStore((s) => s.invokeGitStashDrop);
   const invokeGitDiscard = useGlobalStore((s) => s.invokeGitDiscard);
   const invokeGitCommitContext = useGlobalStore((s) => s.invokeGitCommitContext);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
@@ -440,6 +542,11 @@ function CommitChangelist({
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; label?: string } | null>(null);
   const [message, setMessage] = useState(() => readStoredString(CL_DRAFT_KEY));
+  const [amend, setAmend] = useState(false);
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [recentSubjects, setRecentSubjects] = useState<string[]>([]);
+  const [stashes, setStashes] = useState<Array<{ index: number; message: string }>>([]);
+  const [stashOpen, setStashOpen] = useState(false);
   const [summaries, setSummaries] = useState<Record<string, RepoBatchItem>>({});
   const [statuses, setStatuses] = useState<Record<string, GitStatusEntry[]>>({});
   const [selected, setSelected] = useState<Map<string, Set<string>>>(() => new Map());
@@ -707,17 +814,26 @@ function CommitChangelist({
   const currentSummary = summaryForPath(currentGitRepo);
   const currentIsFavorited = !!findProjectByPath(recentProjects, currentGitRepo);
 
-  const canCommit = selectedCount > 0 && !!message.trim() && !busy && !generating;
-  const commitBlockReason =
-    selectedCount === 0 && dirtyRepos.length === 0
-      ? message.trim()
-        ? t("commit.changelistNothingToCommit")
-        : null
-      : !message.trim() && selectedCount > 0
-        ? t("commit.changelistNeedMessage")
-        : selectedCount === 0 && dirtyRepos.length > 0
+  const amendBlocked = amend && selectedRepoCount > 1;
+  const canCommit =
+    !!message.trim() &&
+    !busy &&
+    !generating &&
+    !amendBlocked &&
+    (amend
+      ? selectedRepoCount <= 1 && (selectedRepoCount === 1 || !!currentGitRepo)
+      : selectedCount > 0);
+  const commitBlockReason = amendBlocked
+    ? t("commit.amendOneRepo")
+    : !message.trim() && (selectedCount > 0 || amend)
+      ? t("commit.changelistNeedMessage")
+      : amend && selectedRepoCount === 0 && !currentGitRepo
+        ? t("commit.changelistPickRepo")
+        : !amend && selectedCount === 0 && dirtyRepos.length > 0
           ? t("commit.changelistNeedFiles")
-          : null;
+          : !amend && selectedCount === 0 && dirtyRepos.length === 0 && !!message.trim()
+            ? t("commit.changelistNothingToCommit")
+            : null;
 
   /**
    * Show what a batch push will do before doing it: publishing a branch that
@@ -811,7 +927,12 @@ function CommitChangelist({
   const loadDiff = async (repoPath: string, entry: GitStatusEntry) => {
     const staged = entry.group === "staged";
     const gen = ++diffGen.current;
-    setDiffTarget({ repoPath, filePath: entry.path, staged });
+    setDiffTarget({
+      repoPath,
+      filePath: entry.path,
+      staged,
+      wholeFile: entry.group === "untracked",
+    });
     setDiffLoading(true);
     try {
       const text = await invokeGitDiff(repoPath, entry.path, staged);
@@ -822,6 +943,119 @@ function CommitChangelist({
       setDiffText(formatInvokeError(e));
     } finally {
       if (gen === diffGen.current) setDiffLoading(false);
+    }
+  };
+
+  const applyHunks = async (patch: string) => {
+    if (!diffTarget || busy) return;
+    const target = diffTarget;
+    setBusy(true);
+    try {
+      const text = await invokeGitApplyCached(target.repoPath, patch, target.staged);
+      onToast("success", text);
+      await refreshAfterWrite([target.repoPath]);
+      const gen = ++diffGen.current;
+      const next = await invokeGitDiff(target.repoPath, target.filePath, target.staged);
+      if (gen === diffGen.current) setDiffText(next);
+    } catch (e) {
+      onToast("error", formatInvokeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadStashes = useCallback(async () => {
+    if (!currentGitRepo) {
+      setStashes([]);
+      return;
+    }
+    try {
+      setStashes(await invokeGitStashList(currentGitRepo));
+    } catch {
+      setStashes([]);
+    }
+  }, [currentGitRepo, invokeGitStashList]);
+
+  useEffect(() => {
+    if (!active) return;
+    void loadStashes();
+  }, [active, loadStashes, refreshNonce]);
+
+  const openRecent = async () => {
+    if (recentOpen) {
+      setRecentOpen(false);
+      return;
+    }
+    const local = readStoredArray<string>(CL_RECENT_KEY).slice(0, RECENT_LOCAL);
+    let fromLog: string[] = [];
+    if (currentGitRepo) {
+      try {
+        const rows = await invokeGitLog(currentGitRepo, RECENT_LOG);
+        fromLog = rows.map((row) => row[1] || "").filter(Boolean);
+      } catch {
+        fromLog = [];
+      }
+    }
+    const merged: string[] = [];
+    for (const item of [...local, ...fromLog]) {
+      if (!merged.includes(item)) merged.push(item);
+    }
+    setRecentSubjects(merged);
+    setRecentOpen(true);
+  };
+
+  const runStashPush = async () => {
+    if (!currentGitRepo) {
+      onToast("error", t("commit.changelistPickRepo"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const text = await invokeGitStashPush(currentGitRepo, message.trim() || undefined);
+      onToast("success", text);
+      setStashOpen(true);
+      await refreshAfterWrite([currentGitRepo]);
+      await loadStashes();
+    } catch (e) {
+      onToast("error", formatInvokeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runStashPop = async (index: number) => {
+    if (!currentGitRepo) return;
+    setBusy(true);
+    try {
+      const text = await invokeGitStashPop(currentGitRepo, index);
+      onToast("success", text);
+      await refreshAfterWrite([currentGitRepo]);
+      await loadStashes();
+    } catch (e) {
+      onToast("error", formatInvokeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runStashDrop = async (index: number, label: string) => {
+    if (!currentGitRepo) return;
+    const ok = await confirm({
+      title: t("commit.stashDropTitle"),
+      message: t("commit.stashDropConfirm", { message: label || t("commit.stashUntitled") }),
+      confirmText: t("commit.stashDrop"),
+      icon: "danger",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const text = await invokeGitStashDrop(currentGitRepo, index);
+      onToast("success", text);
+      await loadStashes();
+    } catch (e) {
+      onToast("error", formatInvokeError(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1060,12 +1294,35 @@ function CommitChangelist({
       onToast("error", t("commit.changelistNeedMessage"));
       return;
     }
-    const repos = [...selected.entries()].filter(
+    let repos = [...selected.entries()].filter(
       ([repoPath, files]) => files.size > 0 && scopedPathKeys.has(pathKey(repoPath))
     );
-    if (repos.length === 0) {
+    if (amend && repos.length > 1) {
+      onToast("error", t("commit.amendOneRepo"));
+      return;
+    }
+    if (amend && repos.length === 0) {
+      if (!currentGitRepo) {
+        onToast("error", t("commit.changelistPickRepo"));
+        return;
+      }
+      repos = [[currentGitRepo, new Set<string>()]];
+    } else if (repos.length === 0) {
       onToast("error", t("commit.changelistNeedFiles"));
       return;
+    }
+    if (amend) {
+      const summary = summaryForPath(repos[0][0]);
+      if (summary?.hasUpstream && summary.ahead === 0) {
+        const ok = await confirm({
+          title: t("commit.amendPublishedTitle"),
+          message: t("commit.amendPublishedMessage"),
+          warning: t("commit.amendPublishedWarn"),
+          confirmText: t("commit.amend"),
+          icon: "warning",
+        });
+        if (!ok) return;
+      }
     }
 
     // Identity soft-guard: preset ≠ actual on any selected repo
@@ -1128,6 +1385,7 @@ function CommitChangelist({
     // Partial commit will unstage unchecked staged files — warn once
     const partialUnstage: { path: string; files: string[] }[] = [];
     for (const [repoPath, fileSet] of repos) {
+      if (fileSet.size === 0) continue;
       const entries = statuses[repoPath] || [];
       const selectedSet = new Set(fileSet);
       const toUnstage = entries
@@ -1174,7 +1432,7 @@ function CommitChangelist({
         async (repoPath) => {
           if (withPush) noteRepo(repoPath);
           const files = selected.get(repoPath) || new Set<string>();
-          if (files.size === 0) return;
+          if (files.size === 0 && !amend) return;
           const entries = statuses[repoPath] || [];
           const selectedEntries = entries.filter((e) => files.has(selectionKey(e)));
           const toUnstage = entries
@@ -1189,14 +1447,14 @@ function CommitChangelist({
                 .map((e) => e.path)
             ),
           ];
-          if (toUnstage.length > 0) {
+          if (files.size > 0 && toUnstage.length > 0) {
             await invokeGitUnstage(repoPath, toUnstage);
           }
-          if (toStage.length > 0) {
+          if (files.size > 0 && toStage.length > 0) {
             await invokeGitStage(repoPath, toStage);
           }
-          await invokeGitCommit(repoPath, msg);
-          if (restageAfter && toUnstage.length > 0) {
+          await invokeGitCommit(repoPath, msg, amend);
+          if (files.size > 0 && restageAfter && toUnstage.length > 0) {
             try {
               await invokeGitStage(repoPath, toUnstage);
             } catch {
@@ -1234,7 +1492,10 @@ function CommitChangelist({
       onToast("error", `${t("commit.changelistDone", { ok, fail })}${detail}`);
     } else {
       onToast("success", t("commit.changelistDone", { ok, fail }));
+      const prev = readStoredArray<string>(CL_RECENT_KEY).filter((item) => item !== msg);
+      writeStoredArray(CL_RECENT_KEY, [msg, ...prev].slice(0, RECENT_LOCAL));
       setMessage("");
+      setAmend(false);
     }
     void refreshAfterWrite(targetPaths);
   };
@@ -1648,7 +1909,13 @@ function CommitChangelist({
               <Loader2 size={14} className="spin" /> {t("commit.diffLoading")}
             </div>
           ) : diffText ? (
-            <DiffPreview text={diffText} />
+            <DiffPreview
+              text={diffText}
+              wholeFile={!!diffTarget?.wholeFile}
+              staged={!!diffTarget?.staged}
+              busy={busy}
+              onApply={(patch) => void applyHunks(patch)}
+            />
           ) : (
             <div className="cl-diff-empty">
               <div className="cl-empty-title">{t("commit.changelistDiffIdle")}</div>
@@ -1667,6 +1934,97 @@ function CommitChangelist({
           placeholder={t("commit.messagePlaceholder")}
           disabled={busy || generating}
         />
+        <div className="cl-commit-tools">
+          <label className="cl-amend">
+            <input
+              type="checkbox"
+              checked={amend}
+              disabled={busy || generating}
+              onChange={(e) => setAmend(e.target.checked)}
+            />
+            {t("commit.amend")}
+          </label>
+          <div className="cl-recent">
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              disabled={busy || generating}
+              onClick={() => void openRecent()}
+            >
+              <History size={13} />
+              {t("commit.recentMessages")}
+            </button>
+            {recentOpen && (
+              <div className="cl-recent-menu">
+                {recentSubjects.length === 0 ? (
+                  <div className="cl-recent-empty runtime-muted">{t("commit.recentEmpty")}</div>
+                ) : (
+                  recentSubjects.map((subject) => (
+                    <button
+                      key={subject}
+                      type="button"
+                      className="cl-recent-item"
+                      onClick={() => {
+                        setMessage(subject);
+                        setRecentOpen(false);
+                      }}
+                    >
+                      {subject}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={busy || generating || !currentGitRepo}
+            onClick={() => void runStashPush()}
+            title={t("commit.stashPushTip")}
+          >
+            <Archive size={13} />
+            {t("commit.stashPush")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={!currentGitRepo}
+            onClick={() => setStashOpen((open) => !open)}
+          >
+            {t("commit.stashList", { count: stashes.length })}
+          </button>
+        </div>
+        {stashOpen && (
+          <div className="cl-stash-list">
+            {stashes.length === 0 ? (
+              <div className="runtime-muted">{t("commit.stashEmpty")}</div>
+            ) : (
+              stashes.map((entry) => (
+                <div key={entry.index} className="cl-stash-row">
+                  <span className="cl-stash-msg">{entry.message || t("commit.stashUntitled")}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={busy}
+                    onClick={() => void runStashPop(entry.index)}
+                  >
+                    {t("commit.stashPop")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={busy}
+                    onClick={() => void runStashDrop(entry.index, entry.message)}
+                    aria-label={t("commit.stashDrop")}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
         <div className="cl-commit-foot">
           <div className="cl-commit-actions-secondary">
             <button

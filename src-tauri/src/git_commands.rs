@@ -1134,16 +1134,24 @@ fn git_unstage_sync(repo_path: String, files: Vec<String>) -> Result<String, Str
     Ok("已取消暂存".into())
 }
 
-fn git_commit_sync(repo_path: String, message: String) -> Result<String, String> {
+fn git_commit_sync(repo_path: String, message: String, amend: bool) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
     let msg = message.trim();
     if msg.is_empty() {
         return Err("提交说明不能为空".into());
     }
-    if !has_staged_changes(&repo_path)? {
+    if amend {
+        if git_stdout(&repo_path, &["rev-parse", "--verify", "HEAD"]).is_err() {
+            return Err("仓库还没有任何提交，无法修改上一次提交。".into());
+        }
+    } else if !has_staged_changes(&repo_path)? {
         return Err("没有已暂存的改动。请先暂存文件，或使用「暂存全部并提交」。".into());
     }
-    let output = git_output(&repo_path, &["commit", "-m", msg])?;
+    let output = if amend {
+        git_output(&repo_path, &["commit", "--amend", "-m", msg])?
+    } else {
+        git_output(&repo_path, &["commit", "-m", msg])?
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1162,6 +1170,28 @@ fn git_commit_sync(repo_path: String, message: String) -> Result<String, String>
     } else {
         stdout
     })
+}
+
+/// A tip that already matches its upstream has been published. Amending it
+/// rewrites history that other clones may already have.
+pub(crate) fn counts_as_published(has_upstream: bool, ahead: u32) -> bool {
+    has_upstream && ahead == 0
+}
+
+fn tip_is_published(repo_path: &str) -> bool {
+    if !has_upstream(repo_path) {
+        return false;
+    }
+    let Ok(s) = git_stdout(
+        repo_path,
+        &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+    ) else {
+        return false;
+    };
+    let mut parts = s.split_whitespace();
+    let _behind: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let ahead: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    counts_as_published(true, ahead)
 }
 
 fn has_upstream(repo_path: &str) -> bool {
@@ -1648,18 +1678,7 @@ fn git_undo_last_commit_sync(repo_path: String) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
 
     // "ahead == 0 with upstream" means the tip is already published.
-    let mut published = false;
-    if has_upstream(&repo_path) {
-        if let Ok(s) = git_stdout(
-            &repo_path,
-            &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
-        ) {
-            let mut parts = s.split_whitespace();
-            let _behind: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-            let ahead: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-            published = ahead == 0;
-        }
-    }
+    let published = tip_is_published(&repo_path);
 
     if git_stdout(&repo_path, &["rev-parse", "--verify", "HEAD"]).is_err() {
         return Err("仓库还没有任何提交，无法回滚。".into());
@@ -1830,9 +1849,178 @@ pub async fn git_unstage(path: String, files: Vec<String>) -> Result<String, Str
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// Reject patches that would leave the repository (`..` or an absolute path).
+pub(crate) fn patch_stays_in_repo(patch: &str) -> bool {
+    for line in patch.lines() {
+        let Some(rest) = line.strip_prefix("+++ ").or_else(|| line.strip_prefix("--- ")) else {
+            continue;
+        };
+        let token = rest.split_whitespace().next().unwrap_or("");
+        if token == "/dev/null" || token.ends_with("/dev/null") || token == "NUL" {
+            continue;
+        }
+        let path = token
+            .strip_prefix("a/")
+            .or_else(|| token.strip_prefix("b/"))
+            .unwrap_or(token);
+        if path.is_empty() {
+            continue;
+        }
+        if path.contains('\0')
+            || path.starts_with('/')
+            || path.starts_with('\\')
+            || Path::new(path).is_absolute()
+        {
+            return false;
+        }
+        if path.split(['/', '\\']).any(|seg| seg == "..") {
+            return false;
+        }
+    }
+    true
+}
+
+fn git_apply_cached_sync(repo_path: String, patch: String, reverse: bool) -> Result<String, String> {
+    ensure_git_repo(&repo_path)?;
+    if patch.trim().is_empty() {
+        return Err("没有可暂存的代码块".into());
+    }
+    if !patch_stays_in_repo(&patch) {
+        return Err("补丁路径超出当前仓库".into());
+    }
+    let mut cmd = git_command();
+    cmd.current_dir(&repo_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut args = vec!["apply", "--cached", "--whitespace=nowarn", "--recount"];
+    if reverse {
+        args.push("--reverse");
+    }
+    args.push("-");
+    cmd.args(args);
+    let mut child = cmd.spawn().map_err(map_git_spawn_err)?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(patch.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "按块暂存失败".into()
+        } else {
+            stderr
+        });
+    }
+    Ok(if reverse {
+        "已取消暂存所选代码块".into()
+    } else {
+        "已暂存所选代码块".into()
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashEntry {
+    pub index: u32,
+    pub message: String,
+}
+
+fn git_stash_push_sync(repo_path: String, message: String) -> Result<String, String> {
+    ensure_git_repo(&repo_path)?;
+    let message = {
+        let trimmed = message.trim();
+        if trimmed.is_empty() {
+            "WIP".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    let output = git_output(&repo_path, &["stash", "push", "-u", "-m", &message])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "收起改动失败".into()
+        } else {
+            stderr
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.to_ascii_lowercase().contains("no local changes") {
+        return Err("没有可收起的改动".into());
+    }
+    Ok(if stdout.is_empty() {
+        "已收起改动".into()
+    } else {
+        stdout
+    })
+}
+
+fn git_stash_list_sync(repo_path: String) -> Result<Vec<GitStashEntry>, String> {
+    ensure_git_repo(&repo_path)?;
+    let output = git_output(
+        &repo_path,
+        &["stash", "list", "--pretty=format:%gd%x1f%s"],
+    )?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "读取暂存列表失败".into()
+        } else {
+            stderr
+        });
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (slot, message) = line.split_once('\u{1f}').unwrap_or((line, ""));
+        let index = slot
+            .trim_start_matches("stash@{")
+            .trim_end_matches('}')
+            .parse()
+            .unwrap_or(0);
+        out.push(GitStashEntry {
+            index,
+            message: message.to_string(),
+        });
+    }
+    Ok(out)
+}
+
+fn git_stash_apply_sync(repo_path: String, index: u32, drop: bool) -> Result<String, String> {
+    ensure_git_repo(&repo_path)?;
+    let spec = format!("stash@{{{index}}}");
+    let verb = if drop { "drop" } else { "pop" };
+    let output = git_output(&repo_path, &["stash", verb, &spec])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let combined = format!("{stderr} {stdout}").trim().to_string();
+        return Err(if combined.is_empty() {
+            if drop {
+                "删除暂存失败".into()
+            } else {
+                "恢复暂存失败".into()
+            }
+        } else {
+            combined
+        });
+    }
+    Ok(if drop {
+        "已删除这条暂存".into()
+    } else {
+        "已恢复这条暂存".into()
+    })
+}
+
 #[tauri::command]
-pub async fn git_commit(path: String, message: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || git_commit_sync(path, message))
+pub async fn git_commit(path: String, message: String, amend: Option<bool>) -> Result<String, String> {
+    let amend = amend.unwrap_or(false);
+    tokio::task::spawn_blocking(move || git_commit_sync(path, message, amend))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
@@ -2044,6 +2232,47 @@ pub async fn git_discard(
 #[tauri::command]
 pub async fn git_undo_last_commit(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || git_undo_last_commit_sync(path))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_apply_cached(
+    path: String,
+    patch: String,
+    reverse: Option<bool>,
+) -> Result<String, String> {
+    let reverse = reverse.unwrap_or(false);
+    tokio::task::spawn_blocking(move || git_apply_cached_sync(path, patch, reverse))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_stash_push(path: String, message: Option<String>) -> Result<String, String> {
+    let message = message.unwrap_or_default();
+    tokio::task::spawn_blocking(move || git_stash_push_sync(path, message))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_stash_list(path: String) -> Result<Vec<GitStashEntry>, String> {
+    tokio::task::spawn_blocking(move || git_stash_list_sync(path))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_stash_pop(path: String, index: u32) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_stash_apply_sync(path, index, false))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(path: String, index: u32) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_stash_apply_sync(path, index, true))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
@@ -2479,7 +2708,27 @@ fn pick_directory_sync(window: &tauri::WebviewWindow) -> Result<Option<String>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{friendly_push_error, parse_porcelain_line, parse_proxy_server, validate_email, validate_name};
+    use super::{
+        counts_as_published, friendly_push_error, parse_porcelain_line, parse_proxy_server,
+        patch_stays_in_repo, validate_email, validate_name,
+    };
+
+    #[test]
+    fn amend_of_a_published_tip_is_the_same_rule_as_undo() {
+        assert!(counts_as_published(true, 0));
+        assert!(!counts_as_published(true, 1));
+        assert!(!counts_as_published(false, 0));
+    }
+
+    #[test]
+    fn patch_rejects_paths_that_leave_the_repo() {
+        let inside = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n";
+        assert!(patch_stays_in_repo(inside));
+        assert!(patch_stays_in_repo("--- /dev/null\n+++ b/src/new.rs\n"));
+        assert!(!patch_stays_in_repo("--- a/../outside.rs\n+++ b/../outside.rs\n"));
+        assert!(!patch_stays_in_repo("--- a/C:/Windows/x.rs\n+++ b/C:/Windows/x.rs\n"));
+        assert!(!patch_stays_in_repo("--- /etc/passwd\n+++ /etc/passwd\n"));
+    }
 
     #[test]
     fn push_error_translates_network_failure() {

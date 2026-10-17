@@ -418,6 +418,97 @@
   background: var(--input-bg);
 }
 
+.cl-commit-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cl-amend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-1);
+}
+
+.cl-recent {
+  position: relative;
+}
+
+.cl-recent-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 5;
+  width: min(420px, 70vw);
+  max-height: 240px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-md);
+}
+
+.cl-recent-item,
+.cl-recent-empty {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-0);
+}
+
+.cl-recent-item:hover {
+  background: var(--bg-hover);
+}
+
+.cl-hunks,
+.cl-stash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.cl-hunk,
+.cl-stash-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cl-hunk code,
+.cl-stash-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text-1);
+}
+
+.cl-hunk-note {
+  margin-bottom: 8px;
+}
+
+.commit-branch-select {
+  max-width: 160px;
+  height: 22px;
+  margin-left: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text-0);
+  font-family: var(--font-mono);
+}
+
 .cl-commit-foot {
   display: flex;
   align-items: center;

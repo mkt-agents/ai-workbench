@@ -58,7 +58,12 @@ export interface Invocations {
   invokeGitStatus: (path: string) => Promise<GitStatusEntry[]>;
   invokeGitStage: (path: string, files: string[]) => Promise<string>;
   invokeGitUnstage: (path: string, files: string[]) => Promise<string>;
-  invokeGitCommit: (path: string, message: string) => Promise<string>;
+  invokeGitCommit: (path: string, message: string, amend?: boolean) => Promise<string>;
+  invokeGitApplyCached: (path: string, patch: string, reverse?: boolean) => Promise<string>;
+  invokeGitStashPush: (path: string, message?: string) => Promise<string>;
+  invokeGitStashList: (path: string) => Promise<Array<{ index: number; message: string }>>;
+  invokeGitStashPop: (path: string, index: number) => Promise<string>;
+  invokeGitStashDrop: (path: string, index: number) => Promise<string>;
   invokeGitPush: (path: string) => Promise<string>;
   invokeGitPull: (path: string, merge?: boolean) => Promise<string>;
   invokeGitCreateBranch: (path: string, name: string) => Promise<string>;
@@ -307,8 +312,18 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_stage', { path, files }),
   invokeGitUnstage: (path: string, files: string[]) =>
     tauriInvoke<string>('git_unstage', { path, files }),
-  invokeGitCommit: (path: string, message: string) =>
-    tauriInvoke<string>('git_commit', { path, message }),
+  invokeGitCommit: (path: string, message: string, amend?: boolean) =>
+    tauriInvoke<string>('git_commit', { path, message, amend: amend ?? false }),
+  invokeGitApplyCached: (path: string, patch: string, reverse?: boolean) =>
+    tauriInvoke<string>('git_apply_cached', { path, patch, reverse: reverse ?? false }),
+  invokeGitStashPush: (path: string, message?: string) =>
+    tauriInvoke<string>('git_stash_push', { path, message: message ?? null }),
+  invokeGitStashList: (path: string) =>
+    tauriInvoke<Array<{ index: number; message: string }>>('git_stash_list', { path }),
+  invokeGitStashPop: (path: string, index: number) =>
+    tauriInvoke<string>('git_stash_pop', { path, index }),
+  invokeGitStashDrop: (path: string, index: number) =>
+    tauriInvoke<string>('git_stash_drop', { path, index }),
   invokeGitPush: (path: string) =>
     tauriInvoke<string>('git_push', { path }),
   invokeGitPull: (path: string, merge?: boolean) =>

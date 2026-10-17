@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { QuickAskTurn } from "../../core/types";
 import {
-  AlertCircle, ArrowDown, BookmarkPlus, Check, ClipboardPaste, Copy, Download, FilePlus2,
+  AlertCircle, ArrowDown, BookmarkPlus, Bot, Check, ClipboardPaste, Copy, Download, FilePlus2,
   FileText, FolderGit2, MessageCircle, MessageSquarePlus, RefreshCw, Send, Sparkles, Square, X,
 } from "lucide-react";
 import MarkdownView from "../MarkdownView";
@@ -74,6 +74,12 @@ type Props = {
   onPasteClipboard: () => void;
   onAttachFile: () => void;
   onSend: () => void;
+  /** Project picker, shown at the top-left of the composer. */
+  repoControl: ReactNode;
+  /** Model picker, shown at the bottom-right, beside send. */
+  modelControl: ReactNode;
+  agentOn: boolean;
+  onToggleAgent: () => void;
   /** Non-null while the composer is an "open …" phrase (empty = nothing matched). */
   openList: OpenSuggestion[] | null;
   onRunOpen: (item: OpenSuggestion) => void;
@@ -127,7 +133,7 @@ export default function AskPanel(props: Props) {
     route, routeOverride, onRouteOverride, routeMenuOpen, onToggleRouteMenu, projectLabel,
     task, onTask, onDaily, agentSteps, agentApproval, stopping, onDecideAgent, onContinue,
     hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard, onAttachFile,
-    onSend, openList, onRunOpen, onStop, onRegenerate, onCopyAnswer, onSaveSnippet,
+    onSend, repoControl, modelControl, agentOn, onToggleAgent, openList, onRunOpen, onStop, onRegenerate, onCopyAnswer, onSaveSnippet,
     onExport, onQuote,
   } = props;
   const answerRef = useRef<HTMLDivElement | null>(null);
@@ -502,66 +508,7 @@ export default function AskPanel(props: Props) {
 
       <div className="qa-input-card">
         <div className="qa-compose-meta">
-        <div className="qa-focus qa-route">
-          <button
-            type="button"
-            className={`qa-route-pill is-${route.mode}${routeOverride !== "auto" ? " is-pinned" : ""}${
-              isProject && !projectLabel ? " is-warn" : ""
-            }`}
-            onClick={onToggleRouteMenu}
-            title={pillTip}
-            aria-haspopup="listbox"
-            aria-expanded={routeMenuOpen}
-          >
-            {flashKey > 0 && <span key={flashKey} className="qa-route-flash" aria-hidden />}
-            {isProject ? <FolderGit2 size={12} /> : <MessageCircle size={12} />}
-            <span className="qa-route-label">{pillLabel}</span>
-            {routeOverride === "auto" && <span className="qa-route-auto">{t("route.autoTag")}</span>}
-            <span className="qa-focus-caret">▾</span>
-          </button>
-          {routeMenuOpen && (
-            <div className="qa-focus-pop is-left is-up qa-route-pop" role="listbox">
-              <div className="qa-focus-pop-head">
-                <span>{t("route.menuTitle")}</span>
-              </div>
-              <div className="qa-focus-list">
-                {ROUTE_OPTIONS.map((opt) => {
-                  const on = opt === routeOverride;
-                  return (
-                    <button
-                      key={opt}
-                      type="button"
-                      role="option"
-                      aria-selected={on}
-                      className={`qa-focus-item${on ? " on" : ""}`}
-                      onClick={() => {
-                        onRouteOverride(opt);
-                        onToggleRouteMenu();
-                      }}
-                    >
-                      <span className={`qa-focus-check${on ? " on" : ""}`}>{on && <Check size={11} />}</span>
-                      <span className="qa-focus-name">{t(`route.${opt}`)}</span>
-                      <span className="qa-route-desc">{t(`route.${opt}Desc`)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-        {task !== "none" && (
-          <span className="qa-task-tag">
-            {t(`taskShort.${task}`)}
-            <button
-              type="button"
-              className="qa-task-tag-x"
-              onClick={() => onTask("none")}
-              title={t("taskClear")}
-            >
-              <X size={11} />
-            </button>
-          </span>
-        )}
+          {repoControl}
         </div>
         {openList && (
           <div ref={openListRef} className="qa-open-suggest" role="listbox" aria-label={t("openList")}>
@@ -685,8 +632,80 @@ export default function AskPanel(props: Props) {
               {t("dailyShort")}
             </button>
           </div>
-          {/* One key, two states: morphs in place so the footer never shifts. */}
-          <button
+          <div className="qa-compose-end">
+            <div className="qa-focus qa-route">
+              <button
+                type="button"
+                className={`qa-route-pill is-${route.mode}${routeOverride !== "auto" ? " is-pinned" : ""}${
+                  isProject && !projectLabel ? " is-warn" : ""
+                }`}
+                onClick={onToggleRouteMenu}
+                title={pillTip}
+                aria-haspopup="listbox"
+                aria-expanded={routeMenuOpen}
+              >
+                {flashKey > 0 && <span key={flashKey} className="qa-route-flash" aria-hidden />}
+                {isProject ? <FolderGit2 size={12} /> : <MessageCircle size={12} />}
+                <span className="qa-route-label">{pillLabel}</span>
+                {routeOverride === "auto" && <span className="qa-route-auto">{t("route.autoTag")}</span>}
+                <span className="qa-focus-caret">▾</span>
+              </button>
+              {routeMenuOpen && (
+                <div className="qa-focus-pop is-left is-up qa-route-pop" role="listbox">
+                  <div className="qa-focus-pop-head">
+                    <span>{t("route.menuTitle")}</span>
+                  </div>
+                  <div className="qa-focus-list">
+                    {ROUTE_OPTIONS.map((opt) => {
+                      const on = opt === routeOverride;
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          role="option"
+                          aria-selected={on}
+                          className={`qa-focus-item${on ? " on" : ""}`}
+                          onClick={() => {
+                            onRouteOverride(opt);
+                            onToggleRouteMenu();
+                          }}
+                        >
+                          <span className={`qa-focus-check${on ? " on" : ""}`}>{on && <Check size={11} />}</span>
+                          <span className="qa-focus-name">{t(`route.${opt}`)}</span>
+                          <span className="qa-route-desc">{t(`route.${opt}Desc`)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            {task !== "none" && (
+              <span className="qa-task-tag">
+                {t(`taskShort.${task}`)}
+                <button
+                  type="button"
+                  className="qa-task-tag-x"
+                  onClick={() => onTask("none")}
+                  title={t("taskClear")}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+            <button
+              type="button"
+              className={`qa-chip-btn qa-agent-toggle${agentOn ? " on" : ""}`}
+              onClick={onToggleAgent}
+              disabled={busy}
+              title={agentOn ? t("agent.note") : t("agent.tip")}
+              aria-pressed={agentOn}
+            >
+              <Bot size={12} />
+              {t("agent.label")}
+            </button>
+            {modelControl}
+            <button
             type="button"
             className={`qa-send-btn${busy ? " is-busy" : ""}`}
             onClick={busy ? onStop : () => {
@@ -704,6 +723,7 @@ export default function AskPanel(props: Props) {
             <Send size={15} className="qa-send-icon" />
             <Square size={12} className="qa-stop-icon" />
           </button>
+          </div>
         </div>
       </div>
     </div>

@@ -110,8 +110,7 @@
 }
 /* Frosted controls: --bg-0/.input-field are near-transparent in the translucent
    themes and the window itself lets the desktop through. */
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-toolbar .qa-focus-btn,
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-agent-toggle {
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-toolbar .qa-focus-btn {
   background-color: var(--float-bg);
   backdrop-filter: blur(16px) saturate(1.08);
   -webkit-backdrop-filter: blur(16px) saturate(1.08);
@@ -271,8 +270,7 @@
 }
 .qa-ctx-pop {
   width: 320px;
-  /* the quick-ask window is short: keep the parts section on screen, scroll the tree */
-  max-height: calc(100vh - 96px);
+  max-height: min(360px, calc(100vh - 180px));
 }
 .qa-ctx-pop > * {
   flex-shrink: 0;
@@ -757,6 +755,8 @@
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
+  position: relative;
+  overflow: visible;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-0);
@@ -770,8 +770,7 @@
 
 /* 与主窗 .card 同配方，快问表面跟主题磨砂一致 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-empty,
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-card,
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-input-card {
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-card {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, transparent 40%),
     rgba(255, 255, 255, 0.06);
@@ -779,6 +778,29 @@
   box-shadow: var(--surface-highlight), 0 10px 28px rgba(0, 0, 0, 0.16);
   backdrop-filter: blur(20px) saturate(1.08);
   -webkit-backdrop-filter: blur(20px) saturate(1.08);
+}
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-input-card {
+  background: transparent;
+  border-color: var(--overlay-3);
+  box-shadow: var(--surface-highlight), 0 10px 28px rgba(0, 0, 0, 0.16);
+}
+/* Blur lives on a pseudo so the open menus can extend past the card. */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-input-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, transparent 40%),
+    rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+}
+.qa-input-card > * {
+  position: relative;
+  z-index: 1;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-toolbar {
@@ -805,10 +827,20 @@
 }
 .qa-input-foot {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px 8px 8px;
+  overflow: visible;
+}
+.qa-compose-tools {
+  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 2px 6px 6px;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .qa-input-card > .qa-compose-meta {
   padding: 6px 8px 0;
@@ -816,34 +848,88 @@
 .qa-compose-meta {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
   flex-shrink: 0;
   min-width: 0;
 }
-.qa-agent-toggle {
+.qa-compose-meta > .qa-ctx-picker {
+  flex: 1 1 auto;
+  max-width: none;
+  min-width: 0;
+}
+.qa-compose-meta-side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.qa-chip-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
+  height: 28px;
+  max-width: 100%;
   padding: 0 10px;
   box-sizing: border-box;
-  flex-shrink: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
   color: var(--text-2);
   font-size: 12px;
+  line-height: 1;
   cursor: pointer;
+  min-width: 0;
+  flex-shrink: 0;
   transition: var(--transition-colors-fast);
 }
-.qa-agent-toggle.on {
+.qa-chip-btn:hover,
+.qa-chip-btn.is-open {
+  color: var(--text-1);
+  background: var(--bg-2);
+  border-color: var(--border-subtle);
+}
+.qa-chip-btn .qa-focus-caret {
+  flex-shrink: 0;
+}
+.qa-chip-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.qa-compose-end {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  flex-shrink: 0;
+}
+.qa-compose-end .qa-send-btn {
+  margin-left: auto;
+}
+.qa-model-pick {
+  flex: 0 1 220px;
+  max-width: 240px;
+  min-width: 0;
+}
+.qa-model-pick .qa-chip-btn {
+  width: 100%;
+}
+.qa-agent-toggle.qa-chip-btn {
+  height: 28px;
+  flex-shrink: 0;
+  max-width: none;
+  border-radius: var(--radius-full);
+  border-color: transparent;
+  background: transparent;
+}
+.qa-agent-toggle.qa-chip-btn.on {
   border-color: var(--accent-border);
   background: var(--accent-dim);
   color: var(--text-0);
-}
-.qa-agent-toggle:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 .qa-agent-log {
   margin-top: 6px;
@@ -880,7 +966,8 @@
 }
 .qa-route-pill:hover {
   color: var(--text-1);
-  border-color: var(--accent-border);
+  background: var(--bg-2);
+  border-color: var(--border-subtle);
 }
 .qa-route-pill.is-project {
   color: var(--accent);
@@ -913,6 +1000,17 @@
 .qa-focus-pop.is-up {
   top: auto;
   bottom: calc(100% + 6px);
+  max-height: min(320px, calc(100vh - 180px));
+  overflow: auto;
+}
+.qa-focus-pop.is-up .qa-focus-list {
+  max-height: none;
+}
+.qa-model-pick .qa-focus-pop {
+  width: max-content;
+  min-width: 168px;
+  max-width: 260px;
+  padding: 4px;
 }
 .qa-route-desc {
   grid-column: 2;
@@ -951,12 +1049,7 @@
   opacity: 1;
 }
 .qa-compose-tools {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
+  width: 100%;
 }
 .qa-compose-tools::-webkit-scrollbar {
   display: none;
@@ -1730,6 +1823,7 @@
 .qa-route-pill {
   position: relative;
   overflow: hidden;
+  flex-shrink: 0;
 }
 .qa-route-flash {
   position: absolute;

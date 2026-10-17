@@ -13,6 +13,10 @@ type Props = {
   className?: string;
   /** Anchor the popover to the left edge of the trigger (default: right). */
   alignLeft?: boolean;
+  /** Open the menu above the trigger. The quick-ask composer sits at the bottom of the window. */
+  dropUp?: boolean;
+  /** Light chip trigger, for a control that lives inside the composer. */
+  ghost?: boolean;
   /** Controlled by the shell so opening one popover closes the others. */
   open: boolean;
   onToggle: () => void;
@@ -30,6 +34,8 @@ export default function QuickSelect({
   placeholder,
   className,
   alignLeft,
+  dropUp,
+  ghost,
   open,
   onToggle,
 }: Props) {
@@ -38,13 +44,21 @@ export default function QuickSelect({
   const selectedRef = useRef<HTMLButtonElement | null>(null);
   // Long model lists scroll the current pick into view when the popover opens.
   useEffect(() => {
-    if (open) selectedRef.current?.scrollIntoView({ block: "nearest" });
+    const el = selectedRef.current;
+    const list = el?.parentElement;
+    if (!open || !el || !list) return;
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
   }, [open]);
   return (
     <div className={className ? `qa-focus ${className}` : "qa-focus"}>
       <button
         type="button"
-        className={`input-field qa-focus-btn${open ? " is-open" : ""}`}
+        className={`${ghost ? "qa-chip-btn" : "input-field qa-focus-btn"}${open ? " is-open" : ""}`}
         onClick={onToggle}
         title={title || current?.label || placeholder}
         aria-haspopup="listbox"
@@ -54,7 +68,7 @@ export default function QuickSelect({
         <span className="qa-focus-caret">▾</span>
       </button>
       {open && (
-        <div className={`qa-focus-pop${alignLeft ? " is-left" : ""}`} role="listbox">
+        <div className={`qa-focus-pop${alignLeft ? " is-left" : ""}${dropUp ? " is-up" : ""}`} role="listbox">
           <div className="qa-focus-list">
             {options.map((o) => {
               const on = o.value === value;

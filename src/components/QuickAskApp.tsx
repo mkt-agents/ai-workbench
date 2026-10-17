@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bot, History, MessageSquarePlus, Pin, PinOff, Sparkles, Terminal, X } from "lucide-react";
+import { History, MessageSquarePlus, Pin, PinOff, Sparkles, Terminal, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -709,46 +709,6 @@ function QuickAskApp() {
         <ToolsPanel onJump={(toolId) => void jumpToDevtools(toolId)} />
       ) : (
         <>
-          <div className="quick-ask-toolbar">
-            <QuickSelect
-              value={selectedModel?.id || ""}
-              options={models.map((m) => ({ value: m.id, label: `${m.name} (${m.model})` }))}
-              onChange={setModelId}
-              placeholder={t("noModel")}
-              alignLeft
-              open={openPop === "model"}
-              onToggle={() => togglePop("model")}
-            />
-            <button
-              type="button"
-              className={`qa-agent-toggle${agentOn ? " on" : ""}`}
-              onClick={toggleAgent}
-              disabled={stream.busy}
-              title={agentOn ? t("agent.note") : t("agent.tip")}
-              aria-pressed={agentOn}
-            >
-              <Bot size={12} />
-              {t("agent.label")}
-            </button>
-            <ContextPicker
-              open={openPop === "focus"}
-              onToggleOpen={() => togglePop("focus")}
-              groups={repoGroups}
-              selection={focusedRepos}
-              label={pickerLabel}
-              currentRepo={settings.currentGitRepo || null}
-              onToggleGroup={onToggleGroup}
-              onToggleService={onToggleService}
-              onClear={() => commitFocus([])}
-              onScanFolder={() => void scanFolder()}
-              scanning={scanning}
-              chips={chips}
-              setChip={setChip}
-              onPreview={() => void previewContext()}
-              previewLoading={ctx.ctxLoading}
-            />
-          </div>
-
           {attachments.length > 0 && (
             <div className="qa-attach-bar">
               {attachments.map((a) => (
@@ -830,6 +790,45 @@ function QuickAskApp() {
             onPasteClipboard={() => void fillClipboard()}
             onAttachFile={() => void addAttachmentFromFile()}
             onSend={sendAsk}
+            repoControl={
+              <ContextPicker
+                open={openPop === "focus"}
+                onToggleOpen={() => togglePop("focus")}
+                groups={repoGroups}
+                selection={focusedRepos}
+                label={pickerLabel}
+                currentRepo={settings.currentGitRepo || null}
+                onToggleGroup={onToggleGroup}
+                onToggleService={onToggleService}
+                onClear={() => commitFocus([])}
+                onScanFolder={() => void scanFolder()}
+                scanning={scanning}
+                chips={chips}
+                setChip={setChip}
+                onPreview={() => void previewContext()}
+                previewLoading={ctx.ctxLoading}
+              />
+            }
+            modelControl={
+              <QuickSelect
+                className="qa-model-pick"
+                value={selectedModel?.id || ""}
+                options={models.map((m) => ({
+                  value: m.id,
+                  label: `${m.name} (${m.model})`,
+                  short: m.name,
+                }))}
+                onChange={setModelId}
+                placeholder={t("noModel")}
+                alignLeft
+                dropUp
+                ghost
+                open={openPop === "model"}
+                onToggle={() => togglePop("model")}
+              />
+            }
+            agentOn={agentOn}
+            onToggleAgent={toggleAgent}
             openList={openList}
             onRunOpen={runOpen}
             onStop={() => void stream.stopStream()}

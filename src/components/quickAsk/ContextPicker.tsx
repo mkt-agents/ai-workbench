@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronRight, Eye, FolderSearch, Layers, Minus, Search, X } from "lucide-react";
+import { Check, ChevronRight, Eye, FolderGit2, FolderSearch, Minus, Search, X } from "lucide-react";
 import type { QuickAskChips } from "../../core/types";
 import { pathKey } from "../../core/pathUtils";
 import { groupState, isServiceSelected } from "./repoSelection";
@@ -89,20 +89,20 @@ export default function ContextPicker(props: Props) {
     <div className="qa-focus qa-ctx-picker">
       <button
         type="button"
-        className={`input-field qa-focus-btn${open ? " is-open" : ""}`}
+        className={`qa-chip-btn${open ? " is-open" : ""}`}
         onClick={onToggleOpen}
         title={t("ctx.title")}
         aria-expanded={open}
       >
         <span className="qa-ctx-trigger">
-          <Layers size={12} className="qa-ctx-trigger-icon" />
+          <FolderGit2 size={12} className="qa-ctx-trigger-icon" />
           <span className="qa-focus-btn-label">{label}</span>
         </span>
         <span className="qa-focus-caret">▾</span>
       </button>
 
       {open && (
-        <div className="qa-focus-pop qa-ctx-pop">
+        <div className="qa-focus-pop qa-ctx-pop is-left is-up">
           <div className="qa-focus-pop-head">
             <span>{t("ctx.reposHead")}</span>
             {selection.length > 0 && (

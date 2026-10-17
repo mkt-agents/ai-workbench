@@ -88,7 +88,7 @@ AI 能力不再列为不做。快问已是多模型流式对话，并带当前�
 
 - [x] Git 页保活 + 摘要 TTL / 并发限制
 - [x] 工作区（`git_workspaces`）分组、扫描子仓、批量绑定身份
-- [x] 提交页 `CommitChangelist`：多仓变更树、左右 diff 高亮、AI 生成说明
+- [x] 提交页 `CommitChangelist`：多仓变更树、左右 diff 高亮、按块暂存、stash、修改上一次提交、最近说明、页头切分支、AI 生成说明
 - [x] 工作区筛选联动当前仓；筛选漏检空态区分 + 自动扩筛选
 - [x] DeepSeek 运行态顶栏贴合；侧栏保活避免 iframe 重刷；检测中文案去重
 - [x] 提示词页下拉 Portal，避免小窗裁切

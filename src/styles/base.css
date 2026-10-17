@@ -37,11 +37,11 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .devtools-history-menu,
   .update-banner,
   .quick-ask-toolbar .qa-focus-btn,
-  .qa-agent-toggle,
   .quick-ask-sessions,
   .qa-empty,
   .qa-answer-card,
   .qa-input-card,
+  .qa-input-card::before,
   .qa-bubble-orb,
   .qa-bubble-aura
 ) {
