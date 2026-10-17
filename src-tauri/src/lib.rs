@@ -555,7 +555,6 @@ pub fn run() {
             dsh_commands::install_dsh,
             dsh_commands::update_dsh,
             dsh_commands::sync_model_to_dsh,
-            dsh_commands::restore_dsh_auth,
             cancellation_commands::cancel_request,
             tool_commands::set_auto_start,
             tool_commands::get_auto_start,

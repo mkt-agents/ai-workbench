@@ -34,7 +34,6 @@ export interface Invocations {
   invokeGetDshVersions: () => Promise<string[]>;
   invokeInstallDsh: (version?: string) => Promise<string>;
   invokeUpdateDsh: (version?: string | null) => Promise<string>;
-  invokeRestoreDshAuth: () => Promise<string>;
   invokeSyncModelToDsh: (params: { name: string; provider: string; apiKey: string; baseUrl: string; model: string; maxTokens: number }) => Promise<string>;
   invokeCloudflaredStatus: () => Promise<{ installed: boolean; version: string; path: string; message: string; customPath: boolean }>;
   invokeCloudflaredInstall: () => Promise<string>;
@@ -197,8 +196,6 @@ export const invocations: Invocations = {
   // when omitted, which can resolve to the already-installed build.
   invokeUpdateDsh: (version?: string | null) =>
     tauriInvoke<string>('update_dsh', { version: version ?? null }),
-  invokeRestoreDshAuth: () =>
-    tauriInvoke<string>('restore_dsh_auth'),
   invokeSyncModelToDsh: (params: { name: string; provider: string; apiKey: string; baseUrl: string; model: string; maxTokens: number }) =>
     tauriInvoke<string>('sync_model_to_dsh', params),
 

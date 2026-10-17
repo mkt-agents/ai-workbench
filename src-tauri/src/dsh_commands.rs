@@ -308,11 +308,18 @@ fn restore_dsh_auth_sync() -> Result<String, String> {
     Ok("已恢复 DSH 原始认证文件".into())
 }
 
-#[tauri::command]
-pub async fn restore_dsh_auth() -> Result<String, String> {
-    tokio::task::spawn_blocking(restore_dsh_auth_sync)
-        .await
-        .map_err(|e| format!("Task failed: {e}"))?
+/// Drop a patch left by an older build of this app. Current startups never write one.
+/// Missing install or a pristine file is success.
+fn restore_leftover_patch() -> Result<(), String> {
+    let target = match find_dsh_connection_index() {
+        Ok(path) => path,
+        Err(_) => return Ok(()),
+    };
+    let content = fs::read_to_string(&target).unwrap_or_default();
+    if !content.contains(DSH_PATCH_SENTINEL) && !dsh_backup_path(&target).exists() {
+        return Ok(());
+    }
+    restore_dsh_auth_sync().map(|_| ())
 }
 
 /// Marker baked into DSH's web UI HTML. Only a listener that actually answers with
@@ -802,7 +809,9 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
     }
 
     // Do not rewrite DSH's install. 0.2+ mints a launch token and exchanges it for a
-    // signed cookie; editing connection/index.js no longer matches that build.
+    // signed cookie. If an older build left its auth patch on disk, put the original
+    // file back before this process reads it.
+    restore_leftover_patch()?;
     let mut launch = spawn_dsh_server(target_port, &path_value)?;
     if !wait_for_port(target_port) {
         stop_child(&mut launch.child);

@@ -215,8 +215,6 @@
     "nodejsHint": "Install Node.js first (LTS recommended)",
     "nodejsDownload": "Download from nodejs.org",
     "portInUse": "Port {{port}} is in use",
-    "authPatchFailed": "DSH auth patch failed; local service may require browser login",
-    "authPatchHint": "0.2 and later sign in with a launch token and do not modify the install. If the page stays blank, open it in a browser",
     "syncStatusLabel": "Last synced to DSH",
     "syncStatusAt": "{{time}}",
     "dismiss": "Dismiss",
@@ -224,7 +222,7 @@
     "onboardingStep1": "Install Node.js",
     "onboardingStep2": "Install and start DeepSeek Harness",
     "onboardingStep3": "Add a model under Model Config and sync to DSH",
-    "onboardingTipAuth": "0.2 and later sign in with a launch token. If the embedded page stays blank, open it in a browser. Restore the auth patch only for an older install",
+    "onboardingTipAuth": "0.2 and later sign in with a launch token. If the embedded page stays blank, open it in a browser",
     "onboardingDismiss": "Got it, don't show again",
     "onboardingGoModels": "Go to Model Config",
     "detecting": "Checking...",
@@ -256,14 +254,9 @@
     "updateFailed": "Update failed: {{error}}",
     "updateTo": "Update to v{{version}}",
     "updateAction": "Update",
-    "restoreAuth": "Restore auth patch",
-    "restoreAuthTitle": "Restore DSH auth patch",
     "autoStart": "Auto-start",
     "autoStartTitle": "Start the service automatically when this page opens (click again to turn off)",
-    "serviceDied": "The service stopped — it may have been closed elsewhere",
-    "restoreAuthMessage": "Restores the original DSH connection file (removes the auth-bypass patch). A running service must be restarted for this to take effect.",
-    "restoreAuthDone": "Original DSH auth file restored",
-    "restoreAuthFailed": "Restore failed: {{error}}"
+    "serviceDied": "The service stopped — it may have been closed elsewhere"
   },
   "cursor": {
     "title": "Cursor",

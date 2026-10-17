@@ -12,7 +12,6 @@ import {
   ArrowUpRight,
   Tag,
   Download,
-  Undo2,
   Rocket,
   X,
 } from "lucide-react";
@@ -93,7 +92,6 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
   const invokeStopDsh = useGlobalStore((s) => s.invokeStopDsh);
   const invokeListDsh = useGlobalStore((s) => s.invokeListDsh);
   const invokeCheckDshHttp = useGlobalStore((s) => s.invokeCheckDshHttp);
-  const invokeRestoreDshAuth = useGlobalStore((s) => s.invokeRestoreDshAuth);
   const invokeInstallDsh = useGlobalStore((s) => s.invokeInstallDsh);
   const invokeUpdateDsh = useGlobalStore((s) => s.invokeUpdateDsh);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
@@ -121,7 +119,6 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
   const [updateProgress, setUpdateProgress] = useState(0);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
 
-  const [restoringAuth, setRestoringAuth] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState(0);
   const [installMsg, setInstallMsg] = useState<string | null>(null);
@@ -664,36 +661,6 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
     }
   };
 
-  /// Undo the auth-bypass patch by restoring the original connection file. When no
-  /// backup exists the backend reports that the file was never modified (newer DSH
-  /// versions need no patch) instead of failing; its message is surfaced as-is.
-  const handleRestoreAuth = async () => {
-    if (busy) return;
-    await pauseEmbed();
-    const ok = await confirm({
-      title: t("dsh.restoreAuthTitle"),
-      message: t("dsh.restoreAuthMessage"),
-      confirmText: t("dsh.restoreAuth"),
-      icon: "warning",
-    });
-    if (!ok) {
-      setEmbedSuspended(false);
-      return;
-    }
-    setRestoringAuth(true);
-    try {
-      const msg = await invokeRestoreDshAuth();
-      setStatus(msg || t("dsh.restoreAuthDone"));
-      clearStatusAfter(5000);
-    } catch (error) {
-      setStatus(t("dsh.restoreAuthFailed", { error: String(error) }));
-      clearStatusAfter(6000);
-    } finally {
-      setRestoringAuth(false);
-      setEmbedSuspended(false);
-    }
-  };
-
   const handleUpdate = async () => {
     if (isRunning) {
       await pauseEmbed();
@@ -793,7 +760,7 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
     }
   };
 
-  const busy = starting || stopping || updating || installing || restoringAuth;
+  const busy = starting || stopping || updating || installing;
   const installed = !!dshVersion && dshVersion !== "";
   const detecting = dshVersion === null;
   const progressMsg = updateMsg || installMsg;
@@ -1098,16 +1065,6 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
                     aria-pressed={autoStart}
                   >
                     <Rocket size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn commit-icon-btn"
-                    onClick={handleRestoreAuth}
-                    disabled={busy}
-                    title={t("dsh.restoreAuthTitle")}
-                    aria-label={t("dsh.restoreAuthTitle")}
-                  >
-                    {restoringAuth ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
                   </button>
                 </>
               )}

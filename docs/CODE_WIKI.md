@@ -724,10 +724,7 @@ DshState { instances: Mutex<Vec<DshInstance>> }
 5. `wait_for_port` — 30s 超时轮询
 6. 有令牌则 `dsh_set_embed` 用子 webview 打开（SameSite=Strict，iframe 带不走 cookie）。不再改写安装文件
 
-**认证补丁** `patch_dsh_auth`（启动不再调用；「还原认证补丁」仍可用）:
-- 目标: `dsh-client-connection/lib/index.js`
-- 备份: 原文件 → `.js.ai-workbench-backup`
-- Sentinel: `/* ai-workbench:dsh-auth-bypass */`
+**认证补丁**：启动不再写入。若磁盘上仍有本工具留下的补丁标记或备份，`start_dsh` 会先还原再拉起进程。
 
 **停止** `stop_dsh(port)`:
 - 先从追踪列表移除
@@ -998,7 +995,6 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `install_dsh` | version?: String | String (emit 进度) |
 | `update_dsh` | version?: String | String (emit 进度) |
 | `sync_model_to_dsh` | name, provider, api_key, base_url, model, max_tokens | String |
-| `restore_dsh_auth` | — | String |
 
 ### 10.4 Cloudflared Commands（14 条）
 

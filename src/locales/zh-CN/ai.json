@@ -215,8 +215,6 @@
     "nodejsHint": "请先安装 Node.js（推荐 LTS 版本）",
     "nodejsDownload": "前往 nodejs.org 下载",
     "portInUse": "端口 {{port}} 已被占用",
-    "authPatchFailed": "DSH 认证补丁失败，本地服务可能无法跳过浏览器登录",
-    "authPatchHint": "0.2 及以上用启动令牌登录，不再改安装文件。若页面空白，点「外开浏览器」",
     "syncStatusLabel": "上次同步到 DSH",
     "syncStatusAt": "{{time}}",
     "dismiss": "关闭",
@@ -224,7 +222,7 @@
     "onboardingStep1": "安装 Node.js",
     "onboardingStep2": "安装并启动 DeepSeek Harness",
     "onboardingStep3": "在「模型配置」中添加模型并同步到 DSH",
-    "onboardingTipAuth": "0.2 及以上用启动令牌登录。若内嵌页空白，点「外开浏览器」；只有旧版本才需要「还原认证补丁」",
+    "onboardingTipAuth": "0.2 及以上用启动令牌登录。若内嵌页空白，点「外开浏览器」",
     "onboardingDismiss": "知道了，不再显示",
     "onboardingGoModels": "去模型配置",
     "detecting": "检测中...",
@@ -256,14 +254,9 @@
     "updateFailed": "更新失败: {{error}}",
     "updateTo": "更新到 v{{version}}",
     "updateAction": "升级",
-    "restoreAuth": "还原认证补丁",
-    "restoreAuthTitle": "还原 DSH 认证补丁",
     "autoStart": "自动启动",
     "autoStartTitle": "进入本页时自动启动服务（再次点击关闭）",
-    "serviceDied": "服务已停止运行，可能在外部被关闭",
-    "restoreAuthMessage": "将把 DSH 的 connection 文件恢复为原始版本（移除免登录补丁）；正在运行的服务需重启后生效。",
-    "restoreAuthDone": "已还原 DSH 原始认证文件",
-    "restoreAuthFailed": "还原失败: {{error}}"
+    "serviceDied": "服务已停止运行，可能在外部被关闭"
   },
   "cursor": {
     "title": "Cursor",
