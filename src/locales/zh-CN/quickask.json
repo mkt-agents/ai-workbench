@@ -58,6 +58,7 @@
   "cancel": "取消",
   "streamFailed": "流式生成失败",
   "history": "历史会话",
+  "historyShort": "历史",
   "historyEmpty": "暂无历史会话",
   "deleteSession": "删除会话",
   "renameSession": "重命名",

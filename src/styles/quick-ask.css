@@ -26,6 +26,12 @@
   flex-shrink: 0;
   user-select: none;
 }
+.quick-ask-header-lead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
 .quick-ask-header-actions {
   display: flex;
   align-items: center;
@@ -435,8 +441,52 @@
 /* ---------- Quick-ask mode tabs + embedded tools ---------- */
 .qa-mode-tabs {
   display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-full);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+}
+.qa-header-sessions {
+  display: flex;
+  align-items: center;
   gap: 4px;
-  margin-right: 6px;
+  margin-right: 4px;
+  padding-right: 8px;
+  border-right: 1px solid var(--border-subtle);
+}
+.qa-session-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-1);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-session-btn:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.qa-session-btn-primary {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--text-0);
+}
+.qa-session-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+}
+.qa-session-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .qa-mode-btn {
   display: inline-flex;
@@ -446,20 +496,20 @@
   font-size: 11px;
   font-weight: 500;
   color: var(--text-2);
-  background: var(--bg-1);
-  border: 1px solid var(--border-subtle);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
   cursor: pointer;
   transition: var(--transition-colors-fast);
 }
 .qa-mode-btn:hover {
   color: var(--text-1);
-  background: var(--bg-hover);
 }
 .qa-mode-btn.active {
-  color: var(--accent);
-  background: var(--accent-dim);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--text-0);
+  background: var(--bg-1);
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
 }
 .quick-ask-tools {
   display: flex;
@@ -1054,13 +1104,10 @@
   color: var(--text-3);
   white-space: nowrap;
 }
-.qa-history-btn {
-  border: 1px solid transparent;
-}
 .qa-history-btn.on {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
 }
 .qa-pin-btn {
   border: 1px solid transparent;

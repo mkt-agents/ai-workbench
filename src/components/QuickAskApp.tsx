@@ -630,11 +630,11 @@ function QuickAskApp() {
   return (
     <div className="quick-ask-root">
       <header className="quick-ask-header" data-tauri-drag-region>
-        <div className="quick-ask-title" data-tauri-drag-region>
-          <Sparkles size={15} strokeWidth={1.75} />
-          <span>{t("title")}</span>
-        </div>
-        <div className="quick-ask-header-actions">
+        <div className="quick-ask-header-lead" data-tauri-drag-region>
+          <div className="quick-ask-title" data-tauri-drag-region>
+            <Sparkles size={15} strokeWidth={1.75} />
+            <span>{t("title")}</span>
+          </div>
           <div className="qa-mode-tabs" role="tablist" aria-label={t("title")}>
             <button
               type="button"
@@ -657,27 +657,31 @@ function QuickAskApp() {
               <Terminal size={11} /> {t("modeTools")}
             </button>
           </div>
+        </div>
+        <div className="quick-ask-header-actions">
           {mode === "ask" && (
-            <>
+            <div className="qa-header-sessions">
               <button
                 type="button"
-                className="btn-icon"
+                className="qa-session-btn qa-session-btn-primary"
                 onClick={startNewChat}
                 disabled={stream.busy}
                 title={`${t("newChat")} (Ctrl+N)`}
               >
-                <MessageSquarePlus size={15} />
+                <MessageSquarePlus size={13} />
+                {t("newChat")}
               </button>
               <button
                 type="button"
-                className={`btn-icon qa-history-btn${historyOpen ? " on" : ""}`}
+                className={`qa-session-btn qa-history-btn${historyOpen ? " on" : ""}`}
                 onClick={() => setHistoryOpen((v) => !v)}
                 title={t("history")}
                 aria-expanded={historyOpen}
               >
-                <History size={15} />
+                <History size={13} />
+                {t("historyShort")}
               </button>
-            </>
+            </div>
           )}
           <button
             type="button"

@@ -153,7 +153,7 @@ pub fn ensure_quick_ask_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
     let url = WebviewUrl::App("index.html#/quick-ask".into());
     WebviewWindowBuilder::new(app, QUICK_ASK_LABEL, url)
         .title("Quick Ask")
-        .inner_size(560.0, 520.0)
+        .inner_size(720.0, 640.0)
         .resizable(true)
         .decorations(false)
         .always_on_top(false)

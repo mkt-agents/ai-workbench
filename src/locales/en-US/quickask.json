@@ -58,6 +58,7 @@
   "cancel": "Cancel",
   "streamFailed": "Streaming failed",
   "history": "History",
+  "historyShort": "History",
   "historyEmpty": "No saved sessions yet",
   "deleteSession": "Delete session",
   "renameSession": "Rename",
