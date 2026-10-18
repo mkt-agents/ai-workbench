@@ -78,12 +78,6 @@ pub(crate) struct ConflictState {
     pub conflicted: Vec<String>,
 }
 
-impl ConflictState {
-    pub fn is_clear(&self) -> bool {
-        self.operation.is_none() && self.conflicted.is_empty()
-    }
-}
-
 pub(crate) fn conflict_state(repo_path: &str) -> ConflictState {
     let operation = resolve_git_dir(Path::new(repo_path))
         .as_deref()

@@ -113,8 +113,107 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
     }
 }
 
+/// One `git …` inside a command line: lowercased subcommand, arguments as written
+/// (git flags are case-sensitive: `-s` strategy vs `-S` sign), with git's global
+/// options (`-C <dir>`, `-c k=v`, `--git-dir=…`) skipped.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GitCall {
+    pub sub: String,
+    pub args: Vec<String>,
+    /// `-C <dir>` when given (original spelling).
+    pub dir: Option<String>,
+}
+
+fn unquote(word: &str) -> &str {
+    word.trim_matches(|c| c == '"' || c == '\'')
+}
+
+fn is_git_program(word: &str) -> bool {
+    let w = unquote(word).to_lowercase();
+    let name = w.rsplit(['\\', '/']).next().unwrap_or(&w);
+    name == "git" || name == "git.exe"
+}
+
+/// Every git invocation in `command`; `&&`, `&`, `|`, `;` and parentheses end one.
+pub(crate) fn git_calls(command: &str) -> Vec<GitCall> {
+    let mut out = Vec::new();
+    for segment in command.split(|c: char| matches!(c, '&' | '|' | ';' | '(' | ')' | '\n')) {
+        let words: Vec<&str> = segment.split_whitespace().collect();
+        let Some(start) = words.iter().position(|w| is_git_program(w)) else {
+            continue;
+        };
+        let mut i = start + 1;
+        let mut dir = None;
+        while i < words.len() {
+            let w = unquote(words[i]);
+            match w {
+                "-C" => {
+                    dir = words.get(i + 1).map(|d| unquote(d).to_string());
+                    i += 2;
+                }
+                "-c" | "--git-dir" | "--work-tree" | "--namespace" => i += 2,
+                _ if w.starts_with("--git-dir=")
+                    || w.starts_with("--work-tree=")
+                    || w.starts_with("--namespace=")
+                    || w.starts_with("--exec-path")
+                    || matches!(w, "--no-pager" | "-p" | "--paginate" | "--bare" | "--no-replace-objects") =>
+                {
+                    i += 1
+                }
+                _ => break,
+            }
+        }
+        let Some(sub) = words.get(i) else {
+            continue;
+        };
+        out.push(GitCall {
+            sub: unquote(sub).to_lowercase(),
+            args: words[i + 1..].iter().map(|w| unquote(w).to_string()).collect(),
+            dir,
+        });
+    }
+    out
+}
+
+/// Git forms no permission level may run: they force-overwrite, rewrite history or
+/// resolve conflicts on the user's behalf (both pick-a-side and discard-the-merge).
+pub(crate) fn git_call_blocked(call: &GitCall) -> bool {
+    let long = |flag: &str| call.args.iter().any(|a| a.eq_ignore_ascii_case(flag));
+    // Short flag clusters such as `-fd` / `-uf` / `-Xtheirs`.
+    let short_has = |c: char| {
+        call.args
+            .iter()
+            .any(|a| a.len() > 1 && a.starts_with('-') && !a.starts_with("--") && a[1..].contains(c))
+    };
+    // -X <option> / -s <strategy> pick a side for every conflict (-S is GPG signing).
+    let picks_strategy = || {
+        call.args.iter().any(|a| {
+            a.starts_with("-X") || a.starts_with("-s") || a.to_ascii_lowercase().starts_with("--strategy")
+        })
+    };
+    match call.sub.as_str() {
+        "rebase" | "filter-branch" | "filter-repo" => true,
+        "pull" => {
+            picks_strategy()
+                || call.args.iter().any(|a| a == "-r")
+                || call.args.iter().any(|a| {
+                    let a = a.to_ascii_lowercase();
+                    a == "--rebase" || (a.starts_with("--rebase=") && a != "--rebase=false")
+                })
+        }
+        "merge" => picks_strategy(),
+        "checkout" | "restore" => long("--ours") || long("--theirs") || (call.sub == "checkout" && short_has('f')),
+        "push" => short_has('f') || long("--mirror") || call.args.iter().any(|a| a.starts_with('+')),
+        "stash" => matches!(call.args.first().map(|a| a.to_ascii_lowercase()).as_deref(), Some("drop" | "clear")),
+        "reset" => long("--hard") || long("--keep") || long("--merge"),
+        "clean" => short_has('f') || short_has('x') || short_has('X') || long("--force"),
+        _ => false,
+    }
+}
+
 /// Grouping for "允许本轮同类": commands by program (`git`, `npm`…), workbench tools by
-/// action, everything else by tool name.
+/// action, everything else by tool name. Git groups by subcommand: allowing
+/// `git add` must not also allow `git pull` or `git merge`.
 pub(crate) fn action_kind(tool: &str, arg: &str) -> String {
     match tool {
         "run_command" | "start_process" => {
@@ -126,6 +225,11 @@ pub(crate) fn action_kind(tool: &str, arg: &str) -> String {
             };
             let name = first.rsplit(['\\', '/']).next().unwrap_or(first).to_lowercase();
             let name = name.strip_suffix(".exe").or_else(|| name.strip_suffix(".cmd")).unwrap_or(&name);
+            if name == "git" {
+                if let Some(call) = git_calls(arg).first() {
+                    return format!("cmd:git {}", call.sub);
+                }
+            }
             format!("cmd:{name}")
         }
         "hosts" | "tunnel" | "runtime" => format!("{tool}:{arg}"),
@@ -252,6 +356,10 @@ Do not create helper files (for example a commit message file); pass text inline
 delete it before you finish and never commit it.\n\
 Never use git push --force, reset --hard, or clean. git push and pull use the system proxy; a push may show a Windows \
 credential window and take minutes, do not retry a push that is still running.\n\
+Merge conflicts belong to the user. If a pull, merge, cherry-pick or stash pop reports conflicts, a push is rejected, \
+or git status shows unmerged paths: stop. Do not resolve or discard them yourself (no -X ours/theirs, checkout --ours/--theirs, \
+editing conflict markers, git add of conflicted files, merge --abort, force push). Tell the user which files conflict and that \
+they can resolve them in Git 管理 → 提交页; while the repository is mid-merge your git writes and file edits there are refused.\n\
 Never stage or commit obvious temp files (*.tmp, *.log, *.bak, *.swp, ~$*, .DS_Store, Thumbs.db) unless asked; mention them instead."
     } else {
         ""
@@ -274,7 +382,8 @@ pub(crate) const REVIEW_SYSTEM: &str = "You review one action that an AI agent w
 Reply with JSON only, no other text: {\"verdict\":\"allow\"|\"ask\",\"reason\":\"<one short sentence in the user's language>\"}.\n\
 Choose allow only when the action is clearly part of what the user asked for and is low-risk or easy to undo: \
 editing source or docs, git add / commit, running tests, builds or linters, git push to a normal branch, starting a dev server.\n\
-Choose ask for anything that deletes or overwrites many files, rewrites git history, touches credentials, keys or system settings \
+Choose ask for anything that deletes or overwrites many files, rewrites git history, pulls or merges other branches in, \
+resolves or aborts merge conflicts, touches credentials, keys or system settings \
 (hosts, environment, runtimes), kills processes the user did not mention, installs software globally, downloads and runs \
 scripts, sends data elsewhere, or is unrelated to the request. When unsure, choose ask.";
 
@@ -338,13 +447,82 @@ mod tests {
 
     #[test]
     fn action_kind_groups_by_program() {
-        assert_eq!(action_kind("run_command", "git commit -m x"), "cmd:git");
+        // Git by subcommand: allowing `git add` for the turn must not allow `git pull`.
+        assert_eq!(action_kind("run_command", "git commit -m x"), "cmd:git commit");
+        assert_ne!(action_kind("run_command", "git add -A"), action_kind("run_command", "git pull"));
+        assert_eq!(action_kind("run_command", "git -C ../x status"), "cmd:git status");
         assert_eq!(action_kind("run_command", "\"C:\\Program Files\\nodejs\\npm.cmd\" test"), "cmd:npm");
         assert_eq!(action_kind("start_process", "NPM.exe run dev"), "cmd:npm");
         assert_eq!(action_kind("run_command", "D:\\tools\\rg.exe foo"), "cmd:rg");
         assert_eq!(action_kind("hosts", "write"), "hosts:write");
         assert_eq!(action_kind("delete_path", "a.txt"), "delete_path");
         assert_ne!(action_kind("run_command", "git add ."), action_kind("run_command", "del a.txt"));
+    }
+
+    #[test]
+    fn git_calls_skip_global_options_and_split_chains() {
+        let calls = git_calls("cd x && git -C ../repo -c core.pager=less status -s & \"git.exe\" push origin main");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].sub, "status");
+        assert_eq!(calls[0].dir.as_deref(), Some("../repo"));
+        assert_eq!(calls[1].sub, "push");
+        assert_eq!(calls[1].args, vec!["origin".to_string(), "main".to_string()]);
+        assert!(git_calls("npm test").is_empty());
+        assert!(git_calls("echo git").is_empty());
+    }
+
+    #[test]
+    fn git_blacklist_is_per_subcommand_and_case_aware() {
+        let blocked = |cmd: &str| git_calls(cmd).iter().any(git_call_blocked);
+        for cmd in [
+            "git push -f",
+            "git push -uf origin x",
+            "git push origin +main",
+            "git push --mirror",
+            "git merge -X theirs other",
+            "git merge -s ours other",
+            "git pull -Xours",
+            "git pull --rebase",
+            "git pull -r",
+            "git -C sub rebase main",
+            "git rebase --skip",
+            "git checkout --theirs a.txt",
+            "git restore --ours a.txt",
+            "git checkout -f main",
+            "git stash drop",
+            "git stash clear",
+            "git reset  --hard",
+            "git reset --keep HEAD~1",
+            "git clean -df",
+            "git clean -Xn",
+        ] {
+            assert!(blocked(cmd), "{cmd}");
+        }
+        for cmd in [
+            "git merge -S other",
+            "git merge --no-ff other",
+            "git pull",
+            "git pull --ff-only",
+            "git pull --rebase=false",
+            "git checkout main",
+            "git stash list",
+            "git stash pop",
+            "git reset HEAD a.txt",
+            "git push origin main",
+            "git log --grep=rebase",
+            "git commit -S -m x",
+            "git clean -n",
+        ] {
+            assert!(!blocked(cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn policy_tells_the_agent_to_hand_conflicts_over() {
+        let reach = Reach { files: true, tools: true, vision: false };
+        let text = policy_text(Permission::Full, Some(Path::new("D:\\repo")), reach);
+        assert!(text.contains("Merge conflicts belong to the user") && text.contains("提交页"));
+        assert!(REVIEW_SYSTEM.contains("merge conflicts"));
     }
 
     #[test]

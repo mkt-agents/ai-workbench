@@ -82,7 +82,7 @@
     "confirm": "Confirm action",
     "allow": "Allow",
     "allowTurn": "Allow this kind for the turn",
-    "allowTurnTip": "Don't ask again this turn for the same kind of action (e.g. git commands, or deleting files)",
+    "allowTurnTip": "Don't ask again this turn for the same kind of action (e.g. all git add, all file deletions). Git is grouped by subcommand: allowing git add doesn't allow git pull",
     "deny": "Deny",
     "detailToggle": "Show / hide output",
     "noRepo": "This level needs a repo: pick one at the top left, or open a repo on the Git page.",
@@ -115,8 +115,10 @@
       "mouse": "Mouse",
       "keyboard": "Keyboard",
       "wait": "Wait",
-      "notice": "Notice"
-    }
+      "notice": "Notice",
+      "conflict": "Conflict"
+    },
+    "openCommitPage": "Resolve on the commit page"
   },
   "computer": {
     "banner": "Operating the computer · move the mouse to the top-left corner, or click Stop, to halt at once",

@@ -30,6 +30,8 @@ const DETAIL_CAP: usize = 2_000;
 /// Screenshots kept in the conversation; older ones become a text placeholder.
 const KEEP_SHOTS: usize = 2;
 const APPROVAL_WAIT: Duration = Duration::from_secs(300);
+/// Summary of the `conflict` step; the hub shows an "open the commit page" button on it.
+const CONFLICT_NOTICE: &str = "仓库有冲突，需要你在提交页处理";
 const REVIEW_WAIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
@@ -315,22 +317,22 @@ pub(crate) fn command_blocked(command: &str) -> bool {
         "rd /s",
         "rmdir /s",
         "remove-item",
-        "reset --hard",
-        "clean -f",
-        "clean -x",
         "filter-branch",
     ];
     if BLOCKED.iter().any(|word| lower.contains(word)) {
         return true;
     }
-    // rebase / --force 必须按 token 匹配：`git log --grep=rebase` 是查询，不是 rebase。
-    let tokens: Vec<&str> = lower.split_whitespace().collect();
-    if tokens.len() >= 2 && tokens[0] == "git" && tokens[1] == "rebase" {
+    // git 规则按子命令和 token 判定（agent_policy::git_call_blocked）：
+    // `git log --grep=rebase` 是查询，`git -C x rebase`、`reset  --hard`（多空格）也要拦住。
+    if lower
+        .split_whitespace()
+        .any(|t| t == "--force" || t == "--force-with-lease" || t.starts_with("--force-with-lease="))
+    {
         return true;
     }
-    tokens
+    crate::agent_policy::git_calls(command)
         .iter()
-        .any(|t| *t == "--force" || *t == "--force-with-lease")
+        .any(crate::agent_policy::git_call_blocked)
 }
 
 /// `git branch` 里真正只读的用法：只允许查询 flag；
@@ -367,7 +369,16 @@ fn branch_is_readonly(rest: &[&str]) -> bool {
 
 pub(crate) fn command_is_readonly(command: &str) -> bool {
     let lower = command.trim().to_lowercase();
-    if lower.contains("&&") || lower.contains(';') || lower.contains('|') || lower.contains('`') {
+    // cmd.exe chains with a single `&`, `>` / `<` redirect into files, `$(…)` runs a
+    // PowerShell subexpression: any of them turns a query into something else.
+    if lower.contains('&')
+        || lower.contains(';')
+        || lower.contains('|')
+        || lower.contains('`')
+        || lower.contains('>')
+        || lower.contains('<')
+        || lower.contains("$(")
+    {
         return false;
     }
     let tokens: Vec<&str> = lower.split_whitespace().collect();
@@ -763,6 +774,54 @@ fn command_cwd(scope: &Scope, args: &Value) -> Result<std::path::PathBuf, String
         return Err(format!("工作目录不存在：{}", dir.display()));
     }
     Ok(dir)
+}
+
+/// Repository containing `path`: the nearest folder upwards with a `.git`.
+fn repo_root_of(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut cur = if path.is_dir() { Some(path) } else { path.parent() };
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+/// The repository a call changes: git writes (honouring `-C`) and file writes.
+/// Read-only git and other programs return None.
+fn changed_repo(scope: &Scope, tool: &str, command: &str, args: &Value) -> Option<std::path::PathBuf> {
+    let target = match tool {
+        "run_command" | "start_process" => {
+            let calls = crate::agent_policy::git_calls(command);
+            if calls.is_empty() || command_is_readonly(command) {
+                return None;
+            }
+            let cwd = command_cwd(scope, args).ok()?;
+            match calls.iter().find_map(|c| c.dir.as_deref()) {
+                Some(dir) => crate::agent_fs::resolve_free(&cwd, dir),
+                None => cwd,
+            }
+        }
+        "write_file" | "edit_file" | "delete_path" => scope.resolve(&arg_str(args, "path")).ok()?,
+        "move_path" => scope.resolve(&arg_str(args, "from")).ok()?,
+        _ => return None,
+    };
+    repo_root_of(&target)
+}
+
+/// Conflicts are the user's: while the repository is mid-merge or has unmerged
+/// paths, the agent may look but not change it (any permission level).
+fn conflict_reason(state: &crate::git_merge::ConflictState) -> Option<String> {
+    let why = crate::git_merge::blocked_reason(state, "继续")?;
+    Some(format!(
+        "没有执行：{why} 冲突必须由用户来处理，不要自己解决或绕开。停下来，告诉用户哪些文件冲突，请他在 Git 管理 → 提交页解决。"
+    ))
+}
+
+fn conflict_block(scope: &Scope, tool: &str, command: &str, args: &Value) -> Option<String> {
+    let root = changed_repo(scope, tool, command, args)?;
+    conflict_reason(&crate::git_merge::conflict_state(&root.to_string_lossy()))
 }
 
 async fn execute_tool(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> Result<ToolOutput, String> {
@@ -1363,6 +1422,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut notes: Vec<String> = Vec::new();
     // 「本轮同类都允许」记下的类别（见 agent_policy::action_kind），只对 Ask 档生效
     let mut granted: HashSet<String> = HashSet::new();
+    // One "去提交页处理冲突" card per turn is enough.
+    let mut conflict_noticed = false;
     // 上一条实际执行过的 shell 命令，用来识别原样重试。
     let mut last_shell_command = String::new();
     let mut last_shell_failed = false;
@@ -1454,6 +1515,16 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 tool_results.push((call.id.clone(), reason.into()));
                 continue;
             }
+            if let Some(reason) = conflict_block(&scope, &call.name, &arg, &args) {
+                emit_step(&app, &request_id, &call.name, "denied", &summary, &reason);
+                if !conflict_noticed {
+                    conflict_noticed = true;
+                    emit_step(&app, &request_id, "conflict", "info", CONFLICT_NOTICE, &reason);
+                }
+                notes.push(format!("{summary}（有冲突，未执行）"));
+                tool_results.push((call.id.clone(), reason.into()));
+                continue;
+            }
             let kind = action_kind(&call.name, &arg);
             let (preview, preview_is_diff) = approval_preview(&scope, &call.name, &args, &summary);
             // 审查托管：先让 AI 审一遍，只有明确放行才不打扰用户
@@ -1528,6 +1599,16 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             match result {
                 Ok(mut out) => {
                     out.text = repeated_command_result(&last_shell_command, last_shell_failed, &command, &out.text);
+                    // A pull / merge / stash pop the AI ran left conflicts: hand over, don't resolve.
+                    if let Some(root) = changed_repo(&scope, &call.name, &arg, &args) {
+                        if let Some(reason) = conflict_reason(&crate::git_merge::conflict_state(&root.to_string_lossy())) {
+                            out.text = format!("{}\n\n[Agent 提示] 出现冲突，已停止，不要自行解决。{reason}", out.text);
+                            if !conflict_noticed {
+                                conflict_noticed = true;
+                                emit_step(&app, &request_id, "conflict", "info", CONFLICT_NOTICE, &reason);
+                            }
+                        }
+                    }
                     // 写入的步骤详情带上 diff，用户能在步骤里看到改了什么
                     let detail = if preview_is_diff && matches!(call.name.as_str(), "write_file" | "edit_file" | "hosts") {
                         format!("{}\n\n{}", out.text, clip(&preview, DETAIL_CAP))
@@ -1580,8 +1661,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        call_summary, candidates_error, command_blocked, command_is_readonly, command_output_failed, count_images,
-        decode_model_body, gate_arg, limit_message, match_app_name, prune_images, repeated_command_result,
+        call_summary, candidates_error, command_blocked, command_is_readonly, command_output_failed, conflict_block,
+        count_images, decode_model_body, gate_arg, limit_message, match_app_name, prune_images, repeated_command_result,
         round_is_action, tool_result_messages, unique_hit, ToolOutput, SHOT_PLACEHOLDER,
     };
     use crate::agent_proc::run_command;
@@ -1698,6 +1779,39 @@ mod tests {
         assert!(command_blocked("git rebase -i HEAD~3"));
         assert!(command_blocked("git push --force-with-lease origin main"));
         assert!(!command_blocked("git push origin main"));
+    }
+
+    #[test]
+    fn blacklist_catches_git_spelled_other_ways() {
+        assert!(command_blocked("git reset  --hard"));
+        assert!(command_blocked("cd sub && git rebase --skip"));
+        assert!(command_blocked("\"C:\\Program Files\\Git\\cmd\\git.exe\" push --force-with-lease=main"));
+        assert!(command_blocked("git checkout --theirs src/a.ts"));
+        assert!(!command_blocked("git merge -S other"));
+        // Chaining, redirects and subexpressions are never read-only.
+        assert!(!command_is_readonly("git status & del a.txt"));
+        assert!(!command_is_readonly("git log > out.txt"));
+        assert!(!command_is_readonly("git status $(Remove-Item x)"));
+        assert!(command_is_readonly("git log --format=%s"));
+    }
+
+    /// While a repo is mid-merge the agent may look, but neither git writes nor
+    /// file edits go through — at any permission level.
+    #[test]
+    fn merge_in_progress_blocks_writes_but_not_reads() {
+        let root = std::env::temp_dir().join(format!("aw-agent-merge-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let scope = crate::agent_fs::Scope::new(Some(root.clone()), false);
+        assert!(conflict_block(&scope, "run_command", "git add -A", &json!({})).is_none(), "clear repo");
+        fs::write(root.join(".git").join("MERGE_HEAD"), "x").unwrap();
+        let reason = conflict_block(&scope, "run_command", "git add -A", &json!({})).unwrap();
+        assert!(reason.contains("合并中") && reason.contains("提交页"), "{reason}");
+        assert!(conflict_block(&scope, "write_file", "", &json!({ "path": "a.txt" })).is_some());
+        assert!(conflict_block(&scope, "run_command", "git status", &json!({})).is_none());
+        assert!(conflict_block(&scope, "run_command", "npm test", &json!({})).is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// branch/remote 有写形态：删分支、改远端必须走用户审批，不能按前缀判只读

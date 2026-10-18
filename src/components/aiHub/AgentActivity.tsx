@@ -1,7 +1,22 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronRight } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
+import { ChevronRight, GitMerge } from "lucide-react";
+import { writeStoredString } from "../../core/localState";
+import { GIT_SUBTAB_KEY } from "../GitManager";
 import type { AgentApproval, AgentDecision } from "./useAskStream";
+
+/** Conflicts are resolved by the user on the commit page: jump there from the step. */
+async function openCommitPage() {
+  try {
+    writeStoredString(GIT_SUBTAB_KEY, "commit");
+    await invoke("open_main_tab", { tab: "git" });
+    await emit("navigate-git-subtab", "commit");
+  } catch {
+    /* window jump is best-effort */
+  }
+}
 
 type StepLike = { tool: string; status: string; summary: string; detail?: string };
 
@@ -38,6 +53,12 @@ function StepList({ steps }: { steps: StepLike[] }) {
               <span className="qa-agent-summary">{step.summary}</span>
             </button>
             {detail && isOpen && <DetailBlock text={detail} />}
+            {step.tool === "conflict" && (
+              <button type="button" className="qa-agent-conflict-open" onClick={() => void openCommitPage()}>
+                <GitMerge size={12} />
+                {t("agent.openCommitPage")}
+              </button>
+            )}
           </li>
         );
       })}

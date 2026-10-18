@@ -3500,7 +3500,8 @@ mod conflict_flow_tests {
         assert!(merge.conflicted.is_empty());
         assert!(merge.message.starts_with("Merge"), "{}", merge.message);
         git_commit_sync(bp.clone(), merge.message, false).unwrap();
-        assert!(crate::git_merge::conflict_state(&bp).is_clear());
+        let after = crate::git_merge::conflict_state(&bp);
+        assert!(after.operation.is_none() && after.conflicted.is_empty());
         git_push_sync(bp.clone()).unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }

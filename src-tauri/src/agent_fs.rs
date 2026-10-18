@@ -180,6 +180,10 @@ impl Protected {
     pub(crate) fn check(&self, path: &Path, destructive: bool) -> Option<String> {
         let key = |p: &Path| p.display().to_string().replace('/', "\\").trim_end_matches('\\').to_lowercase();
         let target = key(path);
+        // Git's own state (index, MERGE_HEAD, refs, config) only changes through git.
+        if path.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git")) {
+            return Some("不能直接改 .git 目录里的文件，仓库状态只能通过 git 命令改变。".into());
+        }
         for tree in &self.trees {
             let t = key(tree);
             if !t.is_empty() && (target == t || target.starts_with(&format!("{t}\\"))) {
@@ -500,6 +504,13 @@ pub(crate) fn write_or_edit(scope: &Scope, tool: &str, args: &Value, protected: 
     if let Some(reason) = protected.check(&path, false) {
         return Err(reason);
     }
+    // Rewriting conflict markers is resolving the conflict, which is the user's call.
+    if current.as_deref().is_some_and(crate::git_merge::has_conflict_markers) {
+        return Err(format!(
+            "{} 里有未解决的冲突标记（<<<<<<< / >>>>>>>），没有修改。请告诉用户在 Git 管理 → 提交页解决冲突。",
+            scope.show(&path)
+        ));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -618,6 +629,8 @@ mod tests {
         assert!(p.check(Path::new("C:\\Users\\me"), false).is_none());
         assert!(p.check(Path::new("C:\\Users\\me\\Desktop\\a.txt"), true).is_none());
         assert!(p.check(Path::new("D:\\"), true).is_some());
+        assert!(p.check(Path::new("D:\\repo\\.git\\MERGE_HEAD"), false).is_some());
+        assert!(p.check(Path::new("D:\\repo\\.github\\ci.yml"), false).is_none());
     }
 
     #[test]

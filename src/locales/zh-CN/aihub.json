@@ -82,7 +82,7 @@
     "confirm": "确认操作",
     "allow": "允许",
     "allowTurn": "本轮同类都允许",
-    "allowTurnTip": "这一轮里同一类操作（比如都是 git 命令、都是删除文件）不再询问",
+    "allowTurnTip": "这一轮里同一类操作（比如都是 git add、都是删除文件）不再询问；git 按子命令分，允许 git add 不等于允许 git pull",
     "deny": "拒绝",
     "detailToggle": "展开 / 收起输出",
     "noRepo": "这一档要先选一个仓库：点左上角选择，或在 Git 页打开一个仓库。",
@@ -115,8 +115,10 @@
       "mouse": "鼠标",
       "keyboard": "键盘",
       "wait": "等待",
-      "notice": "提示"
-    }
+      "notice": "提示",
+      "conflict": "冲突"
+    },
+    "openCommitPage": "打开提交页处理冲突"
   },
   "computer": {
     "banner": "正在操作电脑 · 把鼠标移到屏幕左上角，或点发送键位置的停止，立即停下",
