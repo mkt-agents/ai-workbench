@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, GitBranchList, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate } from '../types';
+import type { AIModelConfig, DshInstance, GitBranchList, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
 import type {
   AiResult,
   FolderReportBundle,

@@ -27,6 +27,11 @@ pub struct DesktopWindowInfo {
     pub class: String,
     /// True when the window is currently parented into the workbench.
     pub attached: bool,
+    /// Diagnostic code for an adopted window that will not show anything
+    /// (`""` = fine): `gone` | `not-child` | `minimized` | `invisible` | `size`.
+    /// Empty is the normal case; the page turns the code into a warning chip,
+    /// because a blank area with "embedded" next to it is a lie.
+    pub warning: String,
 }
 
 /// Outcome of a relayout: whether the window is still ours.
@@ -37,6 +42,8 @@ pub struct DesktopRelayoutResult {
     pub state: String,
     pub title: String,
     pub class: String,
+    /// Same diagnostic code as `DesktopWindowInfo::warning`.
+    pub warning: String,
 }
 
 /// One top-level window seen for a process, for troubleshooting. Every window
@@ -69,13 +76,13 @@ mod imp {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetParent, GetWindow, GetWindowLongPtrW, GetWindowRect,
-        GetWindowThreadProcessId, GetWindowTextW, IsWindow, IsWindowVisible, IsZoomed, SetParent,
-        SetWindowLongPtrW,
+        GetWindowThreadProcessId, GetWindowTextW, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+        SetParent, SetWindowLongPtrW,
         SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT, GW_OWNER, HWND_TOP,
         SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
         SWP_SHOWWINDOW, SW_RESTORE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-        WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
-        WS_THICKFRAME, WS_VISIBLE,
+        WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX,
+        WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
     };
 
     /// Below this (physical px²) a window is a helper, not an application frame.
@@ -188,7 +195,37 @@ mod imp {
             state: "lost".into(),
             title: String::new(),
             class: String::new(),
+            warning: String::new(),
         }
+    }
+
+    /// Why the adopted window shows nothing, as a code the page can translate.
+    ///
+    /// Checked right after adopting (and on every relayout): a window that is
+    /// parented but iconic/invisible/zero-sized leaves the slot blank, and the
+    /// page would otherwise still claim it is embedded.
+    fn verify(hwnd: HWND, parent: HWND) -> &'static str {
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() {
+                return "gone";
+            }
+            if GetParent(hwnd).unwrap_or_default() != parent {
+                return "not-child";
+            }
+            if IsIconic(hwnd).as_bool() {
+                return "minimized";
+            }
+            if !IsWindowVisible(hwnd).as_bool() {
+                return "invisible";
+            }
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_ok()
+                && (rect.right - rect.left < 2 || rect.bottom - rect.top < 2)
+            {
+                return "size";
+            }
+        }
+        ""
     }
 
     /// Every top-level window whose owning process image name contains the needle.
@@ -423,16 +460,20 @@ mod imp {
 
     pub fn find_info(process: &str) -> Option<DesktopWindowInfo> {
         let key = map_key(process);
-        let attached =
-            with_map(|m| m.get(&key).map(|e| (e.hwnd, e.pid, e.title.clone(), e.class.clone())));
-        if let Some((hwnd, pid, title, class)) = attached {
+        let attached = with_map(|m| {
+            m.get(&key)
+                .map(|e| (e.hwnd, e.pid, e.title.clone(), e.class.clone(), e.parent))
+        });
+        if let Some((hwnd, pid, title, class, parent)) = attached {
             if unsafe { IsWindow(Some(as_hwnd(hwnd))) }.as_bool() {
+                let warning = verify(as_hwnd(hwnd), as_hwnd(parent));
                 return Some(DesktopWindowInfo {
                     process_name: process.to_string(),
                     pid,
                     title,
                     class,
                     attached: true,
+                    warning: warning.to_string(),
                 });
             }
             with_map(|m| {
@@ -446,24 +487,36 @@ mod imp {
             title: found.title,
             class: found.class,
             attached: false,
+            warning: String::new(),
         })
     }
 
     pub fn list() -> Vec<DesktopWindowInfo> {
-        let entries: Vec<(String, isize, u32, String, String)> = with_map(|m| {
+        let entries: Vec<(String, isize, u32, String, String, isize)> = with_map(|m| {
             m.iter()
-                .map(|(k, e)| (k.clone(), e.hwnd, e.pid, e.title.clone(), e.class.clone()))
+                .map(|(k, e)| {
+                    (
+                        k.clone(),
+                        e.hwnd,
+                        e.pid,
+                        e.title.clone(),
+                        e.class.clone(),
+                        e.parent,
+                    )
+                })
                 .collect()
         });
         let mut alive = Vec::new();
-        for (key, hwnd, pid, title, class) in entries {
+        for (key, hwnd, pid, title, class, parent) in entries {
             if unsafe { IsWindow(Some(as_hwnd(hwnd))) }.as_bool() {
+                let warning = verify(as_hwnd(hwnd), as_hwnd(parent));
                 alive.push(DesktopWindowInfo {
                     process_name: key,
                     pid,
                     title,
                     class,
                     attached: true,
+                    warning: warning.to_string(),
                 });
             } else {
                 with_map(|m| {
@@ -481,7 +534,10 @@ mod imp {
     /// `relayout` puts the window back with this same call.
     fn take_over(hwnd: HWND, parent: HWND) -> Result<(), String> {
         unsafe {
-            if IsZoomed(hwnd).as_bool() {
+            // A minimized window stays minimized once it is a child — it would
+            // occupy the slot and paint nothing. `IsWindowVisible` is true for
+            // iconic windows, so the picker happily hands them over.
+            if IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
             // Frameless child: drop the standalone frame the app draws for its
@@ -493,13 +549,21 @@ mod imp {
                     | WS_CAPTION.0 as isize
                     | WS_THICKFRAME.0 as isize
                     | WS_SYSMENU.0 as isize
+                    | WS_MINIMIZE.0 as isize
                     | WS_MINIMIZEBOX.0 as isize
                     | WS_MAXIMIZEBOX.0 as isize
                     | WS_MAXIMIZE.0 as isize))
                 | WS_CHILD.0 as isize
                 | WS_VISIBLE.0 as isize;
             SetWindowLongPtrW(hwnd, GWL_STYLE, child_style);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exstyle & !(WS_EX_APPWINDOW.0 as isize));
+            // WS_EX_LAYERED has to go: a layered window only composites through
+            // UpdateLayeredWindow against a layered parent, so as a child of an
+            // ordinary window it draws nothing at all (blank slot).
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                exstyle & !(WS_EX_APPWINDOW.0 as isize | WS_EX_LAYERED.0 as isize),
+            );
             // The host must clip children, or Chromium paints over the
             // sibling webview that draws the surrounding page.
             let host_style = GetWindowLongPtrW(parent, GWL_STYLE);
@@ -547,8 +611,9 @@ mod imp {
         place(hwnd, x, y, width, height, scale);
         let class = class_name(hwnd);
         let title = window_text(hwnd);
+        let warning = verify(hwnd, parent);
         debug_log(&format!(
-            "attach_window {key} hwnd=0x{:X} class={class} title={title}",
+            "attach_window {key} hwnd=0x{:X} class={class} title={title} warning={warning:?}",
             hwnd.0 as usize
         ));
         with_map(|m| {
@@ -572,6 +637,7 @@ mod imp {
             title,
             class,
             attached: true,
+            warning: warning.to_string(),
         })
     }
 
@@ -595,12 +661,14 @@ mod imp {
         if let Some((hwnd, pid, title, class)) = existing {
             if unsafe { IsWindow(Some(as_hwnd(hwnd))) }.as_bool() {
                 place(as_hwnd(hwnd), x, y, width, height, scale);
+                let warning = verify(as_hwnd(hwnd), parent);
                 return Ok(DesktopWindowInfo {
                     process_name: process.to_string(),
                     pid,
                     title,
                     class,
                     attached: true,
+                    warning: warning.to_string(),
                 });
             }
             with_map(|m| {
@@ -612,6 +680,14 @@ mod imp {
         let style = unsafe { GetWindowLongPtrW(found.hwnd, GWL_STYLE) };
         let exstyle = unsafe { GetWindowLongPtrW(found.hwnd, GWL_EXSTYLE) };
         let owner = unsafe { GetWindowLongPtrW(found.hwnd, GWLP_HWNDPARENT) };
+        debug_log(&format!(
+            "attach {key} pick hwnd=0x{:X} class={} title={} style=0x{style:X} exstyle=0x{exstyle:X} owner=0x{owner:X} iconic={} zoomed={}",
+            found.hwnd.0 as usize,
+            found.class,
+            found.title,
+            unsafe { IsIconic(found.hwnd) }.as_bool(),
+            unsafe { IsZoomed(found.hwnd) }.as_bool()
+        ));
         take_over(found.hwnd, parent).map_err(|e| {
             debug_log(&format!(
                 "attach {key} hwnd=0x{:X} class={} FAILED {e}",
@@ -620,12 +696,14 @@ mod imp {
             format!("无法接管 {process} 的窗口（{}）: {e}", found.class)
         })?;
         place(found.hwnd, x, y, width, height, scale);
+        let warning = verify(found.hwnd, parent);
         debug_log(&format!(
-            "attach {key} hwnd=0x{:X} class={} title={} area={}",
+            "attach {key} hwnd=0x{:X} class={} title={} area={} warning={:?}",
             found.hwnd.0 as usize,
             found.class,
             found.title,
-            window_area(found.hwnd)
+            window_area(found.hwnd),
+            warning
         ));
         with_map(|m| {
             m.insert(
@@ -648,6 +726,7 @@ mod imp {
             title: found.title,
             class: found.class,
             attached: true,
+            warning: warning.to_string(),
         })
     }
 
@@ -685,6 +764,7 @@ mod imp {
                     state: "replaced".into(),
                     title: info.title,
                     class: info.class,
+                    warning: info.warning,
                 }),
                 Err(error) => {
                     debug_log(&format!("relayout {key} re-adopt failed: {error}"));
@@ -700,19 +780,25 @@ mod imp {
                 return Ok(lost());
             }
             place(window, x, y, width, height, scale);
-            debug_log(&format!("relayout {key} re-parented (class={class})"));
+            let warning = verify(window, parent);
+            debug_log(&format!(
+                "relayout {key} re-parented (class={class} warning={warning:?})"
+            ));
             return Ok(DesktopRelayoutResult {
                 state: "reparented".into(),
                 title,
                 class,
+                warning: warning.to_string(),
             });
         }
 
         place(window, x, y, width, height, scale);
+        let warning = verify(window, parent);
         Ok(DesktopRelayoutResult {
             state: "ok".into(),
             title,
             class,
+            warning: warning.to_string(),
         })
     }
 

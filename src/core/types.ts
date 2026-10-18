@@ -314,6 +314,11 @@ export interface DesktopWindowInfo {
   class: string;
   /** True when the window is currently parented into the workbench window. */
   attached: boolean;
+  /**
+   * Diagnostic code when the adopted window shows nothing (empty when fine):
+   * `gone` | `not-child` | `minimized` | `invisible` | `size`.
+   */
+  warning: string;
 }
 
 /**
@@ -325,6 +330,7 @@ export interface DesktopRelayoutResult {
   state: "ok" | "reparented" | "replaced" | "lost";
   title: string;
   class: string;
+  warning: string;
 }
 
 /**

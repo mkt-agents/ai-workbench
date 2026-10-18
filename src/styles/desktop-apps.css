@@ -45,6 +45,22 @@
   flex: 1 1 auto;
 }
 
+/* Blank slot + "embedded" would be a lie: say what is wrong where it is
+   visible, i.e. in the toolbar above the hosted window. */
+.dapps-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 4px 8px;
+  max-width: 46ch;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--yellow-border);
+  background: var(--yellow-dim);
+  color: var(--text-1);
+  font-size: 11.5px;
+}
+
 .dapps-tab {
   display: inline-flex;
   align-items: center;
@@ -220,6 +236,11 @@
   user-select: text;
 }
 
+.dapps-error-list li .btn {
+  flex: none;
+  margin-left: auto;
+}
+
 .dapps-error-tag {
   flex: none;
   padding: 1px 5px;
@@ -256,4 +277,75 @@
   font-size: 11.5px;
   max-width: 52ch;
   color: var(--text-3);
+}
+
+/* Window picker modal: the escape hatch when the automatic pick is the wrong
+   window of the right process (splash, helper frame, second window). */
+.dapps-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+}
+
+.dapps-picker-hint,
+.dapps-picker-empty {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+.dapps-picker-empty {
+  color: var(--text-2);
+}
+
+.dapps-picker-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dapps-picker-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+}
+
+.dapps-picker-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dapps-picker-title {
+  font-size: 12.5px;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dapps-picker-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dapps-picker-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }

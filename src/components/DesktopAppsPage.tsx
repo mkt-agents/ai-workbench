@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   AppWindow,
   Loader2,
+  MousePointerClick,
   Play,
   Plus,
   RefreshCw,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
+import ModalTitleRow from "./ModalTitleRow";
 import type { DesktopWindowCandidate, DesktopWindowInfo, InstalledAppInfo } from "../core/types";
 import {
   BUILTIN_DESKTOP_APPS,
@@ -28,7 +30,8 @@ type Phase = "idle" | "running" | "attached" | "launching" | "polling" | "missin
 
 /** Generous, because a cold IDE start (IntelliJ, VS Code) blows past a minute. */
 const WINDOW_WAIT_MS = 150_000;
-const POLL_MS = 500;
+const HEARTBEAT_MS = 400;
+const POLL_MS = 120;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,6 +60,7 @@ export default function DesktopAppsPage() {
   const invokeDesktopEmbedShow = useGlobalStore((s) => s.invokeDesktopEmbedShow);
   const invokeDesktopEmbedDetach = useGlobalStore((s) => s.invokeDesktopEmbedDetach);
   const invokeDesktopEmbedCandidates = useGlobalStore((s) => s.invokeDesktopEmbedCandidates);
+  const invokeDesktopEmbedAttachWindow = useGlobalStore((s) => s.invokeDesktopEmbedAttachWindow);
 
   const [custom, setCustom] = useState<DesktopAppDef[]>(() => loadCustomApps());
   const [activeId, setActiveId] = useState<string>(BUILTIN_DESKTOP_APPS[0].id);
@@ -64,9 +68,16 @@ export default function DesktopAppsPage() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [busy, setBusy] = useState(false);
   const [windowTitle, setWindowTitle] = useState<string>("");
+  /** Win32 class of the adopted window — makes a wrong pick visible on hover. */
+  const [windowClass, setWindowClass] = useState<string>("");
+  /** Set when the adopted window cannot paint anything (see `verify` in Rust). */
+  const [warning, setWarning] = useState<string>("");
   /** Why the last adopt attempt failed, verbatim from the backend. */
   const [errorText, setErrorText] = useState<string>("");
   const [candidates, setCandidates] = useState<DesktopWindowCandidate[]>([]);
+  /** Window picker: open state plus the list it was opened with. */
+  const [picking, setPicking] = useState(false);
+  const [pickerList, setPickerList] = useState<DesktopWindowCandidate[]>([]);
 
   const slotRef = useRef<HTMLDivElement>(null);
   const attachedRef = useRef(false);
@@ -112,6 +123,66 @@ export default function DesktopAppsPage() {
     if (aliveRef.current) setCandidates(list);
   }, [invokeDesktopEmbedCandidates, processName]);
 
+  /** Open the picker: the candidates at this moment, adoptable by handle. */
+  const openPicker = useCallback(async () => {
+    setBusy(true);
+    try {
+      const list = await invokeDesktopEmbedCandidates(processName).catch(() => []);
+      if (!aliveRef.current) return;
+      // The hosted window paints over the webview, so it would cover the very
+      // dialog that is meant to replace it: hide it while choosing.
+      if (attachedRef.current) void invokeDesktopEmbedShow(processName, false);
+      setPickerList(list);
+      setPicking(true);
+    } finally {
+      if (aliveRef.current) setBusy(false);
+    }
+  }, [invokeDesktopEmbedCandidates, invokeDesktopEmbedShow, processName]);
+
+  /** Close the picker, bringing the adopted window back if it is still ours. */
+  const closePicker = useCallback(() => {
+    setPicking(false);
+    if (attachedRef.current) void invokeDesktopEmbedShow(processName, true);
+  }, [invokeDesktopEmbedShow, processName]);
+
+  /** Adopt exactly the window the user clicked. */
+  const attachPicked = useCallback(
+    async (hwnd: string) => {
+      const rect = slotRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setBusy(true);
+      try {
+        const info: DesktopWindowInfo = await invokeDesktopEmbedAttachWindow({
+          processName,
+          hwnd,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        });
+        if (!aliveRef.current) return;
+        attachedRef.current = true;
+        setErrorText("");
+        setCandidates([]);
+        setWindowTitle(info.title);
+        setWindowClass(info.class);
+        setWarning(info.warning);
+        setPhase("attached");
+        closePicker();
+      } catch (err) {
+        if (aliveRef.current) {
+          setErrorText(err instanceof Error ? err.message : String(err));
+          setPhase("error");
+          closePicker();
+          await diagnose();
+        }
+      } finally {
+        if (aliveRef.current) setBusy(false);
+      }
+    },
+    [closePicker, diagnose, invokeDesktopEmbedAttachWindow, processName]
+  );
+
   /** Adopt the app's window into the slot. `false` = no window to adopt. */
   const attach = useCallback(
     async (): Promise<boolean> => {
@@ -130,6 +201,8 @@ export default function DesktopAppsPage() {
         setErrorText("");
         setCandidates([]);
         setWindowTitle(info.title);
+        setWindowClass(info.class);
+        setWarning(info.warning);
         setPhase("attached");
         return true;
       } catch (err) {
@@ -147,6 +220,8 @@ export default function DesktopAppsPage() {
     aliveRef.current = true;
     attachedRef.current = false;
     setWindowTitle("");
+    setWindowClass("");
+    setWarning("");
     setErrorText("");
     setCandidates([]);
     let frame = 0;
@@ -163,13 +238,25 @@ export default function DesktopAppsPage() {
           y: rect.y,
           width: rect.width,
           height: rect.height,
-        }).then((moved) => {
-          if (!moved) {
-            // The window is gone (closed from its own side, killed, …).
-            attachedRef.current = false;
-            setPhase("idle");
-          }
-        });
+        })
+          .then((result) => {
+            if (!aliveRef.current) return;
+            // The backend repairs the link itself: take over a window the app
+            // un-parented, or adopt the fresh frame that replaced a dead one.
+            if (result.state === "lost") {
+              attachedRef.current = false;
+              setPhase("idle");
+              return;
+            }
+            if (result.state === "replaced" || result.state === "reparented") {
+              setWindowTitle(result.title);
+              setWindowClass(result.class);
+              setWarning(result.warning);
+            }
+          })
+          .catch(() => {
+            /* transient: the next tick tries again */
+          });
       });
     };
 
@@ -185,6 +272,8 @@ export default function DesktopAppsPage() {
         if (found.attached) {
           attachedRef.current = true;
           setWindowTitle(found.title);
+          setWindowClass(found.class);
+          setWarning(found.warning);
           setPhase("attached");
           void invokeDesktopEmbedShow(processName, true);
           sync();
@@ -205,10 +294,19 @@ export default function DesktopAppsPage() {
     const observer = new ResizeObserver(sync);
     if (slotRef.current) observer.observe(slotRef.current);
     window.addEventListener("resize", sync);
+    // Resizes alone are not enough: an app that replaces its frame (splash →
+    // main window) or un-parents itself must be repaired without user action.
+    // Tick fast: a slow tick leaves a stray splash/main window visible on
+    // the desktop for whole seconds. relayout's healthy path is a pair of
+    // cheap Win32 calls, so 400ms is affordable.
+    const heartbeat = window.setInterval(() => {
+      if (attachedRef.current) sync();
+    }, HEARTBEAT_MS);
 
     return () => {
       aliveRef.current = false;
       cancelAnimationFrame(frame);
+      window.clearInterval(heartbeat);
       observer.disconnect();
       window.removeEventListener("resize", sync);
       // Hide, do not detach: the app keeps its window and its state.
@@ -312,10 +410,25 @@ export default function DesktopAppsPage() {
     if (!ok) return;
     setBusy(true);
     try {
+      // Kill FIRST, while the window is still our child: terminating the
+      // process destroys the child window in place. Detaching first would
+      // release the window as a floating top-level frame on top of the
+      // workbench for the whole (potentially seconds-long) kill.
       await invokeKillApp(processName);
+      // The unparent entry is now stale; drop it so the next attach starts
+      // clean even if the kill saw the window as "not running".
       await invokeDesktopEmbedDetach(processName).catch(() => undefined);
       attachedRef.current = false;
       setPhase("idle");
+    } catch (e) {
+      // The window is still embedded (its process survived); keep phase
+      // attached so nothing floats over the workbench.
+      if (attachedRef.current) {
+        setWarning("kill-failed");
+      } else {
+        setErrorText(String(e));
+        setPhase("error");
+      }
     } finally {
       if (aliveRef.current) setBusy(false);
     }
@@ -406,7 +519,11 @@ export default function DesktopAppsPage() {
 
         <span
           className={`dapps-status is-${phase}`}
-          title={phase === "attached" && windowTitle ? windowTitle : undefined}
+          title={
+            phase === "attached" && windowTitle
+              ? `${windowClass} · ${windowTitle}`
+              : undefined
+          }
         >
           {busy && (phase === "launching" || phase === "polling") ? (
             <Loader2 size={13} className="dapps-spin" />
@@ -415,6 +532,13 @@ export default function DesktopAppsPage() {
           )}
           <span className="dapps-status-text">{statusText}</span>
         </span>
+
+        {phase === "attached" && warning ? (
+          <span className="dapps-warn">
+            <AlertTriangle size={13} />
+            {t(`warn.${warning}`, { defaultValue: "" })}
+          </span>
+        ) : null}
 
         <span className="dapps-spacer" />
 
@@ -436,6 +560,16 @@ export default function DesktopAppsPage() {
           >
             <RefreshCw size={13} />
             {t("actions.reattach")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={busy || phase === "idle"}
+            onClick={() => void openPicker()}
+            title={t("picker.hint")}
+          >
+            <MousePointerClick size={13} />
+            {t("picker.action")}
           </button>
           <button
             type="button"
@@ -509,6 +643,14 @@ export default function DesktopAppsPage() {
                             <span className="dapps-error-tag">{t("error.owned")}</span>
                           ) : null}
                           <span className="dapps-error-win">{c.title || t("error.untitled")}</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            disabled={busy || !c.visible}
+                            onClick={() => void attachPicked(c.hwnd)}
+                          >
+                            {t("picker.adopt")}
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -527,6 +669,65 @@ export default function DesktopAppsPage() {
           </div>
         )}
       </div>
+
+      {picking ? (
+        <div className="modal-overlay" onClick={closePicker}>
+          <div className="modal dapps-picker" onClick={(event) => event.stopPropagation()}>
+            <ModalTitleRow
+              title={t("picker.title", { name: label(active) })}
+              onClose={closePicker}
+              disabled={busy}
+              badge={
+                <span className="card-title-badge">
+                  {t("picker.count", { count: pickerList.length })}
+                </span>
+              }
+            />
+            <p className="dapps-picker-hint">{t("picker.hint")}</p>
+            {pickerList.length === 0 ? (
+              <p className="dapps-picker-empty">{t("picker.empty", { process: processName })}</p>
+            ) : (
+              <ul className="dapps-picker-list">
+                {pickerList.map((c) => (
+                  <li key={`${c.pid}-${c.hwnd}`}>
+                    <div className="dapps-picker-main">
+                      <span className="dapps-picker-title">{c.title || t("error.untitled")}</span>
+                      <span className="dapps-picker-meta">
+                        <span className="dapps-error-tag">{c.class}</span>
+                        <span className="dapps-error-tag">{c.hwnd}</span>
+                        <span className="dapps-error-tag">
+                          {c.visible ? t("error.visible") : t("error.hidden")}
+                        </span>
+                        <span className="dapps-error-tag">{Math.round(c.area / 1000)}k px²</span>
+                        <span className="dapps-error-tag">{c.processName}</span>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-small"
+                      disabled={busy || !c.visible}
+                      onClick={() => void attachPicked(c.hwnd)}
+                    >
+                      {t("picker.adopt")}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="dapps-picker-foot">
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                disabled={busy}
+                onClick={() => void openPicker()}
+              >
+                <RefreshCw size={12} />
+                {t("error.refresh")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

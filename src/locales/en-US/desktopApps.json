@@ -38,6 +38,22 @@
     "refresh": "Refresh list",
     "launch": "Launch failed: {{message}}"
   },
+  "warn": {
+    "gone": "The adopted window disappeared — re-adopting…",
+    "not-child": "The app restored its own window — re-adopting…",
+    "minimized": "The window is still minimized, hence the blank area",
+    "invisible": "The app hid its own window, hence the blank area",
+    "size": "The window has a zero width/height, hence the blank area",
+    "kill-failed": "The kill was refused by the OS; the app stays embedded."
+  },
+  "picker": {
+    "action": "Pick window",
+    "title": "Pick the window to embed — {{name}}",
+    "hint": "By default the largest main window is adopted. If a splash or helper window got embedded instead and the real window is still on the desktop, pick it here.",
+    "empty": "No window found for process “{{process}}”. Make sure the app is running, then refresh below.",
+    "count": "{{count}} windows",
+    "adopt": "Adopt"
+  },
   "kill": {
     "title": "Close app",
     "message": "This ends every {{name}} process. Unsaved work may be lost.",
