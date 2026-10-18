@@ -533,25 +533,22 @@
   color: var(--accent-strong);
 }
 
-.mr-cols {
+.mr-count.has-conflicts {
+  color: var(--red);
+}
+
+/* 五栏：本地 | 栏间 | 结果 | 栏间 | 合入。每块一行，三栏天然对齐 */
+.mr3-head,
+.mr3-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr) 44px minmax(0, 1fr);
 }
 
-.mr-cols.is-tab {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* 页签模式下列标题和选中的页签重复 */
-.mr-cols-head.is-tab {
-  display: none;
-}
-
-.mr-cols-head {
+.mr3-head {
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.mr-col-title {
+.mr3-title {
   padding: 5px 10px;
   overflow: hidden;
   color: var(--text-1);
@@ -561,151 +558,174 @@
   white-space: nowrap;
 }
 
-.mr-col-title.is-result {
-  border-right: 1px solid var(--border-subtle);
-  border-left: 1px solid var(--border-subtle);
+.mr3-title.is-result {
   color: var(--accent);
 }
 
-.mr-grid {
+.mr3-grid {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
 }
 
-/* 窄窗口：三栏变成页签，只显示选中的那一栏 */
-.is-tab.is-ours :is(.is-result, .is-theirs),
-.is-tab.is-result :is(.is-ours, .is-theirs),
-.is-tab.is-theirs :is(.is-ours, .is-result) {
-  display: none;
-}
-
-.mr-grid.is-tab .mr-row {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.mr-row {
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.mr-cell {
-  position: relative;
+.mr3-cell {
   min-width: 0;
-  padding: 2px 0;
+  padding: 1px 0;
 }
 
-.mr-cell.is-result {
+.mr3-cell.is-result {
   border-right: 1px solid var(--border-subtle);
   border-left: 1px solid var(--border-subtle);
 }
 
-.mr-grid.is-tab .mr-cell.is-result {
-  border: none;
+.mr3-line {
+  display: grid;
+  grid-template-columns: 5ch minmax(0, 1fr);
 }
 
-.mr-code {
-  margin: 0;
-  padding: 2px 10px;
+.mr3-no {
+  padding-right: 0.8ch;
+  color: var(--text-3);
+  text-align: right;
+  user-select: none;
+}
+
+.mr3-text {
+  padding-right: 8px;
   color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
 
-.mr-code.is-same {
+.mr3-row.is-equal .mr3-text,
+.mr3-cell.is-quiet .mr3-text {
   color: var(--text-3);
 }
 
-.mr-code.is-base {
-  color: var(--text-3);
-  text-decoration: line-through;
-  text-decoration-color: color-mix(in srgb, var(--text-3) 50%, transparent);
+/* 未处理的块：色带从改动的一栏穿过栏间连到结果栏（IDEA 的连接色块） */
+.mr3-row.is-ours .mr3-cell.is-ours,
+.mr3-row.is-ours:not(.is-done) :is(.mr3-gutter.is-left, .mr3-cell.is-result),
+.mr3-row.is-theirs .mr3-cell.is-theirs,
+.mr3-row.is-theirs:not(.is-done) :is(.mr3-gutter.is-right, .mr3-cell.is-result) {
+  background: var(--merge-change-bg);
 }
 
-.mr-row.is-conflict .mr-cell.is-ours,
-.mr-row.is-conflict .mr-cell.is-theirs {
-  background: var(--diff-conflict-bg);
+.mr3-row.is-conflict :is(.mr3-cell.is-ours, .mr3-cell.is-theirs),
+.mr3-row.is-conflict:not(.is-done) :is(.mr3-gutter, .mr3-cell.is-result) {
+  background: var(--merge-conflict-bg);
 }
 
-.mr-row.is-conflict:not(.is-done) .mr-cell.is-result {
-  box-shadow: inset 3px 0 0 var(--diff-conflict-border);
+.mr3-row.is-same > * {
+  background: var(--merge-same-bg);
 }
 
-.mr-row.is-conflict.is-done .mr-cell.is-ours,
-.mr-row.is-conflict.is-done .mr-cell.is-theirs {
-  background: transparent;
+.mr3-row.is-ours:not(.is-done),
+.mr3-row.is-theirs:not(.is-done) {
+  box-shadow:
+    inset 0 1px 0 var(--merge-change-band),
+    inset 0 -1px 0 var(--merge-change-band);
 }
 
-.mr-row.is-done .mr-cell.is-result {
-  background: var(--diff-add-bg);
+.mr3-row.is-conflict:not(.is-done) {
+  box-shadow:
+    inset 0 1px 0 var(--merge-conflict-band),
+    inset 0 -1px 0 var(--merge-conflict-band);
 }
 
-.mr-row.is-focus {
+.mr3-row.is-done .mr3-cell.is-result {
+  background: var(--overlay-1);
+}
+
+.mr3-row.is-focus {
   outline: 1px solid var(--accent-border);
   outline-offset: -1px;
 }
 
-.mr-take {
+.mr3-gutter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-top: 2px;
+}
+
+.mr3-act {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  margin: 2px 10px 4px;
-  padding: 1px 8px;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+  padding: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--bg-1);
   color: var(--text-1);
-  font-size: 11px;
   cursor: pointer;
   transition: var(--transition-colors-fast);
 }
 
-.mr-take:hover {
-  border-color: var(--accent-border);
-  background: var(--accent-dim);
+.mr3-act.is-take {
   color: var(--accent-strong);
 }
 
-.mr-row.is-done .mr-take {
-  opacity: 0.6;
+.mr3-act.is-take:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
 }
 
-.mr-open {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 4px 0 6px;
+.mr3-act.is-ignore {
+  color: var(--text-3);
 }
 
-.mr-open-label {
-  padding: 0 10px;
-  color: var(--yellow);
-  font-size: 11px;
-  font-weight: 600;
+.mr3-act.is-ignore:hover {
+  border-color: var(--red-border);
+  background: var(--red-dim);
+  color: var(--red);
 }
 
-.mr-open-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 0 10px;
+.mr3-append {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.mr-picked {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 6px 4px;
+.mr3-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: var(--radius-full);
 }
 
-/* 每块结果按内容行数长高，不需要拖拽改尺寸 */
-.mr-edit {
+.mr3-mark.is-applied {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.mr3-mark.is-ignored {
+  background: var(--overlay-2);
+  color: var(--text-3);
+}
+
+.mr3-edit-wrap {
+  position: relative;
+}
+
+/* 结果块按内容长高（field-sizing），不需要拖拽改尺寸 */
+.mr3-edit {
+  display: block;
   width: 100%;
+  min-height: 1.5em;
   box-sizing: border-box;
-  padding: 2px 4px;
+  margin: 0;
+  padding: 0 24px 0 5ch;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -713,53 +733,84 @@
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: hidden;
   resize: none;
+  field-sizing: content;
   transition: var(--transition-colors-fast);
 }
 
-.mr-edit:focus {
+.mr3-edit:focus {
   border-color: var(--accent-border);
   outline: none;
   background: var(--input-bg);
 }
 
-.mr-chunk-undo {
+.mr3-reset {
+  position: absolute;
+  top: 1px;
+  right: 4px;
   display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 4px;
-  padding: 0 6px;
+  padding: 3px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
-  font-size: 11px;
   cursor: pointer;
   transition: var(--transition-colors-fast);
 }
 
-.mr-chunk-undo:hover {
+.mr3-reset:hover {
   background: var(--overlay-2);
-  color: var(--text-1);
+  color: var(--text-0);
 }
 
-.mr-fold-btn {
+.mr3-fold {
   display: block;
   width: 100%;
-  padding: 1px 10px;
+  padding: 2px 12px;
   border: none;
+  border-top: 1px dashed var(--border-subtle);
+  border-bottom: 1px dashed var(--border-subtle);
   background: var(--overlay-1);
   color: var(--text-3);
+  font-family: var(--font-sans);
   font-size: 11px;
   text-align: left;
   cursor: pointer;
   transition: var(--transition-colors-fast);
 }
 
-.mr-fold-btn:hover {
+.mr3-fold:hover {
   color: var(--accent);
 }
 
+/* 窄窗口：三栏变页签；本地 / 合入页签带上自己那一侧的栏间按钮 */
+.mr3-head.is-tab {
+  display: none;
+}
+
+.mr3-grid.is-ours .mr3-row {
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+.mr3-grid.is-theirs .mr3-row {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.mr3-grid.is-result .mr3-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mr3-grid.is-ours :is(.mr3-cell.is-result, .mr3-gutter.is-right, .mr3-cell.is-theirs),
+.mr3-grid.is-theirs :is(.mr3-cell.is-ours, .mr3-gutter.is-left, .mr3-cell.is-result),
+.mr3-grid.is-result :is(.mr3-cell.is-ours, .mr3-gutter, .mr3-cell.is-theirs) {
+  display: none;
+}
+
+.mr3-grid.is-tab .mr3-cell.is-result {
+  border: none;
+}
 /* 手动编辑整个结果：撑满主区 */
 .mr-manual {
   flex: 1;

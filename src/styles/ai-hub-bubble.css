@@ -44,6 +44,11 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
 
 .qa-bubble-root {
   --qa-disc: 40px;
+  /* Frost grain: fractal noise tile, white specks on dark discs / ink specks on light ones */
+  --qa-bubble-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.11 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --qa-bubble-grain-ink: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.13 0 0 0 0 0.18 0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  /* Lifts the disc off any wallpaper; must fit inside the 8px HWND padding */
+  --qa-bubble-drop: 0 2px 6px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(0, 0, 0, 0.28);
   position: relative;
   width: 100%;
   height: 100%;
@@ -89,20 +94,22 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   pointer-events: auto;
   cursor: pointer;
   color: color-mix(in srgb, var(--accent) 68%, #fff);
+  /* Frost is painted, not filtered: in a transparent WebView2 window backdrop-filter
+     only sees the page itself, never the desktop, so a thin tint just looks empty. */
   background:
-    radial-gradient(120% 90% at 28% 16%, rgba(255, 255, 255, 0.4) 0%, transparent 46%),
+    radial-gradient(120% 90% at 28% 14%, rgba(255, 255, 255, 0.3) 0%, transparent 50%),
+    var(--qa-bubble-grain),
     linear-gradient(
       160deg,
-      color-mix(in srgb, var(--accent) 20%, rgba(255, 255, 255, 0.18)) 0%,
-      rgba(12, 14, 18, 0.3) 100%
+      color-mix(in srgb, var(--accent) 22%, rgba(62, 66, 76, 0.9)) 0%,
+      rgba(22, 24, 30, 0.92) 100%
     );
-  border: 1px solid color-mix(in srgb, var(--accent) 38%, rgba(255, 255, 255, 0.58));
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, rgba(255, 255, 255, 0.42));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.58),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(18px) saturate(1.35);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    var(--qa-bubble-drop);
   transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow var(--transition-colors), filter var(--transition-colors),
     border-color var(--transition-colors), color var(--transition-colors),
@@ -152,10 +159,11 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   color: color-mix(in srgb, var(--accent) 48%, #fff);
   border-color: color-mix(in srgb, var(--accent) 52%, rgba(255, 255, 255, 0.72));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.7),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.08),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
-    inset 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
+    inset 0 1px 0 rgba(255, 255, 255, 0.56),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    inset 0 0 16px color-mix(in srgb, var(--accent) 22%, transparent),
+    var(--qa-bubble-drop);
 }
 
 .qa-bubble-root:hover .qa-bubble-orb {
@@ -196,8 +204,9 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   filter: brightness(1.08);
   border-color: color-mix(in srgb, var(--accent) 60%, rgba(255, 255, 255, 0.8));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.75),
-    inset 0 0 18px color-mix(in srgb, var(--accent) 28%, transparent);
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    inset 0 0 18px color-mix(in srgb, var(--accent) 30%, transparent),
+    var(--qa-bubble-drop);
 }
 
 .qa-bubble-root.is-dragging .qa-bubble-aura {
@@ -257,17 +266,20 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
 [data-theme="light"] .qa-bubble-orb {
   color: var(--accent-strong);
   background:
-    radial-gradient(120% 90% at 28% 16%, rgba(255, 255, 255, 0.75) 0%, transparent 48%),
+    radial-gradient(120% 90% at 28% 14%, rgba(255, 255, 255, 0.85) 0%, transparent 50%),
+    var(--qa-bubble-grain-ink),
     linear-gradient(
       160deg,
-      color-mix(in srgb, var(--accent) 12%, rgba(255, 255, 255, 0.58)) 0%,
-      rgba(220, 228, 238, 0.38) 100%
+      color-mix(in srgb, var(--accent) 8%, rgba(250, 251, 253, 0.94)) 0%,
+      color-mix(in srgb, var(--accent) 12%, rgba(214, 222, 232, 0.92)) 100%
     );
-  border-color: color-mix(in srgb, var(--accent) 30%, rgba(255, 255, 255, 0.78));
+  border-color: color-mix(in srgb, var(--accent) 26%, rgba(255, 255, 255, 0.86));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.22),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 rgba(30, 40, 60, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+    0 2px 6px rgba(20, 30, 50, 0.22),
+    0 0 0 0.5px rgba(20, 30, 50, 0.18);
 }
 
 [data-theme="light"] .qa-bubble-orb::before {
@@ -292,17 +304,20 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   :root:not([data-theme]) .qa-bubble-orb {
     color: var(--accent-strong);
     background:
-      radial-gradient(120% 90% at 28% 16%, rgba(255, 255, 255, 0.75) 0%, transparent 48%),
+      radial-gradient(120% 90% at 28% 14%, rgba(255, 255, 255, 0.85) 0%, transparent 50%),
+      var(--qa-bubble-grain-ink),
       linear-gradient(
         160deg,
-        color-mix(in srgb, var(--accent) 12%, rgba(255, 255, 255, 0.58)) 0%,
-        rgba(220, 228, 238, 0.38) 100%
+        color-mix(in srgb, var(--accent) 8%, rgba(250, 251, 253, 0.94)) 0%,
+        color-mix(in srgb, var(--accent) 12%, rgba(214, 222, 232, 0.92)) 100%
       );
-    border-color: color-mix(in srgb, var(--accent) 30%, rgba(255, 255, 255, 0.78));
+    border-color: color-mix(in srgb, var(--accent) 26%, rgba(255, 255, 255, 0.86));
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.92),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.22),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 -1px 0 rgba(30, 40, 60, 0.08),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+      0 2px 6px rgba(20, 30, 50, 0.22),
+      0 0 0 0.5px rgba(20, 30, 50, 0.18);
   }
 
   :root:not([data-theme]) .qa-bubble-orb::before {
