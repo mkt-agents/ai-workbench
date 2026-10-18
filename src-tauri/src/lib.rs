@@ -117,6 +117,9 @@ pub fn run() {
             }
 
             let conn = Connection::open(&db_path).expect("failed to open sqlite db");
+            if let Err(e) = db_commands::migrate_renamed_tables(&conn) {
+                eprintln!("[db] table rename migration failed: {e}");
+            }
 
             conn.execute_batch(r#"
                 CREATE TABLE IF NOT EXISTS git_accounts (
@@ -253,7 +256,7 @@ pub fn run() {
                     name TEXT NOT NULL,
                     opened_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS quick_ask_sessions (
+                CREATE TABLE IF NOT EXISTS ai_hub_sessions (
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     task TEXT NOT NULL DEFAULT 'none',
@@ -389,10 +392,10 @@ pub fn run() {
                     eprintln!("[tray] init failed: {e}");
                 }
                 // Startup builds TWO webviews: the main window and the desktop bubble
-                // (the orb has to be on screen from the beginning). The quick-ask window
+                // (the orb has to be on screen from the beginning). The ai-hub window
                 // is deliberately NOT built here — it is created on demand by the tray
-                // item and the global shortcut (both go through toggle_quick_ask ->
-                // ensure_quick_ask_window), which keeps a cold first launch after install
+                // item and the global shortcut (both go through toggle_ai_hub ->
+                // ensure_ai_hub_window), which keeps a cold first launch after install
                 // from initialising three WebView2 instances at once.
                 //
                 // NOTE: never create a webview outside setup() on a delay — neither from
@@ -401,10 +404,10 @@ pub fn run() {
                 // window freezes ("not responding").
                 // Create+show bubble once; do not call ensure then visible separately
                 // (ensure used to mis-detect !CONTENT_READY as stale and block the UI).
-                let _ = tray::set_quick_ask_bubble_visible_inner(app.handle(), true, None, None);
-                // Materialise the quick-ask window off the startup path: it cannot be
-                // built from the toggle command (see tray::bubble::prebuild_quick_ask_window).
-                tray::bubble::prebuild_quick_ask_window(app.handle());
+                let _ = tray::set_ai_hub_bubble_visible_inner(app.handle(), true, None, None);
+                // Materialise the ai-hub window off the startup path: it cannot be
+                // built from the toggle command (see tray::bubble::prebuild_ai_hub_window).
+                tray::bubble::prebuild_ai_hub_window(app.handle());
             }
 
             Ok(())
@@ -575,16 +578,16 @@ pub fn run() {
             tool_commands::pick_text_file,
             tool_commands::pick_source_file,
             tool_commands::read_text_file,
-            tray::open_quick_ask_with_text,
-            tray::tray_toggle_quick_ask,
-            tray::show_quick_ask,
-            tray::hide_quick_ask,
-            tray::set_quick_ask_pinned,
+            tray::open_ai_hub_with_text,
+            tray::tray_toggle_ai_hub,
+            tray::show_ai_hub,
+            tray::hide_ai_hub,
+            tray::set_ai_hub_pinned,
             tray::open_main_deepseek,
             tray::open_main_tab,
-            tray::set_quick_ask_bubble_visible,
-            tray::set_quick_ask_bubble_position,
-            tray::bubble::quick_ask_bubble_ready,
+            tray::set_ai_hub_bubble_visible,
+            tray::set_ai_hub_bubble_position,
+            tray::bubble::ai_hub_bubble_ready,
             runtime_commands::list_runtime_versions,
             runtime_commands::get_active_runtime,
             runtime_commands::add_custom_runtime,

@@ -1,9 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { Check, Pencil, Trash2, X } from "lucide-react";
-import type { QuickAskSession } from "../../core/types";
+import type { AiHubSession } from "../../core/types";
 
 type Props = {
-  sessions: QuickAskSession[];
+  sessions: AiHubSession[];
   activeSessionId: string | null;
   /** While a round is streaming: deleting the ACTIVE session is blocked (its
       in-flight finishTurn would re-persist the just-deleted chat as a new session). */
@@ -11,23 +11,23 @@ type Props = {
   renamingId: string | null;
   renameDraft: string;
   setRenameDraft: (v: string) => void;
-  onStartRename: (s: QuickAskSession) => void;
+  onStartRename: (s: AiHubSession) => void;
   onCommitRename: (id: string, title: string) => void;
   onCancelRename: () => void;
-  onOpen: (s: QuickAskSession) => void;
+  onOpen: (s: AiHubSession) => void;
   onRemove: (id: string) => void;
   relativeTime: (iso: string) => string;
 };
 
 /** Persisted-session panel with inline rename. */
 export default function SessionHistory(props: Props) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const {
     sessions, activeSessionId, busy, renamingId, renameDraft, setRenameDraft,
     onStartRename, onCommitRename, onCancelRename, onOpen, onRemove, relativeTime,
   } = props;
   return (
-    <div className="quick-ask-sessions">
+    <div className="ai-hub-sessions">
       <div className="qa-sessions-head">
         <span>{t("history")}</span>
       </div>
@@ -102,7 +102,7 @@ export default function SessionHistory(props: Props) {
           </div>
         ))}
         {sessions.length === 0 && (
-          <span className="quick-ask-hint">{t("historyEmpty")}</span>
+          <span className="ai-hub-hint">{t("historyEmpty")}</span>
         )}
       </div>
     </div>

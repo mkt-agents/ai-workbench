@@ -90,7 +90,7 @@ ai-workbench/
 │   │   ├── theme-glass.css       # glass / ice / silver 共享磨砂覆盖层
 │   │   ├── base.css / layout.css # 基础元素、body.resizing 清单 / 标题栏、侧栏、滚动条
 │   │   ├── components.css / controls.css / modal.css / dropdown.css …  # 通用件
-│   │   ├── <页面>.css            # git-pages / quick-ask / models / snippets / hosts / account-manager …
+│   │   ├── <页面>.css            # git-pages / ai-hub / models / snippets / hosts / account-manager …
 │   │   └── devtools.css          # 工具箱页 + 快捷应用页（`.dt-*` / `.al-*`），最后加载
 │   ├── tauri.d.ts / vite-env.d.ts
 │   │
@@ -113,8 +113,8 @@ ai-workbench/
 │   │   ├── PromptOptimizer.tsx   # AI 提示词改写（侧栏已下线，恢复见 AGENTS.md）
 │   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出 + 类型筛选
 │   │   ├── AccountQuotaPanel.tsx # 账号额度看板（多服务商；样式见同名 .css）
-│   │   ├── QuickAskApp.tsx       # 智枢主窗口（hash 路由 #/quick-ask）
-│   │   ├── QuickAskBubble.tsx    # 智枢桌面悬浮气泡（#/quick-ask-bubble）
+│   │   ├── AiHubApp.tsx       # 智枢主窗口（hash 路由 #/ai-hub）
+│   │   ├── AiHubBubble.tsx    # 智枢桌面悬浮气泡（#/ai-hub-bubble）
 │   │   ├── GitManager.tsx        # Git 管理主页面（仓库总览）
 │   │   ├── GitCommitPanel.tsx    # Git 提交面板（多仓 diff + AI 生成说明）
 │   │   ├── GitReposPage.tsx      # Git 仓库列表页
@@ -133,7 +133,7 @@ ai-workbench/
 │   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool
 │   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
 │   │   │                         #   + PortKillerPanel（该页第二个视图：按端口查杀）
-│   │   ├── quickAsk/             # 智枢窗子组件（QuickSelect 焦点多选等）
+│   │   ├── aiHub/             # 智枢窗子组件（QuickSelect 焦点多选等）
 │   │   ├── GitReportsPage.tsx    # Git 报告页（五视图 + 筛选 + 导出）
 │   │   ├── TestReportPanel.tsx   # 报告面板（概览 / 改动 / 提交 / API / AI）
 │   │   ├── reportTypes 见 testReportTypes.ts；useFilteredFiles.ts 为报告筛选 hook
@@ -168,7 +168,7 @@ ai-workbench/
 │   │   ├── reportAi.ts           # AI 用例行解析 `parseAiLine()`（与后端 `output_rules()` 成对）
 │   │   ├── reportRisk.ts         # 报告风险展示分类（纯前端侧）
 │   │   ├── workbuddy.ts          # WorkBuddy 前端适配辅助
-│   │   ├── quickAskShortcut.ts   # 全局快捷键注册
+│   │   ├── aiHubShortcut.ts   # 全局快捷键注册
 │   │   ├── snippets.ts           # 片段 {{param}} 替换引擎
 │   │   ├── theme.ts              # 主题应用（documentTheme + CSS 类切换）
 │   │   └── version.ts            # 版本号语义比较
@@ -336,15 +336,15 @@ App 启动
   │     ├─ 后台 tokio::spawn: cursor shared-workspace migration
   │     ├─ global_shortcut 插件注册
   │     ├─ tray::init_tray()（托盘 + 智枢窗口）
-  │     └─ tray::ensure_quick_ask_bubble()
+  │     └─ tray::ensure_ai_hub_bubble()
   │
   ├─2. Vite dev server / 静态资源 → Tauri 窗口加载 index.html
   │
   ├─3. React main.tsx 渲染
   │     ├─ ErrorBoundary 包裹
   │     ├─ hash 路由检测：
-  │     │   #/quick-ask-bubble → QuickAskBubble
-  │     │   #/quick-ask       → QuickAskApp
+  │     │   #/ai-hub-bubble → AiHubBubble
+  │     │   #/ai-hub       → AiHubApp
   │     │   默认               → App（主窗口）
   │     └─ bootApp() ← boot.ts
   │
@@ -355,7 +355,7 @@ App 启动
   │
   ├─5. App.tsx useEffect 完成
   │     ├─ setIsReady(true)（显示主界面）
-  │     ├─ registerQuickAskShortcut(settings.quickAskShortcut)
+  │     ├─ registerAiHubShortcut(settings.aiHubShortcut)
   │     ├─ applyDocumentTheme(settings.theme)
   │     ├─ i18n.changeLanguage(settings.language)
   │     └─ sync 智枢气泡可见状态到 Rust
@@ -373,7 +373,7 @@ App 启动
 
 | 接口 | 用途 | 关键字段 |
 |------|------|----------|
-| `AppSettings` | 用户偏好 | theme, language, quickAskShortcut, quickAskChips, sidebarCollapsed |
+| `AppSettings` | 用户偏好 | theme, language, aiHubShortcut, aiHubChips, sidebarCollapsed |
 | `GitAccount` | Git 身份 | name, email, color, note |
 | `GitRepoConfig` | 仓库身份绑定 | path, userName, email, accountId |
 | `GitWorkspace` | Workspace 分组 | path, name |
@@ -454,7 +454,7 @@ storage.<domain>.save()  →  invoke('db_save', { table, rows })  →  void
 type DbTable = 'git_accounts' | 'git_repo_configs' | 'git_host_configs'
   | 'host_profiles' | 'web_plugins' | 'user_scripts' | 'plugin_states'
   | 'recent_projects' | 'git_workspaces' | 'cursor_accounts' | 'ai_models'
-  | 'cloudflared_profiles' | 'snippets' | 'quick_ask_sessions'
+  | 'cloudflared_profiles' | 'snippets' | 'ai_hub_sessions'
   | 'json_tool_history' | 'quick_app_launchers'
 ```
 
@@ -477,9 +477,9 @@ bootApp(): Promise<void>
 | 常量 | 值 | 用途 |
 |------|-----|------|
 | `DSH_DEFAULT_PORT` | 3080 | DeepSeek 默认端口 |
-| `QUICKASK_CONTEXT_LIMIT` | 2000 | 智枢上下文截断上限 |
-| `QUICKASK_DIRTY_REPO_LIMIT` | 5 | 扫描脏仓库数 |
-| `QUICKASK_CLIPBOARD_LIMIT` | 800 | 剪贴板截断 |
+| `AIHUB_CONTEXT_LIMIT` | 2000 | 智枢上下文截断上限 |
+| `AIHUB_DIRTY_REPO_LIMIT` | 5 | 扫描脏仓库数 |
+| `AIHUB_CLIPBOARD_LIMIT` | 800 | 剪贴板截断 |
 | `AI_DEFAULT_MAX_TOKENS` | 4096 | AI 默认 token |
 | `RECENT_PROJECTS_LIMIT` | 200 | 最近项目上限 |
 
@@ -498,7 +498,7 @@ bootApp(): Promise<void>
 | 模块 | 导出 | 功能 |
 |------|------|------|
 | `theme.ts` | `applyDocumentTheme(theme)` | 根据 AppTheme 设置 `data-theme`（支持 glass/ice/silver/light/dark/system） |
-| `quickAskShortcut.ts` | `registerQuickAskShortcut(shortcut)` | 调用 `registerShortcut` + navigate |
+| `aiHubShortcut.ts` | `registerAiHubShortcut(shortcut)` | 调用 `registerShortcut` + navigate |
 | `aiProviders.ts` | `AI_PROVIDERS: ProviderMeta[]` | provider 显示名 + 默认 baseUrl |
 | `aiProviderLogos.ts` | `aiProviderLogoUrl(id)` 等 | 模型配置页品牌图 URL（`public/ai-providers/`） |
 | `providerLogos.ts` | 额度侧栏/卡片 glyph | `src/assets/providers/` + 本机安装图标优先 |
@@ -574,8 +574,8 @@ openGroups: Set<string>       // 分组展开状态
 | `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 + 类型分段筛选 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`） |
 | `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（未安装 / 折叠时账号数胶囊、悬停换眼睛 / `+` 添加）下挂已连接账号，有账号的服务商点行可折叠（localStorage `aq-rail-folded`）；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
-| `QuickAskApp` | 智枢主窗口（`#/quick-ask`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
-| `QuickAskBubble` | 桌面气泡（`#/quick-ask-bubble`） | 快捷唤起，全局置顶 |
+| `AiHubApp` | 智枢主窗口（`#/ai-hub`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
+| `AiHubBubble` | 桌面气泡（`#/ai-hub-bubble`） | 快捷唤起，全局置顶 |
 | `CursorManager` | Cursor 多账号 | 初始化 profile + 切换 + 诊断导出 |
 | `WorkBuddyManager` | WorkBuddy（侧栏已下线） | 账号池 + 签到；额度页复用扫码/签到；恢复见 AGENTS.md |
 | `GitManager` | Git 管理 | 仓库总览 / 扫描 / 身份 |
@@ -622,8 +622,8 @@ TrayTunnelUrls { ... }                     // 托盘隧道 URL
 5. 后台 `cursor::ensure_shared_workspace_migration()`
 6. 注册 `global_shortcut` 插件
 7. `tray::init_tray()` → 托盘图标菜单
-8. `tray::ensure_quick_ask_window()`
-9. `tray::set_quick_ask_bubble_visible_inner()`
+8. `tray::ensure_ai_hub_window()`
+9. `tray::set_ai_hub_bubble_visible_inner()`
 
 **invoke_handler**: **164 条命令**（`lib.rs` 的 `generate_handler!` 实际计数：统计列表内 `模块::命令,` 行，2026-10-10 核对为 164 条，当日新增额度域 14 条：`wb_quota_status`、`cursor_quota_fetch`、`grok_bot_quota_fetch`、Codex 5 条、`quota_accounts.rs` 5 条与 `deepseek_balance_fetch`；此前文档写的 150 是把 `.invoke_handler(tauri::generate_handler![` 与 `.run(tauri::generate_context!())` 两行也算进去了），完整清单见第 10 节。
 
@@ -800,9 +800,9 @@ TunnelSession { id, pid, mode, local_url, public_url?, profile_id?, child }
   - 当前隧道状态（动态）
   - 退出
 
-**智枢窗口**: 独立 WebView，加载同一 React 应用的 `#/quick-ask` 路由。
+**智枢窗口**: 独立 WebView，加载同一 React 应用的 `#/ai-hub` 路由。
 
-**气泡**: 独立窗口 `#/quick-ask-bubble`，物理屏幕坐标定位（通过 Rust `SetWindowPos`）。
+**气泡**: 独立窗口 `#/ai-hub-bubble`，物理屏幕坐标定位（通过 Rust `SetWindowPos`）。
 
 ### 8.13 `cancellation.rs` — 请求取消
 
@@ -1078,18 +1078,18 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `install_runtime` | kind, version | String |
 | `uninstall_runtime` | kind, path | String |
 
-### 10.9 Tray / QuickAsk Commands（8 条）
+### 10.9 Tray / AiHub Commands（8 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
-| `open_quick_ask_with_text` | text? | — |
-| `tray_toggle_quick_ask` | — | — |
-| `hide_quick_ask` | — | — |
+| `open_ai_hub_with_text` | text? | — |
+| `tray_toggle_ai_hub` | — | — |
+| `hide_ai_hub` | — | — |
 | `open_main_deepseek` | — | — |
 | `open_main_tab` | tab: String | — |
-| `set_quick_ask_bubble_visible` | visible, x?, y? | — |
-| `set_quick_ask_bubble_position` | x, y | — |
-| `quick_ask_bubble_ready` | — | —（在 `tray/bubble.rs`） |
+| `set_ai_hub_bubble_visible` | visible, x?, y? | — |
+| `set_ai_hub_bubble_position` | x, y | — |
+| `ai_hub_bubble_ready` | — | —（在 `tray/bubble.rs`） |
 
 ### 10.10 Tool Commands（10 条）
 
@@ -1175,7 +1175,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `find_port_listeners(ports)` | 查这些端口谁在监听：PID / 进程名 / 完整 exe 路径（`QueryFullProcessImageNameW`，无需新增 windows feature）/ IPv4+IPv6 地址（双栈同 PID 合并）/ 保护标记 |
 | `kill_port_listeners(port, pids)` | `taskkill /T /F` 连进程树结束。**杀前重读 netstat**，只杀此刻仍监听该端口的 PID（PID 会被回收）；PID ≤ 4 与 csrss / lsass / svchost 等一律拒绝；返回 `portReleased`（bind 探针 **且** netstat 复检都过） |
 
-> 合计核对（2026-10-10）：`lib.rs` 的 `generate_handler!` 实际注册 **164 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `quick_ask_bubble_ready`；当日新增额度域 14 条：`wb_quota_status`、`cursor_quota_fetch`、`grok_bot_quota_fetch`，Codex 的 `codex_oauth_start`、`codex_oauth_cancel`、`codex_list_accounts`、`codex_delete_account`、`codex_quota_fetch`，`quota_accounts.rs` 的 `cursor_oauth_start`、`cursor_oauth_cancel`、`deepseek_add_key`、`quota_accounts_list`、`quota_account_delete`，以及 `deepseek_balance_fetch`）。此前修正的两处历史计数偏差仍然成立：HTTP 客户端下线使 devtools 域从 1 条变 0 条；`migrate_account_to_profile` 只是 `cursor/mod.rs` 的内部函数、从未注册为命令，Cursor 章节因此是 20 条而非 21 条（更早文档写的 150 还把 `generate_handler!` 前后的两行非命令文本也计入了）。
+> 合计核对（2026-10-10）：`lib.rs` 的 `generate_handler!` 实际注册 **164 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `ai_hub_bubble_ready`；当日新增额度域 14 条：`wb_quota_status`、`cursor_quota_fetch`、`grok_bot_quota_fetch`，Codex 的 `codex_oauth_start`、`codex_oauth_cancel`、`codex_list_accounts`、`codex_delete_account`、`codex_quota_fetch`，`quota_accounts.rs` 的 `cursor_oauth_start`、`cursor_oauth_cancel`、`deepseek_add_key`、`quota_accounts_list`、`quota_account_delete`，以及 `deepseek_balance_fetch`）。此前修正的两处历史计数偏差仍然成立：HTTP 客户端下线使 devtools 域从 1 条变 0 条；`migrate_account_to_profile` 只是 `cursor/mod.rs` 的内部函数、从未注册为命令，Cursor 章节因此是 20 条而非 21 条（更早文档写的 150 还把 `generate_handler!` 前后的两行非命令文本也计入了）。
 
 ### 10.17 Update Commands（3 条，`update_commands.rs`）
 
@@ -1220,12 +1220,12 @@ App.tsx
   ├─ core/store/invocations.ts → (Tauri invoke × 20+)
   ├─ hooks/useTauriEvent.ts → (Tauri listen)
   ├─ lib/theme.ts
-  ├─ lib/quickAskShortcut.ts → (Tauri registerShortcut)
+  ├─ lib/aiHubShortcut.ts → (Tauri registerShortcut)
   └─ components/*
        ├─ AIAssistant → aiProviders.ts, aiProviderLogos.ts, (Tauri ai_commands)
        ├─ AccountQuotaPanel → providerLogos.ts, (Tauri quota / wb / cursor oauth…)
        ├─ SnippetsManager → snippets.ts
-       ├─ QuickAskApp → snippets.ts, promptOptimize.ts, (Tauri generate_text_stream)
+       ├─ AiHubApp → snippets.ts, promptOptimize.ts, (Tauri generate_text_stream)
        ├─ CursorManager → (Tauri cursor commands)
        ├─ DeepSeekHarness → (Tauri dsh_commands)
        ├─ CloudflaredManager → (Tauri cloudflared_commands)
@@ -1455,7 +1455,7 @@ t('myKey')
 | `cloudflared-log` | `{ id, tag, line }` | cloudflared 日志行 |
 | `cloudflared-url` | `{ id, url }` | 隧道拿到公网 URL |
 | `tray-minimized` | — | 用户关闭窗口到托盘 |
-| `quick-ask-bubble-enabled` | `boolean` | 气泡显隐切换 |
+| `ai-hub-bubble-enabled` | `boolean` | 气泡显隐切换 |
 | `navigate-tab` | `Tab` | 托盘菜单跳转 |
 
 ### Frontend → Rust Event

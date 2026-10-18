@@ -1,28 +1,28 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import QuickAskApp from "./components/QuickAskApp";
-import QuickAskBubble from "./components/QuickAskBubble";
+import AiHubApp from "./components/AiHubApp";
+import AiHubBubble from "./components/AiHubBubble";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import ErrorBoundary from "./components/ErrorBoundary";
 import "./i18n/config";
 import "./styles/index.css";
 
 const hash = window.location.hash;
-const isQuickAskBubble = hash.startsWith("#/quick-ask-bubble");
-const isQuickAsk = hash.startsWith("#/quick-ask") && !isQuickAskBubble;
+const isAiHubBubble = hash.startsWith("#/ai-hub-bubble");
+const isAiHub = hash.startsWith("#/ai-hub") && !isAiHubBubble;
 
-if (isQuickAskBubble) {
+if (isAiHubBubble) {
   document.documentElement.classList.add("qa-bubble-mode");
   document.body?.classList.add("qa-bubble-mode");
 }
 
 function Root() {
-  if (isQuickAskBubble) return <QuickAskBubble />;
-  if (isQuickAsk)
+  if (isAiHubBubble) return <AiHubBubble />;
+  if (isAiHub)
     return (
       <ConfirmDialogProvider>
-        <QuickAskApp />
+        <AiHubApp />
       </ConfirmDialogProvider>
     );
   return <App />;

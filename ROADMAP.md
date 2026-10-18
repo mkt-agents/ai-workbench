@@ -135,10 +135,10 @@ AI 能力不再列为不做。智枢已是多模型流式对话，并带当前�
 ### 阶段 12：智枢入口修复与首发更新（P0）✅ 已完成（2026-09）
 
 - [x] 修复「点击桌面悬浮球 / 托盘「智枢」/ `Ctrl+Alt+K` 全部无反应」
-  - 根因：`ensure_quick_ask_window` 从命令线程调用 `WebviewWindowBuilder::build()` 后**永不返回**（HWND 已创建、builder 挂住），`toggle_quick_ask` 因此永远走不到 `show()`
-  - 对策：启动后在**主线程预建**智枢窗（`prebuild_quick_ask_window` → `run_on_main_thread`，延迟 1.2s 不拖慢冷启动），toggle 只做显示/隐藏；窗口未就绪时只调度预建、不阻塞
+  - 根因：`ensure_ai_hub_window` 从命令线程调用 `WebviewWindowBuilder::build()` 后**永不返回**（HWND 已创建、builder 挂住），`toggle_ai_hub` 因此永远走不到 `show()`
+  - 对策：启动后在**主线程预建**智枢窗（`prebuild_ai_hub_window` → `run_on_main_thread`，延迟 1.2s 不拖慢冷启动），toggle 只做显示/隐藏；窗口未就绪时只调度预建、不阻塞
 - [x] 显示/隐藏不再信任 tao 的可见性缓存：改用 `IsWindowVisible` 读真实状态 + `SetWindowPos` 兜底（本机 `ShowWindow` 会被忽略，导致 tao 缓存与真实窗口失配，后续调用全部变 no-op）
-- [x] 新增 `hide_quick_ask` 命令：智枢窗 `Esc` / 关闭按钮改走该命令（原 `getCurrentWindow().hide()` 同样会被缓存问题吞掉）
+- [x] 新增 `hide_ai_hub` 命令：智枢窗 `Esc` / 关闭按钮改走该命令（原 `getCurrentWindow().hide()` 同样会被缓存问题吞掉）
 - [x] 托盘点击 / 二次启动唤回主窗口同样加兜底；窗口 API 失败不再静默吞掉
 - [x] 打包：`src-tauri/src/bin/` 内部工具改为 `dev-tools` 特性门控，不再进入安装包
 - [x] 版本号同步至 `0.1.1`，发布 GitHub Release `v0.1.1`（NSIS + MSI）
@@ -174,7 +174,7 @@ AI 能力不再列为不做。智枢已是多模型流式对话，并带当前�
 - [x] 历史会话导出为 Markdown 文件
 - [x] 键盘快捷键：Ctrl/Cmd+N 新建对话
 - [x] 上下文加载指示器（按钮旋转动画）
-- [x] 抽出 `quickAskConfig.ts`：系统提示词、默认芯片、工具函数独立模块
+- [x] 抽出 `aiHubConfig.ts`：系统提示词、默认芯片、工具函数独立模块
 
 **成功标准**：智枢回答具体、智能；历史会话可管理可导出；代码模块更清晰。
 
@@ -228,7 +228,7 @@ AI 能力不再列为不做。智枢已是多模型流式对话，并带当前�
 
 本阶段当时的范围是把「模型配置 → 智枢 / 报告 / 提交 → 片段」打磨到位。阶段收尾时写过「不做内置 Chat / Agent / RAG」，这条产品限制已经取消。
 
-* [x] **按场景模型绑定**：`settings.aiSceneModels`（quickAsk / report / commit / optimize）→ 各入口 `resolveSceneModel`；模型页「场景绑定」面板可改
+* [x] **按场景模型绑定**：`settings.aiSceneModels`（aiHub / report / commit / optimize）→ 各入口 `resolveSceneModel`；模型页「场景绑定」面板可改
 * [x] **本机探测**：`detect_local_ai_endpoints`（Ollama `:11434` / LM Studio `:1234`）一键写入配置
 * [x] **Harness**：上次同步到 DSH 的模型/时间状态条；认证补丁失败引导外开浏览器或还原；引导清单补 Node 下载与补丁提示
 * [x] **智枢**：输入 `/` 插入片段；回答来源行展示耗时与 token（后端 usage 优先，否则估算）

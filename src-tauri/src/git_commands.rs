@@ -252,7 +252,7 @@ fn git_config_has_proxy(repo_path: &str) -> bool {
 
 /// `(http_proxy, https_proxy)` from the Windows system proxy, when git itself
 /// has neither a proxy env var nor `http.proxy` / `https.proxy`.
-/// The commit-page push and the quick-ask agent share this so both reach GitHub.
+/// The commit-page push and the ai-hub agent share this so both reach GitHub.
 pub(crate) fn git_proxy_env(repo_path: &str) -> Option<(String, String)> {
     system_proxy_for_git(repo_path)
 }
@@ -2704,7 +2704,7 @@ pub async fn pick_directory(window: tauri::WebviewWindow) -> Result<Option<Strin
 }
 
 /// Owned by the calling window so the dialog stays above it even when that window is
-/// always-on-top (the pinned quick-ask window would otherwise cover it).
+/// always-on-top (the pinned ai-hub window would otherwise cover it).
 fn pick_directory_sync(window: &tauri::WebviewWindow) -> Result<Option<String>, String> {
     let folder = rfd::FileDialog::new()
         .set_title("选择 Git 仓库目录")

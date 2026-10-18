@@ -1,7 +1,7 @@
 /* ===== AI Hub window =====
    窗体走 --bg-1，让 glass/ice/silver 的 body 氛围层透出来；
    不要铺 --float-bg（那是弹层实底，会盖死香槟光）。 */
-.quick-ask-root {
+.ai-hub-root {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -14,11 +14,11 @@
   /* Stage owns scrolling; never let the window itself scroll the chrome away. */
   overflow: hidden;
 }
-.quick-ask-root.loading {
+.ai-hub-root.loading {
   align-items: center;
   justify-content: center;
 }
-.quick-ask-header {
+.ai-hub-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -26,19 +26,19 @@
   flex-shrink: 0;
   user-select: none;
 }
-.quick-ask-header-lead {
+.ai-hub-header-lead {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
-.quick-ask-header-actions {
+.ai-hub-header-actions {
   display: flex;
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
 }
-.quick-ask-title {
+.ai-hub-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -47,7 +47,7 @@
   color: var(--text-0);
   min-width: 0;
 }
-.quick-ask-title svg {
+.ai-hub-title svg {
   color: var(--accent);
   flex-shrink: 0;
 }
@@ -430,7 +430,7 @@
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-/* ---------- Quick-ask mode tabs + embedded tools ---------- */
+/* ---------- AI Hub mode tabs + embedded tools ---------- */
 .qa-mode-tabs {
   display: flex;
   align-items: center;
@@ -606,7 +606,7 @@
   from { opacity: 0; transform: translate(-50%, 4px); }
   to { opacity: 1; transform: translateX(-50%); }
 }
-.quick-ask-tools {
+.ai-hub-tools {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -633,7 +633,7 @@
   padding-right: 2px;
 }
 /* The devtools pages are designed for the wide main window — collapse their
-   two-column IO grids and tighten spacing for the 720px quick-ask window. */
+   two-column IO grids and tighten spacing for the 720px ai-hub window. */
 .qa-tools-body .devtools-tool {
   gap: 8px;
   max-width: none;
@@ -684,11 +684,11 @@
 @keyframes qa-spin {
   to { transform: rotate(360deg); }
 }
-.quick-ask-hint {
+.ai-hub-hint {
   font-size: 11px;
   color: var(--yellow);
 }
-.quick-ask-snippets {
+.ai-hub-snippets {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -697,10 +697,10 @@
   border-radius: var(--radius-md);
   background: var(--bg-0);
 }
-.quick-ask-snippet-search {
+.ai-hub-snippet-search {
   width: 100%;
 }
-.quick-ask-snippet-list {
+.ai-hub-snippet-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -719,7 +719,7 @@
 .qa-snippet-item:hover {
   border-color: var(--accent);
 }
-.quick-ask-ctx-preview {
+.ai-hub-ctx-preview {
   margin: 0;
   padding: 8px 10px;
   font-size: 11px;
@@ -948,7 +948,7 @@
   color: var(--text-1);
   background: var(--overlay-2);
 }
-.quick-ask-input {
+.ai-hub-input {
   width: 100%;
   resize: none;
   /* height is driven by AskPanel's auto-grow (2 rows → 160px) */
@@ -963,7 +963,7 @@
   outline: none;
   padding: 10px 14px 8px;
 }
-.quick-ask-input::placeholder {
+.ai-hub-input::placeholder {
   color: var(--text-3);
 }
 .qa-input-foot {
@@ -1610,7 +1610,7 @@
   min-height: 0;
   animation: qa-hist-slide 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.quick-ask-sessions {
+.ai-hub-sessions {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1622,7 +1622,7 @@
   background: var(--float-bg);
   box-shadow: var(--surface-highlight), var(--float-shadow);
 }
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .quick-ask-sessions {
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-hub-sessions {
   backdrop-filter: blur(20px) saturate(1.08);
   -webkit-backdrop-filter: blur(20px) saturate(1.08);
 }

@@ -45,7 +45,7 @@ import { useGlobalStore } from "./core/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { registerQuickAskShortcut } from "./lib/quickAskShortcut";
+import { registerAiHubShortcut } from "./lib/aiHubShortcut";
 import { syncPluginHotkeys } from "./lib/pluginHotkeys";
 import { applyDocumentTheme, normalizeAppTheme } from "./lib/theme";
 import { useTauriEvent } from "./hooks/useTauriEvent";
@@ -154,28 +154,28 @@ function App() {
       .then(async () => {
         if (cancelled) return;
         const s = useGlobalStore.getState().settings;
-        const result = await registerQuickAskShortcut(s.quickAskShortcut);
+        const result = await registerAiHubShortcut(s.aiHubShortcut);
         if (!result.ok) {
-          console.warn("quick-ask shortcut failed:", result.error);
+          console.warn("ai-hub shortcut failed:", result.error);
         }
         try {
           // Drop legacy top-right positions that cover the titlebar (pre-fix HiDPI bug).
-          const pos = s.quickAskBubblePos;
+          const pos = s.aiHubBubblePos;
           const unsafeTopRight =
             pos &&
             Number.isFinite(pos.x) &&
             Number.isFinite(pos.y) &&
             pos.y < 120;
           if (unsafeTopRight) {
-            setSettings({ quickAskBubblePos: undefined });
+            setSettings({ aiHubBubblePos: undefined });
           }
-          await invoke("set_quick_ask_bubble_visible", {
-            visible: s.quickAskBubbleEnabled !== false,
+          await invoke("set_ai_hub_bubble_visible", {
+            visible: s.aiHubBubbleEnabled !== false,
             x: unsafeTopRight ? null : (pos?.x ?? null),
             y: unsafeTopRight ? null : (pos?.y ?? null),
           });
         } catch (e) {
-          console.warn("quick-ask bubble sync failed:", e);
+          console.warn("ai-hub bubble sync failed:", e);
         }
       })
       .catch(console.error);
@@ -213,8 +213,8 @@ function App() {
     }
   }, [setSettings, tc]);
 
-  useTauriEvent<boolean>("quick-ask-bubble-enabled", (event) => {
-    setSettings({ quickAskBubbleEnabled: Boolean(event.payload) });
+  useTauriEvent<boolean>("ai-hub-bubble-enabled", (event) => {
+    setSettings({ aiHubBubbleEnabled: Boolean(event.payload) });
   }, [setSettings]);
 
   const toggleGroup = (group: string) => {

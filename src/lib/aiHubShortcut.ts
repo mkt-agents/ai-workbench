@@ -1,5 +1,5 @@
 /**
- * Register / re-register the global quick-ask shortcut.
+ * Register / re-register the global ai-hub shortcut.
  */
 import { register, unregister, isRegistered } from "@tauri-apps/plugin-global-shortcut";
 import { invoke } from "@tauri-apps/api/core";
@@ -33,14 +33,14 @@ async function bindShortcut(shortcut: string): Promise<void> {
   await register(shortcut, async (event) => {
     if (event.state !== "Pressed") return;
     try {
-      await invoke("tray_toggle_quick_ask");
+      await invoke("tray_toggle_ai_hub");
     } catch (e) {
-      console.error("toggle quick-ask failed", e);
+      console.error("toggle ai-hub failed", e);
     }
   });
 }
 
-export async function registerQuickAskShortcut(
+export async function registerAiHubShortcut(
   shortcut?: string | null
 ): Promise<{ ok: boolean; error?: string }> {
   const next = normalizeShortcut(shortcut);
@@ -77,7 +77,7 @@ export async function registerQuickAskShortcut(
   }
 }
 
-export async function unregisterQuickAskShortcut(): Promise<void> {
+export async function unregisterAiHubShortcut(): Promise<void> {
   if (!currentShortcut) return;
   await tryUnregister(currentShortcut);
   currentShortcut = null;

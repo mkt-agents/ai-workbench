@@ -11,7 +11,7 @@ import {
   clearSkippedVersion,
   getSkippedVersion,
 } from "../lib/version";
-import { registerQuickAskShortcut, DEFAULT_SHORTCUT } from "../lib/quickAskShortcut";
+import { registerAiHubShortcut, DEFAULT_SHORTCUT } from "../lib/aiHubShortcut";
 import { applyDocumentTheme, APP_THEME_CHANGED_EVENT } from "../lib/theme";
 import { clearAiUsage, usageList, type AiUsageEntry } from "../lib/aiUsage";
 import { useConfirm } from "./ConfirmModal";
@@ -50,7 +50,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [updateTarget, setUpdateTarget] = useState<{ version: string; htmlUrl: string } | null>(null);
   const [skipped, setSkipped] = useState<string | null>(() => getSkippedVersion());
-  const [shortcutDraft, setShortcutDraft] = useState(settings.quickAskShortcut || DEFAULT_SHORTCUT);
+  const [shortcutDraft, setShortcutDraft] = useState(settings.aiHubShortcut || DEFAULT_SHORTCUT);
   const [dataBusy, setDataBusy] = useState(false);
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
@@ -65,8 +65,8 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   }, []);
 
   useEffect(() => {
-    setShortcutDraft(settings.quickAskShortcut || DEFAULT_SHORTCUT);
-  }, [settings.quickAskShortcut]);
+    setShortcutDraft(settings.aiHubShortcut || DEFAULT_SHORTCUT);
+  }, [settings.aiHubShortcut]);
 
   useEffect(() => {
     invokeGetAutoStart()
@@ -107,12 +107,12 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   };
 
   const handleApplyShortcut = async () => {
-    const result = await registerQuickAskShortcut(shortcutDraft);
+    const result = await registerAiHubShortcut(shortcutDraft);
     if (result.ok) {
-      setSettings({ quickAskShortcut: shortcutDraft.trim() || DEFAULT_SHORTCUT });
-      showMsg("success", t("quickAsk.shortcutOk", { shortcut: shortcutDraft }));
+      setSettings({ aiHubShortcut: shortcutDraft.trim() || DEFAULT_SHORTCUT });
+      showMsg("success", t("aiHub.shortcutOk", { shortcut: shortcutDraft }));
     } else {
-      showMsg("error", t("quickAsk.shortcutFail", { error: result.error || "unknown" }));
+      showMsg("error", t("aiHub.shortcutFail", { error: result.error || "unknown" }));
     }
   };
 
@@ -237,10 +237,10 @@ function Settings({ onNoticeUpdate }: Props = {}) {
       </div>
 
       <div className="card">
-        <div className="card-title">{t("quickAsk.title")}</div>
+        <div className="card-title">{t("aiHub.title")}</div>
         <div className="card-body">
           <div className="setting-stack">
-            <span className="setting-label">{t("quickAsk.shortcut")}</span>
+            <span className="setting-label">{t("aiHub.shortcut")}</span>
             <div className="setting-stack-controls">
               <div className="setting-inline-controls">
                 <input
@@ -249,40 +249,40 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                   onChange={(e) => setShortcutDraft(e.target.value)}
                 />
                 <button type="button" className="btn btn-secondary btn-small" onClick={() => void handleApplyShortcut()}>
-                  {t("quickAsk.shortcutApply")}
+                  {t("aiHub.shortcutApply")}
                 </button>
               </div>
-              <span className="setting-hint">{t("quickAsk.shortcutHint")}</span>
+              <span className="setting-hint">{t("aiHub.shortcutHint")}</span>
             </div>
           </div>
           <div className="setting-row">
-            <span className="setting-label">{t("quickAsk.pasteClipboard")}</span>
+            <span className="setting-label">{t("aiHub.pasteClipboard")}</span>
             <label className="toggle">
               <input
                 type="checkbox"
-                checked={settings.quickAskPasteClipboard !== false}
-                onChange={(e) => setSettings({ quickAskPasteClipboard: e.target.checked })}
+                checked={settings.aiHubPasteClipboard !== false}
+                onChange={(e) => setSettings({ aiHubPasteClipboard: e.target.checked })}
               />
               <span className="toggle-slider" />
             </label>
           </div>
           <div className="setting-row">
-            <span className="setting-label">{t("quickAsk.bubble")}</span>
+            <span className="setting-label">{t("aiHub.bubble")}</span>
             <label className="toggle">
               <input
                 type="checkbox"
-                checked={settings.quickAskBubbleEnabled !== false}
+                checked={settings.aiHubBubbleEnabled !== false}
                 onChange={(e) => {
                   const on = e.target.checked;
-                  const pos = settings.quickAskBubblePos;
+                  const pos = settings.aiHubBubblePos;
                   // Legacy HiDPI bug saved top-band coords; let Rust use default instead.
                   const unsafe = pos && Number.isFinite(pos.y) && pos.y < 120;
                   setSettings(
                     unsafe
-                      ? { quickAskBubbleEnabled: on, quickAskBubblePos: undefined }
-                      : { quickAskBubbleEnabled: on }
+                      ? { aiHubBubbleEnabled: on, aiHubBubblePos: undefined }
+                      : { aiHubBubbleEnabled: on }
                   );
-                  void invoke("set_quick_ask_bubble_visible", {
+                  void invoke("set_ai_hub_bubble_visible", {
                     visible: on,
                     x: unsafe ? null : (pos?.x ?? null),
                     y: unsafe ? null : (pos?.y ?? null),
@@ -292,7 +292,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               <span className="toggle-slider" />
             </label>
           </div>
-          <p className="setting-hint">{t("quickAsk.bubbleHint")}</p>
+          <p className="setting-hint">{t("aiHub.bubbleHint")}</p>
         </div>
       </div>
 

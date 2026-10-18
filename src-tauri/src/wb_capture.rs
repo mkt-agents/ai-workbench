@@ -20,7 +20,7 @@ use url::Url;
 /// `on_navigation` returns false.
 const CAPTURE_HOST: &str = "aiwb-cb-capture.save";
 /// Windows create webviews on the message-loop thread; a long payload close in
-/// that same callback is how the earlier quick-ask code deadlocked, so the
+/// that same callback is how the earlier ai-hub code deadlocked, so the
 /// teardown is deferred by this much.
 const CLOSE_DELAY: Duration = Duration::from_millis(300);
 /// Navigation URLs have practical ceilings; beyond this we stop pretending the

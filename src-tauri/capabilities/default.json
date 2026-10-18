@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for main and quick-ask windows",
-  "windows": ["main", "quick-ask", "quick-ask-bubble", "browser-*"],
+  "description": "Default capability for main and ai-hub windows",
+  "windows": ["main", "ai-hub", "ai-hub-bubble", "browser-*"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

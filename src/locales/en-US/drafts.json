@@ -28,7 +28,7 @@
   "copy": "Copy",
   "copied": "Copied",
   "copyFailed": "Copy failed: {{error}}",
-  "insertQuickAsk": "Insert into AI Hub",
+  "insertAiHub": "Insert into AI Hub",
   "pin": "Pin",
   "unpin": "Unpin",
   "pinned": "Pinned",

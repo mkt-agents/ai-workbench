@@ -44,7 +44,7 @@
   "useTitle": "Use template",
   "useHint": "Copy to clipboard, or insert into AI Hub.",
   "copyUse": "Replace & copy",
-  "insertQuickAsk": "Insert into AI Hub",
+  "insertAiHub": "Insert into AI Hub",
   "deleteTitle": "Delete template",
   "deleteConfirm": "Delete “{{name}}”?",
   "deleteWarning": "You can undo for a few seconds; after that recreate it manually.",

@@ -10,7 +10,7 @@ type Props = {
 
 /** Modal to fill {{param}} placeholders of a picked snippet. */
 export default function ParamModal(props: Props) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const { paramValues, setParamValues, onClose, onConfirm } = props;
   return (
     <div className="modal-overlay">

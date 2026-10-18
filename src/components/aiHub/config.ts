@@ -1,4 +1,4 @@
-import type { AIModelConfig, QuickAskChips } from "../../core/types";
+import type { AIModelConfig, AiHubChips } from "../../core/types";
 import { DEFAULT_PROMPT_GOALS } from "../../lib/promptOptimize";
 import type { PromptGoal, PromptScenario } from "../../lib/promptOptimize";
 import type { AskMode } from "./route";
@@ -63,7 +63,7 @@ export function buildSystem(
   return buildMeta(model) + base + TASK_HINT[task] + rules;
 }
 
-export const DEFAULT_CHIPS: QuickAskChips = {
+export const DEFAULT_CHIPS: AiHubChips = {
   workspace: true,
   git: true,
   dirty: true,
@@ -139,9 +139,9 @@ export const MAX_SAVED_TURNS = 50;
 /** Older rounds fold into one note once the verbatim window is full. */
 export const MAX_DIGEST_CHARS = 2800;
 export const MAX_TURN_CHARS = 4000;
-/** Max diff bytes per file when including dirty content in quick-ask context. */
+/** Max diff bytes per file when including dirty content in ai-hub context. */
 export const MAX_DIFF_PER_FILE = 2000;
-/** Max number of files to fetch diff for the PRIMARY repo in quick-ask context. */
+/** Max number of files to fetch diff for the PRIMARY repo in ai-hub context. */
 export const MAX_DIFF_FILES_PRIMARY = 8;
 /** Max number of files to fetch diff for SECONDARY repos (status only by default). */
 export const MAX_DIFF_FILES_SECONDARY = 2;

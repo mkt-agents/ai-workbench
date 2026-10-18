@@ -18,6 +18,11 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* 空态（无仓库 / 筛选无结果）撑满列表区，不在顶部缩成一条 */
+.repos-scroll > .runtime-empty {
+  min-height: max(240px, 100%);
+  box-sizing: border-box;
+}
 
 /* 仓库页顶部工具条（对齐 plugin-toolbar） */
 .repos-toolbar {

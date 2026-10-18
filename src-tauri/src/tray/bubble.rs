@@ -1,7 +1,7 @@
-//! Quick-ask bubble and quick-ask window management.
+//! AI Hub bubble and ai-hub window management.
 //!
 //! The bubble is a small always-on-top transparent orb that lives on the
-//! desktop; clicking it toggles the quick-ask window. This module owns the
+//! desktop; clicking it toggles the ai-hub window. This module owns the
 //! window lifecycle, position clamping (to avoid covering the main titlebar),
 //! and the Windows-specific circular HWND region that clips WebView2 corners.
 
@@ -17,7 +17,7 @@ use tauri::{
 /// calls `ShowWindow` (see `tao::platform_impl::windows::window_state::apply_diff`).
 /// When the OS ignores that call the cached flag desynchronises from the real window,
 /// so every later `show()`/`hide()` short-circuits on an empty diff and the window can
-/// never be shown again — this is exactly what parked the on-demand quick-ask window
+/// never be shown again — this is exactly what parked the on-demand ai-hub window
 /// in a permanently hidden state while the bubble (created at startup) kept working.
 /// So read and drive the real window state instead of trusting tao's cache.
 #[cfg(windows)]
@@ -127,8 +127,8 @@ pub(crate) mod vis {
     }
 }
 
-pub const QUICK_ASK_LABEL: &str = "quick-ask";
-pub(crate) const QUICK_ASK_BUBBLE_LABEL: &str = "quick-ask-bubble";
+pub const AI_HUB_LABEL: &str = "ai-hub";
+pub(crate) const AI_HUB_BUBBLE_LABEL: &str = "ai-hub-bubble";
 pub(crate) const MAIN_LABEL: &str = "main";
 /// Bounding window size (logical px). Visible disc is smaller (`.qa-bubble-orb`);
 /// the extra padding holds the soft aura / hover ring. Keep CSS in sync.
@@ -141,17 +141,17 @@ const BUBBLE_TOP_SAFE_LOGICAL: f64 = 96.0;
 /// Park hidden bubble far off-screen so a failed hide cannot keep eating clicks.
 const BUBBLE_PARK_POS: (i32, i32) = (-10_000, -10_000);
 
-/// When true, `quick_ask_bubble_ready` may show the window (avoids white flash).
+/// When true, `ai_hub_bubble_ready` may show the window (avoids white flash).
 static BUBBLE_SHOULD_SHOW: AtomicBool = AtomicBool::new(false);
 /// Frontend has painted transparent orb and called ready.
 static BUBBLE_CONTENT_READY: AtomicBool = AtomicBool::new(false);
 
-pub fn ensure_quick_ask_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    if app.get_webview_window(QUICK_ASK_LABEL).is_some() {
+pub fn ensure_ai_hub_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if app.get_webview_window(AI_HUB_LABEL).is_some() {
         return Ok(());
     }
-    let url = WebviewUrl::App("index.html#/quick-ask".into());
-    WebviewWindowBuilder::new(app, QUICK_ASK_LABEL, url)
+    let url = WebviewUrl::App("index.html#/ai-hub".into());
+    WebviewWindowBuilder::new(app, AI_HUB_LABEL, url)
         .title("智枢")
         .inner_size(720.0, 640.0)
         .min_inner_size(560.0, 520.0)
@@ -166,14 +166,14 @@ pub fn ensure_quick_ask_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
     Ok(())
 }
 
-/// Prepare the quick-ask window shortly after startup, on the main thread.
+/// Prepare the ai-hub window shortly after startup, on the main thread.
 ///
 /// `setup` is the one place where building a window is known-good (that is how the
 /// desktop bubble is created), so the window is materialised here instead of from the
 /// toggle path. It runs in the background after a short delay so the cold start is not
 /// blocked by a second WebView2.
-pub fn prebuild_quick_ask_window<R: Runtime>(app: &AppHandle<R>) {
-    if app.get_webview_window(QUICK_ASK_LABEL).is_some() {
+pub fn prebuild_ai_hub_window<R: Runtime>(app: &AppHandle<R>) {
+    if app.get_webview_window(AI_HUB_LABEL).is_some() {
         return;
     }
     let app = app.clone();
@@ -181,8 +181,8 @@ pub fn prebuild_quick_ask_window<R: Runtime>(app: &AppHandle<R>) {
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
         let inner = app.clone();
         if let Err(e) = app.run_on_main_thread(move || {
-            if let Err(e) = ensure_quick_ask_window(&inner) {
-                eprintln!("[tray] prebuild quick-ask failed: {e}");
+            if let Err(e) = ensure_ai_hub_window(&inner) {
+                eprintln!("[tray] prebuild ai-hub failed: {e}");
             }
         }) {
             eprintln!("[tray] prebuild dispatch failed: {e}");
@@ -287,21 +287,21 @@ fn reveal_bubble_window<R: Runtime>(
 /// repaint path and defeats the DWM blur-behind transparency tao sets up for
 /// `transparent(true)` — the uncovered window backing then shows through as
 /// a white ring, and the region edge itself is aliased (no anti-aliasing).
-pub fn ensure_quick_ask_bubble<R: Runtime>(
+pub fn ensure_ai_hub_bubble<R: Runtime>(
     app: &AppHandle<R>,
     x: Option<i32>,
     y: Option<i32>,
 ) -> Result<(), String> {
     // Never destroy an existing window here. CONTENT_READY stays false until the
     // webview mounts — treating that as "stale" caused close+sleep and froze IPC.
-    if app.get_webview_window(QUICK_ASK_BUBBLE_LABEL).is_some() {
+    if app.get_webview_window(AI_HUB_BUBBLE_LABEL).is_some() {
         return Ok(());
     }
     let (pos_x, pos_y) = resolve_bubble_position(app, x, y);
-    let url = WebviewUrl::App("index.html#/quick-ask-bubble".into());
+    let url = WebviewUrl::App("index.html#/ai-hub-bubble".into());
     // Builder.position() is logical pixels — do NOT pass physical coords there.
     // Set PhysicalPosition immediately after build instead.
-    let win = WebviewWindowBuilder::new(app, QUICK_ASK_BUBBLE_LABEL, url)
+    let win = WebviewWindowBuilder::new(app, AI_HUB_BUBBLE_LABEL, url)
         .title("智枢")
         .inner_size(BUBBLE_SIZE, BUBBLE_SIZE)
         .min_inner_size(BUBBLE_SIZE, BUBBLE_SIZE)
@@ -324,7 +324,7 @@ pub fn ensure_quick_ask_bubble<R: Runtime>(
     Ok(())
 }
 
-pub fn set_quick_ask_bubble_visible_inner<R: Runtime>(
+pub fn set_ai_hub_bubble_visible_inner<R: Runtime>(
     app: &AppHandle<R>,
     visible: bool,
     x: Option<i32>,
@@ -333,15 +333,15 @@ pub fn set_quick_ask_bubble_visible_inner<R: Runtime>(
     if !visible {
         BUBBLE_SHOULD_SHOW.store(false, Ordering::SeqCst);
         // Keep CONTENT_READY — reuse the same webview on next show.
-        if let Some(win) = app.get_webview_window(QUICK_ASK_BUBBLE_LABEL) {
+        if let Some(win) = app.get_webview_window(AI_HUB_BUBBLE_LABEL) {
             park_bubble_window(&win);
         }
         return Ok(());
     }
 
     BUBBLE_SHOULD_SHOW.store(true, Ordering::SeqCst);
-    ensure_quick_ask_bubble(app, x, y)?;
-    let Some(win) = app.get_webview_window(QUICK_ASK_BUBBLE_LABEL) else {
+    ensure_ai_hub_bubble(app, x, y)?;
+    let Some(win) = app.get_webview_window(AI_HUB_BUBBLE_LABEL) else {
         return Err("bubble window missing".into());
     };
     // Show only after frontend is ready (or immediately on subsequent toggles).
@@ -359,15 +359,15 @@ pub fn set_quick_ask_bubble_visible_inner<R: Runtime>(
 
 /// Called by the bubble webview after CSS/transparent bg are applied.
 #[tauri::command]
-pub fn quick_ask_bubble_ready(app: AppHandle) -> Result<(), String> {
+pub fn ai_hub_bubble_ready(app: AppHandle) -> Result<(), String> {
     BUBBLE_CONTENT_READY.store(true, Ordering::SeqCst);
     if !BUBBLE_SHOULD_SHOW.load(Ordering::SeqCst) {
-        if let Some(win) = app.get_webview_window(QUICK_ASK_BUBBLE_LABEL) {
+        if let Some(win) = app.get_webview_window(AI_HUB_BUBBLE_LABEL) {
             park_bubble_window(&win);
         }
         return Ok(());
     }
-    let Some(win) = app.get_webview_window(QUICK_ASK_BUBBLE_LABEL) else {
+    let Some(win) = app.get_webview_window(AI_HUB_BUBBLE_LABEL) else {
         return Ok(());
     };
     // Prefer the position already applied during ensure/show; fall back to default if unsafe.
@@ -397,16 +397,16 @@ pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-pub fn toggle_quick_ask<R: Runtime>(app: &AppHandle<R>) {
+pub fn toggle_ai_hub<R: Runtime>(app: &AppHandle<R>) {
     // Never build the window from this path: `WebviewWindowBuilder::build()` does NOT
     // return when it runs on a command thread — it creates the HWND and then blocks
     // forever, so the window stayed permanently hidden and every entry point (bubble
     // click, tray item, Ctrl+Alt+K) looked dead. The window is prepared on the main
-    // thread at startup by `prebuild_quick_ask_window`; this path only toggles it.
-    let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) else {
+    // thread at startup by `prebuild_ai_hub_window`; this path only toggles it.
+    let Some(win) = app.get_webview_window(AI_HUB_LABEL) else {
         // Not materialised yet — schedule the prebuild and let the next click toggle it
         // instead of blocking here (see the note above).
-        prebuild_quick_ask_window(app);
+        prebuild_ai_hub_window(app);
         return;
     };
     // Judge from the real window, not from `is_visible()` — tao's cached flag desyncs
@@ -419,66 +419,66 @@ pub fn toggle_quick_ask<R: Runtime>(app: &AppHandle<R>) {
     let in_front = vis::is_foreground(&win).unwrap_or(false);
     if visible && in_front {
         if let Err(e) = win.hide() {
-            eprintln!("[tray] hide quick-ask failed: {e}");
+            eprintln!("[tray] hide ai-hub failed: {e}");
         }
         let _ = vis::force_visible(&win, false);
     } else {
         if let Err(e) = win.show() {
-            eprintln!("[tray] show quick-ask failed: {e}");
+            eprintln!("[tray] show ai-hub failed: {e}");
         }
         if let Err(e) = win.unminimize() {
-            eprintln!("[tray] unminimize quick-ask failed: {e}");
+            eprintln!("[tray] unminimize ai-hub failed: {e}");
         }
         if !vis::bring_to_front(&win) {
             if let Err(e) = win.set_focus() {
-                eprintln!("[tray] focus quick-ask failed: {e}");
+                eprintln!("[tray] focus ai-hub failed: {e}");
             }
             if !vis::force_visible(&win, true) {
-                eprintln!("[tray] quick-ask still hidden after force_visible");
+                eprintln!("[tray] ai-hub still hidden after force_visible");
             }
         }
-        let _ = app.emit("quick-ask-shown", ());
+        let _ = app.emit("ai-hub-shown", ());
     }
 }
 
-pub fn show_quick_ask<R: Runtime>(app: &AppHandle<R>) {
-    // Same rule as `toggle_quick_ask`: never build from here (see the comment there).
-    let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) else {
-        prebuild_quick_ask_window(app);
+pub fn show_ai_hub<R: Runtime>(app: &AppHandle<R>) {
+    // Same rule as `toggle_ai_hub`: never build from here (see the comment there).
+    let Some(win) = app.get_webview_window(AI_HUB_LABEL) else {
+        prebuild_ai_hub_window(app);
         return;
     };
     if let Err(e) = win.show() {
-        eprintln!("[tray] show quick-ask failed: {e}");
+        eprintln!("[tray] show ai-hub failed: {e}");
     }
     if let Err(e) = win.unminimize() {
-        eprintln!("[tray] unminimize quick-ask failed: {e}");
+        eprintln!("[tray] unminimize ai-hub failed: {e}");
     }
     if !vis::bring_to_front(&win) {
         if let Err(e) = win.set_focus() {
-            eprintln!("[tray] focus quick-ask failed: {e}");
+            eprintln!("[tray] focus ai-hub failed: {e}");
         }
         if !vis::force_visible(&win, true) {
-            eprintln!("[tray] quick-ask still hidden after force_visible");
+            eprintln!("[tray] ai-hub still hidden after force_visible");
         }
     }
-    let _ = app.emit("quick-ask-shown", ());
+    let _ = app.emit("ai-hub-shown", ());
 }
 
-/// Hide the quick-ask window for real. The frontend used `getCurrentWindow().hide()`,
+/// Hide the ai-hub window for real. The frontend used `getCurrentWindow().hide()`,
 /// which tao resolves through its cached flag diff — once that cache desyncs (because
 /// the real window was shown with `SetWindowPos`) the call becomes a no-op, so Esc /
 /// the close button could not dismiss the window. Route it through Rust instead.
-pub fn set_quick_ask_pinned<R: Runtime>(app: &AppHandle<R>, pinned: bool) -> Result<(), String> {
-    let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) else {
+pub fn set_ai_hub_pinned<R: Runtime>(app: &AppHandle<R>, pinned: bool) -> Result<(), String> {
+    let Some(win) = app.get_webview_window(AI_HUB_LABEL) else {
         return Ok(());
     };
     win.set_always_on_top(pinned).map_err(|e| e.to_string())
 }
 
-pub fn hide_quick_ask<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(win) = app.get_webview_window(QUICK_ASK_LABEL) {
+pub fn hide_ai_hub<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(win) = app.get_webview_window(AI_HUB_LABEL) {
         if let Err(e) = win.hide() {
-            eprintln!("[tray] hide quick-ask failed: {e}");
+            eprintln!("[tray] hide ai-hub failed: {e}");
         }
         vis::force_visible(&win, false);
     }

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronRight, Eye, FolderGit2, FolderSearch, Minus, Search, X } from "lucide-react";
-import type { QuickAskChips } from "../../core/types";
+import type { AiHubChips } from "../../core/types";
 import { readStoredString, writeStoredString } from "../../core/localState";
 import { pathKey } from "../../core/pathUtils";
 import { groupState, isServiceSelected } from "./repoSelection";
 import type { PickerGroup } from "./repoSelection";
 
-const PART_KEYS: (keyof QuickAskChips)[] = ["dirty", "git", "workspace"];
+const PART_KEYS: (keyof AiHubChips)[] = ["dirty", "git", "workspace"];
 const FILTER_MIN_REPOS = 8;
 const CTX_HEIGHT_KEY = "qa-ctx-pop-height";
 const CTX_HEIGHT_MIN = 300;
@@ -36,8 +36,8 @@ type Props = {
   onClear: () => void;
   onScanFolder: () => void;
   scanning: boolean;
-  chips: QuickAskChips;
-  setChip: (key: keyof QuickAskChips, value: boolean) => void;
+  chips: AiHubChips;
+  setChip: (key: keyof AiHubChips, value: boolean) => void;
   onPreview: () => void;
   previewLoading: boolean;
 };
@@ -48,7 +48,7 @@ type Props = {
  * commits / workspace). Plain-chat questions ignore this picker.
  */
 export default function ContextPicker(props: Props) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const {
     open, onToggleOpen, groups, selection, label, currentRepo, onToggleGroup, onToggleService,
     onClear, onScanFolder, scanning, chips, setChip, onPreview, previewLoading,
@@ -169,7 +169,7 @@ export default function ContextPicker(props: Props) {
             </label>
           )}
           <div className="qa-focus-list qa-ctx-tree">
-            {visible.length === 0 && <span className="quick-ask-hint">{t("focusEmpty")}</span>}
+            {visible.length === 0 && <span className="ai-hub-hint">{t("focusEmpty")}</span>}
             {visible.map((g) => {
               const full = groups.find((x) => x.key === g.key) || g;
               const state = groupState(full, selection);

@@ -1,7 +1,7 @@
 /**
- * Quick-ask repo selection by workspace or by service. Pure.
+ * AI Hub repo selection by workspace or by service. Pure.
  *
- * The persisted selection (`settings.quickAskFocusRepos`) mixes two entry kinds:
+ * The persisted selection (`settings.aiHubFocusRepos`) mixes two entry kinds:
  * `ws:<workspaceId>` = a whole workspace, resolved to its services every time
  * (so services added later are picked up), and plain repo paths = single services.
  */

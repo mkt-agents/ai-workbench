@@ -315,7 +315,7 @@ fn extract_content_parts(content: &serde_json::Value) -> Option<String> {
 
 /// 推理模型（DeepSeek-R1、QwQ 等）会把思考过程用 `<think>…</think>` 混进正文；有的服务商
 /// 把思考挪进 reasoning 字段，正文开头只剩一个落单的 `</think>`。两种都不是回答，剥掉。
-/// 前端 `quickAsk/thinking.ts` 的 `stripThinking` 是同一规则（流式分块只能在前端拼完再剥）。
+/// 前端 `aiHub/thinking.ts` 的 `stripThinking` 是同一规则（流式分块只能在前端拼完再剥）。
 pub(crate) fn strip_think_tags(text: &str) -> String {
     const OPEN: &str = "<think>";
     const CLOSE: &str = "</think>";

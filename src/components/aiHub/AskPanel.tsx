@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import type { QuickAskTurn } from "../../core/types";
+import type { AiHubTurn } from "../../core/types";
 import {
   AlertCircle, ArrowDown, BookmarkPlus, Bot, Check, ClipboardPaste, Copy, Download, FilePlus2,
   FileText, FolderGit2, MessageCircle, MessageSquarePlus, RefreshCw, Send, Sparkles, Square, X,
@@ -51,7 +51,7 @@ type Props = {
   /** Streaming text of the in-flight answer. */
   answer: string;
   /** Finished transcript (user / assistant pairs). */
-  turns: QuickAskTurn[];
+  turns: AiHubTurn[];
   /** Question being answered right now. */
   pending: { question: string } | null;
   source: AnswerSource | null;
@@ -106,7 +106,7 @@ const ROUTE_OPTIONS: RouteOverride[] = ["auto", "chat", "project"];
 const STICK_THRESHOLD = 80;
 
 function AgentStepLog({ steps }: { steps: { tool: string; status: string; summary: string }[] }) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const [open, setOpen] = useState(false);
   if (steps.length === 0) return null;
   return (
@@ -135,7 +135,7 @@ function AgentStepLog({ steps }: { steps: { tool: string; status: string; summar
 
 /** Answer stage (flex) + composer card; answer actions live with the answer. */
 export default function AskPanel(props: Props) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const {
     input, setInput, inputRef, busy, phase, modelName, error, failedMode, onRetry, onDismissError,
     lastQuestion, onExample, answer, turns, pending, source, canRegenerate,
@@ -584,7 +584,7 @@ export default function AskPanel(props: Props) {
         )}
         <textarea
           ref={inputRef}
-          className="quick-ask-input"
+          className="ai-hub-input"
           placeholder={
             openList
               ? t("openPlaceholder")

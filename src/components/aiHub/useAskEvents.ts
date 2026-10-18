@@ -20,7 +20,7 @@ export type AskEventsOptions = {
   onPrefillTask?: (task: string) => void;
 };
 
-/** Cross-window events: quick-ask-shown / quick-ask-prefill / theme changes. */
+/** Cross-window events: ai-hub-shown / ai-hub-prefill / theme changes. */
 export function useAskEvents(opts: AskEventsOptions) {
   const { setSettings, getContext, invalidateContext, setInput, inputRef, closePopovers } = opts;
   // Use ref to always have the latest getContext without re-registering listeners
@@ -28,7 +28,7 @@ export function useAskEvents(opts: AskEventsOptions) {
   getContextRef.current = getContext;
   const onPrefillTaskRef = useRef(opts.onPrefillTask);
   onPrefillTaskRef.current = opts.onPrefillTask;
-  // Deduplicate prefill events (both quick-ask windows receive the same event)
+  // Deduplicate prefill events (both ai-hub windows receive the same event)
   const prefillIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -43,14 +43,14 @@ export function useAskEvents(opts: AskEventsOptions) {
       applyDocumentTheme(theme);
     };
 
-    void listen("quick-ask-shown", () => {
+    void listen("ai-hub-shown", () => {
       syncThemeFromStorage();
       // Reload mutable data from SQLite — the main window may have added/removed
       // models, snippets, or sessions while this window was hidden. bootApp()
       // only runs once on mount (memoised promise), so without this the lists go stale.
       void useGlobalStore.getState().loadAIModels();
       void useGlobalStore.getState().loadSnippets();
-      void useGlobalStore.getState().loadQuickAskSessions();
+      void useGlobalStore.getState().loadAiHubSessions();
       void useGlobalStore.getState().loadRecentProjects();
       void useGlobalStore.getState().loadWorkspaces();
       // Defer context build by 1.5s so the window paints instantly; the first
@@ -62,7 +62,7 @@ export function useAskEvents(opts: AskEventsOptions) {
     }).then((fn) => {
       unlistenShown = fn;
     });
-    void listen<{ id?: string; text?: string; task?: string }>("quick-ask-prefill", (event) => {
+    void listen<{ id?: string; text?: string; task?: string }>("ai-hub-prefill", (event) => {
       const payload = event.payload;
       let text = "";
       let id: string | null = null;
@@ -76,7 +76,7 @@ export function useAskEvents(opts: AskEventsOptions) {
       }
       if (!text) return;
       // Deduplicate: if this event was already processed, skip. The task
-      // switch must live inside this branch too, or the two quick-ask windows
+      // switch must live inside this branch too, or the two ai-hub windows
       // would diverge on mode/task.
       if (id && prefillIdRef.current === id) return;
       if (id) {

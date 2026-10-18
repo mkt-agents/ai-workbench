@@ -4,7 +4,7 @@ import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
   RecentProject, WebPlugin, UserScript, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
-  Snippet, Draft, QuickAskSession, CursorUpdateState, CursorCleanupResult,
+  Snippet, Draft, AiHubSession, CursorUpdateState, CursorCleanupResult,
   QuickAppLauncher,
 } from './types';
 import { storage } from './storage';
@@ -81,19 +81,19 @@ const DEFAULT_SETTINGS: AppSettings = {
   sidebarCollapsed: false,
   autoStart: false,
   currentGitRepo: undefined,
-  quickAskShortcut: 'Ctrl+Alt+K',
-  quickAskPasteClipboard: true,
-  quickAskChips: {
+  aiHubShortcut: 'Ctrl+Alt+K',
+  aiHubPasteClipboard: true,
+  aiHubChips: {
     workspace: true,
     git: true,
     dirty: true,
   },
-  quickAskBubbleEnabled: true,
-  quickAskBubblePos: undefined,
+  aiHubBubbleEnabled: true,
+  aiHubBubblePos: undefined,
   trayHintShown: false,
   aiSceneModels: {},
-  quickAskProfiles: [],
-  quickAskProfileId: undefined,
+  aiHubProfiles: [],
+  aiHubProfileId: undefined,
 };
 
 /** Preset web tools sites — shown as suggestions when user has no plugins yet. */
@@ -118,6 +118,25 @@ export function normalizeAppPath(path: string): string {
   return path.trim().toLowerCase().replace(/[\\/]+/g, "\\");
 }
 
+/** `quickAsk*` keys and the `quickAsk` scene predate the 智枢 (aiHub) rename. */
+function renameLegacyAiHubKeys(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key.startsWith('quickAsk')) out[key] = value;
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key.startsWith('quickAsk')) continue;
+    const renamed = 'aiHub' + key.slice('quickAsk'.length);
+    if (!(renamed in out)) out[renamed] = value;
+  }
+  const scenes = out.aiSceneModels as Record<string, unknown> | undefined;
+  if (scenes && 'quickAsk' in scenes) {
+    const { quickAsk, ...others } = scenes;
+    out.aiSceneModels = { ...others, aiHub: others.aiHub ?? quickAsk };
+  }
+  return out;
+}
+
 /** One-shot: fold legacy logoVariant into theme, then drop the field. */
 function migrateSettings(
   raw: Partial<AppSettings> & { logoVariant?: 'ice' | 'silver' }
@@ -135,9 +154,9 @@ function migrateSettings(
     ...DEFAULT_SETTINGS,
     ...rest,
     theme,
-    quickAskChips: {
-      ...DEFAULT_SETTINGS.quickAskChips!,
-      ...(rest.quickAskChips ?? {}),
+    aiHubChips: {
+      ...DEFAULT_SETTINGS.aiHubChips!,
+      ...(rest.aiHubChips ?? {}),
     },
   };
 }
@@ -324,11 +343,11 @@ interface StoreState extends GlobalState, Invocations {
   /** Undo: put previously deleted drafts back with their original id and timestamps. */
   restoreDrafts: (items: Draft[]) => Promise<void>;
 
-  // Quick-ask sessions
-  loadQuickAskSessions: () => Promise<void>;
+  // AI Hub sessions
+  loadAiHubSessions: () => Promise<void>;
   /** Insert or update a session (by id); caps the stored list at 30 by updatedAt. */
-  upsertQuickAskSession: (session: QuickAskSession) => Promise<void>;
-  deleteQuickAskSession: (id: string) => Promise<void>;
+  upsertAiHubSession: (session: AiHubSession) => Promise<void>;
+  deleteAiHubSession: (id: string) => Promise<void>;
 
   // Quick app launchers
   loadQuickAppLaunchers: () => Promise<void>;
@@ -373,7 +392,7 @@ export const useGlobalStore = create<StoreState>()(
       cloudflaredProfiles: [],
       snippets: [],
       drafts: [],
-      quickAskSessions: [],
+      aiHubSessions: [],
       quickAppLaunchers: [],
 
       // Settings
@@ -1289,14 +1308,14 @@ export const useGlobalStore = create<StoreState>()(
         set({ drafts });
       }),
 
-      loadQuickAskSessions: async () => withTable("quick_ask_sessions", async () => {
-        const sessions = await storage.quickAskSessions.load();
-        set({ quickAskSessions: sessions });
+      loadAiHubSessions: async () => withTable("ai_hub_sessions", async () => {
+        const sessions = await storage.aiHubSessions.load();
+        set({ aiHubSessions: sessions });
       }),
 
-      upsertQuickAskSession: async (session) => withTable("quick_ask_sessions", async () => {
+      upsertAiHubSession: async (session) => withTable("ai_hub_sessions", async () => {
         const MAX_SESSIONS = 30;
-        const without = get().quickAskSessions.filter((s) => s.id !== session.id);
+        const without = get().aiHubSessions.filter((s) => s.id !== session.id);
         let sessions = [session, ...without];
         if (sessions.length > MAX_SESSIONS) {
           // Drop the stalest beyond the cap (list is newest-first by design).
@@ -1304,14 +1323,14 @@ export const useGlobalStore = create<StoreState>()(
             .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
             .slice(0, MAX_SESSIONS);
         }
-        await storage.quickAskSessions.save(sessions);
-        set({ quickAskSessions: sessions });
+        await storage.aiHubSessions.save(sessions);
+        set({ aiHubSessions: sessions });
       }),
 
-      deleteQuickAskSession: async (id) => withTable("quick_ask_sessions", async () => {
-        const sessions = get().quickAskSessions.filter((s) => s.id !== id);
-        await storage.quickAskSessions.save(sessions);
-        set({ quickAskSessions: sessions });
+      deleteAiHubSession: async (id) => withTable("ai_hub_sessions", async () => {
+        const sessions = get().aiHubSessions.filter((s) => s.id !== id);
+        await storage.aiHubSessions.save(sessions);
+        set({ aiHubSessions: sessions });
       }),
 
       // Quick app launchers
@@ -1435,7 +1454,7 @@ export const useGlobalStore = create<StoreState>()(
           get().loadCloudflaredProfiles(),
           get().loadSnippets(),
           get().loadDrafts(),
-          get().loadQuickAskSessions(),
+          get().loadAiHubSessions(),
           get().loadQuickAppLaunchers(),
         ]);
       },
@@ -1454,7 +1473,7 @@ export const useGlobalStore = create<StoreState>()(
           settings: migrateSettings({
             ...DEFAULT_SETTINGS,
             ...current.settings,
-            ...p?.settings,
+            ...(renameLegacyAiHubKeys((p?.settings ?? {}) as Record<string, unknown>) as Partial<AppSettings>),
           }),
         };
       },

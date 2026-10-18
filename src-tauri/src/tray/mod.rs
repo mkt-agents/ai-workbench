@@ -2,13 +2,13 @@
 //!
 //! The tray shows DSH/tunnel run state in its tooltip and menu, and hosts the
 //! thin `#[tauri::command]` entry points that the frontend invokes. Window
-//! management for the quick-ask bubble lives in the `bubble` submodule.
+//! management for the ai-hub bubble lives in the `bubble` submodule.
 
 pub mod bubble;
 
-// `ensure_quick_ask_window` stays internal to `bubble` — it is called on demand by the
+// `ensure_ai_hub_window` stays internal to `bubble` — it is called on demand by the
 // toggle/show paths, never from the app setup.
-pub use bubble::set_quick_ask_bubble_visible_inner;
+pub use bubble::set_ai_hub_bubble_visible_inner;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -50,7 +50,7 @@ fn apply_tray_menu<R: Runtime>(
 ) -> Result<(), String> {
     let show_main = MenuItem::with_id(app, "show_main", "显示主窗口", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let quick_ask = MenuItem::with_id(app, "quick_ask", "打开智枢", true, None::<&str>)
+    let ai_hub = MenuItem::with_id(app, "ai_hub", "打开智枢", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
 
@@ -88,7 +88,7 @@ fn apply_tray_menu<R: Runtime>(
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>).map_err(|e| e.to_string())?;
 
     let mut refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
-        vec![&show_main, &quick_ask, &sep1, &dsh_toggle, &sep2];
+        vec![&show_main, &ai_hub, &sep1, &dsh_toggle, &sep2];
     for item in &tunnel_items {
         refs.push(item);
     }
@@ -114,7 +114,7 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
 
     let show_main = MenuItem::with_id(app, "show_main", "显示主窗口", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let quick_ask = MenuItem::with_id(app, "quick_ask", "打开智枢", true, None::<&str>)
+    let ai_hub = MenuItem::with_id(app, "ai_hub", "打开智枢", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     let dsh_toggle = MenuItem::with_id(app, "dsh_toggle", "启动 DeepSeek", true, None::<&str>)
@@ -123,7 +123,7 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>).map_err(|e| e.to_string())?;
     let menu = Menu::with_items(
         app,
-        &[&show_main, &quick_ask, &sep1, &dsh_toggle, &sep2, &quit],
+        &[&show_main, &ai_hub, &sep1, &dsh_toggle, &sep2, &quit],
     )
     .map_err(|e| e.to_string())?;
 
@@ -136,7 +136,7 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
             let id = event.id.as_ref();
             match id {
                 "show_main" => bubble::show_main_window(app),
-                "quick_ask" => bubble::show_quick_ask(app),
+                "ai_hub" => bubble::show_ai_hub(app),
                 "dsh_toggle" => handle_dsh_toggle(app),
                 "quit" => {
                     // Stop all cloudflared tunnels before exiting so they don't
@@ -268,13 +268,13 @@ pub fn refresh_tray_status(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_quick_ask_with_text(
+pub fn open_ai_hub_with_text(
     app: AppHandle,
     text: String,
     task: Option<String>,
 ) -> Result<(), String> {
-    bubble::show_quick_ask(&app);
-    // Emit to both quick-ask windows with a unique event ID so each frontend
+    bubble::show_ai_hub(&app);
+    // Emit to both ai-hub windows with a unique event ID so each frontend
     // instance can deduplicate (they run in separate processes).
     let event_id = format!("{}-{}", std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -284,36 +284,36 @@ pub fn open_quick_ask_with_text(
     if let Some(task) = task {
         payload["task"] = serde_json::Value::String(task);
     }
-    if let Some(win) = app.get_webview_window(bubble::QUICK_ASK_LABEL) {
-        let _ = win.emit("quick-ask-prefill", payload.clone());
+    if let Some(win) = app.get_webview_window(bubble::AI_HUB_LABEL) {
+        let _ = win.emit("ai-hub-prefill", payload.clone());
     }
-    if let Some(win) = app.get_webview_window(bubble::QUICK_ASK_BUBBLE_LABEL) {
-        let _ = win.emit("quick-ask-prefill", payload);
+    if let Some(win) = app.get_webview_window(bubble::AI_HUB_BUBBLE_LABEL) {
+        let _ = win.emit("ai-hub-prefill", payload);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn tray_toggle_quick_ask(app: AppHandle) -> Result<(), String> {
-    bubble::toggle_quick_ask(&app);
+pub fn tray_toggle_ai_hub(app: AppHandle) -> Result<(), String> {
+    bubble::toggle_ai_hub(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub fn show_quick_ask(app: AppHandle) -> Result<(), String> {
-    bubble::show_quick_ask(&app);
+pub fn show_ai_hub(app: AppHandle) -> Result<(), String> {
+    bubble::show_ai_hub(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub fn hide_quick_ask(app: AppHandle) -> Result<(), String> {
-    bubble::hide_quick_ask(&app);
+pub fn hide_ai_hub(app: AppHandle) -> Result<(), String> {
+    bubble::hide_ai_hub(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_quick_ask_pinned(app: AppHandle, pinned: bool) -> Result<(), String> {
-    bubble::set_quick_ask_pinned(&app, pinned)
+pub fn set_ai_hub_pinned(app: AppHandle, pinned: bool) -> Result<(), String> {
+    bubble::set_ai_hub_pinned(&app, pinned)
 }
 
 #[tauri::command]
@@ -323,7 +323,7 @@ pub fn open_main_deepseek(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Show the main window and switch it to a whitelisted tab (quick-ask tools panel jumps).
+/// Show the main window and switch it to a whitelisted tab (ai-hub tools panel jumps).
 #[tauri::command]
 pub fn open_main_tab(app: AppHandle, tab: String) -> Result<(), String> {
     const ALLOWED: &[&str] = &[
@@ -352,25 +352,25 @@ pub fn open_main_tab(app: AppHandle, tab: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_quick_ask_bubble_visible(
+pub fn set_ai_hub_bubble_visible(
     app: AppHandle,
     visible: bool,
     x: Option<i32>,
     y: Option<i32>,
 ) -> Result<(), String> {
-    bubble::set_quick_ask_bubble_visible_inner(&app, visible, x, y)
+    bubble::set_ai_hub_bubble_visible_inner(&app, visible, x, y)
 }
 
 #[tauri::command]
-pub fn set_quick_ask_bubble_position(app: AppHandle, x: i32, y: i32) -> Result<(), String> {
+pub fn set_ai_hub_bubble_position(app: AppHandle, x: i32, y: i32) -> Result<(), String> {
     // Reject / remap legacy top-right positions that cover the main titlebar.
     let (px, py) = if bubble::is_titlebar_danger_zone(&app, x, y) {
         bubble::default_bubble_position(&app)
     } else {
         bubble::clamp_bubble_position(&app, x, y)
     };
-    bubble::ensure_quick_ask_bubble(&app, Some(px), Some(py))?;
-    if let Some(win) = app.get_webview_window(bubble::QUICK_ASK_BUBBLE_LABEL) {
+    bubble::ensure_ai_hub_bubble(&app, Some(px), Some(py))?;
+    if let Some(win) = app.get_webview_window(bubble::AI_HUB_BUBBLE_LABEL) {
         let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
     }
     Ok(())

@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, QuickAskSession, QuickAskTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -10,13 +10,13 @@ function finiteOr(value: unknown, fallback: number): number {
 }
 
 /** Parse the JSON-encoded turns column; corrupt rows degrade to empty turns. */
-function parseTurns(raw: unknown): QuickAskTurn[] {
+function parseTurns(raw: unknown): AiHubTurn[] {
   if (typeof raw !== 'string' || !raw.trim()) return [];
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
-      (t): t is QuickAskTurn =>
+      (t): t is AiHubTurn =>
         !!t && typeof t === 'object' &&
         (t.role === 'user' || t.role === 'assistant') &&
         typeof t.content === 'string'
@@ -41,7 +41,7 @@ type DbTable =
   | 'cloudflared_profiles'
   | 'snippets'
   | 'drafts'
-  | 'quick_ask_sessions'
+  | 'ai_hub_sessions'
   | 'json_tool_history'
   | 'quick_app_launchers';
 
@@ -456,9 +456,9 @@ export const storage = {
       );
     },
   },
-  quickAskSessions: {
-    load: async (): Promise<QuickAskSession[]> => {
-      const rows = await loadRows('quick_ask_sessions');
+  aiHubSessions: {
+    load: async (): Promise<AiHubSession[]> => {
+      const rows = await loadRows('ai_hub_sessions');
       return rows.map((r) => ({
         id: r['id'] as string,
         title: (r['title'] as string) || '',
@@ -468,9 +468,9 @@ export const storage = {
         updatedAt: r['updated_at'] as string,
       }));
     },
-    save: async (items: QuickAskSession[]): Promise<void> => {
+    save: async (items: AiHubSession[]): Promise<void> => {
       await saveRows(
-        'quick_ask_sessions',
+        'ai_hub_sessions',
         items.map((item) => ({
           id: item.id,
           title: item.title,

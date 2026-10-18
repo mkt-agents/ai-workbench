@@ -1,4 +1,4 @@
-import type { QuickAskTurn } from "../../core/types";
+import type { AiHubTurn } from "../../core/types";
 import { MAX_DIGEST_CHARS, MAX_HISTORY_TURNS, MAX_SAVED_TURNS, MAX_TURN_CHARS } from "./config";
 
 function clip(text: string, max: number): string {
@@ -8,7 +8,7 @@ function clip(text: string, max: number): string {
 }
 
 /** One line per dropped round, appended under any summary already stored. */
-export function foldDigest(previous: string, older: QuickAskTurn[]): string {
+export function foldDigest(previous: string, older: AiHubTurn[]): string {
   const lines: string[] = [];
   const prior = previous.trim();
   if (prior) lines.push(prior);
@@ -38,7 +38,7 @@ export function foldDigest(previous: string, older: QuickAskTurn[]): string {
  * Keep the newest verbatim rounds. Anything older is folded into a single
  * digest turn at the front so the session and the model still see it.
  */
-export function compactSession(turns: QuickAskTurn[]): QuickAskTurn[] {
+export function compactSession(turns: AiHubTurn[]): AiHubTurn[] {
   const previous = turns
     .filter((t) => t.digest)
     .map((t) => t.content)
@@ -56,7 +56,7 @@ export function compactSession(turns: QuickAskTurn[]): QuickAskTurn[] {
   return [{ role: "assistant", content, digest: true }, ...recent];
 }
 
-export function sessionDigest(turns: QuickAskTurn[]): string {
+export function sessionDigest(turns: AiHubTurn[]): string {
   return turns
     .filter((t) => t.digest)
     .map((t) => t.content.trim())
@@ -65,7 +65,7 @@ export function sessionDigest(turns: QuickAskTurn[]): string {
 }
 
 /** Recent verbatim rounds for the model. The digest is attached to the system prompt. */
-export function requestHistory(turns: QuickAskTurn[]): QuickAskTurn[] {
+export function requestHistory(turns: AiHubTurn[]): AiHubTurn[] {
   return turns
     .filter((t) => !t.digest)
     .slice(-MAX_HISTORY_TURNS * 2)
@@ -75,7 +75,7 @@ export function requestHistory(turns: QuickAskTurn[]): QuickAskTurn[] {
     }));
 }
 
-function historyContent(turn: QuickAskTurn): string {
+function historyContent(turn: AiHubTurn): string {
   if (turn.role !== "assistant" || !turn.steps?.length) return turn.content;
   const lines = turn.steps.map((s) => `- ${s.summary}`).join("\n");
   return `${turn.content}\n\n[操作]\n${lines}`;
@@ -85,7 +85,7 @@ function clipTurn(text: string): string {
   return text.length > MAX_TURN_CHARS ? text.slice(0, MAX_TURN_CHARS) + "\n…(truncated)" : text;
 }
 
-export function withSessionDigest(system: string, turns: QuickAskTurn[]): string {
+export function withSessionDigest(system: string, turns: AiHubTurn[]): string {
   const digest = sessionDigest(turns);
   if (!digest) return system;
   return (

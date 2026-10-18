@@ -13,7 +13,7 @@ type Props = {
   className?: string;
   /** Anchor the popover to the left edge of the trigger (default: right). */
   alignLeft?: boolean;
-  /** Open the menu above the trigger. The quick-ask composer sits at the bottom of the window. */
+  /** Open the menu above the trigger. The ai-hub composer sits at the bottom of the window. */
   dropUp?: boolean;
   /** Light chip trigger, for a control that lives inside the composer. */
   ghost?: boolean;

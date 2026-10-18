@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AIModelConfig, QuickAskTurn } from "../../core/types";
+import type { AIModelConfig, AiHubTurn } from "../../core/types";
 import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
 import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
@@ -29,7 +29,7 @@ export type AnswerSource = {
   estimatedTokens?: number;
 };
 
-type QaTurn = QuickAskTurn;
+type QaTurn = AiHubTurn;
 
 export type AskPhase = "idle" | "context" | "waiting" | "streaming";
 
@@ -110,7 +110,7 @@ export type AskStreamOptions = {
  * `generate_text_stream` + generate-text-chunk/-done/-error events.
  */
 export function useAskStream(opts: AskStreamOptions) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const {
     selectedModel, task, optimize, input, setInput, setSelectedText, getContext, collectDailyBrief,
     routeOverride, onSent, persistTurns,

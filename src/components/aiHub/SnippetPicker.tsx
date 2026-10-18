@@ -10,24 +10,24 @@ type Props = {
 
 /** Inline snippet search + pick list. */
 export default function SnippetPicker(props: Props) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const { snippetQuery, setSnippetQuery, snippetChoices, onPick } = props;
   return (
-    <div className="quick-ask-snippets">
+    <div className="ai-hub-snippets">
       <input
-        className="input-field quick-ask-snippet-search"
+        className="input-field ai-hub-snippet-search"
         placeholder={t("snippetSearch")}
         value={snippetQuery}
         onChange={(e) => setSnippetQuery(e.target.value)}
         autoFocus
       />
-      <div className="quick-ask-snippet-list">
+      <div className="ai-hub-snippet-list">
         {snippetChoices.map((s) => (
           <button key={s.id} type="button" className="qa-snippet-item" onClick={() => onPick(s)}>
             {s.name}
           </button>
         ))}
-        {snippetChoices.length === 0 && <span className="quick-ask-hint">{t("snippetEmpty")}</span>}
+        {snippetChoices.length === 0 && <span className="ai-hub-hint">{t("snippetEmpty")}</span>}
       </div>
     </div>
   );

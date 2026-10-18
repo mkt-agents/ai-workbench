@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AIModelConfig, QuickAskTurn } from "../../core/types";
+import type { AIModelConfig, AiHubTurn } from "../../core/types";
 
 type GenerateText = (req: {
   config: AIModelConfig;
@@ -58,7 +58,7 @@ function sanitizeSuggestion(raw: string, expectCJK: boolean): string | null {
  */
 export function useNextSuggestion(opts: {
   model: AIModelConfig | undefined;
-  turns: QuickAskTurn[];
+  turns: AiHubTurn[];
   busy: boolean;
   generate: GenerateText;
   fallback?: () => string | null;

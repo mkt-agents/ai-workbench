@@ -27,7 +27,7 @@ const JUMP_ONLY = [
 
 type EmbeddedId = (typeof EMBEDDED)[number]["id"];
 
-const TOOL_KEY = "ai-workbench.quickAsk.tool";
+const TOOL_KEY = "ai-workbench.aiHub.tool";
 
 function loadTool(): EmbeddedId {
   const stored = readStoredString(TOOL_KEY);
@@ -44,7 +44,7 @@ export default function ToolsPanel({ onJump }: { onJump: (toolId: string) => voi
   };
   const Active = EMBEDDED.find((e) => e.id === tool)!.C;
   return (
-    <div className="quick-ask-tools">
+    <div className="ai-hub-tools">
       <div className="qa-tools-bar">
         <div className="qa-tools-row">
           {EMBEDDED.map((e) => (

@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useGlobalStore } from "../core/store";
-import type { AIModelConfig, GitScannedRepo, QuickAskSession, QuickAskTurn, SnippetTaskBind } from "../core/types";
+import type { AIModelConfig, GitScannedRepo, AiHubSession, AiHubTurn, SnippetTaskBind } from "../core/types";
 import { bootApp } from "../core/boot";
 import { projectNameFromPath } from "../core/pathUtils";
 import { writeStoredString } from "../core/localState";
@@ -17,48 +17,48 @@ import {
   makeAttachment,
   type AskAttachment,
 } from "../lib/askAttachments";
-import AskPanel from "./quickAsk/AskPanel";
-import ContextPicker from "./quickAsk/ContextPicker";
+import AskPanel from "./aiHub/AskPanel";
+import ContextPicker from "./aiHub/ContextPicker";
 import {
   buildPickerGroups,
   describeSelection,
   resolveFocus,
   toggleGroup,
   toggleService,
-} from "./quickAsk/repoSelection";
-import type { PickerGroup } from "./quickAsk/repoSelection";
-import OptimizeBar from "./quickAsk/OptimizeBar";
-import ParamModal from "./quickAsk/ParamModal";
-import QuickSelect from "./quickAsk/QuickSelect";
-import SessionHistory from "./quickAsk/SessionHistory";
-import SnippetPicker from "./quickAsk/SnippetPicker";
-import ToolsPanel from "./quickAsk/ToolsPanel";
-import { useNextSuggestion } from "./quickAsk/useNextSuggestion";
+} from "./aiHub/repoSelection";
+import type { PickerGroup } from "./aiHub/repoSelection";
+import OptimizeBar from "./aiHub/OptimizeBar";
+import ParamModal from "./aiHub/ParamModal";
+import QuickSelect from "./aiHub/QuickSelect";
+import SessionHistory from "./aiHub/SessionHistory";
+import SnippetPicker from "./aiHub/SnippetPicker";
+import ToolsPanel from "./aiHub/ToolsPanel";
+import { useNextSuggestion } from "./aiHub/useNextSuggestion";
 import {
   DEFAULT_CHIPS,
   DEFAULT_OPTIMIZE,
   encodeTask,
   makeTitle,
   parseTask,
-} from "./quickAsk/config";
-import type { OptimizeConfig, TaskKind } from "./quickAsk/config";
-import { routeQuestion } from "./quickAsk/route";
-import { keepableAnswer } from "./quickAsk/keepable";
-import { openSuggestions, type OpenSuggestion } from "./quickAsk/localActions";
+} from "./aiHub/config";
+import type { OptimizeConfig, TaskKind } from "./aiHub/config";
+import { routeQuestion } from "./aiHub/route";
+import { keepableAnswer } from "./aiHub/keepable";
+import { openSuggestions, type OpenSuggestion } from "./aiHub/localActions";
 import { GIT_SUBTAB_KEY } from "./GitManager";
-import type { RouteOverride } from "./quickAsk/route";
-import { useAskContext } from "./quickAsk/useAskContext";
-import { useAskEvents } from "./quickAsk/useAskEvents";
-import { useAskSessions } from "./quickAsk/useAskSessions";
-import { useAskSnippets } from "./quickAsk/useAskSnippets";
-import { useAskStream } from "./quickAsk/useAskStream";
+import type { RouteOverride } from "./aiHub/route";
+import { useAskContext } from "./aiHub/useAskContext";
+import { useAskEvents } from "./aiHub/useAskEvents";
+import { useAskSessions } from "./aiHub/useAskSessions";
+import { useAskSnippets } from "./aiHub/useAskSnippets";
+import { useAskStream } from "./aiHub/useAskStream";
 
-type QaTurn = QuickAskTurn;
+type QaTurn = AiHubTurn;
 
 const PINNED_KEY = "qa-pinned";
 
-function QuickAskApp() {
-  const { t, i18n } = useTranslation("quickask");
+function AiHubApp() {
+  const { t, i18n } = useTranslation("aihub");
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
   const invokeGenerateText = useGlobalStore((s) => s.invokeGenerateText);
@@ -73,7 +73,7 @@ function QuickAskApp() {
   const invokeGitIsRepo = useGlobalStore((s) => s.invokeGitIsRepo);
   const invokePickDirectory = useGlobalStore((s) => s.invokePickDirectory);
   const invokePickTextFile = useGlobalStore((s) => s.invokePickTextFile);
-  const invokeSetQuickAskPinned = useGlobalStore((s) => s.invokeSetQuickAskPinned);
+  const invokeSetAiHubPinned = useGlobalStore((s) => s.invokeSetAiHubPinned);
 
   const [ready, setReady] = useState(false);
   const [pinned, setPinned] = useState(() => localStorage.getItem(PINNED_KEY) === "1");
@@ -87,8 +87,8 @@ function QuickAskApp() {
   };
   useEffect(() => {
     localStorage.setItem(PINNED_KEY, pinned ? "1" : "0");
-    void invokeSetQuickAskPinned(pinned).catch(() => {});
-  }, [pinned, invokeSetQuickAskPinned]);
+    void invokeSetAiHubPinned(pinned).catch(() => {});
+  }, [pinned, invokeSetAiHubPinned]);
   const togglePinned = () => setPinned((v) => !v);
   const [mode, setMode] = useState<"ask" | "tools">("ask");
   const [input, setInput] = useState("");
@@ -96,9 +96,9 @@ function QuickAskApp() {
   const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
-  const chips = settings.quickAskChips ?? DEFAULT_CHIPS;
+  const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
   /** Workspace tokens (`ws:<id>`) and/or service paths; empty = auto (current repo). */
-  const [focusedRepos, setFocusedRepos] = useState<string[]>(settings.quickAskFocusRepos ?? []);
+  const [focusedRepos, setFocusedRepos] = useState<string[]>(settings.aiHubFocusRepos ?? []);
   /** Which popover is open — only one at a time (mutual exclusion). */
   const [openPop, setOpenPop] = useState<null | "model" | "focus" | "route">(null);
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
@@ -143,7 +143,7 @@ function QuickAskApp() {
 
   const models = aiModels as AIModelConfig[];
   const selectedModel = useMemo(() => {
-    const scene = task === "optimize" ? "optimize" : "quickAsk";
+    const scene = task === "optimize" ? "optimize" : "aiHub";
     return resolveSceneModel(scene, models, settings.aiSceneModels, modelId || null) ?? undefined;
   }, [models, modelId, task, settings.aiSceneModels]);
 
@@ -257,13 +257,13 @@ function QuickAskApp() {
 
   const setChip = (key: keyof typeof chips, value: boolean) => {
     setSettings({
-      quickAskChips: { ...chips, [key]: value },
+      aiHubChips: { ...chips, [key]: value },
     });
   };
 
   const commitFocus = (next: string[]) => {
     setFocusedRepos(next);
-    setSettings({ quickAskFocusRepos: next });
+    setSettings({ aiHubFocusRepos: next });
   };
 
   const onToggleGroup = (group: PickerGroup) => commitFocus(toggleGroup(focusedRepos, group));
@@ -329,11 +329,11 @@ function QuickAskApp() {
   // and always starts as plain Q&A.
   const optimizeRestoredRef = useRef(false);
   useEffect(() => {
-    if (!ready || optimizeRestoredRef.current || !settings.quickAskLastTask) return;
+    if (!ready || optimizeRestoredRef.current || !settings.aiHubLastTask) return;
     optimizeRestoredRef.current = true;
-    const parsed = parseTask(settings.quickAskLastTask);
+    const parsed = parseTask(settings.aiHubLastTask);
     if (parsed.task === "optimize") setOptimize(parsed.optimize);
-  }, [ready, settings.quickAskLastTask]);
+  }, [ready, settings.aiHubLastTask]);
 
   const changeTask = (next: TaskKind) => {
     setTask(next);
@@ -370,7 +370,7 @@ function QuickAskApp() {
 
   const changeOptimize = (next: OptimizeConfig) => {
     setOptimize(next);
-    setSettings({ quickAskLastTask: encodeTask("optimize", next) });
+    setSettings({ aiHubLastTask: encodeTask("optimize", next) });
   };
 
   const hide = async () => {
@@ -378,7 +378,7 @@ function QuickAskApp() {
     // desync from the real window (see tray/bubble.rs `vis`) and turn this into a
     // no-op. Fall back to the JS API if the command is unavailable.
     try {
-      await invoke("hide_quick_ask");
+      await invoke("hide_ai_hub");
     } catch {
       try {
         await getCurrentWindow().hide();
@@ -536,7 +536,7 @@ function QuickAskApp() {
   // Re-showing the window: drop popovers/history and park focus in the composer.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen("quick-ask-shown", () => {
+    void listen("ai-hub-shown", () => {
       setOpenPop(null);
       setHistoryOpen(false);
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -584,7 +584,7 @@ function QuickAskApp() {
   };
 
   /** Restore a persisted session into the current chat. */
-  const openSession = (s: QuickAskSession) => {
+  const openSession = (s: AiHubSession) => {
     if (stream.busy) {
       flashBusyHint();
       return;
@@ -625,7 +625,7 @@ function QuickAskApp() {
     const question = stream.history[index - 1]?.content;
     const name = makeTitle(question || text, t("saveSnippet"));
     try {
-      await addSnippet({ name, content: text, tags: "quickask,ai", params: "" });
+      await addSnippet({ name, content: text, tags: "aihub,ai", params: "" });
       setSnippetSaved(index);
       window.setTimeout(() => setSnippetSaved((cur) => (cur === index ? null : cur)), 1500);
     } catch (e) {
@@ -695,14 +695,14 @@ function QuickAskApp() {
   };
 
   if (!ready) {
-    return <div className="quick-ask-root loading">{t("loading")}</div>;
+    return <div className="ai-hub-root loading">{t("loading")}</div>;
   }
 
   return (
-    <div className="quick-ask-root">
-      <header className="quick-ask-header" data-tauri-drag-region>
-        <div className="quick-ask-header-lead" data-tauri-drag-region>
-          <div className="quick-ask-title" data-tauri-drag-region>
+    <div className="ai-hub-root">
+      <header className="ai-hub-header" data-tauri-drag-region>
+        <div className="ai-hub-header-lead" data-tauri-drag-region>
+          <div className="ai-hub-title" data-tauri-drag-region>
             <Sparkles size={15} strokeWidth={1.75} />
             <span>{t("title")}</span>
           </div>
@@ -768,7 +768,7 @@ function QuickAskApp() {
             </button>
           )}
         </div>
-        <div className="quick-ask-header-actions">
+        <div className="ai-hub-header-actions">
           {mode === "ask" && (
             <div className="qa-header-sessions">
               <button
@@ -830,9 +830,9 @@ function QuickAskApp() {
             </div>
           )}
 
-          {ctx.ctxTruncated && ctxOpen && <div className="quick-ask-hint">{t("truncated")}</div>}
+          {ctx.ctxTruncated && ctxOpen && <div className="ai-hub-hint">{t("truncated")}</div>}
           {ctxOpen && (
-            <pre className="quick-ask-ctx-preview">{ctx.ctxPreview || t("ctx.previewEmpty")}</pre>
+            <pre className="ai-hub-ctx-preview">{ctx.ctxPreview || t("ctx.previewEmpty")}</pre>
           )}
 
           {snippets.snippetOpen && (
@@ -959,7 +959,7 @@ function QuickAskApp() {
             >
               <div className="qa-history-panel">
                 <SessionHistory
-                  sessions={sessions.quickAskSessions}
+                  sessions={sessions.aiHubSessions}
                   activeSessionId={activeSessionId}
                   busy={stream.busy}
                   renamingId={renamingId}
@@ -998,4 +998,4 @@ function QuickAskApp() {
   );
 }
 
-export default QuickAskApp;
+export default AiHubApp;

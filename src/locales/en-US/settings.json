@@ -15,7 +15,7 @@
     "autoStartUpdateFailed": "Failed to update auto-start: {{error}}",
     "sidebarCollapsed": "Collapse Sidebar"
   },
-  "quickAsk": {
+  "aiHub": {
     "title": "AI Hub",
     "shortcut": "Global shortcut",
     "shortcutHint": "e.g. Ctrl+Alt+K. Change if it conflicts.",

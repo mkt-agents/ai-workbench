@@ -25,7 +25,7 @@ pub enum DbTable {
     Snippets,
     Drafts,
     WebPluginHistory,
-    QuickAskSessions,
+    AiHubSessions,
     JsonToolHistory,
     QuickAppLaunchers,
     // Test assistant. Order here is only the enum order; import follows the
@@ -50,7 +50,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "snippets" => Some(DbTable::Snippets),
         "drafts" => Some(DbTable::Drafts),
         "web_plugin_history" => Some(DbTable::WebPluginHistory),
-        "quick_ask_sessions" => Some(DbTable::QuickAskSessions),
+        "ai_hub_sessions" => Some(DbTable::AiHubSessions),
         "json_tool_history" => Some(DbTable::JsonToolHistory),
         "quick_app_launchers" => Some(DbTable::QuickAppLaunchers),
         _ => None,
@@ -74,7 +74,7 @@ pub(crate) fn load_sql(table: DbTable) -> &'static str {
         DbTable::Snippets => "SELECT * FROM snippets ORDER BY use_count DESC, updated_at DESC",
         DbTable::Drafts => "SELECT * FROM drafts ORDER BY pinned DESC, updated_at DESC",
         DbTable::WebPluginHistory => "SELECT * FROM web_plugin_history ORDER BY opened_at DESC LIMIT 100",
-        DbTable::QuickAskSessions => "SELECT * FROM quick_ask_sessions ORDER BY updated_at DESC LIMIT 30",
+        DbTable::AiHubSessions => "SELECT * FROM ai_hub_sessions ORDER BY updated_at DESC LIMIT 30",
         DbTable::JsonToolHistory => "SELECT * FROM json_tool_history ORDER BY id DESC LIMIT 20",
         DbTable::QuickAppLaunchers => r#"SELECT * FROM quick_app_launchers ORDER BY "order" ASC, created_at DESC"#,
         // Runs keep their tails (64KB each), so the export side caps how many go
@@ -99,7 +99,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::Snippets => "DELETE FROM snippets",
         DbTable::Drafts => "DELETE FROM drafts",
         DbTable::WebPluginHistory => "DELETE FROM web_plugin_history",
-        DbTable::QuickAskSessions => "DELETE FROM quick_ask_sessions",
+        DbTable::AiHubSessions => "DELETE FROM ai_hub_sessions",
         DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
         DbTable::QuickAppLaunchers => "DELETE FROM quick_app_launchers",
     }
@@ -390,9 +390,9 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                 ],
             ).map_err(|e| e.to_string())?;
         }
-        DbTable::QuickAskSessions => {
+        DbTable::AiHubSessions => {
             tx.execute(
-                "INSERT INTO quick_ask_sessions (id, title, task, turns, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO ai_hub_sessions (id, title, task, turns, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
                     json_str(obj, "id")?,
                     json_str(obj, "title")?,
@@ -491,10 +491,51 @@ pub async fn db_save(
     Ok(())
 }
 
+/// Tables renamed after release. Must run before `CREATE TABLE IF NOT EXISTS`, otherwise
+/// an empty table under the new name would block the rename and orphan the old rows.
+const RENAMED_TABLES: &[(&str, &str)] = &[("quick_ask_sessions", "ai_hub_sessions")];
+
+pub(crate) fn migrate_renamed_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let exists = |name: &str| -> rusqlite::Result<bool> {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [name],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+    };
+    for (old, new) in RENAMED_TABLES {
+        if exists(old)? && !exists(new)? {
+            conn.execute_batch(&format!("ALTER TABLE {old} RENAME TO {new};"))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn renamed_tables_keep_their_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE quick_ask_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL);
+             INSERT INTO quick_ask_sessions VALUES ('s1', 'old chat');",
+        )
+        .unwrap();
+        migrate_renamed_tables(&conn).unwrap();
+        let title: String = conn
+            .query_row("SELECT title FROM ai_hub_sessions WHERE id = 's1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "old chat");
+        // Second run (already migrated) is a no-op.
+        migrate_renamed_tables(&conn).unwrap();
+        // Fresh install: nothing to rename.
+        let fresh = Connection::open_in_memory().unwrap();
+        migrate_renamed_tables(&fresh).unwrap();
+    }
 
     fn mem_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

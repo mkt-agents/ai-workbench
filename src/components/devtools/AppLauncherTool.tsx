@@ -23,7 +23,7 @@ import {
 import { useGlobalStore, normalizeAppPath } from "../../core/store";
 import { useConfirm } from "../ConfirmModal";
 import DropdownMenu from "../DropdownMenu";
-import QuickSelect from "../quickAsk/QuickSelect";
+import QuickSelect from "../aiHub/QuickSelect";
 import PortKillerPanel from "./PortKillerPanel";
 import type { InstalledAppInfo, QuickAppLauncher } from "../../core/types";
 

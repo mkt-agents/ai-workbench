@@ -420,7 +420,7 @@
   font-style: italic;
 }
 
-/* Footer: hover tools on the left, quick-ask + copy (primary) on the right. */
+/* Footer: hover tools on the left, ai-hub + copy (primary) on the right. */
 .draft-card-actions {
   display: flex;
   align-items: center;

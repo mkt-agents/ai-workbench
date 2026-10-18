@@ -462,13 +462,13 @@ export default function SnippetsManager() {
     setUseTarget(null);
   };
 
-  const confirmInsertQuickAsk = async () => {
+  const confirmInsertAiHub = async () => {
     if (!useTarget) return;
     const text = resolvedText(useTarget, paramValues);
     await bumpSnippetUse(useTarget.id);
     setUseTarget(null);
     try {
-      await invoke("open_quick_ask_with_text", { text });
+      await invoke("open_ai_hub_with_text", { text });
     } catch (e) {
       console.error(e);
     }
@@ -922,8 +922,8 @@ export default function SnippetsManager() {
               <button type="button" className="btn btn-secondary" onClick={() => void confirmCopy()}>
                 <Copy size={12} /> {t("copyUse")}
               </button>
-              <button type="button" className="btn btn-primary" onClick={() => void confirmInsertQuickAsk()}>
-                <Sparkles size={12} /> {t("insertQuickAsk")}
+              <button type="button" className="btn btn-primary" onClick={() => void confirmInsertAiHub()}>
+                <Sparkles size={12} /> {t("insertAiHub")}
               </button>
             </div>
           </div>

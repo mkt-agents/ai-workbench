@@ -29,7 +29,7 @@ type ProviderType = AIModelConfig["provider"];
 
 /** 场景图标唯一来源：场景绑定面板与空态提示行共用同一套。 */
 const SCENE_ICONS: Record<AiScene, typeof MessageSquare> = {
-  quickAsk: MessageSquare,
+  aiHub: MessageSquare,
   report: FileBarChart2,
   commit: GitCommitHorizontal,
   optimize: Sparkles,

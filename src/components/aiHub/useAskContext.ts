@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useGlobalStore } from "../../core/store";
 import { findWorkspaceForRepo } from "../../core/pathUtils";
-import type { GitRepoSummary, GitStatusEntry, QuickAskChips } from "../../core/types";
+import type { GitRepoSummary, GitStatusEntry, AiHubChips } from "../../core/types";
 import {
   CONTEXT_LIMIT,
   CONTEXT_TTL_MS,
@@ -42,7 +42,7 @@ function statusMark(e: GitStatusEntry): string {
   return e.group === "untracked" ? "??" : `${e.indexStatus || " "}${e.workTreeStatus || " "}`;
 }
 
-export type ContextPart = keyof QuickAskChips;
+export type ContextPart = keyof AiHubChips;
 
 /** What one request actually carried — shown in the answer source line. */
 export type ContextSummary = { repos: string[]; parts: ContextPart[] };
@@ -65,7 +65,7 @@ function repoName(path: string): string {
  * a couple of small diffs; with several, the diff budget is shared between the
  * dirty services and nothing outside the selection is added.
  */
-export function useAskContext(chips: QuickAskChips, focusedRepos: string[]) {
+export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
   const currentGitRepo = useGlobalStore((s) => s.settings.currentGitRepo);
   const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
   const recentProjects = useGlobalStore((s) => s.recentProjects);

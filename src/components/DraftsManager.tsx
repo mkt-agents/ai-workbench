@@ -217,9 +217,9 @@ export default function DraftsManager() {
     }
   };
 
-  const handleInsertQuickAsk = async (draft: Draft) => {
+  const handleInsertAiHub = async (draft: Draft) => {
     try {
-      await invoke("open_quick_ask_with_text", { text: draft.content });
+      await invoke("open_ai_hub_with_text", { text: draft.content });
     } catch (e) {
       showMsg("error", String(e));
     }
@@ -562,9 +562,9 @@ export default function DraftsManager() {
                   <button
                     type="button"
                     className="snippet-icon-btn draft-card-ask"
-                    title={t("insertQuickAsk")}
-                    aria-label={t("insertQuickAsk")}
-                    onClick={() => void handleInsertQuickAsk(draft)}
+                    title={t("insertAiHub")}
+                    aria-label={t("insertAiHub")}
+                    onClick={() => void handleInsertAiHub(draft)}
                   >
                     <Sparkles size={14} />
                   </button>

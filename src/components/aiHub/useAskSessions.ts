@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useGlobalStore } from "../../core/store";
-import type { QuickAskSession, QuickAskTurn } from "../../core/types";
+import type { AiHubSession, AiHubTurn } from "../../core/types";
 import { makeTitle } from "./config";
 
 export type AskSessionsOptions = {
@@ -14,23 +14,23 @@ export type AskSessionsOptions = {
   onRemovedActive: () => void;
 };
 
-/** Persistence of quick-ask chat sessions (SQLite `quick_ask_sessions`). */
+/** Persistence of ai-hub chat sessions (SQLite `ai_hub_sessions`). */
 export function useAskSessions(opts: AskSessionsOptions) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const { task, activeSessionId, setActiveSessionId, setError, onRemovedActive } = opts;
-  const quickAskSessions = useGlobalStore((s) => s.quickAskSessions);
-  const upsertQuickAskSession = useGlobalStore((s) => s.upsertQuickAskSession);
-  const deleteQuickAskSession = useGlobalStore((s) => s.deleteQuickAskSession);
-  const loadQuickAskSessions = useGlobalStore((s) => s.loadQuickAskSessions);
+  const aiHubSessions = useGlobalStore((s) => s.aiHubSessions);
+  const upsertAiHubSession = useGlobalStore((s) => s.upsertAiHubSession);
+  const deleteAiHubSession = useGlobalStore((s) => s.deleteAiHubSession);
+  const loadAiHubSessions = useGlobalStore((s) => s.loadAiHubSessions);
   const invokeSaveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
 
   /** Persist (or create) the active session after a completed exchange. */
-  const persistTurns = useCallback(async (turns: QuickAskTurn[], firstQuestion: string) => {
+  const persistTurns = useCallback(async (turns: AiHubTurn[], firstQuestion: string) => {
     const existing = activeSessionId
-      ? useGlobalStore.getState().quickAskSessions.find((s) => s.id === activeSessionId)
+      ? useGlobalStore.getState().aiHubSessions.find((s) => s.id === activeSessionId)
       : undefined;
     const now = new Date().toISOString();
-    const session: QuickAskSession = existing
+    const session: AiHubSession = existing
       ? { ...existing, turns, task, updatedAt: now }
       : {
           id: `qas-${crypto.randomUUID()}`,
@@ -42,15 +42,15 @@ export function useAskSessions(opts: AskSessionsOptions) {
         };
     if (!existing) setActiveSessionId(session.id);
     try {
-      await upsertQuickAskSession(session);
+      await upsertAiHubSession(session);
     } catch (e) {
       setError(String(e));
     }
-  }, [task, activeSessionId, setActiveSessionId, setError, upsertQuickAskSession, t]);
+  }, [task, activeSessionId, setActiveSessionId, setError, upsertAiHubSession, t]);
 
   const removeSession = useCallback(async (id: string) => {
     try {
-      await deleteQuickAskSession(id);
+      await deleteAiHubSession(id);
       if (activeSessionId === id) {
         setActiveSessionId(null);
         onRemovedActive();
@@ -58,31 +58,31 @@ export function useAskSessions(opts: AskSessionsOptions) {
     } catch (e) {
       setError(String(e));
     }
-  }, [activeSessionId, deleteQuickAskSession, setActiveSessionId, onRemovedActive, setError]);
+  }, [activeSessionId, deleteAiHubSession, setActiveSessionId, onRemovedActive, setError]);
 
   /** Persist a new title for a session. Returns whether the rename was stored. */
   const renameSession = useCallback(async (id: string, title: string): Promise<boolean> => {
     const trimmed = title.trim();
     if (!trimmed) return false;
-    const target = quickAskSessions.find((s) => s.id === id);
+    const target = aiHubSessions.find((s) => s.id === id);
     if (!target) return false;
     try {
       const now = new Date().toISOString();
-      await upsertQuickAskSession({ ...target, title: trimmed, updatedAt: now });
-      await loadQuickAskSessions();
+      await upsertAiHubSession({ ...target, title: trimmed, updatedAt: now });
+      await loadAiHubSessions();
       return true;
     } catch (e) {
       setError(String(e));
       return false;
     }
-  }, [quickAskSessions, upsertQuickAskSession, loadQuickAskSessions, setError]);
+  }, [aiHubSessions, upsertAiHubSession, loadAiHubSessions, setError]);
 
   /** Export the active session as a Markdown file. */
-  const exportActiveSession = useCallback(async (history: QuickAskTurn[]) => {
+  const exportActiveSession = useCallback(async (history: AiHubTurn[]) => {
     if (history.length === 0) return;
     const title = activeSessionId
-      ? quickAskSessions.find((s) => s.id === activeSessionId)?.title || "quick-ask"
-      : "quick-ask";
+      ? aiHubSessions.find((s) => s.id === activeSessionId)?.title || "ai-hub"
+      : "ai-hub";
     const lines = [`# ${title}`, ""];
     history.forEach((turn) => {
       if (turn.digest) {
@@ -97,7 +97,7 @@ export function useAskSessions(opts: AskSessionsOptions) {
       lines.push(turn.content);
       lines.push("");
     });
-    const filename = `${title.replace(/[\\/:*?"<>|]/g, "_") || "quick-ask"}.md`;
+    const filename = `${title.replace(/[\\/:*?"<>|]/g, "_") || "ai-hub"}.md`;
     try {
       await invokeSaveTextFile(lines.join("\n"), filename, t("exportSession"));
       return true;
@@ -105,7 +105,7 @@ export function useAskSessions(opts: AskSessionsOptions) {
       setError(String(e));
       return false;
     }
-  }, [activeSessionId, quickAskSessions, invokeSaveTextFile, setError, t]);
+  }, [activeSessionId, aiHubSessions, invokeSaveTextFile, setError, t]);
 
   /** Relative "n minutes ago" label for the session list. */
   const relativeTime = useCallback((iso: string): string => {
@@ -121,5 +121,5 @@ export function useAskSessions(opts: AskSessionsOptions) {
     return new Date(then).toLocaleDateString();
   }, [t]);
 
-  return { quickAskSessions, persistTurns, removeSession, renameSession, exportActiveSession, relativeTime };
+  return { aiHubSessions, persistTurns, removeSession, renameSession, exportActiveSession, relativeTime };
 }

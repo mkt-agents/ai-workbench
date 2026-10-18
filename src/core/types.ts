@@ -60,14 +60,14 @@ export interface GitBranchList {
 
 export type AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver';
 
-export interface QuickAskChips {
+export interface AiHubChips {
   workspace: boolean;
   git: boolean;
   dirty: boolean;
 }
 
 /** AI call sites that can bind a preferred model (else fall back to default). */
-export type AiScene = 'quickAsk' | 'report' | 'commit' | 'optimize';
+export type AiScene = 'aiHub' | 'report' | 'commit' | 'optimize';
 
 export type AiSceneModels = Partial<Record<AiScene, string>>;
 
@@ -78,35 +78,35 @@ export interface AppSettings {
   autoStart: boolean;
   /** Last selected git repo path for workbench/commit */
   currentGitRepo?: string;
-  /** Global shortcut for quick-ask (e.g. Ctrl+Alt+K) */
-  quickAskShortcut?: string;
-  /** When opening quick-ask, offer clipboard fill */
-  quickAskPasteClipboard?: boolean;
-  /** Persisted context chip toggles for quick-ask */
-  quickAskChips?: QuickAskChips;
-  /** Repos given full-diff context in quick-ask (empty = auto = current repo) */
-  quickAskFocusRepos?: string[];
-  /** Last used quick-ask task (encoded, see quickAsk/config encodeTask) */
-  quickAskLastTask?: string;
-  /** Show desktop floating bubble for quick-ask */
-  quickAskBubbleEnabled?: boolean;
+  /** Global shortcut for ai-hub (e.g. Ctrl+Alt+K) */
+  aiHubShortcut?: string;
+  /** When opening ai-hub, offer clipboard fill */
+  aiHubPasteClipboard?: boolean;
+  /** Persisted context chip toggles for ai-hub */
+  aiHubChips?: AiHubChips;
+  /** Repos given full-diff context in ai-hub (empty = auto = current repo) */
+  aiHubFocusRepos?: string[];
+  /** Last used ai-hub task (encoded, see aiHub/config encodeTask) */
+  aiHubLastTask?: string;
+  /** Show desktop floating bubble for ai-hub */
+  aiHubBubbleEnabled?: boolean;
   /** Physical screen position of the bubble */
-  quickAskBubblePos?: { x: number; y: number };
+  aiHubBubblePos?: { x: number; y: number };
   /** One-shot tip after first close-to-tray */
   trayHintShown?: boolean;
   /** Preferred model id per AI scene (missing → global default). */
   aiSceneModels?: AiSceneModels;
   /** User-defined AI Hub profiles (builtins are merged at runtime). */
-  quickAskProfiles?: QuickAskProfile[];
+  aiHubProfiles?: AiHubProfile[];
   /** Active AI Hub profile id (builtin:* or custom). */
-  quickAskProfileId?: string;
+  aiHubProfileId?: string;
 }
 
 /** Named AI Hub preset: role + optional temperature/model. */
-export interface QuickAskProfile {
+export interface AiHubProfile {
   id: string;
   name: string;
-  /** i18n key for built-in display names (quickask namespace). */
+  /** i18n key for built-in display names (aihub namespace). */
   nameKey?: string;
   /** Extra system guidance appended after the mode prompt. */
   systemRole?: string;
@@ -117,7 +117,7 @@ export interface QuickAskProfile {
 
 export type SnippetKind = 'text' | 'prompt';
 
-/** Quick-ask one-shot tasks a snippet can auto-bind to (not `none` / `optimize`). */
+/** AI Hub one-shot tasks a snippet can auto-bind to (not `none` / `optimize`). */
 export type SnippetTaskBind =
   | 'debug'
   | 'explain'
@@ -154,8 +154,8 @@ export interface Draft {
   updatedAt: string;
 }
 
-/** One Q&A exchange inside a quick-ask session. */
-export interface QuickAskTurn {
+/** One Q&A exchange inside a ai-hub session. */
+export interface AiHubTurn {
   role: 'user' | 'assistant';
   content: string;
   /** Copy and save keep the whole reply (polish, translate, summary, daily report). */
@@ -166,14 +166,14 @@ export interface QuickAskTurn {
   digest?: boolean;
 }
 
-/** A persisted quick-ask conversation (multi-turn). */
-export interface QuickAskSession {
+/** A persisted ai-hub conversation (multi-turn). */
+export interface AiHubSession {
   id: string;
   /** Short label derived from the first question. */
   title: string;
   /** TaskKind snapshot ('none' | 'debug' | 'explain' | 'polish'). */
   task: string;
-  turns: QuickAskTurn[];
+  turns: AiHubTurn[];
   createdAt: string;
   updatedAt: string;
 }
@@ -239,7 +239,7 @@ export interface GlobalState {
   cloudflaredProfiles: CloudflaredNamedProfile[];
   snippets: Snippet[];
   drafts: Draft[];
-  quickAskSessions: QuickAskSession[];
+  aiHubSessions: AiHubSession[];
   quickAppLaunchers: QuickAppLauncher[];
 }
 

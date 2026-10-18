@@ -49,15 +49,15 @@ M3  片段库（精简）               ← 有余力再做；可整段砍掉
 
 ```mermaid
 flowchart TB
-  Hotkey[Ctrl_Alt_K] --> QuickAsk[QuickAskWindow]
-  Tray[SystemTray] --> QuickAsk
+  Hotkey[Ctrl_Alt_K] --> AiHub[AiHubWindow]
+  Tray[SystemTray] --> AiHub
   Tray --> Main[MainWindow]
-  Ctx[ContextChips] --> QuickAsk
+  Ctx[ContextChips] --> AiHub
   Ctx --> WS[git_workspaces]
   Ctx --> GitId[git_user_email]
   Ctx --> Clip[ClipboardOptional]
   Ctx --> Dirty[FavoriteDirtySummary]
-  QuickAsk --> Gen[generate_text]
+  AiHub --> Gen[generate_text]
   Models[ai_models_isDefault] --> Gen
 ```
 
@@ -89,8 +89,8 @@ flowchart TB
 
 | 项 | 定稿方案 |
 |---|---|
-| 窗口 | `label: quick-ask`；无边框、置顶、不进任务栏、默认隐藏；约 560×480 |
-| 前端 | `main.tsx` 按 hash `#/quick-ask` 渲染 `QuickAskApp`（与主 `App` 分离） |
+| 窗口 | `label: ai-hub`；无边框、置顶、不进任务栏、默认隐藏；约 560×480 |
+| 前端 | `main.tsx` 按 hash `#/ai-hub` 渲染 `AiHubApp`（与主 `App` 分离） |
 | 模型 | 默认 `ai_models` 中 `isDefault`，窗内可切换 |
 | 发送 | 复用现有 `generate_text`；Enter 发送；Esc 隐藏（不销毁，保留本次输入与上次回答） |
 | 回答操作 | 复制；「在主窗打开 DeepSeek」（**不是**模型配置页） |
@@ -117,13 +117,13 @@ flowchart TB
 
 ### 4.5 流式（不进 M1）
 
-v1 非流式。若上线后反馈强，再开 **M1.5**：`generate_text_stream` + 事件 `quick-ask-chunk`。
+v1 非流式。若上线后反馈强，再开 **M1.5**：`generate_text_stream` + 事件 `ai-hub-chunk`。
 
 ### 4.6 M1 实施顺序
 
 1. `tray.rs` + 关窗进托盘 + 菜单显示主窗/退出  
-2. 全局快捷键 + `quick-ask` 窗口骨架  
-3. `QuickAskApp`：模型选择 / 发送 / Esc / 复制  
+2. 全局快捷键 + `ai-hub` 窗口骨架  
+3. `AiHubApp`：模型选择 / 发送 / Esc / 复制  
 4. 上下文芯片 + 剪贴板填入  
 5. 托盘接入 DSH 启停与基础 tooltip  
 6. 设置页快捷键配置 + i18n  
@@ -213,9 +213,9 @@ v1 非流式。若上线后反馈强，再开 **M1.5**：`generate_text_stream` 
 ### 7.4 关键文件（预期）
 
 - `src-tauri/src/tray.rs`
-- `src/components/QuickAskApp.tsx`（或 `src/quick-ask/`）
+- `src/components/AiHubApp.tsx`（或 `src/ai-hub/`）
 - `src/main.tsx` hash 分支
-- `src/locales/{zh-CN,en-US}/quickask.json`、`tray.json`
+- `src/locales/{zh-CN,en-US}/aihub.json`、`tray.json`
 - 设置页快捷键 + 数据管理段
 - 文档：`ROADMAP.md` 阶段 8、`README.md`、`交接文档.md`
 

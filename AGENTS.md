@@ -29,7 +29,7 @@
 ```
 src/                  # React 前端
   App.tsx             # 主容器 + 侧栏导航（gitMounted/dshMounted 保活）
-  main.tsx            # hash 路由：默认主窗 / #/quick-ask / #/quick-ask-bubble
+  main.tsx            # hash 路由：默认主窗 / #/ai-hub / #/ai-hub-bubble
   core/               # store.ts（全局状态）、types.ts、storage.ts、boot.ts、constants.ts
   components/         # 单文件单组件，页面级组件 + 各类 Modal
   lib/                # 业务工具（theme、browser、webTools、pluginHotkeys…）
@@ -69,7 +69,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ## 主题与视觉风格
 
-设计系统在 `src/styles/`：`tokens.css`（全部主题块与 token，**字面色值只该出现在这里**）、`theme-glass.css`（磨砂主题共享覆盖层）、`base.css`（含 `body.resizing` 清单）、`layout.css`（标题栏/侧栏/全局滚动条）、`components.css` / `controls.css` / `modal.css` 等通用件，其余按页面一域一文件（`git-pages.css`、`quick-ask.css`、`devtools.css`…）。`index.css` 按原级联顺序 `@import` 全部分片，**同优先级规则靠源顺序决胜，调整 import 顺序等于改样式**；新页面加分片就追加在末尾。主题由 `html[data-theme]` 驱动，类型 `AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver'`（默认 `glass`）。
+设计系统在 `src/styles/`：`tokens.css`（全部主题块与 token，**字面色值只该出现在这里**）、`theme-glass.css`（磨砂主题共享覆盖层）、`base.css`（含 `body.resizing` 清单）、`layout.css`（标题栏/侧栏/全局滚动条）、`components.css` / `controls.css` / `modal.css` 等通用件，其余按页面一域一文件（`git-pages.css`、`ai-hub.css`、`devtools.css`…）。`index.css` 按原级联顺序 `@import` 全部分片，**同优先级规则靠源顺序决胜，调整 import 顺序等于改样式**；新页面加分片就追加在末尾。主题由 `html[data-theme]` 驱动，类型 `AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver'`（默认 `glass`）。
 
 | 主题 | 关键字 | 风格 |
 |---|---|---|
@@ -163,7 +163,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 ## 危险操作提示
 
 - 改 Cursor 逻辑：`%APPDATA%\Cursor` 是单一数据源，删除/替换链接时**只摘链、不跟随递归删**；SQLite 同步必须保留原生类型（BLOB 误写会导致 Cursor 黑屏，已有 `repair_blob_typed_state` 兜底）。
-- 智枢窗：**不能在命令线程建窗**（builder 挂住）；可见性统一走 `tray::bubble::vis::{really_visible, force_visible}`，不要信任 tao 缓存；前端隐藏走 `invoke("hide_quick_ask")`。
+- 智枢窗：**不能在命令线程建窗**（builder 挂住）；可见性统一走 `tray::bubble::vis::{really_visible, force_visible}`，不要信任 tao 缓存；前端隐藏走 `invoke("hide_ai_hub")`。
 - Hosts 写入需管理员，走 `.tmp` + `ReplaceFileW` 原子替换，写前自动备份。
 - Cloudflared token 不进命令行，写临时 YAML 用 `--config` 传路径。
 - DSH 认证补丁会改本机 DeepSeek 安装文件（有 `.ai-workbench-backup` 备份与还原命令）。

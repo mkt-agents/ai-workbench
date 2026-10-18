@@ -15,7 +15,7 @@
     "autoStartUpdateFailed": "更新开机自启失败: {{error}}",
     "sidebarCollapsed": "侧边栏折叠"
   },
-  "quickAsk": {
+  "aiHub": {
     "title": "智枢",
     "shortcut": "全局快捷键",
     "shortcutHint": "例如 Ctrl+Alt+K。冲突时请更换。",

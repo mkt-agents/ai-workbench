@@ -44,7 +44,7 @@
   "useTitle": "使用模板",
   "useHint": "复制到剪贴板，或插入智枢窗口。",
   "copyUse": "替换并复制",
-  "insertQuickAsk": "插入智枢",
+  "insertAiHub": "插入智枢",
   "deleteTitle": "删除模板",
   "deleteConfirm": "确定删除「{{name}}」？",
   "deleteWarning": "删除后可在数秒内撤销；超时后需手动重建。",

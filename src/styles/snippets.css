@@ -562,7 +562,7 @@
   border-color: var(--accent);
   color: var(--on-accent);
 }
-/* Ghost mini buttons reused from quick-ask; snippet-specific variants. */
+/* Ghost mini buttons reused from ai-hub; snippet-specific variants. */
 .qa-mini-btn.primary {
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);

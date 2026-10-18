@@ -15,10 +15,10 @@ use url::Url;
 const SHELL_OPEN_TRIGGER_HOST: &str = "aiwb-shell.open";
 
 /// Second magic host: "问智枢" in the injected toolbar navigates to
-/// `https://aiwb-quickask.open/?text=<encoded selection>` and we forward the
-/// text to the quick-ask window via `open_quick_ask_with_text`. Same trick as
+/// `https://aiwb-aihub.open/?text=<encoded selection>` and we forward the
+/// text to the ai-hub window via `open_ai_hub_with_text`. Same trick as
 /// `SHELL_OPEN_TRIGGER_HOST`: external-URL webviews have no IPC bridge.
-const QUICK_ASK_TRIGGER_HOST: &str = "aiwb-quickask.open";
+const AI_HUB_TRIGGER_HOST: &str = "aiwb-aihub.open";
 
 fn is_safe_url(url: &str) -> bool {
     let lower = url.to_lowercase();
@@ -492,9 +492,9 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       flashBtn(external, ICONS.external);
     });
 
-    // ---- Ask quick-ask --------------------------------------------------
+    // ---- Ask ai-hub --------------------------------------------------
     // Sends the current selection (or the page title + URL when nothing is
-    // selected) to the quick-ask window through the `aiwb-quickask.open`
+    // selected) to the ai-hub window through the `aiwb-aihub.open`
     // magic host — same no-IPC navigation trick as the external button.
     // 3500 chars keeps the encoded URL well inside navigation limits.
     ask.addEventListener('click', function () {
@@ -504,7 +504,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       if (!text) text = document.title + '\n' + location.href;
       if (text.length > 3500) text = text.slice(0, 3500);
       var a = document.createElement('a');
-      a.href = 'https://aiwb-quickask.open/?text=' + encodeURIComponent(text);
+      a.href = 'https://aiwb-aihub.open/?text=' + encodeURIComponent(text);
       a.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;';
       document.body.appendChild(a);
       a.click();
@@ -809,12 +809,12 @@ pub async fn open_browser_window_with_toolbar(
                 }
                 return false;
             }
-            if url.host_str() == Some(QUICK_ASK_TRIGGER_HOST) {
+            if url.host_str() == Some(AI_HUB_TRIGGER_HOST) {
                 for (k, v) in url.query_pairs() {
                     if k == "text" {
                         let text = v.to_string();
                         if !text.trim().is_empty() {
-                            let _ = crate::tray::open_quick_ask_with_text(
+                            let _ = crate::tray::open_ai_hub_with_text(
                                 app_handle_for_nav.clone(),
                                 text,
                                 None,

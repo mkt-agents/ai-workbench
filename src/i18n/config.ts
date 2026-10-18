@@ -11,7 +11,7 @@ import zhCNHosts from '../locales/zh-CN/hosts.json';
 import zhCNPlugins from '../locales/zh-CN/plugins.json';
 import zhCNRuntime from '../locales/zh-CN/runtime.json';
 import zhCNCloudflared from '../locales/zh-CN/cloudflared.json';
-import zhCNQuickask from '../locales/zh-CN/quickask.json';
+import zhCNAihub from '../locales/zh-CN/aihub.json';
 import zhCNSnippets from '../locales/zh-CN/snippets.json';
 import zhCNDrafts from '../locales/zh-CN/drafts.json';
 import zhCNDevtools from '../locales/zh-CN/devtools.json';
@@ -28,7 +28,7 @@ import enUSHosts from '../locales/en-US/hosts.json';
 import enUSPlugins from '../locales/en-US/plugins.json';
 import enUSRuntime from '../locales/en-US/runtime.json';
 import enUSCloudflared from '../locales/en-US/cloudflared.json';
-import enUSQuickask from '../locales/en-US/quickask.json';
+import enUSAihub from '../locales/en-US/aihub.json';
 import enUSSnippets from '../locales/en-US/snippets.json';
 import enUSDrafts from '../locales/en-US/drafts.json';
 import enUSDevtools from '../locales/en-US/devtools.json';
@@ -47,7 +47,7 @@ const resources = {
     plugins: zhCNPlugins,
     runtime: zhCNRuntime,
     cloudflared: zhCNCloudflared,
-    quickask: zhCNQuickask,
+    aihub: zhCNAihub,
     snippets: zhCNSnippets,
     drafts: zhCNDrafts,
     devtools: zhCNDevtools,
@@ -65,7 +65,7 @@ const resources = {
     plugins: enUSPlugins,
     runtime: enUSRuntime,
     cloudflared: enUSCloudflared,
-    quickask: enUSQuickask,
+    aihub: enUSAihub,
     snippets: enUSSnippets,
     drafts: enUSDrafts,
     devtools: enUSDevtools,
@@ -83,7 +83,7 @@ i18n
     fallbackLng: 'zh-CN',
     supportedLngs: ['zh-CN', 'en-US'],
     defaultNS: 'common',
-    ns: ['common', 'navigation', 'git', 'settings', 'ai', 'hosts', 'plugins', 'runtime', 'cloudflared', 'quickask', 'snippets', 'drafts', 'devtools', 'update', 'workbuddy', 'quota'],
+    ns: ['common', 'navigation', 'git', 'settings', 'ai', 'hosts', 'plugins', 'runtime', 'cloudflared', 'aihub', 'snippets', 'drafts', 'devtools', 'update', 'workbuddy', 'quota'],
 
     detection: {
       order: ['localStorage', 'navigator'],

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Check, Copy } from "lucide-react";
 
 /**
- * Lightweight dependency-free Markdown renderer for quick-ask answers.
+ * Lightweight dependency-free Markdown renderer for ai-hub answers.
  * Builds React elements only (no innerHTML) so streamed/untrusted model
  * output cannot inject markup. Supports: fenced code blocks (with language
  * label + copy), headings, ordered/unordered lists, quotes, hr, GFM tables, inline
@@ -207,7 +207,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 }
 
 function CodeBlock({ lang, text }: { lang: string; text: string }) {
-  const { t } = useTranslation("quickask");
+  const { t } = useTranslation("aihub");
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {

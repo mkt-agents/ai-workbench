@@ -53,8 +53,8 @@ function BubbleMark({ className }: { className?: string }) {
  * Desktop floating bubble: click shows AI Hub; right-click hides it; drag
  * moves and release snaps to the nearer left/right edge.
  */
-export default function QuickAskBubble() {
-  const { t } = useTranslation("quickask");
+export default function AiHubBubble() {
+  const { t } = useTranslation("aihub");
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
   const [phase, setPhase] = useState<BubblePhase>("idle");
@@ -77,7 +77,7 @@ export default function QuickAskBubble() {
       // window is created hidden and only revealed after "ready", so the
       // first paint is already the orb — no flash to suppress.
       try {
-        await invoke("quick_ask_bubble_ready");
+        await invoke("ai_hub_bubble_ready");
       } catch {
         /* ignore */
       }
@@ -97,18 +97,18 @@ export default function QuickAskBubble() {
   }, []);
 
   useEffect(() => {
-    const pos = settings.quickAskBubblePos;
+    const pos = settings.aiHubBubblePos;
     if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
-      void invoke("set_quick_ask_bubble_position", { x: pos.x, y: pos.y }).catch(() => {});
+      void invoke("set_ai_hub_bubble_position", { x: pos.x, y: pos.y }).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- apply saved pos once on mount
   }, []);
 
   const persistPosition = useCallback(
     async (x: number, y: number) => {
-      setSettings({ quickAskBubblePos: { x, y } });
+      setSettings({ aiHubBubblePos: { x, y } });
       try {
-        await invoke("set_quick_ask_bubble_position", { x, y });
+        await invoke("set_ai_hub_bubble_position", { x, y });
       } catch {
         /* ignore */
       }
@@ -213,7 +213,7 @@ export default function QuickAskBubble() {
     }
     playFire();
     try {
-      await invoke("show_quick_ask");
+      await invoke("show_ai_hub");
     } catch (err) {
       console.error(err);
     }
@@ -228,7 +228,7 @@ export default function QuickAskBubble() {
       onPointerCancel={(e) => void endPointer(e, true)}
       onContextMenu={(e) => {
         e.preventDefault();
-        void invoke("hide_quick_ask").catch((err) => console.error(err));
+        void invoke("hide_ai_hub").catch((err) => console.error(err));
       }}
       title={t("bubbleTip")}
     >

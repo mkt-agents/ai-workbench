@@ -50,7 +50,7 @@ const FOLLOW_UP_RE = /^(那|这|它|为什么|为啥|怎么|继续|还有|再|�
 const FOLLOW_UP_MAX_CHARS = 30;
 
 /**
- * Decide whether a quick-ask question needs workbench project context or is a
+ * Decide whether a ai-hub question needs workbench project context or is a
  * plain AI conversation. Pure and synchronous so the composer can preview the
  * decision live as the user types.
  */
