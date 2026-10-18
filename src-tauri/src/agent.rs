@@ -12,7 +12,9 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
-use crate::ai_commands::{apply_auth_headers, trim_trailing_slash, AIModelConfig, ChatTurn};
+use crate::ai_commands::{
+    apply_auth_headers, strip_think_tags, trim_trailing_slash, AIModelConfig, ChatTurn,
+};
 use crate::cancellation::{is_cancelled, CancelGuard};
 
 const MAX_ACTION_STEPS: usize = 32;
@@ -1159,9 +1161,10 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 return Err(e);
             }
         };
-        if !turn.text.trim().is_empty() {
-            final_text.push_str(&turn.text);
-            emit_text(&app, &request_id, &turn.text);
+        let visible = strip_think_tags(&turn.text);
+        if !visible.trim().is_empty() {
+            final_text.push_str(&visible);
+            emit_text(&app, &request_id, &visible);
         }
         if turn.calls.is_empty() {
             if final_text.trim().is_empty() {

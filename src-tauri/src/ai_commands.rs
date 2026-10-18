@@ -313,6 +313,37 @@ fn extract_content_parts(content: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// 推理模型（DeepSeek-R1、QwQ 等）会把思考过程用 `<think>…</think>` 混进正文；有的服务商
+/// 把思考挪进 reasoning 字段，正文开头只剩一个落单的 `</think>`。两种都不是回答，剥掉。
+/// 前端 `quickAsk/thinking.ts` 的 `stripThinking` 是同一规则（流式分块只能在前端拼完再剥）。
+pub(crate) fn strip_think_tags(text: &str) -> String {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    // 只做 ASCII 小写，字节偏移与原文一一对应
+    let lower = text.to_ascii_lowercase();
+    if !lower.contains(OPEN) && !lower.contains(CLOSE) {
+        return text.to_string();
+    }
+    let mut i = 0;
+    if let Some(close) = lower.find(CLOSE) {
+        if lower.find(OPEN).map_or(true, |open| close < open) {
+            i = close + CLOSE.len();
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    while let Some(rel) = lower[i..].find(OPEN) {
+        let open = i + rel;
+        out.push_str(&text[i..open]);
+        match lower[open..].find(CLOSE) {
+            Some(rel_close) => i = open + rel_close + CLOSE.len(),
+            // 没闭合：后面全是思考（被截断或还没想完）
+            None => return out.trim_start().to_string(),
+        }
+    }
+    out.push_str(&text[i..]);
+    out.trim_start().to_string()
+}
+
 fn extract_openai_text(json: &serde_json::Value) -> Option<String> {
     let choice = json.get("choices")?.as_array()?.first()?;
     if let Some(msg) = choice.get("message") {
@@ -455,6 +486,8 @@ pub async fn generate_text(req: GenerateTextRequest) -> Result<String, String> {
     } else {
         extract_openai_text(&json)
     }
+    .map(|t| strip_think_tags(&t))
+    .filter(|t| !t.trim().is_empty())
     .ok_or_else(|| describe_empty_generation(&json, &text))?;
 
     Ok(content)
@@ -847,4 +880,23 @@ pub async fn detect_local_ai_endpoints() -> Result<Vec<LocalAiEndpoint>, String>
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_think_tags;
+
+    #[test]
+    fn strips_think_blocks_and_orphan_close_tags() {
+        assert_eq!(strip_think_tags("<think>先想想</think>\n\n答案"), "答案");
+        // 服务商把思考挪进 reasoning 字段，正文只剩落单的闭合标签
+        assert_eq!(strip_think_tags("</think>\n"), "");
+        assert_eq!(strip_think_tags("残留思考</think>\n答案"), "答案");
+        // 没闭合 = 后面全是思考
+        assert_eq!(strip_think_tags("答案<think>还在想"), "答案");
+        assert_eq!(strip_think_tags("<THINK>x</THINK>好的"), "好的");
+        assert_eq!(strip_think_tags("a<think>1</think>b<think>2</think>c"), "abc");
+        // 普通文本原样返回
+        assert_eq!(strip_think_tags("  缩进保留"), "  缩进保留");
+    }
 }

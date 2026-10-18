@@ -12,6 +12,7 @@ import { DAILY_REPORT_SYSTEM, isDailyReport, isDailyRevision } from "./dailyRepo
 import type { OptimizeConfig, TaskKind } from "./config";
 import { routeQuestion } from "./route";
 import type { AskMode, RouteOverride } from "./route";
+import { stripThinking } from "./thinking";
 import type { ContextResult, ContextSummary } from "./useAskContext";
 
 /** What the latest answer was based on — rendered as the answer source line. */
@@ -329,9 +330,11 @@ export function useAskStream(opts: AskStreamOptions) {
       const onChunk = async (event: { payload?: { id: string; text: string } }) => {
         const payload = event.payload;
         if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
-        if (!full && payload.text) setPhase("streaming");
         full += payload.text || "";
-        setAnswer((prev) => prev + (payload.text || ""));
+        const visible = stripThinking(full, true);
+        // Still inside <think>: stay on the waiting indicator instead of an empty answer.
+        if (visible) setPhase("streaming");
+        setAnswer(visible);
       };
       const onDone = async (event: {
         payload?: {
@@ -359,7 +362,8 @@ export function useAskStream(opts: AskStreamOptions) {
               ? { ...prev, elapsedMs, promptTokens, completionTokens, estimatedTokens }
               : prev
           );
-          if (full.trim()) {
+          const finalText = stripThinking(full);
+          if (finalText.trim()) {
             recordAiUsage({
               modelId: selectedModel.id,
               modelName: selectedModel.name,
@@ -367,7 +371,7 @@ export function useAskStream(opts: AskStreamOptions) {
               completionTokens,
               estimatedTokens,
             });
-            finishTurn(full);
+            finishTurn(finalText);
           } else {
             failTurn(false);
           }
@@ -384,7 +388,8 @@ export function useAskStream(opts: AskStreamOptions) {
           const stopped = (payload.error || "").includes("AI_REQUEST_CANCELLED");
           if (!stopped) setError(payload.error || t("streamFailed"));
           // Stopped mid-stream: keep the partial answer as context too.
-          if (stopped && full.trim()) finishTurn(full);
+          const partial = stripThinking(full);
+          if (stopped && partial.trim()) finishTurn(partial);
           else failTurn(!stopped);
           setBusySync(false);
         }
@@ -489,7 +494,8 @@ export function useAskStream(opts: AskStreamOptions) {
         // Stopping rejects the command too — no error for a deliberate stop.
         const stopped = String(e).includes("AI_REQUEST_CANCELLED");
         if (!stopped) setError(String(e));
-        if (stopped && full.trim()) finishTurn(full);
+        const partial = stripThinking(full);
+        if (stopped && partial.trim()) finishTurn(partial);
         else failTurn(!stopped);
         setBusySync(false);
       }

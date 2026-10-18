@@ -6,6 +6,7 @@ import {
   FileText, FolderGit2, MessageCircle, MessageSquarePlus, RefreshCw, Send, Sparkles, Square, X,
 } from "lucide-react";
 import MarkdownView from "../MarkdownView";
+import { stripThinking } from "./thinking";
 import { MAX_HISTORY_TURNS, QUICK_TASKS } from "./config";
 import type { TaskKind } from "./config";
 import type { AskMode, RouteOverride, RouteResult } from "./route";
@@ -337,7 +338,7 @@ export default function AskPanel(props: Props) {
                   className={`qa-msg is-ai${isNew(i) ? " is-new" : ""}${i === lastAssistant && !pending ? " is-last" : ""}`}
                   aria-label={t("assistant")}
                 >
-                  <MarkdownView text={turn.content} />
+                  <MarkdownView text={stripThinking(turn.content)} />
                   <div className="qa-msg-actions">
                     {(() => {
                       const kept = keepableAnswer(turn.content, turn.keep === "whole");
