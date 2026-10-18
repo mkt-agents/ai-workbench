@@ -52,9 +52,14 @@ const BA_RE = /^(?:请|帮我|麻烦)?把\s*(.*?)\s*(?:打开|启动|运行)(?:�
 export type OpenSuggestion = {
   id: string;
   label: string;
-  group: "page" | "tool" | "app";
+  group: "page" | "tool" | "app" | "installed";
   action: LocalAction;
 };
+
+/** A program found in the Start Menu / Desktop shortcuts (`scan_desktop_apps`). */
+export type InstalledApp = { name: string; path: string };
+
+const INSTALLED_LIMIT = 6;
 
 /** A real question that happens to start with 去/打开, not a name to open. */
 const SENTENCE_RE = /[？?]|然后|并且|为什么|怎么|报错|解释|日报|改了|看看|什么/;
@@ -116,6 +121,41 @@ function appSuggestion(launcher: QuickAppLauncher): OpenSuggestion {
   };
 }
 
+/**
+ * How well a spoken name fits an installed program's display name (spaces and case
+ * ignored): exact, name contains it, it contains the name, then its characters in
+ * order ("360浏览器" → "360安全浏览器"). Mirrors `match_app_name` in agent.rs.
+ */
+export function installedScore(target: string, name: string): number {
+  const n = norm(target);
+  const a = norm(name);
+  if (!n || !a) return 0;
+  if (n === a) return 100;
+  if (a.includes(n)) return 80;
+  if (a.length >= 2 && n.includes(a)) return 70;
+  if ([...n].length >= 3 && inOrder(n, a)) return 60;
+  return 0;
+}
+
+function inOrder(needle: string, hay: string): boolean {
+  let at = 0;
+  for (const ch of needle) {
+    const found = hay.indexOf(ch, at);
+    if (found < 0) return false;
+    at = found + ch.length;
+  }
+  return true;
+}
+
+function installedSuggestion(app: InstalledApp): OpenSuggestion {
+  return {
+    id: `installed:${app.path}`,
+    label: app.name,
+    group: "installed",
+    action: { kind: "app", label: app.name, path: app.path, args: "" },
+  };
+}
+
 function bestAliasScore(target: string, page: Alias): number {
   return page.names.reduce((best, name) => Math.max(best, scoreName(target, name)), 0);
 }
@@ -124,7 +164,11 @@ function bestAliasScore(target: string, page: Alias): number {
  * Suggestions while the composer is an "open …" phrase.
  * `null` means this text is a normal question. An empty array means nothing matched.
  */
-export function openSuggestions(text: string, launchers: QuickAppLauncher[]): OpenSuggestion[] | null {
+export function openSuggestions(
+  text: string,
+  launchers: QuickAppLauncher[],
+  installed: InstalledApp[] = [],
+): OpenSuggestion[] | null {
   const parsed = parseOpenInput(text);
   if (!parsed) return null;
   const pages = [...TOOLS, ...PAGES].map((page) => ({
@@ -137,8 +181,18 @@ export function openSuggestions(text: string, launchers: QuickAppLauncher[]): Op
   }));
   const rows = parsed.launching ? [...apps, ...pages] : [...pages, ...apps];
   if (!parsed.target) return rows.map((row) => row.item);
-  return rows
+  const local = rows
     .filter((row) => row.score >= 70)
     .sort((a, b) => b.score - a.score)
     .map((row) => row.item);
+  // Installed programs come after pages and quick apps; skip ones already saved as quick apps.
+  const saved = new Set(launchers.map((l) => l.path.toLowerCase()));
+  const programs = installed
+    .filter((app) => !saved.has(app.path.toLowerCase()))
+    .map((app) => ({ app, score: installedScore(parsed.target, app.name) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score || a.app.name.length - b.app.name.length)
+    .slice(0, INSTALLED_LIMIT)
+    .map((row) => installedSuggestion(row.app));
+  return [...local, ...programs];
 }

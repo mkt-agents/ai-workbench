@@ -1349,6 +1349,64 @@
   opacity: 0.45;
   cursor: default;
 }
+/* 日报 + format caret read as one split button. */
+.qa-daily-split {
+  display: inline-flex;
+  align-items: stretch;
+}
+.qa-daily-split .qa-daily-btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 10px;
+}
+.qa-daily-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 28px;
+  padding: 0;
+  margin-left: -1px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-daily-caret:hover,
+.qa-daily-caret[aria-expanded="true"] {
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+}
+.qa-daily-pop {
+  width: 240px;
+  padding: 4px;
+  gap: 2px;
+}
+.qa-daily-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.qa-daily-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.qa-daily-item-name {
+  font-size: 12px;
+  color: var(--text-0);
+}
+.qa-daily-item-desc {
+  font-size: 11px;
+  color: var(--text-2);
+}
 .qa-agent-steps {
   list-style: none;
   margin: 8px 0 0;
@@ -1964,6 +2022,11 @@
   vertical-align: top;
   border-bottom: 1px solid var(--border-subtle);
 }
+/* Narrow window: cells wrap instead of pushing the table sideways. */
+.qa-md td {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 .qa-md th + th,
 .qa-md td + td {
   border-left: 1px solid var(--border-subtle);
@@ -1987,10 +2050,12 @@
   border-radius: var(--radius-sm);
   background: var(--bg-0);
   border: 1px solid var(--border-subtle);
+  overflow-wrap: anywhere;
 }
 .qa-md a {
   color: var(--accent);
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 .qa-md a:hover {
   text-decoration: underline;
@@ -2026,6 +2091,9 @@
   overflow: auto;
   font-size: 12px;
   line-height: 1.45;
+  /* Long lines wrap so a 560px window never scrolls sideways. */
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 /* Streaming caret: a thin accent bar that breathes rather than hard-blinks */
 .qa-caret {

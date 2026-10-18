@@ -54,17 +54,81 @@ export function formatDailyNotes(repos: DailyRepoNote[]): string {
     .join("\n\n");
 }
 
-export const DAILY_REPORT_SYSTEM = [
+/** `chat`: one opening line + a few points, pasteable into a team chat. `sections`: 今日完成 / 进行中 / 明日计划. */
+export type DailyStyle = "chat" | "sections";
+export const DAILY_STYLES: DailyStyle[] = ["chat", "sections"];
+
+const DAILY_COMMON = [
   "You are writing the user's own daily report from today's git notes.",
   "The notes are private source material. Do not quote them, do not keep their headings, and do not list hashes, branches, or file paths.",
-  "Write in the user's language. A Chinese question gets a Chinese report, in the first person, the way someone would paste it into a team chat.",
+  "Write in the user's language. A Chinese question gets a Chinese report, in the first person.",
   "Use the file names to tell what the work actually was. Commit subjects like fix, update, or wip are not enough on their own.",
-  "Merge commits that touch the same area into one sentence a person would say. If a subject is vague, describe the area from the file names and do not invent motives or results you cannot see.",
-  "Shape: one opening sentence, then a few short sentences or bullets. No numbered headings like 一、二、三. About 150 to 250 Chinese characters, short enough to paste into a team chat.",
-  "If something is still uncommitted, add one sentence about that unfinished piece.",
-  "Skip a tomorrow section unless that unfinished item clearly continues.",
-  "Omit a repo that has no commits today and nothing uncommitted.",
-  "If nothing happened, say so in one sentence.",
+  "Merge commits that touch the same area into one point a person would say. If a subject is vague, describe the area from the file names and do not invent motives or results you cannot see.",
+  "Omit a repo that has no commits today and nothing uncommitted. If nothing happened, say so in one sentence.",
+  "Output only the report text itself, as plain text: no code block, no Markdown headings (#), no tables, no bold, no emoji.",
+  "Points start with \"- \". Each point is one short sentence.",
   "Do not mention the workbench, the model, or that context was attached.",
-  "Do not paste diffs, do not add a follow-up question, and do not offer to rewrite it.",
-].join(" ");
+  "Do not paste diffs, do not add a follow-up question, do not offer to rewrite it, and never add a note about the report itself.",
+];
+
+const DAILY_SHAPE: Record<DailyStyle, string[]> = {
+  chat: [
+    "Shape: one opening sentence summing up the day, then 3 to 5 points. About 150 to 250 Chinese characters, short enough to paste into a team chat.",
+    "If something is still uncommitted, end with one point about that unfinished piece. No tomorrow section.",
+  ],
+  sections: [
+    "Shape: up to three parts, each a label line followed by its points: 今日完成：, 进行中：, 明日计划： (use the same labels translated if the report is not Chinese).",
+    "今日完成 covers committed work. 进行中 covers uncommitted work only. 明日计划 only lists what clearly continues from 进行中; never invent plans.",
+    "Leave out a part that would be empty. About 150 to 300 Chinese characters in total.",
+  ],
+};
+
+export function dailyReportSystem(style: DailyStyle): string {
+  return [...DAILY_COMMON, ...DAILY_SHAPE[style]].join(" ");
+}
+
+const CJK = /[\u4e00-\u9fff\u3400-\u4dbf]/;
+// Pictographic emoji plus the variation selector / joiner that glue them together.
+const EMOJI = /[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu;
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
+/**
+ * Free models ignore "plain text" and wrap the report in a ```markdown block, add
+ * emoji tables and a closing note about the report. Strip all of that so the
+ * result pastes cleanly.
+ */
+export function cleanDailyReport(raw: string): string {
+  let text = raw.replace(/\r\n/g, "\n").trim();
+  // One fenced block holding the report (possibly followed by commentary): keep its inside.
+  const fence = /^([\s\S]*?)```[a-zA-Z]*\n([\s\S]*?)\n```([\s\S]*)$/.exec(text);
+  if (fence && fence[2].trim().length > fence[1].trim().length) {
+    // Blank lines around the inside keep a trailing note its own paragraph (dropped below).
+    text = `${fence[1].trim()}\n\n${fence[2]}\n\n${fence[3].trim()}`.trim();
+  }
+  const lines: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    let line = rawLine.replace(EMOJI, "").replace(/\s+$/, "");
+    if (TABLE_RULE.test(line)) continue;
+    // `| a | b |` table rows become points; a header row of generic words is dropped.
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      const cells = line.split("|").map((c) => c.trim()).filter(Boolean);
+      if (cells.length === 0 || /^(分类|类别|类型|项目|模块|内容|关键内容|事项|说明)$/.test(cells[0])) continue;
+      line = `- ${cells.join("：")}`;
+    }
+    line = line
+      .replace(/^\s*#{1,6}\s*/, "")
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      // Inline code ticks read as noise once pasted into a chat.
+      .replace(/`([^`\n]+)`/g, "$1")
+      .replace(/^(\s*)[*+]\s+/, "$1- ");
+    lines.push(line);
+  }
+  let paragraphs = lines.join("\n").split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  // A Chinese report followed by an English "This report captures …" paragraph: drop the tail.
+  if (paragraphs.some((p) => CJK.test(p))) {
+    while (paragraphs.length > 1 && !CJK.test(paragraphs[paragraphs.length - 1])) {
+      paragraphs = paragraphs.slice(0, -1);
+    }
+  }
+  return paragraphs.join("\n\n");
+}

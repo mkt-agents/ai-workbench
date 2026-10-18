@@ -4,6 +4,8 @@
   "close": "关闭",
   "pin": "置顶窗口",
   "unpin": "取消置顶",
+  "maximizeWindow": "放大窗口（双击标题栏也可）",
+  "restoreWindow": "还原窗口大小",
   "noModel": "请先在主窗口配置 AI 模型",
   "attach": {
     "file": "附加文件",
@@ -56,15 +58,23 @@
   },
   "actionDone": "已打开「{{name}}」",
   "openList": "可打开的页面和应用",
-  "openNone": "没有这个页面或应用",
+  "openNone": "本地没找到，回车交给 AI 处理",
   "openPlaceholder": "选择要打开的项，Enter 打开",
   "openGroup": {
     "page": "页面",
     "tool": "工具箱",
-    "app": "应用"
+    "app": "快捷应用",
+    "installed": "已安装应用"
   },
   "dailyShort": "日报",
   "dailyTip": "根据今天的提交和未提交文件写一份可直接粘贴的日报",
+  "dailyStyle": {
+    "menu": "日报格式",
+    "chat": "群聊式",
+    "chatDesc": "一句开场 + 3–5 条要点，适合直接发群",
+    "sections": "三段式",
+    "sectionsDesc": "今日完成 / 进行中 / 明日计划"
+  },
   "agent": {
     "steps": "{{n}} 个操作",
     "continue": "继续",

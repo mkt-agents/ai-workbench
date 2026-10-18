@@ -166,8 +166,8 @@ fn tool_specs() -> Value {
           "description": "Open a page in AI Workbench. tab is one of: ai-chat, ai-models, snippets, drafts, cursor-accounts, account-quota, git, runtime, plugins, cloudflared, hosts, devtools, app-launcher, settings. gitSub is optional: repos, commit, report.",
           "parameters": obj(json!({ "tab": s("Page id"), "gitSub": s("Git sub page") }), &["tab"]) },
         { "name": "launch_app",
-          "description": "Launch a saved quick app by its name.",
-          "parameters": obj(json!({ "name": s("Quick app name") }), &["name"]) },
+          "description": "Launch a quick app or a program installed on this computer (Start Menu / Desktop shortcut) by its name. If several programs match, the error lists them: call again with one exact name.",
+          "parameters": obj(json!({ "name": s("Program name, e.g. 360浏览器 or 微信") }), &["name"]) },
         { "name": "open_target",
           "description": "Open a file, folder or http(s) / mailto URL with its default program.",
           "parameters": obj(json!({ "target": s("Path or URL") }), &["target"]) },
@@ -411,30 +411,128 @@ fn open_page(app: &AppHandle, args: &Value) -> Result<String, String> {
     }
 }
 
-fn launch_named(apps: &[AgentAppShortcut], name: &str) -> Result<String, String> {
-    let want = name.trim().to_lowercase();
-    let found = apps.iter().find(|a| a.name.to_lowercase() == want);
-    let Some(app) = found else {
-        return Err("快捷应用里没有这个名字".into());
+fn norm_app_name(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect()
+}
+
+/// How well a spoken name fits a program's display name (case and spaces ignored):
+/// exact, name contains it, it contains the name, then its characters in order
+/// ("360浏览器" → "360安全浏览器"). Mirrors `installedScore` in aiHub/localActions.ts.
+fn app_name_score(want: &str, name: &str) -> u32 {
+    let n = norm_app_name(want);
+    let a = norm_app_name(name);
+    if n.is_empty() || a.is_empty() {
+        return 0;
+    }
+    if n == a {
+        return 100;
+    }
+    if a.contains(&n) {
+        return 80;
+    }
+    if a.chars().count() >= 2 && n.contains(&a) {
+        return 70;
+    }
+    if n.chars().count() >= 3 {
+        let mut rest = a.chars();
+        if n.chars().all(|c| rest.any(|h| h == c)) {
+            return 60;
+        }
+    }
+    0
+}
+
+/// Indexes of the names that best fit `want`: only the top score tier, shortest name first.
+fn match_app_name(want: &str, names: &[&str]) -> Vec<usize> {
+    let scored: Vec<(usize, u32)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (i, app_name_score(want, n)))
+        .filter(|(_, s)| *s > 0)
+        .collect();
+    let Some(best) = scored.iter().map(|(_, s)| *s).max() else {
+        return Vec::new();
     };
-    if app.path.trim().is_empty() {
+    let mut hits: Vec<usize> = scored.into_iter().filter(|(_, s)| *s == best).map(|(i, _)| i).collect();
+    hits.sort_by_key(|&i| names[i].chars().count());
+    hits
+}
+
+/// A single program to start: one best hit, or duplicate entries that share one name.
+fn unique_hit(hits: &[usize], names: &[&str]) -> Option<usize> {
+    let first = *hits.first()?;
+    let key = norm_app_name(names[first]);
+    hits.iter().all(|&i| norm_app_name(names[i]) == key).then_some(first)
+}
+
+fn candidates_error(hits: &[usize], names: &[&str]) -> String {
+    let list: Vec<&str> = hits.iter().take(8).map(|&i| names[i]).collect();
+    format!(
+        "没有启动：有 {} 个程序都匹配，请用其中一个完整名字再调用 launch_app：{}",
+        hits.len(),
+        list.join("、")
+    )
+}
+
+/// Start Menu / Desktop programs, rescanned at most every 10 minutes.
+#[cfg(windows)]
+fn installed_apps() -> Vec<crate::app_launcher_commands::InstalledAppInfo> {
+    use crate::app_launcher_commands::InstalledAppInfo;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Vec<InstalledAppInfo>)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, list)) = cache.as_ref() {
+        if at.elapsed() < Duration::from_secs(600) {
+            return list.clone();
+        }
+    }
+    let list = crate::app_launcher_commands::scan_desktop_apps_sync();
+    *cache = Some((Instant::now(), list.clone()));
+    list
+}
+
+fn start_program(path: &str, args: Option<String>, label: &str) -> Result<String, String> {
+    if path.trim().is_empty() {
         return Err("这个应用没有可执行路径".into());
     }
-    let args = if app.args.trim().is_empty() {
-        None
-    } else {
-        Some(app.args.clone())
-    };
     #[cfg(windows)]
     {
-        crate::app_launcher_commands::launch_app_inner(app.path.clone(), args)?;
-            return Ok(format!("已启动 {}", app.name))
+        crate::app_launcher_commands::launch_app_inner(path.to_string(), args)?;
+        Ok(format!("已启动 {label}"))
     }
     #[cfg(not(windows))]
     {
-        let _ = args;
+        let _ = (args, label);
         Err("当前系统不支持启动应用".into())
     }
+}
+
+/// Quick apps first; nothing there → programs found in the Start Menu / on the Desktop.
+fn launch_named(apps: &[AgentAppShortcut], name: &str) -> Result<String, String> {
+    let quick: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
+    let hits = match_app_name(name, &quick);
+    if let Some(i) = unique_hit(&hits, &quick) {
+        let app = &apps[i];
+        let args = (!app.args.trim().is_empty()).then(|| app.args.clone());
+        return start_program(&app.path, args, &app.name);
+    }
+    if !hits.is_empty() {
+        return Err(candidates_error(&hits, &quick));
+    }
+    #[cfg(windows)]
+    {
+        let installed = installed_apps();
+        let names: Vec<&str> = installed.iter().map(|a| a.display_name.as_str()).collect();
+        let hits = match_app_name(name, &names);
+        if let Some(i) = unique_hit(&hits, &names) {
+            return start_program(&installed[i].exe_path, None, &installed[i].display_name);
+        }
+        if !hits.is_empty() {
+            return Err(candidates_error(&hits, &names));
+        }
+    }
+    Err("快捷应用和本机已安装的程序（开始菜单 / 桌面快捷方式）里都没有这个名字".into())
 }
 
 #[derive(Debug, PartialEq)]
@@ -1472,9 +1570,9 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        call_summary, command_blocked, command_is_readonly, command_output_failed, count_images, decode_model_body,
-        gate_arg, limit_message, prune_images, repeated_command_result, round_is_action, tool_result_messages,
-        ToolOutput, SHOT_PLACEHOLDER,
+        call_summary, candidates_error, command_blocked, command_is_readonly, command_output_failed, count_images,
+        decode_model_body, gate_arg, limit_message, match_app_name, prune_images, repeated_command_result,
+        round_is_action, tool_result_messages, unique_hit, ToolOutput, SHOT_PLACEHOLDER,
     };
     use crate::agent_proc::run_command;
     use serde_json::json;
@@ -1676,4 +1774,28 @@ mod tests {
         assert!(run("\"git\" --version").contains("git version"));
         let _ = fs::remove_dir_all(&root);
     }
-}
+
+    #[test]
+    fn app_names_match_loosely_but_rank_exact_first() {
+        let names = ["360安全浏览器", "360压缩", "Google Chrome", "微信", "微信开发者工具"];
+        assert_eq!(match_app_name("360浏览器", &names), vec![0]);
+        assert_eq!(match_app_name("chrome", &names), vec![2]);
+        assert_eq!(match_app_name("google  chrome", &names), vec![2]);
+        assert_eq!(match_app_name("微信", &names), vec![3]);
+        assert!(match_app_name("记事本", &names).is_empty());
+        // Two characters are too short for the in-order rule ("36" would hit everything).
+        assert!(match_app_name("3览", &names).is_empty());
+    }
+
+    #[test]
+    fn several_app_hits_become_candidates_not_a_launch() {
+        let names = ["360安全浏览器", "360压缩", "360安全卫士"];
+        let hits = match_app_name("360", &names);
+        assert_eq!(hits.len(), 3);
+        assert_eq!(unique_hit(&hits, &names), None);
+        let msg = candidates_error(&hits, &names);
+        assert!(msg.contains("360压缩") && msg.contains("360安全卫士") && msg.contains("没有启动"));
+        // Duplicate shortcuts with one name still launch.
+        let dup = ["Visual Studio Code", "visual studio code"];
+        assert_eq!(unique_hit(&match_app_name("code", &dup), &dup), Some(0));
+    }}

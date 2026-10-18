@@ -8,7 +8,7 @@ import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
 import { buildMeta, buildSystem } from "./config";
 import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
-import { DAILY_REPORT_SYSTEM, isDailyReport, isDailyRevision } from "./dailyReport";
+import { cleanDailyReport, dailyReportSystem, isDailyReport, isDailyRevision, type DailyStyle } from "./dailyReport";
 import type { OptimizeConfig, TaskKind } from "./config";
 import { routeQuestion } from "./route";
 import type { AskMode, RouteOverride } from "./route";
@@ -123,6 +123,8 @@ export type AskStreamOptions = {
   attachments?: AskAttachment[];
   /** Permission level + repo for the tool loop every question runs through. */
   agent: AgentRunOptions;
+  /** Format of the daily report (日报). */
+  dailyStyle?: DailyStyle;
 };
 
 /**
@@ -134,7 +136,7 @@ export function useAskStream(opts: AskStreamOptions) {
   const {
     selectedModel, task, optimize, input, setInput, setSelectedText, getContext, collectDailyBrief,
     routeOverride, onSent, persistTurns,
-    profileSystemRole, profileTemperature, attachments = [], agent,
+    profileSystemRole, profileTemperature, attachments = [], agent, dailyStyle = "chat",
   } = opts;
 
   const [answer, setAnswer] = useState("");
@@ -235,6 +237,9 @@ export function useAskStream(opts: AskStreamOptions) {
     if (!rawInput) setInput("");
     let sentMode: AskMode = replay?.mode ?? "chat";
     let keepWhole = false;
+    /** Daily report round: no tools, and the answer is cleaned before it lands. */
+    let isDaily = false;
+    const landText = (text: string) => (isDaily ? cleanDailyReport(text) : text);
     const finishTurn = (text: string, limited = false) => {
       const nextTurns = appendTurn(baseHistory, question, text, keepWhole, agentStepsRef.current, limited);
       setHistory(nextTurns);
@@ -317,7 +322,8 @@ export function useAskStream(opts: AskStreamOptions) {
             lastDailyReposRef.current = brief.repos;
           }
           summary = { repos: brief.repos, parts: ["git", "dirty"] };
-          system = buildMeta(selectedModel) + DAILY_REPORT_SYSTEM;
+          system = buildMeta(selectedModel) + dailyReportSystem(dailyStyle);
+          isDaily = true;
           if (reviseDaily) {
             system +=
               " The user is revising the report you just wrote. Keep the same facts from the notes and apply only their instruction.";
@@ -396,7 +402,7 @@ export function useAskStream(opts: AskStreamOptions) {
               ? { ...prev, elapsedMs, promptTokens, completionTokens, estimatedTokens }
               : prev
           );
-          const finalText = stripThinking(full);
+          const finalText = landText(stripThinking(full));
           if (finalText.trim()) {
             recordAiUsage({
               modelId: selectedModel.id,
@@ -423,7 +429,7 @@ export function useAskStream(opts: AskStreamOptions) {
           if (!stopped) setError(payload.error || t("streamFailed"));
           recordPartialUsage();
           // Stopped mid-stream: keep the partial answer as context too.
-          const partial = stripThinking(full);
+          const partial = landText(stripThinking(full));
           if (stopped && partial.trim()) finishTurn(partial);
           else failTurn(!stopped);
           setBusySync(false);
@@ -506,7 +512,8 @@ export function useAskStream(opts: AskStreamOptions) {
           history: requestHistory(baseHistory),
           apps: agent.apps,
           permission: agent.permission,
-          tools: !TEXT_ONLY_TASKS.includes(sendTask),
+          // The daily notes are already collected: the report needs no repo tools.
+          tools: !TEXT_ONLY_TASKS.includes(sendTask) && !isDaily,
           vision: agent.vision,
         },
       });
@@ -521,7 +528,7 @@ export function useAskStream(opts: AskStreamOptions) {
         const stopped = String(e).includes("AI_REQUEST_CANCELLED");
         if (!stopped) setError(String(e));
         recordPartialUsage();
-        const partial = stripThinking(full);
+        const partial = landText(stripThinking(full));
         if (stopped && partial.trim()) finishTurn(partial);
         else failTurn(!stopped);
         setBusySync(false);

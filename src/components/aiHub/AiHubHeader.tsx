@@ -1,5 +1,8 @@
 import { useTranslation } from "react-i18next";
-import { History, Loader2, MessageSquarePlus, Pin, PinOff, Sparkles, Square, Terminal, X } from "lucide-react";
+import type { MouseEvent } from "react";
+import {
+  History, Loader2, Maximize2, MessageSquarePlus, Minimize2, Pin, PinOff, Sparkles, Square, Terminal, X,
+} from "lucide-react";
 import type { AgentApproval, AgentDecision } from "./useAskStream";
 
 export type AiHubMode = "ask" | "tools";
@@ -16,6 +19,8 @@ type Props = {
   onNewChat: () => void;
   pinned: boolean;
   onTogglePinned: () => void;
+  maximized: boolean;
+  onToggleMaximized: () => void;
   onClose: () => void;
 };
 
@@ -24,10 +29,17 @@ export default function AiHubHeader(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     mode, onMode, busy, agentApproval, onDecideAgent, onStop, historyOpen, onToggleHistory, onNewChat,
-    pinned, onTogglePinned, onClose,
+    pinned, onTogglePinned, maximized, onToggleMaximized, onClose,
   } = props;
+  // Double-click on blank title bar (drag regions only, never a button) toggles size.
+  const onHeaderDoubleClick = (e: MouseEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("button, input, a, [role=tab]")) return;
+    if (!target.closest("[data-tauri-drag-region]")) return;
+    onToggleMaximized();
+  };
   return (
-    <header className="ai-hub-header" data-tauri-drag-region>
+    <header className="ai-hub-header" data-tauri-drag-region onDoubleClick={onHeaderDoubleClick}>
       <div className="ai-hub-header-lead" data-tauri-drag-region>
         <div className="ai-hub-title" data-tauri-drag-region>
           <Sparkles size={15} strokeWidth={1.75} />
@@ -115,6 +127,15 @@ export default function AiHubHeader(props: Props) {
           aria-pressed={pinned}
         >
           {pinned ? <Pin size={14} /> : <PinOff size={14} />}
+        </button>
+        <button
+          type="button"
+          className="btn-icon qa-max-btn"
+          onClick={onToggleMaximized}
+          title={maximized ? t("restoreWindow") : t("maximizeWindow")}
+          aria-label={maximized ? t("restoreWindow") : t("maximizeWindow")}
+        >
+          {maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>
         <button type="button" className="btn-icon" onClick={onClose} title={t("close")}>
           <X size={16} />

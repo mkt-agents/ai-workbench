@@ -1408,7 +1408,7 @@ pub async fn scan_desktop_apps() -> Result<Vec<InstalledAppInfo>, String> {
 }
 
 #[cfg(windows)]
-fn scan_desktop_apps_sync() -> Vec<InstalledAppInfo> {
+pub(crate) fn scan_desktop_apps_sync() -> Vec<InstalledAppInfo> {
     let mut apps: Vec<InstalledAppInfo> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     scan_shortcut_apps(&mut apps, &mut seen);

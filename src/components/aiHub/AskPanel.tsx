@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { AiHubTurn } from "../../core/types";
 import type { TaskKind } from "./config";
+import type { DailyStyle } from "./dailyReport";
 import type { AskMode } from "./route";
 import type {
   AgentDecision, AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentStep,
@@ -70,6 +71,11 @@ export type AskPanelProps = {
   onPermission: (next: AgentPermission) => void;
   permissionMenuOpen: boolean;
   onTogglePermissionMenu: () => void;
+  /** Daily report format, picked from the caret beside 日报. */
+  dailyStyle: DailyStyle;
+  onDailyStyle: (style: DailyStyle) => void;
+  dailyMenuOpen: boolean;
+  onToggleDailyMenu: () => void;
   /** Non-null while the composer is an "open …" phrase (empty = nothing matched). */
   openList: OpenSuggestion[] | null;
   onRunOpen: (item: OpenSuggestion) => void;

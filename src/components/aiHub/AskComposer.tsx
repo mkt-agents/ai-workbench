@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X } from "lucide-react";
+import { Check, ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X } from "lucide-react";
 import { QUICK_TASKS } from "./config";
+import { DAILY_STYLES } from "./dailyReport";
 import type { OpenSuggestion } from "./localActions";
 import PermissionPicker from "./PermissionPicker";
 import type { AskPanelProps } from "./AskPanel";
@@ -12,6 +13,7 @@ type Props = Pick<
   | "onSuggestionDismiss" | "task" | "onTask" | "onDaily" | "hasSnippets" | "snippetOpen"
   | "onToggleSnippets" | "onPasteClipboard" | "onAttachFile" | "onSend" | "repoControl" | "modelControl"
   | "permission" | "onPermission" | "permissionMenuOpen" | "onTogglePermissionMenu"
+  | "dailyStyle" | "onDailyStyle" | "dailyMenuOpen" | "onToggleDailyMenu"
   | "openList" | "onRunOpen" | "onStop"
 >;
 
@@ -63,6 +65,7 @@ export default function AskComposer(props: Props) {
     input, setInput, inputRef, busy, lastQuestion, suggestion, onSuggestionPick, onSuggestionDismiss,
     task, onTask, onDaily, hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard, onAttachFile,
     onSend, repoControl, modelControl, permission, onPermission, permissionMenuOpen, onTogglePermissionMenu,
+    dailyStyle, onDailyStyle, dailyMenuOpen, onToggleDailyMenu,
     openList, onRunOpen, onStop,
   } = props;
   const writes = permission !== "read";
@@ -87,11 +90,11 @@ export default function AskComposer(props: Props) {
     el.style.overflowY = el.scrollHeight > INPUT_MAX_HEIGHT ? "auto" : "hidden";
   }, [input, inputRef]);
 
-  /** Enter / send button: run the highlighted "open …" match, else send. */
+  /** Enter / send button: run the highlighted "open …" match; nothing local matched → ask the AI. */
   const submit = () => {
-    if (openList) {
-      const pick = openList[openHi] ?? openList[0];
-      if (pick) onRunOpen(pick);
+    const pick = openList?.[openHi] ?? openList?.[0];
+    if (pick) {
+      onRunOpen(pick);
       return;
     }
     onSend();
@@ -212,15 +215,56 @@ export default function AskComposer(props: Props) {
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            className="qa-task-btn qa-daily-btn"
-            onClick={onDaily}
-            disabled={busy}
-            title={t("dailyTip")}
-          >
-            {t("dailyShort")}
-          </button>
+          <div className="qa-focus qa-daily">
+            <div className={`qa-daily-split${busy ? " is-disabled" : ""}`}>
+              <button
+                type="button"
+                className="qa-task-btn qa-daily-btn"
+                onClick={onDaily}
+                disabled={busy}
+                title={`${t("dailyTip")} · ${t(`dailyStyle.${dailyStyle}`)}`}
+              >
+                {t("dailyShort")}
+              </button>
+              <button
+                type="button"
+                className="qa-daily-caret"
+                onClick={onToggleDailyMenu}
+                aria-haspopup="listbox"
+                aria-expanded={dailyMenuOpen}
+                aria-label={t("dailyStyle.menu")}
+                title={t("dailyStyle.menu")}
+              >
+                <span className="qa-focus-caret">▾</span>
+              </button>
+            </div>
+            {dailyMenuOpen && (
+              <div className="qa-focus-pop is-up is-left qa-daily-pop" role="listbox">
+                {DAILY_STYLES.map((s) => {
+                  const on = s === dailyStyle;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      role="option"
+                      aria-selected={on}
+                      className={`qa-focus-item qa-daily-item${on ? " on" : ""}`}
+                      onClick={() => {
+                        onDailyStyle(s);
+                        onToggleDailyMenu();
+                      }}
+                    >
+                      <span className="qa-daily-item-text">
+                        <span className="qa-daily-item-name">{t(`dailyStyle.${s}`)}</span>
+                        <span className="qa-daily-item-desc">{t(`dailyStyle.${s}Desc`)}</span>
+                      </span>
+                      {on && <Check size={12} className="qa-perm-item-check" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
         <div className="qa-compose-end">
           <PermissionPicker

@@ -28,7 +28,7 @@ import { useNextSuggestion } from "./aiHub/useNextSuggestion";
 import { DEFAULT_CHIPS, DEFAULT_OPTIMIZE, encodeTask, parseTask } from "./aiHub/config";
 import type { OptimizeConfig, TaskKind } from "./aiHub/config";
 import { routeQuestion } from "./aiHub/route";
-import { openSuggestions, type OpenSuggestion } from "./aiHub/localActions";
+import { openSuggestions, type InstalledApp, type OpenSuggestion } from "./aiHub/localActions";
 import { GIT_SUBTAB_KEY } from "./GitManager";
 import type { RouteOverride } from "./aiHub/route";
 import { useAskContext } from "./aiHub/useAskContext";
@@ -38,9 +38,12 @@ import { useAskSnippets } from "./aiHub/useAskSnippets";
 import { AGENT_PERMISSIONS, useAskStream, type AgentPermission } from "./aiHub/useAskStream";
 import { useConfirm } from "./ConfirmModal";
 import { COMPUTER_TOOL_NAMES } from "./aiHub/AgentActivity";
+import { DAILY_STYLES, type DailyStyle } from "./aiHub/dailyReport";
 import { useRepoFocus } from "./aiHub/useRepoFocus";
 import { useAnswerActions } from "./aiHub/useAnswerActions";
-import { hideAiHub as hide, useModeHotkeys, useResizingBodyClass, useTimedFlag } from "./aiHub/useAiHubWindow";
+import {
+  hideAiHub as hide, useModeHotkeys, useResizingBodyClass, useTimedFlag, useWindowBounds,
+} from "./aiHub/useAiHubWindow";
 
 type QaTurn = AiHubTurn;
 
@@ -53,6 +56,13 @@ const FULL_ACK_KEY = "qa-full-ack-v2";
 const COMPUTER_ACK_KEY = "qa-computer-ack";
 /** Ctrl+. cycles these; 完全权限 is only reachable from the menu. */
 const HOTKEY_CYCLE: AgentPermission[] = ["read", "workspace", "review"];
+const DAILY_STYLE_KEY = "qa-daily-style";
+const INSTALLED_TTL_MS = 10 * 60 * 1000;
+
+function readDailyStyle(): DailyStyle {
+  const stored = localStorage.getItem(DAILY_STYLE_KEY) as DailyStyle | null;
+  return stored && DAILY_STYLES.includes(stored) ? stored : "chat";
+}
 
 /** Stored level; the pre-levels agent switch (`qa-agent=1`) becomes 编辑权限. */
 function readPermission(): AgentPermission {
@@ -69,12 +79,31 @@ function AiHubApp() {
   const aiModels = useGlobalStore((s) => s.aiModels);
   const quickAppLaunchers = useGlobalStore((s) => s.quickAppLaunchers);
   const invokeLaunchApp = useGlobalStore((s) => s.invokeLaunchApp);
+  const invokeScanDesktopApps = useGlobalStore((s) => s.invokeScanDesktopApps);
+  // Start Menu / Desktop programs for "打开 …"; rescanned on show once the list is stale.
+  const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
+  const installedScanAt = useRef(0);
+  const refreshInstalledApps = useCallback(() => {
+    if (installedScanAt.current && Date.now() - installedScanAt.current < INSTALLED_TTL_MS) return;
+    installedScanAt.current = Date.now();
+    invokeScanDesktopApps()
+      .then((list) => setInstalledApps(list.map((app) => ({ name: app.display_name, path: app.exe_path }))))
+      .catch(() => {
+        installedScanAt.current = 0;
+      });
+  }, [invokeScanDesktopApps]);
+  useEffect(() => refreshInstalledApps(), [refreshInstalledApps]);
   const invokePickTextFile = useGlobalStore((s) => s.invokePickTextFile);
   const invokeSetAiHubPinned = useGlobalStore((s) => s.invokeSetAiHubPinned);
 
   const [ready, setReady] = useState(false);
   const [pinned, setPinned] = useState(() => localStorage.getItem(PINNED_KEY) === "1");
   const [permission, setPermission] = useState<AgentPermission>(readPermission);
+  const [dailyStyle, setDailyStyleState] = useState<DailyStyle>(readDailyStyle);
+  const setDailyStyle = (style: DailyStyle) => {
+    setDailyStyleState(style);
+    localStorage.setItem(DAILY_STYLE_KEY, style);
+  };
   useEffect(() => {
     localStorage.setItem(PINNED_KEY, pinned ? "1" : "0");
     void invokeSetAiHubPinned(pinned).catch(() => {});
@@ -88,7 +117,7 @@ function AiHubApp() {
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission">(null);
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily">(null);
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
   /** Write-capable levels always work on the project; read-only follows the auto route. */
@@ -140,6 +169,7 @@ function AiHubApp() {
     getContext: ctx.getContext,
     collectDailyBrief: ctx.collectDailyBrief,
     routeOverride: effectiveOverride,
+    dailyStyle,
     onSent: () => {
       // Quick actions and the pill override are one-shot.
       setTask("none");
@@ -367,8 +397,8 @@ function AiHubApp() {
   };
 
   const openList = useMemo(
-    () => openSuggestions(input, quickAppLaunchers),
-    [input, quickAppLaunchers],
+    () => openSuggestions(input, quickAppLaunchers, installedApps),
+    [input, quickAppLaunchers, installedApps],
   );
   useEffect(() => setOpenDismissed(false), [input]);
   const visibleOpenList = openDismissed ? null : openList;
@@ -505,6 +535,7 @@ function AiHubApp() {
   }, [mode]);
 
   useResizingBodyClass();
+  const windowBounds = useWindowBounds();
   useModeHotkeys(setMode);
 
   // Re-showing the window: drop popovers/history and park focus in the composer.
@@ -513,12 +544,13 @@ function AiHubApp() {
     void listen("ai-hub-shown", () => {
       setOpenPop(null);
       setHistoryOpen(false);
+      refreshInstalledApps();
       requestAnimationFrame(() => inputRef.current?.focus());
     }).then((fn) => {
       unlisten = fn;
     });
     return () => unlisten?.();
-  }, []);
+  }, [refreshInstalledApps]);
 
   // Clicking anywhere outside the toolbar closes the open popover. Clicks on
   // another trigger are handled by togglePop (mutual exclusion) instead.
@@ -605,6 +637,8 @@ function AiHubApp() {
         onNewChat={startNewChat}
         pinned={pinned}
         onTogglePinned={togglePinned}
+        maximized={windowBounds.maximized}
+        onToggleMaximized={windowBounds.toggleMaximized}
         onClose={() => void hide()}
       />
       {computerActive && (
@@ -732,6 +766,10 @@ function AiHubApp() {
             onPermission={(next) => void changePermission(next)}
             permissionMenuOpen={openPop === "permission"}
             onTogglePermissionMenu={() => togglePop("permission")}
+            dailyStyle={dailyStyle}
+            onDailyStyle={setDailyStyle}
+            dailyMenuOpen={openPop === "daily"}
+            onToggleDailyMenu={() => togglePop("daily")}
             openList={visibleOpenList}
             onRunOpen={runOpen}
             onStop={() => void stream.stopStream()}

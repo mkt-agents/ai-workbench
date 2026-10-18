@@ -4,6 +4,8 @@
   "close": "Close",
   "pin": "Keep on top",
   "unpin": "Stop keeping on top",
+  "maximizeWindow": "Maximize (or double-click the title bar)",
+  "restoreWindow": "Restore window size",
   "noModel": "Configure an AI model in the main window first",
   "attach": {
     "file": "Attach file",
@@ -56,15 +58,23 @@
   },
   "actionDone": "Opened “{{name}}”",
   "openList": "Pages and apps you can open",
-  "openNone": "No page or app with that name",
+  "openNone": "Nothing local matches. Press Enter to hand it to the AI",
   "openPlaceholder": "Pick one, Enter to open",
   "openGroup": {
     "page": "Page",
     "tool": "Toolbox",
-    "app": "App"
+    "app": "Quick apps",
+    "installed": "Installed apps"
   },
   "dailyShort": "Daily",
   "dailyTip": "Write a paste-ready report from today's commits and uncommitted files",
+  "dailyStyle": {
+    "menu": "Report format",
+    "chat": "Chat",
+    "chatDesc": "One opening line + 3–5 points, ready for a group chat",
+    "sections": "Sections",
+    "sectionsDesc": "Done today / In progress / Tomorrow"
+  },
   "agent": {
     "steps": "{{n}} actions",
     "continue": "Continue",

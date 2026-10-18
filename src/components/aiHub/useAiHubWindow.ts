@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import type { AiHubMode } from "./AiHubHeader";
 
@@ -73,4 +73,115 @@ export function useTimedFlag(ms: number): [boolean, () => void] {
   }, [ms]);
   useEffect(() => () => window.clearTimeout(timerRef.current), []);
   return [on, flash];
+}
+
+const BOUNDS_KEY = "qa-window-bounds";
+
+type SavedBounds = { x: number; y: number; width: number; height: number; maximized: boolean };
+
+function readBounds(): SavedBounds | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BOUNDS_KEY) || "null");
+    if (!raw || ![raw.x, raw.y, raw.width, raw.height].every(Number.isFinite)) return null;
+    return { x: raw.x, y: raw.y, width: raw.width, height: raw.height, maximized: raw.maximized === true };
+  } catch {
+    return null;
+  }
+}
+
+function writeBounds(bounds: SavedBounds): void {
+  try {
+    localStorage.setItem(BOUNDS_KEY, JSON.stringify(bounds));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Remember the window's size, position and maximized state across launches.
+ * While maximized only the flag is recorded, so restoring brings back the last
+ * normal size. A saved spot is reused only if its title bar still lands on a
+ * connected monitor; an unplugged screen must not strand the window off-desktop.
+ */
+export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => void } {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let disposed = false;
+    let timer: number | undefined;
+    const unlisteners: Array<() => void> = [];
+    const keep = (unlisten: () => void) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    };
+    const save = async () => {
+      try {
+        const isMax = await win.isMaximized();
+        if (disposed) return;
+        setMaximized(isMax);
+        if (isMax) {
+          const prev = readBounds();
+          if (prev) writeBounds({ ...prev, maximized: true });
+          return;
+        }
+        const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+        // Minimized windows report a parking spot around -32000.
+        if (pos.x <= -30000 || pos.y <= -30000 || size.width <= 0 || size.height <= 0) return;
+        writeBounds({ x: pos.x, y: pos.y, width: size.width, height: size.height, maximized: false });
+      } catch {
+        /* ignore */
+      }
+    };
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void save(), 500);
+    };
+    void (async () => {
+      const saved = readBounds();
+      if (saved) {
+        try {
+          const probeX = saved.x + 40;
+          const probeY = saved.y + 16;
+          const onScreen = (await availableMonitors()).some(
+            (m) =>
+              probeX >= m.position.x &&
+              probeX < m.position.x + m.size.width &&
+              probeY >= m.position.y &&
+              probeY < m.position.y + m.size.height,
+          );
+          if (onScreen && !disposed) {
+            await win.setSize(new PhysicalSize(saved.width, saved.height));
+            await win.setPosition(new PhysicalPosition(saved.x, saved.y));
+            if (saved.maximized) await win.maximize();
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (disposed) return;
+      setMaximized(await win.isMaximized().catch(() => false));
+      try {
+        keep(await win.onResized(schedule));
+        keep(await win.onMoved(schedule));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      unlisteners.forEach((u) => u());
+    };
+  }, []);
+  const toggleMaximized = useCallback(() => {
+    const win = getCurrentWindow();
+    void win
+      .isMaximized()
+      .then(async (isMax) => {
+        await (isMax ? win.unmaximize() : win.maximize());
+        setMaximized(!isMax);
+      })
+      .catch(() => {});
+  }, []);
+  return { maximized, toggleMaximized };
 }
