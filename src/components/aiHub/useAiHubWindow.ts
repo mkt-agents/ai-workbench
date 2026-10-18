@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { availableMonitors, currentMonitor, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import type { AiHubMode } from "./AiHubHeader";
 
@@ -76,35 +76,99 @@ export function useTimedFlag(ms: number): [boolean, () => void] {
 }
 
 const BOUNDS_KEY = "qa-window-bounds";
+/** Size and spot before 放大, for 还原. */
+const NORMAL_KEY = "qa-window-normal";
+/**
+ * 放大 is a capped size, not full screen: on a wide monitor full screen leaves the
+ * reading column floating in empty space. Matches `max_inner_size` in tray/bubble.rs.
+ */
+export const LARGE_MAX = { width: 1120, height: 960 };
+/** Room left around the enlarged window inside the monitor's work area (logical px). */
+const LARGE_MARGIN = 48;
 
-type SavedBounds = { x: number; y: number; width: number; height: number; maximized: boolean };
+type Rect = { x: number; y: number; width: number; height: number };
+type SavedBounds = Rect & { large: boolean };
 
-function readBounds(): SavedBounds | null {
+function isRect(raw: unknown): raw is Rect {
+  const r = raw as Rect | null;
+  return !!r && [r.x, r.y, r.width, r.height].every(Number.isFinite);
+}
+
+function readJson(key: string): unknown {
   try {
-    const raw = JSON.parse(localStorage.getItem(BOUNDS_KEY) || "null");
-    if (!raw || ![raw.x, raw.y, raw.width, raw.height].every(Number.isFinite)) return null;
-    return { x: raw.x, y: raw.y, width: raw.width, height: raw.height, maximized: raw.maximized === true };
+    return JSON.parse(localStorage.getItem(key) || "null");
   } catch {
     return null;
   }
 }
 
-function writeBounds(bounds: SavedBounds): void {
+function writeJson(key: string, value: unknown): void {
   try {
-    localStorage.setItem(BOUNDS_KEY, JSON.stringify(bounds));
+    localStorage.setItem(key, JSON.stringify(value));
   } catch {
     /* ignore */
   }
 }
 
+function readBounds(): SavedBounds | null {
+  const raw = readJson(BOUNDS_KEY) as (Rect & { large?: boolean; maximized?: boolean }) | null;
+  if (!isRect(raw)) return null;
+  // `maximized` is the flag older versions stored for real OS maximize.
+  return { x: raw.x, y: raw.y, width: raw.width, height: raw.height, large: raw.large === true || raw.maximized === true };
+}
+
+/** The enlarged window: capped, centered in the work area (physical px). */
+export function largeRect(work: Rect, scale: number): Rect {
+  const width = Math.round(Math.min(LARGE_MAX.width * scale, work.width - LARGE_MARGIN * scale));
+  const height = Math.round(Math.min(LARGE_MAX.height * scale, work.height - LARGE_MARGIN * scale));
+  return {
+    x: Math.round(work.x + (work.width - width) / 2),
+    y: Math.round(work.y + (work.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+type HubWindow = ReturnType<typeof getCurrentWindow>;
+
+async function workAreaOf(): Promise<{ work: Rect; scale: number } | null> {
+  const m = await currentMonitor();
+  if (!m) return null;
+  const { position, size } = m.workArea;
+  return { work: { x: position.x, y: position.y, width: size.width, height: size.height }, scale: m.scaleFactor };
+}
+
+async function applyRect(win: HubWindow, r: Rect): Promise<void> {
+  await win.setSize(new PhysicalSize(r.width, r.height));
+  await win.setPosition(new PhysicalPosition(r.x, r.y));
+}
+
+async function currentRect(win: HubWindow): Promise<Rect | null> {
+  const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+  // Minimized windows report a parking spot around -32000.
+  if (pos.x <= -30000 || pos.y <= -30000 || size.width <= 0 || size.height <= 0) return null;
+  return { x: pos.x, y: pos.y, width: size.width, height: size.height };
+}
+
 /**
- * Remember the window's size, position and maximized state across launches.
- * While maximized only the flag is recorded, so restoring brings back the last
- * normal size. A saved spot is reused only if its title bar still lands on a
- * connected monitor; an unplugged screen must not strand the window off-desktop.
+ * Remember the window's size, position and 放大 state across launches, and
+ * toggle 放大 / 还原. A saved spot is reused only if its title bar still lands on
+ * a connected monitor; an unplugged screen must not strand the window off-desktop.
  */
 export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => void } {
-  const [maximized, setMaximized] = useState(false);
+  const [large, setLarge] = useState(false);
+  const largeRef = useRef(false);
+  /** Size 放大 produced: a manual resize away from it ends the enlarged state. */
+  const largeSize = useRef<{ width: number; height: number } | null>(null);
+  /** Our own setSize / setPosition must not be recorded as a user resize. */
+  const applying = useRef(false);
+
+  const markLarge = (on: boolean, size?: { width: number; height: number }) => {
+    largeRef.current = on;
+    largeSize.current = on ? size ?? null : null;
+    setLarge(on);
+  };
+
   useEffect(() => {
     const win = getCurrentWindow();
     let disposed = false;
@@ -115,19 +179,15 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
       else unlisteners.push(unlisten);
     };
     const save = async () => {
+      if (applying.current) return;
       try {
-        const isMax = await win.isMaximized();
-        if (disposed) return;
-        setMaximized(isMax);
-        if (isMax) {
-          const prev = readBounds();
-          if (prev) writeBounds({ ...prev, maximized: true });
-          return;
+        const rect = await currentRect(win);
+        if (disposed || !rect) return;
+        const ls = largeSize.current;
+        if (largeRef.current && ls && (Math.abs(rect.width - ls.width) > 8 || Math.abs(rect.height - ls.height) > 8)) {
+          markLarge(false);
         }
-        const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
-        // Minimized windows report a parking spot around -32000.
-        if (pos.x <= -30000 || pos.y <= -30000 || size.width <= 0 || size.height <= 0) return;
-        writeBounds({ x: pos.x, y: pos.y, width: size.width, height: size.height, maximized: false });
+        writeJson(BOUNDS_KEY, { ...rect, large: largeRef.current });
       } catch {
         /* ignore */
       }
@@ -137,6 +197,12 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
       timer = window.setTimeout(() => void save(), 500);
     };
     void (async () => {
+      try {
+        // Older versions really maximized the window; that state is no longer offered.
+        if (await win.isMaximized()) await win.unmaximize();
+      } catch {
+        /* ignore */
+      }
       const saved = readBounds();
       if (saved) {
         try {
@@ -150,16 +216,17 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
               probeY < m.position.y + m.size.height,
           );
           if (onScreen && !disposed) {
-            await win.setSize(new PhysicalSize(saved.width, saved.height));
-            await win.setPosition(new PhysicalPosition(saved.x, saved.y));
-            if (saved.maximized) await win.maximize();
+            applying.current = true;
+            await applyRect(win, saved);
+            if (saved.large) markLarge(true, { width: saved.width, height: saved.height });
           }
         } catch {
           /* ignore */
+        } finally {
+          window.setTimeout(() => (applying.current = false), 300);
         }
       }
       if (disposed) return;
-      setMaximized(await win.isMaximized().catch(() => false));
       try {
         keep(await win.onResized(schedule));
         keep(await win.onMoved(schedule));
@@ -173,15 +240,50 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
       unlisteners.forEach((u) => u());
     };
   }, []);
+
   const toggleMaximized = useCallback(() => {
     const win = getCurrentWindow();
-    void win
-      .isMaximized()
-      .then(async (isMax) => {
-        await (isMax ? win.unmaximize() : win.maximize());
-        setMaximized(!isMax);
-      })
-      .catch(() => {});
+    void (async () => {
+      applying.current = true;
+      try {
+        if (largeRef.current) {
+          const normal = readJson(NORMAL_KEY);
+          const area = await workAreaOf();
+          if (isRect(normal)) {
+            await applyRect(win, normal);
+          } else if (area) {
+            // No remembered size: the default 720×640, centered.
+            const w = Math.round(720 * area.scale);
+            const h = Math.round(640 * area.scale);
+            await applyRect(win, {
+              x: Math.round(area.work.x + (area.work.width - w) / 2),
+              y: Math.round(area.work.y + (area.work.height - h) / 2),
+              width: w,
+              height: h,
+            });
+          }
+          markLarge(false);
+        } else {
+          const area = await workAreaOf();
+          const before = await currentRect(win);
+          if (!area) return;
+          if (before) writeJson(NORMAL_KEY, before);
+          const target = largeRect(area.work, area.scale);
+          await applyRect(win, target);
+          markLarge(true, { width: target.width, height: target.height });
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        window.setTimeout(() => {
+          applying.current = false;
+          void currentRect(win)
+            .then((rect) => rect && writeJson(BOUNDS_KEY, { ...rect, large: largeRef.current }))
+            .catch(() => {});
+        }, 300);
+      }
+    })();
   }, []);
-  return { maximized, toggleMaximized };
+
+  return { maximized: large, toggleMaximized };
 }

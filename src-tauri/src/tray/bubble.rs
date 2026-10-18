@@ -155,6 +155,11 @@ pub fn ensure_ai_hub_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .title("智枢")
         .inner_size(720.0, 640.0)
         .min_inner_size(560.0, 520.0)
+        // 放大 is capped (LARGE_MAX in aiHub/useAiHubWindow.ts): a full-screen hub leaves the
+        // reading column floating in empty space, so neither drag-resize nor
+        // Win+Up / snap-to-top may make it larger.
+        .max_inner_size(1120.0, 960.0)
+        .maximizable(false)
         .resizable(true)
         .decorations(false)
         .always_on_top(false)

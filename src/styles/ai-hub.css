@@ -796,10 +796,10 @@
   min-height: 0;
   gap: 4px;
 }
-/* 放大窗口后长行不铺满整屏：对话、错误卡、输入卡同宽居中 */
+/* 放大后的窗口最宽 1120（见 useAiHubWindow 的 LARGE_MAX）：内容限宽 1000 居中，两边只留一点边距 */
 .qa-stage > * {
   width: 100%;
-  max-width: 880px;
+  max-width: 1000px;
   margin-inline: auto;
 }
 .qa-empty {
