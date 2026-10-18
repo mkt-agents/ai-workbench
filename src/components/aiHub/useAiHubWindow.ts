@@ -131,6 +131,25 @@ export function largeRect(work: Rect, scale: number): Rect {
 
 type HubWindow = ReturnType<typeof getCurrentWindow>;
 
+/** Tolerance for rounding and the clamp of `max_inner_size` (physical px). */
+const SIZE_SLACK = 16;
+
+function nearlyLarge(size: { width: number; height: number }, target: Rect): boolean {
+  return size.width >= target.width - SIZE_SLACK && size.height >= target.height - SIZE_SLACK;
+}
+
+/** The default 720×640, centered in the work area. */
+function defaultRect(work: Rect, scale: number): Rect {
+  const width = Math.round(720 * scale);
+  const height = Math.round(640 * scale);
+  return {
+    x: Math.round(work.x + (work.width - width) / 2),
+    y: Math.round(work.y + (work.height - height) / 2),
+    width,
+    height,
+  };
+}
+
 async function workAreaOf(): Promise<{ work: Rect; scale: number } | null> {
   const m = await currentMonitor();
   if (!m) return null;
@@ -143,8 +162,9 @@ async function applyRect(win: HubWindow, r: Rect): Promise<void> {
   await win.setPosition(new PhysicalPosition(r.x, r.y));
 }
 
+/** Position is the outer corner (what setPosition takes); size is the inner size (what setSize takes). */
 async function currentRect(win: HubWindow): Promise<Rect | null> {
-  const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+  const [pos, size] = await Promise.all([win.outerPosition(), win.innerSize()]);
   // Minimized windows report a parking spot around -32000.
   if (pos.x <= -30000 || pos.y <= -30000 || size.width <= 0 || size.height <= 0) return null;
   return { x: pos.x, y: pos.y, width: size.width, height: size.height };
@@ -184,7 +204,7 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
         const rect = await currentRect(win);
         if (disposed || !rect) return;
         const ls = largeSize.current;
-        if (largeRef.current && ls && (Math.abs(rect.width - ls.width) > 8 || Math.abs(rect.height - ls.height) > 8)) {
+        if (largeRef.current && ls && (Math.abs(rect.width - ls.width) > SIZE_SLACK || Math.abs(rect.height - ls.height) > SIZE_SLACK)) {
           markLarge(false);
         }
         writeJson(BOUNDS_KEY, { ...rect, large: largeRef.current });
@@ -218,12 +238,21 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
           if (onScreen && !disposed) {
             applying.current = true;
             await applyRect(win, saved);
-            if (saved.large) markLarge(true, { width: saved.width, height: saved.height });
+            const area = await workAreaOf().catch(() => null);
+            const big = area ? nearlyLarge(saved, largeRect(area.work, area.scale)) : false;
+            if (saved.large || big) markLarge(true, { width: saved.width, height: saved.height });
           }
         } catch {
           /* ignore */
         } finally {
-          window.setTimeout(() => (applying.current = false), 300);
+          window.setTimeout(() => {
+            void currentRect(win)
+              .then((rect) => {
+                if (rect && largeRef.current) largeSize.current = { width: rect.width, height: rect.height };
+              })
+              .catch(() => {})
+              .finally(() => (applying.current = false));
+          }, 300);
         }
       }
       if (disposed) return;
@@ -246,44 +275,41 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
     void (async () => {
       applying.current = true;
       try {
-        if (largeRef.current) {
+        const area = await workAreaOf();
+        if (!area) return;
+        const target = largeRect(area.work, area.scale);
+        const osMax = await win.isMaximized().catch(() => false);
+        if (osMax) await win.unmaximize();
+        const before = await currentRect(win);
+        // Decide from the real size too: a lost flag must not turn 还原 into 放大 again.
+        if (largeRef.current || osMax || (before && nearlyLarge(before, target))) {
           const normal = readJson(NORMAL_KEY);
-          const area = await workAreaOf();
-          if (isRect(normal)) {
-            await applyRect(win, normal);
-          } else if (area) {
-            // No remembered size: the default 720×640, centered.
-            const w = Math.round(720 * area.scale);
-            const h = Math.round(640 * area.scale);
-            await applyRect(win, {
-              x: Math.round(area.work.x + (area.work.width - w) / 2),
-              y: Math.round(area.work.y + (area.work.height - h) / 2),
-              width: w,
-              height: h,
-            });
-          }
+          // A remembered "normal" as big as 放大 would make 还原 a no-op.
+          const back = isRect(normal) && !nearlyLarge(normal, target) ? normal : defaultRect(area.work, area.scale);
+          await applyRect(win, back);
           markLarge(false);
         } else {
-          const area = await workAreaOf();
-          const before = await currentRect(win);
-          if (!area) return;
           if (before) writeJson(NORMAL_KEY, before);
-          const target = largeRect(area.work, area.scale);
           await applyRect(win, target);
-          markLarge(true, { width: target.width, height: target.height });
+          const after = await currentRect(win);
+          markLarge(true, after ?? target);
         }
       } catch {
         /* ignore */
       } finally {
         window.setTimeout(() => {
-          applying.current = false;
           void currentRect(win)
-            .then((rect) => rect && writeJson(BOUNDS_KEY, { ...rect, large: largeRef.current }))
-            .catch(() => {});
+            .then((rect) => {
+              if (!rect) return;
+              // Re-baseline on what the window really ended up as, before user resizes are judged.
+              if (largeRef.current) largeSize.current = { width: rect.width, height: rect.height };
+              writeJson(BOUNDS_KEY, { ...rect, large: largeRef.current });
+            })
+            .catch(() => {})
+            .finally(() => (applying.current = false));
         }, 300);
       }
     })();
   }, []);
-
   return { maximized: large, toggleMaximized };
 }
