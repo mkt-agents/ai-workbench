@@ -40,3 +40,6 @@ _test_b64.txt
 *.log
 npm-debug.log*
 .gstack/
+
+# Local assistant data (never commit)
+.zcode/
