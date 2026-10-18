@@ -616,40 +616,85 @@
   color: var(--text-3);
 }
 
-/* 未处理的块：色带从改动的一栏穿过栏间连到结果栏（IDEA 的连接色块） */
-.mr3-row.is-ours .mr3-cell.is-ours,
-.mr3-row.is-ours:not(.is-done) :is(.mr3-gutter.is-left, .mr3-cell.is-result),
-.mr3-row.is-theirs .mr3-cell.is-theirs,
-.mr3-row.is-theirs:not(.is-done) :is(.mr3-gutter.is-right, .mr3-cell.is-result) {
+/* 每栏的内容按自己的高度着色；栏间用 SVG 曲线把它们连起来（IDEA 的连接色带） */
+.mr3-row.is-ours .mr3-cell.is-ours .mr3-inner,
+.mr3-row.is-ours:not(.is-done) .mr3-cell.is-result .mr3-inner,
+.mr3-row.is-theirs .mr3-cell.is-theirs .mr3-inner,
+.mr3-row.is-theirs:not(.is-done) .mr3-cell.is-result .mr3-inner {
   background: var(--merge-change-bg);
 }
 
-.mr3-row.is-conflict :is(.mr3-cell.is-ours, .mr3-cell.is-theirs),
-.mr3-row.is-conflict:not(.is-done) :is(.mr3-gutter, .mr3-cell.is-result) {
+.mr3-row.is-conflict :is(.mr3-cell.is-ours, .mr3-cell.is-theirs) .mr3-inner,
+.mr3-row.is-conflict:not(.is-done) .mr3-cell.is-result .mr3-inner {
   background: var(--merge-conflict-bg);
 }
 
-.mr3-row.is-same > * {
+.mr3-row.is-same .mr3-inner {
   background: var(--merge-same-bg);
 }
 
-.mr3-row.is-ours:not(.is-done),
-.mr3-row.is-theirs:not(.is-done) {
-  box-shadow:
-    inset 0 1px 0 var(--merge-change-band),
-    inset 0 -1px 0 var(--merge-change-band);
-}
-
-.mr3-row.is-conflict:not(.is-done) {
-  box-shadow:
-    inset 0 1px 0 var(--merge-conflict-band),
-    inset 0 -1px 0 var(--merge-conflict-band);
-}
-
-.mr3-row.is-done .mr3-cell.is-result {
+.mr3-row.is-done .mr3-cell.is-result .mr3-inner {
   background: var(--overlay-1);
 }
 
+.mr3-inner {
+  min-height: 2px;
+}
+
+.mr3-gutter {
+  position: relative;
+}
+
+.mr3-band {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.mr3-band-fill {
+  fill: var(--merge-change-bg);
+}
+
+.mr3-band-edge {
+  fill: none;
+  stroke: var(--merge-change-band);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.mr3-row.is-conflict .mr3-band-fill {
+  fill: var(--merge-conflict-bg);
+}
+
+.mr3-row.is-conflict .mr3-band-edge {
+  stroke: var(--merge-conflict-band);
+}
+
+.mr3-row.is-same .mr3-band-fill {
+  fill: var(--merge-same-bg);
+}
+
+.mr3-row.is-same .mr3-band-edge {
+  stroke: var(--merge-same-band);
+}
+
+/* 处理完的块：色带退成淡灰，只留一条细边 */
+.mr3-row.is-done:not(.is-same) .mr3-band-fill {
+  fill: var(--overlay-1);
+}
+
+.mr3-row.is-done:not(.is-same) .mr3-band-edge {
+  stroke: var(--border);
+}
+
+.mr3-acts {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+}
 .mr3-row.is-focus {
   outline: 1px solid var(--accent-border);
   outline-offset: -1px;
@@ -711,7 +756,29 @@
   width: 18px;
   height: 18px;
   margin-top: 1px;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+/* 悬停时标记变成还原图标：点一下撤销这一侧的选择 */
+.mr3-mark .mr3-mark-undo {
+  display: none;
+}
+
+.mr3-mark:hover :first-child {
+  display: none;
+}
+
+.mr3-mark:hover .mr3-mark-undo {
+  display: inline;
+}
+
+.mr3-mark:hover {
+  background: var(--accent-dim);
+  color: var(--accent-strong);
 }
 
 .mr3-mark.is-applied {

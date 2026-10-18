@@ -92,6 +92,37 @@ export function decide(state: MergeState, idx: number, side: Side, action: "appl
   return { ...state, [idx]: next };
 }
 
+/** 还原 one side: back to undecided (the other side keeps its decision). */
+export function undoSide(state: MergeState, idx: number, side: Side): MergeState {
+  const cur = stateOf(state, idx);
+  const next: ChunkState = { ...cur, custom: undefined, [side]: "none", order: cur.order.filter((s) => s !== side) };
+  if (next.left === "none" && next.right === "none") return resetChunk(state, idx);
+  return { ...state, [idx]: next };
+}
+
+/** Undo / redo of resolver decisions (Ctrl+Z / Ctrl+Y). */
+export type MergeHistory = { past: MergeState[]; future: MergeState[] };
+
+export const HISTORY_LIMIT = 100;
+
+export const EMPTY_HISTORY: MergeHistory = { past: [], future: [] };
+
+/** Record `previous` before a change; a new change drops the redo branch. */
+export function historyPush(history: MergeHistory, previous: MergeState): MergeHistory {
+  return { past: [...history.past, previous].slice(-HISTORY_LIMIT), future: [] };
+}
+
+export function undo(history: MergeHistory, current: MergeState): { history: MergeHistory; state: MergeState } | null {
+  if (history.past.length === 0) return null;
+  const state = history.past[history.past.length - 1];
+  return { state, history: { past: history.past.slice(0, -1), future: [current, ...history.future] } };
+}
+
+export function redo(history: MergeHistory, current: MergeState): { history: MergeHistory; state: MergeState } | null {
+  if (history.future.length === 0) return null;
+  const [state, ...rest] = history.future;
+  return { state, history: { past: [...history.past, current].slice(-HISTORY_LIMIT), future: rest } };
+}
 export function resetChunk(state: MergeState, idx: number): MergeState {
   const next = { ...state };
   delete next[idx];

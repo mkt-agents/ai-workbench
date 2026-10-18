@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
@@ -10,7 +10,9 @@ import {
   FoldVertical,
   Loader2,
   PencilLine,
+  Redo2,
   RotateCcw,
+  Undo2,
   WandSparkles,
   X,
 } from "lucide-react";
@@ -28,12 +30,18 @@ import {
   counts,
   decide,
   editChunk,
+  EMPTY_HISTORY,
+  historyPush,
+  redo,
   nextOpen,
   openNonConflicting,
   resetChunk,
   segmentsWithMarkers,
   sidesOf,
   stateOf,
+  undo,
+  undoSide,
+  type MergeHistory,
   type MergeState,
   type Side,
 } from "../../lib/mergeChunks";
@@ -64,6 +72,79 @@ function errorText(e: unknown): string {
   return parseInvokeError(raw).message || raw;
 }
 
+/**
+ * IDEA-style band between two panes: the chunk is `from` px tall on the left
+ * edge and `to` px tall on the right; unequal heights curve.
+ */
+function Connector({ from, to, height }: { from: number; to: number; height: number }) {
+  if (height <= 0) return null;
+  return (
+    <svg className="mr3-band" viewBox={`0 0 48 ${height}`} preserveAspectRatio="none" aria-hidden>
+      <path className="mr3-band-fill" d={`M0,0 L48,0 L48,${to} C24,${to} 24,${from} 0,${from} Z`} />
+      <path className="mr3-band-edge" d={`M0,0.5 L48,0.5 M0,${from} C24,${from} 24,${to} 48,${to}`} />
+    </svg>
+  );
+}
+
+/**
+ * One changed chunk across the five columns. Each pane's content keeps its own
+ * height (top aligned); the gutters connect them with curved bands.
+ */
+function ChangeRow(props: {
+  idx: number;
+  className: string;
+  onClick: () => void;
+  ours: ReactNode;
+  result: ReactNode;
+  theirs: ReactNode;
+  oursClass: string;
+  theirsClass: string;
+  leftBand: boolean;
+  rightBand: boolean;
+  leftActions: ReactNode;
+  rightActions: ReactNode;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const oursRef = useRef<HTMLDivElement>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+  const theirsRef = useRef<HTMLDivElement>(null);
+  const [h, setH] = useState({ ours: 0, result: 0, theirs: 0, row: 0 });
+  useLayoutEffect(() => {
+    const measure = () =>
+      setH({
+        ours: oursRef.current?.offsetHeight ?? 0,
+        result: resultRef.current?.offsetHeight ?? 0,
+        theirs: theirsRef.current?.offsetHeight ?? 0,
+        row: rowRef.current?.offsetHeight ?? 0,
+      });
+    measure();
+    const ro = new ResizeObserver(measure);
+    for (const el of [rowRef.current, oursRef.current, resultRef.current, theirsRef.current]) if (el) ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div ref={rowRef} data-chunk={props.idx} className={props.className} onClick={props.onClick}>
+      <div className={`mr3-cell is-ours${props.oursClass}`}>
+        <div ref={oursRef} className="mr3-inner">{props.ours}</div>
+      </div>
+      <div className="mr3-gutter is-left">
+        {props.leftBand && <Connector from={h.ours} to={h.result} height={h.row} />}
+        <div className="mr3-acts">{props.leftActions}</div>
+      </div>
+      <div className="mr3-cell is-result">
+        <div ref={resultRef} className="mr3-inner">{props.result}</div>
+      </div>
+      <div className="mr3-gutter is-right">
+        {props.rightBand && <Connector from={h.result} to={h.theirs} height={h.row} />}
+        <div className="mr3-acts">{props.rightActions}</div>
+      </div>
+      <div className={`mr3-cell is-theirs${props.theirsClass}`}>
+        <div ref={theirsRef} className="mr3-inner">{props.theirs}</div>
+      </div>
+    </div>
+  );
+}
+
 /** Numbered lines of one pane inside one chunk. */
 function Lines({ lines, start }: { lines: string[]; start: number }) {
   return (
@@ -92,6 +173,9 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [state, setState] = useState<MergeState>({});
+  const [history, setHistory] = useState<MergeHistory>(EMPTY_HISTORY);
+  /** Chunk being typed into: one history step per editing streak, not per key. */
+  const editingRef = useRef<number | null>(null);
   /** Whole-file hand edit; null = chunk mode. */
   const [manual, setManual] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -158,6 +242,8 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
     setError("");
     setData(null);
     setState({});
+    setHistory(EMPTY_HISTORY);
+    editingRef.current = null;
     setManual(null);
     setFocusIdx(null);
     setUnfolded(new Set());
@@ -241,9 +327,32 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
     }
   };
 
+  /** Every decision goes through here so Ctrl+Z can step back. */
+  const change = (next: MergeState, editing?: number) => {
+    if (editing === undefined || editingRef.current !== editing) setHistory((h) => historyPush(h, state));
+    editingRef.current = editing ?? null;
+    setState(next);
+  };
+
+  const stepBack = () => {
+    const r = undo(history, state);
+    if (!r) return;
+    editingRef.current = null;
+    setHistory(r.history);
+    setState(r.state);
+  };
+
+  const stepForward = () => {
+    const r = redo(history, state);
+    if (!r) return;
+    editingRef.current = null;
+    setHistory(r.history);
+    setState(r.state);
+  };
+
   const decideAt = (idx: number, side: Side, action: "apply" | "ignore") => {
     const next = decide(state, idx, side, action);
-    setState(next);
+    change(next);
     if (chunkResolved(chunks[idx], stateOf(next, idx))) setFocusIdx(nextOpen(chunks, next, idx, 1));
   };
 
@@ -285,10 +394,22 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
     const appending = chunk.kind === "conflict" && st[other] === "applied";
     if (st.custom !== undefined) return null;
     if (st[side] !== "none") {
+      // The mark doubles as 还原: back to undecided for this side.
+      const label = `${t(`merge.mark.${st[side]}`)} · ${t("merge.revertSide")}`;
       return (
-        <span className={`mr3-mark is-${st[side]}`} title={t(`merge.mark.${st[side]}`)}>
+        <button
+          type="button"
+          className={`mr3-mark is-${st[side]}`}
+          title={label}
+          aria-label={label}
+          onClick={(e) => {
+            e.stopPropagation();
+            change(undoSide(state, idx, side));
+          }}
+        >
           {st[side] === "applied" ? <Check size={11} /> : <X size={11} />}
-        </span>
+          <RotateCcw size={10} className="mr3-mark-undo" />
+        </button>
       );
     }
     const Arrow = side === "left" ? ChevronsRight : ChevronsLeft;
@@ -346,14 +467,14 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
           value={text}
           spellCheck={false}
           rows={Math.max(1, text.split("\n").length)}
-          onChange={(e) => setState(editChunk(state, idx, e.target.value))}
+          onChange={(e) => change(editChunk(state, idx, e.target.value), idx)}
           aria-label={t("merge.editChunk")}
         />
         {touched && (
           <button
             type="button"
             className="mr3-reset"
-            onClick={() => setState(resetChunk(state, idx))}
+            onClick={() => change(resetChunk(state, idx))}
             title={t("merge.undoChunk")}
             aria-label={t("merge.undoChunk")}
           >
@@ -398,27 +519,76 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
         </Fragment>
       );
     }
+    if (chunk.kind === "equal") {
+      return (
+        <div key={idx} className="mr3-row is-equal">
+          <div className="mr3-cell is-ours"><Lines lines={chunk.ours} start={s.ours} /></div>
+          <div className="mr3-gutter is-left" />
+          <div className="mr3-cell is-result">{renderResult(idx, chunk)}</div>
+          <div className="mr3-gutter is-right" />
+          <div className="mr3-cell is-theirs"><Lines lines={chunk.theirs} start={s.theirs} /></div>
+        </div>
+      );
+    }
     const st = stateOf(state, idx);
     const resolved = chunkResolved(chunk, st);
     return (
-      <div
+      <ChangeRow
         key={idx}
-        data-chunk={idx}
+        idx={idx}
         className={`mr3-row is-${chunk.kind}${resolved ? " is-done" : ""}${focusIdx === idx ? " is-focus" : ""}`}
-        onClick={() => chunk.kind !== "equal" && setFocusIdx(idx)}
-      >
-        <div className={`mr3-cell is-ours${chunk.kind === "theirs" ? " is-quiet" : ""}`}>
-          <Lines lines={chunk.ours} start={s.ours} />
-        </div>
-        <div className="mr3-gutter is-left">{gutter(idx, chunk, "left")}</div>
-        <div className="mr3-cell is-result">{renderResult(idx, chunk)}</div>
-        <div className="mr3-gutter is-right">{gutter(idx, chunk, "right")}</div>
-        <div className={`mr3-cell is-theirs${chunk.kind === "ours" ? " is-quiet" : ""}`}>
-          <Lines lines={chunk.theirs} start={s.theirs} />
-        </div>
-      </div>
+        onClick={() => setFocusIdx(idx)}
+        ours={<Lines lines={chunk.ours} start={s.ours} />}
+        result={renderResult(idx, chunk)}
+        theirs={<Lines lines={chunk.theirs} start={s.theirs} />}
+        oursClass={chunk.kind === "theirs" ? " is-quiet" : ""}
+        theirsClass={chunk.kind === "ours" ? " is-quiet" : ""}
+        leftBand={chunk.kind !== "theirs"}
+        rightBand={chunk.kind !== "ours"}
+        leftActions={gutter(idx, chunk, "left")}
+        rightActions={gutter(idx, chunk, "right")}
+      />
     );
   };
+
+  // Keys while this resolver is the top dialog and the grid (not hand edit) shows:
+  // Ctrl+Shift+→ / ← take local / incoming for the focused chunk, F7 walks open
+  // chunks, Ctrl+Z / Ctrl+Y undo / redo. Typing in a chunk keeps the textarea's own undo.
+  useEffect(() => {
+    if (!merge || manual !== null) return;
+    const onKey = (e: KeyboardEvent) => {
+      const overlays = document.querySelectorAll(".modal-overlay");
+      if (!overlays[overlays.length - 1]?.querySelector(".merge-resolver")) return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (e.key === "F7" && !ctrl && !e.altKey) {
+        e.preventDefault();
+        const back = e.shiftKey;
+        setFocusIdx(nextOpen(chunks, state, focusIdx ?? (back ? chunks.length : -1), back ? -1 : 1));
+        return;
+      }
+      if (e.target instanceof Element && e.target.closest("input, textarea, select")) return;
+      if (ctrl && e.shiftKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+        e.preventDefault();
+        const idx = focusIdx ?? nextOpen(chunks, state, -1, 1);
+        if (idx === null) return;
+        const side: Side = e.key === "ArrowRight" ? "left" : "right";
+        if (sidesOf(chunks[idx]).includes(side)) decideAt(idx, side, "apply");
+        return;
+      }
+      if (ctrl && !e.shiftKey && key === "z") {
+        e.preventDefault();
+        stepBack();
+        return;
+      }
+      if (ctrl && (key === "y" || (e.shiftKey && key === "z"))) {
+        e.preventDefault();
+        stepForward();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   /** Modify-vs-delete, binary or non-UTF-8 files: only whole-file choices. */
   const renderWholeFile = (info: GitConflictFile) => {
@@ -527,12 +697,32 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
                       >
                         <ChevronDown size={14} />
                       </button>
+                      <button
+                        type="button"
+                        className="btn commit-icon-btn"
+                        disabled={history.past.length === 0}
+                        onClick={stepBack}
+                        title={t("merge.undo")}
+                        aria-label={t("merge.undo")}
+                      >
+                        <Undo2 size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn commit-icon-btn"
+                        disabled={history.future.length === 0}
+                        onClick={stepForward}
+                        title={t("merge.redo")}
+                        aria-label={t("merge.redo")}
+                      >
+                        <Redo2 size={14} />
+                      </button>
                       <span className="mr-toolbar-gap" />
                       <button
                         type="button"
                         className="btn btn-secondary btn-small"
                         disabled={pendingChanges === 0}
-                        onClick={() => setState(applyNonConflicting(chunks, state))}
+                        onClick={() => change(applyNonConflicting(chunks, state))}
                         title={t("merge.applyNonConflictingTip")}
                       >
                         <WandSparkles size={13} />

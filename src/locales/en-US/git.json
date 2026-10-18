@@ -656,14 +656,14 @@
     "oursTitle": "Local ({{name}})",
     "theirsTitle": "Incoming ({{name}})",
     "resultTitle": "Result",
-    "prev": "Previous unresolved conflict",
-    "next": "Next unresolved conflict",
+    "prev": "Previous open chunk (Shift+F7)",
+    "next": "Next open chunk (F7)",
     "editAll": "Edit whole result",
     "backToChunks": "Back to chunks",
     "manualHint": "Manual edit: open conflicts stay as <<<<<<< / >>>>>>> markers and can't be saved until removed",
     "manualSaveHint": "Markers are checked before saving; nothing is written while any remain",
-    "takeOursTip": "Apply the local change (>>)",
-    "takeTheirsTip": "Apply the incoming change (<<)",
+    "takeOursTip": "Apply the local change (» · Ctrl+Shift+→)",
+    "takeTheirsTip": "Apply the incoming change (« · Ctrl+Shift+←)",
     "editChunk": "Edit the result for this conflict",
     "undoChunk": "Undo this choice",
     "foldShow": "Show {{count}} unchanged lines",
@@ -703,6 +703,9 @@
     "conflictsLeft": "{{count}} conflicts left; handle them before applying",
     "changesLeft": "Conflicts handled; {{count}} non-conflicting changes not applied",
     "cancel": "Cancel",
-    "apply": "Apply"
+    "apply": "Apply",
+    "revertSide": "Click to revert (this side back to undecided)",
+    "undo": "Undo (Ctrl+Z)",
+    "redo": "Redo (Ctrl+Y)"
   }
 }
