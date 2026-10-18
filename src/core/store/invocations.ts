@@ -78,7 +78,7 @@ export interface Invocations {
   invokeGitCreateBranch: (path: string, name: string) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
-  invokeGitDiff: (path: string, filePath: string, staged: boolean) => Promise<string>;
+  invokeGitDiff: (path: string, filePath: string, staged: boolean, ignoreWhitespace?: boolean) => Promise<string>;
   invokeGitLog: (path: string, count: number, since?: string) => Promise<string[][]>;
   invokeGitLogFiles: (
     path: string,
@@ -356,8 +356,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_switch_branch', { path, name }),
   invokeGitListBranches: (path: string) =>
     tauriInvoke<GitBranchList>('git_list_branches', { path }),
-  invokeGitDiff: (path: string, filePath: string, staged: boolean) =>
-    tauriInvoke<string>('git_diff', { path, filePath, staged }),
+  invokeGitDiff: (path: string, filePath: string, staged: boolean, ignoreWhitespace?: boolean) =>
+    tauriInvoke<string>('git_diff', { path, filePath, staged, ignoreWhitespace: ignoreWhitespace ?? false }),
   invokeGitLog: (path: string, count: number, since?: string) =>
     tauriInvoke<string[][]>('git_log', { path, count, since: since ?? null }),
   invokeGitLogFiles: (path: string, count: number, since?: string) =>

@@ -173,16 +173,6 @@
   text-align: center;
 }
 
-.cl-split-diff .git-diff-pre {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-  overflow: auto;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-}
-
 .cl-tree {
   display: flex;
   flex-direction: column;
@@ -616,32 +606,6 @@
   background: var(--bg-hover);
 }
 
-.cl-hunks {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-
-.cl-hunk,
-.cl-stash-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.cl-hunk code,
-.cl-stash-msg {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  color: var(--text-1);
-}
-
 .cl-hunk-note {
   margin-bottom: 8px;
 }
@@ -864,9 +828,6 @@
     max-height: 42vh;
   }
 
-  .cl-split-diff .git-diff-pre {
-    max-height: 34vh;
-  }
 
   .repos-toolbar-actions,
   .repos-batch-actions {

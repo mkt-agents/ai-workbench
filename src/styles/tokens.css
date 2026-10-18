@@ -119,6 +119,19 @@
   /* 字体 */
   --font-sans: 'Inter', -apple-system, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+
+  /* 差异 / 合并面板：由语义色推出。data-theme 挂在 html 上，与 :root 同一元素，
+     每个主题块改了 --green / --red / --accent，这里自动跟随，不必逐个主题再写 */
+  --diff-add-bg: color-mix(in srgb, var(--green) 13%, transparent);
+  --diff-add-gutter: color-mix(in srgb, var(--green) 24%, transparent);
+  --diff-add-fg: var(--green);
+  --diff-del-bg: color-mix(in srgb, var(--red) 13%, transparent);
+  --diff-del-gutter: color-mix(in srgb, var(--red) 24%, transparent);
+  --diff-del-fg: var(--red);
+  --diff-hunk-bg: color-mix(in srgb, var(--accent) 9%, transparent);
+  --diff-hunk-fg: var(--accent);
+  --diff-conflict-bg: color-mix(in srgb, var(--yellow) 14%, transparent);
+  --diff-conflict-border: color-mix(in srgb, var(--yellow) 48%, transparent);
 }
 
 [data-theme="light"] {

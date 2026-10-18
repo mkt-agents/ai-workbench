@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  AlertTriangle,
   Archive,
   Bot,
   Check,
@@ -8,6 +9,7 @@ import {
   ChevronRight,
   Download,
   GitBranch,
+  GitMerge,
   History,
   Loader2,
   RefreshCw,
@@ -34,6 +36,9 @@ import { describePushTargets, isPushable } from "../core/gitPushScope";
 import { recordAiUsage } from "../lib/aiUsage";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import { looksLikeTempFile } from "../lib/tempFiles";
+import { parseInvokeError } from "../hooks/useInvokeError";
+import MergeResolver from "./git/MergeResolver";
+import DiffViewer from "./git/DiffViewer";
 import type {
   AIModelConfig,
   GitStatusEntry,
@@ -83,10 +88,9 @@ const CL_FILTER_KEY = "workbench-commit-filter";
 const CL_COLLAPSED_KEY = "workbench-commit-collapsed-repos";
 const CL_DRAFT_KEY = "workbench-commit-draft";
 const CL_RECENT_KEY = "workbench-commit-recent-messages";
+const CL_IGNORE_WS_KEY = "cl-diff-ignore-ws";
 const RECENT_LOG = 12;
 const RECENT_LOCAL = 10;
-/** Rendering more than this many diff lines as individual spans gets sluggish. */
-const DIFF_RENDER_LINES = 2000;
 
 const COMMIT_MSG_SYSTEM =
   "你是资深工程师。根据 git 变更写一条提交说明。" +
@@ -165,6 +169,7 @@ function pickRepoInScope(
 }
 
 function statusCode(entry: GitStatusEntry): string {
+  if (entry.group === "conflicted") return "U";
   if (entry.group === "untracked") return "?";
   if (entry.group === "staged") return (entry.indexStatus || "M").trim() || "M";
   return (entry.workTreeStatus || "M").trim() || "M";
@@ -176,16 +181,26 @@ function statusClass(code: string): string {
   if (c === "D") return "git-status-d";
   if (c === "R" || c === "C") return "git-status-r";
   if (c === "?" || c === "!") return "git-status-u";
+  if (c === "U") return "git-status-conflict";
   return "git-status-m";
 }
 
+function rawInvokeError(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err ?? "")).trim();
+}
+
+/** The message without the `[GIT_CONFLICT]`-style code prefix. */
 function formatInvokeError(err: unknown): string {
-  if (err instanceof Error) {
-    const m = err.message.trim();
-    return m || "操作失败";
-  }
-  const text = String(err ?? "").trim();
-  return text || "操作失败";
+  return parseInvokeError(rawInvokeError(err)).message.trim() || "操作失败";
+}
+
+function invokeErrorCode(err: unknown): string | null {
+  return parseInvokeError(rawInvokeError(err)).code;
+}
+
+/** Git is mid-merge/rebase in this repo, or has unmerged paths. */
+function repoInGitOperation(s: RepoBatchItem | undefined): boolean {
+  return !!s?.isGit && (!!s.operation || (s.conflictCount ?? 0) > 0);
 }
 
 function truncateError(err: string, max = 360): string {
@@ -222,6 +237,8 @@ function mergeSelection(
     const seen = known.get(path);
     const kept = new Set<string>();
     for (const entry of entries) {
+      // Conflicts are resolved in the merge panel, never committed by a tick.
+      if (entry.group === "conflicted") continue;
       const key = selectionKey(entry);
       if (!seen || !seen.has(key)) {
         kept.add(key);
@@ -238,144 +255,15 @@ function fileKey(repoPath: string, filePath: string, group?: string): string {
   return group ? `${repoPath}\0${group}\0${filePath}` : `${repoPath}\0${filePath}`;
 }
 
-function diffLineClass(line: string): string {
-  if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("diff --git") || line.startsWith("index ")) {
-    return "diff-line diff-line-meta";
-  }
-  if (line.startsWith("@@")) return "diff-line diff-line-hunk";
-  if (line.startsWith("+")) return "diff-line diff-line-add";
-  if (line.startsWith("-")) return "diff-line diff-line-del";
-  return "diff-line";
-}
-
-type DiffHunk = { header: string; text: string };
-
-function splitDiffHunks(text: string): { preamble: string; hunks: DiffHunk[] } | null {
-  const norm = text.replace(/\r\n/g, "\n");
-  if (!norm.includes("@@")) return null;
-  const lines = norm.split("\n");
-  const pre: string[] = [];
-  const hunks: string[][] = [];
-  let current: string[] | null = null;
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      if (current) hunks.push(current);
-      current = [line];
-    } else if (current) {
-      current.push(line);
-    } else {
-      pre.push(line);
-    }
-  }
-  if (current) hunks.push(current);
-  if (hunks.length === 0) return null;
-  return {
-    preamble: pre.join("\n"),
-    hunks: hunks.map((rows) => ({ header: rows[0], text: rows.join("\n") })),
-  };
-}
-
-function buildHunkPatch(preamble: string, hunks: DiffHunk[]): string {
-  const body = [preamble.trimEnd(), ...hunks.map((h) => h.text)].filter(Boolean).join("\n");
-  return body.endsWith("\n") ? body : `${body}\n`;
-}
-
-function DiffPreview({
-  text,
-  wholeFile,
-  staged,
-  busy,
-  onApply,
-}: {
-  text: string;
-  wholeFile: boolean;
-  staged: boolean;
-  busy: boolean;
-  onApply?: (patch: string) => void;
-}) {
-  const { t } = useTranslation("git");
-  const [expanded, setExpanded] = useState(false);
-  const [picked, setPicked] = useState<Set<number>>(() => new Set());
-  const split = useMemo(() => (wholeFile ? null : splitDiffHunks(text)), [text, wholeFile]);
-  useEffect(() => {
-    setExpanded(false);
-    setPicked(new Set());
-  }, [text]);
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const hidden = !expanded && lines.length > DIFF_RENDER_LINES;
-  const shown = hidden ? lines.slice(0, DIFF_RENDER_LINES) : lines;
-  const binary = /binary file/i.test(text);
-  return (
-    <>
-      {wholeFile || !split ? (
-        <div className="cl-hunk-note runtime-muted">
-          {binary
-            ? t("commit.hunkBinary")
-            : wholeFile
-              ? t("commit.hunkUntracked")
-              : t("commit.hunkUnavailable")}
-        </div>
-      ) : (
-        <div className="cl-hunks">
-          {split.hunks.map((hunk, i) => (
-            <label key={`${hunk.header}-${i}`} className="cl-hunk">
-              <input
-                type="checkbox"
-                checked={picked.has(i)}
-                disabled={busy}
-                onChange={() => {
-                  setPicked((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(i)) next.delete(i);
-                    else next.add(i);
-                    return next;
-                  });
-                }}
-              />
-              <code>{hunk.header}</code>
-            </label>
-          ))}
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            disabled={busy || picked.size === 0 || !onApply}
-            onClick={() => {
-              if (!onApply || !split) return;
-              onApply(buildHunkPatch(split.preamble, split.hunks.filter((_, i) => picked.has(i))));
-            }}
-          >
-            {staged ? t("commit.hunkUnstage") : t("commit.hunkStage")}
-          </button>
-        </div>
-      )}
-      {hidden && (
-        <div className="cl-diff-more">
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            onClick={() => setExpanded(true)}
-          >
-            {t("commit.diffShowAll", { count: lines.length - DIFF_RENDER_LINES })}
-          </button>
-        </div>
-      )}
-      <pre className="git-diff-pre">
-        {shown.map((line, i) => (
-          <span key={i} className={diffLineClass(line)}>
-            {line || "\u00a0"}
-          </span>
-        ))}
-      </pre>
-    </>
-  );
-}
-
 type DiffTarget = {
   repoPath: string;
   filePath: string;
   staged: boolean;
   wholeFile: boolean;
 };
+
+/** Which write is running; the matching button alone shows a spinner. */
+type BusyAction = "commit" | "commitPush" | "push" | "pull" | "rollback" | "stash" | "hunk" | "merge";
 
 type Props = {
   active: boolean;
@@ -529,6 +417,8 @@ function CommitChangelist({
   const invokeGitCommit = useGlobalStore((s) => s.invokeGitCommit);
   const invokeGitPush = useGlobalStore((s) => s.invokeGitPush);
   const invokeGitPull = useGlobalStore((s) => s.invokeGitPull);
+  const invokeGitMergeState = useGlobalStore((s) => s.invokeGitMergeState);
+  const invokeGitMergeAbort = useGlobalStore((s) => s.invokeGitMergeAbort);
   const invokeGitDiff = useGlobalStore((s) => s.invokeGitDiff);
   const invokeGitApplyCached = useGlobalStore((s) => s.invokeGitApplyCached);
   const invokeGitLog = useGlobalStore((s) => s.invokeGitLog);
@@ -544,7 +434,9 @@ function CommitChangelist({
 
   const [filter, setFilter] = useState(() => readStoredString(CL_FILTER_KEY, "all"));
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<BusyAction | null>(null);
+  /** Any write running: every action stays disabled, only the running one spins. */
+  const busy = busyAction !== null;
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; label?: string } | null>(null);
   const [message, setMessage] = useState(() => readStoredString(CL_DRAFT_KEY));
@@ -559,9 +451,16 @@ function CommitChangelist({
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(readStoredArray<string>(CL_COLLAPSED_KEY))
   );
+  /** Failed repos of the last batch: stays until dismissed (a toast is gone in 8s). */
+  const [report, setReport] = useState<{ title: string; lines: string[] } | null>(null);
+  /** Conflict resolver for one repo, starting at `file`. */
+  const [resolver, setResolver] = useState<{ repoPath: string; file?: string } | null>(null);
+  /** Repos whose merge pull stopped on conflicts during the running batch. */
+  const conflictHitRef = useRef<string[]>([]);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [diffText, setDiffText] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
+  const [ignoreWs, setIgnoreWs] = useState(() => readStoredString(CL_IGNORE_WS_KEY) === "1");
   const refreshGen = useRef(0);
   const diffGen = useRef(0);
   const recentRef = useRef<HTMLDivElement>(null);
@@ -818,9 +717,29 @@ function CommitChangelist({
     return n;
   }, [selected, scopedPathKeys]);
 
+  // A repo mid-merge/rebase or with conflicts is never pushed or pulled from here.
   const pushableRepos = useMemo(() => {
-    return scopedProjects.filter((p) => isPushable(summaries[p.path]));
+    return scopedProjects.filter((p) => isPushable(summaries[p.path]) && !repoInGitOperation(summaries[p.path]));
   }, [scopedProjects, summaries]);
+
+  /** Scoped repos where git is in the middle of something. */
+  const operationRepos = useMemo(
+    () => scopedProjects.filter((p) => repoInGitOperation(summaries[p.path])),
+    [scopedProjects, summaries]
+  );
+  /** Merges with every conflict resolved: committing concludes them. */
+  const mergeCommitTargets = useMemo(
+    () =>
+      operationRepos
+        .filter((p) => summaries[p.path]?.operation === "merge" && (summaries[p.path]?.conflictCount ?? 0) === 0)
+        .map((p) => p.path),
+    [operationRepos, summaries]
+  );
+  /** Repos that block commit: unresolved conflicts, or rebase / cherry-pick / revert. */
+  const blockedRepoPaths = useMemo(
+    () => operationRepos.map((p) => p.path).filter((path) => !mergeCommitTargets.includes(path)),
+    [operationRepos, mergeCommitTargets]
+  );
 
   const pushableCount = pushableRepos.length;
 
@@ -833,7 +752,7 @@ function CommitChangelist({
   const pullableRepos = useMemo(() => {
     return scopedProjects.filter((p) => {
       const s = summaries[p.path];
-      return !!s?.isGit && s.behind > 0 && s.hasUpstream;
+      return !!s?.isGit && s.behind > 0 && s.hasUpstream && !repoInGitOperation(s);
     });
   }, [scopedProjects, summaries]);
 
@@ -852,18 +771,38 @@ function CommitChangelist({
   const currentSummary = summaryForPath(currentGitRepo);
   const currentIsFavorited = !!findProjectByPath(recentProjects, currentGitRepo);
 
+  const runningLabel = (action: BusyAction) =>
+    progress && progress.total > 1
+      ? `${t(`commit.running.${action}`)} ${progress.done}/${progress.total}`
+      : t(`commit.running.${action}`);
+
+  /** Selected repos that git won't let us commit in right now. */
+  const selectedBlocked = useMemo(
+    () =>
+      [...selected.entries()]
+        .filter(([path, files]) => files.size > 0 && blockedRepoPaths.some((b) => pathKey(b) === pathKey(path)))
+        .map(([path]) => path),
+    [selected, blockedRepoPaths]
+  );
+  const amendDuringMerge = amend && mergeCommitTargets.length > 0;
   const amendBlocked = amend && selectedRepoCount > 1;
   const canCommit =
     !!message.trim() &&
     !busy &&
     !generating &&
     !amendBlocked &&
+    !amendDuringMerge &&
+    selectedBlocked.length === 0 &&
     (amend
       ? selectedRepoCount <= 1 && (selectedRepoCount === 1 || !!currentGitRepo)
-      : selectedCount > 0);
-  const commitBlockReason = amendBlocked
+      : selectedCount > 0 || mergeCommitTargets.length > 0);
+  const commitBlockReason = selectedBlocked.length > 0
+    ? t("commit.conflictBlocked", { name: labelPath(selectedBlocked[0]) })
+    : amendDuringMerge
+      ? t("commit.amendDuringMerge")
+      : amendBlocked
     ? t("commit.amendOneRepo")
-    : !message.trim() && (selectedCount > 0 || amend)
+    : !message.trim() && (selectedCount > 0 || amend || mergeCommitTargets.length > 0)
       ? t("commit.changelistNeedMessage")
       : amend && selectedRepoCount === 0 && !currentGitRepo
         ? t("commit.changelistPickRepo")
@@ -902,12 +841,21 @@ function CommitChangelist({
     );
   };
 
+  /** Merge pull; a conflict stops here and is remembered for the resolver. */
+  const mergePull = async (repoPath: string) => {
+    try {
+      await invokeGitPull(repoPath, true);
+    } catch (e) {
+      if (invokeErrorCode(e) === "GIT_CONFLICT") conflictHitRef.current.push(repoPath);
+      throw e;
+    }
+  };
+
   const pushWithUpdate = async (repoPath: string) => {
     try {
       await invokeGitPush(repoPath);
     } catch (e) {
-      const text = formatInvokeError(e);
-      if (!text.includes("请先拉取再推送")) throw e;
+      if (invokeErrorCode(e) !== "GIT_PUSH_REJECTED") throw e;
       const ok = await confirm({
         title: t("commit.pushRejectedTitle"),
         message: t("commit.pushRejectedMessage", { name: labelPath(repoPath) }),
@@ -915,10 +863,79 @@ function CommitChangelist({
         icon: "warning",
       });
       if (!ok) throw e;
-      await invokeGitPull(repoPath, true);
+      await mergePull(repoPath);
       await invokeGitPush(repoPath);
     }
   };
+
+  /** After a batch: failures stay listed; a merge that stopped on conflicts opens the resolver. */
+  const finishBatch = async (
+    title: string,
+    result: { ok: number; fail: number; errors: string[] },
+    okText: string,
+    paths: string[]
+  ) => {
+    const hits = conflictHitRef.current;
+    conflictHitRef.current = [];
+    if (result.fail > 0) {
+      onToast("error", title);
+      setReport({ title, lines: result.errors });
+    } else {
+      setReport(null);
+      onToast("success", okText);
+    }
+    await refreshAfterWrite(paths);
+    if (hits.length > 0) setResolver({ repoPath: hits[0] });
+  };
+
+  /** Abort lists what goes away: every changed file's merge result. */
+  const runMergeAbort = async (repoPath: string) => {
+    const files = (statuses[repoPath] || []).map((e) => e.path);
+    const unique = [...new Set(files)];
+    const list =
+      unique
+        .slice(0, 10)
+        .map((f) => `• ${f}`)
+        .join("\n") +
+      (unique.length > 10 ? `\n${t("commit.rollbackCheckedMore", { count: unique.length - 10 })}` : "");
+    const ok = await confirm({
+      title: t("commit.abortMergeTitle"),
+      message: `${t("commit.abortMergeConfirm", { name: labelPath(repoPath), count: unique.length })}${list ? `\n${list}` : ""}`,
+      warning: t("commit.abortMergeWarn"),
+      confirmText: t("commit.abortMerge"),
+      icon: "danger",
+    });
+    if (!ok) return;
+    setBusyAction("merge");
+    try {
+      onToast("success", await invokeGitMergeAbort(repoPath));
+    } catch (e) {
+      onToast("error", formatInvokeError(e));
+    } finally {
+      setBusyAction(null);
+    }
+    await refreshAfterWrite([repoPath]);
+  };
+
+  const fillMergeMessage = async (repoPath: string) => {
+    try {
+      const state = await invokeGitMergeState(repoPath);
+      if (state.message) setMessage(state.message);
+    } catch {
+      /* the user can still type one */
+    }
+  };
+
+  // A merge that just became committable gets git's merge message once, if the box is empty.
+  const mergeMessageFilled = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!active || amend) return;
+    const next = mergeCommitTargets.find((p) => !mergeMessageFilled.current.has(pathKey(p)));
+    if (!next) return;
+    mergeMessageFilled.current.add(pathKey(next));
+    if (!message.trim()) void fillMergeMessage(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, amend, mergeCommitTargets]);
 
   const toggleCollapsed = (repoPath: string) => {
     setCollapsed((prev) => {
@@ -938,8 +955,9 @@ function CommitChangelist({
     });
   };
 
-  const toggleRepo = (repoPath: string, entries: GitStatusEntry[]) => {
+  const toggleRepo = (repoPath: string, allEntries: GitStatusEntry[]) => {
     setCurrentGitRepo(repoPath);
+    const entries = allEntries.filter((e) => e.group !== "conflicted");
     const cur = selected.get(repoPath);
     const allSelected =
       cur && cur.size === entries.length && entries.every((e) => cur.has(selectionKey(e)));
@@ -962,18 +980,11 @@ function CommitChangelist({
     });
   };
 
-  const loadDiff = async (repoPath: string, entry: GitStatusEntry) => {
-    const staged = entry.group === "staged";
+  const reloadDiff = async (target: DiffTarget, ignoreWhitespace = ignoreWs) => {
     const gen = ++diffGen.current;
-    setDiffTarget({
-      repoPath,
-      filePath: entry.path,
-      staged,
-      wholeFile: entry.group === "untracked",
-    });
     setDiffLoading(true);
     try {
-      const text = await invokeGitDiff(repoPath, entry.path, staged);
+      const text = await invokeGitDiff(target.repoPath, target.filePath, target.staged, ignoreWhitespace);
       if (gen !== diffGen.current) return;
       setDiffText(text);
     } catch (e) {
@@ -984,21 +995,37 @@ function CommitChangelist({
     }
   };
 
+  const loadDiff = async (repoPath: string, entry: GitStatusEntry) => {
+    const target: DiffTarget = {
+      repoPath,
+      filePath: entry.path,
+      staged: entry.group === "staged",
+      wholeFile: entry.group === "untracked",
+    };
+    setDiffTarget(target);
+    await reloadDiff(target);
+  };
+
+  /** The changelist row the diff shows (for its status badge). */
+  const diffEntry = diffTarget
+    ? (statuses[diffTarget.repoPath] || []).find(
+        (e) => e.path === diffTarget.filePath && (e.group === "staged") === diffTarget.staged
+      )
+    : undefined;
+
   const applyHunks = async (patch: string) => {
     if (!diffTarget || busy) return;
     const target = diffTarget;
-    setBusy(true);
+    setBusyAction("hunk");
     try {
       const text = await invokeGitApplyCached(target.repoPath, patch, target.staged);
       onToast("success", text);
       await refreshAfterWrite([target.repoPath]);
-      const gen = ++diffGen.current;
-      const next = await invokeGitDiff(target.repoPath, target.filePath, target.staged);
-      if (gen === diffGen.current) setDiffText(next);
+      await reloadDiff(target);
     } catch (e) {
       onToast("error", formatInvokeError(e));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -1051,7 +1078,7 @@ function CommitChangelist({
       onToast("error", t("commit.changelistPickRepo"));
       return;
     }
-    setBusy(true);
+    setBusyAction("stash");
     try {
       const text = await invokeGitStashPush(currentGitRepo, message.trim() || undefined);
       onToast("success", text);
@@ -1061,13 +1088,13 @@ function CommitChangelist({
     } catch (e) {
       onToast("error", formatInvokeError(e));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const runStashPop = async (index: number) => {
     if (!currentGitRepo) return;
-    setBusy(true);
+    setBusyAction("stash");
     try {
       const text = await invokeGitStashPop(currentGitRepo, index);
       onToast("success", text);
@@ -1076,7 +1103,7 @@ function CommitChangelist({
     } catch (e) {
       onToast("error", formatInvokeError(e));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -1089,7 +1116,7 @@ function CommitChangelist({
       icon: "danger",
     });
     if (!ok) return;
-    setBusy(true);
+    setBusyAction("stash");
     try {
       const text = await invokeGitStashDrop(currentGitRepo, index);
       onToast("success", text);
@@ -1097,7 +1124,7 @@ function CommitChangelist({
     } catch (e) {
       onToast("error", formatInvokeError(e));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -1154,7 +1181,7 @@ function CommitChangelist({
     if (!ok) return;
 
     holdRepos([...new Set(pairs.map(({ repoPath }) => repoPath))]);
-    setBusy(true);
+    setBusyAction("rollback");
     setProgress({ done: 0, total: pairs.length });
     let okCount = 0;
     let fail = 0;
@@ -1181,7 +1208,7 @@ function CommitChangelist({
       fail = result.fail;
       errors = result.errors;
     } finally {
-      setBusy(false);
+      setBusyAction(null);
       setProgress(null);
       releaseRepos([...new Set(pairs.map(({ repoPath }) => repoPath))]);
     }
@@ -1195,6 +1222,7 @@ function CommitChangelist({
     if (fail > 0) {
       const detail = errors[0] ? `: ${truncateError(errors[0])}` : "";
       onToast("error", `${t("commit.rollbackCheckedDone", { ok: okCount, fail })}${detail}`);
+      setReport({ title: t("commit.rollbackCheckedDone", { ok: okCount, fail }), lines: errors });
     } else {
       onToast("success", t("commit.rollbackCheckedDone", { ok: okCount, fail: 0 }));
     }
@@ -1339,6 +1367,21 @@ function CommitChangelist({
     let repos = [...selected.entries()].filter(
       ([repoPath, files]) => files.size > 0 && scopedPathKeys.has(pathKey(repoPath))
     );
+    if (selectedBlocked.length > 0) {
+      onToast("error", t("commit.conflictBlocked", { name: labelPath(selectedBlocked[0]) }));
+      return;
+    }
+    if (amend && mergeCommitTargets.length > 0) {
+      onToast("error", t("commit.amendDuringMerge"));
+      return;
+    }
+    // A resolved merge is concluded by committing, even with nothing ticked.
+    if (!amend) {
+      for (const path of mergeCommitTargets) {
+        if (!repos.some(([p]) => pathKey(p) === pathKey(path))) repos.push([path, new Set<string>()]);
+      }
+    }
+    const isMerging = (repoPath: string) => mergeCommitTargets.some((p) => pathKey(p) === pathKey(repoPath));
     if (amend && repos.length > 1) {
       onToast("error", t("commit.amendOneRepo"));
       return;
@@ -1486,7 +1529,8 @@ function CommitChangelist({
     // Partial commit will unstage unchecked staged files — warn once
     const partialUnstage: { path: string; files: string[] }[] = [];
     for (const [repoPath, fileSet] of repos) {
-      if (fileSet.size === 0) continue;
+      // Inside a merge the index *is* the resolution: nothing gets unstaged there.
+      if (fileSet.size === 0 || isMerging(repoPath)) continue;
       const entries = statuses[repoPath] || [];
       const selectedSet = new Set(fileSet);
       const toUnstage = entries
@@ -1521,7 +1565,7 @@ function CommitChangelist({
 
     // Pause background refresh for these repos until the batch settles.
     holdRepos(targetPaths);
-    setBusy(true);
+    setBusyAction(withPush ? "commitPush" : "commit");
     setProgress({ done: 0, total: targetPaths.length });
     let ok = 0;
     let fail = 0;
@@ -1533,12 +1577,15 @@ function CommitChangelist({
         async (repoPath) => {
           if (withPush) noteRepo(repoPath);
           const files = selected.get(repoPath) || new Set<string>();
-          if (files.size === 0 && !amend) return;
+          const merging = isMerging(repoPath);
+          if (files.size === 0 && !amend && !merging) return;
           const entries = statuses[repoPath] || [];
           const selectedEntries = entries.filter((e) => files.has(selectionKey(e)));
-          const toUnstage = entries
-            .filter((e) => e.group === "staged" && !files.has(selectionKey(e)))
-            .map((e) => e.path);
+          const toUnstage = merging
+            ? []
+            : entries
+                .filter((e) => e.group === "staged" && !files.has(selectionKey(e)))
+                .map((e) => e.path);
           // Stage only unstaged/untracked rows. Staged-only rows stay as the
           // index version so unstaged hunks are not pulled in by `git add`.
           const toStage = [
@@ -1583,22 +1630,23 @@ function CommitChangelist({
       fail = result.fail;
       errors = result.errors;
     } finally {
-      setBusy(false);
+      setBusyAction(null);
       setProgress(null);
       releaseRepos(targetPaths);
     }
 
-    if (fail > 0) {
-      const detail = errors[0] ? `: ${truncateError(errors[0])}` : "";
-      onToast("error", `${t("commit.changelistDone", { ok, fail })}${detail}`);
-    } else {
-      onToast("success", t("commit.changelistDone", { ok, fail }));
+    if (fail === 0) {
       const prev = readStoredArray<string>(CL_RECENT_KEY).filter((item) => item !== msg);
       writeStoredArray(CL_RECENT_KEY, [msg, ...prev].slice(0, RECENT_LOCAL));
       setMessage("");
       setAmend(false);
     }
-    void refreshAfterWrite(targetPaths);
+    void finishBatch(
+      t("commit.changelistDone", { ok, fail }),
+      { ok, fail, errors },
+      t("commit.changelistDone", { ok, fail }),
+      targetPaths
+    );
   };
 
   const actionsRef = useRef({ runCommit, canCommit, busy, generating });
@@ -1629,7 +1677,7 @@ function CommitChangelist({
     const targetPaths = pushableRepos.map((p) => p.path);
     if (!(await confirmBatchPush(targetPaths))) return;
     holdRepos(targetPaths);
-    setBusy(true);
+    setBusyAction("push");
     setProgress({ done: 0, total: targetPaths.length });
     let ok = 0;
     let fail = 0;
@@ -1651,18 +1699,12 @@ function CommitChangelist({
       fail = result.fail;
       errors = result.errors;
     } finally {
-      setBusy(false);
+      setBusyAction(null);
       setProgress(null);
       releaseRepos(targetPaths);
     }
 
-    if (fail > 0) {
-      const detail = errors[0] ? `: ${truncateError(errors[0])}` : "";
-      onToast("error", `${t("commit.changelistDone", { ok, fail })}${detail}`);
-    } else {
-      onToast("success", t("commit.pushOk"));
-    }
-    void refreshAfterWrite(targetPaths);
+    void finishBatch(t("commit.changelistDone", { ok, fail }), { ok, fail, errors }, t("commit.pushOk"), targetPaths);
   };
 
   const runPull = async () => {
@@ -1672,18 +1714,24 @@ function CommitChangelist({
     }
     const targetPaths = pullableRepos.map((p) => p.path);
     holdRepos(targetPaths);
-    setBusy(true);
+    setBusyAction("pull");
     setProgress({ done: 0, total: targetPaths.length });
     let ok = 0;
     let fail = 0;
     let errors: string[] = [];
+    const diverged: string[] = [];
     try {
       const result = await mapPoolCounted(
         targetPaths,
         1,
         async (repoPath) => {
           noteRepo(repoPath);
-          await invokeGitPull(repoPath);
+          try {
+            await invokeGitPull(repoPath);
+          } catch (e) {
+            if (invokeErrorCode(e) === "GIT_DIVERGED") diverged.push(repoPath);
+            throw e;
+          }
         },
         {
           onProgress: (done, total) => setProgress((prev) => ({ done, total, label: prev?.label })),
@@ -1693,19 +1741,43 @@ function CommitChangelist({
       ok = result.ok;
       fail = result.fail;
       errors = result.errors;
+      // Fast-forward was impossible: merging is offered, never done unasked.
+      if (diverged.length > 0) {
+        setBusyAction(null);
+        const merge = await confirm({
+          title: t("commit.pullDivergedTitle"),
+          message: t("commit.pullDivergedMessage", { names: diverged.map(labelPath).join("、") }),
+          confirmText: t("commit.pullDivergedMerge"),
+          icon: "warning",
+        });
+        if (merge) {
+          setBusyAction("pull");
+          setProgress({ done: 0, total: diverged.length });
+          const merged = await mapPoolCounted(
+            diverged,
+            1,
+            async (repoPath) => {
+              noteRepo(repoPath);
+              await mergePull(repoPath);
+            },
+            {
+              onProgress: (done, total) => setProgress((prev) => ({ done, total, label: prev?.label })),
+              describeError: (repoPath, e) => `${labelPath(repoPath)}：${formatInvokeError(e)}`,
+            }
+          );
+          ok += merged.ok;
+          fail = fail - diverged.length + merged.fail;
+          const divergedLabels = new Set(diverged.map((p) => `${labelPath(p)}：`));
+          errors = [...errors.filter((line) => ![...divergedLabels].some((l) => line.startsWith(l))), ...merged.errors];
+        }
+      }
     } finally {
-      setBusy(false);
+      setBusyAction(null);
       setProgress(null);
       releaseRepos(targetPaths);
     }
 
-    if (fail > 0) {
-      const detail = errors[0] ? `: ${truncateError(errors[0])}` : "";
-      onToast("error", `${t("commit.changelistDone", { ok, fail })}${detail}`);
-    } else {
-      onToast("success", t("commit.pullOk"));
-    }
-    void refreshAfterWrite(targetPaths);
+    void finishBatch(t("commit.changelistDone", { ok, fail }), { ok, fail, errors }, t("commit.pullOk"), targetPaths);
   };
 
   const statusLabel = (code: string) => {
@@ -1715,6 +1787,7 @@ function CommitChangelist({
     if (c === "R") return t("commit.statusRenamed");
     if (c === "C") return t("commit.statusCopied");
     if (c === "?" || c === "!") return t("commit.statusUntracked");
+    if (c === "U") return t("commit.statusConflict");
     return t("commit.statusModified");
   };
 
@@ -1747,8 +1820,13 @@ function CommitChangelist({
     const summary = summaries[p.path];
     const isCollapsed = collapsed.has(p.path);
     const sel = selected.get(p.path) || new Set<string>();
-    const allSelected = entries.length > 0 && entries.every((e) => sel.has(selectionKey(e)));
-    const someSelected = entries.some((e) => sel.has(selectionKey(e)));
+    const selectable = entries.filter((e) => e.group !== "conflicted");
+    const allSelected = selectable.length > 0 && selectable.every((e) => sel.has(selectionKey(e)));
+    const someSelected = selectable.some((e) => sel.has(selectionKey(e)));
+    // Conflicts first: they are what blocks the repo.
+    const ordered = [...entries].sort(
+      (a, b) => Number(b.group === "conflicted") - Number(a.group === "conflicted")
+    );
     const Chevron = isCollapsed ? ChevronRight : ChevronDown;
     const isCurrent = currentGitRepo === p.path;
 
@@ -1787,16 +1865,22 @@ function CommitChangelist({
         </div>
         {!isCollapsed && (
           <ul className="cl-file-list">
-            {entries.map((e) => {
+            {ordered.map((e) => {
               const code = statusCode(e);
-              const checked = sel.has(selectionKey(e));
+              const conflicted = e.group === "conflicted";
+              const checked = !conflicted && sel.has(selectionKey(e));
               const isDiff =
                 diffTarget?.repoPath === p.path && diffTarget.filePath === e.path;
               return (
                 <li
                   key={fileKey(p.path, e.path, e.group)}
-                  className={`cl-file ${isDiff ? "is-selected" : ""}`}
+                  className={`cl-file ${isDiff ? "is-selected" : ""}${conflicted ? " is-conflict" : ""}`}
+                  title={conflicted ? t("commit.conflictFileTip") : undefined}
                   onClick={() => {
+                    if (conflicted) {
+                      setResolver({ repoPath: p.path, file: e.path });
+                      return;
+                    }
                     if (!checked) toggleFile(p.path, e);
                     void loadDiff(p.path, e);
                   }}
@@ -1804,7 +1888,7 @@ function CommitChangelist({
                   <IndeterminateCheckbox
                     checked={checked}
                     indeterminate={false}
-                    disabled={busy}
+                    disabled={busy || conflicted}
                     onChange={() => toggleFile(p.path, e)}
                   />
                   <span className={`git-file-badge ${statusClass(code)}`}>{statusLabel(code)}</span>
@@ -1827,6 +1911,7 @@ function CommitChangelist({
                   <button
                     type="button"
                     className="btn commit-icon-btn cl-file-discard"
+                    hidden={conflicted}
                     disabled={busy}
                     title={t("commit.discard")}
                     onClick={(ev) => {
@@ -1877,8 +1962,9 @@ function CommitChangelist({
         <span className="repos-batch-count">
           {t("commit.changelistSelected", { count: selectedCount })}
         </span>
-        {progress && (
+        {progress && busyAction && (
           <span className="runtime-muted">
+            {t(`commit.running.${busyAction}`)}{" "}
             {t("commit.changelistRunning", {
               done: progress.done,
               total: progress.total,
@@ -1898,6 +1984,61 @@ function CommitChangelist({
           />
         </div>
       </div>
+
+      {operationRepos.length > 0 && (
+        <div className="cl-op-banners">
+          {operationRepos.map((p) => {
+            const s = summaries[p.path];
+            const count = s?.conflictCount ?? 0;
+            const name = labelPath(p.path);
+            const ready = mergeCommitTargets.includes(p.path);
+            const text = ready
+              ? t("commit.mergeReadyBanner", { name })
+              : s?.operation === "merge"
+                ? t("commit.mergeBanner", { name, count })
+                : s?.operation
+                  ? t("commit.opBanner", { name, op: t(`commit.op.${s.operation}`) })
+                  : t("commit.conflictOnlyBanner", { name, count });
+            return (
+              <div key={p.path} className={`cl-op-banner${ready ? " is-ready" : ""}`} role="status">
+                <GitMerge size={14} aria-hidden />
+                <span className="cl-op-text">{text}</span>
+                {count > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-small"
+                    disabled={busy}
+                    onClick={() => setResolver({ repoPath: p.path })}
+                  >
+                    {t("commit.resolveConflicts")}
+                  </button>
+                )}
+                {ready && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={busy || generating}
+                    onClick={() => void fillMergeMessage(p.path)}
+                  >
+                    {t("commit.useMergeMessage")}
+                  </button>
+                )}
+                {s?.operation === "merge" && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={busy}
+                    onClick={() => void runMergeAbort(p.path)}
+                  >
+                    {busyAction === "merge" && <Loader2 size={13} className="spin" />}
+                    {t("commit.abortMerge")}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="cl-split">
         <div className="cl-split-tree">
@@ -1991,48 +2132,47 @@ function CommitChangelist({
             <div className="cl-panel cl-tree">{dirtyRepos.map(renderRepo)}</div>
           )}
         </div>
-        <div className="cl-panel cl-split-diff git-diff-panel">
-          <div className="cl-diff-head">
-            <span
-              className="cl-diff-head-title"
-              title={diffTarget ? absoluteFilePath(diffTarget.repoPath, diffTarget.filePath) : undefined}
-            >
-              {diffTarget
-                ? t("commit.diffTitle", { path: diffTarget.filePath })
-                : t("commit.diffEmpty")}
-            </span>
-            {diffTarget && (
-              <button
-                type="button"
-                className="btn commit-icon-btn"
-                onClick={closeDiff}
-                title={t("commit.diffClose")}
-                aria-label={t("commit.diffClose")}
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-          {diffLoading ? (
-            <div className="cl-diff-empty">
-              <Loader2 size={14} className="spin" /> {t("commit.diffLoading")}
-            </div>
-          ) : diffText ? (
-            <DiffPreview
-              text={diffText}
-              wholeFile={!!diffTarget?.wholeFile}
-              staged={!!diffTarget?.staged}
-              busy={busy}
-              onApply={(patch) => void applyHunks(patch)}
-            />
-          ) : (
-            <div className="cl-diff-empty">
-              <div className="cl-empty-title">{t("commit.changelistDiffIdle")}</div>
-              <div className="cl-empty-hint runtime-muted">{t("commit.changelistDiffHint")}</div>
-            </div>
-          )}
-        </div>
+        <DiffViewer
+          active={active}
+          target={diffTarget}
+          text={diffText}
+          loading={diffLoading}
+          statusLabel={diffEntry ? statusLabel(statusCode(diffEntry)) : undefined}
+          statusClass={diffEntry ? statusClass(statusCode(diffEntry)) : undefined}
+          busy={busy}
+          ignoreWhitespace={ignoreWs}
+          onIgnoreWhitespace={(on) => {
+            setIgnoreWs(on);
+            writeStoredString(CL_IGNORE_WS_KEY, on ? "1" : "0");
+            if (diffTarget) void reloadDiff(diffTarget, on);
+          }}
+          onApply={(patch) => void applyHunks(patch)}
+          onClose={closeDiff}
+        />
       </div>
+
+      {report && (
+        <div className="cl-report" role="alert">
+          <div className="cl-report-head">
+            <AlertTriangle size={14} aria-hidden />
+            <span className="cl-report-title">{report.title}</span>
+            <button
+              type="button"
+              className="btn commit-icon-btn"
+              onClick={() => setReport(null)}
+              title={t("commit.reportClose")}
+              aria-label={t("commit.reportClose")}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <ul className="cl-report-list">
+            {report.lines.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="cl-commit-bar">
         <div className="cl-composer">
@@ -2187,8 +2327,8 @@ function CommitChangelist({
               onClick={() => void runRollbackChecked()}
               title={selectedCount > 0 ? t("commit.rollbackCheckedTitle") : t("commit.rollbackCheckedNeedFiles")}
             >
-              {busy ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
-              {t("commit.rollbackChecked")}
+              {busyAction === "rollback" ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
+              {busyAction === "rollback" ? runningLabel("rollback") : t("commit.rollbackChecked")}
             </button>
             {onUndoLastCommit ? (
               <button
@@ -2236,8 +2376,8 @@ function CommitChangelist({
                   : t("commit.changelistPullNeedBehind")
               }
             >
-              {busy ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
-              {t("commit.changelistPull")}
+              {busyAction === "pull" ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+              {busyAction === "pull" ? runningLabel("pull") : t("commit.changelistPull")}
             </button>
             <button
               type="button"
@@ -2246,8 +2386,14 @@ function CommitChangelist({
               title={commitBlockReason ?? t("commit.changelistShortcutCommit")}
               onClick={() => void runCommit(false)}
             >
-              {busy ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-              {amend ? t("commit.commitAmendAction") : t("commit.changelistCommit")}
+              {busyAction === "commit" ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+              {busyAction === "commit"
+                ? runningLabel("commit")
+                : amend
+                  ? t("commit.commitAmendAction")
+                  : mergeCommitTargets.length > 0
+                    ? t("commit.commitMerge")
+                    : t("commit.changelistCommit")}
             </button>
             <button
               type="button"
@@ -2266,8 +2412,8 @@ function CommitChangelist({
                   : t("commit.changelistPushNeedAhead")
               }
             >
-              {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
-              {t("commit.changelistPush")}
+              {busyAction === "push" ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
+              {busyAction === "push" ? runningLabel("push") : t("commit.changelistPush")}
             </button>
             </div>
             <button
@@ -2277,12 +2423,32 @@ function CommitChangelist({
               title={commitBlockReason ?? t("commit.changelistShortcutCommitPush")}
               onClick={() => void runCommit(true)}
             >
-              {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
-              {amend ? t("commit.commitAmendPush") : t("commit.changelistCommitPush")}
+              {busyAction === "commitPush" ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
+              {busyAction === "commitPush"
+                ? runningLabel("commitPush")
+                : amend
+                  ? t("commit.commitAmendPush")
+                  : mergeCommitTargets.length > 0
+                    ? t("commit.commitMergePush")
+                    : t("commit.changelistCommitPush")}
             </button>
           </div>
         </div>
       </div>
+      {resolver && (
+        <MergeResolver
+          repoPath={resolver.repoPath}
+          repoName={labelPath(resolver.repoPath)}
+          initialFile={resolver.file}
+          onToast={onToast}
+          onClose={() => {
+            const repoPath = resolver.repoPath;
+            setResolver(null);
+            void refreshAfterWrite([repoPath]);
+          }}
+          onResolved={() => void refreshAfterWrite([resolver.repoPath])}
+        />
+      )}
     </div>
   );
 }

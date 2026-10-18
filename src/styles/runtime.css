@@ -459,13 +459,13 @@
 }
 
 .git-status-r {
-  color: #38bdf8;
-  background: color-mix(in srgb, #38bdf8 16%, transparent);
+  color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .git-status-u {
-  color: #a78bfa;
-  background: color-mix(in srgb, #a78bfa 16%, transparent);
+  color: var(--text-2);
+  background: var(--overlay-2);
 }
 
 .git-file-path {
@@ -593,50 +593,6 @@
 
 .git-diff-panel {
   margin-bottom: 12px;
-}
-
-.git-diff-pre {
-  margin: 0;
-  max-height: 280px;
-  overflow: auto;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--bg-0);
-  border: 1px solid var(--border-subtle);
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-1);
-}
-
-.git-diff-pre .diff-line {
-  display: block;
-  width: 100%;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-  padding: 0 4px;
-  margin: 0 -4px;
-}
-
-.git-diff-pre .diff-line-add {
-  color: #8fbf8a;
-  background: color-mix(in srgb, #3d7a45 18%, transparent);
-}
-
-.git-diff-pre .diff-line-del {
-  color: #d98989;
-  background: color-mix(in srgb, #a14a4a 18%, transparent);
-}
-
-.git-diff-pre .diff-line-hunk {
-  color: #7aa3c4;
-  background: color-mix(in srgb, #4a6d8c 12%, transparent);
-}
-
-.git-diff-pre .diff-line-meta {
-  color: var(--text-3);
 }
 
 .git-workbench-actions {

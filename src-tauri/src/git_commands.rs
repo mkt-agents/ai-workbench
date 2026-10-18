@@ -1667,12 +1667,22 @@ fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
     Ok(GitBranchList { current, local, remote })
 }
 
-fn git_diff_sync(repo_path: String, file_path: String, staged: bool) -> Result<String, String> {
+fn git_diff_sync(
+    repo_path: String,
+    file_path: String,
+    staged: bool,
+    ignore_whitespace: bool,
+) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
     validate_repo_rel_path(&file_path)?;
+    // `-w` is a view option only: such a diff no longer applies as a patch.
+    let ws: &[&str] = if ignore_whitespace { &["-w"] } else { &[] };
 
     if staged {
-        let output = git_output(&repo_path, &["diff", "--cached", "--", &file_path])?;
+        let mut args = vec!["diff", "--cached"];
+        args.extend_from_slice(ws);
+        args.extend_from_slice(&["--", &file_path]);
+        let output = git_output(&repo_path, &args)?;
         let code = output.status.code().unwrap_or(1);
         if code != 0 && code != 1 {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1719,7 +1729,10 @@ fn git_diff_sync(repo_path: String, file_path: String, staged: bool) -> Result<S
         });
     }
 
-    let output = git_output(&repo_path, &["diff", "--", &file_path])?;
+    let mut args = vec!["diff"];
+    args.extend_from_slice(ws);
+    args.extend_from_slice(&["--", &file_path]);
+    let output = git_output(&repo_path, &args)?;
     let code = output.status.code().unwrap_or(1);
     if code != 0 && code != 1 {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2206,8 +2219,13 @@ pub async fn git_list_branches(path: String) -> Result<GitBranchList, String> {
 }
 
 #[tauri::command]
-pub async fn git_diff(path: String, file_path: String, staged: bool) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || git_diff_sync(path, file_path, staged))
+pub async fn git_diff(
+    path: String,
+    file_path: String,
+    staged: bool,
+    ignore_whitespace: Option<bool>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_diff_sync(path, file_path, staged, ignore_whitespace.unwrap_or(false)))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
