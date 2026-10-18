@@ -17,7 +17,7 @@
   "emptyInput": "请输入问题",
   "placeholder": "问一句…（Enter 发送 · Shift+Enter 换行）",
   "emptyHint": "从一句问题开始",
-  "emptyHintSub": "提到代码、报错、仓库时会自动带上项目上下文；其它问题按普通对话回答",
+  "emptyHintSub": "在输入框左上角选工作区，AI 会在里面读代码、查 git、改文件；能做到哪一步看左下角的权限",
   "send": "发送",
   "stop": "停止",
   "busyOtherTab": "AI 助手仍在执行",
@@ -85,7 +85,7 @@
     "allowTurnTip": "这一轮里同一类操作（比如都是 git add、都是删除文件）不再询问；git 按子命令分，允许 git add 不等于允许 git pull",
     "deny": "拒绝",
     "detailToggle": "展开 / 收起输出",
-    "noRepo": "这一档要先选一个仓库：点左上角选择，或在 Git 页打开一个仓库。",
+    "noRepo": "这一档要先选一个工作区或仓库：点输入框左上角选择，或在 Git 页打开一个仓库。",
     "tool": {
       "read_file": "读取",
       "list_dir": "列出",
@@ -154,7 +154,7 @@
   "snippetSearch": "搜索片段…",
   "snippetEmpty": "无匹配片段",
   "truncated": "上下文已截断",
-  "showContext": "预览项目上下文",
+  "showContext": "预览附带摘要",
   "fillParams": "填写参数",
   "insertSnippet": "插入输入框",
   "cancel": "取消",
@@ -169,8 +169,8 @@
   "exportSession": "导出对话",
   "focusNSelected": "已选 {{n}} 个项目",
   "focusClear": "清除",
-  "focusEmpty": "暂无候选项目，可扫描文件夹",
-  "focusScanFolder": "扫描文件夹…",
+  "focusEmpty": "还没有工作区，点右上角添加文件夹",
+  "focusScanFolder": "添加文件夹（仓库，或包含多个仓库的工作区）",
   "focusScanEmpty": "该文件夹下未发现 Git 仓库",
   "exported": "已导出",
   "turnsCount": "{{n}} 轮",
@@ -214,34 +214,38 @@
   },
   "taskClear": "取消本次任务",
   "chip": {
-    "workspace": "工作区",
+    "workspace": "仓库与分支",
     "git": "Git 身份",
     "dirty": "改动摘要"
   },
   "chipTip": {
-    "workspace": "项目模式下附带仓库列表与当前分支",
-    "git": "项目模式下附带当前 Git 用户名与邮箱",
-    "dirty": "项目模式下附带所选仓库的未提交改动摘要"
+    "workspace": "附带所选仓库列表与当前分支",
+    "git": "附带当前 Git 用户名、邮箱和最近提交",
+    "dirty": "附带所选仓库的未提交改动摘要"
   },
   "ctx": {
-    "title": "选择项目上下文",
+    "title": "选择工作区",
     "autoRepo": "自动 · {{name}}",
-    "noRepo": "未关联项目",
-    "reposHead": "要分析的仓库 / 服务",
+    "noRepo": "未选工作区",
+    "reposHead": "工作区",
     "groupAll": "{{name}} · 全部",
     "groupSome": "{{name}} · {{n}} 个服务",
     "groupOne": "{{name}} / {{svc}}",
-    "nRepos": "{{n}} 个仓库",
-    "otherGroup": "其它仓库",
-    "filter": "筛选仓库或服务…",
-    "selectAll": "选中整个仓库（之后新增的服务也会自动包含）",
-    "partsHead": "附带内容",
-    "note": "这些内容只在「项目」模式发送。",
-    "previewEmpty": "当前没有可附带的项目上下文",
+    "nRepos": "{{n}} 个工作区",
+    "otherGroup": "单独仓库",
+    "filter": "筛选工作区或服务…",
+    "selectAll": "选中整个工作区（之后新增的服务也会自动包含）",
+    "selectStandalone": "不属于任何工作区的仓库",
+    "singleNote": "当前档位一次只在一个工作区里工作；选中整个工作区时，AI 可以在其中所有服务里读写。",
+    "keptOne": "当前档位一次只在一个工作区里工作，已保留「{{name}}」",
+    "partsHead": "提问时附带",
+    "partsToggle": "提问时附带的摘要",
+    "note": "AI 会自己读文件、查 git；这里是每次提问先附上的摘要，能少查一轮。只读权限下，只有问题涉及项目时才附带。",
+    "previewEmpty": "当前没有可附带的摘要",
     "resize": "拖动调整高度",
     "includeOn": "已带上 {{name}} · 单击改为不带",
-    "includeOff": "未带项目 · 单击带上",
-    "includeLocked": "当前档位会改动仓库，始终带上 {{name}}"
+    "includeOff": "未带工作区 · 单击带上",
+    "includeLocked": "当前档位在 {{name}} 里工作，始终带上"
   },
   "route": {
     "reason": {
@@ -264,7 +268,7 @@
     "tokensEst": "~{{n}} tok"
   },
   "part": {
-    "workspace": "工作区",
+    "workspace": "仓库与分支",
     "git": "Git 身份",
     "dirty": "改动摘要"
   }

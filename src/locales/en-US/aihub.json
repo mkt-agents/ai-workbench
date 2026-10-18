@@ -17,7 +17,7 @@
   "emptyInput": "Enter a question",
   "placeholder": "Ask something… (Enter to send · Shift+Enter for newline)",
   "emptyHint": "Start with a question",
-  "emptyHintSub": "Questions about code, errors or repos pull in project context automatically; everything else is a plain chat",
+  "emptyHintSub": "Pick a workspace at the top left of the input: the AI reads code, checks git and edits files there, as far as the permission at the bottom left allows",
   "send": "Send",
   "stop": "Stop",
   "busyOtherTab": "AI Assistant is still running",
@@ -85,7 +85,7 @@
     "allowTurnTip": "Don't ask again this turn for the same kind of action (e.g. all git add, all file deletions). Git is grouped by subcommand: allowing git add doesn't allow git pull",
     "deny": "Deny",
     "detailToggle": "Show / hide output",
-    "noRepo": "This level needs a repo: pick one at the top left, or open a repo on the Git page.",
+    "noRepo": "This level needs a workspace or repo: pick one at the top left of the input, or open a repo on the Git page.",
     "tool": {
       "read_file": "Read",
       "list_dir": "List",
@@ -154,7 +154,7 @@
   "snippetSearch": "Search snippets…",
   "snippetEmpty": "No matching snippets",
   "truncated": "Context truncated",
-  "showContext": "Preview project context",
+  "showContext": "Preview attached summary",
   "fillParams": "Fill parameters",
   "insertSnippet": "Insert into input",
   "cancel": "Cancel",
@@ -170,8 +170,8 @@
   "exported": "Exported",
   "focusNSelected": "{{n}} repos selected",
   "focusClear": "Clear",
-  "focusEmpty": "No repos yet — scan a folder",
-  "focusScanFolder": "Scan folder…",
+  "focusEmpty": "No workspaces yet — add a folder at the top right",
+  "focusScanFolder": "Add folder (a repo, or a workspace holding several repos)",
   "focusScanEmpty": "No git repos found in that folder",
   "turnsCount": "{{n}} turns",
   "justNow": "just now",
@@ -214,34 +214,38 @@
   },
   "taskClear": "Cancel this task",
   "chip": {
-    "workspace": "Workspace",
+    "workspace": "Repos & branches",
     "git": "Git identity",
     "dirty": "Changes"
   },
   "chipTip": {
-    "workspace": "Project mode: attach repo list and current branches",
-    "git": "Project mode: attach current Git user name and email",
-    "dirty": "Project mode: attach uncommitted changes of the selected repos"
+    "workspace": "Attach the selected repos and their current branches",
+    "git": "Attach the current Git user name, email and recent commits",
+    "dirty": "Attach a summary of uncommitted changes in the selected repos"
   },
   "ctx": {
-    "title": "Choose project context",
+    "title": "Choose workspace",
     "autoRepo": "Auto · {{name}}",
-    "noRepo": "No project",
-    "reposHead": "Workspaces / services to analyze",
+    "noRepo": "No workspace",
+    "reposHead": "Workspace",
     "groupAll": "{{name}} · all",
     "groupSome": "{{name}} · {{n}} services",
     "groupOne": "{{name}} / {{svc}}",
     "nRepos": "{{n}} workspaces",
-    "otherGroup": "Other repos",
+    "otherGroup": "Standalone repos",
     "filter": "Filter workspaces or services…",
     "selectAll": "Select the whole workspace (services added later are included too)",
-    "partsHead": "Attach",
-    "note": "These are only sent in Project mode.",
-    "previewEmpty": "No project context to attach right now",
+    "selectStandalone": "Repos that belong to no workspace",
+    "singleNote": "This level works in one workspace at a time; with the whole workspace selected, the AI can read and edit every service in it.",
+    "keptOne": "This level works in one workspace at a time — kept \"{{name}}\"",
+    "partsHead": "Attach with each question",
+    "partsToggle": "Summaries attached with each question",
+    "note": "The AI reads files and checks git on its own; these summaries go in up front to save a round. With read-only permission they are attached only when the question is about the project.",
+    "previewEmpty": "Nothing to attach right now",
     "resize": "Drag to resize",
     "includeOn": "Including {{name}} · click to leave out",
-    "includeOff": "No project context · click to include",
-    "includeLocked": "This level changes the repo, so {{name}} is always included"
+    "includeOff": "No workspace · click to include",
+    "includeLocked": "This level works in {{name}}, so it is always included"
   },
   "route": {
     "reason": {
@@ -264,7 +268,7 @@
     "tokensEst": "~{{n}} tok"
   },
   "part": {
-    "workspace": "Workspace",
+    "workspace": "Repos & branches",
     "git": "Git identity",
     "dirty": "Changes"
   }

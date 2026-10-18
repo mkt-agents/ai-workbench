@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronRight, Eye, FolderGit2, FolderSearch, Minus, Search, X } from "lucide-react";
+import { Check, ChevronRight, Eye, FolderGit2, FolderPlus, Minus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { AiHubChips } from "../../core/types";
 import { readStoredString, writeStoredString } from "../../core/localState";
 import { pathKey } from "../../core/pathUtils";
@@ -8,7 +8,7 @@ import { groupState, isServiceSelected } from "./repoSelection";
 import type { PickerGroup } from "./repoSelection";
 
 const PART_KEYS: (keyof AiHubChips)[] = ["dirty", "git", "workspace"];
-const FILTER_MIN_REPOS = 8;
+const CTX_PARTS_KEY = "qa-ctx-parts-open";
 const CTX_HEIGHT_KEY = "qa-ctx-pop-height";
 const CTX_HEIGHT_MIN = 300;
 const CTX_HEIGHT_DEFAULT = 460;
@@ -36,6 +36,8 @@ type Props = {
   onClear: () => void;
   onScanFolder: () => void;
   scanning: boolean;
+  /** Edit levels: one workspace (or standalone repo) at a time. */
+  single: boolean;
   chips: AiHubChips;
   setChip: (key: keyof AiHubChips, value: boolean) => void;
   onPreview: () => void;
@@ -51,17 +53,25 @@ type Props = {
 };
 
 /**
- * One place for "what project context a project-mode question carries":
- * which workspaces / services (empty = current repo) and which parts (changes /
- * commits / workspace). Plain-chat questions ignore this picker.
+ * Where the agent works: a workspace (folder of service repos), some of its
+ * services, or a standalone repo (empty = current repo). Below it, the summaries
+ * attached up front (changes / git identity / repos and branches).
  */
 export default function ContextPicker(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     open, onToggleOpen, groups, selection, label, currentRepo, onToggleGroup, onToggleService,
-    onClear, onScanFolder, scanning, chips, setChip, onPreview, previewLoading,
+    onClear, onScanFolder, scanning, single, chips, setChip, onPreview, previewLoading,
     included, pinned, locked, includeTip, onToggleInclude,
   } = props;
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [partsOpen, setPartsOpen] = useState(() => readStoredString(CTX_PARTS_KEY) !== "0");
+  const togglePartsOpen = () => {
+    setPartsOpen((prev) => {
+      writeStoredString(CTX_PARTS_KEY, prev ? "0" : "1");
+      return !prev;
+    });
+  };
   // Flash the repo name when the auto decision flips between include / leave out.
   const [flashKey, setFlashKey] = useState(0);
   const prevIncludedRef = useRef(included);
@@ -74,8 +84,6 @@ export default function ContextPicker(props: Props) {
   const [popHeight, setPopHeight] = useState(readCtxHeight);
   const popHeightRef = useRef(popHeight);
   const resizeDrag = useRef<{ y: number; h: number } | null>(null);
-
-  const totalRepos = groups.reduce((n, g) => n + g.repos.length, 0);
 
   // Each time the popover opens, expand groups that matter right now.
   useEffect(() => {
@@ -94,6 +102,7 @@ export default function ContextPicker(props: Props) {
       ),
     );
     setQuery("");
+    setSearchOpen(false);
     // Only on open: later selection changes must not collapse what the user expanded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -178,32 +187,75 @@ export default function ContextPicker(props: Props) {
             onPointerUp={onResizeUp}
             onPointerCancel={onResizeUp}
           />
-          <div className="qa-focus-pop-head">
-            <span>{t("ctx.reposHead")}</span>
-            {selection.length > 0 && (
-              <button type="button" className="qa-mini-btn" onClick={onClear}>
-                <X size={12} /> {t("focusClear")}
+          <div className="qa-focus-pop-head qa-ctx-head">
+            <span className="qa-ctx-head-title">{t("ctx.reposHead")}</span>
+            <div className="qa-ctx-head-actions">
+              {selection.length > 0 && (
+                <button type="button" className="qa-mini-btn" onClick={onClear}>
+                  <X size={12} /> {t("focusClear")}
+                </button>
+              )}
+              <button
+                type="button"
+                className={`qa-ctx-head-btn${searchOpen ? " on" : ""}`}
+                onClick={() => {
+                  if (searchOpen) setQuery("");
+                  setSearchOpen(!searchOpen);
+                }}
+                title={t("ctx.filter")}
+                aria-label={t("ctx.filter")}
+                aria-pressed={searchOpen}
+              >
+                <Search size={14} />
               </button>
-            )}
+              <button
+                type="button"
+                className={`qa-ctx-head-btn${partsOpen ? " on" : ""}`}
+                onClick={togglePartsOpen}
+                title={t("ctx.partsToggle")}
+                aria-label={t("ctx.partsToggle")}
+                aria-pressed={partsOpen}
+              >
+                <SlidersHorizontal size={14} />
+              </button>
+              <button
+                type="button"
+                className="qa-ctx-head-btn"
+                onClick={onScanFolder}
+                disabled={scanning}
+                title={t("focusScanFolder")}
+                aria-label={t("focusScanFolder")}
+              >
+                {scanning ? <span className="qa-spinner" /> : <FolderPlus size={14} />}
+              </button>
+            </div>
           </div>
-          {totalRepos > FILTER_MIN_REPOS && (
+          {searchOpen && (
             <label className="qa-ctx-filter">
               <Search size={12} />
               <input
                 className="input-field"
                 value={query}
+                autoFocus
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Escape") return;
+                  e.stopPropagation();
+                  setQuery("");
+                  setSearchOpen(false);
+                }}
                 placeholder={t("ctx.filter")}
               />
             </label>
           )}
+          {single && <p className="qa-ctx-note">{t("ctx.singleNote")}</p>}
           <div className="qa-focus-list qa-ctx-tree">
             {visible.length === 0 && <span className="ai-hub-hint">{t("focusEmpty")}</span>}
             {visible.map((g) => {
               const full = groups.find((x) => x.key === g.key) || g;
               const state = groupState(full, selection);
               const isOpen = Boolean(q) || expanded.has(g.key);
-              const groupName = g.token ? g.name : t("ctx.otherGroup");
+              const groupName = g.path ? g.name : t("ctx.otherGroup");
               return (
                 <div key={g.key} className="qa-ctx-group-wrap">
                   <div className={`qa-ctx-group${state !== "none" ? " on" : ""}`}>
@@ -219,8 +271,8 @@ export default function ContextPicker(props: Props) {
                     <button
                       type="button"
                       className="qa-ctx-group-main"
-                      onClick={() => onToggleGroup(full)}
-                      title={g.path ? `${t("ctx.selectAll")} · ${g.path}` : t("ctx.selectAll")}
+                      onClick={() => (!g.path && single ? toggleExpanded(g.key) : onToggleGroup(full))}
+                      title={g.path ? `${t("ctx.selectAll")} · ${g.path}` : t("ctx.selectStandalone")}
                       aria-pressed={state === "all"}
                     >
                       <span
@@ -257,45 +309,39 @@ export default function ContextPicker(props: Props) {
               );
             })}
           </div>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small qa-focus-scan"
-            onClick={onScanFolder}
-            disabled={scanning}
-          >
-            {scanning ? <span className="qa-spinner" /> : <FolderSearch size={13} />}
-            {t("focusScanFolder")}
-          </button>
+          {partsOpen && (
+            <>
+              <div className="qa-ctx-divider" />
 
-          <div className="qa-ctx-divider" />
-
-          <div className="qa-focus-pop-head">
-            <span>{t("ctx.partsHead")}</span>
-          </div>
-          <div className="qa-ctx-parts">
-            {PART_KEYS.map((key) => (
+              <div className="qa-focus-pop-head">
+                <span>{t("ctx.partsHead")}</span>
+              </div>
+              <div className="qa-ctx-parts">
+                {PART_KEYS.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`qa-chip${chips[key] ? " on" : ""}`}
+                    aria-pressed={chips[key]}
+                    onClick={() => setChip(key, !chips[key])}
+                    title={t(`chipTip.${key}`)}
+                  >
+                    {t(`chip.${key}`)}
+                  </button>
+                ))}
+              </div>
+              <p className="qa-ctx-note">{t("ctx.note")}</p>
               <button
-                key={key}
                 type="button"
-                className={`qa-chip${chips[key] ? " on" : ""}`}
-                aria-pressed={chips[key]}
-                onClick={() => setChip(key, !chips[key])}
-                title={t(`chipTip.${key}`)}
+                className="btn btn-secondary btn-small qa-focus-scan"
+                onClick={onPreview}
+                disabled={previewLoading}
               >
-                {t(`chip.${key}`)}
+                {previewLoading ? <span className="qa-spinner" /> : <Eye size={13} />}
+                {t("showContext")}
               </button>
-            ))}
-          </div>
-          <p className="qa-ctx-note">{t("ctx.note")}</p>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small qa-focus-scan"
-            onClick={onPreview}
-            disabled={previewLoading}
-          >
-            {previewLoading ? <span className="qa-spinner" /> : <Eye size={13} />}
-            {t("showContext")}
-          </button>
+            </>
+          )}
         </div>
       )}
     </div>

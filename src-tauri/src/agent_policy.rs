@@ -310,23 +310,35 @@ pub(crate) fn filter_specs(specs: &Value, names: &[&str]) -> Vec<Value> {
 }
 
 /// `[Agent]` block appended to the system prompt.
-pub(crate) fn policy_text(permission: Permission, root: Option<&Path>, reach: Reach) -> String {
+///
+/// `services`: when `root` is a workspace folder (not itself a repository), the
+/// repositories inside it the user picked, as paths relative to `root`.
+pub(crate) fn policy_text(permission: Permission, root: Option<&Path>, services: &[String], reach: Reach) -> String {
     if !reach.tools {
         return String::new();
     }
     let anywhere = permission == Permission::Full;
-    let place = match (root, anywhere) {
+    let kind = if services.is_empty() { "repository" } else { "workspace folder" };
+    let mut place = match (root, anywhere) {
         (Some(root), false) => format!(
-            "You work in the repository at {}. Stay inside that directory; paths outside it are refused.",
+            "You work in the {kind} at {}. Stay inside that directory; paths outside it are refused.",
             root.display()
         ),
         (Some(root), true) => format!(
-            "The current repository is {}; relative paths resolve there. You may also use absolute paths anywhere on this computer.",
+            "The current {kind} is {}; relative paths resolve there. You may also use absolute paths anywhere on this computer.",
             root.display()
         ),
         (None, true) => "No repository is selected. Relative paths resolve against the user's home folder; absolute paths work anywhere on this computer.".into(),
         (None, false) => "No repository is selected, so you cannot read or change files or run commands. Answer directly; you may open AI Workbench pages or check processes and ports.".into(),
     };
+    if root.is_some() && !services.is_empty() {
+        place.push_str(&format!(
+            "\nThe workspace folder itself is not a git repository. It holds these repositories (services) the user picked: {}. \
+Each is its own repository: run git with cwd set to that service folder (or git -C <service>), and say which service \
+a change belongs to.",
+            services.join(", ")
+        ));
+    }
     let mode = match permission {
         Permission::Read => {
             "Permission: read only. You may read and search files and run read-only git commands \
@@ -520,7 +532,7 @@ mod tests {
     #[test]
     fn policy_tells_the_agent_to_hand_conflicts_over() {
         let reach = Reach { files: true, tools: true, vision: false };
-        let text = policy_text(Permission::Full, Some(Path::new("D:\\repo")), reach);
+        let text = policy_text(Permission::Full, Some(Path::new("D:\\repo")), &[], reach);
         assert!(text.contains("Merge conflicts belong to the user") && text.contains("提交页"));
         assert!(REVIEW_SYSTEM.contains("merge conflicts"));
     }
@@ -564,16 +576,28 @@ mod tests {
     fn policy_mentions_level_reach_and_computer() {
         let root = std::env::temp_dir();
         let files = Reach { files: true, tools: true, vision: false };
-        assert!(policy_text(Permission::Read, Some(&root), files).contains("read only"));
-        assert!(policy_text(Permission::Workspace, Some(&root), files).contains("paths outside it are refused"));
-        assert!(policy_text(Permission::Full, Some(&root), files).contains("anywhere on this computer"));
-        assert!(policy_text(Permission::Full, None, files).contains("home folder"));
+        assert!(policy_text(Permission::Read, Some(&root), &[], files).contains("read only"));
+        assert!(policy_text(Permission::Workspace, Some(&root), &[], files).contains("paths outside it are refused"));
+        assert!(policy_text(Permission::Full, Some(&root), &[], files).contains("anywhere on this computer"));
+        assert!(policy_text(Permission::Full, None, &[], files).contains("home folder"));
         let none = Reach { files: false, tools: true, vision: false };
-        assert!(policy_text(Permission::Read, None, none).contains("cannot read or change files"));
-        assert!(!policy_text(Permission::Full, Some(&root), files).contains("Computer:"));
+        assert!(policy_text(Permission::Read, None, &[], none).contains("cannot read or change files"));
+        assert!(!policy_text(Permission::Full, Some(&root), &[], files).contains("Computer:"));
         let vision = Reach { vision: true, ..files };
-        assert!(policy_text(Permission::Full, Some(&root), vision).contains("Computer:"));
-        assert!(policy_text(Permission::Full, Some(&root), Reach { tools: false, ..files }).is_empty());
+        assert!(policy_text(Permission::Full, Some(&root), &[], vision).contains("Computer:"));
+        assert!(policy_text(Permission::Full, Some(&root), &[], Reach { tools: false, ..files }).is_empty());
+    }
+
+    #[test]
+    fn workspace_root_lists_services_and_per_repo_git() {
+        let root = Path::new("D:\\work\\p1");
+        let files = Reach { files: true, tools: true, vision: false };
+        let services = vec!["order".to_string(), "user".to_string()];
+        let text = policy_text(Permission::Workspace, Some(root), &services, files);
+        assert!(text.contains("workspace folder at D:\\work\\p1"), "{text}");
+        assert!(text.contains("order, user") && text.contains("git -C"), "{text}");
+        let repo = policy_text(Permission::Workspace, Some(root), &[], files);
+        assert!(repo.contains("repository at") && !repo.contains("git -C <service>"), "{repo}");
     }
 
     #[test]

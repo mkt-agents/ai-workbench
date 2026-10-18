@@ -1,22 +1,30 @@
 /**
- * AI Hub repo selection by workspace or by service. Pure.
+ * AI Hub workspace / service selection. Pure.
  *
  * The persisted selection (`settings.aiHubFocusRepos`) mixes two entry kinds:
  * `ws:<workspaceId>` = a whole workspace, resolved to its services every time
  * (so services added later are picked up), and plain repo paths = single services.
+ *
+ * Groups with a `path` are workspaces (folders holding several service repos):
+ * the Git page's workspaces plus folders added from the picker this session.
+ * The group without a path holds standalone repos.
  */
 import { buildRepoGroups } from "../../core/repoGroups";
-import { pathKey, projectNameFromPath } from "../../core/pathUtils";
+import { isPathUnder, pathKey, projectNameFromPath } from "../../core/pathUtils";
 import type { GitScannedRepo, GitWorkspace, RecentProject } from "../../core/types";
 
 export type RepoOption = { path: string; name: string };
 
+/** A folder added from the picker (session-only, not written to the Git page). */
+export type ExtraFolder = { path: string; name: string; repos: GitScannedRepo[] };
+
 export type PickerGroup = {
   key: string;
-  /** `ws:<id>` for a workspace; null for the "other repos" bucket (no dynamic token). */
+  /** `ws:<id>` for a saved workspace; null for session folders and standalone repos. */
   token: string | null;
-  /** Workspace name; empty for the "other repos" bucket. */
+  /** Workspace name; empty for the standalone-repos group. */
   name: string;
+  /** Workspace folder; null for the standalone-repos group. */
   path: string | null;
   repos: RepoOption[];
 };
@@ -33,6 +41,7 @@ export function buildPickerGroups(
   gitWorkspaces: GitWorkspace[],
   recentProjects: RecentProject[],
   extraRepos: GitScannedRepo[],
+  extraFolders: ExtraFolder[],
   currentRepo: string | null | undefined,
   selection: string[],
 ): PickerGroup[] {
@@ -48,13 +57,19 @@ export function buildPickerGroups(
   add(currentRepo);
   for (const p of recentProjects) add(p.path, p.name);
   for (const r of extraRepos) add(r.path, r.name);
+  for (const f of extraFolders) for (const r of f.repos) add(r.path, r.name);
   for (const s of selection) if (!isGroupToken(s)) add(s);
 
-  return buildRepoGroups(gitWorkspaces, all)
+  // Session folders ride along as workspaces with negative ids (never persisted).
+  const folders: GitWorkspace[] = extraFolders
+    .filter((f) => !gitWorkspaces.some((w) => pathKey(w.path) === pathKey(f.path)))
+    .map((f, i) => ({ id: -(i + 1), path: f.path, name: f.name, createdAt: "" }));
+
+  return buildRepoGroups([...gitWorkspaces, ...folders], all)
     .filter((g) => g.projects.length > 0)
     .map((g) => ({
       key: g.key,
-      token: g.workspace ? `${WS_PREFIX}${g.workspace.id}` : null,
+      token: g.workspace && g.workspace.id > 0 ? `${WS_PREFIX}${g.workspace.id}` : null,
       name: g.workspace?.name || (g.workspace ? projectNameFromPath(g.workspace.path) : ""),
       path: g.workspace?.path ?? null,
       repos: g.projects
@@ -128,6 +143,48 @@ export function resolveFocus(selection: string[], groups: PickerGroup[]): string
   return out;
 }
 
+/** Where an entry lives: its workspace group, or the repo itself when standalone. */
+function placeOf(entry: string, groups: PickerGroup[]): string {
+  if (isGroupToken(entry)) return groups.find((g) => g.token === entry)?.key ?? entry;
+  const k = pathKey(entry);
+  const g = groups.find((x) => x.path && x.repos.some((r) => pathKey(r.path) === k));
+  return g?.key ?? `repo:${k}`;
+}
+
+/**
+ * Edit levels work in one place: keep only the entries in the same workspace
+ * (or the same standalone repo) as `touched`, by default the first entry.
+ */
+export function keepOnePlace(selection: string[], groups: PickerGroup[], touched?: string): string[] {
+  if (selection.length === 0) return selection;
+  const keep = placeOf(touched ?? selection[0], groups);
+  return selection.filter((s) => placeOf(s, groups) === keep);
+}
+
+/** The selection spans more than one workspace / standalone repo. */
+export function spansPlaces(selection: string[], groups: PickerGroup[]): boolean {
+  return new Set(selection.map((s) => placeOf(s, groups))).size > 1;
+}
+
+/**
+ * Directory the agent works in. One service → that repo; several services of
+ * one workspace → the workspace folder, with the picked services listed.
+ * Anything past the first workspace only reaches the prompt as a summary.
+ */
+export function agentTarget(
+  selection: string[],
+  groups: PickerGroup[],
+  currentRepo: string | null | undefined,
+): { root: string; services: string[] } {
+  const paths = resolveFocus(selection, groups);
+  if (paths.length === 0) return { root: currentRepo || "", services: [] };
+  const first = pathKey(paths[0]);
+  const ws = groups.find((g) => g.path && g.repos.some((r) => pathKey(r.path) === first));
+  const services = ws?.path ? paths.filter((p) => isPathUnder(p, ws.path as string)) : [];
+  if (!ws?.path || services.length < 2) return { root: paths[0], services: [] };
+  return { root: ws.path, services };
+}
+
 type Fmt = (key: string, params?: Record<string, string | number>) => string;
 
 /** One label for the picker trigger and the composer pill. Null = nothing to analyze. */
@@ -146,7 +203,7 @@ export function describeSelection(
 
   const short = ({ g, state }: { g: PickerGroup; state: GroupState }): string => {
     const picked = g.repos.filter((r) => isServiceSelected(selection, g, r.path));
-    if (!g.token) {
+    if (!g.path) {
       return picked.length === 1 ? picked[0].name : fmt("ctx.groupSome", { name: fmt("ctx.otherGroup"), n: picked.length });
     }
     if (state === "all") return fmt("ctx.groupAll", { name: g.name });
@@ -159,7 +216,7 @@ export function describeSelection(
     return active
       .map((x) => {
         const picked = x.g.repos.filter((r) => isServiceSelected(selection, x.g, r.path));
-        if (!x.g.token || picked.length === 1) return picked.length === 1 ? picked[0].name : short(x);
+        if (!x.g.path || picked.length === 1) return picked.length === 1 ? picked[0].name : short(x);
         return x.g.name;
       })
       .join("、");

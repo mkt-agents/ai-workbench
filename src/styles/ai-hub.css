@@ -314,6 +314,45 @@
 .qa-ctx-tree > * {
   flex-shrink: 0;
 }
+.qa-ctx-head {
+  gap: 6px;
+}
+.qa-ctx-head-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.qa-ctx-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.qa-ctx-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-ctx-head-btn:hover:not(:disabled) {
+  background: var(--overlay-2);
+  color: var(--text-0);
+}
+.qa-ctx-head-btn.on {
+  background: var(--overlay-3);
+  color: var(--text-0);
+}
+.qa-ctx-head-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .qa-ctx-filter {
   display: flex;
   align-items: center;

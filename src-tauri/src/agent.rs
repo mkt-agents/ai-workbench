@@ -52,6 +52,9 @@ pub struct AgentRunRequest {
     pub user: String,
     pub request_id: String,
     pub repo_path: String,
+    /// `repo_path` is a workspace folder: the service repositories picked inside it.
+    #[serde(default)]
+    pub services: Vec<String>,
     #[serde(default)]
     pub history: Vec<ChatTurn>,
     #[serde(default)]
@@ -1340,6 +1343,24 @@ async fn review_action(
     }
 }
 
+/// Service folders under a workspace root, relative to it. Empty when `root` is
+/// itself a repository (then git already works from the root).
+fn workspace_services(root: &std::path::Path, services: &[String]) -> Vec<String> {
+    if root.join(".git").exists() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for s in services {
+        let Ok(p) = std::path::Path::new(s.trim()).canonicalize() else { continue };
+        let Ok(rel) = p.strip_prefix(root) else { continue };
+        let rel = rel.display().to_string().replace('\\', "/");
+        if !rel.is_empty() && !out.contains(&rel) {
+            out.push(rel);
+        }
+    }
+    out
+}
+
 fn parse_args(raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or(json!({}))
 }
@@ -1378,7 +1399,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let protected = Protected::from_env();
     let reach = Reach { files: scope.has_files(), tools: req.tools, vision: req.vision };
     let mut tools_enabled = req.tools;
-    let system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), reach));
+    let services = root.as_deref().map(|r| workspace_services(r, &req.services)).unwrap_or_default();
+    let system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach));
     let tool_names = offered_tools(permission, reach);
     if tool_names.iter().any(|n| COMPUTER_TOOLS.contains(n)) {
         // The model must never see (or click) the AI hub window itself.
@@ -1663,7 +1685,7 @@ mod tests {
     use super::{
         call_summary, candidates_error, command_blocked, command_is_readonly, command_output_failed, conflict_block,
         count_images, decode_model_body, gate_arg, limit_message, match_app_name, prune_images, repeated_command_result,
-        round_is_action, tool_result_messages, unique_hit, ToolOutput, SHOT_PLACEHOLDER,
+        round_is_action, tool_result_messages, unique_hit, workspace_services, ToolOutput, SHOT_PLACEHOLDER,
     };
     use crate::agent_proc::run_command;
     use serde_json::json;
@@ -1811,6 +1833,25 @@ mod tests {
         assert!(conflict_block(&scope, "write_file", "", &json!({ "path": "a.txt" })).is_some());
         assert!(conflict_block(&scope, "run_command", "git status", &json!({})).is_none());
         assert!(conflict_block(&scope, "run_command", "npm test", &json!({})).is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_services_are_relative_and_skip_repo_roots() {
+        let root = std::env::temp_dir().join(format!("aw-agent-ws-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("order").join(".git")).unwrap();
+        fs::create_dir_all(root.join("svc").join("user").join(".git")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let picked = vec![
+            root.join("order").display().to_string(),
+            root.join("svc").join("user").display().to_string(),
+            root.join("order").display().to_string(),
+            std::env::temp_dir().display().to_string(),
+        ];
+        assert_eq!(workspace_services(&root, &picked), vec!["order", "svc/user"]);
+        let repo = root.join("order");
+        assert!(workspace_services(&repo, &picked).is_empty(), "a repo root needs no service list");
         let _ = fs::remove_dir_all(&root);
     }
 

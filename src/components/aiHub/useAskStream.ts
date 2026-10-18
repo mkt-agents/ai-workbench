@@ -61,7 +61,10 @@ export const AGENT_PERMISSIONS: AgentPermission[] = ["read", "workspace", "revie
 
 export type AgentRunOptions = {
   permission: AgentPermission;
+  /** Agent working directory: one repo, or a workspace folder when `services` is set. */
   repoPath: string;
+  /** Service repos picked inside a workspace folder `repoPath`. */
+  services: string[];
   apps: { name: string; path: string; args: string }[];
   /** The selected model accepts images (unlocks operating the computer at 完全权限). */
   vision: boolean;
@@ -207,7 +210,7 @@ export function useAskStream(opts: AskStreamOptions) {
       setError(t("emptyInput"));
       return;
     }
-    // 只读权限没有仓库也能问；会改东西的三档必须落在一个仓库里
+    // 只读权限没有仓库也能问；会改东西的三档必须落在一个工作区或仓库里
     if (agent.permission !== "read" && !agent.repoPath.trim()) {
       setError(t("agent.noRepo"));
       return;
@@ -509,6 +512,7 @@ export function useAskStream(opts: AskStreamOptions) {
           user,
           requestId: reqId,
           repoPath: agent.repoPath,
+          services: agent.services,
           history: requestHistory(baseHistory),
           apps: agent.apps,
           permission: agent.permission,

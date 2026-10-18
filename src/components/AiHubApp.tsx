@@ -145,7 +145,11 @@ function AiHubApp() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   // `stream` is declared below; the error callback only runs later, from a click.
-  const repo = useRepoFocus({ onError: (msg) => stream.setError(msg) });
+  const repo = useRepoFocus({
+    single: permission !== "read",
+    onError: (msg) => stream.setError(msg),
+    onNotice: showHint,
+  });
 
   const ctx = useAskContext(chips, repo.resolvedFocus);
 
@@ -183,7 +187,8 @@ function AiHubApp() {
     agent: {
       permission,
       vision: Boolean(selectedModel?.vision),
-      repoPath: repo.resolvedFocus[0] || settings.currentGitRepo || "",
+      repoPath: repo.agentRoot,
+      services: repo.agentServices,
       apps: quickAppLaunchers.map((app) => ({
         name: app.name,
         path: app.path,
@@ -721,6 +726,7 @@ function AiHubApp() {
                 onClear={repo.clearFocus}
                 onScanFolder={() => void repo.scanFolder()}
                 scanning={repo.scanning}
+                single={permission !== "read"}
                 chips={chips}
                 setChip={setChip}
                 onPreview={() => void previewContext()}
