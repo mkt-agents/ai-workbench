@@ -707,6 +707,32 @@ fn round_is_action(names: &[String]) -> bool {
 }
 
 /// One-line label for the step log and approval card.
+/// Reply to a tool name the model made up: point it at the real tool instead of
+/// a bare "unknown tool" it will just retry.
+fn unknown_tool_reason(name: &str, offered: &[&str]) -> String {
+    let lower = name.to_lowercase();
+    let shell_like = ["git", "shell", "bash", "cmd", "powershell", "exec", "terminal", "command"]
+        .iter()
+        .any(|k| lower.contains(k));
+    let hint = if shell_like && offered.contains(&"run_command") {
+        let example = if lower.starts_with("git") {
+            let sub = lower.trim_start_matches("git").trim_start_matches(|c: char| c == '_' || c == '-' || c == ' ');
+            format!("git {}", if sub.is_empty() { "status".to_string() } else { sub.replace('_', " ") })
+        } else {
+            "git status".to_string()
+        };
+        format!(
+            "命令（包括所有 git 操作）一律用 run_command 执行，例如 run_command {{\"command\": \"{example} …\"}}；多个文件放进同一条命令。"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "没有 {name} 这个工具，不要再调用它。{hint}可用的工具只有：{}。",
+        offered.join(", ")
+    )
+}
+
 fn call_summary(name: &str, args: &Value) -> String {
     let a = |k: &str| arg_str(args, k);
     match name {
@@ -1402,6 +1428,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let services = root.as_deref().map(|r| workspace_services(r, &req.services)).unwrap_or_default();
     let system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach));
     let tool_names = offered_tools(permission, reach);
+    // Tools that exist at some level: those not offered here get the permission denial instead.
+    let known_tools = offered_tools(Permission::Full, Reach { files: true, tools: true, vision: true });
     if tool_names.iter().any(|n| COMPUTER_TOOLS.contains(n)) {
         // The model must never see (or click) the AI hub window itself.
         crate::agent_computer::exclude_from_capture(&app);
@@ -1446,6 +1474,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut granted: HashSet<String> = HashSet::new();
     // One "去提交页处理冲突" card per turn is enough.
     let mut conflict_noticed = false;
+    // 模型编出来的工具名（如 git_add）：每个名字只在步骤里显示一次
+    let mut unknown_shown: HashSet<String> = HashSet::new();
     // 上一条实际执行过的 shell 命令，用来识别原样重试。
     let mut last_shell_command = String::new();
     let mut last_shell_failed = false;
@@ -1525,6 +1555,14 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 return Err(msg);
             }
             let args = parse_args(&call.arguments);
+            if !known_tools.contains(&call.name.as_str()) {
+                let reason = unknown_tool_reason(&call.name, &tool_names);
+                if unknown_shown.insert(call.name.clone()) {
+                    emit_step(&app, &request_id, "unknown", "error", &format!("模型调用了不存在的工具 {}", call.name), &reason);
+                }
+                tool_results.push((call.id.clone(), reason.into()));
+                continue;
+            }
             let summary = call_summary(&call.name, &args);
             emit_step(&app, &request_id, &call.name, "running", &summary, "");
             let arg = gate_arg(&call.name, &args);
@@ -1683,7 +1721,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        call_summary, candidates_error, command_blocked, command_is_readonly, command_output_failed, conflict_block,
+        call_summary, candidates_error, unknown_tool_reason, command_blocked, command_is_readonly, command_output_failed, conflict_block,
         count_images, decode_model_body, gate_arg, limit_message, match_app_name, prune_images, repeated_command_result,
         round_is_action, tool_result_messages, unique_hit, workspace_services, ToolOutput, SHOT_PLACEHOLDER,
     };
@@ -1834,6 +1872,18 @@ mod tests {
         assert!(conflict_block(&scope, "run_command", "git status", &json!({})).is_none());
         assert!(conflict_block(&scope, "run_command", "npm test", &json!({})).is_none());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn made_up_tools_point_at_run_command() {
+        let offered = ["read_file", "run_command"];
+        let git = unknown_tool_reason("git_add", &offered);
+        assert!(git.contains("没有 git_add") && git.contains("\"git add …\""), "{git}");
+        assert!(git.contains("可用的工具只有：read_file, run_command"), "{git}");
+        assert!(unknown_tool_reason("git_commit_all", &offered).contains("git commit all"));
+        let other = unknown_tool_reason("browse_web", &offered);
+        assert!(!other.contains("run_command {") && other.contains("可用的工具只有"), "{other}");
+        assert!(!unknown_tool_reason("git_add", &["read_file"]).contains("run_command {"));
     }
 
     #[test]

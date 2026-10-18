@@ -116,7 +116,8 @@
       "keyboard": "键盘",
       "wait": "等待",
       "notice": "提示",
-      "conflict": "冲突"
+      "conflict": "冲突",
+      "unknown": "无效调用"
     },
     "openCommitPage": "打开提交页处理冲突"
   },
