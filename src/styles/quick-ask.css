@@ -1646,7 +1646,9 @@
   margin-top: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-1);
+  /* 吸底压在滚动对话上：全不透明实底（--float-bar-bg，各主题按表面色系定值），
+     可读性不依赖 blur——sticky + backdrop-filter 在滚动容器里对后方内容采样不可靠 */
+  background: var(--float-bar-bg);
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
 }
 .qa-selection-text {
