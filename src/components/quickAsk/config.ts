@@ -134,7 +134,7 @@ export const CONTEXT_LIMIT = 12000;
 export const SNIPPET_PICK_LIMIT = 24;
 export const DIRTY_FILE_LIMIT = 30;
 /** Follow-up context: send the last N Q&A pairs to the model, clipped per turn. */
-export const MAX_HISTORY_TURNS = 6;
+export const MAX_HISTORY_TURNS = 24;
 /** Transcript kept on screen and in the saved session (Q&A pairs). */
 export const MAX_SAVED_TURNS = 40;
 export const MAX_TURN_CHARS = 4000;

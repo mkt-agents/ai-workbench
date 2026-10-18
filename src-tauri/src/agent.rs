@@ -23,7 +23,6 @@ const PREVIEW_CAP: usize = 2_000;
 const LIST_CAP: usize = 200;
 const GREP_CAP: usize = 30;
 const CMD_CAP: usize = 8_000;
-const CMD_TIMEOUT: Duration = Duration::from_secs(25);
 const APPROVAL_WAIT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Deserialize)]
@@ -449,8 +448,57 @@ pub(crate) fn command_blocked(command: &str) -> bool {
         "rd /s",
         "rmdir /s",
         "remove-item",
+        "--force",
+        "reset --hard",
+        "clean -f",
+        "clean -x",
+        "filter-branch",
+        "rebase",
     ];
     BLOCKED.iter().any(|word| lower.contains(word))
+}
+
+pub(crate) fn command_is_readonly(command: &str) -> bool {
+    let lower = command.trim().to_lowercase();
+    if lower.contains("&&") || lower.contains(';') || lower.contains('|') || lower.contains('`') {
+        return false;
+    }
+    const READS: &[&str] = &[
+        "git status",
+        "git diff",
+        "git log",
+        "git show",
+        "git remote",
+        "git branch",
+        "git rev-parse",
+        "git ls-files",
+        "git config --get",
+        "git ls-remote",
+    ];
+    READS.iter().any(|prefix| lower == *prefix || lower.starts_with(&format!("{prefix} ")))
+}
+
+fn command_timeout(command: &str) -> Duration {
+    let lower = command.to_lowercase();
+    if lower.contains("git push")
+        || lower.contains("git pull")
+        || lower.contains("git fetch")
+        || lower.contains("git ls-remote")
+        || lower.contains("git clone")
+    {
+        Duration::from_secs(600)
+    } else {
+        Duration::from_secs(60)
+    }
+}
+
+fn git_network_command(command: &str) -> bool {
+    let lower = command.to_lowercase();
+    lower.contains("git push")
+        || lower.contains("git pull")
+        || lower.contains("git fetch")
+        || lower.contains("git ls-remote")
+        || lower.contains("git clone")
 }
 
 fn stop_child(child: &mut std::process::Child) {
@@ -480,7 +528,12 @@ fn run_command(root: &Path, command: &str, request_id: &str) -> Result<String, S
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         let mut c = Command::new("cmd");
-        c.args(["/C", command]).current_dir(root).creation_flags(CREATE_NO_WINDOW);
+        c.args(["/C", command]).current_dir(root);
+        // A credential dialog needs a real window. Hiding it makes push sit
+        // until the timeout, then the model retries.
+        if !git_network_command(command) {
+            c.creation_flags(CREATE_NO_WINDOW);
+        }
         c
     };
     #[cfg(not(windows))]
@@ -509,6 +562,7 @@ fn run_command(root: &Path, command: &str, request_id: &str) -> Result<String, S
         buf
     });
     let started = Instant::now();
+    let limit = command_timeout(command);
     let code = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.code().unwrap_or(-1),
@@ -519,11 +573,11 @@ fn run_command(root: &Path, command: &str, request_id: &str) -> Result<String, S
                     let _ = err_handle.join();
                     return Err(cancelled_message());
                 }
-                if started.elapsed() > CMD_TIMEOUT {
+                if started.elapsed() > limit {
                     stop_child(&mut child);
                     let _ = out_handle.join();
                     let _ = err_handle.join();
-                    return Err("命令超过 25 秒，已停止".into());
+                    return Err(format!("命令超过 {} 秒，已停止", limit.as_secs()));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -973,7 +1027,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     };
     let anthropic = req.config.provider.to_lowercase() == "anthropic";
     let policy = format!(
-        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\nwrite_file and run_command wait for the user to confirm.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
+        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
         root.display()
     );
     let system = format!("{}{policy}", req.system);
@@ -1002,6 +1056,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut rounds = 0usize;
     let mut action_steps = 0usize;
     let mut notes: Vec<String> = Vec::new();
+    let mut shell_granted = false;
+    let mut write_granted = false;
     loop {
         if rounds >= MAX_ROUNDS || action_steps >= MAX_ACTION_STEPS {
             break;
@@ -1065,12 +1121,21 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 _ => format!("未知工具 {}", call.name),
             };
             emit_step(&app, &request_id, &call.name, "running", &summary, "");
-            let needs_confirm = matches!(call.name.as_str(), "write_file" | "run_command");
+            let command = if call.name == "run_command" {
+                arg_str(&args, "command")
+            } else {
+                String::new()
+            };
+            let needs_confirm = match call.name.as_str() {
+                "write_file" => !write_granted,
+                "run_command" => !command_is_readonly(&command) && !shell_granted,
+                _ => false,
+            };
             if needs_confirm {
                 let preview = if call.name == "write_file" {
                     clip(args.get("content").and_then(|v| v.as_str()).unwrap_or(""), PREVIEW_CAP)
                 } else {
-                    arg_str(&args, "command")
+                    command.clone()
                 };
                 emit_approval(&app, &request_id, &call.id, &call.name, &summary, &preview);
                 let allow = match wait_decision(&request_id, &call.id).await {
@@ -1085,6 +1150,11 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     notes.push(format!("{summary}（已拒绝）"));
                     tool_results.push((call.id.clone(), "用户拒绝了这个操作".to_string()));
                     continue;
+                }
+                if call.name == "write_file" {
+                    write_granted = true;
+                } else if call.name == "run_command" {
+                    shell_granted = true;
                 }
             }
             let result = match call.name.as_str() {
@@ -1143,7 +1213,10 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{command_blocked, decode_model_body, limit_message, resolve_in_repo, round_is_action};
+    use super::{
+        command_blocked, command_is_readonly, decode_model_body, limit_message, resolve_in_repo,
+        round_is_action,
+    };
     use std::fs;
 
     #[test]
@@ -1186,8 +1259,15 @@ mod tests {
     fn blocks_shutdown_and_format() {
         assert!(command_blocked("shutdown /s /t 0"));
         assert!(command_blocked("format C:"));
+        assert!(command_blocked("git push --force"));
+        assert!(command_blocked("git reset --hard HEAD"));
         assert!(!command_blocked("git status"));
         assert!(!command_blocked("git log --format=%s"));
+        assert!(!command_blocked("git push origin master"));
+        assert!(command_is_readonly("git status --short"));
+        assert!(command_is_readonly("git diff"));
+        assert!(!command_is_readonly("git push"));
+        assert!(!command_is_readonly("git add -A && git commit -m x"));
     }
 
     #[test]
