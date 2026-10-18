@@ -35,7 +35,8 @@ import { useAskContext } from "./aiHub/useAskContext";
 import { useAskEvents } from "./aiHub/useAskEvents";
 import { useAskSessions } from "./aiHub/useAskSessions";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
-import { useAskStream } from "./aiHub/useAskStream";
+import { AGENT_PERMISSIONS, useAskStream, type AgentPermission } from "./aiHub/useAskStream";
+import { useConfirm } from "./ConfirmModal";
 import { useRepoFocus } from "./aiHub/useRepoFocus";
 import { useAnswerActions } from "./aiHub/useAnswerActions";
 import { hideAiHub as hide, useModeHotkeys, useResizingBodyClass, useTimedFlag } from "./aiHub/useAiHubWindow";
@@ -43,6 +44,18 @@ import { hideAiHub as hide, useModeHotkeys, useResizingBodyClass, useTimedFlag }
 type QaTurn = AiHubTurn;
 
 const PINNED_KEY = "qa-pinned";
+const PERMISSION_KEY = "qa-permission";
+/** Set once the user confirmed what 完全权限 means; later switches don't ask again. */
+const FULL_ACK_KEY = "qa-full-ack";
+/** Ctrl+. cycles these; 完全权限 is only reachable from the menu. */
+const HOTKEY_CYCLE: AgentPermission[] = ["read", "workspace", "review"];
+
+/** Stored level; the pre-levels agent switch (`qa-agent=1`) becomes 编辑权限. */
+function readPermission(): AgentPermission {
+  const stored = localStorage.getItem(PERMISSION_KEY) as AgentPermission | null;
+  if (stored && AGENT_PERMISSIONS.includes(stored)) return stored;
+  return localStorage.getItem("qa-agent") === "1" ? "workspace" : "read";
+}
 
 function AiHubApp() {
   const { t, i18n } = useTranslation("aihub");
@@ -57,14 +70,7 @@ function AiHubApp() {
 
   const [ready, setReady] = useState(false);
   const [pinned, setPinned] = useState(() => localStorage.getItem(PINNED_KEY) === "1");
-  const [agentOn, setAgentOn] = useState(() => localStorage.getItem("qa-agent") === "1");
-  const toggleAgent = () => {
-    setAgentOn((on) => {
-      const next = !on;
-      localStorage.setItem("qa-agent", next ? "1" : "0");
-      return next;
-    });
-  };
+  const [permission, setPermission] = useState<AgentPermission>(readPermission);
   useEffect(() => {
     localStorage.setItem(PINNED_KEY, pinned ? "1" : "0");
     void invokeSetAiHubPinned(pinned).catch(() => {});
@@ -78,9 +84,11 @@ function AiHubApp() {
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "route">(null);
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission">(null);
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
+  /** Write-capable levels always work on the project; read-only follows the auto route. */
+  const effectiveOverride: RouteOverride = permission === "read" ? routeOverride : "project";
   const [ctxOpen, setCtxOpen] = useState(false);
   /** Persisted-session id the current chat belongs to (null = fresh chat). */
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -90,8 +98,15 @@ function AiHubApp() {
   const [renameDraft, setRenameDraft] = useState("");
   /** Text currently selected inside the answer area (for quote follow-up). */
   const [selectedText, setSelectedText] = useState("");
-  /** Brief notice when an action is refused because a round is still running. */
-  const [busyHint, flashBusyHint] = useTimedFlag(2500);
+  /** Brief floating notice: an action refused mid-answer, or a level change for the next message. */
+  const [hintOn, flashHint] = useTimedFlag(2500);
+  const [hintText, setHintText] = useState("");
+  const showHint = (text: string) => {
+    setHintText(text);
+    flashHint();
+  };
+  const flashBusyHint = () => showHint(t("busyHint"));
+  const confirm = useConfirm();
   /** Esc dismissed the open-suggestion list; typing brings it back. */
   const [openDismissed, setOpenDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -120,7 +135,7 @@ function AiHubApp() {
     setSelectedText,
     getContext: ctx.getContext,
     collectDailyBrief: ctx.collectDailyBrief,
-    routeOverride,
+    routeOverride: effectiveOverride,
     onSent: () => {
       // Quick actions and the pill override are one-shot.
       setTask("none");
@@ -132,7 +147,7 @@ function AiHubApp() {
     },
     attachments,
     agent: {
-      enabled: agentOn,
+      permission,
       repoPath: repo.resolvedFocus[0] || settings.currentGitRepo || "",
       apps: quickAppLaunchers.map((app) => ({
         name: app.name,
@@ -218,12 +233,43 @@ function AiHubApp() {
         question: deferredInput,
         task,
         lastMode: stream.lastModeRef.current,
-        override: routeOverride,
+        override: effectiveOverride,
       }),
     // lastModeRef changes only on send, which also re-renders via `answer`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [deferredInput, task, routeOverride, stream.answer, stream.history.length],
+    [deferredInput, task, effectiveOverride, stream.answer, stream.history.length],
   );
+  const contextIncluded = routePreview.mode === "project";
+  /** Repo name click: flip the auto decision for the next message, or go back to auto. */
+  const toggleInclude = () => {
+    if (permission !== "read") return;
+    setRouteOverride((cur) => (cur !== "auto" ? "auto" : contextIncluded ? "chat" : "project"));
+  };
+  const includeTip = (() => {
+    const name = repo.projectLabel || t("ctx.noRepo");
+    if (permission !== "read") return t("ctx.includeLocked", { name });
+    const state = contextIncluded ? t("ctx.includeOn", { name }) : t("ctx.includeOff");
+    return `${state} · ${t(`route.reason.${routePreview.reason}`)}`;
+  })();
+
+  /** Level for the next message. Mid-answer is fine: the running round keeps its own. */
+  const changePermission = async (next: AgentPermission) => {
+    if (next === permission) return;
+    if (next === "full" && localStorage.getItem(FULL_ACK_KEY) !== "1") {
+      const ok = await confirm({
+        title: t("permission.fullConfirmTitle"),
+        message: t("permission.fullConfirmBody"),
+        warning: t("permission.fullConfirmWarn"),
+        confirmText: t("permission.fullConfirmOk"),
+        icon: "warning",
+      });
+      if (!ok) return;
+      localStorage.setItem(FULL_ACK_KEY, "1");
+    }
+    setPermission(next);
+    localStorage.setItem(PERMISSION_KEY, next);
+    if (stream.busy) showHint(t("permission.nextAs", { name: t(`permission.${next}`) }));
+  };
 
   const setChip = (key: keyof typeof chips, value: boolean) => {
     setSettings({
@@ -410,6 +456,12 @@ function AiHubApp() {
         if (stream.busy) flashBusyHint();
         else startNewChat();
       }
+      // Ctrl/Cmd+. : next permission level (never lands on 完全权限)
+      if ((e.ctrlKey || e.metaKey) && e.key === ".") {
+        e.preventDefault();
+        const at = HOTKEY_CYCLE.indexOf(permission);
+        void changePermission(HOTKEY_CYCLE[(at + 1) % HOTKEY_CYCLE.length]);
+      }
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keydown", onKeyDown);
@@ -417,7 +469,7 @@ function AiHubApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [snippets.paramTarget, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy]);
+  }, [snippets.paramTarget, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy, permission]);
 
   const togglePop = (id: NonNullable<typeof openPop>) => {
     setOpenPop((cur) => (cur === id ? null : id));
@@ -594,11 +646,6 @@ function AiHubApp() {
             exportDone={answers.exportDone}
             selectedText={selectedText}
             setSelectedText={setSelectedText}
-            route={routePreview}
-            routeOverride={routeOverride}
-            onRouteOverride={setRouteOverride}
-            routeMenuOpen={openPop === "route"}
-            onToggleRouteMenu={() => togglePop("route")}
             projectLabel={repo.projectLabel}
             task={task}
             onTask={changeTask}
@@ -631,6 +678,11 @@ function AiHubApp() {
                 setChip={setChip}
                 onPreview={() => void previewContext()}
                 previewLoading={ctx.ctxLoading}
+                included={contextIncluded}
+                pinned={permission === "read" && routeOverride !== "auto"}
+                locked={permission !== "read"}
+                includeTip={includeTip}
+                onToggleInclude={toggleInclude}
               />
             }
             modelControl={
@@ -651,8 +703,10 @@ function AiHubApp() {
                 onToggle={() => togglePop("model")}
               />
             }
-            agentOn={agentOn}
-            onToggleAgent={toggleAgent}
+            permission={permission}
+            onPermission={(next) => void changePermission(next)}
+            permissionMenuOpen={openPop === "permission"}
+            onTogglePermissionMenu={() => togglePop("permission")}
             openList={visibleOpenList}
             onRunOpen={runOpen}
             onStop={() => void stream.stopStream()}
@@ -704,9 +758,9 @@ function AiHubApp() {
           )}
         </>
       )}
-      {busyHint && (
+      {hintOn && (
         <div className="qa-busy-hint" role="status">
-          {t("busyHint")}
+          {hintText}
         </div>
       )}
     </div>

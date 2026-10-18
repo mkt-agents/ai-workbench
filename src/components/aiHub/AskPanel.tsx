@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import type { AiHubTurn } from "../../core/types";
 import type { TaskKind } from "./config";
-import type { AskMode, RouteOverride, RouteResult } from "./route";
-import type { AnswerSource, AskPhase, AgentApproval, AgentStep } from "./useAskStream";
+import type { AskMode } from "./route";
+import type { AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentStep } from "./useAskStream";
 import type { OpenSuggestion } from "./localActions";
 import AskThread from "./AskThread";
 import AskEmpty from "./AskEmpty";
@@ -43,12 +43,6 @@ export type AskPanelProps = {
   exportDone: boolean;
   selectedText: string;
   setSelectedText: (v: string) => void;
-  /** Live routing decision for the text currently in the composer. */
-  route: RouteResult;
-  routeOverride: RouteOverride;
-  onRouteOverride: (v: RouteOverride) => void;
-  routeMenuOpen: boolean;
-  onToggleRouteMenu: () => void;
   /** Repo label used in project mode; null = no repo available at all. */
   projectLabel: string | null;
   task: TaskKind;
@@ -69,8 +63,11 @@ export type AskPanelProps = {
   repoControl: ReactNode;
   /** Model picker, shown at the bottom-right, beside send. */
   modelControl: ReactNode;
-  agentOn: boolean;
-  onToggleAgent: () => void;
+  /** What the AI may do in the repo for the next message. */
+  permission: AgentPermission;
+  onPermission: (next: AgentPermission) => void;
+  permissionMenuOpen: boolean;
+  onTogglePermissionMenu: () => void;
   /** Non-null while the composer is an "open …" phrase (empty = nothing matched). */
   openList: OpenSuggestion[] | null;
   onRunOpen: (item: OpenSuggestion) => void;

@@ -1,18 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bot, ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X } from "lucide-react";
+import { ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X } from "lucide-react";
 import { QUICK_TASKS } from "./config";
 import type { OpenSuggestion } from "./localActions";
-import RoutePill from "./RoutePill";
+import PermissionPicker from "./PermissionPicker";
 import type { AskPanelProps } from "./AskPanel";
 
 type Props = Pick<
   AskPanelProps,
   | "input" | "setInput" | "inputRef" | "busy" | "lastQuestion" | "suggestion" | "onSuggestionPick"
-  | "onSuggestionDismiss" | "route" | "routeOverride" | "onRouteOverride" | "routeMenuOpen"
-  | "onToggleRouteMenu" | "projectLabel" | "task" | "onTask" | "onDaily" | "hasSnippets" | "snippetOpen"
+  | "onSuggestionDismiss" | "task" | "onTask" | "onDaily" | "hasSnippets" | "snippetOpen"
   | "onToggleSnippets" | "onPasteClipboard" | "onAttachFile" | "onSend" | "repoControl" | "modelControl"
-  | "agentOn" | "onToggleAgent" | "openList" | "onRunOpen" | "onStop"
+  | "permission" | "onPermission" | "permissionMenuOpen" | "onTogglePermissionMenu"
+  | "openList" | "onRunOpen" | "onStop"
 >;
 
 const INPUT_MAX_HEIGHT = 160;
@@ -61,10 +61,11 @@ export default function AskComposer(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     input, setInput, inputRef, busy, lastQuestion, suggestion, onSuggestionPick, onSuggestionDismiss,
-    route, routeOverride, onRouteOverride, routeMenuOpen, onToggleRouteMenu, projectLabel,
     task, onTask, onDaily, hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard, onAttachFile,
-    onSend, repoControl, modelControl, agentOn, onToggleAgent, openList, onRunOpen, onStop,
+    onSend, repoControl, modelControl, permission, onPermission, permissionMenuOpen, onTogglePermissionMenu,
+    openList, onRunOpen, onStop,
   } = props;
+  const writes = permission !== "read";
   const [openHi, setOpenHi] = useState(0);
   const openListRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -139,7 +140,9 @@ export default function AskComposer(props: Props) {
             ? t("openPlaceholder")
             : task !== "none"
               ? t(`taskPlaceholder.${task}`)
-              : t("placeholder")
+              : writes
+                ? t("permission.placeholderWrite")
+                : t("placeholder")
         }
         value={input}
         onChange={(e) => setInput(e.target.value)}
@@ -220,29 +223,16 @@ export default function AskComposer(props: Props) {
           </button>
         </div>
         <div className="qa-compose-end">
-          <RoutePill
-            route={route}
-            routeOverride={routeOverride}
-            onRouteOverride={onRouteOverride}
-            open={routeMenuOpen}
-            onToggle={onToggleRouteMenu}
-            projectLabel={projectLabel}
+          <PermissionPicker
+            permission={permission}
+            onPermission={onPermission}
+            open={permissionMenuOpen}
+            onToggle={onTogglePermissionMenu}
           />
-          <button
-            type="button"
-            className={`qa-chip-btn qa-agent-toggle${agentOn ? " on" : ""}`}
-            onClick={onToggleAgent}
-            disabled={busy}
-            title={agentOn ? t("agent.note") : t("agent.tip")}
-            aria-pressed={agentOn}
-          >
-            <Bot size={12} />
-            {t("agent.label")}
-          </button>
           {modelControl}
           <button
             type="button"
-            className={`qa-send-btn${busy ? " is-busy" : ""}`}
+            className={`qa-send-btn${busy ? " is-busy" : ""}${writes ? ` is-${permission}` : ""}`}
             onClick={busy ? onStop : submit}
             disabled={!busy && !input.trim()}
             title={busy ? `${t("stop")} (Esc)` : t("sendHintFull")}

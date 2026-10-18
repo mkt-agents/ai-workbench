@@ -635,8 +635,8 @@ TrayTunnelUrls { ... }                     // 托盘隧道 URL
 DSH_DEFAULT_PORT: u16 = 3080
 TRAY_POLL_INTERVAL_SECS: u64 = 5
 MODEL_TEST_TIMEOUT_SECS: u64 = 15
-GENERATE_TEXT_TIMEOUT_SECS: u64 = 300   // 单次生成与代理每轮的总时长上限
-GENERATE_STREAM_IDLE_SECS: u64 = 120    // 流式：两次读取之间的最长静默，不是总时长
+GENERATE_TEXT_TIMEOUT_SECS: u64 = 300   // 单次生成与 Anthropic 代理回合（非流式）的总时长上限
+GENERATE_STREAM_IDLE_SECS: u64 = 120    // 流式问答与 OpenAI 兼容代理回合：两次读取之间的最长静默，不是总时长
 GENERATE_CONNECT_TIMEOUT_SECS: u64 = 15
 FILE_COPY_MAX_RETRIES: u32 = 8
 CURSOR_SOFT_QUIT_TIMEOUT_MS: u64 = 8_000

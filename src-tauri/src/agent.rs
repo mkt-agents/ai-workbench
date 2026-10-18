@@ -12,6 +12,11 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
+use crate::agent_policy::{
+    deny_reason, filter_specs, offered_tools, parse_review_verdict, policy_text, tool_gate, Gate,
+    Permission, REVIEW_SYSTEM,
+};
+use crate::agent_stream::{chunk_usage, delta_content, SseLines, ThinkFilter};
 use crate::ai_commands::{
     apply_auth_headers, strip_think_tags, trim_trailing_slash, AIModelConfig, ChatTurn,
 };
@@ -26,6 +31,7 @@ const LIST_CAP: usize = 200;
 const GREP_CAP: usize = 30;
 const CMD_CAP: usize = 8_000;
 const APPROVAL_WAIT: Duration = Duration::from_secs(300);
+const REVIEW_WAIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +55,16 @@ pub struct AgentRunRequest {
     pub history: Vec<ChatTurn>,
     #[serde(default)]
     pub apps: Vec<AgentAppShortcut>,
+    /// `read` / `workspace` / `review` / `full`, see `agent_policy::Permission`.
+    #[serde(default)]
+    pub permission: String,
+    /// `false` for text-only tasks (polish / translate / …): no tools are offered.
+    #[serde(default = "default_true")]
+    pub tools: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone)]
@@ -123,7 +139,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "write_file",
-            "description": "Create or overwrite a text file inside the repository. The user must confirm before anything is written. Do not use this to delete files.",
+            "description": "Create or overwrite a text file inside the repository. Depending on the permission level the user may be asked first. Do not use this to delete files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -135,7 +151,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "run_command",
-            "description": "Run a command with the working directory locked to the repository. The user must confirm. Refused: shutdown, format, disk wipe.",
+            "description": "Run a command with the working directory locked to the repository. Read-only git commands run immediately; others may need confirmation depending on the permission level. Refused: shutdown, format, disk wipe, force push, hard reset.",
             "parameters": {
                 "type": "object",
                 "properties": { "command": { "type": "string" } },
@@ -166,35 +182,29 @@ fn tool_specs() -> Value {
     ])
 }
 
-fn openai_tools() -> Value {
-    let mut tools = Vec::new();
-    if let Some(arr) = tool_specs().as_array() {
-        for spec in arr {
-            tools.push(json!({
-                "type": "function",
-                "function": {
+/// Tool list in the provider's shape, limited to `names` (empty = no tools).
+fn provider_tools(names: &[&str], anthropic: bool) -> Vec<Value> {
+    filter_specs(&tool_specs(), names)
+        .into_iter()
+        .map(|spec| {
+            if anthropic {
+                json!({
                     "name": spec["name"],
                     "description": spec["description"],
-                    "parameters": spec["parameters"],
-                }
-            }));
-        }
-    }
-    Value::Array(tools)
-}
-
-fn anthropic_tools() -> Value {
-    let mut tools = Vec::new();
-    if let Some(arr) = tool_specs().as_array() {
-        for spec in arr {
-            tools.push(json!({
-                "name": spec["name"],
-                "description": spec["description"],
-                "input_schema": spec["parameters"],
-            }));
-        }
-    }
-    Value::Array(tools)
+                    "input_schema": spec["parameters"],
+                })
+            } else {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": spec["name"],
+                        "description": spec["description"],
+                        "parameters": spec["parameters"],
+                    }
+                })
+            }
+        })
+        .collect()
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -238,14 +248,16 @@ fn emit_text(app: &AppHandle, id: &str, text: &str) {
     let _ = app.emit("generate-text-chunk", json!({ "id": id, "text": text }));
 }
 
-fn emit_done(app: &AppHandle, id: &str, started: Instant) {
-    let _ = app.emit(
-        "generate-text-done",
-        json!({
-            "id": id,
-            "elapsedMs": started.elapsed().as_millis() as u64,
-        }),
-    );
+fn emit_done(app: &AppHandle, id: &str, started: Instant, usage: Option<(u64, u64)>) {
+    let mut payload = json!({
+        "id": id,
+        "elapsedMs": started.elapsed().as_millis() as u64,
+    });
+    if let Some((prompt, completion)) = usage {
+        payload["promptTokens"] = json!(prompt);
+        payload["completionTokens"] = json!(completion);
+    }
+    let _ = app.emit("generate-text-done", payload);
 }
 
 fn emit_err(app: &AppHandle, id: &str, msg: &str) {
@@ -1028,43 +1040,63 @@ fn merge_tool_delta(slot: &mut Value, delta: &Value) {
     }
 }
 
+/// `model_turn` error when the provider rejects the `tools` field; the caller retries without tools.
+const TOOLS_UNSUPPORTED: &str = "__agent_tools_unsupported__";
+
+struct RoundOutput {
+    turn: ModelTurn,
+    /// Visible text already sent to the frontend while streaming (empty = not streamed).
+    streamed: String,
+    usage: Option<(u64, u64)>,
+}
+
+/// One model round. With `stream` set (OpenAI-compatible only) the answer text is
+/// emitted as it arrives; the full body is still folded by `decode_model_body`, so a
+/// router that ignores `stream: true` and answers with plain JSON works the same.
 async fn model_turn(
     client: &reqwest::Client,
     config: &AIModelConfig,
     anthropic: bool,
     messages: &Value,
     system: &str,
+    tools: &[Value],
+    stream: Option<&AppHandle>,
     request_id: &str,
-) -> Result<ModelTurn, String> {
+) -> Result<RoundOutput, String> {
     let base = trim_trailing_slash(&config.base_url);
     let max_tokens = {
         let m = if config.max_tokens > 0 { config.max_tokens } else { 1536 };
         m.clamp(256, 4096)
     };
+    let stream = if anthropic { None } else { stream };
     let (url, body) = if anthropic {
         let url = if base.ends_with("/v1") {
             format!("{base}/messages")
         } else {
             format!("{base}/v1/messages")
         };
-        let body = json!({
+        let mut body = json!({
             "model": config.model,
             "max_tokens": max_tokens,
             "system": system,
-            "tools": anthropic_tools(),
             "messages": messages,
         });
+        if !tools.is_empty() {
+            body["tools"] = json!(tools);
+        }
         (url, body)
     } else {
         let url = format!("{base}/chat/completions");
-        let body = json!({
+        let mut body = json!({
             "model": config.model,
             "messages": messages,
-            "tools": openai_tools(),
             "max_tokens": max_tokens,
             "temperature": config.temperature.clamp(0.0, 1.0),
-            "stream": false,
+            "stream": stream.is_some(),
         });
+        if !tools.is_empty() {
+            body["tools"] = json!(tools);
+        }
         (url, body)
     };
     for attempt in 0..2 {
@@ -1075,24 +1107,55 @@ async fn model_turn(
         .await?
         .map_err(|e| format!("请求模型失败: {e}"))?;
         let status = resp.status();
-        let text = await_cancellable(resp.text(), request_id)
-            .await?
-            .unwrap_or_default();
         if !status.is_success() {
+            let text = await_cancellable(resp.text(), request_id).await?.unwrap_or_default();
             let snippet: String = text.chars().take(240).collect();
-            let lower = snippet.to_lowercase();
-            if lower.contains("tool") {
-                return Err("这个模型不支持工具调用，请换一个支持 function calling 的模型。".into());
+            if !tools.is_empty() && snippet.to_lowercase().contains("tool") {
+                return Err(TOOLS_UNSUPPORTED.into());
             }
             return Err(format!("模型返回 HTTP {status}: {snippet}"));
         }
+        let mut streamed = String::new();
+        let mut usage = None;
+        let text = match stream {
+            Some(app) => {
+                let mut resp = resp;
+                let mut raw = Vec::new();
+                let mut lines = SseLines::default();
+                let mut filter = ThinkFilter::default();
+                while let Some(bytes) = await_cancellable(resp.chunk(), request_id)
+                    .await?
+                    .map_err(|e| format!("读取模型响应失败: {e}"))?
+                {
+                    raw.extend_from_slice(&bytes);
+                    for data in lines.push(&bytes) {
+                        let Ok(chunk) = serde_json::from_str::<Value>(&data) else {
+                            continue;
+                        };
+                        if let Some(u) = chunk_usage(&chunk) {
+                            usage = Some(u);
+                        }
+                        if let Some(piece) = delta_content(&chunk) {
+                            let visible = filter.push(piece);
+                            emit_text(app, request_id, &visible);
+                            streamed.push_str(&visible);
+                        }
+                    }
+                }
+                let tail = filter.finish();
+                emit_text(app, request_id, &tail);
+                streamed.push_str(&tail);
+                String::from_utf8_lossy(&raw).into_owned()
+            }
+            None => await_cancellable(resp.text(), request_id).await?.unwrap_or_default(),
+        };
         match decode_model_body(&text) {
             Ok(json) => {
-                return if anthropic {
-                    parse_anthropic(&json)
-                } else {
-                    parse_openai(&json)
-                };
+                if usage.is_none() {
+                    usage = chunk_usage(&json);
+                }
+                let turn = if anthropic { parse_anthropic(&json)? } else { parse_openai(&json)? };
+                return Ok(RoundOutput { turn, streamed, usage });
             }
             Err(_) if attempt == 0 && text.trim().is_empty() => {
                 if is_cancelled(request_id) {
@@ -1103,9 +1166,41 @@ async fn model_turn(
         }
     }
     Err(
-        "模型返回了空内容。免费线路经常会中途断开，请再试一次，或换一个模型；只想聊天可以改为普通对话。"
+        "模型返回了空内容。免费线路经常会中途断开，请再试一次，或换一个模型。"
             .into(),
     )
+}
+
+/// Ask the reviewer model whether one action may run without the user (审查托管).
+/// Any failure, timeout or unclear reply escalates: `(false, reason)`.
+async fn review_action(
+    client: &reqwest::Client,
+    config: &AIModelConfig,
+    anthropic: bool,
+    user_request: &str,
+    summary: &str,
+    preview: &str,
+    request_id: &str,
+) -> (bool, String) {
+    let user = format!(
+        "User request:\n{}\n\nAction: {summary}\n\nDetails:\n{}",
+        clip(user_request, 2_000),
+        clip(preview, PREVIEW_CAP)
+    );
+    let messages = if anthropic {
+        json!([{ "role": "user", "content": user }])
+    } else {
+        json!([
+            { "role": "system", "content": REVIEW_SYSTEM },
+            { "role": "user", "content": user },
+        ])
+    };
+    let call = model_turn(client, config, anthropic, &messages, REVIEW_SYSTEM, &[], None, request_id);
+    match tokio::time::timeout(REVIEW_WAIT, call).await {
+        Ok(Ok(out)) => parse_review_verdict(&out.turn.text),
+        Ok(Err(e)) => (false, format!("审查失败：{}", clip(&e, 120))),
+        Err(_) => (false, "审查超时".into()),
+    }
 }
 
 fn parse_args(raw: &str) -> Value {
@@ -1127,25 +1222,37 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         emit_err(&app, &request_id, msg);
         return Err(msg.into());
     }
-    let root = match repo_root(&req.repo_path) {
-        Ok(p) => p,
-        Err(e) => {
-            emit_err(&app, &request_id, &e);
-            return Err(e);
+    let permission = Permission::parse(&req.permission);
+    // 没选仓库也能问（只读权限 / 纯文本任务）：不挂任何要工作目录的工具
+    let root = if req.repo_path.trim().is_empty() {
+        None
+    } else {
+        match repo_root(&req.repo_path) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                emit_err(&app, &request_id, &e);
+                return Err(e);
+            }
         }
     };
     let anthropic = req.config.provider.to_lowercase() == "anthropic";
-    let policy = format!(
-        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nShell commands run in Windows cmd.exe: quote arguments with double quotes; single quotes are passed literally. A failed command's output starts with `exit N`.\nDo not create helper files in the repository (for example a commit message file); pass text inline with -m. If you did create one, delete it before you finish and never commit it.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push and pull use the same system proxy as the commit page. A push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nIf the same command keeps failing, do not retry it verbatim: first explain the failure from its output (quoting, paths, staging state), then try a different approach.\nNever stage or commit obvious temp files (*.tmp, *.log, *.bak, *.swp, ~$*, .DS_Store, Thumbs.db) unless the user explicitly asks; mention them instead.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
-        root.display()
-    );
-    let system = format!("{}{policy}", req.system);
-    // 代理每轮是非流式请求，整轮要等模型写完（可能是一整个文件），与单次生成同一上限
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(crate::config::GENERATE_CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(crate::config::GENERATE_TEXT_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut tools_enabled = req.tools;
+    let system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), tools_enabled));
+    let tool_names = offered_tools(permission, root.is_some(), tools_enabled);
+    let mut tools = provider_tools(&tool_names, anthropic);
+    // 流式回合按「多久没收到数据」计时；Anthropic 仍是非流式，要等整轮写完，用总时长上限
+    let client = if anthropic {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(crate::config::GENERATE_CONNECT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(crate::config::GENERATE_TEXT_TIMEOUT_SECS))
+            .build()
+    } else {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(crate::config::GENERATE_CONNECT_TIMEOUT_SECS))
+            .read_timeout(Duration::from_secs(crate::config::GENERATE_STREAM_IDLE_SECS))
+            .build()
+    }
+    .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
     if anthropic {
@@ -1167,11 +1274,13 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut rounds = 0usize;
     let mut action_steps = 0usize;
     let mut notes: Vec<String> = Vec::new();
+    // Ask 档每轮只问第一次：命令 / 启动应用各自记一次
     let mut shell_granted = false;
-    let mut write_granted = false;
+    let mut app_granted = false;
     // 上一条实际执行过的 shell 命令，用来识别原样重试。
     let mut last_shell_command = String::new();
     let mut last_shell_failed = false;
+    let mut usage_total: Option<(u64, u64)> = None;
     loop {
         if rounds >= MAX_ROUNDS || action_steps >= MAX_ACTION_STEPS {
             break;
@@ -1182,34 +1291,55 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             emit_err(&app, &request_id, &msg);
             return Err(msg);
         }
-        let turn = match model_turn(
+        let round = model_turn(
             &client,
             &req.config,
             anthropic,
             &Value::Array(messages.clone()),
             &system,
+            &tools,
+            Some(&app),
             &request_id,
         )
-        .await
-        {
-            Ok(t) => t,
+        .await;
+        let round = match round {
+            Err(e) if e == TOOLS_UNSUPPORTED && tools_enabled => {
+                // 模型不支持工具调用：去掉 tools 重发，这一轮只回答
+                tools_enabled = false;
+                tools.clear();
+                emit_step(&app, &request_id, "notice", "info", "当前模型不支持工具调用，本轮只回答", "");
+                rounds -= 1;
+                continue;
+            }
+            Ok(r) => r,
             Err(e) => {
+                let e = if e == TOOLS_UNSUPPORTED { "模型拒绝了这次请求（工具调用）。".to_string() } else { e };
                 emit_err(&app, &request_id, &e);
                 return Err(e);
             }
         };
-        let visible = strip_think_tags(&turn.text);
-        if !visible.trim().is_empty() {
-            final_text.push_str(&visible);
-            emit_text(&app, &request_id, &visible);
+        if let Some((p, c)) = round.usage {
+            let (tp, tc) = usage_total.unwrap_or((0, 0));
+            usage_total = Some((tp + p, tc + c));
+        }
+        let turn = round.turn;
+        if round.streamed.trim().is_empty() {
+            // 没走流式（Anthropic / 路由回了整段 JSON / 只有 reasoning 字段）：整轮一次性发
+            let visible = strip_think_tags(&turn.text);
+            if !visible.trim().is_empty() {
+                final_text.push_str(&visible);
+                emit_text(&app, &request_id, &visible);
+            }
+        } else {
+            final_text.push_str(&round.streamed);
         }
         if turn.calls.is_empty() {
             if final_text.trim().is_empty() {
-                let msg = "这个模型没有返回文本，也没有调用工具。它可能不支持工具调用。";
+                let msg = "这个模型没有返回文本，也没有调用工具。";
                 emit_err(&app, &request_id, msg);
                 return Err(msg.into());
             }
-            emit_done(&app, &request_id, started);
+            emit_done(&app, &request_id, started, usage_total);
             return Ok(());
         }
         if anthropic {
@@ -1241,18 +1371,47 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             } else {
                 String::new()
             };
-            let needs_confirm = match call.name.as_str() {
-                "write_file" => !write_granted,
-                "run_command" => !command_is_readonly(&command) && !shell_granted,
+            let preview = match call.name.as_str() {
+                "write_file" => clip(args.get("content").and_then(|v| v.as_str()).unwrap_or(""), PREVIEW_CAP),
+                "run_command" => command.clone(),
+                _ => summary.clone(),
+            };
+            let gate = tool_gate(permission, &call.name, &command);
+            if gate == Gate::Deny {
+                let reason = deny_reason(permission, &call.name, &command);
+                emit_step(&app, &request_id, &call.name, "denied", &summary, &reason);
+                notes.push(format!("{summary}（未执行）"));
+                tool_results.push((call.id.clone(), reason));
+                continue;
+            }
+            // 审查托管：先让 AI 审一遍，只有明确放行才不打扰用户
+            let mut review_note = String::new();
+            let mut needs_confirm = match gate {
+                Gate::Ask => match call.name.as_str() {
+                    "launch_app" => !app_granted,
+                    _ => !shell_granted,
+                },
                 _ => false,
             };
-            if needs_confirm {
-                let preview = if call.name == "write_file" {
-                    clip(args.get("content").and_then(|v| v.as_str()).unwrap_or(""), PREVIEW_CAP)
+            if gate == Gate::Review {
+                let (allow, reason) =
+                    review_action(&client, &req.config, anthropic, &req.user, &summary, &preview, &request_id).await;
+                if is_cancelled(&request_id) {
+                    let msg = cancelled_message();
+                    emit_err(&app, &request_id, &msg);
+                    return Err(msg);
+                }
+                if allow {
+                    let detail = if reason.is_empty() { "AI 审查通过".to_string() } else { format!("AI 审查通过：{reason}") };
+                    emit_step(&app, &request_id, &call.name, "running", &summary, &detail);
                 } else {
-                    command.clone()
-                };
-                emit_approval(&app, &request_id, &call.id, &call.name, &summary, &preview);
+                    needs_confirm = true;
+                    review_note = if reason.is_empty() { "AI 审查：需要你确认".into() } else { format!("AI 审查：{reason}") };
+                }
+            }
+            if needs_confirm {
+                let title = if review_note.is_empty() { summary.clone() } else { format!("{summary}（{review_note}）") };
+                emit_approval(&app, &request_id, &call.id, &call.name, &title, &preview);
                 let decision = match wait_decision(&request_id, &call.id).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -1288,20 +1447,25 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                         continue;
                     }
                 }
-                if call.name == "write_file" {
-                    write_granted = true;
-                } else if call.name == "run_command" {
-                    shell_granted = true;
+                // 审查转人工的那一次只放行这一条，不给整轮开口子
+                if gate == Gate::Ask {
+                    if call.name == "launch_app" {
+                        app_granted = true;
+                    } else {
+                        shell_granted = true;
+                    }
                 }
             }
-            let result = match call.name.as_str() {
-                "read_file" => read_file(&root, &args),
-                "list_dir" => list_dir(&root, &args),
-                "grep" => grep(&root, &args, &request_id),
-                "write_file" => write_file(&root, &args),
-                "run_command" => run_command(&root, &arg_str(&args, "command"), &request_id),
-                "open_page" => open_page(&app, &args),
-                "launch_app" => launch_named(&req.apps, &arg_str(&args, "name")),
+            let no_repo = || Err::<String, String>("没有选择仓库，不能读写文件或执行命令。".into());
+            let result = match (call.name.as_str(), root.as_deref()) {
+                ("read_file", Some(root)) => read_file(root, &args),
+                ("list_dir", Some(root)) => list_dir(root, &args),
+                ("grep", Some(root)) => grep(root, &args, &request_id),
+                ("write_file", Some(root)) => write_file(root, &args),
+                ("run_command", Some(root)) => run_command(root, &command, &request_id),
+                ("read_file" | "list_dir" | "grep" | "write_file" | "run_command", None) => no_repo(),
+                ("open_page", _) => open_page(&app, &args),
+                ("launch_app", _) => launch_named(&req.apps, &arg_str(&args, "name")),
                 _ => Err(format!("未知工具 {}", call.name)),
             };
             let failed = match &result {
@@ -1360,7 +1524,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     }
     let msg = limit_message(action_steps >= MAX_ACTION_STEPS, &notes);
     emit_text(&app, &request_id, &msg);
-    emit_done(&app, &request_id, started);
+    emit_done(&app, &request_id, started, usage_total);
     Ok(())
 }
 

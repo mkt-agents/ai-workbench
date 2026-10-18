@@ -47,11 +47,18 @@ export type AgentApproval = {
   preview: string;
 };
 
+/** Ordered from least to most open; mirrors Rust `agent_policy::Permission`. */
+export type AgentPermission = "read" | "workspace" | "review" | "full";
+export const AGENT_PERMISSIONS: AgentPermission[] = ["read", "workspace", "review", "full"];
+
 export type AgentRunOptions = {
-  enabled: boolean;
+  permission: AgentPermission;
   repoPath: string;
   apps: { name: string; path: string; args: string }[];
 };
+
+/** Pure text work: no tools are offered, the round is a plain streamed completion. */
+const TEXT_ONLY_TASKS: TaskKind[] = ["polish", "translate", "summarize", "optimize"];
 
 /** Full transcript (displayed + persisted). Past the verbatim window, older rounds fold into a digest. */
 function appendTurn(
@@ -101,13 +108,13 @@ export type AskStreamOptions = {
   profileTemperature?: number;
   /** Light code/file attachments appended to the user message. */
   attachments?: AskAttachment[];
-  /** When enabled, this question runs the repo tool loop instead of one completion. */
-  agent?: AgentRunOptions;
+  /** Permission level + repo for the tool loop every question runs through. */
+  agent: AgentRunOptions;
 };
 
 /**
- * The streaming Q&A pipeline: send / stop / regenerate over
- * `generate_text_stream` + generate-text-chunk/-done/-error events.
+ * The streaming Q&A pipeline: send / stop / regenerate over `agent_run`
+ * (generate-text-chunk/-done/-error + agent-step / agent-approval events).
  */
 export function useAskStream(opts: AskStreamOptions) {
   const { t } = useTranslation("aihub");
@@ -185,7 +192,8 @@ export function useAskStream(opts: AskStreamOptions) {
       setError(t("emptyInput"));
       return;
     }
-    if (agent?.enabled && !agent.repoPath.trim()) {
+    // 只读权限没有仓库也能问；会改东西的三档必须落在一个仓库里
+    if (agent.permission !== "read" && !agent.repoPath.trim()) {
       setError(t("agent.noRepo"));
       return;
     }
@@ -419,52 +427,50 @@ export function useAskStream(opts: AskStreamOptions) {
         }>("generate-text-done", onDone)
       );
       unlisteners.push(await listen<{ id: string; error: string }>("generate-text-error", onError));
-      if (agent?.enabled) {
-        unlisteners.push(
-          await listen<{
-            id: string;
-            tool: string;
-            status: string;
-            summary: string;
-            detail: string;
-          }>("agent-step", (event) => {
-            const payload = event.payload;
-            if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
-            if (payload.status !== "running") setAgentApproval(null);
-            rememberSteps((prev) => {
-              const last = prev[prev.length - 1];
-              const step: AgentStep = {
-                tool: payload.tool,
-                status: payload.status,
-                summary: payload.summary,
-                detail: payload.detail || "",
-              };
-              if (last && last.tool === step.tool && last.status === "running" && last.summary === step.summary) {
-                return [...prev.slice(0, -1), step];
-              }
-              return [...prev, step];
-            });
-          }),
-        );
-        unlisteners.push(
-          await listen<{
-            id: string;
-            callId: string;
-            tool: string;
-            summary: string;
-            preview: string;
-          }>("agent-approval", (event) => {
-            const payload = event.payload;
-            if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
-            setAgentApproval({
-              callId: payload.callId,
+      unlisteners.push(
+        await listen<{
+          id: string;
+          tool: string;
+          status: string;
+          summary: string;
+          detail: string;
+        }>("agent-step", (event) => {
+          const payload = event.payload;
+          if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
+          if (payload.status !== "running") setAgentApproval(null);
+          rememberSteps((prev) => {
+            const last = prev[prev.length - 1];
+            const step: AgentStep = {
               tool: payload.tool,
+              status: payload.status,
               summary: payload.summary,
-              preview: payload.preview || "",
-            });
-          }),
-        );
-      }
+              detail: payload.detail || "",
+            };
+            if (last && last.tool === step.tool && last.status === "running" && last.summary === step.summary) {
+              return [...prev.slice(0, -1), step];
+            }
+            return [...prev, step];
+          });
+        }),
+      );
+      unlisteners.push(
+        await listen<{
+          id: string;
+          callId: string;
+          tool: string;
+          summary: string;
+          preview: string;
+        }>("agent-approval", (event) => {
+          const payload = event.payload;
+          if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
+          setAgentApproval({
+            callId: payload.callId,
+            tool: payload.tool,
+            summary: payload.summary,
+            preview: payload.preview || "",
+          });
+        }),
+      );
 
       const maxTokens = Math.max(selectedModel.maxTokens || 0, 1536);
       const temperature =
@@ -473,29 +479,19 @@ export function useAskStream(opts: AskStreamOptions) {
           : selectedModel.temperature;
       const config = { ...selectedModel, maxTokens, temperature };
       if (stoppedEarly()) return;
-      if (agent?.enabled) {
-        await invoke("agent_run", {
-          req: {
-            config,
-            system,
-            user,
-            requestId: reqId,
-            repoPath: agent.repoPath,
-            history: requestHistory(baseHistory),
-            apps: agent.apps,
-          },
-        });
-      } else {
-        await invoke("generate_text_stream", {
-          req: {
-            config,
-            system,
-            user,
-            requestId: reqId,
-            history: requestHistory(baseHistory),
-          },
-        });
-      }
+      await invoke("agent_run", {
+        req: {
+          config,
+          system,
+          user,
+          requestId: reqId,
+          repoPath: agent.repoPath,
+          history: requestHistory(baseHistory),
+          apps: agent.apps,
+          permission: agent.permission,
+          tools: !TEXT_ONLY_TASKS.includes(sendTask),
+        },
+      });
       if (streamIdRef.current === myGen) {
         lastQuestionRef.current = question;
         lastHistoryRef.current = baseHistory;

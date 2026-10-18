@@ -6,6 +6,8 @@ mod db_commands;
 pub mod cursor;
 mod ai_commands;
 mod agent;
+mod agent_policy;
+mod agent_stream;
 mod secret_protect;
 mod dsh_commands;
 mod runtime_commands;

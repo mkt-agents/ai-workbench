@@ -235,16 +235,69 @@
   justify-content: center;
   gap: 5px;
 }
-/* Context picker: repos + parts in one popover */
-.qa-ctx-trigger {
+/* Context picker: repo name toggles "include project" for the next message, the caret opens the popover */
+.qa-ctx-trigger-row {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  transition: var(--transition-colors-fast);
+}
+.qa-ctx-trigger-row:hover,
+.qa-ctx-trigger-row.is-open {
+  background: var(--bg-2);
+  border-color: var(--border-subtle);
+}
+.qa-ctx-include,
+.qa-ctx-caret {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-ctx-include {
+  position: relative;
+  overflow: hidden;
   gap: 6px;
   min-width: 0;
+  padding: 0 4px 0 10px;
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+.qa-ctx-caret {
+  padding: 0 9px 0 4px;
+  color: var(--text-3);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+.qa-ctx-caret:hover {
+  color: var(--text-1);
 }
 .qa-ctx-trigger-icon {
   color: var(--accent);
   flex-shrink: 0;
+}
+/* Not sent with the next message: dimmed, icon hollowed out */
+.qa-ctx-include.is-excluded {
+  color: var(--text-3);
+}
+.qa-ctx-include.is-excluded .qa-ctx-trigger-icon {
+  color: var(--text-3);
+  opacity: 0.6;
+}
+/* Set by hand for the next message only */
+.qa-ctx-include.is-pinned .qa-focus-btn-label {
+  text-decoration: underline dashed var(--text-3);
+  text-underline-offset: 3px;
+}
+.qa-ctx-include.is-locked {
+  cursor: default;
 }
 .qa-ctx-pop {
   width: 320px;
@@ -1070,7 +1123,7 @@
   min-height: 30px;
   flex-shrink: 0;
 }
-.qa-compose-end .qa-route-pill,
+.qa-compose-end .qa-perm-pill,
 .qa-compose-end .qa-chip-btn {
   height: 28px;
 }
@@ -1088,19 +1141,6 @@
 .qa-model-pick .qa-chip-btn {
   width: 100%;
 }
-.qa-agent-toggle.qa-chip-btn {
-  height: 28px;
-  flex-shrink: 0;
-  max-width: none;
-  border-radius: var(--radius-full);
-  border-color: transparent;
-  background: transparent;
-}
-.qa-agent-toggle.qa-chip-btn.on {
-  border-color: var(--accent-border);
-  background: var(--accent-dim);
-  color: var(--text-0);
-}
 .qa-agent-log {
   margin-top: 6px;
 }
@@ -1115,19 +1155,17 @@
 .qa-agent-log-toggle:hover {
   color: var(--text-0);
 }
-.qa-route {
+/* Permission level pill + menu (只读 / 编辑 / 审查托管 / 完全权限) */
+.qa-perm {
   min-width: 0;
 }
-.qa-route-pill {
-  position: relative;
-  overflow: hidden;
-  flex-shrink: 0;
+.qa-perm-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 26px;
-  max-width: min(280px, 45vw);
-  padding: 0 8px;
+  max-width: min(200px, 40vw);
+  padding: 0 9px;
   box-sizing: border-box;
   font-size: 11.5px;
   color: var(--text-2);
@@ -1135,40 +1173,96 @@
   border: 1px solid transparent;
   border-radius: var(--radius-full);
   cursor: pointer;
+  flex-shrink: 0;
   transition: var(--transition-colors-fast);
 }
-.qa-route-pill:hover {
+.qa-perm-pill:hover {
   color: var(--text-1);
   background: var(--bg-2);
   border-color: var(--border-subtle);
 }
-.qa-route-pill.is-project {
+/* Write-capable levels: tinted outline, never a solid fill */
+.qa-perm-pill.is-workspace,
+.qa-perm-pill.is-review {
   color: var(--accent);
-  background: var(--accent-dim);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  border-color: var(--accent-border);
 }
-.qa-route-pill.is-warn {
+.qa-perm-pill.is-full {
   color: var(--yellow);
-  background: var(--yellow-dim);
   border-color: var(--yellow-border);
 }
-.qa-route-pill.is-pinned {
-  border-style: dashed;
-}
-.qa-route-label {
+.qa-perm-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.qa-route-auto {
-  font-size: 11px;
+.qa-perm-exp {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-2);
   color: var(--text-3);
-  padding-left: 5px;
-  border-left: 1px solid var(--border-subtle);
+  font-size: 9.5px; /* token-ok: 角标字号，比正文刻度小一档 */
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 15px;
 }
-.qa-route-pop {
-  width: 260px;
+.qa-perm-pop {
+  width: 272px;
+  padding: 4px;
+}
+.qa-perm-item {
+  display: grid;
+  grid-template-columns: 16px 1fr 14px;
+  align-items: start;
+  gap: 8px;
+  padding: 7px 8px;
+}
+.qa-perm-item-icon {
+  margin-top: 2px;
+  color: var(--text-2);
+}
+.qa-perm-item.is-workspace .qa-perm-item-icon,
+.qa-perm-item.is-review .qa-perm-item-icon {
+  color: var(--accent);
+}
+.qa-perm-item.is-full .qa-perm-item-icon {
+  color: var(--yellow);
+}
+.qa-perm-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.qa-perm-item-name {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-0);
+  font-size: 12.5px;
+}
+.qa-perm-item-desc {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+}
+.qa-perm-item-check {
+  margin-top: 2px;
+  color: var(--accent);
+}
+.qa-perm-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-subtle);
+}
+.qa-perm-foot {
+  padding: 6px 8px 4px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+  color: var(--text-3);
+  font-size: 11px;
 }
 .qa-focus-pop.is-up {
   top: auto;
@@ -1215,13 +1309,6 @@
   min-width: 168px;
   max-width: 260px;
   padding: 4px;
-}
-.qa-route-desc {
-  grid-column: 2;
-  font-size: 11px;
-  color: var(--text-3);
-  white-space: normal;
-  line-height: 1.4;
 }
 .qa-task-btn {
   display: inline-flex;
@@ -1416,6 +1503,14 @@
   border-right-color: color-mix(in srgb, var(--accent) 40%, transparent);
   animation: qa-spin 0.9s linear infinite;
   pointer-events: none;
+}
+/* Write-capable level: a ring around send says "this one may change things" */
+.qa-send-btn.is-workspace:not(.is-busy),
+.qa-send-btn.is-review:not(.is-busy) {
+  box-shadow: 0 0 0 2px var(--accent-border);
+}
+.qa-send-btn.is-full:not(.is-busy) {
+  box-shadow: 0 0 0 2px var(--yellow-border);
 }
 .qa-send-btn:hover:not(:disabled) {
   filter: brightness(1.12);
@@ -1991,7 +2086,7 @@
   to { opacity: 1; transform: translateX(-50%); }
 }
 
-/* Route pill flashes once when the live decision flips */
+/* Repo name flashes once when the auto include decision flips */
 .qa-route-flash {
   position: absolute;
   inset: 0;

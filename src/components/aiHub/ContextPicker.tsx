@@ -40,6 +40,14 @@ type Props = {
   setChip: (key: keyof AiHubChips, value: boolean) => void;
   onPreview: () => void;
   previewLoading: boolean;
+  /** The next message carries project context (lit) or not (dimmed). */
+  included: boolean;
+  /** Include state was set by hand for the next message (else auto-routed). */
+  pinned: boolean;
+  /** Write-capable permission: context is always included, the toggle is off. */
+  locked: boolean;
+  includeTip: string;
+  onToggleInclude: () => void;
 };
 
 /**
@@ -52,7 +60,15 @@ export default function ContextPicker(props: Props) {
   const {
     open, onToggleOpen, groups, selection, label, currentRepo, onToggleGroup, onToggleService,
     onClear, onScanFolder, scanning, chips, setChip, onPreview, previewLoading,
+    included, pinned, locked, includeTip, onToggleInclude,
   } = props;
+  // Flash the repo name when the auto decision flips between include / leave out.
+  const [flashKey, setFlashKey] = useState(0);
+  const prevIncludedRef = useRef(included);
+  useEffect(() => {
+    if (prevIncludedRef.current !== included) setFlashKey((k) => k + 1);
+    prevIncludedRef.current = included;
+  }, [included]);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [popHeight, setPopHeight] = useState(readCtxHeight);
@@ -123,19 +139,32 @@ export default function ContextPicker(props: Props) {
 
   return (
     <div className="qa-focus qa-ctx-picker">
-      <button
-        type="button"
-        className={`qa-chip-btn${open ? " is-open" : ""}`}
-        onClick={onToggleOpen}
-        title={t("ctx.title")}
-        aria-expanded={open}
-      >
-        <span className="qa-ctx-trigger">
+      <div className={`qa-ctx-trigger-row${open ? " is-open" : ""}`}>
+        <button
+          type="button"
+          className={`qa-ctx-include${included ? "" : " is-excluded"}${pinned ? " is-pinned" : ""}${
+            locked ? " is-locked" : ""
+          }`}
+          onClick={onToggleInclude}
+          disabled={locked}
+          title={includeTip}
+          aria-pressed={included}
+        >
+          {flashKey > 0 && <span key={flashKey} className="qa-route-flash" aria-hidden />}
           <FolderGit2 size={12} className="qa-ctx-trigger-icon" />
           <span className="qa-focus-btn-label">{label}</span>
-        </span>
-        <span className="qa-focus-caret">▾</span>
-      </button>
+        </button>
+        <button
+          type="button"
+          className="qa-ctx-caret"
+          onClick={onToggleOpen}
+          title={t("ctx.title")}
+          aria-expanded={open}
+          aria-label={t("ctx.title")}
+        >
+          <span className="qa-focus-caret">▾</span>
+        </button>
+      </div>
 
       {open && (
         <div className="qa-focus-pop qa-ctx-pop is-left is-up" style={{ height: popHeight }}>
