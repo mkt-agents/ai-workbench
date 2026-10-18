@@ -976,6 +976,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `git_conflict_file` | path, file | GitConflictFile（kind / textual / ours / base / theirs / segments） |
 | `git_resolve_conflict` | path, file, content? \| take?: ours/theirs/delete | String |
 | `git_merge_abort` | path | String |
+| `git_apply_cached` | path, patch, reverse?: bool, worktree?: bool（true 时打到工作区文件：按块还原 / 撤销还原；冲突中的文件拒绝） | String |
 | `git_log` | path, limit?: usize | Vec\<CommitRecord\> |
 | `git_discard` | path, file_path, untracked, staged: bool | String |
 | `git_undo_last_commit` | path: String | String |
