@@ -25,6 +25,7 @@ Thumbs.db
 _gen.js
 _lines_b64.txt
 _test_b64.txt
+.tmp-noop
 
 # Local screenshots that may contain personal/work data
 /screen.png
