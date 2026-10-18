@@ -96,6 +96,11 @@ pub enum ErrorCode {
     UpdateSizeMismatch,
     UpdateCancelled,
     UpdateLaunchFailed,
+    // Git
+    GitConflict,
+    GitPushRejected,
+    GitDiverged,
+    GitOperationInProgress,
     // Generic
     InvalidInput,
     InternalError,
@@ -123,6 +128,10 @@ impl ErrorCode {
             ErrorCode::UpdateSizeMismatch => "UPDATE_SIZE_MISMATCH",
             ErrorCode::UpdateCancelled => "UPDATE_CANCELLED",
             ErrorCode::UpdateLaunchFailed => "UPDATE_LAUNCH_FAILED",
+            ErrorCode::GitConflict => "GIT_CONFLICT",
+            ErrorCode::GitPushRejected => "GIT_PUSH_REJECTED",
+            ErrorCode::GitDiverged => "GIT_DIVERGED",
+            ErrorCode::GitOperationInProgress => "GIT_OPERATION_IN_PROGRESS",
             ErrorCode::InvalidInput => "INVALID_INPUT",
             ErrorCode::InternalError => "INTERNAL_ERROR",
         }

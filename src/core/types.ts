@@ -215,13 +215,45 @@ export interface RepoBatchItem extends GitRepoSummary {
   hasCommits: boolean;
   originUrl: string;
   status: GitStatusEntry[];
+  /** merge | rebase | cherry-pick | revert while git is mid-operation. */
+  operation?: GitOperation | null;
+  /** Unmerged (conflicted) paths right now. */
+  conflictCount?: number;
 }
+
+export type GitOperation = 'merge' | 'rebase' | 'cherry-pick' | 'revert';
 
 export interface GitStatusEntry {
   path: string;
   indexStatus: string;
   workTreeStatus: string;
-  group: 'staged' | 'unstaged' | 'untracked' | string;
+  /** `conflicted` = unmerged (UU/AA/DD/AU/UA/DU/UD); only the resolver stages it. */
+  group: 'staged' | 'unstaged' | 'untracked' | 'conflicted' | string;
+}
+
+export interface GitMergeState {
+  operation: GitOperation | null;
+  conflicted: string[];
+  /** MERGE_MSG without git's comment block. */
+  message: string;
+  oursLabel: string;
+  theirsLabel: string;
+}
+
+export type MergeSegment =
+  | { kind: 'same'; text: string }
+  | { kind: 'conflict'; ours: string; base: string; theirs: string };
+
+export interface GitConflictFile {
+  kind: 'content' | 'deletedByThem' | 'deletedByUs' | 'deletedBoth';
+  /** All versions are UTF-8 text; otherwise only whole-file choices are offered. */
+  textual: boolean;
+  ours: string | null;
+  base: string | null;
+  theirs: string | null;
+  segments: MergeSegment[];
+  oursLabel: string;
+  theirsLabel: string;
 }
 
 export interface GlobalState {

@@ -1,4 +1,5 @@
 mod git_commands;
+mod git_merge;
 mod hosts_commands;
 mod plugin_commands;
 mod site_icon;
@@ -434,6 +435,10 @@ pub fn run() {
             git_commands::git_commit,
             git_commands::git_push,
             git_commands::git_pull,
+            git_merge::git_merge_state,
+            git_merge::git_conflict_file,
+            git_merge::git_resolve_conflict,
+            git_merge::git_merge_abort,
             git_commands::git_create_branch,
             git_commands::git_switch_branch,
             git_commands::git_list_branches,

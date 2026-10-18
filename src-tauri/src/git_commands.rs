@@ -130,7 +130,7 @@ pub(crate) fn ensure_git_repo(repo_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn git_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
+pub(crate) fn git_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
     git_command()
         .args(args)
         .current_dir(repo_path)
@@ -342,6 +342,9 @@ fn git_network_output(repo_path: &str, args: &[&str]) -> Result<std::process::Ou
         cmd.env("http_proxy", &http_proxy);
         cmd.env("https_proxy", &https_proxy);
     }
+    // The friendly_*_error translations match git's English wording; a localized
+    // git would slip past them (rejected push, diverged pull, merge failures).
+    cmd.env("LC_ALL", "C").env("LANGUAGE", "C");
     let child = cmd
         .args(args)
         .current_dir(repo_path)
@@ -544,6 +547,10 @@ pub struct RepoBatchItem {
     pub status: Vec<GitStatusEntry>,
     pub is_git: bool,
     pub error: Option<String>,
+    /// merge | rebase | cherry-pick | revert while git is mid-operation.
+    pub operation: Option<String>,
+    /// Unmerged paths (conflicts) right now.
+    pub conflict_count: u32,
 }
 
 /// Parsed `git status --porcelain=v2 -z --branch -uall`.
@@ -574,10 +581,21 @@ fn normalize_xy(c: char) -> char {
     }
 }
 
+/// The XY pairs git uses for unmerged paths (both sides touched the file).
+pub(crate) fn is_unmerged_xy(index: char, work: char) -> bool {
+    matches!(
+        (index, work),
+        ('D', 'D') | ('A', 'U') | ('U', 'D') | ('U', 'A') | ('D', 'U') | ('A', 'A') | ('U', 'U')
+    )
+}
+
 fn status_group(index: char, work: char) -> &'static str {
     let index = normalize_xy(index);
     let work = normalize_xy(work);
-    if index == '?' && work == '?' {
+    if is_unmerged_xy(index, work) {
+        // Its own group: staging one would mark it resolved with markers still inside.
+        "conflicted"
+    } else if index == '?' && work == '?' {
         "untracked"
     } else if index != ' ' && index != '?' {
         "staged"
@@ -604,6 +622,9 @@ fn entry_from_xy(xy: &str, path: String) -> Option<GitStatusEntry> {
 /// Split one porcelain record into the changelist rows the UI expects: a path
 /// that is both staged and modified yields two rows (shared with `git_status`).
 fn expand_porcelain_entry(e: GitStatusEntry) -> Vec<GitStatusEntry> {
+    if e.group == "conflicted" {
+        return vec![e];
+    }
     let mut out = Vec::new();
     if e.index_status != " " && e.index_status != "?" {
         out.push(GitStatusEntry {
@@ -674,7 +695,7 @@ fn parse_status_v2_z(raw: &str) -> V2Status {
         let (fields, trailing_paths) = match kind {
             '1' => (9, 0usize), // 1 XY sub mH mI mW hH hI <path>
             '2' => (10, 1),    // 2 XY sub mH mI mW hH hI X<score> <path> + <origPath>
-            'u' => (10, 2),    // u XY sub mH mI mW iH iI iA <p1> + <p2> <p3>
+            'u' => (11, 0),    // u XY sub m1 m2 m3 mW h1 h2 h3 <path>
             '?' => (2, 0),     // ? <path>  — no XY field at all
             _ => continue,     // '!' ignored submodule, or anything unknown
         };
@@ -758,6 +779,8 @@ fn collect_repo_batch_item(
                 status: Vec::new(),
                 is_git: false,
                 error: Some(e),
+                operation: None,
+                conflict_count: 0,
             });
         }
         // git < 2.11 has no porcelain v2: keep the old three-call path working.
@@ -784,6 +807,8 @@ fn collect_repo_batch_item(
                 status: entries,
                 is_git: summary.is_git,
                 error: summary.error.or(Some(e)),
+                operation: None,
+                conflict_count: 0,
             });
         }
         Err(e) => return Err(e),
@@ -799,6 +824,11 @@ fn collect_repo_batch_item(
     )
     .unwrap_or_default();
     let config = parse_config_pairs(&config_raw);
+    let operation = crate::git_merge::resolve_git_dir(Path::new(&repo_path))
+        .as_deref()
+        .and_then(crate::git_merge::repo_operation)
+        .map(str::to_string);
+    let conflict_count = v2.entries.iter().filter(|e| e.group == "conflicted").count() as u32;
 
     let status: Vec<GitStatusEntry> = if include_status {
         v2.entries
@@ -825,6 +855,8 @@ fn collect_repo_batch_item(
         status,
         is_git: true,
         error: None,
+        operation,
+        conflict_count,
     })
 }
 
@@ -850,6 +882,8 @@ fn batch_error_item(repo_path: String, error: String) -> RepoBatchItem {
         // UI affordances for a repo we merely could not read.
         is_git: true,
         error: Some(error),
+        operation: None,
+        conflict_count: 0,
     }
 }
 
@@ -997,19 +1031,11 @@ fn parse_porcelain_line(line: &str) -> Option<GitStatusEntry> {
     let index_status = index_ch.to_string();
     let work_tree_status = work_ch.to_string();
 
-    let group = if index_ch == '?' && work_ch == '?' {
-        "untracked"
-    } else if index_ch != ' ' && index_ch != '?' {
-        "staged"
-    } else {
-        "unstaged"
-    };
-
     Some(GitStatusEntry {
         path,
         index_status,
         work_tree_status,
-        group: group.to_string(),
+        group: status_group(index_ch, work_ch).to_string(),
     })
 }
 
@@ -1070,31 +1096,31 @@ fn git_status_sync(repo_path: String) -> Result<Vec<GitStatusEntry>, String> {
             continue;
         };
         // A file can appear as both staged and unstaged in one line (e.g. "MM")
-        if e.index_status != " " && e.index_status != "?" {
-            entries.push(GitStatusEntry {
-                path: e.path.clone(),
-                index_status: e.index_status.clone(),
-                work_tree_status: " ".into(),
-                group: "staged".into(),
-            });
-        }
-        if e.work_tree_status != " " && e.work_tree_status != "?" && e.group != "untracked" {
-            entries.push(GitStatusEntry {
-                path: e.path.clone(),
-                index_status: " ".into(),
-                work_tree_status: e.work_tree_status.clone(),
-                group: "unstaged".into(),
-            });
-        }
-        if e.group == "untracked" {
-            entries.push(e);
-        }
+        entries.extend(expand_porcelain_entry(e));
     }
     Ok(entries)
 }
 
 fn git_stage_sync(repo_path: String, files: Vec<String>) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
+    // `git add` on an unmerged path marks it resolved even with markers inside;
+    // conflicts are only staged through git_resolve_conflict.
+    let unmerged = crate::git_merge::unmerged_paths(&repo_path);
+    let hit: Vec<String> = if files.is_empty() {
+        unmerged
+    } else {
+        unmerged.into_iter().filter(|p| files.iter().any(|f| f == p)).collect()
+    };
+    if !hit.is_empty() {
+        return Err(crate::git_merge::code_err(
+            crate::config::ErrorCode::GitConflict,
+            format!(
+                "{} 个冲突文件不能直接暂存：{}。请在冲突面板里解决后标记已解决。",
+                hit.len(),
+                hit.iter().take(5).cloned().collect::<Vec<_>>().join("、")
+            ),
+        ));
+    }
     if files.is_empty() {
         let output = git_output(&repo_path, &["add", "-A"])?;
         if !output.status.success() {
@@ -1147,11 +1173,25 @@ fn git_commit_sync(repo_path: String, message: String, amend: bool) -> Result<St
     if msg.is_empty() {
         return Err("提交说明不能为空".into());
     }
+    let state = crate::git_merge::conflict_state(&repo_path);
+    // Concluding a merge is the one commit allowed mid-operation, and only once
+    // every conflict is resolved; amend / rebase / cherry-pick stay blocked.
+    let concluding_merge = state.operation == Some("merge") && state.conflicted.is_empty() && !amend;
+    if !concluding_merge {
+        if let Some(reason) = crate::git_merge::blocked_reason(&state, "提交") {
+            let code = if state.operation.is_some() {
+                crate::config::ErrorCode::GitOperationInProgress
+            } else {
+                crate::config::ErrorCode::GitConflict
+            };
+            return Err(crate::git_merge::code_err(code, reason));
+        }
+    }
     if amend {
         if git_stdout(&repo_path, &["rev-parse", "--verify", "HEAD"]).is_err() {
             return Err("仓库还没有任何提交，无法修改上一次提交。".into());
         }
-    } else if !has_staged_changes(&repo_path)? {
+    } else if !concluding_merge && !has_staged_changes(&repo_path)? {
         return Err("没有已暂存的改动。请先暂存文件，或使用「暂存全部并提交」。".into());
     }
     let output = if amend {
@@ -1258,7 +1298,10 @@ fn friendly_push_error(raw: &str) -> String {
         || lower.contains("updates were rejected")
         || lower.contains("failed to push some refs")
     {
-        return "推送被拒绝：远程有更新的提交，请先拉取再推送".into();
+        return crate::git_merge::code_err(
+            crate::config::ErrorCode::GitPushRejected,
+            "推送被拒绝：远程有更新的提交，请先拉取再推送",
+        );
     }
     if lower.contains("repository not found")
         || lower.contains("does not appear to be a git repository")
@@ -1285,6 +1328,7 @@ fn friendly_push_error(raw: &str) -> String {
 
 fn git_push_sync(repo_path: String) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
+    crate::git_merge::ensure_repo_clear(&repo_path, "推送")?;
 
     let remotes = git_stdout(&repo_path, &["remote"]).unwrap_or_default();
     if remotes.trim().is_empty() {
@@ -1335,7 +1379,7 @@ fn git_push_sync(repo_path: String) -> Result<String, String> {
     }
 }
 
-fn validate_repo_rel_path(path: &str) -> Result<(), String> {
+pub(crate) fn validate_repo_rel_path(path: &str) -> Result<(), String> {
     let p = path.trim();
     if p.is_empty() {
         return Err("路径不能为空".into());
@@ -1367,7 +1411,25 @@ fn friendly_pull_error(raw: &str) -> String {
         || lower.contains("need to specify how to reconcile")
         || lower.contains("cannot fast-forward")
     {
-        return "拉取失败：本地与远程已分叉，无法快进合并。请在终端处理冲突或改用其它合并策略。".into();
+        return crate::git_merge::code_err(
+            crate::config::ErrorCode::GitDiverged,
+            "拉取失败：本地与远程已分叉，无法快进。可以选择「合并远程」把远程改动合进来，有冲突时会停下来交给你处理。",
+        );
+    }
+    if lower.contains("would be overwritten by merge") || lower.contains("your local changes to the following files") {
+        // git lists the files between its "...following files ...:" line and "Please commit".
+        let files: Vec<&str> = raw
+            .lines()
+            .skip_while(|l| !l.to_ascii_lowercase().contains("following files"))
+            .skip(1)
+            .map(str::trim)
+            .take_while(|l| !l.is_empty() && !l.to_ascii_lowercase().starts_with("please"))
+            .take(5)
+            .collect();
+        return format!(
+            "拉取失败：本地未提交的改动会被远程覆盖{}。请先提交或储藏这些改动再拉取，没有改动任何文件。",
+            if files.is_empty() { String::new() } else { format!("（{}）", files.join("、")) }
+        );
     }
     if lower.contains("could not read from remote")
         || lower.contains("permission denied")
@@ -1409,11 +1471,15 @@ fn truncate_diff_text(s: String) -> String {
 
 fn git_pull_sync(repo_path: String, merge: bool) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
+    crate::git_merge::ensure_repo_clear(&repo_path, "拉取")?;
     if !has_upstream(&repo_path) {
         return Err("当前分支没有上游，无法拉取".into());
     }
+    // No --autostash: re-applying the stash can conflict while git still exits 0,
+    // leaving markers behind. Git itself refuses a merge that would overwrite
+    // uncommitted changes, which is the message the user should see instead.
     let args: &[&str] = if merge {
-        &["pull", "--no-rebase", "--autostash"]
+        &["pull", "--no-rebase", "--no-edit"]
     } else {
         &["pull", "--ff-only"]
     };
@@ -1427,12 +1493,10 @@ fn git_pull_sync(repo_path: String, merge: bool) -> Result<String, String> {
         let combined = format!("{} {}", stderr.trim(), stdout.trim())
             .trim()
             .to_string();
-        if merge {
-            let lower = combined.to_ascii_lowercase();
-            if lower.contains("conflict") || lower.contains("fix conflicts") {
-                let _ = git_output(&repo_path, &["merge", "--abort"]);
-                return Err("合并远程时出现冲突，已中止合并。请在仓库里解决冲突后再推送。".into());
-            }
+        // Decided from the index, not git's wording: conflicts stay for the user.
+        let conflicted = crate::git_merge::unmerged_paths(&repo_path);
+        if !conflicted.is_empty() {
+            return Err(crate::git_merge::conflict_error(&conflicted, "合并远程"));
         }
         return Err(friendly_pull_error(&combined));
     }
@@ -1677,6 +1741,13 @@ fn git_discard_sync(
 ) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
     validate_repo_rel_path(&file_path)?;
+    // Restoring an unmerged path from HEAD would silently resolve it as "ours".
+    if crate::git_merge::unmerged_paths(&repo_path).iter().any(|p| p == &file_path) {
+        return Err(crate::git_merge::code_err(
+            crate::config::ErrorCode::GitConflict,
+            format!("{file_path} 有冲突，不能直接回滚。请在冲突面板里选择保留哪一边。"),
+        ));
+    }
 
     if untracked {
         let output = git_output(&repo_path, &["clean", "-f", "--", &file_path])?;
@@ -1737,6 +1808,7 @@ fn git_discard_sync(
 ///   instead of needing a force-push.
 fn git_undo_last_commit_sync(repo_path: String) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
+    crate::git_merge::ensure_repo_clear(&repo_path, "撤销上次提交")?;
 
     // "ahead == 0 with upstream" means the tip is already published.
     let published = tip_is_published(&repo_path);
@@ -1990,6 +2062,7 @@ pub struct GitStashEntry {
 
 fn git_stash_push_sync(repo_path: String, message: String) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
+    crate::git_merge::ensure_repo_clear(&repo_path, "储藏")?;
     let message = {
         let trimmed = message.trim();
         if trimmed.is_empty() {
@@ -2054,10 +2127,20 @@ fn git_stash_list_sync(repo_path: String) -> Result<Vec<GitStashEntry>, String> 
 
 fn git_stash_apply_sync(repo_path: String, index: u32, drop: bool) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
+    if !drop {
+        crate::git_merge::ensure_repo_clear(&repo_path, "恢复储藏")?;
+    }
     let spec = format!("stash@{{{index}}}");
     let verb = if drop { "drop" } else { "pop" };
     let output = git_output(&repo_path, &["stash", verb, &spec])?;
     if !output.status.success() {
+        if !drop {
+            // git keeps the stash entry when pop conflicts; the files wait for the resolver.
+            let conflicted = crate::git_merge::unmerged_paths(&repo_path);
+            if !conflicted.is_empty() {
+                return Err(crate::git_merge::conflict_error(&conflicted, "恢复储藏"));
+            }
+        }
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let combined = format!("{stderr} {stdout}").trim().to_string();
@@ -2935,8 +3018,8 @@ mod tests {
 #[cfg(test)]
 mod v2_tests {
     use super::{
-        is_not_a_git_repo, is_unknown_option, parse_config_pairs, parse_status_v2_z,
-        status_group,
+        expand_porcelain_entry, is_not_a_git_repo, is_unknown_option, parse_config_pairs,
+        parse_porcelain_line, parse_status_v2_z, status_group,
     };
 
     const NUL: char = '\0';
@@ -2971,6 +3054,11 @@ mod v2_tests {
         assert_eq!(status_group('.', 'M'), "unstaged");
         assert_eq!(status_group('M', ' '), "staged");
         assert_eq!(status_group('?', '?'), "untracked");
+        for xy in ["UU", "AA", "DD", "AU", "UA", "DU", "UD"] {
+            let mut c = xy.chars();
+            assert_eq!(status_group(c.next().unwrap(), c.next().unwrap()), "conflicted", "{xy}");
+        }
+        assert_eq!(parse_porcelain_line("UU a.txt").unwrap().group, "conflicted");
     }
 
     #[test]
@@ -2992,20 +3080,24 @@ mod v2_tests {
     }
 
     #[test]
-    fn unmerged_consumes_both_extra_path_tokens() {
+    fn unmerged_records_are_conflicts_with_one_path() {
+        // Captured from a real `git merge` conflict (content + modify/delete).
         let raw = join(&[
-            "# branch.oid abc",
+            "# branch.oid 4ca70b1cf68cce234cfc23ff4a9e17667f03c262",
             "# branch.head main",
-            "u UU N... 100644 100644 100644 100644 100644 100644 src/merging.ts",
-            ":1:src/merging.ts",
-            ":2:src/merging.ts",
+            "u UU N... 100644 100644 100644 100644 18a965e1f6e48e7b23df34f2178d9e2039bd99e3 4dae846e6187b275d4bef06c06978ee7eb6b3ac6 00d20ecb9e50c8ffda9bf7fa4b703726be33e4f6 src/merging.ts",
+            "u UD N... 100644 100644 000000 100644 587be6b4c3f93f93c489c0111bba5596147a26cb 351be5bf6e17c59ea560546d69654115ecb2fd8d 0000000000000000000000000000000000000000 b c.txt",
             "1 .M N... 100644 100644 100644 a b after.ts",
         ]);
         let s = parse_status_v2_z(&raw);
-        assert_eq!(s.entries.len(), 2);
+        assert_eq!(s.entries.len(), 3);
         assert_eq!(s.entries[0].path, "src/merging.ts");
-        assert_eq!(s.entries[0].group, "staged");
-        assert_eq!(s.entries[1].path, "after.ts");
+        assert_eq!(s.entries[0].group, "conflicted");
+        assert_eq!(s.entries[1].path, "b c.txt");
+        assert_eq!(s.entries[1].group, "conflicted");
+        assert_eq!(s.entries[2].path, "after.ts");
+        // A conflict stays one row instead of splitting into staged + unstaged.
+        assert_eq!(expand_porcelain_entry(s.entries[0].clone()).len(), 1);
     }
 
     #[test]
@@ -3308,6 +3400,90 @@ mod branch_tests {
             "dev"
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod conflict_flow_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let out = git_command().args(args).current_dir(dir).output().expect("git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    fn clone_into(root: &Path, remote: &Path, name: &str) -> PathBuf {
+        sh(root, &["clone", "-q", &remote.to_string_lossy(), name]);
+        let dir = root.join(name);
+        sh(&dir, &["config", "user.email", "t@t"]);
+        sh(&dir, &["config", "user.name", "t"]);
+        sh(&dir, &["config", "core.autocrlf", "false"]);
+        dir
+    }
+
+    /// Two clones edit the same line; the second one's merge pull must stop and
+    /// hand the conflict over instead of resolving or aborting it.
+    #[test]
+    fn merge_pull_keeps_conflicts_for_the_user() {
+        if git_command().arg("--version").output().is_err() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("aw-flow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let remote = root.join("remote.git");
+        sh(&root, &["init", "-q", "--bare", "-b", "main", &remote.to_string_lossy()]);
+        let a = clone_into(&root, &remote, "a");
+        std::fs::write(a.join("f.txt"), "one\nbase\nthree\n").unwrap();
+        sh(&a, &["add", "-A"]);
+        sh(&a, &["commit", "-qm", "base"]);
+        sh(&a, &["push", "-q", "-u", "origin", "HEAD"]);
+        let b = clone_into(&root, &remote, "b");
+
+        std::fs::write(a.join("f.txt"), "one\nfrom a\nthree\n").unwrap();
+        sh(&a, &["commit", "-qam", "a"]);
+        sh(&a, &["push", "-q"]);
+        std::fs::write(b.join("f.txt"), "one\nfrom b\nthree\n").unwrap();
+        sh(&b, &["commit", "-qam", "b"]);
+        let bp = b.to_string_lossy().into_owned();
+
+        let rejected = git_push_sync(bp.clone()).unwrap_err();
+        assert!(rejected.starts_with("[GIT_PUSH_REJECTED]"), "{rejected}");
+        let diverged = git_pull_sync(bp.clone(), false).unwrap_err();
+        assert!(diverged.starts_with("[GIT_DIVERGED]"), "{diverged}");
+
+        let err = git_pull_sync(bp.clone(), true).unwrap_err();
+        assert!(err.starts_with("[GIT_CONFLICT]") && err.contains("f.txt"), "{err}");
+        let state = crate::git_merge::conflict_state(&bp);
+        assert_eq!(state.operation, Some("merge"), "merge state must be kept");
+        assert_eq!(state.conflicted, vec!["f.txt".to_string()]);
+
+        assert!(git_commit_sync(bp.clone(), "x".into(), false).unwrap_err().contains("冲突"));
+        assert!(git_push_sync(bp.clone()).unwrap_err().starts_with("[GIT_OPERATION_IN_PROGRESS]"));
+        assert!(git_stage_sync(bp.clone(), vec![]).unwrap_err().starts_with("[GIT_CONFLICT]"));
+        assert!(git_discard_sync(bp.clone(), "f.txt".into(), false, false).is_err());
+
+        let file = crate::git_merge::git_conflict_file_sync(bp.clone(), "f.txt".into()).unwrap();
+        assert_eq!(file.kind, "content");
+        assert!(file.segments.iter().any(|s| matches!(s, crate::git_merge::MergeSegment::Conflict { .. })));
+        let marked = crate::git_merge::git_resolve_conflict_sync(
+            bp.clone(),
+            "f.txt".into(),
+            Some("<<<<<<< ours\nx\n>>>>>>> theirs\n".into()),
+            None,
+        );
+        assert!(marked.is_err(), "markers must be refused");
+        crate::git_merge::git_resolve_conflict_sync(bp.clone(), "f.txt".into(), Some("one\nfrom a and b\nthree\n".into()), None)
+            .unwrap();
+
+        let merge = crate::git_merge::git_merge_state_sync(bp.clone()).unwrap();
+        assert!(merge.conflicted.is_empty());
+        assert!(merge.message.starts_with("Merge"), "{}", merge.message);
+        git_commit_sync(bp.clone(), merge.message, false).unwrap();
+        assert!(crate::git_merge::conflict_state(&bp).is_clear());
+        git_push_sync(bp.clone()).unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 }

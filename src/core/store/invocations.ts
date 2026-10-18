@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, GitBranchList, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller } from '../types';
+import type { AIModelConfig, DshInstance, GitBranchList, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -66,6 +66,15 @@ export interface Invocations {
   invokeGitStashDrop: (path: string, index: number) => Promise<string>;
   invokeGitPush: (path: string) => Promise<string>;
   invokeGitPull: (path: string, merge?: boolean) => Promise<string>;
+  invokeGitMergeState: (path: string) => Promise<GitMergeState>;
+  invokeGitConflictFile: (path: string, file: string) => Promise<GitConflictFile>;
+  /** Record the user's resolution: full `content`, or take `ours` / `theirs` / `delete`. */
+  invokeGitResolveConflict: (
+    path: string,
+    file: string,
+    resolution: { content: string } | { take: 'ours' | 'theirs' | 'delete' },
+  ) => Promise<string>;
+  invokeGitMergeAbort: (path: string) => Promise<string>;
   invokeGitCreateBranch: (path: string, name: string) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
@@ -328,6 +337,19 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_push', { path }),
   invokeGitPull: (path: string, merge?: boolean) =>
     tauriInvoke<string>('git_pull', { path, merge: merge ?? false }),
+  invokeGitMergeState: (path: string) =>
+    tauriInvoke<GitMergeState>('git_merge_state', { path }),
+  invokeGitConflictFile: (path: string, file: string) =>
+    tauriInvoke<GitConflictFile>('git_conflict_file', { path, file }),
+  invokeGitResolveConflict: (path, file, resolution) =>
+    tauriInvoke<string>('git_resolve_conflict', {
+      path,
+      file,
+      content: 'content' in resolution ? resolution.content : null,
+      take: 'take' in resolution ? resolution.take : null,
+    }),
+  invokeGitMergeAbort: (path: string) =>
+    tauriInvoke<string>('git_merge_abort', { path }),
   invokeGitCreateBranch: (path: string, name: string) =>
     tauriInvoke<string>('git_create_branch', { path, name }),
   invokeGitSwitchBranch: (path: string, name: string) =>
