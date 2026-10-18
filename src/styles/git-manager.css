@@ -22,7 +22,7 @@
   display: flex;
   flex-shrink: 0;
   gap: 4px;
-  margin: 4px 16px 0;
+  margin: 4px 16px 12px;
   padding: 3px;
   background: var(--bg-1);
   border: 1px solid var(--border-subtle);

@@ -33,6 +33,7 @@ import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/path
 import { describePushTargets, isPushable } from "../core/gitPushScope";
 import { recordAiUsage } from "../lib/aiUsage";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
+import { looksLikeTempFile } from "../lib/tempFiles";
 import type {
   AIModelConfig,
   GitStatusEntry,
@@ -1347,6 +1348,65 @@ function CommitChangelist({
       onToast("error", t("commit.changelistNeedFiles"));
       return;
     }
+
+    // 疑似临时/非项目文件：列出来让用户决定——仍要提交 / 排除后提交 / 取消
+    const tempPicks: { repoPath: string; keys: string[]; paths: string[] }[] = [];
+    for (const [repoPath, fileSet] of repos) {
+      const entries = statuses[repoPath] || [];
+      const keys: string[] = [];
+      const paths: string[] = [];
+      for (const e of entries) {
+        if (fileSet.has(selectionKey(e)) && looksLikeTempFile(e.path)) {
+          keys.push(selectionKey(e));
+          paths.push(e.path);
+        }
+      }
+      if (keys.length > 0) tempPicks.push({ repoPath, keys, paths });
+    }
+    if (tempPicks.length > 0) {
+      const list = tempPicks.flatMap((x) => x.paths);
+      const shown = list
+        .slice(0, 8)
+        .map((p) => `• ${p}`)
+        .join("\n");
+      const more = list.length > 8 ? `\n${t("commit.tempMore", { count: list.length - 8 })}` : "";
+      const choice = await confirmChoice({
+        title: t("commit.tempTitle"),
+        message: `${t("commit.tempConfirm", { count: list.length })}\n${shown}${more}`,
+        warning: t("commit.tempWarn"),
+        confirmText: t("commit.tempProceed"),
+        altConfirmText: t("commit.tempExclude"),
+        icon: "warning",
+      });
+      if (choice === "cancel") return;
+      if (choice === "alt") {
+        const exclude = new Map(tempPicks.map((x) => [x.repoPath, new Set(x.keys)]));
+        setSelected((prev) => {
+          const next = new Map(prev);
+          for (const [repoPath, keys] of exclude) {
+            const set = new Set(next.get(repoPath) || []);
+            for (const k of keys) set.delete(k);
+            if (set.size === 0) next.delete(repoPath);
+            else next.set(repoPath, set);
+          }
+          return next;
+        });
+        repos = repos
+          .map(([repoPath, fileSet]): [string, Set<string>] => {
+            const keys = exclude.get(repoPath);
+            if (!keys) return [repoPath, fileSet];
+            const next = new Set(fileSet);
+            for (const k of keys) next.delete(k);
+            return [repoPath, next];
+          })
+          .filter(([, fileSet]) => fileSet.size > 0);
+        if (repos.length === 0) {
+          onToast("error", t("commit.changelistNeedFiles"));
+          return;
+        }
+      }
+    }
+
     if (amend) {
       const summary = summaryForPath(repos[0][0]);
       if (summary?.hasUpstream && summary.ahead === 0) {
@@ -1743,6 +1803,11 @@ function CommitChangelist({
                     onChange={() => toggleFile(p.path, e)}
                   />
                   <span className={`git-file-badge ${statusClass(code)}`}>{statusLabel(code)}</span>
+                  {looksLikeTempFile(e.path) && (
+                    <span className="cl-file-temp" title={t("commit.tempBadgeTip")}>
+                      {t("commit.tempBadge")}
+                    </span>
+                  )}
                   {e.group === "staged" && (
                     <span className="cl-file-staged">{t("commit.statusStaged")}</span>
                   )}

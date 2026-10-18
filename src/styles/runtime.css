@@ -207,6 +207,23 @@
   padding: 48px 16px;
   color: var(--text-2);
   font-size: 13px;
+  /* 虚线发丝框：与模型/片段空态同一配方（Git 提交页、环境变量、仓库页空态共用） */
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-1) 55%, transparent);
+}
+
+/* 环境变量页 / Git 提交页：空态面板撑满滚动区（与模型列表空态同一配方） */
+.runtime-page .runtime-empty,
+.page-scrollable.runtime-empty {
+  min-height: max(320px, 100%);
+  box-sizing: border-box;
+}
+
+/* 安装弹窗内不套框，避免与弹框双层描边 */
+.modal .runtime-empty {
+  border: none;
+  background: transparent;
 }
 
 .runtime-muted {

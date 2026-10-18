@@ -416,7 +416,8 @@
 /* 玻璃主题下 --bg-1 本身只有 ~4% alpha，空态面板底色改用 overlay 叠加层 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-empty,
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .snippets-empty,
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .drafts-empty {
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .drafts-empty,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .runtime-empty {
   border-color: var(--overlay-3);
   background: color-mix(in srgb, var(--overlay-1) 80%, transparent);
 }

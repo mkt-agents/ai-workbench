@@ -13,10 +13,15 @@ import type { AnswerSource, AskPhase, AgentApproval, AgentStep } from "./useAskS
 import type { OpenSuggestion } from "./localActions";
 import { keepableAnswer } from "./keepable";
 
-/** Empty-state starters: filled into the input (never auto-sent). */
-const EXAMPLES: { key: string }[] = [
+/** Empty-state starters: filled into the input (never auto-sent). `task` pre-switches the composer task pill. */
+const EXAMPLES: { key: string; task?: TaskKind }[] = [
   { key: "recent" },
   { key: "impact" },
+  { key: "uncommitted" },
+  { key: "commitMsg" },
+  { key: "error", task: "debug" },
+  { key: "polish", task: "polish" },
+  { key: "translate", task: "translate" },
   { key: "open" },
   { key: "model" },
 ];
@@ -481,7 +486,7 @@ export default function AskPanel(props: Props) {
                 key={ex.key}
                 type="button"
                 className="qa-example"
-                onClick={() => onExample(t(`examples.${ex.key}`))}
+                onClick={() => onExample(t(`examples.${ex.key}`), ex.task)}
               >
                 {t(`examples.${ex.key}`)}
               </button>

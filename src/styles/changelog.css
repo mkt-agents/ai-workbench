@@ -269,6 +269,19 @@
   line-height: 18px;
 }
 
+/* 疑似临时/非项目文件：琥珀警示徽标（提交前确认的行内对应） */
+.cl-file-temp {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--yellow-border);
+  background: var(--yellow-dim);
+  color: var(--yellow);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: help;
+}
+
 .cl-repo {
   border-radius: var(--radius-sm);
 }

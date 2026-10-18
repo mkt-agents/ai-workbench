@@ -41,8 +41,11 @@
     "daily": "Write a paste-ready report from today's commits",
     "recent": "What did the latest commits each change?",
     "impact": "What will this change affect?",
+    "uncommitted": "What changes are left uncommitted?",
+    "commitMsg": "Write a commit message for my changes",
     "error": "What's causing this error: ",
     "polish": "Rewrite this so I can paste it in chat: ",
+    "translate": "Translate this into English: ",
     "open": "Open the commit page",
     "model": "Which model is answering?"
   },
