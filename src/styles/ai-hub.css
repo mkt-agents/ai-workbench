@@ -1214,6 +1214,9 @@
 }
 .qa-perm-item {
   display: grid;
+  /* Each item sits in its own wrapper div; without this the highlight stops short */
+  width: 100%;
+  box-sizing: border-box;
   grid-template-columns: 16px 1fr 14px;
   align-items: start;
   gap: 8px;
