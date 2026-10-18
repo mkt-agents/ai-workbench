@@ -166,7 +166,8 @@
     "selectAll": "Select the whole workspace (services added later are included too)",
     "partsHead": "Attach",
     "note": "These are only sent in Project mode.",
-    "previewEmpty": "No project context to attach right now"
+    "previewEmpty": "No project context to attach right now",
+    "resize": "Drag to resize"
   },
   "route": {
     "pillProject": "Project · {{label}}",

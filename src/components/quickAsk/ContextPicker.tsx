@@ -1,13 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronRight, Eye, FolderGit2, FolderSearch, Minus, Search, X } from "lucide-react";
 import type { QuickAskChips } from "../../core/types";
+import { readStoredString, writeStoredString } from "../../core/localState";
 import { pathKey } from "../../core/pathUtils";
 import { groupState, isServiceSelected } from "./repoSelection";
 import type { PickerGroup } from "./repoSelection";
 
 const PART_KEYS: (keyof QuickAskChips)[] = ["dirty", "git", "workspace"];
 const FILTER_MIN_REPOS = 8;
+const CTX_HEIGHT_KEY = "qa-ctx-pop-height";
+const CTX_HEIGHT_MIN = 300;
+const CTX_HEIGHT_DEFAULT = 460;
+
+function ctxMaxHeight(): number {
+  return Math.max(CTX_HEIGHT_MIN, window.innerHeight - 80);
+}
+
+function readCtxHeight(): number {
+  const n = Number(readStoredString(CTX_HEIGHT_KEY));
+  if (!Number.isFinite(n)) return CTX_HEIGHT_DEFAULT;
+  return Math.min(ctxMaxHeight(), Math.max(CTX_HEIGHT_MIN, n));
+}
 
 type Props = {
   open: boolean;
@@ -41,6 +55,9 @@ export default function ContextPicker(props: Props) {
   } = props;
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [popHeight, setPopHeight] = useState(readCtxHeight);
+  const popHeightRef = useRef(popHeight);
+  const resizeDrag = useRef<{ y: number; h: number } | null>(null);
 
   const totalRepos = groups.reduce((n, g) => n + g.repos.length, 0);
 
@@ -85,6 +102,25 @@ export default function ContextPicker(props: Props) {
     });
   };
 
+  const onResizeDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeDrag.current = { y: e.clientY, h: popHeightRef.current };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeDrag.current;
+    if (!drag) return;
+    const next = Math.min(ctxMaxHeight(), Math.max(CTX_HEIGHT_MIN, drag.h + (drag.y - e.clientY)));
+    popHeightRef.current = next;
+    setPopHeight(next);
+  };
+  const onResizeUp = () => {
+    if (!resizeDrag.current) return;
+    resizeDrag.current = null;
+    writeStoredString(CTX_HEIGHT_KEY, String(Math.round(popHeightRef.current)));
+  };
+
   return (
     <div className="qa-focus qa-ctx-picker">
       <button
@@ -102,7 +138,17 @@ export default function ContextPicker(props: Props) {
       </button>
 
       {open && (
-        <div className="qa-focus-pop qa-ctx-pop is-left is-up">
+        <div className="qa-focus-pop qa-ctx-pop is-left is-up" style={{ height: popHeight }}>
+          <div
+            className="qa-ctx-resize"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label={t("ctx.resize")}
+            onPointerDown={onResizeDown}
+            onPointerMove={onResizeMove}
+            onPointerUp={onResizeUp}
+            onPointerCancel={onResizeUp}
+          />
           <div className="qa-focus-pop-head">
             <span>{t("ctx.reposHead")}</span>
             {selection.length > 0 && (

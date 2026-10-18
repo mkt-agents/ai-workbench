@@ -770,6 +770,101 @@ async fn await_cancellable<T>(
     }
 }
 
+fn decode_model_body(text: &str) -> Result<Value, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "模型返回了空内容。免费线路经常会中途断开，请再试一次，或换一个模型；只想聊天可以改为普通对话。"
+                .into(),
+        );
+    }
+    if trimmed.starts_with("data:") {
+        return decode_sse(trimmed);
+    }
+    serde_json::from_str(trimmed).map_err(|e| {
+        let snippet: String = trimmed.chars().take(180).collect();
+        format!("模型响应不是 JSON：{snippet}（{e}）")
+    })
+}
+
+/// Some routers ignore `stream: false` and send SSE. Fold the chunks into one
+/// chat completion so the tool loop can read it.
+fn decode_sse(text: &str) -> Result<Value, String> {
+    let mut content = String::new();
+    let mut calls: Vec<Value> = Vec::new();
+    let mut saw = false;
+    for line in text.lines() {
+        let Some(data) = line.trim().strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(chunk) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        saw = true;
+        if chunk.pointer("/choices/0/message").is_some() {
+            return Ok(chunk);
+        }
+        if let Some(delta) = chunk.pointer("/choices/0/delta") {
+            if let Some(piece) = delta.get("content").and_then(|v| v.as_str()) {
+                content.push_str(piece);
+            }
+            if let Some(arr) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                for call in arr {
+                    let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    if calls.len() <= index {
+                        calls.resize(index + 1, json!({}));
+                    }
+                    merge_tool_delta(&mut calls[index], call);
+                }
+            }
+        }
+    }
+    if !saw || (content.trim().is_empty() && calls.iter().all(|c| c.as_object().map(|o| o.is_empty()).unwrap_or(true)))
+    {
+        return Err("模型以流式返回，但没有有效内容。请重试，或换一个模型。".into());
+    }
+    Ok(json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": calls.into_iter().filter(|c| c.get("function").is_some()).collect::<Vec<_>>(),
+            }
+        }]
+    }))
+}
+
+fn merge_tool_delta(slot: &mut Value, delta: &Value) {
+    if slot.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+        *slot = json!({
+            "id": "",
+            "type": "function",
+            "function": { "name": "", "arguments": "" }
+        });
+    }
+    if let Some(id) = delta.get("id").and_then(|v| v.as_str()) {
+        if !id.is_empty() {
+            slot["id"] = json!(id);
+        }
+    }
+    if let Some(name) = delta.pointer("/function/name").and_then(|v| v.as_str()) {
+        if !name.is_empty() {
+            slot["function"]["name"] = json!(name);
+        }
+    }
+    if let Some(args) = delta.pointer("/function/arguments").and_then(|v| v.as_str()) {
+        let prev = slot
+            .pointer("/function/arguments")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        slot["function"]["arguments"] = json!(format!("{prev}{args}"));
+    }
+}
+
 async fn model_turn(
     client: &reqwest::Client,
     config: &AIModelConfig,
@@ -805,33 +900,49 @@ async fn model_turn(
             "tools": openai_tools(),
             "max_tokens": max_tokens,
             "temperature": config.temperature.clamp(0.0, 1.0),
+            "stream": false,
         });
         (url, body)
     };
-    let resp = await_cancellable(
-        apply_auth_headers(client.post(&url).json(&body), config, anthropic).send(),
-        request_id,
-    )
-    .await?
-    .map_err(|e| format!("请求模型失败: {e}"))?;
-    let status = resp.status();
-    let text = await_cancellable(resp.text(), request_id)
+    for attempt in 0..2 {
+        let resp = await_cancellable(
+            apply_auth_headers(client.post(&url).json(&body), config, anthropic).send(),
+            request_id,
+        )
         .await?
-        .unwrap_or_default();
-    if !status.is_success() {
-        let snippet: String = text.chars().take(240).collect();
-        let lower = snippet.to_lowercase();
-        if lower.contains("tool") {
-            return Err("这个模型不支持工具调用，请换一个支持 function calling 的模型。".into());
+        .map_err(|e| format!("请求模型失败: {e}"))?;
+        let status = resp.status();
+        let text = await_cancellable(resp.text(), request_id)
+            .await?
+            .unwrap_or_default();
+        if !status.is_success() {
+            let snippet: String = text.chars().take(240).collect();
+            let lower = snippet.to_lowercase();
+            if lower.contains("tool") {
+                return Err("这个模型不支持工具调用，请换一个支持 function calling 的模型。".into());
+            }
+            return Err(format!("模型返回 HTTP {status}: {snippet}"));
         }
-        return Err(format!("模型返回 HTTP {status}: {snippet}"));
+        match decode_model_body(&text) {
+            Ok(json) => {
+                return if anthropic {
+                    parse_anthropic(&json)
+                } else {
+                    parse_openai(&json)
+                };
+            }
+            Err(_) if attempt == 0 && text.trim().is_empty() => {
+                if is_cancelled(request_id) {
+                    return Err(cancelled_message());
+                }
+            }
+            Err(e) => return Err(e),
+        }
     }
-    let json: Value = serde_json::from_str(&text).map_err(|e| format!("模型响应不是 JSON: {e}"))?;
-    if anthropic {
-        parse_anthropic(&json)
-    } else {
-        parse_openai(&json)
-    }
+    Err(
+        "模型返回了空内容。免费线路经常会中途断开，请再试一次，或换一个模型；只想聊天可以改为普通对话。"
+            .into(),
+    )
 }
 
 fn parse_args(raw: &str) -> Value {
@@ -1032,8 +1143,34 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{command_blocked, limit_message, resolve_in_repo, round_is_action};
+    use super::{command_blocked, decode_model_body, limit_message, resolve_in_repo, round_is_action};
     use std::fs;
+
+    #[test]
+    fn empty_model_body_is_not_a_json_eof_error() {
+        let err = decode_model_body("").unwrap_err();
+        assert!(err.contains("空内容"), "{err}");
+        assert!(!err.contains("EOF"), "{err}");
+    }
+
+    #[test]
+    fn sse_chunks_fold_into_one_completion() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"好\",\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"run_command\",\"arguments\":\"{\\\"command\\\":\\\"git status\\\"}\"}}]}}]}\n",
+            "\n",
+            "data: [DONE]\n",
+        );
+        let body = decode_model_body(raw).unwrap();
+        assert_eq!(
+            body.pointer("/choices/0/message/content").and_then(|v| v.as_str()),
+            Some("好")
+        );
+        assert_eq!(
+            body.pointer("/choices/0/message/tool_calls/0/function/name")
+                .and_then(|v| v.as_str()),
+            Some("run_command")
+        );
+    }
 
     #[test]
     fn read_only_rounds_do_not_count_as_actions() {

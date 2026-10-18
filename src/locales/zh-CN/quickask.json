@@ -166,7 +166,8 @@
     "selectAll": "选中整个仓库（之后新增的服务也会自动包含）",
     "partsHead": "附带内容",
     "note": "这些内容只在「项目」模式发送。",
-    "previewEmpty": "当前没有可附带的项目上下文"
+    "previewEmpty": "当前没有可附带的项目上下文",
+    "resize": "拖动调整高度"
   },
   "route": {
     "pillProject": "项目 · {{label}}",
