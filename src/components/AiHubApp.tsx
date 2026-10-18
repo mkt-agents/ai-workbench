@@ -1,13 +1,10 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { History, Loader2, MessageSquarePlus, Pin, PinOff, Sparkles, Square, Terminal, X } from "lucide-react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useGlobalStore } from "../core/store";
-import type { AIModelConfig, GitScannedRepo, AiHubSession, AiHubTurn, SnippetTaskBind } from "../core/types";
+import type { AIModelConfig, AiHubSession, AiHubTurn, SnippetTaskBind } from "../core/types";
 import { bootApp } from "../core/boot";
-import { projectNameFromPath } from "../core/pathUtils";
 import { writeStoredString } from "../core/localState";
 import { applyDocumentTheme } from "../lib/theme";
 import { resolveSceneModel } from "../lib/aiSceneModels";
@@ -18,15 +15,9 @@ import {
   type AskAttachment,
 } from "../lib/askAttachments";
 import AskPanel from "./aiHub/AskPanel";
+import AiHubHeader, { type AiHubMode } from "./aiHub/AiHubHeader";
+import AttachmentBar from "./aiHub/AttachmentBar";
 import ContextPicker from "./aiHub/ContextPicker";
-import {
-  buildPickerGroups,
-  describeSelection,
-  resolveFocus,
-  toggleGroup,
-  toggleService,
-} from "./aiHub/repoSelection";
-import type { PickerGroup } from "./aiHub/repoSelection";
 import OptimizeBar from "./aiHub/OptimizeBar";
 import ParamModal from "./aiHub/ParamModal";
 import QuickSelect from "./aiHub/QuickSelect";
@@ -34,16 +25,9 @@ import SessionHistory from "./aiHub/SessionHistory";
 import SnippetPicker from "./aiHub/SnippetPicker";
 import ToolsPanel from "./aiHub/ToolsPanel";
 import { useNextSuggestion } from "./aiHub/useNextSuggestion";
-import {
-  DEFAULT_CHIPS,
-  DEFAULT_OPTIMIZE,
-  encodeTask,
-  makeTitle,
-  parseTask,
-} from "./aiHub/config";
+import { DEFAULT_CHIPS, DEFAULT_OPTIMIZE, encodeTask, parseTask } from "./aiHub/config";
 import type { OptimizeConfig, TaskKind } from "./aiHub/config";
 import { routeQuestion } from "./aiHub/route";
-import { keepableAnswer } from "./aiHub/keepable";
 import { openSuggestions, type OpenSuggestion } from "./aiHub/localActions";
 import { GIT_SUBTAB_KEY } from "./GitManager";
 import type { RouteOverride } from "./aiHub/route";
@@ -52,6 +36,9 @@ import { useAskEvents } from "./aiHub/useAskEvents";
 import { useAskSessions } from "./aiHub/useAskSessions";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
 import { useAskStream } from "./aiHub/useAskStream";
+import { useRepoFocus } from "./aiHub/useRepoFocus";
+import { useAnswerActions } from "./aiHub/useAnswerActions";
+import { hideAiHub as hide, useModeHotkeys, useResizingBodyClass, useTimedFlag } from "./aiHub/useAiHubWindow";
 
 type QaTurn = AiHubTurn;
 
@@ -63,15 +50,8 @@ function AiHubApp() {
   const setSettings = useGlobalStore((s) => s.setSettings);
   const invokeGenerateText = useGlobalStore((s) => s.invokeGenerateText);
   const aiModels = useGlobalStore((s) => s.aiModels);
-  const recentProjects = useGlobalStore((s) => s.recentProjects);
-  const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
-  const addSnippet = useGlobalStore((s) => s.addSnippet);
   const quickAppLaunchers = useGlobalStore((s) => s.quickAppLaunchers);
   const invokeLaunchApp = useGlobalStore((s) => s.invokeLaunchApp);
-  const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
-  const invokeGitScanRepos = useGlobalStore((s) => s.invokeGitScanRepos);
-  const invokeGitIsRepo = useGlobalStore((s) => s.invokeGitIsRepo);
-  const invokePickDirectory = useGlobalStore((s) => s.invokePickDirectory);
   const invokePickTextFile = useGlobalStore((s) => s.invokePickTextFile);
   const invokeSetAiHubPinned = useGlobalStore((s) => s.invokeSetAiHubPinned);
 
@@ -90,22 +70,17 @@ function AiHubApp() {
     void invokeSetAiHubPinned(pinned).catch(() => {});
   }, [pinned, invokeSetAiHubPinned]);
   const togglePinned = () => setPinned((v) => !v);
-  const [mode, setMode] = useState<"ask" | "tools">("ask");
+  const [mode, setMode] = useState<AiHubMode>("ask");
   const [input, setInput] = useState("");
   const [task, setTask] = useState<TaskKind>("none");
   const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
-  /** Workspace tokens (`ws:<id>`) and/or service paths; empty = auto (current repo). */
-  const [focusedRepos, setFocusedRepos] = useState<string[]>(settings.aiHubFocusRepos ?? []);
   /** Which popover is open — only one at a time (mutual exclusion). */
   const [openPop, setOpenPop] = useState<null | "model" | "focus" | "route">(null);
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
-  /** Extra candidates pulled in by a folder scan (session-only). */
-  const [extraRepos, setExtraRepos] = useState<GitScannedRepo[]>([]);
-  const [scanning, setScanning] = useState(false);
   const [ctxOpen, setCtxOpen] = useState(false);
   /** Persisted-session id the current chat belongs to (null = fresh chat). */
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -115,31 +90,16 @@ function AiHubApp() {
   const [renameDraft, setRenameDraft] = useState("");
   /** Text currently selected inside the answer area (for quote follow-up). */
   const [selectedText, setSelectedText] = useState("");
-  /** Transcript index of the assistant message that was just copied / saved. */
-  const [copied, setCopied] = useState<number | null>(null);
-  const [snippetSaved, setSnippetSaved] = useState<number | null>(null);
-  const [exportDone, setExportDone] = useState(false);
   /** Brief notice when an action is refused because a round is still running. */
-  const [busyHint, setBusyHint] = useState(false);
-  const busyHintTimerRef = useRef<number | undefined>(undefined);
-  const flashBusyHint = () => {
-    setBusyHint(true);
-    window.clearTimeout(busyHintTimerRef.current);
-    busyHintTimerRef.current = window.setTimeout(() => setBusyHint(false), 2500);
-  };
-  useEffect(() => () => window.clearTimeout(busyHintTimerRef.current), []);
+  const [busyHint, flashBusyHint] = useTimedFlag(2500);
   /** Esc dismissed the open-suggestion list; typing brings it back. */
   const [openDismissed, setOpenDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const repoGroups = useMemo(
-    () =>
-      buildPickerGroups(gitWorkspaces, recentProjects, extraRepos, settings.currentGitRepo, focusedRepos),
-    [gitWorkspaces, recentProjects, extraRepos, settings.currentGitRepo, focusedRepos],
-  );
-  const resolvedFocus = useMemo(() => resolveFocus(focusedRepos, repoGroups), [focusedRepos, repoGroups]);
+  // `stream` is declared below; the error callback only runs later, from a click.
+  const repo = useRepoFocus({ onError: (msg) => stream.setError(msg) });
 
-  const ctx = useAskContext(chips, resolvedFocus);
+  const ctx = useAskContext(chips, repo.resolvedFocus);
 
   const models = aiModels as AIModelConfig[];
   const selectedModel = useMemo(() => {
@@ -173,7 +133,7 @@ function AiHubApp() {
     attachments,
     agent: {
       enabled: agentOn,
-      repoPath: resolvedFocus[0] || settings.currentGitRepo || "",
+      repoPath: repo.resolvedFocus[0] || settings.currentGitRepo || "",
       apps: quickAppLaunchers.map((app) => ({
         name: app.name,
         path: app.path,
@@ -189,6 +149,16 @@ function AiHubApp() {
     onRemovedActive: stream.resetChat,
   });
   persistRef.current = sessions.persistTurns;
+
+  const answers = useAnswerActions({
+    history: stream.history,
+    setError: stream.setError,
+    setInput,
+    inputRef,
+    selectedText,
+    setSelectedText,
+    exportSession: sessions.exportActiveSession,
+  });
 
   const snippets = useAskSnippets({ setInput, inputRef, input });
   const setComposerInput = (updater: string | ((prev: string) => string)) => {
@@ -259,45 +229,6 @@ function AiHubApp() {
     setSettings({
       aiHubChips: { ...chips, [key]: value },
     });
-  };
-
-  const commitFocus = (next: string[]) => {
-    setFocusedRepos(next);
-    setSettings({ aiHubFocusRepos: next });
-  };
-
-  const onToggleGroup = (group: PickerGroup) => commitFocus(toggleGroup(focusedRepos, group));
-  const onToggleService = (group: PickerGroup, path: string) =>
-    commitFocus(toggleService(focusedRepos, group, path));
-
-  /** Pick a folder, scan it for git repos, add them as candidates and select all. */
-  const scanFolder = async () => {
-    if (scanning) return;
-    setScanning(true);
-    try {
-      const dir = await invokePickDirectory();
-      if (!dir) return;
-      let found: GitScannedRepo[];
-      if (await invokeGitIsRepo(dir)) {
-        found = [{ path: dir, name: projectNameFromPath(dir) }];
-      } else {
-        found = await invokeGitScanRepos(dir, 2);
-      }
-      if (found.length === 0) {
-        stream.setError(t("focusScanEmpty"));
-        return;
-      }
-      setExtraRepos((prev) => {
-        const seen = new Set(prev.map((r) => r.path));
-        return [...prev, ...found.filter((r) => !seen.has(r.path))];
-      });
-      // Select every repo just discovered (union with existing selection).
-      commitFocus(Array.from(new Set([...focusedRepos, ...found.map((r) => r.path)])));
-    } catch (e) {
-      stream.setError(String(e));
-    } finally {
-      setScanning(false);
-    }
   };
 
   useEffect(() => {
@@ -371,21 +302,6 @@ function AiHubApp() {
   const changeOptimize = (next: OptimizeConfig) => {
     setOptimize(next);
     setSettings({ aiHubLastTask: encodeTask("optimize", next) });
-  };
-
-  const hide = async () => {
-    // Go through Rust: tao resolves hide() via its cached visibility flag, which can
-    // desync from the real window (see tray/bubble.rs `vis`) and turn this into a
-    // no-op. Fall back to the JS API if the command is unavailable.
-    try {
-      await invoke("hide_ai_hub");
-    } catch {
-      try {
-        await getCurrentWindow().hide();
-      } catch {
-        /* ignore */
-      }
-    }
   };
 
   const startNewChat = () => {
@@ -516,22 +432,8 @@ function AiHubApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  // Drag-resizing the frameless window repaints every blurred surface per frame;
-  // body.resizing (base.css) drops backdrop-filter until the drag settles.
-  useEffect(() => {
-    let idleTimer: number | undefined;
-    const onResize = () => {
-      document.body.classList.add("resizing");
-      window.clearTimeout(idleTimer);
-      idleTimer = window.setTimeout(() => document.body.classList.remove("resizing"), 300);
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      window.clearTimeout(idleTimer);
-      document.body.classList.remove("resizing");
-    };
-  }, []);
+  useResizingBodyClass();
+  useModeHotkeys(setMode);
 
   // Re-showing the window: drop popovers/history and park focus in the composer.
   useEffect(() => {
@@ -556,23 +458,6 @@ function AiHubApp() {
     document.addEventListener("mousedown", onDown, true);
     return () => document.removeEventListener("mousedown", onDown, true);
   }, [openPop]);
-
-  // Alt+1 / Alt+2: switch between ask and tools modes. Shift is excluded so
-  // layout combos like Alt+Shift+2 don't flip the view by accident.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (e.key === "1") {
-        e.preventDefault();
-        setMode("ask");
-      } else if (e.key === "2") {
-        e.preventDefault();
-        setMode("tools");
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   const fillClipboard = async () => {
     try {
@@ -608,57 +493,6 @@ function AiHubApp() {
     }
   };
 
-  const handleExport = async () => {
-    if (await sessions.exportActiveSession(stream.history)) {
-      setExportDone(true);
-      setTimeout(() => setExportDone(false), 1500);
-    }
-  };
-
-  /** `index` points at an assistant turn in the transcript. */
-  const saveAnswerAsSnippet = async (index: number) => {
-    const text = keepableAnswer(
-      stream.history[index]?.content || "",
-      stream.history[index]?.keep === "whole",
-    ).text;
-    if (!text) return;
-    const question = stream.history[index - 1]?.content;
-    const name = makeTitle(question || text, t("saveSnippet"));
-    try {
-      await addSnippet({ name, content: text, tags: "aihub,ai", params: "" });
-      setSnippetSaved(index);
-      window.setTimeout(() => setSnippetSaved((cur) => (cur === index ? null : cur)), 1500);
-    } catch (e) {
-      stream.setError(String(e));
-    }
-  };
-
-  const copyAnswer = async (index: number) => {
-    const text = keepableAnswer(
-      stream.history[index]?.content || "",
-      stream.history[index]?.keep === "whole",
-    ).text;
-    if (!text) return;
-    try {
-      await invokeCopyToClipboard(text);
-      setCopied(index);
-      window.setTimeout(() => setCopied((cur) => (cur === index ? null : cur)), 1500);
-    } catch (e) {
-      stream.setError(String(e));
-    }
-  };
-
-  /** Quote the selected answer text into the input as a follow-up prompt. */
-  const quoteSelection = () => {
-    const text = selectedText.trim().slice(0, 500);
-    if (!text) return;
-    const quoted = t("quotePrefix", { text });
-    setInput((prev) => (prev ? `${prev}\n\n${quoted}` : quoted));
-    setSelectedText("");
-    window.getSelection()?.removeAllRanges();
-    requestAnimationFrame(() => inputRef.current?.focus());
-  };
-
   /** Editor-class tools live in the main window: select the tool (shared localStorage +
       storage 事件让已挂载的 DevTools 跟着切), switch tab and get out of the way. */
   const jumpToDevtools = async (toolId?: string) => {
@@ -670,19 +504,6 @@ function AiHubApp() {
       /* window jump is best-effort */
     }
   };
-
-  const autoRepoName = settings.currentGitRepo ? projectNameFromPath(settings.currentGitRepo) : null;
-  /** Selection label for the composer pill in project mode; null = nothing to analyze. */
-  const projectLabel = useMemo(
-    () => describeSelection(focusedRepos, repoGroups, autoRepoName, (k, p) => t(k, p)),
-    [focusedRepos, repoGroups, autoRepoName, t],
-  );
-  const pickerLabel =
-    focusedRepos.length === 0 || !projectLabel
-      ? autoRepoName
-        ? t("ctx.autoRepo", { name: autoRepoName })
-        : t("ctx.noRepo")
-      : projectLabel;
 
   const previewContext = async () => {
     if (ctxOpen) {
@@ -700,135 +521,29 @@ function AiHubApp() {
 
   return (
     <div className="ai-hub-root">
-      <header className="ai-hub-header" data-tauri-drag-region>
-        <div className="ai-hub-header-lead" data-tauri-drag-region>
-          <div className="ai-hub-title" data-tauri-drag-region>
-            <Sparkles size={15} strokeWidth={1.75} />
-            <span>{t("title")}</span>
-          </div>
-          <div className="qa-mode-tabs" role="tablist" aria-label={t("title")}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "ask"}
-              className={`qa-mode-btn${mode === "ask" ? " active" : ""}`}
-              onClick={() => setMode("ask")}
-              title={`${t("modeAsk")} (Alt+1)`}
-            >
-              <Sparkles size={11} /> {t("modeAsk")}
-              {/* 切到工具箱后执行仍在后台跑：在页签上留一个在跑的标记 */}
-              {stream.busy && <span className="qa-mode-dot" aria-hidden />}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "tools"}
-              className={`qa-mode-btn${mode === "tools" ? " active" : ""}`}
-              onClick={() => setMode("tools")}
-              title={`${t("modeTools")} (Alt+2)`}
-            >
-              <Terminal size={11} /> {t("modeTools")}
-            </button>
-          </div>
-          {/* 问答回合在后台执行时切到了工具箱：这里必须有停止入口，
-              否则 agent_run 会一直跑完（停止按钮原本只在问答视图的输入框里） */}
-          {mode === "tools" && stream.busy && stream.agentApproval && (
-            <div className="qa-busy-pill is-approval" role="group" aria-label={t("busyApproval")}>
-              <Loader2 size={11} className="spin" />
-              <span>{t("busyApproval")}</span>
-              <button
-                type="button"
-                className="qa-busy-act is-allow"
-                onClick={() => void stream.decideAgent(true)}
-              >
-                {t("agent.allow")}
-              </button>
-              <button
-                type="button"
-                className="qa-busy-act"
-                onClick={() => void stream.decideAgent(false)}
-              >
-                {t("agent.deny")}
-              </button>
-            </div>
-          )}
-          {mode === "tools" && stream.busy && !stream.agentApproval && (
-            <button
-              type="button"
-              className="qa-busy-pill"
-              onClick={() => void stream.stopStream()}
-              title={t("busyOtherTab")}
-            >
-              <Loader2 size={11} className="spin" />
-              <span>{t("busyOtherTab")}</span>
-              <span className="qa-busy-stop">
-                <Square size={9} />
-                {t("stop")}
-              </span>
-            </button>
-          )}
-        </div>
-        <div className="ai-hub-header-actions">
-          {mode === "ask" && (
-            <div className="qa-header-sessions">
-              <button
-                type="button"
-                className="qa-session-btn qa-session-btn-primary"
-                onClick={startNewChat}
-                disabled={stream.busy}
-                title={`${t("newChat")} (Ctrl+N)`}
-              >
-                <MessageSquarePlus size={13} />
-                {t("newChat")}
-              </button>
-              <button
-                type="button"
-                className={`qa-session-btn qa-history-btn${historyOpen ? " on" : ""}`}
-                onClick={() => setHistoryOpen((v) => !v)}
-                title={t("history")}
-                aria-expanded={historyOpen}
-              >
-                <History size={13} />
-                {t("historyShort")}
-              </button>
-            </div>
-          )}
-          <button
-            type="button"
-            className={`btn-icon qa-pin-btn${pinned ? " is-active" : ""}`}
-            onClick={togglePinned}
-            title={pinned ? t("unpin") : t("pin")}
-            aria-pressed={pinned}
-          >
-            {pinned ? <Pin size={14} /> : <PinOff size={14} />}
-          </button>
-          <button type="button" className="btn-icon" onClick={() => void hide()} title={t("close")}>
-            <X size={16} />
-          </button>
-        </div>
-      </header>
+      <AiHubHeader
+        mode={mode}
+        onMode={setMode}
+        busy={stream.busy}
+        agentApproval={stream.agentApproval}
+        onDecideAgent={(allow) => void stream.decideAgent(allow)}
+        onStop={() => void stream.stopStream()}
+        historyOpen={historyOpen}
+        onToggleHistory={() => setHistoryOpen((v) => !v)}
+        onNewChat={startNewChat}
+        pinned={pinned}
+        onTogglePinned={togglePinned}
+        onClose={() => void hide()}
+      />
 
       {mode === "tools" ? (
         <ToolsPanel onJump={(toolId) => void jumpToDevtools(toolId)} />
       ) : (
         <>
-          {attachments.length > 0 && (
-            <div className="qa-attach-bar">
-              {attachments.map((a) => (
-                <span key={a.id} className="qa-attach-chip" title={`${a.name} · ${a.content.length} chars`}>
-                  {a.name}
-                  <button
-                    type="button"
-                    className="qa-attach-chip-x"
-                    onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
-                    aria-label={t("attach.remove")}
-                  >
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
+          <AttachmentBar
+            attachments={attachments}
+            onRemove={(id) => setAttachments((prev) => prev.filter((x) => x.id !== id))}
+          />
 
           {ctx.ctxTruncated && ctxOpen && <div className="ai-hub-hint">{t("truncated")}</div>}
           {ctxOpen && (
@@ -874,9 +589,9 @@ function AiHubApp() {
             pending={stream.pending}
             source={stream.source}
             canRegenerate={Boolean(stream.lastQuestionRef.current)}
-            copied={copied}
-            snippetSaved={snippetSaved}
-            exportDone={exportDone}
+            copied={answers.copied}
+            snippetSaved={answers.snippetSaved}
+            exportDone={answers.exportDone}
             selectedText={selectedText}
             setSelectedText={setSelectedText}
             route={routePreview}
@@ -884,7 +599,7 @@ function AiHubApp() {
             onRouteOverride={setRouteOverride}
             routeMenuOpen={openPop === "route"}
             onToggleRouteMenu={() => togglePop("route")}
-            projectLabel={projectLabel}
+            projectLabel={repo.projectLabel}
             task={task}
             onTask={changeTask}
             onDaily={askDaily}
@@ -903,15 +618,15 @@ function AiHubApp() {
               <ContextPicker
                 open={openPop === "focus"}
                 onToggleOpen={() => togglePop("focus")}
-                groups={repoGroups}
-                selection={focusedRepos}
-                label={pickerLabel}
+                groups={repo.repoGroups}
+                selection={repo.focusedRepos}
+                label={repo.pickerLabel}
                 currentRepo={settings.currentGitRepo || null}
-                onToggleGroup={onToggleGroup}
-                onToggleService={onToggleService}
-                onClear={() => commitFocus([])}
-                onScanFolder={() => void scanFolder()}
-                scanning={scanning}
+                onToggleGroup={repo.onToggleGroup}
+                onToggleService={repo.onToggleService}
+                onClear={repo.clearFocus}
+                onScanFolder={() => void repo.scanFolder()}
+                scanning={repo.scanning}
                 chips={chips}
                 setChip={setChip}
                 onPreview={() => void previewContext()}
@@ -942,10 +657,10 @@ function AiHubApp() {
             onRunOpen={runOpen}
             onStop={() => void stream.stopStream()}
             onRegenerate={() => void stream.regenerate()}
-            onCopyAnswer={(i) => void copyAnswer(i)}
-            onSaveSnippet={(i) => void saveAnswerAsSnippet(i)}
-            onExport={() => void handleExport()}
-            onQuote={quoteSelection}
+            onCopyAnswer={(i) => void answers.copyAnswer(i)}
+            onSaveSnippet={(i) => void answers.saveAnswerAsSnippet(i)}
+            onExport={() => void answers.handleExport()}
+            onQuote={answers.quoteSelection}
           />
 
           {historyOpen && (

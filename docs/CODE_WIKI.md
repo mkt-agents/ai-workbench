@@ -133,7 +133,8 @@ ai-workbench/
 │   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool
 │   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
 │   │   │                         #   + PortKillerPanel（该页第二个视图：按端口查杀）
-│   │   ├── aiHub/             # 智枢窗子组件（QuickSelect 焦点多选等）
+│   │   ├── aiHub/             # 智枢窗子组件：AskPanel（布局）→ AskThread / AskComposer / AskEmpty / AskErrorCard；
+│   │   │                      #   AiHubHeader、RoutePill、AgentActivity；hooks：useAskStream / useRepoFocus / useAnswerActions / useAiHubWindow 等
 │   │   ├── GitReportsPage.tsx    # Git 报告页（五视图 + 筛选 + 导出）
 │   │   ├── TestReportPanel.tsx   # 报告面板（概览 / 改动 / 提交 / API / AI）
 │   │   ├── reportTypes 见 testReportTypes.ts；useFilteredFiles.ts 为报告筛选 hook
