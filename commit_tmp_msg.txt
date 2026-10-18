@@ -1,0 +1,1 @@
+feat: strip thinking tags from reasoning model output

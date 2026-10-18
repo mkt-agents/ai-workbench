@@ -198,6 +198,11 @@ function selectionKey(entry: { path: string; group: string }): string {
   return `${entry.group}\0${entry.path}`;
 }
 
+/** git reports repo-relative `/` paths; tooltips show the full Windows path. */
+function absoluteFilePath(repoPath: string, relPath: string): string {
+  return `${repoPath.replace(/[\\/]+$/, "")}\\${relPath.replace(/\//g, "\\")}`;
+}
+
 /**
  * Rebuild the checked set after a refresh without overriding the user.
  *
@@ -1811,7 +1816,7 @@ function CommitChangelist({
                   {e.group === "staged" && (
                     <span className="cl-file-staged">{t("commit.statusStaged")}</span>
                   )}
-                  <span className="cl-file-path" title={e.path}>
+                  <span className="cl-file-path" title={absoluteFilePath(p.path, e.path)}>
                     <span className="cl-file-name">{e.path.slice(e.path.lastIndexOf("/") + 1)}</span>
                     {e.path.includes("/") && (
                       <span className="cl-file-dir">
@@ -1988,7 +1993,10 @@ function CommitChangelist({
         </div>
         <div className="cl-panel cl-split-diff git-diff-panel">
           <div className="cl-diff-head">
-            <span className="cl-diff-head-title">
+            <span
+              className="cl-diff-head-title"
+              title={diffTarget ? absoluteFilePath(diffTarget.repoPath, diffTarget.filePath) : undefined}
+            >
               {diffTarget
                 ? t("commit.diffTitle", { path: diffTarget.filePath })
                 : t("commit.diffEmpty")}
