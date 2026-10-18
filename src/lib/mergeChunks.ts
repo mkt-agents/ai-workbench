@@ -59,9 +59,16 @@ export function chunkLines(chunk: MergeChunk, st: ChunkState = EMPTY): string[] 
   return applied.flatMap((s) => (s === "left" ? chunk.ours : chunk.theirs));
 }
 
-/** No decision left: every changed side applied or ignored, or edited by hand. */
+/**
+ * No decision left. A one-sided change needs its side applied or ignored; a
+ * conflict is settled once either side is applied (the other can still be
+ * appended) or both are ignored. A hand edit settles anything.
+ */
 export function chunkResolved(chunk: MergeChunk, st: ChunkState = EMPTY): boolean {
   if (st.custom !== undefined) return true;
+  if (chunk.kind === "conflict") {
+    return st.left === "applied" || st.right === "applied" || (st.left === "ignored" && st.right === "ignored");
+  }
   return sidesOf(chunk).every((s) => st[s] !== "none");
 }
 

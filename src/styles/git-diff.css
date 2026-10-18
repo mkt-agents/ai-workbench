@@ -541,7 +541,7 @@
 .mr3-head,
 .mr3-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr) 44px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr) 48px minmax(0, 1fr);
 }
 
 .mr3-head {
@@ -646,20 +646,21 @@
   outline-offset: -1px;
 }
 
+/* 两个按钮横排，单行的块不会被撑高 */
 .mr3-gutter {
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: center;
   gap: 2px;
-  padding-top: 2px;
+  padding-top: 1px;
 }
 
 .mr3-act {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 20px;
+  width: 21px;
+  height: 18px;
   padding: 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -791,11 +792,11 @@
 }
 
 .mr3-grid.is-ours .mr3-row {
-  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr) 48px;
 }
 
 .mr3-grid.is-theirs .mr3-row {
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
 }
 
 .mr3-grid.is-result .mr3-row {

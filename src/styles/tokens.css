@@ -136,8 +136,8 @@
   --diff-add-word: color-mix(in srgb, var(--green) 34%, transparent);
   --diff-del-word: color-mix(in srgb, var(--red) 34%, transparent);
   /* 三栏合并（IDEA 配色语义）：单侧改动蓝、冲突红、两边改成一样绿 */
-  --merge-change-bg: color-mix(in srgb, var(--accent) 12%, transparent);
-  --merge-change-band: color-mix(in srgb, var(--accent) 45%, transparent);
+  --merge-change-bg: color-mix(in srgb, var(--accent) 20%, transparent);
+  --merge-change-band: color-mix(in srgb, var(--accent) 60%, transparent);
   --merge-conflict-bg: color-mix(in srgb, var(--red) 13%, transparent);
   --merge-conflict-band: color-mix(in srgb, var(--red) 50%, transparent);
   --merge-same-bg: color-mix(in srgb, var(--green) 11%, transparent);
