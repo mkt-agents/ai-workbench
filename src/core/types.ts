@@ -64,7 +64,6 @@ export interface QuickAskChips {
   workspace: boolean;
   git: boolean;
   dirty: boolean;
-  clipboard: boolean;
 }
 
 /** AI call sites that can bind a preferred model (else fall back to default). */

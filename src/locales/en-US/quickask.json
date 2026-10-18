@@ -19,6 +19,8 @@
   "send": "Send",
   "stop": "Stop",
   "busyOtherTab": "Ask is still running",
+  "busyApproval": "Ask is waiting for approval",
+  "busyHint": "Still answering — stop it or wait until it finishes",
   "suggestPrefix": "Next",
   "suggestPick": "Click to fill the input",
   "suggestDirty": "Commit and push these changes",
@@ -213,7 +215,6 @@
   "part": {
     "workspace": "Workspace",
     "git": "Git identity",
-    "dirty": "Changes",
-    "clipboard": "Clipboard"
+    "dirty": "Changes"
   }
 }

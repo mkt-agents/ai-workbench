@@ -5,6 +5,9 @@ import type { QuickAskSession } from "../../core/types";
 type Props = {
   sessions: QuickAskSession[];
   activeSessionId: string | null;
+  /** While a round is streaming: deleting the ACTIVE session is blocked (its
+      in-flight finishTurn would re-persist the just-deleted chat as a new session). */
+  busy: boolean;
   renamingId: string | null;
   renameDraft: string;
   setRenameDraft: (v: string) => void;
@@ -20,7 +23,7 @@ type Props = {
 export default function SessionHistory(props: Props) {
   const { t } = useTranslation("quickask");
   const {
-    sessions, activeSessionId, renamingId, renameDraft, setRenameDraft,
+    sessions, activeSessionId, busy, renamingId, renameDraft, setRenameDraft,
     onStartRename, onCommitRename, onCancelRename, onOpen, onRemove, relativeTime,
   } = props;
   return (
@@ -43,7 +46,11 @@ export default function SessionHistory(props: Props) {
                   onChange={(e) => setRenameDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") onCommitRename(s.id, renameDraft);
-                    if (e.key === "Escape") onCancelRename();
+                    // Esc 只退出重命名：不冒泡到全局链（那里会把整个历史面板关掉）
+                    if (e.key === "Escape") {
+                      e.stopPropagation();
+                      onCancelRename();
+                    }
                   }}
                 />
                 <button
@@ -85,6 +92,7 @@ export default function SessionHistory(props: Props) {
                   type="button"
                   className="btn-icon"
                   onClick={() => onRemove(s.id)}
+                  disabled={busy && s.id === activeSessionId}
                   title={t("deleteSession")}
                 >
                   <Trash2 size={13} />

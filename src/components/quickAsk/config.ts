@@ -67,7 +67,6 @@ export const DEFAULT_CHIPS: QuickAskChips = {
   workspace: true,
   git: true,
   dirty: true,
-  clipboard: false,
 };
 
 export type OptimizeConfig = { scenario: PromptScenario; goals: PromptGoal[] };

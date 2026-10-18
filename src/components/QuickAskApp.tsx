@@ -119,6 +119,17 @@ function QuickAskApp() {
   const [copied, setCopied] = useState<number | null>(null);
   const [snippetSaved, setSnippetSaved] = useState<number | null>(null);
   const [exportDone, setExportDone] = useState(false);
+  /** Brief notice when an action is refused because a round is still running. */
+  const [busyHint, setBusyHint] = useState(false);
+  const busyHintTimerRef = useRef<number | undefined>(undefined);
+  const flashBusyHint = () => {
+    setBusyHint(true);
+    window.clearTimeout(busyHintTimerRef.current);
+    busyHintTimerRef.current = window.setTimeout(() => setBusyHint(false), 2500);
+  };
+  useEffect(() => () => window.clearTimeout(busyHintTimerRef.current), []);
+  /** Esc dismissed the open-suggestion list; typing brings it back. */
+  const [openDismissed, setOpenDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const repoGroups = useMemo(
@@ -392,9 +403,14 @@ function QuickAskApp() {
     () => openSuggestions(input, quickAppLaunchers),
     [input, quickAppLaunchers],
   );
+  useEffect(() => setOpenDismissed(false), [input]);
+  const visibleOpenList = openDismissed ? null : openList;
 
   const runOpen = (item: OpenSuggestion) => {
-    if (stream.busy) return;
+    if (stream.busy) {
+      flashBusyHint();
+      return;
+    }
     const question = input.trim();
     setHistoryOpen(false);
     void (async () => {
@@ -445,6 +461,10 @@ function QuickAskApp() {
         snippets.setSnippetOpen(false);
         return;
       }
+      if (mode === "ask" && visibleOpenList) {
+        setOpenDismissed(true);
+        return;
+      }
       if (openPop) {
         setOpenPop(null);
         return;
@@ -471,7 +491,8 @@ function QuickAskApp() {
       // Ctrl/Cmd+N: new chat
       if ((e.ctrlKey || e.metaKey) && e.key === "n") {
         e.preventDefault();
-        if (!stream.busy) startNewChat();
+        if (stream.busy) flashBusyHint();
+        else startNewChat();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -480,7 +501,7 @@ function QuickAskApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [snippets.paramTarget, snippets.snippetOpen, openPop, historyOpen, ctxOpen, task, input, stream.busy]);
+  }, [snippets.paramTarget, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy]);
 
   const togglePop = (id: NonNullable<typeof openPop>) => {
     setOpenPop((cur) => (cur === id ? null : id));
@@ -490,7 +511,27 @@ function QuickAskApp() {
   useEffect(() => {
     setOpenPop(null);
     setHistoryOpen(false);
+    snippets.setSnippetOpen(false);
+    snippets.setParamTarget(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
+
+  // Drag-resizing the frameless window repaints every blurred surface per frame;
+  // body.resizing (base.css) drops backdrop-filter until the drag settles.
+  useEffect(() => {
+    let idleTimer: number | undefined;
+    const onResize = () => {
+      document.body.classList.add("resizing");
+      window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => document.body.classList.remove("resizing"), 300);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.clearTimeout(idleTimer);
+      document.body.classList.remove("resizing");
+    };
+  }, []);
 
   // Re-showing the window: drop popovers/history and park focus in the composer.
   useEffect(() => {
@@ -535,8 +576,8 @@ function QuickAskApp() {
 
   const fillClipboard = async () => {
     try {
-      const clip = await invoke<string>("read_clipboard");
-      if (clip.trim()) setInput((prev) => (prev ? prev : clip.trim()));
+      const clip = (await invoke<string>("read_clipboard")).trim();
+      if (clip) setInput((prev) => (prev ? `${prev}\n${clip}` : clip));
     } catch (e) {
       stream.setError(String(e));
     }
@@ -544,7 +585,10 @@ function QuickAskApp() {
 
   /** Restore a persisted session into the current chat. */
   const openSession = (s: QuickAskSession) => {
-    if (stream.busy) return;
+    if (stream.busy) {
+      flashBusyHint();
+      return;
+    }
     const turns = s.turns || [];
     stream.loadSession(turns);
     setTask("none");
@@ -688,7 +732,27 @@ function QuickAskApp() {
           </div>
           {/* 问答回合在后台执行时切到了小工具：这里必须有停止入口，
               否则 agent_run 会一直跑完（停止按钮原本只在问答视图的输入框里） */}
-          {mode === "tools" && stream.busy && (
+          {mode === "tools" && stream.busy && stream.agentApproval && (
+            <div className="qa-busy-pill is-approval" role="group" aria-label={t("busyApproval")}>
+              <Loader2 size={11} className="spin" />
+              <span>{t("busyApproval")}</span>
+              <button
+                type="button"
+                className="qa-busy-act is-allow"
+                onClick={() => void stream.decideAgent(true)}
+              >
+                {t("agent.allow")}
+              </button>
+              <button
+                type="button"
+                className="qa-busy-act"
+                onClick={() => void stream.decideAgent(false)}
+              >
+                {t("agent.deny")}
+              </button>
+            </div>
+          )}
+          {mode === "tools" && stream.busy && !stream.agentApproval && (
             <button
               type="button"
               className="qa-busy-pill"
@@ -874,7 +938,7 @@ function QuickAskApp() {
             }
             agentOn={agentOn}
             onToggleAgent={toggleAgent}
-            openList={openList}
+            openList={visibleOpenList}
             onRunOpen={runOpen}
             onStop={() => void stream.stopStream()}
             onRegenerate={() => void stream.regenerate()}
@@ -897,6 +961,7 @@ function QuickAskApp() {
                 <SessionHistory
                   sessions={sessions.quickAskSessions}
                   activeSessionId={activeSessionId}
+                  busy={stream.busy}
                   renamingId={renamingId}
                   renameDraft={renameDraft}
                   setRenameDraft={setRenameDraft}
@@ -923,6 +988,11 @@ function QuickAskApp() {
             />
           )}
         </>
+      )}
+      {busyHint && (
+        <div className="qa-busy-hint" role="status">
+          {t("busyHint")}
+        </div>
       )}
     </div>
   );

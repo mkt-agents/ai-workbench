@@ -37,7 +37,6 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .devtools-history-menu,
   .cl-recent-menu,
   .update-banner,
-  .quick-ask-toolbar .qa-focus-btn,
   .quick-ask-sessions,
   .qa-empty,
   .qa-answer-card,

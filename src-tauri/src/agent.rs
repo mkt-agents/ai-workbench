@@ -448,14 +448,54 @@ pub(crate) fn command_blocked(command: &str) -> bool {
         "rd /s",
         "rmdir /s",
         "remove-item",
-        "--force",
         "reset --hard",
         "clean -f",
         "clean -x",
         "filter-branch",
-        "rebase",
     ];
-    BLOCKED.iter().any(|word| lower.contains(word))
+    if BLOCKED.iter().any(|word| lower.contains(word)) {
+        return true;
+    }
+    // rebase / --force 必须按 token 匹配：`git log --grep=rebase` 是查询，不是 rebase。
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    if tokens.len() >= 2 && tokens[0] == "git" && tokens[1] == "rebase" {
+        return true;
+    }
+    tokens
+        .iter()
+        .any(|t| *t == "--force" || *t == "--force-with-lease")
+}
+
+/// `git branch` 里真正只读的用法：只允许查询 flag；
+/// 任何写 flag（-d/-D/-m/-M/-c/-C/--delete/…）或未知的 `-` 参数都判非只读。
+/// 位置参数只在 `--list`/`-l`（此时是匹配模式）或紧跟取值 flag 时允许——
+/// 裸的 `git branch <name>` 会新建分支。
+fn branch_is_readonly(rest: &[&str]) -> bool {
+    const QUERY_FLAGS: &[&str] = &[
+        "-a", "-v", "-vv", "-r", "-av", "-avv", "-q", "-l", "--all", "--list", "--verbose",
+        "--show-current", "--no-color", "--quiet",
+    ];
+    const VALUE_FLAGS: &[&str] = &[
+        "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort",
+        "--format",
+    ];
+    let listing = rest.iter().any(|t| *t == "--list" || *t == "-l");
+    let mut expect_value = false;
+    rest.iter().all(|t| {
+        if t.starts_with('-') {
+            expect_value = VALUE_FLAGS.contains(t);
+            QUERY_FLAGS.contains(t)
+                || expect_value
+                || VALUE_FLAGS
+                    .iter()
+                    .any(|f| t.starts_with(&format!("{f}=")))
+        } else if expect_value {
+            expect_value = false;
+            true
+        } else {
+            listing
+        }
+    })
 }
 
 pub(crate) fn command_is_readonly(command: &str) -> bool {
@@ -463,19 +503,31 @@ pub(crate) fn command_is_readonly(command: &str) -> bool {
     if lower.contains("&&") || lower.contains(';') || lower.contains('|') || lower.contains('`') {
         return false;
     }
-    const READS: &[&str] = &[
-        "git status",
-        "git diff",
-        "git log",
-        "git show",
-        "git remote",
-        "git branch",
-        "git rev-parse",
-        "git ls-files",
-        "git config --get",
-        "git ls-remote",
-    ];
-    READS.iter().any(|prefix| lower == *prefix || lower.starts_with(&format!("{prefix} ")))
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    if tokens.is_empty() {
+        return false;
+    }
+    // git 子命令逐个判定：branch/remote 有写形态，必须看参数
+    if tokens[0] == "git" {
+        match tokens.get(1).copied() {
+            Some("status") | Some("diff") | Some("log") | Some("show") | Some("rev-parse")
+            | Some("ls-files") | Some("ls-remote") => {
+                // --output=<file> 会把结果写进文件
+                return !tokens[2..].iter().any(|t| t.starts_with("--output"));
+            }
+            Some("config") => {
+                return tokens.len() >= 3 && (tokens[2] == "--get" || tokens[2] == "--get-all" || tokens[2] == "--list")
+            }
+            Some("branch") => return tokens.len() >= 2 && branch_is_readonly(&tokens[2..]),
+            Some("remote") => {
+                // 裸 git remote / git remote -v 是查询；add/remove/rename/set-url/prune 都是写
+                return tokens.len() == 2
+                    || (tokens.len() == 3 && (tokens[2] == "-v" || tokens[2] == "--verbose"));
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn command_timeout(command: &str) -> Duration {
@@ -1307,6 +1359,49 @@ mod tests {
         assert!(command_is_readonly("git diff"));
         assert!(!command_is_readonly("git push"));
         assert!(!command_is_readonly("git add -A && git commit -m x"));
+    }
+
+    /// rebase / --force 按 token 拦截：`git log --grep=rebase` 是查询，必须放行
+    #[test]
+    fn blocked_matches_tokens_not_substrings() {
+        assert!(!command_blocked("git log --grep=rebase"));
+        assert!(!command_blocked("git log --oneline rebase-check.txt"));
+        assert!(command_blocked("git rebase main"));
+        assert!(command_blocked("git rebase -i HEAD~3"));
+        assert!(command_blocked("git push --force-with-lease origin main"));
+        assert!(!command_blocked("git push origin main"));
+    }
+
+    /// branch/remote 有写形态：删分支、改远端必须走用户审批，不能按前缀判只读
+    #[test]
+    fn branch_and_remote_writes_need_approval() {
+        // 查询形态保持只读
+        assert!(command_is_readonly("git branch"));
+        assert!(command_is_readonly("git branch -a"));
+        assert!(command_is_readonly("git branch --list"));
+        assert!(command_is_readonly("git branch --contains HEAD"));
+        assert!(command_is_readonly("git remote"));
+        assert!(command_is_readonly("git remote -v"));
+        // 写形态必须审批
+        assert!(!command_is_readonly("git branch -D main"));
+        assert!(!command_is_readonly("git branch -d tmp"));
+        assert!(!command_is_readonly("git branch -m old new"));
+        assert!(!command_is_readonly("git branch --set-upstream-to origin/main"));
+        assert!(!command_is_readonly("git remote remove origin"));
+        assert!(!command_is_readonly("git remote add upstream https://example.com/x.git"));
+        assert!(!command_is_readonly("git remote set-url origin ssh://x"));
+        assert!(!command_is_readonly("git remote rename origin up"));
+        // 裸分支名 = 新建分支；只有 --list 下的位置参数才是匹配模式
+        assert!(!command_is_readonly("git branch newfeature"));
+        assert!(!command_is_readonly("git branch -a newfeature"));
+        assert!(command_is_readonly("git branch --list feat*"));
+        assert!(command_is_readonly("git branch --merged=main"));
+        // --output 会写文件
+        assert!(!command_is_readonly("git diff --output=x.patch"));
+        assert!(command_is_readonly("git log --grep=rebase"));
+        // config 只允许读形态
+        assert!(command_is_readonly("git config --get user.name"));
+        assert!(!command_is_readonly("git config user.name x"));
     }
 
     #[test]

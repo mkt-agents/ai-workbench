@@ -66,19 +66,39 @@ export function useNextSuggestion(opts: {
   const { model, turns, busy, generate, fallback } = opts;
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const genRef = useRef(0);
+  /** 唤出窗口会重载模型列表，model 对象换了 identity 但内容没变——
+      effect 只认 model.id，对象本身走 ref，避免每次唤出都白打一次请求。 */
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const generateRef = useRef(generate);
+  generateRef.current = generate;
+  const fallbackRef = useRef(fallback);
+  fallbackRef.current = fallback;
+  /** 上次已发起预测的对话快照；同一快照不重复请求，也不清掉已有建议。 */
+  const lastKeyRef = useRef<string | null>(null);
+  const modelId = model?.id;
 
   useEffect(() => {
-    const gen = ++genRef.current;
+    const model = modelRef.current;
     if (busy || turns.length === 0) {
+      ++genRef.current;
+      lastKeyRef.current = null;
       setSuggestion(null);
       return;
     }
+    const last = turns[turns.length - 1];
+    const key = `${modelId ?? ""}|${turns.length}|${last?.content.length ?? 0}`;
+    if (key === lastKeyRef.current) return;
+    lastKeyRef.current = key;
+    const gen = ++genRef.current;
     if (!model) {
       // 没模型跑不了预测，但关键词兜底照样有意义
-      setSuggestion(fallback?.() ?? null);
+      setSuggestion(fallbackRef.current?.() ?? null);
       return;
     }
+    let started = false;
     const timer = window.setTimeout(() => {
+      started = true;
       void (async () => {
         const lastUser = [...turns].reverse().find((t) => t.role === "user");
         const expectCJK = CJK_RE.test(lastUser?.content || "");
@@ -92,7 +112,7 @@ export function useNextSuggestion(opts: {
           )
           .join("\n");
         try {
-          const text = await generate({
+          const text = await generateRef.current({
             config: { ...model, maxTokens: 384, temperature: 0.4 },
             system: SUGGEST_SYSTEM,
             user: transcript,
@@ -102,18 +122,22 @@ export function useNextSuggestion(opts: {
           if (clean) setSuggestion(clean);
           else {
             console.warn("[qa-suggest] 建议内容不合格，改用本地兜底:", text.slice(0, 120));
-            setSuggestion(fallback?.() ?? null);
+            setSuggestion(fallbackRef.current?.() ?? null);
           }
         } catch (e) {
           if (genRef.current === gen) {
             console.warn("[qa-suggest] 下一步提示词生成失败，改用本地兜底:", e);
-            setSuggestion(fallback?.() ?? null);
+            setSuggestion(fallbackRef.current?.() ?? null);
           }
         }
       })();
     }, 900);
-    return () => window.clearTimeout(timer);
-  }, [turns, busy, model, generate, fallback]);
+    return () => {
+      window.clearTimeout(timer);
+      // 计时器没跑就被清掉时，这个快照还没真正请求过，下次要重新发
+      if (genRef.current === gen && !started) lastKeyRef.current = null;
+    };
+  }, [turns, busy, modelId]);
 
   const dismiss = useCallback(() => setSuggestion(null), []);
   return { suggestion, dismiss };

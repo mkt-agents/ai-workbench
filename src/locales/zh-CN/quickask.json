@@ -19,6 +19,8 @@
   "send": "发送",
   "stop": "停止",
   "busyOtherTab": "AI 问答仍在执行",
+  "busyApproval": "AI 问答等待确认",
+  "busyHint": "正在回答，先停止或等待完成",
   "suggestPrefix": "下一步",
   "suggestPick": "点击填入输入框",
   "suggestDirty": "提交并推送这些改动",
@@ -213,7 +215,6 @@
   "part": {
     "workspace": "工作区",
     "git": "Git 身份",
-    "dirty": "改动摘要",
-    "clipboard": "剪贴板"
+    "dirty": "改动摘要"
   }
 }

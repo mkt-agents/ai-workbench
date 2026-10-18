@@ -87,7 +87,6 @@ const DEFAULT_SETTINGS: AppSettings = {
     workspace: true,
     git: true,
     dirty: true,
-    clipboard: false,
   },
   quickAskBubbleEnabled: true,
   quickAskBubblePos: undefined,

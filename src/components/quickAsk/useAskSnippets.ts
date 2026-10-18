@@ -86,10 +86,12 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
       }
       return;
     }
+    // Nothing insertable: a `/` is just text, don't pop an empty picker.
+    if (!(snippets || []).some((s) => s.kind !== "prompt")) return;
     setSlashMode(true);
     setSnippetOpen(true);
     setSnippetQuery(hit.query);
-  }, [slashMode]);
+  }, [slashMode, snippets]);
 
   const effectiveQuery = slashMode
     ? (matchSlashCommand(input)?.query ?? snippetQuery)

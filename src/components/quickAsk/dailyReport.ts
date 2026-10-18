@@ -37,21 +37,6 @@ export type DailyRepoNote = {
   unreadable?: boolean;
 };
 
-/** Group paths so the model sees areas ("src/components ×4") instead of a file list. */
-export function summarizeAreas(paths: string[]): string {
-  const tops = new Map<string, number>();
-  for (const p of paths) {
-    const segs = p.split(/[\\/]/).filter(Boolean);
-    const top = segs.slice(0, Math.min(2, segs.length)).join("/") || p;
-    tops.set(top, (tops.get(top) || 0) + 1);
-  }
-  return [...tops.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 6)
-    .map(([k, n]) => (n > 1 ? `${k} ×${n}` : k))
-    .join(", ");
-}
-
 /** Source notes for the model. Not a template for the report itself. */
 export function formatDailyNotes(repos: DailyRepoNote[]): string {
   if (repos.length === 0) return "No repository is selected.";

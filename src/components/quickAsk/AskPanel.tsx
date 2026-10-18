@@ -275,13 +275,12 @@ export default function AskPanel(props: Props) {
     if (source.mode === "project") {
       bits.push(t("source.project"));
       if (source.summary.repos.length) bits.push(source.summary.repos.join("、"));
-      const projectParts = source.summary.parts.filter((p) => p !== "clipboard");
+      const projectParts = source.summary.parts;
       if (projectParts.length) bits.push(projectParts.map((p) => t(`part.${p}`)).join(" + "));
       else bits.push(t("source.noProjectData"));
     } else {
       bits.push(t("source.chat"));
     }
-    if (source.summary.parts.includes("clipboard")) bits.push(t("part.clipboard"));
     if (source.task !== "none") bits.push(t(`taskShort.${source.task}`));
     bits.push(source.modelName);
     if (source.elapsedMs != null) {
@@ -333,7 +332,11 @@ export default function AskPanel(props: Props) {
                   {turn.content}
                 </div>
               ) : (
-                <div key={i} className={`qa-msg is-ai${isNew(i) ? " is-new" : ""}`} aria-label={t("assistant")}>
+                <div
+                  key={i}
+                  className={`qa-msg is-ai${isNew(i) ? " is-new" : ""}${i === lastAssistant && !pending ? " is-last" : ""}`}
+                  aria-label={t("assistant")}
+                >
                   <MarkdownView text={turn.content} />
                   <div className="qa-msg-actions">
                     {(() => {
@@ -359,7 +362,10 @@ export default function AskPanel(props: Props) {
                       {snippetSaved === i ? <Check size={12} className="qa-pop" /> : <BookmarkPlus size={12} />}{" "}
                       {snippetSaved === i ? t("savedSnippet") : code ? t("saveCode") : t("saveSnippet")}
                     </button>
-                    {i === lastAssistant && !pending && turn.content.includes("发送「继续」") && (
+                    {i === lastAssistant &&
+                      !pending &&
+                      (turn.steps?.length ?? 0) > 0 &&
+                      turn.content.includes("发送「继续」") && (
                       <button
                         type="button"
                         className="qa-mini-btn"
@@ -721,19 +727,6 @@ export default function AskPanel(props: Props) {
                 </div>
               )}
             </div>
-            {task !== "none" && (
-              <span className="qa-task-tag">
-                {t(`taskShort.${task}`)}
-                <button
-                  type="button"
-                  className="qa-task-tag-x"
-                  onClick={() => onTask("none")}
-                  title={t("taskClear")}
-                >
-                  <X size={11} />
-                </button>
-              </span>
-            )}
             <button
               type="button"
               className={`qa-chip-btn qa-agent-toggle${agentOn ? " on" : ""}`}

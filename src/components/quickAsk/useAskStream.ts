@@ -126,6 +126,13 @@ export function useAskStream(opts: AskStreamOptions) {
   /** Task the last question was sent with, so regenerate replays it. */
   const lastTaskRef = useRef<TaskKind>("none");
   const [busy, setBusy] = useState(false);
+  /** busy 的同步镜像：send 的重入守卫必须读 ref——state 在同帧双发时都是旧值，
+      双击/双 Enter 会并发两个 agent_run 同写一个仓库。 */
+  const busyRef = useRef(false);
+  const setBusySync = (value: boolean) => {
+    busyRef.current = value;
+    setBusy(value);
+  };
   const [error, setError] = useState<string | null>(null);
   /** Full transcript. The last 50 rounds go verbatim; older rounds ride along as a digest. */
   const [history, setHistory] = useState<QaTurn[]>([]);
@@ -166,7 +173,7 @@ export function useAskStream(opts: AskStreamOptions) {
     historyOverride?: QaTurn[],
     replay?: { task: TaskKind; mode: AskMode },
   ) => {
-    if (busy) return;
+    if (busyRef.current) return;
     const sendTask = replay?.task ?? task;
     if (!selectedModel) {
       setError(t("noModel"));
@@ -190,7 +197,7 @@ export function useAskStream(opts: AskStreamOptions) {
     const myGen = streamIdRef.current;
     activeReqRef.current = reqId;
     stopRequestedRef.current = false;
-    setBusy(true);
+    setBusySync(true);
     setError(null);
     setAnswer("");
     rememberSteps([]);
@@ -241,7 +248,7 @@ export function useAskStream(opts: AskStreamOptions) {
       if (!stopRequestedRef.current && streamIdRef.current === myGen) return false;
       settled = true;
       failTurn(false);
-      setBusy(false);
+      setBusySync(false);
       activeReqRef.current = null;
       teardown();
       return true;
@@ -296,7 +303,7 @@ export function useAskStream(opts: AskStreamOptions) {
           lastDailyReposRef.current = [];
           const ctxResult = await getContext(route.mode);
           summary = ctxResult.summary;
-          const hasProject = summary.parts.some((p) => p !== "clipboard");
+          const hasProject = summary.parts.length > 0;
           system = buildSystem(selectedModel, route.mode, sendTask, hasProject);
           if (profileSystemRole?.trim()) {
             system += `\n\n[Profile] ${profileSystemRole.trim()}`;
@@ -338,7 +345,7 @@ export function useAskStream(opts: AskStreamOptions) {
         if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
         if (!settled) {
           settled = true;
-          setBusy(false);
+          setBusySync(false);
           const elapsedMs =
             payload.elapsedMs ?? Math.round(performance.now() - streamStarted);
           const promptTokens = payload.promptTokens;
@@ -379,7 +386,7 @@ export function useAskStream(opts: AskStreamOptions) {
           // Stopped mid-stream: keep the partial answer as context too.
           if (stopped && full.trim()) finishTurn(full);
           else failTurn(!stopped);
-          setBusy(false);
+          setBusySync(false);
         }
         activeReqRef.current = null;
         teardown();
@@ -484,7 +491,7 @@ export function useAskStream(opts: AskStreamOptions) {
         if (!stopped) setError(String(e));
         if (stopped && full.trim()) finishTurn(full);
         else failTurn(!stopped);
-        setBusy(false);
+        setBusySync(false);
       }
       activeReqRef.current = null;
       teardown();
@@ -587,7 +594,7 @@ export function useAskStream(opts: AskStreamOptions) {
 
   /** Record a local action (open a page / launch an app) without calling the model. */
   const noteLocal = (question: string, answer: string) => {
-    if (busy) return;
+    if (busyRef.current) return;
     const q = question.trim();
     if (!q || !answer.trim()) return;
     const nextTurns = appendTurn(history, q, answer.trim());
