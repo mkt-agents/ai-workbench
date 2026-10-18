@@ -405,6 +405,8 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
+  /* 撑满 .model-compare-results 的剩余高度，避免窗口下方留大片死空间 */
+  flex: 1 1 auto;
   min-height: 180px;
   padding: 32px 20px;
   border: 1px dashed var(--border-subtle);
