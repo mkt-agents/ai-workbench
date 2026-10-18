@@ -582,7 +582,9 @@ fn run_command(root: &Path, command: &str, request_id: &str) -> Result<String, S
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         let mut c = Command::new("cmd");
-        c.args(["/C", command]).current_dir(root);
+        // 必须 raw_arg：std 按 MSVC 规则把 `"` 转义成 `\"`，cmd.exe 不认，带引号的参数
+        // （commit -m "a b"）会被拆碎。/S 让 cmd 只剥最外层这对引号，其余原样执行。
+        c.raw_arg(format!("/S /C \"{command}\"")).current_dir(root);
         // A credential dialog needs a real window. Hiding it makes push sit
         // until the timeout, then the model retries.
         if !git_network_command(command) {
@@ -661,6 +663,9 @@ fn run_command(root: &Path, command: &str, request_id: &str) -> Result<String, S
     }
     if text.trim().is_empty() {
         text = format!("exit {code}");
+    } else if code != 0 {
+        // 失败要说出来：只看报错文本，弱模型分不清是警告还是命令没成功。放开头，clip 截不掉
+        text = format!("exit {code}\n{text}");
     }
     Ok(clip(&text, CMD_CAP))
 }
@@ -846,14 +851,34 @@ fn round_is_action(names: &[String]) -> bool {
     names.iter().any(|name| !matches!(name.as_str(), "read_file" | "list_dir" | "grep"))
 }
 
-/// 模型把上一条命令原样又提交了一遍：在工具结果前插入提示，让它先诊断失败原因
-/// 再换做法，否则弱模型会围绕同一个引号/路径问题无限原样重试。
-fn repeated_command_result(last: &str, current: &str, result: &str) -> String {
-    if last.is_empty() || last != current {
+/// 比较两条命令是否「实质相同」：只换引号种类、多几个空格不算新做法。
+fn normalize_command(command: &str) -> String {
+    command
+        .replace('\'', "\"")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// 命令输出首行是 `exit N`（N≠0）即失败，见 `run_command`。
+fn command_output_failed(output: &str) -> bool {
+    output
+        .lines()
+        .next()
+        .and_then(|l| l.trim().strip_prefix("exit "))
+        .map_or(false, |code| code.trim() != "0")
+}
+
+/// 模型把刚失败的命令又提交了一遍（哪怕只换了引号）：在工具结果前插入提示，让它先诊断
+/// 失败原因再换做法，否则弱模型会围绕同一个引号/路径问题无限重试。
+/// 上一条成功时不提示——改完文件再跑一次 `git status` 是正常复查。
+fn repeated_command_result(last: &str, last_failed: bool, current: &str, result: &str) -> String {
+    if !last_failed || last.is_empty() || normalize_command(last) != normalize_command(current) {
         return result.to_string();
     }
     format!(
-        "[Agent 提示] 这是与上一条完全相同的命令。不要原样重复执行；先分析上一条的输出（引号、路径、暂存区状态），换一种做法。\n\n{result}"
+        "[Agent 提示] 这条命令和上一条实质相同，而上一条失败了。不要再重复；先分析上一条的输出（引号、路径、暂存区状态），换一种做法。\n\n{result}"
     )
 }
 
@@ -1102,7 +1127,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     };
     let anthropic = req.config.provider.to_lowercase() == "anthropic";
     let policy = format!(
-        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push and pull use the same system proxy as the commit page. A push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nIf the same command keeps failing, do not retry it verbatim: first explain the failure from its output (quoting, paths, staging state), then try a different approach.\nNever stage or commit obvious temp files (*.tmp, *.log, *.bak, *.swp, ~$*, .DS_Store, Thumbs.db) unless the user explicitly asks; mention them instead.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
+        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nShell commands run in Windows cmd.exe: quote arguments with double quotes; single quotes are passed literally. A failed command's output starts with `exit N`.\nDo not create helper files in the repository (for example a commit message file); pass text inline with -m. If you did create one, delete it before you finish and never commit it.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push and pull use the same system proxy as the commit page. A push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nIf the same command keeps failing, do not retry it verbatim: first explain the failure from its output (quoting, paths, staging state), then try a different approach.\nNever stage or commit obvious temp files (*.tmp, *.log, *.bak, *.swp, ~$*, .DS_Store, Thumbs.db) unless the user explicitly asks; mention them instead.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
         root.display()
     );
     let system = format!("{}{policy}", req.system);
@@ -1135,6 +1160,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut write_granted = false;
     // 上一条实际执行过的 shell 命令，用来识别原样重试。
     let mut last_shell_command = String::new();
+    let mut last_shell_failed = false;
     loop {
         if rounds >= MAX_ROUNDS || action_steps >= MAX_ACTION_STEPS {
             break;
@@ -1245,9 +1271,14 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 "launch_app" => launch_named(&req.apps, &arg_str(&args, "name")),
                 _ => Err(format!("未知工具 {}", call.name)),
             };
+            let failed = match &result {
+                Ok(text) => command_output_failed(text),
+                Err(_) => true,
+            };
             match result {
                 Ok(text) => {
-                    let text = repeated_command_result(&last_shell_command, &command, &text);
+                    let text =
+                        repeated_command_result(&last_shell_command, last_shell_failed, &command, &text);
                     emit_step(&app, &request_id, &call.name, "done", &summary, &clip(&text, 500));
                     notes.push(summary);
                     tool_results.push((call.id.clone(), text));
@@ -1259,11 +1290,18 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 Err(err) => {
                     emit_step(&app, &request_id, &call.name, "error", &summary, &err);
                     notes.push(format!("{summary}（失败）"));
-                    tool_results.push((call.id.clone(), format!("错误: {err}")));
+                    let text = repeated_command_result(
+                        &last_shell_command,
+                        last_shell_failed,
+                        &command,
+                        &format!("错误: {err}"),
+                    );
+                    tool_results.push((call.id.clone(), text));
                 }
             }
             if call.name == "run_command" {
                 last_shell_command = command;
+                last_shell_failed = failed;
             }
         }
         if round_is_action(&turn.calls.iter().map(|c| c.name.clone()).collect::<Vec<_>>()) {
@@ -1296,21 +1334,42 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        command_blocked, command_is_readonly, decode_model_body, limit_message,
-        repeated_command_result, resolve_in_repo, round_is_action,
+        command_blocked, command_is_readonly, command_output_failed, decode_model_body, limit_message,
+        repeated_command_result, resolve_in_repo, round_is_action, run_command,
     };
     use std::fs;
+    use std::process::Command;
 
     #[test]
-    fn repeated_command_gets_retry_hint_only_when_identical() {
-        let out = " fatal:did not match any file(s) ";
-        let hinted = repeated_command_result("git add a b", "git add a b", out);
+    fn repeated_failed_command_gets_retry_hint() {
+        let out = "exit 1\nfatal:did not match any file(s) ";
+        let hinted = repeated_command_result("git add a b", true, "git add a b", out);
         assert!(hinted.contains("Agent 提示"));
         assert!(hinted.contains(out));
+        // 只换引号 / 多空格也算重复
+        let requoted = repeated_command_result(
+            "git commit -m \"chore: x\"",
+            true,
+            "git commit  -m 'chore: x'",
+            out,
+        );
+        assert!(requoted.contains("Agent 提示"));
         // 命令不同 / 首条命令 / 非命令调用（空串）：原样透传
-        assert_eq!(repeated_command_result("git add a", "git add a b", out), out);
-        assert_eq!(repeated_command_result("", "git add a b", out), out);
-        assert_eq!(repeated_command_result("git add a b", "", out), out);
+        assert_eq!(repeated_command_result("git add a", true, "git add a b", out), out);
+        assert_eq!(repeated_command_result("", true, "git add a b", out), out);
+        assert_eq!(repeated_command_result("git add a b", true, "", out), out);
+        // 上一条成功：改完文件再查一次状态是正常复查，不提示
+        assert_eq!(repeated_command_result("git status", false, "git status", "ok"), "ok");
+    }
+
+    #[test]
+    fn failure_is_read_from_the_exit_line() {
+        assert!(command_output_failed("exit 1\nfatal: x"));
+        assert!(command_output_failed("exit 128"));
+        assert!(!command_output_failed("exit 0"));
+        assert!(!command_output_failed("On branch master\nnothing to commit"));
+        // 正文里出现 exit 不算
+        assert!(!command_output_failed("done\nexit 1"));
     }
 
     #[test]
@@ -1417,6 +1476,30 @@ mod tests {
         assert!(resolve_in_repo(&canon, "src/a.txt").is_ok());
         assert!(resolve_in_repo(&canon, "src/new/note.txt").is_ok());
         assert!(resolve_in_repo(&canon, "../outside.txt").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 双引号参数必须原样到达 git：std 的 MSVC 转义（`\"`）cmd.exe 不认，
+    /// 曾把 `-m "chore: ignore .zcode dir"` 拆成 `"chore:` + 三个 pathspec，模型只能反复重试。
+    #[cfg(windows)]
+    #[test]
+    fn quoted_arguments_survive_cmd() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("aw-agent-quote-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let run = |c: &str| run_command(&root, c, "test-quote").unwrap();
+        run("git init -q");
+        let out = run(
+            "git -c user.name=\"A B\" -c user.email=a@b.c commit -q --allow-empty -m \"chore: ignore .zcode dir\"",
+        );
+        assert_eq!(out.trim(), "exit 0", "commit failed: {out}");
+        assert_eq!(run("git log -1 --format=%s").trim(), "chore: ignore .zcode dir");
+        assert_eq!(run("git log -1 --format=%an").trim(), "A B");
+        // 以引号开头的命令（带空格的程序路径）也不能被 cmd 的去引号规则吃掉
+        assert!(run("\"git\" --version").contains("git version"));
         let _ = fs::remove_dir_all(&root);
     }
 }
