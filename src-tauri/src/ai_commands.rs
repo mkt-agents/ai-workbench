@@ -3,8 +3,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    ErrorCode, GENERATE_STREAM_TIMEOUT_SECS, GENERATE_TEXT_TIMEOUT_SECS, MODEL_LIST_TIMEOUT_SECS,
-    MODEL_TEST_TIMEOUT_SECS,
+    ErrorCode, GENERATE_CONNECT_TIMEOUT_SECS, GENERATE_STREAM_IDLE_SECS, GENERATE_TEXT_TIMEOUT_SECS,
+    MODEL_LIST_TIMEOUT_SECS, MODEL_TEST_TIMEOUT_SECS,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,7 +602,8 @@ pub async fn generate_text_stream(
     }
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(GENERATE_STREAM_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(GENERATE_CONNECT_TIMEOUT_SECS))
+        .read_timeout(Duration::from_secs(GENERATE_STREAM_IDLE_SECS))
         .build()
         .map_err(|e| {
             let msg = format!("Failed to create HTTP client: {}", e);

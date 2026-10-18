@@ -63,8 +63,15 @@ pub const MODEL_LIST_TIMEOUT_SECS: u64 = 20;
 /// longest legitimate generation, not the typical one.
 pub const GENERATE_TEXT_TIMEOUT_SECS: u64 = 300;
 
-/// HTTP timeout for streaming text generation (seconds).
-pub const GENERATE_STREAM_TIMEOUT_SECS: u64 = 120;
+/// Streaming text generation: max silence between two reads (seconds).
+///
+/// Not a total cap — a long answer that keeps streaming must not be cut off mid-way
+/// (the old 120s total timeout did exactly that). Reasoning models can sit silent for
+/// a while before the first token, so this still has to be generous.
+pub const GENERATE_STREAM_IDLE_SECS: u64 = 120;
+
+/// TCP/TLS connect timeout shared by the generation clients (seconds).
+pub const GENERATE_CONNECT_TIMEOUT_SECS: u64 = 15;
 
 /// Stable error codes returned to the frontend.
 #[derive(Debug, Clone, Copy)]

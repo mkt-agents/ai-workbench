@@ -194,7 +194,9 @@ export function useAskStream(opts: AskStreamOptions) {
     // Regenerate replaces the last pair: hide it now, restore it if the retry fails.
     const shownBefore = history;
     if (historyOverride) setHistory(baseHistory);
-    const reqId = `qa-${Date.now()}-${++streamIdRef.current}`;
+    // Stream events are broadcast to every window; time + per-window counter alone can
+    // collide across windows, so add a random part.
+    const reqId = `qa-${Date.now()}-${++streamIdRef.current}-${crypto.randomUUID().slice(0, 8)}`;
     const myGen = streamIdRef.current;
     activeReqRef.current = reqId;
     stopRequestedRef.current = false;
@@ -239,6 +241,15 @@ export function useAskStream(opts: AskStreamOptions) {
 
     let settled = false;
     let full = "";
+    /** Stopped / failed mid-stream still consumed tokens: estimate what arrived. */
+    const recordPartialUsage = () => {
+      if (!full.trim()) return;
+      recordAiUsage({
+        modelId: selectedModel.id,
+        modelName: selectedModel.name,
+        estimatedTokens: Math.max(1, Math.round((question.length + full.length) / 4)),
+      });
+    };
     const teardown = () => {
       unlisteners.forEach((fn) => fn());
       unlisteners.length = 0;
@@ -387,6 +398,7 @@ export function useAskStream(opts: AskStreamOptions) {
           // A user-triggered stop is not a failure — keep the partial answer.
           const stopped = (payload.error || "").includes("AI_REQUEST_CANCELLED");
           if (!stopped) setError(payload.error || t("streamFailed"));
+          recordPartialUsage();
           // Stopped mid-stream: keep the partial answer as context too.
           const partial = stripThinking(full);
           if (stopped && partial.trim()) finishTurn(partial);
@@ -494,6 +506,7 @@ export function useAskStream(opts: AskStreamOptions) {
         // Stopping rejects the command too — no error for a deliberate stop.
         const stopped = String(e).includes("AI_REQUEST_CANCELLED");
         if (!stopped) setError(String(e));
+        recordPartialUsage();
         const partial = stripThinking(full);
         if (stopped && partial.trim()) finishTurn(partial);
         else failTurn(!stopped);

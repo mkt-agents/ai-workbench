@@ -710,7 +710,15 @@ fn launch_named(apps: &[AgentAppShortcut], name: &str) -> Result<String, String>
     }
 }
 
-async fn wait_decision(request_id: &str, call_id: &str) -> Result<bool, String> {
+#[derive(Debug, PartialEq)]
+enum Decision {
+    Allow,
+    Deny,
+    /// Nobody answered within `APPROVAL_WAIT` (window hidden, user away).
+    TimedOut,
+}
+
+async fn wait_decision(request_id: &str, call_id: &str) -> Result<Decision, String> {
     let (tx, mut rx) = oneshot::channel();
     decisions()
         .as_mut()
@@ -723,13 +731,14 @@ async fn wait_decision(request_id: &str, call_id: &str) -> Result<bool, String> 
             return Err(format!("[{}] 已取消", crate::config::ErrorCode::AiRequestCancelled.as_str()));
         }
         match rx.try_recv() {
-            Ok(allow) => return Ok(allow),
+            Ok(true) => return Ok(Decision::Allow),
+            Ok(false) => return Ok(Decision::Deny),
             Err(oneshot::error::TryRecvError::Empty) => {}
-            Err(oneshot::error::TryRecvError::Closed) => return Ok(false),
+            Err(oneshot::error::TryRecvError::Closed) => return Ok(Decision::Deny),
         }
         if Instant::now() > deadline {
             decisions().as_mut().expect("map").remove(&decision_key(request_id, call_id));
-            return Ok(false);
+            return Ok(Decision::TimedOut);
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -1131,8 +1140,10 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         root.display()
     );
     let system = format!("{}{policy}", req.system);
+    // 代理每轮是非流式请求，整轮要等模型写完（可能是一整个文件），与单次生成同一上限
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(crate::config::GENERATE_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(crate::config::GENERATE_TEXT_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -1242,18 +1253,40 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     command.clone()
                 };
                 emit_approval(&app, &request_id, &call.id, &call.name, &summary, &preview);
-                let allow = match wait_decision(&request_id, &call.id).await {
+                let decision = match wait_decision(&request_id, &call.id).await {
                     Ok(v) => v,
                     Err(e) => {
                         emit_err(&app, &request_id, &e);
                         return Err(e);
                     }
                 };
-                if !allow {
-                    emit_step(&app, &request_id, &call.name, "denied", &summary, "用户拒绝");
-                    notes.push(format!("{summary}（已拒绝）"));
-                    tool_results.push((call.id.clone(), "用户拒绝了这个操作".to_string()));
-                    continue;
+                match decision {
+                    Decision::Allow => {}
+                    Decision::Deny => {
+                        emit_step(&app, &request_id, &call.name, "denied", &summary, "用户拒绝");
+                        notes.push(format!("{summary}（已拒绝）"));
+                        tool_results.push((call.id.clone(), "用户拒绝了这个操作".to_string()));
+                        continue;
+                    }
+                    Decision::TimedOut => {
+                        let mins = APPROVAL_WAIT.as_secs() / 60;
+                        emit_step(
+                            &app,
+                            &request_id,
+                            &call.name,
+                            "denied",
+                            &summary,
+                            &format!("等待确认超过 {mins} 分钟，已自动拒绝"),
+                        );
+                        notes.push(format!("{summary}（确认超时）"));
+                        tool_results.push((
+                            call.id.clone(),
+                            format!(
+                                "等待用户确认超过 {mins} 分钟，这个操作没有执行。不要重试，直接告诉用户：需要确认的操作是什么，确认后可以再发一次。"
+                            ),
+                        ));
+                        continue;
+                    }
                 }
                 if call.name == "write_file" {
                     write_granted = true;
