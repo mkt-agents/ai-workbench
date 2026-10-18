@@ -9,7 +9,7 @@
 - **愿景**：本地优先的桌面 AI 助手；多模型配置（提示词独立页已下线，智枢优化仍可用），管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
 - **功能分层**：核心 = DSH / 模型配置 / Cursor（提示词独立页已下线，代码保留）；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 工具箱（devtools）。
 - **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。工具箱页的 **HTTP 客户端**同样已整体删除：`HttpClientTool.tsx` / `devtools_commands.rs`（该域只剩这一条命令，文件一起删了）/ `http_saved_requests` + `http_history` 两张表（setup 里 `DROP TABLE`）/ devtools i18n 的 `http.*` 与 `group.network`，工具箱现在是 9 个（转换 / 生成 / 解析 / 计算四组）。
-- **AI 能力在范围内**：智枢流式对话、仓库工具代理、报告与提交里的模型调用都可以继续做。智枢的每个问题都走 `agent_run`，按四档权限决定能做什么（`agent_policy.rs` 的 `tool_gate` 是唯一事实）：**只读权限**（默认）只能读文件、搜索、跑只读 git；**编辑权限**可直接改仓库内文件，其它命令和启动应用每轮首次先问用户；**审查托管**（EXP）先让 AI 审，只有明确放行才不问用户；**完全权限**不再询问，必须由用户在菜单里主动选、首次二次确认，快捷键不会轮到它。任何档位都不放开：危险命令黑名单（`command_blocked`）和「路径不能跳出当前仓库」。数据留在本机，不上传密钥。
+- **AI 能力在范围内**：智枢流式对话、仓库工具代理、报告与提交里的模型调用都可以继续做。智枢定位是本机 Harness：每个问题都走 `agent_run`，按四档权限决定能做什么（`agent_policy.rs` 的 `tool_gate` / `offered_tools` 是唯一事实）：**只读权限**（默认）只能读文件、搜索、跑只读 git；**编辑权限**可直接改仓库内文件，其它命令、删除移动、启动或结束程序、系统设置（hosts / 隧道 / 运行时）先问用户，审批可选「本轮同类都允许」（同类按 `action_kind`：命令按程序名分）；**审查托管**（EXP）先让 AI 审，只有明确放行才不问用户；**完全权限**不再询问，并且**可以访问整台电脑**（其它档位不出当前仓库），必须由用户在菜单里主动选、首次二次确认，快捷键不会轮到它。模型标了「支持看图」时，完全权限还提供截屏和鼠标键盘操作（`agent_computer.rs`，左上角紧急停止，智枢窗口不进截图，首次使用确认截图会发给模型服务商）。任何档位都不放开：危险命令黑名单（`command_blocked`）、受保护路径（`agent_fs::Protected`：Windows、Program Files、本应用数据目录不能写；磁盘根目录和用户主目录不能删 / 移）、删除一律进回收站。截图和文字上下文一样只发给所选模型服务商，不落盘、不上传密钥。
 - **明确不做**：多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.2.8`
@@ -44,8 +44,10 @@ src-tauri/src/        # Rust 后端
   纯函数层             # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +
                       # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
                       # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO；
-                      # agent_policy.rs：智枢四档权限（tool_gate / 工具列表 / 策略提示词 / 审查结论解析）；
-                      # agent_stream.rs：代理回合 SSE 切行与流式 <think> 过滤
+                      # agent_policy.rs：智枢四档权限（tool_gate / action_kind / 工具列表 / 策略提示词 / 审查结论解析）；
+                      # agent_stream.rs：代理回合 SSE 切行与流式 <think> 过滤；
+                      # agent_fs.rs（路径范围 / 受保护路径 / 文件工具 / diff）、agent_proc.rs（cmd / PowerShell /
+                      # 后台进程）、agent_sys.rs（系统与工具箱能力）、agent_computer.rs（截屏 / 键鼠）
   cursor/ tray/       # Cursor 多身份、系统托盘与智枢窗
   codebuddy/          # WorkBuddy 域：adapter.rs（上游协议全 JSON 化，端点不写死）+
                       # credential.rs（token/cookie 解析、JWT exp、掩码）

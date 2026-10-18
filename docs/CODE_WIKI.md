@@ -134,7 +134,8 @@ ai-workbench/
 │   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
 │   │   │                         #   + PortKillerPanel（该页第二个视图：按端口查杀）
 │   │   ├── aiHub/             # 智枢窗子组件：AskPanel（布局）→ AskThread / AskComposer / AskEmpty / AskErrorCard；
-│   │   │                      #   AiHubHeader、RoutePill、AgentActivity；hooks：useAskStream / useRepoFocus / useAnswerActions / useAiHubWindow 等
+│   │   │                      #   AiHubHeader、PermissionPicker（四档权限）、AgentActivity（步骤详情 / diff 审批）；
+│   │   │                      #   hooks：useAskStream / useRepoFocus / useAnswerActions / useAiHubWindow 等
 │   │   ├── GitReportsPage.tsx    # Git 报告页（五视图 + 筛选 + 导出）
 │   │   ├── TestReportPanel.tsx   # 报告面板（概览 / 改动 / 提交 / API / AI）
 │   │   ├── reportTypes 见 testReportTypes.ts；useFilteredFiles.ts 为报告筛选 hook
@@ -195,6 +196,13 @@ ai-workbench/
 │   │   ├── db_commands.rs         # SQLite db_load / db_save
 │   │   ├── git_commands.rs        # 全部 Git 相关命令（status/commit/push/pull/diff/scan…）
 │   │   ├── ai_commands.rs         # AI 模型连接测试 / 列表 / generate_text / generate_text_stream
+│   │   ├── agent.rs               # 智枢代理主循环 agent_run / agent_decide（流式回合、审批、截图回传）
+│   │   ├── agent_policy.rs        # 四档权限：tool_gate / action_kind / offered_tools / policy_text（纯函数）
+│   │   ├── agent_stream.rs        # 代理回合 SSE 切行、流式 <think> 过滤（纯函数）
+│   │   ├── agent_fs.rs            # 路径范围与受保护目录、文件工具、审批 diff
+│   │   ├── agent_proc.rs          # cmd / PowerShell 命令、后台进程表
+│   │   ├── agent_sys.rs           # 打开 / 剪贴板 / 进程 / 端口、hosts / 隧道 / 运行时
+│   │   ├── agent_computer.rs      # 截屏、鼠标、键盘（完全权限 + 看图模型）
 │   │   ├── dsh_commands.rs        # DeepSeek Harness 生命周期（start/stop/install/update + auth patch）
 │   │   ├── cloudflared_commands.rs# Cloudflare Tunnel（快速 / 命名 + 日志 + config.yml）
 │   │   ├── hosts_commands.rs      # 系统 Hosts（读 / 写 / 备份 / 还原 / 原子替换）
