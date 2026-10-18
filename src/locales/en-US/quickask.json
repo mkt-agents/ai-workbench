@@ -24,6 +24,8 @@
   "copied": "Copied",
   "regenerate": "Regenerate",
   "threadMeta": "Round {{n}} · last {{max}} rounds sent",
+  "threadMetaCompressed": "Round {{n}} · earlier turns compressed; summary plus the last {{max}} rounds are sent",
+  "digestLabel": "Earlier turns compressed",
   "phase": {
     "context": "Reading changes in {{repo}}…",
     "waiting": "{{model}} is thinking…",

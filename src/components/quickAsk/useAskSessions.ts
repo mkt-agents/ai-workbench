@@ -85,6 +85,13 @@ export function useAskSessions(opts: AskSessionsOptions) {
       : "quick-ask";
     const lines = [`# ${title}`, ""];
     history.forEach((turn) => {
+      if (turn.digest) {
+        lines.push(`## ${t("digestLabel")}`);
+        lines.push("");
+        lines.push(turn.content);
+        lines.push("");
+        return;
+      }
       lines.push(turn.role === "user" ? `## 🧑 You` : `## 🤖 Assistant`);
       lines.push("");
       lines.push(turn.content);

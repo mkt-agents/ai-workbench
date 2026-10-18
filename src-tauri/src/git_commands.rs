@@ -250,6 +250,13 @@ fn git_config_has_proxy(repo_path: &str) -> bool {
     })
 }
 
+/// `(http_proxy, https_proxy)` from the Windows system proxy, when git itself
+/// has neither a proxy env var nor `http.proxy` / `https.proxy`.
+/// The commit-page push and the quick-ask agent share this so both reach GitHub.
+pub(crate) fn git_proxy_env(repo_path: &str) -> Option<(String, String)> {
+    system_proxy_for_git(repo_path)
+}
+
 /// IntelliJ applies the IDE/system proxy to git. A GUI process does not, so a
 /// push fails with "unable to access" while IDEA succeeds.
 fn system_proxy_for_git(repo_path: &str) -> Option<(String, String)> {

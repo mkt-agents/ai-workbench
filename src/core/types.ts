@@ -163,6 +163,8 @@ export interface QuickAskTurn {
   keep?: 'whole';
   /** Tool steps from an agent turn. Not sent as the visible answer. */
   steps?: { tool: string; status: string; summary: string }[];
+  /** Folded notes for rounds that fell outside the verbatim window. */
+  digest?: boolean;
 }
 
 /** A persisted quick-ask conversation (multi-turn). */

@@ -542,6 +542,16 @@ fn run_command(root: &Path, command: &str, request_id: &str) -> Result<String, S
         c.args(["-c", command]).current_dir(root);
         c
     };
+    // Commit-page push injects the Windows system proxy. A bare `cmd /C git push`
+    // does not, so the same repo fails here with a connection reset.
+    if git_network_command(command) {
+        if let Some((http_proxy, https_proxy)) =
+            crate::git_commands::git_proxy_env(&root.to_string_lossy())
+        {
+            cmd.env("http_proxy", &http_proxy);
+            cmd.env("https_proxy", &https_proxy);
+        }
+    }
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
@@ -1027,7 +1037,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     };
     let anthropic = req.config.provider.to_lowercase() == "anthropic";
     let policy = format!(
-        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
+        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push and pull use the same system proxy as the commit page. A push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
         root.display()
     );
     let system = format!("{}{policy}", req.system);

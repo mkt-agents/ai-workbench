@@ -1476,6 +1476,22 @@
   color: var(--text-3);
   white-space: nowrap;
 }
+.qa-digest {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.qa-digest-label {
+  margin-bottom: 4px;
+  color: var(--text-3);
+  font-size: 10.5px;
+}
 .qa-history-btn.on {
   border-color: var(--accent-border);
   color: var(--accent-strong);

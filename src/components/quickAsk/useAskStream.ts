@@ -6,7 +6,8 @@ import type { AIModelConfig, QuickAskTurn } from "../../core/types";
 import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
 import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
-import { MAX_HISTORY_TURNS, MAX_SAVED_TURNS, MAX_TURN_CHARS, buildMeta, buildSystem } from "./config";
+import { buildMeta, buildSystem } from "./config";
+import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
 import { DAILY_REPORT_SYSTEM, isDailyReport, isDailyRevision } from "./dailyReport";
 import type { OptimizeConfig, TaskKind } from "./config";
 import { routeQuestion } from "./route";
@@ -51,13 +52,7 @@ export type AgentRunOptions = {
   apps: { name: string; path: string; args: string }[];
 };
 
-function clipTurn(text: string): string {
-  return text.length > MAX_TURN_CHARS
-    ? text.slice(0, MAX_TURN_CHARS) + "\n…(truncated)"
-    : text;
-}
-
-/** Full transcript (displayed + persisted), bounded so the session row stays small. */
+/** Full transcript (displayed + persisted). Past the verbatim window, older rounds fold into a digest. */
 function appendTurn(
   prev: QaTurn[],
   question: string,
@@ -80,21 +75,7 @@ function appendTurn(
       ...(kept && kept.length > 0 ? { steps: kept } : {}),
     },
   ];
-  return next.slice(-MAX_SAVED_TURNS * 2);
-}
-
-function historyContent(turn: QaTurn): string {
-  if (turn.role !== "assistant" || !turn.steps?.length) return turn.content;
-  const lines = turn.steps.map((s) => `- ${s.summary}`).join("\n");
-  return `${turn.content}\n\n[操作]\n${lines}`;
-}
-
-/** Only the most recent rounds go to the model, each clipped. */
-function requestHistory(turns: QaTurn[]): QaTurn[] {
-  return turns.slice(-MAX_HISTORY_TURNS * 2).map((t) => ({
-    role: t.role,
-    content: clipTurn(historyContent(t)),
-  }));
+  return compactSession(next);
 }
 
 export type AskStreamOptions = {
@@ -146,7 +127,7 @@ export function useAskStream(opts: AskStreamOptions) {
   const lastTaskRef = useRef<TaskKind>("none");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Full transcript of this chat; the last MAX_HISTORY_TURNS pairs ride along as context. */
+  /** Full transcript. The last 50 rounds go verbatim; older rounds ride along as a digest. */
   const [history, setHistory] = useState<QaTurn[]>([]);
   /** Question currently being answered (shown above the streaming answer). */
   const [pending, setPending] = useState<{ question: string } | null>(null);
@@ -330,6 +311,7 @@ export function useAskStream(opts: AskStreamOptions) {
           if (stoppedEarly()) return;
         }
       }
+      system = withSessionDigest(system, baseHistory);
       if (streamIdRef.current === myGen) setPhase("waiting");
       setSource({ mode: sentMode, summary, modelName: selectedModel.name, task: sendTask });
       lastModeRef.current = sentMode;
@@ -556,7 +538,8 @@ export function useAskStream(opts: AskStreamOptions) {
 
   /** Point the chat state at a restored session's turns. */
   const loadSession = useCallback((turns: QaTurn[]) => {
-    setHistory(turns);
+    const compacted = compactSession(turns);
+    setHistory(compacted);
     setSource(null);
     lastModeRef.current = null;
     lastTaskRef.current = "none";
@@ -565,7 +548,8 @@ export function useAskStream(opts: AskStreamOptions) {
     rememberSteps([]);
     setAgentApproval(null);
     setStopping(false);
-    const lastUser = [...turns].reverse().find((t) => t.role === "user");
+    const verbatim = compacted.filter((t) => !t.digest);
+    const lastUser = [...verbatim].reverse().find((t) => t.role === "user");
     setAnswer("");
     setPending(null);
     setError(null);
@@ -574,7 +558,9 @@ export function useAskStream(opts: AskStreamOptions) {
     setSelectedText("");
     // Point regenerate at the final exchange of this session.
     lastQuestionRef.current = lastUser?.content ?? "";
-    lastHistoryRef.current = turns.length >= 2 ? turns.slice(0, -2) : [];
+    lastHistoryRef.current = verbatim.length >= 2
+      ? compacted.slice(0, -2)
+      : compacted.filter((t) => t.digest);
   }, [setSelectedText]);
 
   /** Replay the last question with the same history snapshot and task. */

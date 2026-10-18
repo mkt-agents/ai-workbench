@@ -148,7 +148,8 @@ export default function AskPanel(props: Props) {
       ?.scrollIntoView({ block: "nearest" });
   }, [openHi, openList]);
   const showThread = turns.length > 0 || Boolean(pending) || busy;
-  const rounds = Math.ceil(turns.length / 2) + (pending ? 1 : 0);
+  const rounds = Math.ceil(turns.filter((t) => !t.digest).length / 2) + (pending ? 1 : 0);
+  const compressed = turns.some((t) => t.digest);
   /** Follow new output unless the user scrolled up to read. */
   const stickRef = useRef(true);
   const lastAssistant = turns.length - 1;
@@ -296,7 +297,7 @@ export default function AskPanel(props: Props) {
         <div className={`qa-answer-card${busy ? " is-streaming" : ""}`}>
           <div className="qa-answer-toolbar">
             <span className="qa-thread-meta">
-              {t("threadMeta", { n: rounds, max: MAX_HISTORY_TURNS })}
+              {t(compressed ? "threadMetaCompressed" : "threadMeta", { n: rounds, max: MAX_HISTORY_TURNS })}
             </span>
             {turns.length > 0 && (
               <button
@@ -312,7 +313,12 @@ export default function AskPanel(props: Props) {
           </div>
           <div ref={answerRef} className="qa-thread" onScroll={onThreadScroll}>
             {turns.map((turn, i) =>
-              turn.role === "user" ? (
+              turn.digest ? (
+                <div key={i} className="qa-digest" aria-label={t("digestLabel")}>
+                  <div className="qa-digest-label">{t("digestLabel")}</div>
+                  {turn.content}
+                </div>
+              ) : turn.role === "user" ? (
                 <div key={i} className={`qa-msg is-user${isNew(i) ? " is-new" : ""}`} aria-label={t("you")}>
                   {turn.content}
                 </div>
