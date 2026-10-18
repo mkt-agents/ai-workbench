@@ -1,0 +1,259 @@
+/* Desktop app hosting page (AI 工作台 → 桌面应用).
+   The hosted app draws its own native window over `.dapps-slot` and always
+   paints above the webview, so all chrome is compressed into the single
+   `.dapps-bar` strip at the top of one card. */
+
+.dapps-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  overflow: hidden;
+}
+
+.dapps-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+  flex: none;
+  min-height: 40px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dapps-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dapps-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.dapps-spacer {
+  flex: 1 1 auto;
+}
+
+.dapps-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.dapps-tab:hover {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.dapps-tab.is-active {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--text-0);
+}
+
+.dapps-tab-add {
+  color: var(--text-3);
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+.dapps-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.dapps-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--text-3);
+  flex: none;
+}
+
+.dapps-status.is-attached .dapps-dot {
+  background: var(--green);
+}
+
+.dapps-status.is-running .dapps-dot,
+.dapps-status.is-polling .dapps-dot,
+.dapps-status.is-launching .dapps-dot {
+  background: var(--yellow);
+}
+
+.dapps-status.is-error .dapps-dot,
+.dapps-status.is-missing .dapps-dot {
+  background: var(--red);
+}
+
+.dapps-spin {
+  animation: dapps-spin 0.9s linear infinite;
+  color: var(--yellow);
+  flex: none;
+}
+
+@keyframes dapps-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.dapps-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.dapps-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dapps-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Narrow windows: keep one row — drop the status label, keep its dot. */
+@media (max-width: 1100px) {
+  .dapps-status-text {
+    display: none;
+  }
+}
+
+.dapps-slot {
+  position: absolute;
+  inset: 0;
+}
+
+.dapps-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px;
+  overflow-y: auto;
+  text-align: center;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+/* Failure report + the window list it is based on. Clickable, so it opts back
+   into pointer events that `.dapps-hint` turns off. */
+.dapps-error {
+  pointer-events: auto;
+  margin-top: 14px;
+  padding: 10px 12px;
+  width: min(100%, 640px);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  color: var(--text-2);
+  text-align: left;
+}
+
+.dapps-error-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.dapps-error-text {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.dapps-error-list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.dapps-error-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  min-width: 0;
+  user-select: text;
+}
+
+.dapps-error-tag {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.dapps-error-win {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text-2);
+}
+
+.dapps-hint-title {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--text-1);
+}
+
+.dapps-hint-text {
+  margin: 0;
+  font-size: 12.5px;
+  max-width: 46ch;
+}
+
+.dapps-hint-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  max-width: 52ch;
+  color: var(--text-3);
+}

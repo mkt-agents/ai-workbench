@@ -1,0 +1,51 @@
+{
+  "title": "Desktop Apps",
+  "addApp": "Add app",
+  "providers": {
+    "dsh": "DeepSeek Harness",
+    "cursor": "Cursor"
+  },
+  "status": {
+    "idle": "Not running",
+    "running": "Running, not embedded",
+    "attached": "Embedded",
+    "launching": "Starting…",
+    "polling": "Waiting for its window…",
+    "missing": "Executable not found",
+    "error": "Embedding failed"
+  },
+  "actions": {
+    "launch": "Start & embed",
+    "reattach": "Re-embed",
+    "detach": "Release window",
+    "kill": "Close app",
+    "remove": "Remove"
+  },
+  "hint": {
+    "idle": "This app is not running. Click “Start & embed” and it will appear right here.",
+    "running": "Its window is running but not embedded yet. Click “Re-embed” to take it over.",
+    "missing": "No executable found. Install the app first, or use “Add app” to pick an .exe by hand.",
+    "error": "Could not take over its window. The reason and the windows that process owns are below; a slow starter such as an IDE may need a minute or two the first time.",
+    "note": "Embedding takes over the app's own native window: leaving this page hides it (the app keeps running) and closing the workbench gives the window back to the desktop."
+  },
+  "error": {
+    "title": "Why it failed",
+    "candidates": "Windows that process currently owns:",
+    "visible": "visible",
+    "hidden": "hidden",
+    "owned": "owned",
+    "untitled": "(no title)",
+    "refresh": "Refresh list",
+    "launch": "Launch failed: {{message}}"
+  },
+  "kill": {
+    "title": "Close app",
+    "message": "This ends every {{name}} process. Unsaved work may be lost.",
+    "confirm": "Close"
+  },
+  "remove": {
+    "title": "Remove app",
+    "message": "Remove {{name}} from this list? Nothing is uninstalled or deleted.",
+    "confirm": "Remove"
+  }
+}

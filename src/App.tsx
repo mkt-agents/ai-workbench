@@ -23,6 +23,7 @@ import {
   KeyRound,
   Terminal,
   Rocket,
+  AppWindow,
   Gauge,
   Check,
   XCircle,
@@ -38,6 +39,7 @@ import CloudflaredManager from "./components/CloudflaredManager";
 import SnippetsManager from "./components/SnippetsManager";
 import DraftsManager from "./components/DraftsManager";
 import DevTools from "./components/DevTools";
+import DesktopAppsPage from "./components/DesktopAppsPage";
 import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
@@ -65,7 +67,8 @@ type Tab =
   | "snippets"
   | "drafts"
   | "devtools"
-  | "app-launcher";
+  | "app-launcher"
+  | "desktop-apps";
 
 type NavLeaf = { id: Tab; labelKey: string; icon: React.ReactNode };
 type NavGroup = {
@@ -90,7 +93,7 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher", "desktop-apps"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -249,6 +252,7 @@ function App() {
         { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
         { id: "snippets", labelKey: "snippets", icon: <FileText size={16} /> },
         { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
+        { id: "desktop-apps", labelKey: "desktopApps", icon: <AppWindow size={16} /> },
       ],
     },
     {
@@ -530,10 +534,10 @@ function App() {
         </div>
 
         <main className="main-content">
-          <div className={`main-header ${["ai-chat", "ai-models"].includes(activeTab) ? "hidden" : ""}`}>
+          <div className={`main-header ${["ai-chat", "ai-models", "desktop-apps"].includes(activeTab) ? "hidden" : ""}`}>
             <h1>{NAV_MAP[activeTab]}</h1>
           </div>
-          <div className={`main-body${activeTab === "ai-chat" ? " is-flush" : ""}`}>
+          <div className={`main-body${["ai-chat", "desktop-apps"].includes(activeTab) ? " is-flush" : ""}`}>
             <div className="page-in">
               {gitMounted && (
                 <div
@@ -568,6 +572,11 @@ function App() {
                   <div className="page-scrollable al-page-host">
                     <AppLauncherTool />
                   </div>
+                </div>
+              )}
+              {activeTab === "desktop-apps" && (
+                <div className="page-panel is-active">
+                  <DesktopAppsPage />
                 </div>
               )}
               {activeTab === "settings" && (

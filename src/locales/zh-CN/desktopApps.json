@@ -1,0 +1,51 @@
+{
+  "title": "桌面应用",
+  "addApp": "添加应用",
+  "providers": {
+    "dsh": "DeepSeek Harness",
+    "cursor": "Cursor"
+  },
+  "status": {
+    "idle": "未运行",
+    "running": "已运行，未嵌入",
+    "attached": "已嵌入",
+    "launching": "正在启动…",
+    "polling": "等待窗口出现…",
+    "missing": "没找到可执行文件",
+    "error": "嵌入失败"
+  },
+  "actions": {
+    "launch": "启动并嵌入",
+    "reattach": "重新嵌入",
+    "detach": "脱离窗口",
+    "kill": "关闭应用",
+    "remove": "移除"
+  },
+  "hint": {
+    "idle": "这个应用还没运行。点「启动并嵌入」，它会直接出现在下面这块区域里。",
+    "running": "检测到正在运行的应用窗口，但还没有嵌进来。点「重新嵌入」接管它。",
+    "missing": "没找到可执行文件。请先在系统里安装该应用，或用「添加应用」手动选一个 .exe。",
+    "error": "没能接管它的窗口。原因和该进程当前的窗口见下；启动慢的应用（如 IDE）首次可能要等一两分钟。",
+    "note": "嵌入是接管应用自己的原生窗口：切走这个页面会把它藏起来（应用继续运行），关闭本应用时会把窗口还给桌面。"
+  },
+  "error": {
+    "title": "失败原因",
+    "candidates": "该进程当前匹配到的窗口：",
+    "visible": "可见",
+    "hidden": "隐藏",
+    "owned": "有 owner",
+    "untitled": "（无标题）",
+    "refresh": "刷新列表",
+    "launch": "启动失败：{{message}}"
+  },
+  "kill": {
+    "title": "关闭应用",
+    "message": "将结束 {{name}} 的全部进程，未保存的内容可能丢失。",
+    "confirm": "关闭"
+  },
+  "remove": {
+    "title": "移除应用",
+    "message": "从列表里移除 {{name}}？只移除这里的记录，不会卸载或删除任何文件。",
+    "confirm": "移除"
+  }
+}

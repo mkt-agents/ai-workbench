@@ -18,6 +18,7 @@ import zhCNDevtools from '../locales/zh-CN/devtools.json';
 import zhCNUpdate from '../locales/zh-CN/update.json';
 import zhCNWorkbuddy from '../locales/zh-CN/workbuddy.json';
 import zhCNQuota from '../locales/zh-CN/quota.json';
+import zhCNDesktopApps from '../locales/zh-CN/desktopApps.json';
 
 import enUSCommon from '../locales/en-US/common.json';
 import enUSNav from '../locales/en-US/navigation.json';
@@ -35,6 +36,7 @@ import enUSDevtools from '../locales/en-US/devtools.json';
 import enUSUpdate from '../locales/en-US/update.json';
 import enUSWorkbuddy from '../locales/en-US/workbuddy.json';
 import enUSQuota from '../locales/en-US/quota.json';
+import enUSDesktopApps from '../locales/en-US/desktopApps.json';
 
 const resources = {
   'zh-CN': {
@@ -54,6 +56,7 @@ const resources = {
     update: zhCNUpdate,
     workbuddy: zhCNWorkbuddy,
     quota: zhCNQuota,
+    desktopApps: zhCNDesktopApps,
   },
   'en-US': {
     common: enUSCommon,
@@ -72,6 +75,7 @@ const resources = {
     update: enUSUpdate,
     workbuddy: enUSWorkbuddy,
     quota: enUSQuota,
+    desktopApps: enUSDesktopApps,
   },
 };
 
@@ -83,7 +87,7 @@ i18n
     fallbackLng: 'zh-CN',
     supportedLngs: ['zh-CN', 'en-US'],
     defaultNS: 'common',
-    ns: ['common', 'navigation', 'git', 'settings', 'ai', 'hosts', 'plugins', 'runtime', 'cloudflared', 'aihub', 'snippets', 'drafts', 'devtools', 'update', 'workbuddy', 'quota'],
+    ns: ['common', 'navigation', 'git', 'settings', 'ai', 'hosts', 'plugins', 'runtime', 'cloudflared', 'aihub', 'snippets', 'drafts', 'devtools', 'update', 'workbuddy', 'quota', 'desktopApps'],
 
     detection: {
       order: ['localStorage', 'navigator'],

@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, GitBranchList, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller } from '../types';
+import type { AIModelConfig, DshInstance, GitBranchList, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -170,6 +170,21 @@ export interface Invocations {
   invokeScanDesktopApps: () => Promise<InstalledAppInfo[]>;
   invokeScanStorePackages: () => Promise<string[]>;
   invokeGetAppVersion: (path: string) => Promise<string>;
+  invokeDesktopEmbedFind: (processName: string) => Promise<DesktopWindowInfo | null>;
+  invokeDesktopEmbedAttach: (params: { processName: string; x: number; y: number; width: number; height: number }) => Promise<DesktopWindowInfo>;
+  invokeDesktopEmbedRelayout: (params: { processName: string; x: number; y: number; width: number; height: number }) => Promise<DesktopRelayoutResult>;
+  invokeDesktopEmbedShow: (processName: string, visible: boolean) => Promise<void>;
+  invokeDesktopEmbedDetach: (processName: string) => Promise<void>;
+  invokeDesktopEmbedDetachAll: () => Promise<void>;
+  invokeDesktopEmbedCandidates: (processName: string) => Promise<DesktopWindowCandidate[]>;
+  invokeDesktopEmbedAttachWindow: (params: {
+    processName: string;
+    hwnd: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => Promise<DesktopWindowInfo>;
   invokeFindPortListeners: (ports: number[]) => Promise<PortListener[]>;
   invokeKillPortListeners: (port: number, pids: number[]) => Promise<PortKillResult>;
   invokeUpdateReleaseInfo: (version: string) => Promise<ReleaseInfo>;
@@ -500,6 +515,28 @@ export const invocations: Invocations = {
     tauriInvoke<string[]>('scan_store_packages'),
   invokeGetAppVersion: (path: string) =>
     tauriInvoke<string>('get_app_version', { path }),
+  invokeDesktopEmbedFind: (processName: string) =>
+    tauriInvoke<DesktopWindowInfo | null>('desktop_embed_find', { processName }),
+  invokeDesktopEmbedAttach: (params) =>
+    tauriInvoke<DesktopWindowInfo>('desktop_embed_attach', params),
+  invokeDesktopEmbedRelayout: (params) =>
+    tauriInvoke<DesktopRelayoutResult>('desktop_embed_relayout', params),
+  invokeDesktopEmbedShow: (processName: string, visible: boolean) =>
+    tauriInvoke<void>('desktop_embed_show', { processName, visible }),
+  invokeDesktopEmbedDetach: (processName: string) =>
+    tauriInvoke<void>('desktop_embed_detach', { processName }),
+  invokeDesktopEmbedDetachAll: () =>
+    tauriInvoke<void>('desktop_embed_detach_all'),
+  invokeDesktopEmbedCandidates: (processName: string) =>
+    tauriInvoke<DesktopWindowCandidate[]>('desktop_embed_candidates', { processName }),
+  invokeDesktopEmbedAttachWindow: (params: {
+    processName: string;
+    hwnd: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => tauriInvoke<DesktopWindowInfo>('desktop_embed_attach_window', params),
   invokeFindPortListeners: (ports: number[]) =>
     tauriInvoke<PortListener[]>('find_port_listeners', { ports }),
   invokeKillPortListeners: (port: number, pids: number[]) =>

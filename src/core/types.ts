@@ -304,6 +304,50 @@ export interface InstalledAppInfo {
   icon?: string; // base64 PNG, optional
 }
 
+/** A desktop app window the workbench can host. Rust: `desktop_embed::DesktopWindowInfo`. */
+export interface DesktopWindowInfo {
+  /** Image name matched on, without the `.exe` suffix. */
+  processName: string;
+  pid: number;
+  title: string;
+  /** Win32 class of the adopted window; shown on hover so a wrong pick is visible. */
+  class: string;
+  /** True when the window is currently parented into the workbench window. */
+  attached: boolean;
+}
+
+/**
+ * Outcome of a relayout: `ok` moved, `reparented` the app had un-parented
+ * itself and we took it back, `replaced` the old frame was destroyed and a
+ * fresh window was adopted, `lost` nothing to show any more.
+ */
+export interface DesktopRelayoutResult {
+  state: "ok" | "reparented" | "replaced" | "lost";
+  title: string;
+  class: string;
+}
+
+/**
+ * One top-level window seen for a process, hidden and owned ones included.
+ * Rust: `desktop_embed::DesktopWindowCandidate`. Shown when adoption fails,
+ * and listed in the window picker.
+ */
+export interface DesktopWindowCandidate {
+  /** Image name of the owning process, without the `.exe` suffix. */
+  processName: string;
+  pid: number;
+  /** Window handle as hex (`0x00010123`). */
+  hwnd: string;
+  /** Win32 window class, e.g. `SunAwtFrame` for JetBrains IDEs. */
+  class: string;
+  title: string;
+  visible: boolean;
+  /** Has an owner window (usually a dialog, sometimes a launcher helper). */
+  owned: boolean;
+  /** Window area in physical pixels; the largest is the main frame. */
+  area: number;
+}
+
 /** One process holding a queried port. Rust: `port_commands::PortListener` (camelCase). */
 export interface PortListener {
   queriedPort: number;

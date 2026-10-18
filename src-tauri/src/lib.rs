@@ -43,6 +43,7 @@ mod daily_schedule;
 mod qoder_quota;
 mod quota_accounts;
 mod zcode_quota;
+mod desktop_embed;
 
 pub use config::*;
 
@@ -107,6 +108,14 @@ pub fn run() {
         })
         .manage(cloudflared_commands::CloudflaredState::default())
         .manage(tray::TrayTunnelUrls::default())
+        // Adopted desktop windows (desktop_embed) are children of ours, so
+        // Windows destroys them together with the main window. Hand them back
+        // to the desktop first — both here and on the final exit path below.
+        .on_window_event(|_window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                desktop_embed::release_all();
+            }
+        })
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("failed to get app data dir");
             fs::create_dir_all(&data_dir).expect("failed to create app data dir");
@@ -637,6 +646,15 @@ pub fn run() {
             app_launcher_commands::get_app_version,
             port_commands::find_port_listeners,
             port_commands::kill_port_listeners,
+            desktop_embed::desktop_embed_find,
+            desktop_embed::desktop_embed_attach,
+            desktop_embed::desktop_embed_relayout,
+            desktop_embed::desktop_embed_show,
+            desktop_embed::desktop_embed_detach,
+            desktop_embed::desktop_embed_detach_all,
+            desktop_embed::desktop_embed_list,
+        desktop_embed::desktop_embed_candidates,
+        desktop_embed::desktop_embed_attach_window,
             update_commands::update_latest_tag,
             update_commands::update_fetch_release_info,
             update_commands::update_download,
@@ -648,6 +666,7 @@ pub fn run() {
             // Dev servers / watchers the agent started must not outlive the workbench.
             if let tauri::RunEvent::Exit = event {
                 agent_proc::kill_all();
+                desktop_embed::release_all();
             }
         });
 }
