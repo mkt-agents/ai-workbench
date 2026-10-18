@@ -38,8 +38,6 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .cl-recent-menu,
   .update-banner,
   .ai-hub-sessions,
-  .qa-empty,
-  .qa-answer-card,
   .qa-input-card,
   .qa-input-card::before,
   .qa-bubble-orb,

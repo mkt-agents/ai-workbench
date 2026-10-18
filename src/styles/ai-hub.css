@@ -787,12 +787,20 @@
   overflow: auto;
 }
 /* ===== Stage: answer (flex) + composer (bottom) ===== */
+/* 对话区不是卡片：内容直接铺在窗口底上，只有输入卡片浮起；
+   两张卡片并排时中间会夹出一道缝，不要再给对话区加边框 / 底色 */
 .qa-stage {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  gap: 8px;
+  gap: 4px;
+}
+/* 放大窗口后长行不铺满整屏：对话、错误卡、输入卡同宽居中 */
+.qa-stage > * {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
 }
 .qa-empty {
   flex: 1 1 auto;
@@ -803,10 +811,6 @@
   justify-content: center;
   gap: 6px;
   padding: 20px 16px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-1);
-  box-shadow: var(--surface-highlight);
   text-align: center;
 }
 .qa-empty-icon {
@@ -833,20 +837,15 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-1);
   overflow: hidden;
-  box-shadow: var(--surface-highlight);
 }
+/* 一行弱化的小字 + 图标按钮，不做成卡片标题栏 */
 .qa-answer-toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 1px;
   align-items: center;
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-2);
+  padding: 0 8px 2px;
   flex-shrink: 0;
 }
 .qa-open-suggest {
@@ -894,25 +893,15 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-0);
-  box-shadow: var(--surface-highlight);
+  /* 对话区里唯一浮起的表面：靠阴影和对话内容拉开层次 */
+  box-shadow: var(--surface-highlight), var(--shadow-md);
   transition: border-color var(--transition-colors-fast), box-shadow var(--transition-colors-fast);
 }
 .qa-input-card:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-dim);
+  box-shadow: 0 0 0 2px var(--accent-dim), var(--shadow-md);
 }
 
-/* 与主窗 .card 同配方，智枢表面跟主题磨砂一致 */
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-empty,
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-card {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, transparent 40%),
-    rgba(255, 255, 255, 0.06);
-  border-color: var(--overlay-3);
-  box-shadow: var(--surface-highlight), 0 10px 28px rgba(0, 0, 0, 0.16);
-  backdrop-filter: blur(20px) saturate(1.08);
-  -webkit-backdrop-filter: blur(20px) saturate(1.08);
-}
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-input-card {
   background: transparent;
   border-color: var(--overlay-3);
@@ -937,10 +926,6 @@
   z-index: 1;
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-toolbar {
-  background: rgba(255, 255, 255, 0.04);
-  border-bottom-color: var(--overlay-2);
-}
 /* 下一步提示词：每轮回答后自动预测，点击填入输入框；与输入卡内快捷 chips 同族 */
 .qa-suggest-row {
   display: flex;
@@ -1752,7 +1737,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: 10px 12px;
+  /* 左右 14px 与输入卡片里的文字对齐；上下各留出渐隐带 */
+  padding: 12px 14px 20px;
+  /* 内容滚到工具条下 / 输入框上方时淡出，而不是被一刀切断 */
+  mask-image: linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 16px), transparent 100%); /* token-ok: 遮罩只取透明度 */
   word-break: break-word;
   font-size: 13px;
   line-height: 1.55;
