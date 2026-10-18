@@ -683,15 +683,20 @@ db_save(state: DbState, table: DbTable, rows: Vec<serde_json::Value>) -> Result<
 |------|------|
 | `git_repo_summary` | `rev-parse HEAD` + `status --porcelain` + `rev-list @{upstream}` 聚合 |
 | `git_status` | porcelain 解析，拆 staged / unstaged / untracked 三组 |
-| `git_diff` | staged → `diff --cached`; untracked → `diff --no-index /dev/null`; 截断 200KB |
-| `git_commit` | 先 `has_staged_changes` 检查，友好化错误文案 |
-| `git_push/pull` | 检测 upstream，自动 `-u origin HEAD` 首次推送 |
+| `git_diff` | staged → `diff --cached`; untracked → `diff --no-index /dev/null`; `ignoreWhitespace` 加 `-w`（只读视图，不能按块暂存）；截断 200KB |
+| `git_commit` | 先 `has_staged_changes` 检查，友好化错误文案；有冲突 / 变基中拒绝，合并中冲突全解决后允许（完成合并） |
+| `git_push/pull` | 检测 upstream，自动 `-u origin HEAD` 首次推送；网络命令统一 `LC_ALL=C`；合并拉取 `--no-rebase --no-edit`（无 autostash），冲突时保留合并状态返回 `[GIT_CONFLICT]`；推送被拒 `[GIT_PUSH_REJECTED]`、无法快进 `[GIT_DIVERGED]`；合并 / 变基进行中或有冲突时拒绝 `[GIT_OPERATION_IN_PROGRESS]` |
 | `git_scan_repos` | 递归扫描 + 跳过 node_modules/target/.hidden + max_depth 限制 |
 | `set_git_config` | 全局/仓库级 user.name / user.email |
 
-**Porcelain 解析** `parse_porcelain_line`:
+**Porcelain 解析** `parse_porcelain_line` / `parse_status_v2_z`:
 - 处理引号路径 + octal escape（Git 对 unicode 文件名的处理）
 - 区分 staged-only / unstaged-only / both（如 `MM` 生成两条）
+- 未合并（`UU/AA/DD/AU/UA/DU/UD`）单独归 `conflicted` 组、只出一行；v2 的 `u` 记录是 11 个字段、无额外路径 token
+
+### 8.4.1 `git_merge.rs` — 冲突与进行中的操作
+
+纯函数：`resolve_git_dir` / `repo_operation`（读 `MERGE_HEAD`、`rebase-merge|apply`、`CHERRY_PICK_HEAD`、`REVERT_HEAD`）、`parse_unmerged_paths`（`ls-files -u -z`，不依赖 git 语言）、`blocked_reason`、`strip_merge_msg`、`has_conflict_markers`、`parse_merge_segments`（`git merge-file -p --diff3` 输出 → same / conflict 段）。`conflict_state` / `ensure_repo_clear` 供 git 命令与智枢冲突闸门共用。命令：`git_merge_state`、`git_conflict_file`、`git_resolve_conflict`（拒绝仍含 `<<<<<<<` / `>>>>>>>` 的内容，按工作区文件补回 CRLF）、`git_merge_abort`。任何写入都是用户在三栏合并里的明确选择，不自动选边。
 
 ### 8.5 `ai_commands.rs` — AI 模型调用
 
@@ -954,7 +959,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 ## 10. Tauri IPC 命令完整清单
 
-### 10.1 Git Commands（21 条）
+### 10.1 Git Commands（21 条 + git_merge.rs 4 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -966,7 +971,11 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `git_commit` | path, message: String | String |
 | `git_push` | path: String | String |
 | `git_pull` | path: String | String |
-| `git_diff` | path, file_path, staged: bool | String |
+| `git_diff` | path, file_path, staged: bool, ignore_whitespace?: bool | String |
+| `git_merge_state` | path | GitMergeState（operation / conflicted / message / 双方标签） |
+| `git_conflict_file` | path, file | GitConflictFile（kind / textual / ours / base / theirs / segments） |
+| `git_resolve_conflict` | path, file, content? \| take?: ours/theirs/delete | String |
+| `git_merge_abort` | path | String |
 | `git_log` | path, limit?: usize | Vec\<CommitRecord\> |
 | `git_discard` | path, file_path, untracked, staged: bool | String |
 | `git_undo_last_commit` | path: String | String |

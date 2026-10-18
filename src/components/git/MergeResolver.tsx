@@ -385,7 +385,8 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
           disabled={saving}
           badge={files.length > 0 ? <span className="card-title-badge">{t("merge.fileCount", { count: files.length })}</span> : undefined}
         />
-        <div ref={bodyRef} className="mr-body">
+        <div ref={bodyRef} className={`mr-body${files.length <= 1 ? " is-single" : ""}`}>
+          {files.length > 1 && (
           <ul className="mr-files" aria-label={t("merge.files")}>
             {files.map((f) => (
               <li key={f}>
@@ -401,6 +402,7 @@ export default function MergeResolver({ repoPath, repoName, initialFile, onToast
               </li>
             ))}
           </ul>
+          )}
           <div className="mr-main">
             {loading ? (
               <div className="mr-state">

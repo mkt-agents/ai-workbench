@@ -398,6 +398,10 @@
   gap: 10px;
 }
 
+.mr-body.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .mr-files {
   display: flex;
   flex-direction: column;
@@ -535,6 +539,11 @@
 
 .mr-cols.is-tab {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* 页签模式下列标题和选中的页签重复 */
+.mr-cols-head.is-tab {
+  display: none;
 }
 
 .mr-cols-head {
@@ -818,7 +827,11 @@
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .mr-files {
+  .mr-body.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mr-files {
     flex-direction: row;
     overflow-x: auto;
   }
