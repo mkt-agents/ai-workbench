@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { readStoredString, writeStoredString } from "../../core/localState";
+import { DEFAULT_TOOL_ORDER, DEVTOOLS_ORDER_KEY, loadToolOrder } from "../DevTools";
 import CalculatorTool from "../devtools/CalculatorTool";
 import CronTool from "../devtools/CronTool";
 import EncoderTool from "../devtools/EncoderTool";
@@ -40,11 +41,27 @@ export default function ToolsPanel() {
     setTool(id);
     writeStoredString(TOOL_KEY, id);
   };
+  // Same order as the main window's toolbox (drag-sorted there); follows changes live.
+  const [order, setOrder] = useState(() => loadToolOrder(DEFAULT_TOOL_ORDER));
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === DEVTOOLS_ORDER_KEY) setOrder(loadToolOrder(DEFAULT_TOOL_ORDER));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  const tools = useMemo(() => {
+    const rank = (id: string) => {
+      const i = order.indexOf(id);
+      return i < 0 ? order.length : i;
+    };
+    return [...EMBEDDED].sort((a, b) => rank(a.id) - rank(b.id));
+  }, [order]);
   const Active = EMBEDDED.find((e) => e.id === tool)!.C;
   return (
     <div className="ai-hub-tools">
       <div className="qa-tools-bar">
-        {EMBEDDED.map((e) => (
+        {tools.map((e) => (
           <button
             key={e.id}
             type="button"

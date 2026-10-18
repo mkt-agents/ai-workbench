@@ -27,7 +27,8 @@ import CalculatorTool from "./devtools/CalculatorTool";
 
 /** 当前工具 id；智枢跳转写它（storage 事件跨窗同步），本页监听切换。 */
 export const DEVTOOLS_TOOL_KEY = "workbench-devtools-tool";
-const ORDER_KEY = "workbench-devtools-order";
+/** 工具条顺序（可拖动）；智枢工具箱读同一个 key，storage 事件跨窗同步。 */
+export const DEVTOOLS_ORDER_KEY = "workbench-devtools-order";
 
 type ToolDef = {
   id: string;
@@ -79,12 +80,12 @@ const TOOL_BY_ID: Map<string, ToolDef & { groupKey: string }> = new Map(
 );
 
 /** 默认平铺顺序：常用文本/数据工具在前，计算器紧跟（不垫底），低频的 Cron/JWT/正则靠后。 */
-const DEFAULT_TOOL_ORDER = ["json", "encoder", "calc", "timestamp", "cron", "uuid", "hash", "jwt", "regex"];
+export const DEFAULT_TOOL_ORDER = ["json", "encoder", "calc", "timestamp", "cron", "uuid", "hash", "jwt", "regex"];
 
 /** 读取持久化顺序：未知 id 丢弃、新工具追加到末尾，保证与注册表一致。 */
-function loadToolOrder(allIds: string[]): string[] {
+export function loadToolOrder(allIds: string[]): string[] {
   try {
-    const raw = localStorage.getItem(ORDER_KEY);
+    const raw = localStorage.getItem(DEVTOOLS_ORDER_KEY);
     if (!raw) return allIds;
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return allIds;
@@ -134,7 +135,7 @@ function DevTools({ active = true }: { active?: boolean }) {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(ORDER_KEY, JSON.stringify(toolOrder));
+    localStorage.setItem(DEVTOOLS_ORDER_KEY, JSON.stringify(toolOrder));
   }, [toolOrder]);
 
   const stripRef = useRef<HTMLElement>(null);
