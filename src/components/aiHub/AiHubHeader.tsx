@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { History, Loader2, MessageSquarePlus, Pin, PinOff, Sparkles, Square, Terminal, X } from "lucide-react";
-import type { AgentApproval } from "./useAskStream";
+import type { AgentApproval, AgentDecision } from "./useAskStream";
 
 export type AiHubMode = "ask" | "tools";
 
@@ -9,7 +9,7 @@ type Props = {
   onMode: (mode: AiHubMode) => void;
   busy: boolean;
   agentApproval: AgentApproval | null;
-  onDecideAgent: (allow: boolean) => void;
+  onDecideAgent: (decision: AgentDecision) => void;
   onStop: () => void;
   historyOpen: boolean;
   onToggleHistory: () => void;
@@ -63,10 +63,10 @@ export default function AiHubHeader(props: Props) {
           <div className="qa-busy-pill is-approval" role="group" aria-label={t("busyApproval")}>
             <Loader2 size={11} className="spin" />
             <span>{t("busyApproval")}</span>
-            <button type="button" className="qa-busy-act is-allow" onClick={() => onDecideAgent(true)}>
+            <button type="button" className="qa-busy-act is-allow" onClick={() => onDecideAgent("once")}>
               {t("agent.allow")}
             </button>
-            <button type="button" className="qa-busy-act" onClick={() => onDecideAgent(false)}>
+            <button type="button" className="qa-busy-act" onClick={() => onDecideAgent("deny")}>
               {t("agent.deny")}
             </button>
           </div>

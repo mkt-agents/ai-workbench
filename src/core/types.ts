@@ -161,7 +161,9 @@ export interface AiHubTurn {
   /** Copy and save keep the whole reply (polish, translate, summary, daily report). */
   keep?: 'whole';
   /** Tool steps from an agent turn. Not sent as the visible answer. */
-  steps?: { tool: string; status: string; summary: string }[];
+  steps?: { tool: string; status: string; summary: string; detail?: string }[];
+  /** The agent stopped at its round / action cap; the thread offers「继续」. */
+  limited?: boolean;
   /** Folded notes for rounds that fell outside the verbatim window. */
   digest?: boolean;
 }
@@ -397,6 +399,8 @@ export interface AIModelConfig {
   updatedAt: string;
   /** Last connection test, persisted so the verdict survives a restart. */
   lastTest?: AIModelTestResult | null;
+  /** Accepts images: needed for the AI hub to operate the computer (完全权限). */
+  vision?: boolean;
 }
 
 export interface AIModelTestResult {

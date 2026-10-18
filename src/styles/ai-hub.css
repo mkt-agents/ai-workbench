@@ -1356,10 +1356,74 @@
 }
 .qa-agent-step {
   display: flex;
-  gap: 8px;
-  align-items: baseline;
+  flex-direction: column;
+  gap: 4px;
   font-size: 11px;
   color: var(--text-2);
+}
+/* Whole row toggles the step's output (command output, error, diff) */
+.qa-agent-step-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.qa-agent-step-row:disabled {
+  cursor: default;
+}
+.qa-agent-step-row:not(:disabled):hover .qa-agent-summary {
+  color: var(--text-0);
+}
+.qa-agent-caret {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--text-3);
+  transition: var(--transition-colors-fast);
+}
+.qa-agent-caret.is-open {
+  transform: rotate(90deg);
+}
+.qa-agent-caret.is-empty {
+  opacity: 0;
+}
+.qa-agent-detail {
+  margin: 0 0 2px 17px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-1);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.qa-agent-approve .qa-agent-detail {
+  margin: 6px 0 0;
+}
+.qa-diff-line.is-add {
+  color: var(--green);
+  background: var(--green-dim);
+}
+.qa-diff-line.is-del {
+  color: var(--red);
+  background: var(--red-dim);
+}
+.qa-diff-line.is-hunk {
+  color: var(--accent);
+}
+.qa-diff-line.is-meta {
+  color: var(--text-3);
 }
 .qa-agent-tool {
   flex-shrink: 0;
@@ -1390,24 +1454,14 @@
   font-size: 12px;
   color: var(--text-0);
 }
-.qa-agent-preview {
-  margin: 6px 0 0;
-  max-height: 140px;
-  overflow: auto;
-  padding: 6px 8px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  white-space: pre-wrap;
-  color: var(--text-1);
-  background: var(--bg-1);
-  border-radius: var(--radius-sm);
-}
 .qa-agent-approve-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
 }
 .qa-agent-allow,
+.qa-agent-allow-turn,
 .qa-agent-deny {
   padding: 4px 10px;
   font-size: 12px;
@@ -1426,9 +1480,25 @@
 .qa-agent-allow:hover {
   background: var(--accent-strong);
 }
+.qa-agent-allow-turn:hover {
+  color: var(--text-0);
+  border-color: var(--accent-border);
+}
 .qa-agent-deny:hover {
   color: var(--red);
   border-color: var(--red);
+}
+/* Operating the computer: the emergency stop has to be impossible to miss */
+.qa-computer-banner {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--yellow-border);
+  border-radius: var(--radius-md);
+  background: var(--yellow-dim);
+  color: var(--yellow);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
 }
 .qa-task-btn.on {
   color: var(--accent-strong);

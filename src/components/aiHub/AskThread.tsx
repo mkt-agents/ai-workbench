@@ -55,7 +55,7 @@ function MessageActions({
         {snippetSaved === index ? <Check size={12} className="qa-pop" /> : <BookmarkPlus size={12} />}{" "}
         {snippetSaved === index ? t("savedSnippet") : code ? t("saveCode") : t("saveSnippet")}
       </button>
-      {isLast && (turn.steps?.length ?? 0) > 0 && turn.content.includes("发送「继续」") && (
+      {isLast && turn.limited && (
         <button type="button" className="qa-mini-btn" disabled={busy} onClick={onContinue}>
           {t("agent.continue")}
         </button>

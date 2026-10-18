@@ -77,7 +77,10 @@ export function requestHistory(turns: AiHubTurn[]): AiHubTurn[] {
 
 function historyContent(turn: AiHubTurn): string {
   if (turn.role !== "assistant" || !turn.steps?.length) return turn.content;
-  const lines = turn.steps.map((s) => `- ${s.summary}`).join("\n");
+  // Mark what did not happen, so a follow-up does not assume a refused / failed step ran.
+  const mark = (status: string) =>
+    status === "error" ? "（失败）" : status === "denied" ? "（未执行）" : "";
+  const lines = turn.steps.map((s) => `- ${s.summary}${mark(s.status)}`).join("\n");
   return `${turn.content}\n\n[操作]\n${lines}`;
 }
 

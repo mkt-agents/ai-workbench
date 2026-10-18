@@ -1,9 +1,8 @@
-//! AI Hub tool loop. Read-only tools run immediately. Writes and shell
-//! commands wait for `agent_decide`. Paths must stay inside the selected repo.
+//! AI Hub tool loop. What a call may do is decided by `agent_policy` (permission
+//! level); the tools themselves live in `agent_fs` / `agent_proc` / `agent_sys` /
+//! `agent_computer`. Changes that need consent wait for `agent_decide`.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -12,9 +11,10 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
+use crate::agent_fs::{arg_str, Protected, Scope};
 use crate::agent_policy::{
-    deny_reason, filter_specs, offered_tools, parse_review_verdict, policy_text, tool_gate, Gate,
-    Permission, REVIEW_SYSTEM,
+    action_kind, deny_reason, filter_specs, offered_tools, parse_review_verdict, policy_text, tool_gate,
+    Gate, Permission, Reach, COMPUTER_TOOLS, REVIEW_SYSTEM,
 };
 use crate::agent_stream::{chunk_usage, delta_content, SseLines, ThinkFilter};
 use crate::ai_commands::{
@@ -24,12 +24,11 @@ use crate::cancellation::{is_cancelled, CancelGuard};
 
 const MAX_ACTION_STEPS: usize = 32;
 const MAX_ROUNDS: usize = 48;
-const READ_CAP: usize = 20_000;
-const WRITE_CAP: usize = 200_000;
 const PREVIEW_CAP: usize = 2_000;
-const LIST_CAP: usize = 200;
-const GREP_CAP: usize = 30;
-const CMD_CAP: usize = 8_000;
+/// Step detail sent to the UI (command output, errors, diffs).
+const DETAIL_CAP: usize = 2_000;
+/// Screenshots kept in the conversation; older ones become a text placeholder.
+const KEEP_SHOTS: usize = 2;
 const APPROVAL_WAIT: Duration = Duration::from_secs(300);
 const REVIEW_WAIT: Duration = Duration::from_secs(30);
 
@@ -61,6 +60,9 @@ pub struct AgentRunRequest {
     /// `false` for text-only tasks (polish / translate / …): no tools are offered.
     #[serde(default = "default_true")]
     pub tools: bool,
+    /// The model accepts images; with 完全权限 this unlocks operating the computer.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 fn default_true() -> bool {
@@ -81,9 +83,12 @@ struct ModelTurn {
     assistant: Value,
 }
 
-static DECISIONS: Mutex<Option<HashMap<String, oneshot::Sender<bool>>>> = Mutex::new(None);
+/// User's answer on an approval card: allow?, and "same kind for the rest of this turn".
+type DecisionMsg = (bool, bool);
 
-fn decisions() -> std::sync::MutexGuard<'static, Option<HashMap<String, oneshot::Sender<bool>>>> {
+static DECISIONS: Mutex<Option<HashMap<String, oneshot::Sender<DecisionMsg>>>> = Mutex::new(None);
+
+fn decisions() -> std::sync::MutexGuard<'static, Option<HashMap<String, oneshot::Sender<DecisionMsg>>>> {
     let mut guard = DECISIONS.lock().expect("agent decisions");
     if guard.is_none() {
         *guard = Some(HashMap::new());
@@ -96,89 +101,115 @@ fn decision_key(request_id: &str, call_id: &str) -> String {
 }
 
 #[tauri::command]
-pub fn agent_decide(request_id: String, call_id: String, allow: bool) -> Result<(), String> {
+pub fn agent_decide(
+    request_id: String,
+    call_id: String,
+    allow: bool,
+    scope: Option<String>,
+) -> Result<(), String> {
     let key = decision_key(&request_id, &call_id);
     let tx = decisions()
         .as_mut()
         .and_then(|map| map.remove(&key))
         .ok_or_else(|| "没有等待确认的操作".to_string())?;
-    let _ = tx.send(allow);
+    let _ = tx.send((allow, allow && scope.as_deref() == Some("turn")));
     Ok(())
 }
 
+fn obj(props: Value, required: &[&str]) -> Value {
+    json!({ "type": "object", "properties": props, "required": required })
+}
+
+/// Every tool the agent knows; `agent_policy::offered_tools` picks the ones a turn gets.
 fn tool_specs() -> Value {
+    let s = |d: &str| json!({ "type": "string", "description": d });
+    let n = |d: &str| json!({ "type": "integer", "description": d });
+    let b = |d: &str| json!({ "type": "boolean", "description": d });
     json!([
-        {
-            "name": "read_file",
-            "description": "Read a text file inside the repository. Path is relative to the repo root.",
-            "parameters": {
-                "type": "object",
-                "properties": { "path": { "type": "string" } },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "list_dir",
-            "description": "List one directory inside the repository. Path is relative; empty means the root.",
-            "parameters": {
-                "type": "object",
-                "properties": { "path": { "type": "string" } }
-            }
-        },
-        {
-            "name": "grep",
-            "description": "Search file contents under the repository for a literal substring. Skips dependencies and build output.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string" },
-                    "path": { "type": "string", "description": "Optional subdirectory" }
-                },
-                "required": ["pattern"]
-            }
-        },
-        {
-            "name": "write_file",
-            "description": "Create or overwrite a text file inside the repository. Depending on the permission level the user may be asked first. Do not use this to delete files.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string" },
-                    "content": { "type": "string" }
-                },
-                "required": ["path", "content"]
-            }
-        },
-        {
-            "name": "run_command",
-            "description": "Run a command with the working directory locked to the repository. Read-only git commands run immediately; others may need confirmation depending on the permission level. Refused: shutdown, format, disk wipe, force push, hard reset.",
-            "parameters": {
-                "type": "object",
-                "properties": { "command": { "type": "string" } },
-                "required": ["command"]
-            }
-        },
-        {
-            "name": "open_page",
-            "description": "Open a page in AI Workbench. tab is one of: ai-chat, ai-models, snippets, drafts, cursor-accounts, account-quota, git, runtime, plugins, cloudflared, hosts, devtools, app-launcher, settings. gitSub is optional: repos, commit, report.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tab": { "type": "string" },
-                    "gitSub": { "type": "string" }
-                },
-                "required": ["tab"]
-            }
-        },
-        {
-            "name": "launch_app",
-            "description": "Launch a saved quick app by its name.",
-            "parameters": {
-                "type": "object",
-                "properties": { "name": { "type": "string" } },
-                "required": ["name"]
-            }
-        }
+        { "name": "read_file",
+          "description": "Read a text file with line numbers, in pages. Big files: read again with offset to continue.",
+          "parameters": obj(json!({ "path": s("Relative to the repo, or absolute"), "offset": n("First line, 1-based (default 1)"), "limit": n("Lines to read (default 400)") }), &["path"]) },
+        { "name": "list_dir",
+          "description": "List one directory. Empty path = the repo root (or home folder without a repo).",
+          "parameters": obj(json!({ "path": s("Directory") }), &[]) },
+        { "name": "find_files",
+          "description": "Find files by name with * and ? wildcards, e.g. *.tsx or use*Stream.ts. A pattern with / matches the relative path. Skips node_modules, .git, target, dist.",
+          "parameters": obj(json!({ "pattern": s("Wildcard pattern"), "path": s("Folder to search (default: repo root)") }), &["pattern"]) },
+        { "name": "grep",
+          "description": "Search file contents (case-insensitive). Literal text by default; set regex=true for a regular expression. Optional glob limits file names.",
+          "parameters": obj(json!({ "pattern": s("Text or regex"), "path": s("File or folder (default: repo root)"), "regex": b("Treat pattern as a regex"), "glob": s("File name filter, e.g. *.rs") }), &["pattern"]) },
+        { "name": "write_file",
+          "description": "Create a new file or fully rewrite one. For changes to an existing file prefer edit_file.",
+          "parameters": obj(json!({ "path": s("File path"), "content": s("Whole new content") }), &["path", "content"]) },
+        { "name": "edit_file",
+          "description": "Replace an exact piece of text in a file. `old` must match exactly once (include enough surrounding lines), unless replace_all=true.",
+          "parameters": obj(json!({ "path": s("File path"), "old": s("Exact current text"), "new": s("Replacement text"), "replace_all": b("Replace every occurrence") }), &["path", "old", "new"]) },
+        { "name": "delete_path",
+          "description": "Delete a file or folder by moving it to the Recycle Bin (recoverable).",
+          "parameters": obj(json!({ "path": s("File or folder") }), &["path"]) },
+        { "name": "move_path",
+          "description": "Move or rename a file or folder. The target must not exist.",
+          "parameters": obj(json!({ "from": s("Current path"), "to": s("New path") }), &["from", "to"]) },
+        { "name": "run_command",
+          "description": "Run a command to completion and return its output. cmd.exe by default, or PowerShell with shell=powershell. Read-only git commands run immediately. Not for servers or watchers: use start_process. Refused: shutdown, format, disk wipe, force push, hard reset.",
+          "parameters": obj(json!({ "command": s("Command line"), "shell": s("cmd (default) or powershell"), "cwd": s("Working directory (default: repo root)"), "timeout_secs": n("Up to 600, default 60 (git network commands 600)") }), &["command"]) },
+        { "name": "start_process",
+          "description": "Start a long-running command in the background (dev server, watcher, build --watch). Returns an id; read with process_output, stop with stop_process.",
+          "parameters": obj(json!({ "command": s("Command line"), "shell": s("cmd (default) or powershell"), "cwd": s("Working directory") }), &["command"]) },
+        { "name": "process_output",
+          "description": "Status and latest output of a background process started with start_process.",
+          "parameters": obj(json!({ "id": n("Process id from start_process"), "tail_chars": n("How much of the end to return (default 8000)") }), &["id"]) },
+        { "name": "stop_process",
+          "description": "Stop a background process (and its child processes).",
+          "parameters": obj(json!({ "id": n("Process id from start_process") }), &["id"]) },
+        { "name": "open_page",
+          "description": "Open a page in AI Workbench. tab is one of: ai-chat, ai-models, snippets, drafts, cursor-accounts, account-quota, git, runtime, plugins, cloudflared, hosts, devtools, app-launcher, settings. gitSub is optional: repos, commit, report.",
+          "parameters": obj(json!({ "tab": s("Page id"), "gitSub": s("Git sub page") }), &["tab"]) },
+        { "name": "launch_app",
+          "description": "Launch a saved quick app by its name.",
+          "parameters": obj(json!({ "name": s("Quick app name") }), &["name"]) },
+        { "name": "open_target",
+          "description": "Open a file, folder or http(s) / mailto URL with its default program.",
+          "parameters": obj(json!({ "target": s("Path or URL") }), &["target"]) },
+        { "name": "clipboard_read",
+          "description": "Read the text currently on the clipboard.",
+          "parameters": obj(json!({}), &[]) },
+        { "name": "clipboard_write",
+          "description": "Put text on the clipboard.",
+          "parameters": obj(json!({ "text": s("Text") }), &["text"]) },
+        { "name": "list_processes",
+          "description": "List running processes (pid, memory, name), largest first. Optional name filter.",
+          "parameters": obj(json!({ "name": s("Part of the process name") }), &[]) },
+        { "name": "kill_process",
+          "description": "End a process by pid, or every process with an exact image name. System-critical processes are refused.",
+          "parameters": obj(json!({ "pid": n("Process id"), "name": s("Image name, e.g. node.exe") }), &[]) },
+        { "name": "find_port",
+          "description": "Which processes listen on a TCP/UDP port.",
+          "parameters": obj(json!({ "port": n("Port number") }), &["port"]) },
+        { "name": "kill_port",
+          "description": "End the processes that listen on a port (frees it).",
+          "parameters": obj(json!({ "port": n("Port number") }), &["port"]) },
+        { "name": "hosts",
+          "description": "The Windows hosts file. action=read returns it; action=write replaces it with `content` (read first, then send the whole new file). Writing needs the app to run as administrator; a backup is made first.",
+          "parameters": obj(json!({ "action": s("read or write"), "content": s("Whole new hosts file (write only)") }), &["action"]) },
+        { "name": "tunnel",
+          "description": "Cloudflare tunnels (cloudflared). action=status lists installation and running tunnels; start_quick exposes local_url on a temporary public URL; stop ends the tunnel with `id`.",
+          "parameters": obj(json!({ "action": s("status, start_quick or stop"), "local_url": s("e.g. http://localhost:3000"), "id": s("Tunnel id from status") }), &["action"]) },
+        { "name": "runtime",
+          "description": "Installed runtime versions. kind is node, jdk, maven or python. action=list shows versions, active shows the current one, switch changes it (by version or path).",
+          "parameters": obj(json!({ "action": s("list, active or switch"), "kind": s("node, jdk, maven or python"), "version": s("Version to switch to"), "path": s("Install path to switch to") }), &["action", "kind"]) },
+        { "name": "screenshot",
+          "description": "Capture the primary screen. Returns the image; later coordinates are pixels of this image.",
+          "parameters": obj(json!({}), &[]) },
+        { "name": "mouse",
+          "description": "Mouse at screenshot coordinates. action: move, click, double_click, right_click (x, y optional for clicks = current position), drag (x, y to to_x, to_y), scroll (amount notches, positive = up).",
+          "parameters": obj(json!({ "action": s("move, click, double_click, right_click, drag or scroll"), "x": n("X"), "y": n("Y"), "to_x": n("Drag target X"), "to_y": n("Drag target Y"), "amount": n("Scroll notches") }), &["action"]) },
+        { "name": "keyboard",
+          "description": "Keyboard. action=type enters `text` (any language); action=key presses a combo in `keys`, e.g. ctrl+s, alt+tab, enter, win+r.",
+          "parameters": obj(json!({ "action": s("type or key"), "text": s("Text to type"), "keys": s("Key combo") }), &["action"]) },
+        { "name": "wait",
+          "description": "Wait for the screen to update (max 10000 ms).",
+          "parameters": obj(json!({ "ms": n("Milliseconds") }), &[]) }
     ])
 }
 
@@ -228,7 +259,8 @@ fn emit_step(app: &AppHandle, id: &str, tool: &str, status: &str, summary: &str,
     );
 }
 
-fn emit_approval(app: &AppHandle, id: &str, call_id: &str, tool: &str, summary: &str, preview: &str) {
+/// `diff`: `preview` is a unified diff (file / hosts change) and is rendered with colours.
+fn emit_approval(app: &AppHandle, id: &str, call_id: &str, tool: &str, summary: &str, preview: &str, diff: bool) {
     let _ = app.emit(
         "agent-approval",
         json!({
@@ -237,6 +269,7 @@ fn emit_approval(app: &AppHandle, id: &str, call_id: &str, tool: &str, summary: 
             "tool": tool,
             "summary": summary,
             "preview": preview,
+            "previewKind": if diff { "diff" } else { "text" },
         }),
     );
 }
@@ -248,10 +281,12 @@ fn emit_text(app: &AppHandle, id: &str, text: &str) {
     let _ = app.emit("generate-text-chunk", json!({ "id": id, "text": text }));
 }
 
-fn emit_done(app: &AppHandle, id: &str, started: Instant, usage: Option<(u64, u64)>) {
+/// `limited`: the turn stopped at the round / action cap, so the UI offers「继续」.
+fn emit_done(app: &AppHandle, id: &str, started: Instant, usage: Option<(u64, u64)>, limited: bool) {
     let mut payload = json!({
         "id": id,
         "elapsedMs": started.elapsed().as_millis() as u64,
+        "limited": limited,
     });
     if let Some((prompt, completion)) = usage {
         payload["promptTokens"] = json!(prompt);
@@ -262,188 +297,6 @@ fn emit_done(app: &AppHandle, id: &str, started: Instant, usage: Option<(u64, u6
 
 fn emit_err(app: &AppHandle, id: &str, msg: &str) {
     let _ = app.emit("generate-text-error", json!({ "id": id, "error": msg }));
-}
-
-fn repo_root(path: &str) -> Result<PathBuf, String> {
-    let root = PathBuf::from(path);
-    if !root.is_dir() {
-        return Err("没有可用的仓库目录".into());
-    }
-    root.canonicalize().map_err(|e| format!("无法解析仓库路径: {e}"))
-}
-
-/// Resolve `user_path` and reject anything outside `root`.
-/// Missing parents are allowed so a confirmed write can create nested files.
-fn resolve_in_repo(root: &Path, user_path: &str) -> Result<PathBuf, String> {
-    let raw = user_path.trim();
-    if raw.is_empty() {
-        return Ok(root.to_path_buf());
-    }
-    let p = Path::new(raw);
-    let joined = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        root.join(p)
-    };
-    let mut pending = Vec::new();
-    let mut cursor = joined.as_path();
-    let existing = loop {
-        if cursor.exists() {
-            break cursor;
-        }
-        let Some(name) = cursor.file_name() else {
-            return Err("路径超出当前仓库".into());
-        };
-        if name == ".." || name == "." {
-            return Err("路径超出当前仓库".into());
-        }
-        pending.push(name.to_os_string());
-        match cursor.parent() {
-            Some(parent) if parent != cursor => cursor = parent,
-            _ => return Err("目录不存在".into()),
-        }
-    };
-    let mut canon = existing.canonicalize().map_err(|e| e.to_string())?;
-    if !canon.starts_with(root) {
-        return Err("路径超出当前仓库".into());
-    }
-    for name in pending.iter().rev() {
-        if name.is_empty() || name == ".." || name == "." {
-            return Err("路径超出当前仓库".into());
-        }
-        canon.push(name);
-    }
-    Ok(canon)
-}
-
-fn arg_str(args: &Value, key: &str) -> String {
-    args.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
-}
-
-fn read_file(root: &Path, args: &Value) -> Result<String, String> {
-    let path = resolve_in_repo(root, &arg_str(args, "path"))?;
-    if !path.is_file() {
-        return Err("不是文件".into());
-    }
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    if bytes.contains(&0) {
-        return Err("这是二进制文件，未读取内容".into());
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    Ok(clip(&text, READ_CAP))
-}
-
-fn list_dir(root: &Path, args: &Value) -> Result<String, String> {
-    let path = resolve_in_repo(root, &arg_str(args, "path"))?;
-    if !path.is_dir() {
-        return Err("不是目录".into());
-    }
-    let mut names = Vec::new();
-    for entry in std::fs::read_dir(&path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let mark = if entry.path().is_dir() { "/" } else { "" };
-        names.push(format!("{name}{mark}"));
-        if names.len() >= LIST_CAP {
-            break;
-        }
-    }
-    names.sort();
-    Ok(names.join("\n"))
-}
-
-fn skip_dir(name: &str) -> bool {
-    matches!(
-        name,
-        ".git" | "node_modules" | "target" | "dist" | ".next" | "coverage"
-    )
-}
-
-fn grep_file(path: &Path, root: &Path, pattern: &str, hits: &mut Vec<String>) {
-    if hits.len() >= GREP_CAP || !path.is_file() {
-        return;
-    }
-    let Ok(meta) = path.metadata() else { return };
-    if meta.len() > 1_000_000 {
-        return;
-    }
-    let Ok(bytes) = std::fs::read(path) else { return };
-    if bytes.contains(&0) {
-        return;
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let needle = pattern.to_lowercase();
-    for (idx, line) in text.lines().enumerate() {
-        if line.to_lowercase().contains(&needle) {
-            let rel = path.strip_prefix(root).unwrap_or(path);
-            hits.push(format!("{}:{}: {}", rel.display(), idx + 1, line.trim()));
-            if hits.len() >= GREP_CAP {
-                return;
-            }
-        }
-    }
-}
-
-fn grep_tree(dir: &Path, root: &Path, pattern: &str, request_id: &str, hits: &mut Vec<String>) -> Result<(), String> {
-    if hits.len() >= GREP_CAP {
-        return Ok(());
-    }
-    if is_cancelled(request_id) {
-        return Err(cancelled_message());
-    }
-    let Ok(rd) = std::fs::read_dir(dir) else { return Ok(()) };
-    for entry in rd.flatten() {
-        if hits.len() >= GREP_CAP {
-            return Ok(());
-        }
-        if is_cancelled(request_id) {
-            return Err(cancelled_message());
-        }
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if path.is_dir() {
-            if skip_dir(&name) {
-                continue;
-            }
-            grep_tree(&path, root, pattern, request_id, hits)?;
-            continue;
-        }
-        grep_file(&path, root, pattern, hits);
-    }
-    Ok(())
-}
-
-fn grep(root: &Path, args: &Value, request_id: &str) -> Result<String, String> {
-    let pattern = arg_str(args, "pattern");
-    if pattern.is_empty() {
-        return Err("缺少搜索词".into());
-    }
-    let start = resolve_in_repo(root, &arg_str(args, "path"))?;
-    let mut hits = Vec::new();
-    if start.is_file() {
-        grep_file(&start, root, &pattern, &mut hits);
-    } else {
-        grep_tree(&start, root, &pattern, request_id, &mut hits)?;
-    }
-    if hits.is_empty() {
-        Ok("没有匹配".into())
-    } else {
-        Ok(hits.join("\n"))
-    }
-}
-
-fn write_file(root: &Path, args: &Value) -> Result<String, String> {
-    let rel = arg_str(args, "path");
-    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-    if content.chars().count() > WRITE_CAP {
-        return Err("内容过长".into());
-    }
-    let path = resolve_in_repo(root, &rel)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
-    Ok(format!("已写入 {}", path.display()))
 }
 
 pub(crate) fn command_blocked(command: &str) -> bool {
@@ -544,144 +397,6 @@ pub(crate) fn command_is_readonly(command: &str) -> bool {
     false
 }
 
-fn command_timeout(command: &str) -> Duration {
-    let lower = command.to_lowercase();
-    if lower.contains("git push")
-        || lower.contains("git pull")
-        || lower.contains("git fetch")
-        || lower.contains("git ls-remote")
-        || lower.contains("git clone")
-    {
-        Duration::from_secs(600)
-    } else {
-        Duration::from_secs(60)
-    }
-}
-
-fn git_network_command(command: &str) -> bool {
-    let lower = command.to_lowercase();
-    lower.contains("git push")
-        || lower.contains("git pull")
-        || lower.contains("git fetch")
-        || lower.contains("git ls-remote")
-        || lower.contains("git clone")
-}
-
-fn stop_child(child: &mut std::process::Child) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let _ = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &child.id().to_string()])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn run_command(root: &Path, command: &str, request_id: &str) -> Result<String, String> {
-    let command = command.trim();
-    if command.is_empty() {
-        return Err("命令为空".into());
-    }
-    if command_blocked(command) {
-        return Err("这条命令被拒绝".into());
-    }
-    #[cfg(windows)]
-    let mut cmd = {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let mut c = Command::new("cmd");
-        // 必须 raw_arg：std 按 MSVC 规则把 `"` 转义成 `\"`，cmd.exe 不认，带引号的参数
-        // （commit -m "a b"）会被拆碎。/S 让 cmd 只剥最外层这对引号，其余原样执行。
-        c.raw_arg(format!("/S /C \"{command}\"")).current_dir(root);
-        // A credential dialog needs a real window. Hiding it makes push sit
-        // until the timeout, then the model retries.
-        if !git_network_command(command) {
-            c.creation_flags(CREATE_NO_WINDOW);
-        }
-        c
-    };
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let mut c = Command::new("sh");
-        c.args(["-c", command]).current_dir(root);
-        c
-    };
-    // Commit-page push injects the Windows system proxy. A bare `cmd /C git push`
-    // does not, so the same repo fails here with a connection reset.
-    if git_network_command(command) {
-        if let Some((http_proxy, https_proxy)) =
-            crate::git_commands::git_proxy_env(&root.to_string_lossy())
-        {
-            cmd.env("http_proxy", &http_proxy);
-            cmd.env("https_proxy", &https_proxy);
-        }
-    }
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let out_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stdout {
-            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
-        }
-        buf
-    });
-    let err_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stderr {
-            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
-        }
-        buf
-    });
-    let started = Instant::now();
-    let limit = command_timeout(command);
-    let code = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status.code().unwrap_or(-1),
-            Ok(None) => {
-                if is_cancelled(request_id) {
-                    stop_child(&mut child);
-                    let _ = out_handle.join();
-                    let _ = err_handle.join();
-                    return Err(cancelled_message());
-                }
-                if started.elapsed() > limit {
-                    stop_child(&mut child);
-                    let _ = out_handle.join();
-                    let _ = err_handle.join();
-                    return Err(format!("命令超过 {} 秒，已停止", limit.as_secs()));
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    };
-    let stdout_bytes = out_handle.join().unwrap_or_default();
-    let stderr_bytes = err_handle.join().unwrap_or_default();
-    let mut text = String::new();
-    text.push_str(&String::from_utf8_lossy(&stdout_bytes));
-    let err = String::from_utf8_lossy(&stderr_bytes);
-    if !err.trim().is_empty() {
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&err);
-    }
-    if text.trim().is_empty() {
-        text = format!("exit {code}");
-    } else if code != 0 {
-        // 失败要说出来：只看报错文本，弱模型分不清是警告还是命令没成功。放开头，clip 截不掉
-        text = format!("exit {code}\n{text}");
-    }
-    Ok(clip(&text, CMD_CAP))
-}
-
 fn open_page(app: &AppHandle, args: &Value) -> Result<String, String> {
     let tab = arg_str(args, "tab");
     crate::tray::open_main_tab(app.clone(), tab.clone())?;
@@ -724,7 +439,8 @@ fn launch_named(apps: &[AgentAppShortcut], name: &str) -> Result<String, String>
 
 #[derive(Debug, PartialEq)]
 enum Decision {
-    Allow,
+    /// `for_turn`: also allow the same kind of action for the rest of this turn.
+    Allow { for_turn: bool },
     Deny,
     /// Nobody answered within `APPROVAL_WAIT` (window hidden, user away).
     TimedOut,
@@ -743,8 +459,8 @@ async fn wait_decision(request_id: &str, call_id: &str) -> Result<Decision, Stri
             return Err(format!("[{}] 已取消", crate::config::ErrorCode::AiRequestCancelled.as_str()));
         }
         match rx.try_recv() {
-            Ok(true) => return Ok(Decision::Allow),
-            Ok(false) => return Ok(Decision::Deny),
+            Ok((true, for_turn)) => return Ok(Decision::Allow { for_turn }),
+            Ok((false, _)) => return Ok(Decision::Deny),
             Err(oneshot::error::TryRecvError::Empty) => {}
             Err(oneshot::error::TryRecvError::Closed) => return Ok(Decision::Deny),
         }
@@ -869,7 +585,261 @@ fn parse_anthropic(body: &Value) -> Result<ModelTurn, String> {
 }
 
 fn round_is_action(names: &[String]) -> bool {
-    names.iter().any(|name| !matches!(name.as_str(), "read_file" | "list_dir" | "grep"))
+    names.iter().any(|name| {
+        !matches!(
+            name.as_str(),
+            "read_file" | "list_dir" | "grep" | "find_files" | "process_output" | "list_processes" | "find_port"
+                | "screenshot" | "wait"
+        )
+    })
+}
+
+/// One-line label for the step log and approval card.
+fn call_summary(name: &str, args: &Value) -> String {
+    let a = |k: &str| arg_str(args, k);
+    match name {
+        "read_file" => format!("读取 {}", a("path")),
+        "list_dir" => format!("列出 {}", a("path")),
+        "find_files" => format!("查找文件 {}", a("pattern")),
+        "grep" => format!("搜索 {}", a("pattern")),
+        "write_file" => format!("写入 {}", a("path")),
+        "edit_file" => format!("修改 {}", a("path")),
+        "delete_path" => format!("删除 {}", a("path")),
+        "move_path" => format!("移动 {} → {}", a("from"), a("to")),
+        "run_command" => format!("运行 {}", a("command")),
+        "start_process" => format!("后台运行 {}", a("command")),
+        "process_output" => format!("查看后台进程 #{}", args.get("id").map(|v| v.to_string()).unwrap_or_default()),
+        "stop_process" => format!("停止后台进程 #{}", args.get("id").map(|v| v.to_string()).unwrap_or_default()),
+        "open_page" => format!("打开页面 {}", a("tab")),
+        "launch_app" => format!("启动 {}", a("name")),
+        "open_target" => format!("打开 {}", a("target")),
+        "clipboard_read" => "读取剪贴板".into(),
+        "clipboard_write" => "写入剪贴板".into(),
+        "list_processes" => format!("查看进程 {}", a("name")),
+        "kill_process" => format!("结束进程 {}{}", a("name"), args.get("pid").map(|v| v.to_string()).unwrap_or_default()),
+        "find_port" => format!("查看端口 {}", args.get("port").map(|v| v.to_string()).unwrap_or_default()),
+        "kill_port" => format!("释放端口 {}", args.get("port").map(|v| v.to_string()).unwrap_or_default()),
+        "hosts" | "tunnel" | "runtime" => format!("{name} {} {}", a("action"), a("kind")).trim_end().to_string(),
+        "screenshot" => "截屏".into(),
+        "mouse" => format!("鼠标 {} {}", a("action"), args.get("x").map(|x| format!("({x}, {})", args.get("y").map(|y| y.to_string()).unwrap_or_default())).unwrap_or_default()).trim_end().to_string(),
+        "keyboard" => format!("键盘 {} {}", a("action"), if a("action") == "type" { clip(&a("text"), 30) } else { a("keys") }),
+        "wait" => "等待".into(),
+        _ => format!("未知工具 {name}"),
+    }
+}
+
+/// The value `tool_gate` / `action_kind` look at besides the tool name.
+fn gate_arg(name: &str, args: &Value) -> String {
+    match name {
+        "run_command" | "start_process" => arg_str(args, "command"),
+        "hosts" | "tunnel" | "runtime" => arg_str(args, "action"),
+        _ => String::new(),
+    }
+}
+
+/// Tool result: text for the model, plus a PNG (base64) for `screenshot`.
+struct ToolOutput {
+    text: String,
+    image: Option<String>,
+}
+
+impl From<String> for ToolOutput {
+    fn from(text: String) -> Self {
+        Self { text, image: None }
+    }
+}
+
+struct ToolCtx<'a> {
+    app: &'a AppHandle,
+    scope: &'a Scope,
+    protected: &'a Protected,
+    apps: &'a [AgentAppShortcut],
+    request_id: &'a str,
+}
+
+/// Working directory for command tools: `cwd` inside the scope, else the base.
+fn command_cwd(scope: &Scope, args: &Value) -> Result<std::path::PathBuf, String> {
+    let cwd = arg_str(args, "cwd");
+    let dir = if cwd.is_empty() { scope.base.clone() } else { scope.resolve(&cwd)? };
+    if !dir.is_dir() {
+        return Err(format!("工作目录不存在：{}", dir.display()));
+    }
+    Ok(dir)
+}
+
+async fn execute_tool(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> Result<ToolOutput, String> {
+    use crate::{agent_computer as pc, agent_fs as fs, agent_proc as proc, agent_sys as sys};
+    let needs_files = matches!(
+        name,
+        "read_file" | "list_dir" | "find_files" | "grep" | "write_file" | "edit_file" | "delete_path" | "move_path"
+            | "run_command" | "start_process"
+    );
+    if needs_files && !ctx.scope.has_files() {
+        return Err("没有选择仓库，不能读写文件或执行命令。".into());
+    }
+    let out: String = match name {
+        "read_file" => fs::read_file(ctx.scope, args)?,
+        "list_dir" => fs::list_dir(ctx.scope, args)?,
+        "find_files" => fs::find_files(ctx.scope, args, ctx.request_id)?,
+        "grep" => fs::grep(ctx.scope, args, ctx.request_id)?,
+        "write_file" | "edit_file" => fs::write_or_edit(ctx.scope, name, args, ctx.protected)?,
+        "delete_path" => fs::delete_path(ctx.scope, args, ctx.protected)?,
+        "move_path" => fs::move_path(ctx.scope, args, ctx.protected)?,
+        "run_command" => {
+            let cwd = command_cwd(ctx.scope, args)?;
+            let (args, rid) = (args.clone(), ctx.request_id.to_string());
+            tokio::task::spawn_blocking(move || proc::run_command(&cwd, &args, &rid))
+                .await
+                .map_err(|e| e.to_string())??
+        }
+        "start_process" => {
+            let cwd = command_cwd(ctx.scope, args)?;
+            let args = args.clone();
+            tokio::task::spawn_blocking(move || proc::start_process(&cwd, &args)).await.map_err(|e| e.to_string())??
+        }
+        "process_output" => proc::process_output(args)?,
+        "stop_process" => proc::stop_process(args)?,
+        "open_page" => open_page(ctx.app, args)?,
+        "launch_app" => launch_named(ctx.apps, &arg_str(args, "name"))?,
+        "open_target" => sys::open_target(ctx.scope, args)?,
+        "clipboard_read" => sys::clipboard_read()?,
+        "clipboard_write" => sys::clipboard_write(args)?,
+        "list_processes" => sys::list_processes(args)?,
+        "kill_process" => sys::kill_process(args)?,
+        "find_port" => sys::find_port(args).await?,
+        "kill_port" => sys::kill_port(args).await?,
+        "hosts" => sys::hosts(args).await?,
+        "tunnel" => sys::tunnel(ctx.app, args).await?,
+        "runtime" => sys::runtime(args).await?,
+        "screenshot" => {
+            let (text, png) = tokio::task::spawn_blocking(pc::screenshot).await.map_err(|e| e.to_string())??;
+            return Ok(ToolOutput { text, image: Some(png) });
+        }
+        "mouse" => pc::mouse(args)?,
+        "keyboard" => pc::keyboard(args)?,
+        "wait" => {
+            let args = args.clone();
+            tokio::task::spawn_blocking(move || pc::wait(&args)).await.map_err(|e| e.to_string())??
+        }
+        _ => return Err(format!("未知工具 {name}")),
+    };
+    Ok(out.into())
+}
+
+/// Approval-card preview: a diff for file / hosts changes, else the command or a summary.
+fn approval_preview(scope: &Scope, name: &str, args: &Value, summary: &str) -> (String, bool) {
+    match name {
+        "write_file" | "edit_file" => match crate::agent_fs::change_preview(scope, name, args) {
+            Some(diff) => (diff, true),
+            None => (clip(args.get("content").and_then(|v| v.as_str()).unwrap_or(""), PREVIEW_CAP), false),
+        },
+        "hosts" => match crate::agent_sys::hosts_preview(args) {
+            Some(diff) => (diff, true),
+            None => (summary.to_string(), false),
+        },
+        "run_command" | "start_process" => {
+            let cwd = arg_str(args, "cwd");
+            let shell = arg_str(args, "shell");
+            let mut text = arg_str(args, "command");
+            if !shell.is_empty() {
+                text = format!("[{shell}] {text}");
+            }
+            if !cwd.is_empty() {
+                text.push_str(&format!("\n（在 {cwd}）"));
+            }
+            (text, false)
+        }
+        "clipboard_write" => (clip(&arg_str(args, "text"), PREVIEW_CAP), false),
+        "keyboard" => (clip(&arg_str(args, "text"), PREVIEW_CAP), false),
+        _ => (summary.to_string(), false),
+    }
+}
+
+const SHOT_PLACEHOLDER: &str = "[早先的截图已省略]";
+
+/// Image parts in one message: OpenAI `image_url` parts, or Anthropic `image` blocks
+/// (possibly nested inside `tool_result`).
+fn count_images(content: &Value) -> usize {
+    match content {
+        Value::Array(parts) => parts
+            .iter()
+            .map(|p| match p.get("type").and_then(|t| t.as_str()) {
+                Some("image_url") | Some("image") => 1,
+                Some("tool_result") => p.get("content").map(count_images).unwrap_or(0),
+                _ => 0,
+            })
+            .sum(),
+        _ => 0,
+    }
+}
+
+fn strip_images(content: &mut Value) {
+    if let Value::Array(parts) = content {
+        for p in parts.iter_mut() {
+            match p.get("type").and_then(|t| t.as_str()) {
+                Some("image_url") | Some("image") => *p = json!({ "type": "text", "text": SHOT_PLACEHOLDER }),
+                Some("tool_result") => {
+                    if let Some(inner) = p.get_mut("content") {
+                        strip_images(inner);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Keep only the newest `keep` screenshots in the conversation (they are large).
+fn prune_images(messages: &mut [Value], keep: usize) {
+    let mut seen = 0usize;
+    for msg in messages.iter_mut().rev() {
+        let Some(content) = msg.get_mut("content") else { continue };
+        let n = count_images(content);
+        if n == 0 {
+            continue;
+        }
+        if seen >= keep {
+            strip_images(content);
+        }
+        seen += n;
+    }
+}
+
+/// Messages carrying this round's tool results (and screenshots) back to the model.
+fn tool_result_messages(anthropic: bool, results: Vec<(String, ToolOutput)>) -> Vec<Value> {
+    let data_url = |png: &str| format!("data:image/png;base64,{png}");
+    if anthropic {
+        let blocks: Vec<Value> = results
+            .into_iter()
+            .map(|(id, out)| {
+                let content = match out.image {
+                    Some(png) => json!([
+                        { "type": "text", "text": out.text },
+                        { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": png } },
+                    ]),
+                    None => json!(out.text),
+                };
+                json!({ "type": "tool_result", "tool_use_id": id, "content": content })
+            })
+            .collect();
+        return vec![json!({ "role": "user", "content": blocks })];
+    }
+    // OpenAI tool messages carry text only: screenshots follow as one user message.
+    let mut msgs = Vec::new();
+    let mut images = Vec::new();
+    for (id, out) in results {
+        let text = if out.image.is_some() { format!("{}\n（截图在下一条消息里）", out.text) } else { out.text };
+        msgs.push(json!({ "role": "tool", "tool_call_id": id, "content": text }));
+        if let Some(png) = out.image {
+            images.push(json!({ "type": "image_url", "image_url": { "url": data_url(&png) } }));
+        }
+    }
+    if !images.is_empty() {
+        let mut parts = vec![json!({ "type": "text", "text": "这是刚才 screenshot 的截图。" })];
+        parts.extend(images);
+        msgs.push(json!({ "role": "user", "content": parts }));
+    }
+    msgs
 }
 
 /// 比较两条命令是否「实质相同」：只换引号种类、多几个空格不算新做法。
@@ -919,7 +889,7 @@ fn limit_message(action_limited: bool, notes: &[String]) -> String {
     msg
 }
 
-fn cancelled_message() -> String {
+pub(crate) fn cancelled_message() -> String {
     format!(
         "[{}] 已取消",
         crate::config::ErrorCode::AiRequestCancelled.as_str()
@@ -1227,7 +1197,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let root = if req.repo_path.trim().is_empty() {
         None
     } else {
-        match repo_root(&req.repo_path) {
+        match crate::agent_fs::repo_root(&req.repo_path) {
             Ok(p) => Some(p),
             Err(e) => {
                 emit_err(&app, &request_id, &e);
@@ -1236,10 +1206,19 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         }
     };
     let anthropic = req.config.provider.to_lowercase() == "anthropic";
+    // 完全权限：整台电脑（受保护目录除外）；其它档位只在仓库里
+    let scope = Scope::new(root.clone(), permission == Permission::Full);
+    let protected = Protected::from_env();
+    let reach = Reach { files: scope.has_files(), tools: req.tools, vision: req.vision };
     let mut tools_enabled = req.tools;
-    let system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), tools_enabled));
-    let tool_names = offered_tools(permission, root.is_some(), tools_enabled);
+    let system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), reach));
+    let tool_names = offered_tools(permission, reach);
+    if tool_names.iter().any(|n| COMPUTER_TOOLS.contains(n)) {
+        // The model must never see (or click) the AI hub window itself.
+        crate::agent_computer::exclude_from_capture(&app);
+    }
     let mut tools = provider_tools(&tool_names, anthropic);
+    let ctx = ToolCtx { app: &app, scope: &scope, protected: &protected, apps: &req.apps, request_id: &request_id };
     // 流式回合按「多久没收到数据」计时；Anthropic 仍是非流式，要等整轮写完，用总时长上限
     let client = if anthropic {
         reqwest::Client::builder()
@@ -1274,9 +1253,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut rounds = 0usize;
     let mut action_steps = 0usize;
     let mut notes: Vec<String> = Vec::new();
-    // Ask 档每轮只问第一次：命令 / 启动应用各自记一次
-    let mut shell_granted = false;
-    let mut app_granted = false;
+    // 「本轮同类都允许」记下的类别（见 agent_policy::action_kind），只对 Ask 档生效
+    let mut granted: HashSet<String> = HashSet::new();
     // 上一条实际执行过的 shell 命令，用来识别原样重试。
     let mut last_shell_command = String::new();
     let mut last_shell_failed = false;
@@ -1287,10 +1265,11 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         }
         rounds += 1;
         if is_cancelled(&request_id) {
-            let msg = format!("[{}] 已取消", crate::config::ErrorCode::AiRequestCancelled.as_str());
+            let msg = cancelled_message();
             emit_err(&app, &request_id, &msg);
             return Err(msg);
         }
+        prune_images(&mut messages, KEEP_SHOTS);
         let round = model_turn(
             &client,
             &req.config,
@@ -1339,7 +1318,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 emit_err(&app, &request_id, msg);
                 return Err(msg.into());
             }
-            emit_done(&app, &request_id, started, usage_total);
+            emit_done(&app, &request_id, started, usage_total, false);
             return Ok(());
         }
         if anthropic {
@@ -1347,52 +1326,31 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         } else {
             messages.push(turn.assistant.clone());
         }
-        let mut tool_results = Vec::new();
+        let mut tool_results: Vec<(String, ToolOutput)> = Vec::new();
         for call in &turn.calls {
             if is_cancelled(&request_id) {
-                let msg = format!("[{}] 已取消", crate::config::ErrorCode::AiRequestCancelled.as_str());
+                let msg = cancelled_message();
                 emit_err(&app, &request_id, &msg);
                 return Err(msg);
             }
             let args = parse_args(&call.arguments);
-            let summary = match call.name.as_str() {
-                "read_file" => format!("读取 {}", arg_str(&args, "path")),
-                "list_dir" => format!("列出 {}", arg_str(&args, "path")),
-                "grep" => format!("搜索 {}", arg_str(&args, "pattern")),
-                "write_file" => format!("写入 {}", arg_str(&args, "path")),
-                "run_command" => format!("运行 {}", arg_str(&args, "command")),
-                "open_page" => format!("打开 {}", arg_str(&args, "tab")),
-                "launch_app" => format!("启动 {}", arg_str(&args, "name")),
-                _ => format!("未知工具 {}", call.name),
-            };
+            let summary = call_summary(&call.name, &args);
             emit_step(&app, &request_id, &call.name, "running", &summary, "");
-            let command = if call.name == "run_command" {
-                arg_str(&args, "command")
-            } else {
-                String::new()
-            };
-            let preview = match call.name.as_str() {
-                "write_file" => clip(args.get("content").and_then(|v| v.as_str()).unwrap_or(""), PREVIEW_CAP),
-                "run_command" => command.clone(),
-                _ => summary.clone(),
-            };
-            let gate = tool_gate(permission, &call.name, &command);
+            let arg = gate_arg(&call.name, &args);
+            let command = if call.name == "run_command" { arg.clone() } else { String::new() };
+            let gate = tool_gate(permission, &call.name, &arg);
             if gate == Gate::Deny {
-                let reason = deny_reason(permission, &call.name, &command);
+                let reason = deny_reason(permission, &call.name, &arg);
                 emit_step(&app, &request_id, &call.name, "denied", &summary, &reason);
                 notes.push(format!("{summary}（未执行）"));
-                tool_results.push((call.id.clone(), reason));
+                tool_results.push((call.id.clone(), reason.into()));
                 continue;
             }
+            let kind = action_kind(&call.name, &arg);
+            let (preview, preview_is_diff) = approval_preview(&scope, &call.name, &args, &summary);
             // 审查托管：先让 AI 审一遍，只有明确放行才不打扰用户
             let mut review_note = String::new();
-            let mut needs_confirm = match gate {
-                Gate::Ask => match call.name.as_str() {
-                    "launch_app" => !app_granted,
-                    _ => !shell_granted,
-                },
-                _ => false,
-            };
+            let mut needs_confirm = gate == Gate::Ask && !granted.contains(&kind);
             if gate == Gate::Review {
                 let (allow, reason) =
                     review_action(&client, &req.config, anthropic, &req.user, &summary, &preview, &request_id).await;
@@ -1411,7 +1369,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             }
             if needs_confirm {
                 let title = if review_note.is_empty() { summary.clone() } else { format!("{summary}（{review_note}）") };
-                emit_approval(&app, &request_id, &call.id, &call.name, &title, &preview);
+                emit_approval(&app, &request_id, &call.id, &call.name, &title, &preview, preview_is_diff);
                 let decision = match wait_decision(&request_id, &call.id).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -1420,11 +1378,16 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     }
                 };
                 match decision {
-                    Decision::Allow => {}
+                    Decision::Allow { for_turn } => {
+                        // 审查转人工时不记「同类」：每条都要过审查
+                        if for_turn && gate == Gate::Ask {
+                            granted.insert(kind.clone());
+                        }
+                    }
                     Decision::Deny => {
                         emit_step(&app, &request_id, &call.name, "denied", &summary, "用户拒绝");
                         notes.push(format!("{summary}（已拒绝）"));
-                        tool_results.push((call.id.clone(), "用户拒绝了这个操作".to_string()));
+                        tool_results.push((call.id.clone(), "用户拒绝了这个操作".to_string().into()));
                         continue;
                     }
                     Decision::TimedOut => {
@@ -1442,50 +1405,44 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                             call.id.clone(),
                             format!(
                                 "等待用户确认超过 {mins} 分钟，这个操作没有执行。不要重试，直接告诉用户：需要确认的操作是什么，确认后可以再发一次。"
-                            ),
+                            )
+                            .into(),
                         ));
                         continue;
                     }
                 }
-                // 审查转人工的那一次只放行这一条，不给整轮开口子
-                if gate == Gate::Ask {
-                    if call.name == "launch_app" {
-                        app_granted = true;
-                    } else {
-                        shell_granted = true;
-                    }
-                }
             }
-            let no_repo = || Err::<String, String>("没有选择仓库，不能读写文件或执行命令。".into());
-            let result = match (call.name.as_str(), root.as_deref()) {
-                ("read_file", Some(root)) => read_file(root, &args),
-                ("list_dir", Some(root)) => list_dir(root, &args),
-                ("grep", Some(root)) => grep(root, &args, &request_id),
-                ("write_file", Some(root)) => write_file(root, &args),
-                ("run_command", Some(root)) => run_command(root, &command, &request_id),
-                ("read_file" | "list_dir" | "grep" | "write_file" | "run_command", None) => no_repo(),
-                ("open_page", _) => open_page(&app, &args),
-                ("launch_app", _) => launch_named(&req.apps, &arg_str(&args, "name")),
-                _ => Err(format!("未知工具 {}", call.name)),
-            };
+            let result = execute_tool(&ctx, &call.name, &args).await;
             let failed = match &result {
-                Ok(text) => command_output_failed(text),
+                Ok(out) => command_output_failed(&out.text),
                 Err(_) => true,
             };
             match result {
-                Ok(text) => {
-                    let text =
-                        repeated_command_result(&last_shell_command, last_shell_failed, &command, &text);
-                    emit_step(&app, &request_id, &call.name, "done", &summary, &clip(&text, 500));
+                Ok(mut out) => {
+                    out.text = repeated_command_result(&last_shell_command, last_shell_failed, &command, &out.text);
+                    // 写入的步骤详情带上 diff，用户能在步骤里看到改了什么
+                    let detail = if preview_is_diff && matches!(call.name.as_str(), "write_file" | "edit_file" | "hosts") {
+                        format!("{}\n\n{}", out.text, clip(&preview, DETAIL_CAP))
+                    } else {
+                        clip(&out.text, DETAIL_CAP)
+                    };
+                    emit_step(&app, &request_id, &call.name, "done", &summary, &detail);
                     notes.push(summary);
-                    tool_results.push((call.id.clone(), text));
+                    tool_results.push((call.id.clone(), out));
                 }
                 Err(err) if err.contains("AI_REQUEST_CANCELLED") => {
                     emit_err(&app, &request_id, &err);
                     return Err(err);
                 }
+                Err(err) if err == crate::agent_computer::FAILSAFE_MESSAGE => {
+                    // 紧急停止：不再给模型机会继续动鼠标键盘
+                    emit_step(&app, &request_id, &call.name, "denied", &summary, &err);
+                    emit_text(&app, &request_id, &format!("\n\n{err}"));
+                    emit_done(&app, &request_id, started, usage_total, false);
+                    return Ok(());
+                }
                 Err(err) => {
-                    emit_step(&app, &request_id, &call.name, "error", &summary, &err);
+                    emit_step(&app, &request_id, &call.name, "error", &summary, &clip(&err, DETAIL_CAP));
                     notes.push(format!("{summary}（失败）"));
                     let text = repeated_command_result(
                         &last_shell_command,
@@ -1493,7 +1450,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                         &command,
                         &format!("错误: {err}"),
                     );
-                    tool_results.push((call.id.clone(), text));
+                    tool_results.push((call.id.clone(), text.into()));
                 }
             }
             if call.name == "run_command" {
@@ -1504,36 +1461,23 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         if round_is_action(&turn.calls.iter().map(|c| c.name.clone()).collect::<Vec<_>>()) {
             action_steps += 1;
         }
-        if anthropic {
-            let blocks: Vec<Value> = tool_results
-                .into_iter()
-                .map(|(id, content)| {
-                    json!({ "type": "tool_result", "tool_use_id": id, "content": content })
-                })
-                .collect();
-            messages.push(json!({ "role": "user", "content": blocks }));
-        } else {
-            for (id, content) in tool_results {
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": id,
-                    "content": content,
-                }));
-            }
-        }
+        messages.extend(tool_result_messages(anthropic, tool_results));
     }
     let msg = limit_message(action_steps >= MAX_ACTION_STEPS, &notes);
     emit_text(&app, &request_id, &msg);
-    emit_done(&app, &request_id, started, usage_total);
+    emit_done(&app, &request_id, started, usage_total, true);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        command_blocked, command_is_readonly, command_output_failed, decode_model_body, limit_message,
-        repeated_command_result, resolve_in_repo, round_is_action, run_command,
+        call_summary, command_blocked, command_is_readonly, command_output_failed, count_images, decode_model_body,
+        gate_arg, limit_message, prune_images, repeated_command_result, round_is_action, tool_result_messages,
+        ToolOutput, SHOT_PLACEHOLDER,
     };
+    use crate::agent_proc::run_command;
+    use serde_json::json;
     use std::fs;
     use std::process::Command;
 
@@ -1664,16 +1608,49 @@ mod tests {
     }
 
     #[test]
-    fn rejects_paths_outside_the_repo() {
-        let root = std::env::temp_dir().join(format!("aw-agent-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/a.txt"), "hi").unwrap();
-        let canon = root.canonicalize().unwrap();
-        assert!(resolve_in_repo(&canon, "src/a.txt").is_ok());
-        assert!(resolve_in_repo(&canon, "src/new/note.txt").is_ok());
-        assert!(resolve_in_repo(&canon, "../outside.txt").is_err());
-        let _ = fs::remove_dir_all(&root);
+    fn old_screenshots_become_placeholders() {
+        let shot = |n: u8| {
+            json!({ "role": "user", "content": [
+                { "type": "text", "text": format!("shot {n}") },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAA" } },
+            ]})
+        };
+        let anthropic_shot = json!({ "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "t",
+            "content": [{ "type": "text", "text": "x" }, { "type": "image", "source": {} }] }] });
+        let mut msgs = vec![shot(1), json!({ "role": "tool", "content": "ok" }), anthropic_shot, shot(3)];
+        prune_images(&mut msgs, 2);
+        assert_eq!(count_images(&msgs[0]["content"]), 0);
+        assert_eq!(msgs[0]["content"][1]["text"], SHOT_PLACEHOLDER);
+        assert_eq!(count_images(&msgs[2]["content"]), 1);
+        assert_eq!(count_images(&msgs[3]["content"]), 1);
+    }
+
+    #[test]
+    fn screenshots_ride_after_openai_tool_messages() {
+        let results = vec![
+            ("c1".to_string(), ToolOutput { text: "截图 10×10".into(), image: Some("PNG".into()) }),
+            ("c2".to_string(), ToolOutput { text: "ok".into(), image: None }),
+        ];
+        let msgs = tool_result_messages(false, results);
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "tool");
+        assert_eq!(msgs[1]["tool_call_id"], "c2");
+        assert_eq!(msgs[2]["role"], "user");
+        assert_eq!(msgs[2]["content"][1]["image_url"]["url"], "data:image/png;base64,PNG");
+        let results = vec![("c1".to_string(), ToolOutput { text: "s".into(), image: Some("PNG".into()) })];
+        let anth = tool_result_messages(true, results);
+        assert_eq!(anth.len(), 1);
+        assert_eq!(anth[0]["content"][0]["content"][1]["source"]["data"], "PNG");
+    }
+
+    #[test]
+    fn summaries_and_gate_args_cover_new_tools() {
+        assert_eq!(call_summary("edit_file", &json!({ "path": "a.ts" })), "修改 a.ts");
+        assert_eq!(call_summary("start_process", &json!({ "command": "npm run dev" })), "后台运行 npm run dev");
+        assert_eq!(gate_arg("hosts", &json!({ "action": "write" })), "write");
+        assert_eq!(gate_arg("run_command", &json!({ "command": "git status" })), "git status");
+        assert!(round_is_action(&["start_process".into()]));
+        assert!(!round_is_action(&["screenshot".into(), "find_files".into()]));
     }
 
     /// 双引号参数必须原样到达 git：std 的 MSVC 转义（`\"`）cmd.exe 不认，
@@ -1687,7 +1664,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("aw-agent-quote-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let run = |c: &str| run_command(&root, c, "test-quote").unwrap();
+        let run = |c: &str| run_command(&root, &json!({ "command": c }), "test-quote").unwrap();
         run("git init -q");
         let out = run(
             "git -c user.name=\"A B\" -c user.email=a@b.c commit -q --allow-empty -m \"chore: ignore .zcode dir\"",

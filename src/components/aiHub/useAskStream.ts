@@ -45,7 +45,15 @@ export type AgentApproval = {
   tool: string;
   summary: string;
   preview: string;
+  /** `diff`: preview is a unified diff of a file / hosts change. */
+  previewKind: "diff" | "text";
 };
+
+/** Approval answer: allow just this call, or the same kind for the rest of the turn. */
+export type AgentDecision = "once" | "turn" | "deny";
+
+/** Step output kept with a saved turn (the live one is capped by the backend too). */
+const STEP_DETAIL_KEEP = 2000;
 
 /** Ordered from least to most open; mirrors Rust `agent_policy::Permission`. */
 export type AgentPermission = "read" | "workspace" | "review" | "full";
@@ -55,6 +63,8 @@ export type AgentRunOptions = {
   permission: AgentPermission;
   repoPath: string;
   apps: { name: string; path: string; args: string }[];
+  /** The selected model accepts images (unlocks operating the computer at 完全权限). */
+  vision: boolean;
 };
 
 /** Pure text work: no tools are offered, the round is a plain streamed completion. */
@@ -67,11 +77,13 @@ function appendTurn(
   answer: string,
   keepWhole = false,
   steps?: AgentStep[],
+  limited = false,
 ): QaTurn[] {
   const kept = steps?.filter((s) => s.summary).map((s) => ({
     tool: s.tool,
     status: s.status,
     summary: s.summary,
+    ...(s.detail ? { detail: s.detail.slice(0, STEP_DETAIL_KEEP) } : {}),
   }));
   const next: QaTurn[] = [
     ...prev,
@@ -81,6 +93,7 @@ function appendTurn(
       content: answer,
       ...(keepWhole ? { keep: "whole" as const } : {}),
       ...(kept && kept.length > 0 ? { steps: kept } : {}),
+      ...(limited ? { limited: true } : {}),
     },
   ];
   return compactSession(next);
@@ -222,8 +235,8 @@ export function useAskStream(opts: AskStreamOptions) {
     if (!rawInput) setInput("");
     let sentMode: AskMode = replay?.mode ?? "chat";
     let keepWhole = false;
-    const finishTurn = (text: string) => {
-      const nextTurns = appendTurn(baseHistory, question, text, keepWhole, agentStepsRef.current);
+    const finishTurn = (text: string, limited = false) => {
+      const nextTurns = appendTurn(baseHistory, question, text, keepWhole, agentStepsRef.current, limited);
       setHistory(nextTurns);
       setPending(null);
       setPhase("idle");
@@ -361,6 +374,8 @@ export function useAskStream(opts: AskStreamOptions) {
           elapsedMs?: number;
           promptTokens?: number;
           completionTokens?: number;
+          /** The turn stopped at the round / action cap:「继续」resumes it. */
+          limited?: boolean;
         };
       }) => {
         const payload = event.payload;
@@ -390,7 +405,7 @@ export function useAskStream(opts: AskStreamOptions) {
               completionTokens,
               estimatedTokens,
             });
-            finishTurn(finalText);
+            finishTurn(finalText, payload.limited === true);
           } else {
             failTurn(false);
           }
@@ -460,6 +475,7 @@ export function useAskStream(opts: AskStreamOptions) {
           tool: string;
           summary: string;
           preview: string;
+          previewKind?: "diff" | "text";
         }>("agent-approval", (event) => {
           const payload = event.payload;
           if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
@@ -468,6 +484,7 @@ export function useAskStream(opts: AskStreamOptions) {
             tool: payload.tool,
             summary: payload.summary,
             preview: payload.preview || "",
+            previewKind: payload.previewKind === "diff" ? "diff" : "text",
           });
         }),
       );
@@ -490,6 +507,7 @@ export function useAskStream(opts: AskStreamOptions) {
           apps: agent.apps,
           permission: agent.permission,
           tools: !TEXT_ONLY_TASKS.includes(sendTask),
+          vision: agent.vision,
         },
       });
       if (streamIdRef.current === myGen) {
@@ -620,13 +638,18 @@ export function useAskStream(opts: AskStreamOptions) {
     persistRef.current(nextTurns, q);
   };
 
-  const decideAgent = async (allow: boolean) => {
+  const decideAgent = async (decision: AgentDecision) => {
     const id = activeReqRef.current;
     const callId = agentApproval?.callId;
     if (!id || !callId) return;
     setAgentApproval(null);
     try {
-      await invoke("agent_decide", { requestId: id, callId, allow });
+      await invoke("agent_decide", {
+        requestId: id,
+        callId,
+        allow: decision !== "deny",
+        scope: decision === "turn" ? "turn" : "once",
+      });
     } catch (e) {
       setError(String(e));
     }

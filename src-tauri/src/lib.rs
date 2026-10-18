@@ -6,8 +6,12 @@ mod db_commands;
 pub mod cursor;
 mod ai_commands;
 mod agent;
+mod agent_computer;
+mod agent_fs;
 mod agent_policy;
+mod agent_proc;
 mod agent_stream;
+mod agent_sys;
 mod secret_protect;
 mod dsh_commands;
 mod runtime_commands;
@@ -631,6 +635,12 @@ pub fn run() {
             update_commands::update_download,
             update_commands::update_install,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            // Dev servers / watchers the agent started must not outlive the workbench.
+            if let tauri::RunEvent::Exit = event {
+                agent_proc::kill_all();
+            }
+        });
 }

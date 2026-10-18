@@ -44,6 +44,7 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_Storage_FileSystem",
   "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_Registry",
   "Win32_System_Environment",
@@ -57,6 +58,10 @@ windows = { version = "0.61", features = [
 ] }
 flate2 = "1"
 crc32fast = "1"
+# AI hub agent: diffs on the approval card, regex grep, screenshot encoding
+similar = "2"
+regex = "1"
+png = "0.17"
 
 [features]
 # Diagnostic binaries under `src/bin/` are opt-in: without this feature they are not

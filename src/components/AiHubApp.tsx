@@ -37,6 +37,7 @@ import { useAskSessions } from "./aiHub/useAskSessions";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
 import { AGENT_PERMISSIONS, useAskStream, type AgentPermission } from "./aiHub/useAskStream";
 import { useConfirm } from "./ConfirmModal";
+import { COMPUTER_TOOL_NAMES } from "./aiHub/AgentActivity";
 import { useRepoFocus } from "./aiHub/useRepoFocus";
 import { useAnswerActions } from "./aiHub/useAnswerActions";
 import { hideAiHub as hide, useModeHotkeys, useResizingBodyClass, useTimedFlag } from "./aiHub/useAiHubWindow";
@@ -45,8 +46,11 @@ type QaTurn = AiHubTurn;
 
 const PINNED_KEY = "qa-pinned";
 const PERMISSION_KEY = "qa-permission";
-/** Set once the user confirmed what 完全权限 means; later switches don't ask again. */
-const FULL_ACK_KEY = "qa-full-ack";
+/** Set once the user confirmed what 完全权限 means; later switches don't ask again.
+    v2: the level now reaches the whole machine, so earlier acks must see the new warning. */
+const FULL_ACK_KEY = "qa-full-ack-v2";
+/** Set once the user agreed to screenshots going to the model provider. */
+const COMPUTER_ACK_KEY = "qa-computer-ack";
 /** Ctrl+. cycles these; 完全权限 is only reachable from the menu. */
 const HOTKEY_CYCLE: AgentPermission[] = ["read", "workspace", "review"];
 
@@ -148,6 +152,7 @@ function AiHubApp() {
     attachments,
     agent: {
       permission,
+      vision: Boolean(selectedModel?.vision),
       repoPath: repo.resolvedFocus[0] || settings.currentGitRepo || "",
       apps: quickAppLaunchers.map((app) => ({
         name: app.name,
@@ -393,10 +398,25 @@ function AiHubApp() {
     })();
   };
 
-  const sendAsk = () => {
+  const sendAsk = async () => {
+    // Screenshots leave the machine: ask once before the first turn that could take them.
+    if (permission === "full" && selectedModel?.vision && localStorage.getItem(COMPUTER_ACK_KEY) !== "1") {
+      const ok = await confirm({
+        title: t("computer.confirmTitle"),
+        message: t("computer.confirmBody"),
+        warning: t("computer.confirmWarn"),
+        confirmText: t("computer.confirmOk"),
+        icon: "warning",
+      });
+      if (!ok) return;
+      localStorage.setItem(COMPUTER_ACK_KEY, "1");
+    }
     setHistoryOpen(false);
     void stream.send();
   };
+  /** A screen tool is running this turn: keep the emergency stop visible. */
+  const computerActive =
+    stream.busy && stream.agentSteps.some((s) => COMPUTER_TOOL_NAMES.includes(s.tool));
 
   const askDaily = () => {
     if (stream.busy) return;
@@ -578,7 +598,7 @@ function AiHubApp() {
         onMode={setMode}
         busy={stream.busy}
         agentApproval={stream.agentApproval}
-        onDecideAgent={(allow) => void stream.decideAgent(allow)}
+        onDecideAgent={(decision) => void stream.decideAgent(decision)}
         onStop={() => void stream.stopStream()}
         historyOpen={historyOpen}
         onToggleHistory={() => setHistoryOpen((v) => !v)}
@@ -587,6 +607,11 @@ function AiHubApp() {
         onTogglePinned={togglePinned}
         onClose={() => void hide()}
       />
+      {computerActive && (
+        <div className="qa-computer-banner" role="status">
+          {t("computer.banner")}
+        </div>
+      )}
 
       {mode === "tools" ? (
         <ToolsPanel onJump={(toolId) => void jumpToDevtools(toolId)} />
@@ -653,14 +678,14 @@ function AiHubApp() {
             agentSteps={stream.agentSteps}
             agentApproval={stream.agentApproval}
             stopping={stream.stopping}
-            onDecideAgent={(allow) => void stream.decideAgent(allow)}
+            onDecideAgent={(decision) => void stream.decideAgent(decision)}
             onContinue={() => void stream.send(t("agent.continuePrompt"))}
             hasSnippets={(snippets.snippets?.length ?? 0) > 0}
             snippetOpen={snippets.snippetOpen}
             onToggleSnippets={() => snippets.openManual()}
             onPasteClipboard={() => void fillClipboard()}
             onAttachFile={() => void addAttachmentFromFile()}
-            onSend={sendAsk}
+            onSend={() => void sendAsk()}
             repoControl={
               <ContextPicker
                 open={openPop === "focus"}

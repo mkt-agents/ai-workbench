@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import type { AiHubTurn } from "../../core/types";
 import type { TaskKind } from "./config";
 import type { AskMode } from "./route";
-import type { AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentStep } from "./useAskStream";
+import type {
+  AgentDecision, AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentStep,
+} from "./useAskStream";
 import type { OpenSuggestion } from "./localActions";
 import AskThread from "./AskThread";
 import AskEmpty from "./AskEmpty";
@@ -51,7 +53,7 @@ export type AskPanelProps = {
   agentSteps: AgentStep[];
   agentApproval: AgentApproval | null;
   stopping: boolean;
-  onDecideAgent: (allow: boolean) => void;
+  onDecideAgent: (decision: AgentDecision) => void;
   onContinue: () => void;
   hasSnippets: boolean;
   snippetOpen: boolean;
