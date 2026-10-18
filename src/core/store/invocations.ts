@@ -78,7 +78,13 @@ export interface Invocations {
   invokeGitCreateBranch: (path: string, name: string) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
-  invokeGitDiff: (path: string, filePath: string, staged: boolean, ignoreWhitespace?: boolean) => Promise<string>;
+  /** `contextLines` / `ignoreWhitespace` are view options: such a diff can't be staged by hunk. */
+  invokeGitDiff: (
+    path: string,
+    filePath: string,
+    staged: boolean,
+    opts?: { ignoreWhitespace?: boolean; contextLines?: number },
+  ) => Promise<string>;
   invokeGitLog: (path: string, count: number, since?: string) => Promise<string[][]>;
   invokeGitLogFiles: (
     path: string,
@@ -356,8 +362,14 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_switch_branch', { path, name }),
   invokeGitListBranches: (path: string) =>
     tauriInvoke<GitBranchList>('git_list_branches', { path }),
-  invokeGitDiff: (path: string, filePath: string, staged: boolean, ignoreWhitespace?: boolean) =>
-    tauriInvoke<string>('git_diff', { path, filePath, staged, ignoreWhitespace: ignoreWhitespace ?? false }),
+  invokeGitDiff: (path, filePath, staged, opts) =>
+    tauriInvoke<string>('git_diff', {
+      path,
+      filePath,
+      staged,
+      ignoreWhitespace: opts?.ignoreWhitespace ?? false,
+      contextLines: opts?.contextLines ?? null,
+    }),
   invokeGitLog: (path: string, count: number, since?: string) =>
     tauriInvoke<string[][]>('git_log', { path, count, since: since ?? null }),
   invokeGitLogFiles: (path: string, count: number, since?: string) =>

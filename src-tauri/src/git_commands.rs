@@ -1667,20 +1667,37 @@ fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
     Ok(GitBranchList { current, local, remote })
 }
 
+/// Most context lines a diff view may ask for (`-U`): enough for a whole file.
+const DIFF_CONTEXT_MAX: u32 = 100_000;
+
+/// View-only diff flags: `-w` and `-U<n>`. Neither result applies back as a
+/// hunk patch, which is why the UI turns hunk staging off with them.
+fn diff_view_args(ignore_whitespace: bool, context_lines: Option<u32>) -> Vec<String> {
+    let mut out = Vec::new();
+    if ignore_whitespace {
+        out.push("-w".to_string());
+    }
+    if let Some(n) = context_lines {
+        out.push(format!("-U{}", n.min(DIFF_CONTEXT_MAX)));
+    }
+    out
+}
+
 fn git_diff_sync(
     repo_path: String,
     file_path: String,
     staged: bool,
     ignore_whitespace: bool,
+    context_lines: Option<u32>,
 ) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
     validate_repo_rel_path(&file_path)?;
-    // `-w` is a view option only: such a diff no longer applies as a patch.
-    let ws: &[&str] = if ignore_whitespace { &["-w"] } else { &[] };
+    let view = diff_view_args(ignore_whitespace, context_lines);
+    let ws: Vec<&str> = view.iter().map(String::as_str).collect();
 
     if staged {
         let mut args = vec!["diff", "--cached"];
-        args.extend_from_slice(ws);
+        args.extend_from_slice(&ws);
         args.extend_from_slice(&["--", &file_path]);
         let output = git_output(&repo_path, &args)?;
         let code = output.status.code().unwrap_or(1);
@@ -1706,8 +1723,11 @@ fn git_diff_sync(
         let null_path = "NUL";
         #[cfg(not(windows))]
         let null_path = "/dev/null";
+        let mut args = vec!["diff", "--no-index"];
+        args.extend_from_slice(&ws);
+        args.extend_from_slice(&["--", null_path, &file_path]);
         let output = git_command()
-            .args(["diff", "--no-index", "--", null_path, &file_path])
+            .args(&args)
             .current_dir(&repo_path)
             .output()
             .map_err(map_git_spawn_err)?;
@@ -1730,7 +1750,7 @@ fn git_diff_sync(
     }
 
     let mut args = vec!["diff"];
-    args.extend_from_slice(ws);
+    args.extend_from_slice(&ws);
     args.extend_from_slice(&["--", &file_path]);
     let output = git_output(&repo_path, &args)?;
     let code = output.status.code().unwrap_or(1);
@@ -2224,8 +2244,11 @@ pub async fn git_diff(
     file_path: String,
     staged: bool,
     ignore_whitespace: Option<bool>,
+    context_lines: Option<u32>,
 ) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || git_diff_sync(path, file_path, staged, ignore_whitespace.unwrap_or(false)))
+    tokio::task::spawn_blocking(move || {
+        git_diff_sync(path, file_path, staged, ignore_whitespace.unwrap_or(false), context_lines)
+    })
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
@@ -3036,7 +3059,7 @@ mod tests {
 #[cfg(test)]
 mod v2_tests {
     use super::{
-        expand_porcelain_entry, is_not_a_git_repo, is_unknown_option, parse_config_pairs,
+        diff_view_args, expand_porcelain_entry, is_not_a_git_repo, is_unknown_option, parse_config_pairs,
         parse_porcelain_line, parse_status_v2_z, status_group,
     };
 
@@ -3095,6 +3118,13 @@ mod v2_tests {
         assert_eq!(s.entries[0].path, "new/dir/file.ts");
         assert_eq!(s.entries[0].index_status, "R");
         assert_eq!(s.entries[1].path, "tail.txt");
+    }
+
+    #[test]
+    fn diff_view_flags_cap_context() {
+        assert!(diff_view_args(false, None).is_empty());
+        assert_eq!(diff_view_args(true, Some(3)), vec!["-w".to_string(), "-U3".to_string()]);
+        assert_eq!(diff_view_args(false, Some(u32::MAX)), vec!["-U100000".to_string()]);
     }
 
     #[test]

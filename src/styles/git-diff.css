@@ -296,13 +296,14 @@
   overflow-wrap: anywhere;
 }
 
-.dv-body.is-nowrap .dv-text {
+.dv-body.is-unified.is-nowrap .dv-text {
   white-space: pre;
   word-break: normal;
   overflow-wrap: normal;
 }
 
-.dv-body.is-nowrap .dv-rows {
+/* 并排时两栏共用一个滚动区，不换行会把右栏挤出视野，所以只有统一视图能关掉换行 */
+.dv-body.is-unified.is-nowrap .dv-rows {
   width: max-content;
   min-width: 100%;
 }
@@ -844,4 +845,138 @@
   .mr-path {
     max-width: 100%;
   }
+}
+
+/* —— 差异大弹框（IDEA 式工具条） —— */
+/* 和三栏合并一样是占满窗口的工作区，不走弹框三档宽度 */
+.modal.diff-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(96vw, var(--page-max-width));
+  max-width: none;
+  height: 90vh;
+  padding: 14px 16px 12px;
+}
+
+.dm-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 0 8px;
+}
+
+.dm-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border-subtle);
+}
+
+.dm-select {
+  width: auto;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.dm-toggle {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.dm-toggle:hover {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+.dm-toggle.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+}
+
+.dm-gap {
+  flex: 1;
+}
+
+.dm-count {
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dm-file {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-bottom: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--overlay-1);
+  font-size: 12px;
+}
+
+.dm-note {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.dm-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--bg-1);
+}
+
+.dm-body .dv-body {
+  flex: 1;
+}
+
+/* 折叠的未更改片段 */
+.dv-fold {
+  display: block;
+  width: 100%;
+  padding: 2px 12px;
+  border: none;
+  border-top: 1px dashed var(--border-subtle);
+  border-bottom: 1px dashed var(--border-subtle);
+  background: var(--overlay-1);
+  color: var(--text-3);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.dv-fold:hover {
+  color: var(--accent);
+}
+
+/* 单词级高亮 */
+.dv-row.is-add .dv-word,
+.dv-text.is-add .dv-word {
+  border-radius: 2px;
+  background: var(--diff-add-word);
+}
+
+.dv-row.is-del .dv-word,
+.dv-text.is-del .dv-word {
+  border-radius: 2px;
+  background: var(--diff-del-word);
 }

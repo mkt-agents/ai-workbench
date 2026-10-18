@@ -1,27 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  Columns2,
-  Loader2,
-  Rows2,
-  Space,
-  TextWrap,
-  X,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, Columns2, Loader2, Maximize2, Rows2, Space, TextWrap, X } from "lucide-react";
 import { readStoredString, writeStoredString } from "../../core/localState";
-import {
-  buildHunkPatch,
-  changeStarts,
-  maxLineNo,
-  parseUnifiedDiff,
-  toSplitRows,
-  type DiffHunk,
-  type DiffRow,
-  type SplitRow,
-} from "../../lib/diffRows";
+import { useDiffView, type DiffMode } from "./useDiffView";
 
 export type DiffViewTarget = {
   repoPath: string;
@@ -42,26 +23,73 @@ type Props = {
   ignoreWhitespace: boolean;
   onIgnoreWhitespace: (on: boolean) => void;
   onApply: (patch: string) => void;
+  /** Open the same file in the large diff dialog. */
+  onExpand: () => void;
   onClose: () => void;
 };
 
-const MODE_KEY = "cl-diff-mode";
+export const DIFF_MODE_KEY = "cl-diff-mode";
 const WRAP_KEY = "cl-diff-wrap";
-/** Rendering more rows than this as individual nodes gets sluggish. */
-const RENDER_ROWS = 2000;
 /** Side-by-side needs room for two gutters and two text columns. */
 const SPLIT_MIN_PX = 640;
 
-type Mode = "unified" | "split";
-
-/** One rendered line; changeId >= 0 marks the first line of a change block. */
-type ViewRow = { change: boolean; changeId: number; split?: SplitRow; unified?: DiffRow };
-
-function absolutePath(repoPath: string, relPath: string): string {
+export function absolutePath(repoPath: string, relPath: string): string {
   return `${repoPath.replace(/[\\/]+$/, "")}\\${relPath.replace(/\//g, "\\")}`;
 }
 
-const SIGN: Record<string, string> = { add: "+", del: "-", ctx: " ", note: "" };
+/** File name, folder, status and staged chip: the left side of both diff headers. */
+export function DiffTitle({
+  target,
+  statusLabel,
+  statusClass,
+  adds,
+  dels,
+  showStat,
+}: {
+  target: DiffViewTarget;
+  statusLabel?: string;
+  statusClass?: string;
+  adds: number;
+  dels: number;
+  showStat: boolean;
+}) {
+  const { t } = useTranslation("git");
+  const name = target.filePath.slice(target.filePath.lastIndexOf("/") + 1);
+  const dir = target.filePath.includes("/") ? target.filePath.slice(0, target.filePath.lastIndexOf("/")) : "";
+  return (
+    <>
+      {statusLabel && <span className={`git-file-badge ${statusClass ?? ""}`}>{statusLabel}</span>}
+      <span className="dv-title" title={absolutePath(target.repoPath, target.filePath)}>
+        <span className="dv-title-name">{name}</span>
+        {dir && <span className="dv-title-dir">{dir}</span>}
+      </span>
+      <span className={`dv-chip${target.staged ? " is-staged" : ""}`}>
+        {target.staged ? t("commit.statusStaged") : t("commit.diffUnstaged")}
+      </span>
+      {showStat && (
+        <span className="dv-stat">
+          <span className="dv-add">+{adds}</span> <span className="dv-del">−{dels}</span>
+        </span>
+      )}
+    </>
+  );
+}
+
+/** F7 / Shift+F7 outside inputs and dialogs. */
+export function useF7(enabled: boolean, jump: (dir: 1 | -1) => void, insideModal = false) {
+  useEffect(() => {
+    if (!enabled) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "F7" || e.ctrlKey || e.altKey || e.metaKey) return;
+      if ((e.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (!insideModal && document.querySelector(".modal-overlay")) return;
+      e.preventDefault();
+      jump(e.shiftKey ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+}
 
 export default function DiffViewer({
   active,
@@ -74,20 +102,16 @@ export default function DiffViewer({
   ignoreWhitespace,
   onIgnoreWhitespace,
   onApply,
+  onExpand,
   onClose,
 }: Props) {
   const { t } = useTranslation("git");
-  const [mode, setMode] = useState<Mode>(() => (readStoredString(MODE_KEY, "unified") === "split" ? "split" : "unified"));
+  const [mode, setMode] = useState<DiffMode>(() => (readStoredString(DIFF_MODE_KEY, "unified") === "split" ? "split" : "unified"));
   const [wrap, setWrap] = useState(() => readStoredString(WRAP_KEY, "1") !== "0");
-  const [picked, setPicked] = useState<Set<number>>(() => new Set());
-  const [folded, setFolded] = useState<Set<number>>(() => new Set());
-  const [showAll, setShowAll] = useState(false);
-  const [navAt, setNavAt] = useState(-1);
   const [roomForSplit, setRoomForSplit] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => writeStoredString(MODE_KEY, mode), [mode]);
+  useEffect(() => writeStoredString(DIFF_MODE_KEY, mode), [mode]);
   useEffect(() => writeStoredString(WRAP_KEY, wrap ? "1" : "0"), [wrap]);
 
   useEffect(() => {
@@ -98,120 +122,23 @@ export default function DiffViewer({
     return () => ro.disconnect();
   }, []);
 
-  const parsed = useMemo(() => parseUnifiedDiff(text), [text]);
-  useEffect(() => {
-    setPicked(new Set());
-    setFolded(new Set());
-    setShowAll(false);
-    setNavAt(-1);
-  }, [text]);
-
-  const view: Mode = mode === "split" && roomForSplit ? "split" : "unified";
-  const hasHunks = parsed.hunks.length > 0;
-  // A -w diff no longer matches the file, so it can't be applied as a patch.
-  const canStage = !!target && !target.wholeFile && hasHunks && !parsed.binary && !ignoreWhitespace;
-  const gutter = `${Math.max(2, String(maxLineNo(parsed)).length) + 1}ch`;
-
-  /** Rows per hunk for the current view, cut at RENDER_ROWS unless expanded. */
-  const layout = useMemo(() => {
-    let budget = showAll ? Number.POSITIVE_INFINITY : RENDER_ROWS;
-    let hidden = 0;
-    let changeIndex = 0;
-    const hunks = parsed.hunks.map((hunk, hi) => {
-      const rows: ViewRow[] =
-        view === "split"
-          ? toSplitRows(hunk).map((r) => ({ split: r, change: r.change, changeId: -1 }))
-          : hunk.rows.map((r) => ({ unified: r, change: r.kind === "add" || r.kind === "del", changeId: -1 }));
-      const starts = new Set(changeStarts(rows.map((r) => r.change)));
-      const marked = rows.map((r, i) => ({ ...r, changeId: starts.has(i) ? changeIndex++ : -1 }));
-      if (folded.has(hi)) return { hunk, rows: [] as typeof marked };
-      const take = Math.max(0, Math.min(marked.length, budget));
-      budget -= take;
-      hidden += marked.length - take;
-      return { hunk, rows: marked.slice(0, take) };
-    });
-    return { hunks, hidden, changes: changeIndex };
-  }, [parsed, view, folded, showAll]);
-
-  const jump = (dir: 1 | -1) => {
-    if (layout.changes === 0) return;
-    const next = (navAt + dir + layout.changes) % layout.changes;
-    setNavAt(next);
-    bodyRef.current?.querySelector(`[data-change="${next}"]`)?.scrollIntoView({ block: "center" });
-  };
-
-  useEffect(() => {
-    if (!active || !target) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "F7" || e.ctrlKey || e.altKey || e.metaKey) return;
-      if ((e.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (document.querySelector(".modal-overlay")) return;
-      e.preventDefault();
-      jump(e.shiftKey ? -1 : 1);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+  const view: DiffMode = mode === "split" && roomForSplit ? "split" : "unified";
+  const diff = useDiffView({
+    text,
+    view,
+    wrap,
+    fold: false,
+    words: false,
+    // A -w diff no longer matches the file, so it can't be applied as a patch.
+    canStage: !!target && !target.wholeFile && !ignoreWhitespace,
+    staged: !!target?.staged,
+    busy,
+    onApply,
   });
-
-  const togglePick = (i: number) =>
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
-
-  const toggleFold = (i: number) =>
-    setFolded((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
-
-  const applyHunks = (hunks: DiffHunk[]) => onApply(buildHunkPatch(parsed.preamble, hunks));
-
-  const name = target ? target.filePath.slice(target.filePath.lastIndexOf("/") + 1) : "";
-  const dir = target && target.filePath.includes("/") ? target.filePath.slice(0, target.filePath.lastIndexOf("/")) : "";
-
-  const renderHunkHead = (hunk: DiffHunk, hi: number) => {
-    const isFolded = folded.has(hi);
-    const Chevron = isFolded ? ChevronRight : ChevronDown;
-    return (
-      <div className="dv-hunk">
-        <button
-          type="button"
-          className="dv-hunk-fold"
-          onClick={() => toggleFold(hi)}
-          aria-expanded={!isFolded}
-          title={isFolded ? t("commit.diffUnfold") : t("commit.diffFold")}
-        >
-          <Chevron size={13} />
-        </button>
-        {canStage && (
-          <input
-            type="checkbox"
-            checked={picked.has(hi)}
-            disabled={busy}
-            onChange={() => togglePick(hi)}
-            aria-label={t("commit.diffPickHunk")}
-          />
-        )}
-        <code className="dv-hunk-range">
-          -{hunk.oldStart} +{hunk.newStart}
-        </code>
-        {hunk.section && <span className="dv-hunk-section">{hunk.section}</span>}
-        <span className="dv-hunk-count">
-          <span className="dv-add">+{hunk.adds}</span> <span className="dv-del">−{hunk.dels}</span>
-        </span>
-        {canStage && (
-          <button type="button" className="dv-hunk-stage" disabled={busy} onClick={() => applyHunks([hunk])}>
-            {target?.staged ? t("commit.diffUnstageHunk") : t("commit.diffStageHunk")}
-          </button>
-        )}
-      </div>
-    );
-  };
+  const { parsed } = diff;
+  const hasHunks = parsed.hunks.length > 0;
+  const canStage = !!target && !target.wholeFile && hasHunks && !parsed.binary && !ignoreWhitespace;
+  useF7(active && !!target, diff.jump);
 
   const body = () => {
     if (loading) {
@@ -232,104 +159,43 @@ export default function DiffViewer({
     if (!hasHunks) {
       return (
         <div className="cl-diff-empty">
-          <div className="cl-empty-hint runtime-muted">
-            {parsed.binary ? t("commit.hunkBinary") : text.trim()}
-          </div>
+          <div className="cl-empty-hint runtime-muted">{parsed.binary ? t("commit.hunkBinary") : text.trim()}</div>
         </div>
       );
     }
-    return (
-      <div
-        ref={bodyRef}
-        className={`dv-body is-${view}${wrap ? "" : " is-nowrap"}`}
-        style={{ ["--dv-gutter" as string]: gutter }}
-      >
-        {parsed.notes.length > 0 && <div className="dv-notes">{parsed.notes.join(" · ")}</div>}
-        {layout.hunks.map(({ hunk, rows }, hi) => (
-          <section key={hi} className="dv-hunk-block">
-            {renderHunkHead(hunk, hi)}
-            <div className="dv-rows">
-              {rows.map((row, ri) =>
-                row.split ? (
-                  <div
-                    key={ri}
-                    className={`dv-srow${row.change ? " is-change" : ""}${row.changeId === navAt && navAt >= 0 ? " is-nav" : ""}`}
-                    data-change={row.changeId >= 0 ? row.changeId : undefined}
-                  >
-                    <span className={`dv-no is-${row.split.left?.kind ?? "empty"}`}>{row.split.left?.no ?? ""}</span>
-                    <span className={`dv-text is-${row.split.left?.kind ?? "empty"}`}>{row.split.left?.text || "\u00a0"}</span>
-                    <span className={`dv-no is-${row.split.right?.kind ?? "empty"}`}>{row.split.right?.no ?? ""}</span>
-                    <span className={`dv-text is-${row.split.right?.kind ?? "empty"}`}>{row.split.right?.text || "\u00a0"}</span>
-                  </div>
-                ) : row.unified ? (
-                  <div
-                    key={ri}
-                    className={`dv-row is-${row.unified.kind}${row.changeId === navAt && navAt >= 0 ? " is-nav" : ""}`}
-                    data-change={row.changeId >= 0 ? row.changeId : undefined}
-                  >
-                    <span className="dv-no">{row.unified.oldNo ?? ""}</span>
-                    <span className="dv-no">{row.unified.newNo ?? ""}</span>
-                    <span className="dv-sign">{SIGN[row.unified.kind]}</span>
-                    <span className="dv-text">{row.unified.text || "\u00a0"}</span>
-                  </div>
-                ) : null
-              )}
-            </div>
-          </section>
-        ))}
-        {layout.hidden > 0 && (
-          <div className="cl-diff-more">
-            <button type="button" className="btn btn-secondary btn-small" onClick={() => setShowAll(true)}>
-              {t("commit.diffShowAll", { count: layout.hidden })}
-            </button>
-          </div>
-        )}
-      </div>
-    );
+    return diff.body;
   };
 
   return (
     <div ref={rootRef} className="cl-panel cl-split-diff git-diff-panel dv">
       <div className="cl-diff-head dv-head">
         {target ? (
-          <>
-            {statusLabel && <span className={`git-file-badge ${statusClass ?? ""}`}>{statusLabel}</span>}
-            <span className="dv-title" title={absolutePath(target.repoPath, target.filePath)}>
-              <span className="dv-title-name">{name}</span>
-              {dir && <span className="dv-title-dir">{dir}</span>}
-            </span>
-            <span className={`dv-chip${target.staged ? " is-staged" : ""}`}>
-              {target.staged ? t("commit.statusStaged") : t("commit.diffUnstaged")}
-            </span>
-            {hasHunks && (
-              <span className="dv-stat">
-                <span className="dv-add">+{parsed.adds}</span> <span className="dv-del">−{parsed.dels}</span>
-              </span>
-            )}
-          </>
+          <DiffTitle
+            target={target}
+            statusLabel={statusLabel}
+            statusClass={statusClass}
+            adds={parsed.adds}
+            dels={parsed.dels}
+            showStat={hasHunks}
+          />
         ) : (
           <span className="dv-title runtime-muted">{t("commit.diffEmpty")}</span>
         )}
         <span className="dv-head-gap" />
         {target && hasHunks && (
           <div className="dv-tools">
-            {canStage && picked.size > 0 && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                disabled={busy}
-                onClick={() => applyHunks(parsed.hunks.filter((_, i) => picked.has(i)))}
-              >
+            {canStage && diff.picked.size > 0 && (
+              <button type="button" className="btn btn-secondary btn-small" disabled={busy} onClick={diff.applyPicked}>
                 {target.staged
-                  ? t("commit.diffUnstagePicked", { count: picked.size })
-                  : t("commit.diffStagePicked", { count: picked.size })}
+                  ? t("commit.diffUnstagePicked", { count: diff.picked.size })
+                  : t("commit.diffStagePicked", { count: diff.picked.size })}
               </button>
             )}
             <button
               type="button"
               className="btn commit-icon-btn"
-              onClick={() => jump(-1)}
-              disabled={layout.changes === 0}
+              onClick={() => diff.jump(-1)}
+              disabled={diff.changes === 0}
               title={t("commit.diffPrevChange")}
               aria-label={t("commit.diffPrevChange")}
             >
@@ -338,8 +204,8 @@ export default function DiffViewer({
             <button
               type="button"
               className="btn commit-icon-btn"
-              onClick={() => jump(1)}
-              disabled={layout.changes === 0}
+              onClick={() => diff.jump(1)}
+              disabled={diff.changes === 0}
               title={t("commit.diffNextChange")}
               aria-label={t("commit.diffNextChange")}
             >
@@ -352,11 +218,7 @@ export default function DiffViewer({
               disabled={!roomForSplit}
               aria-pressed={view === "split"}
               title={
-                !roomForSplit
-                  ? t("commit.diffSplitNarrow")
-                  : view === "split"
-                    ? t("commit.diffUnified")
-                    : t("commit.diffSplit")
+                !roomForSplit ? t("commit.diffSplitNarrow") : view === "split" ? t("commit.diffUnified") : t("commit.diffSplit")
               }
             >
               {view === "split" ? <Rows2 size={14} /> : <Columns2 size={14} />}
@@ -372,25 +234,37 @@ export default function DiffViewer({
             </button>
             <button
               type="button"
-              className={`btn commit-icon-btn${wrap ? " is-on" : ""}`}
+              className={`btn commit-icon-btn${wrap || view === "split" ? " is-on" : ""}`}
               onClick={() => setWrap(!wrap)}
-              aria-pressed={wrap}
-              title={t("commit.diffWrap")}
+              disabled={view === "split"}
+              aria-pressed={wrap || view === "split"}
+              title={view === "split" ? t("commit.diffWrapSplit") : t("commit.diffWrap")}
             >
               <TextWrap size={14} />
             </button>
           </div>
         )}
         {target && (
-          <button
-            type="button"
-            className="btn commit-icon-btn"
-            onClick={onClose}
-            title={t("commit.diffClose")}
-            aria-label={t("commit.diffClose")}
-          >
-            <X size={14} />
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn commit-icon-btn"
+              onClick={onExpand}
+              title={t("commit.diffExpand")}
+              aria-label={t("commit.diffExpand")}
+            >
+              <Maximize2 size={14} />
+            </button>
+            <button
+              type="button"
+              className="btn commit-icon-btn"
+              onClick={onClose}
+              title={t("commit.diffClose")}
+              aria-label={t("commit.diffClose")}
+            >
+              <X size={14} />
+            </button>
+          </>
         )}
       </div>
       {target?.wholeFile && hasHunks && <div className="cl-hunk-note runtime-muted">{t("commit.hunkUntracked")}</div>}

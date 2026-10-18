@@ -416,7 +416,28 @@
     "diffWhitespace": "Ignore whitespace",
     "diffWhitespaceOn": "Ignoring whitespace (click to show it)",
     "diffWrap": "Wrap lines",
-    "diffWhitespaceNote": "With whitespace ignored the diff is view-only; hunks can't be staged"
+    "diffWhitespaceNote": "With whitespace ignored the diff is view-only; hunks can't be staged",
+    "diffExpand": "Open in a large window (Ctrl+D, or double-click the file)",
+    "diffFoldShow": "Show {{count}} unchanged lines",
+    "diffModal": {
+      "title": "Diff · {{name}}",
+      "fileOf": "File {{at}} / {{total}}",
+      "prevFile": "Previous file (Alt+←)",
+      "nextFile": "Next file (Alt+→)",
+      "viewer": "Viewer",
+      "viewerSplit": "Side by side",
+      "viewerUnified": "Unified",
+      "wsNone": "Don't ignore whitespace",
+      "wsIgnore": "Ignore whitespace",
+      "words": "Highlight words",
+      "fold": "Collapse unchanged",
+      "full": "Whole file",
+      "fullTip": "Show the entire file, not just a few lines around each change",
+      "count": "{{count}} differences",
+      "viewOnly": "View only with whole file / whitespace ignored; turn them off to stage hunks",
+      "empty": "No differences"
+    },
+    "diffWrapSplit": "Side by side always wraps; switch to unified to turn wrapping off"
   },
   "accountManager": {
     "title": "Account Manager",

@@ -416,7 +416,28 @@
     "diffWhitespace": "忽略空白差异",
     "diffWhitespaceOn": "正在忽略空白差异（点击恢复）",
     "diffWrap": "自动换行",
-    "diffWhitespaceNote": "忽略空白时只用于查看，不能按块暂存"
+    "diffWhitespaceNote": "忽略空白时只用于查看，不能按块暂存",
+    "diffExpand": "在大窗口中查看（Ctrl+D，或双击文件）",
+    "diffFoldShow": "展开 {{count}} 行未更改的内容",
+    "diffModal": {
+      "title": "差异 · {{name}}",
+      "fileOf": "第 {{at}} / {{total}} 个文件",
+      "prevFile": "上一个文件（Alt+←）",
+      "nextFile": "下一个文件（Alt+→）",
+      "viewer": "查看方式",
+      "viewerSplit": "并排查看",
+      "viewerUnified": "统一查看",
+      "wsNone": "不忽略空白",
+      "wsIgnore": "忽略空白",
+      "words": "高亮单词",
+      "fold": "折叠未更改",
+      "full": "完整文件",
+      "fullTip": "显示整个文件而不只是改动附近的几行",
+      "count": "{{count}} 个差异",
+      "viewOnly": "完整文件 / 忽略空白时只读，关掉后可以按块暂存",
+      "empty": "没有差异"
+    },
+    "diffWrapSplit": "并排查看时总是自动换行，切到统一查看后可以关掉"
   },
   "accountManager": {
     "title": "账号管理",

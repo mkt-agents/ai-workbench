@@ -39,6 +39,7 @@ import { looksLikeTempFile } from "../lib/tempFiles";
 import { parseInvokeError } from "../hooks/useInvokeError";
 import MergeResolver from "./git/MergeResolver";
 import DiffViewer from "./git/DiffViewer";
+import DiffModal, { type DiffFile } from "./git/DiffModal";
 import type {
   AIModelConfig,
   GitStatusEntry,
@@ -455,6 +456,8 @@ function CommitChangelist({
   const [report, setReport] = useState<{ title: string; lines: string[] } | null>(null);
   /** Conflict resolver for one repo, starting at `file`. */
   const [resolver, setResolver] = useState<{ repoPath: string; file?: string } | null>(null);
+  /** Large diff dialog over the changelist. */
+  const [diffModal, setDiffModal] = useState<{ files: DiffFile[]; index: number } | null>(null);
   /** Repos whose merge pull stopped on conflicts during the running batch. */
   const conflictHitRef = useRef<string[]>([]);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
@@ -984,7 +987,7 @@ function CommitChangelist({
     const gen = ++diffGen.current;
     setDiffLoading(true);
     try {
-      const text = await invokeGitDiff(target.repoPath, target.filePath, target.staged, ignoreWhitespace);
+      const text = await invokeGitDiff(target.repoPath, target.filePath, target.staged, { ignoreWhitespace });
       if (gen !== diffGen.current) return;
       setDiffText(text);
     } catch (e) {
@@ -1013,20 +1016,49 @@ function CommitChangelist({
       )
     : undefined;
 
-  const applyHunks = async (patch: string) => {
-    if (!diffTarget || busy) return;
-    const target = diffTarget;
+  /** Stage / unstage hunks of `target` (the panel's file, or the dialog's). */
+  const applyPatch = async (target: DiffTarget, patch: string) => {
+    if (busy) return;
     setBusyAction("hunk");
     try {
       const text = await invokeGitApplyCached(target.repoPath, patch, target.staged);
       onToast("success", text);
       await refreshAfterWrite([target.repoPath]);
-      await reloadDiff(target);
+      const shown = diffTargetRef.current;
+      if (shown && shown.repoPath === target.repoPath && shown.filePath === target.filePath) await reloadDiff(shown);
     } catch (e) {
       onToast("error", formatInvokeError(e));
     } finally {
       setBusyAction(null);
     }
+  };
+
+  const applyHunks = async (patch: string) => {
+    if (diffTarget) await applyPatch(diffTarget, patch);
+  };
+
+  /** Every non-conflicted file of the scoped repos, in tree order: the dialog's ← / →. */
+  const diffFiles = (): DiffFile[] =>
+    dirtyRepos.flatMap((p) =>
+      (statuses[p.path] || [])
+        .filter((e) => e.group !== "conflicted")
+        .map((e) => ({
+          repoPath: p.path,
+          filePath: e.path,
+          staged: e.group === "staged",
+          wholeFile: e.group === "untracked",
+          statusLabel: statusLabel(statusCode(e)),
+          statusClass: statusClass(statusCode(e)),
+        }))
+    );
+
+  const openDiffModal = (target: DiffTarget | null) => {
+    if (!target) return;
+    const files = diffFiles();
+    const at = files.findIndex(
+      (f) => f.repoPath === target.repoPath && f.filePath === target.filePath && f.staged === target.staged
+    );
+    setDiffModal({ files, index: Math.max(0, at) });
   };
 
   const loadStashes = useCallback(async () => {
@@ -1651,6 +1683,23 @@ function CommitChangelist({
 
   const actionsRef = useRef({ runCommit, canCommit, busy, generating });
   actionsRef.current = { runCommit, canCommit, busy, generating };
+  const openModalRef = useRef(() => {});
+  openModalRef.current = () => openDiffModal(diffTargetRef.current);
+
+  // Ctrl+D: the selected file in the large diff dialog (IDEA's "Show Diff").
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "d") return;
+      if (document.querySelector(".modal-overlay")) return;
+      if ((e.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (!diffTargetRef.current) return;
+      e.preventDefault();
+      openModalRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
 
   useEffect(() => {
     if (!active) return;
@@ -1883,6 +1932,15 @@ function CommitChangelist({
                     }
                     if (!checked) toggleFile(p.path, e);
                     void loadDiff(p.path, e);
+                  }}
+                  onDoubleClick={() => {
+                    if (conflicted) return;
+                    openDiffModal({
+                      repoPath: p.path,
+                      filePath: e.path,
+                      staged: e.group === "staged",
+                      wholeFile: e.group === "untracked",
+                    });
                   }}
                 >
                   <IndeterminateCheckbox
@@ -2147,6 +2205,7 @@ function CommitChangelist({
             if (diffTarget) void reloadDiff(diffTarget, on);
           }}
           onApply={(patch) => void applyHunks(patch)}
+          onExpand={() => openDiffModal(diffTarget)}
           onClose={closeDiff}
         />
       </div>
@@ -2435,6 +2494,15 @@ function CommitChangelist({
           </div>
         </div>
       </div>
+      {diffModal && (
+        <DiffModal
+          files={diffModal.files}
+          startIndex={diffModal.index}
+          busy={busy}
+          onApply={(file, patch) => applyPatch(file, patch)}
+          onClose={() => setDiffModal(null)}
+        />
+      )}
       {resolver && (
         <MergeResolver
           repoPath={resolver.repoPath}

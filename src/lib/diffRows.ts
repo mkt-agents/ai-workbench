@@ -161,3 +161,91 @@ export function maxLineNo(parsed: ParsedDiff): number {
   }
   return max;
 }
+
+/** A run of unchanged rows hidden behind "展开 N 行". */
+export type Folded<T> = { item: T } | { fold: { start: number; count: number } };
+
+/**
+ * Keep `keep` unchanged rows around every change and fold the rest of each
+ * unchanged run (only when at least `minFold` rows would hide).
+ */
+export function foldUnchanged<T>(rows: T[], isChange: (row: T) => boolean, keep = 3, minFold = 4): Folded<T>[] {
+  const out: Folded<T>[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    if (isChange(rows[i])) {
+      out.push({ item: rows[i++] });
+      continue;
+    }
+    let end = i;
+    while (end < rows.length && !isChange(rows[end])) end++;
+    const atStart = i === 0;
+    const atEnd = end === rows.length;
+    const head = atStart ? 0 : keep;
+    const tail = atEnd ? 0 : keep;
+    const hidden = end - i - head - tail;
+    if (hidden >= minFold) {
+      for (let k = i; k < i + head; k++) out.push({ item: rows[k] });
+      out.push({ fold: { start: i + head, count: hidden } });
+      for (let k = end - tail; k < end; k++) out.push({ item: rows[k] });
+    } else {
+      for (let k = i; k < end; k++) out.push({ item: rows[k] });
+    }
+    i = end;
+  }
+  return out;
+}
+
+export type WordPiece = { text: string; changed: boolean };
+
+/** Latin words stay whole; every CJK character and symbol is its own token. */
+const TOKEN_RE = /\p{Script=Han}|[A-Za-z0-9_\u00C0-\u024F]+|\s+|[^\s]/gu;
+const WORD_LIMIT = 2000;
+const TOKEN_LIMIT = 400;
+
+function pieces(tokens: string[], keep: boolean[]): WordPiece[] {
+  const out: WordPiece[] = [];
+  tokens.forEach((text, i) => {
+    const changed = !keep[i];
+    const last = out[out.length - 1];
+    if (last && last.changed === changed) last.text += text;
+    else out.push({ text, changed });
+  });
+  return out;
+}
+
+/**
+ * Changed words between a removed and an added line (token LCS). Very long
+ * lines come back as one changed piece each: the highlight would not help there.
+ */
+export function wordDiff(oldLine: string, newLine: string): { left: WordPiece[]; right: WordPiece[] } {
+  const whole = () => ({
+    left: oldLine ? [{ text: oldLine, changed: true }] : [],
+    right: newLine ? [{ text: newLine, changed: true }] : [],
+  });
+  if (oldLine.length > WORD_LIMIT || newLine.length > WORD_LIMIT) return whole();
+  const a = oldLine.match(TOKEN_RE) ?? [];
+  const b = newLine.match(TOKEN_RE) ?? [];
+  if (a.length > TOKEN_LIMIT || b.length > TOKEN_LIMIT) return whole();
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const keepA = new Array<boolean>(a.length).fill(false);
+  const keepB = new Array<boolean>(b.length).fill(false);
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      keepA[i++] = true;
+      keepB[j++] = true;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return { left: pieces(a, keepA), right: pieces(b, keepB) };
+}

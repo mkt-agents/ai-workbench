@@ -132,6 +132,16 @@
   --diff-hunk-fg: var(--accent);
   --diff-conflict-bg: color-mix(in srgb, var(--yellow) 14%, transparent);
   --diff-conflict-border: color-mix(in srgb, var(--yellow) 48%, transparent);
+  /* 改动行里具体改了的词：比整行底色深一档 */
+  --diff-add-word: color-mix(in srgb, var(--green) 34%, transparent);
+  --diff-del-word: color-mix(in srgb, var(--red) 34%, transparent);
+  /* 三栏合并（IDEA 配色语义）：单侧改动蓝、冲突红、两边改成一样绿 */
+  --merge-change-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+  --merge-change-band: color-mix(in srgb, var(--accent) 45%, transparent);
+  --merge-conflict-bg: color-mix(in srgb, var(--red) 13%, transparent);
+  --merge-conflict-band: color-mix(in srgb, var(--red) 50%, transparent);
+  --merge-same-bg: color-mix(in srgb, var(--green) 11%, transparent);
+  --merge-same-band: color-mix(in srgb, var(--green) 42%, transparent);
 }
 
 [data-theme="light"] {
