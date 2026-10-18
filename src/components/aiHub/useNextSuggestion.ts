@@ -22,7 +22,13 @@ const SUGGEST_SYSTEM = [
 ].join("\n");
 
 const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
-const META_OPENING_RE = /^(let me|i'?ll|i will|我来|让我|我先)/i;
+const CJK_ALL_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/g;
+const LATIN_ALL_RE = /[A-Za-z]/g;
+/** 助手口吻，或推理模型在复述「用户问了什么」——都不是用户会发的指令 */
+const META_OPENING_RE =
+  /^(let me|i'?ll|i will|i need|i should|the user|user (asked|wants|is)|okay|ok,|so,|我来|让我|我先|用户(问|想|在|刚|要|希望))/i;
+/** 提示词要求 ≤24 字；明显更长的多半是思考过程被当成了正文 */
+const MAX_SUGGESTION_CHARS = 60;
 
 /** 历史与输出里可能混入 <|tool_call_start|>、[bash(...)] 之类的工具标记，喂给模型会带偏它 */
 function stripToolNoise(text: string): string {
@@ -41,11 +47,16 @@ function sanitizeSuggestion(raw: string, expectCJK: boolean): string | null {
     .replace(/["'」』〉》.。!！?？,，、;；\s]+$/, "");
   if (!cleaned) return null;
   const line = cleaned.split("\n")[0].trim();
-  if (line.length < 2) return null;
-  // 助手口吻的半截话（Let me ...:）不是用户指令
+  if (line.length < 2 || line.length > MAX_SUGGESTION_CHARS) return null;
+  // 助手口吻的半截话（Let me ...:）、复述用户意图的思考过程，都不是用户指令
   if (META_OPENING_RE.test(line) || /[:：]$/.test(line)) return null;
-  // 用户在说中文，建议却是纯外语 → 语言不符
-  if (expectCJK && !CJK_RE.test(line)) return null;
+  // 用户在说中文，建议却以外语为主 → 语言不符。只看「有没有中文」不够：英文思考里
+  // 常引用用户的中文原话。允许夹带文件名、函数名（拉丁字母不超过中文的两倍）
+  if (expectCJK) {
+    const cjk = (line.match(CJK_ALL_RE) || []).length;
+    const latin = (line.match(LATIN_ALL_RE) || []).length;
+    if (cjk === 0 || latin > cjk * 2) return null;
+  }
   // 命令调用味（bash(...)）、括号/标记碎片一律拒收——建议是句自然语言，不该长这样
   if (/\([^)]*\)|（[^）]*）|[{}<>|`]|\[\/?/.test(line)) return null;
   return line.slice(0, 48);
@@ -113,7 +124,8 @@ export function useNextSuggestion(opts: {
           .join("\n");
         try {
           const text = await generateRef.current({
-            config: { ...model, maxTokens: 384, temperature: 0.4 },
+            // 推理模型先花 token 思考：给太少会在正文出来前耗尽，只剩思考过程
+            config: { ...model, maxTokens: 1024, temperature: 0.4 },
             system: SUGGEST_SYSTEM,
             user: transcript,
           });
