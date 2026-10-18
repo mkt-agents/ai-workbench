@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Loader2, Undo2 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 import { readStoredString, writeStoredString } from "../../core/localState";
 import { parseInvokeError } from "../../hooks/useInvokeError";
 import ModalTitleRow from "../ModalTitleRow";
-import { DiffTitle, useF7, type DiffViewTarget } from "./DiffViewer";
-import { useDiffView, type DiffMode } from "./useDiffView";
+import { blockActionsFor, DiffTitle, useF7, type DiffViewTarget } from "./DiffViewer";
+import { useDiffView, type BlockAction, type DiffMode } from "./useDiffView";
+import type { ChangeBlock } from "../../lib/diffRows";
 
 export type DiffFile = DiffViewTarget & { statusLabel: string; statusClass: string };
 
@@ -17,6 +18,11 @@ type Props = {
   busy: boolean;
   /** Stage / unstage hunks of `file`; the dialog reloads the diff afterwards. */
   onApply: (file: DiffFile, patch: string) => Promise<void>;
+  /** » / « on a change block; the dialog reloads the diff afterwards. */
+  onBlock: (file: DiffFile, action: BlockAction, patch: string, block: ChangeBlock) => Promise<void>;
+  /** The file whose last block revert can be undone, if any. */
+  undoRevertFor: { repoPath: string; filePath: string } | null;
+  onUndoRevert: () => Promise<void>;
   onClose: () => void;
 };
 
@@ -37,7 +43,7 @@ function errorText(e: unknown): string {
 }
 
 /** IDEA-style diff window: change / file navigation, viewer mode, whitespace, words, folding, full file. */
-export default function DiffModal({ files, startIndex, busy, onApply, onClose }: Props) {
+export default function DiffModal({ files, startIndex, busy, onApply, onBlock, undoRevertFor, onUndoRevert, onClose }: Props) {
   const { t } = useTranslation("git");
   const invokeGitDiff = useGlobalStore((s) => s.invokeGitDiff);
   const [index, setIndex] = useState(() => Math.min(Math.max(0, startIndex), Math.max(0, files.length - 1)));
@@ -95,7 +101,14 @@ export default function DiffModal({ files, startIndex, busy, onApply, onClose }:
       if (!file) return;
       void onApply(file, patch).then(load);
     },
+    blockActions: blockActionsFor(file ?? null, ignoreWs),
+    onBlock: (action, patch, block) => {
+      if (!file) return;
+      void onBlock(file, action, patch, block).then(load);
+    },
   });
+  const canUndo =
+    !!file && !!undoRevertFor && undoRevertFor.repoPath === file.repoPath && undoRevertFor.filePath === file.filePath;
   useF7(!!file, diff.jump, true);
 
   const go = (dir: 1 | -1) => setIndex((i) => Math.min(files.length - 1, Math.max(0, i + dir)));
@@ -224,6 +237,17 @@ export default function DiffModal({ files, startIndex, busy, onApply, onClose }:
             {t("commit.diffWrap")}
           </button>
           <span className="dm-gap" />
+          {canUndo && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              disabled={busy}
+              onClick={() => void onUndoRevert().then(load)}
+            >
+              <Undo2 size={13} />
+              {t("commit.undoRevert")}
+            </button>
+          )}
           {canStage && diff.picked.size > 0 && (
             <button type="button" className="btn btn-secondary btn-small" disabled={busy} onClick={diff.applyPicked}>
               {file?.staged

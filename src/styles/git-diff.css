@@ -266,7 +266,16 @@
 
 .dv-srow {
   display: grid;
-  grid-template-columns: var(--dv-gutter) minmax(0, 1fr) var(--dv-gutter) minmax(0, 1fr);
+  grid-template-columns: var(--dv-gutter) minmax(0, 1fr) 8px var(--dv-gutter) minmax(0, 1fr);
+}
+
+/* 有箭头时：并排的栏间放 » / «，统一视图在行首多一列 */
+.dv-body.has-actions .dv-srow {
+  grid-template-columns: var(--dv-gutter) minmax(0, 1fr) 46px var(--dv-gutter) minmax(0, 1fr);
+}
+
+.dv-body.has-actions .dv-row {
+  grid-template-columns: 46px var(--dv-gutter) var(--dv-gutter) 2ch minmax(0, 1fr);
 }
 
 .dv-no {
@@ -278,7 +287,7 @@
   user-select: none;
 }
 
-.dv-srow .dv-no:nth-child(3) {
+.dv-srow .dv-no:nth-child(4) {
   border-left: 1px solid var(--border);
 }
 
@@ -1031,4 +1040,52 @@
 .dv-text.is-del .dv-word {
   border-radius: 2px;
   background: var(--diff-del-word);
+}
+
+/* 栏间：改动块的范围是一条色带，块的第一行放箭头 */
+.dv-gut {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  background: var(--overlay-1);
+}
+
+.dv-gut.is-block {
+  background: var(--merge-change-bg);
+}
+
+.dv-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 17px;
+  margin-top: 1px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  color: var(--accent-strong);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.dv-arrow:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.dv-arrow.is-stage {
+  color: var(--green);
+}
+
+.dv-arrow.is-stage:hover:not(:disabled) {
+  border-color: var(--green-border);
+  background: var(--green-dim);
+}
+
+.dv-arrow:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

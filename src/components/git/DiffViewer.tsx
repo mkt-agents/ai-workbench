@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp, Columns2, Loader2, Maximize2, Rows2, Space, TextWrap, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Columns2, Loader2, Maximize2, Rows2, Space, TextWrap, Undo2, X } from "lucide-react";
 import { readStoredString, writeStoredString } from "../../core/localState";
-import { useDiffView, type DiffMode } from "./useDiffView";
+import { useDiffView, type BlockAction, type DiffMode } from "./useDiffView";
+import type { ChangeBlock } from "../../lib/diffRows";
 
 export type DiffViewTarget = {
   repoPath: string;
@@ -25,8 +26,18 @@ type Props = {
   onApply: (patch: string) => void;
   /** Open the same file in the large diff dialog. */
   onExpand: () => void;
+  /** » / « on a change block (revert / stage that block). */
+  onBlock: (action: BlockAction, patch: string, block: ChangeBlock) => void;
+  /** Set right after a block revert of this file: undo it. */
+  onUndoRevert?: () => void;
   onClose: () => void;
 };
+
+/** Arrows a file's diff offers: none for untracked files or a -w view (the patch would not apply). */
+export function blockActionsFor(target: DiffViewTarget | null, ignoreWhitespace: boolean) {
+  if (!target || target.wholeFile || ignoreWhitespace) return { revert: false, stage: false };
+  return { revert: true, stage: !target.staged };
+}
 
 export const DIFF_MODE_KEY = "cl-diff-mode";
 const WRAP_KEY = "cl-diff-wrap";
@@ -103,6 +114,8 @@ export default function DiffViewer({
   onIgnoreWhitespace,
   onApply,
   onExpand,
+  onBlock,
+  onUndoRevert,
   onClose,
 }: Props) {
   const { t } = useTranslation("git");
@@ -134,6 +147,8 @@ export default function DiffViewer({
     staged: !!target?.staged,
     busy,
     onApply,
+    blockActions: blockActionsFor(target, ignoreWhitespace),
+    onBlock,
   });
   const { parsed } = diff;
   const hasHunks = parsed.hunks.length > 0;
@@ -182,6 +197,12 @@ export default function DiffViewer({
           <span className="dv-title runtime-muted">{t("commit.diffEmpty")}</span>
         )}
         <span className="dv-head-gap" />
+        {target && onUndoRevert && (
+          <button type="button" className="btn btn-secondary btn-small" disabled={busy} onClick={onUndoRevert}>
+            <Undo2 size={13} />
+            {t("commit.undoRevert")}
+          </button>
+        )}
         {target && hasHunks && (
           <div className="dv-tools">
             {canStage && diff.picked.size > 0 && (

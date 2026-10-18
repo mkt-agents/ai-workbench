@@ -437,7 +437,15 @@
       "viewOnly": "完整文件 / 忽略空白时只读，关掉后可以按块暂存",
       "empty": "没有差异"
     },
-    "diffWrapSplit": "并排查看时总是自动换行，切到统一查看后可以关掉"
+    "diffWrapSplit": "并排查看时总是自动换行，切到统一查看后可以关掉",
+    "blockRevertTip": "还原这一块（»）：改回暂存区的内容，写回文件",
+    "blockUnstageTip": "还原这一块（»）：取消暂存这一块，文件不变",
+    "blockStageTip": "移到左边（«）：暂存这一块",
+    "blockRevertTitle": "还原这一块改动",
+    "blockRevertConfirm": "把 {{file}} 里这一块改回原来的内容？会去掉 {{adds}} 行新增、恢复 {{dels}} 行删除。",
+    "blockRevertWarn": "会直接修改工作区文件。还原后可以点「撤销还原」恢复。",
+    "blockRevert": "还原",
+    "undoRevert": "撤销还原"
   },
   "accountManager": {
     "title": "账号管理",

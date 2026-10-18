@@ -59,7 +59,8 @@ export interface Invocations {
   invokeGitStage: (path: string, files: string[]) => Promise<string>;
   invokeGitUnstage: (path: string, files: string[]) => Promise<string>;
   invokeGitCommit: (path: string, message: string, amend?: boolean) => Promise<string>;
-  invokeGitApplyCached: (path: string, patch: string, reverse?: boolean) => Promise<string>;
+  /** `worktree`: apply to the working file instead of the index (block revert / undo). */
+  invokeGitApplyCached: (path: string, patch: string, reverse?: boolean, worktree?: boolean) => Promise<string>;
   invokeGitStashPush: (path: string, message?: string) => Promise<string>;
   invokeGitStashList: (path: string) => Promise<Array<{ index: number; message: string }>>;
   invokeGitStashPop: (path: string, index: number) => Promise<string>;
@@ -329,8 +330,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_unstage', { path, files }),
   invokeGitCommit: (path: string, message: string, amend?: boolean) =>
     tauriInvoke<string>('git_commit', { path, message, amend: amend ?? false }),
-  invokeGitApplyCached: (path: string, patch: string, reverse?: boolean) =>
-    tauriInvoke<string>('git_apply_cached', { path, patch, reverse: reverse ?? false }),
+  invokeGitApplyCached: (path: string, patch: string, reverse?: boolean, worktree?: boolean) =>
+    tauriInvoke<string>('git_apply_cached', { path, patch, reverse: reverse ?? false, worktree: worktree ?? false }),
   invokeGitStashPush: (path: string, message?: string) =>
     tauriInvoke<string>('git_stash_push', { path, message: message ?? null }),
   invokeGitStashList: (path: string) =>

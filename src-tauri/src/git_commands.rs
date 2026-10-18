@@ -2046,7 +2046,20 @@ pub(crate) fn patch_stays_in_repo(patch: &str) -> bool {
     true
 }
 
-fn git_apply_cached_sync(repo_path: String, patch: String, reverse: bool) -> Result<String, String> {
+/// Files a patch touches (`+++ b/<path>`), for the conflict check below.
+fn patch_files(patch: &str) -> Vec<String> {
+    patch
+        .lines()
+        .filter_map(|l| l.strip_prefix("+++ "))
+        .map(|rest| rest.trim())
+        .filter(|p| *p != "/dev/null")
+        .map(|p| p.strip_prefix("b/").unwrap_or(p).to_string())
+        .collect()
+}
+
+/// Apply a hunk / block patch to the index (`--cached`) or to the working
+/// file (`worktree`: reverting a block in the diff view, or undoing that).
+fn git_apply_cached_sync(repo_path: String, patch: String, reverse: bool, worktree: bool) -> Result<String, String> {
     ensure_git_repo(&repo_path)?;
     if patch.trim().is_empty() {
         return Err("没有可暂存的代码块".into());
@@ -2054,12 +2067,23 @@ fn git_apply_cached_sync(repo_path: String, patch: String, reverse: bool) -> Res
     if !patch_stays_in_repo(&patch) {
         return Err("补丁路径超出当前仓库".into());
     }
+    // An unmerged file is the resolver's: a patch would quietly pick its content.
+    let unmerged = crate::git_merge::unmerged_paths(&repo_path);
+    if let Some(hit) = patch_files(&patch).into_iter().find(|f| unmerged.contains(f)) {
+        return Err(crate::git_merge::code_err(
+            crate::config::ErrorCode::GitConflict,
+            format!("{hit} 有冲突，请在冲突面板里解决。"),
+        ));
+    }
     let mut cmd = git_command();
     cmd.current_dir(&repo_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut args = vec!["apply", "--cached", "--whitespace=nowarn", "--recount"];
+    let mut args = vec!["apply", "--whitespace=nowarn", "--recount"];
+    if !worktree {
+        args.push("--cached");
+    }
     if reverse {
         args.push("--reverse");
     }
@@ -2074,15 +2098,18 @@ fn git_apply_cached_sync(repo_path: String, patch: String, reverse: bool) -> Res
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
-            "按块暂存失败".into()
+            if worktree { "还原失败".into() } else { "按块暂存失败".into() }
+        } else if worktree {
+            format!("还原失败：{stderr}（文件可能在打开差异后又被改过，请刷新后再试）")
         } else {
             stderr
         });
     }
-    Ok(if reverse {
-        "已取消暂存所选代码块".into()
-    } else {
-        "已暂存所选代码块".into()
+    Ok(match (worktree, reverse) {
+        (true, true) => "已还原所选改动".into(),
+        (true, false) => "已恢复刚才还原的改动".into(),
+        (false, true) => "已取消暂存所选代码块".into(),
+        (false, false) => "已暂存所选代码块".into(),
     })
 }
 
@@ -2451,9 +2478,11 @@ pub async fn git_apply_cached(
     path: String,
     patch: String,
     reverse: Option<bool>,
+    worktree: Option<bool>,
 ) -> Result<String, String> {
     let reverse = reverse.unwrap_or(false);
-    tokio::task::spawn_blocking(move || git_apply_cached_sync(path, patch, reverse))
+    let worktree = worktree.unwrap_or(false);
+    tokio::task::spawn_blocking(move || git_apply_cached_sync(path, patch, reverse, worktree))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
@@ -3469,6 +3498,37 @@ mod conflict_flow_tests {
         sh(&dir, &["config", "user.name", "t"]);
         sh(&dir, &["config", "core.autocrlf", "false"]);
         dir
+    }
+
+    /// Reverting one block of a hunk in the working file leaves the other block
+    /// alone, and applying the same patch forward brings it back (撤销还原).
+    #[test]
+    fn worktree_block_revert_and_undo() {
+        if git_command().arg("--version").output().is_err() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("aw-block-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        sh(&root, &["init", "-q", "-b", "main"]);
+        sh(&root, &["config", "user.email", "t@t"]);
+        sh(&root, &["config", "user.name", "t"]);
+        sh(&root, &["config", "core.autocrlf", "false"]);
+        let original: String = (1..=10).map(|i| format!("l{i}\n")).collect();
+        std::fs::write(root.join("f.txt"), &original).unwrap();
+        sh(&root, &["add", "-A"]);
+        sh(&root, &["commit", "-qm", "base"]);
+        let changed = original.replace("l2\n", "L2\n").replace("l8\n", "L8\n");
+        std::fs::write(root.join("f.txt"), &changed).unwrap();
+        // One hunk, two blocks; only the first block (l2) is kept, the other
+        // block's new line stays as context: what diffRows.blockPatch("new") builds.
+        let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,10 +1,10 @@\n l1\n-l2\n+L2\n l3\n l4\n l5\n l6\n l7\n L8\n l9\n l10\n";
+        let rp = root.to_string_lossy().into_owned();
+        assert_eq!(git_apply_cached_sync(rp.clone(), patch.into(), true, true).unwrap(), "已还原所选改动");
+        assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), original.replace("l8\n", "L8\n"));
+        git_apply_cached_sync(rp.clone(), patch.into(), false, true).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), changed);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Two clones edit the same line; the second one's merge pull must stop and

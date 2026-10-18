@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import {
+  blockPatch,
   buildHunkPatch,
+  changeBlocks,
   changeStarts,
   foldUnchanged,
   maxLineNo,
   parseUnifiedDiff,
   toSplitRows,
   wordDiff,
+  type ChangeBlock,
   type DiffHunk,
   type DiffRow,
   type ParsedDiff,
@@ -28,7 +31,13 @@ type ViewRow = {
   words?: WordPiece[];
   leftWords?: WordPiece[];
   rightWords?: WordPiece[];
+  /** Index of the change block (see changeBlocks) this line belongs to. */
+  block?: number;
+  /** First line of its block: the » / « arrows sit here. */
+  blockStart?: boolean;
 };
+
+export type BlockAction = "revert" | "stage";
 
 type Options = {
   text: string;
@@ -43,6 +52,9 @@ type Options = {
   staged: boolean;
   busy: boolean;
   onApply: (patch: string) => void;
+  /** Which arrows a change block offers: » revert, « stage (move to the left side). */
+  blockActions?: { revert: boolean; stage: boolean };
+  onBlock?: (action: BlockAction, patch: string, block: ChangeBlock) => void;
 };
 
 /** Rendering more rows than this as individual nodes gets sluggish. */
@@ -91,7 +103,19 @@ function Text({ text, pieces }: { text: string; pieces?: WordPiece[] }) {
  * Parse + layout + render of a unified diff, shared by the commit page's diff
  * panel and the large diff dialog (each draws its own header and tools).
  */
-export function useDiffView({ text, view, wrap, fold, words, canStage, staged, busy, onApply }: Options) {
+export function useDiffView({
+  text,
+  view,
+  wrap,
+  fold,
+  words,
+  canStage,
+  staged,
+  busy,
+  onApply,
+  blockActions,
+  onBlock,
+}: Options) {
   const { t } = useTranslation("git");
   const [picked, setPicked] = useState<Set<number>>(() => new Set());
   const [folded, setFolded] = useState<Set<number>>(() => new Set());
@@ -140,6 +164,22 @@ export function useDiffView({ text, view, wrap, fold, words, canStage, staged, b
           words: pieces.get(i),
         }));
       }
+      // Same runs as changeBlocks: a note row ("\ No newline") does not end a run.
+      let blk = -1;
+      let inRun = false;
+      rows.forEach((r) => {
+        const isNote = r.split ? r.split.left?.kind === "note" : r.unified?.kind === "note";
+        if (r.change) {
+          if (!inRun) {
+            blk++;
+            r.blockStart = true;
+          }
+          inRun = true;
+          r.block = blk;
+        } else if (!isNote) {
+          inRun = false;
+        }
+      });
       const starts = new Set(changeStarts(rows.map((r) => r.change)));
       rows.forEach((r, i) => {
         if (starts.has(i)) r.changeId = changeIndex++;
@@ -176,6 +216,44 @@ export function useDiffView({ text, view, wrap, fold, words, canStage, staged, b
     });
 
   const applyHunks = (hunks: DiffHunk[]) => onApply(buildHunkPatch(parsed.preamble, hunks));
+  const blocksOf = useMemo(() => parsed.hunks.map(changeBlocks), [parsed]);
+  const actions = !!onBlock && !!blockActions && (blockActions.revert || blockActions.stage);
+
+  /** » (revert) / « (stage) on the first line of a change block. */
+  const arrows = (row: ViewRow, hi: number): ReactNode => {
+    if (!actions || !row.blockStart || row.block === undefined) return null;
+    const block = blocksOf[hi]?.[row.block];
+    const hunk = parsed.hunks[hi];
+    if (!block || !hunk) return null;
+    return (
+      <>
+        {blockActions!.revert && (
+          <button
+            type="button"
+            className="dv-arrow is-revert"
+            disabled={busy}
+            title={staged ? t("commit.blockUnstageTip") : t("commit.blockRevertTip")}
+            aria-label={staged ? t("commit.blockUnstageTip") : t("commit.blockRevertTip")}
+            onClick={() => onBlock!("revert", blockPatch(parsed.preamble, hunk, block, "new"), block)}
+          >
+            <ChevronsRight size={13} />
+          </button>
+        )}
+        {blockActions!.stage && (
+          <button
+            type="button"
+            className="dv-arrow is-stage"
+            disabled={busy}
+            title={t("commit.blockStageTip")}
+            aria-label={t("commit.blockStageTip")}
+            onClick={() => onBlock!("stage", blockPatch(parsed.preamble, hunk, block, "old"), block)}
+          >
+            <ChevronsLeft size={13} />
+          </button>
+        )}
+      </>
+    );
+  };
   const gutter = `${Math.max(2, String(maxLineNo(parsed)).length) + 1}ch`;
 
   const hunkHead = (hunk: DiffHunk, hi: number) => {
@@ -219,7 +297,8 @@ export function useDiffView({ text, view, wrap, fold, words, canStage, staged, b
 
   const navClass = (row: ViewRow) => (row.changeId === navAt && navAt >= 0 ? " is-nav" : "");
 
-  const renderRow = (row: ViewRow, key: string): ReactNode => {
+  const renderRow = (row: ViewRow, key: string, hi: number): ReactNode => {
+    const gutClass = `dv-gut${row.block !== undefined ? " is-block" : ""}${row.blockStart ? " is-start" : ""}`;
     if (row.split) {
       const { left, right } = row.split;
       return (
@@ -232,6 +311,7 @@ export function useDiffView({ text, view, wrap, fold, words, canStage, staged, b
           <span className={`dv-text is-${left?.kind ?? "empty"}`}>
             <Text text={left?.text ?? ""} pieces={row.leftWords} />
           </span>
+          <span className={gutClass}>{arrows(row, hi)}</span>
           <span className={`dv-no is-${right?.kind ?? "empty"}`}>{right?.no ?? ""}</span>
           <span className={`dv-text is-${right?.kind ?? "empty"}`}>
             <Text text={right?.text ?? ""} pieces={row.rightWords} />
@@ -246,6 +326,7 @@ export function useDiffView({ text, view, wrap, fold, words, canStage, staged, b
         className={`dv-row is-${r.kind}${navClass(row)}`}
         data-change={row.changeId >= 0 ? row.changeId : undefined}
       >
+        {actions && <span className={gutClass}>{arrows(row, hi)}</span>}
         <span className="dv-no">{r.oldNo ?? ""}</span>
         <span className="dv-no">{r.newNo ?? ""}</span>
         <span className="dv-sign">{SIGN[r.kind]}</span>
@@ -259,7 +340,7 @@ export function useDiffView({ text, view, wrap, fold, words, canStage, staged, b
   const body = (
     <div
       ref={bodyRef}
-      className={`dv-body is-${view}${wrap ? "" : " is-nowrap"}`}
+      className={`dv-body is-${view}${wrap ? "" : " is-nowrap"}${actions ? " has-actions" : ""}`}
       style={{ ["--dv-gutter" as string]: gutter }}
     >
       {parsed.notes.length > 0 && <div className="dv-notes">{parsed.notes.join(" · ")}</div>}
@@ -278,7 +359,7 @@ export function useDiffView({ text, view, wrap, fold, words, canStage, staged, b
                   {t("commit.diffFoldShow", { count: entry.fold.count })}
                 </button>
               ) : (
-                renderRow(entry.item, `r${ri}`)
+                renderRow(entry.item, `r${ri}`, hi)
               )
             )}
           </div>

@@ -40,6 +40,8 @@ import { parseInvokeError } from "../hooks/useInvokeError";
 import MergeResolver from "./git/MergeResolver";
 import DiffViewer from "./git/DiffViewer";
 import DiffModal, { type DiffFile } from "./git/DiffModal";
+import type { BlockAction } from "./git/useDiffView";
+import type { ChangeBlock } from "../lib/diffRows";
 import type {
   AIModelConfig,
   GitStatusEntry,
@@ -458,6 +460,8 @@ function CommitChangelist({
   const [resolver, setResolver] = useState<{ repoPath: string; file?: string } | null>(null);
   /** Large diff dialog over the changelist. */
   const [diffModal, setDiffModal] = useState<{ files: DiffFile[]; index: number } | null>(null);
+  /** The last block reverted in a working file: 撤销还原 applies it forward again. */
+  const [lastRevert, setLastRevert] = useState<{ repoPath: string; filePath: string; patch: string } | null>(null);
   /** Repos whose merge pull stopped on conflicts during the running batch. */
   const conflictHitRef = useRef<string[]>([]);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
@@ -1035,6 +1039,53 @@ function CommitChangelist({
 
   const applyHunks = async (patch: string) => {
     if (diffTarget) await applyPatch(diffTarget, patch);
+  };
+
+  /** Patch applied to the working file, then refresh list and the open diff. */
+  const applyToWorktree = async (target: DiffTarget, patch: string, reverse: boolean) => {
+    setBusyAction("hunk");
+    try {
+      onToast("success", await invokeGitApplyCached(target.repoPath, patch, reverse, true));
+      await refreshAfterWrite([target.repoPath]);
+      const shown = diffTargetRef.current;
+      if (shown && shown.repoPath === target.repoPath && shown.filePath === target.filePath) await reloadDiff(shown);
+      return true;
+    } catch (e) {
+      onToast("error", formatInvokeError(e));
+      return false;
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  /**
+   * » / « on a change block. Unstaged »: revert in the working file (asks, can be
+   * undone). Staged »: unstage the block. «: stage the block.
+   */
+  const runBlock = async (target: DiffTarget, action: BlockAction, patch: string, block: ChangeBlock) => {
+    if (busy) return;
+    if (action === "stage" || target.staged) {
+      await applyPatch(target, patch);
+      return;
+    }
+    const ok = await confirm({
+      title: t("commit.blockRevertTitle"),
+      message: t("commit.blockRevertConfirm", { file: target.filePath, adds: block.adds, dels: block.dels }),
+      warning: t("commit.blockRevertWarn"),
+      confirmText: t("commit.blockRevert"),
+      icon: "warning",
+    });
+    if (!ok) return;
+    if (await applyToWorktree(target, patch, true)) {
+      setLastRevert({ repoPath: target.repoPath, filePath: target.filePath, patch });
+    }
+  };
+
+  const undoRevert = async () => {
+    const last = lastRevert;
+    if (!last || busy) return;
+    const target = { repoPath: last.repoPath, filePath: last.filePath, staged: false, wholeFile: false };
+    if (await applyToWorktree(target, last.patch, false)) setLastRevert(null);
   };
 
   /** Every non-conflicted file of the scoped repos, in tree order: the dialog's ← / →. */
@@ -2206,6 +2257,14 @@ function CommitChangelist({
           }}
           onApply={(patch) => void applyHunks(patch)}
           onExpand={() => openDiffModal(diffTarget)}
+          onBlock={(action, patch, block) => {
+            if (diffTarget) void runBlock(diffTarget, action, patch, block);
+          }}
+          onUndoRevert={
+            lastRevert && diffTarget && lastRevert.repoPath === diffTarget.repoPath && lastRevert.filePath === diffTarget.filePath
+              ? () => void undoRevert()
+              : undefined
+          }
           onClose={closeDiff}
         />
       </div>
@@ -2500,6 +2559,9 @@ function CommitChangelist({
           startIndex={diffModal.index}
           busy={busy}
           onApply={(file, patch) => applyPatch(file, patch)}
+          onBlock={(file, action, patch, block) => runBlock(file, action, patch, block)}
+          undoRevertFor={lastRevert}
+          onUndoRevert={undoRevert}
           onClose={() => setDiffModal(null)}
         />
       )}

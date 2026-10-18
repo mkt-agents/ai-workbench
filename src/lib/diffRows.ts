@@ -249,3 +249,59 @@ export function wordDiff(oldLine: string, newLine: string): { left: WordPiece[];
   }
   return { left: pieces(a, keepA), right: pieces(b, keepB) };
 }
+
+/** One run of added / removed lines inside a hunk: `rows[start, end)`. */
+export type ChangeBlock = { start: number; end: number; adds: number; dels: number };
+
+/** Contiguous change runs; a "\ No newline" note sticks to the run it follows. */
+export function changeBlocks(hunk: DiffHunk): ChangeBlock[] {
+  const out: ChangeBlock[] = [];
+  let i = 0;
+  while (i < hunk.rows.length) {
+    if (hunk.rows[i].kind !== "add" && hunk.rows[i].kind !== "del") {
+      i++;
+      continue;
+    }
+    const start = i;
+    let adds = 0;
+    let dels = 0;
+    while (i < hunk.rows.length && hunk.rows[i].kind !== "ctx") {
+      if (hunk.rows[i].kind === "add") adds++;
+      if (hunk.rows[i].kind === "del") dels++;
+      i++;
+    }
+    out.push({ start, end: i, adds, dels });
+  }
+  return out;
+}
+
+/**
+ * A patch with only `block`'s changes. Lines of the other blocks become the
+ * side the patch is applied against:
+ * - `"old"` (applied forward to the index, i.e. stage this block): their removed
+ *   lines are still in the index, so they turn into context; added lines go;
+ * - `"new"` (applied in reverse, i.e. revert this block): their added lines are
+ *   in the file, so they turn into context; removed lines go.
+ * Hunk header counts are left to `git apply --recount`.
+ */
+export function blockPatch(preamble: string, hunk: DiffHunk, block: ChangeBlock, side: "old" | "new"): string {
+  const body: string[] = [];
+  let lastKept = false;
+  hunk.rows.forEach((row, i) => {
+    const inside = i >= block.start && i < block.end;
+    if (row.kind === "note") {
+      if (lastKept) body.push(`\\ ${row.text}`);
+      return;
+    }
+    if (inside) {
+      body.push(`${row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "}${row.text}`);
+      lastKept = true;
+      return;
+    }
+    const keep = row.kind === "ctx" || (row.kind === "del" && side === "old") || (row.kind === "add" && side === "new");
+    if (keep) body.push(` ${row.text}`);
+    lastKept = keep;
+  });
+  const text = [preamble.trimEnd(), hunk.header, ...body].filter(Boolean).join("\n");
+  return `${text}\n`;
+}
