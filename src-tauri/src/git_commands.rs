@@ -1492,25 +1492,79 @@ fn git_switch_branch_sync(repo_path: String, name: String) -> Result<String, Str
     validate_branch_name(&name)?;
     ensure_git_repo(&repo_path)?;
 
-    let output = git_output(&repo_path, &["checkout", &name])?;
+    // 英文输出才能稳定识别失败原因（本机 git 可能是中文语言包），再由 describe_checkout_error 翻译
+    let output = git_command()
+        .args(["checkout", &name])
+        .env("LC_ALL", "C")
+        .env("LANGUAGE", "C")
+        .current_dir(&repo_path)
+        .output()
+        .map_err(map_git_spawn_err)?;
     if !output.status.success() {
         let combined = format!(
-            "{} {}",
+            "{}\n{}",
             String::from_utf8_lossy(&output.stderr).trim(),
             String::from_utf8_lossy(&output.stdout).trim()
-        )
-        .trim()
-        .to_string();
-        // git's own "pathspec did not match" says nothing about where it looked.
-        if combined.contains("did not match") {
-            return Err(format!(
-                "分支 {} 不存在（本地与远端跟踪引用中均未找到，可先批量拉取）",
-                name
-            ));
-        }
-        return Err(combined);
+        );
+        return Err(describe_checkout_error(&name, combined.trim()));
     }
     Ok(format!("已切换到分支 {}", name))
+}
+
+/// 缩进的文件列表行（git 用 tab 缩进列出受影响的文件），最多列 6 个。
+fn indented_paths(raw: &str, after: &str) -> String {
+    let Some(start) = raw.find(after) else {
+        return String::new();
+    };
+    let files: Vec<&str> = raw[start + after.len()..]
+        .lines()
+        .skip_while(|l| l.trim().is_empty() || !l.starts_with([' ', '\t']))
+        .take_while(|l| l.starts_with([' ', '\t']))
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if files.is_empty() {
+        return String::new();
+    }
+    let mut out: String = files.iter().take(6).map(|f| format!("\n  {f}")).collect();
+    if files.len() > 6 {
+        out.push_str(&format!("\n  …等 {} 个文件", files.len()));
+    }
+    out
+}
+
+/// git checkout 失败的英文原文 → 中文原因 + 下一步。认不出的原样附在「切换分支失败」后面。
+fn describe_checkout_error(name: &str, raw: &str) -> String {
+    const LOCAL: &str = "Your local changes to the following files would be overwritten by checkout:";
+    const UNTRACKED: &str =
+        "The following untracked working tree files would be overwritten by checkout:";
+    if raw.contains(LOCAL) {
+        return format!(
+            "无法切换到 {name}：以下文件有未提交的改动，切过去会被目标分支的版本覆盖{}\n请先提交或「储藏改动」后再切换。",
+            indented_paths(raw, LOCAL)
+        );
+    }
+    if raw.contains(UNTRACKED) {
+        return format!(
+            "无法切换到 {name}：目标分支里有同名文件，会覆盖以下未跟踪文件{}\n请先移走、提交或删除它们后再切换。",
+            indented_paths(raw, UNTRACKED)
+        );
+    }
+    if raw.contains("did not match") {
+        return format!("分支 {name} 不存在（本地与远端跟踪引用中均未找到，可先批量拉取）");
+    }
+    if raw.contains("is already checked out at") || raw.contains("is already used by worktree") {
+        return format!("无法切换到 {name}：该分支已在另一个工作树中检出，不能同时检出两次。");
+    }
+    if raw.contains("resolve your current index first") || raw.contains("you need to resolve") {
+        return format!("无法切换到 {name}：当前有未解决的合并冲突，请先解决冲突并提交。");
+    }
+    if raw.contains("index.lock") {
+        return format!(
+            "无法切换到 {name}：仓库被另一个 git 进程占用（index.lock）。等它结束，或确认没有 git 在运行后删除 .git/index.lock。"
+        );
+    }
+    format!("切换到 {name} 失败：{raw}")
 }
 
 /// Local and remote-tracking refs only — no network. Feeds the switch modal's
@@ -2084,6 +2138,31 @@ fn git_since_arg(since: &str) -> Result<String, String> {
         return Err("invalid since".to_string());
     }
     Ok(format!("--since={s}"))
+}
+
+#[cfg(test)]
+mod checkout_error_tests {
+    use super::describe_checkout_error;
+
+    #[test]
+    fn local_changes_are_translated_with_the_file_list() {
+        let raw = "error: Your local changes to the following files would be overwritten by checkout:\n\tsrc/components/GitCommitPanel.tsx\n\tsrc/styles/changelog.css\nPlease commit your changes or stash them before you switch branches.\nAborting";
+        let msg = describe_checkout_error("dev", raw);
+        assert!(msg.starts_with("无法切换到 dev"), "{msg}");
+        assert!(msg.contains("\n  src/components/GitCommitPanel.tsx\n  src/styles/changelog.css\n"), "{msg}");
+        assert!(!msg.contains("Please commit"), "{msg}");
+        assert!(msg.contains("储藏改动"), "{msg}");
+    }
+
+    #[test]
+    fn untracked_and_missing_and_unknown() {
+        let raw = "error: The following untracked working tree files would be overwritten by checkout:\n\ta.txt\nPlease move or remove them before you switch branches.\nAborting";
+        let msg = describe_checkout_error("dev", raw);
+        assert!(msg.contains("未跟踪文件") && msg.contains("\n  a.txt\n"), "{msg}");
+        assert!(describe_checkout_error("x", "error: pathspec 'x' did not match any file(s) known to git")
+            .contains("不存在"));
+        assert_eq!(describe_checkout_error("x", "fatal: boom"), "切换到 x 失败：fatal: boom");
+    }
 }
 
 #[cfg(test)]

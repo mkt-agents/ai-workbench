@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Check, Loader2, User, XCircle } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, GitBranch, Loader2, User, XCircle } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { pathKey, projectNameFromPath } from "../core/pathUtils";
 import { readStoredString, writeStoredString } from "../core/localState";
@@ -329,21 +329,33 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
                   </>
                 )}
                 {summary?.branch && (
-                  <select
-                    className="commit-branch-select"
-                    value={summary.branch}
-                    disabled={branchBusy || switching || !repoPath}
-                    aria-label={t("commit.branch")}
-                    onChange={(e) => void switchBranch(e.target.value)}
-                  >
-                    {(branches.includes(summary.branch) ? branches : [summary.branch, ...branches]).map(
-                      (name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      )
-                    )}
-                  </select>
+                  <>
+                    <span className="commit-scope-dot" aria-hidden />
+                    <span className="commit-branch-pick">
+                      {branchBusy ? (
+                        <Loader2 size={11} className="spin commit-branch-pick-icon" aria-hidden />
+                      ) : (
+                        <GitBranch size={11} className="commit-branch-pick-icon" aria-hidden />
+                      )}
+                      <select
+                        className="commit-branch-select"
+                        value={summary.branch}
+                        disabled={branchBusy || switching || !repoPath}
+                        aria-label={t("commit.branch")}
+                        title={summary.branch}
+                        onChange={(e) => void switchBranch(e.target.value)}
+                      >
+                        {(branches.includes(summary.branch) ? branches : [summary.branch, ...branches]).map(
+                          (name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          )
+                        )}
+                      </select>
+                      <ChevronDown size={11} className="commit-branch-pick-caret" aria-hidden />
+                    </span>
+                  </>
                 )}
               </>
             ) : (
