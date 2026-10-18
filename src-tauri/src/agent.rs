@@ -1021,8 +1021,18 @@ fn decode_model_body(text: &str) -> Result<Value, String> {
                 .into(),
         );
     }
-    if trimmed.starts_with("data:") {
+    // SSE may open with comment lines (OpenRouter sends ": OPENROUTER PROCESSING" keep-alives).
+    let first_field = trimmed
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with(':'));
+    if first_field.is_some_and(|l| l.starts_with("data:")) {
         return decode_sse(trimmed);
+    }
+    if first_field.is_none() {
+        return Err(
+            "模型只返回了心跳，没有内容。免费线路经常会中途断开，请再试一次，或换一个模型。".into(),
+        );
     }
     serde_json::from_str(trimmed).map_err(|e| {
         let snippet: String = trimmed.chars().take(180).collect();
@@ -1616,6 +1626,23 @@ mod tests {
         let err = decode_model_body("").unwrap_err();
         assert!(err.contains("空内容"), "{err}");
         assert!(!err.contains("EOF"), "{err}");
+    }
+
+    #[test]
+    fn sse_with_keepalive_comments_is_still_sse() {
+        let raw = concat!(
+            ": OPENROUTER PROCESSING\n\n",
+            ": OPENROUTER PROCESSING\n\n",
+            "data: {\"id\":\"gen-1\",\"choices\":[{\"delta\":{\"content\":\"已提交\"}}]}\n\n",
+            "data: [DONE]\n",
+        );
+        let body = decode_model_body(raw).unwrap();
+        assert_eq!(
+            body.pointer("/choices/0/message/content").and_then(|v| v.as_str()),
+            Some("已提交")
+        );
+        let only_ping = decode_model_body(": OPENROUTER PROCESSING\n\n").unwrap_err();
+        assert!(only_ping.contains("心跳"), "{only_ping}");
     }
 
     #[test]
