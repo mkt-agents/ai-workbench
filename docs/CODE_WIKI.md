@@ -696,7 +696,7 @@ db_save(state: DbState, table: DbTable, rows: Vec<serde_json::Value>) -> Result<
 
 ### 8.4.1 `git_merge.rs` — 冲突与进行中的操作
 
-纯函数：`resolve_git_dir` / `repo_operation`（读 `MERGE_HEAD`、`rebase-merge|apply`、`CHERRY_PICK_HEAD`、`REVERT_HEAD`）、`parse_unmerged_paths`（`ls-files -u -z`，不依赖 git 语言）、`blocked_reason`、`strip_merge_msg`、`has_conflict_markers`、`parse_merge_segments`（`git merge-file -p --diff3` 输出 → same / conflict 段）。`conflict_state` / `ensure_repo_clear` 供 git 命令与智枢冲突闸门共用。命令：`git_merge_state`、`git_conflict_file`、`git_resolve_conflict`（拒绝仍含 `<<<<<<<` / `>>>>>>>` 的内容，按工作区文件补回 CRLF）、`git_merge_abort`。任何写入都是用户在三栏合并里的明确选择，不自动选边。
+纯函数：`resolve_git_dir` / `repo_operation`（读 `MERGE_HEAD`、`rebase-merge|apply`、`CHERRY_PICK_HEAD`、`REVERT_HEAD`）、`parse_unmerged_paths`（`ls-files -u -z`，不依赖 git 语言）、`blocked_reason`、`strip_merge_msg`、`has_conflict_markers`、`parse_merge_segments`（`git merge-file -p --diff3` 输出 → same / conflict 段）。`conflict_state` / `ensure_repo_clear` 供 git 命令与智枢冲突闸门共用。命令：`git_merge_state`、`git_conflict_file`、`git_resolve_conflict`（拒绝仍含 `<<<<<<<` / `>>>>>>>` 的内容，按工作区文件补回 CRLF）、`git_merge_abort`。任何写入都是用户在三栏合并里的明确选择，不自动选边。前端整文件三栏不用 `segments`：`src/lib/merge3.ts` 用 Myers 分别比较 base↔ours、base↔theirs，按 git 的规则把重叠或相邻的改动并成一块（equal / ours / theirs / same / conflict），`src/lib/mergeChunks.ts` 管每块左右两侧的采纳 / 忽略 / 追加 / 手改；任一侧超过 2 万行或改动超过 3000 处时回退为用 `segments` 生成带冲突标记的文本手改。
 
 ### 8.5 `ai_commands.rs` — AI 模型调用
 
@@ -971,7 +971,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `git_commit` | path, message: String | String |
 | `git_push` | path: String | String |
 | `git_pull` | path: String | String |
-| `git_diff` | path, file_path, staged: bool, ignore_whitespace?: bool | String |
+| `git_diff` | path, file_path, staged: bool, ignore_whitespace?: bool, context_lines?: u32（`-U`，上限 100000） | String |
 | `git_merge_state` | path | GitMergeState（operation / conflicted / message / 双方标签） |
 | `git_conflict_file` | path, file | GitConflictFile（kind / textual / ours / base / theirs / segments） |
 | `git_resolve_conflict` | path, file, content? \| take?: ours/theirs/delete | String |
