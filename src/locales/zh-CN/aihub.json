@@ -85,7 +85,7 @@
     "allowTurnTip": "这一轮里同一类操作（比如都是 git add、都是删除文件）不再询问；git 按子命令分，允许 git add 不等于允许 git pull",
     "deny": "拒绝",
     "detailToggle": "展开 / 收起输出",
-    "noRepo": "这一档要先选一个工作区或仓库：点输入框左上角选择，或在 Git 页打开一个仓库。",
+    "noRepo": "这一档要先选一个工作区：点输入框左上角选择，或在 Git 页打开一个仓库。",
     "tool": {
       "read_file": "读取",
       "list_dir": "列出",
@@ -131,7 +131,7 @@
     "read": "只读权限",
     "readDesc": "读文件、搜代码、查 git，不做改动",
     "workspace": "编辑权限",
-    "workspaceDesc": "可改仓库内文件，跑命令先问你",
+    "workspaceDesc": "可改工作区内文件，跑命令先问你",
     "review": "审查托管",
     "reviewDesc": "先让 AI 审一遍，有风险再问你",
     "full": "完全权限",

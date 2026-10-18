@@ -328,8 +328,8 @@ pub(crate) fn policy_text(permission: Permission, root: Option<&Path>, services:
             "The current {kind} is {}; relative paths resolve there. You may also use absolute paths anywhere on this computer.",
             root.display()
         ),
-        (None, true) => "No repository is selected. Relative paths resolve against the user's home folder; absolute paths work anywhere on this computer.".into(),
-        (None, false) => "No repository is selected, so you cannot read or change files or run commands. Answer directly; you may open AI Workbench pages or check processes and ports.".into(),
+        (None, true) => "No workspace is selected. Relative paths resolve against the user's home folder; absolute paths work anywhere on this computer.".into(),
+        (None, false) => "No workspace is selected, so you cannot read or change files or run commands. Answer directly; you may open AI Workbench pages or check processes and ports.".into(),
     };
     if root.is_some() && !services.is_empty() {
         place.push_str(&format!(
@@ -346,7 +346,7 @@ a change belongs to.",
 explain what you would do and tell them to switch to the edit permission."
         }
         Permission::Workspace => {
-            "Permission: edit. File writes and edits inside the repository run directly. Other commands, deleting or moving \
+            "Permission: edit. File writes and edits inside the workspace run directly. Other commands, deleting or moving \
 files, launching programs and system changes ask the user first."
         }
         Permission::Review => {

@@ -37,9 +37,9 @@ fn arg_bool(args: &Value, key: &str) -> bool {
 pub(crate) fn repo_root(path: &str) -> Result<PathBuf, String> {
     let root = PathBuf::from(path);
     if !root.is_dir() {
-        return Err("没有可用的仓库目录".into());
+        return Err("没有可用的工作区目录".into());
     }
-    root.canonicalize().map_err(|e| format!("无法解析仓库路径: {e}"))
+    root.canonicalize().map_err(|e| format!("无法解析工作区路径: {e}"))
 }
 
 pub(crate) fn home_dir() -> PathBuf {
@@ -72,7 +72,7 @@ impl Scope {
         if self.anywhere {
             return Ok(resolve_free(&self.base, user_path));
         }
-        let root = self.root.as_ref().ok_or("没有选择仓库，不能读写文件或执行命令。")?;
+        let root = self.root.as_ref().ok_or("没有选择工作区，不能读写文件或执行命令。")?;
         resolve_in_repo(root, user_path)
     }
 
@@ -131,10 +131,10 @@ pub(crate) fn resolve_in_repo(root: &Path, user_path: &str) -> Result<PathBuf, S
             break cursor;
         }
         let Some(name) = cursor.file_name() else {
-            return Err("路径超出当前仓库".into());
+            return Err("路径超出当前工作区".into());
         };
         if name == ".." || name == "." {
-            return Err("路径超出当前仓库".into());
+            return Err("路径超出当前工作区".into());
         }
         pending.push(name.to_os_string());
         match cursor.parent() {
@@ -144,11 +144,11 @@ pub(crate) fn resolve_in_repo(root: &Path, user_path: &str) -> Result<PathBuf, S
     };
     let mut canon = existing.canonicalize().map_err(|e| e.to_string())?;
     if !canon.starts_with(root) {
-        return Err("路径超出当前仓库".into());
+        return Err("路径超出当前工作区".into());
     }
     for name in pending.iter().rev() {
         if name.is_empty() || name == ".." || name == "." {
-            return Err("路径超出当前仓库".into());
+            return Err("路径超出当前工作区".into());
         }
         canon.push(name);
     }
@@ -526,7 +526,7 @@ pub(crate) fn delete_path(scope: &Scope, args: &Value, protected: &Protected) ->
         return Err("路径不存在".into());
     }
     if scope.root.as_deref() == Some(path.as_path()) {
-        return Err("不能删除整个仓库".into());
+        return Err("不能删除整个工作区".into());
     }
     if let Some(reason) = protected.check(&path, true) {
         return Err(reason);

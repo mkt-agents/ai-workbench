@@ -835,7 +835,7 @@ async fn execute_tool(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> Result<Too
             | "run_command" | "start_process"
     );
     if needs_files && !ctx.scope.has_files() {
-        return Err("没有选择仓库，不能读写文件或执行命令。".into());
+        return Err("没有选择工作区，不能读写文件或执行命令。".into());
     }
     let out: String = match name {
         "read_file" => fs::read_file(ctx.scope, args)?,

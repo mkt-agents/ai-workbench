@@ -85,7 +85,7 @@
     "allowTurnTip": "Don't ask again this turn for the same kind of action (e.g. all git add, all file deletions). Git is grouped by subcommand: allowing git add doesn't allow git pull",
     "deny": "Deny",
     "detailToggle": "Show / hide output",
-    "noRepo": "This level needs a workspace or repo: pick one at the top left of the input, or open a repo on the Git page.",
+    "noRepo": "This level needs a workspace: pick one at the top left of the input, or open a repo on the Git page.",
     "tool": {
       "read_file": "Read",
       "list_dir": "List",
@@ -131,7 +131,7 @@
     "read": "Read only",
     "readDesc": "Reads files, searches, checks git; changes nothing",
     "workspace": "Edit",
-    "workspaceDesc": "Edits files in the repo; asks before commands",
+    "workspaceDesc": "Edits files in the workspace; asks before commands",
     "review": "Auto review",
     "reviewDesc": "AI checks each action first; asks you when risky",
     "full": "Full access",
