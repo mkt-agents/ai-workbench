@@ -241,12 +241,24 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: 56px;
+  height: 56px;
   margin-bottom: 2px;
-  border-radius: var(--radius-lg);
-  color: var(--text-2);
-  background: var(--overlay-2);
+  border-radius: var(--radius-xl);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* 空态撑满整个滚动区（虚线框与模型列表空态同一配方，拉伸到全宽） */
+.drafts-list:has(.drafts-empty) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.drafts-list:has(.drafts-empty) .drafts-empty {
+  min-height: max(320px, 100%);
+  box-sizing: border-box;
 }
 
 .drafts-empty p {

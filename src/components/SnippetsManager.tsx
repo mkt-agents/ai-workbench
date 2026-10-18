@@ -725,12 +725,19 @@ export default function SnippetsManager() {
         })}
         {filtered.length === 0 && (
           <div className="snippets-empty">
-            <FileText size={28} />
+            <span className="snippets-empty-icon">
+              {snippets.length === 0 ? <FileText size={22} /> : <Search size={22} />}
+            </span>
             <p>{snippets.length === 0 ? t("empty") : t("noMatch")}</p>
             {snippets.length === 0 ? (
-              <button type="button" className="btn btn-primary" onClick={openCreate}>
-                <Plus size={14} /> {t("add")}
-              </button>
+              <>
+                <span className="snippets-empty-desc">{t("emptyHint")}</span>
+                <div className="snippets-empty-actions">
+                  <button type="button" className="btn btn-primary" onClick={openCreate}>
+                    <Plus size={14} /> {t("add")}
+                  </button>
+                </div>
+              </>
             ) : (
               <button
                 type="button"

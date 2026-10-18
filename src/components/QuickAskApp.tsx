@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { History, MessageSquarePlus, Pin, PinOff, Sparkles, Terminal, X } from "lucide-react";
+import { History, Loader2, MessageSquarePlus, Pin, PinOff, Sparkles, Square, Terminal, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -652,6 +652,8 @@ function QuickAskApp() {
               title={`${t("modeAsk")} (Alt+1)`}
             >
               <Sparkles size={11} /> {t("modeAsk")}
+              {/* 切到小工具后执行仍在后台跑：在页签上留一个在跑的标记 */}
+              {stream.busy && <span className="qa-mode-dot" aria-hidden />}
             </button>
             <button
               type="button"
@@ -664,6 +666,23 @@ function QuickAskApp() {
               <Terminal size={11} /> {t("modeTools")}
             </button>
           </div>
+          {/* 问答回合在后台执行时切到了小工具：这里必须有停止入口，
+              否则 agent_run 会一直跑完（停止按钮原本只在问答视图的输入框里） */}
+          {mode === "tools" && stream.busy && (
+            <button
+              type="button"
+              className="qa-busy-pill"
+              onClick={() => void stream.stopStream()}
+              title={t("busyOtherTab")}
+            >
+              <Loader2 size={11} className="spin" />
+              <span>{t("busyOtherTab")}</span>
+              <span className="qa-busy-stop">
+                <Square size={9} />
+                {t("stop")}
+              </span>
+            </button>
+          )}
         </div>
         <div className="quick-ask-header-actions">
           {mode === "ask" && (

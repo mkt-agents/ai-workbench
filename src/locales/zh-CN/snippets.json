@@ -5,6 +5,7 @@
   "edit": "编辑",
   "delete": "删除",
   "empty": "暂无模板",
+  "emptyHint": "把常用的文本和提示词存成模板，双击即用或插入快问",
   "noTags": "无标签",
   "tagAll": "全部",
   "tagClear": "取消标签筛选",

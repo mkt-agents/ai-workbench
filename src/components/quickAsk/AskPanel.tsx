@@ -231,7 +231,7 @@ export default function AskPanel(props: Props) {
   useLayoutEffect(() => {
     const el = answerRef.current;
     if (el && stickRef.current && !jumpingRef.current) el.scrollTop = el.scrollHeight;
-  }, [answer]);
+  }, [answer, agentSteps]);
 
   useEffect(() => {
     const onSelect = () => {

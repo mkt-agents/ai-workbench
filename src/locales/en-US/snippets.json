@@ -5,6 +5,7 @@
   "edit": "Edit",
   "delete": "Delete",
   "empty": "No templates yet",
+  "emptyHint": "Save frequently used text and prompts as templates — double-click to use, or insert into Quick Ask",
   "noTags": "No tags",
   "tagAll": "All",
   "tagClear": "Clear tag filter",

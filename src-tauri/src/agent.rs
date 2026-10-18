@@ -792,6 +792,17 @@ fn round_is_action(names: &[String]) -> bool {
     names.iter().any(|name| !matches!(name.as_str(), "read_file" | "list_dir" | "grep"))
 }
 
+/// 模型把上一条命令原样又提交了一遍：在工具结果前插入提示，让它先诊断失败原因
+/// 再换做法，否则弱模型会围绕同一个引号/路径问题无限原样重试。
+fn repeated_command_result(last: &str, current: &str, result: &str) -> String {
+    if last.is_empty() || last != current {
+        return result.to_string();
+    }
+    format!(
+        "[Agent 提示] 这是与上一条完全相同的命令。不要原样重复执行；先分析上一条的输出（引号、路径、暂存区状态），换一种做法。\n\n{result}"
+    )
+}
+
 fn limit_message(action_limited: bool, notes: &[String]) -> String {
     let mut msg = if action_limited {
         format!("已达到 {MAX_ACTION_STEPS} 步操作上限，停在这里。发送「继续」可接着做。")
@@ -1037,7 +1048,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     };
     let anthropic = req.config.provider.to_lowercase() == "anthropic";
     let policy = format!(
-        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push and pull use the same system proxy as the commit page. A push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
+        "\n\n[Agent]\nYou can use tools to read and change the repository at {}.\nStay inside that directory. Read before you write.\ngit status, diff, and log run immediately.\nThe first write_file or other shell command in this turn asks the user; later ones in the same turn do not.\nNever use git push --force, reset --hard, or clean.\ngit push and pull use the same system proxy as the commit page. A push may show a Windows credential window and can take several minutes. Do not retry a push that is still running.\nIf the same command keeps failing, do not retry it verbatim: first explain the failure from its output (quoting, paths, staging state), then try a different approach.\nWhen you are done, answer in the user's language without dumping raw tool output.\nThere is no computer-control tool.",
         root.display()
     );
     let system = format!("{}{policy}", req.system);
@@ -1068,6 +1079,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut notes: Vec<String> = Vec::new();
     let mut shell_granted = false;
     let mut write_granted = false;
+    // 上一条实际执行过的 shell 命令，用来识别原样重试。
+    let mut last_shell_command = String::new();
     loop {
         if rounds >= MAX_ROUNDS || action_steps >= MAX_ACTION_STEPS {
             break;
@@ -1179,6 +1192,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             };
             match result {
                 Ok(text) => {
+                    let text = repeated_command_result(&last_shell_command, &command, &text);
                     emit_step(&app, &request_id, &call.name, "done", &summary, &clip(&text, 500));
                     notes.push(summary);
                     tool_results.push((call.id.clone(), text));
@@ -1192,6 +1206,9 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     notes.push(format!("{summary}（失败）"));
                     tool_results.push((call.id.clone(), format!("错误: {err}")));
                 }
+            }
+            if call.name == "run_command" {
+                last_shell_command = command;
             }
         }
         if round_is_action(&turn.calls.iter().map(|c| c.name.clone()).collect::<Vec<_>>()) {
@@ -1224,10 +1241,22 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        command_blocked, command_is_readonly, decode_model_body, limit_message, resolve_in_repo,
-        round_is_action,
+        command_blocked, command_is_readonly, decode_model_body, limit_message,
+        repeated_command_result, resolve_in_repo, round_is_action,
     };
     use std::fs;
+
+    #[test]
+    fn repeated_command_gets_retry_hint_only_when_identical() {
+        let out = " fatal:did not match any file(s) ";
+        let hinted = repeated_command_result("git add a b", "git add a b", out);
+        assert!(hinted.contains("Agent 提示"));
+        assert!(hinted.contains(out));
+        // 命令不同 / 首条命令 / 非命令调用（空串）：原样透传
+        assert_eq!(repeated_command_result("git add a", "git add a b", out), out);
+        assert_eq!(repeated_command_result("", "git add a b", out), out);
+        assert_eq!(repeated_command_result("git add a b", "", out), out);
+    }
 
     #[test]
     fn empty_model_body_is_not_a_json_eof_error() {

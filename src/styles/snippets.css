@@ -589,11 +589,51 @@
   background: var(--bg-1);
 }
 .snippets-empty svg {
-  opacity: 0.45;
+  display: block;
 }
+/* 图标收进专属 tile：不要用 .snippets-empty svg 裸选择器调尺寸——它会命中
+   「新建」按钮里的 Plus 图标，把按钮撑成一张 56px 带底色的大卡片 */
+.snippets-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.snippets-empty-desc {
+  max-width: 320px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+  text-align: center;
+}
+.snippets-empty-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* 空态撑满整个滚动区（虚线框与模型列表空态同一配方，拉伸到全宽） */
+.snippets-list:has(.snippets-empty) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.snippets-list:has(.snippets-empty) .snippets-empty {
+  min-height: max(320px, 100%);
+  box-sizing: border-box;
+}
+
 .snippets-empty p {
   margin: 0;
   font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
 }
 
 /* 新建/编辑/使用：宽度走 modal.css 的 lg 档 */

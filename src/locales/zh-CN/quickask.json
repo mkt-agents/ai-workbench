@@ -18,6 +18,7 @@
   "emptyHintSub": "提到代码、报错、仓库时会自动带上项目上下文；其它问题按普通对话回答",
   "send": "发送",
   "stop": "停止",
+  "busyOtherTab": "AI 问答仍在执行",
   "copy": "复制回答",
   "copyCode": "复制代码",
   "saveCode": "存代码",

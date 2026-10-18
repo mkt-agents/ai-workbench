@@ -18,6 +18,7 @@
   "emptyHintSub": "Questions about code, errors or repos pull in project context automatically; everything else is a plain chat",
   "send": "Send",
   "stop": "Stop",
+  "busyOtherTab": "Ask is still running",
   "copy": "Copy answer",
   "copyCode": "Copy code",
   "saveCode": "Save code",
