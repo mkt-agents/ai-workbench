@@ -597,18 +597,6 @@ function AiHubApp() {
     }
   };
 
-  /** Editor-class tools live in the main window: select the tool (shared localStorage +
-      storage 事件让已挂载的 DevTools 跟着切), switch tab and get out of the way. */
-  const jumpToDevtools = async (toolId?: string) => {
-    try {
-      if (toolId) writeStoredString(DEVTOOLS_TOOL_KEY, toolId);
-      await invoke("open_main_tab", { tab: "devtools" });
-      await hide();
-    } catch {
-      /* window jump is best-effort */
-    }
-  };
-
   const previewContext = async () => {
     if (ctxOpen) {
       setCtxOpen(false);
@@ -648,7 +636,7 @@ function AiHubApp() {
       )}
 
       {mode === "tools" ? (
-        <ToolsPanel onJump={(toolId) => void jumpToDevtools(toolId)} />
+        <ToolsPanel />
       ) : (
         <>
           <AttachmentBar

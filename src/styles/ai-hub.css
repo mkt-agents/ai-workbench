@@ -666,16 +666,16 @@
   flex: 1;
   min-height: 0;
 }
+/* 九个工具一排；窗口拖到最窄时横向滚动，不折成两行 */
 .qa-tools-bar {
   display: flex;
-  flex-direction: column;
   gap: 5px;
   flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.qa-tools-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+.qa-tools-bar > .qa-opt-chip {
+  flex-shrink: 0;
 }
 .qa-tools-body {
   flex: 1;
@@ -687,15 +687,29 @@
 }
 /* The devtools pages are designed for the wide main window — collapse their
    two-column IO grids and tighten spacing for the 720px ai-hub window. */
+.qa-tools-body {
+  container-type: inline-size;
+}
 .qa-tools-body .devtools-tool {
   gap: 8px;
   max-width: none;
   flex: 1;
 }
-.qa-tools-body .devtools-io,
-.qa-tools-body .ts-io {
-  grid-template-columns: 1fr;
-  gap: 8px;
+/* 默认 720 窗口单列；放大后（工具区 ≥ 760）恢复工具自己的双列 */
+@container (max-width: 759px) {
+  .qa-tools-body .devtools-io,
+  .qa-tools-body .ts-io {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+/* 主窗口窄屏规则（视口 ≤ 720）在智枢默认窗口里也会命中，把 JSON 每组按钮撑满一行：这里改回按组横排、放不下再换行 */
+.qa-tools-body .json-toolbar-group {
+  width: auto;
+}
+/* 正则输入框本身 flex: 1，占位空白再分一半会把它挤到一百来 px */
+.qa-tools-body .regex-toolbar-spacer {
+  display: none;
 }
 .qa-tools-body .devtools-io-pane {
   min-width: 0;

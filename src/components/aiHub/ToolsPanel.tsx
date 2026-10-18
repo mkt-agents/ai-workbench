@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ExternalLink } from "lucide-react";
 import { readStoredString, writeStoredString } from "../../core/localState";
 import CalculatorTool from "../devtools/CalculatorTool";
+import CronTool from "../devtools/CronTool";
 import EncoderTool from "../devtools/EncoderTool";
 import HashTool from "../devtools/HashTool";
+import JsonTool from "../devtools/JsonTool";
 import JwtTool from "../devtools/JwtTool";
+import RegexTool from "../devtools/RegexTool";
 import TimestampTool from "../devtools/TimestampTool";
 import UuidTool from "../devtools/UuidTool";
 
@@ -16,13 +18,9 @@ const EMBEDDED = [
   { id: "hash", label: "hash.title", C: HashTool },
   { id: "jwt", label: "jwt.title", C: JwtTool },
   { id: "calc", label: "calc.title", C: CalculatorTool },
-] as const;
-
-/** Editor-class tools need the wide main-window layout — jump instead (carrying the tool id). */
-const JUMP_ONLY = [
-  { id: "json", label: "json.title" },
-  { id: "cron", label: "cron.title" },
-  { id: "regex", label: "regex.title" },
+  { id: "json", label: "json.title", C: JsonTool },
+  { id: "cron", label: "cron.title", C: CronTool },
+  { id: "regex", label: "regex.title", C: RegexTool },
 ] as const;
 
 type EmbeddedId = (typeof EMBEDDED)[number]["id"];
@@ -34,7 +32,7 @@ function loadTool(): EmbeddedId {
   return EMBEDDED.some((e) => e.id === stored) ? (stored as EmbeddedId) : "timestamp";
 }
 
-export default function ToolsPanel({ onJump }: { onJump: (toolId: string) => void }) {
+export default function ToolsPanel() {
   const { t: td } = useTranslation("devtools");
   // Survives mode switches — the panel unmounts every time the user leaves tools.
   const [tool, setTool] = useState<EmbeddedId>(loadTool);
@@ -46,30 +44,16 @@ export default function ToolsPanel({ onJump }: { onJump: (toolId: string) => voi
   return (
     <div className="ai-hub-tools">
       <div className="qa-tools-bar">
-        <div className="qa-tools-row">
-          {EMBEDDED.map((e) => (
-            <button
-              key={e.id}
-              type="button"
-              className={`qa-opt-chip${tool === e.id ? " active" : ""}`}
-              onClick={() => pickTool(e.id)}
-            >
-              {td(e.label)}
-            </button>
-          ))}
-        </div>
-        <div className="qa-tools-row">
-          {JUMP_ONLY.map((tool) => (
-            <button
-              key={tool.id}
-              type="button"
-              className="qa-opt-chip"
-              onClick={() => onJump(tool.id)}
-            >
-              <ExternalLink size={11} /> {td(tool.label)}
-            </button>
-          ))}
-        </div>
+        {EMBEDDED.map((e) => (
+          <button
+            key={e.id}
+            type="button"
+            className={`qa-opt-chip${tool === e.id ? " active" : ""}`}
+            onClick={() => pickTool(e.id)}
+          >
+            {td(e.label)}
+          </button>
+        ))}
       </div>
       <div className="qa-tools-body">
         <Active />
