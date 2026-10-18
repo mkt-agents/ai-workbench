@@ -120,6 +120,8 @@
     "sectionApi": "API",
     "sectionAdvanced": "Advanced",
     "setDefaultCheckbox": "Set as default model",
+    "visionCheckbox": "Understands images (lets the AI hub operate the computer at full access)",
+    "visionHint": "Tick only if the model accepts images. At full access the AI hub then offers screenshots and mouse / keyboard control.",
     "keyConfigured": "Key configured",
     "keyMissing": "Key not set",
     "urlMissing": "URL not set",

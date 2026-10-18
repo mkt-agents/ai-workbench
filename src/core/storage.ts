@@ -334,6 +334,7 @@ export const storage = {
                 at: (r['last_test_at'] as string) || "",
                 message: (r['last_test_msg'] as string) || "",
               },
+        vision: ((r['vision'] as number) || 0) === 1,
       }));
     },
     save: async (items: AIModelConfig[]): Promise<void> => {
@@ -353,6 +354,7 @@ export const storage = {
         last_test_msg: item.lastTest?.message ?? null,
         created_at: item.createdAt,
         updated_at: item.updatedAt,
+        vision: item.vision ? 1 : 0,
       })));
     },
   },

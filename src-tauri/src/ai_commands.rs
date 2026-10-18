@@ -25,6 +25,9 @@ pub struct AIModelConfig {
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// Accepts images (user setting); the agent offers computer-use tools only then.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

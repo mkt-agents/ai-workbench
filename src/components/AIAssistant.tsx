@@ -198,6 +198,7 @@ const emptyForm = (): Omit<AIModelConfig, "id" | "createdAt" | "updatedAt"> => (
   temperature: 0.7,
   maxTokens: 4096,
   isDefault: false,
+  vision: false,
 });
 
 function truncateUrl(url: string, max = 42): string {
@@ -784,6 +785,7 @@ function AIAssistant() {
       temperature: config.temperature,
       maxTokens: config.maxTokens,
       isDefault: config.isDefault,
+      vision: Boolean(config.vision),
     });
     setFetchedModels(null);
     closeModelPicker();
@@ -941,6 +943,7 @@ function AIAssistant() {
           model: config.model,
           temperature: config.temperature,
           maxTokens: config.maxTokens,
+          vision: Boolean(config.vision),
         })),
       };
       const path = await invokeSaveTextFile(
@@ -1010,6 +1013,7 @@ function AIAssistant() {
           temperature: finiteOr(item?.temperature, 0.7),
           maxTokens: finiteOr(item?.maxTokens, 4096),
           isDefault: false,
+          vision: item?.vision === true,
         });
         added += 1;
       }
@@ -2262,6 +2266,15 @@ function AIAssistant() {
                           disabled={modalBusy}
                         />
                         {t("models.setDefaultCheckbox")}
+                      </label>
+                      <label className="ai-checkbox" title={t("models.visionHint")}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(formData.vision)}
+                          onChange={(e) => setFormData({ ...formData, vision: e.target.checked })}
+                          disabled={modalBusy}
+                        />
+                        {t("models.visionCheckbox")}
                       </label>
                     </div>
                   </div>

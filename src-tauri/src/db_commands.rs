@@ -312,7 +312,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
         }
         DbTable::AiModels => {
             tx.execute(
-                "INSERT INTO ai_models (id, name, provider, api_key, auth_type, base_url, model, temperature, max_tokens, is_default, last_test_ok, last_test_at, last_test_msg, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                "INSERT INTO ai_models (id, name, provider, api_key, auth_type, base_url, model, temperature, max_tokens, is_default, last_test_ok, last_test_at, last_test_msg, created_at, updated_at, vision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 rusqlite::params![
                     json_str(obj, "id")?,
                     json_str(obj, "name")?,
@@ -329,6 +329,7 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_opt_str(obj, "last_test_msg"),
                     json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
+                    json_opt_i64(obj, "vision").unwrap_or(0),
                 ],
             ).map_err(|e| e.to_string())?;
         }
@@ -579,7 +580,8 @@ mod tests {
                 api_key TEXT NOT NULL, auth_type TEXT DEFAULT 'api', base_url TEXT NOT NULL,
                 model TEXT NOT NULL, temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT 4096,
                 is_default INTEGER DEFAULT 0, last_test_ok INTEGER, last_test_at TEXT,
-                last_test_msg TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                last_test_msg TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                vision INTEGER DEFAULT 0
             );"#,
         )
         .unwrap();
@@ -604,6 +606,7 @@ mod tests {
         failed.insert("last_test_ok".into(), false.into());
         failed.insert("last_test_at".into(), "2026-09-19T00:00:00Z".into());
         failed.insert("last_test_msg".into(), serde_json::Value::Null);
+        tested.insert("vision".into(), 1.into());
 
         let tx = conn.unchecked_transaction().unwrap();
         insert_row(&tx, DbTable::AiModels, &tested).unwrap();
@@ -627,6 +630,12 @@ mod tests {
         };
         assert_eq!(read("t1").0, Some(1));
         assert_eq!(read("t1").2.as_deref(), Some("ok"));
+        let vision = |id: &str| -> i64 {
+            conn.query_row("SELECT vision FROM ai_models WHERE id = ?1", [id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(vision("t1"), 1);
+        // Rows saved by an older frontend (no `vision` key) stay off.
+        assert_eq!(vision("t3"), 0);
         assert_eq!(read("t2").0, Some(0));
         assert_eq!(read("t2").2, None);
         let never = read("t3");

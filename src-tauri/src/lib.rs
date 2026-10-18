@@ -347,6 +347,8 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_ok INTEGER;");
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_at TEXT;");
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_msg TEXT;");
+            // 模型支持看图：智枢完全权限下据此提供截屏和键鼠操作
+            let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN vision INTEGER DEFAULT 0;");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN auth_mode TEXT DEFAULT 'token';");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN config_path TEXT;");
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NOT NULL DEFAULT '';");

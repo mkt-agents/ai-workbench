@@ -120,6 +120,8 @@
     "sectionApi": "API 配置",
     "sectionAdvanced": "高级设置",
     "setDefaultCheckbox": "设为默认模型",
+    "visionCheckbox": "支持看图（智枢完全权限下可截屏操作电脑）",
+    "visionHint": "模型能理解图片时再勾选。勾选后，智枢在完全权限下会提供截屏和鼠标键盘操作。",
     "keyConfigured": "Key 已配置",
     "keyMissing": "Key 未配置",
     "urlMissing": "未设置 URL",

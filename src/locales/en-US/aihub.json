@@ -109,10 +109,10 @@
     }
   },
   "computer": {
-    "banner": "Operating the computer · press Esc or move the mouse to the top-left corner to stop",
+    "banner": "Operating the computer · move the mouse to the top-left corner, or click Stop, to halt at once",
     "confirmTitle": "Let the AI operate the computer?",
     "confirmBody": "At full access with a vision model, the AI can take screenshots and drive the mouse and keyboard.",
-    "confirmWarn": "Screenshots are sent to the model provider (like the chat itself: not saved to disk, no keys uploaded). Press Esc or move the mouse to the top-left corner at any time to stop.",
+    "confirmWarn": "Screenshots are sent to the model provider (like the chat itself: not saved to disk, no keys uploaded). Move the mouse to the top-left corner, or click Stop, at any time to halt.",
     "confirmOk": "Start"
   },
   "permission": {
