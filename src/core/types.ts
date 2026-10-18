@@ -96,13 +96,13 @@ export interface AppSettings {
   trayHintShown?: boolean;
   /** Preferred model id per AI scene (missing → global default). */
   aiSceneModels?: AiSceneModels;
-  /** User-defined Quick Ask profiles (builtins are merged at runtime). */
+  /** User-defined AI Hub profiles (builtins are merged at runtime). */
   quickAskProfiles?: QuickAskProfile[];
-  /** Active Quick Ask profile id (builtin:* or custom). */
+  /** Active AI Hub profile id (builtin:* or custom). */
   quickAskProfileId?: string;
 }
 
-/** Named Quick Ask preset: role + optional temperature/model. */
+/** Named AI Hub preset: role + optional temperature/model. */
 export interface QuickAskProfile {
   id: string;
   name: string;
@@ -139,7 +139,7 @@ export interface Snippet {
   kind?: SnippetKind;
   /** Prompt Studio scenario key (PROMPT_SCENARIOS) when kind === 'prompt' */
   scenario?: string;
-  /** When set, picking this Quick Ask task inserts the snippet if the composer is empty. */
+  /** When set, picking this AI Hub task inserts the snippet if the composer is empty. */
   taskBind?: SnippetTaskBind | '';
 }
 

@@ -7,7 +7,7 @@ import type { ReportTarget } from "./testReportTypes";
 
 type GitSubTab = "repos" | "commit" | "report";
 
-/** Quick Ask writes this, then opens the Git tab. Consumed once. */
+/** AI Hub writes this, then opens the Git tab. Consumed once. */
 export const GIT_SUBTAB_KEY = "workbench-git-subtab";
 
 function readGitSubtab(value: string | null): GitSubTab | null {

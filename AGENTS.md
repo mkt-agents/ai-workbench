@@ -6,15 +6,15 @@
 
 **已确认定位（见 `ROADMAP.md`）**：**AI 驱动的开发工具箱**——以 **DeepSeek 本地服务**为核心 AI 引擎，Git / Cursor 身份管理为基础能力，AI 模型配置与系统工具（Hosts / 内网穿透等）为辅助。
 
-- **愿景**：本地优先的桌面 AI 助手；多模型配置（提示词独立页已下线，快问优化仍可用），管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
-- **功能分层**：核心 = DSH / 模型配置 / Cursor（提示词独立页已下线，代码保留）；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 小工具（devtools）。
-- **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。小工具页的 **HTTP 客户端**同样已整体删除：`HttpClientTool.tsx` / `devtools_commands.rs`（该域只剩这一条命令，文件一起删了）/ `http_saved_requests` + `http_history` 两张表（setup 里 `DROP TABLE`）/ devtools i18n 的 `http.*` 与 `group.network`，小工具现在是 9 个（转换 / 生成 / 解析 / 计算四组）。
-- **AI 能力在范围内**：快问流式对话、仓库工具代理、报告与提交里的模型调用都可以继续做。需要读文件、改文件、跑命令或操作本机时，写文件和执行命令必须先让用户确认，路径不能跳出当前仓库。数据留在本机，不上传密钥。
+- **愿景**：本地优先的桌面 AI 助手；多模型配置（提示词独立页已下线，智枢优化仍可用），管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
+- **功能分层**：核心 = DSH / 模型配置 / Cursor（提示词独立页已下线，代码保留）；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 工具箱（devtools）。
+- **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。工具箱页的 **HTTP 客户端**同样已整体删除：`HttpClientTool.tsx` / `devtools_commands.rs`（该域只剩这一条命令，文件一起删了）/ `http_saved_requests` + `http_history` 两张表（setup 里 `DROP TABLE`）/ devtools i18n 的 `http.*` 与 `group.network`，工具箱现在是 9 个（转换 / 生成 / 解析 / 计算四组）。
+- **AI 能力在范围内**：智枢流式对话、仓库工具代理、报告与提交里的模型调用都可以继续做。需要读文件、改文件、跑命令或操作本机时，写文件和执行命令必须先让用户确认，路径不能跳出当前仓库。数据留在本机，不上传密钥。
 - **明确不做**：多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
 - 标识：`com.ai-workbench.app`，当前版本 `0.2.8`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite；`ai_models.api_key` 落库用 Windows DPAPI `enc:v1:` 前缀，导出 JSON 仍为明文并有警告；勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/模型配置/模板片段/工作暂存；模型配置页内含「配置列表 / 模型对比」与场景模型绑定、本机 Ollama/LM Studio 探测；快问另有 Profile / 轻附件 / `/` 片段，用量台账在设置页；**提示词页已从侧栏与路由下线**，`PromptOptimizer.tsx` 与 `lib/promptOptimize.ts` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染与 `import`；快问里的「优化提示词」不受影响）→ 账号管理（Cursor/账号额度；WorkBuddy 页已从侧栏与路由下线，`WorkBuddyManager.tsx` 及 `components/workbuddy/` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染三处；扫码加号、签到、自动签到设置都已在账号额度页）→ 版本管理（Git 管理/环境变量）→ 网络管理（网页工具/内网穿透/Hosts 管理）→ 系统工具（小工具 / 快捷应用 `app-launcher`）→ 设置。快捷应用页面根节点带 `.devtools-tool`，与小工具页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——小工具页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
+- 侧栏分组：AI 工作台（Harness/模型配置/模板片段/工作暂存；模型配置页内含「配置列表 / 模型对比」与场景模型绑定、本机 Ollama/LM Studio 探测；智枢另有 Profile / 轻附件 / `/` 片段，用量台账在设置页；**提示词页已从侧栏与路由下线**，`PromptOptimizer.tsx` 与 `lib/promptOptimize.ts` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染与 `import`；智枢里的「优化提示词」不受影响）→ 账号资产（Cursor/账号配额；WorkBuddy 页已从侧栏与路由下线，`WorkBuddyManager.tsx` 及 `components/workbuddy/` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染三处；扫码加号、签到、自动签到设置都已在账号配额页）→ 工程管理（Git 管理/环境变量）→ 网络管理（网页工具/内网穿透/Hosts 管理）→ 系统工具（工具箱 / 快捷应用 `app-launcher`）→ 设置。快捷应用页面根节点带 `.devtools-tool`，与工具箱页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准）。**该页有两个视图**（`.al-view-tabs` 切换，偏好存 localStorage `al-view`）：应用网格，以及「端口查杀」面板 `PortKillerPanel.tsx`（后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——工具箱页那 8 个仍然是纯前端、零后端命令，端口能力有意放在这一页
 
 ## 技术栈与目录
 
@@ -44,7 +44,7 @@ src-tauri/src/        # Rust 后端
   纯函数层             # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +
                       # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
                       # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO
-  cursor/ tray/       # Cursor 多身份、系统托盘与快问窗
+  cursor/ tray/       # Cursor 多身份、系统托盘与智枢窗
   codebuddy/          # WorkBuddy 域：adapter.rs（上游协议全 JSON 化，端点不写死）+
                       # credential.rs（token/cookie 解析、JWT exp、掩码）
   wb_*.rs             # WorkBuddy Manager：wb_commands（账号池）/ wb_checkin（签到 + 调度 loop）/
@@ -94,7 +94,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 **视觉语言**：磨砂/半透明分层（玻璃主题）、极轻阴影、发丝边框、`Inter`（正文，`--font-sans`，基础字号 12.5px，`tabular-nums`）+ `JetBrains Mono`（代码 `--font-mono`）；图标统一 `lucide-react`；玻璃主题下侧栏/标题栏/卡片走 `:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"])` 共享覆盖层（`theme-glass.css`）。
 
-**主题应用**：`src/lib/theme.ts` 的 `applyDocumentTheme()` 写 `data-theme`；`system` 时移除属性。多窗口（快问）通过 localStorage `workbench-settings` + `app-theme-changed` 事件同步。新主题色必须在 `tokens.css` 各主题块补齐全部 token，不能只改一处。
+**主题应用**：`src/lib/theme.ts` 的 `applyDocumentTheme()` 写 `data-theme`；`system` 时移除属性。多窗口（智枢）通过 localStorage `workbench-settings` + `app-theme-changed` 事件同步。新主题色必须在 `tokens.css` 各主题块补齐全部 token，不能只改一处。
 
 **Logo**：母版 `docs/brand/logo-silver.png`（冷银）/ `logo-ice.png`（冰蓝）；打包图标 `src-tauri/icons/`；侧栏 `src/assets/logo-silver.png`。
 
@@ -110,7 +110,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ### 交互与 UX
 
-- 快问/托盘/全局快捷键等多窗口行为以 `交接文档.md`「快问窗要点」为准，不信任窗口缓存可见性。
+- 智枢/托盘/全局快捷键等多窗口行为以 `交接文档.md`「智枢窗要点」为准，不信任窗口缓存可见性。
 - 长任务必须可取消（`CancelGuard`）并有实时进度事件；报告侧是 `test-report-collect-progress`（多仓采集）与 `test-report-ai-progress`（AI 分块）。
 - 危险操作（删账号、覆盖 Hosts、批量推拉）必须二次确认并给出影响范围列表。
 - 空态、加载态、错误态要区分（如 Git 提交页区分「筛选内无改动」vs「真正无改动」）。
@@ -130,7 +130,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 3. **命名映射**：TypeScript 用 camelCase，SQLite 用 snake_case，`storage.ts` 负责双向转换。
 4. **三层分层（报告类模块）**：纯函数（serde/标准库，`change_report.rs`）→ 命令层（tauri、起 git 进程、发事件，`report_commands.rs`）。新逻辑优先落在纯函数层以便 `cargo test`。
 5. **AI 提示词格式只有一份实现**：section 列表与逐行格式由 `report_commands::output_rules()` 生成，前端 `src/lib/reportAi.ts` 的 `parseAiLine()` 负责解析回来——改用例行格式必须同时改这两处（后端单测 `output_rules_only_add_the_coverage_section_with_an_ask` 钉住了契约）。
-6. **取消机制**：AI 流式（快问）用 `request_id`，报告 AI 用 `reportId` 作 token，共用 `CancelGuard`（`cancellation.rs`）。
+6. **取消机制**：AI 流式（智枢）用 `request_id`，报告 AI 用 `reportId` 作 token，共用 `CancelGuard`（`cancellation.rs`）。
 7. **页面保活**：Git / DSH 面板用 `gitMounted` / `dshMounted` + `.page-panel.is-active`，切走隐藏不卸载。
 
 ## 样式硬约定（窗口 resize 性能）
@@ -163,7 +163,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 ## 危险操作提示
 
 - 改 Cursor 逻辑：`%APPDATA%\Cursor` 是单一数据源，删除/替换链接时**只摘链、不跟随递归删**；SQLite 同步必须保留原生类型（BLOB 误写会导致 Cursor 黑屏，已有 `repair_blob_typed_state` 兜底）。
-- 快问窗：**不能在命令线程建窗**（builder 挂住）；可见性统一走 `tray::bubble::vis::{really_visible, force_visible}`，不要信任 tao 缓存；前端隐藏走 `invoke("hide_quick_ask")`。
+- 智枢窗：**不能在命令线程建窗**（builder 挂住）；可见性统一走 `tray::bubble::vis::{really_visible, force_visible}`，不要信任 tao 缓存；前端隐藏走 `invoke("hide_quick_ask")`。
 - Hosts 写入需管理员，走 `.tmp` + `ReplaceFileW` 原子替换，写前自动备份。
 - Cloudflared token 不进命令行，写临时 YAML 用 `--config` 传路径。
 - DSH 认证补丁会改本机 DeepSeek 安装文件（有 `.ai-workbench-backup` 备份与还原命令）。
@@ -178,7 +178,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 | 文件 | 内容 |
 |---|---|
 | `README.md` | 产品功能、打包、隐私说明 |
-| `docs/CODE_WIKI.md` | 架构、DB 表结构、IPC 命令清单（2026-09-30 已与代码核对：版本号、小工具命令条数、目录树；仍可能有滞后，以代码为准） |
-| `交接文档.md` | 历史状态、Cursor/快问等踩坑记录（必读） |
+| `docs/CODE_WIKI.md` | 架构、DB 表结构、IPC 命令清单（2026-09-30 已与代码核对：版本号、工具箱命令条数、目录树；仍可能有滞后，以代码为准） |
+| `交接文档.md` | 历史状态、Cursor/智枢等踩坑记录（必读） |
 | `ROADMAP.md` | 阶段规划 |
 | `docs/cloudflared.md` | 内网穿透专题 |

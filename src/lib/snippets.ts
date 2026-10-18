@@ -1,4 +1,4 @@
-/** Shared snippet param helpers for Snippets page and Quick Ask. */
+/** Shared snippet param helpers for Snippets page and AI Hub. */
 
 export function fillParams(content: string, values: Record<string, string>): string {
   return content.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key] ?? `{{${key}}}`);

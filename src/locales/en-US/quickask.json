@@ -1,5 +1,5 @@
 {
-  "title": "Quick Ask",
+  "title": "AI Hub",
   "loading": "Loading…",
   "close": "Close",
   "pin": "Keep on top",
@@ -18,8 +18,8 @@
   "emptyHintSub": "Questions about code, errors or repos pull in project context automatically; everything else is a plain chat",
   "send": "Send",
   "stop": "Stop",
-  "busyOtherTab": "Ask is still running",
-  "busyApproval": "Ask is waiting for approval",
+  "busyOtherTab": "AI Assistant is still running",
+  "busyApproval": "AI Assistant is waiting for approval",
   "busyHint": "Still answering — stop it or wait until it finishes",
   "suggestPrefix": "Next",
   "suggestPick": "Click to fill the input",
@@ -60,7 +60,7 @@
   "openPlaceholder": "Pick one, Enter to open",
   "openGroup": {
     "page": "Page",
-    "tool": "Tool",
+    "tool": "Toolbox",
     "app": "App"
   },
   "dailyShort": "Daily",
@@ -122,9 +122,9 @@
   "savedSnippet": "Saved",
   "followUp": "Ask about selection",
   "quotePrefix": "About \"{{text}}\": ",
-  "bubbleTip": "Quick Ask · click to open · drag to snap · right-click to close",
-  "modeAsk": "AI Q&A",
-  "modeTools": "Tools",
+  "bubbleTip": "AI Hub · click to open · drag to snap · right-click to close",
+  "modeAsk": "AI Assistant",
+  "modeTools": "Toolbox",
   "task": {
     "none": "General",
     "debug": "Debug error (uses project context)",

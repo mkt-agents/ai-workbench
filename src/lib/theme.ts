@@ -49,7 +49,7 @@ export function applyDocumentTheme(theme: AppTheme): void {
 
 const SETTINGS_STORAGE_KEY = "workbench-settings";
 
-/** Read persisted theme from localStorage (cross-window sync for Quick Ask). */
+/** Read persisted theme from localStorage (cross-window sync for AI Hub). */
 export function readPersistedTheme(): AppTheme | null {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);

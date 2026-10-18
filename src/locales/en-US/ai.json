@@ -157,7 +157,7 @@
     "sceneBindings": "Scene models",
     "sceneBindingsHint": "Bind a preferred model per AI entry point. Unbound scenes use the global default; each UI can still override temporarily.",
     "sceneUseDefault": "Use global default",
-    "sceneQuickAsk": "Quick Ask",
+    "sceneQuickAsk": "AI Hub",
     "sceneReport": "Git report AI",
     "sceneCommit": "Commit message AI",
     "sceneOptimize": "Prompt optimize",

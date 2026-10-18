@@ -44,7 +44,7 @@ export const TASK_HINT: Record<TaskKind, string> = {
 export function buildMeta(model: AIModelConfig, now: Date = new Date()): string {
   const date = now.toISOString().slice(0, 10);
   return (
-    `[Environment] You are answering inside "AI Workbench · Quick Ask", a local Windows desktop developer toolbox. ` +
+    `[Environment] You are answering inside "AI Workbench · 智枢 (AI Hub)", a local Windows desktop developer toolbox. ` +
     `The model serving this conversation is configured as "${model.name}" (model id: ${model.model}, provider: ${model.provider}). ` +
     `If the user asks which model / who you are, answer with exactly this configuration — do not guess another vendor or model. ` +
     `Today is ${date}.\n\n`

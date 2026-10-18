@@ -1,4 +1,4 @@
-/** Light file/code attachments for Quick Ask (no RAG). */
+/** Light file/code attachments for AI Hub (no RAG). */
 
 export const ASK_ATTACH_MAX_FILES = 3;
 /** Total chars across all attachments (names + bodies). */

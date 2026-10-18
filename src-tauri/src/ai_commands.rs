@@ -493,7 +493,7 @@ pub async fn generate_text(req: GenerateTextRequest) -> Result<String, String> {
     Ok(content)
 }
 
-/// One previous Q&A turn for multi-turn requests (Quick Ask follow-ups).
+/// One previous Q&A turn for multi-turn requests (AI Hub follow-ups).
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatTurn {

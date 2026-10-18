@@ -29,11 +29,11 @@
 
 | 能力域 | 功能 |
 |--------|------|
-| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 快问（含流式 + 多轮）、代码片段管理；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
-| **账号管理** | Cursor 多身份一键切换（独立 profile 目录）、账号额度看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
-| **版本管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK / Maven / Python 运行时切换（改注册表 PATH，页面名「环境变量」） |
+| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 智枢（含流式 + 多轮）、代码片段管理；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
+| **账号资产** | Cursor 多身份一键切换（独立 profile 目录）、账号配额看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
+| **工程管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK / Maven / Python 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
-| **系统工具** | 小工具页 8 个本地开发工具（顶部工具条；HTTP 客户端已移除）、快捷应用（本机应用扫描 / 启动 / 运行态 + 「端口查杀」面板） |
+| **系统工具** | 工具箱页 8 个本地开发工具（顶部工具条；HTTP 客户端已移除）、快捷应用（本机应用扫描 / 启动 / 运行态 + 「端口查杀」面板） |
 
 产品标识：
 - **identifier**: `com.ai-workbench.app`
@@ -56,7 +56,7 @@
 | lucide-react | 1.33 | 图标库 |
 | @tauri-apps/api | 2.0 | Tauri 前端绑定 |
 | @tauri-apps/plugin-store | 2.0 | 前端 kv 存储（仅 settings） |
-| @tauri-apps/plugin-global-shortcut | 2.3 | 全局快捷键（快问 `Ctrl+Alt+K`） |
+| @tauri-apps/plugin-global-shortcut | 2.3 | 全局快捷键（智枢 `Ctrl+Alt+K`） |
 
 ### 后端（Rust + Tauri）
 
@@ -83,7 +83,7 @@ ai-workbench/
 │
 ├── src/                          # React 前端
 │   ├── App.tsx                   # 主容器 + 侧边栏导航 + 标题栏
-│   ├── main.tsx                  # 入口（hash 路由分发：主窗口 / 快问 / 快问气泡）
+│   ├── main.tsx                  # 入口（hash 路由分发：主窗口 / 智枢 / 智枢气泡）
 │   ├── styles/                   # 全局样式（data-theme 驱动的皮肤系统），按域分片
 │   │   ├── index.css             # 按级联顺序 @import 全部分片（顺序即优先级）
 │   │   ├── tokens.css            # 各主题 token（含 `--page-max-width`、overlay / ink / radius 刻度）
@@ -91,7 +91,7 @@ ai-workbench/
 │   │   ├── base.css / layout.css # 基础元素、body.resizing 清单 / 标题栏、侧栏、滚动条
 │   │   ├── components.css / controls.css / modal.css / dropdown.css …  # 通用件
 │   │   ├── <页面>.css            # git-pages / quick-ask / models / snippets / hosts / account-manager …
-│   │   └── devtools.css          # 小工具页 + 快捷应用页（`.dt-*` / `.al-*`），最后加载
+│   │   └── devtools.css          # 工具箱页 + 快捷应用页（`.dt-*` / `.al-*`），最后加载
 │   ├── tauri.d.ts / vite-env.d.ts
 │   │
 │   ├── core/                     # 核心业务层
@@ -113,8 +113,8 @@ ai-workbench/
 │   │   ├── PromptOptimizer.tsx   # AI 提示词改写（侧栏已下线，恢复见 AGENTS.md）
 │   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出 + 类型筛选
 │   │   ├── AccountQuotaPanel.tsx # 账号额度看板（多服务商；样式见同名 .css）
-│   │   ├── QuickAskApp.tsx       # 快问主窗口（hash 路由 #/quick-ask）
-│   │   ├── QuickAskBubble.tsx    # 快问桌面悬浮气泡（#/quick-ask-bubble）
+│   │   ├── QuickAskApp.tsx       # 智枢主窗口（hash 路由 #/quick-ask）
+│   │   ├── QuickAskBubble.tsx    # 智枢桌面悬浮气泡（#/quick-ask-bubble）
 │   │   ├── GitManager.tsx        # Git 管理主页面（仓库总览）
 │   │   ├── GitCommitPanel.tsx    # Git 提交面板（多仓 diff + AI 生成说明）
 │   │   ├── GitReposPage.tsx      # Git 仓库列表页
@@ -128,12 +128,12 @@ ai-workbench/
 │   │   ├── workbuddy/            # WorkBuddy 子组件（扫码/签到等；额度页仍复用部分）
 │   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
 │   │   ├── MarkdownView.tsx      # Markdown 渲染
-│   │   ├── DevTools.tsx          # 小工具页（顶部工具条 + 8 个工具）
+│   │   ├── DevTools.tsx          # 工具箱页（顶部工具条 + 8 个工具）
 │   │   ├── devtools/             # 工具实现：JsonTool / EncoderTool / TimestampTool / CronTool /
 │   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool
 │   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
 │   │   │                         #   + PortKillerPanel（该页第二个视图：按端口查杀）
-│   │   ├── quickAsk/             # 快问窗子组件（QuickSelect 焦点多选等）
+│   │   ├── quickAsk/             # 智枢窗子组件（QuickSelect 焦点多选等）
 │   │   ├── GitReportsPage.tsx    # Git 报告页（五视图 + 筛选 + 导出）
 │   │   ├── TestReportPanel.tsx   # 报告面板（概览 / 改动 / 提交 / API / AI）
 │   │   ├── reportTypes 见 testReportTypes.ts；useFilteredFiles.ts 为报告筛选 hook
@@ -164,7 +164,7 @@ ai-workbench/
 │   │   ├── webTools.ts           # URL 规范化 / `@match` 通配判定 / newId（唯一主键）
 │   │   ├── pluginHotkeys.ts      # 书签全局快捷键注册（应用层，切页不失效）
 │   │   ├── floatingMenu.ts       # 悬浮菜单定位计算
-│   │   ├── promptOptimize.ts     # 提示词构造器（快问优化仍用）
+│   │   ├── promptOptimize.ts     # 提示词构造器（智枢优化仍用）
 │   │   ├── reportAi.ts           # AI 用例行解析 `parseAiLine()`（与后端 `output_rules()` 成对）
 │   │   ├── reportRisk.ts         # 报告风险展示分类（纯前端侧）
 │   │   ├── workbuddy.ts          # WorkBuddy 前端适配辅助
@@ -218,7 +218,7 @@ ai-workbench/
 │   │   ├── wb_capture.rs          # WorkBuddy 扫码登录窗 + 凭证回传
 │   │   │
 │   │   ├── tray/                  # 系统托盘
-│   │   │   ├── mod.rs             # 托盘图标菜单注册 + 快问窗口 + 气泡
+│   │   │   ├── mod.rs             # 托盘图标菜单注册 + 智枢窗口 + 气泡
 │   │   │   └── bubble.rs          # 气泡 ready 事件
 │   │   │
 │   │   ├── config.rs              # Rust 侧常量 + ErrorCode 枚举 + WorkbenchError
@@ -335,7 +335,7 @@ App 启动
   │     ├─ ALTER TABLE 字段迁移（增量）
   │     ├─ 后台 tokio::spawn: cursor shared-workspace migration
   │     ├─ global_shortcut 插件注册
-  │     ├─ tray::init_tray()（托盘 + 快问窗口）
+  │     ├─ tray::init_tray()（托盘 + 智枢窗口）
   │     └─ tray::ensure_quick_ask_bubble()
   │
   ├─2. Vite dev server / 静态资源 → Tauri 窗口加载 index.html
@@ -358,7 +358,7 @@ App 启动
   │     ├─ registerQuickAskShortcut(settings.quickAskShortcut)
   │     ├─ applyDocumentTheme(settings.theme)
   │     ├─ i18n.changeLanguage(settings.language)
-  │     └─ sync 快问气泡可见状态到 Rust
+  │     └─ sync 智枢气泡可见状态到 Rust
   │
   └─ 渲染侧边栏 + 主内容区
 ```
@@ -469,7 +469,7 @@ bootApp(): Promise<void>
 
 **设计要点**:
 - **StrictMode-safe**: React 双次 mount 不会重复初始化
-- **多窗口安全**: 主窗口和快问窗口共享同一个 bootPromise
+- **多窗口安全**: 主窗口和智枢窗口共享同一个 bootPromise
 - **实际工作**: `initializeDatabase()` 目前是空函数（Rust setup 已完成建表），真正工作在 `store.initialize()`
 
 ### 6.5 `core/constants.ts` — 魔法值集中地
@@ -477,7 +477,7 @@ bootApp(): Promise<void>
 | 常量 | 值 | 用途 |
 |------|-----|------|
 | `DSH_DEFAULT_PORT` | 3080 | DeepSeek 默认端口 |
-| `QUICKASK_CONTEXT_LIMIT` | 2000 | 快问上下文截断上限 |
+| `QUICKASK_CONTEXT_LIMIT` | 2000 | 智枢上下文截断上限 |
 | `QUICKASK_DIRTY_REPO_LIMIT` | 5 | 扫描脏仓库数 |
 | `QUICKASK_CLIPBOARD_LIMIT` | 800 | 剪贴板截断 |
 | `AI_DEFAULT_MAX_TOKENS` | 4096 | AI 默认 token |
@@ -504,7 +504,7 @@ bootApp(): Promise<void>
 | `providerLogos.ts` | 额度侧栏/卡片 glyph | `src/assets/providers/` + 本机安装图标优先 |
 | `snippets.ts` | `renderSnippet(template, params)` | `{{param}}` 替换引擎 |
 | `version.ts` | `compareVersions(a, b)` | 语义版本比较（含 prerelease） |
-| `promptOptimize.ts` | — | 提示词构造器（快问「优化提示词」） |
+| `promptOptimize.ts` | — | 提示词构造器（智枢「优化提示词」） |
 | `browser.ts` | — | 打开 webview 窗口 |
 
 ### 6.8 `hooks/useTauriEvent.ts`
@@ -534,7 +534,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 
 - **宽度单一来源**：`src/styles/tokens.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)`）、`.snippets-page` / `.runtime-page` / `.models-container` / `.git-manager-column`、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。`.settings-page` 720px 是有意窄表单列；`.userscript-list`（≥1100 强制两列）尚未并入。
 - **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、模板片段 `.snippets-list` 320、模型配置与环境变量（`.models-*` / `.runtime-list`）340。
-- **小工具页（`DevTools.tsx` + `src/styles/devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
+- **工具箱页（`DevTools.tsx` + `src/styles/devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
 - **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）。工具内 textarea 统一 `resize: none`。
 - **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。
 
@@ -570,11 +570,11 @@ openGroups: Set<string>       // 分组展开状态
 |------|------|----------|
 | `DeepSeekHarness` | iframe 托管 DSH | 启动/停止/端口/认证补丁状态 |
 | `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `public/ai-providers/` |
-| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md；快问优化仍用 |
+| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md；智枢优化仍用 |
 | `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 + 类型分段筛选 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`） |
 | `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（未安装 / 折叠时账号数胶囊、悬停换眼睛 / `+` 添加）下挂已连接账号，有账号的服务商点行可折叠（localStorage `aq-rail-folded`）；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
-| `QuickAskApp` | 快问主窗口（`#/quick-ask`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
+| `QuickAskApp` | 智枢主窗口（`#/quick-ask`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
 | `QuickAskBubble` | 桌面气泡（`#/quick-ask-bubble`） | 快捷唤起，全局置顶 |
 | `CursorManager` | Cursor 多账号 | 初始化 profile + 切换 + 诊断导出 |
 | `WorkBuddyManager` | WorkBuddy（侧栏已下线） | 账号池 + 签到；额度页复用扫码/签到；恢复见 AGENTS.md |
@@ -796,11 +796,11 @@ TunnelSession { id, pid, mode, local_url, public_url?, profile_id?, child }
 - 注册 TrayIcon（silver logo）
 - 菜单:
   - 打开主窗口
-  - 快问
+  - 智枢
   - 当前隧道状态（动态）
   - 退出
 
-**快问窗口**: 独立 WebView，加载同一 React 应用的 `#/quick-ask` 路由。
+**智枢窗口**: 独立 WebView，加载同一 React 应用的 `#/quick-ask` 路由。
 
 **气泡**: 独立窗口 `#/quick-ask-bubble`，物理屏幕坐标定位（通过 Rust `SetWindowPos`）。
 
@@ -1138,9 +1138,9 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 ### 10.14 DevTools Commands（已移除）
 
-小工具页**不再有后端命令**：HTTP 客户端工具已整体删除，`devtools_commands.rs` 文件、`lib.rs` 的 `mod` 与 `generate_handler!` 注册、`devtools_http_request` 命令、前端 `invokeHttpRequest` 封装与 `storage.http*` 适配器全部移除；`http_saved_requests` / `http_history` 两张表在 `lib.rs` setup 里被 `DROP TABLE`（幂等，与测试功能那批一起）。
+工具箱页**不再有后端命令**：HTTP 客户端工具已整体删除，`devtools_commands.rs` 文件、`lib.rs` 的 `mod` 与 `generate_handler!` 注册、`devtools_http_request` 命令、前端 `invokeHttpRequest` 封装与 `storage.http*` 适配器全部移除；`http_saved_requests` / `http_history` 两张表在 `lib.rs` setup 里被 `DROP TABLE`（幂等，与测试功能那批一起）。
 
-> 更早删除的是「端口 / 进程查看与结束」：`devtools_list_ports` / `devtools_resolve_processes` / `devtools_kill_process`（随 `a3595b8` 新增快捷应用一起去掉，当时是为了和"按进程名 kill"去重）。**2026-10-09 以「端口查杀」面板形态回归，但落在快捷应用页而不是小工具页**：命令是 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`（见 §10.16b），netstat 相关逻辑也从 `dsh_commands.rs` 抽到了这个共享模块，DSH 改为 `use` 它。小工具页那 **8 个仍然是纯前端工具**（转换 / 生成 / 解析三组），零后端命令这条约定没变。
+> 更早删除的是「端口 / 进程查看与结束」：`devtools_list_ports` / `devtools_resolve_processes` / `devtools_kill_process`（随 `a3595b8` 新增快捷应用一起去掉，当时是为了和"按进程名 kill"去重）。**2026-10-09 以「端口查杀」面板形态回归，但落在快捷应用页而不是工具箱页**：命令是 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`（见 §10.16b），netstat 相关逻辑也从 `dsh_commands.rs` 抽到了这个共享模块，DSH 改为 `use` 它。工具箱页那 **8 个仍然是纯前端工具**（转换 / 生成 / 解析三组），零后端命令这条约定没变。
 
 ### 10.15 WorkBuddy Commands（17 条）
 
@@ -1168,7 +1168,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 ### 10.16b 端口查杀 Commands（2 条，`port_commands.rs`）
 
-挂在**快捷应用页的第二个视图**（`PortKillerPanel.tsx`），不在小工具页。该文件同时是 netstat/taskkill 的**共享原语层**：`dsh_commands.rs` 的 `find_pid_by_port` / `kill_pid` / `is_port_in_use` / `wait_for_port_release` 都搬到了这里并改 `pub(crate)`，改解析等于改 DSH 停止逻辑。
+挂在**快捷应用页的第二个视图**（`PortKillerPanel.tsx`），不在工具箱页。该文件同时是 netstat/taskkill 的**共享原语层**：`dsh_commands.rs` 的 `find_pid_by_port` / `kill_pid` / `is_port_in_use` / `wait_for_port_release` 都搬到了这里并改 `pub(crate)`，改解析等于改 DSH 停止逻辑。
 
 | 命令 | 用途 |
 |------|------|
@@ -1300,8 +1300,8 @@ npm run tauri -- dev
 # DevTools: Ctrl+Shift+I
 ```
 
-#### 调试快问窗口
-在快问窗口中按 `Ctrl+Shift+I` 打开 DevTools。
+#### 调试智枢窗口
+在智枢窗口中按 `Ctrl+Shift+I` 打开 DevTools。
 
 #### 调试托盘后台线程
 托盘运行在独立窗口，可以通过 Tauri `emit` 日志或在 Rust 代码中 `eprintln!` 输出到 `cargo run` 终端。
@@ -1360,7 +1360,7 @@ npm run tauri -- build -- --debug
 - [ ] Cursor 账号初始化 + 切换 + 启动
 - [ ] 导入/导出 JSON（含密钥明文警告）
 - [ ] 关闭到托盘 → 托盘菜单可见
-- [ ] 快问快捷键 `Ctrl+Alt+K`（需要 admin 可能有权限限制）
+- [ ] 智枢快捷键 `Ctrl+Alt+K`（需要 admin 可能有权限限制）
 
 ---
 

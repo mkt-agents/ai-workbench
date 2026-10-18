@@ -3,7 +3,7 @@
  * Magic numbers scattered across components live here.
  */
 
-/** Quick ask context window character limit before truncation. */
+/** AI Hub context window character limit before truncation. */
 export const QUICKASK_CONTEXT_LIMIT = 2000;
 
 /** Max number of snippets shown in the quick-ask picker. */

@@ -25,7 +25,7 @@ import RegexTool from "./devtools/RegexTool";
 import HashTool from "./devtools/HashTool";
 import CalculatorTool from "./devtools/CalculatorTool";
 
-/** 当前工具 id；快问跳转写它（storage 事件跨窗同步），本页监听切换。 */
+/** 当前工具 id；智枢跳转写它（storage 事件跨窗同步），本页监听切换。 */
 export const DEVTOOLS_TOOL_KEY = "workbench-devtools-tool";
 const ORDER_KEY = "workbench-devtools-order";
 
@@ -122,7 +122,7 @@ function DevTools({ active = true }: { active?: boolean }) {
     localStorage.setItem(DEVTOOLS_TOOL_KEY, activeTool);
   }, [activeTool]);
 
-  // 跨窗同步：快问「跳转」写入该 key 时切到对应工具（storage 事件只在别的窗口触发，
+  // 跨窗同步：智枢「跳转」写入该 key 时切到对应工具（storage 事件只在别的窗口触发，
   // 覆盖本页已挂载的场景；未挂载时走 mount 时的 init 读取）。
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {

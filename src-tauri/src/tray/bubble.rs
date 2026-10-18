@@ -152,7 +152,7 @@ pub fn ensure_quick_ask_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Str
     }
     let url = WebviewUrl::App("index.html#/quick-ask".into());
     WebviewWindowBuilder::new(app, QUICK_ASK_LABEL, url)
-        .title("Quick Ask")
+        .title("智枢")
         .inner_size(720.0, 640.0)
         .min_inner_size(560.0, 520.0)
         .resizable(true)
@@ -302,7 +302,7 @@ pub fn ensure_quick_ask_bubble<R: Runtime>(
     // Builder.position() is logical pixels — do NOT pass physical coords there.
     // Set PhysicalPosition immediately after build instead.
     let win = WebviewWindowBuilder::new(app, QUICK_ASK_BUBBLE_LABEL, url)
-        .title("Quick Ask")
+        .title("智枢")
         .inner_size(BUBBLE_SIZE, BUBBLE_SIZE)
         .min_inner_size(BUBBLE_SIZE, BUBBLE_SIZE)
         .max_inner_size(BUBBLE_SIZE, BUBBLE_SIZE)

@@ -320,7 +320,7 @@ pub fn run() {
             )
             .expect("failed to drop legacy test tables");
 
-            // HTTP 客户端小工具已移除（含其收藏的请求与历史记录）。这里同样幂等 DROP，
+            // 工具箱里的 HTTP 客户端已移除（含其收藏的请求与历史记录）。这里同样幂等 DROP，
             // 让旧版本留下的两张空转表不再被 schema 维护；用户自建数据无法还原，
             // 想保留历史的话删掉这一段即可。
             conn.execute_batch(

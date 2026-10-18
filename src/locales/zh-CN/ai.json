@@ -157,7 +157,7 @@
     "sceneBindings": "场景绑定",
     "sceneBindingsHint": "为不同 AI 入口指定默认模型；未绑定则使用全局默认。各入口仍可临时切换。",
     "sceneUseDefault": "使用全局默认",
-    "sceneQuickAsk": "快问",
+    "sceneQuickAsk": "智枢",
     "sceneReport": "Git 报告 AI",
     "sceneCommit": "提交说明 AI",
     "sceneOptimize": "提示词优化",

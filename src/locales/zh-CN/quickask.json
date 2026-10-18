@@ -1,5 +1,5 @@
 {
-  "title": "快问",
+  "title": "智枢",
   "loading": "加载中…",
   "close": "关闭",
   "pin": "置顶窗口",
@@ -18,8 +18,8 @@
   "emptyHintSub": "提到代码、报错、仓库时会自动带上项目上下文；其它问题按普通对话回答",
   "send": "发送",
   "stop": "停止",
-  "busyOtherTab": "AI 问答仍在执行",
-  "busyApproval": "AI 问答等待确认",
+  "busyOtherTab": "AI 助手仍在执行",
+  "busyApproval": "AI 助手等待确认",
   "busyHint": "正在回答，先停止或等待完成",
   "suggestPrefix": "下一步",
   "suggestPick": "点击填入输入框",
@@ -60,7 +60,7 @@
   "openPlaceholder": "选择要打开的项，Enter 打开",
   "openGroup": {
     "page": "页面",
-    "tool": "小工具",
+    "tool": "工具箱",
     "app": "应用"
   },
   "dailyShort": "日报",
@@ -75,7 +75,7 @@
     "confirm": "确认操作",
     "allow": "允许",
     "deny": "拒绝",
-    "noRepo": "代理需要一个仓库：先在快问里选中项目，或在 Git 里打开当前仓库。",
+    "noRepo": "代理需要一个仓库：先在智枢里选中项目，或在 Git 里打开当前仓库。",
     "tool": {
       "read_file": "读取",
       "list_dir": "列出",
@@ -122,9 +122,9 @@
   "savedSnippet": "已保存",
   "followUp": "追问选中内容",
   "quotePrefix": "关于「{{text}}」：",
-  "bubbleTip": "快问 · 单击打开 · 拖到贴边 · 右键关闭快问",
-  "modeAsk": "AI 问答",
-  "modeTools": "小工具",
+  "bubbleTip": "智枢 · 单击打开 · 拖到贴边 · 右键关闭智枢",
+  "modeAsk": "AI 助手",
+  "modeTools": "工具箱",
   "task": {
     "none": "普通问答",
     "debug": "报错诊断（按项目上下文定位）",

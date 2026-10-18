@@ -1,4 +1,4 @@
-/* ===== Quick Ask window =====
+/* ===== AI Hub window =====
    窗体走 --bg-1，让 glass/ice/silver 的 body 氛围层透出来；
    不要铺 --float-bg（那是弹层实底，会盖死香槟光）。 */
 .quick-ask-root {
@@ -503,7 +503,7 @@
   border-color: var(--border);
   box-shadow: var(--shadow-xs);
 }
-/* 「AI 问答」页签上的在跑标记：切到小工具后后台仍在执行 */
+/* 「AI 助手」页签上的在跑标记：切到工具箱后后台仍在执行 */
 .qa-mode-dot {
   width: 6px;
   height: 6px;
@@ -511,7 +511,7 @@
   border-radius: var(--radius-full);
   background: var(--accent);
 }
-/* 小工具页签下的执行提示条：与头部 .qa-session-btn 同族的安静小胶囊，
+/* 工具箱页签下的执行提示条：与头部 .qa-session-btn 同族的安静小胶囊，
    平时只是低调的状态标记，悬停时停止区才泛红示意可中断 */
 .qa-busy-pill {
   display: inline-flex;
@@ -849,7 +849,7 @@
   box-shadow: 0 0 0 2px var(--accent-dim);
 }
 
-/* 与主窗 .card 同配方，快问表面跟主题磨砂一致 */
+/* 与主窗 .card 同配方，智枢表面跟主题磨砂一致 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-empty,
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-answer-card {
   background:
@@ -1743,7 +1743,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* ===== Quick Ask markdown answer ===== */
+/* ===== AI Hub markdown answer ===== */
 .qa-md > *:first-child { margin-top: 0; }
 .qa-md > *:last-child { margin-bottom: 0; }
 .qa-md p {

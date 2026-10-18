@@ -1,4 +1,4 @@
-//! Quick Ask tool loop. Read-only tools run immediately. Writes and shell
+//! AI Hub tool loop. Read-only tools run immediately. Writes and shell
 //! commands wait for `agent_decide`. Paths must stay inside the selected repo.
 
 use std::collections::HashMap;

@@ -716,7 +716,7 @@ function QuickAskApp() {
               title={`${t("modeAsk")} (Alt+1)`}
             >
               <Sparkles size={11} /> {t("modeAsk")}
-              {/* 切到小工具后执行仍在后台跑：在页签上留一个在跑的标记 */}
+              {/* 切到工具箱后执行仍在后台跑：在页签上留一个在跑的标记 */}
               {stream.busy && <span className="qa-mode-dot" aria-hidden />}
             </button>
             <button
@@ -730,7 +730,7 @@ function QuickAskApp() {
               <Terminal size={11} /> {t("modeTools")}
             </button>
           </div>
-          {/* 问答回合在后台执行时切到了小工具：这里必须有停止入口，
+          {/* 问答回合在后台执行时切到了工具箱：这里必须有停止入口，
               否则 agent_run 会一直跑完（停止按钮原本只在问答视图的输入框里） */}
           {mode === "tools" && stream.busy && stream.agentApproval && (
             <div className="qa-busy-pill is-approval" role="group" aria-label={t("busyApproval")}>

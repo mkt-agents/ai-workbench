@@ -1,1 +1,1 @@
-chore: ignore .zcode dir
+feat: add absolute file path tooltips in commit changelist

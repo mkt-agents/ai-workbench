@@ -1,4 +1,4 @@
-/* ===== Quick Ask desktop bubble (crystal disc + aura) =====
+/* ===== AI Hub desktop bubble (crystal disc + aura) =====
    HWND = 56px (tray/bubble.rs BUBBLE_SIZE); disc = 40px; padding holds aura. */
 html.qa-bubble-mode,
 html.qa-bubble-mode body,

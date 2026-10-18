@@ -50,7 +50,7 @@ function BubbleMark({ className }: { className?: string }) {
 }
 
 /**
- * Desktop floating bubble: click shows Quick Ask; right-click hides it; drag
+ * Desktop floating bubble: click shows AI Hub; right-click hides it; drag
  * moves and release snaps to the nearer left/right edge.
  */
 export default function QuickAskBubble() {

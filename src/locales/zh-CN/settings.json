@@ -16,7 +16,7 @@
     "sidebarCollapsed": "侧边栏折叠"
   },
   "quickAsk": {
-    "title": "快问",
+    "title": "智枢",
     "shortcut": "全局快捷键",
     "shortcutHint": "例如 Ctrl+Alt+K。冲突时请更换。",
     "shortcutApply": "应用快捷键",
@@ -24,11 +24,11 @@
     "shortcutFail": "快捷键注册失败：{{error}}",
     "pasteClipboard": "唤起时允许填入剪贴板",
     "bubble": "桌面悬浮钮",
-    "bubbleHint": "右下角置顶小按钮，点击打开快问；可拖动，右键隐藏。也可用快捷键或托盘。"
+    "bubbleHint": "右下角置顶小按钮，点击打开智枢；可拖动，右键隐藏。也可用快捷键或托盘。"
   },
   "usage": {
     "title": "本机 AI 用量",
-    "hint": "仅统计本机快问 / 报告 / 提交等调用次数与估算 token，不上云、不对接账单。",
+    "hint": "仅统计本机智枢 / 报告 / 提交等调用次数与估算 token，不上云、不对接账单。",
     "empty": "还没有用量记录。",
     "row": "{{calls}} 次 · ~{{tokens}} tok",
     "clear": "清空统计"

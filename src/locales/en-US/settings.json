@@ -16,7 +16,7 @@
     "sidebarCollapsed": "Collapse Sidebar"
   },
   "quickAsk": {
-    "title": "Quick Ask",
+    "title": "AI Hub",
     "shortcut": "Global shortcut",
     "shortcutHint": "e.g. Ctrl+Alt+K. Change if it conflicts.",
     "shortcutApply": "Apply shortcut",
@@ -24,11 +24,11 @@
     "shortcutFail": "Failed to register shortcut: {{error}}",
     "pasteClipboard": "Allow clipboard fill on open",
     "bubble": "Desktop floating button",
-    "bubbleHint": "Always-on-top button (bottom-right). Click to open Quick Ask; drag to move; right-click to hide. Shortcut and tray still work."
+    "bubbleHint": "Always-on-top button (bottom-right). Click to open AI Hub; drag to move; right-click to hide. Shortcut and tray still work."
   },
   "usage": {
     "title": "Local AI usage",
-    "hint": "Counts Quick Ask / report / commit calls and estimated tokens on this device only — no cloud billing.",
+    "hint": "Counts AI Hub / report / commit calls and estimated tokens on this device only — no cloud billing.",
     "empty": "No usage recorded yet.",
     "row": "{{calls}} calls · ~{{tokens}} tok",
     "clear": "Clear stats"
