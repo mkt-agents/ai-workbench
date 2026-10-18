@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { History, Loader2, MessageSquarePlus, Pin, PinOff, Sparkles, Square, Terminal, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -33,6 +33,7 @@ import QuickSelect from "./quickAsk/QuickSelect";
 import SessionHistory from "./quickAsk/SessionHistory";
 import SnippetPicker from "./quickAsk/SnippetPicker";
 import ToolsPanel from "./quickAsk/ToolsPanel";
+import { useNextSuggestion } from "./quickAsk/useNextSuggestion";
 import {
   DEFAULT_CHIPS,
   DEFAULT_OPTIMIZE,
@@ -60,6 +61,7 @@ function QuickAskApp() {
   const { t, i18n } = useTranslation("quickask");
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
+  const invokeGenerateText = useGlobalStore((s) => s.invokeGenerateText);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const recentProjects = useGlobalStore((s) => s.recentProjects);
   const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
@@ -186,6 +188,24 @@ function QuickAskApp() {
       return next;
     });
   };
+
+  // LLM 预测不合格/失败时的确定性候选：从上一问的关键词直接给高置信建议
+  const buildFallbackSuggestion = useCallback((): string | null => {
+    const q =
+      [...stream.history].reverse().find((x) => x.role === "user" && !x.digest)?.content || "";
+    if (/未提交|有什么改动|哪些改动|哪些文件|改了什么|提交了什么|什么变更|git status/i.test(q)) {
+      return t("suggestDirty");
+    }
+    return null;
+  }, [stream.history, t]);
+
+  const { suggestion: nextSuggestion, dismiss: dismissSuggestion } = useNextSuggestion({
+    model: selectedModel,
+    turns: stream.history,
+    busy: stream.busy,
+    generate: invokeGenerateText,
+    fallback: buildFallbackSuggestion,
+  });
 
   useAskEvents({
     setSettings,
@@ -768,6 +788,12 @@ function QuickAskApp() {
             inputRef={inputRef}
             busy={stream.busy}
             phase={stream.phase}
+            suggestion={nextSuggestion}
+            onSuggestionPick={(text) => {
+              setComposerInput(text);
+              requestAnimationFrame(() => inputRef.current?.focus());
+            }}
+            onSuggestionDismiss={dismissSuggestion}
             modelName={selectedModel?.name || ""}
             error={stream.error}
             failedMode={stream.failedMode}

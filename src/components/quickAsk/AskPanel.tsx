@@ -42,6 +42,10 @@ type Props = {
   onDismissError: () => void;
   /** Last question sent, recalled with ↑ in an empty input. */
   lastQuestion: string;
+  /** Predicted next-step prompt shown above the composer; null = hidden. */
+  suggestion?: string | null;
+  onSuggestionPick?: (text: string) => void;
+  onSuggestionDismiss?: () => void;
   onExample: (text: string, task?: TaskKind) => void;
   /** Streaming text of the in-flight answer. */
   answer: string;
@@ -134,6 +138,7 @@ export default function AskPanel(props: Props) {
   const {
     input, setInput, inputRef, busy, phase, modelName, error, failedMode, onRetry, onDismissError,
     lastQuestion, onExample, answer, turns, pending, source, canRegenerate,
+    suggestion, onSuggestionPick, onSuggestionDismiss,
     copied, snippetSaved, exportDone, selectedText, setSelectedText,
     route, routeOverride, onRouteOverride, routeMenuOpen, onToggleRouteMenu, projectLabel,
     task, onTask, onDaily, agentSteps, agentApproval, stopping, onDecideAgent, onContinue,
@@ -545,6 +550,29 @@ export default function AskPanel(props: Props) {
                 );
               })
             )}
+          </div>
+        )}
+        {suggestion && !busy && !input.trim() && onSuggestionPick && (
+          <div className="qa-suggest-row">
+            <button
+              type="button"
+              className="qa-suggest-chip"
+              onClick={() => onSuggestionPick(suggestion)}
+              title={t("suggestPick")}
+            >
+              <Sparkles size={11} />
+              <span className="qa-suggest-prefix">{t("suggestPrefix")}</span>
+              <span className="qa-suggest-text">{suggestion}</span>
+            </button>
+            <button
+              type="button"
+              className="qa-suggest-x"
+              onClick={onSuggestionDismiss}
+              aria-label={t("close")}
+              title={t("close")}
+            >
+              <X size={11} />
+            </button>
           </div>
         )}
         <textarea
