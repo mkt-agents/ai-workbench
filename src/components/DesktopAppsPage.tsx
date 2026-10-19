@@ -154,6 +154,27 @@ export default function DesktopAppsPage() {
     [t]
   );
 
+  /** A candidate's human name: its title, or a class-derived name when untitled. */
+  const winName = useCallback(
+    (c: DesktopWindowCandidate) => {
+      const title = c.title.trim();
+      if (title) return title;
+      switch (c.class) {
+        case "Chrome_WidgetWin_0":
+          return t("win.chromeHelper");
+        case "Electron_NotifyIconHostWindow":
+          return t("win.trayHost");
+        case "Base_PowerMessageWindow":
+          return t("win.powerMessage");
+        case "OleDdeWndClass":
+          return t("win.dde");
+      }
+      if (c.class.startsWith("crashpad_")) return t("win.crashpad");
+      return t("win.fallback", { class: c.class });
+    },
+    [t]
+  );
+
   // Executables are only needed to *start* an app, and the scan is slow, so it
   // runs once per visit in the background.
   useEffect(() => {
@@ -809,7 +830,7 @@ export default function DesktopAppsPage() {
                           {c.owned ? (
                             <span className="dapps-error-tag">{t("error.owned")}</span>
                           ) : null}
-                          <span className="dapps-error-win">{c.title || t("error.untitled")}</span>
+                          <span className="dapps-error-win">{winName(c)}</span>
                           <button
                             type="button"
                             className="btn btn-secondary btn-small"
@@ -863,6 +884,61 @@ export default function DesktopAppsPage() {
                       )
                     )
                   : pickerList;
+                // Adoptable first, recommended on top; hidden helpers below with a
+                // reason, so "which one do I pick" is answered by the layout.
+                const adoptable = shown
+                  .filter((c) => c.visible)
+                  .sort(
+                    (a, b) => Number(b.recommended) - Number(a.recommended) || b.area - a.area
+                  );
+                const blocked = shown.filter((c) => !c.visible);
+                const grouped = adoptable.length > 0 && blocked.length > 0;
+                const row = (c: DesktopWindowCandidate) => (
+                  <li
+                    key={`${c.pid}-${c.hwnd}`}
+                    className={c.current ? "is-current" : c.visible ? "" : "is-blocked"}
+                  >
+                    <div className="dapps-picker-main">
+                      <span className="dapps-picker-title">
+                        {winName(c)}
+                        {c.current ? (
+                          <em className="dapps-picker-badge">{t("picker.current")}</em>
+                        ) : c.recommended ? (
+                          <em className="dapps-picker-badge is-recommended">
+                            {t("picker.recommended")}
+                          </em>
+                        ) : null}
+                      </span>
+                      <span className="dapps-picker-meta">
+                        <span className="dapps-error-tag">{c.class}</span>
+                        {c.width > 0 && c.height > 0 ? (
+                          <span className="dapps-error-tag">
+                            {t("picker.size", { w: c.width, h: c.height })}
+                          </span>
+                        ) : c.area > 0 ? (
+                          <span className="dapps-error-tag">
+                            {Math.round(c.area / 1000)}k px²
+                          </span>
+                        ) : null}
+                        <span className="dapps-error-tag">{c.hwnd}</span>
+                      </span>
+                    </div>
+                    {c.current ? (
+                      <span className="dapps-picker-adopted">{t("picker.current")}</span>
+                    ) : c.visible ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-small"
+                        disabled={busy}
+                        onClick={() => void attachPicked(c.hwnd)}
+                      >
+                        {t("picker.adopt")}
+                      </button>
+                    ) : (
+                      <span className="dapps-picker-blocked">{t("picker.blockedHidden")}</span>
+                    )}
+                  </li>
+                );
                 return (
                   <>
                     <input
@@ -876,46 +952,19 @@ export default function DesktopAppsPage() {
                     {shown.length === 0 ? (
                       <p className="dapps-picker-empty">{t("picker.noMatch")}</p>
                     ) : (
-                      <ul className="dapps-picker-list">
-                        {shown.map((c) => (
-                          <li key={`${c.pid}-${c.hwnd}`} className={c.current ? "is-current" : ""}>
-                            <div className="dapps-picker-main">
-                              <span className="dapps-picker-title">
-                                {c.title || t("error.untitled")}
-                                {c.current ? (
-                                  <em className="dapps-picker-badge">{t("picker.current")}</em>
-                                ) : null}
-                              </span>
-                              <span className="dapps-picker-meta">
-                                <span className="dapps-error-tag">{c.class}</span>
-                                <span className="dapps-error-tag">{c.hwnd}</span>
-                                {c.area > 0 ? (
-                                  <span className="dapps-error-tag">
-                                    {c.visible ? "" : `${t("error.hidden")} · `}
-                                    {Math.round(c.area / 1000)}k px²
-                                  </span>
-                                ) : (
-                                  <span className="dapps-error-tag">
-                                    {c.visible ? "" : t("error.hidden")}
-                                  </span>
-                                )}
-                              </span>
-                            </div>
-                            {c.current ? (
-                              <span className="dapps-picker-adopted">{t("picker.current")}</span>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn btn-primary btn-small"
-                                disabled={busy || !c.visible}
-                                onClick={() => void attachPicked(c.hwnd)}
-                              >
-                                {t("picker.adopt")}
-                              </button>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
+                      <>
+                        <p className="dapps-picker-note">{t("picker.visibleTip")}</p>
+                        <ul className="dapps-picker-list">
+                          {grouped ? (
+                            <li className="dapps-picker-group">{t("picker.adoptable")}</li>
+                          ) : null}
+                          {adoptable.map(row)}
+                          {grouped ? (
+                            <li className="dapps-picker-group">{t("picker.notAdoptable")}</li>
+                          ) : null}
+                          {blocked.map(row)}
+                        </ul>
+                      </>
                     )}
                   </>
                 );

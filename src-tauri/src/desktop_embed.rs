@@ -60,6 +60,13 @@ pub struct DesktopWindowCandidate {
     pub visible: bool,
     pub owned: bool,
     pub area: i64,
+    /// Window size in physical px, so the picker can show "W × H" instead of an
+    /// opaque area figure.
+    pub width: i64,
+    pub height: i64,
+    /// This handle is the window the auto-pick would adopt right now — the
+    /// picker badges it as the recommended choice.
+    pub recommended: bool,
     /// This handle is the window embedded right now.
     pub current: bool,
 }
@@ -194,11 +201,19 @@ mod imp {
     }
 
     fn window_area(hwnd: HWND) -> i64 {
+        let (w, h) = window_size(hwnd);
+        w * h
+    }
+
+    fn window_size(hwnd: HWND) -> (i64, i64) {
         let mut rect = RECT::default();
         if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-            return 0;
+            return (0, 0);
         }
-        (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64
+        (
+            (rect.right - rect.left).max(0) as i64,
+            (rect.bottom - rect.top).max(0) as i64,
+        )
     }
 
     fn window_text(hwnd: HWND) -> String {
@@ -506,6 +521,8 @@ mod imp {
     pub fn describe_candidates(process: &str) -> Vec<DesktopWindowCandidate> {
         let key = map_key(process);
         let current_hwnd = with_map(|m| m.get(&key).map(|e| e.hwnd));
+        // What the auto-pick would adopt right now, so the picker can badge it.
+        let recommended = find_window(process).map(|f| f.hwnd.0 as isize);
         candidates(process)
             .into_iter()
             // IME / tooltip / shadow helpers can never be meaningfully
@@ -514,16 +531,22 @@ mod imp {
             // blank slot.
             .filter(|c| !is_helper_class(&c.class) && (c.visible || c.area > 0))
             .take(12)
-            .map(|c| DesktopWindowCandidate {
-                process_name: c.stem,
-                pid: c.pid,
-                hwnd: format!("0x{:X}", c.hwnd.0 as usize),
-                class: c.class,
-                title: c.title,
-                visible: c.visible,
-                owned: c.owned,
-                area: c.area,
-                current: current_hwnd == Some(c.hwnd.0 as isize),
+            .map(|c| {
+                let (width, height) = window_size(c.hwnd);
+                DesktopWindowCandidate {
+                    process_name: c.stem,
+                    pid: c.pid,
+                    hwnd: format!("0x{:X}", c.hwnd.0 as usize),
+                    class: c.class,
+                    title: c.title,
+                    visible: c.visible,
+                    owned: c.owned,
+                    area: c.area,
+                    width,
+                    height,
+                    recommended: recommended == Some(c.hwnd.0 as isize),
+                    current: current_hwnd == Some(c.hwnd.0 as isize),
+                }
             })
             .collect()
     }

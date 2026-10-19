@@ -352,6 +352,11 @@ export interface DesktopWindowCandidate {
   owned: boolean;
   /** Window area in physical pixels; the largest is the main frame. */
   area: number;
+  /** Window width in physical pixels, for the picker's "W × H" label. */
+  width: number;
+  height: number;
+  /** This handle is the one the auto-pick would adopt; the picker badges it. */
+  recommended: boolean;
   /** This handle is the window embedded right now. */
   current: boolean;
 }

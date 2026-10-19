@@ -49,13 +49,27 @@
   "picker": {
     "action": "Pick window",
     "title": "Pick the window to embed — {{name}}",
-    "hint": "By default the largest main window is adopted. If a splash or helper window got embedded instead and the real window is still on the desktop, pick it here.",
-    "empty": "No window found for process “{{process}}”. Make sure the app is running, then refresh below.",
+    "hint": "This page moves the app's own window in here for you, usually automatically. You only need to point at it here when the automatic choice is wrong — e.g. a splash or helper window got embedded and the real window is still on the desktop.",
+    "empty": "No embeddable window found for process “{{process}}”. The app may not be running, or its main window is tucked into the system tray; open it from the tray, then refresh below.",
     "count": "{{count}} windows",
-    "adopt": "Adopt",
+    "adopt": "Embed this window",
     "search": "Search title, class, handle or process…",
     "noMatch": "No matching windows",
+    "visibleTip": "“Embeddable windows” are the ones shown on the desktop right now — usually the main window you want.",
+    "adoptable": "Embeddable windows",
+    "notAdoptable": "System windows · cannot embed",
+    "blockedHidden": "This window is hidden, cannot embed",
+    "recommended": "Recommended",
+    "size": "about {{w}} × {{h}}",
     "current": "Currently embedded"
+  },
+  "win": {
+    "chromeHelper": "App background window",
+    "trayHost": "Tray icon window",
+    "powerMessage": "System message window",
+    "dde": "DDE service window",
+    "crashpad": "Crash reporter window",
+    "fallback": "{{class}} window"
   },
   "kill": {
     "title": "Close app",

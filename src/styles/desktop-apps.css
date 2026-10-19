@@ -393,6 +393,42 @@
   color: var(--accent-strong);
 }
 
+.dapps-picker-badge.is-recommended {
+  padding: 0 6px;
+  color: var(--green);
+  background: var(--green-dim);
+  border: 1px solid var(--green-border);
+  border-radius: var(--radius-full);
+}
+
+.dapps-picker-note {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.dapps-picker-list li.dapps-picker-group {
+  display: block;
+  padding: 10px 10px 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.dapps-picker-list li.dapps-picker-group:hover {
+  background: transparent;
+}
+
+.dapps-picker-list li.is-blocked {
+  opacity: 0.6;
+}
+
+.dapps-picker-blocked {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
 .dapps-picker-meta {
   display: flex;
   align-items: center;
