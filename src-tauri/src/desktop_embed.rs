@@ -359,6 +359,21 @@ mod imp {
             && (c.style & (WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize)) != 0
     }
 
+    /// Same shape as `looks_like_main_frame` but the window is hidden right
+    /// now. Only a *workspace-titled* frame qualifies: adopting reveals what we
+    /// take, so a hidden splash or bare-name window must never be resurrected
+    /// onto the desktop — only the app's real document frame is worth it.
+    fn looks_like_main_frame_hidden(c: &Candidate, process: &str) -> bool {
+        !c.visible
+            && !c.iconic
+            && !c.owned
+            && !c.toolwindow
+            && !is_helper_class(&c.class)
+            && c.area >= MIN_FRAME_AREA
+            && (c.style & (WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize)) != 0
+            && title_is_workspace(&c.title, process)
+    }
+
     fn is_helper_class(class: &str) -> bool {
         matches!(
             class,
@@ -481,6 +496,9 @@ mod imp {
             .or_else(|| pick(&|c| is_exact(c) && c.visible && !c.owned && !c.iconic))
             .or_else(|| pick(&|c| c.visible && !c.owned && !c.iconic))
             .or_else(|| pick(&|c| c.visible && !c.iconic))
+            // Last resort: the app hid its own workspace frame (closed to tray,
+            // or the picker hid it). Adopting reveals it again.
+            .or_else(|| pick(&|c| is_exact(c) && looks_like_main_frame_hidden(c, &exact)))
             .map(|best| Found {
                 hwnd: best.hwnd,
                 pid: best.pid,
@@ -510,6 +528,11 @@ mod imp {
         };
         pick(&|c| is_exact(c) && looks_like_main_frame(c))
             .or_else(|| pick(&|c| looks_like_main_frame(c)))
+            // A hidden workspace frame counts as a frame too: the app itself hid
+            // its main window (tray) and the re-adopt must still find it. relayout
+            // only swaps while WE keep the window shown, so this cannot drag the
+            // picker's own hidden window back in front of the dialog.
+            .or_else(|| pick(&|c| is_exact(c) && looks_like_main_frame_hidden(c, &exact)))
             .map(|best| Found {
                 hwnd: best.hwnd,
                 pid: best.pid,

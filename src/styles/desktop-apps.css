@@ -419,8 +419,8 @@
   background: transparent;
 }
 
-.dapps-picker-list li.is-blocked {
-  opacity: 0.6;
+.dapps-picker-list li.is-hidden-row {
+  opacity: 0.75;
 }
 
 .dapps-picker-blocked {
