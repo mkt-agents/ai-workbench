@@ -64,11 +64,6 @@
       "current": "当前已嵌入"
     },
     "win": {
-      "chromeHelper": "应用后台窗口",
-      "trayHost": "托盘图标窗口",
-      "powerMessage": "系统消息窗口",
-      "dde": "DDE 服务窗口",
-      "crashpad": "崩溃上报窗口",
       "fallback": "{{class}} 窗口"
     },
   "kill": {

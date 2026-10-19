@@ -392,6 +392,24 @@ mod imp {
             || class.ends_with("HintWnd")
     }
 
+    /// A window that can never render the app's UI, so it must not be offered
+    /// for adoption: Chromium/Electron's background, tray-host and power-message
+    /// windows, crash handlers and the DDE server window, plus anything untitled
+    /// that the app itself keeps hidden. A real frame is either visible or
+    /// titled, so nothing the user could mean is caught here.
+    fn is_non_ui_window(c: &Candidate) -> bool {
+        is_helper_class(&c.class)
+            || matches!(
+                c.class.as_str(),
+                "Chrome_WidgetWin_0"
+                    | "Electron_NotifyIconHostWindow"
+                    | "Base_PowerMessageWindow"
+                    | "OleDdeWndClass"
+            )
+            || c.class.starts_with("crashpad_")
+            || (c.title.trim().is_empty() && !c.visible)
+    }
+
     /// A title that names a *document* rather than just the app: VS Code and
     /// other Electron shells title their welcome window with the bare app name
     /// ("Cursor") but a real workspace "‹folder› - Cursor". Preferring the
@@ -543,16 +561,24 @@ mod imp {
 
     pub fn describe_candidates(process: &str) -> Vec<DesktopWindowCandidate> {
         let key = map_key(process);
-        let current_hwnd = with_map(|m| m.get(&key).map(|e| e.hwnd));
+        let current_entry = with_map(|m| {
+            m.get(&key)
+                .filter(|e| entry_live(e.hwnd, e.pid))
+                .map(|e| e.hwnd)
+        });
+        let current_hwnd = current_entry;
         // What the auto-pick would adopt right now, so the picker can badge it.
         let recommended = find_window(process).map(|f| f.hwnd.0 as isize);
-        candidates(process)
+        let mut out: Vec<DesktopWindowCandidate> = candidates(process)
             .into_iter()
-            // IME / tooltip / shadow helpers can never be meaningfully
-            // adopted — hide them so the picker stays readable. Same for
-            // invisible zero-area stubs: embedding one can only yield a
-            // blank slot.
-            .filter(|c| !is_helper_class(&c.class) && (c.visible || c.area > 0))
+            // Helper classes (IME/tooltip/shadow) and non-UI windows (Chromium
+            // background, tray host, crash handler…) can never be adopted
+            // meaningfully — drop them so the picker stays readable. Same for
+            // invisible zero-area stubs: embedding one only yields a blank slot.
+            .filter(|c| {
+                (current_hwnd == Some(c.hwnd.0 as isize) || !is_non_ui_window(c))
+                    && (c.visible || c.area > 0)
+            })
             .take(12)
             .map(|c| {
                 let (width, height) = window_size(c.hwnd);
@@ -571,7 +597,38 @@ mod imp {
                     current: current_hwnd == Some(c.hwnd.0 as isize),
                 }
             })
-            .collect()
+            .collect();
+
+        // The hosted window is a child of our own window now, so EnumWindows no
+        // longer enumerates it — put it back so the picker can mark it as the
+        // current window instead of showing only the leftover helper windows.
+        if let Some(hwnd) = current_entry {
+            let raw = as_hwnd(hwnd);
+            let hex = format!("0x{:X}", hwnd as usize);
+            if !out.iter().any(|c| c.hwnd == hex) {
+                let (width, height) = window_size(raw);
+                let mut pid = 0u32;
+                unsafe { GetWindowThreadProcessId(raw, Some(&mut pid)) };
+                out.insert(
+                    0,
+                    DesktopWindowCandidate {
+                        process_name: process.trim().to_string(),
+                        pid,
+                        hwnd: hex,
+                        class: class_name(raw),
+                        title: window_text(raw),
+                        visible: unsafe { IsWindowVisible(raw) }.as_bool(),
+                        owned: false,
+                        area: width * height,
+                        width,
+                        height,
+                        recommended: false,
+                        current: true,
+                    },
+                );
+            }
+        }
+        out
     }
 
     /// `show` mirrors the entry's last known visibility: the picker dialog

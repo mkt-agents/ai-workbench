@@ -64,11 +64,6 @@
     "current": "Currently embedded"
   },
   "win": {
-    "chromeHelper": "App background window",
-    "trayHost": "Tray icon window",
-    "powerMessage": "System message window",
-    "dde": "DDE service window",
-    "crashpad": "Crash reporter window",
     "fallback": "{{class}} window"
   },
   "kill": {

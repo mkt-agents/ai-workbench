@@ -154,24 +154,9 @@ export default function DesktopAppsPage() {
     [t]
   );
 
-  /** A candidate's human name: its title, or a class-derived name when untitled. */
+  /** A candidate's human name: its title, or its class when it has none. */
   const winName = useCallback(
-    (c: DesktopWindowCandidate) => {
-      const title = c.title.trim();
-      if (title) return title;
-      switch (c.class) {
-        case "Chrome_WidgetWin_0":
-          return t("win.chromeHelper");
-        case "Electron_NotifyIconHostWindow":
-          return t("win.trayHost");
-        case "Base_PowerMessageWindow":
-          return t("win.powerMessage");
-        case "OleDdeWndClass":
-          return t("win.dde");
-      }
-      if (c.class.startsWith("crashpad_")) return t("win.crashpad");
-      return t("win.fallback", { class: c.class });
-    },
+    (c: DesktopWindowCandidate) => c.title.trim() || t("win.fallback", { class: c.class }),
     [t]
   );
 
@@ -897,7 +882,10 @@ export default function DesktopAppsPage() {
                 const visible = shown
                   .filter((c) => c.visible || c.current)
                   .sort(
-                    (a, b) => Number(b.recommended) - Number(a.recommended) || b.area - a.area
+                    (a, b) =>
+                      Number(b.current) - Number(a.current) ||
+                      Number(b.recommended) - Number(a.recommended) ||
+                      b.area - a.area
                   );
                 const hidden = shown.filter((c) => !c.visible && !c.current);
                 const grouped = visible.length > 0 && hidden.length > 0;
