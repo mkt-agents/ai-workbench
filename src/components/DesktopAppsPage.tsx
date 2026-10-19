@@ -30,11 +30,66 @@ type Phase = "idle" | "running" | "attached" | "launching" | "polling" | "missin
 
 /** Generous, because a cold IDE start (IntelliJ, VS Code) blows past a minute. */
 const WINDOW_WAIT_MS = 150_000;
+/** One backend attach_wait round: scans every 25ms in-process for this long,
+ * then reports nothing found and the outer loop calls again. */
+const ATTACH_WAIT_MS = 3_000;
 const HEARTBEAT_MS = 400;
-const POLL_MS = 120;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Module-level exe-icon cache shared by the tab strip (survives re-renders). */
+const desktopIconCache = new Map<string, string>();
+
+/** The tab shows only the app's real icon; the name appears on hover. */
+function AppTabIcon({
+  app,
+  installed,
+}: {
+  app: DesktopAppDef;
+  installed: InstalledAppInfo[];
+}) {
+  const path = matchExe(app, installed);
+  const [fetched, setFetched] = useState<string | null>(
+    () => (path ? desktopIconCache.get(path) ?? null : null)
+  );
+
+  useEffect(() => {
+    if (!path || !path.toLowerCase().endsWith(".exe")) return;
+    // The install scan already carries icons — prefer that, fetch otherwise.
+    const fromScan = installed.find((item) => item.exe_path === path)?.icon;
+    if (fromScan) {
+      desktopIconCache.set(path, fromScan);
+      setFetched(fromScan);
+      return;
+    }
+    if (desktopIconCache.has(path)) {
+      setFetched(desktopIconCache.get(path) ?? null);
+      return;
+    }
+    let cancelled = false;
+    useGlobalStore
+      .getState()
+      .invokeExtractAppIcon(path)
+      .then((data) => {
+        if (!data) return;
+        desktopIconCache.set(path, data);
+        if (!cancelled) setFetched(data);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [installed, path]);
+
+  if (fetched) {
+    return (
+      <img
+        className="dapps-tab-icon"
+        src={`data:image/png;base64,${fetched}`}
+        alt=""
+        draggable={false}
+      />
+    );
+  }
+  return <AppWindow size={16} />;
 }
 
 /**
@@ -56,6 +111,7 @@ export default function DesktopAppsPage() {
   const invokeScanDesktopApps = useGlobalStore((s) => s.invokeScanDesktopApps);
   const invokeDesktopEmbedFind = useGlobalStore((s) => s.invokeDesktopEmbedFind);
   const invokeDesktopEmbedAttach = useGlobalStore((s) => s.invokeDesktopEmbedAttach);
+  const invokeDesktopEmbedAttachWait = useGlobalStore((s) => s.invokeDesktopEmbedAttachWait);
   const invokeDesktopEmbedRelayout = useGlobalStore((s) => s.invokeDesktopEmbedRelayout);
   const invokeDesktopEmbedShow = useGlobalStore((s) => s.invokeDesktopEmbedShow);
   const invokeDesktopEmbedDetach = useGlobalStore((s) => s.invokeDesktopEmbedDetach);
@@ -78,6 +134,7 @@ export default function DesktopAppsPage() {
   /** Window picker: open state plus the list it was opened with. */
   const [picking, setPicking] = useState(false);
   const [pickerList, setPickerList] = useState<DesktopWindowCandidate[]>([]);
+  const [pickerQuery, setPickerQuery] = useState("");
 
   const slotRef = useRef<HTMLDivElement>(null);
   const attachedRef = useRef(false);
@@ -133,6 +190,7 @@ export default function DesktopAppsPage() {
       // dialog that is meant to replace it: hide it while choosing.
       if (attachedRef.current) void invokeDesktopEmbedShow(processName, false);
       setPickerList(list);
+      setPickerQuery("");
       setPicking(true);
     } finally {
       if (aliveRef.current) setBusy(false);
@@ -225,6 +283,11 @@ export default function DesktopAppsPage() {
     setErrorText("");
     setCandidates([]);
     let frame = 0;
+    // The window checks run every 400ms and some engines blink their frame
+    // (Electron re-composition) — a warn chip must not flash for one bad
+    // tick, nor stick forever once the state has cleared.
+    let warnStreak = 0;
+    let warnCode = "";
 
     const sync = () => {
       cancelAnimationFrame(frame);
@@ -248,11 +311,25 @@ export default function DesktopAppsPage() {
               setPhase("idle");
               return;
             }
-            if (result.state === "replaced" || result.state === "reparented") {
-              setWindowTitle(result.title);
-              setWindowClass(result.class);
-              setWarning(result.warning);
+            // Every result refreshes the triad — including plain "ok", so a
+            // stale warn chip cannot outlive its cause.
+            if (result.title) setWindowTitle(result.title);
+            if (result.class) setWindowClass(result.class);
+            const code = result.warning || "";
+            if (!code) {
+              warnStreak = 0;
+              warnCode = "";
+              setWarning("");
+              return;
             }
+            // Only surface a condition that persists (~1.2s): one-tick blips
+            // while the app repaints its frame are not worth shouting about.
+            if (code === warnCode) warnStreak += 1;
+            else {
+              warnCode = code;
+              warnStreak = 1;
+            }
+            if (warnStreak >= 3) setWarning(code);
           })
           .catch(() => {
             /* transient: the next tick tries again */
@@ -344,15 +421,45 @@ export default function DesktopAppsPage() {
         }
       }
       setPhase("polling");
+      // The backend hunts in a tight loop (25ms), so a window appearing on
+      // the desktop is adopted within one frame of showing up — a JS timer
+      // poll would leave it flashing there for a full tick first. Each call
+      // waits ATTACH_WAIT_MS; loop until the overall deadline.
       const deadline = Date.now() + WINDOW_WAIT_MS;
+      let lastError = "";
       while (Date.now() < deadline) {
-        await sleep(POLL_MS);
         if (!aliveRef.current || activeIdRef.current !== active.id) return;
-        const found = await invokeDesktopEmbedFind(processName).catch(() => null);
-        if (found) break;
+        const rect = slotRef.current?.getBoundingClientRect();
+        let info: DesktopWindowInfo | null = null;
+        try {
+          info = await invokeDesktopEmbedAttachWait({
+            processName,
+            x: rect?.x ?? 0,
+            y: rect?.y ?? 0,
+            width: rect?.width ?? 1,
+            height: rect?.height ?? 1,
+            waitMs: ATTACH_WAIT_MS,
+          });        } catch (err) {
+          lastError = err instanceof Error ? err.message : String(err);
+        }
+        if (info) {
+          if (!aliveRef.current || activeIdRef.current !== active.id) {
+            // Adopted while the user had already left the tab — undo.
+            void invokeDesktopEmbedShow(processName, false).catch(() => undefined);
+            return;
+          }
+          attachedRef.current = true;
+          setErrorText("");
+          setCandidates([]);
+          setWindowTitle(info.title);
+          setWindowClass(info.class);
+          setWarning(info.warning);
+          setPhase("attached");
+          return;
+        }
       }
-      const ok = await attach();
-      if (!ok && aliveRef.current) {
+      if (aliveRef.current && activeIdRef.current === active.id) {
+        setErrorText(lastError);
         setPhase("error");
         await diagnose();
       }
@@ -401,20 +508,48 @@ export default function DesktopAppsPage() {
   }, [invokeDesktopEmbedDetach, processName]);
 
   const killApp = useCallback(async () => {
+    // The hosted window is a native child placed above the webview, so it
+    // would cover the confirm dialog: the dialog only "flashes" and its
+    // buttons cannot be clicked. Hide it while the dialog is up, exactly like
+    // the picker does, and bring it back if the user backs out.
+    const wasAttached = attachedRef.current;
+    if (wasAttached) {
+      await invokeDesktopEmbedShow(processName, false).catch(() => undefined);
+    }
     const ok = await confirm({
       title: t("kill.title"),
       message: t("kill.message", { name: label(active) }),
       confirmText: t("kill.confirm"),
       icon: "danger",
     });
-    if (!ok) return;
+    if (!ok) {
+      if (wasAttached && attachedRef.current) {
+        void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
+      }
+      return;
+    }
     setBusy(true);
     try {
       // Kill FIRST, while the window is still our child: terminating the
       // process destroys the child window in place. Detaching first would
       // release the window as a floating top-level frame on top of the
       // workbench for the whole (potentially seconds-long) kill.
-      await invokeKillApp(processName);
+      // Desktop apps (DeepSeek Harness, Cursor) are close-to-tray: a soft kill
+      // only hides them, so force a tree kill instead.
+      await invokeKillApp(processName, true);
+      // Trust the window, not the tasklist: kill_app may report success while
+      // the process is still alive (image-name mismatch, stubborn shut-down).
+      // Detaching in that state would release a live window as a top-level
+      // frame parked over the whole workbench, which looks like a freeze.
+      const stillRunning = await invokeIsAppRunning(processName).catch(() => true);
+      if (stillRunning) {
+        if (attachedRef.current) {
+          setWarning("kill-failed");
+          // It survived — it is only hidden right now, so bring it back.
+          void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
+        }
+        return;
+      }
       // The unparent entry is now stale; drop it so the next attach starts
       // clean even if the kill saw the window as "not running".
       await invokeDesktopEmbedDetach(processName).catch(() => undefined);
@@ -425,6 +560,7 @@ export default function DesktopAppsPage() {
       // attached so nothing floats over the workbench.
       if (attachedRef.current) {
         setWarning("kill-failed");
+        void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
       } else {
         setErrorText(String(e));
         setPhase("error");
@@ -432,7 +568,17 @@ export default function DesktopAppsPage() {
     } finally {
       if (aliveRef.current) setBusy(false);
     }
-  }, [active, confirm, invokeDesktopEmbedDetach, invokeKillApp, label, processName, t]);
+  }, [
+    active,
+    confirm,
+    invokeDesktopEmbedDetach,
+    invokeDesktopEmbedShow,
+    invokeIsAppRunning,
+    invokeKillApp,
+    label,
+    processName,
+    t,
+  ]);
 
   const addApp = useCallback(async () => {
     const path = await invoke<string>("browse_app_file").catch(() => null);
@@ -454,13 +600,24 @@ export default function DesktopAppsPage() {
 
   const removeApp = useCallback(async () => {
     if (!active.custom) return;
+    // Same native-window-covers-the-dialog problem as killApp: hide the
+    // hosted window while the confirm is up.
+    const wasAttached = attachedRef.current;
+    if (wasAttached) {
+      await invokeDesktopEmbedShow(processName, false).catch(() => undefined);
+    }
     const ok = await confirm({
       title: t("remove.title"),
       message: t("remove.message", { name: label(active) }),
       confirmText: t("remove.confirm"),
       icon: "danger",
     });
-    if (!ok) return;
+    if (!ok) {
+      if (wasAttached && attachedRef.current) {
+        void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
+      }
+      return;
+    }
     try {
       await invokeDesktopEmbedDetach(processName);
     } catch {
@@ -471,7 +628,16 @@ export default function DesktopAppsPage() {
     setCustom(next);
     saveCustomApps(next);
     setActiveId(BUILTIN_DESKTOP_APPS[0].id);
-  }, [active, confirm, custom, invokeDesktopEmbedDetach, label, processName, t]);
+  }, [
+    active,
+    confirm,
+    custom,
+    invokeDesktopEmbedDetach,
+    invokeDesktopEmbedShow,
+    label,
+    processName,
+    t,
+  ]);
 
   const statusText = (() => {
     switch (phase) {
@@ -504,11 +670,12 @@ export default function DesktopAppsPage() {
               type="button"
               role="tab"
               aria-selected={app.id === active.id}
-              className={`dapps-tab${app.id === active.id ? " is-active" : ""}`}
+              aria-label={label(app)}
+              title={label(app)}
+              className={`dapps-tab is-icon${app.id === active.id ? " is-active" : ""}`}
               onClick={() => setActiveId(app.id)}
             >
-              <AppWindow size={14} />
-              <span>{label(app)}</span>
+              <AppTabIcon app={app} installed={installed} />
             </button>
           ))}
           <button type="button" className="dapps-tab dapps-tab-add" onClick={() => void addApp()}>
@@ -671,8 +838,8 @@ export default function DesktopAppsPage() {
       </div>
 
       {picking ? (
-        <div className="modal-overlay" onClick={closePicker}>
-          <div className="modal dapps-picker" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => { if (!busy) closePicker(); }}>
+          <div className="modal modal-lg dapps-picker" onClick={(event) => event.stopPropagation()}>
             <ModalTitleRow
               title={t("picker.title", { name: label(active) })}
               onClose={closePicker}
@@ -687,32 +854,72 @@ export default function DesktopAppsPage() {
             {pickerList.length === 0 ? (
               <p className="dapps-picker-empty">{t("picker.empty", { process: processName })}</p>
             ) : (
-              <ul className="dapps-picker-list">
-                {pickerList.map((c) => (
-                  <li key={`${c.pid}-${c.hwnd}`}>
-                    <div className="dapps-picker-main">
-                      <span className="dapps-picker-title">{c.title || t("error.untitled")}</span>
-                      <span className="dapps-picker-meta">
-                        <span className="dapps-error-tag">{c.class}</span>
-                        <span className="dapps-error-tag">{c.hwnd}</span>
-                        <span className="dapps-error-tag">
-                          {c.visible ? t("error.visible") : t("error.hidden")}
-                        </span>
-                        <span className="dapps-error-tag">{Math.round(c.area / 1000)}k px²</span>
-                        <span className="dapps-error-tag">{c.processName}</span>
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-small"
-                      disabled={busy || !c.visible}
-                      onClick={() => void attachPicked(c.hwnd)}
-                    >
-                      {t("picker.adopt")}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              (() => {
+                const needle = pickerQuery.trim().toLowerCase();
+                const shown = needle
+                  ? pickerList.filter((c) =>
+                      [c.title, c.class, c.hwnd, c.processName, String(c.pid)].some((field) =>
+                        field.toLowerCase().includes(needle)
+                      )
+                    )
+                  : pickerList;
+                return (
+                  <>
+                    <input
+                      className="dapps-picker-search"
+                      type="text"
+                      placeholder={t("picker.search")}
+                      value={pickerQuery}
+                      onChange={(event) => setPickerQuery(event.target.value)}
+                      spellCheck={false}
+                    />
+                    {shown.length === 0 ? (
+                      <p className="dapps-picker-empty">{t("picker.noMatch")}</p>
+                    ) : (
+                      <ul className="dapps-picker-list">
+                        {shown.map((c) => (
+                          <li key={`${c.pid}-${c.hwnd}`} className={c.current ? "is-current" : ""}>
+                            <div className="dapps-picker-main">
+                              <span className="dapps-picker-title">
+                                {c.title || t("error.untitled")}
+                                {c.current ? (
+                                  <em className="dapps-picker-badge">{t("picker.current")}</em>
+                                ) : null}
+                              </span>
+                              <span className="dapps-picker-meta">
+                                <span className="dapps-error-tag">{c.class}</span>
+                                <span className="dapps-error-tag">{c.hwnd}</span>
+                                {c.area > 0 ? (
+                                  <span className="dapps-error-tag">
+                                    {c.visible ? "" : `${t("error.hidden")} · `}
+                                    {Math.round(c.area / 1000)}k px²
+                                  </span>
+                                ) : (
+                                  <span className="dapps-error-tag">
+                                    {c.visible ? "" : t("error.hidden")}
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                            {c.current ? (
+                              <span className="dapps-picker-adopted">{t("picker.current")}</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-small"
+                                disabled={busy || !c.visible}
+                                onClick={() => void attachPicked(c.hwnd)}
+                              >
+                                {t("picker.adopt")}
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                );
+              })()
             )}
             <div className="dapps-picker-foot">
               <button

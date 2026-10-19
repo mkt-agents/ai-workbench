@@ -52,7 +52,10 @@
     "hint": "By default the largest main window is adopted. If a splash or helper window got embedded instead and the real window is still on the desktop, pick it here.",
     "empty": "No window found for process “{{process}}”. Make sure the app is running, then refresh below.",
     "count": "{{count}} windows",
-    "adopt": "Adopt"
+    "adopt": "Adopt",
+    "search": "Search title, class, handle or process…",
+    "noMatch": "No matching windows",
+    "current": "Currently embedded"
   },
   "kill": {
     "title": "Close app",

@@ -164,14 +164,16 @@ export interface Invocations {
   invokeInstallRuntime: (kind: RuntimeKind, version: string) => Promise<RuntimeVersion>;
   invokeUninstallRuntime: (kind: RuntimeKind, path: string) => Promise<void>;
   invokeLaunchApp: (path: string, args?: string) => Promise<string>;
-  invokeKillApp: (processName: string) => Promise<string>;
+  invokeKillApp: (processName: string, force?: boolean) => Promise<string>;
   invokeIsAppRunning: (processName: string) => Promise<boolean>;
   invokeScanInstalledApps: () => Promise<InstalledAppInfo[]>;
   invokeScanDesktopApps: () => Promise<InstalledAppInfo[]>;
   invokeScanStorePackages: () => Promise<string[]>;
   invokeGetAppVersion: (path: string) => Promise<string>;
+  invokeExtractAppIcon: (path: string) => Promise<string>;
   invokeDesktopEmbedFind: (processName: string) => Promise<DesktopWindowInfo | null>;
   invokeDesktopEmbedAttach: (params: { processName: string; x: number; y: number; width: number; height: number }) => Promise<DesktopWindowInfo>;
+  invokeDesktopEmbedAttachWait: (params: { processName: string; x: number; y: number; width: number; height: number; waitMs: number }) => Promise<DesktopWindowInfo>;
   invokeDesktopEmbedRelayout: (params: { processName: string; x: number; y: number; width: number; height: number }) => Promise<DesktopRelayoutResult>;
   invokeDesktopEmbedShow: (processName: string, visible: boolean) => Promise<void>;
   invokeDesktopEmbedDetach: (processName: string) => Promise<void>;
@@ -503,8 +505,8 @@ export const invocations: Invocations = {
     tauriInvoke<void>('uninstall_runtime', { kind, path }),
   invokeLaunchApp: (path: string, args?: string) =>
     tauriInvoke<string>('launch_app', { path, args: args ?? null }),
-  invokeKillApp: (processName: string) =>
-    tauriInvoke<string>('kill_app', { processName }),
+  invokeKillApp: (processName: string, force?: boolean) =>
+    tauriInvoke<string>('kill_app', { processName, force: force ?? null }),
   invokeIsAppRunning: (processName: string) =>
     tauriInvoke<boolean>('is_app_running', { processName }),
   invokeScanInstalledApps: () =>
@@ -515,10 +517,20 @@ export const invocations: Invocations = {
     tauriInvoke<string[]>('scan_store_packages'),
   invokeGetAppVersion: (path: string) =>
     tauriInvoke<string>('get_app_version', { path }),
+  invokeExtractAppIcon: (path: string) =>
+    tauriInvoke<string>('extract_app_icon', { path }),
   invokeDesktopEmbedFind: (processName: string) =>
     tauriInvoke<DesktopWindowInfo | null>('desktop_embed_find', { processName }),
   invokeDesktopEmbedAttach: (params) =>
     tauriInvoke<DesktopWindowInfo>('desktop_embed_attach', params),
+  invokeDesktopEmbedAttachWait: (params: {
+    processName: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    waitMs: number;
+  }) => tauriInvoke<DesktopWindowInfo>('desktop_embed_attach_wait', params),
   invokeDesktopEmbedRelayout: (params) =>
     tauriInvoke<DesktopRelayoutResult>('desktop_embed_relayout', params),
   invokeDesktopEmbedShow: (processName: string, visible: boolean) =>

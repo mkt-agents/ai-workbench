@@ -115,25 +115,31 @@ pub(crate) fn launch_app_inner(path: String, args: Option<String>) -> Result<Str
     }
 }
 
-/// Kill a process by image name. First tries a soft kill (`taskkill /IM`),
-/// waits up to 3 s, then escalates to `taskkill /F /IM` if still running.
+/// Kill a process by image name.
+///
+/// Default: soft kill (`taskkill /IM`), wait up to 3 s, then escalate to a
+/// force kill. `force = true` skips the soft step and ends the whole process
+/// tree outright — used for desktop-embedded apps, which are commonly
+/// close-to-tray: a soft kill is just a `WM_CLOSE`, which such an app answers
+/// by hiding its window and keeping the process (and its tray icon) alive.
 #[tauri::command]
-pub async fn kill_app(process_name: String) -> Result<String, String> {
+pub async fn kill_app(process_name: String, force: Option<bool>) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        let task = tokio::task::spawn_blocking(move || kill_app_inner(process_name));
+        let force = force.unwrap_or(false);
+        let task = tokio::task::spawn_blocking(move || kill_app_inner(process_name, force));
         task.await.map_err(|e| format!("关闭任务失败: {}", e))?
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = process_name;
+        let _ = (process_name, force);
         Err("当前系统不支持结束进程".into())
     }
 }
 
 #[cfg(target_os = "windows")]
-fn kill_app_inner(process_name: String) -> Result<String, String> {
+fn kill_app_inner(process_name: String, force: bool) -> Result<String, String> {
     {
         let image = normalize_image_name(&process_name);
         if image.is_empty() {
@@ -147,6 +153,12 @@ fn kill_app_inner(process_name: String) -> Result<String, String> {
             return Ok(format!("{} 未在运行", image));
         }
 
+        if force {
+            let result = force_kill(&image, &image_arg);
+            invalidate_tasklist_cache();
+            return result;
+        }
+
         // Soft kill first so the app can flush state on exit.
         let _ = hidden_command("taskkill")
             .args(["/IM", &image_arg])
@@ -158,30 +170,104 @@ fn kill_app_inner(process_name: String) -> Result<String, String> {
         }
 
         if is_app_running_inner(&image) {
-            // Force kill as last resort.
-            let output = hidden_command("taskkill")
-                .args(["/F", "/IM", &image_arg])
-                .output()
-                .map_err(|e| format!("执行 taskkill 失败: {}", e))?;
-
-            if !output.status.success() {
-                let stderr = decode_gbk(&output.stderr);
-                let stdout = decode_gbk(&output.stdout);
-                let combined = format!("{} {}", stdout, stderr).to_ascii_lowercase();
-                if combined.contains("not found")
-                    || combined.contains("找不到")
-                    || combined.contains("没有")
-                {
-                    invalidate_tasklist_cache();
-                    return Ok(format!("{} 已关闭", image));
-                }
-                return Err(format!("强制结束 {} 失败: {}", image, stderr.trim()));
-            }
+            let result = force_kill(&image, &image_arg);
+            invalidate_tasklist_cache();
+            return result;
         }
 
         invalidate_tasklist_cache();
         Ok(format!("已关闭 {}", image))
     }
+}
+
+/// End the process (and its children) outright, then sweep any leftover PIDs.
+/// Split out from `kill_app_inner` so the close-to-tray fast path reuses it.
+#[cfg(target_os = "windows")]
+fn force_kill(image: &str, image_arg: &str) -> Result<String, String> {
+    let output = hidden_command("taskkill")
+        .args(["/F", "/T", "/IM", image_arg])
+        .output()
+        .map_err(|e| format!("执行 taskkill 失败: {}", e))?;
+
+    let stdout = decode_gbk(&output.stdout);
+    let stderr = decode_gbk(&output.stderr);
+    kill_log(&format!(
+        "taskkill /F /T /IM {image_arg}: code={:?} out={:?} err={:?}",
+        output.status.code(),
+        stdout.trim(),
+        stderr.trim()
+    ));
+
+    if output.status.success() || !is_app_running_inner(image) {
+        kill_leftover_pids(image);
+        return Ok(format!("已关闭 {}", image));
+    }
+
+    let combined = format!("{stdout} {stderr}").to_ascii_lowercase();
+    if combined.contains("not found") || combined.contains("找不到") || combined.contains("没有") {
+        return Ok(format!("{image} 已关闭"));
+    }
+
+    // The tree kill reported failure but the image may still be there under a
+    // child PID taskkill's /T did not reach: sweep by PID before giving up.
+    kill_leftover_pids(image);
+    if !is_app_running_inner(image) {
+        return Ok(format!("已关闭 {}", image));
+    }
+    Err(format!("强制结束 {} 失败: {}", image, stderr.trim()))
+}
+
+/// Force-kill every remaining PID whose image matches, one by one. Covers the
+/// odd shell whose image name `taskkill /IM` refuses to match verbatim.
+#[cfg(target_os = "windows")]
+fn kill_leftover_pids(image: &str) {
+    let output = match hidden_command("tasklist")
+        .args([
+            "/FI",
+            &format!("IMAGENAME eq {}.exe", image),
+            "/FO",
+            "CSV",
+            "/NH",
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+    let text = decode_gbk(&output.stdout);
+    for line in text.lines() {
+        // CSV row: "image.exe","1234","Console","1","123,456 K"
+        let Some(pid) = line.split(',').nth(1) else {
+            continue;
+        };
+        let pid = pid.trim().trim_matches('"');
+        if pid.is_empty() || pid == "0" || !pid.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let _ = hidden_command("taskkill")
+            .args(["/F", "/T", "/PID", pid])
+            .output();
+    }
+}
+
+/// Append a line to `%TEMP%\ai-workbench-app-kill.log` (debug builds only).
+/// The kill outcome is otherwise invisible: a close-to-tray app that survives
+/// the soft kill must be distinguishable from a tree kill that failed.
+#[cfg(target_os = "windows")]
+fn kill_log(line: &str) {
+    #[cfg(debug_assertions)]
+    {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("ai-workbench-app-kill.log"))
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = line;
 }
 
 /// Check whether a process with the given image name is currently running.

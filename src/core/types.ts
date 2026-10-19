@@ -352,6 +352,8 @@ export interface DesktopWindowCandidate {
   owned: boolean;
   /** Window area in physical pixels; the largest is the main frame. */
   area: number;
+  /** This handle is the window embedded right now. */
+  current: boolean;
 }
 
 /** One process holding a queried port. Rust: `port_commands::PortListener` (camelCase). */
