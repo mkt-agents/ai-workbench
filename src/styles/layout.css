@@ -22,7 +22,7 @@
 .app-layout::after {
   content: '';
   position: absolute;
-  top: 40px;
+  top: var(--titlebar-h);
   left: 0;
   right: 0;
   height: 1px;
@@ -45,7 +45,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  height: 40px;
+  height: var(--titlebar-h);
   flex-shrink: 0;
   background: var(--bg-1);
   border-bottom: none;
@@ -82,9 +82,9 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 20px;
-  margin-right: 17px;
-  padding: 0 9px 0 8px;
+  height: 18px;
+  margin-right: 10px;
+  padding: 0 8px 0 7px;
   box-sizing: border-box;
   border-radius: var(--radius-full);
   background: var(--overlay-1);
@@ -116,9 +116,9 @@
 .dev-badge::after {
   content: "";
   position: absolute;
-  right: -9px;
-  top: 3px;
-  bottom: 3px;
+  right: -6px;
+  top: 2px;
+  bottom: 2px;
   width: 1px;
   background: var(--border-subtle);
 }
@@ -133,8 +133,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: var(--titlebar-h);
   border: none;
   background: none;
   color: var(--text-2);
@@ -153,10 +153,10 @@
 .sidebar {
   display: flex;
   flex-direction: column;
-  width: 200px;
+  width: var(--sidebar-w);
   /* 下限钉在折叠宽度，真正变化的只有 width，且不许被 flex 压窄。
      缓出：一开始就动，避免慢启动看起来像卡了一下。 */
-  min-width: 48px;
+  min-width: var(--sidebar-w-collapsed);
   flex-shrink: 0;
   height: 100%;
   background: var(--bg-1);
@@ -177,7 +177,7 @@
 
   :root:not([data-theme="dark"]):not([data-theme="glass"]):not([data-theme="ice"]):not([data-theme="silver"]) .sidebar::after {
     width: 1px;
-    top: 41px;
+    top: calc(var(--titlebar-h) + 1px);
     background: linear-gradient(
       180deg,
       transparent 0%,
@@ -198,7 +198,7 @@
 
 [data-theme="light"] .sidebar::after {
   width: 1px;
-  top: 41px;
+  top: calc(var(--titlebar-h) + 1px);
   background: linear-gradient(
     180deg,
     transparent 0%,
@@ -213,7 +213,7 @@
 .sidebar::after {
   content: '';
   position: absolute;
-  top: 40px;
+  top: var(--titlebar-h);
   right: 0;
   bottom: 0;
   width: 1px;
@@ -221,13 +221,13 @@
   pointer-events: none;
 }
 
-.sidebar.collapsed { width: 48px; }
+.sidebar.collapsed { width: var(--sidebar-w-collapsed); }
 
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 40px;
+  gap: 9px;
+  height: var(--titlebar-h);
   padding: 0 10px;
   flex-shrink: 0;
   border-bottom: none;
@@ -236,6 +236,9 @@
 .sidebar-logo-icon {
   flex-shrink: 0;
   display: block;
+  /* 36px 的标题栏行里 28px 的标偏大，按行高收回一档；折叠轨道内边距见 .sidebar.collapsed .sidebar-logo */
+  width: 22px;
+  height: 22px;
   overflow: visible;
   border-radius: var(--radius-sm);
   object-fit: contain;
@@ -316,9 +319,9 @@
 .sidebar-nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 0 10px;
+  padding: 0 9px;
   height: 30px;
   background: none;
   border: none;
@@ -345,10 +348,20 @@
   transition: opacity 0.14s ease;
 }
 
-/* 导航自身有 6px 内边距，项再留 10px，图标在 48px 轨道里已经居中。
-   不要在折叠时改 justify / padding，否则图标会先跳到宽栏中央。 */
+/* 导航自身有 6px 内边距，项再留 8px，图标在 44px 轨道里已经居中
+   （6 + 8 + 16 + 8 + 6 = 44）。不要在折叠时改 justify，否则图标会先跳到宽栏中央；
+   折叠态内边距再收 1px（9 → 8），跟随 --sidebar-w-collapsed。 */
 .sidebar.collapsed .nav-label {
   opacity: 0;
+}
+
+.sidebar.collapsed .sidebar-logo {
+  padding: 0 8px;
+}
+
+.sidebar.collapsed .sidebar-nav-item,
+.sidebar.collapsed .sidebar-group-item {
+  padding-left: 8px;
 }
 
 /* Active nav item: left accent tick */
@@ -405,7 +418,7 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 0 10px;
+  padding: 0 9px;
   height: 22px;
   background: none;
   border: none;
@@ -451,7 +464,7 @@
 .sidebar-group-item { font-size: 12px; }
 
 .sidebar.collapsed .sidebar-group-item {
-  padding-left: 10px;
+  padding-left: 9px;
   font-size: 12.5px;
 }
 

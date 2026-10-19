@@ -176,6 +176,7 @@ export interface Invocations {
   invokeDesktopEmbedAttachWait: (params: { processName: string; x: number; y: number; width: number; height: number; waitMs: number }) => Promise<DesktopWindowInfo>;
   invokeDesktopEmbedRelayout: (params: { processName: string; x: number; y: number; width: number; height: number }) => Promise<DesktopRelayoutResult>;
   invokeDesktopEmbedShow: (processName: string, visible: boolean) => Promise<void>;
+  invokeDesktopEmbedFocus: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetach: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetachAll: () => Promise<void>;
   invokeDesktopEmbedCandidates: (processName: string) => Promise<DesktopWindowCandidate[]>;
@@ -535,6 +536,8 @@ export const invocations: Invocations = {
     tauriInvoke<DesktopRelayoutResult>('desktop_embed_relayout', params),
   invokeDesktopEmbedShow: (processName: string, visible: boolean) =>
     tauriInvoke<void>('desktop_embed_show', { processName, visible }),
+  invokeDesktopEmbedFocus: (processName: string) =>
+    tauriInvoke<void>('desktop_embed_focus', { processName }),
   invokeDesktopEmbedDetach: (processName: string) =>
     tauriInvoke<void>('desktop_embed_detach', { processName }),
   invokeDesktopEmbedDetachAll: () =>

@@ -5,6 +5,16 @@
   to { transform: rotate(360deg); }
 }
 
+/* ─── 窗口 chrome 尺寸（与主题无关，只在这里定义一份）───
+   标题栏是 .right-area 顶部的一条，侧栏 logo 行与它同一行高；.app-layout::after
+   的整宽顶线、.sidebar::after 的竖线起点都由这两个值推出来。
+   调标题栏高度 / 侧栏宽度只改这里，别在 layout.css 里各写一份 px。 */
+:root {
+  --titlebar-h: 36px;
+  --sidebar-w: 150px;
+  --sidebar-w-collapsed: 44px;
+}
+
 /* ─── Light tokens（默认 · 白雾磨砂）─── */
 :root {
   color-scheme: light;

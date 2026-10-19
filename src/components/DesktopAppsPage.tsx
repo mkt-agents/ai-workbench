@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   AppWindow,
   Loader2,
+  MoreHorizontal,
   MousePointerClick,
   Play,
   Plus,
@@ -16,6 +17,7 @@ import {
 import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
+import DropdownMenu from "./DropdownMenu";
 import type { DesktopWindowCandidate, DesktopWindowInfo, InstalledAppInfo } from "../core/types";
 import {
   BUILTIN_DESKTOP_APPS,
@@ -28,6 +30,18 @@ import {
 
 type Phase = "idle" | "running" | "attached" | "launching" | "polling" | "missing" | "error";
 
+/** One toolbar button, described once and rendered either in the full row or
+ * the narrow "⋯" overflow menu. */
+type TbarAction = {
+  key: string;
+  label: string;
+  icon: ReactNode;
+  variant: "primary" | "secondary" | "danger";
+  title?: string;
+  disabled: boolean;
+  onClick: () => void;
+};
+
 /** Generous, because a cold IDE start (IntelliJ, VS Code) blows past a minute. */
 const WINDOW_WAIT_MS = 150_000;
 /** One backend attach_wait round: scans every 25ms in-process for this long,
@@ -37,6 +51,27 @@ const HEARTBEAT_MS = 400;
 
 /** Module-level exe-icon cache shared by the tab strip (survives re-renders). */
 const desktopIconCache = new Map<string, string>();
+
+/**
+ * Visibility ops per process run strictly in issue order.
+ *
+ * A tab-switch hide and a quick switch-back show are two independent IPC
+ * calls; if the backend ever landed the hide after the show, the entry would
+ * sit at shown=0 while the page is active — the heartbeat keeps re-hiding it
+ * and the slot stays blank for good. Chaining through this queue makes the
+ * order deterministic; different processes are independent by key.
+ */
+const showQueues = new Map<string, Promise<void>>();
+const enqueueShow = (processName: string, op: () => Promise<void>): Promise<void> => {
+  const next = (showQueues.get(processName) ?? Promise.resolve()).then(op, op);
+  showQueues.set(
+    processName,
+    next.finally(() => {
+      if (showQueues.get(processName) === next) showQueues.delete(processName);
+    })
+  );
+  return next;
+};
 
 /** The tab shows only the app's real icon; the name appears on hover. */
 function AppTabIcon({
@@ -114,6 +149,7 @@ export default function DesktopAppsPage() {
   const invokeDesktopEmbedAttachWait = useGlobalStore((s) => s.invokeDesktopEmbedAttachWait);
   const invokeDesktopEmbedRelayout = useGlobalStore((s) => s.invokeDesktopEmbedRelayout);
   const invokeDesktopEmbedShow = useGlobalStore((s) => s.invokeDesktopEmbedShow);
+  const invokeDesktopEmbedFocus = useGlobalStore((s) => s.invokeDesktopEmbedFocus);
   const invokeDesktopEmbedDetach = useGlobalStore((s) => s.invokeDesktopEmbedDetach);
   const invokeDesktopEmbedCandidates = useGlobalStore((s) => s.invokeDesktopEmbedCandidates);
   const invokeDesktopEmbedAttachWindow = useGlobalStore((s) => s.invokeDesktopEmbedAttachWindow);
@@ -201,7 +237,9 @@ export default function DesktopAppsPage() {
       }
       // The hosted window paints over the webview, so it would cover the very
       // dialog that is meant to replace it: hide it while choosing.
-      if (attachedRef.current) void invokeDesktopEmbedShow(processName, false);
+      if (attachedRef.current) {
+        void enqueueShow(processName, () => invokeDesktopEmbedShow(processName, false));
+      }
       setPickerList(list);
       setPickerQuery("");
       setPicking(true);
@@ -213,8 +251,14 @@ export default function DesktopAppsPage() {
   /** Close the picker, bringing the adopted window back if it is still ours. */
   const closePicker = useCallback(() => {
     setPicking(false);
-    if (attachedRef.current) void invokeDesktopEmbedShow(processName, true);
-  }, [invokeDesktopEmbedShow, processName]);
+    if (attachedRef.current) {
+      // Show, then hand focus over: the user closed a webview dialog, so the
+      // intent is to be back inside the hosted app (typing without clicking).
+      void enqueueShow(processName, () =>
+        invokeDesktopEmbedShow(processName, true).then(() => invokeDesktopEmbedFocus(processName))
+      );
+    }
+  }, [invokeDesktopEmbedFocus, invokeDesktopEmbedShow, processName]);
 
   /** Adopt exactly the window the user clicked. */
   const attachPicked = useCallback(
@@ -267,7 +311,14 @@ export default function DesktopAppsPage() {
           width: rect.width,
           height: rect.height,
         });
-        if (!aliveRef.current || activeIdRef.current !== active.id) return true;
+        if (!aliveRef.current || activeIdRef.current !== active.id) {
+          // Adopted while the user already left: the effect cleanup for this
+          // app has already run, so nothing else would hide this window — it
+          // would keep floating over the workbench. Undo the adoption's
+          // visibility here, exactly like startAndAttach does.
+          void enqueueShow(processName, () => invokeDesktopEmbedShow(processName, false));
+          return true;
+        }
         attachedRef.current = true;
         setErrorText("");
         setCandidates([]);
@@ -282,7 +333,7 @@ export default function DesktopAppsPage() {
         return false;
       }
     },
-    [active.id, invokeDesktopEmbedAttach, processName]
+    [active.id, invokeDesktopEmbedAttach, invokeDesktopEmbedShow, processName]
   );
 
   // Per-app lifecycle: adopt what is already running, follow the slot on resize,
@@ -363,10 +414,13 @@ export default function DesktopAppsPage() {
           attachedRef.current = true;
           setWindowTitle(found.title);
           setWindowClass(found.class);
-          setWarning(found.warning);
+          // No setWarning here: the condition may have cleared while the page
+          // was away, and a direct set would bypass the debounce below and
+          // flash a stale chip until the first heartbeat corrects it.
           setPhase("attached");
-          void invokeDesktopEmbedShow(processName, true);
-          sync();
+          void enqueueShow(processName, () =>
+            invokeDesktopEmbedShow(processName, true).then(() => invokeDesktopEmbedFocus(processName))
+          ).then(() => sync());
           return;
         }
         const ok = await attach();
@@ -402,10 +456,17 @@ export default function DesktopAppsPage() {
       // Hide, do not detach: the app keeps its window and its state.
       if (attachedRef.current) {
         attachedRef.current = false;
-        void invokeDesktopEmbedShow(processName, false);
+        void enqueueShow(processName, () => invokeDesktopEmbedShow(processName, false));
       }
     };
-  }, [attach, invokeDesktopEmbedFind, invokeDesktopEmbedShow, invokeDesktopEmbedRelayout, processName]);
+  }, [
+    attach,
+    invokeDesktopEmbedFind,
+    invokeDesktopEmbedFocus,
+    invokeDesktopEmbedShow,
+    invokeDesktopEmbedRelayout,
+    processName,
+  ]);
 
   const startAndAttach = useCallback(async () => {
     setBusy(true);
@@ -452,13 +513,16 @@ export default function DesktopAppsPage() {
             width: rect?.width ?? 1,
             height: rect?.height ?? 1,
             waitMs: ATTACH_WAIT_MS,
-          });        } catch (err) {
+          });
+        } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
         }
         if (info) {
           if (!aliveRef.current || activeIdRef.current !== active.id) {
             // Adopted while the user had already left the tab — undo.
-            void invokeDesktopEmbedShow(processName, false).catch(() => undefined);
+            void enqueueShow(processName, () =>
+              invokeDesktopEmbedShow(processName, false).catch(() => undefined)
+            );
             return;
           }
           attachedRef.current = true;
@@ -468,6 +532,18 @@ export default function DesktopAppsPage() {
           setWindowClass(info.class);
           setWarning(info.warning);
           setPhase("attached");
+          // A launch-embed adopts while the app is still starting up: its
+          // input pipeline can miss the first WM_SETFOCUS entirely (the
+          // backend's refocus campaign covers ~1.6s, but a cold Electron
+          // start can take longer). Re-fire the focus command twice; it
+          // no-ops unless the workbench is the foreground window.
+          for (const delay of [400, 1200]) {
+            window.setTimeout(() => {
+              if (aliveRef.current && activeIdRef.current === active.id && attachedRef.current) {
+                void invokeDesktopEmbedFocus(processName).catch(() => undefined);
+              }
+            }, delay);
+          }
           return;
         }
       }
@@ -491,6 +567,7 @@ export default function DesktopAppsPage() {
     diagnose,
     installed,
     invokeDesktopEmbedFind,
+    invokeDesktopEmbedFocus,
     invokeIsAppRunning,
     invokeLaunchApp,
     processName,
@@ -527,7 +604,9 @@ export default function DesktopAppsPage() {
     // the picker does, and bring it back if the user backs out.
     const wasAttached = attachedRef.current;
     if (wasAttached) {
-      await invokeDesktopEmbedShow(processName, false).catch(() => undefined);
+      void enqueueShow(processName, () =>
+        invokeDesktopEmbedShow(processName, false).catch(() => undefined)
+      );
     }
     const ok = await confirm({
       title: t("kill.title"),
@@ -537,7 +616,9 @@ export default function DesktopAppsPage() {
     });
     if (!ok) {
       if (wasAttached && attachedRef.current) {
-        void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
+        void enqueueShow(processName, () =>
+          invokeDesktopEmbedShow(processName, true).catch(() => undefined)
+        );
       }
       return;
     }
@@ -559,7 +640,9 @@ export default function DesktopAppsPage() {
         if (attachedRef.current) {
           setWarning("kill-failed");
           // It survived — it is only hidden right now, so bring it back.
-          void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
+          void enqueueShow(processName, () =>
+            invokeDesktopEmbedShow(processName, true).catch(() => undefined)
+          );
         }
         return;
       }
@@ -573,7 +656,9 @@ export default function DesktopAppsPage() {
       // attached so nothing floats over the workbench.
       if (attachedRef.current) {
         setWarning("kill-failed");
-        void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
+        void enqueueShow(processName, () =>
+          invokeDesktopEmbedShow(processName, true).catch(() => undefined)
+        );
       } else {
         setErrorText(String(e));
         setPhase("error");
@@ -617,7 +702,9 @@ export default function DesktopAppsPage() {
     // hosted window while the confirm is up.
     const wasAttached = attachedRef.current;
     if (wasAttached) {
-      await invokeDesktopEmbedShow(processName, false).catch(() => undefined);
+      await enqueueShow(processName, () =>
+        invokeDesktopEmbedShow(processName, false).catch(() => undefined)
+      );
     }
     const ok = await confirm({
       title: t("remove.title"),
@@ -627,7 +714,9 @@ export default function DesktopAppsPage() {
     });
     if (!ok) {
       if (wasAttached && attachedRef.current) {
-        void invokeDesktopEmbedShow(processName, true).catch(() => undefined);
+        void enqueueShow(processName, () =>
+          invokeDesktopEmbedShow(processName, true).catch(() => undefined)
+        );
       }
       return;
     }
@@ -670,6 +759,66 @@ export default function DesktopAppsPage() {
         return t("status.idle");
     }
   })();
+
+  const actionItems: TbarAction[] = [
+    {
+      key: "launch",
+      label: t("actions.launch"),
+      icon: <Play size={13} />,
+      variant: "primary",
+      disabled: busy || phase === "attached",
+      onClick: () => void startAndAttach(),
+    },
+    {
+      key: "reattach",
+      label: t("actions.reattach"),
+      icon: <RefreshCw size={13} />,
+      variant: "secondary",
+      disabled: busy || phase === "idle" || phase === "missing",
+      onClick: () => void reattach(),
+    },
+    {
+      key: "picker",
+      label: t("picker.action"),
+      icon: <MousePointerClick size={13} />,
+      variant: "secondary",
+      title: t("picker.hint"),
+      disabled: busy || phase === "idle",
+      onClick: () => void openPicker(),
+    },
+    {
+      key: "detach",
+      label: t("actions.detach"),
+      icon: <Unplug size={13} />,
+      variant: "secondary",
+      disabled: busy || phase !== "attached",
+      onClick: () => void detach(),
+    },
+    {
+      key: "kill",
+      label: t("actions.kill"),
+      icon: <XCircle size={13} />,
+      variant: "danger",
+      disabled: busy || phase === "idle" || phase === "missing",
+      onClick: () => void killApp(),
+    },
+    ...(active.custom
+      ? [
+          {
+            key: "remove",
+            label: t("actions.remove"),
+            icon: <Trash2 size={13} />,
+            variant: "danger" as const,
+            disabled: busy,
+            onClick: () => void removeApp(),
+          },
+        ]
+      : []),
+  ];
+  const primaryAction =
+    actionItems.find((a) => a.key === (phase === "attached" ? "reattach" : "launch")) ??
+    actionItems[0];
+  const overflowActions = actionItems.filter((a) => a !== primaryAction);
 
   return (
     <div className="dapps-page">
@@ -723,63 +872,46 @@ export default function DesktopAppsPage() {
         <span className="dapps-spacer" />
 
         <div className="dapps-actions">
-          <button
-            type="button"
-            className="btn btn-primary btn-small"
-            disabled={busy || phase === "attached"}
-            onClick={() => void startAndAttach()}
-          >
-            <Play size={13} />
-            {t("actions.launch")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            disabled={busy || phase === "idle" || phase === "missing"}
-            onClick={() => void reattach()}
-          >
-            <RefreshCw size={13} />
-            {t("actions.reattach")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            disabled={busy || phase === "idle"}
-            onClick={() => void openPicker()}
-            title={t("picker.hint")}
-          >
-            <MousePointerClick size={13} />
-            {t("picker.action")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            disabled={busy || phase !== "attached"}
-            onClick={() => void detach()}
-          >
-            <Unplug size={13} />
-            {t("actions.detach")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-danger btn-small"
-            disabled={busy || phase === "idle" || phase === "missing"}
-            onClick={() => void killApp()}
-          >
-            <XCircle size={13} />
-            {t("actions.kill")}
-          </button>
-          {active.custom && (
+          <div className="dapps-actions-wide">
+            {actionItems.map((a) => (
+              <button
+                key={a.key}
+                type="button"
+                className={`btn btn-${a.variant} btn-small`}
+                disabled={a.disabled}
+                title={a.title}
+                onClick={a.onClick}
+              >
+                {a.icon}
+                {a.label}
+              </button>
+            ))}
+          </div>
+          <div className="dapps-actions-narrow">
             <button
               type="button"
-              className="btn btn-danger btn-small"
-              disabled={busy}
-              onClick={() => void removeApp()}
+              className={`btn btn-${primaryAction.variant} btn-small`}
+              disabled={primaryAction.disabled}
+              title={primaryAction.title ?? primaryAction.label}
+              onClick={primaryAction.onClick}
             >
-              <Trash2 size={13} />
-              {t("actions.remove")}
+              {primaryAction.icon}
+              {primaryAction.label}
             </button>
-          )}
+            <DropdownMenu
+              label={t("actions.more")}
+              triggerClassName="btn btn-secondary btn-small"
+              items={overflowActions.map((a) => ({
+                label: a.label,
+                icon: a.icon,
+                danger: a.variant === "danger",
+                disabled: a.disabled,
+                onClick: a.onClick,
+              }))}
+            >
+              <MoreHorizontal size={13} />
+            </DropdownMenu>
+          </div>
         </div>
       </div>
 

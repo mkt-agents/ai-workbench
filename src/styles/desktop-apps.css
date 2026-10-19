@@ -9,6 +9,9 @@
   display: flex;
   flex-direction: column;
   width: 100%;
+  /* The toolbar adapts to the page's own width, not the viewport: the sidebar
+     can collapse independently, so a viewport media query would misjudge it. */
+  container: dapps-page / inline-size;
   /* Deliberate exception to --page-max-width: this card IS the host slot the
      native window is placed into, so it fills the main area at every size. */
   border-radius: var(--radius-lg);
@@ -21,7 +24,10 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: nowrap;
+  /* Wrap is only a last-resort net (e.g. a long warning chip on a mid-size
+     page); the toolbar itself collapses into a "⋯" menu first. */
+  flex-wrap: wrap;
+  row-gap: 6px;
   flex: none;
   min-height: 40px;
   padding: 6px 10px;
@@ -156,6 +162,19 @@
   align-items: center;
   gap: 6px;
   flex: none;
+  /* Pushes the group to the right edge even when the bar has wrapped. */
+  margin-left: auto;
+}
+
+.dapps-actions-wide,
+.dapps-actions-narrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dapps-actions-narrow {
+  display: none;
 }
 
 .dapps-actions .btn {
@@ -171,10 +190,19 @@
   overflow: hidden;
 }
 
-/* Narrow windows: keep one row — drop the status label, keep its dot. */
-@media (max-width: 1100px) {
+/* Narrow pages: drop the status label (keep its dot) and collapse the action
+   row to a single contextual primary button plus a "⋯" overflow menu. */
+@container dapps-page (max-width: 760px) {
   .dapps-status-text {
     display: none;
+  }
+
+  .dapps-actions-wide {
+    display: none;
+  }
+
+  .dapps-actions-narrow {
+    display: flex;
   }
 }
 

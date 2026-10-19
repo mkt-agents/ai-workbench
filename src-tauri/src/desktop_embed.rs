@@ -78,21 +78,28 @@ mod imp {
     use std::sync::Mutex;
     use tauri::Manager;
     use windows::core::{BOOL, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        ClientToScreen, RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
+    };
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
+        PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetFocus, keybd_event, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP, VK_MENU,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetForegroundWindow, GetParent, GetWindow, GetWindowLongPtrW,
-        GetWindowRect, GetWindowThreadProcessId, GetWindowTextW, IsHungAppWindow, IsIconic,
-        IsWindow, IsWindowVisible, IsZoomed,
-        SetParent, SetWindowLongPtrW,
-        SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT, GW_OWNER, HWND_TOP,
-        SW_HIDE, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SWP_SHOWWINDOW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-        WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX,
-        WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+        GetWindowPlacement, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+        IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed, SetForegroundWindow,
+        SetParent, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow,
+        GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP, SWP_FRAMECHANGED,
+        SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT, WS_CAPTION, WS_CHILD,
+        WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_MAXIMIZE,
+        WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+        WS_VISIBLE,
     };
 
     /// Below this (physical px²) a window is a helper, not an application frame.
@@ -137,6 +144,11 @@ mod imp {
         /// dialog uses set_visible(false) while itself on screen; place()
         /// keeps the window hidden until it is flipped back.
         shown: isize,
+        /// Input-queue thread of the hosted window, attached to the host
+        /// thread's queue at take_over time (0 = same thread / not attached).
+        /// release() must detach the pair or the two threads keep sharing
+        /// focus state after the window is back on the desktop.
+        attached_thread: u32,
     }
 
     /// Append one line to `%TEMP%\ai-workbench-desktop-embed.log` (debug builds
@@ -160,6 +172,14 @@ mod imp {
 
     static EMBEDDED: Mutex<Option<HashMap<String, Embedded>>> = Mutex::new(None);
 
+    /// Last `(hwnd, x, y, w, h)` written to the trace, so the 400ms heartbeat
+    /// does not flood the log with identical lines. Diagnostic only.
+    static LAST_PLACE: Mutex<Option<(isize, i32, i32, i32, i32)>> = Mutex::new(None);
+
+    /// Last `(hwnd, verify-code)` written to the trace, so a persisting warning
+    /// is logged once instead of every 400ms heartbeat. Diagnostic only.
+    static LAST_WARN: Mutex<Option<(isize, &'static str)>> = Mutex::new(None);
+
     fn map_key(process: &str) -> String {
         process.trim().to_ascii_lowercase()
     }
@@ -175,14 +195,15 @@ mod imp {
     fn scale_and_hwnd(app: &tauri::AppHandle) -> Result<(HWND, f64), String> {
         let window = app.get_window("main").ok_or("主窗口不存在")?;
         let scale = window.scale_factor().unwrap_or(1.0);
-        let raw = window.hwnd().map_err(|e| format!("无法获取主窗口句柄: {e}"))?;
+        let raw = window
+            .hwnd()
+            .map_err(|e| format!("无法获取主窗口句柄: {e}"))?;
         Ok((HWND(raw.0 as *mut _), scale))
     }
 
     /// Image name (without extension) of a running process, or `None` if gone.
     fn image_stem(pid: u32) -> Option<String> {
-        let handle =
-            unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
         let ok = unsafe {
@@ -253,6 +274,9 @@ mod imp {
             }
             if IsIconic(hwnd).as_bool() {
                 return "minimized";
+            }
+            if IsZoomed(hwnd).as_bool() {
+                return "maximized";
             }
             if !IsWindowVisible(hwnd).as_bool() {
                 return "invisible";
@@ -429,7 +453,10 @@ mod imp {
         if needle.is_empty() {
             return Vec::new();
         }
-        let mut ctx = Ctx { needle, out: Vec::new() };
+        let mut ctx = Ctx {
+            needle,
+            out: Vec::new(),
+        };
         unsafe {
             let _ = EnumWindows(Some(collect), LPARAM(&mut ctx as *mut Ctx as isize));
         }
@@ -648,7 +675,82 @@ mod imp {
             if IsHungAppWindow(hwnd).as_bool() {
                 return;
             }
-            let _ = SetWindowPos(hwnd, Some(HWND_TOP), px, py, pw, ph, SWP_NOACTIVATE | visibility);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOP),
+                px,
+                py,
+                pw,
+                ph,
+                SWP_NOACTIVATE | visibility,
+            );
+            // A window adopted while maximized (Chromium re-asserts its own
+            // maximized placement from inside the WM_WINDOWPOSCHANGING sync of
+            // our SetWindowPos above) keeps fighting every subsequent place:
+            // the rect we just wrote is replaced by the maximized screen rect
+            // on the next sync, so the slot drifts and will not come back even
+            // through re-attach. Force the normal placement, re-place, and
+            // repaint the invalidated slot. The window is a hidden/child window
+            // here, so no restore flash can reach the desktop.
+            if IsZoomed(hwnd).as_bool() {
+                let mut wp = WINDOWPLACEMENT {
+                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                    ..Default::default()
+                };
+                if GetWindowPlacement(hwnd, &mut wp).is_ok() {
+                    wp.showCmd = SW_SHOWNORMAL.0 as u32;
+                    let _ = SetWindowPlacement(hwnd, &wp);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(HWND_TOP),
+                        px,
+                        py,
+                        pw,
+                        ph,
+                        SWP_NOACTIVATE | visibility,
+                    );
+                }
+                let _ = RedrawWindow(
+                    Some(hwnd),
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+                );
+            }
+            // Diagnostic (temp): target vs actual rect, plus the live display
+            // state. Throttled on unchanged target so the 400ms heartbeat does
+            // not flood the log; a persistent mismatch (drift) re-logs.
+            let key = (hwnd.0 as isize, px, py, pw, ph);
+            let mut actual = RECT::default();
+            let measured = GetWindowRect(hwnd, &mut actual).is_ok();
+            let mut origin = POINT::default();
+            let host = GetParent(hwnd).unwrap_or_default();
+            let in_client = !host.is_invalid() && ClientToScreen(host, &mut origin).as_bool();
+            let (ax, ay, aw, ah) = (
+                actual.left - origin.x,
+                actual.top - origin.y,
+                actual.right - actual.left,
+                actual.bottom - actual.top,
+            );
+            let drifted = measured && in_client && (ax, ay, aw, ah) != (px, py, pw, ph);
+            let changed = LAST_PLACE
+                .lock()
+                .map(|mut g| {
+                    let changed = *g != Some(key);
+                    if changed {
+                        *g = Some(key);
+                    }
+                    changed
+                })
+                .unwrap_or(true);
+            if changed || drifted {
+                debug_log(&format!(
+                    "place 0x{:X} target=({px},{py},{pw},{ph}) scale={scale:.2} actual=({ax},{ay},{aw},{ah}) client_ok={in_client} zoomed={} iconic={} show={show}",
+                    key.0,
+                    IsZoomed(hwnd).as_bool(),
+                    IsIconic(hwnd).as_bool(),
+                ));
+            }
         }
     }
 
@@ -663,6 +765,15 @@ mod imp {
         let mut rect = RECT::default();
         let placed = unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok();
         unsafe {
+            // Detach the input queues first, while the window is still ours:
+            // the two threads must stop sharing focus/activation state before
+            // the window is a top-level frame again.
+            if entry.attached_thread != 0 {
+                let host_thread = GetWindowThreadProcessId(as_hwnd(entry.parent), None);
+                if host_thread != 0 && host_thread != entry.attached_thread {
+                    let _ = AttachThreadInput(entry.attached_thread, host_thread, false);
+                }
+            }
             let _ = SetParent(hwnd, None);
             // Keep the CURRENT visibility, not the one from attach time: the
             // app may have hidden its own window while it was embedded (a
@@ -768,12 +879,172 @@ mod imp {
         alive
     }
 
+    /// Re-send `WM_SETFOCUS` to the hosted window.
+    ///
+    /// `SetFocus` alone can be a no-op from the app's point of view: the
+    /// message only re-registers the app's input when the window cycles
+    /// hide → focus → show (an already-visible focused window shown with
+    /// `SW_SHOWNOACTIVATE` receives nothing — the same recipe as the show
+    /// path in `set_visible`, which is the one that empirically works).
+    /// Never sleeps: callers pace retries from background threads.
+    /// Returns whether the window ended up holding the (shared) queue focus.
+    fn sync_hosted_focus(hwnd: HWND, attached: bool) -> bool {
+        unsafe {
+            if IsHungAppWindow(hwnd).as_bool() {
+                return false;
+            }
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW,
+            );
+            let _ = SetFocus(Some(hwnd));
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            !attached || GetFocus() == hwnd
+        }
+    }
+
+    /// Make the workbench the foreground/active window, working around the
+    /// Windows foreground lock that a freshly launched app leaves behind.
+    ///
+    /// When we adopt a just-launched app, its window held the foreground and
+    /// consumed our foreground rights: a plain `SetForegroundWindow` from the
+    /// now-background workbench process fails, activation dangles on a window
+    /// that is no longer top-level, and no queue can establish focus — the
+    /// embedded app is typing-dead until the user happens to re-activate the
+    /// workbench (which is why detach → re-embed "fixes" it). Two documented
+    /// unlocks, tried in order: attach to the current foreground queue, then
+    /// the ALT-key trick when the foreground is dangling (null/stale).
+    fn raise_host(parent: HWND) -> bool {
+        unsafe {
+            if GetForegroundWindow() == parent {
+                return true;
+            }
+            let this_thread = GetCurrentThreadId();
+            let fg = GetForegroundWindow();
+            if !fg.is_invalid() {
+                let fg_thread = GetWindowThreadProcessId(fg, None);
+                let mut attached = false;
+                if fg_thread != 0 && fg_thread != this_thread {
+                    attached = AttachThreadInput(this_thread, fg_thread, true).as_bool();
+                }
+                let ok = SetForegroundWindow(parent).as_bool();
+                if attached {
+                    let _ = AttachThreadInput(this_thread, fg_thread, false);
+                }
+                if ok {
+                    let _ = SetActiveWindow(parent);
+                    return true;
+                }
+            }
+            // Foreground dangling (null or a stale child pointer): briefly tap
+            // ALT so the system accepts a background process's activation.
+            keybd_event(VK_MENU.0 as u8, 0, Default::default(), 0);
+            let ok = SetForegroundWindow(parent).as_bool();
+            keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+            if ok {
+                let _ = SetActiveWindow(parent);
+            }
+            ok
+        }
+    }
+
+    /// Give the hosted window keyboard focus when the workbench itself is the
+    /// active window.
+    ///
+    /// Cross-process parenting keeps the hosted window in its own input queue
+    /// until the queues are attached (see take_over); even attached, focus
+    /// never moves on its own — a freshly embedded app sits there unable to
+    /// receive typing until the user clicks it. Hand focus over at the moments
+    /// the user's intent is obvious: right after adopting, re-parenting or a
+    /// frame swap. Runs on the main thread (focus belongs to the calling
+    /// thread's attached queue — the hosted window is attached to the
+    /// host/main queue), and guarded on the host being foreground so the 400ms
+    /// heartbeat can never yank focus out of the workbench's own inputs.
+    ///
+    /// Guarded on the host being foreground so the 400ms heartbeat can never
+    /// yank focus out of the workbench's own inputs; when the host is NOT in
+    /// front (a freshly launched app consumed the foreground), `raise_host`
+    /// takes it back with one of the documented unlocks instead of silently
+    /// giving up — that bail-out was why launch-embed left the app deaf while
+    /// detach → re-embed (user click re-activated the host) worked.
+    fn focus_hosted(app: &tauri::AppHandle, parent: HWND, hwnd: HWND, attached: bool) {
+        // Raw HWND is not Send: carry the handles as isize across the closure.
+        let parent_raw = parent.0 as isize;
+        let hwnd_raw = hwnd.0 as isize;
+        let _ = app.run_on_main_thread(move || unsafe {
+            let parent = as_hwnd(parent_raw);
+            let hwnd = as_hwnd(hwnd_raw);
+            if IsIconic(hwnd).as_bool() {
+                return;
+            }
+            let fg_before = GetForegroundWindow();
+            let raised = raise_host(parent);
+            let _ = SetFocus(Some(hwnd));
+            let nudged = sync_hosted_focus(hwnd, attached);
+            debug_log(&format!(
+                "focus 0x{:X} fg_before=0x{:X} raised={raised} focused={} nudged={nudged}",
+                hwnd.0 as usize,
+                fg_before.0 as usize,
+                GetFocus() == hwnd
+            ));
+        });
+    }
+
+    /// Follow-up focus campaign for adoptions that land while the app is still
+    /// starting (launch-embed): the first `WM_SETFOCUS` can arrive before the
+    /// app's input pipeline is ready, and the foreground/activation state can
+    /// still be dangling from the takeover. Re-nudge a few times, paced from a
+    /// background thread (the old retry loop slept on the UI thread). Each
+    /// attempt acts only while the host is the foreground window, so the user
+    /// typing into the workbench is never hijacked.
+    fn refocus(app: &tauri::AppHandle, parent: HWND, hwnd: HWND, attached: bool) {
+        let app = app.clone();
+        let parent_raw = parent.0 as isize;
+        let hwnd_raw = hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let mut elapsed = 0u64;
+            for at in [300u64, 800, 1600] {
+                std::thread::sleep(std::time::Duration::from_millis(at - elapsed));
+                elapsed = at;
+                let _ = app.run_on_main_thread(move || unsafe {
+                    let parent = as_hwnd(parent_raw);
+                    let hwnd = as_hwnd(hwnd_raw);
+                    if IsIconic(hwnd).as_bool() || IsHungAppWindow(hwnd).as_bool() {
+                        return;
+                    }
+                    if GetForegroundWindow() != parent {
+                        // The user is elsewhere: nothing to fix here, and the
+                        // desktop_embed_focus command covers the come-back.
+                        return;
+                    }
+                    let nudged = sync_hosted_focus(hwnd, attached);
+                    debug_log(&format!(
+                        "refocus 0x{:X} focused={} nudged={nudged}",
+                        hwnd.0 as usize,
+                        GetFocus() == hwnd
+                    ));
+                });
+            }
+        });
+    }
+
     /// Strip the standalone frame off `hwnd` and parent it into `parent`.
     ///
     /// Kept separate from `place` because the app can undo this behind our back:
     /// Chromium re-asserts its own top-level frame on some window events, and
     /// `relayout` puts the window back with this same call.
-    fn take_over(hwnd: HWND, parent: HWND) -> Result<(), String> {
+    ///
+    /// Returns the hosted window's input-queue thread id (0 when it matches the
+    /// host's), attached to the host queue so keyboard focus can move between
+    /// the webview and the hosted app — without this, typing into the embedded
+    /// app is impossible: focus stays in the webview queue and the app never
+    /// sees a key. `release` must detach the pair.
+    fn take_over(hwnd: HWND, parent: HWND) -> Result<u32, String> {
         unsafe {
             // Hide before touching anything: until SetParent runs this is still
             // a visible top-level frame, and every restyle below makes it
@@ -785,6 +1056,27 @@ mod imp {
             // is a child and would paint nothing. Clear the state bits while
             // hidden instead of `SW_RESTORE`: a restore paints the frame on the
             // desktop for a frame before the re-parent lands.
+            //
+            // Clearing the WS_MAXIMIZE style bit alone is not enough: the app
+            // (Chromium) still believes it is maximized and re-applies the
+            // maximized screen rect on its own WM_WINDOWPOSCHANGING sync, which
+            // is the slot drift that place() then has to fight. Really leave
+            // the zoomed/minimized placement via SetWindowPlacement; it may
+            // show the still top-level window, so hide it again immediately —
+            // both calls run in the same pump iteration and no WM_PAINT lands
+            // in between, so nothing is ever painted on the desktop.
+            if IsZoomed(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                let mut wp = WINDOWPLACEMENT {
+                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                    ..Default::default()
+                };
+                if GetWindowPlacement(hwnd, &mut wp).is_ok() && wp.showCmd != SW_SHOWNORMAL.0 as u32
+                {
+                    wp.showCmd = SW_SHOWNORMAL.0 as u32;
+                    let _ = SetWindowPlacement(hwnd, &wp);
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+            }
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
             let exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             let child_style = (style
@@ -815,8 +1107,38 @@ mod imp {
                 SetWindowLongPtrW(parent, GWL_STYLE, host_style | WS_CLIPCHILDREN.0 as isize);
             }
             SetParent(hwnd, Some(parent)).map_err(|e| format!("SetParent: {e}"))?;
+            // Share the input queues: the hosted window's thread keeps its own
+            // queue, and focus/activation state is per-queue — without the
+            // attach, clicks on the hosted app cannot take keyboard focus and
+            // every keystroke stays in the webview.
+            let host_thread = GetWindowThreadProcessId(parent, None);
+            let child_thread = GetWindowThreadProcessId(hwnd, None);
+            if host_thread != 0 && child_thread != 0 && host_thread != child_thread {
+                // `AttachThreadInput` fails while either queue has unread input
+                // (the just-launched app gets input right away), and the
+                // return value is easy to miss: one attempt left the queues
+                // unshared, and focus then never travelled into the app. Retry
+                // briefly instead of giving up on the first refusal.
+                let mut joined = false;
+                for attempt in 0..10 {
+                    if attempt > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    if AttachThreadInput(child_thread, host_thread, true).as_bool() {
+                        joined = true;
+                        break;
+                    }
+                }
+                if joined {
+                    return Ok(child_thread);
+                }
+                debug_log(&format!(
+                    "take_over hwnd=0x{:X} AttachThreadInput failed, focus goes to its own queue",
+                    hwnd.0 as usize
+                ));
+            }
         }
-        Ok(())
+        Ok(0)
     }
 
     /// Adopt one specific window (the page's window picker).
@@ -851,8 +1173,11 @@ mod imp {
         let owner = unsafe { GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) };
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        take_over(hwnd, parent).map_err(|e| format!("无法接管 {process} 的窗口（{text}）: {e}"))?;
+        let attached_thread = take_over(hwnd, parent)
+            .map_err(|e| format!("无法接管 {process} 的窗口（{text}）: {e}"))?;
         place(hwnd, x, y, width, height, scale, true);
+        focus_hosted(app, parent, hwnd, attached_thread != 0);
+        refocus(app, parent, hwnd, attached_thread != 0);
         let class = class_name(hwnd);
         let title = window_text(hwnd);
         let warning = verify(hwnd, parent);
@@ -873,6 +1198,7 @@ mod imp {
                     exstyle,
                     owner,
                     shown: 1,
+                    attached_thread,
                 },
             );
         });
@@ -913,8 +1239,7 @@ mod imp {
         if key.is_empty() {
             return Err(AttachFail::Hard("进程名不能为空".into()));
         }
-        let (parent, scale) =
-            scale_and_hwnd(app).map_err(|e| AttachFail::Hard(e.to_string()))?;
+        let (parent, scale) = scale_and_hwnd(app).map_err(|e| AttachFail::Hard(e.to_string()))?;
 
         // Already adopted: just follow the slot.
         let existing = with_map(|m| {
@@ -956,7 +1281,7 @@ mod imp {
             unsafe { IsIconic(found.hwnd) }.as_bool(),
             unsafe { IsZoomed(found.hwnd) }.as_bool()
         ));
-        take_over(found.hwnd, parent).map_err(|e| {
+        let attached_thread = take_over(found.hwnd, parent).map_err(|e| {
             debug_log(&format!(
                 "attach {key} hwnd=0x{:X} class={} FAILED {e}",
                 found.hwnd.0 as usize, found.class
@@ -964,6 +1289,8 @@ mod imp {
             AttachFail::Hard(format!("无法接管 {process} 的窗口（{}）: {e}", found.class))
         })?;
         place(found.hwnd, x, y, width, height, scale, true);
+        focus_hosted(app, parent, found.hwnd, attached_thread != 0);
+        refocus(app, parent, found.hwnd, attached_thread != 0);
         let warning = verify(found.hwnd, parent);
         debug_log(&format!(
             "attach {key} hwnd=0x{:X} class={} title={} area={} warning={:?}",
@@ -986,6 +1313,7 @@ mod imp {
                     exstyle,
                     owner,
                     shown: 1,
+                    attached_thread,
                 },
             );
         });
@@ -1080,6 +1408,7 @@ mod imp {
                     e.exstyle,
                     e.owner,
                     e.shown,
+                    e.attached_thread,
                 )
             })
         });
@@ -1093,6 +1422,7 @@ mod imp {
             old_exstyle,
             old_owner,
             entry_shown,
+            old_attached_thread,
         )) = current
         else {
             return Ok(lost());
@@ -1127,7 +1457,15 @@ mod imp {
                 return Ok(lost());
             }
             place(window, x, y, width, height, scale, entry_shown != 0);
-            let warning = if entry_shown != 0 { verify(window, parent) } else { "" };
+            if entry_shown != 0 {
+                focus_hosted(app, parent, window, old_attached_thread != 0);
+                refocus(app, parent, window, old_attached_thread != 0);
+            }
+            let warning = if entry_shown != 0 {
+                verify(window, parent)
+            } else {
+                ""
+            };
             debug_log(&format!(
                 "relayout {key} re-parented (class={class} warning={warning:?})"
             ));
@@ -1140,7 +1478,29 @@ mod imp {
         }
 
         place(window, x, y, width, height, scale, entry_shown != 0);
-        let warning = if entry_shown != 0 { verify(window, parent) } else { "" };
+        let warning = if entry_shown != 0 {
+            verify(window, parent)
+        } else {
+            ""
+        };
+        // Diagnostic (temp): log a verify() conclusion only when it flips, so
+        // the 400ms heartbeat stays quiet but any drift into a broken display
+        // state (minimized/maximized/invisible/…) hits the trace once.
+        let warned = LAST_WARN
+            .lock()
+            .map(|mut g| {
+                let changed = *g != Some((old_hwnd, warning));
+                if changed {
+                    *g = Some((old_hwnd, warning));
+                }
+                changed
+            })
+            .unwrap_or(true);
+        if !warning.is_empty() && warned {
+            debug_log(&format!(
+                "relayout {key} warning={warning:?} target=({x:.0},{y:.0},{width:.0},{height:.0})"
+            ));
+        }
 
         // IDE-style startup ( IntelliJ IDEA, some Electron shells ): the
         // window we adopted during launch was the splash, which the app then
@@ -1165,13 +1525,15 @@ mod imp {
                     let exstyle = unsafe { GetWindowLongPtrW(found.hwnd, GWL_EXSTYLE) };
                     let owner = unsafe { GetWindowLongPtrW(found.hwnd, GWLP_HWNDPARENT) };
                     match take_over(found.hwnd, parent) {
-                        Ok(()) => {
+                        Ok(attached_thread) => {
                             debug_log(&format!(
                                 "relayout {key} swap {warning} (class={class}) -> hwnd=0x{:X} class={}",
                                 found.hwnd.0 as usize,
                                 found.class
                             ));
                             place(found.hwnd, x, y, width, height, scale, true);
+                            focus_hosted(app, parent, found.hwnd, attached_thread != 0);
+                            refocus(app, parent, found.hwnd, attached_thread != 0);
                             let warning = verify(found.hwnd, parent);
                             release(Embedded {
                                 hwnd: old_hwnd,
@@ -1183,6 +1545,7 @@ mod imp {
                                 exstyle: old_exstyle,
                                 owner: old_owner,
                                 shown: entry_shown,
+                                attached_thread: old_attached_thread,
                             });
                             with_map(|m| {
                                 m.insert(
@@ -1197,6 +1560,7 @@ mod imp {
                                         exstyle,
                                         owner,
                                         shown: 1,
+                                        attached_thread,
                                     },
                                 );
                             });
@@ -1249,9 +1613,26 @@ mod imp {
             | SWP_NOMOVE
             | SWP_NOSIZE
             | SWP_NOZORDER
-            | if visible { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
+            | if visible {
+                SWP_SHOWWINDOW
+            } else {
+                SWP_HIDEWINDOW
+            };
+        let attached = with_map(|m| m.get(&key).map(|e| e.attached_thread != 0)).unwrap_or(false);
         unsafe {
-            let _ = SetWindowPos(as_hwnd(hwnd), None, 0, 0, 0, 0, flags);
+            let hosted = as_hwnd(hwnd);
+            let _ = SetWindowPos(hosted, None, 0, 0, 0, 0, flags);
+            // A window cannot keep its focus once it is hidden: hiding it moves
+            // focus to the parent, so showing it again leaves the app with no
+            // focused element and it drops every keystroke until a click. The
+            // hide → focus → show cycle below makes the window receive
+            // WM_SETFOCUS again, which is what makes the app register its
+            // input. Done only while the host is in front (tab switch / picker
+            // close / confirm dialog — the user is back here), never while we
+            // sink into the background.
+            if visible && GetForegroundWindow() == GetParent(hosted).unwrap_or_default() {
+                sync_hosted_focus(hosted, attached);
+            }
         }
         Ok(())
     }
@@ -1261,6 +1642,27 @@ mod imp {
         if let Some(entry) = with_map(|m| m.remove(&key)) {
             release(entry);
         }
+    }
+
+    /// Keyboard focus for the hosted window of `process`, when the workbench
+    /// itself is the active window. Used when the page brings a retained
+    /// window back (tab re-entry, picker close): show(true) cannot move focus.
+    pub fn focus(app: &tauri::AppHandle, process: &str) {
+        let key = map_key(process);
+        let live = with_map(|m| {
+            m.get(&key)
+                .map(|e| (e.hwnd, e.parent, e.pid, e.attached_thread != 0))
+        });
+        let Some((hwnd, parent, pid, attached)) = live else {
+            return;
+        };
+        if !entry_live(hwnd, pid) {
+            with_map(|m| {
+                m.remove(&key);
+            });
+            return;
+        }
+        focus_hosted(app, as_hwnd(parent), as_hwnd(hwnd), attached);
     }
 
     pub fn detach_all() {
@@ -1347,8 +1749,7 @@ pub async fn desktop_embed_attach_wait(
         let task = tokio::task::spawn_blocking(move || {
             imp::attach_wait(&app, &process_name, x, y, width, height, wait_ms)
         });
-        task.await
-            .map_err(|e| format!("嵌入失败: {e}"))?
+        task.await.map_err(|e| format!("嵌入失败: {e}"))?
     }
     #[cfg(not(windows))]
     {
@@ -1425,6 +1826,24 @@ pub async fn desktop_embed_detach(process_name: String) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let _ = process_name;
+        Err("当前系统不支持嵌入桌面应用".into())
+    }
+}
+
+/// Keyboard focus for the hosted window (page bring-back / picker close).
+#[tauri::command]
+pub async fn desktop_embed_focus(
+    app: tauri::AppHandle,
+    process_name: String,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        imp::focus(&app, &process_name);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, process_name);
         Err("当前系统不支持嵌入桌面应用".into())
     }
 }
