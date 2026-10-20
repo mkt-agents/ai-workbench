@@ -172,11 +172,12 @@ export interface Invocations {
   invokeGetAppVersion: (path: string) => Promise<string>;
   invokeExtractAppIcon: (path: string) => Promise<string>;
   invokeDesktopEmbedFind: (processName: string) => Promise<DesktopWindowInfo | null>;
-  invokeDesktopEmbedAttach: (params: { processName: string; x: number; y: number; width: number; height: number }) => Promise<DesktopWindowInfo>;
-  invokeDesktopEmbedAttachWait: (params: { processName: string; x: number; y: number; width: number; height: number; waitMs: number }) => Promise<DesktopWindowInfo>;
-  invokeDesktopEmbedRelayout: (params: { processName: string; x: number; y: number; width: number; height: number }) => Promise<DesktopRelayoutResult>;
+  invokeDesktopEmbedAttach: (params: { processName: string; x: number; y: number; width: number; height: number; dpr?: number }) => Promise<DesktopWindowInfo>;
+  invokeDesktopEmbedAttachWait: (params: { processName: string; x: number; y: number; width: number; height: number; waitMs: number; dpr?: number }) => Promise<DesktopWindowInfo>;
+  invokeDesktopEmbedRelayout: (params: { processName: string; x: number; y: number; width: number; height: number; dpr?: number }) => Promise<DesktopRelayoutResult>;
   invokeDesktopEmbedShow: (processName: string, visible: boolean) => Promise<void>;
   invokeDesktopEmbedFocus: (processName: string) => Promise<void>;
+  invokeDesktopEmbedRestore: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetach: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetachAll: () => Promise<void>;
   invokeDesktopEmbedCandidates: (processName: string) => Promise<DesktopWindowCandidate[]>;
@@ -187,6 +188,7 @@ export interface Invocations {
     y: number;
     width: number;
     height: number;
+    dpr?: number;
   }) => Promise<DesktopWindowInfo>;
   invokeFindPortListeners: (ports: number[]) => Promise<PortListener[]>;
   invokeKillPortListeners: (port: number, pids: number[]) => Promise<PortKillResult>;
@@ -538,6 +540,8 @@ export const invocations: Invocations = {
     tauriInvoke<void>('desktop_embed_show', { processName, visible }),
   invokeDesktopEmbedFocus: (processName: string) =>
     tauriInvoke<void>('desktop_embed_focus', { processName }),
+  invokeDesktopEmbedRestore: (processName: string) =>
+    tauriInvoke<void>('desktop_embed_restore', { processName }),
   invokeDesktopEmbedDetach: (processName: string) =>
     tauriInvoke<void>('desktop_embed_detach', { processName }),
   invokeDesktopEmbedDetachAll: () =>
@@ -551,6 +555,7 @@ export const invocations: Invocations = {
     y: number;
     width: number;
     height: number;
+    dpr?: number;
   }) => tauriInvoke<DesktopWindowInfo>('desktop_embed_attach_window', params),
   invokeFindPortListeners: (ports: number[]) =>
     tauriInvoke<PortListener[]>('find_port_listeners', { ports }),

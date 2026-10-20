@@ -17,6 +17,7 @@
 
 /// One embeddable desktop window, as reported to the frontend.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopWindowInfo {
     /// The image name we matched on (echo of the request).
     pub process_name: String,
@@ -36,6 +37,7 @@ pub struct DesktopWindowInfo {
 
 /// Outcome of a relayout: whether the window is still ours.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopRelayoutResult {
     /// `ok` (moved) | `reparented` (the app un-parented itself, taken back) |
     /// `replaced` (the frame was destroyed, a fresh one was adopted) | `lost`.
@@ -50,6 +52,7 @@ pub struct DesktopRelayoutResult {
 /// matching the image-name needle is reported, hidden and owned ones included,
 /// so "nothing was adopted" can be read off the page instead of guessed at.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopWindowCandidate {
     pub process_name: String,
     pub pid: u32,
@@ -78,7 +81,9 @@ mod imp {
     use std::sync::Mutex;
     use tauri::Manager;
     use windows::core::{BOOL, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
+    use windows::Win32::Foundation::{
+        CloseHandle, GetLastError, SetLastError, ERROR_SUCCESS, HWND, LPARAM, POINT, RECT,
+    };
     use windows::Win32::Graphics::Gdi::{
         ClientToScreen, RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
     };
@@ -90,16 +95,16 @@ mod imp {
         GetFocus, keybd_event, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP, VK_MENU,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetForegroundWindow, GetParent, GetWindow, GetWindowLongPtrW,
-        GetWindowPlacement, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-        IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed, SetForegroundWindow,
-        SetParent, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow,
-        GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP, SWP_FRAMECHANGED,
+        EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetParent, GetWindow,
+        GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextW,
+        GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+        SetForegroundWindow, SetParent, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+        ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP, SWP_FRAMECHANGED,
         SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-        SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT, WS_CAPTION, WS_CHILD,
-        WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_MAXIMIZE,
-        WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
-        WS_VISIBLE,
+        SW_HIDE, SW_RESTORE, SW_SHOWNA, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT,
+        WINDOW_LONG_PTR_INDEX, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+        WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX,
+        WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
     };
 
     /// Below this (physical px²) a window is a helper, not an application frame.
@@ -149,6 +154,9 @@ mod imp {
         /// release() must detach the pair or the two threads keep sharing
         /// focus state after the window is back on the desktop.
         attached_thread: u32,
+        /// The window's original placement, captured before take_over touched
+        /// it: a maximized-adopted window must be handed back maximized.
+        placement: WINDOWPLACEMENT,
     }
 
     /// Append one line to `%TEMP%\ai-workbench-desktop-embed.log` (debug builds
@@ -176,9 +184,24 @@ mod imp {
     /// does not flood the log with identical lines. Diagnostic only.
     static LAST_PLACE: Mutex<Option<(isize, i32, i32, i32, i32)>> = Mutex::new(None);
 
+    /// The rect whose move a settle-nudge is owed. A rapid slot-move run
+    /// (sidebar toggle animation) can leave Chromium's compositor anchored to
+    /// the OLD window position — its content stays shifted by the move delta
+    /// (blank strip, clicks land beside the visible UI) even though the
+    /// window rect itself converged. The first tick whose rect repeats
+    /// (animation settled) gets a 1px out-and-back: two fresh real
+    /// WM_WINDOWPOSCHANGED/WM_MOVE pairs on an idle pump re-anchor it.
+    static NUDGE_PENDING: Mutex<Option<(isize, i32, i32, i32, i32)>> = Mutex::new(None);
+
     /// Last `(hwnd, verify-code)` written to the trace, so a persisting warning
     /// is logged once instead of every 400ms heartbeat. Diagnostic only.
     static LAST_WARN: Mutex<Option<(isize, &'static str)>> = Mutex::new(None);
+
+    /// Last full `EnumWindows` scan per process. relayout's heartbeat asks
+    /// every 400ms, but the frame-swap check does not need that rate: a routine
+    /// look for a better workspace window every few seconds is enough, while a
+    /// broken window (the app hid its splash) is rechecked quickly.
+    static FRAME_SCAN_AT: Mutex<Option<HashMap<String, std::time::Instant>>> = Mutex::new(None);
 
     fn map_key(process: &str) -> String {
         process.trim().to_ascii_lowercase()
@@ -190,6 +213,28 @@ mod imp {
             *guard = Some(HashMap::new());
         }
         f(guard.as_mut().expect("initialised just above"))
+    }
+
+    /// True when a full process window scan is due for `key`. Urgent scans
+    /// (blank slot) run at most every 500ms; routine ones every 5s.
+    fn frame_scan_due(key: &str, urgent: bool) -> bool {
+        let now = std::time::Instant::now();
+        let gap = if urgent {
+            std::time::Duration::from_millis(500)
+        } else {
+            std::time::Duration::from_secs(5)
+        };
+        let mut guard = FRAME_SCAN_AT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let scans = guard.get_or_insert_with(HashMap::new);
+        match scans.get(key) {
+            Some(last) if now.duration_since(*last) < gap => false,
+            _ => {
+                scans.insert(key.to_string(), now);
+                true
+            }
+        }
     }
 
     fn scale_and_hwnd(app: &tauri::AppHandle) -> Result<(HWND, f64), String> {
@@ -320,6 +365,10 @@ mod imp {
         pid: u32,
         title: String,
         class: String,
+        /// The window the user is looking at right now. relayout's
+        /// better-workspace swap only follows a frame the app actually raised:
+        /// a background helper titled "… — AppName" must never steal the slot.
+        foreground: bool,
     }
 
     struct Ctx {
@@ -549,6 +598,7 @@ mod imp {
                 pid: best.pid,
                 title: best.title,
                 class: best.class,
+                foreground: best.foreground,
             })
     }
 
@@ -583,6 +633,7 @@ mod imp {
                 pid: best.pid,
                 title: best.title,
                 class: best.class,
+                foreground: best.foreground,
             })
     }
 
@@ -675,15 +726,8 @@ mod imp {
             if IsHungAppWindow(hwnd).as_bool() {
                 return;
             }
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOP),
-                px,
-                py,
-                pw,
-                ph,
-                SWP_NOACTIVATE | visibility,
-            );
+            let key = (hwnd.0 as isize, px, py, pw, ph);
+            let _ = SetWindowPos(hwnd, Some(HWND_TOP), px, py, pw, ph, SWP_NOACTIVATE | visibility);
             // A window adopted while maximized (Chromium re-asserts its own
             // maximized placement from inside the WM_WINDOWPOSCHANGING sync of
             // our SetWindowPos above) keeps fighting every subsequent place:
@@ -717,6 +761,25 @@ mod imp {
                     RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
                 );
             }
+            // Settle nudge (see NUDGE_PENDING): arm on every changed rect, fire
+            // once on the first unchanged tick while the window is shown.
+            let settled = NUDGE_PENDING
+                .lock()
+                .map(|mut g| {
+                    if *g == Some(key) {
+                        *g = None;
+                        true
+                    } else {
+                        *g = Some(key);
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            if settled && show {
+                let _ = SetWindowPos(hwnd, None, px - 1, py, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
+                let _ = SetWindowPos(hwnd, None, px, py, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
+                debug_log(&format!("place 0x{:X} settle nudge", key.0));
+            }
             // Diagnostic (temp): target vs actual rect, plus the live display
             // state. Throttled on unchanged target so the 400ms heartbeat does
             // not flood the log; a persistent mismatch (drift) re-logs.
@@ -726,6 +789,13 @@ mod imp {
             let mut origin = POINT::default();
             let host = GetParent(hwnd).unwrap_or_default();
             let in_client = !host.is_invalid() && ClientToScreen(host, &mut origin).as_bool();
+            let mut client = RECT::default();
+            let client_size =
+                if !host.is_invalid() && GetClientRect(host, &mut client).is_ok() {
+                    format!("client=({},{})", client.right, client.bottom)
+                } else {
+                    "client=(?,?)".into()
+                };
             let (ax, ay, aw, ah) = (
                 actual.left - origin.x,
                 actual.top - origin.y,
@@ -745,7 +815,7 @@ mod imp {
                 .unwrap_or(true);
             if changed || drifted {
                 debug_log(&format!(
-                    "place 0x{:X} target=({px},{py},{pw},{ph}) scale={scale:.2} actual=({ax},{ay},{aw},{ah}) client_ok={in_client} zoomed={} iconic={} show={show}",
+                    "place 0x{:X} target=({px},{py},{pw},{ph}) dpr={scale:.2} actual=({ax},{ay},{aw},{ah}) {client_size} zoomed={} iconic={} show={show}",
                     key.0,
                     IsZoomed(hwnd).as_bool(),
                     IsIconic(hwnd).as_bool(),
@@ -789,12 +859,27 @@ mod imp {
             if entry.owner != 0 {
                 SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, entry.owner);
             }
+            // Restore the ORIGINAL placement, not just style bits: a window
+            // adopted maximized had its placement forced to normal for the
+            // embed; handing it back with a restored WS_MAXIMIZE style bit but
+            // a normal placement is the exact mismatch that used to cause the
+            // slot drift. A hidden-now window is never resurrected: the app
+            // may have hidden it while embedded (a splash being disposed).
+            let mut placement = entry.placement;
+            placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+            if current_style & WS_VISIBLE.0 as isize == 0 {
+                placement.showCmd = SW_HIDE.0 as u32;
+            }
+            let _ = SetWindowPlacement(hwnd, &placement);
+            let placed_normal = placement.showCmd == SW_SHOWNORMAL.0 as u32;
             // Same hang guard as place(): a window that is mid-shutdown can
             // never answer the synchronous messages of SetWindowPos, which
             // would block backend threads until TerminateProcess gets there.
             if !IsHungAppWindow(hwnd).as_bool() {
                 let mut flags = SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER;
-                if !placed {
+                if !placed || !placed_normal {
+                    // Maximized/minimized windows ignore move/size anyway, and
+                    // the placement above already carries the original rect.
                     flags |= SWP_NOMOVE | SWP_NOSIZE;
                 }
                 let _ = SetWindowPos(
@@ -890,7 +975,9 @@ mod imp {
     /// Returns whether the window ended up holding the (shared) queue focus.
     fn sync_hosted_focus(hwnd: HWND, attached: bool) -> bool {
         unsafe {
-            if IsHungAppWindow(hwnd).as_bool() {
+            // Never resurrect a window the page hid on purpose (picker dialog,
+            // tab switch): the show below would paint it over the webview.
+            if !IsWindowVisible(hwnd).as_bool() || IsHungAppWindow(hwnd).as_bool() {
                 return false;
             }
             let _ = SetWindowPos(
@@ -906,6 +993,30 @@ mod imp {
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             !attached || GetFocus() == hwnd
         }
+    }
+
+    /// Idempotent queue attach (see take_over): safe to call every refocus
+    /// round — an already-attached pair just succeeds again. A busy launch
+    /// window refuses `AttachThreadInput` for a while ("unread input"), which
+    /// is exactly when the app is launched and adopted; retrying here until
+    /// it lands is what keeps switching between embedded apps typeable.
+    /// Returns whether the hosted window's queue is shared with the host's.
+    fn ensure_queue_shared(parent: HWND, hwnd: HWND, child_thread: u32) -> bool {
+        if child_thread == 0 {
+            return true; // same thread as the host
+        }
+        let host_thread = unsafe { GetWindowThreadProcessId(parent, None) };
+        if host_thread == 0 || host_thread == child_thread {
+            return true;
+        }
+        let ok = unsafe { AttachThreadInput(child_thread, host_thread, true) }.as_bool();
+        if !ok {
+            debug_log(&format!(
+                "queue attach retry failed hwnd=0x{:X}",
+                hwnd.0 as usize
+            ));
+        }
+        ok
     }
 
     /// Make the workbench the foreground/active window, working around the
@@ -972,7 +1083,7 @@ mod imp {
     /// takes it back with one of the documented unlocks instead of silently
     /// giving up — that bail-out was why launch-embed left the app deaf while
     /// detach → re-embed (user click re-activated the host) worked.
-    fn focus_hosted(app: &tauri::AppHandle, parent: HWND, hwnd: HWND, attached: bool) {
+    fn focus_hosted(app: &tauri::AppHandle, parent: HWND, hwnd: HWND, child_thread: u32) {
         // Raw HWND is not Send: carry the handles as isize across the closure.
         let parent_raw = parent.0 as isize;
         let hwnd_raw = hwnd.0 as isize;
@@ -984,10 +1095,11 @@ mod imp {
             }
             let fg_before = GetForegroundWindow();
             let raised = raise_host(parent);
+            let attached = ensure_queue_shared(parent, hwnd, child_thread);
             let _ = SetFocus(Some(hwnd));
             let nudged = sync_hosted_focus(hwnd, attached);
             debug_log(&format!(
-                "focus 0x{:X} fg_before=0x{:X} raised={raised} focused={} nudged={nudged}",
+                "focus 0x{:X} fg_before=0x{:X} raised={raised} attached={attached} focused={} nudged={nudged}",
                 hwnd.0 as usize,
                 fg_before.0 as usize,
                 GetFocus() == hwnd
@@ -997,12 +1109,12 @@ mod imp {
 
     /// Follow-up focus campaign for adoptions that land while the app is still
     /// starting (launch-embed): the first `WM_SETFOCUS` can arrive before the
-    /// app's input pipeline is ready, and the foreground/activation state can
-    /// still be dangling from the takeover. Re-nudge a few times, paced from a
-    /// background thread (the old retry loop slept on the UI thread). Each
-    /// attempt acts only while the host is the foreground window, so the user
-    /// typing into the workbench is never hijacked.
-    fn refocus(app: &tauri::AppHandle, parent: HWND, hwnd: HWND, attached: bool) {
+    /// app's input pipeline is ready, the foreground/activation state can
+    /// still be dangling from the takeover, and `AttachThreadInput` can keep
+    /// failing while the busy app has unread input. Every round re-tries the
+    /// queue attach FIRST (even with the host not in front — the user will
+    /// come back and click), then re-nudges, paced from a background thread.
+    fn refocus(app: &tauri::AppHandle, parent: HWND, hwnd: HWND, child_thread: u32) {
         let app = app.clone();
         let parent_raw = parent.0 as isize;
         let hwnd_raw = hwnd.0 as isize;
@@ -1011,10 +1123,20 @@ mod imp {
             for at in [300u64, 800, 1600] {
                 std::thread::sleep(std::time::Duration::from_millis(at - elapsed));
                 elapsed = at;
+                // Queue attach retry runs on this background thread: it does
+                // not need the UI thread, and it must happen even while the
+                // user is elsewhere (the guards below would skip the round).
+                let attached =
+                    ensure_queue_shared(as_hwnd(parent_raw), as_hwnd(hwnd_raw), child_thread);
                 let _ = app.run_on_main_thread(move || unsafe {
                     let parent = as_hwnd(parent_raw);
                     let hwnd = as_hwnd(hwnd_raw);
-                    if IsIconic(hwnd).as_bool() || IsHungAppWindow(hwnd).as_bool() {
+                    if IsIconic(hwnd).as_bool()
+                        || IsHungAppWindow(hwnd).as_bool()
+                        // The page may have hidden the window meanwhile
+                        // (picker open): nudging would show it again.
+                        || !IsWindowVisible(hwnd).as_bool()
+                    {
                         return;
                     }
                     if GetForegroundWindow() != parent {
@@ -1033,6 +1155,55 @@ mod imp {
         });
     }
 
+    /// Write one style word, treating "returned 0" as the failure it may be.
+    ///
+    /// `SetWindowLongPtrW` returns the previous value, so a legitimately-zero
+    /// old style is indistinguishable from failure without the last-error
+    /// round trip. Used on the way into a takeover, where a silent failure
+    /// would leave the target window frameless but still top-level.
+    fn set_style_checked(
+        hwnd: HWND,
+        index: WINDOW_LONG_PTR_INDEX,
+        value: isize,
+    ) -> Result<(), String> {
+        unsafe {
+            SetLastError(ERROR_SUCCESS);
+            SetWindowLongPtrW(hwnd, index, value);
+            let error = GetLastError();
+            if error != ERROR_SUCCESS {
+                return Err(format!("SetWindowLongPtrW({index:?}) 失败: {error:?}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Put a window back exactly as `take_over` found it, after a failed
+    /// takeover. Restoring the placement also restores the show state, but
+    /// the style was captured after the window was hidden, so explicitly show
+    /// it again when it was visible before.
+    fn restore_taken_state(
+        hwnd: HWND,
+        host: HWND,
+        style: isize,
+        exstyle: isize,
+        host_style: isize,
+        host_style_changed: bool,
+        placement: &WINDOWPLACEMENT,
+        was_visible: bool,
+    ) {
+        unsafe {
+            let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exstyle);
+            if host_style_changed {
+                let _ = SetWindowLongPtrW(host, GWL_STYLE, host_style);
+            }
+            let _ = SetWindowPlacement(hwnd, placement);
+            if was_visible {
+                let _ = ShowWindow(hwnd, SW_SHOWNA);
+            }
+        }
+    }
+
     /// Strip the standalone frame off `hwnd` and parent it into `parent`.
     ///
     /// Kept separate from `place` because the app can undo this behind our back:
@@ -1040,12 +1211,28 @@ mod imp {
     /// `relayout` puts the window back with this same call.
     ///
     /// Returns the hosted window's input-queue thread id (0 when it matches the
-    /// host's), attached to the host queue so keyboard focus can move between
-    /// the webview and the hosted app — without this, typing into the embedded
-    /// app is impossible: focus stays in the webview queue and the app never
-    /// sees a key. `release` must detach the pair.
-    fn take_over(hwnd: HWND, parent: HWND) -> Result<u32, String> {
+    /// host's). The queue attach is attempted here with a short retry; a busy
+    /// launch window can still refuse it, in which case the id is returned
+    /// anyway and the refocus campaign keeps retrying (see ensure_queue_shared)
+    /// — without a shared queue, clicks and SetFocus cannot reach the app.
+    /// `release` must detach the pair.
+    ///
+    /// Also returns the window's ORIGINAL `WINDOWPLACEMENT`, captured before
+    /// anything touches it: `release` must hand a maximized-adopted window
+    /// back as maximized — restoring only the WS_MAXIMIZE style bit leaves the
+    /// style inconsistent with the (restored-to-normal) placement, the exact
+    /// mismatch that caused the slot drift.
+    fn take_over(hwnd: HWND, parent: HWND) -> Result<(u32, WINDOWPLACEMENT), String> {
         unsafe {
+            // Original placement, captured before anything touches the window.
+            let mut original = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                ..Default::default()
+            };
+            if GetWindowPlacement(hwnd, &mut original).is_err() {
+                original.showCmd = SW_SHOWNORMAL.0 as u32;
+            }
+            let was_visible = IsWindowVisible(hwnd).as_bool();
             // Hide before touching anything: until SetParent runs this is still
             // a visible top-level frame, and every restyle below makes it
             // repaint on the desktop — that is the launch flash. It stays
@@ -1066,12 +1253,8 @@ mod imp {
             // both calls run in the same pump iteration and no WM_PAINT lands
             // in between, so nothing is ever painted on the desktop.
             if IsZoomed(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-                let mut wp = WINDOWPLACEMENT {
-                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                    ..Default::default()
-                };
-                if GetWindowPlacement(hwnd, &mut wp).is_ok() && wp.showCmd != SW_SHOWNORMAL.0 as u32
-                {
+                if original.showCmd != SW_SHOWNORMAL.0 as u32 {
+                    let mut wp = original;
                     wp.showCmd = SW_SHOWNORMAL.0 as u32;
                     let _ = SetWindowPlacement(hwnd, &wp);
                     let _ = ShowWindow(hwnd, SW_HIDE);
@@ -1089,24 +1272,94 @@ mod imp {
                     | WS_MAXIMIZEBOX.0 as isize
                     | WS_MAXIMIZE.0 as isize))
                 | WS_CHILD.0 as isize;
+            let host_style = GetWindowLongPtrW(parent, GWL_STYLE);
+            let host_style_changed = host_style & WS_CLIPCHILDREN.0 as isize == 0;
             // Deliberately no WS_VISIBLE: `place` decides visibility, so the
             // window cannot flash onto the desktop between here and SetParent.
-            SetWindowLongPtrW(hwnd, GWL_STYLE, child_style);
+            //
+            // Every write is checked and rolled back: a target running at a
+            // higher integrity level refuses these calls (UIPI), and stopping
+            // half-way would leave the user's app hidden and frameless with no
+            // way back except restarting it.
+            if let Err(error) = set_style_checked(hwnd, GWL_STYLE, child_style) {
+                restore_taken_state(
+                    hwnd,
+                    parent,
+                    style,
+                    exstyle,
+                    host_style,
+                    false,
+                    &original,
+                    was_visible,
+                );
+                return Err(format!(
+                    "无法修改目标窗口样式，它可能以管理员权限运行（{error}）"
+                ));
+            }
             // WS_EX_LAYERED has to go: a layered window only composites through
             // UpdateLayeredWindow against a layered parent, so as a child of an
             // ordinary window it draws nothing at all (blank slot).
-            SetWindowLongPtrW(
+            if let Err(error) = set_style_checked(
                 hwnd,
                 GWL_EXSTYLE,
                 exstyle & !(WS_EX_APPWINDOW.0 as isize | WS_EX_LAYERED.0 as isize),
-            );
+            ) {
+                restore_taken_state(
+                    hwnd,
+                    parent,
+                    style,
+                    exstyle,
+                    host_style,
+                    false,
+                    &original,
+                    was_visible,
+                );
+                return Err(format!(
+                    "无法修改目标窗口样式，它可能以管理员权限运行（{error}）"
+                ));
+            }
             // The host must clip children, or Chromium paints over the
             // sibling webview that draws the surrounding page.
-            let host_style = GetWindowLongPtrW(parent, GWL_STYLE);
-            if host_style & WS_CLIPCHILDREN.0 as isize == 0 {
-                SetWindowLongPtrW(parent, GWL_STYLE, host_style | WS_CLIPCHILDREN.0 as isize);
+            if host_style_changed {
+                if let Err(error) = set_style_checked(
+                    parent,
+                    GWL_STYLE,
+                    host_style | WS_CLIPCHILDREN.0 as isize,
+                ) {
+                    restore_taken_state(
+                        hwnd,
+                        parent,
+                        style,
+                        exstyle,
+                        host_style,
+                        true,
+                        &original,
+                        was_visible,
+                    );
+                    return Err(format!("无法更新工作台窗口样式（{error}）"));
+                }
             }
-            SetParent(hwnd, Some(parent)).map_err(|e| format!("SetParent: {e}"))?;
+            if let Err(error) = SetParent(hwnd, Some(parent)) {
+                restore_taken_state(
+                    hwnd,
+                    parent,
+                    style,
+                    exstyle,
+                    host_style,
+                    host_style_changed,
+                    &original,
+                    was_visible,
+                );
+                // ERROR_ACCESS_DENIED: an elevated target rejects the
+                // reparent from this (lower-integrity) process.
+                let denied = (error.code().0 as u32) & 0xFFFF == 5;
+                return Err(if denied {
+                    "接管被系统拒绝：目标应用可能以管理员权限运行，请以管理员身份重启工作台后再试"
+                        .into()
+                } else {
+                    format!("SetParent: {error}")
+                });
+            }
             // Share the input queues: the hosted window's thread keeps its own
             // queue, and focus/activation state is per-queue — without the
             // attach, clicks on the hosted app cannot take keyboard focus and
@@ -1118,7 +1371,8 @@ mod imp {
                 // (the just-launched app gets input right away), and the
                 // return value is easy to miss: one attempt left the queues
                 // unshared, and focus then never travelled into the app. Retry
-                // briefly instead of giving up on the first refusal.
+                // briefly here; the refocus campaign keeps retrying after — a
+                // busy launch window refuses for far longer than this loop.
                 let mut joined = false;
                 for attempt in 0..10 {
                     if attempt > 0 {
@@ -1129,16 +1383,19 @@ mod imp {
                         break;
                     }
                 }
-                if joined {
-                    return Ok(child_thread);
+                if !joined {
+                    debug_log(&format!(
+                        "take_over hwnd=0x{:X} queue attach failed, will retry on refocus",
+                        hwnd.0 as usize
+                    ));
                 }
-                debug_log(&format!(
-                    "take_over hwnd=0x{:X} AttachThreadInput failed, focus goes to its own queue",
-                    hwnd.0 as usize
-                ));
+                // Report the foreign thread id either way: `release`'s detach
+                // is a harmless no-op on a never-attached pair, and the focus
+                // campaign needs the id to keep retrying the attach.
+                return Ok((child_thread, original));
             }
+            Ok((0, original))
         }
-        Ok(0)
     }
 
     /// Adopt one specific window (the page's window picker).
@@ -1150,6 +1407,7 @@ mod imp {
         y: f64,
         width: f64,
         height: f64,
+        dpr: Option<f64>,
     ) -> Result<DesktopWindowInfo, String> {
         let key = map_key(process);
         if key.is_empty() {
@@ -1157,27 +1415,64 @@ mod imp {
         }
         let text = hwnd_raw.trim();
         let hwnd = as_hwnd(
-            usize::from_str_radix(text.trim_start_matches("0x"), 16)
+            usize::from_str_radix(text.trim_start_matches("0x").trim_start_matches("0X"), 16)
                 .map_err(|_| format!("无效的窗口句柄: {text}"))? as isize,
         );
         if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
             return Err("这个窗口已经不存在了".into());
         }
-        let (parent, scale) = scale_and_hwnd(app)?;
-        // Whatever we had for this process steps aside first.
-        if let Some(previous) = with_map(|m| m.remove(&key)) {
-            release(previous);
-        }
-        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
-        let exstyle = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-        let owner = unsafe { GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) };
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        let attached_thread = take_over(hwnd, parent)
+        if pid == 0 {
+            return Err("无法读取这个窗口所属的进程".into());
+        }
+        if pid == std::process::id() {
+            return Err("不能嵌入工作台自己的窗口".into());
+        }
+        // A handle from another app's candidate list must never be adopted
+        // under this app's key: that is how a stale picker used to put A's
+        // window into B's slot. Same matching rule as the candidate scan.
+        let stem = image_stem(pid).ok_or("目标窗口的进程已经退出")?;
+        if !stem.to_ascii_lowercase().contains(&key) {
+            return Err(format!(
+                "这个窗口属于「{stem}」，不是「{process}」，未接管"
+            ));
+        }
+        let (parent, scale) = scale_and_hwnd(app)?;
+        let scale = dpr.filter(|d| *d > 0.0).unwrap_or(scale);
+
+        // Re-picking the window already in the slot is a no-op (and must be
+        // checked before the WS_CHILD reject: our own children are WS_CHILD).
+        let existing = with_map(|m| {
+            m.get(&key)
+                .map(|e| (e.hwnd, e.pid, e.title.clone(), e.class.clone(), e.shown))
+        });
+        if let Some((current, current_pid, title, class, shown)) = existing {
+            if current == hwnd.0 as isize && entry_live(current, current_pid) {
+                place(as_hwnd(current), x, y, width, height, scale, shown != 0);
+                let warning = verify(as_hwnd(current), parent);
+                return Ok(DesktopWindowInfo {
+                    process_name: process.to_string(),
+                    pid: current_pid,
+                    title,
+                    class,
+                    attached: true,
+                    warning: warning.to_string(),
+                });
+            }
+        }
+
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+        if style & WS_CHILD.0 as isize != 0 {
+            return Err("这个窗口已经是子窗口，不能再次嵌入".into());
+        }
+        let exstyle = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+        let owner = unsafe { GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) };
+        let (attached_thread, placement) = take_over(hwnd, parent)
             .map_err(|e| format!("无法接管 {process} 的窗口（{text}）: {e}"))?;
         place(hwnd, x, y, width, height, scale, true);
-        focus_hosted(app, parent, hwnd, attached_thread != 0);
-        refocus(app, parent, hwnd, attached_thread != 0);
+        focus_hosted(app, parent, hwnd, attached_thread);
+        refocus(app, parent, hwnd, attached_thread);
         let class = class_name(hwnd);
         let title = window_text(hwnd);
         let warning = verify(hwnd, parent);
@@ -1185,7 +1480,10 @@ mod imp {
             "attach_window {key} hwnd=0x{:X} class={class} title={title} warning={warning:?}",
             hwnd.0 as usize
         ));
-        with_map(|m| {
+        // The previous window for this app steps aside only after the new one
+        // is actually ours: a failed takeover must leave that embedding (and
+        // the user's window) untouched rather than dropping it on the floor.
+        let previous = with_map(|m| {
             m.insert(
                 key.clone(),
                 Embedded {
@@ -1199,9 +1497,15 @@ mod imp {
                     owner,
                     shown: 1,
                     attached_thread,
+                    placement,
                 },
-            );
+            )
         });
+        if let Some(previous) = previous {
+            if previous.hwnd != hwnd.0 as isize {
+                release(previous);
+            }
+        }
         Ok(DesktopWindowInfo {
             process_name: process.to_string(),
             pid,
@@ -1234,12 +1538,14 @@ mod imp {
         width: f64,
         height: f64,
         strict: bool,
+        dpr: Option<f64>,
     ) -> Result<DesktopWindowInfo, AttachFail> {
         let key = map_key(process);
         if key.is_empty() {
             return Err(AttachFail::Hard("进程名不能为空".into()));
         }
         let (parent, scale) = scale_and_hwnd(app).map_err(|e| AttachFail::Hard(e.to_string()))?;
+        let scale = dpr.filter(|d| *d > 0.0).unwrap_or(scale);
 
         // Already adopted: just follow the slot.
         let existing = with_map(|m| {
@@ -1281,7 +1587,7 @@ mod imp {
             unsafe { IsIconic(found.hwnd) }.as_bool(),
             unsafe { IsZoomed(found.hwnd) }.as_bool()
         ));
-        let attached_thread = take_over(found.hwnd, parent).map_err(|e| {
+        let (attached_thread, placement) = take_over(found.hwnd, parent).map_err(|e| {
             debug_log(&format!(
                 "attach {key} hwnd=0x{:X} class={} FAILED {e}",
                 found.hwnd.0 as usize, found.class
@@ -1289,8 +1595,8 @@ mod imp {
             AttachFail::Hard(format!("无法接管 {process} 的窗口（{}）: {e}", found.class))
         })?;
         place(found.hwnd, x, y, width, height, scale, true);
-        focus_hosted(app, parent, found.hwnd, attached_thread != 0);
-        refocus(app, parent, found.hwnd, attached_thread != 0);
+        focus_hosted(app, parent, found.hwnd, attached_thread);
+        refocus(app, parent, found.hwnd, attached_thread);
         let warning = verify(found.hwnd, parent);
         debug_log(&format!(
             "attach {key} hwnd=0x{:X} class={} title={} area={} warning={:?}",
@@ -1314,6 +1620,7 @@ mod imp {
                     owner,
                     shown: 1,
                     attached_thread,
+                    placement,
                 },
             );
         });
@@ -1328,6 +1635,11 @@ mod imp {
     }
 
     /// Single attempt, project-shaped error for the existing callers.
+    ///
+    /// `dpr` is the webview's `devicePixelRatio` (DPI scale × page zoom); when
+    /// present it replaces the bare `window.scale_factor()` for the CSS px →
+    /// physical px mapping, so a zoomed page or a per-monitor DPI change keeps
+    /// the hosted window glued to the slot.
     pub fn attach(
         app: &tauri::AppHandle,
         process: &str,
@@ -1336,8 +1648,9 @@ mod imp {
         width: f64,
         height: f64,
         strict: bool,
+        dpr: Option<f64>,
     ) -> Result<DesktopWindowInfo, String> {
-        attach_once(app, process, x, y, width, height, strict).map_err(|fail| match fail {
+        attach_once(app, process, x, y, width, height, strict, dpr).map_err(|fail| match fail {
             AttachFail::Empty => no_window_message(process),
             AttachFail::Hard(message) => message,
         })
@@ -1360,11 +1673,12 @@ mod imp {
         width: f64,
         height: f64,
         wait_ms: u64,
+        dpr: Option<f64>,
     ) -> Result<DesktopWindowInfo, String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
         let tight_until = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            match attach_once(app, process, x, y, width, height, false) {
+            match attach_once(app, process, x, y, width, height, false, dpr) {
                 Ok(info) => return Ok(info),
                 Err(AttachFail::Hard(message)) => return Err(message),
                 Err(AttachFail::Empty) => {}
@@ -1394,6 +1708,7 @@ mod imp {
         y: f64,
         width: f64,
         height: f64,
+        dpr: Option<f64>,
     ) -> Result<DesktopRelayoutResult, String> {
         let key = map_key(process);
         let current = with_map(|m| {
@@ -1409,6 +1724,7 @@ mod imp {
                     e.owner,
                     e.shown,
                     e.attached_thread,
+                    e.placement,
                 )
             })
         });
@@ -1423,12 +1739,14 @@ mod imp {
             old_owner,
             entry_shown,
             old_attached_thread,
+            old_placement,
         )) = current
         else {
             return Ok(lost());
         };
         let window = as_hwnd(old_hwnd);
         let (parent, scale) = scale_and_hwnd(app)?;
+        let scale = dpr.filter(|d| *d > 0.0).unwrap_or(scale);
 
         if !entry_live(old_hwnd, old_pid) {
             // The frame is gone for good (splash → main window, AWT rebuild).
@@ -1436,7 +1754,7 @@ mod imp {
                 m.remove(&key);
             });
             debug_log(&format!("relayout {key} frame gone, re-adopting"));
-            return match attach(app, process, x, y, width, height, true) {
+            return match attach(app, process, x, y, width, height, true, dpr) {
                 Ok(info) => Ok(DesktopRelayoutResult {
                     state: "replaced".into(),
                     title: info.title,
@@ -1451,15 +1769,17 @@ mod imp {
         }
 
         if entry_parent != 0 && unsafe { GetParent(window) }.unwrap_or_default() != parent {
-            // The app put its frame back: take it over again.
-            if let Err(error) = take_over(window, parent) {
-                debug_log(&format!("relayout {key} re-parent failed: {error}"));
+            // The app put its frame back: take it over again. The entry keeps
+            // its ORIGINAL placement — the re-takeover's snapshot is already
+            // of a child window, not the pre-embed state.
+            if take_over(window, parent).is_err() {
+                debug_log(&format!("relayout {key} re-parent failed"));
                 return Ok(lost());
             }
             place(window, x, y, width, height, scale, entry_shown != 0);
             if entry_shown != 0 {
-                focus_hosted(app, parent, window, old_attached_thread != 0);
-                refocus(app, parent, window, old_attached_thread != 0);
+                focus_hosted(app, parent, window, old_attached_thread);
+                refocus(app, parent, window, old_attached_thread);
             }
             let warning = if entry_shown != 0 {
                 verify(window, parent)
@@ -1510,13 +1830,16 @@ mod imp {
         // frame of the same process is up now, swap to it. Never fires while
         // we hid the window ourselves (picker dialog): that is not an
         // app-side hide and swapping would drag in some other window.
-        if entry_shown != 0 {
+        if entry_shown != 0
+            && frame_scan_due(&key, warning == "invisible" || warning == "size")
+        {
             if let Some(found) = find_frame(process) {
                 // Swap when the adopted window is unusable (invisible /
                 // zero-sized — the splash the app then hid) or when the app has
                 // since raised a *better* frame: its workspace window while we
                 // still hold the bare-name welcome window.
-                let better_workspace = title_is_workspace(&found.title, process)
+                let better_workspace = found.foreground
+                    && title_is_workspace(&found.title, process)
                     && !title_is_workspace(&title, process);
                 if found.hwnd != window
                     && (warning == "invisible" || warning == "size" || better_workspace)
@@ -1525,15 +1848,15 @@ mod imp {
                     let exstyle = unsafe { GetWindowLongPtrW(found.hwnd, GWL_EXSTYLE) };
                     let owner = unsafe { GetWindowLongPtrW(found.hwnd, GWLP_HWNDPARENT) };
                     match take_over(found.hwnd, parent) {
-                        Ok(attached_thread) => {
+                        Ok((attached_thread, placement)) => {
                             debug_log(&format!(
                                 "relayout {key} swap {warning} (class={class}) -> hwnd=0x{:X} class={}",
                                 found.hwnd.0 as usize,
                                 found.class
                             ));
                             place(found.hwnd, x, y, width, height, scale, true);
-                            focus_hosted(app, parent, found.hwnd, attached_thread != 0);
-                            refocus(app, parent, found.hwnd, attached_thread != 0);
+                            focus_hosted(app, parent, found.hwnd, attached_thread);
+                            refocus(app, parent, found.hwnd, attached_thread);
                             let warning = verify(found.hwnd, parent);
                             release(Embedded {
                                 hwnd: old_hwnd,
@@ -1546,6 +1869,7 @@ mod imp {
                                 owner: old_owner,
                                 shown: entry_shown,
                                 attached_thread: old_attached_thread,
+                                placement: old_placement,
                             });
                             with_map(|m| {
                                 m.insert(
@@ -1561,6 +1885,7 @@ mod imp {
                                         owner,
                                         shown: 1,
                                         attached_thread,
+                                        placement,
                                     },
                                 );
                             });
@@ -1618,7 +1943,8 @@ mod imp {
             } else {
                 SWP_HIDEWINDOW
             };
-        let attached = with_map(|m| m.get(&key).map(|e| e.attached_thread != 0)).unwrap_or(false);
+        let child_thread =
+            with_map(|m| m.get(&key).map(|e| e.attached_thread)).unwrap_or(0);
         unsafe {
             let hosted = as_hwnd(hwnd);
             let _ = SetWindowPos(hosted, None, 0, 0, 0, 0, flags);
@@ -1631,9 +1957,59 @@ mod imp {
             // close / confirm dialog — the user is back here), never while we
             // sink into the background.
             if visible && GetForegroundWindow() == GetParent(hosted).unwrap_or_default() {
+                let attached = ensure_queue_shared(
+                    GetParent(hosted).unwrap_or_default(),
+                    hosted,
+                    child_thread,
+                );
                 sync_hosted_focus(hosted, attached);
             }
         }
+        Ok(())
+    }
+
+    /// Undo an app-side minimize/maximize on the hosted window.
+    ///
+    /// relayout cannot repair these: it re-asserts the slot rect, but an iconic
+    /// or zoomed child keeps painting wrong. `SW_RESTORE` clears both states;
+    /// the next relayout re-places the window into the slot.
+    pub fn restore(process: &str) -> Result<(), String> {
+        let key = map_key(process);
+        let live = with_map(|m| m.get(&key).map(|e| (e.hwnd, e.pid, e.shown)));
+        let Some((hwnd, pid, shown)) = live else {
+            return Err("窗口已经不存在了".into());
+        };
+        if !entry_live(hwnd, pid) {
+            with_map(|m| {
+                m.remove(&key);
+            });
+            return Err("窗口已经不存在了".into());
+        }
+        let window = as_hwnd(hwnd);
+        unsafe {
+            let _ = ShowWindow(window, SW_RESTORE);
+            // SW_RESTORE also reveals the window. Keep a deliberately hidden
+            // window (picker / confirm dialog) hidden: restore the state, not
+            // the visibility.
+            let _ = SetWindowPos(
+                window,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | if shown != 0 {
+                        SWP_SHOWWINDOW
+                    } else {
+                        SWP_HIDEWINDOW
+                    },
+            );
+        }
+        debug_log(&format!("restore {key} hwnd=0x{:X}", hwnd as usize));
         Ok(())
     }
 
@@ -1651,9 +2027,9 @@ mod imp {
         let key = map_key(process);
         let live = with_map(|m| {
             m.get(&key)
-                .map(|e| (e.hwnd, e.parent, e.pid, e.attached_thread != 0))
+                .map(|e| (e.hwnd, e.parent, e.pid, e.attached_thread))
         });
-        let Some((hwnd, parent, pid, attached)) = live else {
+        let Some((hwnd, parent, pid, child_thread)) = live else {
             return;
         };
         if !entry_live(hwnd, pid) {
@@ -1662,7 +2038,7 @@ mod imp {
             });
             return;
         }
-        focus_hosted(app, as_hwnd(parent), as_hwnd(hwnd), attached);
+        focus_hosted(app, as_hwnd(parent), as_hwnd(hwnd), child_thread);
     }
 
     pub fn detach_all() {
@@ -1720,14 +2096,15 @@ pub async fn desktop_embed_attach(
     y: f64,
     width: f64,
     height: f64,
+    dpr: Option<f64>,
 ) -> Result<DesktopWindowInfo, String> {
     #[cfg(windows)]
     {
-        imp::attach(&app, &process_name, x, y, width, height, false)
+        imp::attach(&app, &process_name, x, y, width, height, false, dpr)
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, process_name, x, y, width, height);
+        let _ = (app, process_name, x, y, width, height, dpr);
         Err("当前系统不支持嵌入桌面应用".into())
     }
 }
@@ -1743,17 +2120,18 @@ pub async fn desktop_embed_attach_wait(
     width: f64,
     height: f64,
     wait_ms: u64,
+    dpr: Option<f64>,
 ) -> Result<DesktopWindowInfo, String> {
     #[cfg(windows)]
     {
         let task = tokio::task::spawn_blocking(move || {
-            imp::attach_wait(&app, &process_name, x, y, width, height, wait_ms)
+            imp::attach_wait(&app, &process_name, x, y, width, height, wait_ms, dpr)
         });
         task.await.map_err(|e| format!("嵌入失败: {e}"))?
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, process_name, x, y, width, height, wait_ms);
+        let _ = (app, process_name, x, y, width, height, wait_ms, dpr);
         Err("当前系统不支持嵌入桌面应用".into())
     }
 }
@@ -1768,14 +2146,15 @@ pub async fn desktop_embed_attach_window(
     y: f64,
     width: f64,
     height: f64,
+    dpr: Option<f64>,
 ) -> Result<DesktopWindowInfo, String> {
     #[cfg(windows)]
     {
-        imp::attach_window(&app, &process_name, &hwnd, x, y, width, height)
+        imp::attach_window(&app, &process_name, &hwnd, x, y, width, height, dpr)
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, process_name, hwnd, x, y, width, height);
+        let _ = (app, process_name, hwnd, x, y, width, height, dpr);
         Err("当前系统不支持嵌入桌面应用".into())
     }
 }
@@ -1789,14 +2168,15 @@ pub async fn desktop_embed_relayout(
     y: f64,
     width: f64,
     height: f64,
+    dpr: Option<f64>,
 ) -> Result<DesktopRelayoutResult, String> {
     #[cfg(windows)]
     {
-        imp::relayout(&app, &process_name, x, y, width, height)
+        imp::relayout(&app, &process_name, x, y, width, height, dpr)
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, process_name, x, y, width, height);
+        let _ = (app, process_name, x, y, width, height, dpr);
         Err("当前系统不支持嵌入桌面应用".into())
     }
 }
@@ -1822,6 +2202,20 @@ pub async fn desktop_embed_detach(process_name: String) -> Result<(), String> {
     {
         imp::detach(&process_name);
         Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = process_name;
+        Err("当前系统不支持嵌入桌面应用".into())
+    }
+}
+
+/// Clear an app-side minimize/maximize on the hosted window.
+#[tauri::command]
+pub async fn desktop_embed_restore(process_name: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        imp::restore(&process_name)
     }
     #[cfg(not(windows))]
     {
@@ -1872,5 +2266,52 @@ pub async fn desktop_embed_list() -> Result<Vec<DesktopWindowInfo>, String> {
     #[cfg(not(windows))]
     {
         Err("当前系统不支持嵌入桌面应用".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_dtos_use_camel_case_process_name() {
+        let info = DesktopWindowInfo {
+            process_name: "Cursor".into(),
+            pid: 42,
+            title: "workspace - Cursor".into(),
+            class: "Chrome_WidgetWin_1".into(),
+            attached: true,
+            warning: String::new(),
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["processName"], "Cursor");
+        assert!(json.get("process_name").is_none());
+
+        let relayout = DesktopRelayoutResult {
+            state: "ok".into(),
+            title: "workspace - Cursor".into(),
+            class: "Chrome_WidgetWin_1".into(),
+            warning: String::new(),
+        };
+        let json = serde_json::to_value(&relayout).unwrap();
+        assert_eq!(json["state"], "ok");
+
+        let candidate = DesktopWindowCandidate {
+            process_name: "Cursor".into(),
+            pid: 42,
+            hwnd: "0x00010123".into(),
+            class: "Chrome_WidgetWin_1".into(),
+            title: "workspace - Cursor".into(),
+            visible: true,
+            owned: false,
+            area: 100,
+            width: 10,
+            height: 10,
+            recommended: true,
+            current: false,
+        };
+        let json = serde_json::to_value(&candidate).unwrap();
+        assert_eq!(json["processName"], "Cursor");
+        assert!(json.get("process_name").is_none());
     }
 }

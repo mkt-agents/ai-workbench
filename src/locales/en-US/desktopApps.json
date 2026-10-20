@@ -46,6 +46,8 @@
     "maximized": "The app maximized itself again — forcing a restore…",
     "invisible": "The app hid its own window, hence the blank area",
     "size": "The window has a zero width/height, hence the blank area",
+    "restore": "Restore window",
+    "restore-failed": "Could not restore the window — re-embed it.",
     "kill-failed": "The kill was refused by the OS; the app stays embedded."
   },
   "picker": {

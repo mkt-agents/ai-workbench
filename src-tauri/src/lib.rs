@@ -108,14 +108,6 @@ pub fn run() {
         })
         .manage(cloudflared_commands::CloudflaredState::default())
         .manage(tray::TrayTunnelUrls::default())
-        // Adopted desktop windows (desktop_embed) are children of ours, so
-        // Windows destroys them together with the main window. Hand them back
-        // to the desktop first — both here and on the final exit path below.
-        .on_window_event(|_window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                desktop_embed::release_all();
-            }
-        })
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("failed to get app data dir");
             fs::create_dir_all(&data_dir).expect("failed to create app data dir");
@@ -656,6 +648,8 @@ desktop_embed::desktop_embed_relayout,
             desktop_embed::desktop_embed_list,
         desktop_embed::desktop_embed_candidates,
         desktop_embed::desktop_embed_attach_window,
+        desktop_embed::desktop_embed_focus,
+        desktop_embed::desktop_embed_restore,
             update_commands::update_latest_tag,
             update_commands::update_fetch_release_info,
             update_commands::update_download,
@@ -665,6 +659,11 @@ desktop_embed::desktop_embed_relayout,
         .expect("error while running tauri application")
         .run(|_app, event| {
             // Dev servers / watchers the agent started must not outlive the workbench.
+            //
+            // Release adopted windows only here, on the real exit path. Hooking
+            // every window's CloseRequested used to hand them back mid-session:
+            // the main window only hides to the tray (prevent_close), and the
+            // AI hub window closes independently of the embedded apps.
             if let tauri::RunEvent::Exit = event {
                 agent_proc::kill_all();
                 desktop_embed::release_all();

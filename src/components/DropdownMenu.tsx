@@ -20,6 +20,7 @@ export default function DropdownMenu({
   items,
   children,
   triggerClassName = "btn btn-secondary btn-icon",
+  onOpenChange,
 }: {
   /** aria-label for the trigger button. */
   label: string;
@@ -27,17 +28,28 @@ export default function DropdownMenu({
   /** The trigger button's inner content (icon). */
   children: ReactNode;
   triggerClassName?: string;
+  /**
+   * Called synchronously on every real open/close transition (including the
+   * item-click close, before its action runs). Pages whose content is covered
+   * by a native window use this to hide it while the menu is up.
+   */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    onOpenChange?.(next);
+  };
+
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) changeOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") changeOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
@@ -45,7 +57,7 @@ export default function DropdownMenu({
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, onOpenChange]);
 
   return (
     <div className="dd" ref={ref}>
@@ -56,7 +68,7 @@ export default function DropdownMenu({
         aria-expanded={open}
         aria-label={label}
         title={label}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => changeOpen(!open)}
       >
         {children}
       </button>
@@ -73,7 +85,7 @@ export default function DropdownMenu({
                 className={`dd-item${item.danger ? " is-danger" : ""}`}
                 disabled={item.disabled}
                 onClick={() => {
-                  setOpen(false);
+                  changeOpen(false);
                   item.onClick();
                 }}
               >
