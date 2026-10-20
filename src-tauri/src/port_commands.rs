@@ -544,7 +544,11 @@ mod tests {
         let listeners = listeners_from_text(&text, &[8080]);
         assert_eq!(listeners.len(), 1, "one card, one kill — not two rows for the same process");
         assert_eq!(listeners[0].local_addrs, vec!["0.0.0.0", "[::]"]);
-        assert_eq!(listeners[0].protection, "");
+        // No protection assertion here: `listeners_from_text` resolves the pid
+        // against the LIVE process table and 26108 gets recycled by Windows
+        // like any pid (it was node.exe this morning, a system process later,
+        // flipping this test with no code change). The protection verdict is
+        // covered by `system_pids_and_critical_images_are_protected`.
     }
 
     #[test]

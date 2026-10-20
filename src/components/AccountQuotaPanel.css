@@ -881,6 +881,45 @@
   text-overflow: ellipsis;
 }
 
+/* Cursor 双池卡：总剩余与两条分池都是标准 MeterRow（16px 读数 + 6px 条），只收紧行距。 */
+.aq-cursor-body {
+  gap: var(--space-2);
+}
+
+/* 套餐金额 / 赠送 + 耗尽短注；窄卡放不下时短注换到下一行。 */
+.aq-pool-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
+.aq-pool-meta-spend {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-pool-meta-note {
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.aq-pool-meta-note.is-warn {
+  color: var(--yellow);
+}
+
+.aq-pool-meta-cycle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .aq-details {
   display: grid;
   /* 固定三列，各卡片明细列对齐；不用 auto-fit 1fr，否则两项时会各占半宽。 */
