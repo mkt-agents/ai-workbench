@@ -30,6 +30,8 @@ const PAGES: Alias[] = [
   { tab: "hosts", label: "Hosts 管理", names: ["hosts 管理", "hosts"] },
   { tab: "devtools", label: "工具箱", names: ["工具箱", "小工具", "devtools"] },
   { tab: "app-launcher", label: "快捷应用", names: ["快捷应用", "应用启动器"] },
+  // 旧名「桌面应用」也要能跳：`cleanTarget` 会剥掉结尾的「应用」，所以别名留短的形式（桌面 / 嵌入）。
+  { tab: "desktop-apps", label: "协同办公", names: ["协同办公", "办公", "桌面", "嵌入"] },
   { tab: "settings", label: "设置", names: ["设置", "settings"] },
 ];
 

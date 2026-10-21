@@ -249,10 +249,10 @@ function App() {
             />
           ),
         },
+        { id: "desktop-apps", labelKey: "desktopApps", icon: <AppWindow size={16} /> },
         { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
         { id: "snippets", labelKey: "snippets", icon: <FileText size={16} /> },
         { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
-        { id: "desktop-apps", labelKey: "desktopApps", icon: <AppWindow size={16} /> },
       ],
     },
     {

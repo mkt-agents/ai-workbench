@@ -341,6 +341,7 @@ pub fn open_main_tab(app: AppHandle, tab: String) -> Result<(), String> {
         "drafts",
         "account-quota",
         "app-launcher",
+        "desktop-apps",
         "settings",
     ];
     if !ALLOWED.contains(&tab.as_str()) {
