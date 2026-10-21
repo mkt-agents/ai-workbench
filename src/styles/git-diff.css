@@ -1041,6 +1041,37 @@
   white-space: nowrap;
 }
 
+/* 有差异时它是 DropdownMenu 的触发按钮（第 K / 共 N → 跳转列表） */
+button.dm-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+button.dm-count:hover {
+  color: var(--text-0);
+  background: var(--overlay-1);
+  border-color: var(--border-subtle);
+}
+
+button.dm-count svg {
+  opacity: 0.7;
+}
+
+/* 一处改动一行，列表可能很长：限宽限高自己滚，别把整个弹框顶出屏幕 */
+.diff-modal .dd-menu {
+  max-width: 460px;
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+}
+
 .dm-file {
   display: flex;
   align-items: center;
@@ -1135,7 +1166,18 @@
   background: var(--bg-1);
   color: var(--accent-strong);
   cursor: pointer;
+  /* 按块操作默认不画，悬停那一行或键盘聚焦才出现：这对按钮是还原/暂存，
+     常显时会被读成冲突面板那对采纳箭头（冲突其实走 MergeResolver，不进这里）。
+     栏宽仍预留 46px，避免悬停时整行跳动。 */
+  opacity: 0;
   transition: var(--transition-colors-fast);
+}
+
+.dv-srow:hover .dv-arrow,
+.dv-row:hover .dv-arrow,
+.dv-arrow:hover,
+.dv-arrow:focus-visible {
+  opacity: 1;
 }
 
 .dv-arrow:hover:not(:disabled) {
@@ -1153,6 +1195,6 @@
 }
 
 .dv-arrow:disabled {
-  opacity: 0.5;
+  opacity: 0.3;
   cursor: default;
 }

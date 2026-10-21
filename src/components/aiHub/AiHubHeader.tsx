@@ -78,6 +78,14 @@ export default function AiHubHeader(props: Props) {
             <button type="button" className="qa-busy-act is-allow" onClick={() => onDecideAgent("once")}>
               {t("agent.allow")}
             </button>
+            <button
+              type="button"
+              className="qa-busy-act"
+              onClick={() => onDecideAgent("turn")}
+              title={t("agent.allowTurnTip")}
+            >
+              {t("agent.allowTurn")}
+            </button>
             <button type="button" className="qa-busy-act" onClick={() => onDecideAgent("deny")}>
               {t("agent.deny")}
             </button>

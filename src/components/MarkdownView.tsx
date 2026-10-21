@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Copy } from "lucide-react";
+import { useGlobalStore } from "../core/store";
 
 /**
  * Lightweight dependency-free Markdown renderer for ai-hub answers.
@@ -155,17 +156,26 @@ type InlineToken =
   | { type: "italic"; text: string }
   | { type: "link"; text: string; href: string };
 
+/**
+ * Inline token patterns, tried in order at each scan position.
+ * Sticky (`y`) + `lastIndex` so scanning never copies the remaining suffix:
+ * answers stream in, and this runs over the whole growing text on every chunk.
+ */
+const TOKEN_PATTERNS: { re: RegExp; build: (m: RegExpExecArray) => InlineToken }[] = [
+  { re: /`([^`\n]+)`/y, build: (m) => ({ type: "code", text: m[1] }) },
+  { re: /\*\*([^*\n](?:[^*]*?[^*\n])?)\*\*/y, build: (m) => ({ type: "bold", text: m[1] }) },
+  { re: /\*([^*\n]+)\*/y, build: (m) => ({ type: "italic", text: m[1] }) },
+  // Images are read-only model output: keep the alt text and drop the URL markup.
+  { re: /!?\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/y, build: (m) => ({ type: "link", text: m[1], href: m[2] }) },
+];
+
 function matchInlineToken(text: string, from: number): { token: InlineToken; start: number; end: number } | null {
   for (let i = from; i < text.length; i++) {
-    const rest = text.slice(i);
-    let m = rest.match(/^`([^`\n]+)`/);
-    if (m) return { token: { type: "code", text: m[1] }, start: i, end: i + m[0].length };
-    m = rest.match(/^\*\*([^*\n](?:[^*]*?[^*\n])?)\*\*/);
-    if (m) return { token: { type: "bold", text: m[1] }, start: i, end: i + m[0].length };
-    m = rest.match(/^\*([^*\n]+)\*/);
-    if (m) return { token: { type: "italic", text: m[1] }, start: i, end: i + m[0].length };
-    m = rest.match(/^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/);
-    if (m) return { token: { type: "link", text: m[1], href: m[2] }, start: i, end: i + m[0].length };
+    for (const { re, build } of TOKEN_PATTERNS) {
+      re.lastIndex = i;
+      const m = re.exec(text);
+      if (m) return { token: build(m), start: i, end: i + m[0].length };
+    }
   }
   return null;
 }
@@ -208,15 +218,20 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 
 function CodeBlock({ lang, text }: { lang: string; text: string }) {
   const { t } = useTranslation("aihub");
+  const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const [copied, setCopied] = useState(false);
+  /** Clipboard can genuinely fail (focus loss / policy); saying nothing looks like a dead button. */
+  const [failed, setFailed] = useState(false);
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await invokeCopyToClipboard(text);
+      setFailed(false);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      /* clipboard unavailable — ignore */
+      setFailed(true);
+      window.setTimeout(() => setFailed(false), 2500);
     }
   };
 
@@ -224,7 +239,12 @@ function CodeBlock({ lang, text }: { lang: string; text: string }) {
     <div className="qa-code-block">
       <div className="qa-code-head">
         <span className="qa-code-lang">{lang || "text"}</span>
-        <button type="button" className="btn-icon qa-code-copy" onClick={() => void copy()} title={t("copy")}>
+        <button
+          type="button"
+          className={`btn-icon qa-code-copy${failed ? " is-failed" : ""}`}
+          onClick={() => void copy()}
+          title={failed ? t("copyFailed") : t("copy")}
+        >
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
       </div>

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Loader2, Undo2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronUp, Loader2, Undo2 } from "lucide-react";
 import { useGlobalStore } from "../../core/store";
 import { readStoredString, writeStoredString } from "../../core/localState";
 import { parseInvokeError } from "../../hooks/useInvokeError";
+import DropdownMenu from "../DropdownMenu";
 import ModalTitleRow from "../ModalTitleRow";
 import { blockActionsFor, DiffTitle, useF7, type DiffViewTarget } from "./DiffViewer";
 import { useDiffView, type BlockAction, type DiffMode } from "./useDiffView";
@@ -18,7 +19,7 @@ type Props = {
   busy: boolean;
   /** Stage / unstage hunks of `file`; the dialog reloads the diff afterwards. */
   onApply: (file: DiffFile, patch: string) => Promise<void>;
-  /** » / « on a change block; the dialog reloads the diff afterwards. */
+  /** A change block's revert / stage action; the dialog reloads the diff afterwards. */
   onBlock: (file: DiffFile, action: BlockAction, patch: string, block: ChangeBlock) => Promise<void>;
   /** The file whose last block revert can be undone, if any. */
   undoRevertFor: { repoPath: string; filePath: string } | null;
@@ -101,7 +102,7 @@ export default function DiffModal({ files, startIndex, busy, onApply, onBlock, u
       if (!file) return;
       void onApply(file, patch).then(load);
     },
-    blockActions: blockActionsFor(file ?? null, ignoreWs),
+    blockActions: blockActionsFor(file ?? null, ignoreWs, full),
     onBlock: (action, patch, block) => {
       if (!file) return;
       void onBlock(file, action, patch, block).then(load);
@@ -127,6 +128,10 @@ export default function DiffModal({ files, startIndex, busy, onApply, onBlock, u
   const { parsed } = diff;
   const hasHunks = parsed.hunks.length > 0;
   const name = file ? file.filePath.slice(file.filePath.lastIndexOf("/") + 1) : "";
+  const countLabel =
+    diff.navAt >= 0
+      ? t("commit.diffModal.countNav", { current: diff.navAt + 1, total: diff.changes })
+      : t("commit.diffModal.count", { count: diff.changes });
 
   return (
     <div className="modal-overlay">
@@ -255,7 +260,23 @@ export default function DiffModal({ files, startIndex, busy, onApply, onBlock, u
                 : t("commit.diffStagePicked", { count: diff.picked.size })}
             </button>
           )}
-          <span className="dm-count">{t("commit.diffModal.count", { count: diff.changes })}</span>
+          {/* 有差异时计数即导航：点开是各处改动的跳转列表，与上下处按钮共用 goTo/jump。 */}
+          {diff.changes > 0 ? (
+            <DropdownMenu
+              label={t("commit.diffModal.countNavTitle")}
+              triggerClassName="dm-count"
+              items={diff.changeList.map((c) => ({
+                label: t("commit.diffModal.countNavItem", { at: c.id + 1, line: c.line, text: c.text }),
+                icon: c.id === diff.navAt ? <Check size={13} /> : undefined,
+                onClick: () => diff.goTo(c.id),
+              }))}
+            >
+              {countLabel}
+              <ChevronDown size={12} />
+            </DropdownMenu>
+          ) : (
+            <span className="dm-count">{countLabel}</span>
+          )}
         </div>
         {file && (
           <div className="dm-file">

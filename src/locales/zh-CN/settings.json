@@ -23,6 +23,8 @@
     "shortcutOk": "快捷键已注册：{{shortcut}}",
     "shortcutFail": "快捷键注册失败：{{error}}",
     "pasteClipboard": "唤起时允许填入剪贴板",
+    "suggest": "每轮回答后预测下一步提示词",
+    "suggestHint": "预测要多打一次模型（算进下面的用量台账）。关掉只少一条建议，问答本身不受影响。",
     "bubble": "桌面悬浮钮",
     "bubbleHint": "右下角置顶小按钮，点击打开智枢；可拖动，右键隐藏。也可用快捷键或托盘。"
   },

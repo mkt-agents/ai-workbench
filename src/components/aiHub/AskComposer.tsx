@@ -10,8 +10,9 @@ import type { AskPanelProps } from "./AskPanel";
 type Props = Pick<
   AskPanelProps,
   | "input" | "setInput" | "inputRef" | "busy" | "lastQuestion" | "suggestion" | "onSuggestionPick"
-  | "onSuggestionDismiss" | "task" | "onTask" | "onDaily" | "hasSnippets" | "snippetOpen"
+  | "onSuggestionDismiss" | "task" | "onTask" | "onDaily" | "hasSnippets" | "snippetOpen" | "snippetNav"
   | "onToggleSnippets" | "onPasteClipboard" | "onAttachFile" | "onSend" | "repoControl" | "modelControl"
+  | "profileControl"
   | "permission" | "onPermission" | "permissionMenuOpen" | "onTogglePermissionMenu"
   | "dailyStyle" | "onDailyStyle" | "dailyMenuOpen" | "onToggleDailyMenu"
   | "openList" | "onRunOpen" | "onStop"
@@ -63,8 +64,8 @@ export default function AskComposer(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     input, setInput, inputRef, busy, lastQuestion, suggestion, onSuggestionPick, onSuggestionDismiss,
-    task, onTask, onDaily, hasSnippets, snippetOpen, onToggleSnippets, onPasteClipboard, onAttachFile,
-    onSend, repoControl, modelControl, permission, onPermission, permissionMenuOpen, onTogglePermissionMenu,
+    task, onTask, onDaily, hasSnippets, snippetOpen, snippetNav, onToggleSnippets, onPasteClipboard, onAttachFile,
+    onSend, repoControl, modelControl, profileControl, permission, onPermission, permissionMenuOpen, onTogglePermissionMenu,
     dailyStyle, onDailyStyle, dailyMenuOpen, onToggleDailyMenu,
     openList, onRunOpen, onStop,
   } = props;
@@ -150,6 +151,16 @@ export default function AskComposer(props: Props) {
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
+          // IME in the middle of composing: Enter / ↑↓ belong to the candidate window,
+          // never to send or list navigation (a pinyin commit would fire a whole agent run).
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          // ↑↓ in the composer drive the open snippet list — it covers the row that
+          // ↑ recalls the last question and the "打开 …" list.
+          if (snippetNav && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            e.preventDefault();
+            snippetNav.onMove(e.key === "ArrowDown" ? 1 : -1);
+            return;
+          }
           // ↑ in an empty composer recalls the last question for editing.
           if (e.key === "ArrowUp" && !input && lastQuestion && !e.shiftKey) {
             e.preventDefault();
@@ -171,6 +182,10 @@ export default function AskComposer(props: Props) {
           if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
           e.preventDefault();
           if (busy) return;
+          if (snippetNav?.active) {
+            snippetNav.onPick();
+            return;
+          }
           submit();
         }}
         rows={2}
@@ -267,6 +282,7 @@ export default function AskComposer(props: Props) {
           </div>
         </div>
         <div className="qa-compose-end">
+          {profileControl}
           <PermissionPicker
             permission={permission}
             onPermission={onPermission}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AIModelConfig, AiHubTurn } from "../../core/types";
+import { recordAiUsage } from "../../lib/aiUsage";
 
 type GenerateText = (req: {
   config: AIModelConfig;
@@ -71,10 +72,12 @@ export function useNextSuggestion(opts: {
   model: AIModelConfig | undefined;
   turns: AiHubTurn[];
   busy: boolean;
+  /** Off = no extra model call per round (the chip is a nicety, not a requirement). */
+  enabled: boolean;
   generate: GenerateText;
   fallback?: () => string | null;
 }) {
-  const { model, turns, busy, generate, fallback } = opts;
+  const { model, turns, busy, enabled, generate, fallback } = opts;
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const genRef = useRef(0);
   /** 唤出窗口会重载模型列表，model 对象换了 identity 但内容没变——
@@ -91,7 +94,7 @@ export function useNextSuggestion(opts: {
 
   useEffect(() => {
     const model = modelRef.current;
-    if (busy || turns.length === 0) {
+    if (!enabled || busy || turns.length === 0) {
       ++genRef.current;
       lastKeyRef.current = null;
       setSuggestion(null);
@@ -131,6 +134,12 @@ export function useNextSuggestion(opts: {
           });
           if (genRef.current !== gen) return;
           const clean = sanitizeSuggestion(text, expectCJK);
+          // This call is invisible to the user, so it must still land in the ledger.
+          recordAiUsage({
+            modelId: model.id,
+            modelName: model.name,
+            estimatedTokens: Math.max(1, Math.round((transcript.length + text.length) / 4)),
+          });
           if (clean) setSuggestion(clean);
           else {
             console.warn("[qa-suggest] 建议内容不合格，改用本地兜底:", text.slice(0, 120));
@@ -149,7 +158,7 @@ export function useNextSuggestion(opts: {
       // 计时器没跑就被清掉时，这个快照还没真正请求过，下次要重新发
       if (genRef.current === gen && !started) lastKeyRef.current = null;
     };
-  }, [turns, busy, modelId]);
+  }, [turns, busy, enabled, modelId]);
 
   const dismiss = useCallback(() => setSuggestion(null), []);
   return { suggestion, dismiss };

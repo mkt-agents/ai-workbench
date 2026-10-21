@@ -88,6 +88,8 @@ export interface AppSettings {
   aiHubFocusRepos?: string[];
   /** Last used ai-hub task (encoded, see aiHub/config encodeTask) */
   aiHubLastTask?: string;
+  /** Predict the next prompt after every answer (one extra model call per round). */
+  aiHubSuggest?: boolean;
   /** Show desktop floating bubble for ai-hub */
   aiHubBubbleEnabled?: boolean;
   /** Physical screen position of the bubble */
@@ -161,9 +163,13 @@ export interface AiHubTurn {
   /** Copy and save keep the whole reply (polish, translate, summary, daily report). */
   keep?: 'whole';
   /** Tool steps from an agent turn. Not sent as the visible answer. */
-  steps?: { tool: string; status: string; summary: string; detail?: string }[];
+  steps?: { tool: string; status: string; summary: string; arg?: string; detail?: string }[];
   /** The agent stopped at its round / action cap; the thread offers「继续」. */
   limited?: boolean;
+  /** Wall-clock ms of the streamed round, kept so an exported session shows cost. */
+  elapsedMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
   /** Folded notes for rounds that fell outside the verbatim window. */
   digest?: boolean;
 }

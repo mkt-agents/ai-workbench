@@ -83,6 +83,8 @@ const NORMAL_KEY = "qa-window-normal";
  * reading column floating in empty space. Matches `max_inner_size` in tray/bubble.rs.
  */
 export const LARGE_MAX = { width: 1120, height: 960 };
+/** Must match `min_inner_size` in tray/bubble.rs (logical px). */
+const MIN_SIZE = { width: 640, height: 600 };
 /** Room left around the enlarged window inside the monitor's work area (logical px). */
 const LARGE_MARGIN = 48;
 
@@ -150,6 +152,61 @@ function defaultRect(work: Rect, scale: number): Rect {
   };
 }
 
+/**
+ * Keep a physical-pixel rect inside the window contract and the work area.
+ *
+ * Saved bounds predate the current minimum size (or were written on another
+ * monitor/DPI). Landing at e.g. 436×254 lets the empty state's centered
+ * content overflow over the header and composer, so never trust them raw.
+ */
+function clampRect(rect: Rect, work: Rect, scale: number): Rect {
+  const width = Math.round(
+    Math.min(
+      Math.max(rect.width, MIN_SIZE.width * scale),
+      Math.min(LARGE_MAX.width * scale, work.width),
+    ),
+  );
+  const height = Math.round(
+    Math.min(
+      Math.max(rect.height, MIN_SIZE.height * scale),
+      Math.min(LARGE_MAX.height * scale, work.height),
+    ),
+  );
+  return {
+    x: Math.round(Math.min(Math.max(rect.x, work.x), work.x + work.width - width)),
+    y: Math.round(Math.min(Math.max(rect.y, work.y), work.y + work.height - height)),
+    width,
+    height,
+  };
+}
+
+/** Clamp saved bounds to the monitor that still holds their title bar. */
+function clampSavedRect(
+  saved: Rect,
+  monitors: Awaited<ReturnType<typeof availableMonitors>>,
+): Rect | null {
+  const probeX = saved.x + 40;
+  const probeY = saved.y + 16;
+  const monitor = monitors.find(
+    (m) =>
+      probeX >= m.position.x &&
+      probeX < m.position.x + m.size.width &&
+      probeY >= m.position.y &&
+      probeY < m.position.y + m.size.height,
+  );
+  if (!monitor) return null;
+  return clampRect(
+    saved,
+    {
+      x: monitor.workArea.position.x,
+      y: monitor.workArea.position.y,
+      width: monitor.workArea.size.width,
+      height: monitor.workArea.size.height,
+    },
+    monitor.scaleFactor,
+  );
+}
+
 async function workAreaOf(): Promise<{ work: Rect; scale: number } | null> {
   const m = await currentMonitor();
   if (!m) return null;
@@ -203,6 +260,16 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
       try {
         const rect = await currentRect(win);
         if (disposed || !rect) return;
+        const monitor = await currentMonitor().catch(() => null);
+        if (
+          monitor &&
+          (rect.width < MIN_SIZE.width * monitor.scaleFactor - SIZE_SLACK ||
+            rect.height < MIN_SIZE.height * monitor.scaleFactor - SIZE_SLACK)
+        ) {
+          // A hidden/transient window can report a size below the contract;
+          // persisting it would restore the broken layout next launch.
+          return;
+        }
         const ls = largeSize.current;
         if (largeRef.current && ls && (Math.abs(rect.width - ls.width) > SIZE_SLACK || Math.abs(rect.height - ls.height) > SIZE_SLACK)) {
           markLarge(false);
@@ -226,21 +293,13 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
       const saved = readBounds();
       if (saved) {
         try {
-          const probeX = saved.x + 40;
-          const probeY = saved.y + 16;
-          const onScreen = (await availableMonitors()).some(
-            (m) =>
-              probeX >= m.position.x &&
-              probeX < m.position.x + m.size.width &&
-              probeY >= m.position.y &&
-              probeY < m.position.y + m.size.height,
-          );
-          if (onScreen && !disposed) {
+          const target = clampSavedRect(saved, await availableMonitors());
+          if (target && !disposed) {
             applying.current = true;
-            await applyRect(win, saved);
+            await applyRect(win, target);
             const area = await workAreaOf().catch(() => null);
-            const big = area ? nearlyLarge(saved, largeRect(area.work, area.scale)) : false;
-            if (saved.large || big) markLarge(true, { width: saved.width, height: saved.height });
+            const big = area ? nearlyLarge(target, largeRect(area.work, area.scale)) : false;
+            if (big) markLarge(true, { width: target.width, height: target.height });
           }
         } catch {
           /* ignore */
@@ -284,8 +343,13 @@ export function useWindowBounds(): { maximized: boolean; toggleMaximized: () => 
         // Decide from the real size too: a lost flag must not turn 还原 into 放大 again.
         if (largeRef.current || osMax || (before && nearlyLarge(before, target))) {
           const normal = readJson(NORMAL_KEY);
-          // A remembered "normal" as big as 放大 would make 还原 a no-op.
-          const back = isRect(normal) && !nearlyLarge(normal, target) ? normal : defaultRect(area.work, area.scale);
+          // A remembered "normal" as big as 放大 would make 还原 a no-op; a
+          // tiny legacy value must not bring the broken layout back either.
+          const remembered = isRect(normal) ? clampRect(normal, area.work, area.scale) : null;
+          const back =
+            remembered && !nearlyLarge(remembered, target)
+              ? remembered
+              : clampRect(defaultRect(area.work, area.scale), area.work, area.scale);
           await applyRect(win, back);
           markLarge(false);
         } else {

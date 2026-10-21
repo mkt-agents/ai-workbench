@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Eye, FilePen, ShieldAlert, ShieldCheck, type LucideIcon } from "lucide-react";
 import { AGENT_PERMISSIONS, type AgentPermission } from "./useAskStream";
@@ -23,10 +24,21 @@ type Props = {
 export default function PermissionPicker({ permission, onPermission, open, onToggle }: Props) {
   const { t } = useTranslation("aihub");
   const Icon = ICONS[permission];
+  const pillRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
+  /**
+   * A menu hands focus back to its trigger. Without this, cancelling the 完全权限
+   * second confirmation leaves focus on <body> — the popover is already gone.
+   */
+  useEffect(() => {
+    if (wasOpen.current && !open) pillRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
   return (
     <div className="qa-focus qa-perm">
       <button
         type="button"
+        ref={pillRef}
         className={`qa-perm-pill is-${permission}`}
         onClick={onToggle}
         title={`${t(`permission.${permission}Desc`)} · ${t("permission.shortcut")}`}

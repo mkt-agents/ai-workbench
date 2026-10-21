@@ -1,4 +1,5 @@
 import type { TaskKind } from "./config";
+import { TEXT_ONLY_TASKS } from "./config";
 import { isDailyReport } from "./dailyReport";
 
 export type AskMode = "chat" | "project";
@@ -24,8 +25,6 @@ export type RouteInput = {
 
 export type RouteResult = { mode: AskMode; reason: RouteReason };
 
-/** Tasks that work on the text the user typed — the repo is irrelevant. */
-const TEXT_TASKS: TaskKind[] = ["polish", "translate", "summarize", "optimize"];
 /** Tasks that are almost always about the user's code. */
 const PROJECT_TASKS: TaskKind[] = ["debug"];
 
@@ -60,7 +59,7 @@ export function routeQuestion(input: RouteInput): RouteResult {
   const q = input.question.trim();
   if (META_RE.test(q)) return { mode: "chat", reason: "meta" };
   if (isDailyReport(q)) return { mode: "project", reason: "projectTask" };
-  if (TEXT_TASKS.includes(input.task)) return { mode: "chat", reason: "textTask" };
+  if (TEXT_ONLY_TASKS.includes(input.task)) return { mode: "chat", reason: "textTask" };
   if (PROJECT_TASKS.includes(input.task)) return { mode: "project", reason: "projectTask" };
   if (PROJECT_WORD_RE.test(q) || PATH_RE.test(q) || TRACE_RE.test(q)) {
     return { mode: "project", reason: "signal" };

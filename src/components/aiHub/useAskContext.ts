@@ -88,7 +88,6 @@ export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
   const refreshContext = useCallback(async (mode: AskMode): Promise<ContextResult> => {
     const parts: string[] = [];
     const included = new Set<ContextPart>();
-    let truncatedFlag = false;
     const project = mode === "project";
 
     // Focus set drives which repos get full diffs; empty = auto (current repo).
@@ -314,7 +313,7 @@ export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
     const result = joined ? truncate(joined, CONTEXT_LIMIT) : { text: "", truncated: false };
     const out: ContextResult = {
       text: result.text,
-      truncated: truncatedFlag || result.truncated,
+      truncated: result.truncated,
       summary: {
         repos: Array.from(new Set(repoNames)),
         parts: (["dirty", "git", "workspace"] as ContextPart[]).filter((p) => included.has(p)),

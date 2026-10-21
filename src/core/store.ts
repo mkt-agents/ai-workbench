@@ -28,6 +28,12 @@ const isOlderVersion = (v1: string, v2: string): boolean =>
   compareVersions(v1, v2) < 0;
 
 /**
+ * How many ai-hub conversations SQLite keeps. The whole table is rewritten on every
+ * save, so this stays a cap — but eviction must never be silent (see upsertAiHubSession).
+ */
+export const MAX_AI_HUB_SESSIONS = 50;
+
+/**
  * Collapse rows that point at the same directory and canonicalise their paths.
  * Windows paths reach us in three spellings (picker, git output, scan output that
  * joins a forward-slash root with a backslash segment), and exact-string dedupe
@@ -88,6 +94,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     git: true,
     dirty: true,
   },
+  aiHubSuggest: true,
   aiHubBubbleEnabled: true,
   aiHubBubblePos: undefined,
   trayHintShown: false,
@@ -346,7 +353,7 @@ interface StoreState extends GlobalState, Invocations {
   // AI Hub sessions
   loadAiHubSessions: () => Promise<void>;
   /** Insert or update a session (by id); caps the stored list at 30 by updatedAt. */
-  upsertAiHubSession: (session: AiHubSession) => Promise<void>;
+  upsertAiHubSession: (session: AiHubSession) => Promise<string[]>;
   deleteAiHubSession: (id: string) => Promise<void>;
 
   // Quick app launchers
@@ -1313,18 +1320,23 @@ export const useGlobalStore = create<StoreState>()(
         set({ aiHubSessions: sessions });
       }),
 
-      upsertAiHubSession: async (session) => withTable("ai_hub_sessions", async () => {
-        const MAX_SESSIONS = 30;
+      /** Returns the titles of sessions pushed past the cap, so the UI can say what it lost. */
+      upsertAiHubSession: async (session) => withTable<string[]>("ai_hub_sessions", async () => {
         const without = get().aiHubSessions.filter((s) => s.id !== session.id);
         let sessions = [session, ...without];
-        if (sessions.length > MAX_SESSIONS) {
+        const evicted: string[] = [];
+        if (sessions.length > MAX_AI_HUB_SESSIONS) {
           // Drop the stalest beyond the cap (list is newest-first by design).
-          sessions = [...sessions]
+          const kept = [...sessions]
             .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-            .slice(0, MAX_SESSIONS);
+            .slice(0, MAX_AI_HUB_SESSIONS);
+          const keepIds = new Set(kept.map((s) => s.id));
+          for (const s of sessions) if (!keepIds.has(s.id)) evicted.push(s.title || s.id);
+          sessions = kept;
         }
         await storage.aiHubSessions.save(sessions);
         set({ aiHubSessions: sessions });
+        return evicted;
       }),
 
       deleteAiHubSession: async (id) => withTable("ai_hub_sessions", async () => {

@@ -33,7 +33,7 @@
 | **账号资产** | Cursor 多身份一键切换（独立 profile 目录）、账号配额看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
 | **工程管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK / Maven / Python 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
-| **系统工具** | 工具箱页 8 个本地开发工具（顶部工具条；HTTP 客户端已移除）、快捷应用（本机应用扫描 / 启动 / 运行态 + 「端口查杀」面板） |
+| **系统工具** | 工具箱页 10 个本地开发工具（顶部工具条，分转换/生成/解析/计算/系统五组；含「端口查杀」，HTTP 客户端已移除）、快捷应用（本机应用扫描 / 启动 / 运行态） |
 
 产品标识：
 - **identifier**: `com.ai-workbench.app`
@@ -128,11 +128,11 @@ ai-workbench/
 │   │   ├── workbuddy/            # WorkBuddy 子组件（扫码/签到等；额度页仍复用部分）
 │   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
 │   │   ├── MarkdownView.tsx      # Markdown 渲染
-│   │   ├── DevTools.tsx          # 工具箱页（顶部工具条 + 8 个工具）
+│   │   ├── DevTools.tsx          # 工具箱页（顶部工具条 + 10 个工具，转换/生成/解析/计算/系统五组）
 │   │   ├── devtools/             # 工具实现：JsonTool / EncoderTool / TimestampTool / CronTool /
-│   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool
+│   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool / CalculatorTool /
+│   │   │                         #   PortKillerTool（端口查杀，本页唯一带后端命令的工具）
 │   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
-│   │   │                         #   + PortKillerPanel（该页第二个视图：按端口查杀）
 │   │   ├── aiHub/             # 智枢窗子组件：AskPanel（布局）→ AskThread / AskComposer / AskEmpty / AskErrorCard；
 │   │   │                      #   AiHubHeader、PermissionPicker（四档权限）、AgentActivity（步骤详情 / diff 审批）；
 │   │   │                      #   hooks：useAskStream / useRepoFocus / useAnswerActions / useAiHubWindow 等
@@ -382,7 +382,7 @@ App 启动
 
 | 接口 | 用途 | 关键字段 |
 |------|------|----------|
-| `AppSettings` | 用户偏好 | theme, language, aiHubShortcut, aiHubChips, sidebarCollapsed |
+| `AppSettings` | 用户偏好 | theme, language, aiHubShortcut, aiHubChips, sidebarCollapsed, aiHubProfiles / aiHubProfileId（智枢 Profile）, aiHubSuggest（下一步提示词预测开关） |
 | `GitAccount` | Git 身份 | name, email, color, note |
 | `GitRepoConfig` | 仓库身份绑定 | path, userName, email, accountId |
 | `GitWorkspace` | Workspace 分组 | path, name |
@@ -583,7 +583,7 @@ openGroups: Set<string>       // 分组展开状态
 | `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 + 类型分段筛选 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`） |
 | `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（未安装 / 折叠时账号数胶囊、悬停换眼睛 / `+` 添加）下挂已连接账号，有账号的服务商点行可折叠（localStorage `aq-rail-folded`）；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
-| `AiHubApp` | 智枢主窗口（`#/ai-hub`） | 流式 + 多轮 + 上下文 chip + 片段选择器 |
+| `AiHubApp` | 智枢主窗口（`#/ai-hub`） | 流式 + 多轮 + 上下文 chip + 片段选择器 + Profile；会话上限 `MAX_AI_HUB_SESSIONS = 50`（淘汰会提示丢了哪条）、拖拽附件、Esc 分层 |
 | `AiHubBubble` | 桌面气泡（`#/ai-hub-bubble`） | 快捷唤起，全局置顶 |
 | `CursorManager` | Cursor 多账号 | 初始化 profile + 切换 + 诊断导出 |
 | `WorkBuddyManager` | WorkBuddy（侧栏已下线） | 账号池 + 签到；额度页复用扫码/签到；恢复见 AGENTS.md |
@@ -1158,9 +1158,9 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 ### 10.14 DevTools Commands（已移除）
 
-工具箱页**不再有后端命令**：HTTP 客户端工具已整体删除，`devtools_commands.rs` 文件、`lib.rs` 的 `mod` 与 `generate_handler!` 注册、`devtools_http_request` 命令、前端 `invokeHttpRequest` 封装与 `storage.http*` 适配器全部移除；`http_saved_requests` / `http_history` 两张表在 `lib.rs` setup 里被 `DROP TABLE`（幂等，与测试功能那批一起）。
+工具箱页曾一度**零后端命令**：HTTP 客户端工具已整体删除，`devtools_commands.rs` 文件、`lib.rs` 的 `mod` 与 `generate_handler!` 注册、`devtools_http_request` 命令、前端 `invokeHttpRequest` 封装与 `storage.http*` 适配器全部移除；`http_saved_requests` / `http_history` 两张表在 `lib.rs` setup 里被 `DROP TABLE`（幂等，与测试功能那批一起）。**2026-10-21 起这条不再成立**：端口查杀搬进了工具箱页，带 2 条 `port_commands.rs` 命令（见 §10.16b），其余 9 个工具仍是纯前端。
 
-> 更早删除的是「端口 / 进程查看与结束」：`devtools_list_ports` / `devtools_resolve_processes` / `devtools_kill_process`（随 `a3595b8` 新增快捷应用一起去掉，当时是为了和"按进程名 kill"去重）。**2026-10-09 以「端口查杀」面板形态回归，但落在快捷应用页而不是工具箱页**：命令是 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`（见 §10.16b），netstat 相关逻辑也从 `dsh_commands.rs` 抽到了这个共享模块，DSH 改为 `use` 它。工具箱页那 **8 个仍然是纯前端工具**（转换 / 生成 / 解析三组），零后端命令这条约定没变。
+> 更早删除的是「端口 / 进程查看与结束」：`devtools_list_ports` / `devtools_resolve_processes` / `devtools_kill_process`（随 `a3595b8` 新增快捷应用一起去掉，当时是为了和"按进程名 kill"去重）。**2026-10-09 以「端口查杀」形态回归，当时落在快捷应用页；2026-10-21 搬进工具箱页**（`devtools/PortKillerTool.tsx`，挂在新的 `group.system` 分组下）：命令是 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`（见 §10.16b），netstat 相关逻辑也从 `dsh_commands.rs` 抽到了这个共享模块，DSH 改为 `use` 它。工具箱其余 **9 个仍是纯前端工具**（转换 / 生成 / 解析 / 计算四组），端口查杀是唯一带后端命令的那个。
 
 ### 10.15 WorkBuddy Commands（17 条）
 
@@ -1188,7 +1188,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 ### 10.16b 端口查杀 Commands（2 条，`port_commands.rs`）
 
-挂在**快捷应用页的第二个视图**（`PortKillerPanel.tsx`），不在工具箱页。该文件同时是 netstat/taskkill 的**共享原语层**：`dsh_commands.rs` 的 `find_pid_by_port` / `kill_pid` / `is_port_in_use` / `wait_for_port_release` 都搬到了这里并改 `pub(crate)`，改解析等于改 DSH 停止逻辑。
+挂在**工具箱页的 `group.system` 分组**（`src/components/devtools/PortKillerTool.tsx`；2026-10-21 从快捷应用页的那个第二视图搬过来，快捷应用页现在只有应用网格）。该文件同时是 netstat/taskkill 的**共享原语层**：`dsh_commands.rs` 的 `find_pid_by_port` / `kill_pid` / `is_port_in_use` / `wait_for_port_release` 都搬到了这里并改 `pub(crate)`，改解析等于改 DSH 停止逻辑。
 
 | 命令 | 用途 |
 |------|------|
@@ -1470,6 +1470,8 @@ t('myKey')
 | `generate-text-chunk` | `{ id, text }` | AI 流式每 chunk |
 | `generate-text-done` | `{ id }` | AI 流结束 |
 | `generate-text-error` | `{ id, error }` | AI 流错误 |
+| `agent-step` | `{ id, tool, status, summary, detail, arg? }` | 智枢代理每一步；`arg` 是参数主串（path / command / pattern…），前端用它渲染本地化步骤，`summary` 保持中文（要喂模型与 digest） |
+| `agent-approval` | `{ id, callId, tool, summary, preview, previewKind, deadlineAt }` | 智枢代理等用户确认；`deadlineAt` 是自动拒绝的 epoch ms，同时 `request_user_attention` 闪 `ai-hub` + `main` 两个窗口（智枢窗不进任务栏），落定后清掉 |
 | `dsh:install_progress` | `{ stage, percent, message }` | DSH 安装进度 |
 | `dsh:update_progress` | `{ stage, percent, message }` | DSH 更新进度 |
 | `cloudflared-log` | `{ id, tag, line }` | cloudflared 日志行 |

@@ -23,13 +23,14 @@ pub(crate) enum Permission {
 }
 
 impl Permission {
-    /// Unknown / empty falls back to `Workspace`, the behaviour before levels existed.
+    /// Unparsable input falls back to `Read`: a level the backend does not
+    /// recognise must never open up write tools (fail closed).
     pub(crate) fn parse(raw: &str) -> Self {
         match raw.trim() {
-            "read" => Self::Read,
+            "workspace" => Self::Workspace,
             "review" => Self::Review,
             "full" => Self::Full,
-            _ => Self::Workspace,
+            _ => Self::Read,
         }
     }
 }
@@ -538,12 +539,14 @@ mod tests {
     }
 
     #[test]
-    fn permission_parse_defaults_to_workspace() {
+    fn permission_parse_fails_closed() {
         assert_eq!(Permission::parse("read"), Permission::Read);
-        assert_eq!(Permission::parse(" full "), Permission::Full);
+        assert_eq!(Permission::parse(" workspace "), Permission::Workspace);
         assert_eq!(Permission::parse("review"), Permission::Review);
-        assert_eq!(Permission::parse(""), Permission::Workspace);
-        assert_eq!(Permission::parse("whatever"), Permission::Workspace);
+        assert_eq!(Permission::parse(" full "), Permission::Full);
+        // Unknown / missing must not hand out write tools.
+        assert_eq!(Permission::parse(""), Permission::Read);
+        assert_eq!(Permission::parse("whatever"), Permission::Read);
     }
 
     #[test]

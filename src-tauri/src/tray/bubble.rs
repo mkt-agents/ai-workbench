@@ -151,10 +151,10 @@ pub fn ensure_ai_hub_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         return Ok(());
     }
     let url = WebviewUrl::App("index.html#/ai-hub".into());
-    WebviewWindowBuilder::new(app, AI_HUB_LABEL, url)
+    let win = WebviewWindowBuilder::new(app, AI_HUB_LABEL, url)
         .title("智枢")
         .inner_size(720.0, 640.0)
-        .min_inner_size(560.0, 520.0)
+        .min_inner_size(640.0, 600.0)
         // 放大 is capped (LARGE_MAX in aiHub/useAiHubWindow.ts): a full-screen hub leaves the
         // reading column floating in empty space, so neither drag-resize nor
         // Win+Up / snap-to-top may make it larger.
@@ -164,10 +164,15 @@ pub fn ensure_ai_hub_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
         .decorations(false)
         .always_on_top(false)
         .skip_taskbar(true)
+        // The hub layout relies on the logical 640×600 minimum; a Ctrl+wheel
+        // zoom shrinks the CSS viewport and squeezes the header/composer.
+        .zoom_hotkeys_enabled(false)
         .visible(false)
         .center()
         .build()
         .map_err(|e| e.to_string())?;
+    // WebView2 may have persisted a zoom level from an earlier session.
+    let _ = win.set_zoom(1.0);
     Ok(())
 }
 
@@ -428,6 +433,8 @@ pub fn toggle_ai_hub<R: Runtime>(app: &AppHandle<R>) {
         }
         let _ = vis::force_visible(&win, false);
     } else {
+        // Clear any zoom left behind by an older build before showing.
+        let _ = win.set_zoom(1.0);
         if let Err(e) = win.show() {
             eprintln!("[tray] show ai-hub failed: {e}");
         }
@@ -452,6 +459,8 @@ pub fn show_ai_hub<R: Runtime>(app: &AppHandle<R>) {
         prebuild_ai_hub_window(app);
         return;
     };
+    // Clear any zoom left behind by an older build before showing.
+    let _ = win.set_zoom(1.0);
     if let Err(e) = win.show() {
         eprintln!("[tray] show ai-hub failed: {e}");
     }

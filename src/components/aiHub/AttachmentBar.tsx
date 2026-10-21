@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { X } from "lucide-react";
+import { Scissors, X } from "lucide-react";
 import type { AskAttachment } from "../../lib/askAttachments";
 
 /** Light attachments riding along with the next question; × removes one. */
@@ -15,8 +15,13 @@ export default function AttachmentBar({
   return (
     <div className="qa-attach-bar">
       {attachments.map((a) => (
-        <span key={a.id} className="qa-attach-chip" title={`${a.name} · ${a.content.length} chars`}>
-          {a.name}
+        <span
+          key={a.id}
+          className={`qa-attach-chip${a.truncated ? " is-cut" : ""}`}
+          title={`${a.name} · ${a.content.length} chars${a.truncated ? ` · ${t("attach.truncated")}` : ""}`}
+        >
+          <span className="qa-attach-name">{a.name}</span>
+          {a.truncated && <Scissors size={10} className="qa-attach-cut" />}
           <button
             type="button"
             className="qa-attach-chip-x"

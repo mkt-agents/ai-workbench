@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  ArrowDown, BookmarkPlus, Check, Copy, Download, FolderGit2, MessageCircle, MessageSquarePlus, RefreshCw,
+  ArrowDown, BookmarkPlus, Check, Copy, Download, FolderGit2, MessageCircle, MessageSquarePlus,
+  Pencil, RefreshCw, RotateCcw,
 } from "lucide-react";
 import type { AiHubTurn } from "../../core/types";
 import MarkdownView from "../MarkdownView";
@@ -9,7 +10,7 @@ import { stripThinking } from "./thinking";
 import { MAX_HISTORY_TURNS } from "./config";
 import { keepableAnswer } from "./keepable";
 import { describeSource } from "./answerSource";
-import { AgentApprovalCard, AgentLiveSteps, AgentStepLog } from "./AgentActivity";
+import { AgentApprovalBar, AgentApprovalCard, AgentLiveSteps, AgentStepLog } from "./AgentActivity";
 import type { AskPanelProps } from "./AskPanel";
 
 type Props = Pick<
@@ -17,7 +18,7 @@ type Props = Pick<
   | "turns" | "pending" | "answer" | "busy" | "phase" | "modelName" | "projectLabel" | "source"
   | "canRegenerate" | "copied" | "snippetSaved" | "exportDone" | "selectedText" | "setSelectedText"
   | "agentSteps" | "agentApproval" | "stopping" | "onDecideAgent" | "onContinue" | "onRegenerate"
-  | "onCopyAnswer" | "onSaveSnippet" | "onExport" | "onQuote"
+  | "onCopyAnswer" | "onSaveSnippet" | "onExport" | "onQuote" | "onEditQuestion" | "onRestartFrom"
 >;
 
 /** Within this many px of the bottom the thread keeps following new output. */
@@ -90,8 +91,11 @@ export default function AskThread(props: Props) {
   const {
     turns, pending, answer, busy, phase, modelName, projectLabel, source, exportDone, selectedText,
     setSelectedText, agentSteps, agentApproval, stopping, onDecideAgent, onExport, onQuote,
+    onCopyAnswer, copied, onEditQuestion, onRestartFrom,
   } = props;
   const answerRef = useRef<HTMLDivElement | null>(null);
+  /** Re-rendering a long streamed answer is expensive: let typing stay responsive. */
+  const shownAnswer = useDeferredValue(answer);
   const rounds = Math.ceil(turns.filter((x) => !x.digest).length / 2) + (pending ? 1 : 0);
   const compressed = turns.some((x) => x.digest);
   /** Follow new output unless the user scrolled up to read. */
@@ -100,6 +104,8 @@ export default function AskThread(props: Props) {
   const sourceLine = describeSource(source, t);
 
   const [showJump, setShowJump] = useState(false);
+  /** Whether the newest output is in view — decides if a pending approval needs the dock. */
+  const [atBottom, setAtBottom] = useState(true);
 
   // Only messages added while this chat is open play the entrance animation:
   // a loaded / replaced transcript (no question in flight) starts above the line.
@@ -120,6 +126,7 @@ export default function AskThread(props: Props) {
     const el = answerRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD;
+    setAtBottom(nearBottom);
     if (jumpingRef.current) {
       if (nearBottom) jumpingRef.current = false;
       return;
@@ -202,9 +209,40 @@ export default function AskThread(props: Props) {
             );
           }
           if (turn.role === "user") {
+            // Questions are actionable too: 复制 / 编辑 / 从这里重新开始 (the files the
+            // agent already changed stay changed; only the conversation rewinds).
             return (
               <div key={i} className={`qa-msg is-user${isNew(i) ? " is-new" : ""}`} aria-label={t("you")}>
-                {turn.content}
+                <div className="qa-msg-text">{turn.content}</div>
+                <div className="qa-msg-actions is-question">
+                  <button
+                    type="button"
+                    className="qa-mini-btn"
+                    onClick={() => onCopyAnswer(i)}
+                    title={t("copy")}
+                  >
+                    {copied === i ? <Check size={12} className="qa-pop" /> : <Copy size={12} />}{" "}
+                    {copied === i ? t("copied") : t("copy")}
+                  </button>
+                  <button
+                    type="button"
+                    className="qa-mini-btn"
+                    disabled={busy}
+                    onClick={() => onEditQuestion?.(i)}
+                    title={t("editQuestion")}
+                  >
+                    <Pencil size={12} /> {t("edit")}
+                  </button>
+                  <button
+                    type="button"
+                    className="qa-mini-btn"
+                    disabled={busy}
+                    onClick={() => onRestartFrom?.(i)}
+                    title={t("restartFrom")}
+                  >
+                    <RotateCcw size={12} /> {t("restartFromShort")}
+                  </button>
+                </div>
               </div>
             );
           }
@@ -233,7 +271,7 @@ export default function AskThread(props: Props) {
           <div key={turns.length + 1} className="qa-msg is-ai is-new is-live" aria-label={t("assistant")}>
             {answer ? (
               <>
-                <MarkdownView text={answer} />
+                <MarkdownView text={shownAnswer} />
                 {busy && <span className="qa-caret" aria-hidden />}
               </>
             ) : (
@@ -273,7 +311,10 @@ export default function AskThread(props: Props) {
           </div>
         )}
       </div>
-      {showJump && (
+      {agentApproval && !atBottom && (
+        <AgentApprovalBar approval={agentApproval} onDecide={onDecideAgent} />
+      )}
+      {showJump && !agentApproval && (
         <button type="button" className="qa-jump-latest" onClick={jumpToLatest}>
           <ArrowDown size={12} /> {t("jumpLatest")}
         </button>

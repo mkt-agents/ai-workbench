@@ -10,6 +10,7 @@ import {
   Code2,
   Hash,
   Lock,
+  Network,
   Regex,
   Search,
   Shuffle,
@@ -24,6 +25,7 @@ import JwtTool from "./devtools/JwtTool";
 import RegexTool from "./devtools/RegexTool";
 import HashTool from "./devtools/HashTool";
 import CalculatorTool from "./devtools/CalculatorTool";
+import PortKillerTool from "./devtools/PortKillerTool";
 
 /** 当前工具 id；智枢跳转写它（storage 事件跨窗同步），本页监听切换。 */
 export const DEVTOOLS_TOOL_KEY = "workbench-devtools-tool";
@@ -72,6 +74,12 @@ const TOOL_GROUPS: ToolGroup[] = [
       { id: "calc", labelKey: "calc.title", icon: <Calculator size={16} />, descriptionKey: "calc.description" },
     ],
   },
+  {
+    groupKey: "group.system",
+    tools: [
+      { id: "ports", labelKey: "ports.title", icon: <Network size={16} />, descriptionKey: "ports.description" },
+    ],
+  },
 ];
 
 /** id → 工具定义（带所属分组，供分隔线与 tooltip 用）。 */
@@ -80,7 +88,7 @@ const TOOL_BY_ID: Map<string, ToolDef & { groupKey: string }> = new Map(
 );
 
 /** 默认平铺顺序：常用文本/数据工具在前，计算器紧跟（不垫底），低频的 Cron/JWT/正则靠后。 */
-export const DEFAULT_TOOL_ORDER = ["json", "encoder", "calc", "timestamp", "cron", "uuid", "hash", "jwt", "regex"];
+export const DEFAULT_TOOL_ORDER = ["json", "encoder", "calc", "timestamp", "cron", "uuid", "hash", "jwt", "regex", "ports"];
 
 /** 读取持久化顺序：未知 id 丢弃、新工具追加到末尾，保证与注册表一致。 */
 export function loadToolOrder(allIds: string[]): string[] {
@@ -321,6 +329,7 @@ function DevTools({ active = true }: { active?: boolean }) {
       case "regex":        return <RegexTool />;
       case "hash":         return <HashTool />;
       case "calc":         return <CalculatorTool />;
+      case "ports":        return <PortKillerTool />;
       default:             return <JsonTool />;
     }
   };

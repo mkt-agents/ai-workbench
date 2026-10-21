@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, RotateCcw } from "lucide-react";
 import {
   blockPatch,
   buildHunkPatch,
@@ -33,11 +33,14 @@ type ViewRow = {
   rightWords?: WordPiece[];
   /** Index of the change block (see changeBlocks) this line belongs to. */
   block?: number;
-  /** First line of its block: the » / « arrows sit here. */
+  /** First line of its block: the per-block action buttons sit here. */
   blockStart?: boolean;
 };
 
 export type BlockAction = "revert" | "stage";
+
+/** One entry of the change navigator: which change, at which new-side line, saying what. */
+export type ChangeSummary = { id: number; line: number; text: string };
 
 type Options = {
   text: string;
@@ -52,7 +55,7 @@ type Options = {
   staged: boolean;
   busy: boolean;
   onApply: (patch: string) => void;
-  /** Which arrows a change block offers: » revert, « stage (move to the left side). */
+  /** Which per-block actions a change offers: revert writes the file back, stage only moves it into the index. */
   blockActions?: { revert: boolean; stage: boolean };
   onBlock?: (action: BlockAction, patch: string, block: ChangeBlock) => void;
 };
@@ -61,6 +64,20 @@ type Options = {
 const RENDER_ROWS = 2000;
 
 const SIGN: Record<string, string> = { add: "+", del: "-", ctx: " ", note: "" };
+
+/** Navigator label for a change: prefer the new side so a modification reads as "+ 新内容". */
+function changeSummary(row: ViewRow): { line: number; text: string } | null {
+  const side = row.unified
+    ? { kind: row.unified.kind, text: row.unified.text, no: row.unified.newNo ?? row.unified.oldNo }
+    : row.split?.right
+      ? { kind: row.split.right.kind, text: row.split.right.text, no: row.split.right.no }
+      : row.split?.left
+        ? { kind: row.split.left.kind, text: row.split.left.text, no: row.split.left.no }
+        : null;
+  if (!side) return null;
+  const body = `${SIGN[side.kind] ?? " "} ${side.text.trim()}`.trim();
+  return { line: side.no ?? 0, text: body.length > 56 ? `${body.slice(0, 56)}…` : body };
+}
 
 /** Pair the k-th removed line of a block with the k-th added line after it. */
 function pairedLines(rows: DiffRow[]): Map<number, number> {
@@ -137,6 +154,7 @@ export function useDiffView({
     let budget = showAll ? Number.POSITIVE_INFINITY : RENDER_ROWS;
     let hidden = 0;
     let changeIndex = 0;
+    const changeList: ChangeSummary[] = [];
     const hunks = parsed.hunks.map((hunk, hi) => {
       let rows: ViewRow[];
       if (view === "split") {
@@ -182,7 +200,11 @@ export function useDiffView({
       });
       const starts = new Set(changeStarts(rows.map((r) => r.change)));
       rows.forEach((r, i) => {
-        if (starts.has(i)) r.changeId = changeIndex++;
+        if (!starts.has(i)) return;
+        r.changeId = changeIndex;
+        const sum = changeSummary(r);
+        if (sum) changeList.push({ id: changeIndex, ...sum });
+        changeIndex++;
       });
       if (folded.has(hi)) return { hunk, items: [] as ReturnType<typeof foldUnchanged<ViewRow>> };
       const items = fold
@@ -197,14 +219,19 @@ export function useDiffView({
       hidden += items.length - take;
       return { hunk, items: items.slice(0, take) };
     });
-    return { hunks, hidden, changes: changeIndex };
+    return { hunks, hidden, changes: changeIndex, changeList };
   }, [parsed, view, words, fold, folded, opened, showAll]);
+
+  /** Focus one change: mark it as current and bring it into view. */
+  const goTo = (id: number) => {
+    if (id < 0 || id >= layout.changes) return;
+    setNavAt(id);
+    bodyRef.current?.querySelector(`[data-change="${id}"]`)?.scrollIntoView({ block: "center" });
+  };
 
   const jump = (dir: 1 | -1) => {
     if (layout.changes === 0) return;
-    const next = (navAt + dir + layout.changes) % layout.changes;
-    setNavAt(next);
-    bodyRef.current?.querySelector(`[data-change="${next}"]`)?.scrollIntoView({ block: "center" });
+    goTo((navAt + dir + layout.changes) % layout.changes);
   };
 
   const toggle = <T,>(set: (fn: (prev: Set<T>) => Set<T>) => void, key: T) =>
@@ -219,7 +246,7 @@ export function useDiffView({
   const blocksOf = useMemo(() => parsed.hunks.map(changeBlocks), [parsed]);
   const actions = !!onBlock && !!blockActions && (blockActions.revert || blockActions.stage);
 
-  /** » (revert) / « (stage) on the first line of a change block. */
+  /** Revert / stage buttons on the first line of a change block. Icons only, and only on hover. */
   const arrows = (row: ViewRow, hi: number): ReactNode => {
     if (!actions || !row.blockStart || row.block === undefined) return null;
     const block = blocksOf[hi]?.[row.block];
@@ -236,7 +263,7 @@ export function useDiffView({
             aria-label={staged ? t("commit.blockUnstageTip") : t("commit.blockRevertTip")}
             onClick={() => onBlock!("revert", blockPatch(parsed.preamble, hunk, block, "new"), block)}
           >
-            <ChevronsRight size={13} />
+            <RotateCcw size={13} />
           </button>
         )}
         {blockActions!.stage && (
@@ -248,7 +275,7 @@ export function useDiffView({
             aria-label={t("commit.blockStageTip")}
             onClick={() => onBlock!("stage", blockPatch(parsed.preamble, hunk, block, "old"), block)}
           >
-            <ChevronsLeft size={13} />
+            <Plus size={13} />
           </button>
         )}
       </>
@@ -379,6 +406,10 @@ export function useDiffView({
     parsed,
     body,
     changes: layout.changes,
+    changeList: layout.changeList,
+    /** Index of the change F7 last landed on, or -1 before the first jump. */
+    navAt,
+    goTo,
     picked,
     applyPicked: () => applyHunks(parsed.hunks.filter((_, i) => picked.has(i))),
     jump,

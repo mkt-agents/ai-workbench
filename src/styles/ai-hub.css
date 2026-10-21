@@ -64,7 +64,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 160px;
+  max-width: 180px;
   padding: 2px 6px 2px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-full);
@@ -72,10 +72,17 @@
   color: var(--text-1);
   font-size: 11px;
   font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.qa-attach-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Body was cut at the per-file cap — say so on the chip, not silently. */
+.qa-attach-chip.is-cut { border-color: var(--yellow-border); }
+.qa-attach-cut { flex-shrink: 0; color: var(--yellow); }
 
 .qa-attach-chip-x {
   display: inline-flex;
@@ -93,6 +100,19 @@
 }
 
 .qa-attach-chip-x:hover { color: var(--red); }
+
+/* Files dragged over the window: where they would land */
+.qa-drop-hint {
+  margin: 0 12px 8px;
+  padding: 8px;
+  border: 1px dashed var(--accent-border);
+  border-radius: var(--radius-md);
+  background: var(--accent-dim);
+  color: var(--text-1);
+  font-size: 11.5px;
+  text-align: center;
+  flex-shrink: 0;
+}
 
 /* Focus repo multi-select */
 .qa-focus {
@@ -825,6 +845,12 @@
 .qa-snippet-item:hover {
   border-color: var(--accent);
 }
+/* Keyboard highlight (↑↓ from the composer) reads the same as the "打开 …" list. */
+.qa-snippet-item.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-0);
+}
 .ai-hub-ctx-preview {
   margin: 0;
   padding: 8px 10px;
@@ -862,6 +888,11 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* If the window is ever shorter than the content contract (legacy saved
+     bounds), start at the top and scroll instead of painting the starters
+     over the header and composer. */
+  justify-content: safe center;
+  overflow-y: auto;
   gap: 6px;
   padding: 20px 16px;
   text-align: center;
@@ -1305,6 +1336,101 @@
   color: var(--text-3);
   font-size: 11px;
 }
+/* Persona pill: stays neutral until a profile is actually applied. */
+.qa-perm-pill.is-profile.on {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+.qa-profile-pop {
+  width: 258px;
+  padding: 4px;
+}
+/* Profile rows carry a third cell (temperature); the base item grid only has two
+   tracks, so without an explicit third column the value drops onto a second row
+   under the checkbox and makes the selected row taller than the others. */
+.qa-profile-item {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+}
+.qa-profile-item .qa-focus-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-profile-temp {
+  grid-column: 3;
+  justify-self: end;
+  padding-left: 8px;
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* Profile editor: role text + temperature per persona. */
+.qa-profile-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.qa-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 52vh;
+  overflow: auto;
+}
+.qa-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+.qa-profile-card.is-builtin {
+  background: var(--bg-0);
+}
+.qa-profile-name {
+  height: 28px;
+}
+.qa-profile-role {
+  resize: none;
+  min-height: 44px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.qa-profile-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.qa-profile-temp-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.qa-profile-temp-row input[type="range"] {
+  width: 120px;
+}
+.qa-profile-temp-value {
+  min-width: 34px;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+/* Not overriding parks the thumb at 0, which reads like "temperature = 0".
+   Dim the control and mute the number so the unset state is obvious. */
+.qa-profile-temp-row.is-off input[type="range"] {
+  opacity: 0.45;
+}
+.qa-profile-temp-row.is-off .qa-profile-temp-value {
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 11px;
+}
 .qa-focus-pop.is-up {
   top: auto;
   bottom: calc(100% + 6px);
@@ -1581,6 +1707,65 @@
   gap: 6px;
   margin-top: 8px;
 }
+/* Auto-deny countdown + the opt-in to raise the window next time. */
+.qa-agent-approve-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.qa-agent-approve-count {
+  color: var(--yellow);
+  font-variant-numeric: tabular-nums;
+}
+.qa-agent-approve-raise {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+/* Pending approval that scrolled out of view stays actionable at the card's foot.
+   Deliberately no backdrop-filter: an opaque surface keeps window resize cheap. */
+.qa-approve-dock {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--yellow-border);
+  border-radius: var(--radius-md);
+  /* 吸底压在滚动中的对话上：必须全不透明实底，半透明 token 会把文字叠花（同「追问选中内容」条） */
+  background: var(--float-bar-bg);
+  box-shadow: var(--shadow-lg);
+  animation: qa-dock-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.qa-approve-dock-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-0);
+}
+.qa-approve-dock-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--yellow);
+  font-variant-numeric: tabular-nums;
+}
+@keyframes qa-dock-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .qa-agent-allow,
 .qa-agent-allow-turn,
 .qa-agent-deny {
@@ -1735,11 +1920,11 @@
   opacity: 0.4;
   cursor: default;
 }
-/* Error card: message + retry / retry-as-chat + dismiss */
+/* Error card: message + retry / retry-as-chat + dismiss, raw provider text below */
 .qa-error-card {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 6px 6px 10px;
   font-size: 12px;
   color: var(--text-1);
@@ -1750,6 +1935,12 @@
   min-width: 0;
   animation: qa-rise-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.qa-error-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .qa-error-icon {
   color: var(--red);
   flex-shrink: 0;
@@ -1758,8 +1949,36 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.qa-error-raw {
+  color: var(--text-2);
+  font-size: 11px;
+}
+.qa-error-raw summary {
+  cursor: pointer;
+  list-style: none;
+}
+.qa-error-raw summary::-webkit-details-marker {
+  display: none;
+}
+.qa-error-raw pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 120px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
 }
 .qa-error-actions {
   display: inline-flex;
@@ -1836,6 +2055,16 @@
 .qa-msg-actions:focus-within,
 .qa-msg.is-ai.is-last .qa-msg-actions {
   opacity: 1;
+}
+/* Question bubbles carry their own hover row: 复制 / 编辑 / 从这里重新开始 */
+.qa-msg.is-user:hover .qa-msg-actions,
+.qa-msg.is-user .qa-msg-actions:focus-within {
+  opacity: 1;
+}
+.qa-msg.is-user .qa-msg-actions {
+  white-space: normal;
+  justify-content: flex-end;
+  margin: 6px -6px -3px 0;
 }
 .qa-msg .qa-answer-source {
   padding: 2px 0 0;
@@ -1923,6 +2152,25 @@
   font-weight: 500;
   color: var(--text-1);
   flex-shrink: 0;
+}
+.qa-sessions-count {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.qa-sessions-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.qa-sessions-filter .input-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
 }
 .qa-session-list {
   display: flex;
@@ -2148,6 +2396,10 @@
   color: var(--text-3);
   font-family: var(--font-mono);
 }
+/* Clipboard really failed: mark the icon instead of saying nothing. */
+.qa-code-copy.is-failed {
+  color: var(--red);
+}
 .qa-code-body {
   margin: 0;
   padding: 8px 10px;
@@ -2350,6 +2602,7 @@
   .qa-caret,
   .qa-thinking-dots i,
   .qa-answer-card::before,
+  .qa-approve-dock,
   .qa-send-btn.is-busy::after {
     animation: none;
   }

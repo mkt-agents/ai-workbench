@@ -26,7 +26,12 @@ import { useGlobalStore } from "../core/store";
 import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
 import DropdownMenu from "./DropdownMenu";
-import type { DesktopWindowCandidate, DesktopWindowInfo, InstalledAppInfo } from "../core/types";
+import type {
+  DesktopRelayoutResult,
+  DesktopWindowCandidate,
+  DesktopWindowInfo,
+  InstalledAppInfo,
+} from "../core/types";
 import {
   BUILTIN_DESKTOP_APPS,
   loadCustomApps,
@@ -37,6 +42,9 @@ import {
 } from "../lib/desktopApps";
 
 type Phase = "idle" | "running" | "attached" | "launching" | "polling" | "missing" | "error";
+
+/** Logical slot rect + devicePixelRatio, as sent to the embed backend. */
+type SlotRect = { x: number; y: number; width: number; height: number; dpr: number };
 
 /** One toolbar button, described once and rendered either in the full row or
  * the narrow "⋯" overflow menu. */
@@ -509,58 +517,109 @@ export default function DesktopAppsPage() {
     setPicking(false);
     setPickerList([]);
     setPickerQuery("");
-    let frame = 0;
     // The window checks run every 400ms and some engines blink their frame
     // (Electron re-composition) — a warn chip must not flash for one bad
     // tick, nor stick forever once the state has cleared.
     let warnStreak = 0;
     let warnCode = "";
+    // relayout follows the slot frame by frame across an async IPC boundary.
+    // During the sidebar width animation a request per frame overlaps, and
+    // Tauri does not guarantee the order the commands execute in — an old
+    // rect could land after a newer one (the window visibly jumps back).
+    // Keep one call in flight and only queue the newest rect behind it.
+    let pendingRect: SlotRect | null = null;
+    let inFlight = false;
+    let settleTimer = 0;
+    let lastRectKey = "";
+
+    const applyRelayout = (result: DesktopRelayoutResult) => {
+      if (!isCurrent()) return;
+      // The backend repairs the link itself: take over a window the app
+      // un-parented, or adopt the fresh frame that replaced a dead one.
+      if (result.state === "lost") {
+        attachedRef.current = false;
+        setPhase("idle");
+        return;
+      }
+      // Every result refreshes the triad — including plain "ok", so a
+      // stale warn chip cannot outlive its cause.
+      if (result.title) setWindowTitle(result.title);
+      if (result.class) setWindowClass(result.class);
+      const code = result.warning || "";
+      if (!code) {
+        warnStreak = 0;
+        warnCode = "";
+        setWarning("");
+        return;
+      }
+      // Only surface a condition that persists (~1.2s): one-tick blips
+      // while the app repaints its frame are not worth shouting about.
+      if (code === warnCode) warnStreak += 1;
+      else {
+        warnCode = code;
+        warnStreak = 1;
+      }
+      if (warnStreak >= 3) setWarning(code);
+    };
+
+    const flushRelayout = () => {
+      if (inFlight) return;
+      if (!isCurrent() || !attachedRef.current) {
+        pendingRect = null;
+        return;
+      }
+      if (!pendingRect) return;
+      const rect = pendingRect;
+      pendingRect = null;
+      inFlight = true;
+      void invokeDesktopEmbedRelayout({ processName, ...rect })
+        .then((result) => {
+          // A newer target is already queued: its result is the one that
+          // describes the final state. Applying this stale result could
+          // flash an old warning or title over the new one.
+          if (pendingRect) return;
+          applyRelayout(result);
+        })
+        .catch(() => {
+          /* transient: the next tick tries again */
+        })
+        .finally(() => {
+          inFlight = false;
+          if (isCurrent() && attachedRef.current) {
+            if (pendingRect) flushRelayout();
+          } else {
+            pendingRect = null;
+          }
+        });
+    };
+
+    const queueRelayout = (rect: SlotRect) => {
+      pendingRect = rect;
+      flushRelayout();
+    };
 
     const sync = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (!attachedRef.current) return;
-        const rect = slotRect();
-        // A degenerate rect (page just remounted, layout not settled yet)
-        // would place the hosted window into a sliver — wait for a real one.
-        if (!rect || rect.width < 2 || rect.height < 2) return;
-        void invokeDesktopEmbedRelayout({
-          processName,
-          ...rect,
-        })
-          .then((result) => {
-            if (!isCurrent()) return;
-            // The backend repairs the link itself: take over a window the app
-            // un-parented, or adopt the fresh frame that replaced a dead one.
-            if (result.state === "lost") {
-              attachedRef.current = false;
-              setPhase("idle");
-              return;
-            }
-            // Every result refreshes the triad — including plain "ok", so a
-            // stale warn chip cannot outlive its cause.
-            if (result.title) setWindowTitle(result.title);
-            if (result.class) setWindowClass(result.class);
-            const code = result.warning || "";
-            if (!code) {
-              warnStreak = 0;
-              warnCode = "";
-              setWarning("");
-              return;
-            }
-            // Only surface a condition that persists (~1.2s): one-tick blips
-            // while the app repaints its frame are not worth shouting about.
-            if (code === warnCode) warnStreak += 1;
-            else {
-              warnCode = code;
-              warnStreak = 1;
-            }
-            if (warnStreak >= 3) setWarning(code);
-          })
-          .catch(() => {
-            /* transient: the next tick tries again */
-          });
-      });
+      if (!attachedRef.current) return;
+      const rect = slotRect();
+      // A degenerate rect (page just remounted, layout not settled yet)
+      // would place the hosted window into a sliver — wait for a real one.
+      if (!rect || rect.width < 2 || rect.height < 2) return;
+      const key = `${rect.x},${rect.y},${rect.width},${rect.height},${rect.dpr}`;
+      if (key !== lastRectKey) {
+        lastRectKey = key;
+        // ResizeObserver goes quiet the moment the width animation ends. One
+        // call after the layout has been stable for a couple of frames makes
+        // sure the window lands on the settled rect even if the last
+        // in-flight request was coalesced away.
+        window.clearTimeout(settleTimer);
+        settleTimer = window.setTimeout(() => {
+          if (!isCurrent() || !attachedRef.current) return;
+          const settled = slotRect();
+          if (!settled || settled.width < 2 || settled.height < 2) return;
+          queueRelayout(settled);
+        }, 140);
+      }
+      queueRelayout(rect);
     };
 
     void (async () => {
@@ -614,7 +673,8 @@ export default function DesktopAppsPage() {
 
     return () => {
       aliveRef.current = false;
-      cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+      pendingRect = null;
       window.clearInterval(heartbeat);
       observer.disconnect();
       window.removeEventListener("resize", sync);

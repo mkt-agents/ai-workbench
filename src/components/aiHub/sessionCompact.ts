@@ -1,5 +1,5 @@
 import type { AiHubTurn } from "../../core/types";
-import { MAX_DIGEST_CHARS, MAX_HISTORY_TURNS, MAX_SAVED_TURNS, MAX_TURN_CHARS } from "./config";
+import { MAX_DIGEST_CHARS, MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, MAX_SAVED_TURNS, MAX_TURN_CHARS } from "./config";
 
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -64,15 +64,29 @@ export function sessionDigest(turns: AiHubTurn[]): string {
     .join("\n");
 }
 
-/** Recent verbatim rounds for the model. The digest is attached to the system prompt. */
-export function requestHistory(turns: AiHubTurn[]): AiHubTurn[] {
-  return turns
+/**
+ * Recent verbatim rounds for the model. The digest is attached to the system prompt.
+ * Past `maxChars` the oldest rounds are dropped — 50 × 4000 chars would blow the
+ * context window and the provider then answers with an opaque 400.
+ */
+export function requestHistory(
+  turns: AiHubTurn[],
+  maxChars = MAX_HISTORY_CHARS,
+): { turns: AiHubTurn[]; dropped: number } {
+  const pairs = turns
     .filter((t) => !t.digest)
     .slice(-MAX_HISTORY_TURNS * 2)
     .map((t) => ({
       role: t.role,
       content: clipTurn(historyContent(t)),
     }));
+  let total = pairs.reduce((n, t) => n + t.content.length, 0);
+  let dropped = 0;
+  while (total > maxChars && pairs.length - dropped > 1) {
+    total -= pairs[dropped].content.length;
+    dropped += 1;
+  }
+  return { turns: pairs.slice(dropped), dropped };
 }
 
 function historyContent(turn: AiHubTurn): string {

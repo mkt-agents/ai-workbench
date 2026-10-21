@@ -17,6 +17,9 @@ export const PROJECT_SYSTEM =
 
 export type TaskKind = "none" | "debug" | "explain" | "polish" | "translate" | "summarize" | "optimize";
 
+/** Tasks that work on the text the user typed — the repo is irrelevant, and no tools are offered. */
+export const TEXT_ONLY_TASKS: TaskKind[] = ["polish", "translate", "summarize", "optimize"];
+
 /** One-shot quick actions shown in the composer (everything except plain "none"). */
 export const QUICK_TASKS: TaskKind[] = ["explain", "debug", "polish", "translate", "summarize", "optimize"];
 
@@ -129,11 +132,34 @@ export function makeTitle(question: string, fallback: string): string {
   return firstLine.length > 24 ? firstLine.slice(0, 24) + "…" : firstLine;
 }
 
+/** Steps that touch the workspace or its git state — the cached workbench context is stale after them. */
+const MUTATING_STEP_TOOLS = ["write_file", "edit_file", "delete_path", "move_path", "hosts", "runtime", "tunnel"];
+const MUTATING_GIT_RE =
+  /\bgit\s+(add|commit|amend|checkout|switch|restore|merge|pull|push|fetch|stash|reset|rm|mv|revert|cherry-pick|apply|worktree|tag|branch\s+-[dD])\b/i;
+
+/**
+ * Did this round change the repo? Used to drop the 120s context cache so the next
+ * question is grounded in the files as they are now, not as the agent found them.
+ */
+export function stepsMutatedWorkspace(
+  steps: { tool: string; status: string; summary: string }[]
+): boolean {
+  return steps.some(
+    (s) =>
+      s.status === "done" &&
+      (MUTATING_STEP_TOOLS.includes(s.tool) ||
+        ((s.tool === "run_command" || s.tool === "start_process") &&
+          MUTATING_GIT_RE.test(s.summary))),
+  );
+}
+
 export const CONTEXT_LIMIT = 12000;
 export const SNIPPET_PICK_LIMIT = 24;
 export const DIRTY_FILE_LIMIT = 30;
 /** Follow-up context: send the last N Q&A pairs to the model, clipped per turn. */
 export const MAX_HISTORY_TURNS = 50;
+/** Hard cap on the transcript chars in one request: 50 × 4000 would blow the model's context. */
+export const MAX_HISTORY_CHARS = 48000;
 /** Verbatim Q&A pairs kept on screen and in the saved session. */
 export const MAX_SAVED_TURNS = 50;
 /** Older rounds fold into one note once the verbatim window is full. */

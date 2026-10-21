@@ -30,5 +30,9 @@ export function describeSource(source: AnswerSource | null, t: TFunction): strin
   } else if (source.estimatedTokens != null) {
     bits.push(t("source.tokensEst", { n: source.estimatedTokens }));
   }
+  // Be honest about what the model did NOT get: a clipped context block or rounds
+  // left out of the request.
+  if (source.contextTruncated) bits.push(t("source.ctxClipped"));
+  if (source.droppedTurns) bits.push(t("source.roundsLeftOut", { n: Math.ceil(source.droppedTurns / 2) }));
   return bits.join(" · ");
 }

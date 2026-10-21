@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useGlobalStore } from "../core/store";
+import { useGlobalStore, MAX_AI_HUB_SESSIONS } from "../core/store";
 import type { AIModelConfig, AiHubSession, AiHubTurn, SnippetTaskBind } from "../core/types";
 import { bootApp } from "../core/boot";
 import { writeStoredString } from "../core/localState";
@@ -10,7 +10,10 @@ import { applyDocumentTheme } from "../lib/theme";
 import { resolveSceneModel } from "../lib/aiSceneModels";
 import { DEVTOOLS_TOOL_KEY } from "./DevTools";
 import {
+  ASK_ATTACH_MAX_FILES,
+  attachmentNameFromPath,
   canAddAttachment,
+  isTextAttachmentPath,
   makeAttachment,
   type AskAttachment,
 } from "../lib/askAttachments";
@@ -20,6 +23,8 @@ import AttachmentBar from "./aiHub/AttachmentBar";
 import ContextPicker from "./aiHub/ContextPicker";
 import OptimizeBar from "./aiHub/OptimizeBar";
 import ParamModal from "./aiHub/ParamModal";
+import ProfileModal from "./aiHub/ProfileModal";
+import ProfilePicker from "./aiHub/ProfilePicker";
 import QuickSelect from "./aiHub/QuickSelect";
 import SessionHistory from "./aiHub/SessionHistory";
 import SnippetPicker from "./aiHub/SnippetPicker";
@@ -28,6 +33,7 @@ import { useNextSuggestion } from "./aiHub/useNextSuggestion";
 import { DEFAULT_CHIPS, DEFAULT_OPTIMIZE, encodeTask, parseTask } from "./aiHub/config";
 import type { OptimizeConfig, TaskKind } from "./aiHub/config";
 import { routeQuestion } from "./aiHub/route";
+import { findProfile, mergeProfiles } from "../lib/aiHubProfiles";
 import { openSuggestions, type InstalledApp, type OpenSuggestion } from "./aiHub/localActions";
 import { GIT_SUBTAB_KEY } from "./GitManager";
 import type { RouteOverride } from "./aiHub/route";
@@ -36,7 +42,7 @@ import { useAskEvents } from "./aiHub/useAskEvents";
 import { useAskSessions } from "./aiHub/useAskSessions";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
 import { AGENT_PERMISSIONS, useAskStream, type AgentPermission } from "./aiHub/useAskStream";
-import { useConfirm } from "./ConfirmModal";
+import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import { COMPUTER_TOOL_NAMES } from "./aiHub/AgentActivity";
 import { DAILY_STYLES, type DailyStyle } from "./aiHub/dailyReport";
 import { useRepoFocus } from "./aiHub/useRepoFocus";
@@ -49,6 +55,8 @@ type QaTurn = AiHubTurn;
 
 const PINNED_KEY = "qa-pinned";
 const PERMISSION_KEY = "qa-permission";
+/** Set once the user stopped wanting to be asked before hiding a running round. */
+const CLOSE_ACK_KEY = "qa-close-ack";
 /** Set once the user confirmed what 完全权限 means; later switches don't ask again.
     v2: the level now reaches the whole machine, so earlier acks must see the new warning. */
 const FULL_ACK_KEY = "qa-full-ack-v2";
@@ -93,7 +101,8 @@ function AiHubApp() {
       });
   }, [invokeScanDesktopApps]);
   useEffect(() => refreshInstalledApps(), [refreshInstalledApps]);
-  const invokePickTextFile = useGlobalStore((s) => s.invokePickTextFile);
+  const invokePickSourceFile = useGlobalStore((s) => s.invokePickSourceFile);
+  const invokeReadTextFile = useGlobalStore((s) => s.invokeReadTextFile);
   const invokeSetAiHubPinned = useGlobalStore((s) => s.invokeSetAiHubPinned);
 
   const [ready, setReady] = useState(false);
@@ -110,14 +119,29 @@ function AiHubApp() {
   }, [pinned, invokeSetAiHubPinned]);
   const togglePinned = () => setPinned((v) => !v);
   const [mode, setMode] = useState<AiHubMode>("ask");
+  /** Drop events arrive from the window level, where `mode` is not in scope. */
+  const modeRef = useRef<AiHubMode>("ask");
+  modeRef.current = mode;
   const [input, setInput] = useState("");
   const [task, setTask] = useState<TaskKind>("none");
   const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
+  /** Files are being dragged over the window (ask tab only). */
+  const [dropHint, setDropHint] = useState(false);
   const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily">(null);
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily" | "profile">(null);
+  /** Profile editor (custom personas + temperature). */
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const profiles = useMemo(
+    () => mergeProfiles(settings.aiHubProfiles),
+    [settings.aiHubProfiles],
+  );
+  const activeProfile = useMemo(
+    () => findProfile(settings.aiHubProfileId, settings.aiHubProfiles),
+    [settings.aiHubProfileId, settings.aiHubProfiles],
+  );
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
   /** Write-capable levels always work on the project; read-only follows the auto route. */
@@ -140,6 +164,7 @@ function AiHubApp() {
   };
   const flashBusyHint = () => showHint(t("busyHint"));
   const confirm = useConfirm();
+  const confirmChoice = useConfirmChoice();
   /** Esc dismissed the open-suggestion list; typing brings it back. */
   const [openDismissed, setOpenDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -180,10 +205,13 @@ function AiHubApp() {
       setRouteOverride("auto");
       setAttachments([]);
     },
+    onInvalidateContext: ctx.invalidateContext,
     persistTurns: (turns, q) => {
       void persistRef.current(turns, q);
     },
     attachments,
+    profileSystemRole: activeProfile?.systemRole,
+    profileTemperature: activeProfile?.temperature,
     agent: {
       permission,
       vision: Boolean(selectedModel?.vision),
@@ -201,6 +229,7 @@ function AiHubApp() {
     activeSessionId,
     setActiveSessionId,
     setError: stream.setError,
+    onNotice: showHint,
     onRemovedActive: stream.resetChat,
   });
   persistRef.current = sessions.persistTurns;
@@ -215,7 +244,7 @@ function AiHubApp() {
     exportSession: sessions.exportActiveSession,
   });
 
-  const snippets = useAskSnippets({ setInput, inputRef, input });
+  const snippets = useAskSnippets({ setInput, inputRef });
   const setComposerInput = (updater: string | ((prev: string) => string)) => {
     setInput((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
@@ -239,6 +268,7 @@ function AiHubApp() {
     model: selectedModel,
     turns: stream.history,
     busy: stream.busy,
+    enabled: settings.aiHubSuggest !== false,
     generate: invokeGenerateText,
     fallback: buildFallbackSuggestion,
   });
@@ -311,6 +341,17 @@ function AiHubApp() {
     if (stream.busy) showHint(t("permission.nextAs", { name: t(`permission.${next}`) }));
   };
 
+  const profileLabel = (id: string) => {
+    const p = profiles.find((x) => x.id === id);
+    return p ? t(p.nameKey || "", { defaultValue: p.name }) : t("profile.none");
+  };
+
+  /** Profile for the next message; the running round keeps the one it started with. */
+  const changeProfile = (id: string) => {
+    setSettings({ aiHubProfileId: id || undefined });
+    if (stream.busy) showHint(t("profile.nextAs", { name: profileLabel(id) }));
+  };
+
   const setChip = (key: keyof typeof chips, value: boolean) => {
     setSettings({
       aiHubChips: { ...chips, [key]: value },
@@ -368,22 +409,102 @@ function AiHubApp() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const addAttachmentFromFile = async () => {
-    try {
-      const text = await invokePickTextFile(t("attach.pickTitle"));
-      if (!text?.trim()) return;
-      const name = `file-${attachments.length + 1}.txt`;
-      const check = canAddAttachment(attachments, { name, content: text });
+  /** Fold picked/dropped files into the attachment list, saying what did not fit. */
+  const attachFiles = (items: { name: string; text: string }[]) => {
+    const next = [...attachments];
+    let cut = 0;
+    let overBudget: "count" | "size" | null = null;
+    const rejected: string[] = [];
+    for (const item of items) {
+      const probe = makeAttachment(item.name, item.text);
+      const check = canAddAttachment(next, { name: item.name, content: item.text });
       if (!check.ok) {
-        stream.setError(t(check.reason === "count" ? "attach.tooMany" : "attach.tooLarge"));
-        return;
+        overBudget = check.reason;
+        rejected.push(item.name);
+        continue;
       }
-      setAttachments((prev) => [...prev, makeAttachment(name, text)]);
-    } catch (e) {
-      if (String(e).includes("已取消") || String(e).toLowerCase().includes("cancel")) return;
-      stream.setError(String(e));
+      if (probe.truncated) cut += 1;
+      next.push(probe);
+    }
+    setAttachments(next);
+    if (cut > 0) showHint(t("attach.truncated"));
+    if (overBudget) {
+      stream.setError(
+        `${t(overBudget === "count" ? "attach.tooMany" : "attach.tooLarge")}（${rejected.join(", ")}）`,
+      );
     }
   };
+
+  /** Real filename, no silent truncation: pick → read by path instead of the content-only picker. */
+  const addAttachmentFromFile = async () => {
+    try {
+      const path = await invokePickSourceFile(t("attach.pickTitle"));
+      const text = await invokeReadTextFile(path);
+      if (!text.trim()) {
+        showHint(t("attach.empty"));
+        return;
+      }
+      attachFiles([{ name: attachmentNameFromPath(path), text }]);
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("已取消") || msg.toLowerCase().includes("cancel")) return;
+      stream.setError(msg);
+    }
+  };
+
+  const attachDroppedFiles = async (paths: string[]) => {
+    const picked: { name: string; text: string }[] = [];
+    const unreadable: string[] = [];
+    for (const path of paths.slice(0, ASK_ATTACH_MAX_FILES)) {
+      const name = attachmentNameFromPath(path);
+      if (!isTextAttachmentPath(path)) {
+        unreadable.push(name);
+        continue;
+      }
+      try {
+        const text = await invokeReadTextFile(path);
+        if (text.trim()) picked.push({ name, text });
+      } catch {
+        unreadable.push(name);
+      }
+    }
+    if (picked.length) attachFiles(picked);
+    if (unreadable.length) {
+      stream.setError(t("attach.notText", { name: unreadable.join(", ") }));
+    }
+  };
+
+  // Native drag-drop only reports paths through Tauri, so the listener lives at the window level.
+  const attachDroppedRef = useRef<(paths: string[]) => void>(() => {});
+  attachDroppedRef.current = attachDroppedFiles;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        const off = await getCurrentWebview().onDragDropEvent((event) => {
+          const payload = event.payload;
+          if (payload.type === "enter" || payload.type === "over") {
+            if (modeRef.current === "ask") setDropHint(true);
+          } else if (payload.type === "leave") {
+            setDropHint(false);
+          } else {
+            setDropHint(false);
+            if (modeRef.current === "ask") attachDroppedRef.current(payload.paths);
+          }
+        });
+        if (cancelled) off();
+        else unlisten = off;
+      } catch {
+        /* plain-browser dev: no webview, so drops are not reported */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const changeOptimize = (next: OptimizeConfig) => {
     setOptimize(next);
@@ -399,6 +520,28 @@ function AiHubApp() {
     setActiveSessionId(null);
     setHistoryOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  /**
+   * Hide the window. A round still running — or worse, still waiting on the user —
+   * has no taskbar button to come back to, so point at the tray / orb / Ctrl+Alt+K.
+   */
+  const closeWindow = async () => {
+    const pendingApproval = Boolean(stream.agentApproval);
+    if ((stream.busy || pendingApproval) && localStorage.getItem(CLOSE_ACK_KEY) !== "1") {
+      const choice = await confirmChoice({
+        title: t(pendingApproval ? "hideApprovalTitle" : "hideBusyTitle"),
+        message: t(pendingApproval ? "hideApprovalBody" : "hideBusyBody"),
+        warning: t("hideWarn"),
+        confirmText: t("hideNow"),
+        altConfirmText: t("hideAlways"),
+        cancelText: t("hideStay"),
+        icon: "warning",
+      });
+      if (choice === "cancel") return;
+      if (choice === "alt") localStorage.setItem(CLOSE_ACK_KEY, "1");
+    }
+    void hide();
   };
 
   const openList = useMemo(
@@ -464,14 +607,15 @@ function AiHubApp() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      // Layered escape: stop generating > modal > snippet panel > session panel >
-      // context panel > clear input > hide window.
-      if (stream.busy) {
-        void stream.stopStream();
-        return;
-      }
+      // Layered escape: dismiss the topmost layer first, and only stop the round
+      // once nothing is in the way (Esc used to kill a running turn while a popover
+      // was open, because 停流 sat at the head of the chain).
       if (snippets.paramTarget) {
         snippets.setParamTarget(null);
+        return;
+      }
+      if (profileModalOpen) {
+        setProfileModalOpen(false);
         return;
       }
       if (snippets.snippetOpen) {
@@ -494,6 +638,10 @@ function AiHubApp() {
         setCtxOpen(false);
         return;
       }
+      if (stream.busy) {
+        void stream.stopStream();
+        return;
+      }
       if (task !== "none") {
         setTask("none");
         return;
@@ -502,7 +650,7 @@ function AiHubApp() {
         setInput("");
         return;
       }
-      void hide();
+      void closeWindow();
     };
     const onKeyDown = (e: KeyboardEvent) => {
       // Ctrl/Cmd+N: new chat
@@ -524,7 +672,7 @@ function AiHubApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [snippets.paramTarget, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy, permission]);
+  }, [snippets.paramTarget, profileModalOpen, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy, stream.agentApproval, permission]);
 
   const togglePop = (id: NonNullable<typeof openPop>) => {
     setOpenPop((cur) => (cur === id ? null : id));
@@ -602,6 +750,42 @@ function AiHubApp() {
     }
   };
 
+  /** Deleting a conversation is the only irreversible thing this window does. */
+  const removeSessionConfirmed = async (s: AiHubSession) => {
+    if (stream.busy && s.id === activeSessionId) return;
+    const ok = await confirm({
+      title: t("deleteSession"),
+      message: t("deleteSessionBody", {
+        title: s.title || t("newChat"),
+        n: Math.ceil((s.turns?.length ?? 0) / 2),
+      }),
+      warning: t("deleteSessionWarn"),
+      confirmText: t("deleteConfirm"),
+      icon: "danger",
+    });
+    if (ok) void sessions.removeSession(s.id);
+  };
+
+  const editQuestion = (index: number) => {
+    const text = stream.history[index]?.content || "";
+    if (!text) return;
+    setComposerInput(text);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) el.setSelectionRange(el.value.length, el.value.length);
+      el?.focus();
+    });
+  };
+
+  /** Rewind the transcript to before this question, then put it back in the composer. */
+  const restartFrom = (index: number) => {
+    if (stream.busy) return;
+    const text = stream.history[index]?.content || "";
+    stream.truncateTo(index);
+    setComposerInput(text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
   const previewContext = async () => {
     if (ctxOpen) {
       setCtxOpen(false);
@@ -632,7 +816,7 @@ function AiHubApp() {
         onTogglePinned={togglePinned}
         maximized={windowBounds.maximized}
         onToggleMaximized={windowBounds.toggleMaximized}
-        onClose={() => void hide()}
+        onClose={() => void closeWindow()}
       />
       {computerActive && (
         <div className="qa-computer-banner" role="status">
@@ -649,6 +833,12 @@ function AiHubApp() {
             onRemove={(id) => setAttachments((prev) => prev.filter((x) => x.id !== id))}
           />
 
+          {dropHint && (
+            <div className="qa-drop-hint" role="status">
+              {t("attach.dropHint")}
+            </div>
+          )}
+
           {ctx.ctxTruncated && ctxOpen && <div className="ai-hub-hint">{t("truncated")}</div>}
           {ctxOpen && (
             <pre className="ai-hub-ctx-preview">{ctx.ctxPreview || t("ctx.previewEmpty")}</pre>
@@ -660,6 +850,11 @@ function AiHubApp() {
               setSnippetQuery={snippets.setSnippetQuery}
               snippetChoices={snippets.snippetChoices}
               onPick={snippets.pickSnippet}
+              slashMode={snippets.slashMode}
+              active={snippets.active}
+              onMoveActive={snippets.moveActive}
+              setActiveIndex={snippets.setActiveIndex}
+              onPickActive={snippets.pickActive}
             />
           )}
 
@@ -709,6 +904,15 @@ function AiHubApp() {
             onContinue={() => void stream.send(t("agent.continuePrompt"))}
             hasSnippets={(snippets.snippets?.length ?? 0) > 0}
             snippetOpen={snippets.snippetOpen}
+            snippetNav={
+              snippets.snippetOpen
+                ? {
+                    active: snippets.snippetChoices.length > 0,
+                    onMove: snippets.moveActive,
+                    onPick: snippets.pickActive,
+                  }
+                : null
+            }
             onToggleSnippets={() => snippets.openManual()}
             onPasteClipboard={() => void fillClipboard()}
             onAttachFile={() => void addAttachmentFromFile()}
@@ -756,6 +960,19 @@ function AiHubApp() {
                 onToggle={() => togglePop("model")}
               />
             }
+            profileControl={
+              <ProfilePicker
+                profiles={profiles}
+                value={settings.aiHubProfileId || ""}
+                onChange={changeProfile}
+                onManage={() => {
+                  setOpenPop(null);
+                  setProfileModalOpen(true);
+                }}
+                open={openPop === "profile"}
+                onToggle={() => togglePop("profile")}
+              />
+            }
             permission={permission}
             onPermission={(next) => void changePermission(next)}
             permissionMenuOpen={openPop === "permission"}
@@ -772,6 +989,8 @@ function AiHubApp() {
             onSaveSnippet={(i) => void answers.saveAnswerAsSnippet(i)}
             onExport={() => void answers.handleExport()}
             onQuote={answers.quoteSelection}
+            onEditQuestion={editQuestion}
+            onRestartFrom={restartFrom}
           />
 
           {historyOpen && (
@@ -798,7 +1017,9 @@ function AiHubApp() {
                   onCommitRename={(id, title) => void commitRename(id, title)}
                   onCancelRename={() => setRenamingId(null)}
                   onOpen={openSession}
-                  onRemove={(id) => void sessions.removeSession(id)}
+                  onRemove={(s) => void removeSessionConfirmed(s)}
+                  onExportAll={() => void sessions.exportAllSessions()}
+                  maxSessions={MAX_AI_HUB_SESSIONS}
                   relativeTime={sessions.relativeTime}
                 />
               </div>
@@ -811,6 +1032,14 @@ function AiHubApp() {
               setParamValues={snippets.setParamValues}
               onClose={() => snippets.setParamTarget(null)}
               onConfirm={() => void snippets.confirmSnippetParams()}
+            />
+          )}
+
+          {profileModalOpen && (
+            <ProfileModal
+              custom={settings.aiHubProfiles || []}
+              onChange={(next) => setSettings({ aiHubProfiles: next })}
+              onClose={() => setProfileModalOpen(false)}
             />
           )}
         </>

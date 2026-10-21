@@ -9,7 +9,29 @@ export type AskAttachment = {
   id: string;
   name: string;
   content: string;
+  /** Body was cut at ASK_ATTACH_MAX_FILE_CHARS — the chip must say so, not pass silently. */
+  truncated: boolean;
 };
+
+/** Plain-text-ish suffixes; anything else would reach the model as mojibake. */
+const TEXT_SUFFIXES = [
+  "txt", "md", "markdown", "json", "jsonc", "yaml", "yml", "toml", "ini", "conf", "cfg", "log",
+  "csv", "tsv", "xml", "html", "htm", "css", "scss", "less", "ts", "tsx", "js", "jsx", "mjs",
+  "cjs", "vue", "svelte", "rs", "py", "go", "java", "kt", "cs", "c", "h", "cpp", "cc", "hpp",
+  "php", "rb", "swift", "sh", "ps1", "bat", "cmd", "sql", "properties", "env",
+];
+
+export function attachmentNameFromPath(path: string): string {
+  const base = path.split(/[/\\]/).filter(Boolean).pop() ?? "";
+  return base || "file.txt";
+}
+
+export function isTextAttachmentPath(path: string): boolean {
+  const name = attachmentNameFromPath(path).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return TEXT_SUFFIXES.includes(name.slice(dot + 1));
+}
 
 export function attachmentChars(list: AskAttachment[]): number {
   return list.reduce((n, a) => n + a.name.length + a.content.length, 0);
@@ -34,6 +56,7 @@ export function makeAttachment(name: string, content: string): AskAttachment {
     id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name: base,
     content: trimmed,
+    truncated: content.length > trimmed.length,
   };
 }
 
@@ -41,7 +64,10 @@ export function makeAttachment(name: string, content: string): AskAttachment {
 export function formatAttachmentsBlock(list: AskAttachment[]): string {
   if (!list.length) return "";
   const parts = list.map(
-    (a) => `### ${a.name}\n\`\`\`\n${a.content}\n\`\`\``
+    (a) =>
+      `### ${a.name}${
+        a.truncated ? ` (truncated — only the first ${ASK_ATTACH_MAX_FILE_CHARS} characters)` : ""
+      }\n\`\`\`\n${a.content}\n\`\`\``
   );
   return `\n\n---\nAttached files/code from the user:\n${parts.join("\n\n")}`;
 }

@@ -4,11 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, UserAttentionType};
 use tokio::sync::oneshot;
 
 use crate::agent_fs::{arg_str, Protected, Scope};
@@ -243,6 +243,55 @@ fn provider_tools(names: &[&str], anthropic: bool) -> Vec<Value> {
         .collect()
 }
 
+/// Transport failures say nothing a developer can act on ("error sending request"):
+/// name the likely cause, then keep the original text for the details drawer.
+fn friendly_send_error(detail: &str) -> String {
+    let lower = detail.to_lowercase();
+    let hint = if lower.contains("timed out") || lower.contains("timeout") {
+        "连接或读取超时：服务商没在时限内回应，稍后重试，或在模型配置里换一个服务商。"
+    } else if lower.contains("dns") || lower.contains("name could not be resolved") {
+        "域名解析失败：检查地址是否写对，以及本机网络 / 代理。"
+    } else if lower.contains("ssl") || lower.contains("certificate") {
+        "TLS 握手失败：地址的证书或 https 配置有问题。"
+    } else if lower.contains("connection refused") || lower.contains("connect error") {
+        "连不上服务：本地模型（Ollama / LM Studio）是否已启动、端口是否对？"
+    } else {
+        "请求没发出去：检查模型配置里的地址、密钥与本机网络。"
+    };
+    format!("{hint}｜原文：{detail}")
+}
+
+/// HTTP status → what to do next. The provider's body stays appended, unedited.
+fn friendly_model_error(status: u16, snippet: &str) -> String {
+    let head = match status {
+        401 | 403 => "密钥无效或没有这个模型的权限（HTTP {s}）。到 AI 工作台 → 模型配置 核对 API Key 与模型名。",
+        404 => "接口路径或模型名不对（HTTP {s}）。基础 URL 通常要到 /v1 为止，模型名以服务商列表里的写法为准。",
+        429 => "被限流或额度用尽（HTTP {s}）。等一会儿再试，或换一个模型服务商。",
+        400 if mentions_context(snippet) =>
+            "这次发送的内容超出模型上下文（HTTP {s}）。开一个新对话，或减少附件与仓库上下文。",
+        400 => "请求被拒绝（HTTP {s}）。多半是参数或模型名不对，具体看下面的原文。",
+        s if (500..600).contains(&s) => "服务商暂时不可用（HTTP {s}）。稍后重试；本地模型请确认进程还在跑。",
+        _ => "模型返回错误（HTTP {s}）。",
+    }
+    .replace("{s}", &status.to_string());
+    format!("{head}｜原文：{snippet}")
+}
+
+fn mentions_context(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    [
+        "context length",
+        "maximum context",
+        "context_length",
+        "too many tokens",
+        "token count",
+        "reduce your prompt",
+        "input is too long",
+    ]
+    .iter()
+    .any(|k| lower.contains(k))
+}
+
 fn clip(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(max).collect();
     if text.chars().count() > max {
@@ -252,20 +301,58 @@ fn clip(text: &str, max: usize) -> String {
 }
 
 fn emit_step(app: &AppHandle, id: &str, tool: &str, status: &str, summary: &str, detail: &str) {
-    let _ = app.emit(
-        "agent-step",
-        json!({
-            "id": id,
-            "tool": tool,
-            "status": status,
-            "summary": summary,
-            "detail": detail,
-        }),
-    );
+    emit_step_full(app, id, tool, status, summary, detail, None);
+}
+
+/// `arg`: the call's primary argument, so the hub can render the step in the user's
+/// own language. `summary` stays Chinese: it is also what the model and the folded
+/// session digest read.
+fn emit_step_full(
+    app: &AppHandle,
+    id: &str,
+    tool: &str,
+    status: &str,
+    summary: &str,
+    detail: &str,
+    arg: Option<&str>,
+) {
+    let mut payload = json!({
+        "id": id,
+        "tool": tool,
+        "status": status,
+        "summary": summary,
+        "detail": detail,
+    });
+    if let Some(arg) = arg.filter(|a| !a.is_empty()) {
+        payload["arg"] = json!(arg);
+    }
+    let _ = app.emit("agent-step", payload);
+}
+
+/// First meaningful argument of a call (path / command / pattern / …), numbers included.
+fn step_arg(args: &Value) -> String {
+    for key in [
+        "path", "command", "pattern", "target", "name", "from", "tab", "action", "kind", "port", "id", "keys",
+        "text",
+    ] {
+        match args.get(key) {
+            Some(Value::String(s)) if !s.trim().is_empty() => return s.trim().to_string(),
+            Some(Value::Number(n)) => return n.to_string(),
+            _ => {}
+        }
+    }
+    String::new()
 }
 
 /// `diff`: `preview` is a unified diff (file / hosts change) and is rendered with colours.
+/// The round is now blocked on the user, so the taskbar flashes until it is answered —
+/// silently auto-denying after `APPROVAL_WAIT` was indistinguishable from a failure.
 fn emit_approval(app: &AppHandle, id: &str, call_id: &str, tool: &str, summary: &str, preview: &str, diff: bool) {
+    let wait_ms = APPROVAL_WAIT.as_millis() as u64;
+    let deadline_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64 + wait_ms)
+        .unwrap_or(0);
     let _ = app.emit(
         "agent-approval",
         json!({
@@ -275,8 +362,24 @@ fn emit_approval(app: &AppHandle, id: &str, call_id: &str, tool: &str, summary: 
             "summary": summary,
             "preview": preview,
             "previewKind": if diff { "diff" } else { "text" },
+            "deadlineAt": deadline_at,
         }),
     );
+    set_attention(app, true);
+}
+
+/// The hub window is `skip_taskbar`, so it cannot flash a taskbar button of its own:
+/// ask the main window too, and clear both once the round is no longer waiting.
+fn set_attention(app: &AppHandle, on: bool) {
+    for label in ["ai-hub", "main"] {
+        if let Some(win) = app.get_webview_window(label) {
+            let _ = win.request_user_attention(if on {
+                Some(UserAttentionType::Critical)
+            } else {
+                None
+            });
+        }
+    }
 }
 
 fn emit_text(app: &AppHandle, id: &str, text: &str) {
@@ -288,6 +391,7 @@ fn emit_text(app: &AppHandle, id: &str, text: &str) {
 
 /// `limited`: the turn stopped at the round / action cap, so the UI offers「继续」.
 fn emit_done(app: &AppHandle, id: &str, started: Instant, usage: Option<(u64, u64)>, limited: bool) {
+    set_attention(app, false);
     let mut payload = json!({
         "id": id,
         "elapsedMs": started.elapsed().as_millis() as u64,
@@ -301,6 +405,7 @@ fn emit_done(app: &AppHandle, id: &str, started: Instant, usage: Option<(u64, u6
 }
 
 fn emit_err(app: &AppHandle, id: &str, msg: &str) {
+    set_attention(app, false);
     let _ = app.emit("generate-text-error", json!({ "id": id, "error": msg }));
 }
 
@@ -1271,7 +1376,7 @@ async fn model_turn(
             request_id,
         )
         .await?
-        .map_err(|e| format!("请求模型失败: {e}"))?;
+        .map_err(|e| friendly_send_error(&e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
             let text = await_cancellable(resp.text(), request_id).await?.unwrap_or_default();
@@ -1279,7 +1384,7 @@ async fn model_turn(
             if !tools.is_empty() && snippet.to_lowercase().contains("tool") {
                 return Err(TOOLS_UNSUPPORTED.into());
             }
-            return Err(format!("模型返回 HTTP {status}: {snippet}"));
+            return Err(friendly_model_error(status.as_u16(), &snippet));
         }
         let mut streamed = String::new();
         let mut usage = None;
@@ -1558,25 +1663,34 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             if !known_tools.contains(&call.name.as_str()) {
                 let reason = unknown_tool_reason(&call.name, &tool_names);
                 if unknown_shown.insert(call.name.clone()) {
-                    emit_step(&app, &request_id, "unknown", "error", &format!("模型调用了不存在的工具 {}", call.name), &reason);
+                    emit_step_full(
+                        &app,
+                        &request_id,
+                        "unknown",
+                        "error",
+                        &format!("模型调用了不存在的工具 {}", call.name),
+                        &reason,
+                        Some(&call.name),
+                    );
                 }
                 tool_results.push((call.id.clone(), reason.into()));
                 continue;
             }
             let summary = call_summary(&call.name, &args);
-            emit_step(&app, &request_id, &call.name, "running", &summary, "");
+            let arg_text = step_arg(&args);
+            emit_step_full(&app, &request_id, &call.name, "running", &summary, "", Some(&arg_text));
             let arg = gate_arg(&call.name, &args);
             let command = if call.name == "run_command" { arg.clone() } else { String::new() };
             let gate = tool_gate(permission, &call.name, &arg);
             if gate == Gate::Deny {
                 let reason = deny_reason(permission, &call.name, &arg);
-                emit_step(&app, &request_id, &call.name, "denied", &summary, &reason);
+                emit_step_full(&app, &request_id, &call.name, "denied", &summary, &reason, Some(&arg_text));
                 notes.push(format!("{summary}（未执行）"));
                 tool_results.push((call.id.clone(), reason.into()));
                 continue;
             }
             if let Some(reason) = conflict_block(&scope, &call.name, &arg, &args) {
-                emit_step(&app, &request_id, &call.name, "denied", &summary, &reason);
+                emit_step_full(&app, &request_id, &call.name, "denied", &summary, &reason, Some(&arg_text));
                 if !conflict_noticed {
                     conflict_noticed = true;
                     emit_step(&app, &request_id, "conflict", "info", CONFLICT_NOTICE, &reason);
@@ -1600,7 +1714,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 }
                 if allow {
                     let detail = if reason.is_empty() { "AI 审查通过".to_string() } else { format!("AI 审查通过：{reason}") };
-                    emit_step(&app, &request_id, &call.name, "running", &summary, &detail);
+                    emit_step_full(&app, &request_id, &call.name, "running", &summary, &detail, Some(&arg_text));
                 } else {
                     needs_confirm = true;
                     review_note = if reason.is_empty() { "AI 审查：需要你确认".into() } else { format!("AI 审查：{reason}") };
@@ -1616,6 +1730,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                         return Err(e);
                     }
                 };
+                set_attention(&app, false);
                 match decision {
                     Decision::Allow { for_turn } => {
                         // 审查转人工时不记「同类」：每条都要过审查
@@ -1624,20 +1739,21 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                         }
                     }
                     Decision::Deny => {
-                        emit_step(&app, &request_id, &call.name, "denied", &summary, "用户拒绝");
+                        emit_step_full(&app, &request_id, &call.name, "denied", &summary, "用户拒绝", Some(&arg_text));
                         notes.push(format!("{summary}（已拒绝）"));
                         tool_results.push((call.id.clone(), "用户拒绝了这个操作".to_string().into()));
                         continue;
                     }
                     Decision::TimedOut => {
                         let mins = APPROVAL_WAIT.as_secs() / 60;
-                        emit_step(
+                        emit_step_full(
                             &app,
                             &request_id,
                             &call.name,
                             "denied",
                             &summary,
                             &format!("等待确认超过 {mins} 分钟，已自动拒绝"),
+                            Some(&arg_text),
                         );
                         notes.push(format!("{summary}（确认超时）"));
                         tool_results.push((
@@ -1675,7 +1791,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     } else {
                         clip(&out.text, DETAIL_CAP)
                     };
-                    emit_step(&app, &request_id, &call.name, "done", &summary, &detail);
+                    emit_step_full(&app, &request_id, &call.name, "done", &summary, &detail, Some(&arg_text));
                     notes.push(summary);
                     tool_results.push((call.id.clone(), out));
                 }
@@ -1685,13 +1801,15 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 }
                 Err(err) if err == crate::agent_computer::FAILSAFE_MESSAGE => {
                     // 紧急停止：不再给模型机会继续动鼠标键盘
-                    emit_step(&app, &request_id, &call.name, "denied", &summary, &err);
+                    emit_step_full(&app, &request_id, &call.name, "denied", &summary, &err, Some(&arg_text));
                     emit_text(&app, &request_id, &format!("\n\n{err}"));
                     emit_done(&app, &request_id, started, usage_total, false);
                     return Ok(());
                 }
                 Err(err) => {
-                    emit_step(&app, &request_id, &call.name, "error", &summary, &clip(&err, DETAIL_CAP));
+                    emit_step_full(
+                        &app, &request_id, &call.name, "error", &summary, &clip(&err, DETAIL_CAP), Some(&arg_text),
+                    );
                     notes.push(format!("{summary}（失败）"));
                     let text = repeated_command_result(
                         &last_shell_command,
@@ -1722,8 +1840,9 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
 mod tests {
     use super::{
         call_summary, candidates_error, unknown_tool_reason, command_blocked, command_is_readonly, command_output_failed, conflict_block,
-        count_images, decode_model_body, gate_arg, limit_message, match_app_name, prune_images, repeated_command_result,
-        round_is_action, tool_result_messages, unique_hit, workspace_services, ToolOutput, SHOT_PLACEHOLDER,
+        count_images, decode_model_body, friendly_model_error, friendly_send_error, gate_arg, limit_message, match_app_name, prune_images,
+        repeated_command_result, round_is_action, step_arg, tool_result_messages, unique_hit, workspace_services, ToolOutput,
+        SHOT_PLACEHOLDER,
     };
     use crate::agent_proc::run_command;
     use serde_json::json;
@@ -2030,4 +2149,53 @@ mod tests {
         // Duplicate shortcuts with one name still launch.
         let dup = ["Visual Studio Code", "visual studio code"];
         assert_eq!(unique_hit(&match_app_name("code", &dup), &dup), Some(0));
-    }}
+    }
+
+    #[test]
+    fn step_arg_prefers_the_call_target() {
+        assert_eq!(step_arg(&json!({"path": " src/a.rs ", "command": "ls"})), "src/a.rs");
+        assert_eq!(step_arg(&json!({"command": "git status"})), "git status");
+        assert_eq!(step_arg(&json!({"pattern": "TODO", "path": ""})), "TODO");
+        // numbers count too; nothing meaningful at all stays empty
+        assert_eq!(step_arg(&json!({"port": 8080})), "8080");
+        assert_eq!(step_arg(&json!({"path": "   ", "note": "x"})), "");
+        assert_eq!(step_arg(&json!({})), "");
+    }
+
+    #[test]
+    fn transport_errors_name_a_cause_and_keep_the_original() {
+        for (raw, expect) in [
+            ("operation timed out", "超时"),
+            ("error sending request for url (https://x)", "请求没发出去"),
+            ("destination ip is not available", "请求没发出去"),
+            ("dns error: failed to lookup address", "域名解析"),
+            ("invalid peer certificate: Expired", "TLS"),
+            ("connection refused", "连不上服务"),
+        ] {
+            let msg = friendly_send_error(raw);
+            assert!(msg.contains(expect), "{raw} -> {msg}");
+            assert!(msg.contains("原文："), "{msg}");
+            assert!(msg.ends_with(raw), "{msg}");
+        }
+    }
+
+    #[test]
+    fn http_errors_map_to_the_next_action() {
+        let key = friendly_model_error(401, "Invalid api key");
+        assert!(key.contains("密钥") && key.contains("模型配置") && key.contains("HTTP 401"));
+        assert!(friendly_model_error(404, "not found").contains("基础 URL"));
+        assert!(friendly_model_error(429, "slow down").contains("限流"));
+        assert!(friendly_model_error(503, "unavailable").contains("暂时不可用"));
+        assert!(friendly_model_error(418, "teapot").contains("模型返回错误（HTTP 418）"));
+        // 400 splits on whether the body complains about the context window
+        let long = friendly_model_error(
+            400,
+            "This model's maximum context length is 8192 tokens, however you requested 20000",
+        );
+        assert!(long.contains("超出模型上下文"), "{long}");
+        assert!(!long.contains("参数或模型名不对"), "{long}");
+        let bad = friendly_model_error(400, "temperature: value out of range");
+        assert!(bad.contains("参数或模型名不对"), "{bad}");
+        assert!(bad.contains("原文：temperature"), "{bad}");
+    }
+}

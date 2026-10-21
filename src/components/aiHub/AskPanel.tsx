@@ -12,6 +12,14 @@ import AskEmpty from "./AskEmpty";
 import AskErrorCard from "./AskErrorCard";
 import AskComposer from "./AskComposer";
 
+/** Composer-side keyboard bridge to the open snippet list. */
+export type SnippetNav = {
+  /** False when the list is open but nothing matches — Enter then stays "ask the AI". */
+  active: boolean;
+  onMove: (delta: number) => void;
+  onPick: () => void;
+};
+
 export type AskPanelProps = {
   input: string;
   setInput: (v: string) => void;
@@ -58,6 +66,7 @@ export type AskPanelProps = {
   onContinue: () => void;
   hasSnippets: boolean;
   snippetOpen: boolean;
+  snippetNav: SnippetNav | null;
   onToggleSnippets: () => void;
   onPasteClipboard: () => void;
   onAttachFile: () => void;
@@ -66,6 +75,8 @@ export type AskPanelProps = {
   repoControl: ReactNode;
   /** Model picker, shown at the bottom-right, beside send. */
   modelControl: ReactNode;
+  /** Persona / temperature profile picker, left of the permission pill. */
+  profileControl?: ReactNode;
   /** What the AI may do in the repo for the next message. */
   permission: AgentPermission;
   onPermission: (next: AgentPermission) => void;
@@ -85,6 +96,10 @@ export type AskPanelProps = {
   onSaveSnippet: (index: number) => void;
   onExport: () => void;
   onQuote: () => void;
+  /** Put a past question back in the composer (context stays). */
+  onEditQuestion?: (index: number) => void;
+  /** Rewind the transcript to before this question and put it in the composer. */
+  onRestartFrom?: (index: number) => void;
 };
 
 /** Answer stage (flex) + composer card; answer actions live with the answer. */

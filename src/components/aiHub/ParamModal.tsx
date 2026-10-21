@@ -24,6 +24,8 @@ export default function ParamModal(props: Props) {
               value={paramValues[key]}
               onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value })}
               onKeyDown={(e) => {
+                // 输入法选词中的 Enter 不算「插入片段」
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === "Enter") {
                   e.preventDefault();
                   onConfirm();

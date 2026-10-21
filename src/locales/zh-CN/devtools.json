@@ -4,7 +4,8 @@
     "convert": "转换",
     "generate": "生成",
     "parse": "解析",
-    "calc": "计算"
+    "calc": "计算",
+    "system": "系统"
   },
   "json": {
     "title": "JSON",
@@ -241,8 +242,6 @@
   "appLauncher": {
     "title": "快捷应用",
     "description": "保存常用应用路径，一键启动与关闭",
-    "viewApps": "应用",
-    "viewPorts": "端口查杀",
     "add": "添加应用",
     "addFirst": "添加第一个应用",
     "edit": "编辑",
@@ -345,6 +344,8 @@
     }
   },
   "ports": {
+    "title": "端口查杀",
+    "description": "按端口查监听进程并结束它，系统关键进程受保护",
     "placeholder": "端口号，可多个：8080 · 3000, 5432 · 8080-8090",
     "query": "查询",
     "refresh": "刷新",

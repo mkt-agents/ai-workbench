@@ -4,7 +4,8 @@
     "convert": "Convert",
     "generate": "Generate",
     "parse": "Parse",
-    "calc": "Calculate"
+    "calc": "Calculate",
+    "system": "System"
   },
   "json": {
     "title": "JSON",
@@ -241,8 +242,6 @@
   "appLauncher": {
     "title": "Quick Apps",
     "description": "Save frequently used apps for one-click launch & kill",
-    "viewApps": "Apps",
-    "viewPorts": "Port killer",
     "add": "Add App",
     "addFirst": "Add your first app",
     "edit": "Edit",
@@ -345,6 +344,8 @@
     }
   },
   "ports": {
+    "title": "Port Killer",
+    "description": "Find and stop the process listening on a port; critical system processes are protected",
     "placeholder": "Port(s): 8080 · 3000, 5432 · 8080-8090",
     "query": "Query",
     "refresh": "Refresh",

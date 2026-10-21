@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGlobalStore } from "../../core/store";
 import type { Snippet } from "../../core/types";
 import { fillParams, parseParamNames } from "../../lib/snippets";
@@ -15,22 +15,23 @@ export function matchSlashCommand(input: string): { before: string; query: strin
 export type AskSnippetsOptions = {
   setInput: (updater: string | ((prev: string) => string)) => void;
   inputRef: { current: HTMLTextAreaElement | null };
-  /** Current composer text — used to replace a trailing `/query` on pick. */
-  input?: string;
 };
 
 /** Snippet picker: search, param-fill modal, insert into the input box. */
 export function useAskSnippets(opts: AskSnippetsOptions) {
-  const { setInput, inputRef, input = "" } = opts;
+  const { setInput, inputRef } = opts;
   const snippets = useGlobalStore((s) => s.snippets);
   const bumpSnippetUse = useGlobalStore((s) => s.bumpSnippetUse);
 
   const [snippetOpen, setSnippetOpen] = useState(false);
+  /** The one filter source: `/token` while typing it in the composer, the search box otherwise. */
   const [snippetQuery, setSnippetQuery] = useState("");
   const [paramTarget, setParamTarget] = useState<Snippet | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
   /** When true, the picker was opened by typing `/` (replace slash token on pick). */
   const [slashMode, setSlashMode] = useState(false);
+  /** Keyboard-highlighted choice; the composer's ↑↓/Enter drive it. */
+  const [active, setActive] = useState(0);
 
   const applySnippetText = useCallback(async (text: string, snippetId: string) => {
     setInput((prev) => {
@@ -44,6 +45,7 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
     setSlashMode(false);
     setParamTarget(null);
     setSnippetQuery("");
+    setActive(0);
     await bumpSnippetUse(snippetId);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [setInput, bumpSnippetUse, inputRef, slashMode]);
@@ -72,6 +74,7 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
   const openManual = useCallback(() => {
     setSlashMode(false);
     setSnippetQuery("");
+    setActive(0);
     setSnippetOpen((v) => !v);
   }, []);
 
@@ -93,12 +96,8 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
     setSnippetQuery(hit.query);
   }, [slashMode, snippets]);
 
-  const effectiveQuery = slashMode
-    ? (matchSlashCommand(input)?.query ?? snippetQuery)
-    : snippetQuery;
-
   const snippetChoices = useMemo(() => {
-    const q = effectiveQuery.trim().toLowerCase();
+    const q = snippetQuery.trim().toLowerCase();
     // Prompt Studio templates (kind='prompt') are optimizer recipes, not insertable fragments
     const list = [...(snippets || [])]
       .filter((s) => s.kind !== "prompt")
@@ -112,19 +111,50 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
         )
       : list;
     return filtered.slice(0, SNIPPET_PICK_LIMIT);
-  }, [snippets, effectiveQuery]);
+  }, [snippets, snippetQuery]);
+
+  const choiceCount = snippetChoices.length;
+  /** A freshly typed filter starts the highlight at the top match. */
+  useEffect(() => {
+    setActive(0);
+  }, [snippetQuery]);
+  /** A shrinking list must not leave the highlight off-screen. */
+  useEffect(() => {
+    setActive((cur) => (cur < choiceCount ? cur : 0));
+  }, [choiceCount]);
+
+  const moveActive = useCallback(
+    (delta: number) => {
+      if (choiceCount === 0) return;
+      setActive((cur) => (cur + delta + choiceCount) % choiceCount);
+    },
+    [choiceCount],
+  );
+
+  const setActiveIndex = useCallback((index: number) => {
+    setActive(Math.max(0, index));
+  }, []);
+
+  const pickActive = useCallback(() => {
+    const hit = snippetChoices[active];
+    if (hit) pickSnippet(hit);
+  }, [snippetChoices, active, pickSnippet]);
 
   return {
     snippets,
     snippetOpen,
     setSnippetOpen,
-    snippetQuery: effectiveQuery,
+    snippetQuery,
     setSnippetQuery,
     paramTarget,
     setParamTarget,
     paramValues,
     setParamValues,
     snippetChoices,
+    active,
+    moveActive,
+    setActiveIndex,
+    pickActive,
     pickSnippet,
     confirmSnippetParams,
     openManual,

@@ -184,14 +184,63 @@ mod imp {
     /// does not flood the log with identical lines. Diagnostic only.
     static LAST_PLACE: Mutex<Option<(isize, i32, i32, i32, i32)>> = Mutex::new(None);
 
-    /// The rect whose move a settle-nudge is owed. A rapid slot-move run
-    /// (sidebar toggle animation) can leave Chromium's compositor anchored to
-    /// the OLD window position — its content stays shifted by the move delta
-    /// (blank strip, clicks land beside the visible UI) even though the
-    /// window rect itself converged. The first tick whose rect repeats
-    /// (animation settled) gets a 1px out-and-back: two fresh real
-    /// WM_WINDOWPOSCHANGED/WM_MOVE pairs on an idle pump re-anchor it.
-    static NUDGE_PENDING: Mutex<Option<(isize, i32, i32, i32, i32)>> = Mutex::new(None);
+    type PlaceKey = (isize, i32, i32, i32, i32);
+
+    /// The last settled rect and whether its nudge has already fired.
+    ///
+    /// A rapid slot-move run (sidebar toggle animation) can leave Chromium's
+    /// compositor anchored to the OLD window position — its content stays
+    /// shifted by the move delta (blank strip, clicks land beside the visible
+    /// UI) even though the window rect itself converged. The first tick whose
+    /// rect repeats (animation settled) gets a 1px out-and-back: two fresh
+    /// real WM_WINDOWPOSCHANGED/WM_MOVE pairs on an idle pump re-anchor it.
+    ///
+    /// The fired flag must survive: clearing the whole state after nudging
+    /// re-arms the same rect on the next tick, which made the nudge fire
+    /// every other heartbeat forever.
+    static NUDGE_STATE: Mutex<Option<(PlaceKey, bool)>> = Mutex::new(None);
+
+    fn nudge_step(state: &mut Option<(PlaceKey, bool)>, key: PlaceKey, show: bool) -> bool {
+        match state {
+            Some((armed, fired)) if *armed == key => {
+                if !show || *fired {
+                    return false;
+                }
+                *fired = true;
+                true
+            }
+            _ => {
+                *state = Some((key, false));
+                false
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod nudge_tests {
+        use super::nudge_step;
+
+        #[test]
+        fn settle_nudge_fires_once_per_settled_rect() {
+            let mut state = None;
+            let first = (1, 10, 20, 30, 40);
+            let second = (1, 11, 20, 30, 40);
+            let hidden_first = (1, 12, 20, 30, 40);
+
+            assert!(!nudge_step(&mut state, first, true));
+            assert!(nudge_step(&mut state, first, true));
+            assert!(!nudge_step(&mut state, first, true));
+
+            assert!(!nudge_step(&mut state, second, true));
+            assert!(nudge_step(&mut state, second, true));
+            assert!(!nudge_step(&mut state, second, true));
+
+            // Hidden windows keep the nudge owed; showing them fires it once.
+            assert!(!nudge_step(&mut state, hidden_first, false));
+            assert!(nudge_step(&mut state, hidden_first, true));
+            assert!(!nudge_step(&mut state, hidden_first, true));
+        }
+    }
 
     /// Last `(hwnd, verify-code)` written to the trace, so a persisting warning
     /// is logged once instead of every 400ms heartbeat. Diagnostic only.
@@ -761,21 +810,13 @@ mod imp {
                     RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
                 );
             }
-            // Settle nudge (see NUDGE_PENDING): arm on every changed rect, fire
+            // Settle nudge (see NUDGE_STATE): arm on every changed rect, fire
             // once on the first unchanged tick while the window is shown.
-            let settled = NUDGE_PENDING
+            let settled = NUDGE_STATE
                 .lock()
-                .map(|mut g| {
-                    if *g == Some(key) {
-                        *g = None;
-                        true
-                    } else {
-                        *g = Some(key);
-                        false
-                    }
-                })
+                .map(|mut g| nudge_step(&mut *g, key, show))
                 .unwrap_or(false);
-            if settled && show {
+            if settled {
                 let _ = SetWindowPos(hwnd, None, px - 1, py, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
                 let _ = SetWindowPos(hwnd, None, px, py, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
                 debug_log(&format!("place 0x{:X} settle nudge", key.0));

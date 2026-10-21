@@ -6,7 +6,7 @@ import type { AIModelConfig, AiHubTurn } from "../../core/types";
 import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
 import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
-import { buildMeta, buildSystem } from "./config";
+import { buildMeta, buildSystem, stepsMutatedWorkspace, TEXT_ONLY_TASKS } from "./config";
 import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
 import { cleanDailyReport, dailyReportSystem, isDailyReport, isDailyRevision, type DailyStyle } from "./dailyReport";
 import type { OptimizeConfig, TaskKind } from "./config";
@@ -27,6 +27,10 @@ export type AnswerSource = {
   completionTokens?: number;
   /** Fallback estimate (~chars/4) when the provider omitted usage. */
   estimatedTokens?: number;
+  /** The workbench context block was clipped to its budget. */
+  contextTruncated?: boolean;
+  /** Oldest rounds left out of the request to stay inside the char budget. */
+  droppedTurns?: number;
 };
 
 type QaTurn = AiHubTurn;
@@ -38,6 +42,8 @@ export type AgentStep = {
   status: "running" | "done" | "denied" | "error" | string;
   summary: string;
   detail: string;
+  /** Call argument from the backend, so the row can render in the UI language. */
+  arg?: string;
 };
 
 export type AgentApproval = {
@@ -47,6 +53,8 @@ export type AgentApproval = {
   preview: string;
   /** `diff`: preview is a unified diff of a file / hosts change. */
   previewKind: "diff" | "text";
+  /** Epoch ms when the backend auto-denies this call; 0 = unknown. */
+  deadlineAt: number;
 };
 
 /** Approval answer: allow just this call, or the same kind for the rest of the turn. */
@@ -54,6 +62,12 @@ export type AgentDecision = "once" | "turn" | "deny";
 
 /** Step output kept with a saved turn (the live one is capped by the backend too). */
 const STEP_DETAIL_KEEP = 2000;
+
+/**
+ * Hub-local pref (same convention as `qa-pinned` / `qa-permission`): raise the
+ * window when a call is waiting for the user instead of letting it time out.
+ */
+export const APPROVAL_FOCUS_KEY = "qa-approval-focus";
 
 /** Ordered from least to most open; mirrors Rust `agent_policy::Permission`. */
 export type AgentPermission = "read" | "workspace" | "review" | "full";
@@ -70,9 +84,6 @@ export type AgentRunOptions = {
   vision: boolean;
 };
 
-/** Pure text work: no tools are offered, the round is a plain streamed completion. */
-const TEXT_ONLY_TASKS: TaskKind[] = ["polish", "translate", "summarize", "optimize"];
-
 /** Full transcript (displayed + persisted). Past the verbatim window, older rounds fold into a digest. */
 function appendTurn(
   prev: QaTurn[],
@@ -81,11 +92,13 @@ function appendTurn(
   keepWhole = false,
   steps?: AgentStep[],
   limited = false,
+  usage?: { elapsedMs?: number; promptTokens?: number; completionTokens?: number },
 ): QaTurn[] {
   const kept = steps?.filter((s) => s.summary).map((s) => ({
     tool: s.tool,
     status: s.status,
     summary: s.summary,
+    ...(s.arg ? { arg: s.arg } : {}),
     ...(s.detail ? { detail: s.detail.slice(0, STEP_DETAIL_KEEP) } : {}),
   }));
   const next: QaTurn[] = [
@@ -97,6 +110,9 @@ function appendTurn(
       ...(keepWhole ? { keep: "whole" as const } : {}),
       ...(kept && kept.length > 0 ? { steps: kept } : {}),
       ...(limited ? { limited: true } : {}),
+      ...(usage?.elapsedMs != null ? { elapsedMs: usage.elapsedMs } : {}),
+      ...(usage?.promptTokens != null ? { promptTokens: usage.promptTokens } : {}),
+      ...(usage?.completionTokens != null ? { completionTokens: usage.completionTokens } : {}),
     },
   ];
   return compactSession(next);
@@ -117,6 +133,8 @@ export type AskStreamOptions = {
   routeOverride: RouteOverride;
   /** Called once a request is dispatched: one-shot task + override reset. */
   onSent: () => void;
+  /** Drop the workbench context cache: this round changed the repo it describes. */
+  onInvalidateContext: () => void;
   /** Persist the completed exchange as a session (wired to useAskSessions). */
   persistTurns: (turns: QaTurn[], firstQuestion: string) => void;
   /** Active profile: extra system role + optional temperature override. */
@@ -138,7 +156,7 @@ export function useAskStream(opts: AskStreamOptions) {
   const { t } = useTranslation("aihub");
   const {
     selectedModel, task, optimize, input, setInput, setSelectedText, getContext, collectDailyBrief,
-    routeOverride, onSent, persistTurns,
+    routeOverride, onSent, onInvalidateContext, persistTurns,
     profileSystemRole, profileTemperature, attachments = [], agent, dailyStyle = "chat",
   } = opts;
 
@@ -178,7 +196,9 @@ export function useAskStream(opts: AskStreamOptions) {
   const [agentApproval, setAgentApproval] = useState<AgentApproval | null>(null);
   const [stopping, setStopping] = useState(false);
   /** Last request that failed (not stopped), so the error card can offer a retry. */
-  const failedRef = useRef<{ question: string; history: QaTurn[]; task: TaskKind; mode: AskMode } | null>(null);
+  const failedRef = useRef<{
+    question: string; history: QaTurn[]; task: TaskKind; mode: AskMode; attachments: AskAttachment[];
+  } | null>(null);
   const [failedMode, setFailedMode] = useState<AskMode | null>(null);
   /** Last question + the history snapshot it was sent with, for regenerate. */
   const lastQuestionRef = useRef<string>("");
@@ -193,11 +213,14 @@ export function useAskStream(opts: AskStreamOptions) {
   const persistRef = useRef(persistTurns);
   persistRef.current = persistTurns;
 
-  /** `replay` (regenerate) pins the task and mode of the original question. */
+  /** Attachments of the last dispatched round, so 重新生成 replays the same files. */
+  const lastAttachmentsRef = useRef<AskAttachment[]>([]);
+
+  /** `replay` (regenerate / retry) pins the task, mode and files of the original question. */
   const send = async (
     rawInput?: string,
     historyOverride?: QaTurn[],
-    replay?: { task: TaskKind; mode: AskMode },
+    replay?: { task: TaskKind; mode: AskMode; attachments?: AskAttachment[] },
   ) => {
     if (busyRef.current) return;
     const sendTask = replay?.task ?? task;
@@ -217,6 +240,12 @@ export function useAskStream(opts: AskStreamOptions) {
     }
     // The context dump is per-request; history carries only the plain Q&A pairs.
     const baseHistory = historyOverride ?? history;
+    /** Char-budgeted transcript for this request; oldest rounds fold out first. */
+    const budget = requestHistory(baseHistory);
+    /** The composer clears attachments on send: this round carries its own copy, so a
+        retry / regenerate replays with the files it was answered from. */
+    const sentAttachments = replay?.attachments ?? attachments;
+    lastAttachmentsRef.current = sentAttachments;
     // Regenerate replaces the last pair: hide it now, restore it if the retry fails.
     const shownBefore = history;
     if (historyOverride) setHistory(baseHistory);
@@ -243,8 +272,14 @@ export function useAskStream(opts: AskStreamOptions) {
     /** Daily report round: no tools, and the answer is cleaned before it lands. */
     let isDaily = false;
     const landText = (text: string) => (isDaily ? cleanDailyReport(text) : text);
-    const finishTurn = (text: string, limited = false) => {
-      const nextTurns = appendTurn(baseHistory, question, text, keepWhole, agentStepsRef.current, limited);
+    const finishTurn = (
+      text: string,
+      limited = false,
+      usage?: { elapsedMs?: number; promptTokens?: number; completionTokens?: number },
+    ) => {
+      const nextTurns = appendTurn(
+        baseHistory, question, text, keepWhole, agentStepsRef.current, limited, usage,
+      );
       setHistory(nextTurns);
       setPending(null);
       setPhase("idle");
@@ -253,6 +288,9 @@ export function useAskStream(opts: AskStreamOptions) {
       lastQuestionRef.current = question;
       lastHistoryRef.current = baseHistory;
       persistRef.current(nextTurns, question);
+      // The round changed the repo, so the cached workbench context now describes
+      // files as they were before the agent touched them.
+      if (stepsMutatedWorkspace(agentStepsRef.current)) onInvalidateContext();
     };
     /** `failed` = a real error (offer retry); false = stopped / empty answer. */
     const failTurn = (failed: boolean) => {
@@ -263,7 +301,9 @@ export function useAskStream(opts: AskStreamOptions) {
       if (historyOverride) setHistory(shownBefore);
       else setInput((prev) => prev || question);
       if (failed) {
-        failedRef.current = { question, history: baseHistory, task: sendTask, mode: sentMode };
+        failedRef.current = {
+          question, history: baseHistory, task: sendTask, mode: sentMode, attachments: sentAttachments,
+        };
         setFailedMode(sentMode);
       }
     };
@@ -306,6 +346,8 @@ export function useAskStream(opts: AskStreamOptions) {
       });
       sentMode = route.mode;
       let summary: ContextSummary = { repos: [], parts: [] };
+      /** Did the context block get clipped? Surfaced on the answer source line. */
+      let ctxTruncated = false;
       if (sendTask !== "optimize" && route.mode === "project") setPhase("context");
       if (sendTask === "optimize") {
         // Prompt rewriting is self-contained: the draft IS the request, no
@@ -336,7 +378,7 @@ export function useAskStream(opts: AskStreamOptions) {
           }
           user =
             `${question}\n\n---\nToday's notes (source only — write the report, do not copy this structure):\n${brief.text}`;
-          user += formatAttachmentsBlock(attachments);
+          user += formatAttachmentsBlock(sentAttachments);
           sentMode = "project";
           keepWhole = true;
           if (stoppedEarly()) return;
@@ -345,6 +387,7 @@ export function useAskStream(opts: AskStreamOptions) {
           lastDailyReposRef.current = [];
           const ctxResult = await getContext(route.mode);
           summary = ctxResult.summary;
+          ctxTruncated = ctxResult.truncated;
           const hasProject = summary.parts.length > 0;
           system = buildSystem(selectedModel, route.mode, sendTask, hasProject);
           if (profileSystemRole?.trim()) {
@@ -354,7 +397,7 @@ export function useAskStream(opts: AskStreamOptions) {
           user = ctx
             ? `${question}\n\n---\nContext from workbench:\n${ctx}`
             : question;
-          user += formatAttachmentsBlock(attachments);
+          user += formatAttachmentsBlock(sentAttachments);
           keepWhole =
             sendTask === "polish" || sendTask === "translate" || sendTask === "summarize";
           if (stoppedEarly()) return;
@@ -362,7 +405,14 @@ export function useAskStream(opts: AskStreamOptions) {
       }
       system = withSessionDigest(system, baseHistory);
       if (streamIdRef.current === myGen) setPhase("waiting");
-      setSource({ mode: sentMode, summary, modelName: selectedModel.name, task: sendTask });
+      setSource({
+        mode: sentMode,
+        summary,
+        modelName: selectedModel.name,
+        task: sendTask,
+        contextTruncated: ctxTruncated || undefined,
+        droppedTurns: budget.dropped || undefined,
+      });
       lastModeRef.current = sentMode;
       lastTaskRef.current = sendTask;
       if (!replay) onSent();
@@ -414,7 +464,9 @@ export function useAskStream(opts: AskStreamOptions) {
               completionTokens,
               estimatedTokens,
             });
-            finishTurn(finalText, payload.limited === true);
+            finishTurn(finalText, payload.limited === true, {
+              elapsedMs, promptTokens, completionTokens,
+            });
           } else {
             failTurn(false);
           }
@@ -458,6 +510,7 @@ export function useAskStream(opts: AskStreamOptions) {
           status: string;
           summary: string;
           detail: string;
+          arg?: string;
         }>("agent-step", (event) => {
           const payload = event.payload;
           if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
@@ -469,6 +522,8 @@ export function useAskStream(opts: AskStreamOptions) {
               status: payload.status,
               summary: payload.summary,
               detail: payload.detail || "",
+              // The final status arrives as its own event: carry the argument over.
+              arg: payload.arg || last?.arg,
             };
             if (last && last.tool === step.tool && last.status === "running" && last.summary === step.summary) {
               return [...prev.slice(0, -1), step];
@@ -485,6 +540,7 @@ export function useAskStream(opts: AskStreamOptions) {
           summary: string;
           preview: string;
           previewKind?: "diff" | "text";
+          deadlineAt?: number;
         }>("agent-approval", (event) => {
           const payload = event.payload;
           if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
@@ -494,17 +550,31 @@ export function useAskStream(opts: AskStreamOptions) {
             summary: payload.summary,
             preview: payload.preview || "",
             previewKind: payload.previewKind === "diff" ? "diff" : "text",
+            deadlineAt: payload.deadlineAt ?? 0,
           });
+          // The round is blocked on the user: an opt-in raise beats a silent
+          // auto-deny five minutes later.
+          if (localStorage.getItem(APPROVAL_FOCUS_KEY) === "1") {
+            void invoke("show_ai_hub").catch(() => {});
+          }
         }),
       );
 
       const maxTokens = Math.max(selectedModel.maxTokens || 0, 1536);
       const temperature =
         typeof profileTemperature === "number" && Number.isFinite(profileTemperature)
-          ? Math.min(2, Math.max(0, profileTemperature))
+          ? // The backend clamps to 0..1 (agent.rs / ai_commands.rs); match it so the
+            // number shown in the picker is the number that gets sent.
+            Math.min(1, Math.max(0, profileTemperature))
           : selectedModel.temperature;
       const config = { ...selectedModel, maxTokens, temperature };
       if (stoppedEarly()) return;
+      // A plain-chat round under 只读权限 has no business carrying the tool menu:
+      // it invites a file/git round trip the question never asked for.
+      const wantTools =
+        !TEXT_ONLY_TASKS.includes(sendTask) &&
+        !isDaily &&
+        (sentMode === "project" || agent.permission !== "read");
       await invoke("agent_run", {
         req: {
           config,
@@ -513,11 +583,11 @@ export function useAskStream(opts: AskStreamOptions) {
           requestId: reqId,
           repoPath: agent.repoPath,
           services: agent.services,
-          history: requestHistory(baseHistory),
+          history: budget.turns,
           apps: agent.apps,
           permission: agent.permission,
           // The daily notes are already collected: the report needs no repo tools.
-          tools: !TEXT_ONLY_TASKS.includes(sendTask) && !isDaily,
+          tools: wantTools,
           vision: agent.vision,
         },
       });
@@ -578,6 +648,7 @@ export function useAskStream(opts: AskStreamOptions) {
     setSelectedText("");
     lastQuestionRef.current = "";
     lastHistoryRef.current = [];
+    lastAttachmentsRef.current = [];
     lastModeRef.current = null;
     lastTaskRef.current = "none";
     lastDailyBriefRef.current = "";
@@ -614,11 +685,39 @@ export function useAskStream(opts: AskStreamOptions) {
       : compacted.filter((t) => t.digest);
   }, [setSelectedText]);
 
-  /** Replay the last question with the same history snapshot and task. */
+  /**
+   * Fold the transcript back to just before turn `index` (「从这里重新开始」). The
+   * files the agent already changed stay changed — this only rewrites the conversation.
+   * An empty result is not persisted: that would leave a blank session behind.
+   */
+  const truncateTo = useCallback(
+    (index: number): QaTurn[] => {
+      const compacted = compactSession(history.slice(0, Math.max(0, index)));
+      setHistory(compacted);
+      setSource(null);
+      setAnswer("");
+      setPending(null);
+      setError(null);
+      failedRef.current = null;
+      setFailedMode(null);
+      lastModeRef.current = null;
+      const verbatim = compacted.filter((t) => !t.digest);
+      const lastUser = [...verbatim].reverse().find((t) => t.role === "user");
+      lastQuestionRef.current = lastUser?.content ?? "";
+      lastHistoryRef.current =
+        verbatim.length >= 2 ? compacted.slice(0, -2) : compacted.filter((t) => t.digest);
+      if (compacted.length > 0) persistRef.current(compacted, lastUser?.content ?? compacted[0].content);
+      return compacted;
+    },
+    [history],
+  );
+
+  /** Replay the last question with the same history snapshot, task and files. */
   const regenerate = () =>
     send(lastQuestionRef.current, lastHistoryRef.current, {
       task: lastTaskRef.current,
       mode: lastModeRef.current ?? "chat",
+      attachments: lastAttachmentsRef.current,
     });
 
   /** Resend the request that failed; `asChat` drops the project context. */
@@ -627,7 +726,11 @@ export function useAskStream(opts: AskStreamOptions) {
     if (!f) return;
     // A failed send put the question back into the input; the retry owns it now.
     setInput((prev) => (prev.trim() === f.question ? "" : prev));
-    void send(f.question, f.history, { task: f.task, mode: asChat ? "chat" : f.mode });
+    void send(f.question, f.history, {
+      task: f.task,
+      mode: asChat ? "chat" : f.mode,
+      attachments: f.attachments,
+    });
   };
 
   const dismissError = () => {
@@ -693,5 +796,6 @@ export function useAskStream(opts: AskStreamOptions) {
     decideAgent,
     resetChat,
     loadSession,
+    truncateTo,
   };
 }

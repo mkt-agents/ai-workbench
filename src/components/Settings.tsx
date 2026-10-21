@@ -267,6 +267,18 @@ function Settings({ onNoticeUpdate }: Props = {}) {
             </label>
           </div>
           <div className="setting-row">
+            <span className="setting-label">{t("aiHub.suggest")}</span>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={settings.aiHubSuggest !== false}
+                onChange={(e) => setSettings({ aiHubSuggest: e.target.checked })}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+          <p className="setting-hint">{t("aiHub.suggestHint")}</p>
+          <div className="setting-row">
             <span className="setting-label">{t("aiHub.bubble")}</span>
             <label className="toggle">
               <input

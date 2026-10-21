@@ -24,7 +24,6 @@ import { useGlobalStore, normalizeAppPath } from "../../core/store";
 import { useConfirm } from "../ConfirmModal";
 import DropdownMenu from "../DropdownMenu";
 import QuickSelect from "../aiHub/QuickSelect";
-import PortKillerPanel from "./PortKillerPanel";
 import type { InstalledAppInfo, QuickAppLauncher } from "../../core/types";
 
 /** Extract the executable name from a full path for process detection. */
@@ -231,10 +230,6 @@ function AppLauncherTool() {
     const v = typeof localStorage !== "undefined" ? localStorage.getItem("al-sort") : null;
     return v === "name" || v === "nameDesc" || v === "group" || v === "running" ? v : "custom";
   });
-  // Two panes share this page: the launcher grid and the port killer.
-  const [view, setView] = useState<"apps" | "ports">(() =>
-    (typeof localStorage !== "undefined" ? localStorage.getItem("al-view") : null) === "ports" ? "ports" : "apps"
-  );
   // User-defined group names (the canonical list, so empty groups can exist).
   const [groups, setGroups] = useState<string[]>(() => {
     try {
@@ -254,10 +249,6 @@ function AppLauncherTool() {
   useEffect(() => {
     try { localStorage.setItem("al-sort", sortBy); } catch { /* storage disabled */ }
   }, [sortBy]);
-
-  useEffect(() => {
-    try { localStorage.setItem("al-view", view); } catch { /* storage disabled */ }
-  }, [view]);
 
   useEffect(() => {
     try { localStorage.setItem("al-groups", JSON.stringify(groups)); } catch { /* storage disabled */ }
@@ -928,72 +919,52 @@ function AppLauncherTool() {
       {/* ── Toolbar ── */}
       <div className="al-toolbar" ref={toolbarRef}>
         <div className="al-toolbar-left">
-          <div className="al-view-tabs" role="tablist">
-            {(["apps", "ports"] as const).map((key) => (
+          <div className="al-search">
+            <Search size={14} className="al-search-icon" />
+            <input
+              className="al-search-input"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && search) setSearch("");
+              }}
+              placeholder={t("appLauncher.searchPlaceholder")}
+              spellCheck={false}
+            />
+            {search && (
               <button
-                key={key}
                 type="button"
-                role="tab"
-                aria-selected={view === key}
-                className={`al-view-tab${view === key ? " active" : ""}`}
-                // Selection belongs to the app grid; carrying it into the other pane
-                // would leave an invisible batch bar behind.
-                onClick={() => {
-                  setView(key);
-                  setSelectedIds(new Set());
-                }}
+                className="al-search-clear"
+                onClick={() => setSearch("")}
+                title={t("common.clearSearch")}
+                aria-label={t("common.clearSearch")}
               >
-                {t(key === "apps" ? "appLauncher.viewApps" : "appLauncher.viewPorts")}
+                <X size={12} />
               </button>
-            ))}
+            )}
           </div>
-          {view === "apps" && launchers.length > 0 && (
-            <>
-              <div className="al-search">
-                <Search size={14} className="al-search-icon" />
-                <input
-                  className="al-search-input"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape" && search) setSearch("");
-                  }}
-                  placeholder={t("appLauncher.searchPlaceholder")}
-                  spellCheck={false}
-                />
-                {search && (
-                  <button
-                    type="button"
-                    className="al-search-clear"
-                    onClick={() => setSearch("")}
-                    title={t("common.clearSearch")}
-                    aria-label={t("common.clearSearch")}
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-              <QuickSelect
-                className="al-sort-select"
-                value={sortBy}
-                title={t("appLauncher.sort.title")}
-                options={[
-                  { value: "custom", label: t("appLauncher.sort.custom"), short: t("appLauncher.sort.customShort") },
-                  { value: "name", label: t("appLauncher.sort.name") },
-                  { value: "nameDesc", label: t("appLauncher.sort.nameDesc") },
-                  { value: "group", label: t("appLauncher.sort.group") },
-                  { value: "running", label: t("appLauncher.sort.running") },
-                ]}
-                onChange={(v) => setSortBy(v as SortMode)}
-                alignLeft
-                open={openPop === "sort"}
-                onToggle={() => setOpenPop((v) => (v === "sort" ? "" : "sort"))}
-              />
-            </>
+          {/* 排序只在真有应用时有意义；搜索框空态也留着，否则工具条左半光秃秃一块。 */}
+          {launchers.length > 0 && (
+            <QuickSelect
+              className="al-sort-select"
+              value={sortBy}
+              title={t("appLauncher.sort.title")}
+              options={[
+                { value: "custom", label: t("appLauncher.sort.custom"), short: t("appLauncher.sort.customShort") },
+                { value: "name", label: t("appLauncher.sort.name") },
+                { value: "nameDesc", label: t("appLauncher.sort.nameDesc") },
+                { value: "group", label: t("appLauncher.sort.group") },
+                { value: "running", label: t("appLauncher.sort.running") },
+              ]}
+              onChange={(v) => setSortBy(v as SortMode)}
+              alignLeft
+              open={openPop === "sort"}
+              onToggle={() => setOpenPop((v) => (v === "sort" ? "" : "sort"))}
+            />
           )}
         </div>
         <div className="al-toolbar-right">
-          {view === "ports" ? null : selectedIds.size > 0 ? (
+          {selectedIds.size > 0 ? (
             <>
               <span className="al-selected-count">{t("appLauncher.selected", { count: selectedIds.size })}</span>
               <button type="button" className="al-btn" onClick={handleBatchLaunch} title={t("appLauncher.batchLaunch")}>
@@ -1096,11 +1067,7 @@ function AppLauncherTool() {
       )}
 
       {/* ── Content ── */}
-      {view === "ports" ? (
-        <div className="al-scroll">
-          <PortKillerPanel />
-        </div>
-      ) : launchers.length === 0 ? (
+      {launchers.length === 0 ? (
         <div className="al-scroll">
         <div className="al-empty">
           <div className="al-empty-icon-wrap">

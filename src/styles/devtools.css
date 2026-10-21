@@ -5226,7 +5226,6 @@
 /* ── App Launcher (Quick Apps) ── */
 
 .app-launcher-tool {
-  --al-control-h: 28px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -5292,7 +5291,7 @@
   -webkit-backdrop-filter: blur(20px) saturate(1.08);
 }
 
-/* 左：视图切换 + 搜索 + 排序（搜索吃掉剩余宽度）；右：状态与次要操作，主按钮「添加应用」收尾 */
+/* 左：搜索 + 排序（搜索吃掉剩余宽度，空态只有搜索）；右：状态与次要操作，主按钮「添加应用」收尾 */
 .al-toolbar-left {
   display: flex;
   align-items: center;
@@ -5303,6 +5302,12 @@
 
 .al-toolbar-left .al-search {
   max-width: 280px;
+}
+
+/* 一个应用都没有时排序不渲染，搜索框是左组唯一的孩子——这时放宽，别让工具条左半空着一片。
+   有应用时排序紧跟其后，:last-child 不匹配，宽度仍是上面的 280px。 */
+.al-toolbar-left .al-search:last-child {
+  max-width: 460px;
 }
 
 .al-toolbar-right {
@@ -5346,6 +5351,13 @@
 }
 
 /* ── Buttons ── */
+
+/* `.al-*` 控件有两个宿主：快捷应用网格与工具箱里的端口查杀。控件高度定义在宿主上，
+   两处都要声明，否则面板搬出 .app-launcher-tool 就没有高度。 */
+.app-launcher-tool,
+.ports-panel {
+  --al-control-h: 28px;
+}
 
 .al-btn {
   display: inline-flex;
@@ -6423,46 +6435,7 @@
 /* 卡片网格交给 auto-fill 自己收敛列数，不再用断点强制单列：
    900px 视口下侧栏展开也还有 ~670px 内容宽，能放两张 330px 的卡。 */
 
-/* ── 快捷应用页的视图切换（应用 / 端口查杀） ── */
-
-/* 视图切换不再套容器壳（工具条 → 容器 → 激活片三层太重）：tab 直接坐在工具条上，
-   激活态用 accent 胶囊，与右侧 al-btn / devtools chip 同一套语言 */
-.al-view-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: var(--al-control-h);
-  margin-right: 4px;
-  flex-shrink: 0;
-}
-
-.al-view-tab {
-  height: 100%;
-  padding: 0 11px;
-  font-size: 12px;
-  font-weight: 500;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: var(--transition-colors-fast);
-}
-
-.al-view-tab:hover {
-  color: var(--text-0);
-  background: var(--overlay-1);
-}
-
-.al-view-tab.active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  box-shadow: inset 0 0 0 1px var(--accent-border);
-  font-weight: 600;
-}
-
-/* ── 端口查杀面板 ── */
+/* ── 端口查杀工具（工具箱「系统」分组） ── */
 
 .ports-panel {
   display: flex;

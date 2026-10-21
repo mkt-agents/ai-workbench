@@ -23,6 +23,8 @@
     "shortcutOk": "Shortcut registered: {{shortcut}}",
     "shortcutFail": "Failed to register shortcut: {{error}}",
     "pasteClipboard": "Allow clipboard fill on open",
+    "suggest": "Predict the next prompt after every answer",
+    "suggestHint": "The prediction costs one extra model call (counted in the usage table below). Turning it off only removes the chip; Q&A is unchanged.",
     "bubble": "Desktop floating button",
     "bubbleHint": "Always-on-top button (bottom-right). Click to open AI Hub; drag to move; right-click to hide. Shortcut and tray still work."
   },
