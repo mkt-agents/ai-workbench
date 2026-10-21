@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronRight, Plus, RotateCcw } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Plus, RotateCcw } from "lucide-react";
 import {
   blockPatch,
   buildHunkPatch,
   changeBlocks,
   changeStarts,
+  diffTruncated,
   foldUnchanged,
   maxLineNo,
   parseUnifiedDiff,
@@ -142,6 +143,8 @@ export function useDiffView({
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const parsed: ParsedDiff = useMemo(() => parseUnifiedDiff(text), [text]);
+  /** 被 git_diff 截断过的文本不能拿来打补丁：末尾那半行会被当成真的新增行。 */
+  const truncated = diffTruncated(text);
   useEffect(() => {
     setPicked(new Set());
     setFolded(new Set());
@@ -244,7 +247,9 @@ export function useDiffView({
 
   const applyHunks = (hunks: DiffHunk[]) => onApply(buildHunkPatch(parsed.preamble, hunks));
   const blocksOf = useMemo(() => parsed.hunks.map(changeBlocks), [parsed]);
-  const actions = !!onBlock && !!blockActions && (blockActions.revert || blockActions.stage);
+  // 截断保护收在这一层：小面板和大窗口都不要再各写一遍条件，否则总有一处漏掉。
+  const stageable = canStage && !truncated;
+  const actions = !!onBlock && !!blockActions && (blockActions.revert || blockActions.stage) && !truncated;
 
   /** Revert / stage buttons on the first line of a change block. Icons only, and only on hover. */
   const arrows = (row: ViewRow, hi: number): ReactNode => {
@@ -297,7 +302,7 @@ export function useDiffView({
         >
           <Chevron size={13} />
         </button>
-        {canStage && (
+        {stageable && (
           <input
             type="checkbox"
             checked={picked.has(hi)}
@@ -313,7 +318,7 @@ export function useDiffView({
         <span className="dv-hunk-count">
           <span className="dv-add">+{hunk.adds}</span> <span className="dv-del">−{hunk.dels}</span>
         </span>
-        {canStage && (
+        {stageable && (
           <button type="button" className="dv-hunk-stage" disabled={busy} onClick={() => applyHunks([hunk])}>
             {staged ? t("commit.diffUnstageHunk") : t("commit.diffStageHunk")}
           </button>
@@ -370,6 +375,12 @@ export function useDiffView({
       className={`dv-body is-${view}${wrap ? "" : " is-nowrap"}${actions ? " has-actions" : ""}`}
       style={{ ["--dv-gutter" as string]: gutter }}
     >
+      {truncated && (
+        <div className="dv-truncated" role="note">
+          <AlertTriangle size={13} />
+          <span>{t("commit.diffTruncated")}</span>
+        </div>
+      )}
       {parsed.notes.length > 0 && <div className="dv-notes">{parsed.notes.join(" · ")}</div>}
       {layout.hunks.map(({ hunk, items }, hi) => (
         <section key={hi} className="dv-hunk-block">
@@ -405,6 +416,8 @@ export function useDiffView({
   return {
     parsed,
     body,
+    /** 文本被 `git_diff` 截断过：按块与整块操作已在内部禁用，调用方只需换掉只读提示。 */
+    truncated,
     changes: layout.changes,
     changeList: layout.changeList,
     /** Index of the change F7 last landed on, or -1 before the first jump. */

@@ -1457,6 +1457,10 @@ fn friendly_pull_error(raw: &str) -> String {
     }
 }
 
+/// 截断标记。前端 `lib/diffRows.ts` 的 `DIFF_TRUNCATED_MARK` 靠它判定「这份 diff 不完整」，
+/// 从而禁用按块暂存 / 还原——被截断的半行会被 `parseUnifiedDiff` 当成真的新增行打进补丁。
+const DIFF_TRUNCATED_MARK: &str = "[diff 过长，已截断]";
+
 fn truncate_diff_text(s: String) -> String {
     const MAX_BYTES: usize = 200_000;
     if s.len() <= MAX_BYTES {
@@ -1466,7 +1470,23 @@ fn truncate_diff_text(s: String) -> String {
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}…\n\n[diff 过长，已截断]", &s[..end])
+    format!("{}…\n\n{}", &s[..end], DIFF_TRUNCATED_MARK)
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::*;
+
+    /// 前端与这里的字符串必须一字不差，否则 `diffTruncated()` 静默失效、半行又被打回补丁。
+    #[test]
+    fn truncation_marker_matches_the_frontend_guard() {
+        let cut = truncate_diff_text("x".repeat(200_001));
+        assert!(cut.ends_with(DIFF_TRUNCATED_MARK), "截断标记必须收尾");
+        assert!(cut.len() < 200_100, "只该多出一小段标记，实际 {}", cut.len());
+        let short = truncate_diff_text("keep me".to_string());
+        assert_eq!(short, "keep me");
+        assert!(!short.contains(DIFF_TRUNCATED_MARK));
+    }
 }
 
 fn git_pull_sync(repo_path: String, merge: bool) -> Result<String, String> {
@@ -1670,8 +1690,10 @@ fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
 /// Most context lines a diff view may ask for (`-U`): enough for a whole file.
 const DIFF_CONTEXT_MAX: u32 = 100_000;
 
-/// View-only diff flags: `-w` and `-U<n>`. Neither result applies back as a
-/// hunk patch, which is why the UI turns hunk staging off with them.
+/// View-only diff flags: `-w` and `-U<n>`. A `-w` diff no longer matches the file, so its hunks
+/// cannot be applied back and the UI turns staging off for it. `-U<n>` (完整文件视图) still
+/// applies — `git apply --recount` recomputes the hunk counts — so block actions stay available
+/// there; only a truncated diff (`truncate_diff_text`) disables them.
 fn diff_view_args(ignore_whitespace: bool, context_lines: Option<u32>) -> Vec<String> {
     let mut out = Vec::new();
     if ignore_whitespace {

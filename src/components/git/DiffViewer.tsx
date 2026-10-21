@@ -33,10 +33,10 @@ type Props = {
   onClose: () => void;
 };
 
-/** Per-block actions a diff offers: none for untracked files, for a -w view (the patch would not
- *  apply), or for a view-only render such as the dialog's full-file mode. */
-export function blockActionsFor(target: DiffViewTarget | null, ignoreWhitespace: boolean, viewOnly = false) {
-  if (!target || target.wholeFile || ignoreWhitespace || viewOnly) return { revert: false, stage: false };
+/** Per-block actions a diff offers: none for untracked files or a -w view (that patch would not
+ *  apply back). Truncated text is blocked one layer down, inside useDiffView. */
+export function blockActionsFor(target: DiffViewTarget | null, ignoreWhitespace: boolean) {
+  if (!target || target.wholeFile || ignoreWhitespace) return { revert: false, stage: false };
   return { revert: true, stage: !target.staged };
 }
 

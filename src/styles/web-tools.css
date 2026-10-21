@@ -5,6 +5,9 @@
   height: 100%;
   width: 100%;
   max-width: var(--page-max-width);
+  /* 本页不在 .page-scrollable 里（列表自己滚动），宽窗口的居中得自己做，
+     否则 1440 的内容会贴左，右边空出一整条。与 .devtools-tool / .snippets-page 同一套。 */
+  margin-inline: auto;
 }
 
 .plugin-shell {

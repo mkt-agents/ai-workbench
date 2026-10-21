@@ -150,7 +150,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ## 页面尺寸与自适应约定（大小窗口都要好看）
 
-- **页面内容宽度只有一个来源**：`tokens.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.drafts-page`、`.runtime-page`、`.models-container`、`.git-manager-column`、工具页 `.devtools-tool` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。卡片网格已定：快捷应用 260 / 模板片段与工作暂存 320 / 模型配置与环境变量 340。
+- **页面内容宽度只有一个来源**：`tokens.css` 的 `:root { --page-max-width: 1440px }`，由 `.page-scrollable`（≥1400 视口的宽屏块）、`.snippets-page`、`.drafts-page`、`.runtime-page`、`.models-container`、`.git-manager-column`、工具页 `.devtools-tool`、网页工具页 `.plugin-browser` 共同引用。**新页面不要再写自己的 `max-width` 常量**（历史上 960 / 1080 / 1440 三套并存，导致各页占比忽高忽低）。**只有 `.page-scrollable` 自带居中**（`responsive.css` 在 ≥1400 给它 `margin: auto`）；像网页工具页那样列表自己滚动、直接挂在 `.page-in` 下的整页，必须自己补 `margin-inline: auto`，否则宽窗口下 1440 的内容贴左、右边空一整条（2026-10-21 修的就是这个）。卡片网格已定：快捷应用 260 / 模板片段与工作暂存 320 / 模型配置与环境变量 340。
 - **弹框宽度只有三档**：`tokens.css` 的 `--modal-sm`（400，默认 `.modal` / 确认框）/ `--modal-md`（560）/ `--modal-lg`（640，`92vw` / `88vh`）。在 `modal.css` 用语义类挂档（如 `.models-modal` → lg、`.drafts-modal` → md）；也可显式加 `.modal-md` / `.modal-lg`。快捷应用 `.modal-card` / `.modal-card-wide` 对齐 sm / lg。**域样式不要再写独立 px 宽度。**
 - **卡片列表用 `repeat(auto-fill, minmax(min(100%, <N>px), 1fr))`，不要用 `@media` 切 `1fr 1fr`**。已定：快捷应用 260 / 模板片段与工作暂存 320 / 模型配置与环境变量 340。断点写死列数在宽屏下会把卡片拉到 700px 高、内容飘在顶部。
 - **输入/输出区靠 flex 长高填满窗口**：`.dt-content` 是 flex 列，工具根节点 `flex: 1 0 auto`（长高但不低于自然高，内容多时页面照常滚动），主区 `flex: 1 1 auto; min-height: <原 px>`；原来的 `max-height: 280/340/360/420px`、`60vh` 等死上限改成 `min-height` 地板。有意不填满的只有：时间戳（单行 input）、HTTP 参数/请求头表格——撑开只会得到空盒子。

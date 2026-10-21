@@ -87,8 +87,9 @@ export default function DiffModal({ files, startIndex, busy, onApply, onBlock, u
     void load();
   }, [load]);
 
-  // Full-file and -w diffs are views only: their hunks don't apply back as patches.
-  const canStage = !!file && !file.wholeFile && !ignoreWs && !full;
+  // A -w diff no longer matches the file, so its patch cannot apply back. 完整文件不是只读视图：
+  // 块仍按 ctx 切分，补丁的行数由 `git apply --recount` 兜住（截断过的文本在 useDiffView 里另拦）。
+  const canStage = !!file && !file.wholeFile && !ignoreWs;
   const diff = useDiffView({
     text,
     view: mode,
@@ -102,7 +103,7 @@ export default function DiffModal({ files, startIndex, busy, onApply, onBlock, u
       if (!file) return;
       void onApply(file, patch).then(load);
     },
-    blockActions: blockActionsFor(file ?? null, ignoreWs, full),
+    blockActions: blockActionsFor(file ?? null, ignoreWs),
     onBlock: (action, patch, block) => {
       if (!file) return;
       void onBlock(file, action, patch, block).then(load);
@@ -288,7 +289,7 @@ export default function DiffModal({ files, startIndex, busy, onApply, onBlock, u
               dels={parsed.dels}
               showStat={hasHunks}
             />
-            {!canStage && hasHunks && !file.wholeFile && (
+            {!canStage && hasHunks && !file.wholeFile && !diff.truncated && (
               <span className="dm-note">{t("commit.diffModal.viewOnly")}</span>
             )}
           </div>

@@ -184,6 +184,25 @@
   font-size: 11px;
 }
 
+/* 截断过的 diff：按块与整块操作已被 useDiffView 禁用，得说清按钮为什么不见了 */
+.dv-truncated {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--yellow-dim);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.dv-truncated svg {
+  flex-shrink: 0;
+  color: var(--yellow);
+}
+
 .dv-hunk-block + .dv-hunk-block {
   border-top: 1px solid var(--border-subtle);
 }

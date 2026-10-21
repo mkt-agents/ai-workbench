@@ -437,10 +437,11 @@
       "countNav": "Change {{current}} of {{total}}",
       "countNavTitle": "Open the change list and jump to one",
       "countNavItem": "#{{at}} · line {{line}} · {{text}}",
-      "viewOnly": "View only with whole file / whitespace ignored; turn them off to stage hunks",
+      "viewOnly": "View only while whitespace is ignored; turn it off to stage hunks",
       "empty": "No differences"
     },
     "diffWrapSplit": "Side by side always wraps; switch to unified to turn wrapping off",
+    "diffTruncated": "This diff was cut at 200 KB and ends mid-line; block staging and revert are off so a fragment can't be written back",
     "blockRevertTip": "Revert this block: back to the staged content, written to the file",
     "blockUnstageTip": "Unstage this block: the file itself is unchanged",
     "blockStageTip": "Stage this block: index only, the file is unchanged",

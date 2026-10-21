@@ -437,10 +437,11 @@
       "countNav": "第 {{current}} / 共 {{total}} 处",
       "countNavTitle": "打开改动列表，点一条跳过去",
       "countNavItem": "第 {{at}} 处 · {{line}} 行 · {{text}}",
-      "viewOnly": "完整文件 / 忽略空白时只读，关掉后可以按块暂存",
+      "viewOnly": "忽略空白时只读，关掉后可以按块暂存",
       "empty": "没有差异"
     },
     "diffWrapSplit": "并排查看时总是自动换行，切到统一查看后可以关掉",
+    "diffTruncated": "差异超过 200 KB 已被截断，末尾只剩半行；为避免把半截内容写进补丁，这里不能按块暂存或还原",
     "blockRevertTip": "还原这一块：改回暂存区的内容，会写回文件",
     "blockUnstageTip": "取消暂存这一块：文件本身不变",
     "blockStageTip": "暂存这一块：只进索引，文件本身不变",

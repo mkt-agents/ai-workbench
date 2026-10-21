@@ -683,7 +683,7 @@ db_save(state: DbState, table: DbTable, rows: Vec<serde_json::Value>) -> Result<
 |------|------|
 | `git_repo_summary` | `rev-parse HEAD` + `status --porcelain` + `rev-list @{upstream}` 聚合 |
 | `git_status` | porcelain 解析，拆 staged / unstaged / untracked 三组 |
-| `git_diff` | staged → `diff --cached`; untracked → `diff --no-index /dev/null`; `ignoreWhitespace` 加 `-w`（只读视图，不能按块暂存）；截断 200KB |
+| `git_diff` | staged → `diff --cached`; untracked → `diff --no-index /dev/null`; `ignoreWhitespace` 加 `-w`（补丁打不回去，前端只读）；`context_lines` 加 `-U`（上限 100000 = 完整文件视图，按块操作照常可用）；截断 200KB 时尾部加 `[diff 过长，已截断]`，前端 `diffTruncated()` 据此关掉按块 / 整块暂存并挂顶部提示，标记字符串由单测 `truncation_marker_matches_the_frontend_guard` 与 `lib/diffRows.ts` 钉住 |
 | `git_commit` | 先 `has_staged_changes` 检查，友好化错误文案；有冲突 / 变基中拒绝，合并中冲突全解决后允许（完成合并） |
 | `git_push/pull` | 检测 upstream，自动 `-u origin HEAD` 首次推送；网络命令统一 `LC_ALL=C`；合并拉取 `--no-rebase --no-edit`（无 autostash），冲突时保留合并状态返回 `[GIT_CONFLICT]`；推送被拒 `[GIT_PUSH_REJECTED]`、无法快进 `[GIT_DIVERGED]`；合并 / 变基进行中或有冲突时拒绝 `[GIT_OPERATION_IN_PROGRESS]` |
 | `git_scan_repos` | 递归扫描 + 跳过 node_modules/target/.hidden + max_depth 限制 |

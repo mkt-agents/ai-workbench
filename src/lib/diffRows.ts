@@ -305,3 +305,17 @@ export function blockPatch(preamble: string, hunk: DiffHunk, block: ChangeBlock,
   const text = [preamble.trimEnd(), hunk.header, ...body].filter(Boolean).join("\n");
   return `${text}\n`;
 }
+
+/**
+ * `git_diff` cuts its text at 200 KB (Rust `truncate_diff_text`). The cut lands mid
+ * line, and `parseUnifiedDiff` reads that fragment as a real added row — so a block
+ * patch built from a truncated diff can stage a half line into the index. The marker
+ * is the only signal that the text is incomplete; the Rust side pins the same string
+ * with `truncation_marker_matches_the_frontend_guard`.
+ */
+export const DIFF_TRUNCATED_MARK = "[diff 过长，已截断]";
+
+/** True when this diff text was cut short and must not be turned into patches. */
+export function diffTruncated(text: string): boolean {
+  return text.includes(DIFF_TRUNCATED_MARK);
+}
