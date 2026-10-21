@@ -2165,12 +2165,59 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  height: 28px;
+  padding: 0 9px;
+  background: var(--overlay-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   color: var(--text-3);
+  transition: var(--transition-colors-fast);
 }
-.qa-sessions-filter .input-field {
+/* 磨砂主题下面板本身是半透明，边框改用叠层色（与 .al-search 同一配方） */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .qa-sessions-filter {
+  border-color: var(--overlay-3);
+}
+.qa-sessions-filter:hover {
+  border-color: var(--border);
+}
+.qa-sessions-filter:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.qa-filter-icon {
+  flex-shrink: 0;
+}
+.qa-filter-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-0);
+  font-size: 12.5px;
+  outline: none;
+}
+.qa-filter-input::placeholder {
+  color: var(--text-3);
+}
+.qa-filter-clear {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-filter-clear:hover {
+  background: var(--overlay-4);
+  color: var(--text-0);
 }
 .qa-session-list {
   display: flex;

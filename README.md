@@ -62,9 +62,11 @@ npx @tauri-apps/cli icon docs/brand/logo-ice.png -o src-tauri/icons/ice
 ```
 AI 工作台
 ├── Harness
+├── 协同办公
 ├── 模型配置
 ├── 模板片段
-└── 工作暂存
+├── 工作暂存
+└── 快捷应用
 
 账号资产
 ├── Cursor
@@ -80,8 +82,7 @@ AI 工作台
 └── Hosts 管理
 
 系统工具
-├── 工具箱
-└── 快捷应用
+└── 工具箱
 
 设置（固定在侧栏底部）
 ```

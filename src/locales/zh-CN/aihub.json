@@ -208,6 +208,7 @@
   "historyShort": "历史",
   "historyEmpty": "暂无历史会话",
   "historySearch": "搜索标题或内容…",
+  "historyClear": "清空搜索（Esc）",
   "historyNoMatch": "没有匹配的会话",
   "historyAtCap": "已到 {{n}} 条上限，再存一条会移出最早的会话",
   "historyEvicted": "会话已到上限，移出了 {{n}} 条较早的：{{names}}",

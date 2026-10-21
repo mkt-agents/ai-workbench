@@ -253,6 +253,7 @@ function App() {
         { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
         { id: "snippets", labelKey: "snippets", icon: <FileText size={16} /> },
         { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
+        { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
       ],
     },
     {
@@ -289,7 +290,6 @@ function App() {
       defaultOpen: true,
       children: [
         { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
-        { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
       ],
     },
   ];

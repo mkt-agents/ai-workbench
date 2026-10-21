@@ -64,9 +64,9 @@ export default function SessionHistory(props: Props) {
         </button>
       </div>
       <label className="qa-sessions-filter">
-        <Search size={12} />
+        <Search size={13} className="qa-filter-icon" />
         <input
-          className="input-field"
+          className="qa-filter-input"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -80,7 +80,13 @@ export default function SessionHistory(props: Props) {
           autoFocus
         />
         {query && (
-          <button type="button" className="btn-icon" onClick={() => setQuery("")} title={t("close")}>
+          <button
+            type="button"
+            className="qa-filter-clear"
+            onClick={() => setQuery("")}
+            title={t("historyClear")}
+            aria-label={t("historyClear")}
+          >
             <X size={11} />
           </button>
         )}

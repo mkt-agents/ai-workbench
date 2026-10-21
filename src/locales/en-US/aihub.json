@@ -208,6 +208,7 @@
   "historyShort": "History",
   "historyEmpty": "No saved sessions yet",
   "historySearch": "Search titles and content…",
+  "historyClear": "Clear search (Esc)",
   "historyNoMatch": "No matching sessions",
   "historyAtCap": "At the {{n}}-session cap: the next save drops the oldest",
   "historyEvicted": "Session cap reached — dropped {{n}} older one(s): {{names}}",
