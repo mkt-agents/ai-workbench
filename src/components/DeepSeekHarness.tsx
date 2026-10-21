@@ -627,6 +627,10 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
     } finally {
       setStopping(false);
       setStarting(false);
+      // pauseEmbed() latched this on entry. Without a reset here the embed effect's
+      // `wants` stays false after a *successful* stop, so the next start never
+      // recreates the dsh-embed webview and the running page renders blank.
+      setEmbedSuspended(false);
     }
   };
 
