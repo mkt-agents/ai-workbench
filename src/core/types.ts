@@ -58,6 +58,28 @@ export interface GitBranchList {
   remote: string[];
 }
 
+/** One commit a push would take along, with the paths it touched (`git_pending_commits`). */
+export interface GitPendingCommit {
+  hash: string;
+  subject: string;
+  when: string;
+  files: string[];
+}
+
+/** `scope` says which comparison range the backend used: `upstream` (the branch has one),
+ *  `remoteTracking` (no upstream but a same-named remote-tracking ref), `unpushed`
+ *  (commits on no remote ref at all) or `noCommits` (unborn HEAD). `basis` is the ref name
+ *  for the first two; empty for the rest. */
+export interface GitPendingCommits {
+  branch: string;
+  scope: string;
+  basis: string;
+  commits: GitPendingCommit[];
+  /** Real count in the range; `commits` is capped, `truncated` says so. */
+  total: number;
+  truncated: boolean;
+}
+
 export type AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver';
 
 export interface AiHubChips {
@@ -119,14 +141,6 @@ export interface AiHubProfile {
 
 export type SnippetKind = 'text' | 'prompt';
 
-/** AI Hub one-shot tasks a snippet can auto-bind to (not `none` / `optimize`). */
-export type SnippetTaskBind =
-  | 'debug'
-  | 'explain'
-  | 'polish'
-  | 'translate'
-  | 'summarize';
-
 export interface Snippet {
   id: string;
   name: string;
@@ -141,8 +155,6 @@ export interface Snippet {
   kind?: SnippetKind;
   /** Prompt Studio scenario key (PROMPT_SCENARIOS) when kind === 'prompt' */
   scenario?: string;
-  /** When set, picking this AI Hub task inserts the snippet if the composer is empty. */
-  taskBind?: SnippetTaskBind | '';
 }
 
 /** Mid-task scratch note (prompts / scripts); promote to Snippet when lasting. */
@@ -179,7 +191,7 @@ export interface AiHubSession {
   id: string;
   /** Short label derived from the first question. */
   title: string;
-  /** TaskKind snapshot ('none' | 'debug' | 'explain' | 'polish'). */
+  /** Encoded TaskKind snapshot ('none' or 'optimize:…', see aiHub/config encodeTask). */
   task: string;
   turns: AiHubTurn[];
   createdAt: string;

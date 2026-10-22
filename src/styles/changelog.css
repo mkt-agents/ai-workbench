@@ -875,3 +875,177 @@
   padding: 8px 2px;
 }
 
+/* ─── IDEA 式变更分组（更改 / 未进行版本管理的文件）与目录树 ─── */
+
+.cl-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+.cl-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.cl-group-head:hover {
+  background: var(--overlay-1);
+}
+
+.cl-group-title {
+  border: 0;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cl-group-title:hover {
+  color: var(--text-0);
+}
+
+.cl-group-count {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cl-group-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: var(--transition-colors-fast);
+}
+
+.cl-group-head:hover .cl-group-actions {
+  opacity: 1;
+}
+
+.cl-group-action {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+
+/* 目录树：每层 23px 缩进 + 沿父级折叠箭头的竖向辅助线；
+   子级行与父级目录名左对齐，根层与组标题对齐 */
+.cl-tree-children {
+  list-style: none;
+  margin: 0 0 0 10px;
+  padding: 0 0 0 13px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.cl-tree-root {
+  margin-left: 0;
+  padding-left: 24px;
+  border-left: none;
+}
+
+.cl-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.cl-dir-row:hover {
+  background: var(--overlay-2);
+}
+
+.cl-dir-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  padding: 0;
+  cursor: pointer;
+}
+
+.cl-dir-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.cl-dir-count {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 工具栏文件搜索框 */
+.cl-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cl-search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.cl-search-input {
+  width: 160px;
+  height: 28px;
+  padding: 0 24px 0 26px;
+  font-size: 12px;
+}
+
+.cl-search-clear {
+  position: absolute;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0;
+}
+
+.cl-search-clear:hover {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+/* 搜索无命中时组内的占位提示（与平铺列表缩进对齐） */
+.cl-search-empty {
+  padding: 6px 12px 8px 28px;
+  font-size: 12px;
+}
+

@@ -241,6 +241,8 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
         }
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
+          // 中文输入法选词的回车不能触发提交。
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
           if (e.key === "Enter") handleSubmit();
           if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -383,6 +385,8 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
                   spellCheck={false}
                   disabled={!branches || branches.length === 0}
                   onKeyDown={(e) => {
+                    // 输入法组合中的按键（回车 / 方向键）不当作列表操作。
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                     if (e.key === "ArrowDown") {
                       e.preventDefault();
                       listRef.current?.querySelector<HTMLButtonElement>("button.branch-pick-item")?.focus();

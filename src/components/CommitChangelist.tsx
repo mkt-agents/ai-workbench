@@ -8,12 +8,15 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FolderTree,
   GitBranch,
   GitMerge,
   History,
+  List,
   Loader2,
   RefreshCw,
   RotateCcw,
+  Search,
   Sparkles,
   Trash2,
   Upload,
@@ -32,9 +35,21 @@ import {
   reposLoaded,
 } from "../core/gitCache";
 import { findWorkspaceForRepo, pathKey, projectNameFromPath } from "../core/pathUtils";
-import { describePushTargets, isPushable } from "../core/gitPushScope";
+import { isPushable } from "../core/gitPushScope";
+import { pushOneWithRecovery, type PushRecoveryDeps } from "../core/batchPush";
 import { recordAiUsage } from "../lib/aiUsage";
+import {
+  buildChangeTree,
+  collectDirPaths,
+  selectionKey,
+  splitChangeGroups,
+  statusCode,
+  statusClass,
+  type ChangeGroupId,
+} from "../lib/changeTree";
+import ChangeFileTree, { type ChangeViewMode } from "./git/ChangeFileTree";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
+import { usePushPreview, type PushPreviewRow } from "./PushPreviewModal";
 import { looksLikeTempFile } from "../lib/tempFiles";
 import { parseInvokeError } from "../hooks/useInvokeError";
 import MergeResolver from "./git/MergeResolver";
@@ -89,6 +104,8 @@ const AI_CONTEXT_MAX = 12_000;
 
 const CL_FILTER_KEY = "workbench-commit-filter";
 const CL_COLLAPSED_KEY = "workbench-commit-collapsed-repos";
+const CL_VIEW_KEY = "workbench-commit-view";
+const CL_COLLAPSED_DIRS_KEY = "workbench-commit-collapsed-dirs";
 const CL_DRAFT_KEY = "workbench-commit-draft";
 const CL_RECENT_KEY = "workbench-commit-recent-messages";
 const CL_IGNORE_WS_KEY = "cl-diff-ignore-ws";
@@ -171,23 +188,6 @@ function pickRepoInScope(
   return (dirty ?? scope[0])?.path;
 }
 
-function statusCode(entry: GitStatusEntry): string {
-  if (entry.group === "conflicted") return "U";
-  if (entry.group === "untracked") return "?";
-  if (entry.group === "staged") return (entry.indexStatus || "M").trim() || "M";
-  return (entry.workTreeStatus || "M").trim() || "M";
-}
-
-function statusClass(code: string): string {
-  const c = code.toUpperCase();
-  if (c === "A") return "git-status-a";
-  if (c === "D") return "git-status-d";
-  if (c === "R" || c === "C") return "git-status-r";
-  if (c === "?" || c === "!") return "git-status-u";
-  if (c === "U") return "git-status-conflict";
-  return "git-status-m";
-}
-
 function rawInvokeError(err: unknown): string {
   return (err instanceof Error ? err.message : String(err ?? "")).trim();
 }
@@ -210,15 +210,6 @@ function truncateError(err: string, max = 360): string {
   const s = err.trim();
   if (s.length <= max) return s;
   return `${s.slice(0, max)}…`;
-}
-
-function selectionKey(entry: { path: string; group: string }): string {
-  return `${entry.group}\0${entry.path}`;
-}
-
-/** git reports repo-relative `/` paths; tooltips show the full Windows path. */
-function absoluteFilePath(repoPath: string, relPath: string): string {
-  return `${repoPath.replace(/[\\/]+$/, "")}\\${relPath.replace(/\//g, "\\")}`;
 }
 
 /**
@@ -252,10 +243,6 @@ function mergeSelection(
     out.set(path, kept);
   }
   return out;
-}
-
-function fileKey(repoPath: string, filePath: string, group?: string): string {
-  return group ? `${repoPath}\0${group}\0${filePath}` : `${repoPath}\0${filePath}`;
 }
 
 type DiffTarget = {
@@ -407,6 +394,7 @@ function CommitChangelist({
   const { t } = useTranslation("git");
   const confirm = useConfirm();
   const confirmChoice = useConfirmChoice();
+  const { askPushPreview, pushPreviewDialog } = usePushPreview();
 
   const recentProjects = useGlobalStore((s) => s.recentProjects);
   const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
@@ -454,6 +442,16 @@ function CommitChangelist({
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(readStoredArray<string>(CL_COLLAPSED_KEY))
   );
+  /** IDEA-style list presentation: directory tree (default) or flat rows. */
+  const [viewMode, setViewMode] = useState<ChangeViewMode>(() =>
+    readStoredString(CL_VIEW_KEY) === "flat" ? "flat" : "tree"
+  );
+  /** Filename filter; hits keep their ancestor dirs expanded (session-only). */
+  const [fileSearch, setFileSearch] = useState("");
+  /** Collapsed tree dirs, keyed `${repoPath}\0${dir}` (persists across restarts). */
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(
+    () => new Set(readStoredArray<string>(CL_COLLAPSED_DIRS_KEY))
+  );
   /** Failed repos of the last batch: stays until dismissed (a toast is gone in 8s). */
   const [report, setReport] = useState<{ title: string; lines: string[] } | null>(null);
   /** Conflict resolver for one repo, starting at `file`. */
@@ -491,6 +489,14 @@ function CommitChangelist({
   useEffect(() => {
     writeStoredArray(CL_COLLAPSED_KEY, [...collapsed]);
   }, [collapsed]);
+
+  useEffect(() => {
+    writeStoredString(CL_VIEW_KEY, viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
+    writeStoredArray(CL_COLLAPSED_DIRS_KEY, [...collapsedDirs]);
+  }, [collapsedDirs]);
 
   useEffect(() => {
     writeStoredString(CL_DRAFT_KEY, message);
@@ -825,20 +831,10 @@ function CommitChangelist({
    */
   const confirmBatchPush = async (paths: string[], addedCommits = 0) => {
     const rows = paths
-      .map((path) => ({
-        label:
-          recentProjects.find((p) => p.path === path)?.name || projectNameFromPath(path),
-        summary: summaries[path],
-      }))
-      .filter((row): row is { label: string; summary: RepoBatchItem } => !!row.summary);
-    const { message, warning } = describePushTargets(rows, t, { addedCommits });
-    return await confirm({
-      title: t("batch.pushTitle"),
-      message,
-      warning,
-      confirmText: t("batch.push"),
-      icon: warning ? "warning" : "info",
-    });
+      .map((path) => ({ path, label: labelPath(path), summary: summaries[path] }))
+      .filter((row): row is PushPreviewRow => !!row.summary);
+    if (rows.length === 0) return false;
+    return await askPushPreview(rows, addedCommits);
   };
 
   /** One repo at a time, so a credential window is not covered by the next push. */
@@ -858,21 +854,13 @@ function CommitChangelist({
     }
   };
 
-  const pushWithUpdate = async (repoPath: string) => {
-    try {
-      await invokeGitPush(repoPath);
-    } catch (e) {
-      if (invokeErrorCode(e) !== "GIT_PUSH_REJECTED") throw e;
-      const ok = await confirm({
-        title: t("commit.pushRejectedTitle"),
-        message: t("commit.pushRejectedMessage", { name: labelPath(repoPath) }),
-        confirmText: t("commit.pushRejectedMerge"),
-        icon: "warning",
-      });
-      if (!ok) throw e;
-      await mergePull(repoPath);
-      await invokeGitPush(repoPath);
-    }
+  /** 共用推送编排（core/batchPush.ts）：被拒 → 询问 → 合并远程 → 再推。 */
+  const pushDeps: PushRecoveryDeps = {
+    push: invokeGitPush,
+    mergePull,
+    confirm,
+    t,
+    label: labelPath,
   };
 
   /** After a batch: failures stay listed; a merge that stopped on conflicts opens the resolver. */
@@ -983,6 +971,71 @@ function CommitChangelist({
       else set.add(key);
       if (set.size === 0) next.delete(repoPath);
       else next.set(repoPath, set);
+      return next;
+    });
+  };
+
+  /** Batch tick/untick a directory subtree (or any key list) inside one repo. */
+  const setKeysChecked = (repoPath: string, keys: string[], checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      const set = new Set(next.get(repoPath) || []);
+      if (checked) keys.forEach((k) => set.add(k));
+      else keys.forEach((k) => set.delete(k));
+      if (set.size === 0) next.delete(repoPath);
+      else next.set(repoPath, set);
+      return next;
+    });
+  };
+
+  /** Tri-state tick of a whole display group ("更改" / "未进行版本管理的文件"). */
+  const toggleGroup = (repoPath: string, groupEntries: GitStatusEntry[]) => {
+    const selectable = groupEntries.filter((e) => e.group !== "conflicted");
+    const cur = selected.get(repoPath);
+    const allSelected =
+      selectable.length > 0 && selectable.every((e) => cur?.has(selectionKey(e)));
+    setKeysChecked(repoPath, selectable.map((e) => selectionKey(e)), !allSelected);
+  };
+
+  // Group headers share the repo `collapsed` set; the \0 separator keeps their
+  // keys from colliding with repo paths.
+  const groupHeaderKey = (repoPath: string, group: ChangeGroupId) =>
+    `${repoPath}\0group:${group}`;
+
+  const toggleGroupCollapsed = (repoPath: string, group: ChangeGroupId) => {
+    const key = groupHeaderKey(repoPath, group);
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleDirCollapsed = (repoPath: string, dir: string) => {
+    const key = `${repoPath}\0${dir}`;
+    setCollapsedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  /** Expand-all / collapse-all of one group's directory tree. */
+  const setGroupDirsCollapsed = (
+    repoPath: string,
+    groupEntries: GitStatusEntry[],
+    collapse: boolean
+  ) => {
+    const dirs = collectDirPaths(buildChangeTree(groupEntries));
+    setCollapsedDirs((prev) => {
+      const next = new Set(prev);
+      for (const d of dirs) {
+        const key = `${repoPath}\0${d}`;
+        if (collapse) next.add(key);
+        else next.delete(key);
+      }
       return next;
     });
   };
@@ -1694,7 +1747,7 @@ function CommitChangelist({
           }
           if (withPush) {
             try {
-              await pushWithUpdate(repoPath);
+              await pushOneWithRecovery(pushDeps, repoPath);
             } catch (e) {
               throw new Error(
                 t("commit.changelistCommitOkPushFail", {
@@ -1788,7 +1841,7 @@ function CommitChangelist({
         1,
         async (repoPath) => {
           noteRepo(repoPath);
-          await pushWithUpdate(repoPath);
+          await pushOneWithRecovery(pushDeps, repoPath);
         },
         {
           onProgress: (done, total) => setProgress((prev) => ({ done, total, label: prev?.label })),
@@ -1923,10 +1976,7 @@ function CommitChangelist({
     const selectable = entries.filter((e) => e.group !== "conflicted");
     const allSelected = selectable.length > 0 && selectable.every((e) => sel.has(selectionKey(e)));
     const someSelected = selectable.some((e) => sel.has(selectionKey(e)));
-    // Conflicts first: they are what blocks the repo.
-    const ordered = [...entries].sort(
-      (a, b) => Number(b.group === "conflicted") - Number(a.group === "conflicted")
-    );
+    const groups = splitChangeGroups(entries);
     const Chevron = isCollapsed ? ChevronRight : ChevronDown;
     const isCurrent = currentGitRepo === p.path;
 
@@ -1964,76 +2014,53 @@ function CommitChangelist({
           <span className="repos-status-pill">{entries.length}</span>
         </div>
         {!isCollapsed && (
-          <ul className="cl-file-list">
-            {ordered.map((e) => {
-              const code = statusCode(e);
-              const conflicted = e.group === "conflicted";
-              const checked = !conflicted && sel.has(selectionKey(e));
-              const isDiff =
-                diffTarget?.repoPath === p.path && diffTarget.filePath === e.path;
+          <div className="cl-groups">
+            {(["changes", "untracked"] as ChangeGroupId[]).map((gid) => {
+              const groupEntries = groups[gid];
+              if (groupEntries.length === 0) return null;
               return (
-                <li
-                  key={fileKey(p.path, e.path, e.group)}
-                  className={`cl-file ${isDiff ? "is-selected" : ""}${conflicted ? " is-conflict" : ""}`}
-                  title={conflicted ? t("commit.conflictFileTip") : undefined}
-                  onClick={() => {
-                    if (conflicted) {
-                      setResolver({ repoPath: p.path, file: e.path });
-                      return;
-                    }
-                    if (!checked) toggleFile(p.path, e);
+                <ChangeFileTree
+                  key={gid}
+                  repoPath={p.path}
+                  group={gid}
+                  entries={groupEntries}
+                  viewMode={viewMode}
+                  selected={sel}
+                  busy={busy}
+                  search={fileSearch}
+                  activePath={
+                    diffTarget && diffTarget.repoPath === p.path ? diffTarget.filePath : null
+                  }
+                  headerCollapsed={collapsed.has(groupHeaderKey(p.path, gid))}
+                  onToggleHeader={() => toggleGroupCollapsed(p.path, gid)}
+                  collapsedDirs={collapsedDirs}
+                  onToggleDir={(dir) => toggleDirCollapsed(p.path, dir)}
+                  onExpandAll={() => setGroupDirsCollapsed(p.path, groupEntries, false)}
+                  onCollapseAll={() => setGroupDirsCollapsed(p.path, groupEntries, true)}
+                  onToggleFile={(e) => toggleFile(p.path, e)}
+                  onSetKeysChecked={(keys, checked) => setKeysChecked(p.path, keys, checked)}
+                  onToggleGroup={() => toggleGroup(p.path, groupEntries)}
+                  onFileActivate={(e) => {
+                    if (!sel.has(selectionKey(e))) toggleFile(p.path, e);
                     void loadDiff(p.path, e);
                   }}
-                  onDoubleClick={() => {
-                    if (conflicted) return;
+                  onFileOpen={(e) =>
                     openDiffModal({
                       repoPath: p.path,
                       filePath: e.path,
                       staged: e.group === "staged",
                       wholeFile: e.group === "untracked",
-                    });
-                  }}
-                >
-                  <IndeterminateCheckbox
-                    checked={checked}
-                    indeterminate={false}
-                    disabled={busy || conflicted}
-                    onChange={() => toggleFile(p.path, e)}
-                  />
-                  <span className={`git-file-badge ${statusClass(code)}`}>{statusLabel(code)}</span>
-                  {looksLikeTempFile(e.path) && (
-                    <span className="cl-file-temp" title={t("commit.tempBadgeTip")}>
-                      {t("commit.tempBadge")}
-                    </span>
-                  )}
-                  {e.group === "staged" && (
-                    <span className="cl-file-staged">{t("commit.statusStaged")}</span>
-                  )}
-                  <span className="cl-file-path" title={absoluteFilePath(p.path, e.path)}>
-                    <span className="cl-file-name">{e.path.slice(e.path.lastIndexOf("/") + 1)}</span>
-                    {e.path.includes("/") && (
-                      <span className="cl-file-dir">
-                        {e.path.slice(0, e.path.lastIndexOf("/"))}
-                      </span>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn commit-icon-btn cl-file-discard"
-                    hidden={conflicted}
-                    disabled={busy}
-                    title={t("commit.discard")}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      void runDiscard(p.path, e);
-                    }}
-                  >
-                    <Undo2 size={12} />
-                  </button>
-                </li>
+                    })
+                  }
+                  onDiscard={(e) => void runDiscard(p.path, e)}
+                  onResolveConflict={(filePath) =>
+                    setResolver({ repoPath: p.path, file: filePath })
+                  }
+                  statusLabel={statusLabel}
+                />
               );
             })}
-          </ul>
+          </div>
         )}
       </div>
     );
@@ -2068,9 +2095,39 @@ function CommitChangelist({
           {loading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
           <span>{t("commit.refresh")}</span>
         </button>
+        <button
+          type="button"
+          className="btn commit-icon-btn"
+          disabled={busy}
+          onClick={() => setViewMode((v) => (v === "tree" ? "flat" : "tree"))}
+          title={viewMode === "tree" ? t("commit.viewFlatTip") : t("commit.viewTreeTip")}
+        >
+          {viewMode === "tree" ? <FolderTree size={14} /> : <List size={14} />}
+          <span>{viewMode === "tree" ? t("commit.viewTree") : t("commit.viewFlat")}</span>
+        </button>
         <span className="repos-batch-count">
           {t("commit.changelistSelected", { count: selectedCount })}
         </span>
+        <div className="cl-search">
+          <Search size={13} className="cl-search-icon" aria-hidden />
+          <input
+            className="input-field cl-search-input"
+            value={fileSearch}
+            onChange={(e) => setFileSearch(e.target.value)}
+            placeholder={t("commit.searchFiles")}
+            aria-label={t("commit.searchFiles")}
+          />
+          {fileSearch && (
+            <button
+              type="button"
+              className="cl-search-clear"
+              aria-label={t("commit.searchClear")}
+              onClick={() => setFileSearch("")}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
         {progress && busyAction && (
           <span className="runtime-muted">
             {t(`commit.running.${busyAction}`)}{" "}
@@ -2579,6 +2636,7 @@ function CommitChangelist({
           onResolved={() => void refreshAfterWrite([resolver.repoPath])}
         />
       )}
+      {pushPreviewDialog}
     </div>
   );
 }

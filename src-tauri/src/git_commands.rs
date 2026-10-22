@@ -1851,6 +1851,328 @@ fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
     Ok(GitBranchList { current, local, remote })
 }
 
+/// 一次预览最多列几条提交（`total` 仍是真实数，前端据此说「只列前 N」）
+const PENDING_COMMITS_CAP: u32 = 50;
+
+/// 「会被推出去的提交」按哪个范围算。三档，范围字符串全部在这里拼死，
+/// 调用方只能传仓库路径 —— 没有任何用户输入能变成 git 参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingScope {
+    /// `upstream` / `remoteTracking` / `unpushed`，前端按它选措辞，Rust 侧不写 UI 文案
+    pub kind: &'static str,
+    /// 拿来对比的引用名（`origin/main`）；`unpushed` 档为空
+    pub basis: String,
+    /// 拼进 `git log` / `git rev-list` 的范围参数
+    pub log_args: Vec<String>,
+}
+
+pub(crate) fn pending_commit_scope(
+    upstream: Option<&str>,
+    branch: &str,
+    remote_refs: &[String],
+) -> PendingScope {
+    if let Some(up) = upstream.map(str::trim).filter(|s| !s.is_empty()) {
+        return PendingScope {
+            kind: "upstream",
+            basis: up.to_string(),
+            log_args: vec!["@{upstream}..HEAD".to_string()],
+        };
+    }
+    // 没配 upstream 不等于没有参照：本地若已有同名远端跟踪引用，它才是「推上去会和什么比」的东西。
+    // origin 优先，同远端多个引用取第一个（remote_refs 来自 for-each-ref，已按名字排序）。
+    let suffix = format!("/{}", branch);
+    if branch != "HEAD" {
+        let hit = remote_refs
+            .iter()
+            .find(|r| r.starts_with("refs/remotes/origin/") && r.ends_with(&suffix))
+            .or_else(|| remote_refs.iter().find(|r| r.ends_with(&suffix)));
+        if let Some(r) = hit {
+            let basis = r.strip_prefix("refs/remotes/").unwrap_or(r).to_string();
+            return PendingScope {
+                kind: "remoteTracking",
+                basis: basis.clone(),
+                log_args: vec![format!("{}..HEAD", basis)],
+            };
+        }
+    }
+    // 最后兜底：HEAD 上还没进过任何远端引用的提交。新分支 / 全新仓库都走这条。
+    PendingScope {
+        kind: "unpushed",
+        basis: String::new(),
+        log_args: vec!["HEAD".to_string(), "--not".to_string(), "--remotes".to_string()],
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPendingCommit {
+    pub hash: String,
+    pub subject: String,
+    pub when: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPendingCommits {
+    pub branch: String,
+    /// `PendingScope::kind`，或 `noCommits`（一次提交都还没有）
+    pub scope: String,
+    pub basis: String,
+    pub commits: Vec<GitPendingCommit>,
+    /// 范围内全部提交数（含被折叠掉的 merge 之外的部分）
+    pub total: u32,
+    pub truncated: bool,
+}
+
+/// `\x1e` 起头、`\x1f` 分隔 hash/标题/相对时间，随后每行一条改动路径。
+fn parse_pending_log(text: &str) -> Vec<GitPendingCommit> {
+    let mut out = Vec::new();
+    for chunk in text.split('\u{1e}') {
+        let chunk = chunk.trim();
+        if chunk.is_empty() {
+            continue;
+        }
+        let mut lines = chunk.lines();
+        let Some(head) = lines.next() else { continue };
+        let mut parts = head.splitn(3, '\u{1f}');
+        let hash = parts.next().unwrap_or("").trim().to_string();
+        let subject = parts.next().unwrap_or("").trim().to_string();
+        let when = parts.next().unwrap_or("").trim().to_string();
+        // 标题为空也保留这条：预览少报一条就是谎报「这次会推走什么」，条数与 rev-list 也得对得上。
+        if hash.is_empty() {
+            continue;
+        }
+        let files = lines
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        out.push(GitPendingCommit {
+            hash,
+            subject,
+            when,
+            files,
+        });
+    }
+    out
+}
+
+fn git_pending_commits_sync(repo_path: String) -> Result<GitPendingCommits, String> {
+    ensure_git_repo(&repo_path)?;
+    let branch = git_stdout(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if git_stdout(&repo_path, &["rev-parse", "--verify", "-q", "HEAD"]).is_err() {
+        // 没提交就没得推：给空表，而不是让 git 的 "does not have any commits yet" 冒成失败
+        return Ok(GitPendingCommits {
+            branch,
+            scope: "noCommits".to_string(),
+            basis: String::new(),
+            commits: vec![],
+            total: 0,
+            truncated: false,
+        });
+    }
+    let upstream = git_stdout(
+        &repo_path,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    )
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
+    let remote_refs: Vec<String> = git_stdout(
+        &repo_path,
+        &["for-each-ref", "--format=%(refname)", "refs/remotes"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(|l| l.trim().to_string())
+    .filter(|l| !l.is_empty() && !l.ends_with("/HEAD"))
+    .collect();
+    let scope = pending_commit_scope(upstream.as_deref(), &branch, &remote_refs);
+    // 中文路径默认会被转义成 `"...\346..."`，预览里没法读；这条命令只为展示，就地关掉引用。
+    let mut log_args: Vec<String> = vec![
+        "-c".to_string(),
+        "core.quotePath=false".to_string(),
+        "log".to_string(),
+        format!("--max-count={}", PENDING_COMMITS_CAP + 1),
+        "--pretty=format:%x1e%h%x1f%s%x1f%cr".to_string(),
+        "--name-only".to_string(),
+        "--no-merges".to_string(),
+    ];
+    log_args.extend(scope.log_args.iter().cloned());
+    let commits = parse_pending_log(
+        &git_stdout(&repo_path, &log_args.iter().map(String::as_str).collect::<Vec<&str>>())?,
+    );
+    let mut count_args = vec![
+        "rev-list".to_string(),
+        "--count".to_string(),
+        "--no-merges".to_string(),
+    ];
+    count_args.extend(scope.log_args.iter().cloned());
+    let total = git_stdout(
+        &repo_path,
+        &count_args.iter().map(String::as_str).collect::<Vec<&str>>(),
+    )
+    .unwrap_or_default()
+    .trim()
+    .parse::<u32>()
+    .unwrap_or(0);
+    Ok(GitPendingCommits {
+        branch,
+        scope: scope.kind.to_string(),
+        basis: scope.basis,
+        truncated: total as usize > commits.len(),
+        commits,
+        total,
+    })
+}
+
+#[cfg(test)]
+mod pending_commits_tests {
+    use super::*;
+
+    fn refs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn upstream_is_the_first_choice() {
+        let s = pending_commit_scope(Some("origin/main"), "main", &refs(&["refs/remotes/origin/main"]));
+        assert_eq!(s.kind, "upstream");
+        assert_eq!(s.basis, "origin/main");
+        assert_eq!(s.log_args, vec!["@{upstream}..HEAD".to_string()]);
+    }
+
+    #[test]
+    fn blank_upstream_is_not_an_upstream() {
+        let s = pending_commit_scope(Some("   "), "main", &refs(&[]));
+        assert_eq!(s.kind, "unpushed");
+        assert_eq!(s.log_args, vec!["HEAD", "--not", "--remotes"]);
+    }
+
+    #[test]
+    fn remote_tracking_ref_steps_in_without_upstream_and_prefers_origin() {
+        let s = pending_commit_scope(
+            None,
+            "dev",
+            &refs(&["refs/remotes/fork/dev", "refs/remotes/origin/dev"]),
+        );
+        assert_eq!(s.kind, "remoteTracking");
+        assert_eq!(s.basis, "origin/dev");
+        assert_eq!(s.log_args, vec!["origin/dev..HEAD".to_string()]);
+
+        let s2 = pending_commit_scope(None, "dev", &refs(&["refs/remotes/fork/dev"]));
+        assert_eq!(s2.basis, "fork/dev");
+    }
+
+    #[test]
+    fn detached_head_never_matches_a_remote_ref_by_suffix() {
+        // `refs/remotes/origin/HEAD` 会被 `!/HEAD` 过滤掉，但 detached HEAD 的分支名正好是 "HEAD"，
+        // 后缀匹配会把任何 origin/* 认错，所以这一档必须靠分支名守卫。
+        let s = pending_commit_scope(None, "HEAD", &refs(&["refs/remotes/origin/HEAD", "refs/remotes/origin/main"]));
+        assert_eq!(s.kind, "unpushed");
+        assert!(s.basis.is_empty());
+    }
+
+    #[test]
+    fn a_branch_only_local_has_nothing_to_match() {
+        let s = pending_commit_scope(None, "feature-x", &refs(&["refs/remotes/origin/main"]));
+        assert_eq!(s.kind, "unpushed");
+    }
+
+    #[test]
+    fn log_records_keep_files_and_order() {
+        let text = "\u{1e}a1b2c3d\u{1f}feat: 加推送预览\u{1f}3 hours ago\nsrc/a.ts\nsrc/b.ts\n\n\u{1e}9f8e7d6\u{1f}fix: 修一个\u{1f}2 days ago\n";
+        let got = parse_pending_log(text);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].hash, "a1b2c3d");
+        assert_eq!(got[0].subject, "feat: 加推送预览");
+        assert_eq!(got[0].when, "3 hours ago");
+        assert_eq!(got[0].files, vec!["src/a.ts".to_string(), "src/b.ts".to_string()]);
+        assert!(got[1].files.is_empty());
+        assert!(parse_pending_log("").is_empty());
+    }
+
+    #[test]
+    fn empty_subject_still_counts_as_a_commit() {
+        // 少报一条 = 谎报「这次会推走什么」，而且条数要和 rev-list --count 对得上。
+        let got = parse_pending_log("\u{1e}dead001\u{1f}\u{1f}5 minutes ago\nx.txt");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].subject, "");
+        assert_eq!(got[0].files, vec!["x.txt".to_string()]);
+    }
+
+    #[test]
+    fn junk_lines_are_dropped() {
+        assert!(parse_pending_log("\n\n  \n").is_empty());
+        assert!(parse_pending_log("\u{1e}\u{1f}\u{1f}no hash").is_empty());
+    }
+
+    /// 真实仓库跑通三档范围：无上游 → unpushed，配了上游 → upstream，中文路径不转义。
+    #[test]
+    fn pending_commits_against_a_real_repo() {
+        if git_command().arg("--version").output().is_err() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("aw-pending-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let repo = root.join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        let sh = |args: &[&str]| {
+            let out = git_command().args(args).current_dir(&repo).output().expect("git");
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        sh(&["init", "-q", "-b", "main"]);
+        sh(&["config", "user.email", "t@t"]);
+        sh(&["config", "user.name", "t"]);
+        sh(&["config", "core.autocrlf", "false"]);
+
+        // 一次提交都没有：空表，不是报错
+        let none = git_pending_commits_sync(repo.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(none.scope, "noCommits");
+        assert!(none.commits.is_empty());
+
+        std::fs::write(repo.join("说明.md"), "x").unwrap();
+        sh(&["add", "-A"]);
+        sh(&["commit", "-qm", "docs: 中文路径"]);
+        std::fs::write(repo.join("a.txt"), "y").unwrap();
+        sh(&["add", "-A"]);
+        sh(&["commit", "-qm", "feat: 第二个"]);
+
+        // 还没有任何远端引用：走 HEAD --not --remotes
+        let local = git_pending_commits_sync(repo.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(local.branch, "main");
+        assert_eq!(local.scope, "unpushed");
+        assert_eq!(local.total, 2);
+        assert_eq!(local.commits[0].subject, "feat: 第二个");
+        assert_eq!(local.commits[1].files, vec!["说明.md".to_string()]);
+
+        // 推到本地 bare 远端并设上游后，只剩未推送的那条
+        let remote = root.join("g.git");
+        sh(&["init", "-q", "--bare", &remote.to_string_lossy()]);
+        sh(&["remote", "add", "origin", &remote.to_string_lossy()]);
+        sh(&["push", "-q", "-u", "origin", "main"]);
+        std::fs::write(repo.join("b.txt"), "z").unwrap();
+        sh(&["add", "-A"]);
+        sh(&["commit", "-qm", "fix: 第三个"]);
+
+        let up = git_pending_commits_sync(repo.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(up.scope, "upstream");
+        assert_eq!(up.basis, "origin/main");
+        assert_eq!(up.total, 1);
+        assert_eq!(up.commits[0].files, vec!["b.txt".to_string()]);
+        assert!(!up.truncated);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+
 /// Most context lines a diff view may ask for (`-U`): enough for a whole file.
 const DIFF_CONTEXT_MAX: u32 = 100_000;
 
@@ -2469,6 +2791,14 @@ pub async fn git_switch_branch(path: String, name: String) -> Result<String, Str
 #[tauri::command]
 pub async fn git_list_branches(path: String) -> Result<GitBranchList, String> {
     tokio::task::spawn_blocking(move || git_list_branches_sync(path))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// 只读：这次推送会带走哪些提交、每条改了哪些文件。不联网。
+#[tauri::command]
+pub async fn git_pending_commits(path: String) -> Result<GitPendingCommits, String> {
+    tokio::task::spawn_blocking(move || git_pending_commits_sync(path))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }

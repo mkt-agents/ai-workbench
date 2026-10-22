@@ -15,30 +15,8 @@ export const CHAT_SYSTEM =
 export const PROJECT_SYSTEM =
   "You are an expert developer assistant embedded in AI Workbench. You help developers understand, debug, and improve their code. Be concise but thorough. When you see code changes, explain what they do and why. When you see errors, suggest fixes. Reply in the user's language.";
 
-export type TaskKind = "none" | "debug" | "explain" | "polish" | "translate" | "summarize" | "optimize";
-
-/** Tasks that work on the text the user typed — the repo is irrelevant, and no tools are offered. */
-export const TEXT_ONLY_TASKS: TaskKind[] = ["polish", "translate", "summarize", "optimize"];
-
-/** One-shot quick actions shown in the composer (everything except plain "none"). */
-export const QUICK_TASKS: TaskKind[] = ["explain", "debug", "polish", "translate", "summarize", "optimize"];
-
-/** Task-specific instruction appended after the mode prompt. */
-export const TASK_HINT: Record<TaskKind, string> = {
-  none: "",
-  debug:
-    " Task: diagnose the problem. Read error messages and diffs carefully. Explain the root cause, then give concrete fix steps; point to the exact file/line when visible.",
-  explain:
-    " Task: explain the code or concept clearly, with examples. Structure complex explanations with bullet points or numbered steps.",
-  polish:
-    " Task: polish the user's text for clarity, tone and professionalism. Return only the improved text unless asked otherwise. Match the user's language and intent.",
-  translate:
-    " Task: translate the given text faithfully. Use the target language the user specifies; if none, translate between Chinese and English (the opposite of the source). Preserve formatting, terms, names and numbers. Output only the translation.",
-  summarize:
-    " Task: summarize the given text or changes — key points first, then structured details. Keep numbers, names and technical terms exact.",
-  // Fallback only: the optimize flow uses buildPromptOptimizeMessages instead.
-  optimize: " Task: rewrite the user's draft into a clearer, actionable prompt. Output only the improved prompt.",
-};
+/** Composer tasks: plain conversation, or the prompt-optimizer (优化提示词). */
+export type TaskKind = "none" | "optimize";
 
 /**
  * Self-knowledge block prepended to every system prompt, so "which model are
@@ -58,12 +36,11 @@ export function buildMeta(model: AIModelConfig, now: Date = new Date()): string 
 export function buildSystem(
   model: AIModelConfig,
   mode: AskMode,
-  task: TaskKind,
   hasProjectContext: boolean,
 ): string {
   const base = mode === "project" ? PROJECT_SYSTEM : CHAT_SYSTEM;
   const rules = mode === "project" && hasProjectContext ? CONTEXT_RULES : "";
-  return buildMeta(model) + base + TASK_HINT[task] + rules;
+  return buildMeta(model) + base + rules;
 }
 
 export const DEFAULT_CHIPS: AiHubChips = {
@@ -96,7 +73,8 @@ export function parseTask(value: string): { task: TaskKind; optimize: OptimizeCo
     };
   }
   return {
-    task: (QUICK_TASKS as string[]).includes(value) ? (value as TaskKind) : "none",
+    // Legacy values (explain / polish / …) from older sessions degrade to "none".
+    task: value === "optimize" ? "optimize" : "none",
     optimize: DEFAULT_OPTIMIZE,
   };
 }

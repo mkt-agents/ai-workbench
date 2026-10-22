@@ -1,7 +1,7 @@
 import type { TFunction } from "i18next";
 import type { AnswerSource } from "./useAskStream";
 
-/** One-line "what this answer was based on": mode · repos · parts · task · model · time · tokens. */
+/** One-line "what this answer was based on": mode · repos · parts · model · time · tokens. */
 export function describeSource(source: AnswerSource | null, t: TFunction): string | null {
   if (!source) return null;
   const bits: string[] = [];
@@ -14,7 +14,6 @@ export function describeSource(source: AnswerSource | null, t: TFunction): strin
   } else {
     bits.push(t("source.chat"));
   }
-  if (source.task !== "none") bits.push(t(`taskShort.${source.task}`));
   bits.push(source.modelName);
   if (source.elapsedMs != null) {
     bits.push(

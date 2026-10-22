@@ -284,40 +284,136 @@
   }
 }
 
-/* Mirrors .cursor-setup-list so the wizard and the usage card read as one
-   family; numbering comes from the list, never from the copy. */
+/* 使用说明卡片：引导句做成 callout，三个分组铺成响应式子卡片网格，
+   宽屏下 3 列并排、窄屏自动换行，不再是一条松散的纵排列表。 */
 .cursor-usage-lead {
   margin: 0 0 var(--space-3);
-  font-size: 13px;
-  line-height: 1.8;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
   color: var(--text-1);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
 }
 
-.cursor-usage-group + .cursor-usage-group {
-  margin-top: var(--space-3);
+.cursor-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: var(--space-3);
+}
+
+.cursor-usage-group {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
 }
 
 .cursor-usage-group-title {
-  margin-bottom: 2px;
-  font-size: 11.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-3);
+  color: var(--text-1);
+}
+
+/* 分组标题左侧的 accent 色条，替代纯灰色小字带来的「无层级」感 */
+.cursor-usage-group-title::before {
+  content: "";
+  flex-shrink: 0;
+  width: 3px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
 }
 
 .cursor-usage-list {
   margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
-  line-height: 1.8;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
   color: var(--text-2);
 }
 
 .cursor-usage-list li + li {
-  margin-top: 2px;
+  margin-top: 6px;
 }
 
 .cursor-usage-list li::marker {
   color: var(--text-3);
+}
+
+/* 「已检测到登录」一键完成初始化的吸顶提示条：
+   玻璃主题的 --bg-2 只有 2.5%~4.5% 不透明度，吸顶后内容会透出来重叠，
+   所以用与侧栏/吸顶工具条同套 chrome 磨砂配方（--chrome-bg + blur），
+   已同步登记进 base.css 的 body.resizing 关闭清单。
+   吸顶约定：滚动宿主去掉顶部 padding（两条类选择器压过 responsive.css 的
+   单类 .page-scrollable 覆盖），间距改由首个子元素的 margin-top 提供。 */
+.page-scrollable.cursor-manager-page {
+  padding-top: 0;
+}
+
+.cursor-manager-page > :first-child {
+  margin-top: var(--space-4);
+}
+
+.cursor-init-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: var(--space-4);
+  background: var(--chrome-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight);
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+  /* 入场滑入：只动 transform/opacity，不进 transition 禁区 */
+  animation: cursor-init-banner-in 0.22s ease-out;
+}
+
+@keyframes cursor-init-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.cursor-init-banner-icon {
+  flex-shrink: 0;
+  color: var(--green);
+}
+
+/* 进行中状态：图标换转圈、按钮隐藏，边框转中性表示「已受理」 */
+.cursor-init-banner.is-busy {
+  border-color: var(--border);
+}
+
+/* 提示条对应的账号行：与 active 同一套 accent 视觉，帮助定位是哪个账号 */
+.cursor-manager-page .account-item.init-target {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.cursor-init-banner-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-0);
 }
 
 

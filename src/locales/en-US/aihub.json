@@ -241,33 +241,14 @@
   "modeAsk": "AI Assistant",
   "modeTools": "Toolbox",
   "task": {
-    "none": "General",
-    "debug": "Debug error (uses project context)",
-    "explain": "Explain",
-    "polish": "Polish text",
-    "translate": "Translate (zh ⇄ en)",
-    "summarize": "Summarize",
     "optimize": "Optimize prompt"
   },
   "taskShort": {
-    "none": "General",
-    "debug": "Debug",
-    "explain": "Explain",
-    "polish": "Polish",
-    "translate": "Translate",
-    "summarize": "Summarize",
     "optimize": "Optimize prompt"
   },
   "taskPlaceholder": {
-    "none": "Ask something… (Enter to send · Shift+Enter for newline)",
-    "debug": "Paste an error or log to diagnose with project context…",
-    "explain": "Paste code, a command or a concept to explain…",
-    "polish": "Paste the text to polish…",
-    "translate": "Paste text to translate (zh ⇄ en)…",
-    "summarize": "Paste the content to summarize…",
     "optimize": "Write the prompt to optimize…"
   },
-  "taskClear": "Cancel this task",
   "chip": {
     "workspace": "Repos & branches",
     "git": "Git identity",
@@ -306,8 +287,7 @@
     "reason": {
       "override": "Set by hand, next message only",
       "meta": "A question about the assistant itself — answered as chat",
-      "textTask": "Text task — no project information needed",
-      "projectTask": "Debug task — uses project context",
+      "projectTask": "Daily report task — uses project context",
       "signal": "Mentions code, errors or paths — project context attached",
       "followUp": "Follow-up to the previous project question",
       "default": "No project cues — answered as chat"

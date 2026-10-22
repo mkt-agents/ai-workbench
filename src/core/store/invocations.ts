@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, GitBranchList, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
+import type { AIModelConfig, DshInstance, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -83,6 +83,8 @@ export interface Invocations {
   invokeGitPublishBranch: (path: string, name: string, base?: string | null) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
+  /** Read-only: which commits a push would take along, and the files each one touched. */
+  invokeGitPendingCommits: (path: string) => Promise<GitPendingCommits>;
   /** `contextLines` / `ignoreWhitespace` are view options: such a diff can't be staged by hunk. */
   invokeGitDiff: (
     path: string,
@@ -391,6 +393,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_switch_branch', { path, name }),
   invokeGitListBranches: (path: string) =>
     tauriInvoke<GitBranchList>('git_list_branches', { path }),
+  invokeGitPendingCommits: (path: string) =>
+    tauriInvoke<GitPendingCommits>('git_pending_commits', { path }),
   invokeGitDiff: (path, filePath, staged, opts) =>
     tauriInvoke<string>('git_diff', {
       path,

@@ -19,7 +19,7 @@ const PAGES: Alias[] = [
   { tab: "git", gitSub: "repos", label: "仓库", names: ["仓库页", "git 仓库", "仓库"] },
   { tab: "git", label: "Git 管理", names: ["git 管理", "git管理", "工程管理", "版本管理", "git"] },
   { tab: "ai-chat", label: "Harness", names: ["harness", "deepseek", "ai 对话"] },
-  { tab: "ai-models", label: "模型配置", names: ["模型配置", "模型"] },
+  { tab: "ai-models", label: "模型管理", names: ["模型管理", "模型配置", "模型"] },
   { tab: "snippets", label: "模板片段", names: ["模板片段", "片段页", "snippets"] },
   { tab: "drafts", label: "工作暂存", names: ["工作暂存", "暂存"] },
   { tab: "cursor-accounts", label: "Cursor", names: ["cursor 账号", "cursor"] },

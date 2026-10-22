@@ -20,6 +20,7 @@ export default function DropdownMenu({
   items,
   children,
   triggerClassName = "btn btn-secondary btn-icon",
+  disabled,
   onOpenChange,
 }: {
   /** aria-label for the trigger button. */
@@ -28,6 +29,8 @@ export default function DropdownMenu({
   /** The trigger button's inner content (icon). */
   children: ReactNode;
   triggerClassName?: string;
+  /** Disables the trigger (open menus stay open; the items keep their own state). */
+  disabled?: boolean;
   /**
    * Called synchronously on every real open/close transition (including the
    * item-click close, before its action runs). Pages whose content is covered
@@ -90,6 +93,7 @@ export default function DropdownMenu({
         aria-expanded={open}
         aria-label={label}
         title={label}
+        disabled={disabled}
         onClick={() => changeOpen(!open)}
       >
         {children}

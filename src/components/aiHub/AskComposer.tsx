@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X } from "lucide-react";
-import { QUICK_TASKS } from "./config";
 import { DAILY_STYLES } from "./dailyReport";
 import type { OpenSuggestion } from "./localActions";
 import PermissionPicker from "./PermissionPicker";
@@ -142,8 +141,8 @@ export default function AskComposer(props: Props) {
         placeholder={
           openList
             ? t("openPlaceholder")
-            : task !== "none"
-              ? t(`taskPlaceholder.${task}`)
+            : task === "optimize"
+              ? t("taskPlaceholder.optimize")
               : writes
                 ? t("permission.placeholderWrite")
                 : t("placeholder")
@@ -217,18 +216,15 @@ export default function AskComposer(props: Props) {
             )}
           </div>
           <div className="qa-task-track">
-            {QUICK_TASKS.map((k) => (
-              <button
-                key={k}
-                type="button"
-                className={`qa-task-btn${task === k ? " on" : ""}`}
-                onClick={() => onTask(task === k ? "none" : k)}
-                title={t(`task.${k}`)}
-                aria-pressed={task === k}
-              >
-                {t(`taskShort.${k}`)}
-              </button>
-            ))}
+            <button
+              type="button"
+              className={`qa-task-btn${task === "optimize" ? " on" : ""}`}
+              onClick={() => onTask(task === "optimize" ? "none" : "optimize")}
+              title={t("task.optimize")}
+              aria-pressed={task === "optimize"}
+            >
+              {t("taskShort.optimize")}
+            </button>
           </div>
           <div className="qa-focus qa-daily">
             <div className={`qa-daily-split${busy ? " is-disabled" : ""}`}>

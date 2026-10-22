@@ -1,21 +1,20 @@
 import { useTranslation } from "react-i18next";
 import { Sparkles } from "lucide-react";
-import type { TaskKind } from "./config";
 
-/** Empty-state starters: filled into the input (never auto-sent). `task` pre-switches the composer task pill. */
-const EXAMPLES: { key: string; task?: TaskKind }[] = [
-  { key: "recent" },
-  { key: "impact" },
-  { key: "uncommitted" },
-  { key: "commitMsg" },
-  { key: "error", task: "debug" },
-  { key: "polish", task: "polish" },
-  { key: "translate", task: "translate" },
-  { key: "open" },
-  { key: "model" },
+/** Empty-state starters: filled into the input (never auto-sent). */
+const EXAMPLE_KEYS = [
+  "recent",
+  "impact",
+  "uncommitted",
+  "commitMsg",
+  "error",
+  "polish",
+  "translate",
+  "open",
+  "model",
 ];
 
-export default function AskEmpty({ onExample }: { onExample: (text: string, task?: TaskKind) => void }) {
+export default function AskEmpty({ onExample }: { onExample: (text: string) => void }) {
   const { t } = useTranslation("aihub");
   return (
     <div className="qa-empty">
@@ -23,14 +22,14 @@ export default function AskEmpty({ onExample }: { onExample: (text: string, task
       <p className="qa-empty-title">{t("emptyHint")}</p>
       <p className="qa-empty-sub">{t("emptyHintSub")}</p>
       <div className="qa-examples">
-        {EXAMPLES.map((ex) => (
+        {EXAMPLE_KEYS.map((key) => (
           <button
-            key={ex.key}
+            key={key}
             type="button"
             className="qa-example"
-            onClick={() => onExample(t(`examples.${ex.key}`), ex.task)}
+            onClick={() => onExample(t(`examples.${key}`))}
           >
-            {t(`examples.${ex.key}`)}
+            {t(`examples.${key}`)}
           </button>
         ))}
       </div>

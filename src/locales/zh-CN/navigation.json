@@ -1,7 +1,7 @@
 {
   "aiWorkbench": "AI 工作台",
   "harness": "Harness",
-  "modelConfig": "模型配置",
+  "modelConfig": "模型管理",
   "aiPrompts": "提示词",
   "snippets": "模板片段",
   "drafts": "工作暂存",

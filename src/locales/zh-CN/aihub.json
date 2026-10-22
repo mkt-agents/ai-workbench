@@ -241,33 +241,14 @@
   "modeAsk": "AI 助手",
   "modeTools": "工具箱",
   "task": {
-    "none": "普通问答",
-    "debug": "报错诊断（按项目上下文定位）",
-    "explain": "解释说明",
-    "polish": "润色文案",
-    "translate": "中英互译",
-    "summarize": "总结要点",
     "optimize": "优化提示词"
   },
   "taskShort": {
-    "none": "普通",
-    "debug": "诊断",
-    "explain": "解释",
-    "polish": "润色",
-    "translate": "翻译",
-    "summarize": "总结",
     "optimize": "优化提示词"
   },
   "taskPlaceholder": {
-    "none": "问一句…（Enter 发送 · Shift+Enter 换行）",
-    "debug": "粘贴报错或日志，结合项目上下文定位原因…",
-    "explain": "粘贴要解释的代码、命令或概念…",
-    "polish": "粘贴要润色的文字…",
-    "translate": "粘贴要翻译的文字（中英自动互译）…",
-    "summarize": "粘贴要总结的内容…",
     "optimize": "写下要优化的提示词…"
   },
-  "taskClear": "取消本次任务",
   "chip": {
     "workspace": "仓库与分支",
     "git": "Git 身份",
@@ -306,8 +287,7 @@
     "reason": {
       "override": "手动指定，只对下一条生效",
       "meta": "关于助手自身的问题，按普通对话回答",
-      "textTask": "文本类任务，不需要项目信息",
-      "projectTask": "诊断任务，会结合项目上下文",
+      "projectTask": "日报任务，会结合项目上下文",
       "signal": "问题提到了代码、报错或路径，将带上项目上下文",
       "followUp": "延续上一轮的项目追问",
       "default": "没有项目相关线索，按普通对话回答"

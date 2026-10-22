@@ -976,6 +976,225 @@ button.repos-batch-count:hover {
   white-space: nowrap;
 }
 
+/* pushPreview：宽度与高度挂 modal.css lg 档，仓库段落占满剩余高度、底栏固定 */
+
+.push-preview-modal {
+  display: flex;
+  flex-direction: column;
+  height: min(560px, var(--modal-max-vh));
+  max-height: var(--modal-max-vh);
+}
+
+.pp-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pp-summary {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  font-size: 11.5px;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-failed {
+  flex-shrink: 0;
+  color: var(--yellow);
+}
+
+.pp-added,
+.pp-warning {
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.pp-added {
+  color: var(--text-2);
+}
+
+.pp-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--yellow) 12%, transparent);
+  color: var(--yellow);
+}
+
+/* 只有这一段滚动：摘要与警示留在上面不被卷走 */
+.pp-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 2px;
+}
+
+.pp-repo {
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.pp-repo.is-risky {
+  border-color: color-mix(in srgb, var(--yellow) 40%, var(--border-subtle));
+}
+
+/* 名字与分支占一行；说明（如「无上游，将在 origin 新建远端分支」）放不下时整条换到第二行，
+   而不是把名字压成 0 宽（300px 实测：名字 0 宽、说明溢出 36px）。 */
+.pp-repo-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--overlay-1);
+}
+
+.pp-repo-icon {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.pp-repo-name {
+  flex: 1 1 8em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.pp-repo-branch {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.pp-repo-note {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-repo.is-risky .pp-repo-note {
+  color: var(--yellow);
+}
+
+.pp-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.pp-line-error {
+  color: var(--red);
+}
+
+.pp-commits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pp-commit {
+  padding: 6px 10px;
+}
+
+.pp-commit + .pp-commit {
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.pp-commit-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pp-hash {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.pp-subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-0);
+}
+
+.pp-when {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-files {
+  margin: 3px 0 0;
+  padding: 0 0 0 4px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pp-files code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.pp-more {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.pp-trunc {
+  border-top: 1px solid var(--border-subtle);
+}
+
 .repos-card {
   display: flex;
   flex-direction: column;

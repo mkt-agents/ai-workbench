@@ -1556,6 +1556,14 @@ function AIAssistant() {
                 onClick={() => setPageView("list")}
               >
                 <Layers size={13} /> {t("models.viewList")}
+                <span className="models-view-tab-count">
+                  {listQueryNorm
+                    ? t("models.countFiltered", {
+                        shown: filteredConfigs.length,
+                        total: aiModels.length,
+                      })
+                    : aiModels.length}
+                </span>
               </button>
               <button
                 type="button"
@@ -1572,19 +1580,6 @@ function AIAssistant() {
             ) : (
             <>
             <div className="models-chrome">
-              <div className="models-header">
-                <div className="models-title">
-                  <h2>{t("models.title")}</h2>
-                  <span className="models-count">
-                    {listQueryNorm
-                      ? t("models.countFiltered", {
-                          shown: filteredConfigs.length,
-                          total: aiModels.length,
-                        })
-                      : aiModels.length}
-                  </span>
-                </div>
-              </div>
               <div className="models-toolbar">
                 {selectedConfigs.length === 0 && (
                   <div className="models-search">

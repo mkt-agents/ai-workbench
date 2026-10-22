@@ -34,6 +34,20 @@
   font-weight: 560;
 }
 
+/* Tab 上的数量徽标（原页面标题旁的 .models-count 上移至此） */
+.models-view-tab-count {
+  font-size: 11px;
+  color: var(--text-3);
+  font-weight: 500;
+  padding: 1px 7px;
+  background: var(--overlay-2);
+  border-radius: var(--radius-full);
+  font-variant-numeric: tabular-nums;
+}
+.models-view-tab.is-active .models-view-tab-count {
+  color: var(--text-2);
+}
+
 .models-scene-panel {
   flex-shrink: 0;
   margin-bottom: 12px;
@@ -489,39 +503,6 @@
   margin-bottom: 12px;
 }
 
-.models-header {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.models-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex: 0 0 auto;
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.models-title h2 {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-0);
-  margin: 0;
-  letter-spacing: -0.02em;
-}
-
-.models-count {
-  font-size: 11px;
-  color: var(--text-3);
-  font-weight: 500;
-  padding: 2px 8px;
-  background: var(--bg-2);
-  border-radius: var(--radius-full);
-  font-variant-numeric: tabular-nums;
-}
-
 .models-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -567,10 +548,6 @@
 }
 
 @container models-page (max-width: 560px) {
-  .models-count {
-    display: none;
-  }
-
   .models-toolbar-actions .ai-action-label {
     display: none;
   }

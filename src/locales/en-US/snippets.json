@@ -20,16 +20,6 @@
   "kindAll": "All",
   "kindLabel": "Type",
   "scenarioLabel": "Prompt scenario",
-  "taskBindLabel": "AI Hub task bind",
-  "taskBindHint": "When that AI Hub task is selected and the composer is empty, this template is inserted.",
-  "taskBind": {
-    "none": "None",
-    "debug": "Debug",
-    "explain": "Explain",
-    "polish": "Polish",
-    "translate": "Translate",
-    "summarize": "Summarize"
-  },
   "addTitle": "New template",
   "editTitle": "Edit template",
   "name": "Name",

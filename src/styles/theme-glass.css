@@ -337,20 +337,6 @@
   border-color: var(--overlay-3);
 }
 
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-title h2 {
-  color: var(--text-0);
-  font-size: 15px;
-  font-weight: 600;
-}
-
-:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .models-count {
-  color: var(--text-3);
-  font-size: 11px;
-  background: var(--overlay-2);
-  padding: 3px 10px;
-  border-radius: var(--radius-lg);
-}
-
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .ai-model-item {
   background: var(--overlay-2);
   border: 0.25px solid var(--overlay-3);

@@ -445,6 +445,7 @@ pub fn run() {
             git_commands::git_publish_branch,
             git_commands::git_switch_branch,
             git_commands::git_list_branches,
+            git_commands::git_pending_commits,
             git_commands::git_diff,
             git_commands::git_log,
             git_commands::git_log_files,

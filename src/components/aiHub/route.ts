@@ -1,5 +1,3 @@
-import type { TaskKind } from "./config";
-import { TEXT_ONLY_TASKS } from "./config";
 import { isDailyReport } from "./dailyReport";
 
 export type AskMode = "chat" | "project";
@@ -9,7 +7,6 @@ export type RouteOverride = "auto" | AskMode;
 export type RouteReason =
   | "override"
   | "meta"
-  | "textTask"
   | "projectTask"
   | "signal"
   | "followUp"
@@ -17,16 +14,12 @@ export type RouteReason =
 
 export type RouteInput = {
   question: string;
-  task: TaskKind;
   /** Mode of the previous exchange in this chat (null = fresh chat). */
   lastMode: AskMode | null;
   override: RouteOverride;
 };
 
 export type RouteResult = { mode: AskMode; reason: RouteReason };
-
-/** Tasks that are almost always about the user's code. */
-const PROJECT_TASKS: TaskKind[] = ["debug"];
 
 /** Questions about the assistant / app itself — answered from the meta block. */
 const META_RE =
@@ -59,8 +52,6 @@ export function routeQuestion(input: RouteInput): RouteResult {
   const q = input.question.trim();
   if (META_RE.test(q)) return { mode: "chat", reason: "meta" };
   if (isDailyReport(q)) return { mode: "project", reason: "projectTask" };
-  if (TEXT_ONLY_TASKS.includes(input.task)) return { mode: "chat", reason: "textTask" };
-  if (PROJECT_TASKS.includes(input.task)) return { mode: "project", reason: "projectTask" };
   if (PROJECT_WORD_RE.test(q) || PATH_RE.test(q) || TRACE_RE.test(q)) {
     return { mode: "project", reason: "signal" };
   }

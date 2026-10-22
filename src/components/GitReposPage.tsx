@@ -28,7 +28,8 @@ import {
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { GIT_CONCURRENCY, mapPoolCounted } from "../core/asyncPool";
-import { describePushTargets, isPushable } from "../core/gitPushScope";
+import { isPushable } from "../core/gitPushScope";
+import { pushOneWithRecovery, type PushRecoveryDeps } from "../core/batchPush";
 import { parseInvokeError } from "../hooks/useInvokeError";
 import {
   dropRepos,
@@ -64,11 +65,12 @@ import BatchBranchModal, {
   type BranchModalMode,
   type BranchOptions,
 } from "./BatchBranchModal";
+import { usePushPreview } from "./PushPreviewModal";
 import BatchReport, { type BatchRow } from "./git/BatchReport";
 import RepoBindingModal from "./RepoBindingModal";
 import ScanReposModal from "./ScanReposModal";
 import type { ReportTarget } from "./testReportTypes";
-import type { GitAccount, GitWorkspace, RecentProject } from "../core/types";
+import type { GitAccount, GitWorkspace, RecentProject, RepoBatchItem } from "../core/types";
 
 type Props = {
   active?: boolean;
@@ -116,6 +118,10 @@ type BatchFn = (path: string) => Promise<void | { skip: string } | { note: strin
 /** The result list: what was run, one row per repo, and how to re-run the failures. */
 type BatchReportData = { title: string; rows: BatchRow[]; action: BatchAction };
 
+/** Git 正处于合并 / 变基中途，或还有未解决冲突——后端写操作会被 ensure_repo_clear 拒绝。 */
+const repoInGitOperation = (s: RepoBatchItem | undefined): boolean =>
+  !!s?.isGit && (!!s.operation || (s.conflictCount ?? 0) > 0);
+
 function GroupSelectCheckbox({
   checked,
   indeterminate,
@@ -149,6 +155,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const { t } = useTranslation("git");
   const { t: tc } = useTranslation("common");
   const confirm = useConfirm();
+  const { askPushPreview, pushPreviewDialog } = usePushPreview();
 
   const recentProjects = useGlobalStore((s) => s.recentProjects);
   const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
@@ -479,6 +486,15 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     return parseInvokeError(raw).message || raw;
   };
 
+  /** 两页共用一条推送编排：被拒 → 询问 → 合并远程 → 再推（见 core/batchPush.ts）。 */
+  const pushDeps: PushRecoveryDeps = {
+    push: invokeGitPush,
+    mergePull: (path) => invokeGitPull(path, true),
+    confirm,
+    t,
+    label: repoLabel,
+  };
+
   /**
    * Same step over several repos, one row per repo kept for the result list:
    * the 8-second toast could only show three errors of a 19-repo run, and a
@@ -488,7 +504,8 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     items: BatchItem[],
     title: string,
     action: BatchAction,
-    fn: BatchFn
+    fn: BatchFn,
+    options?: { concurrency?: number }
   ): Promise<BatchRow[] | null> => {
     if (batchLock.current || items.length === 0) return null;
     batchLock.current = true;
@@ -507,7 +524,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
       // Hold the cache so a background refresh cannot race the writes below.
       holdRepos(run);
       try {
-        await mapPoolCounted(run, GIT_CONCURRENCY, async (path) => {
+        await mapPoolCounted(run, options?.concurrency ?? GIT_CONCURRENCY, async (path) => {
           // Cancel means "never start this one": git is not touched at all, so a
           // half-run batch leaves no mystery writes behind.
           if (batchCancel.current) {
@@ -567,9 +584,15 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     setBatchCanceling(true);
   };
 
+  /** 只跳过快照确认「不是仓库」的路径；快照缺失不代表不是仓库（可能还没读到），交给后端判。 */
+  const bindSkip = (path: string): string | undefined => {
+    const s = summaries[path];
+    return s && !s.isGit ? t("batch.skipNotGit") : undefined;
+  };
+
   const doBatchBind = async (account: GitAccount, paths: string[]) => {
     const rows = await runBatch(
-      paths.map((path) => ({ path })),
+      withSkip(paths, bindSkip),
       t("batch.bind"),
       { kind: "bind", accountId: account.id },
       async (path) => {
@@ -609,6 +632,9 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     const s = summaries[path];
     if (!s?.isGit) return t("batch.skipNotGit");
     if (!s.hasUpstream) return t("batch.skipNoUpstream");
+    if (repoInGitOperation(s)) return t("batch.skipGitOperation");
+    // 本地与上游分叉（有本地提交还落后）：拉取固定 --ff-only，必然被拒，预跳过。
+    if (s.ahead > 0 && s.behind > 0) return t("batch.skipDiverged");
     if (s.behind === 0) return t("batch.skipUpToDate");
     return undefined;
   };
@@ -629,6 +655,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const pushSkip = (path: string): string | undefined => {
     const s = summaries[path];
     if (!s?.isGit) return t("batch.skipNotGit");
+    if (repoInGitOperation(s)) return t("batch.skipGitOperation");
     if (!s.hasCommits) return t("batch.skipNoCommits");
     if (!s.originUrl) return t("batch.skipNoRemote");
     if (!isPushable(s)) return t("batch.skipNothingAhead");
@@ -643,18 +670,19 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
       showMsg("error", t("batch.noneToPush"));
       return;
     }
-    const { message, warning } = describePushTargets(targets, t);
-    const ok = await confirm({
-      title: t("batch.pushTitle"),
-      message,
-      warning,
-      confirmText: t("batch.push"),
-      icon: warning ? "warning" : "info",
-    });
-    if (!ok) return;
-    void runBatch(withSkip(paths, pushSkip), t("batch.push"), { kind: "push" }, async (path) => {
-      void (await invokeGitPush(path));
-    });
+    // 先看要推走什么：首次发布会在 origin 上建分支，这里撤不回来。
+    if (!(await askPushPreview(targets))) return;
+    // 串行推送：多个仓库同时要凭证弹窗会互相覆盖（与提交页同一条约定）；
+    // 被拒走与提交页相同的恢复：询问 → 合并远程 → 再推。
+    void runBatch(
+      withSkip(paths, pushSkip),
+      t("batch.push"),
+      { kind: "push" },
+      async (path) => {
+        await pushOneWithRecovery(pushDeps, path);
+      },
+      { concurrency: 1 }
+    );
   };
 
   const handleBatchPush = () => void doBatchPush([...batchPaths]);
@@ -671,6 +699,9 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     const branchSkip = (path: string): string | undefined => {
       const s = summaries[path];
       if (!s?.isGit) return t("batch.skipNotGit");
+      // 切换会被后端 ensure_repo_clear 拒绝的仓库预跳过；建分支不动工作区（或 checkout -b
+      // 允许带着改动），不在此列。
+      if (mode === "switch" && repoInGitOperation(s)) return t("batch.skipGitOperation");
       // 没指定基点就是从各仓 HEAD 起，HEAD 没提交就没得起；指定基点时 unborn HEAD 不影响。
       if (mode === "create" && !base && !s.hasCommits) return t("batch.skipNoCommits");
       if (remoteOnly && !s.originUrl) return t("batch.skipNoRemotePublish");
@@ -811,25 +842,50 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const doBatchRefresh = async (paths: string[]) => {
     if (batchLock.current || paths.length === 0) return;
     batchLock.current = true;
+    batchCancel.current = false;
+    setBatchCanceling(false);
     setBatchBusy(true);
-    // One summarize call for the whole selection, so there is no per-repo fraction to advance.
-    setBatchProgress({ done: 0, total: paths.length, indeterminate: true });
+    // 每次一小批走整批 summarize 命令：进度能按仓库推进、批次之间可取消，
+    // 单次命令的批量效率不变（其余批量操作取消语义一致：未开始的绝不碰）。
+    const CHUNK = 8;
+    const rowOf = new Map<string, BatchRow>();
+    let lastError: unknown = null;
+    setBatchProgress({ done: 0, total: paths.length });
     try {
-      invalidateRepos(paths);
-      await refreshRepos(paths);
-      const snap = getRepoSnapshot();
-      const rows = paths.map((path): BatchRow => {
-        const err = snap[path]?.error;
-        return { path, label: repoLabel(path), status: err ? "fail" : "ok", detail: err ? errorText(err) : undefined };
-      });
-      setBatchReport({ title: t("batch.refresh"), rows, action: { kind: "refresh" } });
+      for (let i = 0; i < paths.length; i += CHUNK) {
+        if (batchCancel.current) {
+          for (const path of paths.slice(i)) {
+            rowOf.set(path, { path, label: repoLabel(path), status: "cancel", detail: t("batch.cancelNotRun") });
+          }
+          break;
+        }
+        const chunk = paths.slice(i, i + CHUNK);
+        invalidateRepos(chunk);
+        await refreshRepos(chunk);
+        const snap = getRepoSnapshot();
+        for (const path of chunk) {
+          const err = snap[path]?.error;
+          rowOf.set(path, { path, label: repoLabel(path), status: err ? "fail" : "ok", detail: err ? errorText(err) : undefined });
+        }
+        setBatchProgress({ done: Math.min(i + CHUNK, paths.length), total: paths.length });
+      }
     } catch (e) {
+      lastError = e;
       showMsg("error", errorText(e));
     } finally {
       batchLock.current = false;
       setBatchBusy(false);
       setBatchProgress(null);
     }
+    const rows = paths.map((path): BatchRow => {
+      const row = rowOf.get(path);
+      if (row) return row;
+      return lastError
+        ? { path, label: repoLabel(path), status: "fail", detail: errorText(lastError) }
+        : { path, label: repoLabel(path), status: "cancel", detail: t("batch.cancelNotRun") };
+    });
+    setBatchCanceling(false);
+    setBatchReport({ title: t("batch.refresh"), rows, action: { kind: "refresh" } });
   };
 
   const handleBatchRefresh = () => void doBatchRefresh([...batchPaths]);
@@ -853,10 +909,15 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
       for (const path of paths) {
         const p = recentProjects.find((x) => x.path === path);
         if (p) await removeRecentProject(p.id);
-        if (currentGitRepo === path) setCurrentGitRepo(undefined);
+        if (currentGitRepo && pathKey(currentGitRepo) === pathKey(path)) setCurrentGitRepo(undefined);
         removed.push(path);
       }
-      setSelected(new Set());
+      // 只清掉真的移除的勾选：被筛选挡住、没被移除的仓库保持原选中状态。
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const path of paths) next.delete(path);
+        return next;
+      });
       showMsg("success", t("batch.removed", { count: removed.length }));
     } catch (e) {
       setSelected((prev) => {
@@ -979,6 +1040,11 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
 
   const handlePush = async (path: string) => {
     if (syncingPath) return;
+    const s = summaries[path];
+    // 快进推送保持一键；首次发布（会在 origin 建分支）和落后于远端（会被拒）先看清单。
+    if (s && (!s.hasUpstream || s.behind > 0)) {
+      if (!(await askPushPreview([{ path, label: repoLabel(path), summary: s }]))) return;
+    }
     setSyncingPath(path);
     try {
       await invokeGitPush(path);
@@ -1387,6 +1453,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             <DropdownMenu
               label={t("batch.rosterTitle")}
               triggerClassName="repos-batch-count"
+              disabled={batchBusy}
               items={roster.map((row) => ({
                 label: `${row.label}${row.branch ? ` — ${row.branch}` : ""}${
                   row.hidden ? ` · ${t("batch.rosterHidden")}` : ""
@@ -1736,6 +1803,8 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
           onConfirm={handleBranchConfirm}
         />
       )}
+
+      {pushPreviewDialog}
 
       {scanState && (
         <ScanReposModal

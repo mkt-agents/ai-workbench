@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useGlobalStore, MAX_AI_HUB_SESSIONS } from "../core/store";
-import type { AIModelConfig, AiHubSession, AiHubTurn, SnippetTaskBind } from "../core/types";
+import type { AIModelConfig, AiHubSession, AiHubTurn } from "../core/types";
 import { bootApp } from "../core/boot";
 import { writeStoredString } from "../core/localState";
 import { applyDocumentTheme } from "../lib/theme";
@@ -301,13 +301,12 @@ function AiHubApp() {
     () =>
       routeQuestion({
         question: deferredInput,
-        task,
         lastMode: stream.lastModeRef.current,
         override: effectiveOverride,
       }),
     // lastModeRef changes only on send, which also re-renders via `answer`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [deferredInput, task, effectiveOverride, stream.answer, stream.history.length],
+    [deferredInput, effectiveOverride, stream.answer, stream.history.length],
   );
   const contextIncluded = routePreview.mode === "project";
   /** Repo name click: flip the auto decision for the next message, or go back to auto. */
@@ -395,17 +394,6 @@ function AiHubApp() {
 
   const changeTask = (next: TaskKind) => {
     setTask(next);
-    // If a text snippet is bound to this task and the composer is empty, insert it.
-    const bindable: SnippetTaskBind[] = ["debug", "explain", "polish", "translate", "summarize"];
-    if (bindable.includes(next as SnippetTaskBind) && !input.trim()) {
-      const bound = (snippets.snippets || []).find(
-        (s) => s.kind !== "prompt" && s.taskBind === next
-      );
-      if (bound?.content) {
-        setComposerInput(bound.content);
-        void useGlobalStore.getState().bumpSnippetUse(bound.id).catch(() => {});
-      }
-    }
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
@@ -878,10 +866,9 @@ function AiHubApp() {
             onRetry={(asChat) => stream.retry(asChat)}
             onDismissError={stream.dismissError}
             lastQuestion={stream.lastQuestionRef.current}
-            onExample={(text, exampleTask) => {
+            onExample={(text) => {
               setComposerInput(text);
-              if (exampleTask) changeTask(exampleTask);
-              else requestAnimationFrame(() => inputRef.current?.focus());
+              requestAnimationFrame(() => inputRef.current?.focus());
             }}
             answer={stream.answer}
             turns={stream.history}

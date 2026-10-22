@@ -3,20 +3,12 @@ import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Copy, Pencil, Check, XCircle, Sparkles, X, Download, Upload, Loader2, FileText, Search, Zap, ChevronDown, MoreHorizontal, Terminal, ClipboardCopy, CopyPlus } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
-import type { Snippet, SnippetKind, SnippetTaskBind } from "../core/types";
+import type { Snippet, SnippetKind } from "../core/types";
 
 const SNIPPET_EXPORT_VERSION = 2;
 /** Mirrors package.json; bump with release triad when shipping. */
 const APP_VERSION = "0.2.26";
 
-const TASK_BIND_OPTIONS: Array<SnippetTaskBind | ""> = [
-  "",
-  "debug",
-  "explain",
-  "polish",
-  "translate",
-  "summarize",
-];
 import ModalTitleRow from "./ModalTitleRow";
 import { useConfirm } from "./ConfirmModal";
 import DropdownMenu from "./DropdownMenu";
@@ -253,8 +245,6 @@ export default function SnippetsManager() {
       const scenario = kind === "prompt" ? editing.scenario ?? "general" : undefined;
       // Params are derived from {{name}} in content — keep DB in sync, no hand-edit.
       const params = parseParamNames("", editing.content).join(", ");
-      const taskBind =
-        kind === "text" && editing.taskBind ? (editing.taskBind as SnippetTaskBind) : "";
       if (editing.id) {
         await updateSnippet(editing.id, {
           name: editing.name.trim(),
@@ -263,7 +253,6 @@ export default function SnippetsManager() {
           params,
           kind,
           scenario,
-          taskBind,
         });
       } else {
         await addSnippet({
@@ -273,7 +262,6 @@ export default function SnippetsManager() {
           params,
           kind,
           scenario,
-          taskBind,
         });
       }
       setEditing(null);
@@ -291,7 +279,6 @@ export default function SnippetsManager() {
         params: s.params,
         kind: s.kind,
         scenario: s.scenario,
-        taskBind: s.taskBind,
       });
       showMsg("success", t("cloned", { name: s.name }));
     } catch (e) {
@@ -317,7 +304,6 @@ export default function SnippetsManager() {
           params: s.params,
           kind: s.kind ?? "text",
           scenario: s.scenario,
-          taskBind: s.taskBind || undefined,
         })),
       };
       const path = await invokeSaveTextFile(
@@ -370,10 +356,6 @@ export default function SnippetsManager() {
           continue;
         }
         existing.add(fingerprint(entry));
-        const bindRaw = String(item?.taskBind ?? item?.task_bind ?? "");
-        const taskBind = (TASK_BIND_OPTIONS.includes(bindRaw as SnippetTaskBind)
-          ? bindRaw
-          : "") as SnippetTaskBind | "";
         await addSnippet({
           name: entry.name,
           content: entry.content,
@@ -381,7 +363,6 @@ export default function SnippetsManager() {
           params: String(item?.params ?? ""),
           kind: item?.kind === "prompt" ? "prompt" : "text",
           scenario: item?.scenario ? String(item.scenario) : undefined,
-          taskBind,
         });
         added += 1;
       }
@@ -781,7 +762,6 @@ export default function SnippetsManager() {
                         ...editing,
                         kind,
                         scenario: kind === "prompt" ? editing.scenario ?? "general" : undefined,
-                        taskBind: kind === "prompt" ? "" : editing.taskBind,
                       });
                     }}
                   >
@@ -791,28 +771,7 @@ export default function SnippetsManager() {
                 </div>
               </div>
               <div className="snippets-modal-row">
-                {(editing.kind ?? "text") !== "prompt" ? (
-                  <div className="input-group">
-                    <label className="input-label">{t("taskBindLabel")}</label>
-                    <select
-                      className="input-field"
-                      value={editing.taskBind || ""}
-                      onChange={(e) =>
-                        setEditing({
-                          ...editing,
-                          taskBind: e.target.value as SnippetTaskBind | "",
-                        })
-                      }
-                    >
-                      {TASK_BIND_OPTIONS.map((opt) => (
-                        <option key={opt || "none"} value={opt}>
-                          {opt ? t(`taskBind.${opt}`) : t("taskBind.none")}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="setting-hint">{t("taskBindHint")}</span>
-                  </div>
-                ) : (
+                {(editing.kind ?? "text") === "prompt" && (
                   <div className="input-group">
                     <label className="input-label">{t("scenarioLabel")}</label>
                     <select

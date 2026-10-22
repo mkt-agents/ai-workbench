@@ -1,5 +1,5 @@
 /* WorkBuddy 弹窗（扫码纳管 / 粘贴纳管 / 续期）的样式。弹窗由账号额度页直接打开，
-   不能依赖 WorkBuddyManager.css——那页已下线，它的样式表不再加载。 */
+   不能依赖 WorkBuddyManager.css——那页 2026-10-22 已删除，这些弹窗样式必须自带。 */
 
 .wb-inline-error {
   font-size: 11.5px;

@@ -74,6 +74,7 @@
 .modal.scan-repos-modal,
 .modal.us-edit-modal,
 .modal.batch-branch-modal,
+.modal.push-preview-modal,
 .modal.wb-modal-wide {
   width: var(--modal-lg);
   max-width: min(var(--modal-lg), var(--modal-max-vw));

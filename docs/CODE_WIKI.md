@@ -37,7 +37,7 @@
 
 产品标识：
 - **identifier**: `com.ai-workbench.app`
-- **当前版本**: `0.2.8`（以 `package.json` 为准，三处同步见 §13.1）
+- **当前版本**: `0.2.33`（以 `package.json` 为准，三处同步见 §13.1）
 - **默认 DeepSeek 端口**: `3080`
 
 ---
@@ -690,6 +690,7 @@ db_save(state: DbState, table: DbTable, rows: Vec<serde_json::Value>) -> Result<
 | `git_commit` | 先 `has_staged_changes` 检查，友好化错误文案；有冲突 / 变基中拒绝，合并中冲突全解决后允许（完成合并） |
 | `git_push/pull` | 检测 upstream，自动 `-u origin HEAD` 首次推送；网络命令统一 `LC_ALL=C`；合并拉取 `--no-rebase --no-edit`（无 autostash），冲突时保留合并状态返回 `[GIT_CONFLICT]`；推送被拒 `[GIT_PUSH_REJECTED]`、无法快进 `[GIT_DIVERGED]`；合并 / 变基进行中或有冲突时拒绝 `[GIT_OPERATION_IN_PROGRESS]` |
 | `git_scan_repos` | 递归扫描 + 跳过 node_modules/target/.hidden + max_depth 限制 |
+| `git_pending_commits` | 只读：这次推送会带走哪些提交。对比范围三档由纯函数 `pending_commit_scope` 判定——有上游 `@{upstream}..HEAD` → 无上游但有同名远端跟踪引用（`origin` 优先）`<ref>..HEAD` → 否则 `HEAD --not --remotes`；`--no-merges` 与 `rev-list --count` 同口径，列表上限 50 条并回 `total` / `truncated`；`-c core.quotePath=false` 让中文路径可读；unborn HEAD 返回空表（`scope: "noCommits"`）而不是报错。前端 `PushPreviewModal` 用它，措辞单一来源是 `core/gitPushScope.ts` 的 `pushTargetNote()` |
 | `set_git_config` | 全局/仓库级 user.name / user.email |
 
 **Porcelain 解析** `parse_porcelain_line` / `parse_status_v2_z`:
@@ -962,7 +963,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 
 ## 10. Tauri IPC 命令完整清单
 
-### 10.1 Git Commands（21 条 + git_merge.rs 4 条）
+### 10.1 Git Commands（git_commands.rs 33 条 + git_merge.rs 4 条）
 
 | 命令 | 参数 | 返回 |
 |------|------|------|
@@ -991,6 +992,17 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `set_repo_git_config` | repo_path, name, email | String |
 | `get_repo_git_config` | repo_path | (String, String) |
 | `get_git_config` | scope?: String | (String, String) |
+| `git_create_branch` | path, name, base?: String（基点先解析 `refs/remotes/origin/<base>`，再退到本地同名分支） | String（建好并切过去） |
+| `git_switch_branch` | path, name | String |
+| `git_list_branches` | path | GitBranchList（current + local + remote；远端名剥掉 remote 段，只读本地引用、不联网） |
+| `git_fetch_branch` | path, name | String（只推进一个远端跟踪引用，不动工作区） |
+| `git_publish_branch` | path, name, base?: String | String（在 origin 上建分支，HEAD 与工作树都不动） |
+| `git_pending_commits` | path | GitPendingCommits（见 §8.4：范围三档、上限 50、`total` / `truncated`） |
+| `git_log_files` | path, count: i64（1–50）, since?: String | Vec\<GitCommitFiles\>（提交 + 改动的路径，无补丁） |
+| `git_stash_push` | path, message?: String | String |
+| `git_stash_list` | path | Vec\<GitStashEntry\> |
+| `git_stash_pop` | path, index: u32 | String |
+| `git_stash_drop` | path, index: u32 | String |
 | `pick_directory` | — | Option\<String\> |
 
 ### 10.2 AI Commands（4 条）
@@ -1198,7 +1210,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `find_port_listeners(ports)` | 查这些端口谁在监听：PID / 进程名 / 完整 exe 路径（`QueryFullProcessImageNameW`，无需新增 windows feature）/ IPv4+IPv6 地址（双栈同 PID 合并）/ 保护标记 |
 | `kill_port_listeners(port, pids)` | `taskkill /T /F` 连进程树结束。**杀前重读 netstat**，只杀此刻仍监听该端口的 PID（PID 会被回收）；PID ≤ 4 与 csrss / lsass / svchost 等一律拒绝；返回 `portReleased`（bind 探针 **且** netstat 复检都过） |
 
-> 合计核对（2026-10-10）：`lib.rs` 的 `generate_handler!` 实际注册 **164 条**，与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `ai_hub_bubble_ready`；当日新增额度域 14 条：`wb_quota_status`、`cursor_quota_fetch`、`grok_bot_quota_fetch`，Codex 的 `codex_oauth_start`、`codex_oauth_cancel`、`codex_list_accounts`、`codex_delete_account`、`codex_quota_fetch`，`quota_accounts.rs` 的 `cursor_oauth_start`、`cursor_oauth_cancel`、`deepseek_add_key`、`quota_accounts_list`、`quota_account_delete`，以及 `deepseek_balance_fetch`）。此前修正的两处历史计数偏差仍然成立：HTTP 客户端下线使 devtools 域从 1 条变 0 条；`migrate_account_to_profile` 只是 `cursor/mod.rs` 的内部函数、从未注册为命令，Cursor 章节因此是 20 条而非 21 条（更早文档写的 150 还把 `generate_handler!` 前后的两行非命令文本也计入了）。
+> 合计核对（2026-10-10）：`lib.rs` 的 `generate_handler!` 实际注册 **164 条**（**这条是当日快照，此后一直在长：2026-10-22 实测 230 条**，口径见 AGENTS.md「计数口径：列表里 `模块::命令,` 的行」；下面各节的分域计数同理，可能滞后于代码），与本章各节相加一致（含 `report_history` 3 条与 `tray/bubble` 的 `ai_hub_bubble_ready`；当日新增额度域 14 条：`wb_quota_status`、`cursor_quota_fetch`、`grok_bot_quota_fetch`，Codex 的 `codex_oauth_start`、`codex_oauth_cancel`、`codex_list_accounts`、`codex_delete_account`、`codex_quota_fetch`，`quota_accounts.rs` 的 `cursor_oauth_start`、`cursor_oauth_cancel`、`deepseek_add_key`、`quota_accounts_list`、`quota_account_delete`，以及 `deepseek_balance_fetch`）。此前修正的两处历史计数偏差仍然成立：HTTP 客户端下线使 devtools 域从 1 条变 0 条；`migrate_account_to_profile` 只是 `cursor/mod.rs` 的内部函数、从未注册为命令，Cursor 章节因此是 20 条而非 21 条（更早文档写的 150 还把 `generate_handler!` 前后的两行非命令文本也计入了）。
 
 ### 10.17 Update Commands（3 条，`update_commands.rs`）
 
@@ -1346,9 +1358,9 @@ React ErrorBoundary 捕获后渲染 fallback UI，控制台可见堆栈。
 
 | 文件 | 字段 |
 |------|------|
-| `package.json` | `"version": "0.2.8"` |
-| `tauri.conf.json` | `"version": "0.2.8"` |
-| `Cargo.toml` | `version = "0.2.8"` |
+| `package.json` | `"version": "0.2.33"` |
+| `tauri.conf.json` | `"version": "0.2.33"` |
+| `Cargo.toml` | `version = "0.2.33"` |
 
 > 另需同步 `package-lock.json` 的 2 处 `"version"`（随 `npm install` 写入），见 [README.md](../README.md)「版本号同步」。
 

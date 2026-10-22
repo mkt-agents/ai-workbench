@@ -39,7 +39,7 @@ export type AskPanelProps = {
   suggestion?: string | null;
   onSuggestionPick?: (text: string) => void;
   onSuggestionDismiss?: () => void;
-  onExample: (text: string, task?: TaskKind) => void;
+  onExample: (text: string) => void;
   /** Streaming text of the in-flight answer. */
   answer: string;
   /** Finished transcript (user / assistant pairs). */

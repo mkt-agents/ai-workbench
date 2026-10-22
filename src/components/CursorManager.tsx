@@ -16,6 +16,7 @@ import {
   FolderOpen,
   ClipboardList,
   Zap,
+  X,
 } from "lucide-react";
 import useTauriEvent from "../hooks/useTauriEvent";
 import { useGlobalStore } from "../core/store";
@@ -112,7 +113,7 @@ const SWITCH_STAGE_PERCENT: Record<string, number> = {
 const USAGE_GROUPS: { titleKey: string; itemKeys: string[] }[] = [
   {
     titleKey: "usageGroupAddTitle",
-    itemKeys: ["usageAdd1", "usageAdd2", "usageAdd3"],
+    itemKeys: ["usageAdd1", "usageAdd4", "usageAdd2"],
   },
   {
     titleKey: "usageGroupSwitchTitle",
@@ -125,6 +126,32 @@ const USAGE_GROUPS: { titleKey: string; itemKeys: string[] }[] = [
 ];
 
 const SETUP_STEP_KEYS = ["setupStep1", "setupStep2", "setupStep3"];
+
+/** Email normalization shared by the pending-init matcher: trim + lowercase. */
+export function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Exact-email match between the live Cursor login and the accounts still
+ * waiting for initialization. Deliberately stricter than matchCursorAccount
+ * (no name fallback): offering a one-click snapshot capture on a fuzzy match
+ * risks sealing the wrong identity, so only the registered address counts —
+ * the backend's fail-closed identity check stays the final gate either way.
+ */
+export function findPendingInitMatch<T extends { email: string }>(
+  pending: readonly T[],
+  liveEmail: string | null | undefined
+): T | undefined {
+  const email = normalizeEmail(liveEmail ?? "");
+  if (!email) return undefined;
+  return pending.find((account) => normalizeEmail(account.email) === email);
+}
+
+/** 账号名称的自动取值：邮箱 @ 前缀（如 user@x.com → user）。 */
+function autoNameFromEmail(email: string): string {
+  return email.split("@")[0]?.trim() ?? "";
+}
 
 function CursorManager() {
   const { t } = useTranslation("ai");
@@ -216,6 +243,17 @@ function CursorManager() {
   const [updateCleaning, setUpdateCleaning] = useState(false);
   const [accountQuery, setAccountQuery] = useState("");
   const [accountSort, setAccountSort] = useState<"created" | "name">("created");
+  /** Banner prompt: a pending account's address is now the live Cursor login. */
+  const [initPrompt, setInitPrompt] = useState<{
+    accountId: string;
+    email: string;
+    name: string;
+  } | null>(null);
+  const [dismissedInitIds, setDismissedInitIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  /** Banner stays visible in a working state while the finish runs. */
+  const [initPromptBusy, setInitPromptBusy] = useState(false);
 
   const visibleAccounts = useMemo(() => {
     const q = accountQuery.trim().toLowerCase();
@@ -236,6 +274,18 @@ function CursorManager() {
     // whatever row order the store happened to hand back.
     return [...matched].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [cursorAccounts, accountQuery, accountSort]);
+
+  /** Accounts still waiting to be initialized — same criterion as openAddModal. */
+  const pendingInitAccounts = useMemo(
+    () =>
+      cursorAccounts.filter((account) => {
+        if (dismissedInitIds.has(account.id)) return false;
+        if (!account.profileInitialized) return true;
+        const snap = backupStatus[account.id];
+        return snap ? !snap.complete : false;
+      }),
+    [cursorAccounts, backupStatus, dismissedInitIds]
+  );
 
   /** Only one job that quits Cursor or holds its files open at a time:
    *  switching, adding, deleting and DB slimming all do, and a VACUUM that
@@ -457,6 +507,56 @@ function CursorManager() {
     }, 10_000);
     return () => window.clearInterval(timer);
   }, [invokeIsCursorRunning, opLocked]);
+
+  // Login-completed detection for accounts waiting on initialization: while a
+  // pending account exists, poll the live login every 3s while Cursor runs, and
+  // keep a slow 10s poll while it does not — the quit edge may read a state.vscdb
+  // that is not flushed yet, so one check there is not enough (covers "login
+  // then close Cursor"). A match raises a sticky banner; its click still goes
+  // through the backend's fail-closed identity check, so a wrong match cannot
+  // poison a snapshot.
+  const pendingInitRef = useRef(pendingInitAccounts);
+  pendingInitRef.current = pendingInitAccounts;
+  const pendingInitKey = pendingInitAccounts.map((a) => a.id).join("|");
+
+  useEffect(() => {
+    if (opLocked || initPrompt || pendingInitKey === "") return;
+    let cancelled = false;
+    const check = async () => {
+      const pending = pendingInitRef.current;
+      if (cancelled || pending.length === 0) return;
+      try {
+        const status = await invokeGetCursorLoginStatus();
+        if (cancelled || !status?.isLoggedIn) return;
+        const match = findPendingInitMatch(pending, status.email);
+        if (match) {
+          setInitPrompt({
+            accountId: match.id,
+            email: match.email,
+            name: match.notes?.trim() || match.name,
+          });
+          // Sync the toolbar's 当前登录 and the row flags so the page does not
+          // claim "not signed in" right under a banner saying the opposite.
+          void refreshLiveStatus({ silent: true });
+        }
+      } catch {
+        /* silent — a failed probe must not spam toasts */
+      }
+    };
+    void check();
+    const timer = window.setInterval(check, isCursorRunning ? 3000 : 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    pendingInitKey,
+    isCursorRunning,
+    opLocked,
+    initPrompt,
+    invokeGetCursorLoginStatus,
+    refreshLiveStatus,
+  ]);
 
   useTauriEvent<{ stage: string; message: string }>(
     "cursor:switch_progress",
@@ -756,6 +856,12 @@ function CursorManager() {
       icon: "warning",
     });
     if (!ok) return;
+    // The banner's one-click finish may have started while this dialog was
+    // open (the dialog awaits with busy still false) — bail out instead of
+    // running a second concurrent snapshot+restart for the same account.
+    if (opLocked) return;
+    // The row flow takes over: retire a stale banner for this account.
+    setInitPrompt((p) => (p && p.accountId === account.id ? null : p));
 
     setBusy(true);
     setSwitchStep(t("cursor.savingLogin"));
@@ -773,8 +879,62 @@ function CursorManager() {
     }
   };
 
+  const dismissInitPrompt = () => {
+    if (!initPrompt) return;
+    setDismissedInitIds((prev) => {
+      const next = new Set(prev);
+      next.add(initPrompt.accountId);
+      return next;
+    });
+    setInitPrompt(null);
+  };
+
+  /**
+   * The banner click is the confirmation itself — no extra dialog on top of it.
+   * The backend still re-verifies that the live login is this row's address.
+   */
+  const handleBannerFinishInit = async () => {
+    if (opLocked || !initPrompt) return;
+    const account = useGlobalStore
+      .getState()
+      .cursorAccounts.find((a) => a.id === initPrompt.accountId);
+    if (!account) {
+      setInitPrompt(null);
+      return;
+    }
+    // Keep the banner up in a working state so the user can see WHICH account
+    // is being saved; the progress bar below only shows a generic step.
+    setInitPromptBusy(true);
+    setBusy(true);
+    setSwitchStep(t("cursor.savingLogin"));
+    try {
+      const result = await finishAccountProfile(account.id);
+      showMsg("success", result || t("cursor.finishInitOk"));
+      await refresh();
+    } catch (error) {
+      showMsg("error", t("cursor.initFailed", { error }));
+      await refresh();
+    } finally {
+      setBusy(false);
+      setInitPromptBusy(false);
+      setInitPrompt(null);
+      setSwitchStep("");
+      setSwitchStage("");
+    }
+  };
+
   const handleReopenCursor = async (account: CursorAccount) => {
     if (opLocked) return;
+    // Reopening clears the login this banner was matched against — retire it.
+    setInitPrompt(null);
+    // Re-entering the waiting state re-arms the auto-detect banner for this
+    // row, even if the user dismissed it during the previous attempt.
+    setDismissedInitIds((prev) => {
+      if (!prev.has(account.id)) return prev;
+      const next = new Set(prev);
+      next.delete(account.id);
+      return next;
+    });
     setBusy(true);
     setSwitchStep(t("cursor.openingProfile"));
     try {
@@ -815,6 +975,8 @@ function CursorManager() {
 
   const handleLaunchCursor = async (account: CursorAccount) => {
     if (opLocked) return;
+    // Launching applies that account's login; any live banner match is stale.
+    setInitPrompt(null);
     setBusy(true);
     setSwitchStep(t("cursor.launching"));
     try {
@@ -933,6 +1095,8 @@ function CursorManager() {
       icon: "warning",
     });
     if (!ok) return;
+    // Switching replaces the login any banner match was based on.
+    setInitPrompt(null);
 
     setSwitchingId(account.id);
     setSwitchStep(
@@ -965,6 +1129,49 @@ function CursorManager() {
 
   return (
     <div className="page-scrollable cursor-manager-page">
+      {initPrompt && (
+        <div
+          className={`cursor-init-banner${initPromptBusy ? " is-busy" : ""}`}
+          role="status"
+        >
+          {initPromptBusy ? (
+            <Loader2 size={14} className="spin cursor-init-banner-icon" />
+          ) : (
+            <Check size={14} className="cursor-init-banner-icon" />
+          )}
+          <div className="cursor-init-banner-text">
+            {initPromptBusy
+              ? t("cursor.initBannerWorking", { name: initPrompt.name })
+              : t("cursor.initDetected", {
+                  name: initPrompt.name,
+                  email: initPrompt.email,
+                })}
+          </div>
+          {!initPromptBusy && (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary btn-small"
+                onClick={handleBannerFinishInit}
+                disabled={opLocked}
+                title={t("cursor.finishInitWarning")}
+              >
+                {t("cursor.initBannerFinish")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={dismissInitPrompt}
+                disabled={opLocked}
+                title={t("cursor.initBannerDismiss")}
+                aria-label={t("cursor.initBannerDismiss")}
+              >
+                <X size={12} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
       <div className="cursor-toolbar">
         <div className="cursor-toolbar-main">
           <div className="status-label">{t("cursor.currentLogin")}</div>
@@ -1158,7 +1365,9 @@ function CursorManager() {
               return (
                 <li
                   key={account.id}
-                  className={`account-item ${liveActive ? "active" : ""}`}
+                  className={`account-item ${liveActive ? "active" : ""} ${
+                    initPrompt?.accountId === account.id ? "init-target" : ""
+                  }`}
                 >
                   <div
                     className="account-avatar"
@@ -1521,16 +1730,18 @@ function CursorManager() {
       <div className="card cursor-usage-card">
         <div className="card-title">{t("cursor.usageTitle")}</div>
         <p className="cursor-usage-lead">{t("cursor.usageLead")}</p>
-        {USAGE_GROUPS.map((group) => (
-          <div className="cursor-usage-group" key={group.titleKey}>
-            <div className="cursor-usage-group-title">{t(`cursor.${group.titleKey}`)}</div>
-            <ul className="cursor-usage-list">
-              {group.itemKeys.map((key) => (
-                <li key={key}>{t(`cursor.${key}`)}</li>
-              ))}
-            </ul>
-          </div>
-        ))}
+        <div className="cursor-usage-grid">
+          {USAGE_GROUPS.map((group) => (
+            <div className="cursor-usage-group" key={group.titleKey}>
+              <div className="cursor-usage-group-title">{t(`cursor.${group.titleKey}`)}</div>
+              <ul className="cursor-usage-list">
+                {group.itemKeys.map((key) => (
+                  <li key={key}>{t(`cursor.${key}`)}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
       </div>
 
       {showModal && (
@@ -1556,7 +1767,22 @@ function CursorManager() {
               <input
                 className="input-field"
                 value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                onChange={(e) =>
+                  setFormData((prev) => {
+                    // 名称自动填充：名称为空或仍是上一个邮箱的前缀（未手改）
+                    // 时跟随新邮箱；手改过就不再覆盖。
+                    const nameWasAuto =
+                      prev.name.trim() === "" ||
+                      prev.name === autoNameFromEmail(prev.email);
+                    return {
+                      ...prev,
+                      email: e.target.value,
+                      name: nameWasAuto
+                        ? autoNameFromEmail(e.target.value)
+                        : prev.name,
+                    };
+                  })
+                }
                 placeholder={t("cursor.emailPlaceholder")}
                 disabled={busy}
               />

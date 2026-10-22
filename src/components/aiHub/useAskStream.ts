@@ -6,7 +6,7 @@ import type { AIModelConfig, AiHubTurn } from "../../core/types";
 import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
 import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
-import { buildMeta, buildSystem, stepsMutatedWorkspace, TEXT_ONLY_TASKS } from "./config";
+import { buildMeta, buildSystem, stepsMutatedWorkspace } from "./config";
 import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
 import { cleanDailyReport, dailyReportSystem, isDailyReport, isDailyRevision, type DailyStyle } from "./dailyReport";
 import type { OptimizeConfig, TaskKind } from "./config";
@@ -20,7 +20,6 @@ export type AnswerSource = {
   mode: AskMode;
   summary: ContextSummary;
   modelName: string;
-  task: TaskKind;
   /** Wall-clock ms for the completed stream (when known). */
   elapsedMs?: number;
   promptTokens?: number;
@@ -340,7 +339,6 @@ export function useAskStream(opts: AskStreamOptions) {
       let user: string;
       const route = routeQuestion({
         question,
-        task: sendTask,
         lastMode: lastModeRef.current,
         override: replay?.mode ?? routeOverride,
       });
@@ -389,7 +387,7 @@ export function useAskStream(opts: AskStreamOptions) {
           summary = ctxResult.summary;
           ctxTruncated = ctxResult.truncated;
           const hasProject = summary.parts.length > 0;
-          system = buildSystem(selectedModel, route.mode, sendTask, hasProject);
+          system = buildSystem(selectedModel, route.mode, hasProject);
           if (profileSystemRole?.trim()) {
             system += `\n\n[Profile] ${profileSystemRole.trim()}`;
           }
@@ -398,8 +396,6 @@ export function useAskStream(opts: AskStreamOptions) {
             ? `${question}\n\n---\nContext from workbench:\n${ctx}`
             : question;
           user += formatAttachmentsBlock(sentAttachments);
-          keepWhole =
-            sendTask === "polish" || sendTask === "translate" || sendTask === "summarize";
           if (stoppedEarly()) return;
         }
       }
@@ -409,7 +405,6 @@ export function useAskStream(opts: AskStreamOptions) {
         mode: sentMode,
         summary,
         modelName: selectedModel.name,
-        task: sendTask,
         contextTruncated: ctxTruncated || undefined,
         droppedTurns: budget.dropped || undefined,
       });
@@ -571,8 +566,9 @@ export function useAskStream(opts: AskStreamOptions) {
       if (stoppedEarly()) return;
       // A plain-chat round under 只读权限 has no business carrying the tool menu:
       // it invites a file/git round trip the question never asked for.
+      // The prompt-optimizer works on the draft alone — no tools either.
       const wantTools =
-        !TEXT_ONLY_TASKS.includes(sendTask) &&
+        sendTask !== "optimize" &&
         !isDaily &&
         (sentMode === "project" || agent.permission !== "read");
       await invoke("agent_run", {
