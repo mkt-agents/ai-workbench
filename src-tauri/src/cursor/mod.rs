@@ -22,10 +22,12 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// TTL for the "which data dir is Cursor running with" probe. Reading it needs
-/// `Get-CimInstance Win32_Process` (WMI, commonly 200–500 ms) and the Cursor
-/// page re-reads login status on every window focus, so a short cache removes
-/// the repeat cost while staying responsive.
-const RUNNING_DATA_DIR_TTL: Duration = Duration::from_millis(2500);
+/// `Get-CimInstance Win32_Process` (WMI, commonly 0.5–2 s once PowerShell
+/// startup is included) and the Cursor page re-reads login status on every
+/// window focus and during pending-init polling, so the cache must outlive
+/// those bursts — state changes (quit / launch / switch) invalidate it
+/// explicitly, so a longer TTL costs nothing in correctness.
+const RUNNING_DATA_DIR_TTL: Duration = Duration::from_secs(10);
 
 /// TTL for the "is Cursor.exe running" probe. Short enough to detect a stop
 /// promptly, long enough to collapse the bursts of sequential checks that
@@ -64,14 +66,31 @@ impl<T: Clone> TimedCache<T> {
     }
 }
 
+/// TTL for the disk figures (usage bar + per-account backup sizes). Both walk
+/// the same multi-GB backup tree; without a cache one page load pays for the
+/// walk twice, and every re-entry pays again. Mutations (capture / delete /
+/// cleanup / slim) invalidate explicitly, so a short TTL is purely a
+/// collapse-the-bursts window.
+const DISK_CACHE_TTL: Duration = Duration::from_secs(5);
+
 static RUNNING_DATA_DIR_CACHE: TimedCache<Option<PathBuf>> = TimedCache::new();
 static CURSOR_RUNNING_CACHE: TimedCache<bool> = TimedCache::new();
+static DISK_USAGE_CACHE: TimedCache<CursorDiskUsage> = TimedCache::new();
+static BACKUPS_LIST_CACHE: TimedCache<Vec<CursorBackupInfo>> = TimedCache::new();
 
 /// Invalidate both probe caches after a state change (quit / launch) so the
 /// next read observes reality instead of a stale snapshot.
 fn invalidate_cursor_probes() {
     RUNNING_DATA_DIR_CACHE.invalidate();
     CURSOR_RUNNING_CACHE.invalidate();
+}
+
+/// Invalidate the disk-figure caches after anything that creates, deletes,
+/// shrinks or cleans backup/profile trees, so the page never shows a stale
+/// size for a change the user just made.
+fn invalidate_cursor_disk_cache() {
+    DISK_USAGE_CACHE.invalidate();
+    BACKUPS_LIST_CACHE.invalidate();
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1558,20 +1577,24 @@ fn inspect_backup_dir(account_id: &str, backup: &Path) -> CursorBackupStatus {
     let has_auth_json = auth_json.exists();
     let has_cookies = cookies.exists() && cookies.metadata().map(|m| m.len() > 0).unwrap_or(false);
 
-    let mut auth_email = String::new();
-    let mut has_token = false;
-    if has_auth_json {
-        if let Ok(content) = fs::read_to_string(&auth_json) {
-            if let Ok(snap) = serde_json::from_str::<CursorAuthSnapshot>(&content) {
-                auth_email = snap.email.clone();
-                has_token = snap
-                    .items
-                    .get("cursorAuth/accessToken")
-                    .map(|t| !t.is_empty())
-                    .unwrap_or(false);
-            }
-        }
-    }
+    // auth.json is parsed exactly once: the completeness check and the token
+    // expiry warning both read the same snapshot.
+    let snap: Option<CursorAuthSnapshot> = if has_auth_json {
+        fs::read_to_string(&auth_json)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+    } else {
+        None
+    };
+    let auth_email = snap
+        .as_ref()
+        .map(|s| s.email.clone())
+        .unwrap_or_default();
+    let token = snap
+        .as_ref()
+        .and_then(|s| s.items.get("cursorAuth/accessToken"))
+        .filter(|t| !t.is_empty());
+    let has_token = token.is_some();
 
     let (complete, reason) = if !has_auth_json {
         (
@@ -1592,21 +1615,15 @@ fn inspect_backup_dir(account_id: &str, backup: &Path) -> CursorBackupStatus {
     let mut final_complete = complete;
     let mut warning: Option<String> = None;
     if complete {
-        if let Ok(content) = fs::read_to_string(&auth_json) {
-            if let Ok(snap) = serde_json::from_str::<CursorAuthSnapshot>(&content) {
-                if let Some(token) = snap.items.get("cursorAuth/accessToken") {
-                    if let Some(warn) = token_expiry_warning(token) {
-                        // An already-expired token blocks switching (incomplete).
-                        // "Expiring soon" stays complete and is reported as a
-                        // non-blocking warning so the UI can surface it early.
-                        if warn.contains("已过期") {
-                            final_complete = false;
-                            final_reason = warn;
-                        } else {
-                            warning = Some(warn);
-                        }
-                    }
-                }
+        if let Some(warn) = token.and_then(|t| token_expiry_warning(t)) {
+            // An already-expired token blocks switching (incomplete).
+            // "Expiring soon" stays complete and is reported as a
+            // non-blocking warning so the UI can surface it early.
+            if warn.contains("已过期") {
+                final_complete = false;
+                final_reason = warn;
+            } else {
+                warning = Some(warn);
             }
         }
     }
@@ -1872,7 +1889,15 @@ fn migrate_backup_to_profile_impl(account_id: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn inspect_cursor_backup(account_id: String) -> Result<CursorBackupStatus, String> {
+pub async fn inspect_cursor_backup(account_id: String) -> Result<CursorBackupStatus, String> {
+    // Small files, but it runs once per account on every page load — keep it
+    // off the IPC thread so it cannot delay sibling invokes.
+    tokio::task::spawn_blocking(move || inspect_cursor_backup_sync(account_id))
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+fn inspect_cursor_backup_sync(account_id: String) -> Result<CursorBackupStatus, String> {
     let backup = backup_dir_path(&account_id)?;
     if !backup.exists() {
         return Ok(CursorBackupStatus {
@@ -2253,11 +2278,15 @@ pub async fn init_account_profile(
     expected_email: Option<String>,
 ) -> Result<String, String> {
     let window = window.clone();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         init_account_profile_impl(&window, account_id, expected_email)
     })
     .await
-    .map_err(|e| format!("初始化任务异常: {}", e))?
+    .map_err(|e| format!("初始化任务异常: {}", e))?;
+    if result.is_ok() {
+        invalidate_cursor_disk_cache();
+    }
+    result
 }
 
 fn init_account_profile_impl(
@@ -2515,11 +2544,15 @@ pub async fn finish_account_profile(
     relaunch: Option<bool>,
 ) -> Result<String, String> {
     let window = window.clone();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         finish_account_profile_impl(&window, account_id, expected_email, relaunch)
     })
     .await
-    .map_err(|e| format!("初始化任务异常: {}", e))?
+    .map_err(|e| format!("初始化任务异常: {}", e))?;
+    if result.is_ok() {
+        invalidate_cursor_disk_cache();
+    }
+    result
 }
 
 #[tauri::command]
@@ -2607,11 +2640,16 @@ pub async fn switch_cursor_account(
     if let Some(id) = current_account_id.as_deref() {
         set_active_account(Some(id));
     }
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         switch_cursor_account_impl(Some(&window), target_account_id, relaunch)
     })
     .await
-    .map_err(|e| format!("切换任务异常: {}", e))?
+    .map_err(|e| format!("切换任务异常: {}", e))?;
+    // The switch preserves the outgoing session into a backup slot first.
+    if result.is_ok() {
+        invalidate_cursor_disk_cache();
+    }
+    result
 }
 
 #[tauri::command]
@@ -2655,6 +2693,7 @@ fn delete_cursor_backup_impl(account_id: String) -> Result<(), String> {
             let _ = clear_auth_in_data_root(&cursor_data_dir());
         }
     }
+    invalidate_cursor_disk_cache();
     Ok(())
 }
 
@@ -2752,17 +2791,29 @@ pub struct CursorOrphanProfiles {
 
 /// Unreferenced profile directories, surfaced so the user can reclaim disk.
 #[tauri::command]
-pub fn get_cursor_orphan_profiles() -> Result<CursorOrphanProfiles, String> {
-    let dirs = orphan_profile_dirs(&known_cursor_account_ids());
-    Ok(CursorOrphanProfiles {
-        count: dirs.len() as u32,
-        bytes: dirs.iter().map(|(_, _, bytes)| *bytes).sum(),
-        ids: dirs.into_iter().map(|(name, _, _)| name).collect(),
+pub async fn get_cursor_orphan_profiles() -> Result<CursorOrphanProfiles, String> {
+    // orphan_profile_dirs dir_sizes every orphan: spawn_blocking, same as the
+    // other tree walkers on this page.
+    tokio::task::spawn_blocking(|| {
+        let dirs = orphan_profile_dirs(&known_cursor_account_ids());
+        Ok(CursorOrphanProfiles {
+            count: dirs.len() as u32,
+            bytes: dirs.iter().map(|(_, _, bytes)| *bytes).sum(),
+            ids: dirs.into_iter().map(|(name, _, _)| name).collect(),
+        })
     })
+    .await
+    .map_err(|e| format!("Task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn cleanup_cursor_orphan_profiles() -> Result<CursorCleanupResult, String> {
+pub async fn cleanup_cursor_orphan_profiles() -> Result<CursorCleanupResult, String> {
+    tokio::task::spawn_blocking(cleanup_cursor_orphan_profiles_sync)
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+fn cleanup_cursor_orphan_profiles_sync() -> Result<CursorCleanupResult, String> {
     let known = known_cursor_account_ids();
     if known.is_empty() {
         return Err("未能读取账号列表，已跳过清理".into());
@@ -2772,6 +2823,7 @@ pub fn cleanup_cursor_orphan_profiles() -> Result<CursorCleanupResult, String> {
         .map(|(_, _, bytes)| *bytes)
         .sum();
     let removed = cleanup_orphan_profiles(&known);
+    invalidate_cursor_disk_cache();
     Ok(CursorCleanupResult {
         removed_files: removed as u32,
         freed_bytes: freed,
@@ -2821,7 +2873,7 @@ pub fn read_cursor_diagnostics(account_id: Option<String>) -> Result<String, Str
     }
 
     if let Some(id) = account_id.as_deref() {
-        if let Ok(status) = inspect_cursor_backup(id.to_string()) {
+        if let Ok(status) = inspect_cursor_backup_sync(id.to_string()) {
             out.push_str(&format!(
                 "snapshot:     complete={} authEmail={} reason={}\n",
                 status.complete, status.auth_email, status.reason
@@ -2865,7 +2917,7 @@ pub fn read_cursor_diagnostics(account_id: Option<String>) -> Result<String, Str
     Ok(out)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorBackupInfo {
     pub account_id: String,
@@ -2873,7 +2925,7 @@ pub struct CursorBackupInfo {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorDiskUsage {
     pub backups_bytes: u64,
@@ -3261,6 +3313,15 @@ fn try_remove_empty_dir(path: &Path) {
 }
 
 fn get_cursor_disk_usage_sync() -> Result<CursorDiskUsage, String> {
+    if let Some(cached) = DISK_USAGE_CACHE.get(DISK_CACHE_TTL) {
+        return Ok(cached);
+    }
+    let usage = get_cursor_disk_usage_uncached()?;
+    DISK_USAGE_CACHE.set(usage.clone());
+    Ok(usage)
+}
+
+fn get_cursor_disk_usage_uncached() -> Result<CursorDiskUsage, String> {
     let backups_path = backups_root_dir()?;
     let live_db = live_state_vscdb();
 
@@ -3339,6 +3400,7 @@ fn cleanup_cursor_sealed_backups_sync() -> Result<CursorCleanupResult, String> {
             failures.join("；")
         )
     };
+    invalidate_cursor_disk_cache();
     Ok(CursorCleanupResult {
         removed_files: removed,
         freed_bytes: freed,
@@ -3436,6 +3498,7 @@ fn cleanup_cursor_full_backups_sync() -> Result<CursorCleanupResult, String> {
         format_bytes(backup_freed)
     ));
 
+    invalidate_cursor_disk_cache();
     Ok(CursorCleanupResult {
         removed_files: removed,
         freed_bytes: freed,
@@ -3444,7 +3507,20 @@ fn cleanup_cursor_full_backups_sync() -> Result<CursorCleanupResult, String> {
 }
 
 #[tauri::command]
-pub fn list_cursor_backups() -> Result<Vec<CursorBackupInfo>, String> {
+pub async fn list_cursor_backups() -> Result<Vec<CursorBackupInfo>, String> {
+    // Recursive per-account dir_size on the shared backup tree: must leave the
+    // IPC thread, and the cache collapses it into the disk-usage walk.
+    if let Some(cached) = BACKUPS_LIST_CACHE.get(DISK_CACHE_TTL) {
+        return Ok(cached);
+    }
+    let list = tokio::task::spawn_blocking(list_cursor_backups_uncached)
+        .await
+        .map_err(|e| format!("Task failed: {}", e))??;
+    BACKUPS_LIST_CACHE.set(list.clone());
+    Ok(list)
+}
+
+fn list_cursor_backups_uncached() -> Result<Vec<CursorBackupInfo>, String> {
     let backups_root = backups_root_dir()?;
 
     if !backups_root.exists() {
@@ -3624,6 +3700,7 @@ fn slim_cursor_state_dbs_sync() -> Result<CursorDbSlimReport, String> {
     } else {
         format!("数据库瘦身完成，共回收 {}", format_bytes(freed_bytes))
     };
+    invalidate_cursor_disk_cache();
     Ok(CursorDbSlimReport {
         targets,
         freed_bytes,
@@ -3742,8 +3819,8 @@ pub fn run_cursor_switch_self_test(personal_id: &str, company_id: &str) -> Resul
         lines.push(msg);
     };
 
-    let personal = inspect_cursor_backup(personal_id.to_string())?;
-    let company = inspect_cursor_backup(company_id.to_string())?;
+    let personal = inspect_cursor_backup_sync(personal_id.to_string())?;
+    let company = inspect_cursor_backup_sync(company_id.to_string())?;
     if !personal.complete {
         return Err(format!("个人账号快照不可用: {}", personal.reason));
     }

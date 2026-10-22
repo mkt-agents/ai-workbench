@@ -333,8 +333,14 @@ function CursorManager() {
     async (opts?: { silent?: boolean }) => {
       setStatusRefreshing(true);
       try {
-        try {
-          const status = await invokeGetCursorLoginStatus();
+        // Login probe (WMI process query + state.vscdb read) and the running
+        // check (tasklist) are independent — one burst, not a serial chain.
+        const [loginSettled, runningSettled] = await Promise.allSettled([
+          invokeGetCursorLoginStatus(),
+          invokeIsCursorRunning(),
+        ]);
+        if (loginSettled.status === "fulfilled") {
+          const status = loginSettled.value;
           setCurrentCursor(status);
           // This runs on every window focus, so only persist when a stored
           // "logged in" flag would actually change — an unconditional save
@@ -360,15 +366,15 @@ function CursorManager() {
           if (changed) {
             await syncCursorLoggedInFlags(status?.email ?? "", status?.name ?? "");
           }
-        } catch (e) {
+        } else {
           setCurrentCursor(null);
           if (!opts?.silent) {
-            showMsg("error", t("cursor.loginStatusFailed", { error: e }));
+            showMsg("error", t("cursor.loginStatusFailed", { error: loginSettled.reason }));
           }
         }
-        try {
-          setIsCursorRunning(await invokeIsCursorRunning());
-        } catch {
+        if (runningSettled.status === "fulfilled") {
+          setIsCursorRunning(runningSettled.value);
+        } else {
           setIsCursorRunning(false);
           if (!opts?.silent) {
             showMsg("error", t("cursor.cursorDetectFailed"));
@@ -384,12 +390,14 @@ function CursorManager() {
   const refreshDiskUsage = useCallback(async () => {
     setDiskLoading(true);
     try {
-      setDiskUsage(await invokeGetCursorDiskUsage());
-      setOrphans(await invokeGetCursorOrphanProfiles());
-    } catch {
-      // Keep the last known numbers: a failed re-read is not "no data", and the
-      // alternative is flashing "无法读取占用信息" over good figures.
-      setOrphans(null);
+      // Both walks traverse big trees; run them concurrently and keep the last
+      // known numbers per figure — a failed re-read is not "no data".
+      const [usageSettled, orphanSettled] = await Promise.allSettled([
+        invokeGetCursorDiskUsage(),
+        invokeGetCursorOrphanProfiles(),
+      ]);
+      if (usageSettled.status === "fulfilled") setDiskUsage(usageSettled.value);
+      setOrphans(orphanSettled.status === "fulfilled" ? orphanSettled.value : null);
     } finally {
       setDiskLoading(false);
     }
@@ -409,18 +417,28 @@ function CursorManager() {
     // account list or first paint on it.
     void refreshDiskUsage();
     void refreshUpdateState();
-    await loadCursorAccounts();
+
+    // Account read (SQLite), live login probe (WMI + state.vscdb) and the
+    // backup-size walk are mutually independent: fire them together instead of
+    // awaiting each in turn.
+    const accountsTask = loadCursorAccounts();
+    const liveTask = refreshLiveStatus({ silent: true });
+    const backupsTask = invokeListCursorBackups().catch(
+      (): Array<{ accountId: string; path: string; sizeBytes: number }> => []
+    );
+    await accountsTask;
 
     // One-shot legacy avatar color migration
     const loaded = useGlobalStore.getState().cursorAccounts;
     const avatarMigrated =
       localStorage.getItem(AVATAR_MIGRATE_KEY) === "1" ||
       localStorage.getItem(LEGACY_AVATAR_MIGRATE_KEY) === "1";
-    if (!avatarMigrated) {
+    const avatarTask = (async () => {
+      if (avatarMigrated) return;
       const toMigrate = loaded.filter((a, i) => avatarColorFor(a, i) !== a.color);
       if (toMigrate.length > 0) {
         await Promise.all(
-          loaded.map(async (a, i) => {
+          toMigrate.map(async (a, i) => {
             const next = avatarColorFor(a, i);
             if (next !== a.color) {
               await updateCursorAccount(a.id, { color: next });
@@ -429,9 +447,9 @@ function CursorManager() {
         );
       }
       localStorage.setItem(AVATAR_MIGRATE_KEY, "1");
-    }
+    })();
 
-    await refreshLiveStatus({ silent: true });
+    await Promise.all([avatarTask, liveTask]);
 
     const accounts = useGlobalStore.getState().cursorAccounts;
     // Publish per account as it lands: the SQLite probe takes ~1s each, and a
@@ -465,9 +483,7 @@ function CursorManager() {
     );
     setBackupStatus(lastSnapshotStatus);
 
-    const backups = await invokeListCursorBackups().catch(
-      (): Array<{ accountId: string; path: string; sizeBytes: number }> => []
-    );
+    const backups = await backupsTask;
     lastBackupSizes = Object.fromEntries(backups.map((b) => [b.accountId, b.sizeBytes]));
     setBackupSizes(lastBackupSizes);
   }, [
