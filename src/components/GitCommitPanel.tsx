@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Check, ChevronDown, GitBranch, Loader2, User, XCircle } from "lucide-react";
+import { AlertTriangle, Check, GitBranch, Loader2, User, XCircle } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { pathKey, projectNameFromPath } from "../core/pathUtils";
 import { readStoredString, writeStoredString } from "../core/localState";
@@ -60,8 +60,6 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
   const updateRepoConfig = useGlobalStore((s) => s.updateRepoConfig);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeGitUndoLastCommit = useGlobalStore((s) => s.invokeGitUndoLastCommit);
-  const invokeGitListBranches = useGlobalStore((s) => s.invokeGitListBranches);
-  const invokeGitSwitchBranch = useGlobalStore((s) => s.invokeGitSwitchBranch);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const aiSceneModels = useGlobalStore((s) => s.settings.aiSceneModels);
   const loadAIModels = useGlobalStore((s) => s.loadAIModels);
@@ -77,8 +75,6 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     readStoredString(CL_MODEL_KEY)
   );
   const [scopeLabel, setScopeLabel] = useState<string | null>(null);
-  const [branches, setBranches] = useState<string[]>([]);
-  const [branchBusy, setBranchBusy] = useState(false);
   const onScopeLabel = useCallback((label: string | null) => {
     setScopeLabel(label);
   }, []);
@@ -119,42 +115,6 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
     const key = pathKey(repoPath);
     return Object.values(repoItems).find((item) => pathKey(item.path) === key) ?? null;
   }, [repoItems, repoPath]);
-
-  useEffect(() => {
-    if (!active || !repoPath) {
-      setBranches([]);
-      return;
-    }
-    let cancelled = false;
-    invokeGitListBranches(repoPath)
-      .then((list) => {
-        if (cancelled) return;
-        const names = [...new Set([list.current, ...list.local].filter(Boolean))];
-        setBranches(names);
-      })
-      .catch(() => {
-        if (!cancelled) setBranches([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [active, repoPath, refreshNonce, invokeGitListBranches]);
-
-  const switchBranch = async (name: string) => {
-    if (!repoPath || !name || name === summary?.branch || branchBusy) return;
-    setBranchBusy(true);
-    try {
-      await invokeGitSwitchBranch(repoPath, name);
-      invalidateRepos([repoPath]);
-      await refreshRepos([repoPath], { withStatus: true });
-      setRefreshNonce((n) => n + 1);
-      showMsg("success", t("commit.branchSwitched", { name }));
-    } catch (e) {
-      showMsg("error", formatInvokeError(e));
-    } finally {
-      setBranchBusy(false);
-    }
-  };
 
   const author = summary
     ? { name: summary.userName || "", email: summary.userEmail || "" }
@@ -331,29 +291,10 @@ function GitCommitPanel({ active = true, onOpenRepos }: Props) {
                 {summary?.branch && (
                   <>
                     <span className="commit-scope-dot" aria-hidden />
-                    <span className="commit-branch-pick">
-                      {branchBusy ? (
-                        <Loader2 size={11} className="spin commit-branch-pick-icon" aria-hidden />
-                      ) : (
-                        <GitBranch size={11} className="commit-branch-pick-icon" aria-hidden />
-                      )}
-                      <select
-                        className="commit-branch-select"
-                        value={summary.branch}
-                        disabled={branchBusy || switching || !repoPath}
-                        aria-label={t("commit.branch")}
-                        title={summary.branch}
-                        onChange={(e) => void switchBranch(e.target.value)}
-                      >
-                        {(branches.includes(summary.branch) ? branches : [summary.branch, ...branches]).map(
-                          (name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          )
-                        )}
-                      </select>
-                      <ChevronDown size={11} className="commit-branch-pick-caret" aria-hidden />
+                    {/* 只展示当前分支；切分支去「仓库」页，这里故意不给切换入口。 */}
+                    <span className="commit-branch-badge" title={summary.branch}>
+                      <GitBranch size={11} aria-hidden />
+                      <span className="commit-branch-badge-text">{summary.branch}</span>
                     </span>
                   </>
                 )}

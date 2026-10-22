@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle, MoreHorizontal, Radar, Columns2, Link2, MessageSquare, FileBarChart2, GitCommitHorizontal, Sparkles } from "lucide-react";
+import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle, MoreHorizontal, Radar, Columns2, Link2, MessageSquare, FileBarChart2, GitCommitHorizontal, Sparkles, Share2 } from "lucide-react";
 import AppLogoMark from "./AppLogoMark";
 import DropdownMenu from "./DropdownMenu";
 import ModelComparePlayground from "./ModelComparePlayground";
@@ -364,6 +364,9 @@ function AIAssistant() {
   const [bulkBusy, setBulkBusy] = useState<"test" | "sync" | null>(null);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
   const [transferBusy, setTransferBusy] = useState<"export" | "import" | null>(null);
+  /** Share modal: which config is being shared, and whether its key is shown in clear. */
+  const [shareConfig, setShareConfig] = useState<AIModelConfig | null>(null);
+  const [shareShowKey, setShareShowKey] = useState(false);
   const pickerRootRef = useRef<HTMLDivElement | null>(null);
   const pickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const pickerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -417,6 +420,19 @@ function AIAssistant() {
     } catch (error) {
       showMsg("error", t("models.copyFailed", { error: String(error) }));
     }
+  };
+
+  /** 分享文本：接口地址 / 密钥 / 模型各占一行，第三方拿到即可直连。 */
+  const buildShareText = (config: AIModelConfig) =>
+    [
+      `${t("models.baseUrl")}: ${config.baseUrl}`,
+      `${t("models.apiKey")}: ${config.apiKey}`,
+      `${t("models.model")}: ${config.model}`,
+    ].join("\n");
+
+  const openShare = (config: AIModelConfig) => {
+    setShareShowKey(false);
+    setShareConfig(config);
   };
 
   // The menu is portalled to <body>, so an outside click has to be checked against the
@@ -1478,6 +1494,15 @@ function AIAssistant() {
             <button
               type="button"
               className="ai-model-icon-btn"
+              onClick={() => openShare(config)}
+              title={t("models.share")}
+              aria-label={t("models.share")}
+            >
+              <Share2 size={13} />
+            </button>
+            <button
+              type="button"
+              className="ai-model-icon-btn"
               onClick={() => handleEdit(config)}
               title={t("models.edit")}
               aria-label={t("models.edit")}
@@ -1542,6 +1567,9 @@ function AIAssistant() {
       if (collapsed) return [band];
       return [band, ...group.configs.map((config) => renderConfigCard(config, true))];
     });
+
+  const shareMeta = shareConfig ? getProviderMeta(shareConfig.provider) : null;
+  const shareLogo = shareConfig ? aiProviderLogoSrc(shareConfig.provider) : null;
 
   return (
     <div className="ai-assistant">
@@ -2331,6 +2359,140 @@ function AIAssistant() {
                       title={t("models.submitShortcut")}
                     >
                       {editingId ? t("models.save") : t("models.addModel")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {shareConfig && (
+            <div className="modal-overlay">
+              <div className="modal modal-md models-share-modal">
+                <ModalTitleRow
+                  title={t("models.shareTitle")}
+                  onClose={() => setShareConfig(null)}
+                />
+                <div className="ai-modal-content">
+                  <div className="ai-share-head">
+                    {shareLogo ? (
+                      <img className="ai-share-logo has-logo" src={shareLogo} alt="" />
+                    ) : (
+                      <span className="ai-share-logo">
+                        {providerIconLabel(shareConfig.provider)}
+                      </span>
+                    )}
+                    <div className="ai-share-head-text">
+                      <span className="ai-share-name" title={shareConfig.name}>
+                        {shareConfig.name}
+                      </span>
+                      <span className="ai-share-provider">
+                        {shareMeta?.label || shareConfig.provider}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="ai-share-rows">
+                    <div className="ai-share-field">
+                      <span className="ai-share-label">{t("models.baseUrl")}</span>
+                      <button
+                        type="button"
+                        className="ai-share-value"
+                        disabled={!shareConfig.baseUrl}
+                        title={shareConfig.baseUrl || t("models.urlMissing")}
+                        onClick={() =>
+                          void copyValue(`${shareConfig.id}:share-url`, shareConfig.baseUrl)
+                        }
+                      >
+                        <span className="ai-share-value-text">
+                          {shareConfig.baseUrl || t("models.urlMissing")}
+                        </span>
+                        {copiedField === `${shareConfig.id}:share-url` ? (
+                          <Check size={13} />
+                        ) : (
+                          <Copy size={13} />
+                        )}
+                      </button>
+                    </div>
+                    <div className="ai-share-field">
+                      <span className="ai-share-label">{t("models.apiKey")}</span>
+                      <div className="ai-share-value is-static">
+                        {shareConfig.apiKey?.trim() ? (
+                          <span
+                            className={`ai-share-value-text ai-share-key-text${
+                              shareShowKey ? "" : " is-masked"
+                            }`}
+                          >
+                            {shareShowKey ? shareConfig.apiKey : "••••••••••••"}
+                          </span>
+                        ) : (
+                          <span className="ai-share-value-text is-missing">
+                            {t("models.keyMissing")}
+                          </span>
+                        )}
+                        {shareConfig.apiKey?.trim() && (
+                          <button
+                            type="button"
+                            className="ai-model-icon-btn"
+                            onClick={() => setShareShowKey((v) => !v)}
+                            title={shareShowKey ? t("models.hideKey") : t("models.showKey")}
+                            aria-label={shareShowKey ? t("models.hideKey") : t("models.showKey")}
+                          >
+                            {shareShowKey ? <EyeOff size={13} /> : <Eye size={13} />}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="ai-share-field">
+                      <span className="ai-share-label">{t("models.model")}</span>
+                      <button
+                        type="button"
+                        className="ai-share-value"
+                        disabled={!shareConfig.model}
+                        title={shareConfig.model}
+                        onClick={() =>
+                          void copyValue(`${shareConfig.id}:share-model`, shareConfig.model)
+                        }
+                      >
+                        <span className="ai-share-value-text">{shareConfig.model}</span>
+                        {copiedField === `${shareConfig.id}:share-model` ? (
+                          <Check size={13} />
+                        ) : (
+                          <Copy size={13} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="ai-share-warning">
+                    <AlertCircle size={13} />
+                    <span>{t("models.shareWarning")}</span>
+                  </div>
+                </div>
+                <div className="modal-actions modal-actions--split">
+                  <div className="modal-actions-secondary">
+                    {copiedField === "share:all" && (
+                      <span className="ai-modal-status is-success">{t("models.shareCopied")}</span>
+                    )}
+                  </div>
+                  <div className="modal-actions-primary">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        if (!shareConfig.baseUrl || !shareConfig.model) {
+                          showMsg("error", t("models.shareIncomplete"));
+                          return;
+                        }
+                        void copyValue("share:all", buildShareText(shareConfig));
+                      }}
+                    >
+                      {copiedField === "share:all" ? (
+                        <Check size={14} />
+                      ) : (
+                        <Share2 size={14} />
+                      )}
+                      {copiedField === "share:all"
+                        ? t("models.shareCopiedBtn")
+                        : t("models.shareCopyAll")}
                     </button>
                   </div>
                 </div>

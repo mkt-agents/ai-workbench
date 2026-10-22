@@ -443,7 +443,6 @@
     "stashDropConfirm": "This cannot be undone: {{message}}",
     "stashUntitled": "Untitled stash",
     "branch": "Branch",
-    "branchSwitched": "Switched to {{name}}",
     "unstagePartialTitle": "Partial commit will unstage other files",
     "unstagePartialConfirm": "{{count}} staged file(s) are not checked; they will be unstaged before commit so they are not included.",
     "unstagePartialWarn": "\"Keep staged after commit\" re-stages those files after a successful commit.",

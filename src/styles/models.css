@@ -1842,6 +1842,211 @@
   color: var(--text-1);
 }
 
+/* ─── Share modal（分享模型配置：地址 / 密钥 / 模型） ─── */
+
+.models-share-modal {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 16px;
+}
+
+.models-share-modal .ai-modal-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 头部：提供商品牌图 + 配置名 + 提供商名，替代一整行孤零零的名字 */
+.ai-share-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ai-share-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+}
+
+.ai-share-logo.has-logo {
+  padding: 4px;
+}
+
+.ai-share-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.ai-share-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ai-share-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-share-provider {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 字段组：标签在上、值在下，与头部/警示条同一左线，竖向节奏干净 */
+.ai-share-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ai-share-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ai-share-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+
+/* 值区：轻浮起表面（白 overlay 提亮而非黑盒下陷），点击整行复制 */
+.ai-share-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  color: var(--text-0);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.ai-share-value:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--overlay-2);
+}
+
+.ai-share-value:disabled {
+  cursor: default;
+  color: var(--text-3);
+}
+
+.ai-share-value svg {
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: var(--transition-colors-fast);
+}
+
+.ai-share-value:hover:not(:disabled) svg {
+  opacity: 0.95;
+  color: var(--accent);
+}
+
+.ai-share-value-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* API Key 行不是按钮：同壳，只有右侧眼睛可点 */
+.ai-share-value.is-static {
+  cursor: default;
+}
+
+.ai-share-value.is-static:hover {
+  border-color: var(--border-subtle);
+  background: var(--overlay-1);
+}
+
+.ai-share-key-text {
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-share-key-text.is-masked {
+  letter-spacing: 2px;
+  color: var(--text-2);
+}
+
+.ai-share-value .ai-share-value-text.is-missing {
+  font-family: var(--font-sans);
+  color: var(--text-3);
+}
+
+.ai-share-value .ai-model-icon-btn {
+  flex-shrink: 0;
+}
+
+/* 警示条：琥珀描边浅底，带图标，压住整块底部 */
+.ai-share-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 11px;
+  border: 1px solid var(--yellow-border);
+  border-radius: var(--radius-md);
+  background: var(--yellow-dim);
+  color: var(--yellow);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.ai-share-warning svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.models-share-modal .modal-actions-secondary {
+  min-width: 0;
+}
+
+.models-share-modal .modal-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* Tables (GFM) */
 .markdown-body table {
   width: 100%;

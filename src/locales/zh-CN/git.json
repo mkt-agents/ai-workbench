@@ -443,7 +443,6 @@
     "stashDropConfirm": "删除后无法恢复：{{message}}",
     "stashUntitled": "未命名储藏",
     "branch": "分支",
-    "branchSwitched": "已切换到 {{name}}",
     "unstagePartialTitle": "部分提交将取消其它已暂存文件",
     "unstagePartialConfirm": "有 {{count}} 个已暂存但未勾选的文件；提交前会先取消它们的暂存，以免一并提交。",
     "unstagePartialWarn": "「提交后保留暂存」会在提交成功后尽量重新暂存这些文件。",
