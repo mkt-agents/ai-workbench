@@ -852,9 +852,18 @@ function CommitChangelist({
    * Show what a batch push will do before doing it: publishing a branch that
    * has no upstream yet is not reversible from here.
    */
-  const confirmBatchPush = async (paths: string[], addedCommits = 0) => {
+  const confirmBatchPush = async (
+    paths: string[],
+    addedCommits = 0,
+    pendingFilesByPath?: Map<string, string[]>
+  ) => {
     const rows = paths
-      .map((path) => ({ path, label: labelPath(path), summary: summaries[path] }))
+      .map((path) => ({
+        path,
+        label: labelPath(path),
+        summary: summaries[path],
+        pendingFiles: pendingFilesByPath?.get(path),
+      }))
       .filter((row): row is PushPreviewRow => !!row.summary);
     if (rows.length === 0) return false;
     return await askPushPreview(rows, addedCommits);
@@ -1729,8 +1738,19 @@ function CommitChangelist({
     const targetPaths = repos.map(([path]) => path);
 
     // Commit & push: show what each push will do before touching the remote.
+    // The commit does not exist yet, so hand the preview the selected files —
+    // otherwise the dialog shows an empty list while claiming one commit ahead.
     if (withPush) {
-      const ok = await confirmBatchPush(targetPaths, 1);
+      const pendingFiles = new Map<string, string[]>();
+      for (const [repoPath, fileSet] of repos) {
+        pendingFiles.set(
+          repoPath,
+          (statuses[repoPath] || [])
+            .filter((e) => fileSet.has(selectionKey(e)))
+            .map((e) => e.path)
+        );
+      }
+      const ok = await confirmBatchPush(targetPaths, 1, pendingFiles);
       if (!ok) return;
     }
 

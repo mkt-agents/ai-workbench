@@ -231,6 +231,7 @@
     "totalCommits": "共 {{commits}} 条提交，来自 {{repos}} 个仓库",
     "readFailed": "{{count}} 个仓库读不出来，仍可照常推送",
     "addedNote": "下面还没算上你即将提交的那 {{count}} 条",
+    "pendingCommit": "即将创建的提交（{{count}} 个文件）",
     "noCommitsYet": "这个仓库还没有提交",
     "noneHere": "没有需要推送的提交",
     "noSubject": "（无标题）",

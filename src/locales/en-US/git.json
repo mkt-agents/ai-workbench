@@ -231,6 +231,7 @@
     "totalCommits": "{{commits}} commits across {{repos}} repos",
     "readFailed": "{{count}} repos could not be read — pushing still works",
     "addedNote": "The {{count}} commit you are about to make is not listed yet",
+    "pendingCommit": "Commit to be created ({{count}} files)",
     "noCommitsYet": "This repo has no commits yet",
     "noneHere": "Nothing to push here",
     "noSubject": "(no subject)",

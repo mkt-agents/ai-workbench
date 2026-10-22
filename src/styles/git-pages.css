@@ -1136,6 +1136,17 @@ button.repos-batch-count:hover {
   border-top: 1px dashed var(--border-subtle);
 }
 
+/* 即将创建的提交（提交并推送流程，commit 还不存在，行首用旋转箭头区分） */
+.pp-commit.is-pending .pp-subject {
+  color: var(--text-1);
+}
+
+.pp-pending-icon {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--accent);
+}
+
 .pp-commit-top {
   display: flex;
   align-items: baseline;

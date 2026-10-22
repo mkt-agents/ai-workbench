@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, GitBranch, Loader2 } from "lucide-react";
+import { AlertTriangle, GitBranch, Loader2, RotateCw } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { GIT_CONCURRENCY, mapPool } from "../core/asyncPool";
 import { pushTargetNote } from "../core/gitPushScope";
@@ -11,7 +11,17 @@ import ModalTitleRow from "./ModalTitleRow";
 /** Files listed under one commit before the rest collapse into a count. */
 const FILE_CAP = 12;
 
-export type PushPreviewRow = { path: string; label: string; summary: RepoBatchItem };
+export type PushPreviewRow = {
+  path: string;
+  label: string;
+  summary: RepoBatchItem;
+  /**
+   * Commit-then-push: the commit does not exist yet when this dialog opens,
+   * so the caller passes the files about to be committed in this repo — they
+   * show up as a pseudo-commit row instead of an empty "nothing to push" line.
+   */
+  pendingFiles?: string[];
+};
 
 /** A row with no piece yet is simply still reading. */
 type Piece = { state: "ok"; data: GitPendingCommits } | { state: "error"; message: string };
@@ -69,7 +79,9 @@ function PushPreviewModal({ rows, addedCommits = 0, onClose, onConfirm }: Props)
   const failed = rows.filter((row) => pieces[row.path]?.state === "error");
   const commitTotal = rows.reduce((n, row) => {
     const p = pieces[row.path];
-    return p && p.state === "ok" ? n + p.data.total : n;
+    // 提交即推送的流程里，即将创建的那条也算一条（下面会以 ⟳ 行列出）。
+    const pending = (row.pendingFiles?.length ?? 0) > 0 ? 1 : 0;
+    return n + pending + (p && p.state === "ok" ? p.data.total : 0);
   }, 0);
   const dataOf = (path: string) => {
     const p = pieces[path];
@@ -109,7 +121,7 @@ function PushPreviewModal({ rows, addedCommits = 0, onClose, onConfirm }: Props)
               <span className="pp-failed">{t("pushPreview.readFailed", { count: failed.length })}</span>
             )}
           </div>
-          {addedCommits > 0 && (
+          {addedCommits > 0 && !rows.some((r) => (r.pendingFiles?.length ?? 0) > 0) && (
             <p className="pp-added">{t("pushPreview.addedNote", { count: addedCommits })}</p>
           )}
           {riskyCount > 0 && (
@@ -123,7 +135,8 @@ function PushPreviewModal({ rows, addedCommits = 0, onClose, onConfirm }: Props)
             {rows.map((row, i) => {
               const data = dataOf(row.path);
               const piece = pieces[row.path];
-              const empty = data && data.commits.length === 0;
+              const pending = [...(row.pendingFiles ?? [])].sort(byPath);
+              const empty = data && data.commits.length === 0 && pending.length === 0;
               return (
                 <section className={`pp-repo${notes[i].risky ? " is-risky" : ""}`} key={row.path}>
                   <div className="pp-repo-head">
@@ -158,9 +171,9 @@ function PushPreviewModal({ rows, addedCommits = 0, onClose, onConfirm }: Props)
                         : t("pushPreview.noneHere")}
                     </div>
                   )}
-                  {data && data.commits.length > 0 && (
+                  {(data?.commits.length ?? 0) > 0 || pending.length > 0 ? (
                     <ul className="pp-commits">
-                      {data.commits.map((c) => {
+                      {data?.commits.map((c) => {
                         const files = [...c.files].sort(byPath);
                         const rest = files.length - FILE_CAP;
                         return (
@@ -187,13 +200,35 @@ function PushPreviewModal({ rows, addedCommits = 0, onClose, onConfirm }: Props)
                           </li>
                         );
                       })}
-                      {data.truncated && (
+                      {pending.length > 0 && (
+                        <li className="pp-commit is-pending">
+                          <div className="pp-commit-top">
+                            <RotateCw size={11} className="pp-pending-icon" />
+                            <span className="pp-subject">
+                              {t("pushPreview.pendingCommit", { count: pending.length })}
+                            </span>
+                          </div>
+                          <ul className="pp-files">
+                            {pending.slice(0, FILE_CAP).map((f) => (
+                              <li key={f}>
+                                <code title={f}>{f}</code>
+                              </li>
+                            ))}
+                            {pending.length > FILE_CAP && (
+                              <li className="pp-more">
+                                {t("pushPreview.moreFiles", { count: pending.length - FILE_CAP })}
+                              </li>
+                            )}
+                          </ul>
+                        </li>
+                      )}
+                      {data?.truncated && (
                         <li className="pp-line pp-trunc">
                           {t("pushPreview.truncated", { shown: data.commits.length, total: data.total })}
                         </li>
                       )}
                     </ul>
-                  )}
+                  ) : null}
                 </section>
               );
             })}
