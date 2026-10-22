@@ -6,7 +6,6 @@ import {
   Bot,
   Check,
   ChevronDown,
-  ChevronRight,
   Download,
   FolderTree,
   GitBranch,
@@ -47,7 +46,10 @@ import {
   statusClass,
   type ChangeGroupId,
 } from "../lib/changeTree";
-import ChangeFileTree, { type ChangeViewMode } from "./git/ChangeFileTree";
+import ChangeFileTree, {
+  type ChangeFileRepo,
+  type ChangeViewMode,
+} from "./git/ChangeFileTree";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import { usePushPreview, type PushPreviewRow } from "./PushPreviewModal";
 import { looksLikeTempFile } from "../lib/tempFiles";
@@ -273,33 +275,6 @@ type Props = {
   onScopeLabel?: (label: string | null) => void;
 };
 
-function IndeterminateCheckbox({
-  checked,
-  indeterminate,
-  disabled,
-  onChange,
-}: {
-  checked: boolean;
-  indeterminate: boolean;
-  disabled?: boolean;
-  onChange: () => void;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate && !checked;
-  }, [indeterminate, checked]);
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={checked}
-      disabled={disabled}
-      onChange={onChange}
-      onClick={(e) => e.stopPropagation()}
-    />
-  );
-}
-
 type ModelSelectorProps = {
   models: AIModelConfig[];
   selectedId: string;
@@ -468,6 +443,7 @@ function CommitChangelist({
   const [ignoreWs, setIgnoreWs] = useState(() => readStoredString(CL_IGNORE_WS_KEY) === "1");
   const refreshGen = useRef(0);
   const diffGen = useRef(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const recentRef = useRef<HTMLDivElement>(null);
   const recentGen = useRef(0);
   const stashRef = useRef<HTMLDivElement>(null);
@@ -480,6 +456,20 @@ function CommitChangelist({
   useEffect(() => {
     diffTargetRef.current = diffTarget;
   }, [diffTarget]);
+
+  // Ctrl+F focuses the file search box (no modal open — dialogs own the shortcut).
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "f") return;
+      if (document.querySelector(".modal-overlay")) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
 
   // View choices and the draft survive page switches (and app restarts).
   useEffect(() => {
@@ -694,6 +684,39 @@ function CommitChangelist({
   const allDirtyRepos = useMemo(() => {
     return scanProjects.filter((p) => isRepoDirty(p.path, summaries, statuses));
   }, [scanProjects, statuses, summaries]);
+
+  /**
+   * Workspace-level IDEA groups: every dirty repo's entries merged into two
+   * lists ("更改" / "未进行版本管理的文件") instead of two groups per repo.
+   */
+  const repoGroups = useMemo(() => {
+    const changes: ChangeFileRepo[] = [];
+    const untracked: ChangeFileRepo[] = [];
+    for (const p of dirtyRepos) {
+      const entries = statuses[p.path];
+      if (!entries || entries.length === 0) continue;
+      const g = splitChangeGroups(entries);
+      const label = p.name || projectNameFromPath(p.path);
+      const branch = summaries[p.path]?.branch || undefined;
+      if (g.changes.length > 0)
+        changes.push({ repoPath: p.path, repoLabel: label, branch, entries: g.changes });
+      if (g.untracked.length > 0)
+        untracked.push({ repoPath: p.path, repoLabel: label, branch, entries: g.untracked });
+    }
+    return { changes, untracked };
+  }, [dirtyRepos, statuses, summaries]);
+
+  /** Dirty repos whose status failed to parse — still shown with a note. */
+  const parseEmptyRepos = useMemo(
+    () =>
+      dirtyRepos.filter((p) => {
+        const entries = statuses[p.path];
+        if (entries && entries.length > 0) return false;
+        const s = summaries[p.path];
+        return !!s?.isGit && (s.dirtyCount ?? 0) > 0;
+      }),
+    [dirtyRepos, statuses, summaries]
+  );
 
   const labelPath = useCallback(
     (path: string) =>
@@ -988,22 +1011,37 @@ function CommitChangelist({
     });
   };
 
-  /** Tri-state tick of a whole display group ("更改" / "未进行版本管理的文件"). */
-  const toggleGroup = (repoPath: string, groupEntries: GitStatusEntry[]) => {
-    const selectable = groupEntries.filter((e) => e.group !== "conflicted");
-    const cur = selected.get(repoPath);
-    const allSelected =
-      selectable.length > 0 && selectable.every((e) => cur?.has(selectionKey(e)));
-    setKeysChecked(repoPath, selectable.map((e) => selectionKey(e)), !allSelected);
+  /**
+   * Tri-state tick of a workspace-level display group ("更改" / "未进行版本
+   * 管理的文件") across every repo in scope.
+   */
+  const toggleGroupAll = (groupRepos: ChangeFileRepo[]) => {
+    let total = 0;
+    let hits = 0;
+    for (const r of groupRepos) {
+      const cur = selected.get(r.repoPath);
+      for (const e of r.entries) {
+        if (e.group === "conflicted") continue;
+        total += 1;
+        if (cur?.has(selectionKey(e))) hits += 1;
+      }
+    }
+    const checked = !(total > 0 && hits === total);
+    for (const r of groupRepos) {
+      setKeysChecked(
+        r.repoPath,
+        r.entries.filter((e) => e.group !== "conflicted").map((e) => selectionKey(e)),
+        checked
+      );
+    }
   };
 
-  // Group headers share the repo `collapsed` set; the \0 separator keeps their
-  // keys from colliding with repo paths.
-  const groupHeaderKey = (repoPath: string, group: ChangeGroupId) =>
-    `${repoPath}\0group:${group}`;
+  // Group headers share the repo `collapsed` set; the "group:" prefix keeps
+  // their keys from colliding with repo paths.
+  const groupHeaderKey = (group: ChangeGroupId) => `group:${group}`;
 
-  const toggleGroupCollapsed = (repoPath: string, group: ChangeGroupId) => {
-    const key = groupHeaderKey(repoPath, group);
+  const toggleGroupCollapsed = (group: ChangeGroupId) => {
+    const key = groupHeaderKey(group);
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -1022,19 +1060,16 @@ function CommitChangelist({
     });
   };
 
-  /** Expand-all / collapse-all of one group's directory tree. */
-  const setGroupDirsCollapsed = (
-    repoPath: string,
-    groupEntries: GitStatusEntry[],
-    collapse: boolean
-  ) => {
-    const dirs = collectDirPaths(buildChangeTree(groupEntries));
+  /** Expand-all / collapse-all of a group's directory trees across repos. */
+  const setGroupsDirsCollapsed = (groupRepos: ChangeFileRepo[], collapse: boolean) => {
     setCollapsedDirs((prev) => {
       const next = new Set(prev);
-      for (const d of dirs) {
-        const key = `${repoPath}\0${d}`;
-        if (collapse) next.add(key);
-        else next.delete(key);
+      for (const r of groupRepos) {
+        for (const d of collectDirPaths(buildChangeTree(r.entries))) {
+          const key = `${r.repoPath}\0${d}`;
+          if (collapse) next.add(key);
+          else next.delete(key);
+        }
       }
       return next;
     });
@@ -1944,124 +1979,26 @@ function CommitChangelist({
     return t("commit.statusModified");
   };
 
-  const renderRepo = (p: RecentProject) => {
-    const entries = statuses[p.path] || [];
-    // Dirty summary with zero parsed entries (e.g. porcelain parse miss) — still show the repo.
-    if (entries.length === 0) {
-      const summary = summaries[p.path];
-      if (!summary?.isGit || (summary.dirtyCount ?? 0) <= 0) return null;
-      return (
-        <div key={p.path} className={`cl-repo ${currentGitRepo === p.path ? "is-current" : ""}`}>
-          <div className="cl-repo-head">
-            <span className="cl-repo-title" title={p.path}>
-              {p.name || projectNameFromPath(p.path)}
-            </span>
-            {summary.branch && (
-              <span className="commit-branch-badge" title={summary.branch}>
-                <GitBranch size={12} />
-                <span className="commit-branch-text">{summary.branch}</span>
-              </span>
-            )}
-            <span className="repos-status-pill">{summary.dirtyCount}</span>
-          </div>
-          <div className="runtime-muted" style={{ padding: "6px 12px 10px" }}>
-            {t("commit.changelistStatusParseEmpty")}
-          </div>
-        </div>
-      );
-    }
+  /** Dirty repo whose status failed to parse: still shown with a note. */
+  const renderParseEmptyRepo = (p: RecentProject) => {
     const summary = summaries[p.path];
-    const isCollapsed = collapsed.has(p.path);
-    const sel = selected.get(p.path) || new Set<string>();
-    const selectable = entries.filter((e) => e.group !== "conflicted");
-    const allSelected = selectable.length > 0 && selectable.every((e) => sel.has(selectionKey(e)));
-    const someSelected = selectable.some((e) => sel.has(selectionKey(e)));
-    const groups = splitChangeGroups(entries);
-    const Chevron = isCollapsed ? ChevronRight : ChevronDown;
-    const isCurrent = currentGitRepo === p.path;
-
     return (
-      <div key={p.path} className={`cl-repo ${isCurrent ? "is-current" : ""}`}>
+      <div key={p.path} className={`cl-repo ${currentGitRepo === p.path ? "is-current" : ""}`}>
         <div className="cl-repo-head">
-          <button
-            type="button"
-            className="cl-repo-toggle"
-            onClick={() => toggleCollapsed(p.path)}
-            aria-expanded={!isCollapsed}
-          >
-            <Chevron size={14} />
-          </button>
-          <IndeterminateCheckbox
-            checked={allSelected}
-            indeterminate={someSelected && !allSelected}
-            disabled={busy}
-            onChange={() => toggleRepo(p.path, entries)}
-          />
-          <button
-            type="button"
-            className="cl-repo-title"
-            title={p.path}
-            onClick={() => setCurrentGitRepo(p.path)}
-          >
+          <span className="cl-repo-title" title={p.path}>
             {p.name || projectNameFromPath(p.path)}
-          </button>
+          </span>
           {summary?.branch && (
             <span className="commit-branch-badge" title={summary.branch}>
               <GitBranch size={12} />
               <span className="commit-branch-text">{summary.branch}</span>
             </span>
           )}
-          <span className="repos-status-pill">{entries.length}</span>
+          <span className="repos-status-pill">{summary.dirtyCount}</span>
         </div>
-        {!isCollapsed && (
-          <div className="cl-groups">
-            {(["changes", "untracked"] as ChangeGroupId[]).map((gid) => {
-              const groupEntries = groups[gid];
-              if (groupEntries.length === 0) return null;
-              return (
-                <ChangeFileTree
-                  key={gid}
-                  repoPath={p.path}
-                  group={gid}
-                  entries={groupEntries}
-                  viewMode={viewMode}
-                  selected={sel}
-                  busy={busy}
-                  search={fileSearch}
-                  activePath={
-                    diffTarget && diffTarget.repoPath === p.path ? diffTarget.filePath : null
-                  }
-                  headerCollapsed={collapsed.has(groupHeaderKey(p.path, gid))}
-                  onToggleHeader={() => toggleGroupCollapsed(p.path, gid)}
-                  collapsedDirs={collapsedDirs}
-                  onToggleDir={(dir) => toggleDirCollapsed(p.path, dir)}
-                  onExpandAll={() => setGroupDirsCollapsed(p.path, groupEntries, false)}
-                  onCollapseAll={() => setGroupDirsCollapsed(p.path, groupEntries, true)}
-                  onToggleFile={(e) => toggleFile(p.path, e)}
-                  onSetKeysChecked={(keys, checked) => setKeysChecked(p.path, keys, checked)}
-                  onToggleGroup={() => toggleGroup(p.path, groupEntries)}
-                  onFileActivate={(e) => {
-                    if (!sel.has(selectionKey(e))) toggleFile(p.path, e);
-                    void loadDiff(p.path, e);
-                  }}
-                  onFileOpen={(e) =>
-                    openDiffModal({
-                      repoPath: p.path,
-                      filePath: e.path,
-                      staged: e.group === "staged",
-                      wholeFile: e.group === "untracked",
-                    })
-                  }
-                  onDiscard={(e) => void runDiscard(p.path, e)}
-                  onResolveConflict={(filePath) =>
-                    setResolver({ repoPath: p.path, file: filePath })
-                  }
-                  statusLabel={statusLabel}
-                />
-              );
-            })}
-          </div>
-        )}
+        <div className="runtime-muted" style={{ padding: "6px 12px 10px" }}>
+          {t("commit.changelistStatusParseEmpty")}
+        </div>
       </div>
     );
   };
@@ -2111,9 +2048,17 @@ function CommitChangelist({
         <div className="cl-search">
           <Search size={13} className="cl-search-icon" aria-hidden />
           <input
+            ref={searchInputRef}
             className="input-field cl-search-input"
             value={fileSearch}
             onChange={(e) => setFileSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setFileSearch("");
+              }
+            }}
             placeholder={t("commit.searchFiles")}
             aria-label={t("commit.searchFiles")}
           />
@@ -2295,7 +2240,58 @@ function CommitChangelist({
               </div>
             </div>
           ) : (
-            <div className="cl-panel cl-tree">{dirtyRepos.map(renderRepo)}</div>
+            <div className="cl-panel cl-tree">
+              {parseEmptyRepos.map(renderParseEmptyRepo)}
+              {(["changes", "untracked"] as ChangeGroupId[]).map((gid) => {
+                const groupRepos = repoGroups[gid];
+                if (groupRepos.length === 0) return null;
+                return (
+                  <ChangeFileTree
+                    key={gid}
+                    group={gid}
+                    repos={groupRepos}
+                    viewMode={viewMode}
+                    selected={selected}
+                    busy={busy}
+                    search={fileSearch}
+                    activeDiff={diffTarget}
+                    collapsedRepos={collapsed}
+                    collapsedDirs={collapsedDirs}
+                    headerCollapsed={collapsed.has(groupHeaderKey(gid))}
+                    onToggleHeader={() => toggleGroupCollapsed(gid)}
+                    onToggleRepoCollapsed={(rp) => toggleCollapsed(rp)}
+                    onRepoClick={(rp) => setCurrentGitRepo(rp)}
+                    onToggleDir={toggleDirCollapsed}
+                    onExpandAll={() => setGroupsDirsCollapsed(groupRepos, false)}
+                    onCollapseAll={() => setGroupsDirsCollapsed(groupRepos, true)}
+                    onToggleFile={toggleFile}
+                    onSetKeysChecked={setKeysChecked}
+                    onToggleGroup={() => toggleGroupAll(groupRepos)}
+                    onToggleRepo={toggleRepo}
+                    onFileActivate={(rp, e) => {
+                      if (!(selected.get(rp) || new Set()).has(selectionKey(e))) toggleFile(rp, e);
+                      void loadDiff(rp, e);
+                    }}
+                    onFileOpen={(rp, e) =>
+                      openDiffModal({
+                        repoPath: rp,
+                        filePath: e.path,
+                        staged: e.group === "staged",
+                        wholeFile: e.group === "untracked",
+                      })
+                    }
+                    onDiscard={(rp, e) => void runDiscard(rp, e)}
+                    onResolveConflict={(rp, fp) => setResolver({ repoPath: rp, file: fp })}
+                    statusLabel={statusLabel}
+                    onSpeedSearch={(ch) => {
+                      setFileSearch((s) => s + ch);
+                      searchInputRef.current?.focus();
+                    }}
+                    onClearSearch={() => setFileSearch("")}
+                  />
+                );
+              })}
+            </div>
           )}
         </div>
         <DiffViewer

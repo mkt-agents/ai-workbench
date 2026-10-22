@@ -45,7 +45,7 @@ const TOOLS: Alias[] = [
   { tab: "devtools", toolId: "jwt", label: "JWT", names: ["jwt"] },
   { tab: "devtools", toolId: "regex", label: "正则", names: ["正则", "regex"] },
   { tab: "devtools", toolId: "calc", label: "计算器", names: ["计算器"] },
-  { tab: "devtools", toolId: "ports", label: "端口查杀", names: ["端口查杀", "端口", "port"] },
+  { tab: "devtools", toolId: "ports", label: "端口清理", names: ["端口清理", "端口查杀", "端口", "port"] },
 ];
 
 const VERB_RE =

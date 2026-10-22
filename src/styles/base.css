@@ -37,6 +37,7 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .ai-mode-dropdown,
   .devtools-history-menu,
   .cl-recent-menu,
+  .cl-group-head,
   .update-banner,
   .ai-hub-sessions,
   .qa-input-card,

@@ -1,4 +1,6 @@
 use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
@@ -19,6 +21,44 @@ const SHELL_OPEN_TRIGGER_HOST: &str = "aiwb-shell.open";
 /// text to the ai-hub window via `open_ai_hub_with_text`. Same trick as
 /// `SHELL_OPEN_TRIGGER_HOST`: external-URL webviews have no IPC bridge.
 const AI_HUB_TRIGGER_HOST: &str = "aiwb-aihub.open";
+
+/// Third magic host: collapse/expand clicks in the injected toolbar report
+/// the new state via `https://aiwb-toolbar.open/?collapsed=1|0`. The Rust
+/// side remembers it globally, so every future browser window (any site,
+/// any app restart) opens with the user's last choice. First-ever use has
+/// no record yet and defaults to collapsed.
+const TOOLBAR_STATE_TRIGGER_HOST: &str = "aiwb-toolbar.open";
+
+/// Marker file in the app-data dir holding the last collapsed state ("1"/"0").
+const TOOLBAR_STATE_FILE: &str = "browser-toolbar-collapsed";
+
+/// Global toolbar collapsed state, loaded from disk on first use.
+static TOOLBAR_COLLAPSED: OnceLock<AtomicBool> = OnceLock::new();
+
+fn toolbar_collapsed_state(app: &tauri::AppHandle) -> &AtomicBool {
+    TOOLBAR_COLLAPSED.get_or_init(|| {
+        let persisted = app
+            .path()
+            .app_data_dir()
+            .ok()
+            .and_then(|dir| std::fs::read_to_string(dir.join(TOOLBAR_STATE_FILE)).ok())
+            .map(|s| s.trim() == "1")
+            // No record yet → first-ever open starts collapsed.
+            .unwrap_or(true);
+        AtomicBool::new(persisted)
+    })
+}
+
+fn persist_toolbar_collapsed(app: &tauri::AppHandle, collapsed: bool) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(
+                dir.join(TOOLBAR_STATE_FILE),
+                if collapsed { "1" } else { "0" },
+            );
+        }
+    }
+}
 
 fn is_safe_url(url: &str) -> bool {
     let lower = url.to_lowercase();
@@ -71,8 +111,12 @@ pub fn navigate_browser_window(app: tauri::AppHandle, url: String) -> Result<boo
 ///     cross-origin iframes while dragging.
 ///   - Collapse / expand with an animated width transition
 ///   - Hide, with a small restore dot in the corner to bring it back
-///   - Position / collapsed state / zoom persist per-origin via
-///     sessionStorage, so they survive in-page navigation in this window
+///   - Position / zoom persist per-origin via sessionStorage, so they
+///     survive in-page navigation in this window. The collapsed state is
+///     remembered globally: clicks are reported back to the shell via the
+///     `aiwb-toolbar.open` magic host and persisted on the Rust side, so
+///     the next window on any site opens with the last choice (collapsed
+///     on first-ever use).
 ///
 /// The toolbar calls the webview's own `history.back()/forward()` and
 /// `location.reload()` — no IPC round-trip needed for nav actions. Opening
@@ -520,9 +564,37 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       collapse.style.display = v ? 'none' : '';
       expand.style.display = v ? '' : 'none';
       store.set(COL_KEY, v ? '1' : '0');
+      if (!v && dragged) expandKeepInView();
     }
-    collapse.addEventListener('click', function () { setCollapsed(true); });
-    expand.addEventListener('click', function () { setCollapsed(false); });
+    // When dragged (left/top-anchored) close to the right edge, expanding
+    // grew the bar off-screen: dragging clamps with the *collapsed* width,
+    // so the bar can sit flush against the border, and expanding pivots on
+    // the immobile left edge. Shift the host left so the full expanded bar
+    // fits — estimated up-front so the animation grows leftward, then
+    // re-clamped with the real width once the width transition settles.
+    function expandKeepInView() {
+      var exp = bar.querySelector('.exp');
+      if (!exp) return;
+      var target = bar.offsetWidth + exp.scrollWidth + 6 - exp.offsetWidth;
+      var overflow = host.getBoundingClientRect().left + target - window.innerWidth;
+      if (overflow > 0) {
+        host.style.left = Math.max(EDGE_GAP, host.getBoundingClientRect().left - overflow) + 'px';
+      }
+      setTimeout(clampIntoView, 300);
+    }
+    // Report the toggle to the shell via a magic-host navigation so the
+    // choice is remembered globally (across windows, sites and app
+    // restarts). Same no-IPC trick as the external-browser button.
+    function reportCollapsed(v) {
+      var a = document.createElement('a');
+      a.href = 'https://aiwb-toolbar.open/?collapsed=' + (v ? '1' : '0');
+      a.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;';
+      (document.body || document.documentElement).appendChild(a);
+      a.click();
+      setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); }, 200);
+    }
+    collapse.addEventListener('click', function () { setCollapsed(true); reportCollapsed(true); });
+    expand.addEventListener('click', function () { setCollapsed(false); reportCollapsed(false); });
 
     // ---- Hide / restore ----
     // Hiding only hides the bar; a small restore dot appears in the corner
@@ -544,13 +616,16 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
     var dragging = false;
     var dragged = false; // true once the toolbar was dragged or restored
     var startX = 0, startY = 0, startLeft = 0, startTop = 0, lastDown = 0;
+    // Minimum gap between the bar and the viewport edges — never fully
+    // flush, collapsed or expanded.
+    var EDGE_GAP = 8;
 
     function clampIntoView() {
       var rect = host.getBoundingClientRect();
-      var newLeft = Math.min(rect.left, window.innerWidth - host.offsetWidth);
-      var newTop = Math.min(rect.top, window.innerHeight - host.offsetHeight);
-      if (newLeft < 0) newLeft = 0;
-      if (newTop < 0) newTop = 0;
+      var newLeft = Math.min(rect.left, window.innerWidth - EDGE_GAP - host.offsetWidth);
+      var newTop = Math.min(rect.top, window.innerHeight - EDGE_GAP - host.offsetHeight);
+      if (newLeft < EDGE_GAP) newLeft = EDGE_GAP;
+      if (newTop < EDGE_GAP) newTop = EDGE_GAP;
       host.style.left = newLeft + 'px';
       host.style.top = newTop + 'px';
     }
@@ -566,8 +641,8 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
 
     function onMove(e) {
       if (!dragging) return;
-      var newLeft = Math.max(0, Math.min(window.innerWidth - host.offsetWidth, startLeft + (e.clientX - startX)));
-      var newTop = Math.max(0, Math.min(window.innerHeight - host.offsetHeight, startTop + (e.clientY - startY)));
+      var newLeft = Math.max(EDGE_GAP, Math.min(window.innerWidth - EDGE_GAP - host.offsetWidth, startLeft + (e.clientX - startX)));
+      var newTop = Math.max(EDGE_GAP, Math.min(window.innerHeight - EDGE_GAP - host.offsetHeight, startTop + (e.clientY - startY)));
       host.style.left = newLeft + 'px';
       host.style.top = newTop + 'px';
     }
@@ -643,7 +718,12 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       dragged = true;
       clampIntoView();
     }
-    if (store.get(COL_KEY) === '1') setCollapsed(true);
+    // Collapsed state: this window's own sessionStorage wins (keeps the
+    // toolbar stable across in-page navigation); with no local record yet,
+    // fall back to the globally remembered choice injected by Rust.
+    var savedCol = store.get(COL_KEY);
+    if (savedCol === '1') setCollapsed(true);
+    else if (savedCol === null && window.__aiwbToolbarDefaultCollapsed) setCollapsed(true);
     if (zoomLevel !== 1) applyZoom(false);
     updateState();
   }
@@ -762,8 +842,12 @@ pub async fn open_browser_window_with_toolbar(
         _ => Some(Theme::Dark),
     };
 
-    // Build combined initialization script: toolbar + matching userscripts
-    let mut init_script = String::from(BROWSER_TOOLBAR_INIT_JS);
+    // Build combined initialization script: remembered collapsed state +
+    // toolbar + matching userscripts. The state goes first so the toolbar
+    // IIFE reads it during init.
+    let collapsed_default = toolbar_collapsed_state(&app).load(Ordering::Relaxed);
+    let mut init_script = format!("window.__aiwbToolbarDefaultCollapsed = {};\n", collapsed_default);
+    init_script.push_str(BROWSER_TOOLBAR_INIT_JS);
     if let Some(scripts) = userscripts {
         for script in scripts {
             if script.code.trim().is_empty() {
@@ -821,6 +905,19 @@ pub async fn open_browser_window_with_toolbar(
                             );
                         }
                     }
+                }
+                return false;
+            }
+            if url.host_str() == Some(TOOLBAR_STATE_TRIGGER_HOST) {
+                let mut collapsed: Option<bool> = None;
+                for (k, v) in url.query_pairs() {
+                    if k == "collapsed" {
+                        collapsed = Some(v == "1");
+                    }
+                }
+                if let Some(c) = collapsed {
+                    toolbar_collapsed_state(&app_handle_for_nav).store(c, Ordering::Relaxed);
+                    persist_toolbar_collapsed(&app_handle_for_nav, c);
                 }
                 return false;
             }

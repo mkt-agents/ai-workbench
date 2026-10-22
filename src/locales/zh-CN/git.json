@@ -352,6 +352,7 @@
     "searchFiles": "搜索文件…",
     "searchClear": "清除搜索",
     "searchNoMatch": "无匹配文件",
+    "groupSelectedCount": "本组已选 {{selected}} / {{total}} 个文件",
     "expand": "展开",
     "collapse": "折叠",
     "expandAll": "全部展开",

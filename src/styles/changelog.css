@@ -188,6 +188,30 @@
   background: transparent;
 }
 
+/* 文件树滚动条：全局滚动条是隐藏的（见 layout.css），这里局部覆盖，
+   数据超出可视区时才显示一条细滚动条，未超出不占位 */
+.cl-tree::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.cl-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cl-tree::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-full);
+  background: var(--overlay-3);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  /* 574 个文件这种极端比例下滑块会缩成一小截，给个最低长度保证可抓取 */
+  min-height: 48px;
+}
+.cl-tree::-webkit-scrollbar-thumb:hover {
+  background: var(--overlay-4);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  min-height: 48px;
+}
+
 .cl-empty {
   padding: 0;
 }
@@ -321,7 +345,7 @@
 .cl-file-list {
   list-style: none;
   margin: 0 0 4px;
-  padding: 0 0 0 28px;
+  padding: 0 0 4px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -331,10 +355,22 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 6px;
+  padding: 3px 6px 3px 30px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   min-width: 0;
+  transition: var(--transition-colors-fast);
+}
+
+/* 未勾选 = 不进入本次提交，淡显（同 IDEA）；悬停 / diff 预览 / 冲突行恢复 */
+.cl-file:not(.is-checked) {
+  opacity: 0.55;
+}
+
+.cl-file:hover,
+.cl-file.is-selected,
+.cl-file.is-conflict {
+  opacity: 1;
 }
 
 .cl-file:hover {
@@ -877,24 +913,19 @@
 
 /* ─── IDEA 式变更分组（更改 / 未进行版本管理的文件）与目录树 ─── */
 
-.cl-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-bottom: 4px;
-}
-
+/* 组头在滚动容器内吸顶：磨砂表面与侧栏同配方（body.resizing 需关 blur） */
 .cl-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 3px 6px;
-  border-radius: var(--radius-sm);
   min-width: 0;
-}
-
-.cl-group-head:hover {
-  background: var(--overlay-1);
+  background: var(--chrome-bg);
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
 }
 
 .cl-group-title {
@@ -942,26 +973,61 @@
   padding: 0;
 }
 
-/* 目录树：每层 23px 缩进 + 沿父级折叠箭头的竖向辅助线；
-   子级行与父级目录名左对齐，根层与组标题对齐 */
-.cl-tree-children {
+/* 目录树：扁平行列表，复选框固定在最左列，名称按每层 16px 缩进（同 IDEA） */
+.cl-tree-list {
   list-style: none;
-  margin: 0 0 0 10px;
-  padding: 0 0 0 13px;
-  border-left: 1px solid var(--border-subtle);
+  margin: 0;
+  padding: 0 0 4px;
 }
 
-.cl-tree-root {
-  margin-left: 0;
-  padding-left: 24px;
-  border-left: none;
+.cl-tree-row {
+  position: relative;
+}
+
+.cl-tree-row > input[type="checkbox"] {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
+}
+
+/* ↑↓ 键盘导航的焦点行（容器自身不画 outline，行高亮即可） */
+.cl-tree-list {
+  outline: none;
+}
+
+.cl-tree-row.is-focused {
+  background: var(--overlay-2);
+}
+
+/* 文件名按状态着色（IDEA 式）：修改/重命名=蓝 新增=绿 删除=弱化 未版本=琥珀 冲突=红 */
+.cl-file.cl-st-m .cl-file-name,
+.cl-file.cl-st-r .cl-file-name {
+  color: var(--accent);
+}
+
+.cl-file.cl-st-a .cl-file-name {
+  color: var(--green);
+}
+
+.cl-file.cl-st-d .cl-file-name {
+  color: var(--text-3);
+}
+
+.cl-file.cl-st-u .cl-file-name {
+  color: var(--yellow);
+}
+
+.cl-file.cl-st-conflict .cl-file-name {
+  color: var(--red);
 }
 
 .cl-dir-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 4px;
+  padding: 2px 6px 2px 30px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   min-width: 0;
@@ -998,6 +1064,35 @@
   color: var(--text-3);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+/* 组内仓库节点（多仓时）：名称 + 分支徽标 + 数量 */
+.cl-repo-row {
+  padding: 2px 6px 2px 30px;
+}
+
+.cl-repo-name {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-0);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.cl-repo-name:hover {
+  color: var(--accent);
+}
+
+.cl-flat-repo {
+  margin-bottom: 2px;
 }
 
 /* 工具栏文件搜索框 */

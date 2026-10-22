@@ -344,7 +344,7 @@
     }
   },
   "ports": {
-    "title": "Port Killer",
+    "title": "Port Cleaner",
     "description": "Find and stop the process listening on a port; critical system processes are protected",
     "placeholder": "Port(s): 8080 · 3000, 5432 · 8080-8090",
     "query": "Query",

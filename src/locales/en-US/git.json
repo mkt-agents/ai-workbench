@@ -352,6 +352,7 @@
     "searchFiles": "Search files…",
     "searchClear": "Clear search",
     "searchNoMatch": "No matching files",
+    "groupSelectedCount": "{{selected}} of {{total}} files selected in this group",
     "expand": "Expand",
     "collapse": "Collapse",
     "expandAll": "Expand all",
