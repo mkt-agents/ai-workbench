@@ -76,7 +76,11 @@ export interface Invocations {
     resolution: { content: string } | { take: 'ours' | 'theirs' | 'delete' },
   ) => Promise<string>;
   invokeGitMergeAbort: (path: string) => Promise<string>;
-  invokeGitCreateBranch: (path: string, name: string) => Promise<string>;
+  invokeGitCreateBranch: (path: string, name: string, base?: string | null) => Promise<string>;
+  /** Refresh one tracking ref (`+refs/heads/<name>:refs/remotes/origin/<name>`); no worktree change. */
+  invokeGitFetchBranch: (path: string, name: string) => Promise<string>;
+  /** Create the branch **on origin** from a base; HEAD and the working tree stay put. */
+  invokeGitPublishBranch: (path: string, name: string, base?: string | null) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
   /** `contextLines` / `ignoreWhitespace` are view options: such a diff can't be staged by hunk. */
@@ -377,8 +381,12 @@ export const invocations: Invocations = {
     }),
   invokeGitMergeAbort: (path: string) =>
     tauriInvoke<string>('git_merge_abort', { path }),
-  invokeGitCreateBranch: (path: string, name: string) =>
-    tauriInvoke<string>('git_create_branch', { path, name }),
+  invokeGitCreateBranch: (path: string, name: string, base?: string | null) =>
+    tauriInvoke<string>('git_create_branch', { path, name, base: base ?? null }),
+  invokeGitFetchBranch: (path: string, name: string) =>
+    tauriInvoke<string>('git_fetch_branch', { path, name }),
+  invokeGitPublishBranch: (path: string, name: string, base?: string | null) =>
+    tauriInvoke<string>('git_publish_branch', { path, name, base: base ?? null }),
   invokeGitSwitchBranch: (path: string, name: string) =>
     tauriInvoke<string>('git_switch_branch', { path, name }),
   invokeGitListBranches: (path: string) =>

@@ -17,7 +17,7 @@ import {
   ClipboardList,
   Zap,
 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import useTauriEvent from "../hooks/useTauriEvent";
 import { useGlobalStore } from "../core/store";
 import { matchCursorAccount } from "../core/cursorMatch";
 import { useConfirm } from "./ConfirmModal";
@@ -67,6 +67,8 @@ const LEGACY_AVATAR_COLORS = new Set([
 const AVATAR_MIGRATE_KEY = "ai-workbench-cursor-avatar-migrated-v4";
 /** Pre-rename key: still read so the one-shot migration does not re-run. */
 const LEGACY_AVATAR_MIGRATE_KEY = "wt-cursor-avatar-migrated-v4";
+/** One-shot dismissal of the first-time setup wizard. */
+const SETUP_DISMISS_KEY = "ai-workbench-cursor-setup-dismissed-v1";
 
 type SnapshotStatus = {
   complete: boolean;
@@ -101,6 +103,28 @@ const SWITCH_STAGE_PERCENT: Record<string, number> = {
   launch: 88,
   done: 100,
 };
+
+/**
+ * The usage card: bullet lists, so the copy never carries its own numbering
+ * (a pasted "7." in JSX and "1."-"6." in the locale strings drift apart the
+ * moment an item is inserted). Keyed by i18n suffix under `cursor.*`.
+ */
+const USAGE_GROUPS: { titleKey: string; itemKeys: string[] }[] = [
+  {
+    titleKey: "usageGroupAddTitle",
+    itemKeys: ["usageAdd1", "usageAdd2", "usageAdd3"],
+  },
+  {
+    titleKey: "usageGroupSwitchTitle",
+    itemKeys: ["usageSwitch1", "usageSwitch2"],
+  },
+  {
+    titleKey: "usageGroupMaintainTitle",
+    itemKeys: ["usageMaintain1", "usageMaintain2", "usageMaintain3"],
+  },
+];
+
+const SETUP_STEP_KEYS = ["setupStep1", "setupStep2", "setupStep3"];
 
 function CursorManager() {
   const { t } = useTranslation("ai");
@@ -168,7 +192,9 @@ function CursorManager() {
   const [backupStatus, setBackupStatus] = useState<Record<string, SnapshotStatus>>(
     () => lastSnapshotStatus ?? {}
   );
-  const [showSetupGuide, setShowSetupGuide] = useState(true);
+  const [showSetupGuide, setShowSetupGuide] = useState(
+    () => localStorage.getItem(SETUP_DISMISS_KEY) !== "1"
+  );
   const [diskUsage, setDiskUsage] = useState<{
     backupsBytes: number;
     backupsFullDbBytes: number;
@@ -206,8 +232,16 @@ function CursorManager() {
         (a.notes?.trim() || a.name).localeCompare(b.notes?.trim() || b.name)
       );
     }
-    return matched;
+    // The label promises creation order, so sort for it instead of relying on
+    // whatever row order the store happened to hand back.
+    return [...matched].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [cursorAccounts, accountQuery, accountSort]);
+
+  /** Only one job that quits Cursor or holds its files open at a time:
+   *  switching, adding, deleting and DB slimming all do, and a VACUUM that
+   *  races a launch leaves a half-compacted database behind. */
+  const opLocked =
+    Boolean(switchingId) || busy || cleaning || slimming || updateCleaning;
 
   const msgTimer = useRef<number | undefined>(undefined);
 
@@ -256,15 +290,23 @@ function CursorManager() {
           // "logged in" flag would actually change — an unconditional save
           // rewrites the whole table each time.
           const stored = useGlobalStore.getState().cursorAccounts;
-          const live = status?.isLoggedIn
-            ? { email: status.email, name: status.name }
-            : null;
-          const changed = stored.some((account) => {
-            const shouldBeLoggedIn = live
-              ? matchCursorAccount(account, { ...live, isLoggedIn: true })
-              : false;
-            return Boolean(account.isLoggedIn) !== shouldBeLoggedIn;
-          });
+          // "Logged in" with neither an address nor a display name is a broken
+          // read, not a signed-out state — syncing from it would wipe a real
+          // 当前登录 flag off some other row.
+          const unusable =
+            Boolean(status?.isLoggedIn) && !status?.email && !status?.name;
+          const live =
+            status?.isLoggedIn && !unusable
+              ? { email: status.email, name: status.name }
+              : null;
+          const changed = unusable
+            ? false
+            : stored.some((account) => {
+                const shouldBeLoggedIn = live
+                  ? matchCursorAccount(account, { ...live, isLoggedIn: true })
+                  : false;
+                return Boolean(account.isLoggedIn) !== shouldBeLoggedIn;
+              });
           if (changed) {
             await syncCursorLoggedInFlags(status?.email ?? "", status?.name ?? "");
           }
@@ -406,7 +448,7 @@ function CursorManager() {
   // would leave a stale "in use" state on the active account's button).
   useEffect(() => {
     const timer = window.setInterval(async () => {
-      if (switchingId || busy || cleaning || slimming) return;
+      if (opLocked) return;
       try {
         setIsCursorRunning(await invokeIsCursorRunning());
       } catch {
@@ -414,20 +456,16 @@ function CursorManager() {
       }
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, [invokeIsCursorRunning, switchingId, busy, cleaning, slimming]);
+  }, [invokeIsCursorRunning, opLocked]);
 
-  useEffect(() => {
-    const unlisten = listen<{ stage: string; message: string }>(
-      "cursor:switch_progress",
-      (event) => {
-        setSwitchStep(event.payload.message);
-        setSwitchStage(event.payload.stage);
-      }
-    );
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
+  useTauriEvent<{ stage: string; message: string }>(
+    "cursor:switch_progress",
+    (event) => {
+      setSwitchStep(event.payload.message);
+      setSwitchStage(event.payload.stage);
+    },
+    []
+  );
 
   // Flows emit stages in different orders (finish saves before it quits), so the
   // bar only ever moves forward within one run and resets when it goes idle.
@@ -445,7 +483,7 @@ function CursorManager() {
   };
 
   const handleCleanupFullBackups = async () => {
-    if (cleaning || busy || switchingId) return;
+    if (opLocked) return;
     const stale = diskUsage?.staleDbCount ?? 0;
     const reclaim = diskUsage?.backupsFullDbBytes ?? 0;
     const ok = await confirm({
@@ -472,7 +510,7 @@ function CursorManager() {
   };
 
   const handleCleanupSealedBackups = async () => {
-    if (cleaning || busy || switchingId) return;
+    if (opLocked) return;
     const count = diskUsage?.sealedCount ?? 0;
     const size = diskUsage?.sealedBytes ?? 0;
     const ok = await confirm({
@@ -500,7 +538,7 @@ function CursorManager() {
    * updater stops re-attempting a move of `Cursor.exe` that can never succeed.
    */
   const handleCleanupUpdateState = async () => {
-    if (!updateState?.stuck || updateCleaning || busy || switchingId) return;
+    if (!updateState?.stuck || opLocked) return;
     if (updateState.running) {
       showMsg("warning", t("cursor.updateCleanupNeedQuit"));
       return;
@@ -532,7 +570,7 @@ function CursorManager() {
   };
 
   const handleSlimDbs = async () => {
-    if (slimming || cleaning || busy || switchingId) return;
+    if (opLocked) return;
     const ok = await confirm({
       title: t("cursor.slimTitle"),
       message: t("cursor.slimMessage"),
@@ -605,7 +643,14 @@ function CursorManager() {
   };
 
   const handleDelete = async (id: string) => {
-    if (switchingId || busy || cleaning || slimming) return;
+    if (opLocked) return;
+    // A running Cursor holds the profile and snapshot files open; a
+    // half-deleted account is worse than a refused click, and the page cannot
+    // tell which profile the running process owns (that probe is server-side).
+    if (isCursorRunning) {
+      showMsg("warning", t("cursor.deleteNeedQuit"));
+      return;
+    }
     const ok = await confirm({
       title: t("cursor.deleteTitle"),
       message: t("cursor.deleteMessage"),
@@ -625,7 +670,7 @@ function CursorManager() {
   };
 
   const handleSubmit = async () => {
-    if (busy || switchingId) return;
+    if (opLocked) return;
     if (!formData.name.trim() || !formData.email.trim()) {
       showMsg("error", t("cursor.nameEmailRequired"));
       return;
@@ -650,6 +695,20 @@ function CursorManager() {
       } finally {
         setBusy(false);
       }
+      return;
+    }
+
+    // Two rows for one address would let the second "完成初始化" treat the
+    // first as a duplicate slot and delete its snapshot.
+    const wanted = formData.email.trim().toLowerCase();
+    const duplicate = cursorAccounts.find(
+      (a) => a.email.trim().toLowerCase() === wanted
+    );
+    if (duplicate) {
+      showMsg(
+        "warning",
+        t("cursor.duplicateEmail", { name: duplicate.notes || duplicate.name })
+      );
       return;
     }
 
@@ -688,7 +747,7 @@ function CursorManager() {
   };
 
   const handleFinishInit = async (account: CursorAccount) => {
-    if (switchingId || busy || cleaning || slimming) return;
+    if (opLocked) return;
     const ok = await confirm({
       title: t("cursor.finishInitTitle"),
       message: t("cursor.finishInitMessage", { name: account.notes || account.name }),
@@ -715,7 +774,7 @@ function CursorManager() {
   };
 
   const handleReopenCursor = async (account: CursorAccount) => {
-    if (switchingId || busy || cleaning || slimming) return;
+    if (opLocked) return;
     setBusy(true);
     setSwitchStep(t("cursor.openingProfile"));
     try {
@@ -755,7 +814,7 @@ function CursorManager() {
   };
 
   const handleLaunchCursor = async (account: CursorAccount) => {
-    if (switchingId || busy || cleaning || slimming) return;
+    if (opLocked) return;
     setBusy(true);
     setSwitchStep(t("cursor.launching"));
     try {
@@ -772,7 +831,7 @@ function CursorManager() {
   };
 
   const handleQuitCursor = async () => {
-    if (busy || switchingId) return;
+    if (opLocked) return;
     const ok = await confirm({
       title: t("cursor.quitTitle"),
       message: t("cursor.quitMessage"),
@@ -796,7 +855,7 @@ function CursorManager() {
   };
 
   const handleCleanupOrphans = async () => {
-    if (cleaning || busy || switchingId) return;
+    if (opLocked) return;
     const count = orphans?.count ?? 0;
     if (count === 0) return;
     const ok = await confirm({
@@ -826,7 +885,7 @@ function CursorManager() {
     matchCursorAccount(account, currentCursor);
 
   const handleSwitch = async (account: CursorAccount) => {
-    if (switchingId) return;
+    if (opLocked) return;
     if (isLiveAccount(account)) {
       showMsg("warning", t("cursor.alreadyCurrent"));
       return;
@@ -888,17 +947,14 @@ function CursorManager() {
       await refresh();
     } catch (error) {
       const errText = String(error);
-      const hint =
-        errText.includes("Sign Out") || errText.includes("Authentication")
-          ? errText
-          : `${errText}. If Authentication error appears, re-login and finish init.`;
-      const text = t("cursor.switchFailed", { error: hint });
-      showMsg("error", text);
-      try {
-        await invokeCopyToClipboard(text);
-      } catch {
-        /* ignore copy failure */
-      }
+      const authish = /Sign Out|Authentication/i.test(errText);
+      // The error toast already offers 复制错误信息, so no silent clipboard write;
+      // and the next step belongs in i18n, not bolted onto the message in English.
+      showMsg(
+        "error",
+        t("cursor.switchFailed", { error: errText }) +
+          (authish ? `\n${t("cursor.switchFailedAuth")}` : "")
+      );
       await refresh();
     } finally {
       setSwitchingId(null);
@@ -913,7 +969,7 @@ function CursorManager() {
         <div className="cursor-toolbar-main">
           <div className="status-label">{t("cursor.currentLogin")}</div>
           <div className="status-value cursor-toolbar-login">
-            {currentCursor?.isLoggedIn
+            {currentCursor?.isLoggedIn && (currentCursor.name || currentCursor.email)
               ? `${currentCursor.name || currentCursor.email}${
                   currentCursor.email ? ` <${currentCursor.email}>` : ""
                 }`
@@ -934,7 +990,7 @@ function CursorManager() {
               type="button"
               className="btn btn-secondary btn-small"
               onClick={handleQuitCursor}
-              disabled={Boolean(switchingId) || busy}
+              disabled={opLocked}
               title={t("cursor.quitMessage")}
             >
               {t("cursor.btnQuit")}
@@ -1022,17 +1078,18 @@ function CursorManager() {
             <button
               type="button"
               className="btn btn-secondary btn-small"
-              onClick={() => setShowSetupGuide(false)}
+              onClick={() => {
+                localStorage.setItem(SETUP_DISMISS_KEY, "1");
+                setShowSetupGuide(false);
+              }}
             >
               {t("cursor.setupDismiss")}
             </button>
           </div>
           <ol className="cursor-setup-list">
-            <li>{t("cursor.setupStep1")}</li>
-            <li>{t("cursor.setupStep2")}</li>
-            <li>{t("cursor.setupStep3")}</li>
-            <li>{t("cursor.setupStep4")}</li>
-            <li>{t("cursor.setupStep5")}</li>
+            {SETUP_STEP_KEYS.map((key) => (
+              <li key={key}>{t(`cursor.${key}`)}</li>
+            ))}
           </ol>
         </div>
       )}
@@ -1049,7 +1106,7 @@ function CursorManager() {
             type="button"
             className="btn btn-primary btn-small"
             onClick={openAddModal}
-            disabled={Boolean(switchingId) || busy}
+            disabled={opLocked}
           >
             + {t("cursor.addAccount")}
           </button>
@@ -1227,14 +1284,14 @@ function CursorManager() {
                         <button
                           className="btn btn-primary btn-small"
                           onClick={() => handleFinishInit(account)}
-                          disabled={Boolean(switchingId) || busy}
+                          disabled={opLocked}
                         >
                           {t("cursor.finishLogin")}
                         </button>
                         <button
                           className="btn btn-secondary btn-small"
                           onClick={() => handleReopenCursor(account)}
-                          disabled={Boolean(switchingId) || busy}
+                          disabled={opLocked}
                           title={t("cursor.reopenHint")}
                         >
                           {t("cursor.btnReopen")}
@@ -1257,9 +1314,7 @@ function CursorManager() {
                             ? handleLaunchCursor(account)
                             : handleSwitch(account)
                         }
-                        disabled={
-                          Boolean(switchingId) || busy || (liveActive && isCursorRunning)
-                        }
+                        disabled={opLocked || (liveActive && isCursorRunning)}
                         title={
                           liveActive && !isCursorRunning
                             ? t("cursor.launchHint")
@@ -1292,7 +1347,7 @@ function CursorManager() {
                     <button
                       className="btn btn-danger btn-small"
                       onClick={() => handleDelete(account.id)}
-                      disabled={Boolean(switchingId) || busy}
+                      disabled={opLocked}
                     >
                       {t("cursor.btnDelete")}
                     </button>
@@ -1336,7 +1391,7 @@ function CursorManager() {
             type="button"
             className="btn btn-secondary btn-small"
             onClick={handleCleanupUpdateState}
-            disabled={updateState.running || updateCleaning || busy || Boolean(switchingId)}
+            disabled={updateState.running || opLocked}
             title={
               updateState.running
                 ? t("cursor.updateCleanupNeedQuit")
@@ -1408,12 +1463,7 @@ function CursorManager() {
           <button
             type="button"
             className="btn btn-secondary btn-small"
-            disabled={
-              cleaning ||
-              busy ||
-              Boolean(switchingId) ||
-              !diskUsage?.staleDbCount
-            }
+            disabled={opLocked || !diskUsage?.staleDbCount}
             onClick={handleCleanupFullBackups}
             title={
               diskUsage?.staleDbCount
@@ -1430,9 +1480,7 @@ function CursorManager() {
           <button
             type="button"
             className="btn btn-secondary btn-small"
-            disabled={
-              cleaning || slimming || busy || Boolean(switchingId) || !diskUsage
-            }
+            disabled={opLocked || !diskUsage}
             onClick={handleSlimDbs}
             title={t("cursor.slimWarning")}
           >
@@ -1442,7 +1490,7 @@ function CursorManager() {
           <button
             type="button"
             className="btn btn-secondary btn-small"
-            disabled={cleaning || busy || Boolean(switchingId) || !orphans?.count}
+            disabled={opLocked || !orphans?.count}
             onClick={handleCleanupOrphans}
             title={
               orphans?.count
@@ -1458,7 +1506,7 @@ function CursorManager() {
             <button
               type="button"
               className="btn btn-secondary btn-small"
-              disabled={cleaning || busy || Boolean(switchingId)}
+              disabled={opLocked}
               onClick={handleCleanupSealedBackups}
               title={t("cursor.sealedCleanupWarning")}
             >
@@ -1470,20 +1518,19 @@ function CursorManager() {
         </div>
       </div>
 
-      <div className="card">
+      <div className="card cursor-usage-card">
         <div className="card-title">{t("cursor.usageTitle")}</div>
-        <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.8 }}>
-          <p>
-            <strong>{t("cursor.usageLead")}</strong>
-          </p>
-          <p>{t("cursor.usage1")}</p>
-          <p>{t("cursor.usage2")}</p>
-          <p>{t("cursor.usage3")}</p>
-          <p>{t("cursor.usage4")}</p>
-          <p>{t("cursor.usage5")}</p>
-          <p>{t("cursor.usage6")}</p>
-          <p>7. {t("cursor.passwordHint")}</p>
-        </div>
+        <p className="cursor-usage-lead">{t("cursor.usageLead")}</p>
+        {USAGE_GROUPS.map((group) => (
+          <div className="cursor-usage-group" key={group.titleKey}>
+            <div className="cursor-usage-group-title">{t(`cursor.${group.titleKey}`)}</div>
+            <ul className="cursor-usage-list">
+              {group.itemKeys.map((key) => (
+                <li key={key}>{t(`cursor.${key}`)}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
 
       {showModal && (

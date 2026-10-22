@@ -16,8 +16,23 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* 长列表（选区名单、几十条分支）以前会一路顶出窗口，这里封顶后自己滚 */
+  max-height: min(60vh, 340px);
+  overflow: auto;
+  overscroll-behavior: contain;
   animation: dd-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
   transform-origin: top right;
+}
+/* 下方放不下就朝上开（触发按钮在短窗口下半屏时，12 行的选区名单会顶出窗口） */
+.dd-menu.is-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+  transform-origin: bottom right;
+  animation: dd-in-up 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes dd-in-up {
+  from { opacity: 0; transform: translateY(5px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 /* 磨砂主题：实底 + 轻糊，避免底下卡片文字透上来。 */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dd-menu {

@@ -23,10 +23,13 @@ import {
   User,
   Download,
   Upload,
+  X,
   XCircle,
 } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { GIT_CONCURRENCY, mapPoolCounted } from "../core/asyncPool";
+import { describePushTargets, isPushable } from "../core/gitPushScope";
+import { parseInvokeError } from "../hooks/useInvokeError";
 import {
   dropRepos,
   getRepoSnapshot,
@@ -56,11 +59,16 @@ import { useConfirm } from "./ConfirmModal";
 import DropdownMenu from "./DropdownMenu";
 import AccountManagerModal from "./AccountManagerModal";
 import BatchIdentityModal from "./BatchIdentityModal";
-import BatchBranchModal, { type BranchModalMode } from "./BatchBranchModal";
+import BatchBranchModal, {
+  type BranchLanding,
+  type BranchModalMode,
+  type BranchOptions,
+} from "./BatchBranchModal";
+import BatchReport, { type BatchRow } from "./git/BatchReport";
 import RepoBindingModal from "./RepoBindingModal";
 import ScanReposModal from "./ScanReposModal";
 import type { ReportTarget } from "./testReportTypes";
-import type { GitAccount, GitWorkspace, RecentProject, RepoBatchItem } from "../core/types";
+import type { GitAccount, GitWorkspace, RecentProject } from "../core/types";
 
 type Props = {
   active?: boolean;
@@ -79,6 +87,34 @@ function readStoredFilter(): RepoFilter {
     return "all";
   }
 }
+
+/** What a finished batch run was, so 只重试失败项 can re-run exactly that. */
+/** 建分支的完整方案：从哪个基点起、要不要先取远端、落在远端还是本地。 */
+type BranchPlan = {
+  mode: BranchModalMode;
+  name: string;
+  switchExisting: boolean;
+  base: string | null;
+  fetchBase: boolean;
+  landing: BranchLanding;
+};
+
+type BatchAction =
+  | { kind: "refresh" }
+  | { kind: "pull" }
+  | { kind: "push" }
+  | { kind: "bind"; accountId: string }
+  | { kind: "branch"; plan: BranchPlan };
+
+/** One repo's input to a run: `skip` pre-marks it (with the reason) without touching git. */
+type BatchItem = { path: string; skip?: string };
+
+/** A run's per-repo work; returning `{ skip }` means the repo was handled but the step was not. */
+/** `skip` = 没碰 git 的原因；`note` = 成功了但值得写明（例如基点落在哪个提交）。 */
+type BatchFn = (path: string) => Promise<void | { skip: string } | { note: string }>;
+
+/** The result list: what was run, one row per repo, and how to re-run the failures. */
+type BatchReportData = { title: string; rows: BatchRow[]; action: BatchAction };
 
 function GroupSelectCheckbox({
   checked,
@@ -139,6 +175,8 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const invokeGitCreateBranch = useGlobalStore((s) => s.invokeGitCreateBranch);
   const invokeGitSwitchBranch = useGlobalStore((s) => s.invokeGitSwitchBranch);
   const invokeGitListBranches = useGlobalStore((s) => s.invokeGitListBranches);
+  const invokeGitFetchBranch = useGlobalStore((s) => s.invokeGitFetchBranch);
+  const invokeGitPublishBranch = useGlobalStore((s) => s.invokeGitPublishBranch);
   const invokeSetRepoGitConfig = useGlobalStore((s) => s.invokeSetRepoGitConfig);
   const invokeOpenRuntimeFolder = useGlobalStore((s) => s.invokeOpenRuntimeFolder);
 
@@ -170,11 +208,16 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const [showBatchBind, setShowBatchBind] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const batchLock = useRef(false);
+  /** Cancel is cooperative: queued repos never reach git, running ones finish. */
+  const batchCancel = useRef(false);
+  const [batchCanceling, setBatchCanceling] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{
     done: number;
     total: number;
     indeterminate?: boolean;
   } | null>(null);
+  /** 上一次批量的逐仓库结果，留到用户关掉（toast 只活 8 秒）。 */
+  const [batchReport, setBatchReport] = useState<BatchReportData | null>(null);
   const [branchModal, setBranchModal] = useState<BranchModalMode | null>(null);
   const [filter, setFilter] = useState<RepoFilter>(readStoredFilter);
   const [lastRefreshAt, setLastRefreshAt] = useState(0);
@@ -398,69 +441,142 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
 
   const clearSelected = () => setSelected(new Set());
 
+  /** 跨组筛选时逐个点组头太费；一键选中当前筛选出来的全部仓库。 */
+  const allVisibleSelected = visiblePaths.size > 0 && [...visiblePaths].every((path) => selected.has(path));
+
+  const toggleVisibleSelection = () => {
+    const add = !allVisibleSelected;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const path of visiblePaths) {
+        if (add) next.add(path);
+        else next.delete(path);
+      }
+      return next;
+    });
+  };
+
+  /** 选区名单：点一行把它移出选区；被筛选挡在列表外的仓库也标出来，免得计数看不出所以然。 */
+  const roster = useMemo(
+    () =>
+      [...selected]
+        .map((path) => ({
+          path,
+          label: recentProjects.find((p) => p.path === path)?.name || projectNameFromPath(path),
+          branch: summaries[path]?.branch ?? "",
+          hidden: !visiblePaths.has(path),
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path)),
+    [selected, recentProjects, summaries, visiblePaths]
+  );
+
   const repoLabel = (path: string) =>
     recentProjects.find((p) => p.path === path)?.name || projectNameFromPath(path);
 
-  const reportBatch = (ok: number, fail: number, errors: string[], skipped = 0) => {
-    const parts: string[] = [t("batch.done", { ok, fail })];
-    if (skipped > 0) parts.push(t("batch.skipped", { count: skipped }));
-    if (errors.length > 0) {
-      const shown = errors
-        .slice(0, 3)
-        .map((e) => (e.length > 140 ? `${e.slice(0, 140)}…` : e));
-      parts.push(shown.join(" ｜ "));
-      if (errors.length > 3) parts.push(t("batch.moreErrors", { count: errors.length - 3 }));
-    }
-    showMsg(fail > 0 ? "error" : "success", parts.join(" ｜ "));
+  /** Structured invoke errors read as a Chinese sentence, not `[GIT_CONFLICT] …`. */
+  const errorText = (e: unknown) => {
+    const raw = String(e instanceof Error ? e.message : e ?? "").trim();
+    return parseInvokeError(raw).message || raw;
   };
 
+  /**
+   * Same step over several repos, one row per repo kept for the result list:
+   * the 8-second toast could only show three errors of a 19-repo run, and a
+   * pre-marked `skip` never reaches git at all.
+   */
   const runBatch = async (
-    paths: string[],
-    fn: (path: string) => Promise<void>,
-    skipped = 0
-  ) => {
-    if (batchLock.current || paths.length === 0) return;
+    items: BatchItem[],
+    title: string,
+    action: BatchAction,
+    fn: BatchFn
+  ): Promise<BatchRow[] | null> => {
+    if (batchLock.current || items.length === 0) return null;
     batchLock.current = true;
-    // Hold the cache so a background refresh cannot race the writes below.
-    holdRepos(paths);
+    batchCancel.current = false;
+    setBatchCanceling(false);
+    const rowOf = new Map<string, BatchRow>(
+      items.map((i) => [
+        i.path,
+        { path: i.path, label: repoLabel(i.path), status: i.skip ? "skip" : "ok", detail: i.skip },
+      ])
+    );
+    const run = items.filter((i) => !i.skip).map((i) => i.path);
     setBatchBusy(true);
-    setBatchProgress({ done: 0, total: paths.length });
-    let ok = 0;
-    let fail = 0;
-    let errors: string[] = [];
-    try {
-      const result = await mapPoolCounted(paths, GIT_CONCURRENCY, fn, {
-        onProgress: (done, total) => setBatchProgress({ done, total }),
-        describeError: (path, error) => `${repoLabel(path)}：${String(error)}`,
-      });
-      ok = result.ok;
-      fail = result.fail;
-      errors = result.errors;
-    } finally {
-      releaseRepos(paths);
+    setBatchProgress({ done: 0, total: run.length });
+    if (run.length > 0) {
+      // Hold the cache so a background refresh cannot race the writes below.
+      holdRepos(run);
+      try {
+        await mapPoolCounted(run, GIT_CONCURRENCY, async (path) => {
+          // Cancel means "never start this one": git is not touched at all, so a
+          // half-run batch leaves no mystery writes behind.
+          if (batchCancel.current) {
+            rowOf.set(path, {
+              path,
+              label: repoLabel(path),
+              status: "cancel",
+              detail: t("batch.cancelNotRun"),
+            });
+            return;
+          }
+          try {
+            const out = await fn(path);
+            rowOf.set(
+              path,
+              out && "skip" in out
+                ? { path, label: repoLabel(path), status: "skip", detail: out.skip }
+                : out && "note" in out
+                  ? { path, label: repoLabel(path), status: "ok", detail: out.note }
+                  : { path, label: repoLabel(path), status: "ok" }
+            );
+          } catch (e) {
+            rowOf.set(path, { path, label: repoLabel(path), status: "fail", detail: errorText(e) });
+            throw e;
+          }
+        }, { onProgress: (done, total) => setBatchProgress({ done, total }) });
+      } finally {
+        releaseRepos(run);
+        batchLock.current = false;
+        setBatchBusy(false);
+        setBatchProgress(null);
+      }
+      // The writes landed after these paths were last read, so force a re-read —
+      // only for the repos git actually touched.
+      const touched = run.filter((path) => rowOf.get(path)?.status !== "cancel");
+      await refreshPaths(
+        touched.map((path) => {
+          const p = recentProjects.find((x) => x.path === path);
+          return { path, name: p?.name };
+        }),
+        { force: true }
+      );
+    } else {
       batchLock.current = false;
       setBatchBusy(false);
       setBatchProgress(null);
     }
-    reportBatch(ok, fail, errors, skipped);
-    // The writes landed after these paths were last read, so force a re-read.
-    await refreshPaths(
-      paths.map((path) => {
-        const p = recentProjects.find((x) => x.path === path);
-        return { path, name: p?.name };
-      }),
-      { force: true }
-    );
+    const rows = items.map((i) => rowOf.get(i.path) ?? { path: i.path, label: repoLabel(i.path), status: "ok" as const });
+    setBatchCanceling(false);
+    setBatchReport({ title, rows, action });
+    return rows;
   };
 
-  const handleBatchBind = async (account: GitAccount) => {
-    const paths = [...batchPaths];
-    setShowBatchBind(false);
-    const bound: string[] = [];
-    await runBatch(paths, async (path) => {
-      await invokeSetRepoGitConfig(path, account.name, account.email);
-      bound.push(path);
-    });
+  /** 取消 = 不再把剩下的仓库交给 git；已经在跑的那几个仍然跑完，结果照样进清单。 */
+  const requestBatchCancel = () => {
+    batchCancel.current = true;
+    setBatchCanceling(true);
+  };
+
+  const doBatchBind = async (account: GitAccount, paths: string[]) => {
+    const rows = await runBatch(
+      paths.map((path) => ({ path })),
+      t("batch.bind"),
+      { kind: "bind", accountId: account.id },
+      async (path) => {
+        void (await invokeSetRepoGitConfig(path, account.name, account.email));
+      }
+    );
+    const bound = (rows ?? []).filter((r) => r.status === "ok").map((r) => r.path);
     if (bound.length === 0) return;
     try {
       await upsertRepoConfigs(
@@ -473,146 +589,250 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
         }))
       );
     } catch (e) {
-      showMsg("error", String(e));
+      showMsg("error", errorText(e));
     }
   };
 
-  const handleBatchPull = () => {
-    const pullable: string[] = [];
-    let skipped = 0;
-    for (const path of batchPaths) {
-      const s = summaries[path];
-      if (s?.isGit && s.behind > 0 && s.hasUpstream) pullable.push(path);
-      else skipped += 1;
-    }
-    if (pullable.length === 0) {
+  const handleBatchBind = async (account: GitAccount) => {
+    const paths = [...batchPaths];
+    setShowBatchBind(false);
+    await doBatchBind(account, paths);
+  };
+
+  const withSkip = (paths: string[], skipOf: (path: string) => string | undefined): BatchItem[] =>
+    paths.map((path) => {
+      const skip = skipOf(path);
+      return skip ? { path, skip } : { path };
+    });
+
+  const pullSkip = (path: string): string | undefined => {
+    const s = summaries[path];
+    if (!s?.isGit) return t("batch.skipNotGit");
+    if (!s.hasUpstream) return t("batch.skipNoUpstream");
+    if (s.behind === 0) return t("batch.skipUpToDate");
+    return undefined;
+  };
+
+  const doBatchPull = (paths: string[]) => {
+    const items = withSkip(paths, pullSkip);
+    if (items.every((i) => i.skip)) {
       showMsg("error", t("batch.noneToPull"));
       return;
     }
-    void runBatch(
-      pullable,
-      async (path) => {
-        void (await invokeGitPull(path));
-      },
-      skipped
-    );
+    void runBatch(items, t("batch.pull"), { kind: "pull" }, async (path) => {
+      void (await invokeGitPull(path));
+    });
   };
 
-  /** Ensure `<name>` exists locally and on origin in every selected repo. */
-  const runBranchCreate = async (name: string, switchExisting: boolean) => {
-    const rows = batchPaths
-      .map((path) => ({ path, summary: summaries[path] }))
-      .filter((row): row is { path: string; summary: RepoBatchItem } => !!row.summary?.isGit);
-    const noCommits = rows.filter((row) => !row.summary.hasCommits);
-    const runnable = rows.filter((row) => row.summary.hasCommits);
+  const handleBatchPull = () => doBatchPull([...batchPaths]);
+
+  const pushSkip = (path: string): string | undefined => {
+    const s = summaries[path];
+    if (!s?.isGit) return t("batch.skipNotGit");
+    if (!s.hasCommits) return t("batch.skipNoCommits");
+    if (!s.originUrl) return t("batch.skipNoRemote");
+    if (!isPushable(s)) return t("batch.skipNothingAhead");
+    return undefined;
+  };
+
+  const doBatchPush = async (paths: string[]) => {
+    const targets = paths
+      .filter((path) => !pushSkip(path))
+      .map((path) => ({ path, label: repoLabel(path), summary: summaries[path]! }));
+    if (targets.length === 0) {
+      showMsg("error", t("batch.noneToPush"));
+      return;
+    }
+    const { message, warning } = describePushTargets(targets, t);
+    const ok = await confirm({
+      title: t("batch.pushTitle"),
+      message,
+      warning,
+      confirmText: t("batch.push"),
+      icon: warning ? "warning" : "info",
+    });
+    if (!ok) return;
+    void runBatch(withSkip(paths, pushSkip), t("batch.push"), { kind: "push" }, async (path) => {
+      void (await invokeGitPush(path));
+    });
+  };
+
+  const handleBatchPush = () => void doBatchPush([...batchPaths]);
+
+  /**
+   * Ensure `<name>` exists — on origin only, or locally and checked out. The base
+   * is resolved per repo by git (remote-tracking ref before the local branch), so
+   * a repo that cannot see the base fails with a plain sentence instead of
+   * silently forking off whatever tip it happened to hold.
+   */
+  const doBatchBranch = async (paths: string[], plan: BranchPlan) => {
+    const { mode, name, switchExisting, base, fetchBase, landing } = plan;
+    const remoteOnly = mode === "create" && landing === "remote";
+    const branchSkip = (path: string): string | undefined => {
+      const s = summaries[path];
+      if (!s?.isGit) return t("batch.skipNotGit");
+      // 没指定基点就是从各仓 HEAD 起，HEAD 没提交就没得起；指定基点时 unborn HEAD 不影响。
+      if (mode === "create" && !base && !s.hasCommits) return t("batch.skipNoCommits");
+      if (remoteOnly && !s.originUrl) return t("batch.skipNoRemotePublish");
+      return undefined;
+    };
+    const runnable = paths.filter((path) => !branchSkip(path));
     if (runnable.length === 0) {
       showMsg("error", t("batch.noneToBranch"));
       return;
     }
-    const noRemote = runnable.filter((row) => !row.summary.originUrl);
-    const lines = runnable.map((row) => `• ${row.summary.name} — ${row.summary.branch}`);
+    const label = (path: string) => summaries[path]?.name || repoLabel(path);
+    const lines = runnable.map((path) => `• ${label(path)} — ${summaries[path]?.branch ?? ""}`);
+    const baseNote = base ? t("batch.baseNote", { name: base }) : t("batch.baseHeadNote");
+    const noRemote = paths.filter(
+      (path) => summaries[path]?.isGit && !summaries[path]?.originUrl
+    ).length;
     const warnings: string[] = [];
-    if (noCommits.length > 0) {
-      warnings.push(
-        t("batch.branchNoCommitsWarning", {
-          names: noCommits.map((row) => row.summary.name).join(", "),
-        })
-      );
+    if (mode === "create") {
+      if (base && fetchBase) warnings.push(t("batch.fetchBaseWarning", { name: base }));
+      if (remoteOnly) {
+        if (noRemote > 0) warnings.push(t("batch.noRemotePublishWarning", { count: noRemote }));
+        const heads = [
+          ...new Set(runnable.map((path) => summaries[path]?.branch ?? "").filter(Boolean)),
+        ];
+        if (!base && heads.length > 1) {
+          warnings.push(t("batch.divergentBaseWarning", { names: heads.slice(0, 4).join("、") }));
+        }
+      } else {
+        const unborn = base
+          ? []
+          : paths.filter((path) => summaries[path]?.isGit && !summaries[path]?.hasCommits);
+        if (unborn.length > 0) {
+          warnings.push(t("batch.branchNoCommitsWarning", { names: unborn.map(label).join(", ") }));
+        }
+        if (noRemote > 0) warnings.push(t("batch.branchNoRemoteWarning", { count: noRemote }));
+        if (switchExisting) warnings.push(t("batch.branchSwitchExistingNote", { name }));
+      }
     }
-    if (noRemote.length > 0) {
-      warnings.push(t("batch.branchNoRemoteWarning", { count: noRemote.length }));
-    }
-    if (switchExisting) {
-      warnings.push(t("batch.branchSwitchExistingNote", { name }));
+    if (mode === "switch") {
+      const dirty = runnable.filter((path) => (summaries[path]?.dirtyCount ?? 0) > 0).length;
+      if (dirty > 0) warnings.push(t("batch.branchDirtyWarning", { count: dirty }));
     }
     const ok = await confirm({
-      title: t("batch.branchCreateTitle"),
-      message: `${t("batch.branchCreateConfirmMessage", { count: runnable.length, name })}\n${lines.join("\n")}`,
+      title: remoteOnly
+        ? t("batch.branchPublishTitle")
+        : mode === "switch"
+          ? t("batch.branchSwitchTitle")
+          : t("batch.branchCreateTitle"),
+      message: `${
+        mode === "switch"
+          ? t("batch.branchSwitchConfirmMessage", { count: runnable.length, name })
+          : remoteOnly
+            ? t("batch.branchPublishConfirmMessage", { count: runnable.length, name, base: baseNote })
+            : t("batch.branchCreateConfirmMessage", { count: runnable.length, name, base: baseNote })
+      }\n${lines.join("\n")}`,
       warning: warnings.length > 0 ? warnings.join("\n") : undefined,
-      confirmText: t("batch.createBranch"),
+      confirmText: remoteOnly
+        ? t("batch.publishBranch")
+        : mode === "create"
+          ? t("batch.createBranch")
+          : t("batch.switchBranch"),
       icon: warnings.length > 0 ? "warning" : "info",
     });
     if (!ok) return;
-    await runBatch(
-      runnable.map((row) => row.path),
+    void runBatch(
+      withSkip(paths, branchSkip),
+      remoteOnly
+        ? t("batch.publishBranch")
+        : mode === "create"
+          ? t("batch.createBranch")
+          : t("batch.switchBranch"),
+      { kind: "branch", plan },
       async (path) => {
-        // Decide per repo: an existing local branch either fails the item or —
-        // with the opt-in — becomes a plain switch.
+        if (mode === "switch") {
+          // Decide per repo from that repo's own refs: the modal only offers the
+          // union, so a branch can be missing in some of the selected repos.
+          const list = await invokeGitListBranches(path);
+          if (list.current === name) return { skip: t("batch.skipOnBranch", { name }) };
+          if (!list.local.includes(name) && !list.remote.includes(name)) {
+            throw new Error(t("batch.branchMissing", { name }));
+          }
+          await invokeGitSwitchBranch(path, name);
+          return;
+        }
+        // 「先从远端取基点」只在指定了基点时有意义 —— HEAD 本来就在工作区里。
+        if (base && fetchBase) await invokeGitFetchBranch(path, base);
+        if (remoteOnly) return { note: await invokeGitPublishBranch(path, name, base) };
         const list = await invokeGitListBranches(path);
         if (list.local.includes(name)) {
           if (!switchExisting) throw new Error(t("batch.branchExistsLocal", { name }));
           await invokeGitSwitchBranch(path, name);
         } else if (list.remote.includes(name)) {
           // The remote already has this name. Checkout that tip instead of
-          // forking a new branch from the current HEAD and pushing over it.
+          // forking a new branch from the chosen base and pushing over it.
           await invokeGitSwitchBranch(path, name);
         } else {
-          await invokeGitCreateBranch(path, name);
+          await invokeGitCreateBranch(path, name, base);
         }
-        // A fresh branch has no upstream, so git_push takes its `-u origin HEAD` path.
-        await invokeGitPush(path);
+        if (!summaries[path]?.originUrl) return { skip: t("batch.skipNoRemote") };
+        void (await invokeGitPush(path));
       }
     );
   };
-
-  const runBranchSwitch = async (name: string) => {
-    const rows = batchPaths.filter((path) => summaries[path]?.isGit);
-    if (rows.length === 0) {
-      showMsg("error", t("batch.noneToBranch"));
-      return;
-    }
-    const dirtyCount = rows.filter((path) => (summaries[path]?.dirtyCount ?? 0) > 0).length;
-    const lines = rows.map((path) => {
-      const s = summaries[path]!;
-      const label = recentProjects.find((p) => p.path === path)?.name || s.name;
-      return `• ${label} — ${s.branch}`;
-    });
-    const ok = await confirm({
-      title: t("batch.branchSwitchTitle"),
-      message: `${t("batch.branchSwitchConfirmMessage", { count: rows.length, name })}\n${lines.join("\n")}`,
-      warning: dirtyCount > 0 ? t("batch.branchDirtyWarning", { count: dirtyCount }) : undefined,
-      confirmText: t("batch.switchBranch"),
-      icon: dirtyCount > 0 ? "warning" : "info",
-    });
-    if (!ok) return;
-    await runBatch(rows, async (path) => {
-      await invokeGitSwitchBranch(path, name);
-    });
-  };
-
-  const handleBranchConfirm = (name: string, options: { switchExisting: boolean }) => {
+  const handleBranchConfirm = (name: string, options: BranchOptions) => {
     const mode = branchModal;
     setBranchModal(null);
-    if (mode === "create") void runBranchCreate(name, options.switchExisting);
-    if (mode === "switch") void runBranchSwitch(name);
+    if (!mode) return;
+    void doBatchBranch([...batchPaths], { mode, name, ...options });
   };
 
-  const handleBatchRefresh = () => {
-    const paths = [...batchPaths];
+  /** 只重试失败项：按原动作在同一批仓库上重跑一次（该确认的还是会确认）。 */
+  const retryBatch = (paths: string[], action: BatchAction) => {
+    switch (action.kind) {
+      case "refresh":
+        void doBatchRefresh(paths);
+        break;
+      case "pull":
+        doBatchPull(paths);
+        break;
+      case "push":
+        void doBatchPush(paths);
+        break;
+      case "bind": {
+        const account = accounts.find((a) => a.id === action.accountId);
+        if (!account) {
+          showMsg("error", t("batch.noAccounts"));
+          return;
+        }
+        void doBatchBind(account, paths);
+        break;
+      }
+      case "branch":
+        void doBatchBranch(paths, action.plan);
+        break;
+    }
+  };
+
+  const doBatchRefresh = async (paths: string[]) => {
     if (batchLock.current || paths.length === 0) return;
     batchLock.current = true;
     setBatchBusy(true);
     // One summarize call for the whole selection, so there is no per-repo fraction to advance.
     setBatchProgress({ done: 0, total: paths.length, indeterminate: true });
-    void (async () => {
-      try {
-        invalidateRepos(paths);
-        await refreshRepos(paths);
-        const snap = getRepoSnapshot();
-        const errors = paths.flatMap((path) => {
-          const err = snap[path]?.error;
-          return err ? [`${repoLabel(path)}：${err}`] : [];
-        });
-        reportBatch(paths.length - errors.length, errors.length, errors);
-      } catch (e) {
-        showMsg("error", String(e));
-      } finally {
-        batchLock.current = false;
-        setBatchBusy(false);
-        setBatchProgress(null);
-      }
-    })();
+    try {
+      invalidateRepos(paths);
+      await refreshRepos(paths);
+      const snap = getRepoSnapshot();
+      const rows = paths.map((path): BatchRow => {
+        const err = snap[path]?.error;
+        return { path, label: repoLabel(path), status: err ? "fail" : "ok", detail: err ? errorText(err) : undefined };
+      });
+      setBatchReport({ title: t("batch.refresh"), rows, action: { kind: "refresh" } });
+    } catch (e) {
+      showMsg("error", errorText(e));
+    } finally {
+      batchLock.current = false;
+      setBatchBusy(false);
+      setBatchProgress(null);
+    }
   };
+
+  const handleBatchRefresh = () => void doBatchRefresh([...batchPaths]);
 
   /** Remove the selected repos from the workbench list (never touches the disk). */
   const handleBatchRemove = async () => {
@@ -626,7 +846,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
         title: t("batch.removeTitle"),
         message: t("batch.removeMessage", { count: paths.length }),
         warning: t("batch.removeWarning"),
-        confirmText: tc("actions.delete"),
+        confirmText: t("batch.removeConfirm"),
         icon: "danger",
       });
       if (!ok) return;
@@ -1161,7 +1381,35 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
 
       {recentProjects.length > 0 && (
         <div className={`repos-batch-bar${selected.size > 0 ? "" : " is-empty"}`}>
-          <span className="repos-batch-count">{t("batch.selected", { count: batchPaths.length })}</span>
+          {selected.size === 0 ? (
+            <span className="repos-batch-count">{t("batch.selected", { count: 0 })}</span>
+          ) : (
+            <DropdownMenu
+              label={t("batch.rosterTitle")}
+              triggerClassName="repos-batch-count"
+              items={roster.map((row) => ({
+                label: `${row.label}${row.branch ? ` — ${row.branch}` : ""}${
+                  row.hidden ? ` · ${t("batch.rosterHidden")}` : ""
+                }`,
+                icon: <X size={12} aria-hidden />,
+                onClick: () => toggleSelected(row.path),
+              }))}
+            >
+              {t("batch.selected", { count: batchPaths.length })}
+              <ChevronDown size={12} aria-hidden />
+            </DropdownMenu>
+          )}
+          {visiblePaths.size > 0 && (
+            <button
+              type="button"
+              className="repos-batch-clear"
+              disabled={batchBusy}
+              onClick={toggleVisibleSelection}
+              title={allVisibleSelected ? t("batch.clearVisibleTip") : t("batch.selectAllVisibleTip")}
+            >
+              {allVisibleSelected ? t("batch.clearVisible") : t("batch.selectAllVisible", { count: visiblePaths.size })}
+            </button>
+          )}
           {selected.size === 0 ? (
             <span className="repos-batch-hint">{t("batch.hint")}</span>
           ) : (
@@ -1173,10 +1421,23 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
               )}
               {batchProgress && (
                 <span className="runtime-muted">
-                  {batchProgress.indeterminate
-                    ? t("batch.refreshing", { count: batchProgress.total })
-                    : t("batch.running", { done: batchProgress.done, total: batchProgress.total })}
+                  {batchCanceling
+                    ? t("batch.canceling", { count: batchProgress.total - batchProgress.done })
+                    : batchProgress.indeterminate
+                      ? t("batch.refreshing", { count: batchProgress.total })
+                      : t("batch.running", { done: batchProgress.done, total: batchProgress.total })}
                 </span>
+              )}
+              {batchProgress && !batchProgress.indeterminate && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={requestBatchCancel}
+                  disabled={batchCanceling}
+                  title={t("batch.cancelTip")}
+                >
+                  {t("batch.cancel")}
+                </button>
               )}
               <button
                 type="button"
@@ -1202,7 +1463,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                   className="btn commit-icon-btn"
                   disabled={batchBusy || batchPaths.length === 0}
                   onClick={() => setBranchModal("create")}
-                  title={t("branchModal.createTitle")}
+                  title={t("batch.createBranchTip")}
                 >
                   <GitBranchPlus size={14} />
                   <span>{t("batch.createBranch")}</span>
@@ -1212,7 +1473,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                   className="btn commit-icon-btn"
                   disabled={batchBusy || batchPaths.length === 0}
                   onClick={() => setBranchModal("switch")}
-                  title={t("branchModal.switchTitle")}
+                  title={t("batch.switchTip")}
                 >
                   <GitBranch size={14} />
                   <span>{t("batch.switchBranch")}</span>
@@ -1222,7 +1483,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                   className="btn commit-icon-btn"
                   disabled={batchBusy || batchPaths.length === 0}
                   onClick={handleBatchPull}
-                  title={t("batch.pull")}
+                  title={t("batch.pullTip")}
                 >
                   <Download size={14} />
                   <span>{t("batch.pull")}</span>
@@ -1231,8 +1492,18 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                   type="button"
                   className="btn commit-icon-btn"
                   disabled={batchBusy || batchPaths.length === 0}
+                  onClick={handleBatchPush}
+                  title={t("batch.pushTip")}
+                >
+                  <Upload size={14} />
+                  <span>{t("batch.push")}</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn commit-icon-btn"
+                  disabled={batchBusy || batchPaths.length === 0}
                   onClick={handleBatchRefresh}
-                  title={t("batch.refresh")}
+                  title={t("batch.refreshTip")}
                 >
                   <RefreshCw size={14} />
                   <span>{t("batch.refresh")}</span>
@@ -1243,7 +1514,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                   className="btn commit-icon-btn repos-batch-remove"
                   disabled={batchBusy || batchPaths.length === 0}
                   onClick={() => void handleBatchRemove()}
-                  title={t("batch.removeWarning")}
+                  title={t("batch.removeTip")}
                 >
                   <Trash2 size={14} />
                   <span>{t("batch.remove")}</span>
@@ -1252,6 +1523,16 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
             </>
           )}
         </div>
+      )}
+
+      {batchReport && (
+        <BatchReport
+          title={batchReport.title}
+          rows={batchReport.rows}
+          busy={batchBusy}
+          onClose={() => setBatchReport(null)}
+          onRetry={(paths) => retryBatch(paths, batchReport.action)}
+        />
       )}
 
       {message && (

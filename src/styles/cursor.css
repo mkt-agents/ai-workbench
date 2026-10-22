@@ -284,4 +284,40 @@
   }
 }
 
+/* Mirrors .cursor-setup-list so the wizard and the usage card read as one
+   family; numbering comes from the list, never from the copy. */
+.cursor-usage-lead {
+  margin: 0 0 var(--space-3);
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-1);
+}
+
+.cursor-usage-group + .cursor-usage-group {
+  margin-top: var(--space-3);
+}
+
+.cursor-usage-group-title {
+  margin-bottom: 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.cursor-usage-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-2);
+}
+
+.cursor-usage-list li + li {
+  margin-top: 2px;
+}
+
+.cursor-usage-list li::marker {
+  color: var(--text-3);
+}
+
 

@@ -149,21 +149,32 @@ fn validate_account_id(account_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn backup_dir(account_id: &str) -> Result<PathBuf, String> {
+/// Path resolution without the side effect. Reads, deletes and diagnostics must
+/// never mint a directory: an empty `cursor-backups/<id>` created by a status
+/// probe turns "never captured" into a phantom snapshot slot.
+fn backup_dir_path(account_id: &str) -> Result<PathBuf, String> {
     validate_account_id(account_id)?;
     let appdata = std::env::var("APPDATA")
         .map_err(|_| "Failed to resolve APPDATA".to_string())?;
-    let dir = Path::new(&appdata)
+    Ok(Path::new(&appdata)
         .join("com.ai-workbench.app")
         .join("cursor-backups")
-        .join(account_id);
+        .join(account_id))
+}
+
+fn backup_dir(account_id: &str) -> Result<PathBuf, String> {
+    let dir = backup_dir_path(account_id)?;
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create backup dir: {}", e))?;
     Ok(dir)
 }
 
-fn cursor_profile_dir(account_id: &str) -> Result<PathBuf, String> {
+fn cursor_profile_dir_path(account_id: &str) -> Result<PathBuf, String> {
     validate_account_id(account_id)?;
-    let dir = app_data_dir()?.join("cursor-profiles").join(account_id);
+    Ok(app_data_dir()?.join("cursor-profiles").join(account_id))
+}
+
+fn cursor_profile_dir(account_id: &str) -> Result<PathBuf, String> {
+    let dir = cursor_profile_dir_path(account_id)?;
     fs::create_dir_all(&dir).map_err(|e| format!("创建 profile 目录失败: {}", e))?;
     Ok(dir)
 }
@@ -1513,6 +1524,20 @@ fn identity_match(account_email: &str, account_name: &str, live: &CursorAuthSnap
     false
 }
 
+/// A `cursorAuth/accessToken` row survives a sign-out with an empty value, so
+/// key presence is not a login. Something is only a login when we can name it:
+/// an address, or a token that is actually filled in.
+fn snapshot_reports_login(snapshot: &CursorAuthSnapshot) -> bool {
+    if !snapshot.email.trim().is_empty() {
+        return true;
+    }
+    snapshot
+        .items
+        .get("cursorAuth/accessToken")
+        .map(|token| !token.trim().is_empty())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorBackupStatus {
@@ -1848,7 +1873,7 @@ fn migrate_backup_to_profile_impl(account_id: &str) -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub fn inspect_cursor_backup(account_id: String) -> Result<CursorBackupStatus, String> {
-    let backup = backup_dir(&account_id)?;
+    let backup = backup_dir_path(&account_id)?;
     if !backup.exists() {
         return Ok(CursorBackupStatus {
             account_id,
@@ -1878,17 +1903,11 @@ fn get_cursor_login_status_sync() -> Result<CursorLoginStatus, String> {
     }
 
     if let Ok(snapshot) = extract_auth_from_live() {
-        if !snapshot.email.is_empty() {
+        if snapshot_reports_login(&snapshot) {
+            let CursorAuthSnapshot { email, name, .. } = snapshot;
             return Ok(CursorLoginStatus {
-                email: snapshot.email,
-                name: snapshot.name,
-                is_logged_in: true,
-            });
-        }
-        if snapshot.items.contains_key("cursorAuth/accessToken") {
-            return Ok(CursorLoginStatus {
-                email: snapshot.email,
-                name: snapshot.name,
+                email,
+                name,
                 is_logged_in: true,
             });
         }
@@ -2338,6 +2357,39 @@ fn resolve_finish_capture_root(profile: &Path) -> Result<PathBuf, String> {
     ))
 }
 
+/// 「完成初始化」 stores whatever the shared source currently holds, so the
+/// capture has to be proven to belong to the row that will own it: right after
+/// it, `reclaim_duplicate_email_slots` deletes every *other* slot holding this
+/// email — so an unverified capture writes someone else's login into this row
+/// and wipes the real owner's snapshot and profile.
+///
+/// Fails closed when the row's email is unknown: re-clicking 完成初始化 is
+/// cheap, undoing a deleted account is not.
+fn check_capture_identity(
+    account_id: &str,
+    row_email: Option<&str>,
+    live: &CursorAuthSnapshot,
+) -> Result<(), String> {
+    let Some(row) = row_email.map(str::trim).filter(|email| !email.is_empty()) else {
+        return Err(format!(
+            "还没读到账号 {account_id} 登记的邮箱，无法确认这份登录属于它。请稍候几秒重新点「完成初始化」。"
+        ));
+    };
+    // Same double-email form the switch/restore verifiers use, so the
+    // `glass.lastSignedInAuthId` arm stays available.
+    if identity_match(row, row, live) {
+        return Ok(());
+    }
+    let live_label = if live.email.trim().is_empty() {
+        "（没有可读邮箱）"
+    } else {
+        live.email.trim()
+    };
+    Err(format!(
+        "Cursor 当前登录的是 {live_label}，不是这个账号（登记为 {row}）。请在 Cursor 里登录 {row} 后再点「完成初始化」；如果这个账号用的其实是 {live_label}，先用「编辑」改正这一行的邮箱。"
+    ))
+}
+
 /// Same Cursor login cannot occupy two slots. Remove leftover backup/profile
 /// dirs that already captured this email under a different account id
 /// (common after failed/re-added inits), so the current slot can finish.
@@ -2382,16 +2434,19 @@ fn reclaim_duplicate_email_slots(
 fn finish_account_profile_impl(
     window: &tauri::Window,
     account_id: String,
+    expected_email: Option<String>,
     relaunch: Option<bool>,
 ) -> Result<String, String> {
     let should_relaunch = relaunch.unwrap_or(true);
     let profile = cursor_profile_dir(&account_id)?;
     let mut capture_root = resolve_finish_capture_root(&profile)?;
+    let row_email = known_account_email(&account_id, expected_email.as_deref());
 
     emit_switch_progress(Some(window), "save", "正在保存登录态…");
     let preflight = read_auth_snapshot_from_root(&capture_root).map_err(|e| {
         format!("读取登录态失败: {e}")
     })?;
+    check_capture_identity(&account_id, row_email.as_deref(), &preflight)?;
     match reclaim_duplicate_email_slots(&account_id, &preflight.email) {
         Ok(n) if n > 0 => {
             emit_switch_progress(
@@ -2416,6 +2471,7 @@ fn finish_account_profile_impl(
             quit_cursor_sync()?;
             capture_root = resolve_finish_capture_root(&profile)?;
             let retry_snap = read_auth_snapshot_from_root(&capture_root)?;
+            check_capture_identity(&account_id, row_email.as_deref(), &retry_snap)?;
             let _ = reclaim_duplicate_email_slots(&account_id, &retry_snap.email);
             backup_cursor_data_from_root(&account_id, &capture_root).map_err(|e| {
                 format!(
@@ -2455,12 +2511,15 @@ fn finish_account_profile_impl(
 pub async fn finish_account_profile(
     window: tauri::Window,
     account_id: String,
+    expected_email: Option<String>,
     relaunch: Option<bool>,
 ) -> Result<String, String> {
     let window = window.clone();
-    tokio::task::spawn_blocking(move || finish_account_profile_impl(&window, account_id, relaunch))
-        .await
-        .map_err(|e| format!("初始化任务异常: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        finish_account_profile_impl(&window, account_id, expected_email, relaunch)
+    })
+    .await
+    .map_err(|e| format!("初始化任务异常: {}", e))?
 }
 
 #[tauri::command]
@@ -2499,6 +2558,9 @@ fn switch_cursor_account_impl(
         quit_cursor_sync()?;
     }
 
+    // Every caller in the repo passes relaunch=true (the Cursor page at
+    // store.ts, the CLI self-test at run_cursor_switch_self_test), so this
+    // branch only runs for a hand-made invoke.
     if !should_relaunch {
         emit_switch_progress(window, "save", "正在保存当前账号登录态…");
         preserve_current_login().map_err(|who| format!(
@@ -2566,16 +2628,20 @@ fn delete_cursor_backup_impl(account_id: String) -> Result<(), String> {
     // The profile holds junctions/symlinks into the default Cursor data
     // (User, extensions) — unlink them without following, then drop the
     // directory itself.
-    let slot_email = backup_dir(&account_id)
+    let slot_email = backup_dir_path(&account_id)
         .ok()
         .and_then(|backup| load_auth_snapshot(&backup).ok())
         .map(|snapshot| snapshot.email)
         .unwrap_or_default();
 
-    let profile = cursor_profile_dir(&account_id)?;
-    remove_tree_removing_links(&profile)?;
-    let backup = backup_dir(&account_id)?;
-    remove_tree_removing_links(&backup)?;
+    let profile = cursor_profile_dir_path(&account_id)?;
+    remove_tree_removing_links(&profile).map_err(|e| {
+        format!("删除独立配置失败：{e}。Cursor 可能仍在运行，请先在本页点「关闭 Cursor」后重试。")
+    })?;
+    let backup = backup_dir_path(&account_id)?;
+    remove_tree_removing_links(&backup).map_err(|e| {
+        format!("删除登录快照失败：{e}。Cursor 可能仍在运行，请先在本页点「关闭 Cursor」后重试。")
+    })?;
 
     if get_active_account_id().as_deref() == Some(account_id.as_str()) {
         set_active_account(None);
@@ -2741,7 +2807,7 @@ pub fn read_cursor_diagnostics(account_id: Option<String>) -> Result<String, Str
     ));
 
     let data_root = match account_id.as_deref() {
-        Some(id) => cursor_profile_dir(id)?,
+        Some(id) => cursor_profile_dir_path(id)?,
         None => cursor_data_dir(),
     };
     out.push_str(&format!("profile:      {}\n", data_root.display()));
@@ -3154,33 +3220,36 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 /// Old full-copy leftovers under cursor-backups/*/globalStorage/ (auth.json backups do not need these).
-fn collect_stale_full_backup_dbs(backups_root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(backups_root) else {
-        return out;
-    };
-    const NAMES: &[&str] = &[
-        "state.vscdb",
-        "state.vscdb-wal",
-        "state.vscdb-shm",
-        "state.vscdb.backup",
-    ];
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let gs = entry.path().join("globalStorage");
-        if !gs.is_dir() {
-            continue;
-        }
-        for name in NAMES {
-            let p = gs.join(name);
-            if p.is_file() {
-                out.push(p);
-            }
-        }
+const STALE_FULL_BACKUP_DB_NAMES: &[&str] = &[
+    "state.vscdb",
+    "state.vscdb-wal",
+    "state.vscdb-shm",
+    "state.vscdb.backup",
+];
+
+/// The same legacy copies inside one account's backup directory — the unit the
+/// per-account "备份 X" chip needs, so its figure matches the disk bar's scope.
+fn stale_full_backup_dbs_in(account_backup: &Path) -> Vec<PathBuf> {
+    let global_storage = account_backup.join("globalStorage");
+    if !global_storage.is_dir() {
+        return Vec::new();
     }
-    out
+    STALE_FULL_BACKUP_DB_NAMES
+        .iter()
+        .map(|name| global_storage.join(name))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+fn collect_stale_full_backup_dbs(backups_root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(backups_root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .flat_map(|entry| stale_full_backup_dbs_in(&entry.path()))
+        .collect()
 }
 
 fn try_remove_empty_dir(path: &Path) {
@@ -3215,8 +3284,12 @@ fn get_cursor_disk_usage_sync() -> Result<CursorDiskUsage, String> {
     let sealed_bytes: u64 = sealed.iter().map(|p| dir_size(p)).sum();
 
     Ok(CursorDiskUsage {
+        // dir_size skips every state.vscdb* file — the only filter of its kind
+        // that can hit inside a backup — so the legacy full copies are added
+        // back here. Otherwise the "N cleanable" figure counts bytes that are
+        // missing from the total it is reported inside of.
         backups_bytes: if backups_path.exists() {
-            dir_size(&backups_path)
+            dir_size(&backups_path) + backups_full_db_bytes
         } else {
             0
         },
@@ -3224,9 +3297,11 @@ fn get_cursor_disk_usage_sync() -> Result<CursorDiskUsage, String> {
         stale_db_count,
         sealed_bytes,
         sealed_count: sealed.len() as u32,
-        live_db_bytes: file_size(&live_db),
-        backups_path: backups_path.to_string_lossy().to_string(),
-        live_db_path: live_db.to_string_lossy().to_string(),
+        // The same cluster the slim panel reports on, so a VACUUM can never
+        // "reclaim more than the page says the database holds".
+        live_db_bytes: state_db_cluster_bytes(&live_db),
+        backups_path: format!("{}（含旧全量库副本）", backups_path.to_string_lossy()),
+        live_db_path: format!("{}（含 -wal / -shm）", live_db.to_string_lossy()),
     })
 }
 
@@ -3344,7 +3419,14 @@ fn cleanup_cursor_full_backups_sync() -> Result<CursorCleanupResult, String> {
         }
     }
     for gs in parents {
+        // An account slot reduced to an empty globalStorage/ folder is litter
+        // from the pre-snapshot era. Removing a provably empty directory cannot
+        // lose data, so drain it in the same pass.
+        let account_dir = gs.parent().map(|parent| parent.to_path_buf());
         try_remove_empty_dir(&gs);
+        if let Some(account_dir) = account_dir {
+            try_remove_empty_dir(&account_dir);
+        }
     }
     removed += backup_removed;
     freed += backup_freed;
@@ -3378,7 +3460,14 @@ pub fn list_cursor_backups() -> Result<Vec<CursorBackupInfo>, String> {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let size = dir_size(&path);
+                // Same scope as the disk bar: dir_size skips the legacy full DB
+                // copies, so add them back rather than showing a smaller number
+                // than "清理冗余备份" reports for this slot.
+                let stale_bytes: u64 = stale_full_backup_dbs_in(&path)
+                    .iter()
+                    .map(|db| file_size(db))
+                    .sum();
+                let size = dir_size(&path) + stale_bytes;
                 results.push(CursorBackupInfo {
                     account_id,
                     path: path.to_string_lossy().to_string(),
@@ -3410,7 +3499,7 @@ pub async fn cleanup_cursor_full_backups() -> Result<CursorCleanupResult, String
 pub struct CursorDbSlimTarget {
     pub label: String,
     pub path: String,
-    /// "rebuilt" | "vacuumed" | "failed"
+    /// "removed" | "vacuumed" | "failed"
     pub action: String,
     pub before_bytes: u64,
     pub after_bytes: u64,
@@ -3870,5 +3959,94 @@ mod update_state_tests {
             r#"{"phase":"backing_up"}"#
         );
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod capture_identity_tests {
+    use super::*;
+
+    fn snapshot(email: &str, items: &[(&str, &str)]) -> CursorAuthSnapshot {
+        CursorAuthSnapshot {
+            email: email.to_string(),
+            name: String::new(),
+            items: items
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    fn authed(email: &str) -> CursorAuthSnapshot {
+        snapshot(email, &[("cursorAuth/accessToken", "jwt-live")])
+    }
+
+    #[test]
+    fn unknown_row_email_fails_closed() {
+        let live = authed("someone@corp.com");
+        for row in [None, Some(""), Some("   ")] {
+            let err = check_capture_identity("acct-1", row, &live).unwrap_err();
+            assert!(
+                err.contains("完成初始化"),
+                "refusal must say how to retry: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn matching_row_email_is_accepted() {
+        let live = authed("song.zhang@corp.com");
+        for row in [
+            "song.zhang@corp.com",
+            "Song.Zhang@Corp.com",
+            "  song.zhang@corp.com  ",
+        ] {
+            assert!(
+                check_capture_identity("acct-1", Some(row), &live).is_ok(),
+                "{row} should match"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_in_id_without_a_readable_email_still_matches() {
+        let live = snapshot(
+            "",
+            &[
+                ("cursorAuth/accessToken", "jwt-live"),
+                ("glass.lastSignedInAuthId", "auth0|user-42"),
+            ],
+        );
+        assert!(check_capture_identity("acct-1", Some("user-42"), &live).is_ok());
+    }
+
+    #[test]
+    fn foreign_login_is_refused_naming_both_addresses() {
+        let live = authed("personal@gmail.com");
+        let err = check_capture_identity("acct-1", Some("song@corp.com"), &live).unwrap_err();
+        assert!(err.contains("personal@gmail.com"), "{err}");
+        assert!(err.contains("song@corp.com"), "{err}");
+        assert!(err.contains("编辑"), "refusal must point at the fix: {err}");
+    }
+
+    #[test]
+    fn login_without_any_identifying_value_is_refused() {
+        let live = snapshot("", &[("cursorAuth/accessToken", "")]);
+        assert!(check_capture_identity("acct-1", Some("song@corp.com"), &live).is_err());
+    }
+
+    #[test]
+    fn an_empty_token_key_is_not_a_login() {
+        let signed_out = snapshot("", &[("cursorAuth/accessToken", "")]);
+        assert!(!snapshot_reports_login(&signed_out));
+        let whitespace = snapshot("", &[("cursorAuth/accessToken", "   ")]);
+        assert!(!snapshot_reports_login(&whitespace));
+        let empty = snapshot("", &[]);
+        assert!(!snapshot_reports_login(&empty));
+
+        let token_only = snapshot("", &[("cursorAuth/accessToken", "jwt")]);
+        assert!(snapshot_reports_login(&token_only));
+        let email_only = snapshot("a@b.com", &[]);
+        assert!(snapshot_reports_login(&email_only));
     }
 }

@@ -37,9 +37,11 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 218 条注册
+                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 229 条注册
                       # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；含
-                      # `detect_local_ai_endpoints` / `regenerate_test_report_ai_section`；
+                      # `detect_local_ai_endpoints` / `regenerate_test_report_ai_section` /
+                      # `git_fetch_branch` / `git_publish_branch`（2026-10-22 批量建分支用：前者只推进
+                      # 一个远端跟踪引用，后者在 origin 上建分支、不碰工作区）；
                       # 原 `devtools_commands.rs` 随 HTTP 客户端一起删除，该文件已不存在）
   纯函数层             # git_merge.rs：合并 / 变基状态、冲突列表、diff3 分段与冲突解决命令（冲突只交给用户）；
  # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +

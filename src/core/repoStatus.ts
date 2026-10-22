@@ -7,9 +7,14 @@ import { isPushable } from "./gitPushScope";
 import { pathKey, projectNameFromPath } from "./pathUtils";
 import type { GitRepoConfig, RecentProject, RepoBatchItem } from "./types";
 
-export type RepoFilter = "all" | "dirty" | "sync" | "identity";
+/**
+ * `behind` (要拉) and `ahead` (要推) are separate chips: lumping them into one
+ * 「待同步」 made it impossible to pick the repos a batch pull or batch push should
+ * target. A stored `sync` value from before the split falls back to `all`.
+ */
+export type RepoFilter = "all" | "dirty" | "behind" | "ahead" | "identity";
 
-export const REPO_FILTERS: RepoFilter[] = ["all", "dirty", "sync", "identity"];
+export const REPO_FILTERS: RepoFilter[] = ["all", "dirty", "behind", "ahead", "identity"];
 
 export type RepoFlags = {
   dirty: boolean;
@@ -58,8 +63,10 @@ export function matchesFilter(flags: RepoFlags, filter: RepoFilter): boolean {
   switch (filter) {
     case "dirty":
       return flags.dirty;
-    case "sync":
-      return flags.behind || flags.ahead;
+    case "behind":
+      return flags.behind;
+    case "ahead":
+      return flags.ahead;
     case "identity":
       return flags.identityIssue;
     default:
@@ -117,11 +124,18 @@ export function countByFilter(
   summaries: Record<string, RepoBatchItem>,
   presets: GitRepoConfig[]
 ): Record<RepoFilter, number> {
-  const out: Record<RepoFilter, number> = { all: projects.length, dirty: 0, sync: 0, identity: 0 };
+  const out: Record<RepoFilter, number> = {
+    all: projects.length,
+    dirty: 0,
+    behind: 0,
+    ahead: 0,
+    identity: 0,
+  };
   for (const p of projects) {
     const f = repoFlags(summaries[p.path], findPreset(p.path, presets));
     if (matchesFilter(f, "dirty")) out.dirty++;
-    if (matchesFilter(f, "sync")) out.sync++;
+    if (matchesFilter(f, "behind")) out.behind++;
+    if (matchesFilter(f, "ahead")) out.ahead++;
     if (matchesFilter(f, "identity")) out.identity++;
   }
   return out;

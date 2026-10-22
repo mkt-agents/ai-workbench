@@ -1544,29 +1544,190 @@ pub struct GitBranchList {
     pub remote: Vec<String>,
 }
 
-/// Create a local branch at HEAD and switch to it. Pushing to the remote is a
-/// separate step: the frontend reuses `git_push`, whose no-upstream path is
-/// exactly `push -u origin HEAD`.
-fn git_create_branch_sync(repo_path: String, name: String) -> Result<String, String> {
+/// Where a new branch starts. `None` means the repo's own HEAD; a name is tried
+/// as `origin/<name>` first and only then as a local `<name>` — "branch from
+/// origin/master" must never silently fork off a stale local master.
+/// Returns the ref git should use plus its short sha for the result row.
+pub(crate) fn resolve_branch_base(
+    repo_path: &str,
+    base: Option<&str>,
+) -> Result<(String, String), String> {
+    let short = |sha: &str| -> String { sha.trim().chars().take(7).collect() };
+    let raw = base.map(str::trim).unwrap_or_default();
+    if raw.is_empty() {
+        // An unborn HEAD has nothing to branch from — "first commit" is the fix,
+        // and saying so beats git's generic fatal output.
+        let sha = git_stdout(repo_path, &["rev-parse", "--verify", "HEAD"])
+            .map_err(|_| "当前分支还没有任何提交，无法作为基点".to_string())?;
+        return Ok(("HEAD".to_string(), short(&sha)));
+    }
+    validate_branch_name(raw)?;
+    for cand in [format!("refs/remotes/origin/{raw}"), format!("refs/heads/{raw}")] {
+        if let Ok(sha) = git_stdout(repo_path, &["rev-parse", "--verify", &cand]) {
+            return Ok((cand, short(&sha)));
+        }
+    }
+    Err(format!(
+        "找不到基点 {raw}：本地没有这个分支，也没有 origin/{raw} 的跟踪引用。勾上「先从远端取基点」再试，或确认分支名。"
+    ))
+}
+
+/// `refs/remotes/origin/x` reads as `origin/x`, `refs/heads/x` as `x`.
+fn base_ref_label(r: &str) -> String {
+    ["refs/remotes/", "refs/heads/"]
+        .iter()
+        .find_map(|p| r.strip_prefix(p).map(str::to_string))
+        .unwrap_or_else(|| r.to_string())
+}
+
+fn clip_git_tail(raw: &str, fallback: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else if trimmed.chars().count() > 200 {
+        format!("{}…", trimmed.chars().take(160).collect::<String>())
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn friendly_fetch_error(raw: &str, name: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("couldn't find remote ref") || lower.contains("no matching ref") {
+        return format!("远端没有分支 {name}");
+    }
+    if lower.contains("authentication failed")
+        || lower.contains("permission denied")
+        || lower.contains("403")
+    {
+        return format!("没有权限读取远端分支 {name}（检查凭据或访问令牌）");
+    }
+    if lower.contains("could not resolve host") || lower.contains("timed out") {
+        return "连不上远端：检查网络或代理后重试".into();
+    }
+    clip_git_tail(raw, "拉取远端分支失败")
+}
+
+fn friendly_publish_error(raw: &str, name: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("non-fast-forward") || (lower.contains("! [rejected]") && lower.contains("fetch first")) {
+        return format!("origin 上已有一条不同的 {name}，不会覆盖：先确认远端那条分支怎么处理");
+    }
+    if lower.contains("permission denied")
+        || lower.contains("read-only")
+        || lower.contains("authentication failed")
+        || lower.contains("403")
+    {
+        return "远端拒绝写入：当前凭据没有建分支的权限".into();
+    }
+    if lower.contains("could not resolve host")
+        || lower.contains("timed out")
+        || lower.contains("the remote end hung up")
+    {
+        return "连不上远端或传输中断：检查网络后重试".into();
+    }
+    clip_git_tail(raw, &format!("在 origin 创建 {name} 失败"))
+}
+
+/// Create a local branch at `base` (HEAD when absent) and switch to it. Pushing
+/// to the remote is a separate step: the frontend reuses `git_push`, whose
+/// no-upstream path is exactly `push -u origin HEAD`.
+fn git_create_branch_sync(
+    repo_path: String,
+    name: String,
+    base: Option<String>,
+) -> Result<String, String> {
     let name = name.trim().to_string();
     validate_branch_name(&name)?;
     ensure_git_repo(&repo_path)?;
+    let (base_ref, sha) = resolve_branch_base(&repo_path, base.as_deref())?;
 
-    // An unborn HEAD has nothing to branch from — "first commit" is the fix,
-    // and saying so beats git's generic fatal output.
-    if git_stdout(&repo_path, &["rev-parse", "--verify", "HEAD"]).is_err() {
-        return Err("当前分支还没有任何提交，无法创建新分支".into());
-    }
     if git_stdout(&repo_path, &["rev-parse", "--verify", &format!("refs/heads/{}", name)]).is_ok() {
         return Err(format!("本地已存在分支 {}，如需切换请使用「批量切换分支」", name));
     }
 
-    let output = git_output(&repo_path, &["checkout", "-b", &name])?;
+    let output = git_output(&repo_path, &["checkout", "-b", &name, &base_ref])?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(stderr.trim().to_string());
     }
-    Ok(format!("已创建并切换到分支 {}", name))
+    Ok(format!(
+        "已创建并切换到分支 {}（基于 {}@{}）",
+        name,
+        base_ref_label(&base_ref),
+        sha
+    ))
+}
+
+/// `git fetch origin +refs/heads/<name>:refs/remotes/origin/<name>`: refresh one
+/// tracking ref, never the working tree. `+` because a tracking ref may need to
+/// move backwards after someone else force-pushed.
+fn git_fetch_branch_sync(repo_path: String, name: String) -> Result<String, String> {
+    let name = name.trim().to_string();
+    validate_branch_name(&name)?;
+    ensure_git_repo(&repo_path)?;
+    if !has_remote(&repo_path, "origin") {
+        return Err("这个仓库没有配置 origin，取不到远端分支".into());
+    }
+    let spec = format!("+refs/heads/{name}:refs/remotes/origin/{name}");
+    let output = match git_network_output(&repo_path, &["fetch", "origin", &spec]) {
+        Ok(output) => output,
+        Err(err) => return Err(friendly_fetch_error(&err, &name)),
+    };
+    if !output.status.success() {
+        let combined = format!(
+            "{} {}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return Err(friendly_fetch_error(&combined, &name));
+    }
+    let sha = git_stdout(&repo_path, &["rev-parse", "--verify", &format!("refs/remotes/origin/{name}")])?;
+    Ok(format!(
+        "已取到 origin/{name}（{}）",
+        sha.trim().chars().take(7).collect::<String>()
+    ))
+}
+
+/// Create the branch **on origin** from a base ref without touching the working
+/// tree or HEAD. Deliberately not behind `ensure_repo_clear`: nothing in the
+/// worktree moves, so a repo that is mid-merge can still publish a branch.
+/// Landing it locally is the existing switch flow (git DWIM builds the tracking
+/// branch for a remote-only name).
+fn git_publish_branch_sync(
+    repo_path: String,
+    name: String,
+    base: Option<String>,
+) -> Result<String, String> {
+    let name = name.trim().to_string();
+    validate_branch_name(&name)?;
+    ensure_git_repo(&repo_path)?;
+    if !has_remote(&repo_path, "origin") {
+        return Err("没有配置 origin，只能先在本地建分支".into());
+    }
+    let (base_ref, sha) = resolve_branch_base(&repo_path, base.as_deref())?;
+    let spec = format!("{base_ref}:refs/heads/{name}");
+    let output = match git_network_output(&repo_path, &["push", "origin", &spec]) {
+        Ok(output) => output,
+        Err(err) => return Err(friendly_publish_error(&err, &name)),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        return Err(friendly_publish_error(
+            &format!("{stderr} {stdout}"),
+            &name,
+        ));
+    }
+    if format!("{stderr} {stdout}").to_ascii_lowercase().contains("everything up-to-date") {
+        return Ok(format!("origin 上已有同一个 {name}，未重复创建"));
+    }
+    Ok(format!(
+        "已在 origin 创建 {}（基于 {}@{}）",
+        name,
+        base_ref_label(&base_ref),
+        sha
+    ))
 }
 
 /// `git checkout <name>`. Git's DWIM covers the remote-only case: when only
@@ -1575,6 +1736,9 @@ fn git_switch_branch_sync(repo_path: String, name: String) -> Result<String, Str
     let name = name.trim().to_string();
     validate_branch_name(&name)?;
     ensure_git_repo(&repo_path)?;
+    // 合并中 / 有未解决冲突时 git 自己也会拒绝 checkout，但吐的是原始报错；
+    // 走与其它写操作同一条门，用户看到的是「去提交页解决冲突」。
+    crate::git_merge::ensure_repo_clear(&repo_path, "切换分支")?;
 
     // 英文输出才能稳定识别失败原因（本机 git 可能是中文语言包），再由 describe_checkout_error 翻译
     let output = git_command()
@@ -2267,8 +2431,30 @@ pub async fn git_pull(path: String, merge: Option<bool>) -> Result<String, Strin
 }
 
 #[tauri::command]
-pub async fn git_create_branch(path: String, name: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || git_create_branch_sync(path, name))
+pub async fn git_create_branch(
+    path: String,
+    name: String,
+    base: Option<String>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_create_branch_sync(path, name, base))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_fetch_branch(path: String, name: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_fetch_branch_sync(path, name))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_publish_branch(
+    path: String,
+    name: String,
+    base: Option<String>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_publish_branch_sync(path, name, base))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
@@ -3351,8 +3537,9 @@ mod v2_tests {
 #[cfg(test)]
 mod branch_tests {
     use super::{
-        git_command, git_create_branch_sync, git_list_branches_sync, git_stdout,
-        git_switch_branch_sync, validate_branch_name,
+        git_command, git_create_branch_sync, git_fetch_branch_sync, git_list_branches_sync,
+        git_publish_branch_sync, git_stdout, git_switch_branch_sync, resolve_branch_base,
+        validate_branch_name,
     };
     use std::path::{Path, PathBuf};
 
@@ -3412,16 +3599,16 @@ mod branch_tests {
         let (root, _origin, work1) = seed_remote("create").expect("seed remote");
         let dir = work1.to_string_lossy().to_string();
 
-        git_create_branch_sync(dir.clone(), "feature/x".into()).expect("create branch");
+        git_create_branch_sync(dir.clone(), "feature/x".into(), None).expect("create branch");
         assert_eq!(
             git_stdout(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
             "feature/x",
             "create must land on the new branch"
         );
 
-        let dup = git_create_branch_sync(dir.clone(), "feature/x".into()).unwrap_err();
+        let dup = git_create_branch_sync(dir.clone(), "feature/x".into(), None).unwrap_err();
         assert!(dup.contains("已存在"), "重复创建应报已存在，实际: {dup}");
-        assert!(git_create_branch_sync(dir.clone(), "-lead".into()).is_err());
+        assert!(git_create_branch_sync(dir.clone(), "-lead".into(), None).is_err());
 
         // An unborn HEAD (no commits) cannot branch.
         let empty = root.join("empty");
@@ -3429,9 +3616,128 @@ mod branch_tests {
         git_run(&empty, &["init", "-q", "-b", "master"]).unwrap();
         git_run(&empty, &["config", "user.email", "branch-test@example.com"]).unwrap();
         git_run(&empty, &["config", "user.name", "Branch Test"]).unwrap();
-        let err = git_create_branch_sync(empty.to_string_lossy().to_string(), "x".into())
+        let err = git_create_branch_sync(empty.to_string_lossy().to_string(), "x".into(), None)
             .unwrap_err();
         assert!(err.contains("没有任何提交"), "unborn HEAD 应报无提交，实际: {err}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 只建远端：工作区、HEAD、本地分支三者都不许动。
+    #[test]
+    #[ignore = "creates throwaway git repositories and shells out to git"]
+    fn publish_branch_creates_on_origin_without_touching_worktree() {
+        let (root, origin, work1) = seed_remote("publish").expect("seed remote");
+        let dir = work1.to_string_lossy().to_string();
+        std::fs::write(work1.join("dirty.txt"), "local only\n").unwrap();
+
+        // release/1.0 exists on origin and as a tracking ref, but not locally.
+        git_run(&work1, &["branch", "-q", "release/1.0"]).unwrap();
+        git_run(&work1, &["push", "-q", "origin", "release/1.0"]).unwrap();
+        git_run(&work1, &["branch", "-q", "-D", "release/1.0"]).unwrap();
+
+        let msg = git_publish_branch_sync(
+            dir.clone(),
+            "feature/from-remote".into(),
+            Some("release/1.0".into()),
+        )
+        .expect("publish from remote base");
+        assert!(msg.contains("origin/release/1.0"), "应写明基点，实际: {msg}");
+
+        let on_origin = git_stdout(
+            &origin.to_string_lossy(),
+            &["rev-parse", "--verify", "refs/heads/feature/from-remote"],
+        )
+        .expect("branch must exist on origin");
+        let base =
+            git_stdout(&dir, &["rev-parse", "--verify", "refs/remotes/origin/release/1.0"]).unwrap();
+        assert_eq!(
+            on_origin.trim(),
+            base.trim(),
+            "远端新分支必须指向基点同一个提交"
+        );
+
+        assert_eq!(
+            git_stdout(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap().trim(),
+            "master",
+            "HEAD 不许动"
+        );
+        assert!(work1.join("dirty.txt").exists(), "工作区文件不该被动过");
+        assert!(
+            git_stdout(&dir, &["for-each-ref", "refs/heads/feature/from-remote"])
+                .unwrap()
+                .is_empty(),
+            "本地不该出现这个分支"
+        );
+
+        let again =
+            git_publish_branch_sync(dir.clone(), "feature/from-remote".into(), Some("release/1.0".into()))
+                .unwrap();
+        assert!(again.contains("未重复创建"), "重复发布应报无需重复，实际: {again}");
+
+        let missing =
+            git_publish_branch_sync(dir.clone(), "feature/nope".into(), Some("no/such/base".into()))
+                .unwrap_err();
+        assert!(missing.contains("找不到基点"), "缺基点应报找不到，实际: {missing}");
+
+        // No origin → plain refusal before any network call.
+        let lone = root.join("lone");
+        std::fs::create_dir_all(&lone).unwrap();
+        git_run(&lone, &["init", "-q", "-b", "master"]).unwrap();
+        std::fs::write(lone.join("a.txt"), "a\n").unwrap();
+        git_run(&lone, &["config", "user.email", "t@example.com"]).unwrap();
+        git_run(&lone, &["config", "user.name", "T"]).unwrap();
+        git_run(&lone, &["add", "-A"]).unwrap();
+        git_run(&lone, &["commit", "-q", "-m", "seed"]).unwrap();
+        let no_remote =
+            git_publish_branch_sync(lone.to_string_lossy().to_string(), "x".into(), None).unwrap_err();
+        assert!(no_remote.contains("origin"), "实际: {no_remote}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 「先从远端取基点」：fetch 只推进跟踪引用，且基点一律优先走远端引用。
+    #[test]
+    #[ignore = "creates throwaway git repositories and shells out to git"]
+    fn fetch_branch_advances_tracking_ref_and_base_prefers_remote() {
+        let (root, origin, work1) = seed_remote("fetch").expect("seed remote");
+        git_run(&root, &["clone", "-q", &origin.to_string_lossy(), "work2"]).unwrap();
+        let work2 = root.join("work2");
+        let dir2 = work2.to_string_lossy().to_string();
+
+        std::fs::write(work1.join("file.txt"), "one\ntwo\n").unwrap();
+        git_run(&work1, &["add", "-A"]).unwrap();
+        git_run(&work1, &["commit", "-q", "-m", "second"]).unwrap();
+        git_run(&work1, &["push", "-q", "origin", "master"]).unwrap();
+
+        let stale =
+            git_stdout(&dir2, &["rev-parse", "--verify", "refs/remotes/origin/master"]).unwrap();
+        // work2's local master is behind: a base that preferred local would fork
+        // off the wrong commit.
+        let (r, sha) = resolve_branch_base(&dir2, Some("master")).expect("base resolves");
+        assert_eq!(r, "refs/remotes/origin/master", "基点必须走远端引用，实际: {r}");
+        assert_eq!(sha, stale.trim().chars().take(7).collect::<String>());
+
+        let msg = git_fetch_branch_sync(dir2.clone(), "master".into()).expect("fetch");
+        assert!(msg.contains("已取到 origin/master"), "实际: {msg}");
+        let fresh =
+            git_stdout(&dir2, &["rev-parse", "--verify", "refs/remotes/origin/master"]).unwrap();
+        assert_ne!(fresh, stale, "跟踪引用应被推进");
+        let (_, sha2) = resolve_branch_base(&dir2, Some("master")).unwrap();
+        assert_eq!(sha2, fresh.trim().chars().take(7).collect::<String>());
+
+        let none = git_fetch_branch_sync(dir2.clone(), "no/such".into()).unwrap_err();
+        assert!(none.contains("远端没有分支"), "实际: {none}");
+
+        // The fresh commit is what lands on origin — no checkout involved.
+        git_publish_branch_sync(dir2.clone(), "feature/off-fresh".into(), Some("master".into()))
+            .expect("publish fresh");
+        let on_origin = git_stdout(
+            &origin.to_string_lossy(),
+            &["rev-parse", "--verify", "refs/heads/feature/off-fresh"],
+        )
+        .unwrap();
+        assert_eq!(on_origin.trim(), fresh.trim(), "远端新分支应指向刚取到的提交");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -3594,6 +3900,9 @@ mod conflict_flow_tests {
         assert!(git_push_sync(bp.clone()).unwrap_err().starts_with("[GIT_OPERATION_IN_PROGRESS]"));
         assert!(git_stage_sync(bp.clone(), vec![]).unwrap_err().starts_with("[GIT_CONFLICT]"));
         assert!(git_discard_sync(bp.clone(), "f.txt".into(), false, false).is_err());
+        // 批量切换分支走同一条门：不给原始 checkout 报错，而是指回提交页。
+        let switched = git_switch_branch_sync(bp.clone(), "main".into()).unwrap_err();
+        assert!(switched.starts_with("[GIT_OPERATION_IN_PROGRESS]"), "{switched}");
 
         let file = crate::git_merge::git_conflict_file_sync(bp.clone(), "f.txt".into()).unwrap();
         assert_eq!(file.kind, "content");
@@ -3615,6 +3924,10 @@ mod conflict_flow_tests {
         let after = crate::git_merge::conflict_state(&bp);
         assert!(after.operation.is_none() && after.conflicted.is_empty());
         git_push_sync(bp.clone()).unwrap();
+        // 门只挡冲突：合并提交完、工作区干净之后，切换必须照常成功。
+        sh(&b, &["checkout", "-q", "-b", "side"]);
+        sh(&b, &["checkout", "-q", "main"]);
+        git_switch_branch_sync(bp.clone(), "side".into()).expect("clean repo must switch");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

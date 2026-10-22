@@ -441,6 +441,8 @@ pub fn run() {
             git_merge::git_resolve_conflict,
             git_merge::git_merge_abort,
             git_commands::git_create_branch,
+            git_commands::git_fetch_branch,
+            git_commands::git_publish_branch,
             git_commands::git_switch_branch,
             git_commands::git_list_branches,
             git_commands::git_diff,

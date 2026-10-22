@@ -238,7 +238,8 @@ interface StoreState extends GlobalState, Invocations {
   deleteCursorAccount: (id: string) => Promise<void>;
   switchCursorAccount: (id: string, currentAccountId?: string | null) => Promise<string>;
 
-  // Cursor invoke wrappers (delegated to store/invocations)
+  // Cursor invoke wrappers (implemented inline below — cursor is the one domain
+  // not delegated to store/invocations)
   invokeInspectCursorBackup: (accountId: string) => Promise<{
     accountId: string;
     complete: boolean;
@@ -269,7 +270,7 @@ interface StoreState extends GlobalState, Invocations {
     freedBytes: number;
     message: string;
   }>;
-  invokeFinishAccountProfile: (accountId: string, relaunch?: boolean) => Promise<string>;
+  invokeFinishAccountProfile: (accountId: string, expectedEmail?: string | null, relaunch?: boolean) => Promise<string>;
   invokeGetCursorProfileDir: (accountId: string) => Promise<string>;
   invokeSwitchCursorAccount: (targetAccountId: string, currentAccountId?: string | null, relaunch?: boolean) => Promise<string>;
   invokeDeleteCursorBackup: (accountId: string) => Promise<void>;
@@ -867,7 +868,10 @@ export const useGlobalStore = create<StoreState>()(
       }),
 
       finishAccountProfile: async (id) => {
-        const backupPath = await get().invokeFinishAccountProfile(id, true);
+        // The backend refuses a capture whose login is not this row's address;
+        // an unverified one overwrites this slot and deletes the real owner's snapshot.
+        const rowEmail = get().cursorAccounts.find((a) => a.id === id)?.email ?? null;
+        const backupPath = await get().invokeFinishAccountProfile(id, rowEmail, true);
         const cleanPath = backupPath.trim().split(/[\r\n]/)[0].trim();
         await get().updateCursorAccount(id, {
           profileInitialized: true,
@@ -990,8 +994,8 @@ export const useGlobalStore = create<StoreState>()(
         tauriInvoke<{ removedFiles: number; freedBytes: number; message: string }>(
           "cleanup_cursor_orphan_profiles"
         ),
-      invokeFinishAccountProfile: async (accountId, relaunch = true) =>
-        tauriInvoke<string>("finish_account_profile", { accountId, relaunch }),
+      invokeFinishAccountProfile: async (accountId, expectedEmail = null, relaunch = true) =>
+        tauriInvoke<string>("finish_account_profile", { accountId, expectedEmail, relaunch }),
       invokeGetCursorProfileDir: async (accountId) =>
         tauriInvoke<string>("get_cursor_profile_dir", { accountId }),
       invokeSwitchCursorAccount: async (targetAccountId, currentAccountId, relaunch = true) =>

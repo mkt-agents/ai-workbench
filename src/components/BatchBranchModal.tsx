@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, GitBranch, Loader2, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, Cloud, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Search } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import { GIT_CONCURRENCY, mapPool } from "../core/asyncPool";
 import { pathKey } from "../core/pathUtils";
 import ModalTitleRow from "./ModalTitleRow";
 
 export type BranchModalMode = "create" | "switch";
+/** Where the new branch lands: only on origin, or checked out locally as well. */
+export type BranchLanding = "remote" | "local";
+
+export type BranchOptions = {
+  switchExisting: boolean;
+  /** Base branch to fork from; `null` means each repo's own current branch. */
+  base: string | null;
+  /** Fetch `origin/<base>` first so the base really is the newest tip. */
+  fetchBase: boolean;
+  landing: BranchLanding;
+};
 
 type BranchUsage = {
   name: string;
@@ -22,7 +33,7 @@ type Props = {
   paths: string[];
   onClose: () => void;
   /** Validated here; the parent owns the confirm dialog and the batch run. */
-  onConfirm: (name: string, options: { switchExisting: boolean }) => void;
+  onConfirm: (name: string, options: BranchOptions) => void;
 };
 
 type NameError =
@@ -63,6 +74,9 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
   const [name, setName] = useState("");
   const [query, setQuery] = useState("");
   const [switchExisting, setSwitchExisting] = useState(false);
+  const [base, setBase] = useState<string | null>(null);
+  const [fetchBase, setFetchBase] = useState(true);
+  const [landing, setLanding] = useState<BranchLanding>("remote");
   const [branches, setBranches] = useState<BranchUsage[] | null>(null);
   const [reading, setReading] = useState(false);
   /** The list area has three looks: placeholder (never read), empty result, list. */
@@ -75,12 +89,28 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
   const canSubmit = !nameError && !reading;
   /** Create mode: flag repos that already have the typed branch locally. */
   const typedMatch = trimmed ? branches?.find((b) => b.name === trimmed) : undefined;
-  const existsLocally = mode === "create" && !!typedMatch && typedMatch.localCount > 0;
+  // A local collision only matters when we are about to touch the worktree; a
+  // remote one only matters when we are about to write on origin.
+  const existsLocally =
+    mode === "create" && landing === "local" && !!typedMatch && typedMatch.localCount > 0;
+  const existsOnRemote =
+    mode === "create" && landing === "remote" && !!typedMatch && typedMatch.remoteCount > 0;
+  const baseUsage = base ? branches?.find((b) => b.name === base) : undefined;
+  const usageDetail = (b: BranchUsage) =>
+    t("branchModal.usageDetail", { total: paths.length, local: b.localCount, remote: b.remoteCount });
   const visibleBranches = useMemo(() => {
     if (!branches) return [];
     const q = query.trim().toLowerCase();
     return q ? branches.filter((b) => b.name.toLowerCase().includes(q)) : branches;
   }, [branches, query]);
+  /** 分组口径：只要有任一仓库本地存在就归「本地已有」，一个分支名只出现一次。 */
+  const [localGroup, remoteOnlyGroup] = useMemo(
+    () => [
+      visibleBranches.filter((b) => b.localCount > 0),
+      visibleBranches.filter((b) => b.localCount === 0 && b.remoteCount > 0),
+    ],
+    [visibleBranches]
+  );
 
   /** Union of local + remote-tracking refs across the selection — reads local
    *  refs only, no network. Unreadable repos just contribute nothing. */
@@ -132,12 +162,17 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    onConfirm(trimmed, { switchExisting });
+    onConfirm(trimmed, { switchExisting, base, fetchBase, landing });
   };
 
-  const selectBranch = (branch: BranchUsage) => {
+  /** 新建形态：列表只用来挑基点，再点已选中的一行退回「不指定」。 */
+  const pickBase = (branch: BranchUsage) => {
+    setBase(base === branch.name ? null : branch.name);
+  };
+
+  /** 切换形态：点一行就是要切过去的分支名。 */
+  const pickSwitchTarget = (branch: BranchUsage) => {
     setName(branch.name);
-    if (mode === "create" && branch.localCount > 0) setSwitchExisting(true);
   };
 
   const moveRowFocus = (from: HTMLButtonElement, delta: number) => {
@@ -146,6 +181,49 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
     ];
     const next = buttons[buttons.indexOf(from) + delta];
     next?.focus();
+  };
+
+  /**
+   * 一行的读法：图标说「本地还是只在远端」（不再拿引用类型为难人），右侧说「几个仓库有它」，
+   * 缺的仓库数以 chip 形式落在名字后面——它才是批量场景里真正要关心的东西。
+   */
+  const renderRow = (b: BranchUsage) => {
+    const missing = paths.length - b.count;
+    const selected = mode === "create" ? base === b.name : trimmed === b.name;
+    return (
+      <li key={b.name}>
+        <button
+          type="button"
+          className={`branch-pick-item${selected ? " is-active" : ""}${missing > 0 ? " is-partial" : ""}`}
+          aria-pressed={selected}
+          title={usageDetail(b)}
+          onClick={() => (mode === "create" ? pickBase(b) : pickSwitchTarget(b))}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              moveRowFocus(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
+            }
+            if (e.key === "Enter" && mode === "switch" && trimmed === b.name) {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
+        >
+          {b.localCount > 0 ? (
+            <GitBranch size={13} className="bb-item-icon" />
+          ) : (
+            <Cloud size={13} className="bb-item-icon is-remote" />
+          )}
+          <span className="branch-pick-name">{b.name}</span>
+          {missing > 0 && (
+            <span className="bb-missing">{t("branchModal.missingN", { count: missing })}</span>
+          )}
+          <span className="branch-pick-count">
+            {t("branchModal.countOf", { have: b.count, total: paths.length })}
+          </span>
+        </button>
+      </li>
+    );
   };
 
   const nameField = (
@@ -173,11 +251,21 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
       {trimmed !== "" && nameError && (
         <div className="repos-modal-error">{t(`branchModal.invalid.${nameError}`)}</div>
       )}
-      {mode === "create" && !nameError && !existsLocally && (
-        <p className="input-hint">{t("branchModal.createHint")}</p>
+      {mode === "create" && !nameError && (
+        <p className="input-hint">
+          {landing === "remote" ? t("branchModal.createHintRemote") : t("branchModal.createHintLocal")}
+        </p>
       )}
       {mode === "switch" && trimmed !== "" && !nameError && !typedMatch && (
         <p className="input-hint">{t("branchModal.switchHint")}</p>
+      )}
+      {existsOnRemote && !nameError && (
+        <div className="bb-collide">
+          <div className="bb-warn">
+            <AlertTriangle size={12} />
+            <span>{t("branchModal.alreadyOnRemote", { count: typedMatch!.remoteCount })}</span>
+          </div>
+        </div>
       )}
       {existsLocally && !nameError && (
         <div className="bb-collide">
@@ -198,6 +286,70 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
     </div>
   );
 
+  const planRows = (
+    <div className="bb-plan">
+      <div className="bb-row">
+        <span className="bb-row-label">{t("branchModal.landingLabel")}</span>
+        <div className="bb-radios">
+          <label className="bb-radio">
+            <input
+              type="radio"
+              name="bb-landing"
+              checked={landing === "remote"}
+              onChange={() => setLanding("remote")}
+            />
+            <span>{t("branchModal.landingRemote")}</span>
+          </label>
+          <label className="bb-radio">
+            <input
+              type="radio"
+              name="bb-landing"
+              checked={landing === "local"}
+              onChange={() => setLanding("local")}
+            />
+            <span>{t("branchModal.landingLocal")}</span>
+          </label>
+        </div>
+      </div>
+      {landing === "remote" && !base && (
+        <p className="input-hint">{t("branchModal.baseCurrentWarn")}</p>
+      )}
+    </div>
+  );
+
+  /** 基点摘要 + 取基点勾选放在不滚动的面板头里：选完基点后这两行不能跟着列表滚走。 */
+  const baseLine = (
+    <div className="bb-base-line">
+      <span className="bb-base-text" title={baseUsage ? usageDetail(baseUsage) : undefined}>
+        {base && baseUsage
+          ? t(
+              baseUsage.count < paths.length
+                ? "branchModal.baseSummaryPartial"
+                : "branchModal.baseSummary",
+              {
+                name: base,
+                have: baseUsage.count,
+                total: paths.length,
+                missing: paths.length - baseUsage.count,
+              }
+            )
+          : base
+            ? t("branchModal.baseSummaryMissing", { name: base })
+            : t("branchModal.baseSummaryNone")}
+      </span>
+      {base && (
+        <label className="repos-apply-now bb-fetch-base" title={t("branchModal.fetchBaseTip")}>
+          <input
+            type="checkbox"
+            checked={fetchBase}
+            onChange={(e) => setFetchBase(e.target.checked)}
+          />
+          <span>{t("branchModal.fetchBase", { name: base })}</span>
+        </label>
+      )}
+    </div>
+  );
+
   return (
     <div className="modal-overlay">
       <div className="modal batch-branch-modal">
@@ -211,7 +363,12 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
           }
         />
         <div className="bb-body">
-          {mode === "create" && nameField}
+          {mode === "create" && (
+            <>
+              {nameField}
+              {planRows}
+            </>
+          )}
 
           <div className="bb-panel">
             <div className="bb-panel-bar">
@@ -232,7 +389,7 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
                     }
                     if (e.key === "Enter" && mode === "switch" && visibleBranches.length === 1) {
                       e.preventDefault();
-                      selectBranch(visibleBranches[0]);
+                      pickSwitchTarget(visibleBranches[0]);
                     }
                   }}
                 />
@@ -249,18 +406,16 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
               </button>
             </div>
 
-            <div className="bb-colhead">
-              <span>{mode === "create" ? t("branchModal.listLabelCreate") : t("branchModal.listLabelSwitch")}</span>
-              <span
-                title={
-                  mode === "create"
-                    ? t("branchModal.colHaveTitle", { total: paths.length })
-                    : t("branchModal.colSwitchTitle", { total: paths.length })
-                }
-              >
-                {mode === "create" ? t("branchModal.colHave") : t("branchModal.colSwitch")}
-              </span>
-            </div>
+            {mode === "create" ? (
+              baseLine
+            ) : (
+              <div className="bb-colhead">
+                <span>{t("branchModal.listLabelSwitch")}</span>
+                <span title={t("branchModal.colCountTitle", { total: paths.length })}>
+                  {t("branchModal.colCount")}
+                </span>
+              </div>
+            )}
 
             {reading && !readOnce && (
               <div className="bb-empty">
@@ -276,58 +431,40 @@ function BatchBranchModal({ mode, paths, onClose, onConfirm }: Props) {
             )}
             {visibleBranches.length > 0 && (
               <ul className="branch-pick-list" ref={listRef}>
-                {visibleBranches.map((b) => {
-                  const partial = b.count < paths.length;
-                  const where =
-                    b.localCount === 0
-                      ? t("branchModal.remoteOnly")
-                      : b.remoteCount === 0
-                        ? t("branchModal.localOnly")
-                        : t("branchModal.localAndRemote");
-                  const missing =
-                    mode === "switch" && partial
-                      ? t("branchModal.rowMissing", { count: paths.length - b.count })
-                      : "";
-                  return (
-                    <li key={b.name}>
-                      <button
-                        type="button"
-                        className={`branch-pick-item${b.name === trimmed ? " is-active" : ""}${
-                          mode === "switch" && partial ? " is-partial" : ""
-                        }`}
-                        aria-pressed={b.name === trimmed}
-                        onClick={() => selectBranch(b)}
-                        onKeyDown={(e) => {
-                          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                            e.preventDefault();
-                            moveRowFocus(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
-                          }
-                          if (e.key === "Enter" && mode === "switch" && trimmed === b.name) {
-                            e.preventDefault();
-                            handleSubmit();
-                          }
-                        }}
-                      >
-                        <GitBranch size={13} className="bb-item-icon" />
-                        <span className="branch-pick-name">{b.name}</span>
-                        <span className="bb-where">{where}</span>
-                        <span
-                          className="branch-pick-count"
-                          title={
-                            missing ||
-                            t("branchModal.usageDetail", {
-                              total: paths.length,
-                              local: b.localCount,
-                              remote: b.remoteCount,
-                            })
-                          }
-                        >
-                          {t("branchModal.repoCount", { count: b.count })}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
+                {mode === "create" && (
+                  <li>
+                    <button
+                      type="button"
+                      className={`branch-pick-item is-base-none${base ? "" : " is-active"}`}
+                      aria-pressed={!base}
+                      title={t("branchModal.baseNoneTip")}
+                      onClick={() => setBase(null)}
+                      onKeyDown={(e) => {
+                        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                          e.preventDefault();
+                          moveRowFocus(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
+                        }
+                      }}
+                    >
+                      <GitCommitHorizontal size={13} className="bb-item-icon" />
+                      <span className="branch-pick-name">{t("branchModal.baseNoneRow")}</span>
+                    </button>
+                  </li>
+                )}
+                {localGroup.length > 0 && (
+                  <li className="bb-group-head" aria-hidden>
+                    {t("branchModal.groupLocal")}
+                  </li>
+                )}
+                {localGroup.map(renderRow)}
+                {remoteOnlyGroup.length > 0 && (
+                  <li className="bb-group-head" aria-hidden>
+                    {mode === "create"
+                      ? t("branchModal.groupRemoteBase")
+                      : t("branchModal.groupRemoteSwitch")}
+                  </li>
+                )}
+                {remoteOnlyGroup.map(renderRow)}
               </ul>
             )}
 

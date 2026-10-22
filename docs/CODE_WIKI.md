@@ -117,7 +117,8 @@ ai-workbench/
 │   │   ├── AiHubBubble.tsx    # 智枢桌面悬浮气泡（#/ai-hub-bubble）
 │   │   ├── GitManager.tsx        # Git 管理主页面（仓库总览）
 │   │   ├── GitCommitPanel.tsx    # Git 提交面板（多仓 diff + AI 生成说明）
-│   │   ├── GitReposPage.tsx      # Git 仓库列表页
+│   │   ├── GitReposPage.tsx      # Git 仓库列表页（批量绑定 / 建分支 / 切分支 / 拉取 / 推送，结果走 git/BatchReport）
+│   │   ├── git/                  # 仓库页子组件：DiffModal / DiffViewer / MergeResolver / useDiffView / BatchReport（批量结果清单）
 │   │   ├── CommitChangelist.tsx  # 文件变更列表组件
 │   │   ├── CursorManager.tsx     # Cursor 多账号管理（切换 / 初始化 / 诊断）
 │   │   ├── VersionSwitcher.tsx   # Node.js / JDK / Maven / Python 版本切换
@@ -147,6 +148,7 @@ ai-workbench/
 │   │   ├── ConfirmModal.tsx      # 确认对话框 + Provider（Context）
 │   │   ├── AccountManagerModal.tsx     # Git 账号弹窗
 │   │   ├── BatchIdentityModal.tsx      # 批量身份弹窗
+│   │   ├── BatchBranchModal.tsx        # 批量建分支 / 切换分支弹窗（建分支可选基点 + 「只在 origin 上建」）
 │   │   ├── RepoBindingModal.tsx        # 仓库绑定弹窗
 │   │   ├── ScanReposModal.tsx          # 扫描 Git 仓库弹窗
 │   │   ├── RuntimeInstallModal.tsx      # 运行时安装弹窗
@@ -602,6 +604,7 @@ openGroups: Set<string>       // 分组展开状态
 | `ConfirmModal` | Context Provider + useConfirm hook |
 | `AccountManagerModal` | Git 账号弹窗（增删改） |
 | `BatchIdentityModal` | 批量设置仓库身份 |
+| `BatchBranchModal` | 批量建分支（选基点 / 只在 origin 上建）与批量切换分支 |
 | `RepoBindingModal` | 仓库绑定 Git 账号 |
 | `ScanReposModal` | 扫描目录找 Git 仓库 |
 | `RuntimeInstallModal` | 安装新版本 Node/JDK/Maven/Python |
@@ -1056,7 +1059,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `get_cursor_login_status` | — | {email, name, isLoggedIn} |
 | `is_cursor_running` | — | bool |
 | `init_account_profile` | account_id | String |
-| `finish_account_profile` | account_id, relaunch? | String |
+| `finish_account_profile` | account_id, expected_email?, relaunch? | String |
 | `launch_cursor` | account_id? | String |
 | `quit_cursor` | — | String |
 | `get_cursor_profile_dir` | account_id | String |

@@ -5,7 +5,7 @@
  * closes on any outside click or on Escape. Used to keep crowded rows (the
  * project cards' eight action buttons) to a few primary actions.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export type DropdownItem = {
   label: string;
@@ -36,12 +36,34 @@ export default function DropdownMenu({
   onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const changeOpen = (next: boolean) => {
     setOpen(next);
     onOpenChange?.(next);
   };
+
+  /**
+   * Opening downward is only right when there is room downward: a trigger in the
+   * lower half of a short window pushed the 12-row selection list off screen.
+   * Flip and cap to the space actually left, measured before paint.
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    const box = ref.current;
+    if (!menu || !box) return;
+    const edge = box.getBoundingClientRect();
+    const GAP = 10;
+    const below = window.innerHeight - edge.bottom - GAP;
+    const above = edge.top - GAP;
+    const natural = menu.scrollHeight;
+    const flip = natural > below && above > below;
+    setUp(flip);
+    menu.style.maxHeight = `${Math.max(140, Math.floor(flip ? above : below))}px`;
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -73,7 +95,7 @@ export default function DropdownMenu({
         {children}
       </button>
       {open && (
-        <div className="dd-menu" role="menu">
+        <div ref={menuRef} className={`dd-menu${up ? " is-up" : ""}`} role="menu">
           {items.map((item, i) =>
             "divider" in item ? (
               <div key={i} className="dd-divider" role="separator" />
