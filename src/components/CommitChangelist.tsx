@@ -858,7 +858,7 @@ function CommitChangelist({
     pendingFilesByPath?: Map<string, string[]>
   ) => {
     const rows = paths
-      .map((path) => ({
+      .map((path): PushPreviewRow => ({
         path,
         label: labelPath(path),
         summary: summaries[path],
