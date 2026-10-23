@@ -14,7 +14,7 @@ import {
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
   Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown, Code,
   Copy, FileText, Zap, ClipboardCopy, Loader2, RefreshCw,
-  ArrowDownAZ, Clock, ToggleLeft, ToggleRight, MoreHorizontal, MousePointerClick, Share2,
+  ArrowDownAZ, Clock, ToggleLeft, ToggleRight, MoreHorizontal, MousePointerClick, Share2, Info,
 } from "lucide-react";
 import DropdownMenu from "./DropdownMenu";
 
@@ -895,6 +895,16 @@ function PluginBrowser() {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       void saveUserScript();
+      return;
+    }
+    // Esc 关闭（挡输入法组合键，避免拼音选词回车/ESC 误触）
+    if (e.key === "Escape" && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      setUsFormOpen(false);
+      setUsEditingId(null);
+      setUsPendingPresetId(null);
+      setUsTplEditingId(null);
+      setUsTestUrl("");
     }
   };
 
@@ -932,13 +942,32 @@ function PluginBrowser() {
     }
   };
 
-  /** 点自定义模板卡片 = 以模板内容新建脚本 */
+  /** 脚本卡一键「存为模板」：不打开编辑器直接快照 */
+  const saveScriptAsTemplate = async (s: UserScript) => {
+    if (scriptTemplates.some((tpl) => tpl.name === s.name && tpl.code === s.code)) {
+      showMsg("error", t("usTemplateExists"));
+      return;
+    }
+    try {
+      await addScriptTemplate({
+        id: newId("tpl"),
+        name: s.name,
+        description: s.description,
+        matchPatterns: [...s.matchPatterns],
+        code: s.code,
+      });
+      showMsg("success", t("usSavedAsTemplate"));
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
+  /** 点自定义模板卡片 = 以模板内容新建脚本（面板保持展开，方便继续套用其它模板） */
   const useTemplate = (tpl: ScriptTemplate) => {
     openUsForm(
       { name: tpl.name, description: tpl.description, matchPatterns: tpl.matchPatterns, code: tpl.code },
       null
     );
-    setUsShowPresets(false);
   };
 
   const copyToClipboard = useCallback(async (text: string, msg: string) => {
@@ -1004,8 +1033,14 @@ function PluginBrowser() {
         return;
       }
       let imported = 0;
+      let skipped = 0;
       for (const s of scripts) {
         if (!s.name || !s.code) continue;
+        // 同名同码视为同一脚本，跳过避免重复导入出卡片
+        if (userScripts.some((u) => u.name === s.name && u.code === s.code)) {
+          skipped++;
+          continue;
+        }
         let patterns: string[];
         if (Array.isArray(s.matchPatterns) && s.matchPatterns.length > 0) {
           patterns = s.matchPatterns;
@@ -1024,7 +1059,11 @@ function PluginBrowser() {
         });
         imported++;
       }
-      showMsg("success", t("imported", { count: imported }));
+      if (imported + skipped === 0) {
+        showMsg("error", t("importInvalid"));
+      } else {
+        showMsg("success", t("usScriptsImported", { count: imported, skip: skipped }));
+      }
     } catch (e) {
       const msg = String(e);
       if (msg.includes("取消")) return;
@@ -1100,6 +1139,8 @@ function PluginBrowser() {
       if (imported + skipped === 0) {
         showMsg("error", t("importInvalid"));
       } else {
+        // 自动展开模板面板，让导入结果立刻可见
+        setUsShowPresets(true);
         showMsg("success", t("usTemplatesImported", { count: imported, skip: skipped }));
       }
     } catch (e) {
@@ -2084,21 +2125,14 @@ function PluginBrowser() {
               <span className="plugin-count">{userScripts.length}</span>
             </div>
             <div className="plugin-header-actions">
-              {/* 渐进式收纳：宽度足够时平铺，不够时由 CSS 容器查询逐步藏进 ···（预设模板常驻） */}
+              {/* 渐进式收纳：宽度足够时平铺，不够时由 CSS 容器查询逐步藏进 ···（预设模板/新建脚本常驻）。
+                  顺序按操作对象分组：创建入口 → 脚本数据 → 模板分享 → 批量管理 */}
               <button
                 className="btn btn-secondary btn-small"
                 onClick={() => setUsShowPresets(!usShowPresets)}
                 title={t("usPresets")}
               >
                 <FileText size={12} /> {t("usPresets")}
-              </button>
-              <button
-                className="btn btn-secondary btn-small header-flat-btn"
-                data-flat="import"
-                onClick={() => void handleUsImport()}
-                title={t("import")}
-              >
-                <Upload size={12} /> {t("import")}
               </button>
               <button
                 className="btn btn-secondary btn-small header-flat-btn"
@@ -2110,13 +2144,22 @@ function PluginBrowser() {
               </button>
               <button
                 className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="import"
+                onClick={() => void handleUsImport()}
+                title={t("usImportScripts")}
+              >
+                <Upload size={12} /> {t("usImportScripts")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
                 data-flat="export"
                 disabled={userScripts.length === 0}
                 onClick={() => void handleUsExport()}
-                title={t("export")}
+                title={t("usExportScripts")}
               >
-                <Download size={12} /> {t("export")}
+                <Download size={12} /> {t("usExportScripts")}
               </button>
+              <span className="header-flat-sep" aria-hidden="true" />
               <button
                 className="btn btn-secondary btn-small header-flat-btn"
                 data-flat="tplImport"
@@ -2156,10 +2199,10 @@ function PluginBrowser() {
                 label={t("more")}
                 triggerClassName="btn btn-secondary btn-small plugin-more-btn"
                 items={[
-                  { label: t("import"), icon: <Upload size={13} />, onClick: () => void handleUsImport() },
                   { label: t("usImportUrl"), icon: <Link2 size={13} />, onClick: () => setUsImportUrlOpen(true) },
+                  { label: t("usImportScripts"), icon: <Upload size={13} />, onClick: () => void handleUsImport() },
                   {
-                    label: t("export"),
+                    label: t("usExportScripts"),
                     icon: <Download size={13} />,
                     disabled: userScripts.length === 0,
                     onClick: () => void handleUsExport(),
@@ -2208,13 +2251,6 @@ function PluginBrowser() {
                 <Zap size={14} />
                 <span>{t("usPresets")}</span>
                 <button
-                  className="us-presets-add"
-                  onClick={() => openUsTplForm()}
-                  type="button"
-                >
-                  <Plus size={12} /> {t("usAddTemplate")}
-                </button>
-                <button
                   className="us-presets-close"
                   onClick={() => setUsShowPresets(false)}
                   aria-label={tc("actions.close")}
@@ -2222,6 +2258,7 @@ function PluginBrowser() {
                   <X size={14} />
                 </button>
               </div>
+              <p className="us-presets-desc">{t("usPresetsDesc")}</p>
               <div className="us-presets-section-label">{t("usPresetBuiltin")}</div>
               <div className="us-presets-grid">
                 {SCRIPT_PRESETS.map((preset) => {
@@ -2324,13 +2361,26 @@ function PluginBrowser() {
                         </button>
                       </div>
                       <Code size={16} />
-                      <span className="us-preset-name">{tpl.name}</span>
+                      <span className="us-preset-name">
+                        {tpl.name}
+                        <span className="us-preset-badge">{t("usTplBadge")}</span>
+                      </span>
                       {tpl.description ? (
                         <span className="us-preset-desc" title={tpl.description}>{tpl.description}</span>
                       ) : null}
                       <span className="us-preset-match" title={tpl.matchPatterns.join("\n")}>
                         {tpl.matchPatterns.join(", ")}
                       </span>
+                      <div className="us-preset-apply-row">
+                        <button
+                          type="button"
+                          className="us-preset-apply"
+                          title={t("usUseTemplate")}
+                          onClick={(e) => { e.stopPropagation(); useTemplate(tpl); }}
+                        >
+                          <Check size={12} /> {t("usApplyTemplate")}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -2497,6 +2547,7 @@ function PluginBrowser() {
                       });
                       showMsg("success", t("usAdded"));
                     }}
+                    onSaveAsTemplate={() => void saveScriptAsTemplate(s)}
                     onCopyCode={() => copyToClipboard(s.code, t("usCodeCopied"))}
                     onExportSingle={async () => {
                       const data = {
@@ -2669,6 +2720,10 @@ function PluginBrowser() {
                 <X size={16} />
               </button>
             </div>
+            <p className={`us-form-mode-hint ${usTplEditingId ? "is-tpl" : "is-script"}`}>
+              <Info size={12} />
+              <span>{usTplEditingId ? t("usFormTplHint") : t("usFormScriptHint")}</span>
+            </p>
             <div className="plugin-edit-modal-body">
               <div className="us-form-top">
                 <div className="input-group">
@@ -2937,6 +2992,7 @@ function UserscriptCard({
   onDuplicate,
   onCopyCode,
   onExportSingle,
+  onSaveAsTemplate,
   expanded,
   onToggleExpand,
 }: {
@@ -2953,6 +3009,7 @@ function UserscriptCard({
   onDuplicate: () => void;
   onCopyCode: () => void;
   onExportSingle: () => void;
+  onSaveAsTemplate: () => void;
   expanded: boolean;
   onToggleExpand: () => void;
 }) {
@@ -3045,6 +3102,14 @@ function UserscriptCard({
                   type="button"
                 >
                   <Copy size={11} />
+                </button>
+                <button
+                  className="plugin-item-btn"
+                  onClick={onSaveAsTemplate}
+                  title={t("usSaveAsTemplate")}
+                  type="button"
+                >
+                  <BookmarkPlus size={11} />
                 </button>
                 <button
                   className="plugin-item-btn"

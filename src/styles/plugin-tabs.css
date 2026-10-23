@@ -31,6 +31,16 @@
   display: none;
 }
 
+/* 平铺时脚本组与模板组之间的竖分隔线，随模板组一起出现 */
+.header-flat-sep {
+  display: none;
+  width: 1px;
+  height: 16px;
+  align-self: center;
+  margin: 0 2px;
+  background: var(--border-subtle);
+}
+
 @container (min-width: 720px) {
   .plugin-header .header-flat-btn[data-flat="import"],
   .plugin-header .header-flat-btn[data-flat="export"] {
@@ -43,6 +53,10 @@
   .plugin-header .header-flat-btn[data-flat="tplImport"],
   .plugin-header .header-flat-btn[data-flat="tplExport"] {
     display: inline-flex;
+  }
+
+  .plugin-header .header-flat-sep {
+    display: block;
   }
 }
 
@@ -685,6 +699,7 @@
 }
 
 .us-presets-close {
+  margin-left: auto;
   background: transparent;
   border: 0;
   color: var(--text-2);
@@ -699,27 +714,6 @@
 .us-presets-close:hover {
   color: var(--text-0);
   background: var(--overlay-3);
-}
-
-/* Header pill: add template (pushes itself right; close button follows) */
-.us-presets-add {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 550;
-  padding: 2px 9px;
-  border-radius: var(--radius-full);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: var(--accent);
-  cursor: pointer;
-  transition: var(--transition-colors-fast);
-}
-
-.us-presets-add:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .us-presets-section-label {
@@ -861,6 +855,76 @@
   color: var(--red);
   border-color: var(--red-border);
   background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+/* ---------- 区分「脚本=运行实例」与「模板=蓝本」 ----------
+   表单双模式说明条：轻量行内提示，无底色无边框 */
+.us-form-mode-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 10px 16px 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.us-form-mode-hint svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--text-3);
+}
+
+.us-form-mode-hint.is-tpl,
+.us-form-mode-hint.is-tpl svg {
+  color: var(--accent);
+}
+
+.us-presets-desc {
+  margin: -2px 0 10px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.us-preset-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.us-preset-apply-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.us-preset-apply {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.us-preset-apply:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .us-update-badge {
