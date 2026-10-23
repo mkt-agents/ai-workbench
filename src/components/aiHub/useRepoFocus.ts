@@ -221,14 +221,27 @@ export function useRepoFocus(opts: { single: boolean; onError: (msg: string) => 
         ? t("ctx.autoRepo", { name: autoRepoName })
         : t("ctx.noRepo")
       : projectLabel;
-  /** Group keys the user can remove: folders / repos added via the picker. */
+  /**
+   * Group keys the user can remove: folders / repos added via the picker that
+   * would actually disappear. The current repo, recent projects and saved Git
+   * workspaces come back on the next render (they do not live in the picker's
+   * own lists), so they get no ✕ — otherwise the button was a silent no-op.
+   */
   const removableKeys = useMemo(() => {
     const paths = new Set([
       ...extraFolders.map((f) => pathKey(f.path)),
       ...extraRepos.map((r) => pathKey(r.path)),
     ]);
-    return repoGroups.filter((g) => g.path && paths.has(pathKey(g.path))).map((g) => g.key);
-  }, [repoGroups, extraFolders, extraRepos]);
+    if (paths.size === 0) return [];
+    const pinned = new Set(
+      [settings.currentGitRepo, ...recentProjects.map((p) => p.path), ...gitWorkspaces.map((w) => w.path)]
+        .filter((p): p is string => Boolean(p))
+        .map((p) => pathKey(p)),
+    );
+    return repoGroups
+      .filter((g) => g.path && paths.has(pathKey(g.path)) && !pinned.has(pathKey(g.path)))
+      .map((g) => g.key);
+  }, [repoGroups, extraFolders, extraRepos, recentProjects, gitWorkspaces, settings.currentGitRepo]);
 
   return {
     focusedRepos,

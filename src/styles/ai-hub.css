@@ -450,11 +450,14 @@
   cursor: pointer;
   flex-shrink: 0;
   opacity: 0;
+  /* 透明时不收点击：否则行尾那 18px 是个看不见的「移除工作区」陷阱 */
+  pointer-events: none;
   transition: var(--transition-colors-fast);
 }
 .qa-ctx-group:hover .qa-ctx-group-x,
 .qa-ctx-group-x:focus-visible {
   opacity: 1;
+  pointer-events: auto;
 }
 .qa-ctx-group-x:hover {
   color: var(--red);
@@ -1474,6 +1477,7 @@
 .qa-focus-pop.is-up .qa-focus-list {
   max-height: none;
 }
+/* 高度上限由内联 style 给出（拖拽把手 + 触发行到窗口顶的剩余空间）：面板按内容收缩，列表超长才滚动 */
 .qa-ctx-pop.is-up {
   max-height: none;
   overflow: hidden;

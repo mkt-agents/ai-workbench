@@ -12,15 +12,32 @@ const CTX_PARTS_KEY = "qa-ctx-parts-open";
 const CTX_HEIGHT_KEY = "qa-ctx-pop-height";
 const CTX_HEIGHT_MIN = 300;
 const CTX_HEIGHT_DEFAULT = 460;
+/** Air kept between the panel and the window edge above it. */
+const CTX_TOP_GAP = 12;
 
-function ctxMaxHeight(): number {
+/** Ceiling imposed by the window itself (the composer lives below the panel). */
+function windowCap(): number {
   return Math.max(CTX_HEIGHT_MIN, window.innerHeight - 80);
 }
 
+/**
+ * Tallest the panel may get. It opens upwards from the composer, so the space
+ * between the trigger row and the top edge is the real limit — a stored height
+ * from a bigger window must not push the header off-screen.
+ */
+function ctxCap(root: HTMLElement | null): number {
+  const top = root?.getBoundingClientRect().top;
+  if (top == null) return windowCap();
+  return Math.max(CTX_HEIGHT_MIN, Math.min(windowCap(), Math.round(top - CTX_TOP_GAP)));
+}
+
 function readCtxHeight(): number {
-  const n = Number(readStoredString(CTX_HEIGHT_KEY));
-  if (!Number.isFinite(n)) return CTX_HEIGHT_DEFAULT;
-  return Math.min(ctxMaxHeight(), Math.max(CTX_HEIGHT_MIN, n));
+  // `readStoredString` answers "" for a missing key — `Number("")` is 0, which
+  // used to pin the panel to the 300px floor instead of the 460px default.
+  const raw = readStoredString(CTX_HEIGHT_KEY).trim();
+  const n = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return Math.min(CTX_HEIGHT_DEFAULT, windowCap());
+  return Math.min(windowCap(), Math.max(CTX_HEIGHT_MIN, n));
 }
 
 type Props = {
@@ -87,6 +104,22 @@ export default function ContextPicker(props: Props) {
   const [popHeight, setPopHeight] = useState(readCtxHeight);
   const popHeightRef = useRef(popHeight);
   const resizeDrag = useRef<{ y: number; h: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // The panel is capped, not fixed: short lists stay compact and the cap keeps
+  // following the space above the trigger row when the window shrinks.
+  useEffect(() => {
+    if (!open) return;
+    const clamp = () => {
+      const next = Math.min(popHeightRef.current, ctxCap(rootRef.current));
+      if (next === popHeightRef.current) return;
+      popHeightRef.current = next;
+      setPopHeight(next);
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, [open]);
 
   // Each time the popover opens, expand groups that matter right now.
   useEffect(() => {
@@ -139,7 +172,7 @@ export default function ContextPicker(props: Props) {
   const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = resizeDrag.current;
     if (!drag) return;
-    const next = Math.min(ctxMaxHeight(), Math.max(CTX_HEIGHT_MIN, drag.h + (drag.y - e.clientY)));
+    const next = Math.min(ctxCap(rootRef.current), Math.max(CTX_HEIGHT_MIN, drag.h + (drag.y - e.clientY)));
     popHeightRef.current = next;
     setPopHeight(next);
   };
@@ -150,7 +183,7 @@ export default function ContextPicker(props: Props) {
   };
 
   return (
-    <div className="qa-focus qa-ctx-picker">
+    <div ref={rootRef} className="qa-focus qa-ctx-picker">
       <div className={`qa-ctx-trigger-row${open ? " is-open" : ""}`}>
         <button
           type="button"
@@ -179,7 +212,7 @@ export default function ContextPicker(props: Props) {
       </div>
 
       {open && (
-        <div className="qa-focus-pop qa-ctx-pop is-left is-up" style={{ height: popHeight }}>
+        <div className="qa-focus-pop qa-ctx-pop is-left is-up" style={{ maxHeight: popHeight }}>
           <div
             className="qa-ctx-resize"
             role="separator"
