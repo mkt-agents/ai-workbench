@@ -1210,7 +1210,7 @@
             '<div class="' + SW_TS + '-header">' +
                 '<div class="' + SW_TS + '-hl">' +
                     '<div class="' + SW_TS + '-logo">S</div>' +
-                    '<div class="' + SW_TS + '-title">SkyWalking 日志增强 <span>v7.1.2 · powered by jingzhou.zhao</span></div>' +
+                    '<div class="' + SW_TS + '-title">SkyWalking 日志增强 <span>v7.1.2</span></div>' +
                 '</div>' +
                 '<div class="' + SW_TS + '-hr">' +
                     '<button class="' + SW_TS + '-theme-btn" id="' + SW_TS + '-theme-btn" title="切换深色/浅色主题"></button>' +
