@@ -262,14 +262,15 @@
   max-width: 100%;
   min-width: 0;
   height: 28px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-1);
   border-radius: var(--radius-full);
   transition: var(--transition-colors-fast);
 }
 .qa-ctx-trigger-row:hover,
 .qa-ctx-trigger-row.is-open {
   background: var(--bg-2);
-  border-color: var(--border-subtle);
+  border-color: var(--border);
 }
 .qa-ctx-include,
 .qa-ctx-caret {
@@ -292,12 +293,18 @@
   border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 .qa-ctx-caret {
-  padding: 0 9px 0 4px;
-  color: var(--text-3);
+  padding: 0 8px 0 5px;
+  color: var(--text-2);
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
 }
 .qa-ctx-caret:hover {
-  color: var(--text-1);
+  color: var(--text-0);
+}
+.qa-ctx-caret-icon {
+  transition: var(--transition-colors-fast);
+}
+.qa-ctx-caret-icon.is-open {
+  transform: rotate(180deg);
 }
 .qa-ctx-trigger-icon {
   color: var(--accent);
@@ -424,6 +431,10 @@
 }
 .qa-ctx-group-caret.is-open svg {
   transform: rotate(90deg);
+}
+/* Leaf workspace (its single service is the folder itself): keep the indent slot. */
+.qa-ctx-group-caret.is-leaf {
+  visibility: hidden;
 }
 .qa-ctx-group-main {
   display: flex;

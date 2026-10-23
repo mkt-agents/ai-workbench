@@ -585,19 +585,15 @@
   position: relative;
 }
 
-.cl-recent-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 4px);
-  z-index: 5;
-  width: min(420px, 70vw);
-  max-height: 240px;
+/* 最近说明 / 暂存列表：随提交栏在文档流内展开（把列表略微收起），
+   不再悬浮覆盖文件树 */
+.cl-pop-panel {
+  max-height: 180px;
   overflow: auto;
   padding: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--float-bg);
-  box-shadow: var(--float-shadow);
+  background: var(--bg-1);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .cl-recent-menu {
@@ -623,15 +619,11 @@
   color: var(--text-0);
 }
 
+/* legacy glass override kept harmless: selector below no longer matches any DOM */
+
 .cl-menu-note {
   color: var(--text-2);
   line-height: 1.45;
-}
-
-.cl-stash-menu {
-  left: auto;
-  right: 0;
-  width: min(360px, 70vw);
 }
 
 .cl-stash-row {

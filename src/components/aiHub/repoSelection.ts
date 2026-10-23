@@ -3,14 +3,15 @@
  *
  * The persisted selection (`settings.aiHubFocusRepos`) mixes two entry kinds:
  * `ws:<workspaceId>` = a whole workspace, resolved to its services every time
- * (so services added later are picked up), and plain repo paths = single services.
+ * (so services added later are picked up), and plain paths = single services /
+ * empty workspaces.
  *
- * Groups with a `path` are workspaces (folders holding several service repos):
- * the Git page's workspaces plus folders added from the picker this session.
- * The group without a path holds standalone repos.
+ * Every entry is a workspace: the Git page's saved workspaces, folders added
+ * from the picker this session, and one-service workspaces for anything not
+ * claimed by a workspace folder. A workspace may hold many services, one, or
+ * none at all (a plain folder added from the picker).
  */
-import { buildRepoGroups } from "../../core/repoGroups";
-import { isPathUnder, pathKey, projectNameFromPath } from "../../core/pathUtils";
+import { findWorkspaceForRepo, isPathUnder, pathKey, projectNameFromPath } from "../../core/pathUtils";
 import type { GitScannedRepo, GitWorkspace, RecentProject } from "../../core/types";
 
 export type RepoOption = { path: string; name: string };
@@ -20,11 +21,11 @@ export type ExtraFolder = { path: string; name: string; repos: GitScannedRepo[] 
 
 export type PickerGroup = {
   key: string;
-  /** `ws:<id>` for a saved workspace; null for session folders and standalone repos. */
+  /** `ws:<id>` for a saved workspace; null for session folders and one-service workspaces. */
   token: string | null;
-  /** Workspace name; empty for the standalone-repos group. */
+  /** Workspace name. */
   name: string;
-  /** Workspace folder; null for the standalone-repos group. */
+  /** Workspace folder; null only as a defensive fallback. */
   path: string | null;
   repos: RepoOption[];
 };
@@ -61,21 +62,48 @@ export function buildPickerGroups(
   for (const s of selection) if (!isGroupToken(s)) add(s);
 
   // Session folders ride along as workspaces with negative ids (never persisted).
-  const folders: GitWorkspace[] = extraFolders
-    .filter((f) => !gitWorkspaces.some((w) => pathKey(w.path) === pathKey(f.path)))
-    .map((f, i) => ({ id: -(i + 1), path: f.path, name: f.name, createdAt: "" }));
+  const workspaces: GitWorkspace[] = [
+    ...gitWorkspaces,
+    ...extraFolders
+      .filter((f) => !gitWorkspaces.some((w) => pathKey(w.path) === pathKey(f.path)))
+      .map((f, i) => ({ id: -(i + 1), path: f.path, name: f.name, createdAt: "" })),
+  ];
 
-  return buildRepoGroups([...gitWorkspaces, ...folders], all)
-    .filter((g) => g.projects.length > 0)
-    .map((g) => ({
-      key: g.key,
-      token: g.workspace && g.workspace.id > 0 ? `${WS_PREFIX}${g.workspace.id}` : null,
-      name: g.workspace?.name || (g.workspace ? projectNameFromPath(g.workspace.path) : ""),
-      path: g.workspace?.path ?? null,
-      repos: g.projects
-        .map((p) => ({ path: p.path, name: p.name || projectNameFromPath(p.path) }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    }));
+  // Which workspace claims each repo (strictly inside the workspace folder).
+  const wsOf = new Map<string, GitWorkspace>();
+  for (const p of all) {
+    const ws = findWorkspaceForRepo(p.path, workspaces);
+    if (ws) wsOf.set(pathKey(p.path), ws);
+  }
+
+  const groups: PickerGroup[] = workspaces.map((ws) => ({
+    key: ws.id > 0 ? `ws-${ws.id}` : `session-${pathKey(ws.path)}`,
+    token: ws.id > 0 ? `${WS_PREFIX}${ws.id}` : null,
+    name: ws.name || projectNameFromPath(ws.path),
+    path: ws.path,
+    repos: all
+      .filter((p) => wsOf.get(pathKey(p.path))?.id === ws.id)
+      .map((p) => ({ path: p.path, name: p.name || projectNameFromPath(p.path) }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  }));
+
+  // Anything not claimed by a workspace folder is a one-service workspace of its
+  // own — except paths that ARE a workspace folder (e.g. a persisted selection
+  // entry pointing at an empty workspace): those already have their group.
+  const claimed = new Set(groups.flatMap((g) => g.repos.map((r) => pathKey(r.path))));
+  const wsFolders = new Set(workspaces.map((w) => pathKey(w.path)));
+  for (const p of all) {
+    const k = pathKey(p.path);
+    if (claimed.has(k) || wsFolders.has(k)) continue;
+    groups.push({
+      key: `repo-${k}`,
+      token: null,
+      name: p.name || projectNameFromPath(p.path),
+      path: p.path,
+      repos: [{ path: p.path, name: p.name || projectNameFromPath(p.path) }],
+    });
+  }
+  return groups;
 }
 
 function hasPath(selection: string[], path: string): boolean {
@@ -89,6 +117,10 @@ export function isServiceSelected(selection: string[], group: PickerGroup, path:
 
 export function groupState(group: PickerGroup, selection: string[]): GroupState {
   if (group.token && selection.includes(group.token)) return "all";
+  // A selection entry naming the workspace folder itself selects the whole
+  // workspace (the only way to select an empty one).
+  if (group.path && hasPath(selection, group.path)) return "all";
+  if (group.repos.length === 0) return "none";
   const n = group.repos.filter((r) => hasPath(selection, r.path)).length;
   if (n === 0) return "none";
   return n === group.repos.length ? "all" : "some";
@@ -96,14 +128,22 @@ export function groupState(group: PickerGroup, selection: string[]): GroupState 
 
 function withoutGroup(selection: string[], group: PickerGroup): string[] {
   const keys = new Set(group.repos.map((r) => pathKey(r.path)));
-  return selection.filter((s) => s !== group.token && (isGroupToken(s) || !keys.has(pathKey(s))));
+  const self = group.path ? pathKey(group.path) : null;
+  return selection.filter((s) => {
+    if (s === group.token) return false;
+    if (self && !isGroupToken(s) && pathKey(s) === self) return false;
+    return isGroupToken(s) || !keys.has(pathKey(s));
+  });
 }
 
 /** Fully selected → clear the group; otherwise → select the whole group. */
 export function toggleGroup(selection: string[], group: PickerGroup): string[] {
   const rest = withoutGroup(selection, group);
   if (groupState(group, selection) === "all") return rest;
-  return group.token ? [...rest, group.token] : [...rest, ...group.repos.map((r) => r.path)];
+  if (group.token) return [...rest, group.token];
+  if (group.repos.length > 0) return [...rest, ...group.repos.map((r) => r.path)];
+  // An empty workspace selects its folder itself.
+  return group.path ? [...rest, group.path] : rest;
 }
 
 /**
@@ -135,19 +175,31 @@ export function resolveFocus(selection: string[], groups: PickerGroup[]): string
   for (const s of selection) {
     if (isGroupToken(s)) {
       const g = groups.find((x) => x.token === s);
-      g?.repos.forEach((r) => push(r.path));
+      if (!g) continue;
+      // An empty workspace resolves to its folder itself.
+      if (g.repos.length === 0 && g.path) push(g.path);
+      else g.repos.forEach((r) => push(r.path));
     } else {
-      push(s);
+      // A path naming a workspace folder selects the whole workspace.
+      const asFolder = groups.find((x) => x.path && pathKey(x.path) === pathKey(s));
+      if (asFolder) {
+        if (asFolder.repos.length === 0) push(s);
+        else asFolder.repos.forEach((r) => push(r.path));
+      } else {
+        push(s);
+      }
     }
   }
   return out;
 }
 
-/** Where an entry lives: its workspace group, or the repo itself when standalone. */
+/** Where an entry lives: its workspace group (folder paths name their group), or the repo itself. */
 function placeOf(entry: string, groups: PickerGroup[]): string {
   if (isGroupToken(entry)) return groups.find((g) => g.token === entry)?.key ?? entry;
   const k = pathKey(entry);
-  const g = groups.find((x) => x.path && x.repos.some((r) => pathKey(r.path) === k));
+  const g = groups.find(
+    (x) => x.path && (pathKey(x.path) === k || x.repos.some((r) => pathKey(r.path) === k)),
+  );
   return g?.key ?? `repo:${k}`;
 }
 
@@ -203,8 +255,12 @@ export function describeSelection(
 
   const short = ({ g, state }: { g: PickerGroup; state: GroupState }): string => {
     const picked = g.repos.filter((r) => isServiceSelected(selection, g, r.path));
+    // An empty workspace works in the folder itself.
+    if (g.repos.length === 0) return g.path ? g.name : fmt("ctx.otherGroup");
+    // A one-service workspace reads as just the service.
+    if (picked.length === 1 && state === "all") return picked[0].name;
     if (!g.path) {
-      return picked.length === 1 ? picked[0].name : fmt("ctx.groupSome", { name: fmt("ctx.otherGroup"), n: picked.length });
+      return fmt("ctx.groupSome", { name: fmt("ctx.otherGroup"), n: picked.length });
     }
     if (state === "all") return fmt("ctx.groupAll", { name: g.name });
     if (picked.length === 1) return fmt("ctx.groupOne", { name: g.name, svc: picked[0].name });

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronRight, Eye, FolderGit2, FolderPlus, Minus, Search, SlidersHorizontal, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, FolderGit2, FolderPlus, Minus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { AiHubChips } from "../../core/types";
 import { readStoredString, writeStoredString } from "../../core/localState";
 import { pathKey } from "../../core/pathUtils";
@@ -171,7 +171,7 @@ export default function ContextPicker(props: Props) {
           aria-expanded={open}
           aria-label={t("ctx.title")}
         >
-          <span className="qa-focus-caret">▾</span>
+          <ChevronDown size={13} className={`qa-ctx-caret-icon${open ? " is-open" : ""}`} />
         </button>
       </div>
 
@@ -256,23 +256,34 @@ export default function ContextPicker(props: Props) {
               const state = groupState(full, selection);
               const isOpen = Boolean(q) || expanded.has(g.key);
               const groupName = g.path ? g.name : t("ctx.otherGroup");
+              // A one-service workspace whose service IS the workspace folder
+              // itself (an added repo / current repo): no child row — the group
+              // row already is the service.
+              const selfService =
+                g.path != null &&
+                full.repos.length === 1 &&
+                pathKey(full.repos[0].path) === pathKey(g.path);
               return (
                 <div key={g.key} className="qa-ctx-group-wrap">
                   <div className={`qa-ctx-group${state !== "none" ? " on" : ""}`}>
-                    <button
-                      type="button"
-                      className={`qa-ctx-group-caret${isOpen ? " is-open" : ""}`}
-                      onClick={() => toggleExpanded(g.key)}
-                      aria-expanded={isOpen}
-                      aria-label={groupName}
-                    >
-                      <ChevronRight size={12} />
-                    </button>
+                    {selfService ? (
+                      <span className="qa-ctx-group-caret is-leaf" aria-hidden />
+                    ) : (
+                      <button
+                        type="button"
+                        className={`qa-ctx-group-caret${isOpen ? " is-open" : ""}`}
+                        onClick={() => toggleExpanded(g.key)}
+                        aria-expanded={isOpen}
+                        aria-label={groupName}
+                      >
+                        <ChevronRight size={12} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="qa-ctx-group-main"
-                      onClick={() => (!g.path && single ? toggleExpanded(g.key) : onToggleGroup(full))}
-                      title={g.path ? `${t("ctx.selectAll")} · ${g.path}` : t("ctx.selectStandalone")}
+                      onClick={() => onToggleGroup(full)}
+                      title={g.path ? `${t("ctx.selectAll")} · ${g.path}` : t("ctx.selectAll")}
                       aria-pressed={state === "all"}
                     >
                       <span
@@ -285,8 +296,9 @@ export default function ContextPicker(props: Props) {
                       <span className="qa-ctx-group-count">{full.repos.length}</span>
                     </button>
                   </div>
-                  {isOpen && (
+                  {isOpen && !selfService && (
                     <div className="qa-ctx-children">
+                      {g.repos.length === 0 && <span className="ai-hub-hint">{t("ctx.emptyWs")}</span>}
                       {g.repos.map((r) => {
                         const on = isServiceSelected(selection, full, r.path);
                         return (

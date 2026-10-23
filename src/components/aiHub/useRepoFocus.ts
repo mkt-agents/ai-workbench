@@ -65,7 +65,11 @@ export function useRepoFocus(opts: { single: boolean; onError: (msg: string) => 
   const limit = (next: string[], touched: string) =>
     opts.single ? keepOnePlace(next, repoGroups, touched) : next;
   const onToggleGroup = (group: PickerGroup) =>
-    commitFocus(limit(toggleGroup(focusedRepos, group), group.token ?? group.repos[0]?.path ?? ""));
+    // Empty workspaces have neither token nor services — fall back to the folder
+    // path so single-place mode keeps the just-picked workspace.
+    commitFocus(
+      limit(toggleGroup(focusedRepos, group), group.token ?? group.repos[0]?.path ?? group.path ?? ""),
+    );
   const onToggleService = (group: PickerGroup, path: string) =>
     commitFocus(limit(toggleService(focusedRepos, group, path), path));
   const clearFocus = () => commitFocus([]);
@@ -102,7 +106,13 @@ export function useRepoFocus(opts: { single: boolean; onError: (msg: string) => 
       }
       const found = await invokeGitScanRepos(dir, 2);
       if (found.length === 0) {
-        opts.onError(t("focusScanEmpty"));
+        // 任意文件夹都是一个工作区（可以是空的）：非 git 目录一样可以做 agent 根，
+        // 只是 git 类上下文（提交 / 改动）为空。
+        setExtraFolders((prev) => [
+          ...prev.filter((f) => pathKey(f.path) !== pathKey(dir)),
+          { path: dir, name: projectNameFromPath(dir), repos: [] },
+        ]);
+        commitFocus(opts.single ? [dir] : Array.from(new Set([...focusedRepos, dir])));
         return;
       }
       const saved = gitWorkspaces.find((w) => pathKey(w.path) === pathKey(dir));

@@ -497,6 +497,9 @@ function CommitChangelist({
     const onOutside = (e: Event) => {
       const node = e.target;
       if (!(node instanceof Node)) return;
+      // The toggle buttons live outside the panels now; clicking one must not
+      // close-then-reopen the panel it owns.
+      if (node instanceof Element && node.closest(".cl-pop-toggle")) return;
       if (recentOpen && recentRef.current && !recentRef.current.contains(node)) {
         recentGen.current += 1;
         setRecentOpen(false);
@@ -2366,6 +2369,59 @@ function CommitChangelist({
       )}
 
       <div className="cl-commit-bar">
+        {recentOpen && (
+          <div className="cl-pop-panel" ref={recentRef}>
+            <div className="cl-menu-note runtime-muted">{t("commit.recentMessagesTip")}</div>
+            {recentSubjects.length === 0 ? (
+              <div className="cl-recent-empty runtime-muted">{t("commit.recentEmpty")}</div>
+            ) : (
+              recentSubjects.map((subject) => (
+                <button
+                  key={subject}
+                  type="button"
+                  className="cl-recent-item"
+                  onClick={() => {
+                    setMessage(subject);
+                    setRecentOpen(false);
+                  }}
+                >
+                  {subject}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        {stashOpen && (
+          <div className="cl-pop-panel" ref={stashRef}>
+            <div className="cl-menu-note runtime-muted">{t("commit.stashListTip")}</div>
+            {stashes.length === 0 ? (
+              <div className="cl-recent-empty runtime-muted">{t("commit.stashEmpty")}</div>
+            ) : (
+              stashes.map((entry) => (
+                <div key={entry.index} className="cl-stash-row">
+                  <span className="cl-stash-msg">{entry.message || t("commit.stashUntitled")}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={busy}
+                    onClick={() => void runStashPop(entry.index)}
+                  >
+                    {t("commit.stashPop")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={busy}
+                    onClick={() => void runStashDrop(entry.index, entry.message)}
+                    aria-label={t("commit.stashDrop")}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
         <div className="cl-composer">
           <textarea
             className="git-commit-message cl-commit-msg"
@@ -2376,10 +2432,10 @@ function CommitChangelist({
             disabled={busy || generating}
           />
           <div className="cl-composer-foot">
-            <div className="cl-recent" ref={recentRef}>
+            <div className="cl-recent">
               <button
                 type="button"
-                className="btn btn-secondary btn-small"
+                className="btn btn-secondary btn-small cl-pop-toggle"
                 disabled={busy || generating}
                 title={t("commit.recentMessagesTip")}
                 onClick={() => void openRecent()}
@@ -2387,28 +2443,6 @@ function CommitChangelist({
                 <History size={13} />
                 {t("commit.recentMessages")}
               </button>
-              {recentOpen && (
-                <div className="cl-recent-menu">
-                  <div className="cl-menu-note runtime-muted">{t("commit.recentMessagesTip")}</div>
-                  {recentSubjects.length === 0 ? (
-                    <div className="cl-recent-empty runtime-muted">{t("commit.recentEmpty")}</div>
-                  ) : (
-                    recentSubjects.map((subject) => (
-                      <button
-                        key={subject}
-                        type="button"
-                        className="cl-recent-item"
-                        onClick={() => {
-                          setMessage(subject);
-                          setRecentOpen(false);
-                        }}
-                      >
-                        {subject}
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
             </div>
             <div className="cl-mode" role="radiogroup" aria-label={t("commit.amendMode")}>
               <button
@@ -2436,7 +2470,7 @@ function CommitChangelist({
               {amend ? t("commit.amendHint") : t("commit.commitNewHint")}
             </p>
             <div className="cl-composer-side">
-              <div className="cl-stash" ref={stashRef}>
+              <div className="cl-stash">
                 <button
                   type="button"
                   className="btn btn-secondary btn-small"
@@ -2452,7 +2486,7 @@ function CommitChangelist({
                 </button>
                 <button
                   type="button"
-                  className={`btn btn-secondary btn-small cl-stash-count${stashOpen ? " is-on" : ""}`}
+                  className={`btn btn-secondary btn-small cl-stash-count cl-pop-toggle${stashOpen ? " is-on" : ""}`}
                   disabled={!currentGitRepo}
                   title={t("commit.stashListTip")}
                   aria-expanded={stashOpen}
@@ -2464,37 +2498,6 @@ function CommitChangelist({
                 >
                   {stashes.length}
                 </button>
-                {stashOpen && (
-                  <div className="cl-recent-menu cl-stash-menu">
-                    <div className="cl-menu-note runtime-muted">{t("commit.stashPushTip")}</div>
-                    {stashes.length === 0 ? (
-                      <div className="cl-recent-empty runtime-muted">{t("commit.stashEmpty")}</div>
-                    ) : (
-                      stashes.map((entry) => (
-                        <div key={entry.index} className="cl-stash-row">
-                          <span className="cl-stash-msg">{entry.message || t("commit.stashUntitled")}</span>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-small"
-                            disabled={busy}
-                            onClick={() => void runStashPop(entry.index)}
-                          >
-                            {t("commit.stashPop")}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-small"
-                            disabled={busy}
-                            onClick={() => void runStashDrop(entry.index, entry.message)}
-                            aria-label={t("commit.stashDrop")}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
               </div>
             </div>
           </div>
