@@ -323,6 +323,7 @@ pub fn run() {
             codebuddy::ensure_schema(&conn).expect("failed to init workbuddy schema");
             codex_quota::ensure_schema(&conn).expect("failed to init codex account schema");
             quota_accounts::ensure_schema(&conn).expect("failed to init quota account schema");
+            quota_accounts::ensure_kv_schema(&conn).expect("failed to init app kv schema");
             qoder_quota::ensure_schema(&conn).expect("failed to init qoder settings schema");
             trae_quota::ensure_schema(&conn).expect("failed to init trae settings schema");
 
@@ -358,7 +359,7 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_ok INTEGER;");
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_at TEXT;");
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_msg TEXT;");
-            // 模型支持看图：智枢完全权限下据此提供截屏和键鼠操作
+            // 模型支持看图：天玑完全权限下据此提供截屏和键鼠操作
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN vision INTEGER DEFAULT 0;");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN auth_mode TEXT DEFAULT 'token';");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN config_path TEXT;");
@@ -509,6 +510,8 @@ pub fn run() {
             quota_accounts::quota_accounts_list,
             quota_accounts::quota_account_delete,
             quota_accounts::quota_account_set_tag,
+            quota_accounts::quota_card_order_load,
+            quota_accounts::quota_card_order_save,
             deepseek_quota::deepseek_balance_fetch,
             claude_quota::claude_import_local,
             claude_quota::claude_add_token,

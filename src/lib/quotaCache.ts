@@ -58,7 +58,7 @@ export function saveDsPeaks(peaks: Record<string, number>): void {
   }
 }
 
-/** 超过该秒数的授权类结果在进页面时自动重查；WorkBuddy 不在此列。 */
+/** 超过该秒数的结果在进页面时自动重查（授权类逐卡查，WorkBuddy 走整池命令）。 */
 export const STALE_AFTER_SECS = 600;
 
 export function isStale(result: QuotaResultBase | undefined, nowMs: number): boolean {

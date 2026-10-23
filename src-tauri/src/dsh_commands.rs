@@ -1173,13 +1173,12 @@ pub async fn get_dsh_version() -> Result<String, String> {
         .ok_or_else(|| "Not installed".to_string())
 }
 
-/// Newest DeepSeek build the user should be offered: the higher of the `latest` and
-/// `next` dist-tags.
+/// Newest DeepSeek build the user should be offered: the `latest` dist-tag only.
 ///
-/// Querying `version` alone was not enough — that returns `latest` only, and DSH
-/// publishes some release candidates under `next` first (`latest` = 0.1.5-rc.1 while
-/// `next` = 0.1.5-rc.2), so a genuinely newer build produced no update prompt. The
-/// alpha channel stays excluded, matching `get_dsh_versions`.
+/// `next` is deliberately excluded: it can point at a release candidate whose
+/// dependency packages are not yet published (e.g. 0.2.1-rc.3 shipped without
+/// dsh-deepseek-llm-api-extensions@0.2.1-rc.3), so an upgrade to it always fails
+/// with ETARGET. The alpha channel stays excluded, matching `get_dsh_versions`.
 #[tauri::command]
 pub async fn get_dsh_latest_version() -> Result<String, String> {
     let output = tokio::task::spawn_blocking(|| {
@@ -1204,21 +1203,10 @@ pub async fn get_dsh_latest_version() -> Result<String, String> {
         .map_err(|e| format!("Failed to parse dist-tags: {}", e))?;
 
     let mut best: Option<String> = None;
-    for tag in ["latest", "next"] {
-        let Some(version) = tags.get(tag).and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if version.contains("alpha") {
-            continue;
+    if let Some(version) = tags.get("latest").and_then(|v| v.as_str()) {
+        if !version.contains("alpha") {
+            best = Some(version.to_string());
         }
-        best = match best {
-            Some(current)
-                if !crate::runtime_commands::compare_versions(version, &current).is_gt() =>
-            {
-                Some(current)
-            }
-            _ => Some(version.to_string()),
-        };
     }
 
     best.ok_or_else(|| "Could not determine latest version".to_string())
@@ -1264,10 +1252,9 @@ pub async fn update_dsh(
 ) -> Result<String, String> {
     use tauri::Emitter;
 
-    // Install the exact offered version instead of the `latest` tag: DSH publishes some
-    // release candidates under `next` first (`latest` = 0.1.5-rc.1 while `next` =
-    // 0.1.5-rc.2). With `@latest` npm resolved to the already-installed version, exited 0
-    // with "up to date", and the workbench reported an update that never happened.
+    // Install the exact offered version instead of the `latest` tag: with `@latest` npm
+    // resolved to the already-installed version, exited 0 with "up to date", and the
+    // workbench reported an update that never happened.
     let requested = version
         .as_deref()
         .map(str::trim)
@@ -1301,11 +1288,19 @@ pub async fn update_dsh(
         let stderr = child.stderr.take().unwrap();
         let reader = BufReader::new(stderr);
         let mut last_msg = String::new();
+        // Keep npm's own error lines so a non-zero exit can report the real cause
+        // (e.g. ETARGET when upstream published an incomplete release) instead of a
+        // generic network hint.
+        let mut npm_errors: Vec<String> = Vec::new();
 
         for line in reader.lines() {
             if let Ok(line) = line {
                 let trimmed = line.trim().to_string();
                 if trimmed.is_empty() { continue; }
+
+                if trimmed.starts_with("npm error") && npm_errors.len() < 5 {
+                    npm_errors.push(trimmed.clone());
+                }
 
                 let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
                     ("installing", 70, format!("正在安装: {}", trimmed))
@@ -1330,11 +1325,15 @@ pub async fn update_dsh(
             }
         }
 
-        child.wait().map_err(|e| format!("Wait failed: {}", e))
+        child
+            .wait()
+            .map(|status| (status, npm_errors))
+            .map_err(|e| format!("Wait failed: {}", e))
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
     .map_err(|e| format!("Update failed: {}", e))?;
+    let (result, npm_errors) = result;
 
     if result.success() {
         // npm exits 0 even when it changed nothing, so report the version that is really
@@ -1357,7 +1356,15 @@ pub async fn update_dsh(
         })).ok();
         Ok(message)
     } else {
-        Err("更新失败，请检查网络连接".to_string())
+        let code = result.code().unwrap_or(-1);
+        if npm_errors.is_empty() {
+            Err(format!("更新失败（npm 退出码 {code}），请检查网络连接"))
+        } else {
+            Err(format!(
+                "更新失败（npm 退出码 {code}）：{}",
+                npm_errors.join(" | ")
+            ))
+        }
     }
 }
 

@@ -11,14 +11,12 @@ import {
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
-  Bot,
   Clock,
   ExternalLink,
   EyeOff,
   GripVertical,
   KeyRound,
   LogIn,
-  ChevronDown,
   RefreshCw,
   Trash2,
   UserPlus,
@@ -117,6 +115,7 @@ import ScanAddFlow from "./workbuddy/ScanAddFlow";
 import ManualAddModal from "./workbuddy/ManualAddModal";
 import {
   loadCardOrder,
+  loadCardOrderAuthoritative,
   loadEnabledCards,
   loadHiddenCards,
   saveCardOrder,
@@ -568,6 +567,25 @@ function AccountQuotaPanel() {
   const [loaded, setLoaded] = useState(false);
   /** 卡片键（`cursor:3` / `wb:5` …）→ 最近一次查询结果；整表持久化到 aq-cache。 */
   const [results, setResults] = useState<Record<string, QuotaResultBase>>(loadNormalizedCache);
+  /** 最新结果的镜像：异步回调可能在面板卸载后才返回，那时只能靠 ref 拿到「上一次的值」。 */
+  const resultsRef = useRef(results);
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
+  /**
+   * 写结果的同时立刻落盘。面板切走会整个卸载，挂载中的 `[results]` effect 不再执行，
+   * 刷新途中切走就会丢掉这次结果（下次进来又是旧快照）。WorkBuddy 一次整池要串行
+   * 2s/账号，中途切走很常见，所以它在返回处自己写盘，不等 effect。
+   */
+  const commitResults = useCallback(
+    (updater: (prev: Record<string, QuotaResultBase>) => Record<string, QuotaResultBase>) => {
+      const next = updater(resultsRef.current);
+      resultsRef.current = next;
+      setResults(next);
+      saveQuotaCache(next);
+    },
+    [],
+  );
   const [loadingKeys, setLoadingKeys] = useState<string[]>([]);
   const inflight = useRef(new Set<string>());
   /** 同一时刻只跑一个浏览器授权；新开的会先取消旧的。 */
@@ -679,6 +697,17 @@ function AccountQuotaPanel() {
   }, [flashKey]);
 
   const [order, setOrder] = useState<string[]>(loadCardOrder);
+  // 权威顺序在 SQLite（localStorage 只是种子/降级）；挂载后校正一次，
+  // 让重装 / 清 WebView 数据后拖过的顺序仍然生效。
+  useEffect(() => {
+    let cancelled = false;
+    void loadCardOrderAuthoritative().then((dbOrder) => {
+      if (!cancelled && dbOrder.length > 0) setOrder(dbOrder);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   /** 只有按住拖拽手柄时卡片才 draggable，卡片内文字选择和按钮不受影响。 */
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
@@ -805,9 +834,9 @@ function AccountQuotaPanel() {
 
   useTauriEvent<WbQuotaStatus>(WB_QUOTA_EVENT, (e) => {
     const key = `wb:${e.payload.accountId}`;
-    setResults((prev) => ({ ...prev, [key]: wbResult(e.payload) }));
+    commitResults((prev) => ({ ...prev, [key]: wbResult(e.payload) }));
     setLoadingKeys((prev) => prev.filter((k) => k !== key));
-  }, []);
+  }, [commitResults]);
 
   /** 进行中的签到账号 id；结果只留本次会话，持久状态以账号表的 lastCheckin* 为准。 */
   const [checkinBusy, setCheckinBusy] = useState<number[]>([]);
@@ -915,13 +944,23 @@ function AccountQuotaPanel() {
       markLoading(keys, true);
       try {
         const list = await wbQuotaStatus(ids?.length === 1 ? ids[0] : null);
-        setResults((prev) => {
+        const returned = new Set(list.map((item) => item.accountId));
+        commitResults((prev) => {
           const next = { ...prev };
           for (const item of list) next[`wb:${item.accountId}`] = wbResult(item);
+          // 后端会静默跳过凭证已过期 / 已删除 / 已禁用的目标（`checkin_targets`），
+          // 此时返回空数组也不算错。不能就这么留在旧数字上，明确标成「没查到」。
+          for (const a of accounts) {
+            if (!targets.includes(a.id) || returned.has(a.id)) continue;
+            // 本地已停用 / 已封禁的账号后端本来就不查（`checkin_targets` 的 WHERE），
+            // 那不是「查不到」，别报成失败。
+            if (!a.enabled || a.status === "banned") continue;
+            next[`wb:${a.id}`] = failedWb(a, t("wbSkipped"));
+          }
           return next;
         });
       } catch (e) {
-        setResults((prev) => {
+        commitResults((prev) => {
           const next = { ...prev };
           for (const a of accounts) if (targets.includes(a.id)) next[`wb:${a.id}`] = failedWb(a, e);
           return next;
@@ -930,7 +969,7 @@ function AccountQuotaPanel() {
         markLoading(keys, false);
       }
     },
-    [accounts],
+    [accounts, commitResults, t],
   );
   const refreshWbRef = useRef(refreshWb);
   refreshWbRef.current = refreshWb;
@@ -1261,15 +1300,19 @@ function AccountQuotaPanel() {
     autoRefreshed.current = true;
     const at = Date.now();
     for (const key of visibleAuthKeys) if (isStale(results[key], at)) void fetchKey(key);
+    // WorkBuddy 走自己的整池命令（后端逐账号串行 2s），同一条 10 分钟阈值；
+    // 全部可见时传 null 让后端一次跑完，部分隐藏时只查没藏起来的。
+    const staleWb = visibleWbIds.filter((id) => isStale(results[`wb:${id}`], at));
+    if (staleWb.length > 0) void refreshWbRef.current(staleWb.length === accounts.length ? null : staleWb);
   });
 
+  /** 一颗按钮查全部：授权类并行逐卡查；WorkBuddy 交给整池命令（后端逐账号串行 2s）。 */
   const refreshAll = () => {
     for (const key of visibleAuthKeys) void fetchKey(key);
-  };
-
-  const refreshWbVisible = () => {
     // 全部可见时让后端整池串行一次；部分被隐藏时只查看得见的。
-    void refreshWb(visibleWbIds.length === accounts.length ? null : visibleWbIds);
+    if (visibleWbIds.length > 0) {
+      void refreshWb(visibleWbIds.length === accounts.length ? null : visibleWbIds);
+    }
   };
 
   /** 右侧「添加账号」：+ 永远是加一个新账号，顺带把服务商放回看板。 */
@@ -1985,19 +2028,16 @@ function AccountQuotaPanel() {
                   </span>
                 </div>
                 <div className="aq-toolbar-buttons">
-                  <RefreshSplitButton
-                    onRefreshAll={refreshAll}
-                    onRefreshWb={refreshWbVisible}
-                    showWb={visibleWbIds.length > 0}
-                    authLoading={authLoading}
-                    wbLoading={wbLoading}
-                    authDisabled={visibleAuthKeys.length === 0}
-                    refreshAllHint={t("refreshAllHint")}
-                    refreshWbLabel={t("refreshWb")}
-                    refreshWbHint={t("refreshWbHint")}
-                    refreshAllLabel={t("refreshAll")}
-                    refreshingLabel={t("refreshing")}
-                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={refreshAll}
+                    disabled={authLoading || wbLoading || (visibleAuthKeys.length === 0 && visibleWbIds.length === 0)}
+                    title={t("refreshAllHint")}
+                  >
+                    <RefreshCw size={13} className={authLoading || wbLoading ? "spin" : undefined} />
+                    {authLoading || wbLoading ? t("refreshing") : t("refreshAll")}
+                  </button>
                   {(uncheckedWbIds.length > 0 || claimableQoderKeys.length > 0 || uncheckedTraeKeys.length > 0) && (
                     <button
                       type="button"
@@ -2081,115 +2121,6 @@ function AccountQuotaPanel() {
         )}
       </div>
     </NowContext.Provider>
-  );
-}
-
-/** 无 WB：直接全部刷新。有 WB：单颗按钮展开菜单（全部刷新 / 刷新 WorkBuddy），避免分裂按钮缝隙。 */
-function RefreshSplitButton({
-  onRefreshAll,
-  onRefreshWb,
-  showWb,
-  authLoading,
-  wbLoading,
-  authDisabled,
-  refreshAllHint,
-  refreshWbLabel,
-  refreshWbHint,
-  refreshAllLabel,
-  refreshingLabel,
-}: {
-  onRefreshAll: () => void;
-  onRefreshWb: () => void;
-  showWb: boolean;
-  authLoading: boolean;
-  wbLoading: boolean;
-  authDisabled: boolean;
-  refreshAllHint: string;
-  refreshWbLabel: string;
-  refreshWbHint: string;
-  refreshAllLabel: string;
-  refreshingLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const busy = authLoading || wbLoading;
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  if (!showWb) {
-    return (
-      <button
-        type="button"
-        className="btn btn-secondary btn-small"
-        onClick={onRefreshAll}
-        disabled={authLoading || authDisabled}
-        title={refreshAllHint}
-      >
-        <RefreshCw size={13} className={authLoading ? "spin" : undefined} />
-        {authLoading ? refreshingLabel : refreshAllLabel}
-      </button>
-    );
-  }
-
-  return (
-    <div className="aq-pop-anchor" ref={rootRef}>
-      <button
-        type="button"
-        className="btn btn-secondary btn-small"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        title={[refreshAllHint, refreshWbHint].join("\n")}
-      >
-        <RefreshCw size={13} className={busy ? "spin" : undefined} />
-        {busy ? refreshingLabel : refreshAllLabel}
-        <ChevronDown size={12} className="aq-refresh-chevron" />
-      </button>
-      {open && (
-        <div className="aq-pop aq-pop-menu" role="menu">
-          <button
-            type="button"
-            className="aq-pop-menu-item"
-            role="menuitem"
-            disabled={authLoading || authDisabled}
-            onClick={() => {
-              onRefreshAll();
-              setOpen(false);
-            }}
-          >
-            <RefreshCw size={13} className={authLoading ? "spin" : undefined} />
-            {authLoading ? refreshingLabel : refreshAllLabel}
-          </button>
-          <button
-            type="button"
-            className="aq-pop-menu-item"
-            role="menuitem"
-            disabled={wbLoading}
-            onClick={() => {
-              onRefreshWb();
-              setOpen(false);
-            }}
-          >
-            {wbLoading ? <RefreshCw size={13} className="spin" /> : <Bot size={13} />}
-            {wbLoading ? refreshingLabel : refreshWbLabel}
-          </button>
-        </div>
-      )}
-    </div>
   );
 }
 

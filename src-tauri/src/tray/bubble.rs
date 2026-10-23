@@ -152,7 +152,7 @@ pub fn ensure_ai_hub_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String
     }
     let url = WebviewUrl::App("index.html#/ai-hub".into());
     let win = WebviewWindowBuilder::new(app, AI_HUB_LABEL, url)
-        .title("智枢")
+        .title("天玑")
         .inner_size(720.0, 640.0)
         .min_inner_size(640.0, 600.0)
         // 放大 is capped (LARGE_MAX in aiHub/useAiHubWindow.ts): a full-screen hub leaves the
@@ -312,7 +312,7 @@ pub fn ensure_ai_hub_bubble<R: Runtime>(
     // Builder.position() is logical pixels — do NOT pass physical coords there.
     // Set PhysicalPosition immediately after build instead.
     let win = WebviewWindowBuilder::new(app, AI_HUB_BUBBLE_LABEL, url)
-        .title("智枢")
+        .title("天玑")
         .inner_size(BUBBLE_SIZE, BUBBLE_SIZE)
         .min_inner_size(BUBBLE_SIZE, BUBBLE_SIZE)
         .max_inner_size(BUBBLE_SIZE, BUBBLE_SIZE)

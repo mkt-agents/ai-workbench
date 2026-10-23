@@ -271,6 +271,7 @@
     "filter": "Filter workspaces or services…",
     "selectAll": "Select the whole workspace (services added later are included too)",
     "emptyWs": "Empty workspace — the AI works directly in this folder",
+    "removeWs": "Remove this workspace from the list (files on disk are untouched)",
     "singleNote": "This level works in one workspace at a time; with the whole workspace selected, the AI can read and edit every service in it.",
     "keptOne": "This level works in one workspace at a time — kept \"{{name}}\"",
     "partsHead": "Attach with each question",

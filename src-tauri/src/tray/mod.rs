@@ -50,7 +50,7 @@ fn apply_tray_menu<R: Runtime>(
 ) -> Result<(), String> {
     let show_main = MenuItem::with_id(app, "show_main", "显示主窗口", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let ai_hub = MenuItem::with_id(app, "ai_hub", "打开智枢", true, None::<&str>)
+    let ai_hub = MenuItem::with_id(app, "ai_hub", "打开天玑", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
 
@@ -114,7 +114,7 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
 
     let show_main = MenuItem::with_id(app, "show_main", "显示主窗口", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let ai_hub = MenuItem::with_id(app, "ai_hub", "打开智枢", true, None::<&str>)
+    let ai_hub = MenuItem::with_id(app, "ai_hub", "打开天玑", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     let dsh_toggle = MenuItem::with_id(app, "dsh_toggle", "启动 DeepSeek", true, None::<&str>)

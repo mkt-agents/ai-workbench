@@ -1,30 +1,18 @@
-import { useEffect, useLayoutEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import GitManager, { GIT_SUBTAB_KEY } from "./components/GitManager";
 import SettingsPage from "./components/Settings";
 import UpdateBanner from "./components/UpdateBanner";
 import UpdateModal from "./components/UpdateModal";
+import MenuManager from "./components/MenuManager";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import {
-  GitBranch,
   Settings,
-  Puzzle,
-  Network,
   Minus,
   Square,
   X,
-  Cpu,
-  Layers,
-  Cloud,
-  FileText,
-  StickyNote,
   PanelLeftClose,
   PanelLeftOpen,
-  KeyRound,
-  Terminal,
-  Rocket,
-  AppWindow,
-  Gauge,
   Check,
   XCircle,
 } from "lucide-react";
@@ -51,33 +39,12 @@ import { registerAiHubShortcut } from "./lib/aiHubShortcut";
 import { syncPluginHotkeys } from "./lib/pluginHotkeys";
 import { applyDocumentTheme, normalizeAppTheme } from "./lib/theme";
 import { useTauriEvent } from "./hooks/useTauriEvent";
+import { NAV_NODES, type Tab } from "./lib/navStructure";
+import {
+  applyNavCustomization,
+  normalizeNavCustomization,
+} from "./lib/navCustomize";
 import "./styles/index.css";
-
-type Tab =
-  | "git"
-  | "hosts"
-  | "settings"
-  | "plugins"
-  | "cursor-accounts"
-  | "account-quota"
-  | "ai-chat"
-  | "ai-models"
-  | "runtime"
-  | "cloudflared"
-  | "snippets"
-  | "drafts"
-  | "devtools"
-  | "app-launcher"
-  | "desktop-apps";
-
-type NavLeaf = { id: Tab; labelKey: string; icon: React.ReactNode };
-type NavGroup = {
-  group: string;
-  labelKey: string;
-  defaultOpen?: boolean;
-  children: NavLeaf[];
-};
-type NavNode = NavLeaf | NavGroup;
 
 const NARROW_COLLAPSE_PX = 720;
 const WIDE_EXPAND_PX = 900;
@@ -93,7 +60,7 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher", "desktop-apps"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher", "desktop-apps", "menu-manager"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -229,91 +196,48 @@ function App() {
     });
   };
 
-  const NAV_NODES: NavNode[] = [
-    {
-      group: "ai",
-      labelKey: "aiWorkbench",
-      defaultOpen: true,
-      children: [
-        {
-          id: "ai-chat",
-          labelKey: "harness",
-          icon: (
-            <img
-              src="/deepseek-logo.svg"
-              alt=""
-              width={16}
-              height={16}
-              className="nav-brand-icon"
-              draggable={false}
-            />
-          ),
-        },
-        { id: "desktop-apps", labelKey: "desktopApps", icon: <AppWindow size={16} /> },
-        { id: "snippets", labelKey: "snippets", icon: <FileText size={16} /> },
-        { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
-        { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
-        { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
-      ],
-    },
-    {
-      group: "account",
-      labelKey: "accountManagement",
-      defaultOpen: true,
-      children: [
-        { id: "cursor-accounts", labelKey: "cursorAccounts", icon: <KeyRound size={16} /> },
-        { id: "account-quota", labelKey: "accountQuota", icon: <Gauge size={16} /> },
-      ],
-    },
-    {
-      group: "version",
-      labelKey: "versionManagement",
-      defaultOpen: true,
-      children: [
-        { id: "git", labelKey: "gitManagement", icon: <GitBranch size={16} /> },
-        { id: "runtime", labelKey: "runtimeVersion", icon: <Layers size={16} /> },
-      ],
-    },
-    {
-      group: "network",
-      labelKey: "networkManagement",
-      defaultOpen: true,
-      children: [
-        { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
-        { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
-        { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
-      ],
-    },
-    {
-      group: "system",
-      labelKey: "systemUtils",
-      defaultOpen: true,
-      children: [
-        { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
-      ],
-    },
-  ];
+  // 侧栏唯一事实在 lib/navStructure；这里按用户的菜单自定义（改名/排序/换组）
+  // 投影出实际渲染结构。改菜单管理页即改 settings，本组件跟着重渲。
+  const navCustom = useMemo(
+    () => normalizeNavCustomization(settings.navCustomization),
+    [settings.navCustomization],
+  );
+  const effectiveNav = useMemo(() => applyNavCustomization(NAV_NODES, navCustom), [navCustom]);
+  // 自定义分组没有 labelKey，名字存在 renames 里；万一覆盖项被清掉，回落到
+  // 「新分组」（与菜单管理页一致），而不是另一个叫法。
+  const groupLabel = (g: { id: string; labelKey: string | null }) =>
+    navCustom.renames[`group:${g.id}`] ||
+    (g.labelKey ? t(g.labelKey) : t("menuTool.defaultName"));
+  const leafLabel = (leaf: { id: string; labelKey: string }) =>
+    navCustom.renames[leaf.id] || t(leaf.labelKey);
+
+  // 新建的自定义分组默认展开（用户仍可手动收起）。
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      const missing = effectiveNav.filter((g) => g.custom && !prev.has(g.id));
+      if (missing.length === 0) return prev;
+      const next = new Set(prev);
+      for (const g of missing) next.add(g.id);
+      return next;
+    });
+  }, [effectiveNav]);
 
   const NAV_MAP: Record<string, string> = {
     settings: t("settings"),
   };
-  for (const node of NAV_NODES) {
-    if ("group" in node) {
-      for (const child of node.children) NAV_MAP[child.id] = t(child.labelKey);
-    } else {
-      NAV_MAP[node.id] = t(node.labelKey);
-    }
+  for (const g of effectiveNav) {
+    for (const child of g.children) NAV_MAP[child.id] = leafLabel(child);
   }
 
-  const renderLeafButton = (leaf: NavLeaf, className = "") => (
+  const renderLeafButton = (leaf: { id: Tab; labelKey: string; icon: React.ReactNode }, className = "") => (
     <button
       key={leaf.id}
       onClick={() => { setActiveTab(leaf.id); if (typeof window !== "undefined") window.location.hash = `#${leaf.id}`; }}
       className={`sidebar-nav-item ${className} ${activeTab === leaf.id ? "active" : ""}`.trim()}
-      title={t(leaf.labelKey)}
+      title={leafLabel(leaf)}
     >
       <span className="nav-icon">{leaf.icon}</span>
-      <span className="nav-label">{t(leaf.labelKey)}</span>
+      <span className="nav-label">{leafLabel(leaf)}</span>
     </button>
   );
 
@@ -443,33 +367,30 @@ function App() {
         </div>
 
         <nav className="sidebar-nav">
-          {NAV_NODES.map((node) => {
-            if ("group" in node) {
-              const isOpen = openGroups.has(node.group);
-              const hasActive = node.children.some((c) => c.id === activeTab);
-              const label = t(node.labelKey);
-              // Collapsed rail still lists every page. Headers stay mounted and
-              // collapse via CSS so the list doesn't remount mid-animation.
-              const showChildren = collapsed || isOpen;
-              return (
-                <div key={node.group} className="sidebar-group">
-                  <button
-                    className={`sidebar-group-header ${hasActive ? "has-active" : ""}`}
-                    onClick={() => toggleGroup(node.group)}
-                    type="button"
-                    aria-expanded={isOpen}
-                    tabIndex={collapsed ? -1 : undefined}
-                  >
-                    <span className="nav-label">{label}</span>
-                  </button>
-                  {showChildren &&
-                    node.children.map((child) =>
-                      renderLeafButton(child, "sidebar-group-item")
-                    )}
-                </div>
-              );
-            }
-            return renderLeafButton(node);
+          {effectiveNav.map((node) => {
+            const isOpen = openGroups.has(node.id);
+            const hasActive = node.children.some((c) => c.id === activeTab);
+            const label = groupLabel(node);
+            // Collapsed rail still lists every page. Headers stay mounted and
+            // collapse via CSS so the list doesn't remount mid-animation.
+            const showChildren = collapsed || isOpen;
+            return (
+              <div key={node.id} className="sidebar-group">
+                <button
+                  className={`sidebar-group-header ${hasActive ? "has-active" : ""}`}
+                  onClick={() => toggleGroup(node.id)}
+                  type="button"
+                  aria-expanded={isOpen}
+                  tabIndex={collapsed ? -1 : undefined}
+                >
+                  <span className="nav-label">{label}</span>
+                </button>
+                {showChildren &&
+                  node.children.map((child) =>
+                    renderLeafButton(child, "sidebar-group-item")
+                  )}
+              </div>
+            );
           })}
         </nav>
 
@@ -567,6 +488,7 @@ function App() {
               {activeTab === "devtools" && (
                 <DevTools active={activeTab === "devtools"} />
               )}
+              {activeTab === "menu-manager" && <MenuManager />}
               {activeTab === "app-launcher" && (
                 <div className="page-panel is-active">
                   <div className="page-scrollable al-page-host">

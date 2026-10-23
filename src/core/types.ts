@@ -93,6 +93,23 @@ export type AiScene = 'aiHub' | 'report' | 'commit' | 'optimize';
 
 export type AiSceneModels = Partial<Record<AiScene, string>>;
 
+/**
+ * 侧栏菜单自定义（菜单管理页写入）。权威导航结构在 `lib/navStructure.tsx`，
+ * 这里只存覆盖量；任何字段缺失/损坏都会被 `normalizeNavCustomization` 清洗回默认。
+ */
+export interface NavCustomization {
+  /** 显示名覆盖：导航项用页签 id，分组用 `group:<分组 id>`；删除键 = 恢复默认文案。 */
+  renames: Record<string, string>;
+  /** 导航项 → 分组 id（覆盖默认分组）。 */
+  itemGroups: Record<string, string>;
+  /** 导航项完整顺序（新版本新增页签按默认顺序补齐）。 */
+  itemOrder: string[];
+  /** 分组完整顺序（含自定义分组）。 */
+  groupOrder: string[];
+  /** 用户新建的分组 id（组名存 renames[`group:<id>`]）。 */
+  customGroups: string[];
+}
+
 export interface AppSettings {
   theme: AppTheme;
   language: 'zh-CN' | 'en-US';
@@ -108,6 +125,12 @@ export interface AppSettings {
   aiHubChips?: AiHubChips;
   /** Repos given full-diff context in ai-hub (empty = auto = current repo) */
   aiHubFocusRepos?: string[];
+  /** Folders added from the ai-hub workspace picker (persisted; services rescan on boot). */
+  aiHubExtraFolders?: string[];
+  /** Single repos added from the ai-hub workspace picker. */
+  aiHubExtraRepos?: string[];
+  /** Sidebar menu customization (menu manager page): renames / order / custom groups. */
+  navCustomization?: NavCustomization;
   /** Last used ai-hub task (encoded, see aiHub/config encodeTask) */
   aiHubLastTask?: string;
   /** Predict the next prompt after every answer (one extra model call per round). */

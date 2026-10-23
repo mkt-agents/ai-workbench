@@ -1,5 +1,6 @@
 /** 账号额度看板右侧服务商栏：静态目录 + 已选卡片偏好 + 安装检测缓存。 */
 import invocations from "../core/store/invocations";
+import { quotaCardOrderLoad, quotaCardOrderSave } from "./quotaAccounts";
 import type { InstalledAppInfo } from "../core/types";
 
 /** 能查额度、能加到看板的服务商。 */
@@ -61,7 +62,11 @@ export function saveEnabledCards(cards: QuotaCardId[]): void {
 
 const ORDER_KEY = "aq-card-order";
 
-/** 看板卡片顺序：卡片键为 `<服务商>:<账号 id>`，未授权时是 `<服务商>:empty`。 */
+/**
+ * 看板卡片顺序：卡片键为 `<服务商>:<账号 id>`，未授权时是 `<服务商>:empty`。
+ * 权威存储是后端 SQLite 的 app_kv（`quota_card_order_load/save`），重装、清
+ * WebView 数据都不丢；localStorage 只是首帧种子与 DB 不可用时的降级回退。
+ */
 export function loadCardOrder(): string[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(ORDER_KEY) ?? "[]");
@@ -71,11 +76,42 @@ export function loadCardOrder(): string[] {
   }
 }
 
+/** 每次本地写顺序自增；用于丢弃晚到的 DB 校正回包（拖拽不能被闪回旧顺序）。 */
+let orderWrites = 0;
+
 export function saveCardOrder(order: string[]): void {
+  orderWrites += 1;
   try {
     localStorage.setItem(ORDER_KEY, JSON.stringify(order));
   } catch {
-    /* private mode / quota — the order just won't persist */
+    /* private mode / quota — the order just won't persist locally */
+  }
+  void quotaCardOrderSave(order).catch(() => undefined);
+}
+
+/**
+ * 挂载时取权威顺序：DB 有值用 DB（回写 localStorage 供下次首帧即用）；
+ * DB 为空而 localStorage 有旧顺序（升级首启），把 localStorage 迁移进 DB。
+ */
+export async function loadCardOrderAuthoritative(): Promise<string[]> {
+  const myWrite = orderWrites;
+  try {
+    const dbOrder = await quotaCardOrderLoad();
+    if (orderWrites !== myWrite) return loadCardOrder();
+    if (dbOrder.length > 0) {
+      orderWrites += 1; // 回写本地缓存，不算用户拖拽
+      try {
+        localStorage.setItem(ORDER_KEY, JSON.stringify(dbOrder));
+      } catch {
+        /* 同上 */
+      }
+      return dbOrder;
+    }
+    const local = loadCardOrder();
+    if (local.length > 0) void quotaCardOrderSave(local).catch(() => undefined);
+    return local;
+  } catch {
+    return loadCardOrder();
   }
 }
 

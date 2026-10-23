@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use tauri::State;
 
 use crate::codex_quota::{http_client, jwt_claims, now_unix, pkce_challenge, random_b64, with_db};
 use crate::DbState;
@@ -481,6 +482,62 @@ pub async fn quota_account_set_tag(
     with_db(Arc::clone(&state.conn), move |c| set_account_tag(c, id, tag)).await
 }
 
+// ---------------------------------------------------------------------------
+// 看板卡片顺序（app_kv 单行 KV）
+//
+// 顺序原本只存 localStorage（WebView2 数据目录），重装 / 清理 WebView 数据就丢，
+// 而账号本体在 SQLite 里活得好好的——于是重启后卡片全部退回自然顺序。
+// 挪进 `app_kv`，与账号同库同生共死；localStorage 只作首帧种子与降级回退。
+// ---------------------------------------------------------------------------
+
+const KV_TABLE_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS app_kv (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+"#;
+
+const CARD_ORDER_KEY: &str = "quota_card_order";
+
+/// 幂等；从 setup 块里 `ensure_schema` 一起调用。
+pub fn ensure_kv_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(KV_TABLE_SQL).map_err(|e| e.to_string())
+}
+
+fn load_card_order(conn: &Connection) -> Result<Vec<String>, String> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_kv WHERE key = ?1",
+            params![CARD_ORDER_KEY],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(raw
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn quota_card_order_load(state: State<'_, DbState>) -> Result<Vec<String>, String> {
+    with_db(Arc::clone(&state.conn), load_card_order).await
+}
+
+#[tauri::command]
+pub async fn quota_card_order_save(state: State<'_, DbState>, keys: Vec<String>) -> Result<(), String> {
+    let json = serde_json::to_string(&keys).map_err(|e| e.to_string())?;
+    with_db(Arc::clone(&state.conn), move |conn| {
+        conn.execute(
+            "INSERT INTO app_kv (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![CARD_ORDER_KEY, json],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,6 +546,21 @@ mod tests {
         let c = Connection::open_in_memory().unwrap();
         ensure_schema(&c).unwrap();
         c
+    }
+
+    #[test]
+    fn card_order_roundtrips_in_app_kv() {
+        let c = mem();
+        ensure_kv_schema(&c).unwrap();
+        ensure_kv_schema(&c).unwrap(); // 幂等
+        assert_eq!(load_card_order(&c).unwrap(), Vec::<String>::new());
+        let keys: Vec<String> = vec!["deepseek:2".into(), "cursor:1".into(), "mimo:empty".into()];
+        c.execute(
+            "INSERT INTO app_kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![CARD_ORDER_KEY, serde_json::to_string(&keys).unwrap()],
+        )
+        .unwrap();
+        assert_eq!(load_card_order(&c).unwrap(), keys);
     }
 
     #[test]

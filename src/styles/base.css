@@ -28,6 +28,7 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .ai-model-menu,
   .prompt-template-menu,
   .al-toolbar,
+  .mm-toolbar,
   .cursor-init-banner,
   .qa-focus-pop,
   .tr-multiselect-menu,

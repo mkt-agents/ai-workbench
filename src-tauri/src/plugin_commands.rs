@@ -16,7 +16,7 @@ use url::Url;
 /// is unavailable).
 const SHELL_OPEN_TRIGGER_HOST: &str = "aiwb-shell.open";
 
-/// Second magic host: "问智枢" in the injected toolbar navigates to
+/// Second magic host: "问天玑" in the injected toolbar navigates to
 /// `https://aiwb-aihub.open/?text=<encoded selection>` and we forward the
 /// text to the ai-hub window via `open_ai_hub_with_text`. Same trick as
 /// `SHELL_OPEN_TRIGGER_HOST`: external-URL webviews have no IPC bridge.
@@ -376,7 +376,7 @@ const BROWSER_TOOLBAR_INIT_JS: &str = r#"(function () {
       '<button id="copy" title="复制地址" aria-label="复制地址">' + svg(ICONS.copy) + '</button>' +
       '<button id="external" title="在系统浏览器打开" aria-label="在系统浏览器打开">' + svg(ICONS.external) + '</button>' +
       '<span class="sep"></span>' +
-      '<button id="ask" title="问智枢（送入选中文本，未选中则送页面标题+地址）" aria-label="问智枢">' + svg(ICONS.ask) + '</button>' +
+      '<button id="ask" title="问天玑（送入选中文本，未选中则送页面标题+地址）" aria-label="问天玑">' + svg(ICONS.ask) + '</button>' +
       '</div>' +
       '<button id="collapse" title="收起工具栏" aria-label="收起工具栏">' + svg(ICONS.collapse) + '</button>' +
       '<button id="expand" title="展开工具栏" aria-label="展开工具栏" style="display:none;">' + svg(ICONS.expand) + '</button>' +

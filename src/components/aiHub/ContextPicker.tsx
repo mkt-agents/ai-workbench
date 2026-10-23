@@ -36,6 +36,9 @@ type Props = {
   onClear: () => void;
   onScanFolder: () => void;
   scanning: boolean;
+  /** Picker-added workspaces the user can remove from the list. */
+  removableKeys: string[];
+  onRemoveGroup: (group: PickerGroup) => void;
   /** Edit levels: one workspace (or standalone repo) at a time. */
   single: boolean;
   chips: AiHubChips;
@@ -61,8 +64,8 @@ export default function ContextPicker(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     open, onToggleOpen, groups, selection, label, currentRepo, onToggleGroup, onToggleService,
-    onClear, onScanFolder, scanning, single, chips, setChip, onPreview, previewLoading,
-    included, pinned, locked, includeTip, onToggleInclude,
+    onClear, onScanFolder, scanning, removableKeys, onRemoveGroup, single, chips, setChip,
+    onPreview, previewLoading, included, pinned, locked, includeTip, onToggleInclude,
   } = props;
   const [searchOpen, setSearchOpen] = useState(false);
   const [partsOpen, setPartsOpen] = useState(() => readStoredString(CTX_PARTS_KEY) !== "0");
@@ -295,6 +298,20 @@ export default function ContextPicker(props: Props) {
                       <span className="qa-focus-name">{groupName}</span>
                       <span className="qa-ctx-group-count">{full.repos.length}</span>
                     </button>
+                    {removableKeys.includes(g.key) && (
+                      <button
+                        type="button"
+                        className="qa-ctx-group-x"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveGroup(full);
+                        }}
+                        title={t("ctx.removeWs")}
+                        aria-label={t("ctx.removeWs")}
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
                   </div>
                   {isOpen && !selfService && (
                     <div className="qa-ctx-children">

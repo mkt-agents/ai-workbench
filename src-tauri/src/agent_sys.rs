@@ -152,7 +152,7 @@ pub(crate) fn kill_process(args: &Value) -> Result<String, String> {
     let mut failed = Vec::new();
     for t in targets {
         if t.pid == me {
-            failed.push(format!("{} 是智枢自己，不能结束", t.pid));
+            failed.push(format!("{} 是天玑自己，不能结束", t.pid));
             continue;
         }
         if !crate::port_commands::protection_for(t.pid, &t.name).is_empty() {

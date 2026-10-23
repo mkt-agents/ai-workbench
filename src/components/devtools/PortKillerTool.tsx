@@ -5,7 +5,7 @@
  * 展示与确认——保护判定不信任前端，受保护的进程后端同样会拒绝。
  *
  * 工具箱里唯一带后端命令的工具，其余 9 个仍是纯前端。确认框依赖 `ConfirmDialogProvider`，
- * 故只挂主窗工具箱，不进智枢的工具面板（那一栏刻意只放零后端命令的纯前端工具）。
+ * 故只挂主窗工具箱，不进天玑的工具面板（那一栏刻意只放零后端命令的纯前端工具）。
  */
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";

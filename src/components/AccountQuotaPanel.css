@@ -122,44 +122,6 @@
   overflow: visible;
 }
 
-.aq-refresh-chevron {
-  margin-left: 2px;
-  opacity: 0.7;
-}
-
-.aq-pop-menu {
-  width: auto;
-  min-width: 10rem;
-  padding: 4px;
-  gap: 2px;
-}
-
-.aq-pop-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  margin: 0;
-  padding: 6px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-0);
-  font: inherit;
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.aq-pop-menu-item:hover:not(:disabled) {
-  background: var(--overlay-2);
-}
-
-.aq-pop-menu-item:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
 .aq-pop-jobs {
   width: min(280px, calc(100vw - 48px));
   gap: 8px;

@@ -121,7 +121,7 @@
   word-break: break-word;
 }
 
-/* 弹框里的更新日志要压一档：.qa-md 是给智枢窗定的，h1 17px 在 560px 框里像正文。 */
+/* 弹框里的更新日志要压一档：.qa-md 是给天玑窗定的，h1 17px 在 560px 框里像正文。 */
 .update-modal-notes .qa-md {
   font-size: 12.5px;
   line-height: 1.65;

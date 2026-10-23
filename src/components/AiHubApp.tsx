@@ -917,6 +917,8 @@ function AiHubApp() {
                 onClear={repo.clearFocus}
                 onScanFolder={() => void repo.scanFolder()}
                 scanning={repo.scanning}
+                removableKeys={repo.removableKeys}
+                onRemoveGroup={repo.removeExtra}
                 single={permission !== "read"}
                 chips={chips}
                 setChip={setChip}

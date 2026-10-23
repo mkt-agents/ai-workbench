@@ -20,8 +20,30 @@
   "devtools": "工具箱",
   "quickApps": "快捷应用",
   "desktopApps": "协同办公",
+  "menuManager": "菜单管理",
   "settings": "设置",
   "collapseSidebar": "折叠侧栏",
   "expandSidebar": "展开侧栏",
-  "loading": "正在加载..."
+  "loading": "正在加载...",
+  "menuTool": {
+    "hint": "调整侧栏菜单的分组、排序与名称：可直接拖动排序，拖到别的分组即换组。只影响显示，不改功能本身。设置保存在本机。",
+    "newGroup": "新建分组",
+    "defaultName": "新分组",
+    "unnamedGroup": "未命名分组",
+    "customGroup": "自定义",
+    "rename": "重命名",
+    "resetName": "恢复默认名称",
+    "moveTo": "移动到分组",
+    "dragGroup": "拖动调整分组顺序",
+    "dragItem": "拖动排序，拖到别的分组可换组",
+    "deleteGroup": "删除该分组（组内菜单回到默认分组）",
+    "deleteTitle": "删除分组",
+    "deleteMessage": "「{{name}}」将被删除，组内 {{items}} 个菜单会回到各自的默认分组。",
+    "deleteWarning": "不会删除任何功能页，只清除这个分组的名字与位置。",
+    "deleteConfirm": "删除分组",
+    "emptyGroup": "空分组，把右侧菜单移动进来，或删除该分组。",
+    "resetAll": "恢复默认",
+    "resetTitle": "恢复默认菜单",
+    "resetMessage": "将清除全部分组、排序与改名自定义，恢复侧栏默认布局。"
+  }
 }

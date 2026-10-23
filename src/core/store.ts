@@ -125,7 +125,7 @@ export function normalizeAppPath(path: string): string {
   return path.trim().toLowerCase().replace(/[\\/]+/g, "\\");
 }
 
-/** `quickAsk*` keys and the `quickAsk` scene predate the 智枢 (aiHub) rename. */
+/** `quickAsk*` keys and the `quickAsk` scene predate the 天玑 (aiHub) rename. */
 function renameLegacyAiHubKeys(raw: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {

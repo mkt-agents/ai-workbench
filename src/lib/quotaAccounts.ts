@@ -84,6 +84,10 @@ export const quotaAccountDelete = (id: number) => invoke<void>("quota_account_de
 export const quotaAccountSetTag = (id: number, tag: string | null) =>
   invoke<void>("quota_account_set_tag", { id, tag });
 
+/** 看板卡片顺序存 SQLite（app_kv），重装 / 清 WebView 数据后仍在。 */
+export const quotaCardOrderLoad = () => invoke<string[]>("quota_card_order_load");
+export const quotaCardOrderSave = (keys: string[]) => invoke<void>("quota_card_order_save", { keys });
+
 /** 打开 Cursor 登录页并轮询结果（最长 5 分钟）；Grok Bot 用同一套 Cursor 账号体系。 */
 export const cursorOauthStart = (provider: "cursor" | "grok-bot") =>
   invoke<QuotaAccount>("cursor_oauth_start", { provider });

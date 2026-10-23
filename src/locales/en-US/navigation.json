@@ -20,8 +20,30 @@
   "devtools": "Toolbox",
   "quickApps": "Quick Apps",
   "desktopApps": "Collaboration",
+  "menuManager": "Menus",
   "settings": "Settings",
   "collapseSidebar": "Collapse sidebar",
   "expandSidebar": "Expand sidebar",
-  "loading": "Loading..."
+  "loading": "Loading...",
+  "menuTool": {
+    "hint": "Regroup, reorder and rename the sidebar. Drag to reorder, drop on another group to move it. Display only — features are untouched. Stored on this machine.",
+    "newGroup": "New group",
+    "defaultName": "New group",
+    "unnamedGroup": "Unnamed group",
+    "customGroup": "Custom",
+    "rename": "Rename",
+    "resetName": "Reset to default name",
+    "moveTo": "Move to group",
+    "dragGroup": "Drag to reorder groups",
+    "dragItem": "Drag to reorder, or drop on another group to move it",
+    "deleteGroup": "Delete this group (items return to their default groups)",
+    "deleteTitle": "Delete group",
+    "deleteMessage": "\"{{name}}\" will be deleted; its {{items}} item(s) return to their default groups.",
+    "deleteWarning": "No feature page is removed — only this group's name and position are cleared.",
+    "deleteConfirm": "Delete group",
+    "emptyGroup": "Empty group — move items here, or delete it.",
+    "resetAll": "Reset to defaults",
+    "resetTitle": "Reset sidebar menu",
+    "resetMessage": "This clears all grouping, ordering and rename customizations and restores the default sidebar."
+  }
 }

@@ -12,7 +12,7 @@ type Props = {
 };
 
 /**
- * Editor for 智枢 profiles: an extra system role plus an optional temperature
+ * Editor for 天玑 profiles: an extra system role plus an optional temperature
  * override. Custom ones live in settings (localStorage), not SQLite.
  */
 export default function ProfileModal({ custom, onChange, onClose }: Props) {

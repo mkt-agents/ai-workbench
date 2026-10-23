@@ -343,8 +343,11 @@
 }
 
 .nav-label {
+  /* 菜单管理里改成长名字时不要被硬裁，给个省略号 */
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
   transition: opacity 0.14s ease;
 }
 
