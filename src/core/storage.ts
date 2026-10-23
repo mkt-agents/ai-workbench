@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, ScriptTemplate, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -33,6 +33,7 @@ type DbTable =
   | 'host_profiles'
   | 'web_plugins'
   | 'user_scripts'
+  | 'script_templates'
   | 'plugin_states'
   | 'recent_projects'
   | 'git_workspaces'
@@ -193,6 +194,44 @@ export const storage = {
         enabled: item.enabled ? 1 : 0,
         source_url: item.sourceUrl || '',
         preset_id: item.presetId || '',
+        created_at: item.createdAt,
+        updated_at: item.updatedAt,
+      })));
+    },
+  },
+  scriptTemplates: {
+    load: async (): Promise<ScriptTemplate[]> => {
+      const rows = await loadRows('script_templates');
+      return rows.map(r => {
+        let patterns: string[] = [];
+        try {
+          const raw = r['match_patterns'];
+          if (raw) {
+            const parsed = JSON.parse(raw as string);
+            if (Array.isArray(parsed)) patterns = parsed.filter(Boolean);
+          }
+        } catch {
+          // ignore malformed patterns
+        }
+        if (patterns.length === 0) patterns = ['<all_urls>'];
+        return {
+          id: r['id'] as string,
+          name: r['name'] as string,
+          description: (r['description'] as string) || '',
+          matchPatterns: patterns,
+          code: (r['code'] as string) || '',
+          createdAt: (r['created_at'] as string) || '',
+          updatedAt: (r['updated_at'] as string) || '',
+        };
+      });
+    },
+    save: async (items: ScriptTemplate[]): Promise<void> => {
+      await saveRows('script_templates', items.map(item => ({
+        id: item.id,
+        name: item.name,
+        description: item.description || '',
+        match_patterns: JSON.stringify(item.matchPatterns.length > 0 ? item.matchPatterns : ['<all_urls>']),
+        code: item.code,
         created_at: item.createdAt,
         updated_at: item.updatedAt,
       })));

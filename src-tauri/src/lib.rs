@@ -184,6 +184,15 @@ pub fn run() {
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS script_templates (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    match_patterns TEXT NOT NULL DEFAULT '["<all_urls>"]',
+                    code TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS plugin_states (
                     plugin_id TEXT PRIMARY KEY,
                     enabled INTEGER NOT NULL,

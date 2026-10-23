@@ -8,7 +8,7 @@ import nexusPresetCode from "../../scripts/nexus-batch-query.user.js?raw";
 import { useGlobalStore } from "../core/store";
 import invocations from "../core/store/invocations";
 import { useConfirm } from "./ConfirmModal";
-import type { WebPlugin, UserScript } from "../core/types";
+import type { WebPlugin, UserScript, ScriptTemplate } from "../core/types";
 import {
   X, Plus, Trash2, Edit2, Check, Globe, ExternalLink, Search, Link2,
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
@@ -336,6 +336,11 @@ function PluginBrowser() {
   const updateUserScript = useGlobalStore((s) => s.updateUserScript);
   const deleteUserScript = useGlobalStore((s) => s.deleteUserScript);
   const toggleUserScript = useGlobalStore((s) => s.toggleUserScript);
+  const scriptTemplates = useGlobalStore((s) => s.scriptTemplates);
+  const loadScriptTemplates = useGlobalStore((s) => s.loadScriptTemplates);
+  const addScriptTemplate = useGlobalStore((s) => s.addScriptTemplate);
+  const updateScriptTemplate = useGlobalStore((s) => s.updateScriptTemplate);
+  const deleteScriptTemplate = useGlobalStore((s) => s.deleteScriptTemplate);
 
   const [address, setAddress] = useState("");
   const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set());
@@ -384,6 +389,8 @@ function PluginBrowser() {
   const [usSyntaxError, setUsSyntaxError] = useState<string | null>(null);
   /** 从预设打开「新建」表单时带上，保存时写入 script.presetId */
   const [usPendingPresetId, setUsPendingPresetId] = useState<string | null>(null);
+  /** 模板表单模式：null = 脚本表单；"new" = 新建模板；其余 = 编辑该 id 的模板 */
+  const [usTplEditingId, setUsTplEditingId] = useState<string | null>(null);
   const [usUpdatingId, setUsUpdatingId] = useState<string | null>(null);
   const usCodeRef = useRef<HTMLTextAreaElement>(null);
 
@@ -470,7 +477,8 @@ function PluginBrowser() {
   useEffect(() => {
     loadWebPlugins();
     loadUserScripts();
-  }, [loadWebPlugins, loadUserScripts]);
+    loadScriptTemplates();
+  }, [loadWebPlugins, loadUserScripts, loadScriptTemplates]);
 
   useEffect(() => {
     setActiveKeys(new Set(getOpenBrowserKeys()));
@@ -643,6 +651,7 @@ function PluginBrowser() {
     editingId: string | null
   ) => {
     setUsEditingId(editingId);
+    setUsTplEditingId(null);
     setUsFormName(values.name);
     setUsDesc(values.description);
     setUsMatch(values.matchPatterns.length > 0 ? values.matchPatterns : ["<all_urls>"]);
@@ -668,6 +677,18 @@ function PluginBrowser() {
       },
       null
     );
+  };
+
+  /** 新建 / 编辑自定义模板：复用脚本表单，保存走向 script_templates */
+  const openUsTplForm = (tpl?: ScriptTemplate) => {
+    openUsForm(
+      tpl
+        ? { name: tpl.name, description: tpl.description, matchPatterns: tpl.matchPatterns, code: tpl.code }
+        : { name: "", description: "", matchPatterns: [], code: "" },
+      null
+    );
+    // openUsForm 会把模式重置回脚本表单，模板标记必须放在它之后
+    setUsTplEditingId(tpl ? tpl.id : "new");
   };
 
   const openFormAdd = (prefill?: { name?: string; url?: string; group?: string }) => {
@@ -818,7 +839,22 @@ function PluginBrowser() {
     const patterns = usMatch.map((p) => p.trim()).filter(Boolean);
     const finalPatterns = patterns.length > 0 ? patterns : ["<all_urls>"];
     try {
-      if (usEditingId) {
+      if (usTplEditingId) {
+        // 模板表单：写入 script_templates，不产生脚本实例
+        const payload = {
+          name: usFormName.trim(),
+          description: usDesc.trim(),
+          matchPatterns: finalPatterns,
+          code: usCode,
+        };
+        if (usTplEditingId === "new") {
+          await addScriptTemplate({ id: newId("tpl"), ...payload });
+          showMsg("success", t("usTemplateAdded"));
+        } else {
+          await updateScriptTemplate(usTplEditingId, payload);
+          showMsg("success", t("usTemplateUpdated"));
+        }
+      } else if (usEditingId) {
         await updateUserScript(usEditingId, {
           name: usFormName.trim(),
           description: usDesc.trim(),
@@ -841,6 +877,7 @@ function PluginBrowser() {
       setUsFormOpen(false);
       setUsEditingId(null);
       setUsPendingPresetId(null);
+      setUsTplEditingId(null);
       setUsFormName("");
       setUsDesc("");
       setUsMatch(["<all_urls>"]);
@@ -859,6 +896,49 @@ function PluginBrowser() {
       e.preventDefault();
       void saveUserScript();
     }
+  };
+
+  /** 脚本表单里一键「存为模板」：保留表单继续编辑脚本 */
+  const saveAsTemplateFromForm = async () => {
+    if (!usFormName.trim() || !usCode.trim()) return;
+    try {
+      const patterns = usMatch.map((p) => p.trim()).filter(Boolean);
+      await addScriptTemplate({
+        id: newId("tpl"),
+        name: usFormName.trim(),
+        description: usDesc.trim(),
+        matchPatterns: patterns.length > 0 ? patterns : ["<all_urls>"],
+        code: usCode,
+      });
+      showMsg("success", t("usSavedAsTemplate"));
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
+  const handleDeleteTemplate = async (tpl: ScriptTemplate) => {
+    const ok = await confirm({
+      title: t("usDeleteTemplateTitle"),
+      message: t("usDeleteTemplateMessage", { name: tpl.name }),
+      confirmText: tc("actions.delete"),
+      icon: "danger",
+    });
+    if (!ok) return;
+    try {
+      await deleteScriptTemplate(tpl.id);
+      showMsg("success", t("usTemplateDeleted"));
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
+  /** 点自定义模板卡片 = 以模板内容新建脚本 */
+  const useTemplate = (tpl: ScriptTemplate) => {
+    openUsForm(
+      { name: tpl.name, description: tpl.description, matchPatterns: tpl.matchPatterns, code: tpl.code },
+      null
+    );
+    setUsShowPresets(false);
   };
 
   const copyToClipboard = useCallback(async (text: string, msg: string) => {
@@ -1978,6 +2058,13 @@ function PluginBrowser() {
                 <Zap size={14} />
                 <span>{t("usPresets")}</span>
                 <button
+                  className="us-presets-add"
+                  onClick={() => openUsTplForm()}
+                  type="button"
+                >
+                  <Plus size={12} /> {t("usAddTemplate")}
+                </button>
+                <button
                   className="us-presets-close"
                   onClick={() => setUsShowPresets(false)}
                   aria-label={tc("actions.close")}
@@ -1985,6 +2072,7 @@ function PluginBrowser() {
                   <X size={14} />
                 </button>
               </div>
+              <div className="us-presets-section-label">{t("usPresetBuiltin")}</div>
               <div className="us-presets-grid">
                 {SCRIPT_PRESETS.map((preset) => {
                   const installed = findInstalledForPreset(preset, userScripts, (key) => t(key));
@@ -2032,6 +2120,63 @@ function PluginBrowser() {
                   );
                 })}
               </div>
+
+              <div className="us-presets-section-label us-presets-section-mine">
+                {t("usPresetMine")}
+                <span className="us-presets-count">{scriptTemplates.length}</span>
+              </div>
+              {scriptTemplates.length === 0 ? (
+                <div className="us-presets-empty">
+                  <span>{t("usMineEmpty")}</span>
+                </div>
+              ) : (
+                <div className="us-presets-grid">
+                  {scriptTemplates.map((tpl) => (
+                    <div
+                      key={tpl.id}
+                      className="us-preset-card us-preset-custom"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => useTemplate(tpl)}
+                      onKeyDown={(e) => {
+                        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                          e.preventDefault();
+                          useTemplate(tpl);
+                        }
+                      }}
+                      title={t("usUseTemplate")}
+                    >
+                      <div className="us-preset-actions">
+                        <button
+                          type="button"
+                          title={t("usEditTemplate")}
+                          aria-label={t("usEditTemplate")}
+                          onClick={(e) => { e.stopPropagation(); openUsTplForm(tpl); }}
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          className="is-danger"
+                          title={tc("actions.delete")}
+                          aria-label={tc("actions.delete")}
+                          onClick={(e) => { e.stopPropagation(); void handleDeleteTemplate(tpl); }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                      <Code size={16} />
+                      <span className="us-preset-name">{tpl.name}</span>
+                      {tpl.description ? (
+                        <span className="us-preset-desc" title={tpl.description}>{tpl.description}</span>
+                      ) : null}
+                      <span className="us-preset-match" title={tpl.matchPatterns.join("\n")}>
+                        {tpl.matchPatterns.join(", ")}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -2352,12 +2497,14 @@ function PluginBrowser() {
         <div className="modal-overlay">
           <div className="modal plugin-edit-modal us-edit-modal" onKeyDown={handleUsFormKeyDown}>
             <div className="plugin-edit-modal-header">
-              {usEditingId ? <Edit2 size={16} /> : <Plus size={16} />}
-              {usEditingId ? t("usEditScript") : t("usAddScript")}
+              {usTplEditingId ? <BookmarkPlus size={16} /> : usEditingId ? <Edit2 size={16} /> : <Plus size={16} />}
+              {usTplEditingId
+                ? (usTplEditingId === "new" ? t("usAddTemplate") : t("usEditTemplate"))
+                : usEditingId ? t("usEditScript") : t("usAddScript")}
               <button
                 type="button"
                 className="modal-close"
-                onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); }}
+                onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); setUsTplEditingId(null); }}
                 aria-label={tc("actions.close")}
                 title={tc("actions.close")}
               >
@@ -2519,7 +2666,18 @@ function PluginBrowser() {
               </div>
             </div>
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); setUsTestUrl(""); }} type="button">
+              {!usTplEditingId && (
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  disabled={!usFormName.trim() || !usCode.trim()}
+                  title={t("usSaveAsTemplateHint")}
+                  onClick={() => void saveAsTemplateFromForm()}
+                >
+                  <BookmarkPlus size={14} /> {t("usSaveAsTemplate")}
+                </button>
+              )}
+              <button className="btn btn-secondary" onClick={() => { setUsFormOpen(false); setUsPendingPresetId(null); setUsTplEditingId(null); setUsTestUrl(""); }} type="button">
                 {tc("actions.cancel")}
               </button>
               <button
@@ -2528,7 +2686,7 @@ function PluginBrowser() {
                 disabled={!usFormName.trim() || !usCode.trim()}
                 onClick={() => void saveUserScript()}
               >
-                <Check size={14} /> {t("save")}
+                <Check size={14} /> {usTplEditingId ? t("usSaveTemplate") : t("save")}
               </button>
             </div>
           </div>

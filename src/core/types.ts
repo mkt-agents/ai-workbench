@@ -285,6 +285,7 @@ export interface GlobalState {
   gitWorkspaces: GitWorkspace[];
   webPlugins: WebPlugin[];
   userScripts: UserScript[];
+  scriptTemplates: ScriptTemplate[];
   hostProfiles: HostProfile[];
   cursorAccounts: CursorAccount[];
   aiModels: AIModelConfig[];
@@ -436,6 +437,17 @@ export interface UserScript {
   sourceUrl?: string;
   /** 来自内置预设模板时的预设 id（如 nexus-batch），用于一键更新 */
   presetId?: string;
+}
+
+/** 用户自定义脚本模板（网页工具-脚本页「我的模板」），内置模板之外的补充 */
+export interface ScriptTemplate {
+  id: string;
+  name: string;
+  description: string;
+  matchPatterns: string[];
+  code: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CursorAccount {

@@ -1,6 +1,6 @@
 // ==UserScript==
-// @version      7.0.5
-// @description  SkyWalking 日志查询插件 v7.0.5：液态玻璃日志检索、调用链分析与进程内资源争抢证据诊断，支持深色主题
+// @version      7.0.19
+// @description  SkyWalking 日志查询插件 v7.0.19：液态玻璃日志检索、调用链分析与进程内资源争抢证据诊断，支持深色主题
 // @grant        none
 // ==/UserScript==
 
@@ -516,13 +516,20 @@
 
             // Form (compact, no folding)
             '.' + SW_TS + '-qcard{background:linear-gradient(180deg,rgba(255,255,255,0.88) 0%,rgba(255,255,255,0.72) 100%);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border:1px solid rgba(0,0,0,0.055);border-radius:14px;padding:12px 16px;box-shadow:0 1px 2px rgba(16,24,40,0.035),0 14px 34px rgba(16,24,40,0.07),inset 0 1px 0 rgba(255,255,255,0.95);flex-shrink:0;container-type:inline-size;container-name:qform}',
-            '.' + SW_TS + '-frow{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end}',
-            '.' + SW_TS + '-qgrid{display:grid;gap:10px 14px;align-items:end;justify-content:space-between;grid-template-columns:minmax(220px,320px) minmax(280px,420px) minmax(220px,300px) auto}',
-            '.' + SW_TS + '-qtrange{display:flex;flex-wrap:wrap;gap:12px;grid-column:2/4;min-width:0}',
-            '.' + SW_TS + '-qtrange .' + SW_TS + '-fg{flex:1 1 225px;min-width:225px;max-width:250px}',
-            '@container (min-width:1780px){.' + SW_TS + '-qgrid{grid-template-columns:minmax(160px,300px) minmax(320px,620px) minmax(180px,240px) minmax(120px,140px) minmax(180px,240px) minmax(489px,500px) auto}.' + SW_TS + '-qtrange{grid-column:auto}}',
-            '@container (max-width:1100px){.' + SW_TS + '-qgrid{grid-template-columns:minmax(330px,1.45fr) minmax(230px,1fr)}.' + SW_TS + '-q-trace{grid-column:1/-1}.' + SW_TS + '-qtrange,.' + SW_TS + '-qactions{grid-column:auto}}',
-            '@container (max-width:620px){.' + SW_TS + '-qgrid{grid-template-columns:minmax(0,1fr)}.' + SW_TS + '-trange-arrow{display:none}}',
+            // 两行命名区域网格：行1 服务/包含/排除/级别，行2 Trace/时间范围/操作；
+            // 列宽按内容比例分配，替代 space-between 造成的参差空隙
+            '.' + SW_TS + '-frow{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.05)}',
+            // 单一网格 + 命名区域：两行共用列轨道，上下列严格对齐（服务↔Trace、包含+排除↔时间范围、
+            // 级别↔操作按钮）。列宽全用 fr 比例铺满整行（补位式，不留空隙）
+            '.' + SW_TS + '-qgrid{display:grid;gap:10px 12px;align-items:end;grid-template-columns:minmax(170px,1fr) minmax(200px,1.35fr) minmax(160px,1.1fr) minmax(214px,0.95fr);grid-template-areas:"svc ikw ekw lv" "trace rng rng act"}',
+            '.' + SW_TS + '-fg-svc{grid-area:svc}',
+            '.' + SW_TS + '-fg-ikw{grid-area:ikw}',
+            '.' + SW_TS + '-fg-ekw{grid-area:ekw}',
+            '.' + SW_TS + '-fg-lv{grid-area:lv}',
+            '.' + SW_TS + '-q-trace{grid-area:trace}',
+            '.' + SW_TS + '-fg-rng{grid-area:rng;min-width:0}',
+            '@container (max-width:1100px){.' + SW_TS + '-qgrid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"svc ikw" "ekw lv" "trace rng" "act act"}}',
+            '@container (max-width:620px){.' + SW_TS + '-qgrid{grid-template-columns:minmax(0,1fr);grid-template-areas:"svc" "ikw" "ekw" "lv" "trace" "rng" "act"}}',
             '.' + SW_TS + '-fg{display:flex;flex-direction:column;gap:3px;min-width:120px;flex:1 1 120px}',
             '.' + SW_TS + '-fg label{font-size:10.5px;font-weight:600;color:#76767c;text-transform:uppercase;letter-spacing:0.55px}',
             '.' + SW_TS + '-fg input,.' + SW_TS + '-fg select{box-sizing:border-box;padding:6px 9px;border:1px solid rgba(0,0,0,0.085);border-radius:8px;font-size:12.5px;background:linear-gradient(180deg,#fff 0%,#fcfcfd 100%);color:#1d1d1f;transition:border-color 0.2s,box-shadow 0.2s,background 0.2s;outline:none;font-family:inherit;width:100%;height:32px;box-shadow:0 1px 1px rgba(16,24,40,0.025),inset 0 1px 1px rgba(16,24,40,0.02)}',
@@ -534,10 +541,17 @@
             '.' + SW_TS + '-fg input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover{background-color:rgba(0,122,255,0.1)}',
             '.' + SW_TS + '-svc-ibtn{flex:0 0 30px;border:none;background:transparent;color:#86868b;border-radius:7px;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color 0.15s,background 0.15s;padding:0}',
             '.' + SW_TS + '-svc-ibtn:hover{color:#ff3b30;background:rgba(255,59,48,0.08)}',
-            '.' + SW_TS + '-trange-arrow{flex:0 0 auto;align-self:flex-end;margin:0 0 7px;padding:0;color:#c7c7cc;font-size:13px;user-select:none}',
-            '.' + SW_TS + '-qchips-label{flex:0 0 auto;align-self:center;font-size:12px;font-weight:600;color:#86868b}',
-            '.' + SW_TS + '-qchips{display:flex;gap:4px;flex-wrap:wrap;align-items:center;align-self:center;flex:0 1 auto;min-width:0;max-width:100%}',
-            '.' + SW_TS + '-qactions{display:inline-flex;align-items:center;gap:6px;justify-self:end;align-self:end}',
+            // 时间范围：两个 datetime 合成一个整体控件，聚焦时整框高亮（放在 .fg input 之后以覆盖其边框/底色）
+            '.' + SW_TS + '-qtrange{display:flex;align-items:center;min-width:0;width:100%;max-width:100%;height:32px;padding:0 4px 0 8px;border:1px solid rgba(0,0,0,0.085);border-radius:8px;background:linear-gradient(180deg,#fff 0%,#fcfcfd 100%);box-shadow:0 1px 1px rgba(16,24,40,0.025),inset 0 1px 1px rgba(16,24,40,0.02);transition:border-color 0.2s,box-shadow 0.2s,background 0.2s}',
+            '.' + SW_TS + '-qtrange:focus-within{border-color:rgba(255,59,48,0.45);background:#fff;box-shadow:0 1px 1px rgba(16,24,40,0.02),0 0 0 3px rgba(255,59,48,0.12)}',
+            '.' + SW_TS + '-qtrange input{flex:1 1 0;min-width:0;height:30px;padding:0 3px;border:none;background:transparent;box-shadow:none;transition:none}',
+            '.' + SW_TS + '-qtrange input:focus{border:none;background:transparent;box-shadow:none}',
+            '.' + SW_TS + '-qtrange-sep{flex:0 0 auto;color:#c7c7cc;font-size:13px;padding:0 2px;user-select:none}',
+            '.' + SW_TS + '-qchips-label{flex:0 0 auto;font-size:11px;font-weight:600;color:#86868b;letter-spacing:0.4px}',
+            '.' + SW_TS + '-qchips{display:flex;gap:4px;flex-wrap:wrap;align-items:center;flex:0 1 auto;min-width:0;max-width:100%}',
+            // 诊断按钮紧跟时间胶囊（不推右），淡色描边，不抢查询按钮的视觉重量
+            '.' + SW_TS + '-frow .' + SW_TS + '-diag-trigger{margin-left:2px}',
+            '.' + SW_TS + '-qactions{display:inline-flex;align-items:center;gap:6px;justify-self:end;grid-area:act}',
             '.' + SW_TS + '-qbtn{padding:7px 16px;border:none;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;background:linear-gradient(135deg,#ff4b3d 0%,#ff7a35 100%);color:#fff;box-shadow:0 1px 2px rgba(255,59,48,0.28),0 6px 14px rgba(255,59,48,0.2),inset 0 1px 0 rgba(255,255,255,0.32);transition:box-shadow 0.2s,transform 0.2s,filter 0.2s;display:flex;align-items:center;gap:5px;height:32px;white-space:nowrap}',
             '.' + SW_TS + '-qbtn:hover{transform:translateY(-1px);filter:saturate(106%);box-shadow:0 2px 4px rgba(255,59,48,0.3),0 10px 22px rgba(255,59,48,0.26),inset 0 1px 0 rgba(255,255,255,0.36)}',
             '.' + SW_TS + '-qbtn:active{transform:translateY(0)}',
@@ -638,9 +652,11 @@
             '.' + SW_TS + '-diag-trigger{border:0;background:linear-gradient(135deg,#ff3b30,#ff7a00);color:#fff;border-radius:10px;padding:8px 13px;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 6px 18px rgba(255,59,48,0.28);transition:transform .18s ease,opacity .18s ease;display:flex;align-items:center;gap:6px;font-family:-apple-system,sans-serif}',
             '.' + SW_TS + '-diag-trigger:hover{transform:translateY(-1px)}',
             '.' + SW_TS + '-diag-trigger:disabled{opacity:.62;cursor:wait;transform:none}',
-            '.' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-compact{height:32px;padding:0 12px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.06);flex:0 0 auto;align-self:center}',
-            '.' + SW_TS + '-diag-info-btn{width:28px;height:28px;border-radius:50%;border:1px solid rgba(0,0,0,.1);background:rgba(255,255,255,.48);color:#86868b;font-size:15px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;align-self:center;transition:all .15s}',
-            '.' + SW_TS + '-diag-info-btn:hover{background:rgba(0,0,0,.05);color:#6e6e73;transform:translateY(-1px)}',
+            // 淡色幽灵按钮：与快捷时间胶囊同一层级，透明底 + 发丝描边，红色只落在文字上
+            '.' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-soft{height:24px;padding:0 9px;border-radius:6px;font-size:11.5px;font-weight:600;letter-spacing:0.2px;white-space:nowrap;color:#c0392b;background:transparent;border:1px solid rgba(255,59,48,0.22);box-shadow:none;flex:0 0 auto;align-self:center}',
+            '.' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-soft:hover{background:rgba(255,59,48,0.09);border-color:rgba(255,59,48,0.38);color:#d70015;box-shadow:none;transform:none}',
+            '.' + SW_TS + '-diag-info-btn{width:24px;height:24px;border-radius:50%;border:1px solid rgba(0,0,0,.12);background:transparent;color:#9a9aa0;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;align-self:center;padding:0;transition:all .15s}',
+            '.' + SW_TS + '-diag-info-btn:hover{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.2);color:#1d1d1f;transform:none}',
             '#' + SW_TS + '-btn:hover{box-shadow:0 9px 26px rgba(255,59,48,0.42), inset 0 1px 0 rgba(255,255,255,0.25)}',
             '#' + SW_TS + '-btn:active{transform:scale(0.97)}',
             '#' + SW_TS + '-diag-modal{position:fixed;inset:0;z-index:100020;background:rgba(8,10,16,.68);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);display:none;align-items:center;justify-content:center;padding:24px;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:#f5f5f7}',
@@ -754,8 +770,13 @@
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-close-all-btn{background:rgba(255,72,48,0.13);border-color:rgba(255,72,48,0.32);color:#ff8b80}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-close-all-btn:hover{background:rgba(255,72,48,0.24)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qcard{background:var(--d-el2);border-color:rgba(255,255,255,0.07);box-shadow:0 14px 36px rgba(0,0,0,0.42)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-frow{border-top-color:rgba(255,255,255,0.075)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg label,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qchips-label{color:var(--d-t2)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg input,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg select,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-ikw-dd-btn,#' + SW_TS + '-modal.sw-dark .' + SW_TS + '-modal-search{background:rgba(8,10,14,0.42);border-color:var(--d-line);color:var(--d-t0);box-shadow:inset 0 1px 2px rgba(0,0,0,0.32)}',
+            // 时间范围组合框：底色/边框走外层容器，内部输入保持透明
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qtrange{background:rgba(8,10,14,0.42);border-color:var(--d-line);box-shadow:inset 0 1px 2px rgba(0,0,0,0.32)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qtrange:focus-within{background:rgba(8,10,14,0.6);border-color:rgba(255,72,48,0.55);box-shadow:inset 0 1px 2px rgba(0,0,0,0.28),0 0 0 3px rgba(255,72,48,0.2)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qtrange input,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qtrange input:focus{background:transparent;border-color:transparent;box-shadow:none}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg input:focus,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg select:focus,#' + SW_TS + '-modal.sw-dark .' + SW_TS + '-modal-search:focus{background:rgba(8,10,14,0.6);border-color:rgba(255,72,48,0.55);box-shadow:inset 0 1px 2px rgba(0,0,0,0.28),0 0 0 3px rgba(255,72,48,0.2)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg input::placeholder{color:var(--d-t3)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg select{background-image:url("data:image/svg+xml,%3csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 20 20\'%3e%3cpath stroke=\'%23989ea9\' stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'1.5\' d=\'m6 8 4 4 4-4\'/%3e%3c/svg%3e");background-repeat:no-repeat;background-position:right 8px center;background-size:12px;padding-right:26px;cursor:pointer}',
@@ -764,11 +785,13 @@
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover{background-color:rgba(255,255,255,0.14)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-svc-ibtn{color:var(--d-t2)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-svc-ibtn:hover{color:#ff8b80;background:rgba(255,72,48,0.16)}',
-            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-trange-arrow{color:var(--d-t3)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qtrange-sep{color:var(--d-t3)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qbtn{background:var(--d-primary);box-shadow:0 4px 14px rgba(232,69,45,0.24)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qbtn:hover{background:var(--d-primary-hover);box-shadow:0 6px 18px rgba(232,69,45,0.32)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-trigger{background:var(--d-primary);box-shadow:0 4px 14px rgba(232,69,45,0.24)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-trigger:hover{background:var(--d-primary-hover);box-shadow:0 8px 20px rgba(232,69,45,0.32)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-soft{background:rgba(255,72,48,0.12);border-color:rgba(255,72,48,0.24);color:#ff9c93;box-shadow:none}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-soft:hover{background:rgba(255,72,48,0.2);border-color:rgba(255,72,48,0.4);color:#ffb3ab;box-shadow:none}',
             '#' + SW_TS + '-modal.sw-dark .' + SW_TS + '-mtab.active{background:var(--d-primary);box-shadow:0 3px 12px rgba(232,69,45,0.26)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qbtn.sec{background:#2a2e37;color:var(--d-t0);border-color:var(--d-line-2);box-shadow:none}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qbtn.sec:hover{background:rgba(255,72,48,0.16);color:#ff9c93;border-color:rgba(255,72,48,0.4);box-shadow:none}',
@@ -830,8 +853,8 @@
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-item-extra span{background:#24272f;color:var(--d-t2)}',
             '#' + SW_TS + '-wrap.sw-dark mark,#' + SW_TS + '-modal.sw-dark mark{background:rgba(255,204,0,0.26);color:#fff;box-shadow:0 0 0 1px rgba(255,204,0,0.34)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-empty{color:var(--d-t2)}',
-            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-info-btn{background:rgba(255,255,255,0.06);border-color:var(--d-line);color:var(--d-t2)}',
-            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-info-btn:hover{background:rgba(255,255,255,0.13);color:var(--d-t0)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-info-btn{background:transparent;border-color:rgba(255,255,255,0.14);color:var(--d-t2)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-diag-info-btn:hover{background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.26);color:var(--d-t0)}',
             // 详情弹窗（挂在 document.body 上，独立 sw-dark）
             '#' + SW_TS + '-modal.sw-dark{background:rgba(6,8,12,0.62)}',
             '#' + SW_TS + '-modal.sw-dark #' + SW_TS + '-modal-body{background:#22252d;border-color:rgba(255,255,255,0.08);box-shadow:0 34px 90px rgba(0,0,0,0.62)}',
@@ -1000,8 +1023,8 @@
         $$('.' + SW_TS + '-diag-trigger').forEach(function (button) {
             button.disabled = loading;
             button.innerHTML = loading
-                ? '<span style="animation:' + SW_TS + '-spin .8s linear infinite;display:inline-block">&#9696;</span> 正在穿透链路...'
-                : '&#128269; 诊断雪崩';
+                ? '<span style="animation:' + SW_TS + '-spin .8s linear infinite;display:inline-block">&#9696;</span> 正在穿透…'
+                : '诊断雪崩';
         });
     }
     async function showDiagnosisContextPicker(context) {
@@ -1185,7 +1208,7 @@
             '<div class="' + SW_TS + '-header">' +
                 '<div class="' + SW_TS + '-hl">' +
                     '<div class="' + SW_TS + '-logo">S</div>' +
-                    '<div class="' + SW_TS + '-title">SkyWalking 日志增强 <span>v7.0.5 · powered by jingzhou.zhao</span></div>' +
+                    '<div class="' + SW_TS + '-title">SkyWalking 日志增强 <span>v7.0.19 · powered by jingzhou.zhao</span></div>' +
                 '</div>' +
                 '<div class="' + SW_TS + '-hr">' +
                     '<button class="' + SW_TS + '-theme-btn" id="' + SW_TS + '-theme-btn" title="切换深色/浅色主题"></button>' +
@@ -1531,7 +1554,7 @@
         if (!tab) { card.innerHTML = ''; return; }
         card.innerHTML =
             '<div class="' + SW_TS + '-qgrid">' +
-                '<div class="' + SW_TS + '-fg">' +
+                '<div class="' + SW_TS + '-fg ' + SW_TS + '-fg-svc">' +
                     '<label>服务</label>' +
                     '<div style="display:flex;gap:4px;align-items:stretch">' +
                         '<input data-k="service" list="' + SW_TS + '-service-list" placeholder="输入服务名搜索" value="' + esc(tab.serviceInput || '') + '" autocomplete="off" style="flex:1;min-width:0">' +
@@ -1539,7 +1562,7 @@
                         '<button type="button" class="' + SW_TS + '-svc-ibtn" data-act="svc-refresh" title="刷新服务列表缓存">&#x21bb;</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="' + SW_TS + '-fg">' +
+                '<div class="' + SW_TS + '-fg ' + SW_TS + '-fg-ikw">' +
                     '<label>包含关键词</label>' +
                     '<div data-ikw-input-row style="display:flex;gap:4px;align-items:stretch">' +
                         '<input data-k="ikw" placeholder="多个用逗号分隔" value="' + esc(tab.includeKeyword || '') + '" style="flex:1;min-width:0">' +
@@ -1547,11 +1570,11 @@
                         '<button type="button" class="' + SW_TS + '-ikw-save" data-act="ikw-save" title="保存到本服务快捷列表">&#9734;</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="' + SW_TS + '-fg">' +
+                '<div class="' + SW_TS + '-fg ' + SW_TS + '-fg-ekw">' +
                     '<label>排除关键词</label>' +
                     '<input data-k="ekw" placeholder="多个用逗号分隔" value="' + esc(tab.excludeKeyword || '') + '">' +
                 '</div>' +
-                '<div class="' + SW_TS + '-fg">' +
+                '<div class="' + SW_TS + '-fg ' + SW_TS + '-fg-lv">' +
                     '<label>级别</label>' +
                     '<select data-k="level">' +
                         '<option value="">全部</option>' +
@@ -1564,15 +1587,12 @@
                     '<label>Trace ID</label>' +
                     '<input data-k="trace" placeholder="可选" value="' + esc(tab.traceId || '') + '">' +
                 '</div>' +
-                '<div class="' + SW_TS + '-qtrange">' +
-                    '<div class="' + SW_TS + '-fg">' +
-                        '<label>开始时间</label>' +
-                        '<input type="datetime-local" step="1" data-k="start" value="' + (tab.startTime || '') + '" style="min-width:0">' +
-                    '</div>' +
-                    '<span class="' + SW_TS + '-trange-arrow">&#8594;</span>' +
-                    '<div class="' + SW_TS + '-fg">' +
-                        '<label>结束时间</label>' +
-                        '<input type="datetime-local" step="1" data-k="end" value="' + (tab.endTime || '') + '" style="min-width:0">' +
+                '<div class="' + SW_TS + '-fg ' + SW_TS + '-fg-rng">' +
+                    '<label>时间范围</label>' +
+                    '<div class="' + SW_TS + '-qtrange">' +
+                        '<input type="datetime-local" step="1" data-k="start" value="' + (tab.startTime || '') + '" title="开始时间">' +
+                        '<span class="' + SW_TS + '-qtrange-sep">&#8594;</span>' +
+                        '<input type="datetime-local" step="1" data-k="end" value="' + (tab.endTime || '') + '" title="结束时间">' +
                     '</div>' +
                 '</div>' +
                 '<span class="' + SW_TS + '-qactions">' +
@@ -1584,7 +1604,7 @@
                     '<button class="' + SW_TS + '-qbtn" data-act="search">&#128269; 查询</button>' +
                 '</span>' +
             '</div>' +
-            '<div class="' + SW_TS + '-frow" style="margin-top:10px">' +
+            '<div class="' + SW_TS + '-frow">' +
                 '<span class="' + SW_TS + '-qchips-label">快捷时间</span>' +
                 '<span class="' + SW_TS + '-qchips">' +
                     [
@@ -1598,7 +1618,7 @@
                         return '<span class="' + SW_TS + '-qchip" data-min="' + q.m + '">' + q.t + '</span>';
                     }).join('') +
                 '</span>' +
-                '<button class="' + SW_TS + '-diag-trigger ' + SW_TS + '-diag-compact" data-act="diagnose" type="button" title="对当前已加载日志做链路穿透，定位雪崩根因">&#128269; 诊断雪崩</button>' +
+                '<button class="' + SW_TS + '-diag-trigger ' + SW_TS + '-diag-soft" data-act="diagnose" type="button" title="对当前已加载日志做链路穿透，定位雪崩根因">诊断雪崩</button>' +
                 '<button class="' + SW_TS + '-diag-info-btn" data-act="diag-info" type="button" title="查看诊断算法说明" aria-label="查看诊断算法说明">&#9432;</button>' +
             '</div>';
     }

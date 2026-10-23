@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
-  RecentProject, WebPlugin, UserScript, HostProfile, CursorAccount,
+  RecentProject, WebPlugin, UserScript, ScriptTemplate, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, Draft, AiHubSession, CursorUpdateState, CursorCleanupResult,
   QuickAppLauncher,
@@ -222,6 +222,12 @@ interface StoreState extends GlobalState, Invocations {
   toggleUserScript: (id: string) => Promise<void>;
   getUserScriptsForUrl: (url: string) => UserScript[];
 
+  // User-defined script templates (脚本页「我的模板」)
+  loadScriptTemplates: () => Promise<void>;
+  addScriptTemplate: (tpl: Omit<ScriptTemplate, "createdAt" | "updatedAt">) => Promise<void>;
+  updateScriptTemplate: (id: string, updates: Partial<ScriptTemplate>) => Promise<void>;
+  deleteScriptTemplate: (id: string) => Promise<void>;
+
   // Host profiles
   loadHostProfiles: () => Promise<void>;
   addHostProfile: (profile: Omit<HostProfile, 'createdAt' | 'updatedAt'>) => Promise<void>;
@@ -394,6 +400,7 @@ export const useGlobalStore = create<StoreState>()(
       gitWorkspaces: [],
       webPlugins: [],
       userScripts: [],
+      scriptTemplates: [],
       hostProfiles: [],
       cursorAccounts: [],
       aiModels: [],
@@ -809,6 +816,33 @@ export const useGlobalStore = create<StoreState>()(
         );
         await storage.userScripts.save(scripts);
         set(() => ({ userScripts: scripts }));
+      }),
+
+      loadScriptTemplates: async () => withTable("script_templates", async () => {
+        const templates = await storage.scriptTemplates.load();
+        set(() => ({ scriptTemplates: templates }));
+      }),
+
+      addScriptTemplate: async (tpl) => withTable("script_templates", async () => {
+        const now = new Date().toISOString();
+        const next = [...get().scriptTemplates, { ...tpl, createdAt: now, updatedAt: now }];
+        await storage.scriptTemplates.save(next);
+        set(() => ({ scriptTemplates: next }));
+      }),
+
+      updateScriptTemplate: async (id, updates) => withTable("script_templates", async () => {
+        const now = new Date().toISOString();
+        const next = get().scriptTemplates.map((t) =>
+          t.id === id ? { ...t, ...updates, updatedAt: now } : t
+        );
+        await storage.scriptTemplates.save(next);
+        set(() => ({ scriptTemplates: next }));
+      }),
+
+      deleteScriptTemplate: async (id) => withTable("script_templates", async () => {
+        const next = get().scriptTemplates.filter((t) => t.id !== id);
+        await storage.scriptTemplates.save(next);
+        set(() => ({ scriptTemplates: next }));
       }),
 
       // Host Profiles
