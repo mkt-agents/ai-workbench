@@ -14,7 +14,7 @@ import {
   BookmarkPlus, GripVertical, LayoutGrid, List, FolderOpen, Inbox,
   Keyboard, Download, Upload, ChevronDown, ChevronRight, ArrowUpDown, Code,
   Copy, FileText, Zap, ClipboardCopy, Loader2, RefreshCw,
-  ArrowDownAZ, Clock, ToggleLeft, ToggleRight, MoreHorizontal, MousePointerClick,
+  ArrowDownAZ, Clock, ToggleLeft, ToggleRight, MoreHorizontal, MousePointerClick, Share2,
 } from "lucide-react";
 import DropdownMenu from "./DropdownMenu";
 
@@ -1032,6 +1032,83 @@ function PluginBrowser() {
     }
   };
 
+  /** 模板分享：导出为 JSON（单个或全部），收到的人可从「导入模板」合并进来 */
+  const handleTemplatesExport = async (tpl?: ScriptTemplate) => {
+    const list = tpl ? [tpl] : scriptTemplates;
+    if (list.length === 0) return;
+    try {
+      const data = {
+        version: 1,
+        kind: "ai-workbench-script-templates",
+        templates: list.map((item) => ({
+          name: item.name,
+          description: item.description,
+          matchPatterns: item.matchPatterns,
+          code: item.code,
+        })),
+      };
+      const fileName = tpl
+        ? `script-template-${tpl.name.replace(/[\\/:*?"<>|]/g, "_")}.json`
+        : "script-templates.json";
+      const path = await useGlobalStore.getState().invokeSaveTextFile(
+        JSON.stringify(data, null, 2),
+        fileName,
+        t("usExportTemplates")
+      );
+      showMsg("success", t("exportedTo", { path }));
+    } catch (e) {
+      const msg = String(e);
+      if (!msg.includes("取消")) showMsg("error", msg);
+    }
+  };
+
+  const handleTemplatesImport = async () => {
+    try {
+      const text = await useGlobalStore.getState().invokePickTextFile(t("usImportTemplates"));
+      const data = JSON.parse(text);
+      const list = data.templates || data;
+      if (!Array.isArray(list)) {
+        showMsg("error", t("importInvalid"));
+        return;
+      }
+      let imported = 0;
+      let skipped = 0;
+      for (const item of list) {
+        if (!item || !item.name || !item.code) continue;
+        const name = String(item.name);
+        const code = String(item.code);
+        // 同名同码视为同一模板，跳过避免重复卡片
+        if (scriptTemplates.some((tpl) => tpl.name === name && tpl.code === code)) {
+          skipped++;
+          continue;
+        }
+        let patterns: string[];
+        if (Array.isArray(item.matchPatterns) && item.matchPatterns.length > 0) {
+          patterns = item.matchPatterns.map(String);
+        } else {
+          patterns = ["<all_urls>"];
+        }
+        await addScriptTemplate({
+          id: newId("tpl-import"),
+          name,
+          description: String(item.description || ""),
+          matchPatterns: patterns,
+          code,
+        });
+        imported++;
+      }
+      if (imported + skipped === 0) {
+        showMsg("error", t("importInvalid"));
+      } else {
+        showMsg("success", t("usTemplatesImported", { count: imported, skip: skipped }));
+      }
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("取消")) return;
+      showMsg("error", t("importFailed"));
+    }
+  };
+
   const importScriptFromUrl = useCallback(async (url: string) => {
     setUsImporting(true);
     try {
@@ -2007,12 +2084,73 @@ function PluginBrowser() {
               <span className="plugin-count">{userScripts.length}</span>
             </div>
             <div className="plugin-header-actions">
+              {/* 渐进式收纳：宽度足够时平铺，不够时由 CSS 容器查询逐步藏进 ···（预设模板常驻） */}
               <button
                 className="btn btn-secondary btn-small"
                 onClick={() => setUsShowPresets(!usShowPresets)}
                 title={t("usPresets")}
               >
                 <FileText size={12} /> {t("usPresets")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="import"
+                onClick={() => void handleUsImport()}
+                title={t("import")}
+              >
+                <Upload size={12} /> {t("import")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="importUrl"
+                onClick={() => setUsImportUrlOpen(true)}
+                title={t("usImportUrl")}
+              >
+                <Link2 size={12} /> {t("usImportUrl")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="export"
+                disabled={userScripts.length === 0}
+                onClick={() => void handleUsExport()}
+                title={t("export")}
+              >
+                <Download size={12} /> {t("export")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="tplImport"
+                onClick={() => void handleTemplatesImport()}
+                title={t("usImportTemplates")}
+              >
+                <Upload size={12} /> {t("usImportTemplates")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="tplExport"
+                disabled={scriptTemplates.length === 0}
+                onClick={() => void handleTemplatesExport()}
+                title={t("usExportTemplates")}
+              >
+                <Share2 size={12} /> {t("usExportTemplates")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="enableAll"
+                disabled={userScripts.length === 0 || userScriptStats.enabled === userScriptStats.total}
+                onClick={() => void bulkToggleScripts(true)}
+                title={t("usEnableAll")}
+              >
+                <ToggleRight size={12} /> {t("usEnableAll")}
+              </button>
+              <button
+                className="btn btn-secondary btn-small header-flat-btn"
+                data-flat="disableAll"
+                disabled={userScriptStats.enabled === 0}
+                onClick={() => void bulkToggleScripts(false)}
+                title={t("usDisableAll")}
+              >
+                <ToggleLeft size={12} /> {t("usDisableAll")}
               </button>
               <DropdownMenu
                 label={t("more")}
@@ -2025,6 +2163,18 @@ function PluginBrowser() {
                     icon: <Download size={13} />,
                     disabled: userScripts.length === 0,
                     onClick: () => void handleUsExport(),
+                  },
+                  { divider: true },
+                  {
+                    label: t("usImportTemplates"),
+                    icon: <Upload size={13} />,
+                    onClick: () => void handleTemplatesImport(),
+                  },
+                  {
+                    label: t("usExportTemplates"),
+                    icon: <Share2 size={13} />,
+                    disabled: scriptTemplates.length === 0,
+                    onClick: () => void handleTemplatesExport(),
                   },
                   { divider: true },
                   {
@@ -2147,6 +2297,14 @@ function PluginBrowser() {
                       title={t("usUseTemplate")}
                     >
                       <div className="us-preset-actions">
+                        <button
+                          type="button"
+                          title={t("usShareTemplate")}
+                          aria-label={t("usShareTemplate")}
+                          onClick={(e) => { e.stopPropagation(); void handleTemplatesExport(tpl); }}
+                        >
+                          <Share2 size={12} />
+                        </button>
                         <button
                           type="button"
                           title={t("usEditTemplate")}

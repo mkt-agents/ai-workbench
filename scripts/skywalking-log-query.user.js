@@ -1,6 +1,6 @@
 // ==UserScript==
-// @version      7.0.19
-// @description  SkyWalking 日志查询插件 v7.0.19：液态玻璃日志检索、调用链分析与进程内资源争抢证据诊断，支持深色主题
+// @version      7.1.2
+// @description  SkyWalking 日志查询插件 v7.1.2：液态玻璃日志检索（浅色/深色双主题玻璃质感）、调用链分析与进程内资源争抢证据诊断
 // @grant        none
 // ==/UserScript==
 
@@ -477,11 +477,11 @@
     function injectStyle() {
         if (document.getElementById(SW_TS + '-style')) return;
         var css = [
-            '#' + SW_TS + '-wrap{position:fixed;inset:0;z-index:99998;display:flex;flex-direction:column;background:radial-gradient(1200px 560px at 10% -12%,rgba(255,59,48,0.05) 0%,transparent 60%),radial-gradient(1000px 520px at 92% -8%,rgba(0,122,255,0.045) 0%,transparent 58%),linear-gradient(180deg,#fbfbfd 0%,#f3f4f7 55%,#eaeaef 100%);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;color:#1d1d1f;-webkit-font-smoothing:antialiased}',
+            '#' + SW_TS + '-wrap{position:fixed;inset:0;z-index:99998;display:flex;flex-direction:column;background:radial-gradient(1200px 560px at 10% -12%,rgba(255,59,48,0.05) 0%,transparent 60%),radial-gradient(1000px 520px at 92% -8%,rgba(0,122,255,0.045) 0%,transparent 58%),linear-gradient(180deg,rgba(251,251,253,0.78) 0%,rgba(243,244,247,0.72) 55%,rgba(234,234,239,0.7) 100%);backdrop-filter:blur(26px) saturate(150%);-webkit-backdrop-filter:blur(26px) saturate(150%);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;color:#1d1d1f;-webkit-font-smoothing:antialiased}',
             '#' + SW_TS + '-wrap *{box-sizing:border-box}',
 
             // Header
-            '.' + SW_TS + '-header{background:linear-gradient(180deg,rgba(255,255,255,0.86) 0%,rgba(255,255,255,0.68) 100%);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border-bottom:1px solid rgba(0,0,0,0.055);padding:8px 16px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 0 rgba(255,255,255,0.7),0 8px 24px rgba(16,24,40,0.035);flex-shrink:0}',
+            '.' + SW_TS + '-header{background:linear-gradient(180deg,rgba(255,255,255,0.32) 0%,rgba(255,255,255,0.2) 100%);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border-bottom:1px solid rgba(0,0,0,0.045);padding:8px 16px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 0 rgba(255,255,255,0.7),0 8px 24px rgba(16,24,40,0.035);flex-shrink:0}',
             '.' + SW_TS + '-hl{display:flex;align-items:center;gap:12px}',
             '.' + SW_TS + '-logo{width:28px;height:28px;background:linear-gradient(135deg,#ff4b3d,#ff8a3d);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:700;box-shadow:0 1px 2px rgba(255,59,48,0.3),0 4px 12px rgba(255,59,48,0.22),inset 0 1px 0 rgba(255,255,255,0.35)}',
             '.' + SW_TS + '-title{font-size:15px;font-weight:600;letter-spacing:-0.2px}',
@@ -515,7 +515,7 @@
             '.' + SW_TS + '-close-all-btn:hover{background:rgba(255,59,48,0.12);border-color:rgba(255,59,48,0.34)}',
 
             // Form (compact, no folding)
-            '.' + SW_TS + '-qcard{background:linear-gradient(180deg,rgba(255,255,255,0.88) 0%,rgba(255,255,255,0.72) 100%);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border:1px solid rgba(0,0,0,0.055);border-radius:14px;padding:12px 16px;box-shadow:0 1px 2px rgba(16,24,40,0.035),0 14px 34px rgba(16,24,40,0.07),inset 0 1px 0 rgba(255,255,255,0.95);flex-shrink:0;container-type:inline-size;container-name:qform}',
+            '.' + SW_TS + '-qcard{background:linear-gradient(180deg,rgba(255,255,255,0.52) 0%,rgba(255,255,255,0.38) 100%);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border:1px solid rgba(255,255,255,0.55);border-radius:14px;padding:12px 16px;box-shadow:0 1px 2px rgba(16,24,40,0.035),0 14px 34px rgba(16,24,40,0.07),inset 0 1px 0 rgba(255,255,255,0.95);flex-shrink:0;container-type:inline-size;container-name:qform}',
             // 两行命名区域网格：行1 服务/包含/排除/级别，行2 Trace/时间范围/操作；
             // 列宽按内容比例分配，替代 space-between 造成的参差空隙
             '.' + SW_TS + '-frow{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.05)}',
@@ -588,13 +588,13 @@
             '.' + SW_TS + '-stats .warn{color:#c87800;font-weight:600}',
 
             // Log list (card-based)
-            '.' + SW_TS + '-list{flex:1;min-height:0;overflow:auto;background:linear-gradient(180deg,rgba(255,255,255,0.8) 0%,rgba(255,255,255,0.62) 100%);backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%);border:1px solid rgba(0,0,0,0.05);border-radius:16px;box-shadow:0 1px 2px rgba(16,24,40,0.03),0 18px 44px rgba(16,24,40,0.075),inset 0 1px 0 rgba(255,255,255,0.9);position:relative;padding:0px}',
+            '.' + SW_TS + '-list{flex:1;min-height:0;overflow:auto;background:linear-gradient(180deg,rgba(255,255,255,0.48) 0%,rgba(255,255,255,0.34) 100%);backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%);border:1px solid rgba(255,255,255,0.5);border-radius:16px;box-shadow:0 1px 2px rgba(16,24,40,0.03),0 18px 44px rgba(16,24,40,0.075),inset 0 1px 0 rgba(255,255,255,0.9);position:relative;padding:0px}',
             // Tab content 容器：每个 tab 独立 DOM，切换 tab 只切 display，不重渲染
             '.' + SW_TS + '-tab-content{display:block;min-height:100%}',
             // 时间标签：双击可填入查询
             '.' + SW_TS + '-item-time{font-size:12px;font-weight:500;color:#1d1d1f;font-variant-numeric:tabular-nums;flex-shrink:0;cursor:pointer;user-select:none}',
             '.' + SW_TS + '-item-time:hover{background:rgba(0,122,255,0.1);border-radius:4px}',
-            '.' + SW_TS + '-item{padding:10px 14px;background:linear-gradient(180deg,rgba(255,255,255,0.72) 0%,rgba(255,255,255,0.5) 100%);border:1px solid rgba(0,0,0,0.055);border-radius:11px;margin:6px;transition:background 0.15s,border-color 0.15s,box-shadow 0.15s;box-shadow:0 1px 1px rgba(16,24,40,0.025),inset 0 1px 0 rgba(255,255,255,0.85)}',
+            '.' + SW_TS + '-item{padding:10px 14px;background:linear-gradient(180deg,rgba(255,255,255,0.55) 0%,rgba(255,255,255,0.38) 100%);border:1px solid rgba(255,255,255,0.5);border-radius:11px;margin:6px;transition:background 0.15s,border-color 0.15s,box-shadow 0.15s;box-shadow:0 1px 1px rgba(16,24,40,0.025),inset 0 1px 0 rgba(255,255,255,0.85)}',
             // 按日志级别着色：WARN 淡黄 / ERROR 淡红 / DEBUG 淡紫（渐变 + 3px 左侧色条；hover 规则必须带上 box-shadow，否则等权重下被 .item:hover 抹掉）
             '.' + SW_TS + '-item.lv-bg-WARN{background:linear-gradient(180deg,rgba(255,204,0,0.16) 0%,rgba(255,204,0,0.06) 100%);border-color:rgba(230,170,0,0.3);box-shadow:inset 3px 0 0 rgba(240,170,0,0.85),0 1px 1px rgba(16,24,40,0.025),inset 0 1px 0 rgba(255,255,255,0.6)}',
             '.' + SW_TS + '-item.lv-bg-WARN:hover{background:linear-gradient(180deg,rgba(255,204,0,0.24) 0%,rgba(255,204,0,0.1) 100%);border-color:rgba(230,170,0,0.45);box-shadow:inset 3px 0 0 rgba(240,170,0,0.9),0 4px 12px rgba(16,24,40,0.05),inset 0 1px 0 rgba(255,255,255,0.6)}',
@@ -653,7 +653,7 @@
             '.' + SW_TS + '-diag-trigger:hover{transform:translateY(-1px)}',
             '.' + SW_TS + '-diag-trigger:disabled{opacity:.62;cursor:wait;transform:none}',
             // 淡色幽灵按钮：与快捷时间胶囊同一层级，透明底 + 发丝描边，红色只落在文字上
-            '.' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-soft{height:24px;padding:0 9px;border-radius:6px;font-size:11.5px;font-weight:600;letter-spacing:0.2px;white-space:nowrap;color:#c0392b;background:transparent;border:1px solid rgba(255,59,48,0.22);box-shadow:none;flex:0 0 auto;align-self:center}',
+            '.' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-soft{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;border-radius:6px;font-size:11.5px;font-weight:600;letter-spacing:0.2px;white-space:nowrap;color:#c0392b;background:transparent;border:1px solid rgba(255,59,48,0.22);box-shadow:none;flex:0 0 auto;align-self:center}',
             '.' + SW_TS + '-diag-trigger.' + SW_TS + '-diag-soft:hover{background:rgba(255,59,48,0.09);border-color:rgba(255,59,48,0.38);color:#d70015;box-shadow:none;transform:none}',
             '.' + SW_TS + '-diag-info-btn{width:24px;height:24px;border-radius:50%;border:1px solid rgba(0,0,0,.12);background:transparent;color:#9a9aa0;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;align-self:center;padding:0;transition:all .15s}',
             '.' + SW_TS + '-diag-info-btn:hover{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.2);color:#1d1d1f;transform:none}',
@@ -751,8 +751,8 @@
             // ==================== Dark theme overrides（sw-dark 挂在面板与详情弹窗上） ====================
             // 深色色板 token：两个根（面板 / 详情弹窗）都要定义，子规则统一引用
             '#' + SW_TS + '-wrap.sw-dark,#' + SW_TS + '-modal.sw-dark{color-scheme:dark;--d-t0:#f2f3f7;--d-t1:#c9ccd4;--d-t2:#989ea9;--d-t3:#6a6f7b;--d-line:rgba(255,255,255,0.08);--d-line-2:rgba(255,255,255,0.14);--d-glass:#23262e;--d-el1:#22252d;--d-el2:#1d1f27;--d-el3:#181a21;--d-hi:0 0 0 0 transparent;--d-red:#ff4830;--d-amber:#ffab33;--d-blue:#57a8ff;--d-violet:#b98af0;--d-green:#5fd97a;--d-primary:linear-gradient(135deg,#e8452d 0%,#b8291b 100%);--d-primary-hover:linear-gradient(135deg,#f7573d 0%,#c9301f 100%)}',
-            '#' + SW_TS + '-wrap.sw-dark{background:radial-gradient(1100px 520px at 12% -10%,rgba(255,72,48,0.07) 0%,transparent 62%),radial-gradient(900px 460px at 88% -6%,rgba(255,120,60,0.04) 0%,transparent 58%),linear-gradient(180deg,#1a1c23 0%,#0f1116 100%);color:var(--d-t0)}',
-            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-header{background:rgba(31,34,42,0.86);border-bottom-color:rgba(255,255,255,0.07);box-shadow:0 1px 0 rgba(0,0,0,0.5),0 10px 28px rgba(0,0,0,0.28)}',
+            '#' + SW_TS + '-wrap.sw-dark{background:radial-gradient(1100px 520px at 12% -10%,rgba(255,72,48,0.07) 0%,transparent 62%),radial-gradient(900px 460px at 88% -6%,rgba(255,120,60,0.04) 0%,transparent 58%),linear-gradient(180deg,rgba(26,28,35,0.8) 0%,rgba(15,17,22,0.84) 100%);backdrop-filter:blur(26px) saturate(140%);-webkit-backdrop-filter:blur(26px) saturate(140%);color:var(--d-t0)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-header{background:rgba(31,34,42,0.5);backdrop-filter:blur(32px) saturate(150%);-webkit-backdrop-filter:blur(32px) saturate(150%);border-bottom-color:rgba(255,255,255,0.07);box-shadow:0 1px 0 rgba(255,255,255,0.06),0 10px 28px rgba(0,0,0,0.28)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-logo{background:linear-gradient(135deg,#e8452d,#b8291b);box-shadow:0 2px 10px rgba(232,69,45,0.3)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-title span{color:var(--d-t2)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-exit,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-theme-btn{background:#22252d;border-color:var(--d-line);color:var(--d-t1);box-shadow:none}',
@@ -769,7 +769,7 @@
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-add-btn:hover{background:rgba(255,255,255,0.08);color:var(--d-t0);border-color:rgba(255,72,48,0.45)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-close-all-btn{background:rgba(255,72,48,0.13);border-color:rgba(255,72,48,0.32);color:#ff8b80}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-close-all-btn:hover{background:rgba(255,72,48,0.24)}',
-            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qcard{background:var(--d-el2);border-color:rgba(255,255,255,0.07);box-shadow:0 14px 36px rgba(0,0,0,0.42)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qcard{background:linear-gradient(180deg,rgba(34,37,46,0.55) 0%,rgba(29,31,39,0.45) 100%);backdrop-filter:blur(34px) saturate(150%);-webkit-backdrop-filter:blur(34px) saturate(150%);border-color:rgba(255,255,255,0.09);box-shadow:0 14px 36px rgba(0,0,0,0.42),inset 0 1px 0 rgba(255,255,255,0.08)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-frow{border-top-color:rgba(255,255,255,0.075)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg label,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-qchips-label{color:var(--d-t2)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg input,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-fg select,#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-ikw-dd-btn,#' + SW_TS + '-modal.sw-dark .' + SW_TS + '-modal-search{background:rgba(8,10,14,0.42);border-color:var(--d-line);color:var(--d-t0);box-shadow:inset 0 1px 2px rgba(0,0,0,0.32)}',
@@ -815,8 +815,8 @@
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-stats b{color:var(--d-t0)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-stats .ok{color:var(--d-green)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-stats .warn{color:var(--d-amber)}',
-            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-list{background:var(--d-el3);border-color:rgba(255,255,255,0.06);box-shadow:0 18px 44px rgba(0,0,0,0.45)}',
-            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-item{background:var(--d-el1);border-color:rgba(255,255,255,0.06);box-shadow:none}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-list{background:rgba(24,26,33,0.42);backdrop-filter:blur(28px) saturate(140%);-webkit-backdrop-filter:blur(28px) saturate(140%);border-color:rgba(255,255,255,0.07);box-shadow:0 18px 44px rgba(0,0,0,0.45),inset 0 1px 0 rgba(255,255,255,0.07)}',
+            '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-item{background:rgba(34,37,45,0.55);border-color:rgba(255,255,255,0.07);box-shadow:none}',
             // 级别底色必须一起覆盖：深色基础 item 规则带 id 权重，会压过浅色的 .item.lv-bg-* 类规则
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-item.lv-bg-WARN{background:linear-gradient(rgba(255,204,0,0.085),rgba(255,204,0,0.085)),var(--d-el1);border-color:rgba(255,204,0,0.24);box-shadow:inset 3px 0 0 rgba(255,204,0,0.75)}',
             '#' + SW_TS + '-wrap.sw-dark .' + SW_TS + '-item.lv-bg-WARN:hover{background:linear-gradient(rgba(255,204,0,0.14),rgba(255,204,0,0.14)),#2b2f39;border-color:rgba(255,204,0,0.38);box-shadow:inset 3px 0 0 rgba(255,204,0,0.85),0 6px 18px rgba(0,0,0,0.36)}',
@@ -1019,12 +1019,14 @@
         document.body.appendChild(modal);
         return modal;
     }
+    // 诊断按钮闪电图标（stroke 跟随文字色，浅色/深色主题自动适配）
+    var DIAG_ZAP_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
     function setDiagnosisButtonLoading(loading) {
         $$('.' + SW_TS + '-diag-trigger').forEach(function (button) {
             button.disabled = loading;
             button.innerHTML = loading
                 ? '<span style="animation:' + SW_TS + '-spin .8s linear infinite;display:inline-block">&#9696;</span> 正在穿透…'
-                : '诊断雪崩';
+                : DIAG_ZAP_ICON + '<span>诊断雪崩</span>';
         });
     }
     async function showDiagnosisContextPicker(context) {
@@ -1208,7 +1210,7 @@
             '<div class="' + SW_TS + '-header">' +
                 '<div class="' + SW_TS + '-hl">' +
                     '<div class="' + SW_TS + '-logo">S</div>' +
-                    '<div class="' + SW_TS + '-title">SkyWalking 日志增强 <span>v7.0.19 · powered by jingzhou.zhao</span></div>' +
+                    '<div class="' + SW_TS + '-title">SkyWalking 日志增强 <span>v7.1.2 · powered by jingzhou.zhao</span></div>' +
                 '</div>' +
                 '<div class="' + SW_TS + '-hr">' +
                     '<button class="' + SW_TS + '-theme-btn" id="' + SW_TS + '-theme-btn" title="切换深色/浅色主题"></button>' +
@@ -1618,7 +1620,7 @@
                         return '<span class="' + SW_TS + '-qchip" data-min="' + q.m + '">' + q.t + '</span>';
                     }).join('') +
                 '</span>' +
-                '<button class="' + SW_TS + '-diag-trigger ' + SW_TS + '-diag-soft" data-act="diagnose" type="button" title="对当前已加载日志做链路穿透，定位雪崩根因">诊断雪崩</button>' +
+                '<button class="' + SW_TS + '-diag-trigger ' + SW_TS + '-diag-soft" data-act="diagnose" type="button" title="对当前已加载日志做链路穿透，定位雪崩根因">' + DIAG_ZAP_ICON + '<span>诊断雪崩</span></button>' +
                 '<button class="' + SW_TS + '-diag-info-btn" data-act="diag-info" type="button" title="查看诊断算法说明" aria-label="查看诊断算法说明">&#9432;</button>' +
             '</div>';
     }

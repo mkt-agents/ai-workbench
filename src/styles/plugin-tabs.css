@@ -20,6 +20,43 @@
   padding-inline: 6px;
 }
 
+/* ---------- 脚本页头部操作：按容器宽度渐进式平铺 / 收进 ··· ----------
+   .plugin-header 自身是 inline-size 容器；header-flat-btn 默认隐藏，
+   宽度足够时逐级放出，··· 按钮在全部平铺后隐藏（菜单项始终是超集） */
+.plugin-header {
+  container-type: inline-size;
+}
+
+.header-flat-btn {
+  display: none;
+}
+
+@container (min-width: 720px) {
+  .plugin-header .header-flat-btn[data-flat="import"],
+  .plugin-header .header-flat-btn[data-flat="export"] {
+    display: inline-flex;
+  }
+}
+
+@container (min-width: 900px) {
+  .plugin-header .header-flat-btn[data-flat="importUrl"],
+  .plugin-header .header-flat-btn[data-flat="tplImport"],
+  .plugin-header .header-flat-btn[data-flat="tplExport"] {
+    display: inline-flex;
+  }
+}
+
+@container (min-width: 1080px) {
+  .plugin-header .header-flat-btn[data-flat="enableAll"],
+  .plugin-header .header-flat-btn[data-flat="disableAll"] {
+    display: inline-flex;
+  }
+
+  .plugin-header .plugin-more-btn {
+    display: none;
+  }
+}
+
 .plugin-tab {
   display: inline-flex;
   align-items: center;
