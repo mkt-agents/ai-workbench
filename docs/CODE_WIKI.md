@@ -124,7 +124,7 @@ ai-workbench/
 │   │   ├── VersionSwitcher.tsx   # Node.js / JDK / Maven / Python 版本切换
 │   │   ├── CloudflaredManager.tsx# 内网穿透（临时 / 命名隧道 + 日志流）
 │   │   ├── HostsManager.tsx      # 系统 Hosts 读写 + 备份恢复
-│   │   ├── PluginBrowser.tsx     # 网页工具（书签 + 用户脚本，弹窗浏览器打开 http(s)）
+│   │   ├── PluginBrowser.tsx     # 网页工具（书签 + 用户脚本；脚本页含内置/自定义模板管理与分享，头部操作按容器宽度渐进收纳）
 │   │   ├── WorkBuddyManager.tsx  # WorkBuddy 账号池 + 签到（侧栏已下线，恢复见 AGENTS.md）
 │   │   ├── workbuddy/            # WorkBuddy 子组件（扫码/签到等；额度页仍复用部分）
 │   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
@@ -250,7 +250,8 @@ ai-workbench/
 │   └── CODE_WIKI.md               # 本文件
 │
 ├── public/                         # 静态资源（含 ai-providers/ 模型配置提供商品牌 SVG/PNG）
-├── scripts/                        # 工具脚本（含 check-css-tokens.mjs → npm run check:css）
+├── scripts/                        # 工具脚本（check-css-tokens.mjs → npm run check:css；
+│   │                               #   skywalking-log-query.user.js = 脚本页 SkyWalking 预设模板唯一来源，?raw 注入）
 ├── docs/screenshot.png
 ├── README.md
 ├── LICENSE
@@ -463,7 +464,7 @@ storage.<domain>.save()  →  invoke('db_save', { table, rows })  →  void
 **Table 类型**:
 ```typescript
 type DbTable = 'git_accounts' | 'git_repo_configs' | 'git_host_configs'
-  | 'host_profiles' | 'web_plugins' | 'user_scripts' | 'plugin_states'
+  | 'host_profiles' | 'web_plugins' | 'user_scripts' | 'script_templates' | 'plugin_states'
   | 'recent_projects' | 'git_workspaces' | 'cursor_accounts' | 'ai_models'
   | 'cloudflared_profiles' | 'snippets' | 'ai_hub_sessions'
   | 'json_tool_history' | 'quick_app_launchers'
@@ -594,7 +595,7 @@ openGroups: Set<string>       // 分组展开状态
 | `CloudflaredManager` | 内网穿透 | 临时隧道 / 命名隧道 / 日志流 / config.yml 编辑 |
 | `HostsManager` | Hosts 管理 | 读写 + 原子替换 + 备份恢复 |
 | `VersionSwitcher` | 运行时切换 | Node.js / JDK / Maven / Python PATH 写入注册表 |
-| `PluginBrowser` | 网页工具 | 书签 + 用户脚本两个页签；弹窗浏览器打开 http(s)（脚本按 `@match` 注入） |
+| `PluginBrowser` | 网页工具 | 书签 + 用户脚本两个页签；弹窗浏览器打开 http(s)（脚本按 `@match` 注入）；脚本页含内置/自定义模板（增改删 + 存为模板 + JSON 分享导入导出），头部操作按容器宽度渐进收纳（`···` 兜底，预设模板常驻） |
 | `Settings` | 设置 | 主题 / 语言 / 自启 / 快捷键 / 数据导出导入 |
 
 ### 7.3 弹窗组件
@@ -949,6 +950,7 @@ cancel_request(request_id)    // 前端调用取消
 | web_plugin_history | INTEGER AUTO | 插件打开历史（限 100） |
 | plugin_states | TEXT (plugin_id) | 插件启用/配置 |
 | user_scripts | TEXT (id) | 用户脚本：`match_patterns`(JSON) + `match_pattern`(旧版兼容) + code + enabled |
+| script_templates | TEXT (id) | 脚本自定义模板（网页工具-脚本「我的模板」）：name + description + `match_patterns`(JSON) + code；支持分享（导出 JSON / 导入合并，按名称+代码判重） |
 
 ### 9.3 Schema 迁移
 
