@@ -879,3 +879,43 @@ P0 的 7 项里，有 4 项（P0-1/2/4/5）不是"新增能力"，而是**当前
 | 前端调用点 | `useAskStream.ts:574`（agent_run）、`:757`（agent_decide）、`:614`（stop）、`:174`（busyRef）、`:292`（作废缓存） |
 | 后端注册 | `lib.rs:435,583-599` |
 | 依赖现状 | `Cargo.toml:26,28,62-64`（无 `ignore`/`grep` crate） |
+
+---
+
+## 已落地（2026-10-25）：从代码代理到通用 harness
+
+> 动机与分期见本轮方案，这里只记「改了什么、边界在哪」。
+
+### 1. 内容块消息协议
+- 新增 `agent_protocol.rs`（text / image / tool_use / tool_result），前端镜像 `src/components/aiHub/harness.ts`
+- `agent_run` 新增 `messages` 入参（优先），旧 `history + user` 仍可用（包成 Text 块走同一路径）
+- 6 个协议单测覆盖两种 provider 形状、图片、错误标记与空消息
+
+### 2. 工具注册表
+- 新增 `agent_tools.rs`：35 个工具一条声明（分组 / 闸门类别 / 并发预取 / 是否算动作步）
+- `agent_policy` 的 LOOK / CHANGE / COMPUTER 名单与 `agent.rs` 的 `round_is_action`、`is_readonly_tool` 全部改为派生
+- 守门测试：注册表名字必须与 `tool_specs()` 完全一致
+
+### 3. 上下文管道与项目配置
+- `harness_config.rs`：`.ai-workbench/`（context.md / memory.md / skills/*.md / hooks.json）与全局目录，项目优先、全局兜底
+- `agent_context.rs`：项目文档（没有 `.ai-workbench` 时回落 AGENTS.md / CLAUDE.md）、记忆、技能索引、`/skill:name` 正文、`@` 引用；总量 24k 字符
+- 命令 `harness_config_load`（设置页展示来源）与 `harness_list_files`（`@` 补全）
+
+### 4. 输入语法层
+- `harnessCommands.ts` + `CommandPalette.tsx` + `useHarnessComposer.ts`：`/` 命令面板（内置 `/clear`、`/plan` + 技能 + 片段），`@` 文件补全（250ms 防抖、最多 8 条）
+- `ModePicker.tsx`：六模式胶囊；后端 `mode_allows` 按模式收窄工具（读写文件与计划始终保留）
+
+### 5. 技能 / hooks / 记忆
+- 技能 frontmatter：`name` / `description` / `when_to_use` / `allowed-tools` / `mode`
+- hooks：PreToolUse 非零退出即拒绝、PostToolUse 输出追加到结果、Stop 异步执行；只读权限一律不跑
+- `remember` 工具 + `agent_memory.rs`：memory.md 追加式写入，32KB / 200 条上限
+
+### 6. 非代码工具
+- `read_document`（docx / xlsx / txt / md / csv）、`read_table`、`table_query`（内存 SQLite，单条 SELECT，最多 500 行）
+- 依赖：`zip 0.6` + `calamine 0.26`（zip 版本必须跟随 calamine，否则编译期冲突）
+
+### 尚未做（明确留白）
+- PDF 文本层（需 lopdf；扫描件不做 OCR）
+- `web_fetch` 白名单分级（off / allowlist / open）
+- 技能 `allowed-tools` 与模式工具集求交集（目前只注入正文）
+- 子代理可写与并行

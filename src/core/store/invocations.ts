@@ -15,6 +15,41 @@ import type {
   TestReportBundle,
 } from '../../components/testReportTypes';
 
+/** 一份加载到的项目/全局资料（`harness_config_load`）。 */
+export interface HarnessText {
+  path: string;
+  scope: string;
+  text: string;
+  truncated: boolean;
+}
+
+export interface HarnessSkillView {
+  name: string;
+  description: string;
+  whenToUse?: string;
+  allowedTools: string[];
+  mode: string;
+  path: string;
+  scope: string;
+}
+
+export interface HarnessHookView {
+  event: string;
+  matcher: string;
+  command: string;
+  timeoutMs: number;
+  scope: string;
+}
+
+export interface HarnessConfigView {
+  projectDir?: string;
+  globalDir?: string;
+  context?: HarnessText;
+  memory?: HarnessText;
+  skills: HarnessSkillView[];
+  hooks: HarnessHookView[];
+}
+
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
   invokeGenerateText: (params: { config: AIModelConfig; system: string; user: string }) => Promise<string>;
@@ -91,6 +126,10 @@ export interface Invocations {
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
   /** Current branch name; `HEAD` means detached / no commits yet. */
   invokeGitCurrentBranch: (path: string) => Promise<string>;
+  /** harness 配置：项目 `.ai-workbench/` 与全局目录合并后的结果。 */
+  invokeHarnessConfig: (path: string) => Promise<HarnessConfigView>;
+  /** `@` 补全：工作区内匹配的文件（相对路径，最多 200 条）。 */
+  invokeHarnessListFiles: (path: string, query: string) => Promise<string[]>;
   /** Read-only: which commits a push would take along, and the files each one touched. */
   invokeGitPendingCommits: (path: string) => Promise<GitPendingCommits>;
   /** `contextLines` / `ignoreWhitespace` are view options: such a diff can't be staged by hunk. */
@@ -409,6 +448,10 @@ export const invocations: Invocations = {
     tauriInvoke<GitBranchList>('git_list_branches', { path }),
   invokeGitCurrentBranch: (path: string) =>
     tauriInvoke<string>('git_current_branch', { path }),
+  invokeHarnessConfig: (path: string) =>
+    tauriInvoke<HarnessConfigView>('harness_config_load', { path }),
+  invokeHarnessListFiles: (path: string, query: string) =>
+    tauriInvoke<string[]>('harness_list_files', { path, query }),
   invokeGitPendingCommits: (path: string) =>
     tauriInvoke<GitPendingCommits>('git_pending_commits', { path }),
   invokeGitDiff: (path, filePath, staged, opts) =>

@@ -4,6 +4,7 @@ import { Check, ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X }
 import { DAILY_STYLES } from "./dailyReport";
 import type { OpenSuggestion } from "./localActions";
 import PermissionPicker from "./PermissionPicker";
+import CommandPalette from "./CommandPalette";
 import type { AskPanelProps } from "./AskPanel";
 
 type Props = Pick<
@@ -16,6 +17,7 @@ type Props = Pick<
   | "permissionMenuOpen" | "onTogglePermissionMenu"
   | "dailyStyle" | "onDailyStyle" | "dailyMenuOpen" | "onToggleDailyMenu"
   | "openList" | "onRunOpen" | "onStop"
+  | "palette" | "modeControl"
 >;
 
 const INPUT_MAX_HEIGHT = 160;
@@ -69,7 +71,10 @@ export default function AskComposer(props: Props) {
     permission, onPermission, diffConfirm, onDiffConfirm, permissionMenuOpen, onTogglePermissionMenu,
     dailyStyle, onDailyStyle, dailyMenuOpen, onToggleDailyMenu,
     openList, onRunOpen, onStop,
+    palette, modeControl,
   } = props;
+  /** `/` 命令与 `@` 文件补全的浮层：有候选时它优先吃掉 ↑↓ 与回车。 */
+  const paletteItems = palette?.items ?? null;
   const writes = permission !== "read";
   const [openHi, setOpenHi] = useState(0);
   const openListRef = useRef<HTMLDivElement | null>(null);
@@ -114,6 +119,14 @@ export default function AskComposer(props: Props) {
           listRef={openListRef}
         />
       )}
+      {palette && paletteItems && (
+        <CommandPalette
+          items={paletteItems}
+          active={palette.active}
+          onHover={palette.onHover}
+          onPick={palette.onPick}
+        />
+      )}
       {suggestion && !busy && !input.trim() && onSuggestionPick && (
         <div className="qa-suggest-row">
           <button
@@ -155,6 +168,20 @@ export default function AskComposer(props: Props) {
           // IME in the middle of composing: Enter / ↑↓ belong to the candidate window,
           // never to send or list navigation (a pinyin commit would fire a whole agent run).
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          // `/` 命令与 `@` 文件补全排在所有列表之前：它盖在输入框上方，
+          // ↑↓ / 回车必须归它，否则会误触片段列表或直接发送。
+          if (palette && paletteItems && paletteItems.length > 0) {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              palette.onMove(e.key === "ArrowDown" ? 1 : -1);
+              return;
+            }
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              palette.onPickActive();
+              return;
+            }
+          }
           // ↑↓ in the composer drive the open snippet list — it covers the row that
           // ↑ recalls the last question and the "打开 …" list.
           if (snippetNav && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -281,6 +308,7 @@ export default function AskComposer(props: Props) {
         </div>
         <div className="qa-compose-end">
           {profileControl}
+          {modeControl}
           <PermissionPicker
             permission={permission}
             onPermission={onPermission}

@@ -8,16 +8,24 @@ pub mod cursor;
 mod ai_commands;
 mod agent;
 mod agent_budget;
+mod agent_context;
+mod agent_docs;
+mod agent_table;
 mod agent_computer;
 mod agent_freshness;
+mod agent_hooks;
+mod agent_memory;
 mod agent_fs;
 mod agent_policy;
 mod agent_proc;
+mod agent_protocol;
 mod agent_stream;
 mod agent_symbols;
+mod agent_tools;
 mod agent_undo;
 mod agent_web;
 mod mcp;
+mod harness_config;
 mod agent_sys;
 mod secret_protect;
 mod dsh_commands;
@@ -600,6 +608,8 @@ pub fn run() {
             ai_commands::generate_text_stream,
             agent::agent_run,
             agent::agent_decide,
+            harness_config::harness_config_load,
+            harness_config::harness_list_files,
             agent_freshness::workspace_fingerprint,
             agent_undo::agent_undo,
             agent_undo::agent_undo_files,

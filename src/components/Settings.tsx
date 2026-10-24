@@ -5,6 +5,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
 import type { AppSettings, AppTheme } from "../core/types";
+import type { HarnessConfigView } from "../core/store/invocations";
 import {
   APP_RELEASES_URL,
   checkForUpdatesMultiSource as checkForUpdates,
@@ -296,6 +297,27 @@ function Settings({ onNoticeUpdate }: Props = {}) {
 
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
+  // 项目 harness 配置（`.ai-workbench/` 与全局目录）：只读展示来源、技能与 hooks 数量
+  const invokeHarnessConfig = useGlobalStore((s) => s.invokeHarnessConfig);
+  const [harnessConfig, setHarnessConfig] = useState<HarnessConfigView | null>(null);
+  const harnessRoot = settings.currentGitRepo?.trim() || "";
+  useEffect(() => {
+    if (!harnessRoot) {
+      setHarnessConfig(null);
+      return;
+    }
+    let alive = true;
+    void invokeHarnessConfig(harnessRoot)
+      .then((config) => {
+        if (alive) setHarnessConfig(config);
+      })
+      .catch(() => {
+        if (alive) setHarnessConfig(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [harnessRoot, invokeHarnessConfig]);
   // 桌宠三项都可能缺省（旧版只写 localStorage 的 qa-bubble-pet），统一按归一化结果渲染。
   const petCfg = useMemo(
     () =>
@@ -965,6 +987,27 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                   </label>
                 </div>
                 <p className="setting-hint">{t("aiHub.subagentsHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.harnessConfig")}</span>
+                  <span className="setting-value">
+                    {harnessConfig
+                      ? t("aiHub.harnessCounts", {
+                          skills: harnessConfig.skills.length,
+                          hooks: harnessConfig.hooks.length,
+                        })
+                      : "—"}
+                  </span>
+                </div>
+                <p className="setting-hint">
+                  {harnessConfig
+                    ? t("aiHub.harnessSources", {
+                        project: harnessConfig.projectDir || "—",
+                        global: harnessConfig.globalDir || "—",
+                      })
+                    : t("aiHub.harnessHint")}
+                </p>
               </div>
             </section>
             <section className="hub-group" hidden={hubGroup !== "budget"}>

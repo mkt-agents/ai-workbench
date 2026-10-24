@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use crate::agent_fs::{arg_str, Protected, Scope};
 use crate::agent_policy::{
     action_kind, deny_reason, filter_specs, offered_tools, parse_review_verdict, policy_text, tool_gate,
-    Gate, Permission, Reach, COMPUTER_TOOLS, REVIEW_SYSTEM,
+    Gate, Permission, Reach, REVIEW_SYSTEM,
 };
 use crate::agent_stream::{
     chunk_cache_hit, chunk_usage, delta_content, retry_plan, AnthropicStream, SseLines, ThinkFilter,
@@ -76,6 +76,17 @@ pub struct AgentRunRequest {
     pub services: Vec<String>,
     #[serde(default)]
     pub history: Vec<ChatTurn>,
+    /// 内容块历史（新协议，见 `agent_protocol`）。非空时优先于 `history` + `user`，
+    /// 让工具调用在历史里保留成可复用的 `tool_use` / `tool_result` 块。
+    #[serde(default)]
+    pub messages: Vec<crate::agent_protocol::Message>,
+    /// 用户在输入框用 `@` 引用的文件（相对工作区或绝对路径，越界会被忽略）。
+    #[serde(default)]
+    pub refs: Vec<String>,
+    /// 任务模式：`chat` / `code` / `doc` / `data` / `research` / `ops`。
+    /// 空 = 按 `code` 处理（老前端不传时行为不变）。
+    #[serde(default)]
+    pub mode: String,
     #[serde(default)]
     pub apps: Vec<AgentAppShortcut>,
     /// `read` / `workspace` / `review` / `full`, see `agent_policy::Permission`.
@@ -247,6 +258,18 @@ pub(crate) fn tool_specs() -> Value {
               } }),
               &["steps"]
           ) },
+        { "name": "read_document",
+          "description": "Read a document as plain text: docx (paragraph text), xlsx/xls (first sheet as TSV), or any text file (md/txt/csv/json). Layout is not reproduced. Files over 10MB are refused.",
+          "parameters": obj(json!({ "path": s("File path"), "limit": n("Max characters (default 12000, up to 60000)") }), &["path"]) },
+        { "name": "read_table",
+          "description": "Load a CSV/TSV/XLSX and show its columns plus the first rows. For filtering or aggregation use table_query instead of reading thousands of rows.",
+          "parameters": obj(json!({ "path": s("Table file"), "rows": n("Rows to preview (default 30, up to 200)") }), &["path"]) },
+        { "name": "table_query",
+          "description": "Run one read-only SELECT over a CSV/XLSX. The table is exposed as `t`, with the header row as column names. One statement only, no writes, at most 500 rows returned — aggregate instead of dumping rows.",
+          "parameters": obj(json!({ "path": s("Table file"), "sql": s("SELECT … FROM t") }), &["path", "sql"]) },
+        { "name": "remember",
+          "description": "Save one durable fact to project memory (.ai-workbench/memory.md): a convention, a preference, a gotcha that will still matter next week. Not for temporary state — the write costs the user a confirmation.",
+          "parameters": obj(json!({ "text": s("One sentence worth remembering"), "scope": s("project (default) or global") }), &["text"]) },
         { "name": "read_file",
           "description": "Read a text file with line numbers, in pages. Big files: read again with offset to continue.",
           "parameters": obj(json!({ "path": s("Relative to the repo, or absolute"), "offset": n("First line, 1-based (default 1)"), "limit": n("Lines to read (default 400)") }), &["path"]) },
@@ -1078,14 +1101,25 @@ fn parse_anthropic(body: &Value) -> Result<ModelTurn, String> {
     })
 }
 
+/// 回合结束时的 Stop hooks：异步跑、失败不影响答案（没有消费者读它的输出）。
+/// 只读权限不跑——hooks 等于执行用户脚本。
+fn run_stop_hooks(hooks: &[crate::harness_config::HookEntry], scope: &Scope, permission: Permission) {
+    if permission == Permission::Read {
+        return;
+    }
+    let cwd = scope.root.clone().unwrap_or_else(|| scope.base.clone());
+    for hook in hooks.iter().filter(|h| h.event == "stop") {
+        let hook = hook.clone();
+        let cwd = cwd.clone();
+        tokio::spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, "stop")).await;
+        });
+    }
+}
+
 fn round_is_action(names: &[String]) -> bool {
-    names.iter().any(|name| {
-        !matches!(
-            name.as_str(),
-            "read_file" | "list_dir" | "grep" | "find_files" | "symbols" | "process_output" | "list_processes"
-                | "find_port" | "screenshot" | "wait" | "update_plan" | "task"
-        )
-    })
+    // 「算不算动作步」由 `agent_tools::TOOLS` 声明，别在这里再抄一份名字表。
+    names.iter().any(|name| crate::agent_tools::counts_as_action(name))
 }
 
 /// One-line label for the step log and approval card.
@@ -1235,6 +1269,8 @@ struct ToolCtx<'a> {
     client: &'a reqwest::Client,
     /// 本轮可用的 MCP 服务与它们的工具（工具名 → 服务/工具是多对一查找，不靠拆字符串）。
     mcp: &'a [(crate::mcp::McpServerSpec, Vec<crate::mcp::McpTool>)],
+    /// 项目 hooks（`.ai-workbench/hooks.json`）；只读权限下不执行。
+    hooks: &'a [crate::harness_config::HookEntry],
     /// 只读调用并发上限（设置项「并发读取」，关掉 = 1，逐个跑）。
     max_parallel: usize,
     /// 429 / 5xx 的重试次数（设置项「自动重试」，关掉 = 0）。
@@ -1524,15 +1560,67 @@ async fn execute_tool(
     args: &Value,
 ) -> Result<ToolOutput, String> {
     use crate::{agent_computer as pc, agent_fs as fs, agent_proc as proc, agent_sys as sys};
+    // 项目 hooks：只读权限不跑（hooks 等于执行任意用户脚本）。
+    // PreToolUse 非零退出 = 拒绝这次调用，把 hook 的输出回灌给模型。
+    if permission != Permission::Read && !ctx.hooks.is_empty() {
+        let hook_cwd = ctx.scope.root.clone().unwrap_or_else(|| ctx.scope.base.clone());
+        let payload = format!("{name} {}", args);
+        for hook in ctx
+            .hooks
+            .iter()
+            .filter(|h| h.event == "preToolUse" && crate::agent_hooks::matches(&h.matcher, name))
+        {
+            let hook = hook.clone();
+            let cwd = hook_cwd.clone();
+            let payload = payload.clone();
+            let outcome = tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, &payload))
+                .await
+                .map_err(|e| format!("hook 线程失败：{e}"))?;
+            if !outcome.ok {
+                return Err(format!("hook 拒绝执行 {name}：{}", outcome.output));
+            }
+        }
+    }
     let needs_files = matches!(
         name,
         "read_file" | "list_dir" | "find_files" | "grep" | "write_file" | "edit_file" | "delete_path" | "move_path"
-            | "run_command" | "start_process"
+            | "run_command" | "start_process" | "read_document" | "read_table" | "table_query"
     );
     if needs_files && !ctx.scope.has_files() {
         return Err("没有选择工作区，不能读写文件或执行命令。".into());
     }
     let out: String = match name {
+        // 长期记忆：写项目或全局的 memory.md（闸门是 Change，编辑档先问一次）
+        "remember" => {
+            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("project");
+            let path = crate::agent_memory::append(ctx.scope.root.as_deref(), text, scope)?;
+            format!("已记住（{}）：{}", path, text.trim())
+        }
+        // 文档 / 表格：非代码任务的主力，只读、可并发
+        "read_document" => {
+            let path = ctx
+                .scope
+                .resolve(args.get("path").and_then(|v| v.as_str()).unwrap_or(""))?;
+            let cap = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(12_000).min(60_000) as usize;
+            crate::agent_docs::read_document(&path, cap)?
+        }
+        "read_table" => {
+            let path = ctx
+                .scope
+                .resolve(args.get("path").and_then(|v| v.as_str()).unwrap_or(""))?;
+            let rows = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(30).clamp(1, 200) as usize;
+            let (header, data) = crate::agent_docs::read_rows(&path, rows)?;
+            let preview = data.iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n");
+            format!("列：{}\n\n{}", header.join(" | "), preview)
+        }
+        "table_query" => {
+            let path = ctx
+                .scope
+                .resolve(args.get("path").and_then(|v| v.as_str()).unwrap_or(""))?;
+            let sql = args.get("sql").and_then(|v| v.as_str()).unwrap_or("");
+            crate::agent_table::query(&path, sql, crate::agent_table::ROW_LIMIT)?
+        }
         // 只读文件工具走同一个执行体：并发批会把它搬到后台线程上跑
         "read_file" | "list_dir" | "find_files" | "grep" | "symbols" => {
             return execute_readonly(ctx.scope, ctx.request_id, name, args, ctx.grep_ignore);
@@ -2394,7 +2482,7 @@ fn with_grep_ignore(args: &Value, grep_ignore: bool) -> Value {
 /// `process_output` / `list_processes` 这类虽然也只读，但很快，且不走文件作用域，
 /// 留在主循环里按原顺序执行。
 fn is_readonly_tool(name: &str) -> bool {
-    matches!(name, "read_file" | "list_dir" | "find_files" | "grep" | "symbols")
+    crate::agent_tools::can_prefetch(name)
 }
 
 /// 只读文件工具的执行体：只依赖 `Scope` + 请求号，所以能整块搬进 `spawn_blocking`
@@ -2546,7 +2634,18 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         emit_err(&app, &request_id, msg);
         return Err(msg.into());
     }
-    if req.user.trim().is_empty() {
+    // 新协议只看最后一条 user 的文本；旧路径仍看 `user` 字段。
+    let last_ask = if req.messages.is_empty() {
+        req.user.trim().to_string()
+    } else {
+        req.messages
+            .iter()
+            .rev()
+            .find(|m| !m.is_assistant())
+            .map(|m| m.joined_text().trim().to_string())
+            .unwrap_or_default()
+    };
+    if last_ask.is_empty() {
         let msg = "问题为空";
         emit_err(&app, &request_id, msg);
         return Err(msg.into());
@@ -2576,7 +2675,14 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     };
     let mut tools_enabled = req.tools;
     let services = root.as_deref().map(|r| workspace_services(r, &req.services)).unwrap_or_default();
+    // 项目/全局 harness 配置：上下文注入、技能正文与 hooks 都从这里来。
+    let harness_config = crate::harness_config::load(root.as_deref());
     let mut system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach));
+    // 上下文管道：项目文档 / 长期记忆 / 技能索引 / `@` 引用，全部只读且不越出工作区。
+    let context_bundle = crate::agent_context::collect(&harness_config, root.as_deref(), &req.refs, &last_ask);
+    if !context_bundle.text.is_empty() {
+        system.push_str(&context_bundle.text);
+    }
     if req.plan_first && req.tools {
         // 设置项「先出计划」：只给一句引导，不强制——纯问答里加计划卡反而碍事
         system.push_str("\n\n任务超过两步时，先调用 `update_plan` 列出步骤再动手；一句话能答完的问题不要用。");
@@ -2585,7 +2691,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     // Tools that exist at some level: those not offered here get the permission denial instead.
     let known_tools =
         offered_tools(Permission::Full, Reach { files: true, tools: true, vision: true, web: true });
-    if tool_names.iter().any(|n| COMPUTER_TOOLS.contains(n)) {
+    if tool_names.iter().any(|n| crate::agent_tools::is_computer(n)) {
         // The model must never see (or click) the AI hub window itself.
         crate::agent_computer::exclude_from_capture(&app);
     }
@@ -2599,6 +2705,10 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut tool_names = tool_names;
     if !req.subagents {
         tool_names.retain(|n| *n != "task");
+    }
+    // 模式只收窄写类以外的工具：读、写文件、计划在任何模式下都保留。
+    if !req.mode.trim().is_empty() {
+        tool_names.retain(|n| crate::agent_tools::mode_allows(&req.mode, n));
     }
     let mut tools = provider_tools(&tool_names, anthropic);
     // MCP：工具名是运行时的，不在这张静态表里；列一次、追加进 tools，然后按名字查找
@@ -2628,27 +2738,26 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         web_allow: &req.web_allow,
         client: &client,
         mcp: &mcp_servers,
+        hooks: &harness_config.hooks,
         result_cap,
         max_parallel: if req.parallel_reads { MAX_PARALLEL } else { 1 },
         max_retries: if req.retries { MAX_RETRIES } else { 0 },
         grep_ignore: req.grep_ignore,
     };
 
-    let mut messages = Vec::new();
-    if anthropic {
-        for turn in &req.history {
-            let role = if turn.role == "assistant" { "assistant" } else { "user" };
-            messages.push(json!({ "role": role, "content": turn.content }));
-        }
-        messages.push(json!({ "role": "user", "content": req.user }));
+    // 历史统一走内容块协议：新入参直接用，旧入参包成 Text 块，翻译成 provider 形状只做一次。
+    let protocol_messages: Vec<crate::agent_protocol::Message> = if req.messages.is_empty() {
+        let mut msgs: Vec<crate::agent_protocol::Message> = req
+            .history
+            .iter()
+            .map(|turn| crate::agent_protocol::Message::text(&turn.role, &turn.content))
+            .collect();
+        msgs.push(crate::agent_protocol::Message::text("user", &req.user));
+        msgs
     } else {
-        messages.push(json!({ "role": "system", "content": system }));
-        for turn in &req.history {
-            let role = if turn.role == "assistant" { "assistant" } else { "user" };
-            messages.push(json!({ "role": role, "content": turn.content }));
-        }
-        messages.push(json!({ "role": "user", "content": req.user }));
-    }
+        req.messages.clone()
+    };
+    let mut messages = crate::agent_protocol::provider_messages(&protocol_messages, anthropic, &system);
 
     let mut final_text = String::new();
     let mut rounds = 0usize;
@@ -2809,6 +2918,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 emit_err(&app, &request_id, msg);
                 return Err(msg.into());
             }
+            run_stop_hooks(&harness_config.hooks, &scope, permission);
             emit_done(&app, &request_id, started, usage_total, false, stats);
             return Ok(());
         }
@@ -3034,10 +3144,43 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 tool_results.push((p.call_id, reason.into()));
                 continue;
             }
-            let result = match prefetched.done.remove(&p.index) {
+            let mut result = match prefetched.done.remove(&p.index) {
                 Some(done) => done,
                 None => execute_tool(&ctx, &config, permission, &p.name, &p.args).await,
             };
+            // PostToolUse：脚本输出追加到结果末尾（agent_hooks 已截到 2k）。
+            if permission != Permission::Read && !ctx.hooks.is_empty() {
+                let post: Vec<_> = ctx
+                    .hooks
+                    .iter()
+                    .filter(|h| h.event == "postToolUse" && crate::agent_hooks::matches(&h.matcher, &p.name))
+                    .cloned()
+                    .collect();
+                if !post.is_empty() {
+                    let payload = match &result {
+                        Ok(out) => format!("{} {}", p.name, out.text.chars().take(500).collect::<String>()),
+                        Err(err) => format!("{} error={}", p.name, err.chars().take(300).collect::<String>()),
+                    };
+                    let cwd = ctx.scope.root.clone().unwrap_or_else(|| ctx.scope.base.clone());
+                    let mut extra = String::new();
+                    for hook in post {
+                        let cwd = cwd.clone();
+                        let payload = payload.clone();
+                        if let Ok(outcome) =
+                            tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, &payload)).await
+                        {
+                            if !outcome.output.is_empty() {
+                                extra.push_str(&format!("\n[hook] {}", outcome.output));
+                            }
+                        }
+                    }
+                    if !extra.is_empty() {
+                        if let Ok(out) = &mut result {
+                            out.text.push_str(&extra);
+                        }
+                    }
+                }
+            }
             let failed = match &result {
                 Ok(out) => command_output_failed(&out.text),
                 Err(_) => true,
@@ -3101,6 +3244,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     }
     let msg = limit_message(action_steps >= MAX_ACTION_STEPS, &notes);
     emit_text(&app, &request_id, &msg);
+    run_stop_hooks(&harness_config.hooks, &scope, permission);
     emit_done(&app, &request_id, started, usage_total, true, stats);
     Ok(())
 }

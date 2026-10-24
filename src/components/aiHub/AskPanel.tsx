@@ -7,6 +7,7 @@ import type {
   AgentDecision, AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentPlanStep, AgentStep,
 } from "./useAskStream";
 import type { OpenSuggestion } from "./localActions";
+import type { PaletteItem } from "./harnessCommands";
 import AskThread from "./AskThread";
 import AskEmpty from "./AskEmpty";
 import AskErrorCard from "./AskErrorCard";
@@ -79,6 +80,17 @@ export type AskPanelProps = {
   modelControl: ReactNode;
   /** Persona / temperature profile picker, left of the permission pill. */
   profileControl?: ReactNode;
+  /** 任务模式胶囊（对话 / 代码 / 文档 / 数据 / 调研 / 运维）。 */
+  modeControl?: ReactNode;
+  /** `/` 命令与 `@` 文件引用共用的浮层；null = 没有候选。 */
+  palette?: {
+    items: PaletteItem[] | null;
+    active: number;
+    onMove: (delta: number) => void;
+    onHover: (index: number) => void;
+    onPick: (item: PaletteItem) => void;
+    onPickActive: () => void;
+  };
   /** What the AI may do in the repo for the next message. */
   permission: AgentPermission;
   onPermission: (next: AgentPermission) => void;

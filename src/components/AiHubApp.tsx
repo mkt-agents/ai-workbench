@@ -41,6 +41,9 @@ import { useAskContext } from "./aiHub/useAskContext";
 import { useAskEvents } from "./aiHub/useAskEvents";
 import { useAskSessions } from "./aiHub/useAskSessions";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
+import { useHarnessComposer, type HarnessCommand, type HarnessSkillItem } from "./aiHub/useHarnessComposer";
+import ModePicker from "./aiHub/ModePicker";
+import { HARNESS_MODES, modeRoute, type HarnessMode } from "./aiHub/harness";
 import { AGENT_PERMISSIONS, useAskStream, type AgentPermission } from "./aiHub/useAskStream";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import { COMPUTER_TOOL_NAMES } from "./aiHub/AgentActivity";
@@ -55,6 +58,13 @@ type QaTurn = AiHubTurn;
 
 const PINNED_KEY = "qa-pinned";
 const PERMISSION_KEY = "qa-permission";
+/** 任务模式（对话 / 代码 / 文档 / 数据 / 调研 / 运维），与界面 tab 的 `mode` 无关。 */
+const TASK_MODE_KEY = "qa-task-mode";
+
+function readTaskMode(): HarnessMode {
+  const raw = localStorage.getItem(TASK_MODE_KEY) as HarnessMode | null;
+  return raw && HARNESS_MODES.includes(raw) ? raw : "code";
+}
 /** Set once the user stopped wanting to be asked before hiding a running round. */
 /**
  * 一个仓库最多记住几个分支的「以后都允许」：来回切过的旧分支不该一直堆在设置里。
@@ -152,11 +162,21 @@ function AiHubApp() {
   const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
+  const [taskMode, setTaskMode] = useState<HarnessMode>(readTaskMode);
+  useEffect(() => {
+    localStorage.setItem(TASK_MODE_KEY, taskMode);
+  }, [taskMode]);
+  /** `@` 引用进来的文件；追问沿用同一批，换文件重新 @ 即可。 */
+  const [refs, setRefs] = useState<string[]>([]);
+  /** 项目 + 全局技能（只取名字与说明做补全；正文由后端按 `/skill:name` 注入）。 */
+  const [harnessSkills, setHarnessSkills] = useState<HarnessSkillItem[]>([]);
   /** Files are being dragged over the window (ask tab only). */
   const [dropHint, setDropHint] = useState(false);
   const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily" | "profile">(null);
+  const [openPop, setOpenPop] = useState<
+    null | "model" | "focus" | "permission" | "daily" | "profile" | "mode"
+  >(null);
   /** Profile editor (custom personas + temperature). */
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const profiles = useMemo(
@@ -170,7 +190,10 @@ function AiHubApp() {
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
   /** Write-capable levels always work on the project; read-only follows the auto route. */
-  const effectiveOverride: RouteOverride = permission === "read" ? routeOverride : "project";
+  // 非「代码 / 对话」模式必须带项目上下文（文档、表格、调研都要读工作区），
+  // 不再交给正则猜是不是代码问题。
+  const effectiveOverride: RouteOverride =
+    permission === "read" ? (taskMode === "code" ? routeOverride : modeRoute(taskMode)) : "project";
   const [ctxOpen, setCtxOpen] = useState(false);
   /** Persisted-session id the current chat belongs to (null = fresh chat). */
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -342,8 +365,21 @@ function AiHubApp() {
       mcp: mcpServers
         .filter((s) => s.enabled && s.name.trim() && s.command.trim())
         .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args || "" })),
+      mode: taskMode,
+      refs,
     },
   });
+  const invokeHarnessConfig = useGlobalStore((s) => s.invokeHarnessConfig);
+  useEffect(() => {
+    const root = repo.agentRoot;
+    if (!root) {
+      setHarnessSkills([]);
+      return;
+    }
+    void invokeHarnessConfig(root)
+      .then((config) => setHarnessSkills(config.skills))
+      .catch(() => setHarnessSkills([]));
+  }, [repo.agentRoot, invokeHarnessConfig]);
   // 代理自己 `git checkout` 完，这一轮就结束了而窗口焦点没变；跑完再问一次分支，
   // 免得下一问还带着旧分支的「以后都允许」。
   const agentWasBusy = useRef(false);
@@ -380,6 +416,31 @@ function AiHubApp() {
       return next;
     });
   };
+  /** 内置命令：只放真能执行的动作，别让面板里出现点了没反应的条目。 */
+  const harnessCommands = useMemo<HarnessCommand[]>(
+    () => [
+      { id: "clear", label: t("palette.clear"), hint: t("palette.clearHint"), run: () => stream.resetChat() },
+      {
+        id: "plan",
+        label: t("palette.plan"),
+        hint: t("palette.planHint"),
+        run: () => setSettings({ agentPlanFirst: settings.agentPlanFirst !== true }),
+      },
+    ],
+    [t, stream, settings.agentPlanFirst],
+  );
+  const palette = useHarnessComposer({
+    input,
+    setInput: setComposerInput,
+    root: repo.agentRoot,
+    skills: harnessSkills,
+    commands: harnessCommands,
+    snippets: snippets.snippetChoices,
+    slashOpen: snippets.snippetOpen && snippets.slashMode,
+    slashQueryText: snippets.snippetQuery,
+    onPickSnippet: snippets.pickSnippet,
+    onRef: (path) => setRefs((prev) => (prev.includes(path) ? prev : [...prev, path])),
+  });
 
   // LLM 预测不合格/失败时的确定性候选：从上一问的关键词直接给高置信建议
   const buildFallbackSuggestion = useCallback((): string | null => {
@@ -981,7 +1042,9 @@ function AiHubApp() {
             <pre className="ai-hub-ctx-preview">{ctx.ctxPreview || t("ctx.previewEmpty")}</pre>
           )}
 
-          {snippets.snippetOpen && (
+          {/* 命令面板接管 `/` 的候选：有命令条目时不再叠一层片段浮层。
+              手动打开（工具栏按钮）时 palette 为空，片段列表照常出现。 */}
+          {snippets.snippetOpen && !palette.items && (
             <SnippetPicker
               snippetQuery={snippets.snippetQuery}
               setSnippetQuery={snippets.setSnippetQuery}
@@ -1054,6 +1117,22 @@ function AiHubApp() {
             onPasteClipboard={() => void fillClipboard()}
             onAttachFile={() => void addAttachmentFromFile()}
             onSend={() => void sendAsk()}
+            palette={{
+              items: palette.items,
+              active: palette.active,
+              onMove: palette.move,
+              onHover: palette.setActive,
+              onPick: palette.pick,
+              onPickActive: palette.pickActive,
+            }}
+            modeControl={
+              <ModePicker
+                mode={taskMode}
+                onMode={setTaskMode}
+                open={openPop === "mode"}
+                onToggle={() => togglePop("mode")}
+              />
+            }
             repoControl={
               <ContextPicker
                 open={openPop === "focus"}

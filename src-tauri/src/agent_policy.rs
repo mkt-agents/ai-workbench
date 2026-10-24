@@ -8,6 +8,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::agent::{command_blocked, command_is_readonly};
+use crate::agent_tools::GateKind;
 
 /// Ordered from least to most open; matches the picker in the AI hub composer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,60 +46,9 @@ pub(crate) enum Gate {
     Deny,
 }
 
-/// Tools that only look: never gated.
-const LOOK_TOOLS: &[&str] = &[
-    "read_file", "list_dir", "find_files", "grep", "symbols", "open_page", "process_output", "list_processes",
-    "find_port",
-    // Purely presentational: publishes a checklist for the user, changes nothing.
-    "update_plan",
-];
-/// Tools that change something outside a file write: ask in 编辑权限.
-const CHANGE_TOOLS: &[&str] = &[
-    "delete_path", "move_path", "stop_process", "kill_process", "kill_port", "open_target", "clipboard_write",
-    "launch_app",
-];
-/// Operate the computer (screenshot + mouse / keyboard): 完全权限 only.
-pub(crate) const COMPUTER_TOOLS: &[&str] = &["screenshot", "mouse", "keyboard", "wait"];
-
-/// Every tool in `agent.rs::tool_specs` — the completeness test compares this against the
-/// spec table, so adding a tool without deciding its gate here fails `cargo test`.
-/// MCP tools are **not** listed: their names exist only in a turn (`mcp_<server>_<tool>`)
-/// and are covered by the prefix rule instead.
-#[cfg(test)]
-const TOOL_SPEC_NAMES: &[&str] = &[
-    "read_file",
-    "list_dir",
-    "find_files",
-    "grep",
-    "symbols",
-    "write_file",
-    "edit_file",
-    "delete_path",
-    "move_path",
-    "run_command",
-    "start_process",
-    "process_output",
-    "stop_process",
-    "open_page",
-    "launch_app",
-    "open_target",
-    "clipboard_read",
-    "clipboard_write",
-    "list_processes",
-    "kill_process",
-    "find_port",
-    "kill_port",
-    "hosts",
-    "tunnel",
-    "runtime",
-    "screenshot",
-    "mouse",
-    "keyboard",
-    "wait",
-    "update_plan",
-    "task",
-    "web_fetch",
-];
+// 工具属性（只读 / 变更 / 电脑 / 写入 / 命令 / 敏感 / 工作台）只声明在
+// `agent_tools::TOOLS`：闸门、动作步与并发预取都从那张表派生。
+// MCP 工具是运行时的 `mcp_<server>_<tool>`，不在表里，由下面的前缀规则覆盖。
 
 /// Read-only actions of the grouped workbench tools.
 fn workbench_action_is_read(tool: &str, action: &str) -> bool {
@@ -127,17 +77,18 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
             _ => Gate::Ask,
         };
     }
-    if LOOK_TOOLS.contains(&tool) {
-        return Gate::Allow;
-    }
-    if CHANGE_TOOLS.contains(&tool) {
-        return mutating(Gate::Ask);
-    }
-    if COMPUTER_TOOLS.contains(&tool) {
-        return if permission == Permission::Full { Gate::Allow } else { Gate::Deny };
-    }
-    match tool {
-        "run_command" | "start_process" => {
+    match crate::agent_tools::gate_kind(tool) {
+        // 只读与纯展示：任何档位都放行
+        Some(GateKind::Look) | Some(GateKind::Plan) => Gate::Allow,
+        Some(GateKind::Change) => mutating(Gate::Ask),
+        Some(GateKind::Computer) => {
+            if permission == Permission::Full {
+                Gate::Allow
+            } else {
+                Gate::Deny
+            }
+        }
+        Some(GateKind::Command) => {
             if command_blocked(arg) {
                 Gate::Deny
             } else if tool == "run_command" && command_is_readonly(arg) {
@@ -146,20 +97,14 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
                 mutating(Gate::Ask)
             }
         }
-        "write_file" | "edit_file" => mutating(Gate::Allow),
-        // 出网同样是"读到了不该读的东西"：白名单之外直接拒，白名单内每次都要问
-        "web_fetch" => match permission {
+        Some(GateKind::Write) => mutating(Gate::Allow),
+        // 出网同样是"读到了不该读的东西"；剪贴板里可能是密码：只读档也要问
+        Some(GateKind::Sensitive) => match permission {
             Permission::Read | Permission::Workspace => Gate::Ask,
             Permission::Review => Gate::Review,
             Permission::Full => Gate::Allow,
         },
-        // Clipboard can hold passwords: even read-only asks first.
-        "clipboard_read" => match permission {
-            Permission::Read | Permission::Workspace => Gate::Ask,
-            Permission::Review => Gate::Review,
-            Permission::Full => Gate::Allow,
-        },
-        "hosts" | "tunnel" | "runtime" => {
+        Some(GateKind::Workbench) => {
             if workbench_action_is_read(tool, arg) {
                 Gate::Allow
             } else {
@@ -167,7 +112,7 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
             }
         }
         // Unknown tools fall through to the executor's "unknown tool" error.
-        _ => Gate::Allow,
+        None => Gate::Allow,
     }
 }
 
@@ -307,7 +252,7 @@ pub(crate) fn deny_reason(permission: Permission, tool: &str, arg: &str) -> Stri
     if matches!(tool, "run_command" | "start_process") && command_blocked(arg) {
         return "这条命令被拒绝：危险命令在任何权限下都不允许执行。".into();
     }
-    if COMPUTER_TOOLS.contains(&tool) {
+    if crate::agent_tools::is_computer(tool) {
         return "只有完全权限、并且模型支持看图时才能操作电脑。没有执行。".into();
     }
     if permission == Permission::Read {
@@ -346,7 +291,18 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
     let writes = permission != Permission::Read;
     let mut names: Vec<&'static str> = Vec::new();
     if reach.files {
-        names.extend(["read_file", "list_dir", "find_files", "grep", "symbols", "run_command"]);
+        names.extend([
+            "read_file",
+            "list_dir",
+            "find_files",
+            "grep",
+            "symbols",
+            "run_command",
+            // 文档 / 表格：只读，非代码任务的主力
+            "read_document",
+            "read_table",
+            "table_query",
+        ]);
         if writes {
             names.extend([
                 "write_file", "edit_file", "delete_path", "move_path", "start_process", "process_output", "stop_process",
@@ -367,14 +323,22 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
         "task",
     ]);
     if writes {
-        names.extend(["launch_app", "open_target", "clipboard_write", "kill_process", "kill_port"]);
+        names.extend([
+            "launch_app",
+            "open_target",
+            "clipboard_write",
+            "kill_process",
+            "kill_port",
+            // 长期记忆：写 memory.md，编辑档先问一次
+            "remember",
+        ]);
     }
     // 白名单是空的就等于没联网能力：连工具都不下发，省得模型反复试
     if reach.web {
         names.push("web_fetch");
     }
     if permission == Permission::Full && reach.vision {
-        names.extend(COMPUTER_TOOLS);
+        names.extend(crate::agent_tools::by_gate(GateKind::Computer));
     }
     names
 }
@@ -526,7 +490,9 @@ mod tests {
     #[test]
     fn gate_table_matches_the_plan() {
         use Gate::{Allow, Ask, Deny, Review};
-        for tool in LOOK_TOOLS {
+        for tool in crate::agent_tools::by_gate(GateKind::Look)
+            .chain(crate::agent_tools::by_gate(GateKind::Plan))
+        {
             expect(tool, "", [Allow; 4]);
         }
         expect("run_command", "git status", [Allow; 4]);
@@ -537,7 +503,7 @@ mod tests {
         expect("start_process", "git status", [Deny, Ask, Review, Allow]);
         expect("write_file", "", [Deny, Allow, Review, Allow]);
         expect("edit_file", "", [Deny, Allow, Review, Allow]);
-        for tool in CHANGE_TOOLS {
+        for tool in crate::agent_tools::by_gate(GateKind::Change) {
             expect(tool, "", [Deny, Ask, Review, Allow]);
         }
         expect("clipboard_read", "", [Ask, Ask, Review, Allow]);
@@ -547,7 +513,7 @@ mod tests {
         expect("tunnel", "start_quick", [Deny, Ask, Review, Allow]);
         expect("runtime", "list", [Allow; 4]);
         expect("runtime", "switch", [Deny, Ask, Review, Allow]);
-        for tool in COMPUTER_TOOLS {
+        for tool in crate::agent_tools::by_gate(GateKind::Computer) {
             expect(tool, "", [Deny, Deny, Deny, Allow]);
         }
         // 出网（web_fetch）与只读子代理（task）：两者都不改本机，但都有成本 / 外发风险
@@ -569,17 +535,17 @@ mod tests {
             .filter_map(|s| s.get("name").and_then(|v| v.as_str()).map(str::to_string))
             .collect();
         in_specs.sort();
-        let mut known: Vec<String> = TOOL_SPEC_NAMES.iter().map(|s| s.to_string()).collect();
+        let mut known: Vec<String> = crate::agent_tools::names().map(str::to_string).collect();
         known.sort();
         assert_eq!(
             in_specs, known,
-            "agent.rs 的 tool_specs 与 agent_policy 的 TOOL_SPEC_NAMES 不一致：新增工具要同时进闸门、下发列表和附录 A"
+            "agent.rs 的 tool_specs 与 agent_tools::TOOLS 不一致：新增工具要同时进注册表、下发列表和附录 A"
         );
         // 反过来：每个声明过的工具都必须真的能下发（漏进 offered_tools 等于下线）
         let all = Reach { files: true, tools: true, vision: true, web: true };
         let offered = offered_tools(Permission::Full, all);
-        for name in TOOL_SPEC_NAMES {
-            assert!(offered.contains(name), "{name} 在任何档位都不会下发");
+        for name in crate::agent_tools::names() {
+            assert!(offered.contains(&name), "{name} 在任何档位都不会下发");
         }
     }
 

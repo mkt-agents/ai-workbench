@@ -8,6 +8,7 @@ import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
 import { buildMeta, buildSystem, stepsMutatedWorkspace } from "./config";
 import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
+import { buildUserMessage, turnsToMessages } from "./harness";
 import { cleanDailyReport, dailyReportSystem, isDailyReport, isDailyRevision, type DailyStyle } from "./dailyReport";
 import type { OptimizeConfig, TaskKind } from "./config";
 import { routeQuestion } from "./route";
@@ -138,6 +139,10 @@ export type AgentRunOptions = {
   anthropicStream: boolean;
   /** MCP 总开关（设置项，默认开）。 */
   mcpEnabled: boolean;
+  /** 任务模式（对话 / 代码 / 文档 / 数据 / 调研 / 运维）：后端按它收窄工具子集。 */
+  mode?: string;
+  /** `@` 引用的文件（相对工作区或绝对路径）。 */
+  refs?: string[];
   /** 启用中的 MCP 服务；后端每轮列一次工具，名字是 `mcp_<server>_<tool>`。 */
   mcp: { name: string; command: string; args: string }[];
 };
@@ -714,6 +719,9 @@ export function useAskStream(opts: AskStreamOptions) {
           repoPath: agent.repoPath,
           services: agent.services,
           history: budget.turns,
+          // 内容块历史 + 这一问：后端优先用它，旧字段保留一版方便回退。
+          // 现在每轮还是一个 Text 块；工具调用将来能留成 tool_use / tool_result。
+          messages: [...turnsToMessages(budget.turns), buildUserMessage(user)],
           apps: agent.apps,
           permission: agent.permission,
           // The daily notes are already collected: the report needs no repo tools.
@@ -732,6 +740,8 @@ export function useAskStream(opts: AskStreamOptions) {
           anthropicStream: agent.anthropicStream,
           mcpEnabled: agent.mcpEnabled,
           mcp: agent.mcp,
+          mode: agent.mode ?? "",
+          refs: agent.refs ?? [],
         },
       });
       if (streamIdRef.current === myGen) {
