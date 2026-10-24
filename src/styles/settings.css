@@ -661,6 +661,40 @@
   min-width: 180px;
 }
 
+/* 「记住的审批」逐条清单：一条一行，作用域短的靠左拉长，规则用等宽字 */
+.settings-page .remembered-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-page .remembered-list > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.settings-page .remembered-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.settings-page .remembered-scope {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.settings-page .remembered-kind {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
 .settings-page .setting-hint {
   margin: 0;
   padding: 10px 0 0;

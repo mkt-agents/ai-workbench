@@ -52,14 +52,66 @@ const CHART_COLORS = [
 
 type SettingsTab = "general" | "menu" | "hub" | "net" | "data" | "about";
 
+/** 一条「以后都允许」：记在哪一层 + 规则本身。 */
+type RememberedAllow = {
+  scope: "global" | "repo" | "branch";
+  /** 仓库根路径；`global` 时为空。 */
+  repo: string;
+  /** 分支名；只有 `branch` 层才有。 */
+  branch: string;
+  kind: string;
+};
+
+/** 三层摊平成一张表，列表展示与逐条删除共用。 */
+function rememberedAllowEntries(s: AppSettings): RememberedAllow[] {
+  const out: RememberedAllow[] = (s.agentAlwaysAllow || []).map((kind) => ({
+    scope: "global",
+    repo: "",
+    branch: "",
+    kind,
+  }));
+  for (const [repo, list] of Object.entries(s.agentAlwaysAllowByRepo || {})) {
+    for (const kind of list || []) out.push({ scope: "repo", repo, branch: "", kind });
+  }
+  for (const [repo, perRepo] of Object.entries(s.agentAlwaysAllowByBranch || {})) {
+    for (const [branch, list] of Object.entries(perRepo || {})) {
+      for (const kind of list || []) out.push({ scope: "branch", repo, branch, kind });
+    }
+  }
+  return out;
+}
+
 /** 「以后都允许」全局 + 各仓库 + 各分支的总条数，清空按钮和文案共用。 */
 function rememberedAllowCount(s: AppSettings): number {
-  const repo = Object.values(s.agentAlwaysAllowByRepo || {}).reduce((n, list) => n + (list?.length ?? 0), 0);
-  const branch = Object.values(s.agentAlwaysAllowByBranch || {}).reduce(
-    (n, perRepo) => n + Object.values(perRepo || {}).reduce((m, list) => m + (list?.length ?? 0), 0),
-    0
-  );
-  return (s.agentAlwaysAllow?.length ?? 0) + repo + branch;
+  return rememberedAllowEntries(s).length;
+}
+
+/** 列表里只露最后一段目录名，完整路径放 title。 */
+function shortRepoName(repo: string): string {
+  const parts = repo.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || repo;
+}
+
+/** 摘掉一条；空掉的仓库 / 分支整个删掉，别在设置里留空对象。 */
+function withoutRemembered(s: AppSettings, entry: RememberedAllow): Partial<AppSettings> {
+  if (entry.scope === "global") {
+    return { agentAlwaysAllow: (s.agentAlwaysAllow || []).filter((k) => k !== entry.kind) };
+  }
+  if (entry.scope === "repo") {
+    const byRepo = { ...(s.agentAlwaysAllowByRepo || {}) };
+    const list = (byRepo[entry.repo] || []).filter((k) => k !== entry.kind);
+    if (list.length) byRepo[entry.repo] = list;
+    else delete byRepo[entry.repo];
+    return { agentAlwaysAllowByRepo: byRepo };
+  }
+  const byBranch = { ...(s.agentAlwaysAllowByBranch || {}) };
+  const perRepo = { ...(byBranch[entry.repo] || {}) };
+  const list = (perRepo[entry.branch] || []).filter((k) => k !== entry.kind);
+  if (list.length) perRepo[entry.branch] = list;
+  else delete perRepo[entry.branch];
+  if (Object.keys(perRepo).length) byBranch[entry.repo] = perRepo;
+  else delete byBranch[entry.repo];
+  return { agentAlwaysAllowByBranch: byBranch };
 }
 
 /**
@@ -825,6 +877,36 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                     : t("aiHub.rememberedEmpty")}
                 </p>
                 <p className="setting-hint">{t("aiHub.rememberedScope")}</p>
+                {rememberedAllowCount(settings) > 0 && (
+                  <details className="remembered-list">
+                    <summary>{t("aiHub.rememberedListTitle", { n: rememberedAllowCount(settings) })}</summary>
+                    {rememberedAllowEntries(settings).map((entry) => (
+                      <div
+                        className="remembered-row"
+                        key={`${entry.scope}|${entry.repo}|${entry.branch}|${entry.kind}`}
+                      >
+                        <span className="remembered-scope" title={entry.repo || undefined}>
+                          {entry.scope === "global"
+                            ? t("aiHub.rememberedScopeGlobal")
+                            : entry.scope === "repo"
+                              ? t("aiHub.rememberedScopeRepo", { repo: shortRepoName(entry.repo) })
+                              : t("aiHub.rememberedScopeBranch", {
+                                  repo: shortRepoName(entry.repo),
+                                  branch: entry.branch,
+                                })}
+                        </span>
+                        <code className="remembered-kind">{entry.kind}</code>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          onClick={() => setSettings(withoutRemembered(settings, entry))}
+                        >
+                          {t("aiHub.rememberedRemove")}
+                        </button>
+                      </div>
+                    ))}
+                  </details>
+                )}
               </div>
             </section>
             <section className="hub-group" hidden={hubGroup !== "capability"}>

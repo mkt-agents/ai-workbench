@@ -195,28 +195,41 @@ function AiHubApp() {
   // 审批记忆再细到分支：选了仓库就问一次当前分支（非 git 目录 / detached HEAD 当没有分支）
   const invokeGitCurrentBranch = useGlobalStore((s) => s.invokeGitCurrentBranch);
   const [branchByRepo, setBranchByRepo] = useState<Record<string, string>>({});
-  const refreshAgentBranch = useCallback(() => {
-    if (!agentRoot) return;
-    void invokeGitCurrentBranch(agentRoot)
-      .then((branch) => {
-        const name = branch && branch !== "HEAD" ? branch : "";
-        setBranchByRepo((prev) => (prev[agentRoot] === name ? prev : { ...prev, [agentRoot]: name }));
-      })
-      // 非 git 目录 / detached HEAD：清掉这个仓库的分支名，别沿用切走前的那个。
-      .catch(() => setBranchByRepo((prev) => (prev[agentRoot] === "" ? prev : { ...prev, [agentRoot]: "" })));
-  }, [agentRoot, invokeGitCurrentBranch]);
+  /** 上一次真正问分支的时间：焦点来回切会连着触发，1.5 秒内只问一次。 */
+  const branchRefreshAt = useRef(0);
+  const refreshAgentBranch = useCallback(
+    (force = false) => {
+      if (!agentRoot) return;
+      const now = Date.now();
+      // 轮次结束那条要 force：下一问必须带上最新分支，不能被节流吞掉。
+      if (!force && now - branchRefreshAt.current < 1500) return;
+      branchRefreshAt.current = now;
+      void invokeGitCurrentBranch(agentRoot)
+        .then((branch) => {
+          const name = branch && branch !== "HEAD" ? branch : "";
+          setBranchByRepo((prev) => (prev[agentRoot] === name ? prev : { ...prev, [agentRoot]: name }));
+        })
+        // 非 git 目录 / detached HEAD：清掉这个仓库的分支名，别沿用切走前的那个。
+        .catch(() => setBranchByRepo((prev) => (prev[agentRoot] === "" ? prev : { ...prev, [agentRoot]: "" })));
+    },
+    [agentRoot, invokeGitCurrentBranch],
+  );
   useEffect(() => {
     refreshAgentBranch();
     // 切分支一般发生在这个窗口外面（Git 页 / 终端 / 代理自己 checkout）：
     // 窗口重新拿到焦点时重问一次，别让分支级记忆沿用上一个分支。
-    window.addEventListener("focus", refreshAgentBranch);
-    return () => window.removeEventListener("focus", refreshAgentBranch);
+    const onFocus = () => refreshAgentBranch();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [refreshAgentBranch]);
   const agentBranch = agentRoot ? branchByRepo[agentRoot] || "" : "";
+  // 同一类可能同时出现在全局与分支层，去重后再下发（后端只做 contains，重复没有意义）。
   const agentAlwaysAllow = [
-    ...(settings.agentAlwaysAllow || []),
-    ...(agentRoot ? settings.agentAlwaysAllowByRepo?.[agentRoot] || [] : []),
-    ...(agentRoot && agentBranch ? settings.agentAlwaysAllowByBranch?.[agentRoot]?.[agentBranch] || [] : []),
+    ...new Set([
+      ...(settings.agentAlwaysAllow || []),
+      ...(agentRoot ? settings.agentAlwaysAllowByRepo?.[agentRoot] || [] : []),
+      ...(agentRoot && agentBranch ? settings.agentAlwaysAllowByBranch?.[agentRoot]?.[agentBranch] || [] : []),
+    ]),
   ];
   const agentDiffConfirm = agentRoot
     ? (settings.agentDiffConfirmByRepo?.[agentRoot] ?? settings.agentDiffConfirm === true)
@@ -311,7 +324,7 @@ function AiHubApp() {
   // 免得下一问还带着旧分支的「以后都允许」。
   const agentWasBusy = useRef(false);
   useEffect(() => {
-    if (agentWasBusy.current && !stream.busy) refreshAgentBranch();
+    if (agentWasBusy.current && !stream.busy) refreshAgentBranch(true);
     agentWasBusy.current = stream.busy;
   }, [stream.busy, refreshAgentBranch]);
   const sessions = useAskSessions({
