@@ -1366,10 +1366,24 @@
   margin: 4px 6px;
   background: var(--border-subtle);
 }
+/* 改前确认开关：贴在菜单底部、提示行之上，和档位选项分开 */
+.qa-perm-diff {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 8px 0;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-1);
+  font-size: 11px;
+  cursor: pointer;
+}
+.qa-perm-diff input {
+  accent-color: var(--accent);
+}
 .qa-perm-foot {
   padding: 6px 8px 4px;
-  border-top: 1px solid var(--border-subtle);
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--text-3);
   font-size: 11px;
 }
@@ -1609,6 +1623,184 @@
   font-size: 11px;
   color: var(--text-2);
 }
+/* 撤销：只在改过文件的那一轮出现，做完就变成一行结果 */
+.qa-undo {
+  margin-top: 8px;
+}
+.qa-undo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-undo-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--accent-border);
+}
+.qa-undo-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.qa-undo-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  font-size: 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.qa-undo.is-done .qa-undo-title {
+  color: var(--green);
+}
+.qa-undo.is-failed .qa-undo-title {
+  color: var(--red);
+}
+.qa-undo-detail {
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* 逐文件撤销：先列出这一轮改了什么，再决定退一个还是退全部 */
+.qa-undo-pick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.qa-undo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.qa-undo-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.qa-undo-file:hover {
+  background: var(--overlay-1);
+}
+.qa-undo-kind {
+  flex: none;
+  min-width: 28px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+.qa-undo-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-undo-file-btn {
+  flex: none;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-undo-file-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+/* 计划卡（update_plan）：模型自己的步骤清单，比"操作列表"更高一层 */
+.qa-plan {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.qa-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.qa-plan-title {
+  font-weight: 600;
+  color: var(--text-1);
+}
+.qa-plan-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.qa-plan-steps {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.qa-plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.qa-plan-step.is-in_progress {
+  color: var(--text-0);
+}
+.qa-plan-step.is-done .qa-plan-text {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+.qa-plan-mark {
+  flex-shrink: 0;
+  display: inline-flex;
+  width: 12px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+.qa-plan-step.is-done .qa-plan-mark {
+  color: var(--green);
+}
+.qa-plan-step.is-in_progress .qa-plan-mark {
+  color: var(--accent);
+}
+.qa-plan-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--text-3);
+}
+.qa-plan-text {
+  min-width: 0;
+  word-break: break-word;
+}
 .qa-agent-steps {
   list-style: none;
   margin: 8px 0 0;
@@ -1616,6 +1808,21 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+/* 「全部展开 / 收起」：2 条以上带输出时才出现，靠右不抢摘要的位置 */
+.qa-agent-steps-all-row {
+  align-self: flex-end;
+}
+.qa-agent-steps-all {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+.qa-agent-steps-all:hover {
+  color: var(--text-0);
 }
 .qa-agent-step {
   display: flex;
@@ -1739,6 +1946,26 @@
   font-size: 12px;
   color: var(--text-0);
 }
+/* 合并审批：一张卡里多个操作，逐个列出 diff */
+.qa-agent-approve-patches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.qa-agent-approve-patch {
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-0);
+}
+.qa-agent-approve-patch-title {
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--text-1);
+}
 .qa-agent-approve-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1806,6 +2033,7 @@
 }
 .qa-agent-allow,
 .qa-agent-allow-turn,
+.qa-agent-allow-always,
 .qa-agent-deny {
   padding: 4px 10px;
   font-size: 12px;
@@ -1827,6 +2055,15 @@
 .qa-agent-allow-turn:hover {
   color: var(--text-0);
   border-color: var(--accent-border);
+}
+/* 「以后都允许」比本轮放行更强，视觉上压低一档，避免误点 */
+.qa-agent-allow-always {
+  color: var(--text-2);
+  border-style: dashed;
+}
+.qa-agent-allow-always:hover {
+  color: var(--text-0);
+  border-color: var(--border);
 }
 .qa-agent-deny:hover {
   color: var(--red);

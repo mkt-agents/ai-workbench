@@ -147,7 +147,7 @@ pub(crate) fn kill_pid(pid: u32) -> Result<(), String> {
         }
         Err(format!(
             "taskkill PID {pid} 失败: {}",
-            stderr.trim().replace('\r', " ").replace('\n', " ")
+            stderr.trim().replace(['\r', '\n'], " ")
         ))
     }
     #[cfg(not(target_os = "windows"))]

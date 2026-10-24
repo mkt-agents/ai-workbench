@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AIModelConfig, AiHubTurn } from "../../core/types";
+import type { AIModelConfig, AiHubPlanStep, AiHubTurn } from "../../core/types";
 import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
 import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
@@ -30,6 +30,14 @@ export type AnswerSource = {
   contextTruncated?: boolean;
   /** Oldest rounds left out of the request to stay inside the char budget. */
   droppedTurns?: number;
+  /** Characters this round actually carried (system + conversation). */
+  contextChars?: number;
+  /** Estimated share of the backend context budget (0..1). */
+  budgetRatio?: number;
+  /** Rounds in which the backend had to compact something. */
+  trimmedRounds?: number;
+  /** Input tokens served from the provider's prompt cache. */
+  cacheHitTokens?: number;
 };
 
 type QaTurn = AiHubTurn;
@@ -45,6 +53,20 @@ export type AgentStep = {
   arg?: string;
 };
 
+/** The model's checklist for the round in flight (`update_plan`). */
+export type AgentPlanStep = AiHubPlanStep;
+
+export type AgentApprovalPatch = {
+  callId: string;
+  tool: string;
+  summary: string;
+  preview: string;
+  /** `diff`: preview is a unified diff of a file / hosts change. */
+  previewKind: "diff" | "text";
+  /** `agent_policy::action_kind`, e.g. `cmd:npm`. */
+  actionKind: string;
+};
+
 export type AgentApproval = {
   callId: string;
   tool: string;
@@ -54,10 +76,21 @@ export type AgentApproval = {
   previewKind: "diff" | "text";
   /** Epoch ms when the backend auto-denies this call; 0 = unknown. */
   deadlineAt: number;
+  /** `agent_policy::action_kind` of the call, e.g. `cmd:npm` — what「以后都允许」stores. */
+  actionKind: string;
+  /** The backend offers cross-turn memory (Ask gate, not 完全权限). */
+  canRemember: boolean;
+  /** Merged approval: one card for several changes; present only when ≥ 2 patches. */
+  patches?: AgentApprovalPatch[];
+  /** All call ids answered together (merged card). */
+  callIds?: string[];
 };
 
-/** Approval answer: allow just this call, or the same kind for the rest of the turn. */
-export type AgentDecision = "once" | "turn" | "deny";
+/**
+ * Approval answer: allow just this call, the same kind for the rest of the turn,
+ * or the same kind from now on (remembered in settings).
+ */
+export type AgentDecision = "once" | "turn" | "always" | "deny";
 
 /** Step output kept with a saved turn (the live one is capped by the backend too). */
 const STEP_DETAIL_KEEP = 2000;
@@ -81,6 +114,32 @@ export type AgentRunOptions = {
   apps: { name: string; path: string; args: string }[];
   /** The selected model accepts images (unlocks operating the computer at 完全权限). */
   vision: boolean;
+  /** 编辑档的写入也先看 diff（设置项）。 */
+  diffConfirm: boolean;
+  /** 跨轮审批记忆（设置项）：`action_kind` 列表。 */
+  alwaysAllow: string[];
+  /** `web_fetch` 的域名白名单（设置项）；空 = 不下发这个工具。 */
+  webAllow: string[];
+  /** 允许派只读子代理（设置项，默认关）。 */
+  subagents: boolean;
+  /** 只读调用并发（设置项，默认开）。 */
+  parallelReads: boolean;
+  /** 429 / 5xx 自动重试（设置项，默认开）。 */
+  retries: boolean;
+  /** 搜索时仍屏蔽 .gitignore（设置项，默认开）。 */
+  grepIgnore: boolean;
+  /** 长任务先 update_plan（设置项，默认关）。 */
+  planFirst: boolean;
+  /** 每轮上下文预算（token，设置项；缺省由后端用 48000）。 */
+  contextTokens?: number;
+  /** 单条工具结果回灌上限（字符，设置项；缺省由后端用 12000）。 */
+  resultCap?: number;
+  /** Anthropic 走流式（设置项，默认开）。 */
+  anthropicStream: boolean;
+  /** MCP 总开关（设置项，默认开）。 */
+  mcpEnabled: boolean;
+  /** 启用中的 MCP 服务；后端每轮列一次工具，名字是 `mcp_<server>_<tool>`。 */
+  mcp: { name: string; command: string; args: string }[];
 };
 
 /** Full transcript (displayed + persisted). Past the verbatim window, older rounds fold into a digest. */
@@ -91,7 +150,17 @@ function appendTurn(
   keepWhole = false,
   steps?: AgentStep[],
   limited = false,
-  usage?: { elapsedMs?: number; promptTokens?: number; completionTokens?: number },
+  usage?: {
+    elapsedMs?: number;
+    promptTokens?: number;
+    completionTokens?: number;
+    contextChars?: number;
+    budgetRatio?: number;
+    trimmedRounds?: number;
+    cacheHitTokens?: number;
+    undoToken?: string;
+  },
+  plan?: AgentPlanStep[],
 ): QaTurn[] {
   const kept = steps?.filter((s) => s.summary).map((s) => ({
     tool: s.tool,
@@ -108,10 +177,16 @@ function appendTurn(
       content: answer,
       ...(keepWhole ? { keep: "whole" as const } : {}),
       ...(kept && kept.length > 0 ? { steps: kept } : {}),
+      ...(plan && plan.length > 0 ? { plan } : {}),
       ...(limited ? { limited: true } : {}),
       ...(usage?.elapsedMs != null ? { elapsedMs: usage.elapsedMs } : {}),
       ...(usage?.promptTokens != null ? { promptTokens: usage.promptTokens } : {}),
       ...(usage?.completionTokens != null ? { completionTokens: usage.completionTokens } : {}),
+      ...(usage?.contextChars != null ? { contextChars: usage.contextChars } : {}),
+      ...(usage?.budgetRatio != null ? { budgetRatio: usage.budgetRatio } : {}),
+      ...(usage?.trimmedRounds ? { trimmedRounds: usage.trimmedRounds } : {}),
+      ...(usage?.cacheHitTokens ? { cacheHitTokens: usage.cacheHitTokens } : {}),
+      ...(usage?.undoToken ? { undoToken: usage.undoToken } : {}),
     },
   ];
   return compactSession(next);
@@ -119,6 +194,8 @@ function appendTurn(
 
 export type AskStreamOptions = {
   selectedModel: AIModelConfig | undefined;
+  /** 备用模型：主模型这一轮彻底失败时后端换它重来（见 `resolveFallbackModel`）。 */
+  fallbackModel?: AIModelConfig | null;
   task: TaskKind;
   /** Scenario/goals for the `optimize` task (ignored otherwise). */
   optimize: OptimizeConfig;
@@ -134,6 +211,8 @@ export type AskStreamOptions = {
   onSent: () => void;
   /** Drop the workbench context cache: this round changed the repo it describes. */
   onInvalidateContext: () => void;
+  /** 「以后都允许」：把这一类的 `action_kind` 写进设置，下一轮直接放行。带仓库路径好按仓记忆。 */
+  onRememberKind?: (kind: string, repoPath: string) => void;
   /** Persist the completed exchange as a session (wired to useAskSessions). */
   persistTurns: (turns: QaTurn[], firstQuestion: string) => void;
   /** Active profile: extra system role + optional temperature override. */
@@ -154,8 +233,8 @@ export type AskStreamOptions = {
 export function useAskStream(opts: AskStreamOptions) {
   const { t } = useTranslation("aihub");
   const {
-    selectedModel, task, optimize, input, setInput, setSelectedText, getContext, collectDailyBrief,
-    routeOverride, onSent, onInvalidateContext, persistTurns,
+    selectedModel, fallbackModel, task, optimize, input, setInput, setSelectedText, getContext, collectDailyBrief,
+    routeOverride, onSent, onInvalidateContext, onRememberKind, persistTurns,
     profileSystemRole, profileTemperature, attachments = [], agent, dailyStyle = "chat",
   } = opts;
 
@@ -192,6 +271,13 @@ export function useAskStream(opts: AskStreamOptions) {
       return value;
     });
   };
+  /** Checklist published by `update_plan`; empty until the model writes one. */
+  const [agentPlan, setAgentPlan] = useState<AgentPlanStep[]>([]);
+  const agentPlanRef = useRef<AgentPlanStep[]>([]);
+  const rememberPlan = useCallback((next: AgentPlanStep[]) => {
+    agentPlanRef.current = next;
+    setAgentPlan(next);
+  }, []);
   const [agentApproval, setAgentApproval] = useState<AgentApproval | null>(null);
   const [stopping, setStopping] = useState(false);
   /** Last request that failed (not stopped), so the error card can offer a retry. */
@@ -241,6 +327,8 @@ export function useAskStream(opts: AskStreamOptions) {
     const baseHistory = historyOverride ?? history;
     /** Char-budgeted transcript for this request; oldest rounds fold out first. */
     const budget = requestHistory(baseHistory);
+    /** The previous round's checklist belongs to that round, not this one. */
+    rememberPlan([]);
     /** The composer clears attachments on send: this round carries its own copy, so a
         retry / regenerate replays with the files it was answered from. */
     const sentAttachments = replay?.attachments ?? attachments;
@@ -274,10 +362,19 @@ export function useAskStream(opts: AskStreamOptions) {
     const finishTurn = (
       text: string,
       limited = false,
-      usage?: { elapsedMs?: number; promptTokens?: number; completionTokens?: number },
+      usage?: {
+        elapsedMs?: number;
+        promptTokens?: number;
+        completionTokens?: number;
+        contextChars?: number;
+        budgetRatio?: number;
+        trimmedRounds?: number;
+        cacheHitTokens?: number;
+        undoToken?: string;
+      },
     ) => {
       const nextTurns = appendTurn(
-        baseHistory, question, text, keepWhole, agentStepsRef.current, limited, usage,
+        baseHistory, question, text, keepWhole, agentStepsRef.current, limited, usage, agentPlanRef.current,
       );
       setHistory(nextTurns);
       setPending(null);
@@ -430,6 +527,13 @@ export function useAskStream(opts: AskStreamOptions) {
           completionTokens?: number;
           /** The turn stopped at the round / action cap:「继续」resumes it. */
           limited?: boolean;
+          /** Context / budget telemetry of the last round (see `TurnStats` in agent.rs). */
+          contextChars?: number;
+          budgetRatio?: number;
+          trimmedRounds?: number;
+          cacheHitTokens?: number;
+          /** Present when the turn wrote files and left a snapshot to restore. */
+          undoToken?: string;
         };
       }) => {
         const payload = event.payload;
@@ -445,9 +549,15 @@ export function useAskStream(opts: AskStreamOptions) {
             promptTokens != null || completionTokens != null
               ? undefined
               : Math.max(1, Math.round((question.length + full.length) / 4));
+          const telemetry = {
+            contextChars: payload.contextChars,
+            budgetRatio: payload.budgetRatio,
+            trimmedRounds: payload.trimmedRounds,
+            cacheHitTokens: payload.cacheHitTokens,
+          };
           setSource((prev) =>
             prev
-              ? { ...prev, elapsedMs, promptTokens, completionTokens, estimatedTokens }
+              ? { ...prev, elapsedMs, promptTokens, completionTokens, estimatedTokens, ...telemetry }
               : prev
           );
           const finalText = landText(stripThinking(full));
@@ -460,7 +570,7 @@ export function useAskStream(opts: AskStreamOptions) {
               estimatedTokens,
             });
             finishTurn(finalText, payload.limited === true, {
-              elapsedMs, promptTokens, completionTokens,
+              elapsedMs, promptTokens, completionTokens, ...telemetry, undoToken: payload.undoToken,
             });
           } else {
             failTurn(false);
@@ -528,6 +638,20 @@ export function useAskStream(opts: AskStreamOptions) {
         }),
       );
       unlisteners.push(
+        await listen<{ id: string; steps: AgentPlanStep[] }>("agent-plan", (event) => {
+          const payload = event.payload;
+          if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
+          // The backend already normalised titles / statuses; keep only what the card can draw.
+          const steps = (Array.isArray(payload.steps) ? payload.steps : [])
+            .filter((s) => s && typeof s.title === "string" && s.title.trim())
+            .map((s) => ({
+              title: s.title.trim(),
+              status: s.status === "done" ? "done" as const : s.status === "in_progress" ? "in_progress" as const : "pending" as const,
+            }));
+          if (steps.length > 0) rememberPlan(steps);
+        }),
+      );
+      unlisteners.push(
         await listen<{
           id: string;
           callId: string;
@@ -536,6 +660,10 @@ export function useAskStream(opts: AskStreamOptions) {
           preview: string;
           previewKind?: "diff" | "text";
           deadlineAt?: number;
+          actionKind?: string;
+          canRemember?: boolean;
+          patches?: AgentApprovalPatch[];
+          callIds?: string[];
         }>("agent-approval", (event) => {
           const payload = event.payload;
           if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
@@ -546,6 +674,10 @@ export function useAskStream(opts: AskStreamOptions) {
             preview: payload.preview || "",
             previewKind: payload.previewKind === "diff" ? "diff" : "text",
             deadlineAt: payload.deadlineAt ?? 0,
+            actionKind: payload.actionKind || "",
+            canRemember: Boolean(payload.canRemember),
+            patches: Array.isArray(payload.patches) ? payload.patches : undefined,
+            callIds: Array.isArray(payload.callIds) ? payload.callIds : undefined,
           });
           // The round is blocked on the user: an opt-in raise beats a silent
           // auto-deny five minutes later.
@@ -574,6 +706,8 @@ export function useAskStream(opts: AskStreamOptions) {
       await invoke("agent_run", {
         req: {
           config,
+          // 主模型整轮失败时后端换它重试一次；没配置第二个同协议模型就为空
+          fallbackConfig: fallbackModel || null,
           system,
           user,
           requestId: reqId,
@@ -585,6 +719,19 @@ export function useAskStream(opts: AskStreamOptions) {
           // The daily notes are already collected: the report needs no repo tools.
           tools: wantTools,
           vision: agent.vision,
+          diffConfirm: agent.diffConfirm,
+          alwaysAllow: agent.alwaysAllow,
+          webAllow: agent.webAllow,
+          subagents: agent.subagents,
+          parallelReads: agent.parallelReads,
+          retries: agent.retries,
+          grepIgnore: agent.grepIgnore,
+          planFirst: agent.planFirst,
+          contextTokens: agent.contextTokens,
+          resultCap: agent.resultCap,
+          anthropicStream: agent.anthropicStream,
+          mcpEnabled: agent.mcpEnabled,
+          mcp: agent.mcp,
         },
       });
       if (streamIdRef.current === myGen) {
@@ -650,9 +797,10 @@ export function useAskStream(opts: AskStreamOptions) {
     lastDailyBriefRef.current = "";
     lastDailyReposRef.current = [];
     rememberSteps([]);
+    rememberPlan([]);
     setAgentApproval(null);
     setStopping(false);
-  }, [setSelectedText]);
+  }, [setSelectedText, rememberPlan]);
 
   /** Point the chat state at a restored session's turns. */
   const loadSession = useCallback((turns: QaTurn[]) => {
@@ -664,6 +812,7 @@ export function useAskStream(opts: AskStreamOptions) {
     lastDailyBriefRef.current = "";
     lastDailyReposRef.current = [];
     rememberSteps([]);
+    rememberPlan([]);
     setAgentApproval(null);
     setStopping(false);
     const verbatim = compacted.filter((t) => !t.digest);
@@ -750,16 +899,23 @@ export function useAskStream(opts: AskStreamOptions) {
 
   const decideAgent = async (decision: AgentDecision) => {
     const id = activeReqRef.current;
-    const callId = agentApproval?.callId;
-    if (!id || !callId) return;
+    const ids = agentApproval?.callIds?.length
+      ? agentApproval.callIds
+      : agentApproval?.callId
+        ? [agentApproval.callId]
+        : [];
+    if (!id || ids.length === 0) return;
+    const kind = agentApproval?.actionKind || "";
     setAgentApproval(null);
     try {
       await invoke("agent_decide", {
         requestId: id,
-        callId,
+        callIds: ids,
         allow: decision !== "deny",
-        scope: decision === "turn" ? "turn" : "once",
+        scope: decision === "always" ? "always" : decision === "turn" ? "turn" : "once",
       });
+      // 记住要等后端收下这次决定：被判定失效（回合已结束）就不该写进设置
+      if (decision === "always" && kind) onRememberKind?.(kind, agent.repoPath);
     } catch (e) {
       setError(String(e));
     }
@@ -787,6 +943,7 @@ export function useAskStream(opts: AskStreamOptions) {
     regenerate,
     stopStream,
     agentSteps,
+    agentPlan,
     agentApproval,
     stopping,
     decideAgent,

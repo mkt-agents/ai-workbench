@@ -119,7 +119,7 @@ pub(crate) fn list_processes(args: &Value) -> Result<String, String> {
         .into_iter()
         .filter(|r| filter.is_empty() || r.name.to_lowercase().contains(&filter))
         .collect();
-    rows.sort_by(|a, b| b.mem_kb.cmp(&a.mem_kb));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.mem_kb));
     let total = rows.len();
     let lines: Vec<String> = rows
         .iter()

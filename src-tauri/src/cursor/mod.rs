@@ -665,9 +665,9 @@ fn parse_user_data_dir_from_cmdline(cmdline: &str) -> Option<PathBuf> {
     let marker = "--user-data-dir=";
     let idx = cmdline.find(marker)?;
     let rest = &cmdline[idx + marker.len()..];
-    let raw = if rest.starts_with('"') {
-        let end = rest[1..].find('"')? + 1;
-        rest[1..end].to_string()
+    let raw = if let Some(stripped) = rest.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        stripped[..end].to_string()
     } else {
         let end = rest.find(' ').unwrap_or(rest.len());
         rest[..end].to_string()
@@ -1181,6 +1181,7 @@ fn repair_blob_typed_state(db_path: &Path) -> Result<usize, String> {
 ///   synced sessions show as empty shells (headers only, no messages).
 /// - `checkpointId:<composerId>:<hash>`: session checkpoint snapshots, keyed
 ///   by the same composerIds the sidebar already lists.
+///
 /// Other prefixes (agentKv, inlineDiff, ...) stay skipped: agentKv is a
 /// multi-GB derived cache and inline diffs are bulky temporaries.
 const SHARED_CURSOR_KV_PREFIXES: &[&str] = &[
@@ -1398,7 +1399,6 @@ fn backup_cursor_data_from_root(account_id: &str, data_root: &Path) -> Result<St
 
 /// Copy live state.vscdb (+ wal/shm) to a temp file so we can read while Cursor holds a lock.
 /// Refuses huge DBs — a multi-GB copy freezes the whole app.
-
 fn copy_live_db_for_read_at(live_db: &Path) -> Result<PathBuf, String> {
     if !live_db.exists() {
         return Err("未找到 Cursor 登录数据库".to_string());
@@ -1491,7 +1491,7 @@ fn extract_auth_from_live() -> Result<CursorAuthSnapshot, String> {
     // Prefer direct RO open. Empty auth means logged out — that is a valid result.
     // Never fall through to a multi-GB copy just because email/token is empty.
     match extract_auth_from_db(&live_db) {
-        Ok(snap) => return Ok(snap),
+        Ok(snap) => Ok(snap),
         Err(direct_err) => {
             // Fallback only when the live DB cannot be opened (lock / IO).
             match copy_live_db_for_read() {
@@ -1518,18 +1518,18 @@ fn emails_match(a: &str, b: &str) -> bool {
 }
 
 fn identity_match(account_email: &str, account_name: &str, live: &CursorAuthSnapshot) -> bool {
-    if !live.email.is_empty() {
-        if emails_match(account_email, &live.email) || emails_match(account_name, &live.email) {
-            return true;
-        }
+    if !live.email.is_empty()
+        && (emails_match(account_email, &live.email) || emails_match(account_name, &live.email))
+    {
+        return true;
     }
-    if !live.name.is_empty() {
-        if emails_match(account_email, &live.name) || emails_match(account_name, &live.name) {
-            return true;
-        }
+    if !live.name.is_empty()
+        && (emails_match(account_email, &live.name) || emails_match(account_name, &live.name))
+    {
+        return true;
     }
     if let Some(auth_id) = live.items.get("glass.lastSignedInAuthId") {
-        if let Some(uid) = auth_id.split('|').last() {
+        if let Some(uid) = auth_id.split('|').next_back() {
             if !uid.is_empty()
                 && (account_email == uid
                     || account_name == uid
@@ -3528,29 +3528,23 @@ fn list_cursor_backups_uncached() -> Result<Vec<CursorBackupInfo>, String> {
     }
 
     let mut results = Vec::new();
-    for entry in fs::read_dir(&backups_root).map_err(|e| format!("Failed to read backups: {}", e))? {
-        if let Ok(entry) = entry {
-            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                let path = entry.path();
-                let account_id = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                // Same scope as the disk bar: dir_size skips the legacy full DB
-                // copies, so add them back rather than showing a smaller number
-                // than "清理冗余备份" reports for this slot.
-                let stale_bytes: u64 = stale_full_backup_dbs_in(&path)
-                    .iter()
-                    .map(|db| file_size(db))
-                    .sum();
-                let size = dir_size(&path) + stale_bytes;
-                results.push(CursorBackupInfo {
-                    account_id,
-                    path: path.to_string_lossy().to_string(),
-                    size_bytes: size,
-                });
-            }
+    let entries = fs::read_dir(&backups_root).map_err(|e| format!("Failed to read backups: {}", e))?;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
         }
+        let path = entry.path();
+        let account_id = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        // Same scope as the disk bar: dir_size skips the legacy full DB
+        // copies, so add them back rather than showing a smaller number
+        // than "清理冗余备份" reports for this slot.
+        let stale_bytes: u64 = stale_full_backup_dbs_in(&path).iter().map(|db| file_size(db)).sum();
+        let size = dir_size(&path) + stale_bytes;
+        results.push(CursorBackupInfo {
+            account_id,
+            path: path.to_string_lossy().to_string(),
+            size_bytes: size,
+        });
     }
 
     Ok(results)
@@ -3677,7 +3671,7 @@ fn slim_cursor_state_dbs_sync() -> Result<CursorDbSlimReport, String> {
                     continue;
                 }
                 let canon = fs::canonicalize(&db).ok();
-                if seen.iter().any(|s| *s == canon) {
+                if seen.contains(&canon) {
                     continue;
                 }
                 seen.push(canon);
@@ -3928,8 +3922,8 @@ mod junction_tests {
                 "/c",
                 "mklink",
                 "/J",
-                &link.to_string_lossy().to_string(),
-                &target.to_string_lossy().to_string(),
+                link.to_string_lossy().as_ref(),
+                target.to_string_lossy().as_ref(),
             ])
             .output()
             .expect("mklink should run");

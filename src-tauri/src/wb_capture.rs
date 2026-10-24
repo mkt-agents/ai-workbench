@@ -601,6 +601,8 @@ fn logged_in_from_url(url: &str) -> bool {
 pub async fn wb_capture_cb_login_cookies(app: AppHandle, batch_id: String) -> Result<CookieCapture, String> {
     let label = window_label(&batch_id);
     let handle = app.clone();
+    // (页面地址, host, cookie 三元组)：命令层拿这三样拼 Cookie 头
+    #[allow(clippy::type_complexity)]
     let (page_url, host, cookies) = tokio::task::spawn_blocking(move || -> Result<(String, String, Vec<(String, String, String)>), String> {
         let win = handle
             .get_webview_window(&label)

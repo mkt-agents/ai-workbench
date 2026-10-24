@@ -238,7 +238,7 @@ fn sanitize_asset_name(url: &str) -> String {
         .next()
         .unwrap_or("")
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or("");
     let safe: String = last
         .chars()
@@ -633,11 +633,8 @@ async fn download_installer_to(
                         downloaded += chunk.len() as u64;
                         if downloaded - reported >= 1_048_576 {
                             reported = downloaded;
-                            let percent = if total > 0 {
-                                ((downloaded * 100) / total).min(99) as u8
-                            } else {
-                                0
-                            };
+                            let percent =
+                                (downloaded * 100).checked_div(total).map(|p| p.min(99) as u8).unwrap_or(0);
                             on_progress("download", percent, downloaded, total);
                         }
                         None

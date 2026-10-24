@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn unmerged_paths_dedupe_stages_and_keep_spaces() {
-        let raw = "100644 aaa 1\ta.txt\0100644 bbb 2\ta.txt\0100644 ccc 3\ta.txt\0100644 ddd 2\tb c.txt\0";
+        let raw = "100644 aaa 1\ta.txt\x00100644 bbb 2\ta.txt\x00100644 ccc 3\ta.txt\x00100644 ddd 2\tb c.txt\x00";
         assert_eq!(parse_unmerged_paths(raw), vec!["a.txt".to_string(), "b c.txt".to_string()]);
         assert!(parse_unmerged_paths("").is_empty());
     }

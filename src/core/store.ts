@@ -6,6 +6,7 @@ import type {
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
   Snippet, Draft, AiHubSession, CursorUpdateState, CursorCleanupResult,
   QuickAppLauncher,
+  McpServer,
 } from './types';
 import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
@@ -370,6 +371,12 @@ interface StoreState extends GlobalState, Invocations {
   deleteQuickAppLauncher: (id: string) => Promise<void>;
   reorderQuickAppLaunchers: (orderedIds: string[]) => Promise<void>;
 
+  // MCP servers
+  loadMcpServers: () => Promise<void>;
+  addMcpServer: (server: Omit<McpServer, 'id' | 'createdAt' | 'updatedAt'>) => Promise<McpServer>;
+  updateMcpServer: (id: string, updates: Partial<McpServer>) => Promise<void>;
+  deleteMcpServer: (id: string) => Promise<void>;
+
   // DeepSeek Harness cached state
   dshNodejsInstalled: boolean | null;
   dshVersion: string | null;
@@ -409,6 +416,7 @@ export const useGlobalStore = create<StoreState>()(
       drafts: [],
       aiHubSessions: [],
       quickAppLaunchers: [],
+      mcpServers: [],
 
       // Settings
       setSettings: (newSettings) => set((state) => ({
@@ -1429,6 +1437,35 @@ export const useGlobalStore = create<StoreState>()(
         set({ quickAppLaunchers: launchers });
       }),
 
+      // MCP servers: enabled ones are sent with every question
+      loadMcpServers: async () => withTable("mcp_servers", async () => {
+        const servers = await storage.mcpServers.load();
+        set({ mcpServers: servers });
+      }),
+
+      addMcpServer: async (server) => withTable("mcp_servers", async () => {
+        const now = new Date().toISOString();
+        const created: McpServer = { ...server, id: crypto.randomUUID(), createdAt: now, updatedAt: now };
+        const next = [...get().mcpServers, created];
+        await storage.mcpServers.save(next);
+        set({ mcpServers: next });
+        return created;
+      }),
+
+      updateMcpServer: async (id, updates) => withTable("mcp_servers", async () => {
+        const servers = get().mcpServers.map((s) =>
+          s.id === id ? { ...s, ...updates, updatedAt: new Date().toISOString() } : s
+        );
+        await storage.mcpServers.save(servers);
+        set({ mcpServers: servers });
+      }),
+
+      deleteMcpServer: async (id) => withTable("mcp_servers", async () => {
+        const servers = get().mcpServers.filter((s) => s.id !== id);
+        await storage.mcpServers.save(servers);
+        set({ mcpServers: servers });
+      }),
+
       // Spread all pure pass-through Tauri invoke wrappers
       ...invocations,
 
@@ -1506,6 +1543,7 @@ export const useGlobalStore = create<StoreState>()(
           get().loadDrafts(),
           get().loadAiHubSessions(),
           get().loadQuickAppLaunchers(),
+          get().loadMcpServers(),
         ]);
       },
     }),

@@ -13,6 +13,9 @@ const ICONS: Record<AgentPermission, LucideIcon> = {
 type Props = {
   permission: AgentPermission;
   onPermission: (next: AgentPermission) => void;
+  /** 编辑档的写入也先弹 diff 确认。 */
+  diffConfirm: boolean;
+  onDiffConfirm: (on: boolean) => void;
   open: boolean;
   onToggle: () => void;
 };
@@ -21,7 +24,9 @@ type Props = {
  * Composer permission level (mirrors DeepSeek Harness): what the AI may do in the repo.
  * Switchable any time, even mid-answer — it applies to the next message.
  */
-export default function PermissionPicker({ permission, onPermission, open, onToggle }: Props) {
+export default function PermissionPicker({
+  permission, onPermission, diffConfirm, onDiffConfirm, open, onToggle,
+}: Props) {
   const { t } = useTranslation("aihub");
   const Icon = ICONS[permission];
   const pillRef = useRef<HTMLButtonElement>(null);
@@ -82,6 +87,15 @@ export default function PermissionPicker({ permission, onPermission, open, onTog
               </div>
             );
           })}
+          {/* 编辑档才可能有「直接落地」的写入，所以这一项只在编辑/审查档有意义 */}
+          <label className="qa-perm-diff" title={t("permission.diffConfirmHint")}>
+            <input
+              type="checkbox"
+              checked={diffConfirm}
+              onChange={(e) => onDiffConfirm(e.target.checked)}
+            />
+            <span>{t("permission.diffConfirm")}</span>
+          </label>
           <div className="qa-perm-foot">{t("permission.shortcutHint")}</div>
         </div>
       )}

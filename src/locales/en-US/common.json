@@ -36,6 +36,7 @@
     "AI_EMPTY_PROMPT": "Please enter content",
     "AI_EMPTY_RESPONSE": "Model returned no valid text",
     "AI_REQUEST_CANCELLED": "Cancelled",
+    "AI_APPROVAL_STALE": "This confirmation is no longer valid (the turn ended or timed out). Ask again.",
     "DSH_NOT_INSTALLED": "DeepSeek Harness not installed, please install first",
     "DSH_START_FAILED": "Failed to start DeepSeek",
     "DSH_INSTALL_FAILED": "Failed to install DeepSeek",

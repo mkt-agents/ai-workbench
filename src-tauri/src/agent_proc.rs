@@ -241,7 +241,17 @@ fn pump(pipe: impl Read + Send + 'static, sink: Arc<Mutex<String>>) {
     });
 }
 
+/// 只给测试用：钉住「后台进程 #N 已启动…」这条消息格式，代理自己走 [`start_process_id`]。
+#[cfg(test)]
 pub(crate) fn start_process(cwd: &Path, args: &Value) -> Result<String, String> {
+    start_process_id(cwd, args).map(|(_, message)| message)
+}
+
+/// Same as [`start_process`], but hands the id back separately. The agent needs it: when a
+/// turn is cancelled while this call is still inside `spawn_blocking` (which cannot be
+/// aborted), the child is already registered, so the caller has to stop it by id or it
+/// outlives the turn with nobody knowing its number.
+pub(crate) fn start_process_id(cwd: &Path, args: &Value) -> Result<(u32, String), String> {
     let command = arg_str(args, "command");
     if command.is_empty() {
         return Err("命令为空".into());
@@ -274,7 +284,7 @@ pub(crate) fn start_process(cwd: &Path, args: &Value) -> Result<String, String> 
     // Give it a moment so an immediate failure (bad command) shows up in the first read.
     std::thread::sleep(Duration::from_millis(800));
     let first = process_output(&serde_json::json!({ "id": id }))?;
-    Ok(format!("后台进程 #{id} 已启动（pid {pid}）：{command}\n{first}"))
+    Ok((id, format!("后台进程 #{id} 已启动（pid {pid}）：{command}\n{first}")))
 }
 
 fn proc_id(args: &Value) -> Result<u32, String> {

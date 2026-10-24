@@ -182,7 +182,7 @@ mod imp {
 
     /// Last `(hwnd, x, y, w, h)` written to the trace, so the 400ms heartbeat
     /// does not flood the log with identical lines. Diagnostic only.
-    static LAST_PLACE: Mutex<Option<(isize, i32, i32, i32, i32)>> = Mutex::new(None);
+    static LAST_PLACE: Mutex<Option<PlaceKey>> = Mutex::new(None);
 
     type PlaceKey = (isize, i32, i32, i32, i32);
 
@@ -814,7 +814,7 @@ mod imp {
             // once on the first unchanged tick while the window is shown.
             let settled = NUDGE_STATE
                 .lock()
-                .map(|mut g| nudge_step(&mut *g, key, show))
+                .map(|mut g| nudge_step(&mut g, key, show))
                 .unwrap_or(false);
             if settled {
                 let _ = SetWindowPos(hwnd, None, px - 1, py, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
@@ -1222,6 +1222,7 @@ mod imp {
     /// takeover. Restoring the placement also restores the show state, but
     /// the style was captured after the window was hidden, so explicitly show
     /// it again when it was visible before.
+    #[allow(clippy::too_many_arguments)] // 快照字段：失败回滚要把当初抓到的状态原样带回来
     fn restore_taken_state(
         hwnd: HWND,
         host: HWND,
@@ -1293,13 +1294,13 @@ mod imp {
             // show the still top-level window, so hide it again immediately —
             // both calls run in the same pump iteration and no WM_PAINT lands
             // in between, so nothing is ever painted on the desktop.
-            if IsZoomed(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-                if original.showCmd != SW_SHOWNORMAL.0 as u32 {
-                    let mut wp = original;
-                    wp.showCmd = SW_SHOWNORMAL.0 as u32;
-                    let _ = SetWindowPlacement(hwnd, &wp);
-                    let _ = ShowWindow(hwnd, SW_HIDE);
-                }
+            if (IsZoomed(hwnd).as_bool() || IsIconic(hwnd).as_bool())
+                && original.showCmd != SW_SHOWNORMAL.0 as u32
+            {
+                let mut wp = original;
+                wp.showCmd = SW_SHOWNORMAL.0 as u32;
+                let _ = SetWindowPlacement(hwnd, &wp);
+                let _ = ShowWindow(hwnd, SW_HIDE);
             }
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
             let exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -1440,6 +1441,7 @@ mod imp {
     }
 
     /// Adopt one specific window (the page's window picker).
+    #[allow(clippy::too_many_arguments)] // 前端选窗时把几何参数一起传进来，收起成结构体只会多一层壳
     pub fn attach_window(
         app: &tauri::AppHandle,
         process: &str,
@@ -1571,6 +1573,7 @@ mod imp {
     /// relayout self-heal): launching a splash first is fine, but RE-adopting
     /// after a frame death must never drag in a splash / console window,
     /// which then dies in turn and produces an endless adopt cycle.
+    #[allow(clippy::too_many_arguments)] // 与 attach / attach_wait 的参数一一对应
     fn attach_once(
         app: &tauri::AppHandle,
         process: &str,
@@ -1681,6 +1684,7 @@ mod imp {
     /// present it replaces the bare `window.scale_factor()` for the CSS px →
     /// physical px mapping, so a zoomed page or a per-monitor DPI change keeps
     /// the hosted window glued to the slot.
+    #[allow(clippy::too_many_arguments)] // 槽位几何 + 严格模式 + dpr，都由前端一次给出
     pub fn attach(
         app: &tauri::AppHandle,
         process: &str,
@@ -1706,6 +1710,7 @@ mod imp {
     /// After the first ~5s the scan relaxes (10ms → 120ms): a cold IDE start
     /// can take a minute, and tight scanning for that long would just burn
     /// CPU while nothing changes.
+    #[allow(clippy::too_many_arguments)] // 槽位几何 + 等待时长 + dpr，都由前端一次给出
     pub fn attach_wait(
         app: &tauri::AppHandle,
         process: &str,
@@ -2130,6 +2135,7 @@ pub async fn desktop_embed_candidates(
 
 /// Take the window over and place it at the slot (logical coordinates).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC 命令的参数就是前端一次给的槽位几何
 pub async fn desktop_embed_attach(
     app: tauri::AppHandle,
     process_name: String,
@@ -2153,6 +2159,7 @@ pub async fn desktop_embed_attach(
 /// Adopt with an in-process scan loop, so a window appearing on the desktop is
 /// taken over within one frame of showing up (no desktop flash).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC 命令的参数就是前端一次给的槽位几何
 pub async fn desktop_embed_attach_wait(
     app: tauri::AppHandle,
     process_name: String,
@@ -2179,6 +2186,7 @@ pub async fn desktop_embed_attach_wait(
 
 /// Adopt the window the user picked from the candidate list.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC 命令的参数就是前端一次给的槽位几何
 pub async fn desktop_embed_attach_window(
     app: tauri::AppHandle,
     process_name: String,

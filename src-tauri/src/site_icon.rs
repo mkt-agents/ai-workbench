@@ -72,7 +72,8 @@ fn icon_score(tag: &str, href: &str, is_touch: bool) -> u32 {
 }
 
 /// 页面里声明的图标地址，按清晰度从高到低（同分保持文档顺序）。
-/// `mask-icon` 是单色轮廓，不要。
+/// `mask-icon` 是单色轮廓，不要。仅测试用：线上走 `icon_candidates`。
+#[cfg(test)]
 pub fn icon_links(html: &str, base: &Url) -> Vec<Url> {
     scored_icon_links(html, base).into_iter().map(|(_, u)| u).collect()
 }
@@ -99,7 +100,7 @@ fn scored_icon_links(html: &str, base: &Url) -> Vec<(u32, Url)> {
         }
         found.push((icon_score(tag, &href, is_touch), url));
     }
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|a| std::cmp::Reverse(a.0));
     found
 }
 

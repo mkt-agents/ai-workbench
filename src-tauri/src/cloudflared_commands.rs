@@ -419,7 +419,7 @@ pub(crate) fn open_url(url: &str) -> Result<(), String> {
         cmd.args(args)
             .spawn()
             .map_err(|e| format!("打开链接失败: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
@@ -723,7 +723,7 @@ fn spawn_log_readers(
         if let Some(stream) = stream {
             thread::spawn(move || {
                 let reader = BufReader::new(stream);
-                for line in reader.lines().flatten() {
+                for line in reader.lines().map_while(Result::ok) {
                     emit_log(&app, &session_id, &log_tag, &line);
                     if let Some(hint) = explain_cloudflared_line(&line) {
                         emit_log(&app, &session_id, &log_tag, &hint);
@@ -1293,12 +1293,12 @@ fn patch_ingress_text(content: &str, host: &str, service: &str) -> Result<String
     let ingress_indent = leading_ws(&lines[ingress_idx]).to_string();
 
     let mut end = lines.len();
-    for i in (ingress_idx + 1)..lines.len() {
-        let trimmed = lines[i].trim();
+    for (i, line) in lines.iter().enumerate().skip(ingress_idx + 1) {
+        let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if leading_ws(&lines[i]).len() <= ingress_indent.len() {
+        if leading_ws(line).len() <= ingress_indent.len() {
             end = i;
             break;
         }

@@ -900,7 +900,7 @@ pub async fn git_summarize_repos(
         // Contiguous chunks, joined in order: no shared mutable state, and the
         // result index still lines up with `paths`.
         let workers = GIT_SUMMARIZE_WORKERS.min(paths.len());
-        let per = (paths.len() + workers - 1) / workers;
+        let per = paths.len().div_ceil(workers);
         let mut results: Vec<RepoBatchItem> = Vec::with_capacity(paths.len());
         std::thread::scope(|scope| {
             let handles: Vec<_> = paths
@@ -1843,8 +1843,8 @@ fn git_list_branches_sync(repo_path: String) -> Result<GitBranchList, String> {
     .map(|s| s.trim().to_string())
     .filter(|s| !s.is_empty() && s != "HEAD")
     .collect();
-    local.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    remote.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    local.sort_by_key(|a| a.to_lowercase());
+    remote.sort_by_key(|a| a.to_lowercase());
     // The same branch on several remotes (origin/x + upstream/x) collapses to one name.
     local.dedup();
     remote.dedup();
@@ -3191,7 +3191,7 @@ pub async fn git_scan_repos(
         let max_depth = max_depth.unwrap_or(1);
         let mut out = Vec::new();
         scan_git_repos_recursive(root, 0, max_depth, &mut out)?;
-        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        out.sort_by_key(|a| a.name.to_lowercase());
         Ok(out)
     })
     .await

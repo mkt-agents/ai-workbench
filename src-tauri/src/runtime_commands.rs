@@ -1510,7 +1510,7 @@ fn verify_resolved(kind: &RuntimeKind, expected_bin: &str) -> (bool, Option<Stri
         let snap = load_env_snapshot();
         let Some(found) = split_path(&snap.effective_path())
             .into_iter()
-            .map(|dir| Path::new(&dir).join(&file))
+            .map(|dir| Path::new(&dir).join(file))
             .find(|p| p.is_file())
         else {
             return (false, None, None);
@@ -2085,11 +2085,7 @@ async fn download_archive(
         downloaded += chunk.len() as u64;
         if downloaded - reported >= 1_048_576 {
             reported = downloaded;
-            let percent = if total > 0 {
-                ((downloaded * 100) / total).min(99) as u8
-            } else {
-                0
-            };
+            let percent = (downloaded * 100).checked_div(total).map(|p| p.min(99) as u8).unwrap_or(0);
             emit_progress(
                 window,
                 "download",
@@ -2231,7 +2227,7 @@ async fn list_installable_jdk(installed: &[RuntimeVersion]) -> Result<Vec<Instal
     for (major, name) in futures_util::future::join_all(lookups).await.into_iter().flatten() {
         let aliases = jdk_installed_aliases(&name);
         out.push(InstallableVersion {
-            installed: installed.iter().any(|i| aliases.iter().any(|a| *a == i.version)),
+            installed: installed.iter().any(|i| aliases.contains(&i.version)),
             version: name,
             lts: lts.contains(&major),
         });

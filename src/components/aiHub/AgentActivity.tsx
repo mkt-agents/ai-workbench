@@ -2,10 +2,18 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { ChevronRight, GitMerge } from "lucide-react";
+import { Check, ChevronRight, GitMerge, ListChecks, Loader2, Undo2 } from "lucide-react";
+import type { AgentUndoFile } from "../../core/types";
+import { useGlobalStore } from "../../core/store";
 import { writeStoredString } from "../../core/localState";
 import { GIT_SUBTAB_KEY } from "../GitManager";
-import { APPROVAL_FOCUS_KEY, type AgentApproval, type AgentDecision } from "./useAskStream";
+import {
+  APPROVAL_FOCUS_KEY,
+  type AgentApproval,
+  type AgentApprovalPatch,
+  type AgentDecision,
+  type AgentPlanStep,
+} from "./useAskStream";
 
 /** Conflicts are resolved by the user on the commit page: jump there from the step. */
 async function openCommitPage() {
@@ -27,6 +35,7 @@ export const COMPUTER_TOOL_NAMES = ["screenshot", "mouse", "keyboard", "wait"];
 const NOTICE_KEYS: Record<string, string> = {
   conflict: "agent.conflictNote",
   notice: "agent.toolsUnsupported",
+  retry: "agent.retryNote",
 };
 
 function StepList({ steps }: { steps: StepLike[] }) {
@@ -39,8 +48,22 @@ function StepList({ steps }: { steps: StepLike[] }) {
       else next.add(i);
       return next;
     });
+  // 只有带 detail 的行值得展开；不到 2 条就不给这个入口，省得白占一行
+  const detailed = steps.flatMap((step, i) => (step.detail?.trim() ? [i] : []));
+  const allOpen = detailed.length > 0 && detailed.every((i) => open.has(i));
   return (
     <ol className="qa-agent-steps">
+      {detailed.length > 1 && (
+        <li className="qa-agent-steps-all-row">
+          <button
+            type="button"
+            className="qa-agent-steps-all"
+            onClick={() => setOpen(allOpen ? new Set() : new Set(detailed))}
+          >
+            {allOpen ? t("agent.collapseAll") : t("agent.expandAll")}
+          </button>
+        </li>
+      )}
       {steps.map((step, i) => {
         const detail = step.detail?.trim();
         const isOpen = open.has(i);
@@ -102,6 +125,145 @@ function DetailBlock({ text, diff }: { text: string; diff?: boolean }) {
         );
       })}
     </pre>
+  );
+}
+
+/**
+ * The model's own checklist (`update_plan`). Live while the round runs, folded into the
+ * finished turn afterwards; it is not the answer, so it never replaces the text.
+ */
+export function AgentPlanCard({ plan }: { plan: AgentPlanStep[] }) {
+  const { t } = useTranslation("aihub");
+  if (plan.length === 0) return null;
+  const done = plan.filter((s) => s.status === "done").length;
+  return (
+    <div className="qa-plan" role="group" aria-label={t("agent.planTitle")}>
+      <div className="qa-plan-head">
+        <ListChecks size={12} />
+        <span className="qa-plan-title">{t("agent.planTitle")}</span>
+        <span className="qa-plan-count">{t("agent.planProgress", { done, total: plan.length })}</span>
+      </div>
+      <ol className="qa-plan-steps">
+        {plan.map((step, i) => (
+          <li key={step.id || `${step.title}-${i}`} className={`qa-plan-step is-${step.status}`}>
+            <span className="qa-plan-mark" aria-hidden>
+              {step.status === "done" ? (
+                <Check size={10} />
+              ) : step.status === "in_progress" ? (
+                <Loader2 size={10} className="spin" />
+              ) : (
+                <span className="qa-plan-dot" />
+              )}
+            </span>
+            <span className="qa-plan-text">{step.title}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/** Last two segments of a path: enough to recognise the file, short enough for one row. */
+function shortPath(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.slice(-2).join("/") || path;
+}
+
+/**
+ * 「撤销这次改动」: restores files byte for byte from the snapshots the backend took before
+ * each change. Clicking it first lists what the round touched, so one file can be restored
+ * on its own or the whole round at once — every restored file leaves the list, which is why
+ * a partial undo followed by 「全部还原」 only touches the rest. The button reports the
+ * outcome in place (this window has no toast).
+ */
+export function AgentUndoButton({ token }: { token: string }) {
+  const { t } = useTranslation("aihub");
+  const invokeAgentUndo = useGlobalStore((s) => s.invokeAgentUndo);
+  const invokeAgentUndoFiles = useGlobalStore((s) => s.invokeAgentUndoFiles);
+  const [state, setState] = useState<"idle" | "picking" | "busy" | "done" | "failed">("idle");
+  const [files, setFiles] = useState<AgentUndoFile[]>([]);
+  const [detail, setDetail] = useState("");
+
+  const open = async () => {
+    setState("busy");
+    try {
+      const list = await invokeAgentUndoFiles(token);
+      setFiles(list);
+      setDetail("");
+      setState("picking");
+    } catch (e) {
+      setDetail(String(e));
+      setState("failed");
+    }
+  };
+
+  const run = async (path?: string) => {
+    setState("busy");
+    try {
+      const summary = await invokeAgentUndo(token, path);
+      setDetail(summary);
+      if (!path) {
+        setFiles([]);
+        setState("done");
+        return;
+      }
+      const rest = files.filter((f) => f.path !== path);
+      setFiles(rest);
+      setState(rest.length > 0 ? "picking" : "done");
+    } catch (e) {
+      setDetail(String(e));
+      setState("failed");
+    }
+  };
+
+  if (state === "done" || state === "failed") {
+    return (
+      <div className={`qa-undo is-${state}`}>
+        <div className="qa-undo-result">
+          <span className="qa-undo-title">
+            {state === "done" ? t("agent.undoDone") : t("agent.undoFailed")}
+          </span>
+          <span className="qa-undo-detail">{detail.replace(/^\[[A-Z_]+\]\s*/, "")}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === "picking") {
+    return (
+      <div className="qa-undo is-picking">
+        <div className="qa-undo-pick-head">
+          <span>{t("agent.undoPick", { count: files.length })}</span>
+          <button type="button" className="qa-undo-btn" onClick={() => void run()}>
+            <Undo2 size={12} />
+            {t("agent.undoAll")}
+          </button>
+        </div>
+        <ul className="qa-undo-list">
+          {files.map((file) => (
+            <li key={file.path} className="qa-undo-file">
+              <span className="qa-undo-kind">{t(`agent.undoKind.${file.kind}`)}</span>
+              <span className="qa-undo-path" title={file.to ? `${file.path} → ${file.to}` : file.path}>
+                {shortPath(file.path)}
+                {file.kind === "move" && file.to ? ` → ${shortPath(file.to)}` : ""}
+              </span>
+              <button type="button" className="qa-undo-file-btn" onClick={() => void run(file.path)}>
+                {t("agent.undoOne")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`qa-undo is-${state}`}>
+      <button type="button" className="qa-undo-btn" disabled={state === "busy"} onClick={() => void open()}>
+        <Undo2 size={12} />
+        {state === "busy" ? t("agent.undoBusy") : t("agent.undo")}
+      </button>
+    </div>
   );
 }
 
@@ -169,6 +331,16 @@ export function AgentApprovalBar({
       <button type="button" className="qa-agent-allow-turn" onClick={() => onDecide("turn")} title={t("agent.allowTurnTip")}>
         {t("agent.allowTurn")}
       </button>
+      {approval.canRemember && (
+        <button
+          type="button"
+          className="qa-agent-allow-always"
+          onClick={() => onDecide("always")}
+          title={t("agent.allowAlwaysTip")}
+        >
+          {t("agent.allowAlways")}
+        </button>
+      )}
       <button type="button" className="qa-agent-deny" onClick={() => onDecide("deny")}>
         {t("agent.deny")}
       </button>
@@ -193,11 +365,22 @@ export function AgentApprovalCard({
     // Turning it on should pay off for the call being answered right now.
     if (on) void invoke("show_ai_hub").catch(() => {});
   };
+  const patches: AgentApprovalPatch[] | null =
+    approval.patches && approval.patches.length > 1 ? approval.patches : null;
   return (
     <div className="qa-agent-approve" role="group" aria-label={t("agent.confirm")}>
       <div className="qa-agent-approve-title">{approval.summary}</div>
-      {approval.preview && (
-        <DetailBlock text={approval.preview} diff={approval.previewKind === "diff"} />
+      {patches ? (
+        <ol className="qa-agent-approve-patches">
+          {patches.map((patch) => (
+            <li key={patch.callId} className="qa-agent-approve-patch">
+              <div className="qa-agent-approve-patch-title">{patch.summary}</div>
+              {patch.preview && <DetailBlock text={patch.preview} diff={patch.previewKind === "diff"} />}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        approval.preview && <DetailBlock text={approval.preview} diff={approval.previewKind === "diff"} />
       )}
       <div className="qa-agent-approve-actions">
         <button type="button" className="qa-agent-allow" onClick={() => onDecide("once")}>
@@ -211,6 +394,16 @@ export function AgentApprovalCard({
         >
           {t("agent.allowTurn")}
         </button>
+        {approval.canRemember && (
+          <button
+            type="button"
+            className="qa-agent-allow-always"
+            onClick={() => onDecide("always")}
+            title={t("agent.allowAlwaysTip")}
+          >
+            {t("agent.allowAlways")}
+          </button>
+        )}
         <button type="button" className="qa-agent-deny" onClick={() => onDecide("deny")}>
           {t("agent.deny")}
         </button>

@@ -859,7 +859,7 @@ pub async fn open_browser_window_with_toolbar(
             // The name comes from the script itself (`@name` on import) and this is a
             // line comment inside generated code — a newline in it would escape.
             init_script.push_str(&script.name.replace(['\r', '\n'], " "));
-            init_script.push_str("\n");
+            init_script.push('\n');
             init_script.push_str("__aiwb_run_userscript(() => {\n");
             init_script.push_str(&script.code);
             init_script.push_str("\n}, ");
@@ -888,6 +888,8 @@ pub async fn open_browser_window_with_toolbar(
                 for (k, v) in url.query_pairs() {
                     if k == "url" {
                         let target = v.to_string();
+                        // 官方建议改用 tauri-plugin-opener；不新增插件依赖，先用旧接口。
+                        #[allow(deprecated)]
                         let _ = app_handle_for_nav.shell().open(target, None);
                     }
                 }

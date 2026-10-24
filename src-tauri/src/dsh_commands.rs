@@ -720,32 +720,31 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
         let reader = BufReader::new(stderr);
         let mut last_msg = String::new();
 
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                let trimmed = line.trim().to_string();
-                if trimmed.is_empty() { continue; }
+        // `map_while`：读出错就收摊，别让 `flatten` 在坏管道上无限转
+        for line in reader.lines().map_while(Result::ok) {
+            let trimmed = line.trim().to_string();
+            if trimmed.is_empty() { continue; }
 
-                // Parse npm progress output
-                let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
-                    ("installing", 70, format!("正在安装: {}", trimmed))
-                } else if trimmed.contains("fetch") || trimmed.contains("http") {
-                    ("downloading", 30, format!("下载中: {}", trimmed))
-                } else if trimmed.contains("extract") || trimmed.contains("tar") {
-                    ("extracting", 50, format!("解压中: {}", trimmed))
-                } else if trimmed.contains("link") {
-                    ("linking", 80, format!("链接中: {}", trimmed))
-                } else {
-                    ("progress", 40, trimmed.clone())
-                };
+            // Parse npm progress output
+            let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
+                ("installing", 70, format!("正在安装: {}", trimmed))
+            } else if trimmed.contains("fetch") || trimmed.contains("http") {
+                ("downloading", 30, format!("下载中: {}", trimmed))
+            } else if trimmed.contains("extract") || trimmed.contains("tar") {
+                ("extracting", 50, format!("解压中: {}", trimmed))
+            } else if trimmed.contains("link") {
+                ("linking", 80, format!("链接中: {}", trimmed))
+            } else {
+                ("progress", 40, trimmed.clone())
+            };
 
-                if trimmed != last_msg {
-                    last_msg = trimmed;
-                    let _ = window_clone.emit("dsh:install_progress", serde_json::json!({
-                        "stage": stage,
-                        "percent": percent,
-                        "message": msg
-                    }));
-                }
+            if trimmed != last_msg {
+                last_msg = trimmed;
+                let _ = window_clone.emit("dsh:install_progress", serde_json::json!({
+                    "stage": stage,
+                    "percent": percent,
+                    "message": msg
+                }));
             }
         }
 
@@ -938,12 +937,10 @@ fn stop_dsh_sync(port: u16, window: tauri::Window) -> Result<String, String> {
     };
 
     let port_pid = find_pid_by_port(port);
-    if owned_child.is_none() && !was_tracked && port_pid.is_none() {
-        if dsh_fully_stopped(port) {
-            return Err(format!("No instance running on port {port}"));
-        }
-        // Listener or HTTP still up but not tracked — keep going and kill by port.
+    if owned_child.is_none() && !was_tracked && port_pid.is_none() && dsh_fully_stopped(port) {
+        return Err(format!("No instance running on port {port}"));
     }
+    // Listener or HTTP still up but not tracked — keep going and kill by port.
 
     let mut kill_errors: Vec<String> = Vec::new();
     let owned_pid = owned_child.as_ref().map(|c| c.id());
@@ -1293,35 +1290,33 @@ pub async fn update_dsh(
         // generic network hint.
         let mut npm_errors: Vec<String> = Vec::new();
 
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                let trimmed = line.trim().to_string();
-                if trimmed.is_empty() { continue; }
+        for line in reader.lines().map_while(Result::ok) {
+            let trimmed = line.trim().to_string();
+            if trimmed.is_empty() { continue; }
 
-                if trimmed.starts_with("npm error") && npm_errors.len() < 5 {
-                    npm_errors.push(trimmed.clone());
-                }
+            if trimmed.starts_with("npm error") && npm_errors.len() < 5 {
+                npm_errors.push(trimmed.clone());
+            }
 
-                let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
-                    ("installing", 70, format!("正在安装: {}", trimmed))
-                } else if trimmed.contains("fetch") || trimmed.contains("http") {
-                    ("downloading", 30, format!("下载中: {}", trimmed))
-                } else if trimmed.contains("extract") || trimmed.contains("tar") {
-                    ("extracting", 50, format!("解压中: {}", trimmed))
-                } else if trimmed.contains("link") {
-                    ("linking", 80, format!("链接中: {}", trimmed))
-                } else {
-                    ("progress", 40, trimmed.clone())
-                };
+            let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
+                ("installing", 70, format!("正在安装: {}", trimmed))
+            } else if trimmed.contains("fetch") || trimmed.contains("http") {
+                ("downloading", 30, format!("下载中: {}", trimmed))
+            } else if trimmed.contains("extract") || trimmed.contains("tar") {
+                ("extracting", 50, format!("解压中: {}", trimmed))
+            } else if trimmed.contains("link") {
+                ("linking", 80, format!("链接中: {}", trimmed))
+            } else {
+                ("progress", 40, trimmed.clone())
+            };
 
-                if trimmed != last_msg {
-                    last_msg = trimmed;
-                    let _ = window_clone.emit("dsh:update_progress", serde_json::json!({
-                        "stage": stage,
-                        "percent": percent,
-                        "message": msg
-                    }));
-                }
+            if trimmed != last_msg {
+                last_msg = trimmed;
+                let _ = window_clone.emit("dsh:update_progress", serde_json::json!({
+                    "stage": stage,
+                    "percent": percent,
+                    "message": msg
+                }));
             }
         }
 

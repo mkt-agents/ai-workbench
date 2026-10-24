@@ -36,6 +36,7 @@
     "AI_EMPTY_PROMPT": "请输入内容",
     "AI_EMPTY_RESPONSE": "模型未返回有效文本",
     "AI_REQUEST_CANCELLED": "已取消",
+    "AI_APPROVAL_STALE": "这次确认已经失效（回合已结束或超时），请重新提问",
     "DSH_NOT_INSTALLED": "DeepSeek Harness 未安装，请先安装",
     "DSH_START_FAILED": "启动 DeepSeek 失败",
     "DSH_INSTALL_FAILED": "安装 DeepSeek 失败",

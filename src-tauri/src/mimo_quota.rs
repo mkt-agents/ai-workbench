@@ -112,6 +112,7 @@ impl MimoQuotaDto {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // 测试 / 解析时的整行快照，字段就是这么多
     fn ok(
         id: i64,
         label: Option<String>,
@@ -162,7 +163,7 @@ fn scale_credits(used: f64, limit: f64) -> (f64, f64, &'static str) {
     }
 }
 
-fn usage_items<'a>(root: &'a Value) -> Option<&'a Vec<Value>> {
+fn usage_items(root: &Value) -> Option<&Vec<Value>> {
     root.pointer("/data/monthUsage/items")
         .or_else(|| root.pointer("/data/usage/items"))
         .and_then(|v| v.as_array())
@@ -215,6 +216,7 @@ pub fn parse_platform_usage(body: &str) -> Result<(Option<String>, Vec<MimoWindo
     Ok((plan, windows))
 }
 
+#[allow(clippy::type_complexity)] // (套餐名, 余额列表, 窗口列表)：解析结果直接摊给调用方
 pub fn parse_balance(body: &str, mode: MimoMode) -> Result<(Option<String>, Vec<MimoBalance>, Vec<MimoWindow>), String> {
     let root: Value = serde_json::from_str(body).map_err(|_| "余额响应不是合法 JSON".to_string())?;
     if let Some(code) = root.get("code").and_then(|c| c.as_i64()) {
@@ -269,14 +271,12 @@ pub fn parse_balance(body: &str, mode: MimoMode) -> Result<(Option<String>, Vec<
     ] {
         if let Some(v) = data.get(key).or_else(|| data.get(alt)) {
             let amount = parse_f64(v);
-            if amount > 0.0 || key == "balance" {
-                if !balances.iter().any(|b: &MimoBalance| b.label == label) {
-                    balances.push(MimoBalance {
-                        label: label.to_string(),
-                        amount,
-                        currency: currency.to_string(),
-                    });
-                }
+            if (amount > 0.0 || key == "balance") && !balances.iter().any(|b: &MimoBalance| b.label == label) {
+                balances.push(MimoBalance {
+                    label: label.to_string(),
+                    amount,
+                    currency: currency.to_string(),
+                });
             }
         }
     }
@@ -356,7 +356,7 @@ pub fn cookie_value(raw: &str, name: &str) -> Option<String> {
         .filter_map(|chunk| chunk.trim().split_once('='))
         .filter(|(n, v)| n.trim() == name && !v.trim().is_empty())
         .map(|(_, v)| v.trim().trim_matches('"').to_string())
-        .last()
+        .next_back()
 }
 
 fn service_token(raw: &str) -> Option<String> {
@@ -832,6 +832,8 @@ fn join_platform_cookies(host: &str, cookies: &[(String, String, String)]) -> (S
 async fn capture_window_cookies(app: &AppHandle, label: &str) -> Result<MimoCookieCapture, String> {
     let handle = app.clone();
     let label = label.to_string();
+    // (页面地址, host, cookie 三元组)：上层拿这三样拼 Cookie 头
+    #[allow(clippy::type_complexity)]
     let (page_url, host, cookies) = tokio::task::spawn_blocking(move || -> Result<(String, String, Vec<(String, String, String)>), String> {
         let win = handle
             .get_webview_window(&label)

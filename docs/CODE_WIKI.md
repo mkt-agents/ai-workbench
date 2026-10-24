@@ -29,7 +29,7 @@
 
 | 能力域 | 功能 |
 |--------|------|
-| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、AI 智枢（含流式 + 多轮）、代码片段与工作暂存、快捷应用（本机应用扫描 / 启动 / 运行态，2026-10-21 从系统工具移进这一组）、协同办公（接管本机应用窗口并嵌入，原名「桌面应用」）；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
+| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、天玑（含流式 + 多轮）、代码片段与工作暂存、快捷应用（本机应用扫描 / 启动 / 运行态，2026-10-21 从系统工具移进这一组）、协同办公（接管本机应用窗口并嵌入，原名「桌面应用」）；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
 | **账号资产** | Cursor 多身份一键切换（独立 profile 目录）、账号配额看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
 | **工程管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK / Maven / Python 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
@@ -56,7 +56,7 @@
 | lucide-react | 1.33 | 图标库 |
 | @tauri-apps/api | 2.0 | Tauri 前端绑定 |
 | @tauri-apps/plugin-store | 2.0 | 前端 kv 存储（仅 settings） |
-| @tauri-apps/plugin-global-shortcut | 2.3 | 全局快捷键（智枢 `Ctrl+Alt+K`） |
+| @tauri-apps/plugin-global-shortcut | 2.3 | 全局快捷键（天玑 `Ctrl+Alt+K`） |
 
 ### 后端（Rust + Tauri）
 
@@ -83,7 +83,7 @@ ai-workbench/
 │
 ├── src/                          # React 前端
 │   ├── App.tsx                   # 主容器 + 侧边栏导航 + 标题栏
-│   ├── main.tsx                  # 入口（hash 路由分发：主窗口 / 智枢 / 智枢气泡）
+│   ├── main.tsx                  # 入口（hash 路由分发：主窗口 / 天玑 / 天玑气泡）
 │   ├── styles/                   # 全局样式（data-theme 驱动的皮肤系统），按域分片
 │   │   ├── index.css             # 按级联顺序 @import 全部分片（顺序即优先级）
 │   │   ├── tokens.css            # 各主题 token（含 `--page-max-width`、overlay / ink / radius 刻度）
@@ -113,8 +113,8 @@ ai-workbench/
 │   │   ├── PromptOptimizer.tsx   # AI 提示词改写（侧栏已下线，恢复见 AGENTS.md）
 │   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出 + 类型筛选
 │   │   ├── AccountQuotaPanel.tsx # 账号额度看板（多服务商；样式见同名 .css）
-│   │   ├── AiHubApp.tsx       # 智枢主窗口（hash 路由 #/ai-hub）
-│   │   ├── AiHubBubble.tsx    # 智枢桌面悬浮气泡（#/ai-hub-bubble）
+│   │   ├── AiHubApp.tsx       # 天玑主窗口（hash 路由 #/ai-hub）
+│   │   ├── AiHubBubble.tsx    # 天玑桌面悬浮气泡（#/ai-hub-bubble）
 │   │   ├── GitManager.tsx        # Git 管理主页面（仓库总览）
 │   │   ├── GitCommitPanel.tsx    # Git 提交面板（多仓 diff + AI 生成说明）
 │   │   ├── GitReposPage.tsx      # Git 仓库列表页（批量绑定 / 建分支 / 切分支 / 拉取 / 推送，结果走 git/BatchReport）
@@ -134,7 +134,7 @@ ai-workbench/
 │   │   │                         #   UuidTool / HashTool / JwtTool / RegexTool / CalculatorTool /
 │   │   │                         #   PortKillerTool（端口查杀，本页唯一带后端命令的工具）
 │   │   │                         #   + AppLauncherTool（快捷应用页，根节点复用 `.devtools-tool`）
-│   │   ├── aiHub/             # 智枢窗子组件：AskPanel（布局）→ AskThread / AskComposer / AskEmpty / AskErrorCard；
+│   │   ├── aiHub/             # 天玑窗子组件：AskPanel（布局）→ AskThread / AskComposer / AskEmpty / AskErrorCard；
 │   │   │                      #   AiHubHeader、PermissionPicker（四档权限）、AgentActivity（步骤详情 / diff 审批）；
 │   │   │                      #   hooks：useAskStream / useRepoFocus / useAnswerActions / useAiHubWindow 等
 │   │   ├── GitReportsPage.tsx    # Git 报告页（五视图 + 筛选 + 导出）
@@ -168,7 +168,7 @@ ai-workbench/
 │   │   ├── webTools.ts           # URL 规范化 / `@match` 通配判定 / newId（唯一主键）
 │   │   ├── pluginHotkeys.ts      # 书签全局快捷键注册（应用层，切页不失效）
 │   │   ├── floatingMenu.ts       # 悬浮菜单定位计算
-│   │   ├── promptOptimize.ts     # 提示词构造器（智枢优化仍用）
+│   │   ├── promptOptimize.ts     # 提示词构造器（天玑优化仍用）
 │   │   ├── reportAi.ts           # AI 用例行解析 `parseAiLine()`（与后端 `output_rules()` 成对）
 │   │   ├── reportRisk.ts         # 报告风险展示分类（纯前端侧）
 │   │   ├── workbuddy.ts          # WorkBuddy 前端适配辅助
@@ -198,7 +198,7 @@ ai-workbench/
 │   │   ├── db_commands.rs         # SQLite db_load / db_save
 │   │   ├── git_commands.rs        # 全部 Git 相关命令（status/commit/push/pull/diff/scan…）
 │   │   ├── ai_commands.rs         # AI 模型连接测试 / 列表 / generate_text / generate_text_stream
-│   │   ├── agent.rs               # 智枢代理主循环 agent_run / agent_decide（流式回合、审批、截图回传）
+│   │   ├── agent.rs               # 天玑代理主循环 agent_run / agent_decide（流式回合、审批、截图回传）
 │   │   ├── agent_policy.rs        # 四档权限：tool_gate / action_kind / offered_tools / policy_text（纯函数）
 │   │   ├── agent_stream.rs        # 代理回合 SSE 切行、流式 <think> 过滤（纯函数）
 │   │   ├── agent_fs.rs            # 路径范围与受保护目录、文件工具、审批 diff
@@ -229,7 +229,7 @@ ai-workbench/
 │   │   ├── wb_capture.rs          # WorkBuddy 扫码登录窗 + 凭证回传
 │   │   │
 │   │   ├── tray/                  # 系统托盘
-│   │   │   ├── mod.rs             # 托盘图标菜单注册 + 智枢窗口 + 气泡
+│   │   │   ├── mod.rs             # 托盘图标菜单注册 + 天玑窗口 + 气泡
 │   │   │   └── bubble.rs          # 气泡 ready 事件
 │   │   │
 │   │   ├── config.rs              # Rust 侧常量 + ErrorCode 枚举 + WorkbenchError
@@ -347,7 +347,7 @@ App 启动
   │     ├─ ALTER TABLE 字段迁移（增量）
   │     ├─ 后台 tokio::spawn: cursor shared-workspace migration
   │     ├─ global_shortcut 插件注册
-  │     ├─ tray::init_tray()（托盘 + 智枢窗口）
+  │     ├─ tray::init_tray()（托盘 + 天玑窗口）
   │     └─ tray::ensure_ai_hub_bubble()
   │
   ├─2. Vite dev server / 静态资源 → Tauri 窗口加载 index.html
@@ -370,7 +370,7 @@ App 启动
   │     ├─ registerAiHubShortcut(settings.aiHubShortcut)
   │     ├─ applyDocumentTheme(settings.theme)
   │     ├─ i18n.changeLanguage(settings.language)
-  │     └─ sync 智枢气泡可见状态到 Rust
+  │     └─ sync 天玑气泡可见状态到 Rust
   │
   └─ 渲染侧边栏 + 主内容区
 ```
@@ -385,7 +385,7 @@ App 启动
 
 | 接口 | 用途 | 关键字段 |
 |------|------|----------|
-| `AppSettings` | 用户偏好 | theme, language, aiHubShortcut, aiHubChips, sidebarCollapsed, aiHubProfiles / aiHubProfileId（智枢 Profile）, aiHubSuggest（下一步提示词预测开关） |
+| `AppSettings` | 用户偏好 | theme, language, aiHubShortcut, aiHubChips, sidebarCollapsed, aiHubProfiles / aiHubProfileId（天玑 Profile）, aiHubSuggest（下一步提示词预测开关） |
 | `GitAccount` | Git 身份 | name, email, color, note |
 | `GitRepoConfig` | 仓库身份绑定 | path, userName, email, accountId |
 | `GitWorkspace` | Workspace 分组 | path, name |
@@ -481,7 +481,7 @@ bootApp(): Promise<void>
 
 **设计要点**:
 - **StrictMode-safe**: React 双次 mount 不会重复初始化
-- **多窗口安全**: 主窗口和智枢窗口共享同一个 bootPromise
+- **多窗口安全**: 主窗口和天玑窗口共享同一个 bootPromise
 - **实际工作**: `initializeDatabase()` 目前是空函数（Rust setup 已完成建表），真正工作在 `store.initialize()`
 
 ### 6.5 `core/constants.ts` — 魔法值集中地
@@ -489,7 +489,7 @@ bootApp(): Promise<void>
 | 常量 | 值 | 用途 |
 |------|-----|------|
 | `DSH_DEFAULT_PORT` | 3080 | DeepSeek 默认端口 |
-| `AIHUB_CONTEXT_LIMIT` | 2000 | 智枢上下文截断上限 |
+| `AIHUB_CONTEXT_LIMIT` | 2000 | 天玑上下文截断上限 |
 | `AIHUB_DIRTY_REPO_LIMIT` | 5 | 扫描脏仓库数 |
 | `AIHUB_CLIPBOARD_LIMIT` | 800 | 剪贴板截断 |
 | `AI_DEFAULT_MAX_TOKENS` | 4096 | AI 默认 token |
@@ -516,7 +516,7 @@ bootApp(): Promise<void>
 | `providerLogos.ts` | 额度侧栏/卡片 glyph | `src/assets/providers/` + 本机安装图标优先 |
 | `snippets.ts` | `renderSnippet(template, params)` | `{{param}}` 替换引擎 |
 | `version.ts` | `compareVersions(a, b)` | 语义版本比较（含 prerelease） |
-| `promptOptimize.ts` | — | 提示词构造器（智枢「优化提示词」） |
+| `promptOptimize.ts` | — | 提示词构造器（天玑「优化提示词」） |
 | `browser.ts` | — | 打开 webview 窗口 |
 
 ### 6.8 `hooks/useTauriEvent.ts`
@@ -582,11 +582,11 @@ openGroups: Set<string>       // 分组展开状态
 |------|------|----------|
 | `DeepSeekHarness` | iframe 托管 DSH | 启动/停止/端口/认证补丁状态 |
 | `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `public/ai-providers/` |
-| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md；智枢优化仍用 |
+| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md；天玑优化仍用 |
 | `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 + 类型分段筛选 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`） |
 | `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（未安装 / 折叠时账号数胶囊、悬停换眼睛 / `+` 添加）下挂已连接账号，有账号的服务商点行可折叠（localStorage `aq-rail-folded`）；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
-| `AiHubApp` | 智枢主窗口（`#/ai-hub`） | 流式 + 多轮 + 上下文 chip + 片段选择器 + Profile；会话上限 `MAX_AI_HUB_SESSIONS = 50`（淘汰会提示丢了哪条）、拖拽附件、Esc 分层 |
+| `AiHubApp` | 天玑主窗口（`#/ai-hub`） | 流式 + 多轮 + 上下文 chip + 片段选择器 + Profile；会话上限 `MAX_AI_HUB_SESSIONS = 50`（淘汰会提示丢了哪条）、拖拽附件、Esc 分层 |
 | `AiHubBubble` | 桌面气泡（`#/ai-hub-bubble`） | 快捷唤起，全局置顶 |
 | `CursorManager` | Cursor 多账号 | 初始化 profile + 切换 + 诊断导出 |
 | `WorkBuddyManager` | WorkBuddy（侧栏已下线） | 账号池 + 签到；额度页复用扫码/签到；恢复见 AGENTS.md |
@@ -701,7 +701,7 @@ db_save(state: DbState, table: DbTable, rows: Vec<serde_json::Value>) -> Result<
 
 ### 8.4.1 `git_merge.rs` — 冲突与进行中的操作
 
-纯函数：`resolve_git_dir` / `repo_operation`（读 `MERGE_HEAD`、`rebase-merge|apply`、`CHERRY_PICK_HEAD`、`REVERT_HEAD`）、`parse_unmerged_paths`（`ls-files -u -z`，不依赖 git 语言）、`blocked_reason`、`strip_merge_msg`、`has_conflict_markers`、`parse_merge_segments`（`git merge-file -p --diff3` 输出 → same / conflict 段）。`conflict_state` / `ensure_repo_clear` 供 git 命令与智枢冲突闸门共用。命令：`git_merge_state`、`git_conflict_file`、`git_resolve_conflict`（拒绝仍含 `<<<<<<<` / `>>>>>>>` 的内容，按工作区文件补回 CRLF）、`git_merge_abort`。任何写入都是用户在三栏合并里的明确选择，不自动选边。前端整文件三栏不用 `segments`：`src/lib/merge3.ts` 用 Myers 分别比较 base↔ours、base↔theirs，按 git 的规则把重叠或相邻的改动并成一块（equal / ours / theirs / same / conflict），`src/lib/mergeChunks.ts` 管每块左右两侧的采纳 / 忽略 / 追加 / 手改；任一侧超过 2 万行或改动超过 3000 处时回退为用 `segments` 生成带冲突标记的文本手改。
+纯函数：`resolve_git_dir` / `repo_operation`（读 `MERGE_HEAD`、`rebase-merge|apply`、`CHERRY_PICK_HEAD`、`REVERT_HEAD`）、`parse_unmerged_paths`（`ls-files -u -z`，不依赖 git 语言）、`blocked_reason`、`strip_merge_msg`、`has_conflict_markers`、`parse_merge_segments`（`git merge-file -p --diff3` 输出 → same / conflict 段）。`conflict_state` / `ensure_repo_clear` 供 git 命令与天玑冲突闸门共用。命令：`git_merge_state`、`git_conflict_file`、`git_resolve_conflict`（拒绝仍含 `<<<<<<<` / `>>>>>>>` 的内容，按工作区文件补回 CRLF）、`git_merge_abort`。任何写入都是用户在三栏合并里的明确选择，不自动选边。前端整文件三栏不用 `segments`：`src/lib/merge3.ts` 用 Myers 分别比较 base↔ours、base↔theirs，按 git 的规则把重叠或相邻的改动并成一块（equal / ours / theirs / same / conflict），`src/lib/mergeChunks.ts` 管每块左右两侧的采纳 / 忽略 / 追加 / 手改；任一侧超过 2 万行或改动超过 3000 处时回退为用 `segments` 生成带冲突标记的文本手改。
 
 ### 8.5 `ai_commands.rs` — AI 模型调用
 
@@ -816,11 +816,11 @@ TunnelSession { id, pid, mode, local_url, public_url?, profile_id?, child }
 - 注册 TrayIcon（silver logo）
 - 菜单:
   - 打开主窗口
-  - 智枢
+  - 天玑
   - 当前隧道状态（动态）
   - 退出
 
-**智枢窗口**: 独立 WebView，加载同一 React 应用的 `#/ai-hub` 路由。
+**天玑窗口**: 独立 WebView，加载同一 React 应用的 `#/ai-hub` 路由。
 
 **气泡**: 独立窗口 `#/ai-hub-bubble`，物理屏幕坐标定位（通过 Rust `SetWindowPos`）。
 
@@ -1337,8 +1337,8 @@ npm run tauri -- dev
 # DevTools: Ctrl+Shift+I
 ```
 
-#### 调试智枢窗口
-在智枢窗口中按 `Ctrl+Shift+I` 打开 DevTools。
+#### 调试天玑窗口
+在天玑窗口中按 `Ctrl+Shift+I` 打开 DevTools。
 
 #### 调试托盘后台线程
 托盘运行在独立窗口，可以通过 Tauri `emit` 日志或在 Rust 代码中 `eprintln!` 输出到 `cargo run` 终端。
@@ -1397,7 +1397,7 @@ npm run tauri -- build -- --debug
 - [ ] Cursor 账号初始化 + 切换 + 启动
 - [ ] 导入/导出 JSON（含密钥明文警告）
 - [ ] 关闭到托盘 → 托盘菜单可见
-- [ ] 智枢快捷键 `Ctrl+Alt+K`（需要 admin 可能有权限限制）
+- [ ] 天玑快捷键 `Ctrl+Alt+K`（需要 admin 可能有权限限制）
 
 ---
 
@@ -1487,8 +1487,8 @@ t('myKey')
 | `generate-text-chunk` | `{ id, text }` | AI 流式每 chunk |
 | `generate-text-done` | `{ id }` | AI 流结束 |
 | `generate-text-error` | `{ id, error }` | AI 流错误 |
-| `agent-step` | `{ id, tool, status, summary, detail, arg? }` | 智枢代理每一步；`arg` 是参数主串（path / command / pattern…），前端用它渲染本地化步骤，`summary` 保持中文（要喂模型与 digest） |
-| `agent-approval` | `{ id, callId, tool, summary, preview, previewKind, deadlineAt }` | 智枢代理等用户确认；`deadlineAt` 是自动拒绝的 epoch ms，同时 `request_user_attention` 闪 `ai-hub` + `main` 两个窗口（智枢窗不进任务栏），落定后清掉 |
+| `agent-step` | `{ id, tool, status, summary, detail, arg? }` | 天玑代理每一步；`arg` 是参数主串（path / command / pattern…），前端用它渲染本地化步骤，`summary` 保持中文（要喂模型与 digest） |
+| `agent-approval` | `{ id, callId, tool, summary, preview, previewKind, deadlineAt }` | 天玑代理等用户确认；`deadlineAt` 是自动拒绝的 epoch ms，同时 `request_user_attention` 闪 `ai-hub` + `main` 两个窗口（天玑窗不进任务栏），落定后清掉 |
 | `dsh:install_progress` | `{ stage, percent, message }` | DSH 安装进度 |
 | `dsh:update_progress` | `{ stage, percent, message }` | DSH 更新进度 |
 | `cloudflared-log` | `{ id, tag, line }` | cloudflared 日志行 |

@@ -4,7 +4,6 @@ import GitManager, { GIT_SUBTAB_KEY } from "./components/GitManager";
 import SettingsPage from "./components/Settings";
 import UpdateBanner from "./components/UpdateBanner";
 import UpdateModal from "./components/UpdateModal";
-import MenuManager from "./components/MenuManager";
 import { ConfirmDialogProvider } from "./components/ConfirmModal";
 import {
   Settings,
@@ -60,7 +59,7 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher", "desktop-apps", "menu-manager"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher", "desktop-apps"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -488,7 +487,6 @@ function App() {
               {activeTab === "devtools" && (
                 <DevTools active={activeTab === "devtools"} />
               )}
-              {activeTab === "menu-manager" && <MenuManager />}
               {activeTab === "app-launcher" && (
                 <div className="page-panel is-active">
                   <div className="page-scrollable al-page-host">

@@ -90,7 +90,7 @@ fn decode_hosts(bytes: &[u8]) -> String {
 
 fn encode_hosts(content: &str) -> Vec<u8> {
     let mut out = Vec::new();
-    if content.chars().any(|c| !c.is_ascii()) {
+    if !content.is_ascii() {
         out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
     }
     out.extend_from_slice(content.as_bytes());
@@ -108,10 +108,7 @@ pub fn read_system_hosts() -> Result<String, String> {
 #[tauri::command]
 pub fn is_admin() -> bool {
     let path = hosts_path();
-    match fs::OpenOptions::new().write(true).open(&path) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    fs::OpenOptions::new().write(true).open(&path).is_ok()
 }
 
 /// Snapshot the current hosts file. Internal only: `write_system_hosts` backs up

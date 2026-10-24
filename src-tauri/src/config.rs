@@ -86,6 +86,8 @@ pub enum ErrorCode {
     AiEmptyPrompt,
     AiEmptyResponse,
     AiRequestCancelled,
+    /// 审批卡已经失效（回合结束 / 超时 / 不是这个窗口在等）
+    AiApprovalStale,
     DshNotInstalled,
     DshStartFailed,
     DshInstallFailed,
@@ -119,6 +121,7 @@ impl ErrorCode {
             ErrorCode::AiEmptyPrompt => "AI_EMPTY_PROMPT",
             ErrorCode::AiEmptyResponse => "AI_EMPTY_RESPONSE",
             ErrorCode::AiRequestCancelled => "AI_REQUEST_CANCELLED",
+            ErrorCode::AiApprovalStale => "AI_APPROVAL_STALE",
             ErrorCode::DshNotInstalled => "DSH_NOT_INSTALLED",
             ErrorCode::DshStartFailed => "DSH_START_FAILED",
             ErrorCode::DshInstallFailed => "DSH_INSTALL_FAILED",

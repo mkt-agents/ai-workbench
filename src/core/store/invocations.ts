@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, DshInstance, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
+import type { AIModelConfig, AgentUndoFile, DshInstance, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -55,6 +55,12 @@ export interface Invocations {
   invokePickDirectory: () => Promise<string | null>;
   invokeSetAiHubPinned: (pinned: boolean) => Promise<void>;
   invokeGitRepoSummary: (path: string) => Promise<GitRepoSummary>;
+  /** Cheap "did anything change" digest (git HEAD + status, else a bounded file walk). */
+  invokeWorkspaceFingerprint: (path: string) => Promise<{ fingerprint: string; files: number; git: boolean }>;
+  /** Restore every file the turn wrote, from its snapshot folder. Returns a summary line. */
+  invokeAgentUndo: (requestId: string, path?: string) => Promise<string>;
+  /** Files this turn can still undo (one row each: write / create / delete / move). */
+  invokeAgentUndoFiles: (requestId: string) => Promise<AgentUndoFile[]>;
   invokeGitStatus: (path: string) => Promise<GitStatusEntry[]>;
   invokeGitStage: (path: string, files: string[]) => Promise<string>;
   invokeGitUnstage: (path: string, files: string[]) => Promise<string>;
@@ -348,6 +354,12 @@ export const invocations: Invocations = {
     tauriInvoke<void>('set_ai_hub_pinned', { pinned }),
   invokeGitRepoSummary: (path: string) =>
     tauriInvoke<GitRepoSummary>('git_repo_summary', { path }),
+  invokeWorkspaceFingerprint: (path: string) =>
+    tauriInvoke<{ fingerprint: string; files: number; git: boolean }>('workspace_fingerprint', { path }),
+  invokeAgentUndo: (requestId: string, path?: string) =>
+    tauriInvoke<string>('agent_undo', { requestId, path: path ?? null }),
+  invokeAgentUndoFiles: (requestId: string) =>
+    tauriInvoke<AgentUndoFile[]>('agent_undo_files', { requestId }),
   invokeGitStatus: (path: string) =>
     tauriInvoke<GitStatusEntry[]>('git_status', { path }),
   invokeGitStage: (path: string, files: string[]) =>

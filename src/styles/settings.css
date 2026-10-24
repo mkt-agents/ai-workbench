@@ -1,34 +1,337 @@
 /* ─── Settings Page ─── */
 
-.settings-usage-list {
-  list-style: none;
-  margin: 0 0 10px;
-  padding: 0;
+/* 用量走势图：14 根迷你柱，刻度取「最高一天」与「每日预算」里大的那个 */
+.usage-trend {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
+  gap: 7px;
+  margin: 10px 0 16px;
 }
-
-.settings-usage-list li {
+.usage-trend-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.usage-trend-head-left {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.usage-trend-title {
+  color: var(--text-1);
+}
+.usage-trend-peak {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* 柱状 / 曲线 形态切换 */
+.usage-trend-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 1px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-1);
+}
+.usage-trend-switch-btn {
+  padding: 1px 8px;
+  font-size: 10px;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.usage-trend-switch-btn.is-active {
+  color: var(--text-0);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-xs);
+}
+.usage-trend-switch-btn:hover {
+  color: var(--accent);
+}
+.usage-trend-plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 76px;
+  padding: 4px 2px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  /* 两条 1/3、2/3 处的横向网格线，空图不至于一片留白 */
+  background-image:
+    linear-gradient(var(--border-subtle), var(--border-subtle)),
+    linear-gradient(var(--border-subtle), var(--border-subtle));
+  background-size: 100% 1px;
+  background-position: 0 33%, 0 66%;
+  background-repeat: no-repeat;
+}
+.usage-trend-budget {
+  position: absolute;
+  right: 2px;
+  left: 2px;
+  border-top: 1px dashed var(--yellow-border);
+  pointer-events: none;
+}
+.usage-trend-col {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  height: 100%;
+}
+.usage-trend-bar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 2px;
+  overflow: hidden;
+  background: var(--accent-dim);
+  border-radius: 2px 2px 0 0;
+  transition: var(--transition-colors-fast);
+}
+/* 堆叠段：各模型的 token 占这条柱的比例（flexGrow 直接用 token 数） */
+.usage-trend-bar b {
+  display: block;
+  width: 100%;
+}
+.usage-trend-col:hover .usage-trend-bar {
+  filter: brightness(1.15);
+}
+/* 没用量的天只留一条基线小刻度 */
+.usage-trend-bar.is-empty {
+  opacity: 0.45;
+}
+/* 今天：只描边强调，不再整根 accent 实色（glass 主题的浅香槟会糊成一大块，
+   还会盖掉堆叠的模型配色）；超预算的红圈在下面这条规则里覆盖 */
+.usage-trend-bar.is-today {
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.usage-trend-bar.is-over {
+  box-shadow: inset 0 0 0 1px var(--red-border);
+}
+/* 走势曲线：叠在柱子上，折点落在每根柱的正中，同一条刻度 */
+.usage-trend-line {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  bottom: 0;
+  left: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  overflow: visible;
+  pointer-events: none;
+}
+.usage-trend-line path {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.85;
+}
+.usage-trend-line .usage-trend-fill {
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+  stroke: none;
+}
+.usage-trend-line rect {
+  pointer-events: all;
+}
+.usage-trend-days {
+  display: flex;
+  gap: 3px;
+  padding: 0 2px;
+  font-size: 9px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.usage-trend-days span {
+  flex: 1;
+  text-align: center;
+}
+.usage-trend-days span.is-today {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+/* 每日预算进度条：今日已用 / 预算 */
+.usage-budget-track {
+  height: 4px;
+  overflow: hidden;
+  margin: 2px 0 8px;
+  background: var(--overlay-2);
+  border-radius: var(--radius-full);
+}
+.usage-budget-track i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-full);
+  transition: width 0.2s ease;
+}
+.usage-budget-track.is-over i {
+  background: var(--red);
+}
+
+/* 今日统计条：大数字 + 预算选择器靠右 */
+.usage-stat {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.usage-stat-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.usage-stat-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.usage-stat-calls {
+  color: var(--text-3);
+}
+.usage-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+}
+.usage-stat-value small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-2);
+}
+.usage-stat-value.is-over {
+  color: var(--red);
+}
+.usage-stat-budget {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 模型明细：色点与走势图曲线同色，下面一条占比条 */
+.usage-models-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 16px 0 10px;
+}
+.usage-models-title {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.usage-models {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+}
+.usage-model {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-1);
+  background: var(--overlay-1);
+}
+.usage-model-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: var(--radius-full);
+}
+.usage-model-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.usage-model-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.usage-model-head strong {
+  overflow: hidden;
+  color: var(--text-0);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 模型名弱色后缀（id 部分），与色点区分开 */
+.usage-model-sub {
+  color: var(--text-3);
+  font-weight: 400;
+}
+.usage-model-nums {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: none;
+}
+.usage-model-tokens {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.usage-model-share {
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* 旧记录（没记分模型明细）的兜底行 */
+.usage-model.is-other .usage-model-dot {
+  background: var(--text-3);
+  opacity: 0.5;
+}
+.usage-model.is-other .usage-model-head strong {
+  color: var(--text-2);
+}
+.usage-model.is-other .usage-model-track i {
+  background: var(--overlay-4);
+}
+.usage-model-track {
+  height: 4px;
+  overflow: hidden;
+  background: var(--overlay-2);
+  border-radius: var(--radius-full);
+}
+.usage-model-track i {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: var(--transition-colors-fast);
 }
 
 .settings-page {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr);
+  align-content: start;
+  column-gap: 18px;
+  row-gap: 14px;
   padding: 0 0 24px;
   width: 100%;
-  max-width: 720px;
+  max-width: 940px;
   margin-inline: auto;
   align-self: stretch;
   flex: 1 1 auto;
@@ -37,7 +340,142 @@
   overflow-y: auto;
 }
 
+/* 右列容器：卡片竖排，nav 的网格区域才会有「整栏高」，sticky 才能跟着滚 */
+.settings-cards {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* 左栏分类导航：跟滚动容器一起吸顶，只占第 1 列 */
+.settings-nav {
+  grid-column: 1;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0 10px;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+.settings-nav-item.active {
+  background: var(--overlay-3);
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.settings-nav-item.active svg {
+  color: var(--accent);
+}
+
+/* 分类名统一四个汉字；英文更长，宁可省略号也不换行把行高撑乱 */
+.settings-nav-item span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 卡片内的分组小标题（「交互」「权限与审批」这类） */
+.settings-group {
+  margin: 14px 0 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.settings-group:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* 天玑助手：卡内 tab 切换四个分组（交互 / 权限 / 能力 / 预算），一次只挂一块面板 */
+.hub-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-1);
+}
+.hub-tab {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.hub-tab.is-active {
+  color: var(--text-0);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-xs);
+}
+.hub-tab:hover {
+  color: var(--accent);
+}
+.hub-group {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 14px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--overlay-1);
+}
+/* display:flex 会压过 UA 的 [hidden]，这里显式关掉 */
+.hub-group[hidden] {
+  display: none;
+}
+.hub-group > .setting-row,
+.hub-group > .setting-stack {
+  padding: 10px 0;
+}
+/* 组内行分隔线：与 card-body 同一套邻接规则 */
+.hub-group > .setting-row + .setting-row,
+.hub-group > .setting-row + .setting-stack,
+.hub-group > .setting-row + .setting-hint,
+.hub-group > .setting-stack + .setting-row,
+.hub-group > .setting-stack + .setting-stack,
+.hub-group > .setting-hint + .setting-hint,
+.hub-group > .setting-hint + .setting-inline-controls {
+  border-top: 1px solid var(--border-subtle);
+}
+.hub-group > .setting-row:last-child,
+.hub-group > .setting-stack:last-child {
+  padding-bottom: 8px;
+}
+
 /* Structured cards: title + body own padding; cancel global .card padding/overflow */
+/* 未选中的分类用 hidden 挂起（不卸载，输入草稿不丢） */
 .settings-page .card {
   width: 100%;
   height: auto;
@@ -46,6 +484,31 @@
   overflow: visible;
   padding: 0;
   margin-bottom: 0;
+}
+
+.settings-page .card[hidden] {
+  display: none;
+}
+
+/* 非卡片形态的分类内容（如菜单配置：组件自带分组卡与吸顶工具条） */
+.settings-pane[hidden] {
+  display: none;
+}
+
+/* 菜单配置：滚动只能有一个宿主——这里就是 .settings-page，所以 .menu-manager
+   不能自己再当滚动容器（overflow 一旦是 auto，吸顶工具条会黏在这个「永不滚动」
+   的盒子上，整条跟着列表一起滑走）。改成让它自然撑开，sticky 便锚到页面滚动区。 */
+.settings-pane .menu-manager {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
+  padding-inline: 0;
+}
+
+/* 贴住滚动区顶端，别留那 4px 让卡片从缝里露过去 */
+.settings-pane .mm-toolbar {
+  top: 0;
+  margin-top: 0;
 }
 
 .settings-page .card-title {
@@ -129,6 +592,48 @@
   min-width: 140px;
 }
 
+/* MCP 服务列表：一服务一行，名字/命令/参数三段 + 开关 + 删除 */
+.settings-page .mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.settings-page .mcp-row {
+  display: grid;
+  grid-template-columns: auto minmax(90px, 0.7fr) minmax(110px, 1fr) minmax(160px, 2fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.settings-page .mcp-row.is-draft {
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.settings-page .mcp-dot {
+  width: 10px;
+  height: 10px;
+  justify-self: center;
+  border-radius: var(--radius-full);
+  border: 1px dashed var(--text-3);
+}
+.settings-page .mcp-row .input-field {
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  .settings-page .mcp-row {
+    grid-template-columns: auto 1fr;
+  }
+  .settings-page .mcp-row .input-field,
+  .settings-page .mcp-row .btn {
+    grid-column: 2;
+  }
+}
+
+.settings-page .setting-web-allow {
+  width: min(320px, 100%);
+  min-width: 180px;
+}
+
 .settings-page .setting-hint {
   margin: 0;
   padding: 10px 0 0;
@@ -185,17 +690,29 @@
   border-radius: var(--radius-md);
 }
 
-@media (min-width: 1100px) {
+/* 窄窗：导航落到内容上方，横向排一行 */
+@media (max-width: 900px) {
   .settings-page {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    align-content: start;
-    max-width: 1080px;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 10px;
   }
 
-  .settings-page .settings-card-span,
-  .settings-page > .toast {
-    grid-column: 1 / -1;
+  .settings-nav {
+    grid-column: 1;
+    flex-direction: row;
+    gap: 4px;
+    padding: 0 0 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .settings-nav-item {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .settings-cards {
+    grid-column: 1;
   }
 }
 

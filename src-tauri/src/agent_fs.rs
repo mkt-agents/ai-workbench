@@ -50,6 +50,7 @@ pub(crate) fn home_dir() -> PathBuf {
 }
 
 /// Where file and command tools may act this turn.
+#[derive(Clone)]
 pub(crate) struct Scope {
     pub root: Option<PathBuf>,
     /// 完全权限: absolute paths anywhere; relative paths against `base`.
@@ -270,28 +271,43 @@ fn skip_dir(name: &str) -> bool {
     )
 }
 
-/// Depth-first walk under `start`, skipping dependency / build folders.
-fn walk(start: &Path, request_id: &str, mut visit: impl FnMut(&Path) -> bool) -> Result<(), String> {
-    let mut stack = vec![start.to_path_buf()];
+/// Walk under `start`: `.gitignore` / `.git/info/exclude` / the user's global
+/// ignore are honoured (a `target/` or `dist/` line in `.gitignore` used to be
+/// ignored only because the name happened to be in `skip_dir`), plus the fixed
+/// skip list for repos that do not ignore their own build output.
+/// `visit` returning false stops the walk.
+pub(crate) fn walk(
+    start: &Path,
+    request_id: &str,
+    no_ignore: bool,
+    mut visit: impl FnMut(&Path) -> bool,
+) -> Result<(), String> {
+    let mut builder = ignore::WalkBuilder::new(start);
+    builder
+        // 点文件照旧可以搜（.github / .env.example），旧实现同样不跳
+        .hidden(false)
+        .follow_links(false)
+        // 不是 git 仓库的普通文件夹也读 .gitignore
+        .require_git(false)
+        .git_ignore(!no_ignore)
+        .git_global(!no_ignore)
+        .git_exclude(!no_ignore)
+        .filter_entry(|entry| entry.depth() == 0 || !skip_dir(&entry.file_name().to_string_lossy()));
     let mut seen = 0usize;
-    while let Some(dir) = stack.pop() {
+    for item in builder.build() {
         if is_cancelled(request_id) {
             return Err(crate::agent::cancelled_message());
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        for entry in rd.flatten() {
-            seen += 1;
-            if seen > WALK_CAP {
-                return Ok(());
-            }
-            let path = entry.path();
-            if path.is_dir() {
-                if !skip_dir(&entry.file_name().to_string_lossy()) {
-                    stack.push(path);
-                }
-            } else if !visit(&path) {
-                return Ok(());
-            }
+        let Ok(entry) = item else { continue };
+        if entry.depth() == 0 || entry.path().is_dir() {
+            continue;
+        }
+        seen += 1;
+        if seen > WALK_CAP {
+            return Ok(());
+        }
+        if !visit(entry.path()) {
+            return Ok(());
         }
     }
     Ok(())
@@ -325,20 +341,25 @@ pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// 文件通配：gitignore 风格（`**` 可以跨目录；不带 `/` 的模式在任意层级按文件名匹配，
+/// 旧实现只能按文件名逐段比对，`src/**/*.ts` 用不了）。
+fn pattern_matcher(root: &Path, pattern: &str) -> Result<ignore::overrides::Override, String> {
+    let mut builder = ignore::overrides::OverrideBuilder::new(root);
+    builder.add(pattern).map_err(|e| format!("文件名模式无效: {e}"))?;
+    builder.build().map_err(|e| format!("文件名模式无效: {e}"))
+}
+
 pub(crate) fn find_files(scope: &Scope, args: &Value, request_id: &str) -> Result<String, String> {
     let pattern = arg_str(args, "pattern");
     if pattern.is_empty() {
         return Err("缺少文件名模式".into());
     }
     let start = scope.resolve(&arg_str(args, "path"))?;
-    // A pattern with a slash matches the relative path, otherwise just the file name.
-    let by_path = pattern.contains('/') || pattern.contains('\\');
-    let pattern = pattern.replace('\\', "/");
+    let matcher = pattern_matcher(&start, &pattern)?;
+    let no_ignore = arg_bool(args, "no_ignore");
     let mut hits = Vec::new();
-    walk(&start, request_id, |path| {
-        let rel = path.strip_prefix(&start).unwrap_or(path).display().to_string().replace('\\', "/");
-        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        if glob_match(&pattern, if by_path { &rel } else { &name }) {
+    walk(&start, request_id, no_ignore, |path| {
+        if matcher.matched(path, false).is_whitelist() {
             hits.push(scope.show(path));
         }
         hits.len() < FIND_CAP
@@ -364,6 +385,83 @@ impl Matcher {
     }
 }
 
+/// How the hits are shaped: full lines (default), file names only, or per-file counts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GrepMode {
+    Content,
+    Files,
+    Count,
+}
+
+impl GrepMode {
+    fn parse(raw: &str) -> Self {
+        match raw.trim().to_lowercase().as_str() {
+            "files" | "file" => Self::Files,
+            "count" => Self::Count,
+            _ => Self::Content,
+        }
+    }
+}
+
+struct GrepHit {
+    lines: Vec<String>,
+    /// 占用的全局额度：内容模式按命中行，files / count 按文件。
+    used: usize,
+}
+
+/// One file's hits. `context` adds the surrounding lines (`path-line- text`),
+/// `remaining` caps how many match lines this file may still report.
+fn grep_file(
+    shown: &str,
+    text: &str,
+    matcher: &Matcher,
+    mode: GrepMode,
+    context: usize,
+    remaining: usize,
+) -> GrepHit {
+    let mut found: Vec<usize> = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        if matcher.is_match(line) {
+            found.push(idx);
+            if mode == GrepMode::Content && found.len() >= remaining.max(1) {
+                break;
+            }
+        }
+    }
+    if found.is_empty() {
+        return GrepHit { lines: Vec::new(), used: 0 };
+    }
+    if mode == GrepMode::Files {
+        return GrepHit { lines: vec![shown.to_string()], used: 1 };
+    }
+    if mode == GrepMode::Count {
+        return GrepHit { lines: vec![format!("{shown}: {}", found.len())], used: 1 };
+    }
+    let all: Vec<&str> = text.lines().collect();
+    // 合并匹配行 ±context 的区间，避免相邻命中把同一行印两遍
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for &m in &found {
+        let lo = m.saturating_sub(context);
+        let hi = (m + context).min(all.len().saturating_sub(1));
+        match ranges.last_mut() {
+            Some(last) if lo <= last.1 + 1 => last.1 = last.1.max(hi),
+            _ => ranges.push((lo, hi)),
+        }
+    }
+    let mut lines = Vec::new();
+    for (n, (lo, hi)) in ranges.iter().enumerate() {
+        if n > 0 {
+            lines.push("--".to_string());
+        }
+        for (i, line) in all.iter().enumerate().take(*hi + 1).skip(*lo) {
+            let body: String = line.trim().chars().take(240).collect();
+            let sep = if found.binary_search(&i).is_ok() { ':' } else { '-' };
+            lines.push(format!("{shown}{sep}{}{sep} {body}", i + 1));
+        }
+    }
+    GrepHit { lines, used: found.len() }
+}
+
 pub(crate) fn grep(scope: &Scope, args: &Value, request_id: &str) -> Result<String, String> {
     let pattern = arg_str(args, "pattern");
     if pattern.is_empty() {
@@ -380,8 +478,13 @@ pub(crate) fn grep(scope: &Scope, args: &Value, request_id: &str) -> Result<Stri
         Matcher::Literal(pattern.to_lowercase())
     };
     let glob = arg_str(args, "glob");
+    let mode = GrepMode::parse(&arg_str(args, "mode"));
+    let context = arg_usize(args, "context").unwrap_or(0).min(5);
+    let max = arg_usize(args, "max").unwrap_or(GREP_CAP).clamp(1, 200);
+    let no_ignore = arg_bool(args, "no_ignore");
     let start = scope.resolve(&arg_str(args, "path"))?;
-    let mut hits = Vec::new();
+    let mut hits: Vec<String> = Vec::new();
+    let mut used = 0usize;
     let mut scan = |path: &Path| {
         if !glob.is_empty() {
             let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -394,27 +497,23 @@ pub(crate) fn grep(scope: &Scope, args: &Value, request_id: &str) -> Result<Stri
             return true;
         }
         let Ok(text) = read_text(path) else { return true };
-        for (idx, line) in text.lines().enumerate() {
-            if matcher.is_match(line) {
-                let shown: String = line.trim().chars().take(240).collect();
-                hits.push(format!("{}:{}: {shown}", scope.show(path), idx + 1));
-                if hits.len() >= GREP_CAP {
-                    return false;
-                }
-            }
-        }
-        true
+        let hit = grep_file(&scope.show(path), &text, &matcher, mode, context, max.saturating_sub(used));
+        used += hit.used;
+        hits.extend(hit.lines);
+        used < max
     };
     if start.is_file() {
         scan(&start);
     } else {
-        walk(&start, request_id, scan)?;
+        walk(&start, request_id, no_ignore, scan)?;
     }
     if hits.is_empty() {
-        Ok("没有匹配".into())
-    } else {
-        Ok(hits.join("\n"))
+        return Ok("没有匹配".into());
     }
+    if used >= max {
+        hits.push(format!("…(已到上限 {max} 条，缩小 pattern 或 path 再查)"));
+    }
+    Ok(hits.join("\n"))
 }
 
 /// Replace `old` with `new`. `old` must occur exactly once unless `replace_all`.
@@ -684,6 +783,56 @@ mod tests {
         assert!(find_files(&scope, &json!({ "pattern": "*.txt" }), "t").unwrap().contains("n/a.txt"));
         move_path(&scope, &json!({ "from": "n/a.txt", "to": "n/b.txt" }), &none).unwrap();
         assert!(root.join("n").join("b.txt").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn walk_honours_gitignore_and_skips_build_dirs() {
+        let root = std::env::temp_dir().join(format!("aw-fs-ignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+        std::fs::write(root.join("src").join("a.rs"), "a").unwrap();
+        std::fs::write(root.join("generated").join("b.rs"), "b").unwrap();
+        std::fs::write(root.join("node_modules").join("c.js"), "c").unwrap();
+        let scope = Scope::new(Some(root.canonicalize().unwrap()), false);
+        let files = find_files(&scope, &json!({ "pattern": "**/*.rs" }), "t").unwrap();
+        assert!(files.contains("src/a.rs"), "{files}");
+        // .gitignore 里的目录不再被搜到
+        assert!(!files.contains("generated/b.rs"), "{files}");
+        // 两种口径都能回来：no_ignore 关掉过滤
+        let all = find_files(&scope, &json!({ "pattern": "**/*.rs", "no_ignore": true }), "t").unwrap();
+        assert!(all.contains("generated/b.rs"), "{all}");
+        // 硬编码跳过表仍然兜底（node_modules 不在 .gitignore 里）
+        assert!(!all.contains("c.js"), "{all}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn grep_modes_and_context_work() {
+        let root = std::env::temp_dir().join(format!("aw-fs-grep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one\ntwo\nneedle here\nfour\nfive\n").unwrap();
+        std::fs::write(root.join("b.txt"), "nothing\n").unwrap();
+        let scope = Scope::new(Some(root.canonicalize().unwrap()), false);
+        let content = grep(&scope, &json!({ "pattern": "needle" }), "t").unwrap();
+        assert!(content.contains("a.txt:3: needle here"), "{content}");
+        let files = grep(&scope, &json!({ "pattern": "needle", "mode": "files" }), "t").unwrap();
+        assert_eq!(files.trim(), "a.txt");
+        let counts = grep(&scope, &json!({ "pattern": "needle", "mode": "count" }), "t").unwrap();
+        assert_eq!(counts.trim(), "a.txt: 1");
+        // context 带前后行，匹配行用 `:`、上下文行用 `-`
+        let ctx = grep(&scope, &json!({ "pattern": "needle", "context": 1 }), "t").unwrap();
+        assert!(ctx.contains("a.txt-2- two"), "{ctx}");
+        assert!(ctx.contains("a.txt:3: needle here"), "{ctx}");
+        assert!(ctx.contains("a.txt-4- four"), "{ctx}");
+        assert!(!ctx.contains("a.txt-1- one"), "{ctx}");
+        // max 生效并如实告知
+        let capped = grep(&scope, &json!({ "pattern": "e", "regex": true, "max": 1 }), "t").unwrap();
+        assert!(capped.contains("到上限"), "{capped}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

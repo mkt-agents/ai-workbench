@@ -329,7 +329,7 @@ pub(crate) fn strip_think_tags(text: &str) -> String {
     }
     let mut i = 0;
     if let Some(close) = lower.find(CLOSE) {
-        if lower.find(OPEN).map_or(true, |open| close < open) {
+        if lower.find(OPEN).is_none_or(|open| close < open) {
             i = close + CLOSE.len();
         }
     }

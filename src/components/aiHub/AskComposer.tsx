@@ -12,7 +12,8 @@ type Props = Pick<
   | "onSuggestionDismiss" | "task" | "onTask" | "onDaily" | "hasSnippets" | "snippetOpen" | "snippetNav"
   | "onToggleSnippets" | "onPasteClipboard" | "onAttachFile" | "onSend" | "repoControl" | "modelControl"
   | "profileControl"
-  | "permission" | "onPermission" | "permissionMenuOpen" | "onTogglePermissionMenu"
+  | "permission" | "onPermission" | "diffConfirm" | "onDiffConfirm"
+  | "permissionMenuOpen" | "onTogglePermissionMenu"
   | "dailyStyle" | "onDailyStyle" | "dailyMenuOpen" | "onToggleDailyMenu"
   | "openList" | "onRunOpen" | "onStop"
 >;
@@ -64,7 +65,8 @@ export default function AskComposer(props: Props) {
   const {
     input, setInput, inputRef, busy, lastQuestion, suggestion, onSuggestionPick, onSuggestionDismiss,
     task, onTask, onDaily, hasSnippets, snippetOpen, snippetNav, onToggleSnippets, onPasteClipboard, onAttachFile,
-    onSend, repoControl, modelControl, profileControl, permission, onPermission, permissionMenuOpen, onTogglePermissionMenu,
+    onSend, repoControl, modelControl, profileControl,
+    permission, onPermission, diffConfirm, onDiffConfirm, permissionMenuOpen, onTogglePermissionMenu,
     dailyStyle, onDailyStyle, dailyMenuOpen, onToggleDailyMenu,
     openList, onRunOpen, onStop,
   } = props;
@@ -282,6 +284,8 @@ export default function AskComposer(props: Props) {
           <PermissionPicker
             permission={permission}
             onPermission={onPermission}
+            diffConfirm={diffConfirm}
+            onDiffConfirm={onDiffConfirm}
             open={permissionMenuOpen}
             onToggle={onTogglePermissionMenu}
           />

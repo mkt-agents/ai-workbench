@@ -423,7 +423,7 @@ pub async fn check_apps_running(process_names: Vec<String>, force: Option<bool>)
                 .collect();
             is_apps_running_batch(&normalized)
         });
-        Ok(task.await.map_err(|e| format!("检测任务失败: {}", e))?)
+        task.await.map_err(|e| format!("检测任务失败: {}", e))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -662,9 +662,9 @@ unsafe fn extract_icon_pe_png(
     use windows::Win32::UI::WindowsAndMessaging::{HICON, IMAGE_ICON, LoadImageW, RT_GROUP_ICON};
 
     extern "system" fn collect_groups(
-        hModule: HMODULE,
-        _resType: PCWSTR,
-        resName: PCWSTR,
+        h_module: HMODULE,
+        _res_type: PCWSTR,
+        res_name: PCWSTR,
         out_state: isize,
     ) -> windows::core::BOOL {
         unsafe {
@@ -673,10 +673,10 @@ unsafe fn extract_icon_pe_png(
             // (MAINICON etc.) are still proof the file HAS icon artwork, even
             // though this enumerator can't rank them by ID.
             state.seen += 1;
-            if (resName.0 as usize) > 0xffff {
+            if (res_name.0 as usize) > 0xffff {
                 return true.into();
             }
-            if let Some(candidate) = rank_icon_group(hModule, resName.0 as u16) {
+            if let Some(candidate) = rank_icon_group(h_module, res_name.0 as u16) {
                 if !state.groups.iter().any(|(_, id)| *id == candidate.1) {
                     state.groups.push(candidate);
                 }
@@ -704,7 +704,7 @@ unsafe fn extract_icon_pe_png(
         return if state.seen == 0 { Ok(None) } else { Err("没有可排序的图标组".into()) };
     }
     let mut groups = state.groups;
-    groups.sort_by(|a, b| b.0.cmp(&a.0));
+    groups.sort_by_key(|g| std::cmp::Reverse(g.0));
 
     let mut last_err = "加载图标失败".to_string();
     let mut rendered = None;
@@ -761,7 +761,7 @@ unsafe fn rank_icon_group(
     let data = std::slice::from_raw_parts(ptr, size);
     let count = u16::from_le_bytes([data[4], data[5]]) as usize;
     let mut area: u32 = 0;
-    for e in data[6..].chunks_exact(14).take(count) {
+    for e in data[6..].as_chunks::<14>().0.iter().take(count) {
         let w = e[0] as u32 % 257; // 0 means 256
         let h = e[1] as u32 % 257;
         area = area.max(w * h);
@@ -921,7 +921,7 @@ unsafe fn render_icon_to_png(
     // 256px entry most Office/7-Zip groups rank as largest), and the failed
     // decode comes back as a fully transparent bitmap — a valid PNG that renders
     // as nothing. Callers use the Err to fall through to the next candidate.
-    let opaque = rgba.chunks_exact(4).filter(|p| p[3] > 24).count();
+    let opaque = rgba.as_chunks::<4>().0.iter().filter(|p| p[3] > 24).count();
     if opaque * 200 < rgba.len() / 4 {
         return Err("图标为空白".into());
     }
@@ -997,7 +997,7 @@ fn write_chunk(out: &mut Vec<u8>, chunk_type: &[u8], data: &[u8]) -> Result<(), 
 #[cfg(windows)]
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
 
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -1498,7 +1498,7 @@ pub(crate) fn scan_desktop_apps_sync() -> Vec<InstalledAppInfo> {
     let mut apps: Vec<InstalledAppInfo> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     scan_shortcut_apps(&mut apps, &mut seen);
-    apps.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+    apps.sort_by_key(|a| a.display_name.to_lowercase());
     apps
 }
 
@@ -1615,7 +1615,7 @@ pub(crate) fn scan_installed_apps_sync() -> Result<Vec<InstalledAppInfo>, String
     scan_special_desktop_apps(&mut apps, &mut seen);
 
     // Sort by display name for a stable list.
-    apps.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+    apps.sort_by_key(|a| a.display_name.to_lowercase());
     Ok(apps)
 }
 
@@ -2235,7 +2235,7 @@ fn query_string_value(hkey: windows::Win32::System::Registry::HKEY, name: &str) 
     // REG_SZ = 1, REG_EXPAND_SZ = 2 (contains unexpanded env vars like %ProgramFiles%)
     if value_type.0 == 1 || value_type.0 == 2 {
         let wide_len = (data_len as usize) / 2;
-        let wide_slice: Vec<u16> = buf.chunks_exact(2)
+        let wide_slice: Vec<u16> = buf.as_chunks::<2>().0.iter()
             .take(wide_len)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();

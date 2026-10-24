@@ -135,6 +135,38 @@ export interface AppSettings {
   aiHubLastTask?: string;
   /** Predict the next prompt after every answer (one extra model call per round). */
   aiHubSuggest?: boolean;
+  /** 编辑档的写入也先弹 diff 确认（默认关）。 */
+  agentDiffConfirm?: boolean;
+  /** 「以后都允许」记住的 action_kind（如 `cmd:npm`、`git:commit`），上限 20 条。 */
+  agentAlwaysAllow?: string[];
+  /** 「以后都允许」按仓库记（key = 工作区根路径），选了仓库时优先用它而不是全局。 */
+  agentAlwaysAllowByRepo?: Record<string, string[]>;
+  /** diff 确认按仓库覆盖（key = 工作区根路径）；缺省回落全局 `agentDiffConfirm`。 */
+  agentDiffConfirmByRepo?: Record<string, boolean>;
+  /** 天玑可以抓取的域名（空 = 不给 web_fetch 工具）。 */
+  agentWebAllow?: string[];
+  /** 允许天玑派只读子代理（task 工具，默认关）。 */
+  agentSubagents?: boolean;
+  /** 只读调用并发执行（默认开；关掉就逐个跑，步骤顺序更好读）。 */
+  agentParallelReads?: boolean;
+  /** 429 / 5xx 自动重试（默认开；关掉直接报错，避免重复计费）。 */
+  agentRetries?: boolean;
+  /** 搜索时仍屏蔽 .gitignore 里的文件（默认开）。 */
+  agentGrepIgnore?: boolean;
+  /** 长任务先让天玑用 update_plan 列步骤（默认关）。 */
+  agentPlanFirst?: boolean;
+  /** 每轮上下文预算（token，默认 48000；越大多带历史，也越贵）。 */
+  agentContextTokens?: number;
+  /** 单条工具结果回灌上限（字符，默认 12000）。 */
+  agentResultCap?: number;
+  /** Anthropic 走流式（默认开；某些网关 SSE 支持不好时可关）。 */
+  agentAnthropicStream?: boolean;
+  /** MCP 总开关（默认开；关掉这一轮不列任何 MCP 工具）。 */
+  agentMcpEnabled?: boolean;
+  /** 复用两分钟内的上下文缓存（默认开；关掉每问一次都重新采集 git 数据）。 */
+  agentFreshContext?: boolean;
+  /** 每日 token 预算（0 / 缺省 = 不限），只用于提醒，不阻断提问。 */
+  aiUsageDailyBudget?: number;
   /** Show desktop floating bubble for ai-hub */
   aiHubBubbleEnabled?: boolean;
   /** Physical screen position of the bubble */
@@ -191,6 +223,14 @@ export interface Draft {
   updatedAt: string;
 }
 
+/** One row of the model's own checklist (the `update_plan` tool). */
+export interface AiHubPlanStep {
+  /** 后端按位置发的稳定 id（s1…s8）：模型每轮重发整张清单，前端靠它保持行身份。 */
+  id?: string;
+  title: string;
+  status: 'pending' | 'in_progress' | 'done';
+}
+
 /** One Q&A exchange inside a ai-hub session. */
 export interface AiHubTurn {
   role: 'user' | 'assistant';
@@ -199,6 +239,8 @@ export interface AiHubTurn {
   keep?: 'whole';
   /** Tool steps from an agent turn. Not sent as the visible answer. */
   steps?: { tool: string; status: string; summary: string; arg?: string; detail?: string }[];
+  /** The model's plan for this round, kept so the checklist survives a reload. */
+  plan?: AiHubPlanStep[];
   /** The agent stopped at its round / action cap; the thread offers「继续」. */
   limited?: boolean;
   /** Wall-clock ms of the streamed round, kept so an exported session shows cost. */
@@ -207,6 +249,27 @@ export interface AiHubTurn {
   completionTokens?: number;
   /** Folded notes for rounds that fell outside the verbatim window. */
   digest?: boolean;
+  /** 这一轮带上的上下文字符数（system + 对话）。 */
+  contextChars?: number;
+  /** 估算的上下文预算占比 0..1。 */
+  budgetRatio?: number;
+  /** 有内容被压缩的轮数。 */
+  trimmedRounds?: number;
+  /** 上游 prompt cache 命中的输入 token。 */
+  cacheHitTokens?: number;
+  /** 这一轮改过文件时的快照令牌（= requestId），用来「撤销这次改动」。 */
+  undoToken?: string;
+}
+
+/** One file a turn can still undo (see `agent_undo.rs`). */
+export interface AgentUndoFile {
+  /** Absolute path as recorded by the turn. */
+  path: string;
+  /** How the turn touched it; decides what undo does. */
+  kind: 'write' | 'create' | 'delete' | 'move';
+  /** Destination of a `move` entry. */
+  to: string;
+  bytes: number;
 }
 
 /** A persisted ai-hub conversation (multi-turn). */
@@ -317,6 +380,25 @@ export interface GlobalState {
   drafts: Draft[];
   aiHubSessions: AiHubSession[];
   quickAppLaunchers: QuickAppLauncher[];
+  mcpServers: McpServer[];
+}
+
+/**
+ * An MCP (Model Context Protocol) server the user configured. The agent starts it over
+ * stdio per call (`cmd /c <command> <args>`) and exposes its tools as `mcp_<name>_<tool>`.
+ */
+export interface McpServer {
+  id: string;
+  /** Shown in tool names and step lines; keep it short and ASCII. */
+  name: string;
+  /** Program to run, e.g. `npx` or `D:\tools\mcp-fs.exe`. */
+  command: string;
+  /** Argument line as typed; quotes group arguments. */
+  args: string;
+  /** Disabled servers are not offered to the model at all. */
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** A saved application shortcut for quick launch / kill. */

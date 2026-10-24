@@ -1,7 +1,7 @@
 import { useEffect, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  ArrowDown, BookmarkPlus, Check, Copy, Download, FolderGit2, MessageCircle, MessageSquarePlus,
+  ArrowDown, BookmarkPlus, Check, Copy, Download, FolderGit2, Gauge, MessageCircle, MessageSquarePlus,
   Pencil, RefreshCw, RotateCcw,
 } from "lucide-react";
 import type { AiHubTurn } from "../../core/types";
@@ -9,15 +9,17 @@ import MarkdownView from "../MarkdownView";
 import { stripThinking } from "./thinking";
 import { MAX_HISTORY_TURNS } from "./config";
 import { keepableAnswer } from "./keepable";
-import { describeSource } from "./answerSource";
-import { AgentApprovalBar, AgentApprovalCard, AgentLiveSteps, AgentStepLog } from "./AgentActivity";
+import { describeSource, describeTurn } from "./answerSource";
+import {
+  AgentApprovalBar, AgentApprovalCard, AgentLiveSteps, AgentPlanCard, AgentStepLog, AgentUndoButton,
+} from "./AgentActivity";
 import type { AskPanelProps } from "./AskPanel";
 
 type Props = Pick<
   AskPanelProps,
   | "turns" | "pending" | "answer" | "busy" | "phase" | "modelName" | "projectLabel" | "source"
   | "canRegenerate" | "copied" | "snippetSaved" | "exportDone" | "selectedText" | "setSelectedText"
-  | "agentSteps" | "agentApproval" | "stopping" | "onDecideAgent" | "onContinue" | "onRegenerate"
+  | "agentSteps" | "agentPlan" | "agentApproval" | "stopping" | "onDecideAgent" | "onContinue" | "onRegenerate"
   | "onCopyAnswer" | "onSaveSnippet" | "onExport" | "onQuote" | "onEditQuestion" | "onRestartFrom"
 >;
 
@@ -78,8 +80,15 @@ function MessageActions({
 
 function SourceLine({ line, mode }: { line: string; mode: string | undefined }) {
   return (
-    <div className={`qa-answer-source is-${mode}`} title={line}>
-      {mode === "project" ? <FolderGit2 size={11} /> : <MessageCircle size={11} />}
+    <div className={`qa-answer-source is-${mode ?? "restored"}`} title={line}>
+      {/* 从会话里读回来的那一条只有数字，没有模式：用仪表盘图标区分 */}
+      {mode === "project" ? (
+        <FolderGit2 size={11} />
+      ) : mode === "chat" ? (
+        <MessageCircle size={11} />
+      ) : (
+        <Gauge size={11} />
+      )}
       <span>{line}</span>
     </div>
   );
@@ -90,7 +99,7 @@ export default function AskThread(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     turns, pending, answer, busy, phase, modelName, projectLabel, source, exportDone, selectedText,
-    setSelectedText, agentSteps, agentApproval, stopping, onDecideAgent, onExport, onQuote,
+    setSelectedText, agentSteps, agentPlan, agentApproval, stopping, onDecideAgent, onExport, onQuote,
     onCopyAnswer, copied, onEditQuestion, onRestartFrom,
   } = props;
   const answerRef = useRef<HTMLDivElement | null>(null);
@@ -102,6 +111,14 @@ export default function AskThread(props: Props) {
   const stickRef = useRef(true);
   const lastAssistant = turns.length - 1;
   const sourceLine = describeSource(source, t);
+  /** A session read back from disk has numbers but no live `source`. */
+  const lastTurn = turns[lastAssistant];
+  const restoredLine =
+    !sourceLine && lastTurn && lastTurn.role === "assistant" && !lastTurn.digest
+      ? describeTurn(lastTurn, t)
+      : null;
+  /** Shown under the newest answer: live source if any, else the restored numbers. */
+  const tailLine = sourceLine ?? restoredLine;
 
   const [showJump, setShowJump] = useState(false);
   /** Whether the newest output is in view — decides if a pending approval needs the dock. */
@@ -255,8 +272,10 @@ export default function AskThread(props: Props) {
             >
               <MarkdownView text={stripThinking(turn.content)} />
               <MessageActions turn={turn} index={i} isLast={isLast} props={props} />
+              {turn.plan && turn.plan.length > 0 && <AgentPlanCard plan={turn.plan} />}
+              {turn.undoToken && <AgentUndoButton token={turn.undoToken} />}
               {turn.steps && turn.steps.length > 0 && <AgentStepLog steps={turn.steps} />}
-              {isLast && sourceLine && <SourceLine line={sourceLine} mode={source?.mode} />}
+              {isLast && tailLine && <SourceLine line={tailLine} mode={source?.mode} />}
             </div>
           );
         })}
@@ -275,7 +294,7 @@ export default function AskThread(props: Props) {
                 {busy && <span className="qa-caret" aria-hidden />}
               </>
             ) : (
-              busy && agentSteps.length === 0 && !agentApproval && (
+              busy && agentSteps.length === 0 && agentPlan.length === 0 && !agentApproval && (
                 <div className="qa-thinking" role="status">
                   <span className="qa-thinking-dots" aria-hidden>
                     <i />
@@ -292,14 +311,15 @@ export default function AskThread(props: Props) {
                 </div>
               )
             )}
-            {stopping && (answer || agentSteps.length > 0 || agentApproval) && (
+            {stopping && (answer || agentSteps.length > 0 || agentPlan.length > 0 || agentApproval) && (
               <div className="qa-thinking" role="status">
                 <span className="qa-thinking-text">{t("phase.stopping")}</span>
               </div>
             )}
+            <AgentPlanCard plan={agentPlan} />
             <AgentLiveSteps steps={agentSteps} />
             {agentApproval && <AgentApprovalCard approval={agentApproval} onDecide={onDecideAgent} />}
-            {sourceLine && answer && <SourceLine line={sourceLine} mode={source?.mode} />}
+            {tailLine && answer && <SourceLine line={tailLine} mode={source?.mode} />}
           </div>
         )}
         {selectedText && !busy && (

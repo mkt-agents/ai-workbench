@@ -6,15 +6,16 @@
 
 **已确认定位（见 `ROADMAP.md`）**：**AI 驱动的开发工具箱**——以 **DeepSeek 本地服务**为核心 AI 引擎，Git / Cursor 身份管理为基础能力，AI 模型配置与系统工具（Hosts / 内网穿透等）为辅助。
 
-- **愿景**：本地优先的桌面 AI 助手；多模型配置（提示词独立页已下线，智枢优化仍可用），管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
+- **愿景**：本地优先的桌面 AI 助手；多模型配置（提示词独立页已下线，天玑优化仍可用），管理开发者的 Git/Cursor 多身份与本机隧道/Hosts 等上下文。**所有数据留在本机，不上传密钥**。
 - **功能分层**：核心 = DSH / 模型配置 / Cursor（提示词独立页已下线，代码保留）；基础 = Git 多仓（仓库 / 提交 / 报告）/ 运行时切换；辅助 = Hosts / Cloudflared / 网页工具；系统工具 = 工具箱（devtools）。
 - **已移除的功能，不要再去找**：自动化测试执行 / 测试用例管理 / 覆盖率 / 漏洞扫描整套能力已删除，其历史文档（`test-assistant-*.md`）也已清理，相关数据表在 `lib.rs` setup 中被 `DROP TABLE`。Git 报告页是**静态分析 + 按需 AI**：只读 git diff，不执行测试、不产出覆盖率。若需查阅旧实现，`git log -- docs/test-assistant-summary.md` 仍可回溯（最后出现在 `4a03f74`）。工具箱页的 **HTTP 客户端**同样已整体删除：`HttpClientTool.tsx` / `devtools_commands.rs`（该域只剩这一条命令，文件一起删了）/ `http_saved_requests` + `http_history` 两张表（setup 里 `DROP TABLE`）/ devtools i18n 的 `http.*` 与 `group.network`，工具箱现在是 10 个（转换 / 生成 / 解析 / 计算 / 系统五组）。
-- **AI 能力在范围内**：智枢流式对话、仓库工具代理、报告与提交里的模型调用都可以继续做。智枢定位是本机 Harness：每个问题都走 `agent_run`，按四档权限决定能做什么（`agent_policy.rs` 的 `tool_gate` / `offered_tools` 是唯一事实，档位字符串解析 fail-closed：未知值回落只读）：**只读权限**（默认）只能读文件、搜索、跑只读 git；**编辑权限**可直接改工作区内文件，其它命令、删除移动、启动或结束程序、系统设置（hosts / 隧道 / 运行时）先问用户，审批可选「本轮同类都允许」（同类按 `action_kind`：命令按程序名分，git 按子命令分，允许 `git add` 不等于允许 `git pull`）；**审查托管**（EXP）先让 AI 审，只有明确放行才不问用户；**完全权限**不再询问，并且**可以访问整台电脑**（其它档位不出当前工作区；选整个工作区时根目录是工作区文件夹，见 `aiHub/repoSelection.ts` 的 `agentTarget`），必须由用户在菜单里主动选、首次二次确认，快捷键不会轮到它。模型标了「支持看图」时，完全权限还提供截屏和鼠标键盘操作（`agent_computer.rs`，左上角紧急停止，智枢窗口不进截图，首次使用确认截图会发给模型服务商）。任何档位都不放开：Git 冲突交给用户（仓库合并中 / 有未合并路径时，git 写操作与改文件一律拒绝并提示去 Git 管理 → 提交页，`agent.rs` 的 `conflict_block`；含冲突标记的文件不让 AI 改；`-X`/`-s` 选边、`checkout --ours/--theirs`、强推、`rebase`、`stash drop/clear` 在黑名单里），危险命令黑名单（`command_blocked`，git 部分按子命令和参数判定：`agent_policy::git_call_blocked`）、受保护路径（`agent_fs::Protected`：Windows、Program Files、本应用数据目录、任何 `.git` 目录不能写；磁盘根目录和用户主目录不能删 / 移）、删除一律进回收站。**等用户确认时不要静默失败**：审批 5 分钟超时自动拒绝，所以 `agent.rs` 的 `emit_approval` 会 `request_user_attention` 闪任务栏（智枢窗 `skip_taskbar`，主窗一起闪）、payload 带 `deadlineAt`，前端答案滚出视野时吸一条审批条；「等确认时唤回窗口」是用户主动开的 localStorage `qa-approval-focus`（默认关，只在 `useAskStream` 里调既有 `show_ai_hub`，不改 `bubble.rs`）。代理改过工作区（写文件 / git 写操作）后 `aiHub/config.ts` 的 `stepsMutatedWorkspace` 会作废 120s 上下文缓存，避免下一问还带着改动之前的 diff。截图和文字上下文一样只发给所选模型服务商，不落盘、不上传密钥。
+- **AI 能力在范围内**：天玑流式对话、仓库工具代理、报告与提交里的模型调用都可以继续做。天玑定位是本机 Harness：每个问题都走 `agent_run`，按四档权限决定能做什么（`agent_policy.rs` 的 `tool_gate` / `offered_tools` 是唯一事实，档位字符串解析 fail-closed：未知值回落只读）：**只读权限**（默认）只能读文件、搜索、跑只读 git；**编辑权限**可直接改工作区内文件，其它命令、删除移动、启动或结束程序、系统设置（hosts / 隧道 / 运行时）先问用户，审批可选「本轮同类都允许」或「以后都允许」（同类按 `action_kind`：命令按程序名分，git 按子命令分，允许 `git add` 不等于允许 `git pull`；「以后都允许」写进 `settings.agentAlwaysAllow`，上限 20 条，设置页可一键清空，只在 `Gate::Ask` 出现——审查档与完全权限不给，改前确认降下来的那一档也不给）；设置项 `settings.agentDiffConfirm` 开着时编辑档的 `write_file` / `edit_file` 先弹带 diff 的审批卡（`agent_policy::needs_diff_confirm`，拒绝即不落盘）；**审查托管**（EXP）先让 AI 审，只有明确放行才不问用户；**完全权限**不再询问，并且**可以访问整台电脑**（其它档位不出当前工作区；选整个工作区时根目录是工作区文件夹，见 `aiHub/repoSelection.ts` 的 `agentTarget`），必须由用户在菜单里主动选、首次二次确认，快捷键不会轮到它。模型标了「支持看图」时，完全权限还提供截屏和鼠标键盘操作（`agent_computer.rs`，左上角紧急停止，天玑窗口不进截图，首次使用确认截图会发给模型服务商）。任何档位都不放开：Git 冲突交给用户（仓库合并中 / 有未合并路径时，git 写操作与改文件一律拒绝并提示去 Git 管理 → 提交页，`agent.rs` 的 `conflict_block`；含冲突标记的文件不让 AI 改；`-X`/`-s` 选边、`checkout --ours/--theirs`、强推、`rebase`、`stash drop/clear` 在黑名单里），危险命令黑名单（`command_blocked`，git 部分按子命令和参数判定：`agent_policy::git_call_blocked`）、受保护路径（`agent_fs::Protected`：Windows、Program Files、本应用数据目录、任何 `.git` 目录不能写；磁盘根目录和用户主目录不能删 / 移）、删除一律进回收站。**等用户确认时不要静默失败**：审批 5 分钟超时自动拒绝，所以 `agent.rs` 的 `emit_approval` 会 `request_user_attention` 闪任务栏（天玑窗 `skip_taskbar`，主窗一起闪）、payload 带 `deadlineAt`，前端答案滚出视野时吸一条审批条；「等确认时唤回窗口」是用户主动开的 localStorage `qa-approval-focus`（默认关，只在 `useAskStream` 里调既有 `show_ai_hub`，不改 `bubble.rs`）。代理改过工作区（写文件 / git 写操作）后 `aiHub/config.ts` 的 `stepsMutatedWorkspace` 会作废 120s 上下文缓存，避免下一问还带着改动之前的 diff；缓存条目另外带一份 `workspace_fingerprint` 摘要（`agent_freshness.rs`），`useAskContext` 在 TTL 内命中前先比对，编辑器保存 / 外部 `git checkout` 也会触发重采。长任务由模型自己的 `update_plan` 工具产出计划卡（`agent-plan` 事件 → `AiHubTurn.plan` → `AgentPlanCard`，全档位可用的纯展示工具，不占动作步数），多轮上下文由 `agent_budget::fit_context` 每轮压到 48k（工具结果 → 最老轮次 → 系统提示，三级）。2026-10-23（M4）又加了四样：`symbols`（启发式定义定位，全档可用，`agent_symbols.rs`）、`web_fetch`（只认 https + `settings.agentWebAllow` 白名单，白名单空则连工具都不下发，跳转逐跳重过白名单（≤3 跳），读/编辑档 Ask，`agent_web.rs`）、`task`（只读子代理，16 轮 / 800 字结论 / 不能嵌套也不能写，默认关，`settings.agentSubagents` 打开才下发）和「撤销这次改动」（`agent_undo.rs`：写文件前快照到 `%APPDATA%\com.ai-workbench.app\agent-snapshots\<requestId>\`，保留 20 轮 / 50MB，`emit_done` 带 `undoToken` → `AiHubTurn.undoToken` → 答案下方按钮）。MCP 客户端（`mcp.rs`）：设置页「天玑 → MCP 服务」里配的服务（表 `mcp_servers`）只把启用且填全的随 `agent_run` 下发，后端每轮开场为每个服务起一次进程列工具（`cmd /c <command> <args>`，换行分隔 JSON-RPC，`initialize` → `tools/list`，一次调用一个进程、用完即关，服务失败只让这一轮少几个工具），工具名 `mcp_<server>_<tool>`，派发靠本轮列到的 (server, tool) 表查找；闸门是 `tool_gate` 的前缀规则——完全权限 `Allow`、审查 `Review`、其余一律 `Ask`（工具能力由服务决定，不能沿用"未知工具即放行"）。截图和文字上下文一样只发给所选模型服务商，不落盘、不上传密钥。
 - **明确不做**：多平台（仅 Windows）、插件浏览器深度开发。
 - 平台：仅 Windows 10/11
+- 命名：产品叫 **AI Workbench**，里面的 AI 助手 2026-10-23 由「智枢」改名 **天玑**（中文文案、文档、错误提示统一用「天玑」；英文侧仍是 `AI Hub`）。代码标识不变：窗口标签 `ai-hub` / `ai-hub-bubble`、路由 `#/ai-hub`、目录 `src/components/aiHub/`、设置键 `aiHub*`、事件 `agent-*`。旧文档、旧 commit 里出现的「智枢」指的就是天玑。
 - 标识：`com.ai-workbench.app`，当前版本 `0.2.34`
 - 用户数据：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`（SQLite；`ai_models.api_key` 落库用 Windows DPAPI `enc:v1:` 前缀，导出 JSON 仍为明文并有警告；勿打包进安装包）
-- 侧栏分组：AI 工作台（Harness/协同办公/工作暂存/模板片段/模型管理/快捷应用；顺序只由 `App.tsx` 的 `NAV_NODES` 决定，2026-10-21 把 `desktop-apps` 上移到 Harness 之后（同一轮由「桌面应用」改名「协同办公」，接管本机应用窗口并嵌入，文案走 `navigation.json` + `desktopApps.json`，id 与路由 `#/desktop-apps` 未变），并把 `app-launcher` 从系统工具移进来放在末尾（id、路由、`.devtools-tool` 尺寸来源都没变）；2026-10-22 模型管理（同日由「模型配置」改名，labelKey `modelConfig` 未变；页面 Tab 随之改为「模型列表 / 模型对比」，数量徽标移到列表 Tab 上、页面大标题移除）先是移到工作暂存之后，短暂移进账号资产分组后又移回 AI 工作台，最终顺序在工作暂存之后、快捷应用之前；页内含场景模型绑定、本机 Ollama/LM Studio 探测；智枢另有 Profile（内置 + 自定义 systemRole / temperature，存 `settings.aiHubProfiles`）/ 轻附件（选择器给真实文件名，也能从资源管理器拖进来，超 8000 字符会明示）/ `/` 片段（焦点留在输入框、打字即过滤 + `↑↓` 选择），用量台账在设置页（智枢的「下一步提示词」预测可用 `settings.aiHubSuggest` 关掉）；**提示词页已从侧栏与路由下线**，`PromptOptimizer.tsx` 与 `lib/promptOptimize.ts` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染与 `import`；智枢里的「优化提示词」不受影响）→ 账号资产（Cursor/账号配额；WorkBuddy 页 2026-10-22 已整体删除（页面壳 `WorkBuddyManager.tsx`/`.css` 与仅被它引用的 `AccountPoolTable`/`CheckinPanel`/`ProtocolPanel`），`components/workbuddy/` 只剩账号配额页复用的 `ScanAddFlow`/`ManualAddModal`/`CredentialForm` + `WbModal.css`，`lib/workbuddy.ts` 与双语 `workbuddy.json` 保留；扫码加号、签到、自动签到设置都在账号配额页）→ 工程管理（Git 管理/环境变量）→ 网络管理（网页工具/内网穿透/Hosts 管理）→ 系统工具（工具箱 `devtools`，2026-10-21 快捷应用移走后只剩它一个）→ 设置。快捷应用页面根节点带 `.devtools-tool`，与工具箱页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准），页内只剩应用网格一个视图。**「端口查杀」已于 2026-10-21 从快捷应用页搬进工具箱**，是 `group.system` 分组下的第 10 个工具（`src/components/devtools/PortKillerTool.tsx`，后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——工具箱其余 9 个仍然是纯前端、零后端命令，它是唯一带命令的那个；因此它不进智枢的工具面板（那一栏刻意只嵌零命令的纯前端工具）
+- 侧栏分组：AI 工作台（Harness/协同办公/工作暂存/模板片段/模型管理/快捷应用；顺序只由 `App.tsx` 的 `NAV_NODES` 决定，2026-10-21 把 `desktop-apps` 上移到 Harness 之后（同一轮由「桌面应用」改名「协同办公」，接管本机应用窗口并嵌入，文案走 `navigation.json` + `desktopApps.json`，id 与路由 `#/desktop-apps` 未变），并把 `app-launcher` 从系统工具移进来放在末尾（id、路由、`.devtools-tool` 尺寸来源都没变）；2026-10-22 模型管理（同日由「模型配置」改名，labelKey `modelConfig` 未变；页面 Tab 随之改为「模型列表 / 模型对比」，数量徽标移到列表 Tab 上、页面大标题移除）先是移到工作暂存之后，短暂移进账号资产分组后又移回 AI 工作台，最终顺序在工作暂存之后、快捷应用之前；页内含场景模型绑定、本机 Ollama/LM Studio 探测；天玑另有 Profile（内置 + 自定义 systemRole / temperature，存 `settings.aiHubProfiles`）/ 轻附件（选择器给真实文件名，也能从资源管理器拖进来，超 8000 字符会明示）/ `/` 片段（焦点留在输入框、打字即过滤 + `↑↓` 选择），用量台账在设置页（天玑的「下一步提示词」预测可用 `settings.aiHubSuggest` 关掉）；**提示词页已从侧栏与路由下线**，`PromptOptimizer.tsx` 与 `lib/promptOptimize.ts` 保留，恢复只需在 `App.tsx` 加回 Tab / `NAV_NODES` / 渲染与 `import`；天玑里的「优化提示词」不受影响）→ 账号资产（Cursor/账号配额；WorkBuddy 页 2026-10-22 已整体删除（页面壳 `WorkBuddyManager.tsx`/`.css` 与仅被它引用的 `AccountPoolTable`/`CheckinPanel`/`ProtocolPanel`），`components/workbuddy/` 只剩账号配额页复用的 `ScanAddFlow`/`ManualAddModal`/`CredentialForm` + `WbModal.css`，`lib/workbuddy.ts` 与双语 `workbuddy.json` 保留；扫码加号、签到、自动签到设置都在账号配额页）→ 工程管理（Git 管理/环境变量）→ 网络管理（网页工具/内网穿透/Hosts 管理）→ 系统工具（工具箱 `devtools`，2026-10-21 快捷应用移走后只剩它一个）→ 设置。快捷应用页面根节点带 `.devtools-tool`，与工具箱页共用尺寸来源（`App.tsx` 的 `NAV_NODES` 是唯一事实，文案以 `src/locales/*/navigation.json` 为准），页内只剩应用网格一个视图。**「端口查杀」已于 2026-10-21 从快捷应用页搬进工具箱**，是 `group.system` 分组下的第 10 个工具（`src/components/devtools/PortKillerTool.tsx`，后端 `port_commands.rs` 的 `find_port_listeners` / `kill_port_listeners`）——工具箱其余 9 个仍然是纯前端、零后端命令，它是唯一带命令的那个；因此它不进天玑的工具面板（那一栏刻意只嵌零命令的纯前端工具）
 - **网页工具-脚本（2026-10-23）**：预设模板体系升级——内置模板（`SCRIPT_PRESETS` 写死在 `PluginBrowser.tsx`，SkyWalking 大脚本来自 `scripts/skywalking-log-query.user.js` 经 `?raw` 注入，**v7.1.2 起液态玻璃质感浅色/深色双主题**）之外新增**用户自定义模板**：SQLite 表 `script_templates`（name/description/match_patterns/code，走 `db_load`/`db_save` 白名单），面板分组「内置模板 / 我的模板」，卡片点击=用模板新建、hover 操作组=分享（导出 JSON）/编辑/删除；脚本编辑弹窗底部「存为模板」一键把当前表单内容存成模板；`···` 菜单含模板导入/导出（JSON `kind: "ai-workbench-script-templates"`，按名称+代码判重合并）。头部操作区按**容器宽度渐进收纳**（`.plugin-header` 是 `container-type: inline-size` 容器，`.header-flat-btn[data-flat=…]` 由 `plugin-tabs.css` 的 `@container` 断点逐级放出：≥720 导入/导出、≥900 从网址导入/模板导入导出、≥1080 全部平铺并隐藏 `···`），**预设模板按钮常驻不收纳**
 
 ## 技术栈与目录
@@ -38,8 +39,10 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 230 条注册
+                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 234 条注册
                       # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；含
+                      # `workspace_fingerprint`（2026-10-23 M2：工作区新鲜度摘要，见 `agent_freshness.rs`）/
+                      # `agent_undo`（2026-10-23 M4：撤销一整轮的写文件，见 `agent_undo.rs`）/
                       # `detect_local_ai_endpoints` / `regenerate_test_report_ai_section` /
                       # `git_fetch_branch` / `git_publish_branch`（2026-10-22 批量建分支用：前者只推进
                       # 一个远端跟踪引用，后者在 origin 上建分支、不碰工作区）/
@@ -50,11 +53,18 @@ src-tauri/src/        # Rust 后端
  # change_report.rs：Git 报告的模块 / 层级 / 风险 / 缺测 / API 判定 +
                       # AI 分块与幻觉校验；report_commands.rs 里的提示词构造函数
                       # （requirement_block / output_rules / build_ai_*）——可单测、不含 IO；
-                      # agent_policy.rs：智枢四档权限（tool_gate / action_kind / 工具列表 / 策略提示词 / 审查结论解析）；
-                      # agent_stream.rs：代理回合 SSE 切行与流式 <think> 过滤；
+                      # agent_policy.rs：天玑四档权限（tool_gate / action_kind / 工具列表 / 策略提示词 / 审查结论解析）；
+                      # agent_stream.rs：代理回合 SSE 切行、流式 <think> 过滤、Anthropic SSE 折叠回非流式 body；
+                      # agent_budget.rs：token 估算与三级裁剪（工具结果 → 最老轮次 → 系统提示），
+                      # 每轮 `model_turn` 前由 `fit_context` 压到 48k；agent_freshness.rs：工作区指纹
+                      # （git HEAD + status + dirty mtime；非 git 走封顶 3000 文件的 mtime/size 遍历）；
+                      # agent_symbols.rs：`symbols` 启发式定义定位（关键字 + 名字，复用 agent_fs::walk）；
+                      # agent_web.rs：`web_fetch`（https + 域名白名单 + 跳转逐跳重过白名单 + html 转文本）；
+                      # agent_undo.rs：写文件前的逐字节快照与撤销（保留 20 轮 / 50MB，命令 `agent_undo`）；
+                      # mcp.rs：MCP 客户端（stdio + 换行 JSON-RPC，一次调用一个进程，工具名 `mcp_<server>_<tool>`）；
                       # agent_fs.rs（路径范围 / 受保护路径 / 文件工具 / diff）、agent_proc.rs（cmd / PowerShell /
                       # 后台进程）、agent_sys.rs（系统与工具箱能力）、agent_computer.rs（截屏 / 键鼠）
-  cursor/ tray/       # Cursor 多身份、系统托盘与智枢窗
+  cursor/ tray/       # Cursor 多身份、系统托盘与天玑窗
   codebuddy/          # WorkBuddy 域：adapter.rs（上游协议全 JSON 化，端点不写死）+
                       # credential.rs（token/cookie 解析、JWT exp、掩码）
   wb_*.rs             # WorkBuddy Manager：wb_commands（账号池）/ wb_checkin（签到 + 调度 loop）/
@@ -76,6 +86,12 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 ```
 
 改完前端跑 `npm run build` 验证类型；改完 Rust 跑 `cargo test`（在 `src-tauri/` 下）。
+
+`npm run build` 若报 `[vite:esbuild-transpile] remove C:\...\Temp\esbuild-xxx: Access is denied`，不是代码问题：本机（杀软 / 文件锁）不让 esbuild 删系统 Temp 里的临时文件。把临时目录指到工作区再跑即可（`.build-tmp/` 已存在且不入库）：
+
+```powershell
+$env:TEMP = (Resolve-Path .build-tmp).Path; $env:TMP = $env:TEMP; npm run build
+```
 
 ## 主题与视觉风格
 
@@ -104,7 +120,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 **视觉语言**：磨砂/半透明分层（玻璃主题）、极轻阴影、发丝边框、`Inter`（正文，`--font-sans`，基础字号 12.5px，`tabular-nums`）+ `JetBrains Mono`（代码 `--font-mono`）；图标统一 `lucide-react`；玻璃主题下侧栏/标题栏/卡片走 `:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"])` 共享覆盖层（`theme-glass.css`）。
 
-**主题应用**：`src/lib/theme.ts` 的 `applyDocumentTheme()` 写 `data-theme`；`system` 时移除属性。多窗口（智枢）通过 localStorage `workbench-settings` + `app-theme-changed` 事件同步。新主题色必须在 `tokens.css` 各主题块补齐全部 token，不能只改一处。
+**主题应用**：`src/lib/theme.ts` 的 `applyDocumentTheme()` 写 `data-theme`；`system` 时移除属性。多窗口（天玑）通过 localStorage `workbench-settings` + `app-theme-changed` 事件同步。新主题色必须在 `tokens.css` 各主题块补齐全部 token，不能只改一处。
 
 **Logo**：母版 `docs/brand/logo-silver.png`（冷银）/ `logo-ice.png`（冰蓝）；打包图标 `src-tauri/icons/`；侧栏 `src/assets/logo-silver.png`。
 
@@ -120,10 +136,11 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 
 ### 交互与 UX
 
-- 智枢/托盘/全局快捷键等多窗口行为以 `交接文档.md`「智枢窗要点」为准，不信任窗口缓存可见性。
+- 天玑/托盘/全局快捷键等多窗口行为以 `交接文档.md`「天玑窗要点」为准，不信任窗口缓存可见性。
 - 长任务必须可取消（`CancelGuard`）并有实时进度事件；报告侧是 `test-report-collect-progress`（多仓采集）与 `test-report-ai-progress`（AI 分块）。
-- **任何「Enter 即执行」的输入框，先挡输入法组合**：`if (e.nativeEvent.isComposing || e.keyCode === 229) return;`——否则拼音选词的回车会把半截内容发送或提交。已覆盖智枢提问框、片段搜索、历史重命名、参数填充。
+- **任何「Enter 即执行」的输入框，先挡输入法组合**：`if (e.nativeEvent.isComposing || e.keyCode === 229) return;`——否则拼音选词的回车会把半截内容发送或提交。已覆盖天玑提问框、片段搜索、历史重命名、参数填充。
 - 危险操作（删账号、覆盖 Hosts、批量推拉）必须二次确认并给出影响范围列表。
+- **设置页是「左栏分类 + 右栏卡片」**：分类由 `Settings.tsx` 的 `SETTINGS_TABS` 决定（通用设置 / 菜单配置 / 天玑助手 / 联网扩展 / 数据用量 / 关于程序：外观两项相邻、能力两项相邻，中文统一四个字，窄窗下导航变成顶部横向一行），卡片用 `hidden={tab !== id}` **挂起而不是卸载**——切分类时网页白名单输入框、MCP 新增行的草稿不能丢。新增设置项时先挂到对应分类的卡片里：行与行之间靠 `.card-body > .setting-row + .setting-row` 的分隔线，卡片内再分组就用 `<h3 className="settings-group">`（交互 / 权限与审批 / 助手能力：交互放「长任务先出计划」，助手能力放「并发读取 / 自动重试 / 搜索时跳过 .gitignore / 只读子代理」，预算与兼容放「上下文预算 / 工具结果上限 / Anthropic 流式」，MCP 总开关放在联网扩展）。除「交互 / 权限」外都是 `AppSettings` 里的 `agent*` 项，前端经 `AiHubApp` 映射成 `AgentRunRequest` 的同名字段，后端在 `ToolCtx` 上取 `max_parallel` / `max_retries` / `grep_ignore` / `result_cap`，`context_tokens` 直接喂给 `fit_context`。**「菜单配置」那一栏不是卡片**：它直接挂 `MenuManager`（原侧栏「系统工具 → 菜单管理」，2026-10-23 搬进设置并改名），组件自带吸顶工具条与分组卡，外层用 `.settings-pane` + `hidden` 包一层即可，别再套 `.card`。侧栏项与 `Tab` 联合类型在 `lib/navStructure.tsx`，删掉那一项后用户存下的 `navCustom` 里的旧 id 会被 `applyNavCustomization` 自然忽略。
 - 空态、加载态、错误态要区分（如 Git 提交页区分「筛选内无改动」vs「真正无改动」）。
 - 文案中文为主、通过 i18n 双语；数字/代码/路径用等宽字体展示。
 
@@ -141,7 +158,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 3. **命名映射**：TypeScript 用 camelCase，SQLite 用 snake_case，`storage.ts` 负责双向转换。
 4. **三层分层（报告类模块）**：纯函数（serde/标准库，`change_report.rs`）→ 命令层（tauri、起 git 进程、发事件，`report_commands.rs`）。新逻辑优先落在纯函数层以便 `cargo test`。
 5. **AI 提示词格式只有一份实现**：section 列表与逐行格式由 `report_commands::output_rules()` 生成，前端 `src/lib/reportAi.ts` 的 `parseAiLine()` 负责解析回来——改用例行格式必须同时改这两处（后端单测 `output_rules_only_add_the_coverage_section_with_an_ask` 钉住了契约）。
-6. **取消机制**：AI 流式（智枢）用 `request_id`，报告 AI 用 `reportId` 作 token，共用 `CancelGuard`（`cancellation.rs`）。
+6. **取消机制**：AI 流式（天玑）用 `request_id`，报告 AI 用 `reportId` 作 token，共用 `CancelGuard`（`cancellation.rs`）。
 7. **页面保活**：Git / DSH 面板用 `gitMounted` / `dshMounted` + `.page-panel.is-active`，切走隐藏不卸载。
 
 ## 样式硬约定（窗口 resize 性能）
@@ -174,7 +191,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 ## 危险操作提示
 
 - 改 Cursor 逻辑：`%APPDATA%\Cursor` 是单一数据源，删除/替换链接时**只摘链、不跟随递归删**；SQLite 同步必须保留原生类型（BLOB 误写会导致 Cursor 黑屏，已有 `repair_blob_typed_state` 兜底）。
-- 智枢窗：**不能在命令线程建窗**（builder 挂住）；可见性统一走 `tray::bubble::vis::{really_visible, force_visible}`，不要信任 tao 缓存；前端隐藏走 `invoke("hide_ai_hub")`。
+- 天玑窗：**不能在命令线程建窗**（builder 挂住）；可见性统一走 `tray::bubble::vis::{really_visible, force_visible}`，不要信任 tao 缓存；前端隐藏走 `invoke("hide_ai_hub")`。
 - Hosts 写入需管理员，走 `.tmp` + `ReplaceFileW` 原子替换，写前自动备份。
 - Cloudflared token 不进命令行，写临时 YAML 用 `--config` 传路径。
 - DSH 认证补丁会改本机 DeepSeek 安装文件（有 `.ai-workbench-backup` 备份与还原命令）。
@@ -190,6 +207,6 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端单测
 |---|---|
 | `README.md` | 产品功能、打包、隐私说明 |
 | `docs/CODE_WIKI.md` | 架构、DB 表结构、IPC 命令清单（2026-09-30 已与代码核对：版本号、工具箱命令条数、目录树；仍可能有滞后，以代码为准） |
-| `交接文档.md` | 历史状态、Cursor/智枢等踩坑记录（必读） |
+| `交接文档.md` | 历史状态、Cursor/天玑等踩坑记录（必读） |
 | `ROADMAP.md` | 阶段规划 |
 | `docs/cloudflared.md` | 内网穿透专题 |

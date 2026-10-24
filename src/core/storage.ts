@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, ScriptTemplate, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, ScriptTemplate, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher, McpServer } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -44,7 +44,8 @@ type DbTable =
   | 'drafts'
   | 'ai_hub_sessions'
   | 'json_tool_history'
-  | 'quick_app_launchers';
+  | 'quick_app_launchers'
+  | 'mcp_servers';
 
 async function loadRows(table: DbTable): Promise<Record<string, unknown>[]> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -576,6 +577,34 @@ export const storage = {
           order: item.order ?? 0,
           group: item.group ?? '',
           version: item.version ?? '',
+          created_at: item.createdAt,
+          updated_at: item.updatedAt,
+        }))
+      );
+    },
+  },
+  mcpServers: {
+    load: async (): Promise<McpServer[]> => {
+      const rows = await loadRows('mcp_servers');
+      return rows.map((r) => ({
+        id: r['id'] as string,
+        name: (r['name'] as string) || '',
+        command: (r['command'] as string) || '',
+        args: (r['args'] as string) || '',
+        enabled: Number(r['enabled'] ?? 1) !== 0,
+        createdAt: (r['created_at'] as string) || '',
+        updatedAt: (r['updated_at'] as string) || '',
+      }));
+    },
+    save: async (items: McpServer[]): Promise<void> => {
+      await saveRows(
+        'mcp_servers',
+        items.map((item) => ({
+          id: item.id,
+          name: item.name,
+          command: item.command,
+          args: item.args || '',
+          enabled: item.enabled ? 1 : 0,
           created_at: item.createdAt,
           updated_at: item.updatedAt,
         }))

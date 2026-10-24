@@ -62,6 +62,8 @@ crc32fast = "1"
 similar = "2"
 regex = "1"
 png = "0.17"
+# Agent file walk: honour .gitignore / global excludes, and gitignore-style globs
+ignore = "0.4"
 
 [features]
 # Diagnostic binaries under `src/bin/` are opt-in: without this feature they are not

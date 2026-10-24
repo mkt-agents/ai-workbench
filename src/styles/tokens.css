@@ -15,6 +15,18 @@
   --sidebar-w-collapsed: 44px;
 }
 
+/* ─── 数据可视化色板（与主题无关，只在这里定义一份）───
+   用量走势图按模型取色。中等明度、中饱和，在浅色和深色主题上都有足够对比；
+   每个主题各定义一份反而会破坏「同一模型跨主题同色」的认知。 */
+:root {
+  --chart-1: #5e8bd0;
+  --chart-2: #4fae7e;
+  --chart-3: #d9a13f;
+  --chart-4: #d16a6a;
+  --chart-5: #8f7bd8;
+  --chart-6: #4fb3c4;
+}
+
 /* ─── Light tokens（默认 · 白雾磨砂）─── */
 :root {
   color-scheme: light;

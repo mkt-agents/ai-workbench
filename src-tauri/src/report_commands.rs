@@ -1104,7 +1104,7 @@ fn commits_block(report: &ChangeReport) -> String {
         let touched: Vec<&str> = report
             .files
             .iter()
-            .filter(|f| f.commits.iter().any(|s| *s == detail.short_sha))
+            .filter(|f| f.commits.contains(&detail.short_sha))
             .map(|f| f.path.as_str())
             .take(12)
             .collect();
@@ -1146,7 +1146,7 @@ fn file_line(file: &change_report::FileChange) -> String {
 fn chunk_label(chunk: &change_report::AiChunk) -> String {
     match chunk.modules.split_first() {
         None => "-".to_string(),
-        Some((first, rest)) if rest.is_empty() => first.clone(),
+        Some((first, [])) => first.clone(),
         Some((first, rest)) => format!("{} 等 {} 个模块", first, rest.len() + 1),
     }
 }

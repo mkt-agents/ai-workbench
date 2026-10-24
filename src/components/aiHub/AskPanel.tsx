@@ -4,7 +4,7 @@ import type { TaskKind } from "./config";
 import type { DailyStyle } from "./dailyReport";
 import type { AskMode } from "./route";
 import type {
-  AgentDecision, AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentStep,
+  AgentDecision, AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentPlanStep, AgentStep,
 } from "./useAskStream";
 import type { OpenSuggestion } from "./localActions";
 import AskThread from "./AskThread";
@@ -60,6 +60,8 @@ export type AskPanelProps = {
   onTask: (task: TaskKind) => void;
   onDaily: () => void;
   agentSteps: AgentStep[];
+  /** Checklist the model published with `update_plan` for this round. */
+  agentPlan: AgentPlanStep[];
   agentApproval: AgentApproval | null;
   stopping: boolean;
   onDecideAgent: (decision: AgentDecision) => void;
@@ -80,6 +82,9 @@ export type AskPanelProps = {
   /** What the AI may do in the repo for the next message. */
   permission: AgentPermission;
   onPermission: (next: AgentPermission) => void;
+  /** 编辑档的写入也先看 diff（本地设置）。 */
+  diffConfirm: boolean;
+  onDiffConfirm: (on: boolean) => void;
   permissionMenuOpen: boolean;
   onTogglePermissionMenu: () => void;
   /** Daily report format, picked from the caret beside 日报. */

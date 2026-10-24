@@ -7,7 +7,7 @@ import type { AIModelConfig, AiHubSession, AiHubTurn } from "../core/types";
 import { bootApp } from "../core/boot";
 import { writeStoredString } from "../core/localState";
 import { applyDocumentTheme } from "../lib/theme";
-import { resolveSceneModel } from "../lib/aiSceneModels";
+import { resolveFallbackModel, resolveSceneModel } from "../lib/aiSceneModels";
 import { DEVTOOLS_TOOL_KEY } from "./DevTools";
 import {
   ASK_ATTACH_MAX_FILES,
@@ -86,6 +86,7 @@ function AiHubApp() {
   const invokeGenerateText = useGlobalStore((s) => s.invokeGenerateText);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const quickAppLaunchers = useGlobalStore((s) => s.quickAppLaunchers);
+  const mcpServers = useGlobalStore((s) => s.mcpServers);
   const invokeLaunchApp = useGlobalStore((s) => s.invokeLaunchApp);
   const invokeScanDesktopApps = useGlobalStore((s) => s.invokeScanDesktopApps);
   // Start Menu / Desktop programs for "打开 …"; rescanned on show once the list is stale.
@@ -183,6 +184,21 @@ function AiHubApp() {
     const scene = task === "optimize" ? "optimize" : "aiHub";
     return resolveSceneModel(scene, models, settings.aiSceneModels, modelId || null) ?? undefined;
   }, [models, modelId, task, settings.aiSceneModels]);
+  // 主模型整轮失败（连不上 / 4xx / 5xx / 空回答）时的备胎：同协议的另一个可用模型
+  const fallbackModel = useMemo(
+    () => resolveFallbackModel(selectedModel, models),
+    [models, selectedModel]
+  );
+
+  // 审批记忆 / diff 确认按仓库覆盖：选了仓库就优先用该仓库的值，否则用全局。
+  const agentRoot = repo.agentRoot?.trim() || "";
+  const agentAlwaysAllow = [
+    ...(settings.agentAlwaysAllow || []),
+    ...(agentRoot ? settings.agentAlwaysAllowByRepo?.[agentRoot] || [] : []),
+  ];
+  const agentDiffConfirm = agentRoot
+    ? (settings.agentDiffConfirmByRepo?.[agentRoot] ?? settings.agentDiffConfirm === true)
+    : settings.agentDiffConfirm === true;
 
   // stream <-> sessions reference each other's callbacks; bridge via ref.
   const persistRef = useRef<(turns: QaTurn[], firstQuestion: string) => Promise<void>>(
@@ -190,6 +206,7 @@ function AiHubApp() {
   );
   const stream = useAskStream({
     selectedModel,
+    fallbackModel,
     task,
     optimize,
     input,
@@ -206,6 +223,22 @@ function AiHubApp() {
       setAttachments([]);
     },
     onInvalidateContext: ctx.invalidateContext,
+    // 用户点了「以后都允许」：把这一类 action_kind 记进设置，下一次提问直接带上。
+    // 选了仓库就按仓库记（只在这一个仓库放行），没选仓库才落到全局。
+    onRememberKind: (kind, repoPath) => {
+      if (!kind) return;
+      const key = repoPath?.trim();
+      if (key) {
+        const byRepo = settings.agentAlwaysAllowByRepo || {};
+        const list = byRepo[key] || [];
+        if (list.includes(kind)) return;
+        setSettings({ agentAlwaysAllowByRepo: { ...byRepo, [key]: [...list, kind].slice(-20) } });
+      } else {
+        const list = settings.agentAlwaysAllow || [];
+        if (list.includes(kind)) return;
+        setSettings({ agentAlwaysAllow: [...list, kind].slice(-20) });
+      }
+    },
     persistTurns: (turns, q) => {
       void persistRef.current(turns, q);
     },
@@ -215,6 +248,18 @@ function AiHubApp() {
     agent: {
       permission,
       vision: Boolean(selectedModel?.vision),
+      diffConfirm: agentDiffConfirm,
+      alwaysAllow: agentAlwaysAllow,
+      webAllow: settings.agentWebAllow || [],
+      subagents: settings.agentSubagents === true,
+      parallelReads: settings.agentParallelReads !== false,
+      retries: settings.agentRetries !== false,
+      grepIgnore: settings.agentGrepIgnore !== false,
+      planFirst: settings.agentPlanFirst === true,
+      contextTokens: settings.agentContextTokens,
+      resultCap: settings.agentResultCap,
+      anthropicStream: settings.agentAnthropicStream !== false,
+      mcpEnabled: settings.agentMcpEnabled !== false,
       repoPath: repo.agentRoot,
       services: repo.agentServices,
       apps: quickAppLaunchers.map((app) => ({
@@ -222,6 +267,10 @@ function AiHubApp() {
         path: app.path,
         args: app.args || "",
       })),
+      // 只送启用的、填全了的：后端每轮会去列一次工具，烂配置只会浪费一轮的等待
+      mcp: mcpServers
+        .filter((s) => s.enabled && s.name.trim() && s.command.trim())
+        .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args || "" })),
     },
   });
   const sessions = useAskSessions({
@@ -885,6 +934,7 @@ function AiHubApp() {
             onTask={changeTask}
             onDaily={askDaily}
             agentSteps={stream.agentSteps}
+            agentPlan={stream.agentPlan}
             agentApproval={stream.agentApproval}
             stopping={stream.stopping}
             onDecideAgent={(decision) => void stream.decideAgent(decision)}
@@ -964,6 +1014,15 @@ function AiHubApp() {
             }
             permission={permission}
             onPermission={(next) => void changePermission(next)}
+            diffConfirm={agentDiffConfirm}
+            onDiffConfirm={(on) => {
+              if (agentRoot) {
+                const byRepo = settings.agentDiffConfirmByRepo || {};
+                setSettings({ agentDiffConfirmByRepo: { ...byRepo, [agentRoot]: on } });
+              } else {
+                setSettings({ agentDiffConfirm: on });
+              }
+            }}
             permissionMenuOpen={openPop === "permission"}
             onTogglePermissionMenu={() => togglePop("permission")}
             dailyStyle={dailyStyle}

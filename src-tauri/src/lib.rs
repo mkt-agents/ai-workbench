@@ -7,11 +7,17 @@ mod db_commands;
 pub mod cursor;
 mod ai_commands;
 mod agent;
+mod agent_budget;
 mod agent_computer;
+mod agent_freshness;
 mod agent_fs;
 mod agent_policy;
 mod agent_proc;
 mod agent_stream;
+mod agent_symbols;
+mod agent_undo;
+mod agent_web;
+mod mcp;
 mod agent_sys;
 mod secret_protect;
 mod dsh_commands;
@@ -310,6 +316,16 @@ pub fn run() {
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                -- MCP 服务：一个服务一条命令，工具由服务自己报（见 mcp.rs）
+                CREATE TABLE IF NOT EXISTS mcp_servers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    command TEXT NOT NULL,
+                    args TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             "#).expect("failed to init schema");
 
             // Migration: add order/group columns for existing databases (ignore if already present)
@@ -582,6 +598,9 @@ pub fn run() {
             ai_commands::generate_text_stream,
             agent::agent_run,
             agent::agent_decide,
+            agent_freshness::workspace_fingerprint,
+            agent_undo::agent_undo,
+            agent_undo::agent_undo_files,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::dsh_set_embed,

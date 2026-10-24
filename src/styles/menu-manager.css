@@ -1,0 +1,417 @@
+/* 菜单配置（设置 → 菜单配置）：分组卡片 + 行内操作。
+ *
+ * 注意：它挂在设置页里，滚动宿主是 `.settings-page`，本文件的 `overflow-y: auto`
+ * 会被 `settings.css` 的 `.settings-pane .menu-manager` 覆盖成 visible——否则吸顶
+ * 工具条会黏在一个不滚动的盒子上，跟着列表一起滑走。独立成页时再靠这条规则自滚。
+ *
+ * 视觉与其他列表页同一套语言：吸顶工具条（与 .al-toolbar 同配方）、卡片式分组、
+ * 数字胶囊、hover 才点亮的行内控件（同 .cl-group-head 的做法），
+ * 让 15 个菜单项在一屏里主次分明，不再是一排排同等重量的图标。 */
+
+.menu-manager {
+  /* 整页唯一的滚动宿主：内容比窗口高时若不自己滚，会被 .main-body 的
+     overflow: hidden 裁掉，底部菜单既看不见也点不到。 */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  max-width: var(--page-max-width);
+  width: 100%;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* 顶部不留内边距：吸顶工具条要贴住滚动区顶端，否则卡片会从那道缝里露上去；
+     左右留 4px 给输入框聚焦描边与卡片极轻投影。 */
+  padding: 0 4px var(--space-8);
+}
+
+/* 关键：滚动宿主的直接子项必须禁止被压缩。
+   否则内容超高时这些卡片会按 flex-shrink 被压到比内容还矮，再由自身的
+   overflow: hidden 把每组末尾的菜单行切掉——看起来就是「菜单缺项 / 被遮挡」，
+   而且内容不再溢出，滚动条根本不会出现。与 .page-scrollable .card 同一条规则。 */
+.mm-toolbar,
+.mm-group {
+  flex-shrink: 0;
+}
+
+/* ── 吸顶工具条 ── */
+
+.mm-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: 4px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight);
+}
+
+/* 磨砂主题下用与侧栏/标题栏同一套 chrome 配方：卡片从下面滚过时是透过玻璃看到
+   模糊轮廓，而不是撞上一块实心板。已加进 base.css 的 body.resizing 关闭清单。 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .mm-toolbar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, transparent 58%),
+    rgba(255, 255, 255, 0.055);
+  border-color: var(--overlay-3);
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+}
+
+.mm-hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.55;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.mm-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.mm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.mm-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
+}
+
+/* 键盘聚焦环沿用输入框那套（accent 描边 + 一圈淡光），不用 outline */
+.mm-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+/* 主操作：新建分组 */
+.mm-btn-accent {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.mm-btn-accent:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.mm-btn-danger:hover {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+  border-color: var(--red-border);
+}
+
+/* ── 分组卡片 ── */
+
+.mm-group {
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow), var(--surface-highlight);
+  overflow: hidden;
+  transition: var(--transition-colors-fast);
+}
+
+.mm-group:hover {
+  border-color: var(--border);
+}
+
+.mm-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 9px var(--space-3);
+  background: var(--overlay-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mm-group-name {
+  font-weight: 600;
+  color: var(--text-0);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 组内菜单数量：一眼看清哪组空、哪组满，比纯文字列表有层次 */
+.mm-count {
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 「自定义」标记走 accent 色，与默认分组区分开 */
+.mm-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+
+.mm-flex {
+  flex: 1 1 auto;
+}
+
+/* ── 菜单行 ── */
+
+.mm-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: var(--transition-colors-fast);
+}
+
+.mm-item:last-child {
+  border-bottom: none;
+}
+
+.mm-item:hover {
+  background: var(--overlay-1);
+}
+
+/* 页面图标统一放进 22px 小方块里：左侧一列图标对齐，hover 时有一层浅底 */
+.mm-item .nav-icon {
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  transition: var(--transition-colors-fast);
+}
+
+.mm-item:hover .nav-icon {
+  background: var(--overlay-2);
+  color: var(--text-1);
+}
+
+.mm-item-name {
+  color: var(--text-1);
+  font-size: 12.5px;
+  /* 不撑开也不抢位：剩余空间归 .mm-flex，名字宽了才收成省略号 */
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: var(--transition-colors-fast);
+}
+
+.mm-item:hover .mm-item-name {
+  color: var(--text-0);
+}
+
+/* 空分组：虚线占位块，与「环境变量 / Git 提交」空态同一套配方 */
+.mm-empty {
+  margin: var(--space-2) var(--space-3) var(--space-3);
+  padding: 14px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-1) 55%, transparent);
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ── 行内控件 ── */
+
+.mm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--transition-colors-fast);
+}
+
+.mm-icon-btn:hover:not(:disabled) {
+  background: var(--overlay-2);
+  color: var(--text-0);
+}
+
+.mm-icon-btn:focus-visible {
+  outline: none;
+  background: var(--overlay-2);
+  color: var(--text-0);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.mm-icon-btn:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+
+/* 行内改名 / 恢复按钮：默认压低存在感，hover 或键盘聚焦时才点亮 */
+.mm-item > .mm-icon-btn:not(:disabled) {
+  opacity: 0.65;
+}
+
+.mm-item:hover > .mm-icon-btn:not(:disabled),
+.mm-item:focus-within > .mm-icon-btn:not(:disabled) {
+  opacity: 1;
+  color: var(--text-2);
+}
+
+.mm-group-header:hover .mm-icon-btn:not(:disabled),
+.mm-group-header:focus-within .mm-icon-btn:not(:disabled) {
+  opacity: 1;
+}
+
+.mm-icon-danger:hover:not(:disabled) {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+/* 组头按钮常亮一档（比行内略高），避免整排看不清 */
+.mm-group-header .mm-icon-btn:not(:disabled) {
+  opacity: 0.62;
+  color: var(--text-2);
+}
+
+/* .input-field 自带 6px 上下内边距，塞进 24~26px 的高度会把文字压扁裁掉；
+   行内控件改成零内边距 + line-height: 1，字形才完整。 */
+.mm-rename-input,
+.mm-move-select {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.mm-rename-input {
+  min-width: 0;
+  flex: 0 1 260px;
+}
+
+.mm-move-select {
+  /* 原生下拉箭头画在内边距里，右侧留窄了会盖住分组名的后半截 */
+  min-width: 108px;
+  max-width: 168px;
+  padding-right: 22px;
+  text-overflow: ellipsis;
+  transition: var(--transition-colors-fast);
+}
+
+/* 每行都摆一个有边框的下拉太吵（值还和所在分组重复）：
+   平时只留一行淡文字当注解，行 hover / 聚焦时才浮出输入框的壳。
+   用 .mm-item 前缀是为了压过 theme-glass 里 `.input-field` 的背景与内阴影。 */
+.mm-item .mm-move-select {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-3);
+}
+
+.mm-item:hover .mm-move-select {
+  border-color: var(--border-subtle);
+  background: var(--overlay-1);
+  color: var(--text-2);
+}
+
+.mm-item .mm-move-select:hover {
+  border-color: var(--border);
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.mm-item .mm-move-select:focus {
+  border-color: var(--accent);
+  background: var(--bg-2);
+  color: var(--text-0);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+/* ── 拖拽 ── */
+
+/* 抓手只是提示：整行 / 整个组头都是拖拽源 */
+.mm-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--text-3);
+  opacity: 0.4;
+  cursor: grab;
+  transition: var(--transition-colors-fast);
+}
+
+.mm-item:hover .mm-grip,
+.mm-group-header:hover .mm-grip {
+  opacity: 1;
+  color: var(--text-2);
+}
+
+.mm-item[draggable="true"]:active,
+.mm-group-header[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.mm-item.is-dragging,
+.mm-group.is-dragging {
+  opacity: 0.45;
+}
+
+/* 落点指示线：用 inset 阴影画，不占布局高度、不会把行挤动 */
+.mm-item.is-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.mm-group.is-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent), var(--card-shadow), var(--surface-highlight);
+}
+
+.mm-group.is-drop-end {
+  box-shadow: inset 0 -2px 0 var(--accent), var(--card-shadow), var(--surface-highlight);
+}

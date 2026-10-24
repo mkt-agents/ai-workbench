@@ -101,7 +101,7 @@ pub(crate) fn parse_combo(combo: &str) -> Result<Vec<(u16, bool)>, String> {
             k if k.len() == 1 && k.chars().all(|c| c.is_ascii_alphanumeric()) => {
                 (k.to_ascii_uppercase().as_bytes()[0] as u16, false)
             }
-            k if k.starts_with('f') && k[1..].parse::<u16>().map_or(false, |n| (1..=24).contains(&n)) => {
+            k if k.starts_with('f') && k[1..].parse::<u16>().is_ok_and(|n| (1..=24).contains(&n)) => {
                 (0x6F + k[1..].parse::<u16>().unwrap_or(1), false)
             }
             other => return Err(format!("不认识的按键：{other}")),
@@ -129,7 +129,7 @@ pub(crate) fn screenshot() -> Result<(String, String), String> {
     let (dw, dh, s) = shot_size(w, h);
     *SCALE.lock().expect("shot scale") = s;
     let rgb = if s == 1.0 {
-        bgra.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]).collect()
+        bgra.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0]]).collect()
     } else {
         downscale_bgra_to_rgb(&bgra, w, h, dw, dh)
     };

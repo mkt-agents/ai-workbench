@@ -450,10 +450,10 @@ pub fn patch_content_signals(patch: &str) -> BTreeMap<String, FileSignals> {
         let words = path_words(&line[1..]);
         let has = |set: &[&str]| words.iter().any(|w| set.contains(&w.as_str()));
         let entry = out.entry(current.clone()).or_default();
-        if has(&SEC_WORDS) || (words.iter().any(|w| w == "api") && words.iter().any(|w| w == "key")) {
+        if has(SEC_WORDS) || (words.iter().any(|w| w == "api") && words.iter().any(|w| w == "key")) {
             entry.security = true;
         }
-        if has(&MONEY_WORDS)
+        if has(MONEY_WORDS)
             || has(&["balance", "payable", "currency", "decimal", "refund", "settle", "settlement"])
         {
             entry.money = true;
@@ -493,12 +493,12 @@ pub fn risk_tokens_with(
     }
     let words = path_words(path);
     let word_hit = |set: &[&str]| words.iter().any(|w| set.contains(&w.as_str()));
-    if word_hit(&SEC_WORDS) || signals.security {
+    if word_hit(SEC_WORDS) || signals.security {
         risks.push("security".to_string());
     } else if SEC_SUBSTR.iter().any(|s| lower.contains(s)) {
         hints.push("security".to_string());
     }
-    if word_hit(&MONEY_WORDS) || signals.money {
+    if word_hit(MONEY_WORDS) || signals.money {
         risks.push("money".to_string());
     } else if MONEY_SUBSTR.iter().any(|s| lower.contains(s)) {
         hints.push("money".to_string());
@@ -520,7 +520,7 @@ pub fn test_candidates(path: &str) -> Vec<String> {
         let rest = &path[index + "/src/main/".len()..];
         let stem = name.strip_suffix(&format!(".{}", ext)).unwrap_or(&name);
         let dir = rest.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
-        let Some((source_root, package_dir)) = dir.split_once('/').map(|(root, pkg)| (root, pkg)).or_else(|| Some((dir, ""))) else { return out };
+        let Some((source_root, package_dir)) = dir.split_once('/').or(Some((dir, ""))) else { return out };
         if source_root.is_empty() {
             return out;
         }
@@ -1461,7 +1461,7 @@ mod tests {
     #[test]
     fn report_flags_missing_tests_and_groups_by_module() {
         let name_status = "M\0a-service/src/main/java/com/x/web/AController.java\0A\0a-service/src/main/java/com/x/web/B.java\0M\0b-service/src/test/java/com/x/BTest.java\0";
-        let numstat = "1\t1\ta-service/src/main/java/com/x/web/AController.java\05\t0\tb-service/src/test/java/com/x/BTest.java\0";
+        let numstat = "1\t1\ta-service/src/main/java/com/x/web/AController.java\x005\t0\tb-service/src/test/java/com/x/BTest.java\0";
         let known = set(&["a-service/src/test/java/com/x/web/AControllerTest.java"]);
 
         let report = build_report(&ReportInputs {

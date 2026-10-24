@@ -29,6 +29,7 @@ pub enum DbTable {
     AiHubSessions,
     JsonToolHistory,
     QuickAppLaunchers,
+    McpServers,
     // Test assistant. Order here is only the enum order; import follows the
     // file. FKs are not enforced at runtime (PRAGMA foreign_keys is off), so
     // the whole set must travel together to keep the rows referentially sane.
@@ -55,6 +56,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "ai_hub_sessions" => Some(DbTable::AiHubSessions),
         "json_tool_history" => Some(DbTable::JsonToolHistory),
         "quick_app_launchers" => Some(DbTable::QuickAppLaunchers),
+        "mcp_servers" => Some(DbTable::McpServers),
         _ => None,
     }
 }
@@ -80,6 +82,7 @@ pub(crate) fn load_sql(table: DbTable) -> &'static str {
         DbTable::AiHubSessions => "SELECT * FROM ai_hub_sessions ORDER BY updated_at DESC LIMIT 30",
         DbTable::JsonToolHistory => "SELECT * FROM json_tool_history ORDER BY id DESC LIMIT 20",
         DbTable::QuickAppLaunchers => r#"SELECT * FROM quick_app_launchers ORDER BY "order" ASC, created_at DESC"#,
+        DbTable::McpServers => "SELECT * FROM mcp_servers ORDER BY created_at ASC",
         // Runs keep their tails (64KB each), so the export side caps how many go
         // out; the newest ones are the useful ones.
     }
@@ -106,6 +109,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::AiHubSessions => "DELETE FROM ai_hub_sessions",
         DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
         DbTable::QuickAppLaunchers => "DELETE FROM quick_app_launchers",
+        DbTable::McpServers => "DELETE FROM mcp_servers",
     }
 }
 
@@ -447,6 +451,20 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_i64(obj, "order", 0),
                     json_opt_str(obj, "group").unwrap_or_default(),
                     json_opt_str(obj, "version").unwrap_or_default(),
+                    json_str(obj, "created_at")?,
+                    json_str(obj, "updated_at")?,
+                ],
+            ).map_err(|e| e.to_string())?;
+        }
+        DbTable::McpServers => {
+            tx.execute(
+                "INSERT INTO mcp_servers (id, name, command, args, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_str(obj, "name")?,
+                    json_str(obj, "command")?,
+                    json_opt_str(obj, "args").unwrap_or_default(),
+                    json_bool_as_i64(obj, "enabled")?,
                     json_str(obj, "created_at")?,
                     json_str(obj, "updated_at")?,
                 ],

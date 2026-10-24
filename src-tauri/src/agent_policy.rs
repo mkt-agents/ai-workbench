@@ -47,7 +47,10 @@ pub(crate) enum Gate {
 
 /// Tools that only look: never gated.
 const LOOK_TOOLS: &[&str] = &[
-    "read_file", "list_dir", "find_files", "grep", "open_page", "process_output", "list_processes", "find_port",
+    "read_file", "list_dir", "find_files", "grep", "symbols", "open_page", "process_output", "list_processes",
+    "find_port",
+    // Purely presentational: publishes a checklist for the user, changes nothing.
+    "update_plan",
 ];
 /// Tools that change something outside a file write: ask in 编辑权限.
 const CHANGE_TOOLS: &[&str] = &[
@@ -56,6 +59,46 @@ const CHANGE_TOOLS: &[&str] = &[
 ];
 /// Operate the computer (screenshot + mouse / keyboard): 完全权限 only.
 pub(crate) const COMPUTER_TOOLS: &[&str] = &["screenshot", "mouse", "keyboard", "wait"];
+
+/// Every tool in `agent.rs::tool_specs` — the completeness test compares this against the
+/// spec table, so adding a tool without deciding its gate here fails `cargo test`.
+/// MCP tools are **not** listed: their names exist only in a turn (`mcp_<server>_<tool>`)
+/// and are covered by the prefix rule instead.
+#[cfg(test)]
+const TOOL_SPEC_NAMES: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "find_files",
+    "grep",
+    "symbols",
+    "write_file",
+    "edit_file",
+    "delete_path",
+    "move_path",
+    "run_command",
+    "start_process",
+    "process_output",
+    "stop_process",
+    "open_page",
+    "launch_app",
+    "open_target",
+    "clipboard_read",
+    "clipboard_write",
+    "list_processes",
+    "kill_process",
+    "find_port",
+    "kill_port",
+    "hosts",
+    "tunnel",
+    "runtime",
+    "screenshot",
+    "mouse",
+    "keyboard",
+    "wait",
+    "update_plan",
+    "task",
+    "web_fetch",
+];
 
 /// Read-only actions of the grouped workbench tools.
 fn workbench_action_is_read(tool: &str, action: &str) -> bool {
@@ -76,6 +119,14 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
         Permission::Review => Gate::Review,
         Permission::Full => Gate::Allow,
     };
+    // MCP 工具名是 `mcp_<server>_<tool>`：能力由服务自己决定，一律先问；只有完全权限免问
+    if tool.starts_with("mcp_") {
+        return match permission {
+            Permission::Full => Gate::Allow,
+            Permission::Review => Gate::Review,
+            _ => Gate::Ask,
+        };
+    }
     if LOOK_TOOLS.contains(&tool) {
         return Gate::Allow;
     }
@@ -96,6 +147,12 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
             }
         }
         "write_file" | "edit_file" => mutating(Gate::Allow),
+        // 出网同样是"读到了不该读的东西"：白名单之外直接拒，白名单内每次都要问
+        "web_fetch" => match permission {
+            Permission::Read | Permission::Workspace => Gate::Ask,
+            Permission::Review => Gate::Review,
+            Permission::Full => Gate::Allow,
+        },
         // Clipboard can hold passwords: even read-only asks first.
         "clipboard_read" => match permission {
             Permission::Read | Permission::Workspace => Gate::Ask,
@@ -112,6 +169,13 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
         // Unknown tools fall through to the executor's "unknown tool" error.
         _ => Gate::Allow,
     }
+}
+
+/// 编辑档里本来直接落地的写入，开了「改前确认」就先给用户看 diff（`write_file` / `edit_file`）。
+/// 只降一级，不提权：Deny / Ask / Review 的原样返回。
+pub(crate) fn needs_diff_confirm(permission: Permission, tool: &str, gate: Gate, confirm: bool) -> bool {
+    confirm && gate == Gate::Allow && permission == Permission::Workspace
+        && matches!(tool, "write_file" | "edit_file")
 }
 
 /// One `git …` inside a command line: lowercased subcommand, arguments as written
@@ -138,7 +202,7 @@ fn is_git_program(word: &str) -> bool {
 /// Every git invocation in `command`; `&&`, `&`, `|`, `;` and parentheses end one.
 pub(crate) fn git_calls(command: &str) -> Vec<GitCall> {
     let mut out = Vec::new();
-    for segment in command.split(|c: char| matches!(c, '&' | '|' | ';' | '(' | ')' | '\n')) {
+    for segment in command.split(['&', '|', ';', '(', ')', '\n']) {
         let words: Vec<&str> = segment.split_whitespace().collect();
         let Some(start) = words.iter().position(|w| is_git_program(w)) else {
             continue;
@@ -270,6 +334,8 @@ pub(crate) struct Reach {
     pub tools: bool,
     /// The model accepts images: needed for operating the computer.
     pub vision: bool,
+    /// The user allowed at least one domain, so `web_fetch` is worth offering.
+    pub web: bool,
 }
 
 /// Tool names offered to the model, in a stable order.
@@ -280,16 +346,32 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
     let writes = permission != Permission::Read;
     let mut names: Vec<&'static str> = Vec::new();
     if reach.files {
-        names.extend(["read_file", "list_dir", "find_files", "grep", "run_command"]);
+        names.extend(["read_file", "list_dir", "find_files", "grep", "symbols", "run_command"]);
         if writes {
             names.extend([
                 "write_file", "edit_file", "delete_path", "move_path", "start_process", "process_output", "stop_process",
             ]);
         }
     }
-    names.extend(["open_page", "list_processes", "find_port", "clipboard_read", "hosts", "tunnel", "runtime"]);
+    names.extend([
+        // Planning is offered even without a repo: it is how the user follows a long turn.
+        "update_plan",
+        "open_page",
+        "list_processes",
+        "find_port",
+        "clipboard_read",
+        "hosts",
+        "tunnel",
+        "runtime",
+        // 只读子代理：默认不下发，`agent.rs` 按 `settings.agentSubagents` 过滤
+        "task",
+    ]);
     if writes {
         names.extend(["launch_app", "open_target", "clipboard_write", "kill_process", "kill_port"]);
+    }
+    // 白名单是空的就等于没联网能力：连工具都不下发，省得模型反复试
+    if reach.web {
+        names.push("web_fetch");
     }
     if permission == Permission::Full && reach.vision {
         names.extend(COMPUTER_TOOLS);
@@ -303,7 +385,7 @@ pub(crate) fn filter_specs(specs: &Value, names: &[&str]) -> Vec<Value> {
         .as_array()
         .map(|arr| {
             arr.iter()
-                .filter(|s| s.get("name").and_then(|v| v.as_str()).map_or(false, |n| names.contains(&n)))
+                .filter(|s| s.get("name").and_then(|v| v.as_str()).is_some_and(|n| names.contains(&n)))
                 .cloned()
                 .collect()
         })
@@ -377,6 +459,13 @@ Never stage or commit obvious temp files (*.tmp, *.log, *.bak, *.swp, ~$*, .DS_S
     } else {
         ""
     };
+    let web = if reach.web {
+        "\nWeb: web_fetch downloads an https page (only hosts the user allowlisted) and returns its text. \
+Do not follow redirects yourself by guessing: if it reports one, call it again with the final address. \
+Quote the URL when the answer relies on it."
+    } else {
+        ""
+    };
     let computer = if anywhere && reach.vision {
         "\nComputer: you can see and operate the screen. Take a screenshot first and after every few actions to check \
 the result. Coordinates are pixels of the latest screenshot. Prefer keyboard shortcuts over precise clicks. The user can \
@@ -385,9 +474,14 @@ stop you at any time by moving the mouse to the top-left corner."
         ""
     };
     format!(
-        "\n\n[Agent]\n{place}\n{mode}{files}{computer}\n\
+        "\n\n[Agent]\n{place}\n{mode}{files}{web}{computer}\n\
+For a task that needs more than two tool rounds, call update_plan first with a short list of the steps, then call it \
+again whenever a step starts or finishes (send the whole list each time, at most 8 steps). Skip it for simple questions \
+and one-step edits.\n\
 If the same action keeps failing, do not retry it verbatim: first explain the failure from its output, then try a \
-different approach.\nWhen you are done, answer in the user's language without dumping raw tool output."
+different approach.\nLooking for where a symbol is defined? Try symbols first (it is heuristic: keyword + name), then \
+grep for the call sites; do not guess a definition you have not read.\nWhen you are done, answer in the user's \
+language without dumping raw tool output."
     )
 }
 
@@ -455,6 +549,37 @@ mod tests {
         expect("runtime", "switch", [Deny, Ask, Review, Allow]);
         for tool in COMPUTER_TOOLS {
             expect(tool, "", [Deny, Deny, Deny, Allow]);
+        }
+        // 出网（web_fetch）与只读子代理（task）：两者都不改本机，但都有成本 / 外发风险
+        expect("web_fetch", "", [Ask, Ask, Review, Allow]);
+        expect("task", "", [Allow; 4]);
+        // MCP 工具名是运行时的：能做什么由服务决定，只有完全权限不问
+        expect("mcp_fs_write_file", "", [Ask, Ask, Review, Allow]);
+    }
+
+    /// 工具表新增一项却没在 `tool_gate` / `offered_tools` 里做决定时，这条会失败。
+    /// 附录 A 的矩阵是"唯一事实"，这条测试是它的守门人。
+    #[test]
+    fn every_tool_in_the_spec_table_has_a_gate_row() {
+        let specs = crate::agent::tool_specs();
+        let mut in_specs: Vec<String> = specs
+            .as_array()
+            .expect("tool_specs 是数组")
+            .iter()
+            .filter_map(|s| s.get("name").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        in_specs.sort();
+        let mut known: Vec<String> = TOOL_SPEC_NAMES.iter().map(|s| s.to_string()).collect();
+        known.sort();
+        assert_eq!(
+            in_specs, known,
+            "agent.rs 的 tool_specs 与 agent_policy 的 TOOL_SPEC_NAMES 不一致：新增工具要同时进闸门、下发列表和附录 A"
+        );
+        // 反过来：每个声明过的工具都必须真的能下发（漏进 offered_tools 等于下线）
+        let all = Reach { files: true, tools: true, vision: true, web: true };
+        let offered = offered_tools(Permission::Full, all);
+        for name in TOOL_SPEC_NAMES {
+            assert!(offered.contains(name), "{name} 在任何档位都不会下发");
         }
     }
 
@@ -532,7 +657,7 @@ mod tests {
 
     #[test]
     fn policy_tells_the_agent_to_hand_conflicts_over() {
-        let reach = Reach { files: true, tools: true, vision: false };
+        let reach = Reach { files: true, tools: true, vision: false, web: false };
         let text = policy_text(Permission::Full, Some(Path::new("D:\\repo")), &[], reach);
         assert!(text.contains("Merge conflicts belong to the user") && text.contains("提交页"));
         assert!(REVIEW_SYSTEM.contains("merge conflicts"));
@@ -550,8 +675,33 @@ mod tests {
     }
 
     #[test]
+    fn mcp_tools_always_ask_below_full_access() {
+        let name = "mcp_fs_write_file";
+        assert_eq!(tool_gate(Permission::Read, name, ""), Gate::Ask);
+        assert_eq!(tool_gate(Permission::Workspace, name, ""), Gate::Ask);
+        assert_eq!(tool_gate(Permission::Review, name, ""), Gate::Review);
+        assert_eq!(tool_gate(Permission::Full, name, ""), Gate::Allow);
+        // 前缀规则不能顺手放行别的工具
+        assert_eq!(tool_gate(Permission::Workspace, "mcpfs_read", ""), Gate::Allow);
+    }
+
+    #[test]
+    fn diff_confirm_only_demotes_edit_level_writes() {
+        assert!(needs_diff_confirm(Permission::Workspace, "write_file", Gate::Allow, true));
+        assert!(needs_diff_confirm(Permission::Workspace, "edit_file", Gate::Allow, true));
+        // 开关关着 / 不是写入 / 不是编辑档：一律不动
+        assert!(!needs_diff_confirm(Permission::Workspace, "write_file", Gate::Allow, false));
+        assert!(!needs_diff_confirm(Permission::Workspace, "delete_path", Gate::Allow, true));
+        assert!(!needs_diff_confirm(Permission::Workspace, "run_command", Gate::Allow, true));
+        assert!(!needs_diff_confirm(Permission::Full, "write_file", Gate::Allow, true));
+        assert!(!needs_diff_confirm(Permission::Read, "write_file", Gate::Allow, true));
+        // 只降 Allow 这一级：Deny 不会被开关变成 Ask
+        assert!(!needs_diff_confirm(Permission::Workspace, "write_file", Gate::Deny, true));
+    }
+
+    #[test]
     fn offered_tools_follow_level_reach_and_vision() {
-        let all = Reach { files: true, tools: true, vision: true };
+        let all = Reach { files: true, tools: true, vision: true, web: true };
         assert!(offered_tools(Permission::Full, Reach { tools: false, ..all }).is_empty());
         let read = offered_tools(Permission::Read, all);
         assert!(read.contains(&"read_file") && read.contains(&"run_command") && read.contains(&"hosts"));
@@ -565,6 +715,12 @@ mod tests {
         assert!(!blind.contains(&"mouse"));
         let no_files = offered_tools(Permission::Workspace, Reach { files: false, ..all });
         assert!(!no_files.contains(&"read_file") && no_files.contains(&"open_page"));
+        // 计划是纯展示的，任何档位、有没有仓库都能用
+        assert!(read.contains(&"update_plan") && full.contains(&"update_plan"));
+        assert!(no_files.contains(&"update_plan"));
+        for p in ALL {
+            assert_eq!(tool_gate(p, "update_plan", ""), Gate::Allow, "{p:?}");
+        }
     }
 
     #[test]
@@ -578,12 +734,12 @@ mod tests {
     #[test]
     fn policy_mentions_level_reach_and_computer() {
         let root = std::env::temp_dir();
-        let files = Reach { files: true, tools: true, vision: false };
+        let files = Reach { files: true, tools: true, vision: false, web: false };
         assert!(policy_text(Permission::Read, Some(&root), &[], files).contains("read only"));
         assert!(policy_text(Permission::Workspace, Some(&root), &[], files).contains("paths outside it are refused"));
         assert!(policy_text(Permission::Full, Some(&root), &[], files).contains("anywhere on this computer"));
         assert!(policy_text(Permission::Full, None, &[], files).contains("home folder"));
-        let none = Reach { files: false, tools: true, vision: false };
+        let none = Reach { files: false, tools: true, vision: false, web: false };
         assert!(policy_text(Permission::Read, None, &[], none).contains("cannot read or change files"));
         assert!(!policy_text(Permission::Full, Some(&root), &[], files).contains("Computer:"));
         let vision = Reach { vision: true, ..files };
@@ -594,7 +750,7 @@ mod tests {
     #[test]
     fn workspace_root_lists_services_and_per_repo_git() {
         let root = Path::new("D:\\work\\p1");
-        let files = Reach { files: true, tools: true, vision: false };
+        let files = Reach { files: true, tools: true, vision: false, web: false };
         let services = vec!["order".to_string(), "user".to_string()];
         let text = policy_text(Permission::Workspace, Some(root), &services, files);
         assert!(text.contains("workspace folder at D:\\work\\p1"), "{text}");

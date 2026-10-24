@@ -103,7 +103,7 @@ fn limit_label(limit_type: &str, unit: Option<f64>, number: Option<f64>) -> Stri
             }
         },
         "TIME_LIMIT" | "REQUESTS_LIMIT" | "REQUEST_LIMIT" => "次数额度".to_string(),
-        other if other.is_empty() => "额度".to_string(),
+        "" => "额度".to_string(),
         other => other.to_string(),
     }
 }

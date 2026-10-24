@@ -220,10 +220,19 @@ fn handle_dsh_toggle(app: &AppHandle) {
         };
         ports
     };
+    // 托盘菜单是同步回调：future 必须 spawn 出去。写成 `let _ = ...` 等于把 future
+    // 直接丢掉，一个字节的启动 / 停止逻辑都不会执行（clippy::let_underscore_future）。
     if ports.is_empty() {
-        let _ = crate::dsh_commands::start_dsh(None, window);
+        let window = window.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::dsh_commands::start_dsh(None, window).await;
+        });
     } else {
-        let _ = crate::dsh_commands::stop_dsh(ports[0], window);
+        let port = ports[0];
+        let window = window.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::dsh_commands::stop_dsh(port, window).await;
+        });
     }
     let _ = refresh_tray_status(app);
 }

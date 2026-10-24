@@ -67,9 +67,14 @@ function repoName(path: string): string {
  */
 export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
   const currentGitRepo = useGlobalStore((s) => s.settings.currentGitRepo);
+  // 设置项「复用上下文缓存」：关掉时 TTL 归零，每问一次都重新采集
+  const contextTtlMs = useGlobalStore((s) =>
+    s.settings.agentFreshContext === false ? 0 : CONTEXT_TTL_MS
+  );
   const gitWorkspaces = useGlobalStore((s) => s.gitWorkspaces);
   const recentProjects = useGlobalStore((s) => s.recentProjects);
   const invokeGitRepoSummary = useGlobalStore((s) => s.invokeGitRepoSummary);
+  const invokeWorkspaceFingerprint = useGlobalStore((s) => s.invokeWorkspaceFingerprint);
   const invokeGitStatus = useGlobalStore((s) => s.invokeGitStatus);
   const invokeGitDiff = useGlobalStore((s) => s.invokeGitDiff);
   const invokeGitLog = useGlobalStore((s) => s.invokeGitLog);
@@ -79,10 +84,42 @@ export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
   const [ctxPreview, setCtxPreview] = useState("");
   const [ctxTruncated, setCtxTruncated] = useState(false);
   const [ctxLoading, setCtxLoading] = useState(false);
-  /** Context cache: avoid re-fetching git data on every send. */
-  const cachedContextRef = useRef<(ContextResult & { at: number }) | null>(null);
+  /** Context cache: avoid re-fetching git data on every send. `fp` is the workspace digest it describes. */
+  const cachedContextRef = useRef<(ContextResult & { at: number; fp: string }) | null>(null);
   /** Chips signature to detect changes that invalidate cache. */
   const chipsSigRef = useRef<string>("");
+
+  /** The folder the cache is about: the focused repo, else the current repo. */
+  const watchTarget = focusedRepos[0] || currentGitRepo || "";
+
+  /**
+   * Digest of the watched workspace, or "" when there is nothing to watch / it cannot be read.
+   * A save in the editor or a branch switch changes it; the agent's own edits do too.
+   */
+  const fingerprintNow = useCallback(async (): Promise<string> => {
+    if (!watchTarget) return "";
+    try {
+      const out = await invokeWorkspaceFingerprint(watchTarget);
+      return out.fingerprint;
+    } catch {
+      return "";
+    }
+  }, [watchTarget, invokeWorkspaceFingerprint]);
+
+  /**
+   * A hit inside the TTL is only good if the files still look the same: two minutes is
+   * long enough for the user to edit, stage or switch branches outside the hub.
+   * A failed check is not evidence of change — the cache stays.
+   */
+  const cacheStillFresh = useCallback(
+    async (cached: { fp: string }): Promise<boolean> => {
+      if (!watchTarget) return true;
+      if (!cached.fp) return false;
+      const now = await fingerprintNow();
+      return !now || now === cached.fp;
+    },
+    [watchTarget, fingerprintNow]
+  );
 
   /** Project parts (workspace / git / dirty) are only collected in project mode. */
   const refreshContext = useCallback(async (mode: AskMode): Promise<ContextResult> => {
@@ -337,30 +374,35 @@ export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
     invokeGitLog,
   ]);
 
-  /** Get context for a mode: use cache if fresh, otherwise rebuild. */
-  const getContext = useCallback((mode: AskMode = "project"): Promise<ContextResult> => {
-    const sig = `${mode}|${chips.workspace}|${chips.git}|${chips.dirty}|${currentGitRepo}|${focusedRepos.join(",")}`;
-    const cached = cachedContextRef.current;
-    const now = Date.now();
-    if (cached && chipsSigRef.current === sig && now - cached.at < CONTEXT_TTL_MS) {
-      setCtxPreview(cached.text);
-      setCtxTruncated(cached.truncated);
-      return Promise.resolve({ text: cached.text, truncated: cached.truncated, summary: cached.summary });
-    }
-    if (mode === "chat") {
-      setCtxPreview("");
-      setCtxTruncated(false);
-      return Promise.resolve({ text: "", truncated: false, summary: EMPTY_SUMMARY });
-    }
-    chipsSigRef.current = sig;
-    setCtxLoading(true);
-    return refreshContext(mode)
-      .then((out) => {
-        cachedContextRef.current = { ...out, at: Date.now() };
+  /** Get context for a mode: use cache if still fresh, otherwise rebuild. */
+  const getContext = useCallback(
+    async (mode: AskMode = "project"): Promise<ContextResult> => {
+      const sig = `${mode}|${chips.workspace}|${chips.git}|${chips.dirty}|${currentGitRepo}|${focusedRepos.join(",")}`;
+      const cached = cachedContextRef.current;
+      const now = Date.now();
+      if (cached && chipsSigRef.current === sig && now - cached.at < contextTtlMs && (await cacheStillFresh(cached))) {
+        setCtxPreview(cached.text);
+        setCtxTruncated(cached.truncated);
+        return { text: cached.text, truncated: cached.truncated, summary: cached.summary };
+      }
+      if (mode === "chat") {
+        setCtxPreview("");
+        setCtxTruncated(false);
+        return { text: "", truncated: false, summary: EMPTY_SUMMARY };
+      }
+      chipsSigRef.current = sig;
+      setCtxLoading(true);
+      try {
+        const out = await refreshContext(mode);
+        // Digest after the collection: the next question notices anything edited since.
+        cachedContextRef.current = { ...out, at: Date.now(), fp: await fingerprintNow() };
         return out;
-      })
-      .finally(() => setCtxLoading(false));
-  }, [chips, currentGitRepo, focusedRepos, refreshContext]);
+      } finally {
+        setCtxLoading(false);
+      }
+    },
+    [chips, currentGitRepo, focusedRepos, refreshContext, cacheStillFresh, fingerprintNow]
+  );
 
   /** Force the next getContext() to rebuild (e.g. after the window is re-shown). */
   const invalidateContext = useCallback(() => {

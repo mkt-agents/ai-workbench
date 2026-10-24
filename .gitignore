@@ -7,6 +7,8 @@ dist/
 src-tauri/target/
 /target/
 .cargo-target/
+# esbuild 临时目录（本机系统 Temp 删不掉时指到这里，见 AGENTS.md 常用命令）
+.build-tmp/
 
 # Rust
 src-tauri/Cargo.lock

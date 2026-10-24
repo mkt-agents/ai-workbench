@@ -795,10 +795,10 @@ fn aes_sbox() -> [u8; 256] {
     // 标准 AES S-box，运行时生成避免 256 项手写表出错。
     let mut inv = [0u8; 256];
     // 求 GF(2^8) 乘法逆元表（p * a == 1）。
-    for i in 1..256usize {
+    for (i, slot) in inv.iter_mut().enumerate().skip(1) {
         for j in 1..256usize {
             if gf_mul(i as u8, j as u8) == 1 {
-                inv[i] = j as u8;
+                *slot = j as u8;
                 break;
             }
         }
@@ -1434,6 +1434,8 @@ async fn exchange_auth_code(
     let (proof, info) = device_proof_parts(identity, "/trae/api/v3/oauth/ExchangeToken", auth_code, CLIENT_ID_IDE);
     // EP_EXCHANGE_V3 已是完整 URL（回调里的 host 仅是提示，不参与拼接）。
     let main_url = EP_EXCHANGE_V3.to_string();
+    // (名字, URL, 主 body, 额外 header)：候选签名变体表，一行一个变体
+    #[allow(clippy::type_complexity)]
     let variants: Vec<(String, String, Value, Vec<(&'static str, String)>)> = vec![
         (
             "DeviceInfo".to_string(),
