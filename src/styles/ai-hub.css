@@ -680,6 +680,7 @@
 }
 .qa-busy-pill .spin {
   color: var(--accent);
+  flex-shrink: 0;
 }
 .qa-busy-stop {
   display: inline-flex;
@@ -701,6 +702,7 @@
 }
 /* Agent approval reachable from the tools tab: the pill holds the decision buttons */
 .qa-busy-pill.is-approval {
+  min-width: 0;
   padding-right: 3px;
   border-color: var(--yellow-border);
   color: var(--text-1);
@@ -708,6 +710,14 @@
 }
 .qa-busy-pill.is-approval:hover {
   background: transparent;
+}
+/* 窄窗口下先让状态文字省略，三个决策按钮始终完整可点（同吸底审批条的收缩规则） */
+.qa-busy-pill.is-approval > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .qa-busy-act {
   height: 18px;
@@ -718,6 +728,8 @@
   color: var(--text-2);
   font-size: 11px;
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
   transition: var(--transition-colors-fast);
 }
 .qa-busy-act:hover {
@@ -2002,6 +2014,7 @@
   bottom: 8px;
   z-index: 4;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 7px 9px;
@@ -2020,6 +2033,16 @@
   white-space: nowrap;
   font-size: 11.5px;
   color: var(--text-0);
+}
+/* 倒计时 + 决策按钮当成一个原子组：摘要放不下时整组换行，收缩由组内换行吸收 */
+.qa-approve-dock-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  flex: 0 1 auto;
 }
 .qa-approve-dock-count {
   flex: 0 0 auto;
@@ -2042,6 +2065,9 @@
   border: 1px solid var(--border);
   background: var(--bg-1);
   color: var(--text-1);
+  /* 中文标签可断在任意两字之间：按钮不参与收缩，否则被挤成竖排 */
+  flex-shrink: 0;
+  white-space: nowrap;
   transition: var(--transition-colors-fast);
 }
 .qa-agent-allow {

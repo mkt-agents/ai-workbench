@@ -324,26 +324,28 @@ export function AgentApprovalBar({
   return (
     <div className="qa-approve-dock" role="alert">
       <span className="qa-approve-dock-text">{approval.summary}</span>
-      {left && <span className="qa-approve-dock-count">{left}</span>}
-      <button type="button" className="qa-agent-allow" onClick={() => onDecide("once")}>
-        {t("agent.allow")}
-      </button>
-      <button type="button" className="qa-agent-allow-turn" onClick={() => onDecide("turn")} title={t("agent.allowTurnTip")}>
-        {t("agent.allowTurn")}
-      </button>
-      {approval.canRemember && (
-        <button
-          type="button"
-          className="qa-agent-allow-always"
-          onClick={() => onDecide("always")}
-          title={t("agent.allowAlwaysTip")}
-        >
-          {t("agent.allowAlways")}
+      <span className="qa-approve-dock-acts">
+        {left && <span className="qa-approve-dock-count">{left}</span>}
+        <button type="button" className="qa-agent-allow" onClick={() => onDecide("once")}>
+          {t("agent.allow")}
         </button>
-      )}
-      <button type="button" className="qa-agent-deny" onClick={() => onDecide("deny")}>
-        {t("agent.deny")}
-      </button>
+        <button type="button" className="qa-agent-allow-turn" onClick={() => onDecide("turn")} title={t("agent.allowTurnTip")}>
+          {t("agent.allowTurn")}
+        </button>
+        {approval.canRemember && (
+          <button
+            type="button"
+            className="qa-agent-allow-always"
+            onClick={() => onDecide("always")}
+            title={t("agent.allowAlwaysTip")}
+          >
+            {t("agent.allowAlways")}
+          </button>
+        )}
+        <button type="button" className="qa-agent-deny" onClick={() => onDecide("deny")}>
+          {t("agent.deny")}
+        </button>
+      </span>
     </div>
   );
 }
