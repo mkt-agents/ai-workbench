@@ -41,8 +41,8 @@
     "pasteClipboard": "Allow clipboard fill on open",
     "suggest": "Predict the next prompt after every answer",
     "suggestHint": "The prediction costs one extra model call (counted in the usage table below). Turning it off only removes the chip; Q&A is unchanged.",
-    "bubble": "Desktop floating button",
-    "bubbleHint": "Always-on-top button (bottom-right). Click to open AI Hub; drag to move; right-click to hide. Shortcut and tray still work.",
+    "bubble": "Desktop pet",
+    "bubbleHint": "Desktop pet in the bottom-right corner: click to open AI Hub, double-click to swap skins (Pikachu / shiny / Genesect / orb), drag to snap, right-click to hide. Shortcut and tray still work.",
     "diffConfirm": "Show the diff before the agent writes",
     "diffConfirmHint": "At edit level, a file change asks you first (with the diff). Denying leaves the file untouched.",
     "remembered": "Remembered approvals",
@@ -84,7 +84,7 @@
     "freshContextHint": "On by default: questions asked within two minutes reuse the last git snapshot, after a fingerprint check that nothing changed. Turn it off to re-collect every time — always the latest state, at the cost of a short wait per question."
   },
   "usage": {
-    "title": "Local AI usage",
+    "title": "AI usage overview",
     "hint": "Calls and estimated tokens from AI Hub / reports / commits — stored locally, never uploaded.",
     "empty": "No usage recorded yet.",
     "row": "{{calls}} calls · ~{{tokens}} tok",

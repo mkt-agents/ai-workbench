@@ -354,4 +354,197 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   .qa-bubble-root.is-firing .qa-bubble-orb::after {
     animation: none;
   }
+
+  .qa-pet svg,
+  .qa-pet-body,
+  .qa-pet-speech {
+    animation: none !important;
+  }
+}
+
+/* ─── 桌宠（皮卡丘 / 高达）──────────────────────────────
+   窗口 112px：宠物沉底站好，头顶留白给气泡语。
+   SVG 配色是角色固有色（黄 / 白蓝红），不走主题 token。 */
+.qa-pet {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 5px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.qa-pet-body {
+  line-height: 0;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+.qa-pet svg {
+  width: 68px;
+  height: auto;
+  overflow: visible;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35));
+  animation: qa-pet-bob 3s ease-in-out infinite;
+}
+
+/* 悬停：凑近一点 + 耳朵/天线竖起 */
+.qa-bubble-root:hover .qa-pet-body {
+  transform: translateY(-2px) scale(1.05);
+}
+.pet-ear {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.qa-bubble-root:hover .pet-ear-l {
+  transform: rotate(-7deg);
+}
+.qa-bubble-root:hover .pet-ear-r {
+  transform: rotate(7deg);
+}
+/* 皮卡丘尾巴：根部为轴，悬停摆一下 */
+.pet-tail {
+  transform-box: fill-box;
+  transform-origin: 0% 100%;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.qa-bubble-root:hover .pet-tail {
+  transform: rotate(-8deg);
+}
+
+/* 按压：蹲一下 */
+.qa-bubble-root.is-pressed .qa-pet-body {
+  transform: translateY(2px) scale(1.04, 0.9);
+}
+/* 拖拽：被拎起来晃 */
+.qa-bubble-root.is-dragging .qa-pet-body {
+  animation: qa-pet-swing 0.9s ease-in-out infinite;
+}
+/* 点击 / 换装：弹一下 */
+.qa-bubble-root.is-firing .qa-pet-body {
+  animation: qa-pet-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 眨眼：随机感靠 4.4s 长周期里只闭一瞬间 */
+.pet-eye {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: qa-pet-blink 4.4s ease-in-out infinite;
+}
+/* 皮卡丘放电：脸颊发光 + 电弧闪 */
+.pet-cheek {
+  transition: filter 160ms;
+}
+.qa-bubble-root.is-firing .pet-cheek {
+  filter: drop-shadow(0 0 5px rgba(255, 110, 64, 0.95)) brightness(1.3);
+}
+.pet-bolt {
+  opacity: 0;
+}
+.qa-bubble-root.is-firing .pet-bolt {
+  animation: qa-pet-spark 0.21s linear 2;
+}
+/* 高达过载：眼带爆亮 */
+.qa-bubble-root.is-firing .pet-visor {
+  filter: drop-shadow(0 0 6px rgba(124, 242, 192, 0.95)) brightness(1.5);
+}
+
+/* 宠物模式下收起圆球光晕（圆盘光环衬在宠物身后会穿帮） */
+.qa-bubble-root.pet-pikachu .qa-bubble-aura,
+.qa-bubble-root.pet-gundam .qa-bubble-aura {
+  display: none;
+}
+
+/* 官方 Showdown 动画 GIF（PokeAPI，60×60 透明）：GIF 自带呼吸/摆尾待机动画，
+   只以接近原生尺寸展示（轻微 1.1x 放大走默认平滑插值），不叠 CSS 动画免得打架 */
+.qa-pet-img {
+  width: 70px;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 互动气泡语 */
+.qa-pet-speech {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 100px;
+  padding: 2px 8px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--bg-3) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: qa-pet-speech-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes qa-pet-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.5px);
+  }
+}
+@keyframes qa-pet-blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.08);
+  }
+}
+@keyframes qa-pet-swing {
+  0%,
+  100% {
+    transform: rotate(4.5deg);
+  }
+  50% {
+    transform: rotate(-4.5deg);
+  }
+}
+@keyframes qa-pet-pop {
+  0% {
+    transform: scale(0.9);
+  }
+  55% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes qa-pet-spark {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+@keyframes qa-pet-speech-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
 }

@@ -130,11 +130,11 @@ pub(crate) mod vis {
 pub const AI_HUB_LABEL: &str = "ai-hub";
 pub(crate) const AI_HUB_BUBBLE_LABEL: &str = "ai-hub-bubble";
 pub(crate) const MAIN_LABEL: &str = "main";
-/// Bounding window size (logical px). Visible disc is smaller (`.qa-bubble-orb`);
-/// the extra padding holds the soft aura / hover ring. Keep CSS in sync.
-/// The window stays a plain (uncut) rectangle: DWM blur-behind makes the
-/// corners around the CSS-rounded disc see-through.
-const BUBBLE_SIZE: f64 = 56.0;
+/// Bounding window size (logical px). The orb disc is 40px (`.qa-bubble-orb`);
+/// pet skins (皮卡丘 / 高达) anchor to the bottom and use the headroom above for
+/// the speech bubble. Keep CSS in sync. The window stays a plain (uncut)
+/// rectangle: DWM blur-behind makes the uncovered corners see-through.
+const BUBBLE_SIZE: f64 = 112.0;
 const BUBBLE_MARGIN: f64 = 24.0;
 /// Keep the bubble out of the top chrome band so it cannot cover main titlebar buttons.
 const BUBBLE_TOP_SAFE_LOGICAL: f64 = 96.0;

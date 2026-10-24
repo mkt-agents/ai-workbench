@@ -28,6 +28,9 @@ _gen.js
 _lines_b64.txt
 _test_b64.txt
 .tmp-noop
+# Clippy fix backup temp files
+build-temp-fix-backup/
+.clippy-fix-backup/
 
 # Local screenshots that may contain personal/work data
 /screen.png
@@ -37,6 +40,9 @@ _test_b64.txt
 *.db
 *.db-wal
 *.db-shm
+# Temporary script / dump files (generated locally)
+.tmp-finish-34.ps1/
+.tmp-leveldb-dump/
 
 # Logs
 *.log
