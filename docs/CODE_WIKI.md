@@ -1126,6 +1126,12 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `open_main_tab` | tab: String | — |
 | `set_ai_hub_bubble_visible` | visible, x?, y? | — |
 | `set_ai_hub_bubble_position` | x, y | — |
+| `set_ai_hub_bubble_box` | width, height | —（桌宠窗尺寸：设置档位 + 就地菜单临时撑高，底边中心锚定，`tray/bubble.rs`） |
+| `pick_pet_images` | — | 路径数组（系统文件框多选自备桌宠素材，`pet_pack_commands.rs`；rfd 走 spawn_blocking） |
+| `read_pet_images` | paths | `[{name, dataUrl}]`（扩展名白名单 + 单文件 8MB 上限，交给前端画布抠像归一化） |
+| `save_pet_pack` | frames: `[{name, dataUrl}]` | 帧数（文件名必须过 `<情绪>[-序号].png\|webm` 白名单，先清旧帧再写进 `%APPDATA%\…\pets\custom\`） |
+| `load_pet_pack` | — | `[{name, dataUrl}]`（桌宠窗与设置页都读它；目录空 = 空数组 → `petSkin("custom")` 回落到内置熊猫 `src/assets/pets/panda/`，其 `timeline.json` 是「姿势文件 + 连续格数」的节拍表） |
+| `clear_pet_pack` | — | 删除的帧数（只清这个目录里的文件） |
 | `ai_hub_bubble_ready` | — | —（在 `tray/bubble.rs`） |
 
 ### 10.10 Tool Commands（10 条）
@@ -1485,17 +1491,28 @@ t('myKey')
 | 事件名 | Payload | 触发时机 |
 |--------|---------|----------|
 | `generate-text-chunk` | `{ id, text }` | AI 流式每 chunk |
-| `generate-text-done` | `{ id }` | AI 流结束 |
+| `generate-text-done` | `{ id, elapsedMs, limited, promptTokens?, completionTokens?, contextChars?, budgetRatio?, trimmedRounds? }` | AI 流结束；桌宠用 `elapsedMs` / `limited` 决定撒花还是「步数用完了」 |
 | `generate-text-error` | `{ id, error }` | AI 流错误 |
 | `agent-step` | `{ id, tool, status, summary, detail, arg? }` | 天玑代理每一步；`arg` 是参数主串（path / command / pattern…），前端用它渲染本地化步骤，`summary` 保持中文（要喂模型与 digest） |
+| `agent-plan` | `{ id, steps }` | 模型自己的 `update_plan` 计划卡（纯展示，不占动作步数） |
 | `agent-approval` | `{ id, callId, tool, summary, preview, previewKind, deadlineAt }` | 天玑代理等用户确认；`deadlineAt` 是自动拒绝的 epoch ms，同时 `request_user_attention` 闪 `ai-hub` + `main` 两个窗口（天玑窗不进任务栏），落定后清掉 |
 | `dsh:install_progress` | `{ stage, percent, message }` | DSH 安装进度 |
 | `dsh:update_progress` | `{ stage, percent, message }` | DSH 更新进度 |
 | `cloudflared-log` | `{ id, tag, line }` | cloudflared 日志行 |
 | `cloudflared-url` | `{ id, url }` | 隧道拿到公网 URL |
 | `tray-minimized` | — | 用户关闭窗口到托盘 |
-| `ai-hub-bubble-enabled` | `boolean` | 气泡显隐切换 |
 | `navigate-tab` | `Tab` | 托盘菜单跳转 |
+
+> 这些事件都由 `app.emit` **广播给所有窗口**，所以桌宠窗（`ai-hub-bubble`）不用自己的通道：它直接 `listen` `agent-*` / `generate-text-*` 演情绪（`src/lib/petBrain.ts` 是唯一映射表）。
+>
+> 旧表里列过的 `ai-hub-bubble-enabled`（`boolean`，气泡显隐）**没有任何发射方**：`App.tsx` 保留了监听，但开关实际走 `set_ai_hub_bubble_visible` 命令，别再按这条事件写代码。
+
+### Frontend → Frontend 跨窗广播
+
+| 事件名 | Payload | 用途 |
+|--------|---------|------|
+| `app-theme-changed` | `AppTheme` | 设置页改主题后通知天玑 / 桌宠窗（各自 `applyDocumentTheme`） |
+| `ai-hub-pet-changed` | `PetConfig & { packRev? }` | 设置页改桌宠形象 / 尺寸 / 安静模式后通知桌宠窗——它是另一个 webview，自己的 store 不会自动刷新；`packRev` 变了桌宠窗才去重读自备素材目录 |
 
 ### Frontend → Rust Event
 

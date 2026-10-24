@@ -39,10 +39,14 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # runtime/tool/db/cancellation/app_launcher/port/update…）；共 234 条注册
+                      # runtime/tool/db/cancellation/app_launcher/port/update/pet_pack…）；共 245 条注册
                       # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；含
                       # `workspace_fingerprint`（2026-10-23 M2：工作区新鲜度摘要，见 `agent_freshness.rs`）/
                       # `agent_undo`（2026-10-23 M4：撤销一整轮的写文件，见 `agent_undo.rs`）/
+                      # `set_ai_hub_bubble_box`（2026-10-24 桌宠改造：桌宠窗尺寸运行时化，
+                      # 见「架构约定 8」）/
+                      # `pet_pack_commands` 五条（2026-10-24 自备形象：挑图 / 读图 / 落盘 / 读目录 / 清除，
+                      # 素材只进应用数据目录，见「架构约定 8」④）/
                       # `detect_local_ai_endpoints` / `regenerate_test_report_ai_section` /
                       # `git_fetch_branch` / `git_publish_branch`（2026-10-22 批量建分支用：前者只推进
                       # 一个远端跟踪引用，后者在 origin 上建分支、不碰工作区）/
@@ -140,7 +144,7 @@ $env:TEMP = (Resolve-Path .build-tmp).Path; $env:TMP = $env:TEMP; npm run build
 - 长任务必须可取消（`CancelGuard`）并有实时进度事件；报告侧是 `test-report-collect-progress`（多仓采集）与 `test-report-ai-progress`（AI 分块）。
 - **任何「Enter 即执行」的输入框，先挡输入法组合**：`if (e.nativeEvent.isComposing || e.keyCode === 229) return;`——否则拼音选词的回车会把半截内容发送或提交。已覆盖天玑提问框、片段搜索、历史重命名、参数填充。
 - 危险操作（删账号、覆盖 Hosts、批量推拉）必须二次确认并给出影响范围列表。
-- **设置页是「左栏分类 + 右栏卡片」**：分类由 `Settings.tsx` 的 `SETTINGS_TABS` 决定（通用设置 / 菜单配置 / 天玑助手 / 联网扩展 / 数据用量 / 关于程序：外观两项相邻、能力两项相邻，中文统一四个字，窄窗下导航变成顶部横向一行），卡片用 `hidden={tab !== id}` **挂起而不是卸载**——切分类时网页白名单输入框、MCP 新增行的草稿不能丢。新增设置项时先挂到对应分类的卡片里：行与行之间靠 `.card-body > .setting-row + .setting-row` 的分隔线，卡片内再分组就用 `<h3 className="settings-group">`（交互 / 权限与审批 / 助手能力：交互放「长任务先出计划」，助手能力放「并发读取 / 自动重试 / 搜索时跳过 .gitignore / 只读子代理」，预算与兼容放「上下文预算 / 工具结果上限 / Anthropic 流式」，MCP 总开关放在联网扩展）。除「交互 / 权限」外都是 `AppSettings` 里的 `agent*` 项，前端经 `AiHubApp` 映射成 `AgentRunRequest` 的同名字段，后端在 `ToolCtx` 上取 `max_parallel` / `max_retries` / `grep_ignore` / `result_cap`，`context_tokens` 直接喂给 `fit_context`。**「菜单配置」那一栏不是卡片**：它直接挂 `MenuManager`（原侧栏「系统工具 → 菜单管理」，2026-10-23 搬进设置并改名），组件自带吸顶工具条与分组卡，外层用 `.settings-pane` + `hidden` 包一层即可，别再套 `.card`。侧栏项与 `Tab` 联合类型在 `lib/navStructure.tsx`，删掉那一项后用户存下的 `navCustom` 里的旧 id 会被 `applyNavCustomization` 自然忽略。
+- **设置页是「左栏分类 + 右栏卡片」**：分类由 `Settings.tsx` 的 `SETTINGS_TABS` 决定（常规设置 / 菜单配置 / 天玑助手 / 联网扩展 / 数据用量 / 关于版本：外观两项相邻、能力两项相邻，中文统一四个字，窄窗下导航变成顶部横向一行），卡片用 `hidden={tab !== id}` **挂起而不是卸载**——切分类时网页白名单输入框、MCP 新增行的草稿不能丢。新增设置项时先挂到对应分类的卡片里：行与行之间靠 `.card-body > .setting-row + .setting-row` 的分隔线（行下面带说明的成套项要包一层 `.setting-item`——分隔线画在项上，否则夹了 `p.setting-hint` 邻接规则就断档；只有一行没说明的项也用它，节奏才一致），卡片内再分组就用 `<h3 className="settings-group">`（天玑助手的卡内页签是三个：交互权限 / 助手能力 / 预算兼容——「权限」两项目前并进交互，单独一页太薄；助手能力放「并发读取 / 自动重试 / 搜索时跳过 .gitignore / 只读子代理」，预算兼容放「上下文预算 / 工具结果上限 / Anthropic 流式」，MCP 总开关放在联网扩展）。**桌面宠物（开关 / 形象 / 导入素材 / 大小 / 安静模式）自成一张卡**，挂在「常规设置」页，不跟天玑助手混在一起。除交互权限那几项（含 `agentDiffConfirm` / `agentAlwaysAllow`）外都是 `AppSettings` 里的 `agent*` 项，前端经 `AiHubApp` 映射成 `AgentRunRequest` 的同名字段，后端在 `ToolCtx` 上取 `max_parallel` / `max_retries` / `grep_ignore` / `result_cap`，`context_tokens` 直接喂给 `fit_context`。**「菜单配置」那一栏不是卡片**：它直接挂 `MenuManager`（原侧栏「系统工具 → 菜单管理」，2026-10-23 搬进设置并改名），组件自带吸顶工具条与分组卡，外层用 `.settings-pane` + `hidden` 包一层即可，别再套 `.card`。侧栏项与 `Tab` 联合类型在 `lib/navStructure.tsx`，删掉那一项后用户存下的 `navCustom` 里的旧 id 会被 `applyNavCustomization` 自然忽略。
 - 空态、加载态、错误态要区分（如 Git 提交页区分「筛选内无改动」vs「真正无改动」）。
 - 文案中文为主、通过 i18n 双语；数字/代码/路径用等宽字体展示。
 
@@ -160,6 +164,7 @@ $env:TEMP = (Resolve-Path .build-tmp).Path; $env:TMP = $env:TEMP; npm run build
 5. **AI 提示词格式只有一份实现**：section 列表与逐行格式由 `report_commands::output_rules()` 生成，前端 `src/lib/reportAi.ts` 的 `parseAiLine()` 负责解析回来——改用例行格式必须同时改这两处（后端单测 `output_rules_only_add_the_coverage_section_with_an_ask` 钉住了契约）。
 6. **取消机制**：AI 流式（天玑）用 `request_id`，报告 AI 用 `reportId` 作 token，共用 `CancelGuard`（`cancellation.rs`）。
 7. **页面保活**：Git / DSH 面板用 `gitMounted` / `dshMounted` + `.page-panel.is-active`，切走隐藏不卸载。
+8. **桌宠（`ai-hub-bubble`）四条事实**：① 情绪状态机 `PetMood`（`lib/petSkins.ts`）只有七个值，改名要三处一起改——`lib/petBrain.ts` 的事件映射表、`components/aiHub/PetStage.tsx` 的 FX 层、`styles/ai-hub-bubble.css` 的 `mood-*` 规则。② 桌宠窗尺寸是**运行时值**（`settings.aiHubPetSize`，96/112/128/160；builder 用区间 `BUBBLE_BOX_MIN..MAX_W/MAX_H` 而不是钉死 min==max，否则 `set_size` 会被夹回原形），改尺寸与「就地菜单」撑高都走 `set_ai_hub_bubble_box`，**底边中心锚定**（`bottom_center_anchor`，高只往头顶长），前端 mount 时必须按「位置 → 尺寸 → `ai_hub_bubble_ready`」的顺序调用，否则非默认档位第一帧会跳。③ 桌宠不接自己的后端通道：`app.emit` 是广播，它直接 `listen` `agent-step / agent-plan / agent-approval / generate-text-*` 演状态；形象 / 尺寸 / 安静模式由主窗设置页经 `ai-hub-pet-changed` 事件通知（另一个 webview 的 store 不会自动刷新），广播 payload 里的 `packRev` 变了它才去重读素材目录。④ **四种皮肤与素材来源**：`PetSkinId` = `panda`（默认）/ `artisan`（电玩小匠）/ `orb`（水晶圆盘）/ `custom`（自备包）；前两个是本仓库自己生成的原创帧。**内置形象的帧与节拍表都在 `src/assets/pets/<名字>/`**：唯一姿势 PNG + `timeline.json`（`{"fps":12,"clips":{"情绪":[["姿势文件",连续格数],…]}}`，由一次性生成脚本产出：脚本不进仓库、产物进仓库）。`PetStage` 是定频轮播，所以「同一张图连续占几格」就是停顿——节奏全在这张表里，运行时不加新概念（`lib/petSkins.ts` 的 `builtInSkin()` 负责展开，两个形象共用这条装配）。**别把每个姿势钉成一格**：那样眨眼和敲键盘同速，看着呆；idle 要 6s 一轮、眨眼约 3s 一次才自然。作画网格定 128 是因为它必须 ≥ 最大显示尺寸（160 档图片是 0.82×160≈131 CSS px）——64 网格在那儿要被放大两倍，发丝描边就糊成方块。角色四周留 8 格空白，否则耳朵顶到窗口边、和定位在 `top:10~12%` 的情绪特效（zzz、思考点）打架。**custom** 走 `%APPDATA%\com.ai-workbench.app\pets\custom\<情绪>[-序号].png|webm`（文件名前缀即情绪、缺的情绪退回 idle），导入走 `pet_pack_commands.rs` 五条命令 + `lib/petPack.ts` 归一化管线：抠背景（四角主色，容差外一圈按混色反解回前景本色，否则角色外会套一圈背景毛边）→ 裁到紧包围盒 → **全部塞进同一边长的正方形、脚贴底、水平居中**（缩放比不一致角色就忽大忽小，基线不一致切情绪就跳位）；**自备包是空的时 `petSkin("custom")` 回落到内置熊猫**，而不是给一扇看不见的窗。曾经内置过的 GIF（皮卡丘/机甲等）与自绘矢量形象（麻薯/超级玛丽）都已下线。**红线只针对第三方美术**：`src/assets/` 不收来路不明的角色——2026-10-24 实测调研：颜值能打的开源桌宠几乎都不可随包分发（`PC2005-cloud/dsh-pet` 代码 MIT 但素材写明「禁止商用」且角色是 CC BY-NC-SA，`WindowPet` 内置角色是原神/宝可梦盗图，`VPet`/`BongoCat`/`Taromati2`/Sprout Lands 非商用或需另行授权），与本仓库 MIT 冲突；CC0 素材（`luizmelo/pet-cat-pack`、`styloo/dog2d`、Kenney）虽然可商用，但要走浏览器会话才能从 itch.io 取。**本仓库自己生成的原创帧不受此限**（熊猫与电玩小匠都是这么来的）。**但「借题材」不等于「抄设计」**：2026-10-24 有人要求照《王者荣耀》鲁班七号「电玩小子」皮肤做桌宠，那是复刻受保护的角色设计（发型、帽徽、服装色块分布、机甲纹样），已拒绝；改成只做「爱打电玩的小工匠」这个类型 —— 侧戴棒球帽、头戴耳机、蓝夹克配紫袖、别扳手、跟一台小无人机，配色与版型自己定（就是 `artisan`）。换别人的形象仍走导入，素材许可由导入者承担。
 
 ## 样式硬约定（窗口 resize 性能）
 

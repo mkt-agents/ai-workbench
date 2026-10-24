@@ -30,6 +30,7 @@ pub mod config;
 pub mod cancellation;
 mod app_launcher_commands;
 mod port_commands;
+mod pet_pack_commands;
 mod cancellation_commands;
 mod change_report;
 mod report_commands;
@@ -636,6 +637,12 @@ pub fn run() {
             tray::set_ai_hub_bubble_visible,
             tray::set_ai_hub_bubble_position,
             tray::bubble::ai_hub_bubble_ready,
+            tray::bubble::set_ai_hub_bubble_box,
+            pet_pack_commands::pick_pet_images,
+            pet_pack_commands::read_pet_images,
+            pet_pack_commands::save_pet_pack,
+            pet_pack_commands::load_pet_pack,
+            pet_pack_commands::clear_pet_pack,
             runtime_commands::list_runtime_versions,
             runtime_commands::get_active_runtime,
             runtime_commands::add_custom_runtime,

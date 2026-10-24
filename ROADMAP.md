@@ -334,6 +334,20 @@ AI 能力不再列为不做。天玑已是多模型流式对话，并带当前�
 
 **成功标准**：点推送前能看到「这次会推走哪几条、各改了哪些文件」；没上游的仓库一眼看出会在 origin 建分支；单仓快进推送不多一次弹框。
 
+### 阶段 26：桌宠改造——先好看，再知道自己在干什么（P1）✅ 已完成（2026-10-24）
+
+- [x] **动效复活**：换成 GIF 之后 `ai-hub-bubble.css` 里 SVG 时代的 `.pet-ear / .pet-eye / .pet-bolt / .pet-visor` 与 `qa-pet-bob / blink / spark` 全是死选择器（形象只剩素材自己在动，看着就呆）。现在拆成两条轴：`.qa-pet-img` 演身体（呼吸 / 干活颠 / 贴玻璃敲 / 撒花连跳 / 垂头 / 慢呼吸打瞌睡），`.qa-fx` 演头顶（思考点、绕轨点、问号、火花、乌云、Zzz），只用 transform + opacity，`prefers-reduced-motion` 一并关掉
+- [x] **情绪状态机**：`lib/petSkins.ts` 定七个 `PetMood`，`lib/petBrain.ts` 把 `agent-step / agent-plan / agent-approval / generate-text-done / -error` 映射成情绪 + 话术（等审批「在等你点允许」、跑完「搞定，用了 N 秒」、被拒「好，不做了」、回合数用完「步数用完了」）；3 分钟没动静打瞌睡，任何信号唤醒。桌宠窗不加后端通道——`app.emit` 本来就是广播
+- [x] **尺寸改成运行时值**：`BUBBLE_SIZE` 硬钉（builder `min==max` + 四处 `set_size` + 位置数学）换成 `set_ai_hub_bubble_box`，档位 96 / 112 / 128 / 160；`bottom_center_anchor` 保证撑高只往头顶长（单测 `growing_for_the_menu_keeps_the_feet_on_the_ground` 钉住「脚不动」）。菜单开时窗高 +116，关时收回
+- [x] **就地菜单**：右键从「直接隐藏天玑窗」改为唤出四行菜单（打开天玑 / 换个形象 / 安静一会儿 / 隐藏桌宠）；菜单开着时第一下点击只负责收起，不顺手开窗
+- [x] **设置搬进主窗**：形象 / 大小 / 安静模式进「天玑助手」卡片，改完广播 `ai-hub-pet-changed`（桌宠是另一个 webview，自己的 store 不会自动刷新）；旧 localStorage 旁路 `qa-bubble-pet` 降级为缺省回退（旧存档 gundam → robot）
+- [x] **顺手修的**：shiny / robot 身后残留圆盘光晕穿帮（旧规则只认 pikachu 与已下线的 gundam）、零引用死文件 `pikachu-shiny.png`、气泡语半透明底改实底 `--float-bar-bg`
+- [x] **素材改成自备包，不随包分发第三方美术**：想内置开源桌宠前先查了许可——`PC2005-cloud/dsh-pet`（DSH 桌宠，3.8k★）代码 MIT，但 README「许可」把素材单列为「禁止商用」、角色本身 CC BY-NC-SA；`WindowPet` 的内置角色是原神/宝可梦盗图；`VPet` / `BongoCat` / `Taromati2` / Sprout Lands 都是非商用或需另行授权。与本仓库 MIT 冲突，于是内置只留 `orb`，形象改由用户在设置页「桌宠形象 → 导入形象」入库：`pet_pack_commands.rs` 五条命令读写 `%APPDATA%\com.ai-workbench.app\pets\custom\<情绪>[-序号].png|webm`，`lib/petPack.ts` 在本机画布里抠背景（四角主色 + 边缘混色反解，不留背景色毛边）、裁紧包围盒、把所有帧归一到同一边长正方形并脚贴底，主窗导入后经 `ai-hub-pet-changed` 的 `packRev` 通知桌宠窗重读；自备包空着时回落到内置熊猫。曾经内置的 GIF 与自绘矢量形象（麻薯 / 超级玛丽）一并下线
+- [x] **内置原创形象 + 节拍表（2026-10-24 补）**: 先做 `panda`，再用同一条管线加 `artisan`（电玩小匠）：素材许可自己写的才谈得上进安装包，于是自己生成一套——`src/assets/pets/panda/` 放唯一姿势 PNG（128 格作画，产物 144，四周留白）+ `timeline.json`（`fps` 与每情绪 `[姿势文件, 连续格数]`）。「同一张图连续占几格」就是停顿，节奏全靠这张表：idle 一轮 6.0s、眨眼约 3s 一次；working 打键一阵一停；happy 带下蹲与落地压扁；sleepy 点头往下栽；error 发抖；drag / tap 挥爪。定频轮播下如果每姿势只占一格，所有动作同速且眨眼 0.75 秒一次，就是「呆」的数学原因；作画网格低于最大显示尺寸（160 档图片 ≈131 CSS px）则会被放大糊成方块，两条都修掉了。皮肤顺序 `panda → artisan → orb → custom`，默认 `panda`；`builtInSkin()` 让新增内置形象只需要「一份素材目录 + 一份表」。有人要求照搬《王者荣耀》鲁班七号「电玩小子」皮肤，那是复刻受保护的角色设计、与 MIT 随包分发冲突，已改成只做题材的原创形象
+- [ ] 后续可选项：桌宠人格（本地话术库 + 可选模型润色）、`pet_memories` 表、主动关怀（每日首问打招呼 / 久坐提醒）；`timeline.json` 的节拍表也可以开放给自备包（现在自备包仍按文件名派生 8/12fps）
+
+**成功标准**：桌宠在跑命令时颠、等审批时拍玻璃并冒话、跑完撒花；右键出菜单且撑高时脚不离原位（实测 112×112 → 112×228，底边同一像素）；96 / 160 换档不跳位；最窄档下菜单四行完整、无溢出。
+
 ### 阶段 10：备选规划（📋 待定）
 
 > 详细方案见 [docs/workbench-upgrade-plan.md](docs/workbench-upgrade-plan.md)

@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, XCircle, Loader2, Settings2, Sparkles, Globe, Database, Info, ListTree } from "lucide-react";
+import { Check, XCircle, Loader2, Settings2, Sparkles, Globe, Database, Info, ListTree, Plus } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
@@ -12,6 +12,18 @@ import {
   getSkippedVersion,
 } from "../lib/version";
 import { registerAiHubShortcut, DEFAULT_SHORTCUT } from "../lib/aiHubShortcut";
+import {
+  CUSTOM_SKIN,
+  PANDA_SKIN,
+  PET_CONFIG_EVENT,
+  PET_ORDER,
+  PET_SIZES,
+  loadUserPack,
+  normalizePetConfig,
+  type PetConfig,
+  type PetConfigPatch,
+} from "../lib/petSkins";
+import PetPackImport from "./PetPackImport";
 import { applyDocumentTheme, APP_THEME_CHANGED_EVENT } from "../lib/theme";
 import {
   clearAiUsage,
@@ -228,6 +240,39 @@ function Settings({ onNoticeUpdate }: Props = {}) {
 
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
+  // 桌宠三项都可能缺省（旧版只写 localStorage 的 qa-bubble-pet），统一按归一化结果渲染。
+  const petCfg = useMemo(
+    () =>
+      normalizePetConfig({
+        skin: settings.aiHubPetSkin,
+        size: settings.aiHubPetSize,
+        quiet: settings.aiHubPetQuiet,
+      }),
+    [settings.aiHubPetSkin, settings.aiHubPetSize, settings.aiHubPetQuiet],
+  );
+  /** 自备素材包变了才需要桌宠窗重读目录：广播里带这个代号。 */
+  const packRevRef = useRef(0);
+  const [packCount, setPackCount] = useState(0);
+  const [importOpen, setImportOpen] = useState(false);
+
+  const applyPetConfig = (patch: Partial<PetConfig>) => {
+    const next = normalizePetConfig({ ...petCfg, ...patch });
+    setSettings({ aiHubPetSkin: next.skin, aiHubPetSize: next.size, aiHubPetQuiet: next.quiet });
+    // 桌宠窗是另一个 webview，它的 store 不会自己刷新：改完广播过去（同主题事件的做法）。
+    void emit<PetConfigPatch>(PET_CONFIG_EVENT, { ...next, packRev: packRevRef.current }).catch(() => {});
+  };
+
+  /** 素材包落盘或清空之后：重读、把皮肤切上去（空了就回圆盘），代号 +1 通知桌宠窗。 */
+  const afterPackChange = async () => {
+    const count = await loadUserPack();
+    setPackCount(count);
+    packRevRef.current += 1;
+    applyPetConfig({ skin: count > 0 ? CUSTOM_SKIN : PANDA_SKIN });
+  };
+
+  useEffect(() => {
+    void loadUserPack().then(setPackCount);
+  }, []);
   const mcpServers = useGlobalStore((s) => s.mcpServers);
   const addMcpServer = useGlobalStore((s) => s.addMcpServer);
   const updateMcpServer = useGlobalStore((s) => s.updateMcpServer);
@@ -240,8 +285,9 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   const [trend, setTrend] = useState<AiUsageHistoryPoint[]>(() => readAiUsageHistory());
   // 模型明细口径：默认「近 14 天」与上面走势图同窗口，避免两个数字对不上
   const [usageScope, setUsageScope] = useState<"trend" | "all">("trend");
-  // 天玑助手卡内分组：跟顶部分类一样用 hidden 挂起不卸载
-  const [hubGroup, setHubGroup] = useState<"interaction" | "permission" | "capability" | "budget">("interaction");
+  // 天玑助手卡内分组：跟顶部分类一样用 hidden 挂起不卸载。
+  // 权限两项目前并进「交互」——它单独一页只有两行，太薄。
+  const [hubGroup, setHubGroup] = useState<"interaction" | "capability" | "budget">("interaction");
   useEffect(() => {
     const refresh = () => {
       setUsageRows(usageList());
@@ -508,6 +554,128 @@ function Settings({ onNoticeUpdate }: Props = {}) {
           </div>
         </div>
 
+        {/* 桌面宠物：开关 / 形象 / 素材 / 大小 / 安静模式自成一张卡，跟"天玑怎么干活"分开 */}
+        <div className="card" hidden={tab !== "general"}>
+          <div className="card-title">{t("aiHub.bubble")}</div>
+          <div className="card-body">
+            <div className="setting-item">
+              <div className="setting-row">
+                <span className="setting-label">{t("aiHub.petEnabled")}</span>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.aiHubBubbleEnabled !== false}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      const pos = settings.aiHubBubblePos;
+                      // Legacy HiDPI bug saved top-band coords; let Rust use default instead.
+                      const unsafe = pos && Number.isFinite(pos.y) && pos.y < 120;
+                      setSettings(
+                        unsafe
+                          ? { aiHubBubbleEnabled: on, aiHubBubblePos: undefined }
+                          : { aiHubBubbleEnabled: on }
+                      );
+                      void invoke("set_ai_hub_bubble_visible", {
+                        visible: on,
+                        x: unsafe ? null : (pos?.x ?? null),
+                        y: unsafe ? null : (pos?.y ?? null),
+                      }).catch(() => {});
+                    }}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              </div>
+              <p className="setting-hint">{t("aiHub.bubbleHint")}</p>
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-row pet-choice-row">
+                <span className="setting-label">{t("aiHub.petSkin")}</span>
+                <div className="pet-chips">
+                  {PET_ORDER.filter((id) => id !== CUSTOM_SKIN || packCount > 0).map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`pet-chip${petCfg.skin === id ? " is-active" : ""}`}
+                      onClick={() => applyPetConfig({ skin: id })}
+                    >
+                      {t(`aiHub.petName${id.charAt(0).toUpperCase()}${id.slice(1)}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-row pet-choice-row">
+                <span className="setting-label">{t("aiHub.petSize")}</span>
+                <div className="pet-chips">
+                  {PET_SIZES.map((px) => (
+                    <button
+                      key={px}
+                      type="button"
+                      className={`pet-chip${petCfg.size === px ? " is-active" : ""}`}
+                      onClick={() => applyPetConfig({ size: px })}
+                    >
+                      {px}px
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="setting-hint">{t("aiHub.petSizeHint")}</p>
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-row">
+                <span className="setting-label">{t("aiHub.petQuiet")}</span>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={petCfg.quiet}
+                    onChange={(e) => applyPetConfig({ quiet: e.target.checked })}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              </div>
+              <p className="setting-hint">{t("aiHub.petQuietHint")}</p>
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-row pet-choice-row">
+                <span className="setting-label">{t("aiHub.petImport")}</span>
+                <div className="pet-chips">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => setImportOpen(true)}
+                  >
+                    {t("aiHub.petImportPick")}
+                  </button>
+                  {packCount > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() =>
+                        void (async () => {
+                          await invoke("clear_pet_pack");
+                          await afterPackChange();
+                        })()
+                      }
+                    >
+                      {t("aiHub.petImportClear")}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="setting-hint">
+                {packCount > 0
+                  ? t("aiHub.petImportReady", { n: packCount })
+                  : t("aiHub.petImportEmpty")}
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* 数据管理（导出 / 导入）：挂在通用设置末尾 */}
         <div className="card" hidden={tab !== "general"}>
           <div className="card-title">{t("data.title")}</div>
@@ -537,7 +705,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               {(
                 [
                   ["interaction", "tabs.groupInteraction"],
-                  ["permission", "tabs.groupPermission"],
                   ["capability", "tabs.groupCapability"],
                   ["budget", "tabs.groupBudget"],
                 ] as const
@@ -555,218 +722,219 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               ))}
             </div>
             <section className="hub-group" hidden={hubGroup !== "interaction"}>
-            <div className="setting-stack">
-              <span className="setting-label">{t("aiHub.shortcut")}</span>
-              <div className="setting-stack-controls">
-                <div className="setting-inline-controls">
-                  <input
-                    className="input-field setting-shortcut-input"
-                    value={shortcutDraft}
-                    onChange={(e) => setShortcutDraft(e.target.value)}
-                  />
-                  <button type="button" className="btn btn-secondary btn-small" onClick={() => void handleApplyShortcut()}>
-                    {t("aiHub.shortcutApply")}
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.shortcut")}</span>
+                  <div className="setting-row-controls">
+                    <input
+                      className="input-field setting-shortcut-input"
+                      value={shortcutDraft}
+                      onChange={(e) => setShortcutDraft(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => void handleApplyShortcut()}
+                    >
+                      {t("aiHub.shortcutApply")}
+                    </button>
+                  </div>
+                </div>
+                <p className="setting-hint">{t("aiHub.shortcutHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.pasteClipboard")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.aiHubPasteClipboard !== false}
+                      onChange={(e) => setSettings({ aiHubPasteClipboard: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.suggest")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.aiHubSuggest !== false}
+                      onChange={(e) => setSettings({ aiHubSuggest: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.suggestHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.planFirst")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentPlanFirst === true}
+                      onChange={(e) => setSettings({ agentPlanFirst: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.planFirstHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.diffConfirm")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentDiffConfirm === true}
+                      onChange={(e) => setSettings({ agentDiffConfirm: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.diffConfirmHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.remembered")}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={rememberedAllowCount(settings) === 0}
+                    onClick={() => setSettings({ agentAlwaysAllow: [], agentAlwaysAllowByRepo: {} })}
+                  >
+                    {t("aiHub.rememberedClear")}
                   </button>
                 </div>
-                <span className="setting-hint">{t("aiHub.shortcutHint")}</span>
+                <p className="setting-hint">
+                  {rememberedAllowCount(settings) > 0
+                    ? t("aiHub.rememberedCount", { n: rememberedAllowCount(settings) })
+                    : t("aiHub.rememberedEmpty")}
+                </p>
               </div>
-            </div>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.pasteClipboard")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.aiHubPasteClipboard !== false}
-                  onChange={(e) => setSettings({ aiHubPasteClipboard: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.suggest")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.aiHubSuggest !== false}
-                  onChange={(e) => setSettings({ aiHubSuggest: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.suggestHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.bubble")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.aiHubBubbleEnabled !== false}
-                  onChange={(e) => {
-                    const on = e.target.checked;
-                    const pos = settings.aiHubBubblePos;
-                    // Legacy HiDPI bug saved top-band coords; let Rust use default instead.
-                    const unsafe = pos && Number.isFinite(pos.y) && pos.y < 120;
-                    setSettings(
-                      unsafe
-                        ? { aiHubBubbleEnabled: on, aiHubBubblePos: undefined }
-                        : { aiHubBubbleEnabled: on }
-                    );
-                    void invoke("set_ai_hub_bubble_visible", {
-                      visible: on,
-                      x: unsafe ? null : (pos?.x ?? null),
-                      y: unsafe ? null : (pos?.y ?? null),
-                    }).catch(() => {});
-                  }}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.bubbleHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.planFirst")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentPlanFirst === true}
-                  onChange={(e) => setSettings({ agentPlanFirst: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.planFirstHint")}</p>
-            </section>
-            <section className="hub-group" hidden={hubGroup !== "permission"}>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.diffConfirm")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentDiffConfirm === true}
-                  onChange={(e) => setSettings({ agentDiffConfirm: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.diffConfirmHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.remembered")}</span>
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                disabled={rememberedAllowCount(settings) === 0}
-                onClick={() => setSettings({ agentAlwaysAllow: [], agentAlwaysAllowByRepo: {} })}
-              >
-                {t("aiHub.rememberedClear")}
-              </button>
-            </div>
-            <p className="setting-hint">
-              {rememberedAllowCount(settings) > 0
-                ? t("aiHub.rememberedCount", { n: rememberedAllowCount(settings) })
-                : t("aiHub.rememberedEmpty")}
-            </p>
             </section>
             <section className="hub-group" hidden={hubGroup !== "capability"}>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.parallelReads")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentParallelReads !== false}
-                  onChange={(e) => setSettings({ agentParallelReads: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.parallelReadsHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.retries")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentRetries !== false}
-                  onChange={(e) => setSettings({ agentRetries: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.retriesHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.grepIgnore")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentGrepIgnore !== false}
-                  onChange={(e) => setSettings({ agentGrepIgnore: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.grepIgnoreHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.subagents")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentSubagents === true}
-                  onChange={(e) => setSettings({ agentSubagents: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.subagentsHint")}</p>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.parallelReads")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentParallelReads !== false}
+                      onChange={(e) => setSettings({ agentParallelReads: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.parallelReadsHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.retries")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentRetries !== false}
+                      onChange={(e) => setSettings({ agentRetries: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.retriesHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.grepIgnore")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentGrepIgnore !== false}
+                      onChange={(e) => setSettings({ agentGrepIgnore: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.grepIgnoreHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.subagents")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentSubagents === true}
+                      onChange={(e) => setSettings({ agentSubagents: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.subagentsHint")}</p>
+              </div>
             </section>
             <section className="hub-group" hidden={hubGroup !== "budget"}>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.contextTokens")}</span>
-              <select
-                className="input-field"
-                style={{ width: 120 }}
-                value={String(settings.agentContextTokens ?? 48000)}
-                onChange={(e) => setSettings({ agentContextTokens: Number(e.target.value) })}
-              >
-                <option value="24000">24k</option>
-                <option value="48000">48k</option>
-                <option value="96000">96k</option>
-              </select>
-            </div>
-            <p className="setting-hint">{t("aiHub.contextTokensHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.resultCap")}</span>
-              <select
-                className="input-field"
-                style={{ width: 120 }}
-                value={String(settings.agentResultCap ?? 12000)}
-                onChange={(e) => setSettings({ agentResultCap: Number(e.target.value) })}
-              >
-                <option value="6000">6k</option>
-                <option value="12000">12k</option>
-                <option value="24000">24k</option>
-              </select>
-            </div>
-            <p className="setting-hint">{t("aiHub.resultCapHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.anthropicStream")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentAnthropicStream !== false}
-                  onChange={(e) => setSettings({ agentAnthropicStream: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.anthropicStreamHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.freshContext")}</span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.agentFreshContext !== false}
-                  onChange={(e) => setSettings({ agentFreshContext: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
-            </div>
-            <p className="setting-hint">{t("aiHub.freshContextHint")}</p>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.contextTokens")}</span>
+                  <select
+                    className="input-field"
+                    style={{ width: 120 }}
+                    value={String(settings.agentContextTokens ?? 48000)}
+                    onChange={(e) => setSettings({ agentContextTokens: Number(e.target.value) })}
+                  >
+                    <option value="24000">24k</option>
+                    <option value="48000">48k</option>
+                    <option value="96000">96k</option>
+                  </select>
+                </div>
+                <p className="setting-hint">{t("aiHub.contextTokensHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.resultCap")}</span>
+                  <select
+                    className="input-field"
+                    style={{ width: 120 }}
+                    value={String(settings.agentResultCap ?? 12000)}
+                    onChange={(e) => setSettings({ agentResultCap: Number(e.target.value) })}
+                  >
+                    <option value="6000">6k</option>
+                    <option value="12000">12k</option>
+                    <option value="24000">24k</option>
+                  </select>
+                </div>
+                <p className="setting-hint">{t("aiHub.resultCapHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.anthropicStream")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentAnthropicStream !== false}
+                      onChange={(e) => setSettings({ agentAnthropicStream: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.anthropicStreamHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.freshContext")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentFreshContext !== false}
+                      onChange={(e) => setSettings({ agentFreshContext: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.freshContextHint")}</p>
+              </div>
             </section>
           </div>
         </div>
@@ -774,34 +942,40 @@ function Settings({ onNoticeUpdate }: Props = {}) {
         <div className="card" hidden={tab !== "net"}>
           <div className="card-title">{t("net.title")}</div>
           <div className="card-body">
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.webAllow")}</span>
-              <input
-                className="input-field setting-web-allow"
-                type="text"
-                defaultValue={(settings.agentWebAllow ?? []).join(", ")}
-                placeholder={t("aiHub.webAllowPlaceholder")}
-                onBlur={(e) => setSettings({ agentWebAllow: parseDomainList(e.target.value) })}
-                onKeyDown={(e) => {
-                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                  if (e.key === "Enter") e.currentTarget.blur();
-                }}
-              />
-            </div>
-            <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
-            <div className="setting-row">
-              <span className="setting-label">{t("aiHub.mcpEnabled")}</span>
-              <label className="toggle">
+            <div className="setting-item">
+              <div className="setting-row">
+                <span className="setting-label">{t("aiHub.webAllow")}</span>
                 <input
-                  type="checkbox"
-                  checked={settings.agentMcpEnabled !== false}
-                  onChange={(e) => setSettings({ agentMcpEnabled: e.target.checked })}
+                  className="input-field setting-web-allow"
+                  type="text"
+                  defaultValue={(settings.agentWebAllow ?? []).join(", ")}
+                  placeholder={t("aiHub.webAllowPlaceholder")}
+                  onBlur={(e) => setSettings({ agentWebAllow: parseDomainList(e.target.value) })}
+                  onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                    if (e.key === "Enter") e.currentTarget.blur();
+                  }}
                 />
-                <span className="toggle-slider" />
-              </label>
+              </div>
+              <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
             </div>
-            <p className="setting-hint">{t("aiHub.mcpEnabledHint")}</p>
-            <div className="setting-stack">
+
+            <div className="setting-item">
+              <div className="setting-row">
+                <span className="setting-label">{t("aiHub.mcpEnabled")}</span>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.agentMcpEnabled !== false}
+                    onChange={(e) => setSettings({ agentMcpEnabled: e.target.checked })}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              </div>
+              <p className="setting-hint">{t("aiHub.mcpEnabledHint")}</p>
+            </div>
+
+            <div className="setting-item">
               <span className="setting-label">{t("aiHub.mcp")}</span>
               <div className="mcp-list">
                 {mcpServers.length === 0 && <p className="setting-hint">{t("aiHub.mcpEmpty")}</p>}
@@ -843,7 +1017,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                   </div>
                 ))}
                 <div className="mcp-row is-draft">
-                  <span className="mcp-dot" aria-hidden />
+                  <Plus size={13} className="mcp-add-icon" aria-hidden />
                   <input
                     className="input-field mcp-name"
                     value={mcpDraft.name}
@@ -1115,6 +1289,13 @@ function Settings({ onNoticeUpdate }: Props = {}) {
         </div>
 
       </div>
+
+      {importOpen && (
+        <PetPackImport
+          onClose={() => setImportOpen(false)}
+          onApplied={() => void afterPackChange().then(() => setImportOpen(false))}
+        />
+      )}
 
       {message && (
         <div className={`toast toast-${message.type}`} role="status">

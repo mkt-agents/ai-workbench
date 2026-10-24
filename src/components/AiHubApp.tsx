@@ -803,6 +803,28 @@ function AiHubApp() {
     if (ok) void sessions.removeSession(s.id);
   };
 
+  /** 批量删除：一条确认框报总数与总轮数；正在出答案的那一条先跳过（它会被收尾逻辑写回去）。 */
+  const removeSessionsConfirmed = async (list: AiHubSession[]) => {
+    const skipped = list.filter((s) => stream.busy && s.id === activeSessionId);
+    const targets = list.filter((s) => !(stream.busy && s.id === activeSessionId));
+    if (targets.length === 0) return;
+    const turns = targets.reduce((n, s) => n + Math.ceil((s.turns?.length ?? 0) / 2), 0);
+    const ok = await confirm({
+      title: t("deleteManyTitle"),
+      message: t("deleteManyBody", { n: targets.length, turns }),
+      warning: t("deleteSessionWarn"),
+      confirmText: t("deleteManyConfirm", { n: targets.length }),
+      icon: "danger",
+    });
+    if (!ok) return;
+    await sessions.removeSessions(targets.map((s) => s.id));
+    showHint(
+      skipped.length
+        ? t("deleteManySkipped", { n: targets.length })
+        : t("deleteManyDone", { n: targets.length })
+    );
+  };
+
   const editQuestion = (index: number) => {
     const text = stream.history[index]?.content || "";
     if (!text) return;
@@ -1066,6 +1088,7 @@ function AiHubApp() {
                   onCancelRename={() => setRenamingId(null)}
                   onOpen={openSession}
                   onRemove={(s) => void removeSessionConfirmed(s)}
+                  onRemoveMany={(list) => void removeSessionsConfirmed(list)}
                   onExportAll={() => void sessions.exportAllSessions()}
                   maxSessions={MAX_AI_HUB_SESSIONS}
                   relativeTime={sessions.relativeTime}

@@ -1,5 +1,6 @@
-/* ===== AI Hub desktop bubble (crystal disc + aura) =====
-   HWND = 56px (tray/bubble.rs BUBBLE_SIZE); disc = 40px; padding holds aura. */
+/* ===== AI Hub desktop pet / bubble =====
+   窗口边长 = --qa-bubble-size（96/112/128/160 档位，由设置页决定，Rust 按它算位置）；
+   默认 112。圆盘 --qa-disc 与形象 --qa-pet 都从边长派生，换档位不用改 CSS。 */
 html.qa-bubble-mode,
 html.qa-bubble-mode body,
 html.qa-bubble-mode #root,
@@ -43,7 +44,8 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
 }
 
 .qa-bubble-root {
-  --qa-disc: 40px;
+  --qa-bubble-size: 112px;
+  --qa-disc: calc(var(--qa-bubble-size) * 0.357);
   /* Frost grain: fractal noise tile, white specks on dark discs / ink specks on light ones */
   --qa-bubble-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.11 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   --qa-bubble-grain-ink: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.13 0 0 0 0 0.18 0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -52,15 +54,26 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   position: relative;
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   box-sizing: border-box;
   background: transparent !important;
-  /* Only the disc captures hits — aura padding stays click-through to desktop */
+  /* 只有圆盘 / 形象 / 菜单吃点击，透明留白不参与命中；
+     整窗要不要穿透给桌面由 Rust 的 set_ignore_cursor_events 决定，这里管不到 */
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* 桌宠永远站在窗底：菜单撑高只往头顶长（Rust 侧同样按底边锚定），形象不会一跳一跳 */
+.qa-bubble-stage {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--qa-bubble-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 
 /* Soft outer aura (lives in HWND padding; clipped if window were 40px) */
@@ -355,16 +368,20 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
     animation: none;
   }
 
-  .qa-pet svg,
   .qa-pet-body,
-  .qa-pet-speech {
+  .qa-pet-img,
+  .qa-pet-vid,
+  .qa-pet-speech,
+  .qa-fx,
+  .qa-fx i,
+  .qa-bubble-menu {
     animation: none !important;
   }
 }
 
-/* ─── 桌宠（皮卡丘 / 高达）──────────────────────────────
-   窗口 112px：宠物沉底站好，头顶留白给气泡语。
-   SVG 配色是角色固有色（黄 / 白蓝红），不走主题 token。 */
+/* ─── 桌宠 ─────────────────────────────────────────────
+   素材按 src/assets/pets/<皮肤>/ 进清单：一段带 alpha 的 WebM（.qa-pet-vid）自己就在演，
+   静图序列帧（.qa-pet-img）靠下面这套 mood-* 身体动效活着。两条轴都吃 phase 变换。 */
 .qa-pet {
   position: relative;
   z-index: 1;
@@ -373,49 +390,46 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding-bottom: 5px;
+  padding-bottom: calc(var(--qa-bubble-size) * 0.045);
   box-sizing: border-box;
   pointer-events: auto;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
 }
+/* 交互变换放在外层，待机动画放在 .qa-pet-img：同一元素上动画会盖掉 transition */
 .qa-pet-body {
   line-height: 0;
+  transform-origin: 50% 100%;
   transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
 }
-.qa-pet svg {
-  width: 68px;
-  height: auto;
-  overflow: visible;
+/* 身体动效共用的那条轴：静帧（.qa-pet-img）与自备透明视频（.qa-pet-vid）走同一套情绪演出 */
+.qa-pet-img,
+.qa-pet-vid {
+  user-select: none;
+  /* 呼吸与起跳都以脚为轴，才不会像在原地浮起来 */
+  transform-origin: 50% 100%;
   filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35));
-  animation: qa-pet-bob 3s ease-in-out infinite;
+  animation: qa-pet-breathe 3.4s ease-in-out infinite;
+}
+/* 入库管线产出的帧一律同一尺寸的正方形（脚贴底、水平居中），所以直接按窗边长放 */
+.qa-pet-img {
+  width: calc(var(--qa-bubble-size) * 0.82);
+  height: calc(var(--qa-bubble-size) * 0.82);
+  -webkit-user-drag: none;
+}
+/* 自备的透明视频不裁切：整段塞进舞台，归一化没做也不至于切掉头 */
+.qa-pet-vid {
+  width: calc(var(--qa-bubble-size) * 1.5);
+  height: calc(var(--qa-bubble-size) * 0.82);
+  object-fit: contain;
+  object-position: 50% 100%;
 }
 
-/* 悬停：凑近一点 + 耳朵/天线竖起 */
+/* 悬停：凑近一点 */
 .qa-bubble-root:hover .qa-pet-body {
   transform: translateY(-2px) scale(1.05);
-}
-.pet-ear {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.qa-bubble-root:hover .pet-ear-l {
-  transform: rotate(-7deg);
-}
-.qa-bubble-root:hover .pet-ear-r {
-  transform: rotate(7deg);
-}
-/* 皮卡丘尾巴：根部为轴，悬停摆一下 */
-.pet-tail {
-  transform-box: fill-box;
-  transform-origin: 0% 100%;
-  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.qa-bubble-root:hover .pet-tail {
-  transform: rotate(-8deg);
 }
 
 /* 按压：蹲一下 */
@@ -431,82 +445,241 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   animation: qa-pet-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* 眨眼：随机感靠 4.4s 长周期里只闭一瞬间 */
-.pet-eye {
-  transform-box: fill-box;
-  transform-origin: 50% 50%;
-  animation: qa-pet-blink 4.4s ease-in-out infinite;
+/* —— 情绪层：同一条身体在七种状态下演得不一样 —— */
+.qa-pet.mood-thinking :is(.qa-pet-img, .qa-pet-vid) {
+  animation-duration: 2.2s;
 }
-/* 皮卡丘放电：脸颊发光 + 电弧闪 */
-.pet-cheek {
-  transition: filter 160ms;
+.qa-pet.mood-working :is(.qa-pet-img, .qa-pet-vid) {
+  animation: qa-pet-toil 0.85s ease-in-out infinite;
 }
-.qa-bubble-root.is-firing .pet-cheek {
-  filter: drop-shadow(0 0 5px rgba(255, 110, 64, 0.95)) brightness(1.3);
+/* 等审批：贴玻璃敲两下，眼睛盯着你 */
+.qa-pet.mood-waiting :is(.qa-pet-img, .qa-pet-vid) {
+  animation: qa-pet-knock 1.1s ease-in-out infinite;
 }
-.pet-bolt {
-  opacity: 0;
+.qa-pet.mood-happy :is(.qa-pet-img, .qa-pet-vid) {
+  animation: qa-pet-joy 0.42s ease-in-out 2;
 }
-.qa-bubble-root.is-firing .pet-bolt {
-  animation: qa-pet-spark 0.21s linear 2;
+/* 失败 / 被拒：塌下来一点、颜色也灰一点 */
+.qa-pet.mood-error :is(.qa-pet-img, .qa-pet-vid) {
+  animation: none;
+  transform: translateY(2px) rotate(-3deg);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.3)) saturate(0.5) brightness(0.86);
 }
-/* 高达过载：眼带爆亮 */
-.qa-bubble-root.is-firing .pet-visor {
-  filter: drop-shadow(0 0 6px rgba(124, 242, 192, 0.95)) brightness(1.5);
+.qa-pet.mood-sleepy :is(.qa-pet-img, .qa-pet-vid) {
+  animation-duration: 5.6s;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35)) saturate(0.7) brightness(0.78);
 }
 
-/* 宠物模式下收起圆球光晕（圆盘光环衬在宠物身后会穿帮） */
-.qa-bubble-root.pet-pikachu .qa-bubble-aura,
-.qa-bubble-root.pet-gundam .qa-bubble-aura {
+/* 形象模式下收起圆球光晕：角色光环衬在身后会穿帮，只留 orb 自己带 */
+.qa-bubble-root:not([data-skin="orb"]) .qa-bubble-aura {
   display: none;
 }
 
-/* 官方 Showdown 动画 GIF（PokeAPI，60×60 透明）：GIF 自带呼吸/摆尾待机动画，
-   只以接近原生尺寸展示（轻微 1.1x 放大走默认平滑插值），不叠 CSS 动画免得打架 */
-.qa-pet-img {
-  width: 70px;
-  height: auto;
-  user-select: none;
-  -webkit-user-drag: none;
+/* —— 头顶 FX：只做 transform / opacity —— */
+.qa-fx {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+.qa-fx-dots {
+  top: 12%;
+  right: 12%;
+  display: flex;
+  gap: 3px;
+}
+.qa-fx-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  opacity: 0.25;
+  animation: qa-fx-dot 1.1s ease-in-out infinite;
+}
+.qa-fx-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.qa-fx-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+.qa-fx-knock {
+  top: 8%;
+  right: 14%;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--yellow);
+  animation: qa-fx-knock-in 1.1s ease-in-out infinite;
+}
+/* 干活：一颗小点绕着身体转 */
+.qa-fx-orbit {
+  inset: 6%;
+  animation: qa-fx-orbit 1.4s linear infinite;
+}
+.qa-fx-orbit i {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+/* 成功：三颗火花错开往外蹦（容器铺满身体，子粒子才按百分比定位得准） */
+.qa-fx-spark {
+  inset: 0;
+}
+.qa-fx-spark i {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--green);
+  animation: qa-fx-spark 0.7s ease-out infinite;
+}
+.qa-fx-spark i:nth-child(1) {
+  top: 14%;
+  left: 22%;
+}
+.qa-fx-spark i:nth-child(2) {
+  top: 8%;
+  left: 52%;
+  animation-delay: 0.12s;
+}
+.qa-fx-spark i:nth-child(3) {
+  top: 18%;
+  left: 74%;
+  animation-delay: 0.24s;
+}
+/* 失败：头顶一小片乌云。透明窗叠在任意桌面上，用 --overlay-4 那种 12% 叠加色等于没有 */
+.qa-fx-cloud {
+  top: 10%;
+  left: 50%;
+  width: 20px;
+  height: 8px;
+  margin-left: -10px;
+  border-radius: var(--radius-full);
+  background: var(--text-2);
+  animation: qa-fx-cloud 2.2s ease-in-out infinite;
+}
+.qa-fx-zzz {
+  top: 10%;
+  right: 16%;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  animation: qa-fx-zzz 2.8s ease-in-out infinite;
 }
 
 /* 互动气泡语 */
 .qa-pet-speech {
   position: absolute;
-  top: 3px;
+  top: 2px;
   left: 50%;
   transform: translateX(-50%);
-  max-width: 100px;
+  max-width: calc(var(--qa-bubble-size) - 16px);
   padding: 2px 8px;
   font-size: 10px;
   line-height: 1.35;
   color: var(--text-0);
-  background: color-mix(in srgb, var(--bg-3) 88%, transparent);
+  background: var(--float-bar-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xs);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
   animation: qa-pet-speech-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@keyframes qa-pet-bob {
+/* —— 就地菜单：右键唤出，撑高只往头顶长 —— */
+.qa-bubble-menu {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  /* 站在桌宠头顶留 4px 缝，别贴着脑袋 */
+  bottom: calc(var(--qa-bubble-size) + 4px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  /* 压在桌面上必须实底（同吸底审批条），半透明会把桌布叠花 */
+  background: var(--float-bar-bg);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+  animation: qa-bubble-menu-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.qa-bubble-menu button {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-bubble-menu button:hover {
+  background: var(--overlay-2);
+  color: var(--text-0);
+}
+.qa-bubble-menu button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* 待机呼吸：以脚为轴的极轻微起伏，站得住才像活的 */
+@keyframes qa-pet-breathe {
   0%,
   100% {
-    transform: translateY(0);
+    transform: translateY(0) scale(1, 1);
   }
   50% {
-    transform: translateY(-2.5px);
+    transform: translateY(-1.5px) scale(1.008, 0.994);
   }
 }
-@keyframes qa-pet-blink {
+/* 干活：一小步一小步地颠 */
+@keyframes qa-pet-toil {
   0%,
-  91%,
   100% {
-    transform: scaleY(1);
+    transform: translateY(0) rotate(-1.5deg);
   }
-  94% {
-    transform: scaleY(0.08);
+  50% {
+    transform: translateY(-2.5px) rotate(1.5deg);
+  }
+}
+/* 等审批：往玻璃上贴一下再弹回来 */
+@keyframes qa-pet-knock {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  30% {
+    transform: translateX(3px) rotate(3deg);
+  }
+  60% {
+    transform: translateX(-1px) rotate(-1deg);
+  }
+}
+/* 成功：连跳两下，落地压扁 */
+@keyframes qa-pet-joy {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  35% {
+    transform: translateY(-6px) scale(0.98, 1.06);
+  }
+  70% {
+    transform: translateY(0) scale(1.06, 0.92);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
   }
 }
 @keyframes qa-pet-swing {
@@ -529,15 +702,6 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
     transform: scale(1);
   }
 }
-@keyframes qa-pet-spark {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.3;
-  }
-}
 @keyframes qa-pet-speech-in {
   from {
     opacity: 0;
@@ -546,5 +710,84 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   to {
     opacity: 1;
     transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+@keyframes qa-fx-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@keyframes qa-fx-knock-in {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: translateY(1px);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@keyframes qa-fx-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes qa-fx-spark {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) translateY(2px);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1) translateY(-2px);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.6) translateY(-6px);
+  }
+}
+@keyframes qa-fx-cloud {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translateX(-1.5px);
+  }
+  50% {
+    opacity: 0.85;
+    transform: translateX(1.5px);
+  }
+}
+@keyframes qa-fx-zzz {
+  0% {
+    opacity: 0;
+    transform: translateY(2px) scale(0.8);
+  }
+  35% {
+    opacity: 0.9;
+    transform: translateY(-3px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px) scale(1.1);
+  }
+}
+@keyframes qa-bubble-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }

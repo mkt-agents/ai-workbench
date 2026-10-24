@@ -363,6 +363,8 @@ interface StoreState extends GlobalState, Invocations {
   /** Insert or update a session (by id); caps the stored list at 30 by updatedAt. */
   upsertAiHubSession: (session: AiHubSession) => Promise<string[]>;
   deleteAiHubSession: (id: string) => Promise<void>;
+  /** 批量删除：一次落库，不要循环调用单条删除（每次都会整表重写）。 */
+  deleteAiHubSessions: (ids: string[]) => Promise<void>;
 
   // Quick app launchers
   loadQuickAppLaunchers: () => Promise<void>;
@@ -1387,6 +1389,13 @@ export const useGlobalStore = create<StoreState>()(
 
       deleteAiHubSession: async (id) => withTable("ai_hub_sessions", async () => {
         const sessions = get().aiHubSessions.filter((s) => s.id !== id);
+        await storage.aiHubSessions.save(sessions);
+        set({ aiHubSessions: sessions });
+      }),
+
+      deleteAiHubSessions: async (ids) => withTable("ai_hub_sessions", async () => {
+        const drop = new Set(ids);
+        const sessions = get().aiHubSessions.filter((s) => !drop.has(s.id));
         await storage.aiHubSessions.save(sessions);
         set({ aiHubSessions: sessions });
       }),

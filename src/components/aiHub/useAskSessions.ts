@@ -23,6 +23,7 @@ export function useAskSessions(opts: AskSessionsOptions) {
   const aiHubSessions = useGlobalStore((s) => s.aiHubSessions);
   const upsertAiHubSession = useGlobalStore((s) => s.upsertAiHubSession);
   const deleteAiHubSession = useGlobalStore((s) => s.deleteAiHubSession);
+  const deleteAiHubSessions = useGlobalStore((s) => s.deleteAiHubSessions);
   const loadAiHubSessions = useGlobalStore((s) => s.loadAiHubSessions);
   const invokeSaveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
 
@@ -64,6 +65,20 @@ export function useAskSessions(opts: AskSessionsOptions) {
       setError(String(e));
     }
   }, [activeSessionId, deleteAiHubSession, setActiveSessionId, onRemovedActive, setError]);
+
+  /** 批量删除：整表只写一次；当前打开的那个也在里面时一并关掉（否则它会被下一次提问重新落库）。 */
+  const removeSessions = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      await deleteAiHubSessions(ids);
+      if (activeSessionId && ids.includes(activeSessionId)) {
+        setActiveSessionId(null);
+        onRemovedActive();
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [activeSessionId, deleteAiHubSessions, setActiveSessionId, onRemovedActive, setError]);
 
   /** Persist a new title for a session. Returns whether the rename was stored. */
   const renameSession = useCallback(async (id: string, title: string): Promise<boolean> => {
@@ -166,5 +181,14 @@ export function useAskSessions(opts: AskSessionsOptions) {
     return new Date(then).toLocaleDateString();
   }, [t]);
 
-  return { aiHubSessions, persistTurns, removeSession, renameSession, exportActiveSession, exportAllSessions, relativeTime };
+  return {
+    aiHubSessions,
+    persistTurns,
+    removeSession,
+    removeSessions,
+    renameSession,
+    exportActiveSession,
+    exportAllSessions,
+    relativeTime,
+  };
 }

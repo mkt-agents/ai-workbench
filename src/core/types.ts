@@ -82,6 +82,9 @@ export interface GitPendingCommits {
 
 export type AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver';
 
+/** 桌宠形象 id：换装顺序、帧清单与矢量形象在 lib/petSkins，这里只定设置项能存的取值。 */
+export type PetSkinId = 'panda' | 'artisan' | 'orb' | 'custom';
+
 export interface AiHubChips {
   workspace: boolean;
   git: boolean;
@@ -171,6 +174,12 @@ export interface AppSettings {
   aiHubBubbleEnabled?: boolean;
   /** Physical screen position of the bubble */
   aiHubBubblePos?: { x: number; y: number };
+  /** 桌宠形象（缺省时读旧 localStorage 键 qa-bubble-pet）。 */
+  aiHubPetSkin?: PetSkinId;
+  /** 桌宠窗边长（逻辑 px，96 / 112 / 128 / 160；主窗下发，后端按它算位置）。 */
+  aiHubPetSize?: number;
+  /** 安静模式：不冒话、不做主动情绪反应，只保留状态动画。 */
+  aiHubPetQuiet?: boolean;
   /** One-shot tip after first close-to-tray */
   trayHintShown?: boolean;
   /** Preferred model id per AI scene (missing → global default). */

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Check, ChevronRight, GitMerge, ListChecks, Loader2, Undo2 } from "lucide-react";
+import { Check, ChevronRight, GitMerge, ListChecks, Loader2, ShieldAlert, Timer, Undo2 } from "lucide-react";
 import type { AgentUndoFile } from "../../core/types";
 import { useGlobalStore } from "../../core/store";
 import { writeStoredString } from "../../core/localState";
@@ -309,8 +309,19 @@ function useDeadlineLeft(deadlineAt: number): string {
 }
 
 /**
+ * 后端的 summary 可能是「运行 …（AI 审查：需要你确认）」这种「正文 + 括注」，
+ * 括注拆出来单独做标签，正文才能独占一行（长命令不再被压成一条挤在按钮旁边）。
+ */
+function splitSummary(summary: string): { body: string; note: string } {
+  const m = summary.match(/^(.*?)（([^（）]+)）\s*$/);
+  if (m && m[1].trim()) return { body: m[1].trim(), note: m[2].trim() };
+  return { body: summary, note: "" };
+}
+
+/**
  * Sticky copy of the approval card for when it has scrolled out of view: a round
  * waiting on the user must stay actionable at the bottom of the transcript.
+ * 三行结构：标签 + 倒计时 / 待确认内容 / 决策按钮，窄窗下也不会把摘要和按钮挤在同一行。
  */
 export function AgentApprovalBar({
   approval,
@@ -321,11 +332,23 @@ export function AgentApprovalBar({
 }) {
   const { t } = useTranslation("aihub");
   const left = useDeadlineLeft(approval.deadlineAt);
+  const { body, note } = splitSummary(approval.summary);
   return (
     <div className="qa-approve-dock" role="alert">
-      <span className="qa-approve-dock-text">{approval.summary}</span>
-      <span className="qa-approve-dock-acts">
-        {left && <span className="qa-approve-dock-count">{left}</span>}
+      <div className="qa-approve-dock-head">
+        <ShieldAlert size={12} className="qa-approve-dock-icon" aria-hidden />
+        <span className="qa-approve-dock-title">{note || t("agent.confirm")}</span>
+        {left && (
+          <span className="qa-approve-dock-count" title={t("agent.autoDenyTip")}>
+            <Timer size={11} aria-hidden />
+            {left}
+          </span>
+        )}
+      </div>
+      <div className="qa-approve-dock-text" title={body}>
+        {body}
+      </div>
+      <div className="qa-approve-dock-acts">
         <button type="button" className="qa-agent-allow" onClick={() => onDecide("once")}>
           {t("agent.allow")}
         </button>
@@ -345,7 +368,7 @@ export function AgentApprovalBar({
         <button type="button" className="qa-agent-deny" onClick={() => onDecide("deny")}>
           {t("agent.deny")}
         </button>
-      </span>
+      </div>
     </div>
   );
 }
@@ -369,9 +392,14 @@ export function AgentApprovalCard({
   };
   const patches: AgentApprovalPatch[] | null =
     approval.patches && approval.patches.length > 1 ? approval.patches : null;
+  const { body: titleBody, note: titleNote } = splitSummary(approval.summary);
   return (
     <div className="qa-agent-approve" role="group" aria-label={t("agent.confirm")}>
-      <div className="qa-agent-approve-title">{approval.summary}</div>
+      <div className="qa-agent-approve-title">
+        <ShieldAlert size={12} className="qa-agent-approve-icon" aria-hidden />
+        <span className="qa-agent-approve-title-text">{titleBody}</span>
+        {titleNote && <span className="qa-agent-approve-note">{titleNote}</span>}
+      </div>
       {patches ? (
         <ol className="qa-agent-approve-patches">
           {patches.map((patch) => (

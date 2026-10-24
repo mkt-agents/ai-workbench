@@ -416,23 +416,29 @@
   border-top: none;
 }
 
-/* 天玑助手：卡内 tab 切换四个分组（交互 / 权限 / 能力 / 预算），一次只挂一块面板 */
+/* 天玑助手：卡内 tab 切换四个分组（交互 / 权限 / 能力 / 预算），一次只挂一块面板。
+   四个页签等分整行，名字长短不一也不会把右边缘挤得参差。 */
 .hub-tabs {
-  display: inline-flex;
+  display: flex;
   gap: 2px;
   padding: 2px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--overlay-1);
 }
 .hub-tab {
+  flex: 1 1 0;
+  min-width: 0;
   padding: 4px 12px;
   font-size: 11px;
   color: var(--text-2);
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 .hub-tab.is-active {
@@ -443,35 +449,59 @@
 .hub-tab:hover {
   color: var(--accent);
 }
+/* 面板不再套一层带边框的「卡片里的卡片」，行直接铺在卡片正文里，
+   和常规设置页其它卡片一致；分隔线按「项」画（见 .setting-item）。 */
 .hub-group {
   display: flex;
   flex-direction: column;
-  padding: 6px 14px 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--overlay-1);
 }
 /* display:flex 会压过 UA 的 [hidden]，这里显式关掉 */
 .hub-group[hidden] {
   display: none;
 }
-.hub-group > .setting-row,
-.hub-group > .setting-stack {
+
+/* —— 一项 = 行 + 说明 ——
+   卡片正文里凡是要「行下面跟一句说明」的成套设置，都包一层 .setting-item：
+   分隔线画在项上，说明文字就不会把 `.setting-row + .setting-row` 的邻接线挤断。
+   只有一行、没有说明的项也用它，视觉节奏才一致。 */
+.settings-page .setting-item {
   padding: 10px 0;
 }
-/* 组内行分隔线：与 card-body 同一套邻接规则 */
-.hub-group > .setting-row + .setting-row,
-.hub-group > .setting-row + .setting-stack,
-.hub-group > .setting-row + .setting-hint,
-.hub-group > .setting-stack + .setting-row,
-.hub-group > .setting-stack + .setting-stack,
-.hub-group > .setting-hint + .setting-hint,
-.hub-group > .setting-hint + .setting-inline-controls {
+
+.settings-page .setting-item:first-child {
+  padding-top: 0;
+}
+
+.settings-page .setting-item:last-child {
+  padding-bottom: 0;
+}
+
+.settings-page .setting-item + .setting-item {
   border-top: 1px solid var(--border-subtle);
 }
-.hub-group > .setting-row:last-child,
-.hub-group > .setting-stack:last-child {
-  padding-bottom: 8px;
+
+.settings-page .setting-item > .setting-row {
+  padding: 0;
+}
+
+.settings-page .setting-item > .setting-hint {
+  padding: 4px 0 0;
+}
+
+/* 项标题：整块内容（如 MCP 服务列表）上面那行小标题 */
+.settings-page .setting-item > .setting-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+/* 行右侧的一组控件（输入框 + 按钮）：贴右、垂直居中，不带 setting-inline-controls 的上下留白 */
+.settings-page .setting-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
 }
 
 /* Structured cards: title + body own padding; cancel global .card padding/overflow */
@@ -597,24 +627,21 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 8px;
 }
 .settings-page .mcp-row {
   display: grid;
-  grid-template-columns: auto minmax(90px, 0.7fr) minmax(110px, 1fr) minmax(160px, 2fr) auto;
+  grid-template-columns: auto minmax(100px, 0.8fr) minmax(112px, 1fr) minmax(150px, 1.8fr) auto;
   align-items: center;
   gap: 8px;
 }
-.settings-page .mcp-row.is-draft {
+/* 草稿行跟已有服务之间拉一条虚线；表里一个都没有时不画（否则那条线会贴在说明下面） */
+.settings-page .mcp-list > .mcp-row + .mcp-row.is-draft {
   padding-top: 8px;
   border-top: 1px dashed var(--border-subtle);
 }
-.settings-page .mcp-dot {
-  width: 10px;
-  height: 10px;
+.settings-page .mcp-add-icon {
   justify-self: center;
-  border-radius: var(--radius-full);
-  border: 1px dashed var(--text-3);
+  color: var(--text-3);
 }
 .settings-page .mcp-row .input-field {
   min-width: 0;
@@ -897,3 +924,190 @@
   box-shadow: none;
 }
 
+
+/* 桌宠形象 / 尺寸：一行胶囊，选中态走 accent 语言（与 .plugin-view-btn.active 同源）。
+   胶囊必须 nowrap——中文标签在 flex 行里被压缩会竖排。 */
+.pet-choice-row {
+  align-items: center;
+}
+
+.pet-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 1 auto;
+}
+
+.pet-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.pet-chip:hover {
+  color: var(--text-0);
+  border-color: var(--border);
+}
+
+.pet-chip.is-active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* 桌宠名片/素材等成套项用通用 .setting-item（见文件前半「一项 = 行 + 说明」） */
+
+/* —— 自备形象导入向导：格子底用来暴露透明区，别在纯白上用肉眼判断 —— */
+.pet-import-modal {
+  display: flex;
+  flex-direction: column;
+}
+
+.pet-import-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pet-import-license {
+  border-left: 2px solid var(--yellow-border);
+  padding-left: var(--space-2);
+  color: var(--text-2);
+}
+
+/* 第一行：挑图按钮靠左，抠背景开关靠右；切格参数单独一行，互不挤 */
+.pet-import-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pet-import-tools .pet-import-key {
+  margin-left: auto;
+  min-width: 0;
+}
+
+.pet-import-grid,
+.pet-import-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.pet-import-grid {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.pet-import-grid-label,
+.pet-import-grid-unit,
+.pet-import-grid-x {
+  white-space: nowrap;
+}
+
+.pet-import-grid-label {
+  color: var(--text-2);
+}
+
+.pet-import-grid-x {
+  color: var(--text-3);
+}
+
+/* controls.css 的 .input-field{width:100%} 在本文件之后载入，靠后代选择器盖回来 */
+.pet-import-grid .pet-import-num {
+  width: 52px;
+  padding: 4px 6px;
+  text-align: center;
+}
+
+/* 52px 里再塞一个原生上下箭头就只剩半格，键盘上下键照样能调 */
+.pet-import-grid .pet-import-num::-webkit-inner-spin-button,
+.pet-import-grid .pet-import-num::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.pet-import-cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 132px), 1fr));
+  gap: var(--space-3);
+}
+
+.pet-import-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 缩略图贴着格子底站：和桌宠窗里"脚贴底"的归一化口径一致 */
+.pet-import-cell-thumb,
+.pet-import-preview {
+  background-color: var(--input-bg);
+  background-image:
+    linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--ink-rgb) 9%, transparent) 25%,
+      transparent 25%,
+      transparent 75%,
+      color-mix(in srgb, var(--ink-rgb) 9%, transparent) 75%
+    ),
+    linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--ink-rgb) 9%, transparent) 25%,
+      transparent 25%,
+      transparent 75%,
+      color-mix(in srgb, var(--ink-rgb) 9%, transparent) 75%
+    );
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.pet-import-cell-thumb {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 92px;
+  padding: 4px;
+}
+
+.pet-import-thumb {
+  max-width: 100%;
+  max-height: 84px;
+}
+
+.pet-import-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.pet-import-preview-img {
+  width: 72px;
+  height: 72px;
+}
+
+.pet-import-error {
+  color: var(--red);
+  font-size: 12px;
+}
