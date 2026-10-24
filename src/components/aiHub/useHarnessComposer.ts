@@ -90,7 +90,8 @@ export function useHarnessComposer(opts: Options) {
       }
       for (const snippet of snippets) {
         if (out.length >= FILE_LIMIT + SNIPPET_LIMIT) break;
-        if (!matchesQuery(snippet.name, q)) continue;
+        // 片段的标签也参与匹配：原来片段面板就是这么过滤的
+        if (!matchesQuery(snippet.name, q) && !matchesQuery(snippet.tags, q)) continue;
         out.push({ kind: "snippet", id: snippet.id, label: snippet.name, hint: snippet.tags });
       }
       return out;
@@ -147,7 +148,8 @@ export function useHarnessComposer(opts: Options) {
         if (snippet) onPickSnippet(snippet);
         return;
       }
-      setInput((prev) => applyCompletion(prev, "at", `@${item.path}`));
+      // 文件选中后变成附件 chip：输入框里的 `@query` 摘掉，免得模型看到重复内容
+      setInput((prev) => applyCompletion(prev, "at", "").trimEnd());
       onRef(item.path);
     },
     [commands, snippets, onPickSnippet, onRef, setInput],

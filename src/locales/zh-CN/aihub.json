@@ -22,10 +22,13 @@
     "opsDesc": "进程、端口、hosts、隧道"
   },
   "palette": {
+    "open": "插入 /（命令、技能、片段）",
     "clear": "/clear 清空对话",
     "clearHint": "开一段新的对话",
     "plan": "/plan 先出计划",
-    "planHint": "长任务先给计划再动手"
+    "planHint": "长任务先给计划再动手",
+    "mode": "/mode 切换任务模式",
+    "modeHint": "对话 / 代码 / 文档 / 数据 / 调研 / 运维，循环切换"
   },
   "attach": {
     "file": "附加文件",
@@ -301,7 +304,6 @@
   "bubblePetCustom": "我来啦～",
   "bubblePetOrb": "天玑已就绪",
   "bubblePetPanda": "抱一下～",
-  "bubblePetArtisan": "系统在线～",
   "petChatter1": "要我帮忙看看代码吗？",
   "petChatter2": "一直在这儿呢～",
   "petChatter3": "今天的提交还没写说明吧？",

@@ -22,10 +22,13 @@
     "opsDesc": "Processes, ports, hosts, tunnels"
   },
   "palette": {
+    "open": "Insert / (commands, skills, snippets)",
     "clear": "/clear new chat",
     "clearHint": "Start a fresh conversation",
     "plan": "/plan plan first",
-    "planHint": "Draft a plan before acting"
+    "planHint": "Draft a plan before acting",
+    "mode": "/mode switch task mode",
+    "modeHint": "Chat / code / docs / data / research / ops, cycles through"
   },
   "attach": {
     "file": "Attach file",
@@ -301,7 +304,6 @@
   "bubblePetCustom": "Here I am!",
   "bubblePetOrb": "Ready.",
   "bubblePetPanda": "Hug!",
-  "bubblePetArtisan": "All systems up!",
   "petChatter1": "Want me to look at some code?",
   "petChatter2": "Still right here.",
   "petChatter3": "Your last commit message is still empty.",

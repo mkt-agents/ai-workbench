@@ -80,9 +80,6 @@ pub struct AgentRunRequest {
     /// 让工具调用在历史里保留成可复用的 `tool_use` / `tool_result` 块。
     #[serde(default)]
     pub messages: Vec<crate::agent_protocol::Message>,
-    /// 用户在输入框用 `@` 引用的文件（相对工作区或绝对路径，越界会被忽略）。
-    #[serde(default)]
-    pub refs: Vec<String>,
     /// 任务模式：`chat` / `code` / `doc` / `data` / `research` / `ops`。
     /// 空 = 按 `code` 处理（老前端不传时行为不变）。
     #[serde(default)]
@@ -2679,7 +2676,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let harness_config = crate::harness_config::load(root.as_deref());
     let mut system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach));
     // 上下文管道：项目文档 / 长期记忆 / 技能索引 / `@` 引用，全部只读且不越出工作区。
-    let context_bundle = crate::agent_context::collect(&harness_config, root.as_deref(), &req.refs, &last_ask);
+    let context_bundle = crate::agent_context::collect(&harness_config, root.as_deref(), &last_ask);
     if !context_bundle.text.is_empty() {
         system.push_str(&context_bundle.text);
     }

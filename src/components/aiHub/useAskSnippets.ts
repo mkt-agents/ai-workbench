@@ -70,14 +70,6 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
     await applySnippetText(text, paramTarget.id);
   }, [paramTarget, paramValues, applySnippetText]);
 
-  /** Open picker from the toolbar button (manual mode). */
-  const openManual = useCallback(() => {
-    setSlashMode(false);
-    setSnippetQuery("");
-    setActive(0);
-    setSnippetOpen((v) => !v);
-  }, []);
-
   /** React to composer text: open/filter when a trailing `/query` is present. */
   const syncSlashFromInput = useCallback((value: string) => {
     const hit = matchSlashCommand(value);
@@ -157,7 +149,6 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
     pickActive,
     pickSnippet,
     confirmSnippetParams,
-    openManual,
     syncSlashFromInput,
     slashMode,
   };

@@ -13,14 +13,6 @@ import AskEmpty from "./AskEmpty";
 import AskErrorCard from "./AskErrorCard";
 import AskComposer from "./AskComposer";
 
-/** Composer-side keyboard bridge to the open snippet list. */
-export type SnippetNav = {
-  /** False when the list is open but nothing matches — Enter then stays "ask the AI". */
-  active: boolean;
-  onMove: (delta: number) => void;
-  onPick: () => void;
-};
-
 export type AskPanelProps = {
   input: string;
   setInput: (v: string) => void;
@@ -68,8 +60,7 @@ export type AskPanelProps = {
   onDecideAgent: (decision: AgentDecision) => void;
   onContinue: () => void;
   hasSnippets: boolean;
-  snippetOpen: boolean;
-  snippetNav: SnippetNav | null;
+  /** 插入 `/`：命令、技能、片段统一由命令面板列出。 */
   onToggleSnippets: () => void;
   onPasteClipboard: () => void;
   onAttachFile: () => void;
@@ -80,8 +71,6 @@ export type AskPanelProps = {
   modelControl: ReactNode;
   /** Persona / temperature profile picker, left of the permission pill. */
   profileControl?: ReactNode;
-  /** 任务模式胶囊（对话 / 代码 / 文档 / 数据 / 调研 / 运维）。 */
-  modeControl?: ReactNode;
   /** `/` 命令与 `@` 文件引用共用的浮层；null = 没有候选。 */
   palette?: {
     items: PaletteItem[] | null;

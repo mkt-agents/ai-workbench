@@ -27,7 +27,6 @@ import ProfileModal from "./aiHub/ProfileModal";
 import ProfilePicker from "./aiHub/ProfilePicker";
 import QuickSelect from "./aiHub/QuickSelect";
 import SessionHistory from "./aiHub/SessionHistory";
-import SnippetPicker from "./aiHub/SnippetPicker";
 import ToolsPanel from "./aiHub/ToolsPanel";
 import { useNextSuggestion } from "./aiHub/useNextSuggestion";
 import { DEFAULT_CHIPS, DEFAULT_OPTIMIZE, encodeTask, parseTask } from "./aiHub/config";
@@ -42,7 +41,6 @@ import { useAskEvents } from "./aiHub/useAskEvents";
 import { useAskSessions } from "./aiHub/useAskSessions";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
 import { useHarnessComposer, type HarnessCommand, type HarnessSkillItem } from "./aiHub/useHarnessComposer";
-import ModePicker from "./aiHub/ModePicker";
 import { HARNESS_MODES, modeRoute, type HarnessMode } from "./aiHub/harness";
 import { AGENT_PERMISSIONS, useAskStream, type AgentPermission } from "./aiHub/useAskStream";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
@@ -58,13 +56,6 @@ type QaTurn = AiHubTurn;
 
 const PINNED_KEY = "qa-pinned";
 const PERMISSION_KEY = "qa-permission";
-/** 任务模式（对话 / 代码 / 文档 / 数据 / 调研 / 运维），与界面 tab 的 `mode` 无关。 */
-const TASK_MODE_KEY = "qa-task-mode";
-
-function readTaskMode(): HarnessMode {
-  const raw = localStorage.getItem(TASK_MODE_KEY) as HarnessMode | null;
-  return raw && HARNESS_MODES.includes(raw) ? raw : "code";
-}
 /** Set once the user stopped wanting to be asked before hiding a running round. */
 /**
  * 一个仓库最多记住几个分支的「以后都允许」：来回切过的旧分支不该一直堆在设置里。
@@ -162,21 +153,17 @@ function AiHubApp() {
   const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
-  const [taskMode, setTaskMode] = useState<HarnessMode>(readTaskMode);
-  useEffect(() => {
-    localStorage.setItem(TASK_MODE_KEY, taskMode);
-  }, [taskMode]);
-  /** `@` 引用进来的文件；追问沿用同一批，换文件重新 @ 即可。 */
-  const [refs, setRefs] = useState<string[]>([]);
+  /** 任务模式是长期偏好，跟其它设置一起存；切换入口只有设置页与 `/mode`。 */
+  const taskMode: HarnessMode = HARNESS_MODES.includes(settings.aiHubTaskMode as HarnessMode)
+    ? (settings.aiHubTaskMode as HarnessMode)
+    : "code";
   /** 项目 + 全局技能（只取名字与说明做补全；正文由后端按 `/skill:name` 注入）。 */
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkillItem[]>([]);
   /** Files are being dragged over the window (ask tab only). */
   const [dropHint, setDropHint] = useState(false);
   const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<
-    null | "model" | "focus" | "permission" | "daily" | "profile" | "mode"
-  >(null);
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily" | "profile">(null);
   /** Profile editor (custom personas + temperature). */
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const profiles = useMemo(
@@ -366,7 +353,6 @@ function AiHubApp() {
         .filter((s) => s.enabled && s.name.trim() && s.command.trim())
         .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args || "" })),
       mode: taskMode,
-      refs,
     },
   });
   const invokeHarnessConfig = useGlobalStore((s) => s.invokeHarnessConfig);
@@ -426,8 +412,17 @@ function AiHubApp() {
         hint: t("palette.planHint"),
         run: () => setSettings({ agentPlanFirst: settings.agentPlanFirst !== true }),
       },
+      {
+        id: "mode",
+        label: t("palette.mode"),
+        hint: t(`mode.${taskMode}`),
+        run: () => {
+          const next = HARNESS_MODES[(HARNESS_MODES.indexOf(taskMode) + 1) % HARNESS_MODES.length];
+          setSettings({ aiHubTaskMode: next });
+        },
+      },
     ],
-    [t, stream, settings.agentPlanFirst],
+    [t, stream, settings.agentPlanFirst, taskMode, setSettings],
   );
   const palette = useHarnessComposer({
     input,
@@ -439,7 +434,21 @@ function AiHubApp() {
     slashOpen: snippets.snippetOpen && snippets.slashMode,
     slashQueryText: snippets.snippetQuery,
     onPickSnippet: snippets.pickSnippet,
-    onRef: (path) => setRefs((prev) => (prev.includes(path) ? prev : [...prev, path])),
+    // `@` 选中的文件走附件（同一套限额与可删除 chip），不再另开一条上下文通道。
+    onRef: (path) => {
+      void (async () => {
+        try {
+          const text = await invokeReadTextFile(path);
+          if (!text.trim()) {
+            showHint(t("attach.empty"));
+            return;
+          }
+          attachFiles([{ name: attachmentNameFromPath(path), text }]);
+        } catch (e) {
+          stream.setError(String(e));
+        }
+      })();
+    },
   });
 
   // LLM 预测不合格/失败时的确定性候选：从上一问的关键词直接给高置信建议
@@ -1042,22 +1051,7 @@ function AiHubApp() {
             <pre className="ai-hub-ctx-preview">{ctx.ctxPreview || t("ctx.previewEmpty")}</pre>
           )}
 
-          {/* 命令面板接管 `/` 的候选：有命令条目时不再叠一层片段浮层。
-              手动打开（工具栏按钮）时 palette 为空，片段列表照常出现。 */}
-          {snippets.snippetOpen && !palette.items && (
-            <SnippetPicker
-              snippetQuery={snippets.snippetQuery}
-              setSnippetQuery={snippets.setSnippetQuery}
-              snippetChoices={snippets.snippetChoices}
-              onPick={snippets.pickSnippet}
-              slashMode={snippets.slashMode}
-              active={snippets.active}
-              onMoveActive={snippets.moveActive}
-              setActiveIndex={snippets.setActiveIndex}
-              onPickActive={snippets.pickActive}
-            />
-          )}
-
+          {/* `/` 只有一个面板：命令、技能、片段都在这里，旧的片段浮层已下线。 */}
           {task === "optimize" && <OptimizeBar value={optimize} onChange={changeOptimize} />}
 
           <AskPanel
@@ -1103,17 +1097,11 @@ function AiHubApp() {
             onDecideAgent={(decision) => void stream.decideAgent(decision)}
             onContinue={() => void stream.send(t("agent.continuePrompt"))}
             hasSnippets={(snippets.snippets?.length ?? 0) > 0}
-            snippetOpen={snippets.snippetOpen}
-            snippetNav={
-              snippets.snippetOpen
-                ? {
-                    active: snippets.snippetChoices.length > 0,
-                    onMove: snippets.moveActive,
-                    onPick: snippets.pickActive,
-                  }
-                : null
-            }
-            onToggleSnippets={() => snippets.openManual()}
+            // 工具栏的片段按钮改成「插入 /」：命令、技能、片段都在同一个面板里。
+            onToggleSnippets={() => {
+              setComposerInput((prev) => (prev.endsWith("/") ? prev : `${prev}${prev.trim() ? "\n" : ""}/`));
+              requestAnimationFrame(() => inputRef.current?.focus());
+            }}
             onPasteClipboard={() => void fillClipboard()}
             onAttachFile={() => void addAttachmentFromFile()}
             onSend={() => void sendAsk()}
@@ -1125,14 +1113,6 @@ function AiHubApp() {
               onPick: palette.pick,
               onPickActive: palette.pickActive,
             }}
-            modeControl={
-              <ModePicker
-                mode={taskMode}
-                onMode={setTaskMode}
-                open={openPop === "mode"}
-                onToggle={() => togglePop("mode")}
-              />
-            }
             repoControl={
               <ContextPicker
                 open={openPop === "focus"}

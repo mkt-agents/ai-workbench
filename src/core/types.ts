@@ -82,8 +82,8 @@ export interface GitPendingCommits {
 
 export type AppTheme = 'light' | 'dark' | 'system' | 'glass' | 'ice' | 'silver';
 
-/** 桌宠形象 id：换装顺序、帧清单与矢量形象在 lib/petSkins，这里只定设置项能存的取值。 */
-export type PetSkinId = 'panda' | 'artisan' | 'orb' | 'custom';
+/** 桌宠形象 id：换装顺序与帧清单在 lib/petSkins，这里只定设置项能存的取值。 */
+export type PetSkinId = 'panda' | 'orb' | 'custom';
 
 export interface AiHubChips {
   workspace: boolean;
@@ -136,6 +136,8 @@ export interface AppSettings {
   navCustomization?: NavCustomization;
   /** Last used ai-hub task (encoded, see aiHub/config encodeTask) */
   aiHubLastTask?: string;
+  /** 任务模式（chat / code / doc / data / research / ops），决定工具子集与上下文采集。 */
+  aiHubTaskMode?: string;
   /** Predict the next prompt after every answer (one extra model call per round). */
   aiHubSuggest?: boolean;
   /** 编辑档的写入也先弹 diff 确认（默认关）。 */

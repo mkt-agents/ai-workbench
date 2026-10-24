@@ -141,8 +141,6 @@ export type AgentRunOptions = {
   mcpEnabled: boolean;
   /** 任务模式（对话 / 代码 / 文档 / 数据 / 调研 / 运维）：后端按它收窄工具子集。 */
   mode?: string;
-  /** `@` 引用的文件（相对工作区或绝对路径）。 */
-  refs?: string[];
   /** 启用中的 MCP 服务；后端每轮列一次工具，名字是 `mcp_<server>_<tool>`。 */
   mcp: { name: string; command: string; args: string }[];
 };
@@ -741,7 +739,6 @@ export function useAskStream(opts: AskStreamOptions) {
           mcpEnabled: agent.mcpEnabled,
           mcp: agent.mcp,
           mode: agent.mode ?? "",
-          refs: agent.refs ?? [],
         },
       });
       if (streamIdRef.current === myGen) {

@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
 import type { AppSettings, AppTheme } from "../core/types";
 import type { HarnessConfigView } from "../core/store/invocations";
+import { HARNESS_MODES } from "./aiHub/harness";
 import {
   APP_RELEASES_URL,
   checkForUpdatesMultiSource as checkForUpdates,
@@ -800,6 +801,24 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               ))}
             </div>
             <section className="hub-group" hidden={hubGroup !== "interaction"}>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.taskMode")}</span>
+                  <select
+                    className="input-field"
+                    style={{ width: 140 }}
+                    value={settings.aiHubTaskMode ?? "code"}
+                    onChange={(e) => setSettings({ aiHubTaskMode: e.target.value })}
+                  >
+                    {HARNESS_MODES.map((option) => (
+                      <option key={option} value={option}>
+                        {t(`aiHub.modeNames.${option}`)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="setting-hint">{t("aiHub.taskModeHint")}</p>
+              </div>
               <div className="setting-item">
                 <div className="setting-row">
                   <span className="setting-label">{t("aiHub.shortcut")}</span>

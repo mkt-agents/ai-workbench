@@ -898,12 +898,12 @@ P0 的 7 项里，有 4 项（P0-1/2/4/5）不是"新增能力"，而是**当前
 
 ### 3. 上下文管道与项目配置
 - `harness_config.rs`：`.ai-workbench/`（context.md / memory.md / skills/*.md / hooks.json）与全局目录，项目优先、全局兜底
-- `agent_context.rs`：项目文档（没有 `.ai-workbench` 时回落 AGENTS.md / CLAUDE.md）、记忆、技能索引、`/skill:name` 正文、`@` 引用；总量 24k 字符
+- `agent_context.rs`：项目文档（没有 `.ai-workbench` 时回落 AGENTS.md / CLAUDE.md）、记忆、技能索引、`/skill:name` 正文；总量 24k 字符
 - 命令 `harness_config_load`（设置页展示来源）与 `harness_list_files`（`@` 补全）
 
 ### 4. 输入语法层
-- `harnessCommands.ts` + `CommandPalette.tsx` + `useHarnessComposer.ts`：`/` 命令面板（内置 `/clear`、`/plan` + 技能 + 片段），`@` 文件补全（250ms 防抖、最多 8 条）
-- `ModePicker.tsx`：六模式胶囊；后端 `mode_allows` 按模式收窄工具（读写文件与计划始终保留）
+- `harnessCommands.ts` + `CommandPalette.tsx` + `useHarnessComposer.ts`：`/` 是**唯一**输入面板（内置 `/clear`、`/plan`、`/mode` + 技能 + 片段；`SnippetPicker` 已下线，片段成为面板里的一个分组），`@` 文件补全（250ms 防抖、最多 8 条），选中的文件转成**附件 chip**（与「附加文件」共用 `attachments` 的限额与删除，后端 refs 通道已删）
+- 任务模式是设置项 `aiHubTaskMode`（设置页「交互权限」下拉 + 输入框 `/mode` 循环），不再有常驻胶囊；后端 `mode_allows` 按模式收窄工具（读写文件与计划始终保留）
 
 ### 5. 技能 / hooks / 记忆
 - 技能 frontmatter：`name` / `description` / `when_to_use` / `allowed-tools` / `mode`
