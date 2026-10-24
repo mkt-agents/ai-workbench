@@ -24,7 +24,34 @@ const EDGE_MARGIN_LOGICAL = 24;
 /** Logical top band reserved for main titlebar (matches BUBBLE_TOP_SAFE_LOGICAL). */
 const TOP_SAFE_LOGICAL = 96;
 
+import pikachuAnim from "../assets/pets/pikachu.gif";
+import shinyAnim from "../assets/pets/pikachu-shiny.gif";
+import robotAnim from "../assets/pets/robot-anim.gif";
+
 type BubblePhase = "idle" | "pressed" | "dragging" | "firing";
+/** 桌宠皮肤：双击悬浮球循环切换（均为 PokeAPI 官方像素动画 GIF） */
+type PetSkin = "pikachu" | "shiny" | "robot" | "orb";
+const PET_ORDER: PetSkin[] = ["pikachu", "shiny", "robot", "orb"];
+const PET_KEY = "qa-bubble-pet";
+/** 图片皮肤 → 动画 GIF */
+const PET_IMAGES: Record<Exclude<PetSkin, "orb">, string> = {
+  pikachu: pikachuAnim,
+  shiny: shinyAnim,
+  robot: robotAnim,
+};
+/** 单击与双击的判别窗口（ms）：窗内第二击 = 换装，超时 = 打开天玑 */
+const DOUBLE_CLICK_MS = 280;
+
+function readPetSkin(): PetSkin {
+  try {
+    const raw = localStorage.getItem(PET_KEY);
+    // 旧存档里的 gundam 皮肤已下线，迁到 robot
+    const skin = raw === "gundam" ? "robot" : raw;
+    return PET_ORDER.includes(skin as PetSkin) ? (skin as PetSkin) : "pikachu";
+  } catch {
+    return "pikachu";
+  }
+}
 
 /** Slim geometric spark — reads cleaner than Lucide Sparkles at small size. */
 function BubbleMark({ className }: { className?: string }) {
@@ -58,6 +85,8 @@ export default function AiHubBubble() {
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
   const [phase, setPhase] = useState<BubblePhase>("idle");
+  const [pet, setPet] = useState<PetSkin>(readPetSkin);
+  const [speech, setSpeech] = useState<string | null>(null);
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -65,6 +94,8 @@ export default function AiHubBubble() {
     dragging: boolean;
   } | null>(null);
   const fireTimerRef = useRef<number | null>(null);
+  const clickTimerRef = useRef<number | null>(null);
+  const speechTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.add("qa-bubble-mode");
@@ -92,6 +123,8 @@ export default function AiHubBubble() {
     return () => {
       unlisten?.();
       if (fireTimerRef.current != null) window.clearTimeout(fireTimerRef.current);
+      if (clickTimerRef.current != null) window.clearTimeout(clickTimerRef.current);
+      if (speechTimerRef.current != null) window.clearTimeout(speechTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only theme + ready handshake
   }, []);
@@ -161,6 +194,50 @@ export default function AiHubBubble() {
     }, 420);
   }, []);
 
+  /** 冒一句互动短语，1.4s 后收回 */
+  const showSpeech = useCallback((text: string) => {
+    setSpeech(text);
+    if (speechTimerRef.current != null) window.clearTimeout(speechTimerRef.current);
+    speechTimerRef.current = window.setTimeout(() => {
+      setSpeech(null);
+      speechTimerRef.current = null;
+    }, 1400);
+  }, []);
+
+  /** 双击换装：皮卡丘 → 异色皮卡丘 → 盖诺赛克特 → 原始悬浮球，循环 */
+  const cyclePet = useCallback(() => {
+    setPet((prev) => {
+      const next = PET_ORDER[(PET_ORDER.indexOf(prev) + 1) % PET_ORDER.length];
+      try {
+        localStorage.setItem(PET_KEY, next);
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+    playFire();
+    showSpeech(t("bubblePetSwap"));
+  }, [playFire, showSpeech, t]);
+
+  /** 单击：宠物先做个反应，稍等确认不是双击再打开天玑 */
+  const handleTap = useCallback(() => {
+    playFire();
+    const key =
+      pet === "pikachu"
+        ? "bubblePetPikachu"
+        : pet === "shiny"
+          ? "bubblePetShiny"
+          : pet === "robot"
+            ? "bubblePetRobot"
+            : "bubblePetOrb";
+    showSpeech(t(key));
+    if (clickTimerRef.current != null) return;
+    clickTimerRef.current = window.setTimeout(() => {
+      clickTimerRef.current = null;
+      void invoke("show_ai_hub").catch((err) => console.error(err));
+    }, DOUBLE_CLICK_MS);
+  }, [pet, playFire, showSpeech, t]);
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -211,17 +288,19 @@ export default function AiHubBubble() {
       setPhase("idle");
       return;
     }
-    playFire();
-    try {
-      await invoke("show_ai_hub");
-    } catch (err) {
-      console.error(err);
+    // 第二击落在双击窗口内 → 换装，取消本已排队的「打开天玑」
+    if (clickTimerRef.current != null) {
+      window.clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+      cyclePet();
+      return;
     }
+    handleTap();
   };
 
   return (
     <div
-      className={`qa-bubble-root is-${phase}`}
+      className={`qa-bubble-root is-${phase} pet-${pet}`}
       onPointerDown={onPointerDown}
       onPointerMove={(e) => void onPointerMove(e)}
       onPointerUp={(e) => void endPointer(e, false)}
@@ -233,9 +312,23 @@ export default function AiHubBubble() {
       title={t("bubbleTip")}
     >
       <div className="qa-bubble-aura" aria-hidden />
-      <div className="qa-bubble-orb" aria-label={t("title")}>
-        <BubbleMark className="qa-bubble-icon" />
-      </div>
+      {pet === "orb" ? (
+        <div className="qa-bubble-orb" aria-label={t("title")}>
+          <BubbleMark className="qa-bubble-icon" />
+        </div>
+      ) : (
+        <div className="qa-pet" aria-label={t("title")}>
+          <div className="qa-pet-body">
+            <img
+              className="qa-pet-img"
+              src={PET_IMAGES[pet as Exclude<PetSkin, "orb">]}
+              alt=""
+              draggable={false}
+            />
+          </div>
+        </div>
+      )}
+      {speech && <span className="qa-pet-speech">{speech}</span>}
     </div>
   );
 }
