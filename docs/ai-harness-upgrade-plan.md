@@ -903,7 +903,7 @@ P0 的 7 项里，有 4 项（P0-1/2/4/5）不是"新增能力"，而是**当前
 
 ### 4. 输入语法层
 - `harnessCommands.ts` + `CommandPalette.tsx` + `useHarnessComposer.ts`：`/` 是**唯一**输入面板（内置 `/clear`、`/plan`、`/mode` + 技能 + 片段；`SnippetPicker` 已下线，片段成为面板里的一个分组），`@` 文件补全（250ms 防抖、最多 8 条），选中的文件转成**附件 chip**（与「附加文件」共用 `attachments` 的限额与删除，后端 refs 通道已删）
-- 任务模式是设置项 `aiHubTaskMode`（设置页「交互权限」下拉 + 输入框 `/mode` 循环），不再有常驻胶囊；后端 `mode_allows` 按模式收窄工具（读写文件与计划始终保留）
+- 任务模式是设置项 `aiHubTaskMode`，语义为「钉住」：默认自动（空值 / `code` 不收窄），`/mode` 二级清单钉住后输入框上方出现可解除 chip（设置页下拉 = 自动 + 五种场景）；后端 `mode_allows` 按模式收窄工具（读写文件与计划始终保留）
 
 ### 5. 技能 / hooks / 记忆
 - 技能 frontmatter：`name` / `description` / `when_to_use` / `allowed-tools` / `mode`

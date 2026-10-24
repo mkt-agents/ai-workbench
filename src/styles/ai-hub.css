@@ -404,6 +404,7 @@
   box-shadow: none;
 }
 .qa-ctx-group {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -436,8 +437,14 @@
 .qa-ctx-group-caret.is-leaf {
   visibility: hidden;
 }
-/* Remove a picker-added workspace; visible only while hovering the row. */
+/* Remove a picker-added workspace; visible only while hovering the row.
+   浮在行尾、不占布局：以前它只在手动添加的工作区上存在，会把那一行的
+   服务数往左顶 20px（18px 按钮 + 2px 间距），看起来数字错位。 */
 .qa-ctx-group-x {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -448,7 +455,6 @@
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  flex-shrink: 0;
   opacity: 0;
   /* 透明时不收点击：否则行尾那 18px 是个看不见的「移除工作区」陷阱 */
   pointer-events: none;
@@ -461,6 +467,11 @@
 }
 .qa-ctx-group-x:hover {
   color: var(--red);
+}
+/* 数字让位给浮现的移除按钮，两者不叠在同一格 */
+.qa-ctx-group:has(.qa-ctx-group-x):hover .qa-ctx-group-count,
+.qa-ctx-group:has(.qa-ctx-group-x:focus-visible) .qa-ctx-group-count {
+  opacity: 0;
 }
 .qa-ctx-group-main {
   display: flex;
@@ -487,6 +498,7 @@
   font-size: 11px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
+  transition: opacity 0.12s;
 }
 .qa-ctx-children {
   display: flex;
@@ -1188,7 +1200,8 @@
 .qa-compose-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* 左对齐排（项目选择 + 钉住的模式 chip），右侧的上下文选择自己推开 */
+  justify-content: flex-start;
   gap: 6px;
   flex-shrink: 0;
   min-width: 0;
@@ -1197,6 +1210,7 @@
   flex: 1 1 auto;
   max-width: none;
   min-width: 0;
+  margin-left: auto;
 }
 .qa-chip-btn {
   display: inline-flex;
@@ -1398,35 +1412,6 @@
   margin-top: 2px;
   color: var(--text-3);
   font-size: 11px;
-}
-/* Persona pill: stays neutral until a profile is actually applied. */
-.qa-perm-pill.is-profile.on {
-  color: var(--accent);
-  border-color: var(--accent-border);
-}
-.qa-profile-pop {
-  width: 258px;
-  padding: 4px;
-}
-/* Profile rows carry a third cell (temperature); the base item grid only has two
-   tracks, so without an explicit third column the value drops onto a second row
-   under the checkbox and makes the selected row taller than the others. */
-.qa-profile-item {
-  grid-template-columns: 16px minmax(0, 1fr) auto;
-}
-.qa-profile-item .qa-focus-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.qa-profile-temp {
-  grid-column: 3;
-  justify-self: end;
-  padding-left: 8px;
-  font-size: 10.5px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
 }
 /* Profile editor: role text + temperature per persona. */
 .qa-profile-note {

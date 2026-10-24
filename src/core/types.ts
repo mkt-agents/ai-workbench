@@ -122,8 +122,6 @@ export interface AppSettings {
   currentGitRepo?: string;
   /** Global shortcut for ai-hub (e.g. Ctrl+Alt+K) */
   aiHubShortcut?: string;
-  /** When opening ai-hub, offer clipboard fill */
-  aiHubPasteClipboard?: boolean;
   /** Persisted context chip toggles for ai-hub */
   aiHubChips?: AiHubChips;
   /** Repos given full-diff context in ai-hub (empty = auto = current repo) */

@@ -67,10 +67,10 @@ export type AskPanelProps = {
   onSend: () => void;
   /** Project picker, shown at the top-left of the composer. */
   repoControl: ReactNode;
+  /** 钉住的任务模式 chip：挨着项目选择器，点一下解除；不钉时为 null。 */
+  modeChip?: ReactNode;
   /** Model picker, shown at the bottom-right, beside send. */
   modelControl: ReactNode;
-  /** Persona / temperature profile picker, left of the permission pill. */
-  profileControl?: ReactNode;
   /** `/` 命令与 `@` 文件引用共用的浮层；null = 没有候选。 */
   palette?: {
     items: PaletteItem[] | null;
@@ -79,6 +79,9 @@ export type AskPanelProps = {
     onHover: (index: number) => void;
     onPick: (item: PaletteItem) => void;
     onPickActive: () => void;
+    /** 二级列表标题（如 `/mode`）；有值即表示正在二级列表里。 */
+    drillTitle?: string | null;
+    onCloseDrill?: () => void;
   };
   /** What the AI may do in the repo for the next message. */
   permission: AgentPermission;

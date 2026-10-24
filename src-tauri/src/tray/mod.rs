@@ -5,6 +5,7 @@
 //! management for the ai-hub bubble lives in the `bubble` submodule.
 
 pub mod bubble;
+pub mod gaze;
 
 // `ensure_ai_hub_window` stays internal to `bubble` — it is called on demand by the
 // toggle/show paths, never from the app setup.
@@ -323,6 +324,13 @@ pub fn hide_ai_hub(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn set_ai_hub_pinned(app: AppHandle, pinned: bool) -> Result<(), String> {
     bubble::set_ai_hub_pinned(&app, pinned)
+}
+
+/// Show the main window without switching tabs (pet context menu "打开主界面").
+#[tauri::command]
+pub fn open_main(app: AppHandle) -> Result<(), String> {
+    bubble::show_main_window(&app);
+    Ok(())
 }
 
 #[tauri::command]

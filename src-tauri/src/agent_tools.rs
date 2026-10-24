@@ -136,18 +136,32 @@ pub(crate) fn by_gate(kind: GateKind) -> impl Iterator<Item = &'static str> {
 
 /// 某个模式下这个工具该不该下发。
 ///
-/// 读（Look）、纯展示（Plan）与写文件（Write）任何模式都给——写文档也要落盘；
+/// 读（Look）、纯展示（Plan）与写文件（Write）在文档 / 数据 / 调研 / 运维下都给——写报告也要落盘；
 /// 收窄的是命令、系统操作与网页：调研模式不该去杀进程，运维模式也不必抓网页。
+/// 「对话」是最小集：只读 + 计划 + 记住事实，不写文件、不跑命令、不碰系统与网页。
 /// 空模式与 `code` 保持原样（全给），未知模式同样不收窄，避免新增模式忘记登记就静默下线工具。
 pub(crate) fn mode_allows(mode: &str, tool: &str) -> bool {
     let Some(def) = get(tool) else {
         // MCP 等运行时工具不在这里判断
         return true;
     };
-    if matches!(def.gate, GateKind::Look | GateKind::Plan | GateKind::Write) {
+    if matches!(def.gate, GateKind::Look | GateKind::Plan) {
+        // 只读工具在任何模式都给；「对话」只碰代码 / 文档 / 数据，不驱动系统与网页。
+        if mode == "chat" {
+            return matches!(
+                def.group,
+                ToolGroup::Code | ToolGroup::Doc | ToolGroup::Data | ToolGroup::Meta
+            );
+        }
         return true;
     }
+    if def.gate == GateKind::Write {
+        // 写文件：除「对话」外任何模式都给——文档 / 数据要交报告，运维也要落盘。
+        return mode != "chat";
+    }
     match mode {
+        // 命令 / 系统 / 网页 / 电脑：对话模式一律不给；「记住一条事实」例外（属于对话本身的能力）
+        "chat" => def.gate == GateKind::Change && def.group == ToolGroup::Meta,
         "doc" | "data" => matches!(def.group, ToolGroup::Doc | ToolGroup::Data | ToolGroup::Meta | ToolGroup::Web),
         "research" => matches!(def.group, ToolGroup::Web | ToolGroup::Meta),
         "ops" => matches!(def.group, ToolGroup::System | ToolGroup::Meta),
@@ -209,6 +223,14 @@ mod tests {
         assert!(!mode_allows("ops", "web_fetch"));
         assert!(mode_allows("research", "web_fetch"));
         assert!(mode_allows("ops", "kill_process"));
+        // 对话模式：只读 + 计划 + 记住事实，不写文件、不跑命令、不碰系统与网页
+        assert!(mode_allows("chat", "read_file"));
+        assert!(mode_allows("chat", "update_plan"));
+        assert!(mode_allows("chat", "remember"));
+        assert!(!mode_allows("chat", "write_file"));
+        assert!(!mode_allows("chat", "run_command"));
+        assert!(!mode_allows("chat", "web_fetch"));
+        assert!(!mode_allows("chat", "kill_process"));
         // 空模式与未知模式不收窄，行为与改造前一致
         assert!(mode_allows("", "kill_process"));
         assert!(mode_allows("whatever", "web_fetch"));

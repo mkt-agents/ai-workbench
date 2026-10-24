@@ -285,7 +285,13 @@ pub fn harness_list_files(path: String, query: String) -> Result<Vec<String>, St
     }
     let needle = query.trim().to_lowercase();
     let mut out: Vec<String> = Vec::new();
+    // 补全是勤调用路径：大仓库不为它走完整棵树，两万条之后就返回已匹配的部分。
+    let mut scanned = 0usize;
     crate::agent_fs::walk(&root, "", false, |p| {
+        scanned += 1;
+        if scanned > 20_000 {
+            return false;
+        }
         let rel = p
             .strip_prefix(&root)
             .unwrap_or(p)

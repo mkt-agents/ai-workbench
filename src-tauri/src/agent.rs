@@ -2703,7 +2703,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     if !req.subagents {
         tool_names.retain(|n| *n != "task");
     }
-    // 模式只收窄写类以外的工具：读、写文件、计划在任何模式下都保留。
+    // 按任务模式收窄工具子集（对话是最小集；具体规则见 `agent_tools::mode_allows`）。
     if !req.mode.trim().is_empty() {
         tool_names.retain(|n| crate::agent_tools::mode_allows(&req.mode, n));
     }

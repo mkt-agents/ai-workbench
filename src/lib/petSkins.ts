@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PetSkinId } from "../core/types";
 import PANDA_TIMELINE_RAW from "../assets/pets/panda/timeline.json?raw";
-import ARTISAN_TIMELINE_RAW from "../assets/pets/artisan/timeline.json?raw";
 
 /**
  * 桌宠情绪：状态机只有这七个取值。帧清单（本文件）与演出层（PetStage 的 FX、
@@ -37,11 +36,8 @@ export const CUSTOM_SKIN: PetSkinId = "custom";
 /** 内置熊猫：本仓库自己生成的原创帧，素材与节拍表都在 src/assets/pets/panda/。 */
 export const PANDA_SKIN: PetSkinId = "panda";
 
-/** 内置电玩小匠：同一套管线的第二个原创形象，素材在 src/assets/pets/artisan/。 */
-export const ARTISAN_SKIN: PetSkinId = "artisan";
-
 /** 换装循环顺序：双击、菜单「换个形象」都按它走。 */
-export const PET_ORDER: PetSkinId[] = [PANDA_SKIN, ARTISAN_SKIN, "orb", CUSTOM_SKIN];
+export const PET_ORDER: PetSkinId[] = [PANDA_SKIN, "orb", CUSTOM_SKIN];
 
 export interface PetClip {
   frames: string[];
@@ -57,6 +53,11 @@ export interface PetSkinDef {
   kind: "sprite" | "orb";
   clips: Partial<Record<PetMood, PetClip>>;
   gestures: Partial<Record<PetGesture, PetClip>>;
+  /**
+   * 眨眼序列（半闭 → 闭 → 半闭）。它不是一段循环节拍，而是由 PetStage 在随机
+   * 时刻插播的：钉在 idle 循环里就等于「每 5.5 秒眨一次表」，机械感的源头。
+   */
+  blink?: string[];
 }
 
 const VIDEO_EXT = /\.(webm|mp4|mov)$/i;
@@ -115,17 +116,15 @@ const PANDA_POSES = import.meta.glob<string>("../assets/pets/panda/*.png", {
   import: "default",
 });
 
-const ARTISAN_POSES = import.meta.glob<string>("../assets/pets/artisan/*.png", {
-  eager: true,
-  import: "default",
-});
+/** 节拍表里眨眼段的名字（与 `clips` 其它键同格式，但不进情绪表）。 */
+const BLINK_CLIP = "blink";
 
 function builtInSkin(id: PetSkinId, raw: string, poses: Record<string, string>): PetSkinDef {
   const timeline = JSON.parse(raw) as BuiltInTimeline;
   const urls = new Map(
     Object.entries(poses).map(([path, url]) => [path.slice(path.lastIndexOf("/") + 1), url]),
   );
-  const clip = (name: string): PetClip | undefined => {
+  const framesOf = (name: string): string[] | undefined => {
     const runs = timeline.clips[name];
     if (!runs?.length) return undefined;
     const frames: string[] = [];
@@ -134,7 +133,11 @@ function builtInSkin(id: PetSkinId, raw: string, poses: Record<string, string>):
       if (!url) continue;
       for (let i = 0; i < hold; i++) frames.push(url);
     }
-    return frames.length ? { frames, fps: timeline.fps, video: false } : undefined;
+    return frames.length ? frames : undefined;
+  };
+  const clip = (name: string): PetClip | undefined => {
+    const frames = framesOf(name);
+    return frames ? { frames, fps: timeline.fps, video: false } : undefined;
   };
   const clips = {} as Partial<Record<PetMood, PetClip>>;
   for (const mood of PET_MOODS) {
@@ -146,11 +149,10 @@ function builtInSkin(id: PetSkinId, raw: string, poses: Record<string, string>):
     const made = clip(name);
     if (made) gestures[name] = made;
   }
-  return { id, kind: "sprite", clips, gestures };
+  return { id, kind: "sprite", clips, gestures, blink: framesOf(BLINK_CLIP) };
 }
 
 const PANDA_DEF = builtInSkin(PANDA_SKIN, PANDA_TIMELINE_RAW, PANDA_POSES);
-const ARTISAN_DEF = builtInSkin(ARTISAN_SKIN, ARTISAN_TIMELINE_RAW, ARTISAN_POSES);
 
 /** 自备包：内存里的一份镜像，由 loadUserPack 刷新。 */
 let pack = bucketize([]);
@@ -183,21 +185,20 @@ function hasUserPack(): boolean {
 export function petSkin(id: PetSkinId): PetSkinDef {
   if (id === "orb") return ORB_DEF;
   if (id === PANDA_SKIN) return PANDA_DEF;
-  if (id === ARTISAN_SKIN) return ARTISAN_DEF;
   // 自备包还没放素材：用内置熊猫顶上，而不是留一个看不见的窗
   if (!pack.clips.idle) return PANDA_DEF;
   return { id, kind: "sprite", clips: pack.clips, gestures: pack.gestures };
 }
 
-/** 取某情绪的素材；缺则退回 idle，圆盘皮肤没有素材。 */
+/** 取某情绪的素材；缺则退回 idle。圆盘不吃素材。 */
 export function petClipFor(def: PetSkinDef, mood: PetMood): PetClip | undefined {
-  if (def.kind === "orb") return undefined;
+  if (def.kind !== "sprite") return undefined;
   return def.clips[mood] ?? def.clips.idle;
 }
 
 /** 取交互片段（被拎起 / 被点按）；没配就交给情绪素材继续演。 */
 export function petGestureFor(def: PetSkinDef, name: PetGesture): PetClip | undefined {
-  return def.kind === "orb" ? undefined : def.gestures[name];
+  return def.kind !== "sprite" ? undefined : def.gestures[name];
 }
 
 /** 换装只在"有素材的自定义包 + 圆盘"之间循环：空包不该占一格。 */
@@ -225,6 +226,13 @@ export const PET_SIZE_DEFAULT = 112;
  */
 export const PET_CONFIG_EVENT = "ai-hub-pet-changed";
 
+/**
+ * 桌宠视线事件：Rust 侧（`tray/gaze.rs`）按节拍读全局光标，把「相对桌宠窗中心的方向」
+ * 推给桌宠窗。payload `{ x, y }` 是 -1..1 的归一化方向（x 右为正、y 下为正），没有这条
+ * 事件时前端就退回窗内 pointer 的局部跟随。
+ */
+export const PET_GAZE_EVENT = "ai-hub-pet-gaze";
+
 export interface PetConfigPatch extends Partial<PetConfig> {
   packRev?: number;
 }
@@ -240,6 +248,8 @@ const SKIN_ALIAS: Record<string, PetSkinId> = {
   mochi: CUSTOM_SKIN,
   mario: CUSTOM_SKIN,
   maid: CUSTOM_SKIN,
+  // 自绘机甲（2026-10-25 下线）：素材包空着就落回熊猫，不会出现空窗
+  artisan: CUSTOM_SKIN,
 };
 
 function isPetSkin(value: unknown): value is PetSkinId {

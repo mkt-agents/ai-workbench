@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
 import type { AppSettings, AppTheme } from "../core/types";
 import type { HarnessConfigView } from "../core/store/invocations";
-import { HARNESS_MODES } from "./aiHub/harness";
+import { HARNESS_MODES, type HarnessMode } from "./aiHub/harness";
 import {
   APP_RELEASES_URL,
   checkForUpdatesMultiSource as checkForUpdates,
@@ -26,6 +26,8 @@ import {
   type PetConfigPatch,
 } from "../lib/petSkins";
 import PetPackImport from "./PetPackImport";
+import ProfileModal from "./aiHub/ProfileModal";
+import { mergeProfiles } from "../lib/aiHubProfiles";
 import { applyDocumentTheme, APP_THEME_CHANGED_EVENT } from "../lib/theme";
 import {
   clearAiUsage,
@@ -294,6 +296,8 @@ type Props = {
 
 function Settings({ onNoticeUpdate }: Props = {}) {
   const { t, i18n } = useTranslation("settings");
+  /** 角色档位的名字与说明在天玑的命名空间里（内置档位共用同一套文案）。 */
+  const { t: tHub } = useTranslation("aihub");
   const confirm = useConfirm();
 
   const settings = useGlobalStore((s) => s.settings);
@@ -333,6 +337,16 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   const packRevRef = useRef(0);
   const [packCount, setPackCount] = useState(0);
   const [importOpen, setImportOpen] = useState(false);
+  /** 角色档位编辑器（内置只读 + 自定义增删改）。 */
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profiles = useMemo(() => mergeProfiles(settings.aiHubProfiles), [settings.aiHubProfiles]);
+  /** 钉住的任务模式：undefined / "code" 都算自动，与天玑侧同一套判定。 */
+  const pinnedTaskMode =
+    settings.aiHubTaskMode &&
+    settings.aiHubTaskMode !== "code" &&
+    HARNESS_MODES.includes(settings.aiHubTaskMode as HarnessMode)
+      ? settings.aiHubTaskMode
+      : "";
 
   const applyPetConfig = (patch: Partial<PetConfig>) => {
     const next = normalizePetConfig({ ...petCfg, ...patch });
@@ -801,16 +815,40 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               ))}
             </div>
             <section className="hub-group" hidden={hubGroup !== "interaction"}>
+              {/* 按「影响面」分三段：窗口 → 每轮怎么答 → 写入与审批（安全类压轴） */}
+              <div className="hub-group-title">{t("aiHub.groupWindow")}</div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.shortcut")}</span>
+                  <div className="setting-row-controls">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => void handleApplyShortcut()}
+                    >
+                      {t("aiHub.shortcutApply")}
+                    </button>
+                    <input
+                      className="input-field setting-shortcut-input"
+                      value={shortcutDraft}
+                      onChange={(e) => setShortcutDraft(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <p className="setting-hint">{t("aiHub.shortcutHint")}</p>
+              </div>
+              <div className="hub-group-title">{t("aiHub.groupAnswer")}</div>
               <div className="setting-item">
                 <div className="setting-row">
                   <span className="setting-label">{t("aiHub.taskMode")}</span>
                   <select
                     className="input-field"
-                    style={{ width: 140 }}
-                    value={settings.aiHubTaskMode ?? "code"}
-                    onChange={(e) => setSettings({ aiHubTaskMode: e.target.value })}
+                    style={{ width: 160 }}
+                    value={pinnedTaskMode ?? ""}
+                    onChange={(e) => setSettings({ aiHubTaskMode: e.target.value || undefined })}
                   >
-                    {HARNESS_MODES.map((option) => (
+                    <option value="">{t("aiHub.taskModeAuto")}</option>
+                    {HARNESS_MODES.filter((option) => option !== "code").map((option) => (
                       <option key={option} value={option}>
                         {t(`aiHub.modeNames.${option}`)}
                       </option>
@@ -821,50 +859,31 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               </div>
               <div className="setting-item">
                 <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.shortcut")}</span>
+                  <span className="setting-label">{t("aiHub.profile")}</span>
                   <div className="setting-row-controls">
-                    <input
-                      className="input-field setting-shortcut-input"
-                      value={shortcutDraft}
-                      onChange={(e) => setShortcutDraft(e.target.value)}
-                    />
                     <button
                       type="button"
                       className="btn btn-secondary btn-small"
-                      onClick={() => void handleApplyShortcut()}
+                      onClick={() => setProfileOpen(true)}
                     >
-                      {t("aiHub.shortcutApply")}
+                      {t("aiHub.profileManage")}
                     </button>
+                    <select
+                      className="input-field"
+                      style={{ width: 160 }}
+                      value={settings.aiHubProfileId ?? ""}
+                      onChange={(e) => setSettings({ aiHubProfileId: e.target.value || undefined })}
+                    >
+                      <option value="">{t("aiHub.profileNone")}</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {tHub(p.nameKey || "", { defaultValue: p.name })}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
-                <p className="setting-hint">{t("aiHub.shortcutHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.pasteClipboard")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.aiHubPasteClipboard !== false}
-                      onChange={(e) => setSettings({ aiHubPasteClipboard: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.suggest")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.aiHubSuggest !== false}
-                      onChange={(e) => setSettings({ aiHubSuggest: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.suggestHint")}</p>
+                <p className="setting-hint">{t("aiHub.profileHint")}</p>
               </div>
               <div className="setting-item">
                 <div className="setting-row">
@@ -880,6 +899,21 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                 </div>
                 <p className="setting-hint">{t("aiHub.planFirstHint")}</p>
               </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.suggest")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.aiHubSuggest !== false}
+                      onChange={(e) => setSettings({ aiHubSuggest: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.suggestHint")}</p>
+              </div>
+              <div className="hub-group-title">{t("aiHub.groupWrite")}</div>
               <div className="setting-item">
                 <div className="setting-row">
                   <span className="setting-label">{t("aiHub.diffConfirm")}</span>
@@ -951,6 +985,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               </div>
             </section>
             <section className="hub-group" hidden={hubGroup !== "capability"}>
+              <div className="hub-group-title">{t("aiHub.groupRead")}</div>
               <div className="setting-item">
                 <div className="setting-row">
                   <span className="setting-label">{t("aiHub.parallelReads")}</span>
@@ -967,20 +1002,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               </div>
               <div className="setting-item">
                 <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.retries")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentRetries !== false}
-                      onChange={(e) => setSettings({ agentRetries: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.retriesHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
                   <span className="setting-label">{t("aiHub.grepIgnore")}</span>
                   <label className="toggle">
                     <input
@@ -992,6 +1013,21 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                   </label>
                 </div>
                 <p className="setting-hint">{t("aiHub.grepIgnoreHint")}</p>
+              </div>
+              <div className="hub-group-title">{t("aiHub.groupRun")}</div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.retries")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentRetries !== false}
+                      onChange={(e) => setSettings({ agentRetries: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.retriesHint")}</p>
               </div>
               <div className="setting-item">
                 <div className="setting-row">
@@ -1007,6 +1043,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                 </div>
                 <p className="setting-hint">{t("aiHub.subagentsHint")}</p>
               </div>
+              <div className="hub-group-title">{t("aiHub.groupProject")}</div>
               <div className="setting-item">
                 <div className="setting-row">
                   <span className="setting-label">{t("aiHub.harnessConfig")}</span>
@@ -1030,6 +1067,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               </div>
             </section>
             <section className="hub-group" hidden={hubGroup !== "budget"}>
+              <div className="hub-group-title">{t("aiHub.groupContext")}</div>
               <div className="setting-item">
                 <div className="setting-row">
                   <span className="setting-label">{t("aiHub.contextTokens")}</span>
@@ -1062,6 +1100,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                 </div>
                 <p className="setting-hint">{t("aiHub.resultCapHint")}</p>
               </div>
+              <div className="hub-group-title">{t("aiHub.groupCompat")}</div>
               <div className="setting-item">
                 <div className="setting-row">
                   <span className="setting-label">{t("aiHub.anthropicStream")}</span>
@@ -1449,6 +1488,14 @@ function Settings({ onNoticeUpdate }: Props = {}) {
         <PetPackImport
           onClose={() => setImportOpen(false)}
           onApplied={() => void afterPackChange().then(() => setImportOpen(false))}
+        />
+      )}
+
+      {profileOpen && (
+        <ProfileModal
+          custom={settings.aiHubProfiles || []}
+          onChange={(next) => setSettings({ aiHubProfiles: next })}
+          onClose={() => setProfileOpen(false)}
         />
       )}
 

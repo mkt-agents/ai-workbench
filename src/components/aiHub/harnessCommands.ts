@@ -4,10 +4,15 @@
  * 以前 `/` 只是片段检索（纯文本模板），没有任何「命令」语义。这里把三类条目
  * （内置命令 / 技能 / 片段）统一成 `PaletteItem`，键盘与渲染只认识这一种形状；
  * 真正执行什么由 `AiHubApp` 注入的回调决定。
+ *
+ * `drill` 的命令点下去不直接执行，而是在同一个浮层里展开二级列表（见 `option`）：
+ * 需要「选一个」的命令（如 `/mode`）不该让用户反复点同一行去猜下一个是什么。
  */
 
 export type PaletteItem =
-  | { kind: "command"; id: string; label: string; hint: string }
+  | { kind: "command"; id: string; label: string; hint: string; drill?: boolean }
+  /** 二级列表里的一项；`checked` 标出当前值，`run` 由命令自己提供。 */
+  | { kind: "option"; id: string; label: string; hint: string; checked?: boolean; run: () => void }
   | { kind: "skill"; id: string; name: string; label: string; hint: string; source: string; allowedTools: string[] }
   | { kind: "snippet"; id: string; label: string; hint: string }
   | { kind: "file"; id: string; label: string; hint: string; path: string };

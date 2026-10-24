@@ -23,8 +23,7 @@ import AttachmentBar from "./aiHub/AttachmentBar";
 import ContextPicker from "./aiHub/ContextPicker";
 import OptimizeBar from "./aiHub/OptimizeBar";
 import ParamModal from "./aiHub/ParamModal";
-import ProfileModal from "./aiHub/ProfileModal";
-import ProfilePicker from "./aiHub/ProfilePicker";
+
 import QuickSelect from "./aiHub/QuickSelect";
 import SessionHistory from "./aiHub/SessionHistory";
 import ToolsPanel from "./aiHub/ToolsPanel";
@@ -32,7 +31,7 @@ import { useNextSuggestion } from "./aiHub/useNextSuggestion";
 import { DEFAULT_CHIPS, DEFAULT_OPTIMIZE, encodeTask, parseTask } from "./aiHub/config";
 import type { OptimizeConfig, TaskKind } from "./aiHub/config";
 import { routeQuestion } from "./aiHub/route";
-import { findProfile, mergeProfiles } from "../lib/aiHubProfiles";
+import { findProfile } from "../lib/aiHubProfiles";
 import { openSuggestions, type InstalledApp, type OpenSuggestion } from "./aiHub/localActions";
 import { GIT_SUBTAB_KEY } from "./GitManager";
 import type { RouteOverride } from "./aiHub/route";
@@ -153,23 +152,21 @@ function AiHubApp() {
   const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
-  /** 任务模式是长期偏好，跟其它设置一起存；切换入口只有设置页与 `/mode`。 */
-  const taskMode: HarnessMode = HARNESS_MODES.includes(settings.aiHubTaskMode as HarnessMode)
-    ? (settings.aiHubTaskMode as HarnessMode)
-    : "code";
+  /** 钉住的任务模式：undefined / "code" = 自动（不收窄工具，路由交给自动判断）。
+      平时不需要选；想限定场景用 `/mode` 钉住，输入框上方会出现可解除的 chip。 */
+  const pinnedMode: HarnessMode | null =
+    settings.aiHubTaskMode &&
+    settings.aiHubTaskMode !== "code" &&
+    HARNESS_MODES.includes(settings.aiHubTaskMode as HarnessMode)
+      ? (settings.aiHubTaskMode as HarnessMode)
+      : null;
   /** 项目 + 全局技能（只取名字与说明做补全；正文由后端按 `/skill:name` 注入）。 */
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkillItem[]>([]);
   /** Files are being dragged over the window (ask tab only). */
   const [dropHint, setDropHint] = useState(false);
   const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily" | "profile">(null);
-  /** Profile editor (custom personas + temperature). */
-  const [profileModalOpen, setProfileModalOpen] = useState(false);
-  const profiles = useMemo(
-    () => mergeProfiles(settings.aiHubProfiles),
-    [settings.aiHubProfiles],
-  );
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily">(null);
   const activeProfile = useMemo(
     () => findProfile(settings.aiHubProfileId, settings.aiHubProfiles),
     [settings.aiHubProfileId, settings.aiHubProfiles],
@@ -177,10 +174,13 @@ function AiHubApp() {
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
   /** Write-capable levels always work on the project; read-only follows the auto route. */
-  // 非「代码 / 对话」模式必须带项目上下文（文档、表格、调研都要读工作区），
-  // 不再交给正则猜是不是代码问题。
-  const effectiveOverride: RouteOverride =
-    permission === "read" ? (taskMode === "code" ? routeOverride : modeRoute(taskMode)) : "project";
+  // 钉住的模式优先于自动路由：文档 / 数据 / 调研 / 运维必须带项目上下文，对话则不带；
+  // 未钉住时维持原判断（只读看 routeOverride、可写一律 project）。
+  const effectiveOverride: RouteOverride = pinnedMode
+    ? modeRoute(pinnedMode)
+    : permission === "read"
+      ? routeOverride
+      : "project";
   const [ctxOpen, setCtxOpen] = useState(false);
   /** Persisted-session id the current chat belongs to (null = fresh chat). */
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -352,7 +352,7 @@ function AiHubApp() {
       mcp: mcpServers
         .filter((s) => s.enabled && s.name.trim() && s.command.trim())
         .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args || "" })),
-      mode: taskMode,
+      mode: pinnedMode ?? "",
     },
   });
   const invokeHarnessConfig = useGlobalStore((s) => s.invokeHarnessConfig);
@@ -402,6 +402,16 @@ function AiHubApp() {
       return next;
     });
   };
+  /** 切任务模式：`/mode` 二级清单与钉住 chip 共用；null = 解除钉住回到自动。 */
+  const changeTaskMode = useCallback(
+    (next: HarnessMode | null) => {
+      setSettings({ aiHubTaskMode: next ?? undefined });
+      showHint(
+        next ? t("mode.switched", { mode: t(`mode.${next}`) }) : t("mode.unpinned"),
+      );
+    },
+    [setSettings, t],
+  );
   /** 内置命令：只放真能执行的动作，别让面板里出现点了没反应的条目。 */
   const harnessCommands = useMemo<HarnessCommand[]>(
     () => [
@@ -415,14 +425,29 @@ function AiHubApp() {
       {
         id: "mode",
         label: t("palette.mode"),
-        hint: t(`mode.${taskMode}`),
-        run: () => {
-          const next = HARNESS_MODES[(HARNESS_MODES.indexOf(taskMode) + 1) % HARNESS_MODES.length];
-          setSettings({ aiHubTaskMode: next });
-        },
+        hint: pinnedMode ? t(`mode.${pinnedMode}`) : t("mode.auto"),
+        // 展开二级清单而不是盲切：自动 + 五种场景一次看全，当前选择带勾
+        options: [
+          {
+            kind: "option" as const,
+            id: "auto",
+            label: t("mode.auto"),
+            hint: t("mode.autoDesc"),
+            checked: !pinnedMode,
+            run: () => changeTaskMode(null),
+          },
+          ...HARNESS_MODES.filter((item) => item !== "code").map((item) => ({
+            kind: "option" as const,
+            id: item,
+            label: t(`mode.${item}`),
+            hint: t(`mode.${item}Desc`),
+            checked: item === pinnedMode,
+            run: () => changeTaskMode(item),
+          })),
+        ],
       },
     ],
-    [t, stream, settings.agentPlanFirst, taskMode, setSettings],
+    [t, stream, settings.agentPlanFirst, pinnedMode, setSettings, changeTaskMode],
   );
   const palette = useHarnessComposer({
     input,
@@ -535,17 +560,6 @@ function AiHubApp() {
     setPermission(next);
     localStorage.setItem(PERMISSION_KEY, next);
     if (stream.busy) showHint(t("permission.nextAs", { name: t(`permission.${next}`) }));
-  };
-
-  const profileLabel = (id: string) => {
-    const p = profiles.find((x) => x.id === id);
-    return p ? t(p.nameKey || "", { defaultValue: p.name }) : t("profile.none");
-  };
-
-  /** Profile for the next message; the running round keeps the one it started with. */
-  const changeProfile = (id: string) => {
-    setSettings({ aiHubProfileId: id || undefined });
-    if (stream.busy) showHint(t("profile.nextAs", { name: profileLabel(id) }));
   };
 
   const setChip = (key: keyof typeof chips, value: boolean) => {
@@ -795,12 +809,13 @@ function AiHubApp() {
       // Layered escape: dismiss the topmost layer first, and only stop the round
       // once nothing is in the way (Esc used to kill a running turn while a popover
       // was open, because 停流 sat at the head of the chain).
-      if (snippets.paramTarget) {
-        snippets.setParamTarget(null);
+      if (palette.drillTitle) {
+        // `/mode` 的模式清单：Esc 先退回输入，别顺手停掉回合或关窗
+        palette.closeDrill();
         return;
       }
-      if (profileModalOpen) {
-        setProfileModalOpen(false);
+      if (snippets.paramTarget) {
+        snippets.setParamTarget(null);
         return;
       }
       if (snippets.snippetOpen) {
@@ -857,7 +872,7 @@ function AiHubApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [snippets.paramTarget, profileModalOpen, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy, stream.agentApproval, permission]);
+  }, [snippets.paramTarget, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy, stream.agentApproval, permission, palette.drillTitle, palette.closeDrill]);
 
   const togglePop = (id: NonNullable<typeof openPop>) => {
     setOpenPop((cur) => (cur === id ? null : id));
@@ -1096,7 +1111,7 @@ function AiHubApp() {
             stopping={stream.stopping}
             onDecideAgent={(decision) => void stream.decideAgent(decision)}
             onContinue={() => void stream.send(t("agent.continuePrompt"))}
-            hasSnippets={(snippets.snippets?.length ?? 0) > 0}
+            hasSnippets={(snippets.snippets?.length ?? 0) > 0 || harnessSkills.length > 0}
             // 工具栏的片段按钮改成「插入 /」：命令、技能、片段都在同一个面板里。
             onToggleSnippets={() => {
               setComposerInput((prev) => (prev.endsWith("/") ? prev : `${prev}${prev.trim() ? "\n" : ""}/`));
@@ -1112,7 +1127,25 @@ function AiHubApp() {
               onHover: palette.setActive,
               onPick: palette.pick,
               onPickActive: palette.pickActive,
+              drillTitle: palette.drillTitle,
+              onCloseDrill: palette.closeDrill,
             }}
+            modeChip={
+              pinnedMode ? (
+                /* 钉住的任务模式：住在输入卡片的元信息行，点一下解除回到自动 */
+                <button
+                  type="button"
+                  className="qa-mode-pin-chip"
+                  onClick={() => changeTaskMode(null)}
+                  title={t("mode.unpin")}
+                >
+                  {t("mode.pill", { mode: t(`mode.${pinnedMode}`) })}
+                  <span className="qa-mode-pin-x" aria-hidden>
+                    ✕
+                  </span>
+                </button>
+              ) : null
+            }
             repoControl={
               <ContextPicker
                 open={openPop === "focus"}
@@ -1156,19 +1189,6 @@ function AiHubApp() {
                 ghost
                 open={openPop === "model"}
                 onToggle={() => togglePop("model")}
-              />
-            }
-            profileControl={
-              <ProfilePicker
-                profiles={profiles}
-                value={settings.aiHubProfileId || ""}
-                onChange={changeProfile}
-                onManage={() => {
-                  setOpenPop(null);
-                  setProfileModalOpen(true);
-                }}
-                open={openPop === "profile"}
-                onToggle={() => togglePop("profile")}
               />
             }
             permission={permission}
@@ -1243,13 +1263,6 @@ function AiHubApp() {
             />
           )}
 
-          {profileModalOpen && (
-            <ProfileModal
-              custom={settings.aiHubProfiles || []}
-              onChange={(next) => setSettings({ aiHubProfiles: next })}
-              onClose={() => setProfileModalOpen(false)}
-            />
-          )}
         </>
       )}
       {hintOn && (

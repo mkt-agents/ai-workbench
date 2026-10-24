@@ -89,7 +89,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoStart: false,
   currentGitRepo: undefined,
   aiHubShortcut: 'Ctrl+Alt+K',
-  aiHubPasteClipboard: true,
   aiHubChips: {
     workspace: true,
     git: true,
@@ -1577,3 +1576,32 @@ export const useGlobalStore = create<StoreState>()(
     }
   )
 );
+
+/**
+ * 跨 webview 同步：主窗（设置页）和天玑窗共用一个 localStorage，却各持一份 store。
+ * 天玑窗常驻不销毁，不补这一步就会出现「设置页刚换了角色 / 模式，天玑里还是旧的」。
+ * 只同步输入框相关的这三项，别的偏好不互相覆盖。
+ */
+const SYNCED_SETTING_KEYS = ['aiHubTaskMode', 'aiHubProfileId', 'aiHubProfiles'] as const;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== 'workbench-settings' || !event.newValue) return;
+    try {
+      const saved = (JSON.parse(event.newValue) as {
+        state?: { settings?: Record<string, unknown> };
+      }).state?.settings;
+      if (!saved) return;
+      const current = useGlobalStore.getState().settings as unknown as Record<string, unknown>;
+      const patch: Record<string, unknown> = {};
+      for (const key of SYNCED_SETTING_KEYS) {
+        if (JSON.stringify(saved[key]) !== JSON.stringify(current[key])) patch[key] = saved[key];
+      }
+      if (Object.keys(patch).length) {
+        useGlobalStore.getState().setSettings(patch as Partial<AppSettings>);
+      }
+    } catch {
+      // 另一个窗口写坏了就当没收到，别把本地状态带崩
+    }
+  });
+}

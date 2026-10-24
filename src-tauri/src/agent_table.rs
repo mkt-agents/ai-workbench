@@ -26,8 +26,14 @@ pub(crate) fn query(path: &Path, sql: &str, limit: usize) -> Result<String, Stri
             .prepare(&format!("INSERT INTO t VALUES ({placeholders})"))
             .map_err(|e| format!("准备插入失败：{e}"))?;
         for row in &rows {
+            // 行的列数可能和表头不一致（CSV 少写一列很常见）：补齐或截断，
+            // 否则 SQLite 会报 "wrong number of parameters" 直接整条查询失败。
+            let mut cells: Vec<&str> = row.iter().take(header.len()).map(String::as_str).collect();
+            while cells.len() < header.len() {
+                cells.push("");
+            }
             insert
-                .execute(rusqlite::params_from_iter(row.iter()))
+                .execute(rusqlite::params_from_iter(cells.iter()))
                 .map_err(|e| format!("插入数据失败：{e}"))?;
         }
     }
@@ -79,12 +85,17 @@ fn check_select(sql: &str) -> Result<(), String> {
     if !lower.starts_with("select") && !lower.starts_with("with") {
         return Err("只允许 SELECT 查询（表已经在 `t` 里，不用再查文件名）".into());
     }
+    // 按标识符切词再比关键字：用 `contains` 会把 `updated_at` 这种列名当成 UPDATE 拒掉。
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+        .collect();
     for banned in [
         "attach", "detach", "pragma", "insert", "update", "delete", "drop", "create", "alter", "vacuum", "replace",
-        " into ",
+        "into",
     ] {
-        if lower.contains(banned) {
-            return Err(format!("查询里不能出现 `{}`", banned.trim()));
+        if tokens.contains(&banned) {
+            return Err(format!("查询里不能出现 `{banned}`"));
         }
     }
     Ok(())
@@ -114,6 +125,15 @@ mod tests {
     }
 
     #[test]
+    fn short_rows_are_padded_instead_of_failing() {
+        // 表头 2 列、第二行只有 1 列：补齐成空串，查询仍然要能跑
+        let path = temp_csv("ragged", "name,amount\n甲\n乙,20\n");
+        let out = query(&path, "SELECT count(*) AS n FROM t", 10).unwrap();
+        assert!(out.contains("2"), "{out}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn writes_are_refused() {
         for sql in [
             "DELETE FROM t",
@@ -125,6 +145,8 @@ mod tests {
             assert!(check_select(sql).is_err(), "{sql} 不该通过");
         }
         assert!(check_select("SELECT * FROM t").is_ok());
+        // 列名里带关键字不算写操作（`updated_at` 不是 UPDATE）
+        assert!(check_select("SELECT updated_at, created_at FROM t").is_ok());
         assert!(check_select("with x as (select 1) select * from x").is_ok());
     }
 

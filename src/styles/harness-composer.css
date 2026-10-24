@@ -1,13 +1,19 @@
 /* 天玑 harness 输入层：`/` 命令面板与任务模式胶囊。只用 token，跟随主题。
    （`harness.css` 是 DSH 的样式，别混在一起。） */
 
+/* 面板做成卡片内的悬浮层（四周留缝 + 圆角 + 轻投影）：
+   工作区 chip 是卡片自己的顶行，斜杠面板只是浮在它和输入框之间，
+   不然一打开面板，工作区 chip 看起来像被顶成了面板的表头 */
 .qa-palette {
   display: flex;
   flex-direction: column;
   max-height: 232px;
+  margin: 6px 8px 8px;
   overflow: auto;
-  border-bottom: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   background: var(--bg-2);
+  box-shadow: var(--shadow-sm);
 }
 .qa-palette-row {
   display: flex;
@@ -45,5 +51,87 @@
   color: var(--text-3);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 二级列表（`/mode` 之类「选一个」的命令）：表头说明这里不是又一层命令 */
+.qa-palette-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.qa-palette-head-title {
+  font-weight: 600;
+  color: var(--text-2);
+}
+.qa-palette-head-hint {
+  margin-left: auto;
+}
+/* 二级列表行高更大、说明放到名称下方，一行挤右侧的说明太逼仄 */
+.qa-palette.is-drill {
+  max-height: 336px;
+}
+.qa-palette-row.is-option {
+  align-items: flex-start;
+  padding: 8px;
+}
+.qa-palette-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.qa-palette-option-name {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-0);
+}
+.qa-palette-option-desc {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.qa-palette-row.is-option .qa-palette-icon {
+  margin-top: 2px;
+}
+/* 当前值：实心圆点用 accent，其余空心跟随弱化文字色 */
+.qa-palette-icon.is-on {
+  color: var(--accent);
+}
+.qa-palette-more {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+/* 钉住的任务模式 chip：住在输入卡片元信息行、挨着工作区选择器，
+   整颗可点、点一下解除回到自动 */
+.qa-mode-pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-mode-pin-chip:hover {
+  background: var(--accent-dim);
+}
+.qa-mode-pin-x {
+  font-size: 10px;
+  opacity: 0.7;
 }
 

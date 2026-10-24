@@ -296,6 +296,8 @@ export function useAskStream(opts: AskStreamOptions) {
   const activeReqRef = useRef<string | null>(null);
   /** Set when the user hits stop, including before the backend command is active. */
   const stopRequestedRef = useRef(false);
+  /** 当前这一轮的就地收尾函数（send 里定义）：停止看门狗超时后调用。 */
+  const forceStopRef = useRef<(() => void) | null>(null);
 
   /** Persist (or create) the active session after a completed exchange. */
   const persistRef = useRef(persistTurns);
@@ -345,6 +347,8 @@ export function useAskStream(opts: AskStreamOptions) {
     const myGen = streamIdRef.current;
     activeReqRef.current = reqId;
     stopRequestedRef.current = false;
+    // 上一轮的就地收尾如果还挂着，别让它落进这一轮
+    forceStopRef.current = null;
     setBusySync(true);
     setError(null);
     setAnswer("");
@@ -429,10 +433,27 @@ export function useAskStream(opts: AskStreamOptions) {
       settled = true;
       failTurn(false);
       setBusySync(false);
+      setStopping(false);
       activeReqRef.current = null;
       teardown();
       return true;
     };
+
+    /** 停止看门狗的就地收尾：和「收到取消错误」完全同一套落地动作。
+        后端卡在不可打断的一步时，停止键也不能失灵。 */
+    const forceStop = () => {
+      if (settled) return;
+      settled = true;
+      recordPartialUsage();
+      const partial = landText(stripThinking(full));
+      if (partial.trim()) finishTurn(partial);
+      else failTurn(false);
+      setBusySync(false);
+      setStopping(false);
+      activeReqRef.current = null;
+      teardown();
+    };
+    forceStopRef.current = forceStop;
 
     try {
       let system: string;
@@ -544,6 +565,7 @@ export function useAskStream(opts: AskStreamOptions) {
         if (!settled) {
           settled = true;
           setBusySync(false);
+          setStopping(false);
           const elapsedMs =
             payload.elapsedMs ?? Math.round(performance.now() - streamStarted);
           const promptTokens = payload.promptTokens;
@@ -596,6 +618,7 @@ export function useAskStream(opts: AskStreamOptions) {
           if (stopped && partial.trim()) finishTurn(partial);
           else failTurn(!stopped);
           setBusySync(false);
+          setStopping(false);
         }
         activeReqRef.current = null;
         teardown();
@@ -756,19 +779,40 @@ export function useAskStream(opts: AskStreamOptions) {
         if (stopped && partial.trim()) finishTurn(partial);
         else failTurn(!stopped);
         setBusySync(false);
+        setStopping(false);
       }
       activeReqRef.current = null;
       teardown();
     }
   };
 
+  /** 停止看门狗：`cancel_request` 发出后，后端所有可等待点都在轮询取消标记，
+      正常几秒内就会收尾。真卡在不可打断的一步（某个 spawn_blocking、坏掉的连接）
+      时，就地在本地结束这一轮——停止键不能看起来失灵。
+      后端稍后才到的 done / error 事件会被 teardown 掉，不会二次落地。 */
+  useEffect(() => {
+    if (!stopping) return;
+    const timer = window.setTimeout(() => {
+      if (!busyRef.current) return;
+      forceStopRef.current?.();
+      setStopping(false);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [stopping]);
+
   /// Abort the in-flight stream. The backend answers with an
   /// AI_REQUEST_CANCELLED error event (handled as a normal stop) and the partial
   /// answer stays on screen.
   const stopStream = async () => {
     const id = activeReqRef.current;
-    if (!id) return;
     stopRequestedRef.current = true;
+    if (!id) {
+      // 还显示 busy 却没有在飞的请求 id：状态已经失真（结束事件丢了），
+      // 就地收尾，别让停止键变成摆设。
+      forceStopRef.current?.();
+      setStopping(false);
+      return;
+    }
     setStopping(true);
     try {
       await invoke("cancel_request", { id });

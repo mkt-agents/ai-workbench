@@ -455,6 +455,9 @@ pub fn set_bubble_box<R: Runtime>(
     };
     let scale = win.scale_factor().unwrap_or(1.0);
     let (new_w, new_h) = bubble_box_physical(scale);
+    // 旧尺寸必须在 set_size 之前抓：之后再问 outer_size() 拿到的已经是新值，
+    // 减出来恒等于 0，底边锚定就成了摆设 —— 表现就是右键菜单一开、宠物往下掉一截。
+    let old = win.outer_size().ok().map(|s| (s.width as i32, s.height as i32));
     let _ = win.set_size(tauri::LogicalSize::new(bw as f64, bh as f64));
     let pos = match win.outer_position() {
         Ok(pos) => pos,
@@ -464,13 +467,8 @@ pub fn set_bubble_box<R: Runtime>(
     if pos.x <= BUBBLE_PARK_POS.0 + 100 || pos.y <= BUBBLE_PARK_POS.1 + 100 {
         return Ok(());
     }
-    let (x, y) = match win.outer_size().ok() {
-        Some(old) => bottom_center_anchor(
-            (pos.x, pos.y),
-            (old.width as i32, old.height as i32),
-            new_w,
-            new_h,
-        ),
+    let (x, y) = match old {
+        Some(old) => bottom_center_anchor((pos.x, pos.y), old, new_w, new_h),
         None => (pos.x, pos.y),
     };
     let (px, py) = clamp_bubble_position(app, x, y);

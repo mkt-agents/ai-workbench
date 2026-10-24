@@ -7,7 +7,7 @@
 //!
 //! 全部只读；`.ai-workbench/` 与 `@` 引用都必须落在工作区内（防目录穿越）。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -203,6 +203,7 @@ pub(crate) fn skill_names_in(ask: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::harness_config::HarnessConfig;
+    use std::path::PathBuf;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("aw-ctx-{}-{}", tag, std::process::id()));

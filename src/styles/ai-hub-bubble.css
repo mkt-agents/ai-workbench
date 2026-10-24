@@ -51,6 +51,13 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   --qa-bubble-grain-ink: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.13 0 0 0 0 0.18 0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   /* Lifts the disc off any wallpaper; must fit inside the 8px HWND padding */
   --qa-bubble-drop: 0 2px 6px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(0, 0, 0, 0.28);
+  /* 视线：AiHubBubble 的 applyGaze() 直接写这几个变量，桌宠会「看向」鼠标。
+     tilt = 身体 3D 转向（度，慢一档）；gaze = 图像层位移（px，快一档）。
+     两层分开给值，视线才有"眼睛先到、身体跟上"的层次，同速同幅就像整张贴纸在平移。 */
+  --qa-tilt-x: 0;
+  --qa-tilt-y: 0;
+  --qa-gaze-x: 0;
+  --qa-gaze-y: 0;
   position: relative;
   width: 100%;
   height: 100%;
@@ -369,6 +376,8 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   }
 
   .qa-pet-body,
+  .qa-pet-sway,
+  .qa-pet-shadow,
   .qa-pet-img,
   .qa-pet-vid,
   .qa-pet-speech,
@@ -376,6 +385,17 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   .qa-fx i,
   .qa-bubble-menu {
     animation: none !important;
+  }
+
+  /* 视线位移也跟着关：这里是"不想看动效"，不是"看不清方向"。
+     !important 是必须的：基础规则在文件更后面，同优先级会把它盖回去。 */
+  .qa-pet {
+    transition: none !important;
+  }
+  .qa-pet-img,
+  .qa-pet-vid {
+    transition: none !important;
+    translate: none !important;
   }
 }
 
@@ -396,13 +416,49 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+  /* 3D：整只形象按指针位置微微转向（变量由 AiHubBubble 写），配下面的地面阴影就有立体感。
+     缓动比图像层慢一档：眼球是瞬移，身体是跟过去 —— 同速就会像贴纸在平移。 */
+  transform: perspective(420px) rotateX(calc(var(--qa-tilt-y) * 1deg))
+    rotateY(calc(var(--qa-tilt-x) * 1deg));
+  transform-origin: 50% 94%;
+  transform-style: preserve-3d;
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 /* 交互变换放在外层，待机动画放在 .qa-pet-img：同一元素上动画会盖掉 transition */
 .qa-pet-body {
+  position: relative;
+  z-index: 1;
   line-height: 0;
   transform-origin: 50% 100%;
   transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
+}
+/* 待机摇摆：7 秒一循环、节奏不规则（不是机械的正弦），和外层呼吸叠加才"活" */
+.qa-pet-sway {
+  display: inline-block;
+  line-height: 0;
+  transform-origin: 50% 100%;
+  animation: qa-pet-sway 7.4s ease-in-out infinite;
+}
+/* 地面阴影：会随呼吸/起跳收缩，是"站在桌上"而不是"贴在屏上"的关键一笔 */
+.qa-pet-shadow {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--qa-bubble-size) * 0.012);
+  width: calc(var(--qa-bubble-size) * 0.56);
+  height: calc(var(--qa-bubble-size) * 0.1);
+  margin-left: calc(var(--qa-bubble-size) * -0.28);
+  border-radius: var(--radius-full);
+  background: radial-gradient(
+    50% 50% at 50% 50%,
+    rgba(0, 0, 0, 0.44) 0%,
+    rgba(0, 0, 0, 0.18) 52%,
+    transparent 78%
+  );
+  transform-origin: 50% 50%;
+  animation: qa-pet-shadow-breathe 3.4s ease-in-out infinite;
+  pointer-events: none;
+  transition: opacity 200ms ease, transform 200ms ease;
 }
 /* 身体动效共用的那条轴：静帧（.qa-pet-img）与自备透明视频（.qa-pet-vid）走同一套情绪演出 */
 .qa-pet-img,
@@ -412,6 +468,10 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   transform-origin: 50% 100%;
   filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35));
   animation: qa-pet-breathe 3.4s ease-in-out infinite;
+  /* 视线位移走独立的 translate 属性：和上面那条用 transform 的呼吸动画互不覆盖，
+     也就能做到「眼球先到（110ms）、身体后跟（见 .qa-pet 的 420ms）」 */
+  translate: calc(var(--qa-gaze-x) * 1px) calc(var(--qa-gaze-y) * 1px);
+  transition: translate 110ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 /* 入库管线产出的帧一律同一尺寸的正方形（脚贴底、水平居中），所以直接按窗边长放 */
 .qa-pet-img {
@@ -432,17 +492,35 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   transform: translateY(-2px) scale(1.05);
 }
 
-/* 按压：蹲一下 */
+/* 按压：蹲一下，影子跟着摊开 */
 .qa-bubble-root.is-pressed .qa-pet-body {
   transform: translateY(2px) scale(1.04, 0.9);
 }
-/* 拖拽：被拎起来晃 */
+.qa-bubble-root.is-pressed .qa-pet-shadow {
+  transform: scale(1.08, 0.86);
+}
+/* 拖拽：被拎起来晃，影子缩小变淡（离桌面远了） */
 .qa-bubble-root.is-dragging .qa-pet-body {
   animation: qa-pet-swing 0.9s ease-in-out infinite;
+}
+.qa-bubble-root.is-dragging .qa-pet-shadow {
+  opacity: 0.3;
+  transform: scale(0.7) translateY(3px);
+  animation: none;
 }
 /* 点击 / 换装：弹一下 */
 .qa-bubble-root.is-firing .qa-pet-body {
   animation: qa-pet-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.qa-bubble-root.is-firing .qa-pet-shadow {
+  animation: qa-pet-shadow-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* 松手落地：压扁再弹回，别像贴纸瞬移 */
+.qa-bubble-root.is-landing .qa-pet-body {
+  animation: qa-pet-land 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.qa-bubble-root.is-landing .qa-pet-shadow {
+  animation: qa-pet-shadow-land 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* —— 情绪层：同一条身体在七种状态下演得不一样 —— */
@@ -468,6 +546,18 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
 .qa-pet.mood-sleepy :is(.qa-pet-img, .qa-pet-vid) {
   animation-duration: 5.6s;
   filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35)) saturate(0.7) brightness(0.78);
+}
+/* 情绪也跟着影子走：犯困压得更扁更淡，干活时身子快一点、影子稳一点 */
+.qa-pet.mood-sleepy .qa-pet-shadow {
+  opacity: 0.55;
+  transform: scale(1.08, 0.9);
+}
+/* 睡着时不跟视线：闭着眼还追着鼠标平移太出戏，只留身体那点慢转向像在翻身 */
+.qa-pet.mood-sleepy :is(.qa-pet-img, .qa-pet-vid) {
+  translate: none;
+}
+.qa-pet.mood-working .qa-pet-sway {
+  animation-duration: 3.6s;
 }
 
 /* 形象模式下收起圆球光晕：角色光环衬在身后会穿帮，只留 orb 自己带 */
@@ -561,6 +651,16 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   background: var(--text-2);
   animation: qa-fx-cloud 2.2s ease-in-out infinite;
 }
+/* 开心：头顶飘一颗爱心（和火花叠在一起） */
+.qa-fx-heart {
+  top: 4%;
+  left: 50%;
+  margin-left: 16%;
+  font-size: 11px;
+  line-height: 1;
+  color: #ff8fa8; /* token-ok: 爱心粉色，主题 token 里没有对应语义色 */
+  animation: qa-fx-heart 1.3s ease-out infinite;
+}
 .qa-fx-zzz {
   top: 10%;
   right: 16%;
@@ -642,6 +742,79 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   }
   50% {
     transform: translateY(-1.5px) scale(1.008, 0.994);
+  }
+}
+/* 待机摇摆：三段不等长（左靠 → 回正 → 右靠），没有均匀正弦的机器味 */
+@keyframes qa-pet-sway {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  18% {
+    transform: rotate(-1.6deg);
+  }
+  36% {
+    transform: rotate(-0.4deg);
+  }
+  62% {
+    transform: rotate(1.5deg);
+  }
+  78% {
+    transform: rotate(0.3deg);
+  }
+}
+/* 地面阴影与呼吸反相：身体抬高时影子缩小，落下时摊开 */
+@keyframes qa-pet-shadow-breathe {
+  0%,
+  100% {
+    opacity: 0.9;
+    transform: scale(1, 1);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(0.9, 0.86);
+  }
+}
+@keyframes qa-pet-shadow-pop {
+  0% {
+    transform: scale(0.86);
+    opacity: 0.65;
+  }
+  55% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+}
+@keyframes qa-pet-land {
+  0% {
+    transform: translateY(-6px) scale(0.94, 1.08);
+  }
+  45% {
+    transform: translateY(1px) scale(1.1, 0.88);
+  }
+  72% {
+    transform: translateY(0) scale(0.98, 1.02);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+@keyframes qa-pet-shadow-land {
+  0% {
+    opacity: 0.3;
+    transform: scale(0.6);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.16, 0.9);
+  }
+  100% {
+    opacity: 0.9;
+    transform: scale(1);
   }
 }
 /* 干活：一小步一小步地颠 */
@@ -765,6 +938,20 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   50% {
     opacity: 0.85;
     transform: translateX(1.5px);
+  }
+}
+@keyframes qa-fx-heart {
+  0% {
+    opacity: 0;
+    transform: translateY(2px) scale(0.7);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px) scale(1.05);
   }
 }
 @keyframes qa-fx-zzz {

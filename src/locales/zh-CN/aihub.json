@@ -8,6 +8,13 @@
   "restoreWindow": "还原窗口大小",
   "noModel": "请先在主窗口配置 AI 模型",
   "mode": {
+    "current": "当前：{{mode}} 模式 · 输入 /mode 可切换",
+    "pill": "{{mode}}模式",
+    "auto": "自动",
+    "autoDesc": "按问题判断带什么上下文与工具",
+    "unpin": "解除钉住，恢复自动",
+    "unpinned": "已恢复自动模式",
+    "switched": "已切到{{mode}}模式",
     "chat": "对话",
     "chatDesc": "纯问答，不带仓库上下文",
     "code": "代码",
@@ -28,7 +35,9 @@
     "plan": "/plan 先出计划",
     "planHint": "长任务先给计划再动手",
     "mode": "/mode 切换任务模式",
-    "modeHint": "对话 / 代码 / 文档 / 数据 / 调研 / 运维，循环切换"
+    "modeNow": "当前：{{mode}}",
+    "modeHint": "选一个：对话 / 代码 / 文档 / 数据 / 调研 / 运维",
+    "backHint": "Esc 返回"
   },
   "attach": {
     "file": "附加文件",
@@ -310,6 +319,7 @@
   "petChatter4": "喝口水，我盯着终端。",
   "bubblePetSwap": "变身！",
   "petMenuOpen": "打开天玑",
+  "petMenuMain": "显示主窗口",
   "petMenuSwap": "换个形象",
   "petMenuQuiet": "安静一会儿",
   "petMenuLoud": "开口说话",

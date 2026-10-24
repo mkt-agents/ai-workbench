@@ -12,7 +12,7 @@ type Props = Pick<
   | "input" | "setInput" | "inputRef" | "busy" | "lastQuestion" | "suggestion" | "onSuggestionPick"
   | "onSuggestionDismiss" | "task" | "onTask" | "onDaily" | "hasSnippets"
   | "onToggleSnippets" | "onPasteClipboard" | "onAttachFile" | "onSend" | "repoControl" | "modelControl"
-  | "profileControl"
+  | "modeChip"
   | "permission" | "onPermission" | "diffConfirm" | "onDiffConfirm"
   | "permissionMenuOpen" | "onTogglePermissionMenu"
   | "dailyStyle" | "onDailyStyle" | "dailyMenuOpen" | "onToggleDailyMenu"
@@ -67,7 +67,7 @@ export default function AskComposer(props: Props) {
   const {
     input, setInput, inputRef, busy, lastQuestion, suggestion, onSuggestionPick, onSuggestionDismiss,
     task, onTask, onDaily, hasSnippets, onToggleSnippets, onPasteClipboard, onAttachFile,
-    onSend, repoControl, modelControl, profileControl,
+    onSend, repoControl, modelControl, modeChip,
     permission, onPermission, diffConfirm, onDiffConfirm, permissionMenuOpen, onTogglePermissionMenu,
     dailyStyle, onDailyStyle, dailyMenuOpen, onToggleDailyMenu,
     openList, onRunOpen, onStop,
@@ -109,7 +109,10 @@ export default function AskComposer(props: Props) {
 
   return (
     <div className="qa-input-card">
-      <div className="qa-compose-meta">{repoControl}</div>
+      <div className="qa-compose-meta">
+        {repoControl}
+        {modeChip}
+      </div>
       {openList && (
         <OpenSuggestList
           items={openList}
@@ -125,6 +128,7 @@ export default function AskComposer(props: Props) {
           active={palette.active}
           onHover={palette.onHover}
           onPick={palette.onPick}
+          drillTitle={palette.drillTitle}
         />
       )}
       {suggestion && !busy && !input.trim() && onSuggestionPick && (
@@ -168,6 +172,20 @@ export default function AskComposer(props: Props) {
           // IME in the middle of composing: Enter / ↑↓ belong to the candidate window,
           // never to send or list navigation (a pinyin commit would fire a whole agent run).
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          // 二级列表（`/mode` 的模式清单）：Esc 收起；空输入框退格退回 `/` 命令面板
+          if (palette?.drillTitle) {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              palette.onCloseDrill?.();
+              return;
+            }
+            if (e.key === "Backspace" && !input) {
+              e.preventDefault();
+              palette.onCloseDrill?.();
+              setInput("/");
+              return;
+            }
+          }
           // `/` 命令与 `@` 文件补全排在所有列表之前：它盖在输入框上方，
           // ↑↓ / 回车必须归它，否则会误触片段列表或直接发送。
           if (palette && paletteItems && paletteItems.length > 0) {
@@ -296,7 +314,6 @@ export default function AskComposer(props: Props) {
           </div>
         </div>
         <div className="qa-compose-end">
-          {profileControl}
           <PermissionPicker
             permission={permission}
             onPermission={onPermission}

@@ -450,6 +450,9 @@ pub fn run() {
                 // Create+show bubble once; do not call ensure then visible separately
                 // (ensure used to mis-detect !CONTENT_READY as stale and block the UI).
                 let _ = tray::set_ai_hub_bubble_visible_inner(app.handle(), true, None, None);
+                // 桌面光标 → 桌宠视线：桌宠窗只有一百来像素，指针几乎不会真的进来，
+                // 没有这条后台轮询它永远不知道用户在屏幕哪儿（见 tray/gaze.rs）。
+                tray::gaze::spawn_gaze_watcher(app.handle().clone());
                 // Materialise the ai-hub window off the startup path: it cannot be
                 // built from the toggle command (see tray::bubble::prebuild_ai_hub_window).
                 tray::bubble::prebuild_ai_hub_window(app.handle());
@@ -643,6 +646,7 @@ pub fn run() {
             tray::show_ai_hub,
             tray::hide_ai_hub,
             tray::set_ai_hub_pinned,
+            tray::open_main,
             tray::open_main_deepseek,
             tray::open_main_tab,
             tray::set_ai_hub_bubble_visible,

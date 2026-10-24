@@ -459,6 +459,28 @@
 .hub-group[hidden] {
   display: none;
 }
+/* 组内小结（天玑那几个 Tab 用）：只当分隔标题，不再套一层卡片。
+   标题自带上方留白，紧随其后的第一项收紧一点，组与组之间靠这个标题断开。 */
+.hub-group-title {
+  padding: 16px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-3);
+}
+.hub-group-title:first-child {
+  padding-top: 0;
+}
+/* 组与组之间也画一条细线（和组内条目的分隔线同款），只是上下留白更大、
+   由小标题承担层次，不然两组之间会像断了一截 */
+.hub-group-title:not(:first-child) {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+/* 比 `.settings-page .setting-item` 的默认 10px 更具体，否则标题下会多空一截 */
+.settings-page .hub-group-title + .setting-item {
+  padding-top: 6px;
+}
 
 /* —— 一项 = 行 + 说明 ——
    卡片正文里凡是要「行下面跟一句说明」的成套设置，都包一层 .setting-item：
@@ -617,9 +639,12 @@
   padding: 12px 0 4px;
 }
 
+/* 固定 px 宽：百分比宽度在这里会和「右侧控件组」的宽度互相求解，
+   结果是「应用快捷键」按钮被挤到下一行（截图里那条错位）。
+   160 与同一组的任务模式 / 角色档位下拉同宽，右缘对齐。 */
 .settings-page .setting-shortcut-input {
-  width: min(200px, 100%);
-  min-width: 140px;
+  width: 160px;
+  min-width: 0;
 }
 
 /* MCP 服务列表：一服务一行，名字/命令/参数三段 + 开关 + 删除 */

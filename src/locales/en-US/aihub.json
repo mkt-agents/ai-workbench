@@ -8,6 +8,13 @@
   "restoreWindow": "Restore window size",
   "noModel": "Configure an AI model in the main window first",
   "mode": {
+    "current": "Mode: {{mode}} · type /mode to switch",
+    "pill": "{{mode}} mode",
+    "auto": "Auto",
+    "autoDesc": "Context and tools decided per question",
+    "unpin": "Unpin and go back to auto",
+    "unpinned": "Back to auto mode",
+    "switched": "Switched to {{mode}} mode",
     "chat": "Chat",
     "chatDesc": "Plain Q&A without workspace context",
     "code": "Code",
@@ -28,7 +35,9 @@
     "plan": "/plan plan first",
     "planHint": "Draft a plan before acting",
     "mode": "/mode switch task mode",
-    "modeHint": "Chat / code / docs / data / research / ops, cycles through"
+    "modeNow": "Now: {{mode}}",
+    "modeHint": "Pick one: chat / code / docs / data / research / ops",
+    "backHint": "Esc to go back"
   },
   "attach": {
     "file": "Attach file",
@@ -310,6 +319,7 @@
   "petChatter4": "Grab some water, I'll watch the terminal.",
   "bubblePetSwap": "Transform!",
   "petMenuOpen": "Open AI Hub",
+  "petMenuMain": "Show main window",
   "petMenuSwap": "Swap pet",
   "petMenuQuiet": "Stay quiet",
   "petMenuLoud": "Speak again",

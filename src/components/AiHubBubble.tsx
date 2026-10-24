@@ -19,6 +19,7 @@ import {
 import PetStage, { type BubblePhase } from "./aiHub/PetStage";
 import {
   PET_CONFIG_EVENT,
+  PET_GAZE_EVENT,
   loadUserPack,
   nextPetSkin,
   normalizePetConfig,
@@ -39,8 +40,9 @@ const TOP_SAFE_LOGICAL = 96;
 const DOUBLE_CLICK_MS = 280;
 /** 气泡语停留时长。 */
 const SPEECH_MS = 1600;
-/** 就地菜单展开时临时撑高（逻辑 px）；菜单贴在桌宠头顶，底边不动（Rust 同规则）。 */
-const PET_MENU_EXTRA = 116;
+/** 就地菜单展开时临时撑高（逻辑 px）；菜单贴在桌宠头顶，底边不动（Rust 同规则）。
+ *  高度要盖住 5 个菜单项：5×22 + 4×2 间隙 + 10 padding + 2 边框 + 4 缝隙 = 136。 */
+const PET_MENU_EXTRA = 136;
 /** 没有新信号超过这个时间就打瞌睡。 */
 const SLEEP_AFTER_MS = 180_000;
 
@@ -74,7 +76,20 @@ export default function AiHubBubble() {
     dragging: boolean;
   } | null>(null);
   const fireTimerRef = useRef<number | null>(null);
+  const landTimerRef = useRef<number | null>(null);
+  /** 悬停一会儿 = 摸头：停够 1.1 秒才反应，扫过去不算 */
+  const hoverTimerRef = useRef<number | null>(null);
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menuOpen;
   const clickTimerRef = useRef<number | null>(null);
+  /** 指针倾角：直接写 CSS 变量，不走 state，鼠标划过时不用重渲。 */
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  /** 最近一次视线方向（-1..1）：全局光标与窗内指针共用一台"眼睛"。 */
+  const gazeRef = useRef({ x: 0, y: 0 });
+  /** 上一次真正写进 CSS 的值：70ms 一条的全局视线不该每次都触发样式重算。 */
+  const gazeKeyRef = useRef("");
+  /** 指针是否停在窗里：在窗里就以本地精确值为准，离开后才吃全局方向。 */
+  const hoverRef = useRef(false);
   const speechTimerRef = useRef<number | null>(null);
   const moodTimerRef = useRef<number | null>(null);
   const sleepTimerRef = useRef<number | null>(null);
@@ -144,6 +159,7 @@ export default function AiHubBubble() {
     document.body?.classList.add("qa-bubble-mode");
     applyDocumentTheme(normalizeAppTheme(readPersistedTheme() ?? settings.theme));
 
+    let chatterTimer = 0;
     void (async () => {
       // Do not call webview.setBackgroundColor here: the runtime path can
       // force an opaque white backing (white ring around the orb). The
@@ -168,6 +184,14 @@ export default function AiHubBubble() {
         () => play(reactTo({ kind: "idle" })),
         SLEEP_AFTER_MS,
       );
+
+      // 待机时自己唠叨一句（安静模式 / 菜单开着 / 正在干活时都不吭声）
+      chatterTimer = window.setInterval(() => {
+        if (cfgRef.current.quiet || menuOpenRef.current || dragRef.current) return;
+        if (moodRef.current !== "idle" && moodRef.current !== "sleepy") return;
+        const keys = ["petChatter1", "petChatter2", "petChatter3", "petChatter4"];
+        say(t(keys[Math.floor(Math.random() * keys.length)]));
+      }, 105_000);
     })();
 
     let unlistenTheme: (() => void) | undefined;
@@ -184,7 +208,8 @@ export default function AiHubBubble() {
       const next = normalizePetConfig({ ...cfgRef.current, ...payload });
       setCfg(next);
       if (next.size !== cfgRef.current.size) {
-        pushBox(next.size, next.size + (menuOpen ? PET_MENU_EXTRA : 0));
+        // 用 ref 而不是闭包里的 menuOpen：这个监听只注册一次，闭包里的值永远是首次渲染的 false
+        pushBox(next.size, next.size + (menuOpenRef.current ? PET_MENU_EXTRA : 0));
       }
       // 主窗换了自备素材（导入或清除）：重读目录，皮肤清单才会变
       if (payload.packRev !== undefined && payload.packRev !== packRevRef.current) {
@@ -195,10 +220,28 @@ export default function AiHubBubble() {
       unlistenCfg = fn;
     });
 
+    // 全局光标视线（Rust 侧轮询，只在桌宠窗可见时发）：窗只有一百来像素，指针几乎不会
+    // 真的进来，没有这条事件的话熊猫永远不知道用户在哪儿 —— 这才是"呆板"的根。
+    let unlistenGaze: (() => void) | undefined;
+    void listen<{ x: number; y: number }>(PET_GAZE_EVENT, (event) => {
+      const { x, y } = event.payload ?? { x: 0, y: 0 };
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      gazeRef.current = { x, y };
+      // 指针正在窗里（或被拎着）时以本地精确值为准，松手/离开后才吃全局方向
+      if (hoverRef.current || dragRef.current) return;
+      applyGaze(x, y, false);
+    }).then((fn) => {
+      unlistenGaze = fn;
+    });
+
     return () => {
       unlistenTheme?.();
       unlistenCfg?.();
+      unlistenGaze?.();
+      window.clearInterval(chatterTimer);
       clearTimer(fireTimerRef);
+      clearTimer(landTimerRef);
+      clearTimer(hoverTimerRef);
       clearTimer(clickTimerRef);
       clearTimer(speechTimerRef);
       clearTimer(moodTimerRef);
@@ -351,7 +394,44 @@ export default function AiHubBubble() {
     setPhase("pressed");
   };
 
+  /**
+   * 视线：把方向（-1..1，x 右为正、y 下为正）写进 CSS 变量。
+   *
+   * 分两层给值 —— 图像层（`--qa-gaze-*`）幅度大、缓动快，像眼球先扫过去；3D 身体层
+   * （`--qa-tilt-*`）幅度小、缓动慢，像重心随后跟上。两层同速同幅就会像一整张贴纸在平移，
+   * 反而更假。
+   */
+  const applyGaze = useCallback((gx: number, gy: number, near: boolean) => {
+    const el = rootRef.current;
+    if (!el) return;
+    // near = 指针真在窗里，可以给满；远处光标只给六成，别让它整只拧到极限
+    const k = near ? 1 : 0.62;
+    const key = `${gx.toFixed(2)}|${gy.toFixed(2)}|${k}`;
+    if (key === gazeKeyRef.current) return;
+    gazeKeyRef.current = key;
+    // 图像层跟着光标同向平移（光标在右边就往右挪，就是"看过去"），
+    // 身体层的 rotateX 反过来：负角 = 顶端前倾，才像低头凑近而不是后仰。
+    el.style.setProperty("--qa-tilt-x", (gx * 3.2 * k).toFixed(2));
+    el.style.setProperty("--qa-tilt-y", (-gy * 2.4 * k).toFixed(2));
+    el.style.setProperty("--qa-gaze-x", (gx * 3.6 * k).toFixed(2));
+    el.style.setProperty("--qa-gaze-y", (gy * 2.4 * k).toFixed(2));
+  }, []);
+
+  /** 指针在窗内：用局部坐标，比全局光标更跟手（窗很小，局部能给到满幅）。 */
+  const aimAt = (e: React.PointerEvent) => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return;
+    const gx = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
+    const gy = ((e.clientY - rect.top) / rect.height - 0.5) * 2;
+    gazeRef.current = { x: gx, y: gy };
+    applyGaze(gx, gy, true);
+  };
+
+  /** 指针离开：回落到最近一次方向（一般就是全局光标方向），硬归零会像"抽回去"。 */
+  const settleAim = () => applyGaze(gazeRef.current.x, gazeRef.current.y, false);
+
   const onPointerMove = async (e: React.PointerEvent) => {
+    aimAt(e);
     const d = dragRef.current;
     if (!d) return;
     const dx = e.screenX - d.startX;
@@ -382,7 +462,13 @@ export default function AiHubBubble() {
     }
     if (d.moved || d.dragging) {
       await snapAndPersist();
-      setPhase("idle");
+      // 放手后回弹一下再站定：直接切 idle 会像贴纸瞬移
+      setPhase("landing");
+      clearTimer(landTimerRef);
+      landTimerRef.current = window.setTimeout(() => {
+        setPhase("idle");
+        landTimerRef.current = null;
+      }, 320);
       return;
     }
     // 第二击落在双击窗口内 → 换装，取消本已排队的「打开天玑」
@@ -402,6 +488,7 @@ export default function AiHubBubble() {
 
   return (
     <div
+      ref={rootRef}
       className={`qa-bubble-root is-${phase}${menuOpen ? " has-menu" : ""}`}
       data-skin={cfg.skin}
       style={{ "--qa-bubble-size": `${cfg.size}px` } as React.CSSProperties}
@@ -409,11 +496,28 @@ export default function AiHubBubble() {
       onPointerMove={(e) => void onPointerMove(e)}
       onPointerUp={(e) => void endPointer(e, false)}
       onPointerCancel={(e) => void endPointer(e, true)}
+      onPointerEnter={() => {
+        hoverRef.current = true;
+        // 摸头：停够 1.1 秒才高兴，扫过去不算
+        clearTimer(hoverTimerRef);
+        hoverTimerRef.current = window.setTimeout(() => {
+          hoverTimerRef.current = null;
+          if (dragRef.current || menuOpenRef.current) return;
+          react({ kind: "tap", skin: cfgRef.current.skin });
+        }, 1100);
+      }}
+      onPointerLeave={() => {
+        hoverRef.current = false;
+        clearTimer(hoverTimerRef);
+        settleAim();
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         toggleMenu();
       }}
-      title={t("bubbleTip")}
+      aria-label={t("bubbleTip")}
+      role="button"
+      tabIndex={-1}
     >
       <div className="qa-bubble-stage">
         <div className="qa-bubble-aura" aria-hidden />
@@ -427,6 +531,13 @@ export default function AiHubBubble() {
           aria-label={t("title")}
           onPointerDown={(e) => e.stopPropagation()}
         >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => runMenuItem(() => void invoke("open_main").catch(() => {}))}
+          >
+            {t("petMenuMain")}
+          </button>
           <button
             type="button"
             role="menuitem"
