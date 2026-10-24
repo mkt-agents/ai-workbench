@@ -89,6 +89,8 @@ export interface Invocations {
   invokeGitPublishBranch: (path: string, name: string, base?: string | null) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
   invokeGitListBranches: (path: string) => Promise<GitBranchList>;
+  /** Current branch name; `HEAD` means detached / no commits yet. */
+  invokeGitCurrentBranch: (path: string) => Promise<string>;
   /** Read-only: which commits a push would take along, and the files each one touched. */
   invokeGitPendingCommits: (path: string) => Promise<GitPendingCommits>;
   /** `contextLines` / `ignoreWhitespace` are view options: such a diff can't be staged by hunk. */
@@ -405,6 +407,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_switch_branch', { path, name }),
   invokeGitListBranches: (path: string) =>
     tauriInvoke<GitBranchList>('git_list_branches', { path }),
+  invokeGitCurrentBranch: (path: string) =>
+    tauriInvoke<string>('git_current_branch', { path }),
   invokeGitPendingCommits: (path: string) =>
     tauriInvoke<GitPendingCommits>('git_pending_commits', { path }),
   invokeGitDiff: (path, filePath, staged, opts) =>

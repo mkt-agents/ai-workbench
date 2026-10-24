@@ -144,6 +144,8 @@ export interface AppSettings {
   agentAlwaysAllow?: string[];
   /** 「以后都允许」按仓库记（key = 工作区根路径），选了仓库时优先用它而不是全局。 */
   agentAlwaysAllowByRepo?: Record<string, string[]>;
+  /** 「以后都允许」再细到分支：仓库 → 分支 → action_kind 列表。拿到分支时记这一层。 */
+  agentAlwaysAllowByBranch?: Record<string, Record<string, string[]>>;
   /** diff 确认按仓库覆盖（key = 工作区根路径）；缺省回落全局 `agentDiffConfirm`。 */
   agentDiffConfirmByRepo?: Record<string, boolean>;
   /** 天玑可以抓取的域名（空 = 不给 web_fetch 工具）。 */

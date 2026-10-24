@@ -192,9 +192,31 @@ function AiHubApp() {
 
   // 审批记忆 / diff 确认按仓库覆盖：选了仓库就优先用该仓库的值，否则用全局。
   const agentRoot = repo.agentRoot?.trim() || "";
+  // 审批记忆再细到分支：选了仓库就问一次当前分支（非 git 目录 / detached HEAD 当没有分支）
+  const invokeGitCurrentBranch = useGlobalStore((s) => s.invokeGitCurrentBranch);
+  const [branchByRepo, setBranchByRepo] = useState<Record<string, string>>({});
+  const refreshAgentBranch = useCallback(() => {
+    if (!agentRoot) return;
+    void invokeGitCurrentBranch(agentRoot)
+      .then((branch) => {
+        const name = branch && branch !== "HEAD" ? branch : "";
+        setBranchByRepo((prev) => (prev[agentRoot] === name ? prev : { ...prev, [agentRoot]: name }));
+      })
+      // 非 git 目录 / detached HEAD：清掉这个仓库的分支名，别沿用切走前的那个。
+      .catch(() => setBranchByRepo((prev) => (prev[agentRoot] === "" ? prev : { ...prev, [agentRoot]: "" })));
+  }, [agentRoot, invokeGitCurrentBranch]);
+  useEffect(() => {
+    refreshAgentBranch();
+    // 切分支一般发生在这个窗口外面（Git 页 / 终端 / 代理自己 checkout）：
+    // 窗口重新拿到焦点时重问一次，别让分支级记忆沿用上一个分支。
+    window.addEventListener("focus", refreshAgentBranch);
+    return () => window.removeEventListener("focus", refreshAgentBranch);
+  }, [refreshAgentBranch]);
+  const agentBranch = agentRoot ? branchByRepo[agentRoot] || "" : "";
   const agentAlwaysAllow = [
     ...(settings.agentAlwaysAllow || []),
     ...(agentRoot ? settings.agentAlwaysAllowByRepo?.[agentRoot] || [] : []),
+    ...(agentRoot && agentBranch ? settings.agentAlwaysAllowByBranch?.[agentRoot]?.[agentBranch] || [] : []),
   ];
   const agentDiffConfirm = agentRoot
     ? (settings.agentDiffConfirmByRepo?.[agentRoot] ?? settings.agentDiffConfirm === true)
@@ -224,11 +246,23 @@ function AiHubApp() {
     },
     onInvalidateContext: ctx.invalidateContext,
     // 用户点了「以后都允许」：把这一类 action_kind 记进设置，下一次提问直接带上。
-    // 选了仓库就按仓库记（只在这一个仓库放行），没选仓库才落到全局。
+    // 记在最细的已知范围：有分支 → 仓库+分支；只有仓库 → 仓库；都没有 → 全局。
     onRememberKind: (kind, repoPath) => {
       if (!kind) return;
       const key = repoPath?.trim();
-      if (key) {
+      const branch = key ? branchByRepo[key] || "" : "";
+      if (key && branch) {
+        const byBranch = settings.agentAlwaysAllowByBranch || {};
+        const perRepo = byBranch[key] || {};
+        const list = perRepo[branch] || [];
+        if (list.includes(kind)) return;
+        setSettings({
+          agentAlwaysAllowByBranch: {
+            ...byBranch,
+            [key]: { ...perRepo, [branch]: [...list, kind].slice(-20) },
+          },
+        });
+      } else if (key) {
         const byRepo = settings.agentAlwaysAllowByRepo || {};
         const list = byRepo[key] || [];
         if (list.includes(kind)) return;
@@ -273,6 +307,13 @@ function AiHubApp() {
         .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args || "" })),
     },
   });
+  // 代理自己 `git checkout` 完，这一轮就结束了而窗口焦点没变；跑完再问一次分支，
+  // 免得下一问还带着旧分支的「以后都允许」。
+  const agentWasBusy = useRef(false);
+  useEffect(() => {
+    if (agentWasBusy.current && !stream.busy) refreshAgentBranch();
+    agentWasBusy.current = stream.busy;
+  }, [stream.busy, refreshAgentBranch]);
   const sessions = useAskSessions({
     task: encodeTask(task, optimize),
     activeSessionId,

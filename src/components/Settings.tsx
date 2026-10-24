@@ -52,10 +52,14 @@ const CHART_COLORS = [
 
 type SettingsTab = "general" | "menu" | "hub" | "net" | "data" | "about";
 
-/** 「以后都允许」全局 + 各仓库的总条数，清空按钮和文案共用。 */
+/** 「以后都允许」全局 + 各仓库 + 各分支的总条数，清空按钮和文案共用。 */
 function rememberedAllowCount(s: AppSettings): number {
   const repo = Object.values(s.agentAlwaysAllowByRepo || {}).reduce((n, list) => n + (list?.length ?? 0), 0);
-  return (s.agentAlwaysAllow?.length ?? 0) + repo;
+  const branch = Object.values(s.agentAlwaysAllowByBranch || {}).reduce(
+    (n, perRepo) => n + Object.values(perRepo || {}).reduce((m, list) => m + (list?.length ?? 0), 0),
+    0
+  );
+  return (s.agentAlwaysAllow?.length ?? 0) + repo + branch;
 }
 
 /**
@@ -804,7 +808,13 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                     type="button"
                     className="btn btn-secondary btn-small"
                     disabled={rememberedAllowCount(settings) === 0}
-                    onClick={() => setSettings({ agentAlwaysAllow: [], agentAlwaysAllowByRepo: {} })}
+                    onClick={() =>
+                      setSettings({
+                        agentAlwaysAllow: [],
+                        agentAlwaysAllowByRepo: {},
+                        agentAlwaysAllowByBranch: {},
+                      })
+                    }
                   >
                     {t("aiHub.rememberedClear")}
                   </button>
@@ -814,6 +824,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                     ? t("aiHub.rememberedCount", { n: rememberedAllowCount(settings) })
                     : t("aiHub.rememberedEmpty")}
                 </p>
+                <p className="setting-hint">{t("aiHub.rememberedScope")}</p>
               </div>
             </section>
             <section className="hub-group" hidden={hubGroup !== "capability"}>

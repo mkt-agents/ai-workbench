@@ -2795,6 +2795,22 @@ pub async fn git_list_branches(path: String) -> Result<GitBranchList, String> {
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
+fn git_current_branch_sync(path: &str) -> Result<String, String> {
+    // 用 `symbolic-ref` 而不是 `rev-parse --abbrev-ref HEAD`：后者在还没提交过的仓库里
+    // 会直接 fatal（HEAD 解析不了），前者照样给出分支名；detached HEAD 时它失败，
+    // 正好当作「没有分支」，调用点按仓库粒度记忆。
+    git_stdout(path, &["symbolic-ref", "--short", "-q", "HEAD"])
+}
+
+/// 当前分支名。天玑的「以后都允许」要按「仓库 + 分支」记。
+/// detached HEAD / 非 git 目录返回 Err，调用点当成「没有分支」。
+#[tauri::command]
+pub async fn git_current_branch(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_current_branch_sync(&path))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
 /// 只读：这次推送会带走哪些提交、每条改了哪些文件。不联网。
 #[tauri::command]
 pub async fn git_pending_commits(path: String) -> Result<GitPendingCommits, String> {
@@ -4258,6 +4274,57 @@ mod conflict_flow_tests {
         sh(&b, &["checkout", "-q", "-b", "side"]);
         sh(&b, &["checkout", "-q", "main"]);
         git_switch_branch_sync(bp.clone(), "side".into()).expect("clean repo must switch");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod current_branch_tests {
+    use super::{git_command, git_current_branch_sync};
+    use std::path::Path;
+
+    fn git_ok(dir: &Path, args: &[&str]) -> bool {
+        git_command()
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn empty_repo_keeps_its_branch_and_detached_head_has_none() {
+        let root = std::env::temp_dir().join(format!("aw-current-branch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        if !git_ok(&root, &["init", "-q", "-b", "main"]) {
+            let _ = std::fs::remove_dir_all(&root);
+            return; // 本机没有 git：当跳过
+        }
+        let dir = root.to_string_lossy().into_owned();
+
+        // 一次提交都没有也要给出分支名：`rev-parse --abbrev-ref HEAD` 在这里会 fatal。
+        assert_eq!(git_current_branch_sync(&dir).unwrap(), "main");
+
+        assert!(git_ok(&root, &["config", "user.email", "branch@test"]));
+        assert!(git_ok(&root, &["config", "user.name", "Branch Test"]));
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        assert!(git_ok(&root, &["add", "-A"]));
+        assert!(git_ok(&root, &["commit", "-qm", "seed"]));
+
+        // 换了分支就得跟着变——分支级「以后都允许」全靠这个值。
+        assert!(git_ok(&root, &["checkout", "-q", "-b", "feature/x"]));
+        assert_eq!(git_current_branch_sync(&dir).unwrap(), "feature/x");
+
+        // detached HEAD：没有分支可记，报错让调用点回落到仓库粒度。
+        assert!(git_ok(&root, &["checkout", "-q", "--detach"]));
+        assert!(git_current_branch_sync(&dir).is_err());
+
+        // 非 git 目录同样报错，而不是返回空串。
+        let plain = root.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(git_current_branch_sync(&plain.to_string_lossy()).is_err());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

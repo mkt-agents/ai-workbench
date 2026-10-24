@@ -483,43 +483,6 @@ pub fn set_ai_hub_bubble_box(app: AppHandle, width: u32, height: u32) -> Result<
     set_bubble_box(&app, width, height)
 }
 
-#[cfg(test)]
-mod bubble_box_tests {
-    use super::{bottom_center_anchor, clamp_bubble_box};
-
-    #[test]
-    fn growing_for_the_menu_keeps_the_feet_on_the_ground() {
-        // 112 方窗开菜单 → 112×228：底边（y + h）必须落在同一像素上。
-        let before = (1600, 900);
-        let after = bottom_center_anchor(before, (112, 112), 112, 228);
-        assert_eq!(before.1 + 112, after.1 + 228);
-        assert_eq!(after, (1600, 784));
-    }
-
-    #[test]
-    fn a_larger_dial_stays_centred_on_the_same_spot() {
-        // 112 → 160：左右各让 24，底边仍然不动。
-        let after = bottom_center_anchor((1000, 900), (112, 112), 160, 160);
-        assert_eq!(after, (976, 852));
-        assert_eq!(after.1 + 160, 900 + 112);
-    }
-
-    #[test]
-    fn size_dial_values_pass_through_untouched() {
-        for dial in [96, 112, 128, 160] {
-            assert_eq!(clamp_bubble_box(dial, dial), (dial, dial));
-        }
-    }
-
-    #[test]
-    fn oversized_menu_box_is_clamped_not_rejected() {
-        // 菜单撑高只往头顶长：越界夹进 builder 区间，不能让窗建不出来。
-        assert_eq!(clamp_bubble_box(112, 4_000), (112, super::BUBBLE_BOX_MAX_H));
-        assert_eq!(clamp_bubble_box(4_000, 200), (super::BUBBLE_BOX_MAX_W, 200));
-        assert_eq!(clamp_bubble_box(10, 10), (super::BUBBLE_BOX_MIN, super::BUBBLE_BOX_MIN));
-    }
-}
-
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window(MAIN_LABEL) {
         if let Err(e) = win.show() {
@@ -627,5 +590,43 @@ pub fn hide_ai_hub<R: Runtime>(app: &AppHandle<R>) {
             eprintln!("[tray] hide ai-hub failed: {e}");
         }
         vis::force_visible(&win, false);
+    }
+}
+
+// 测试模块放文件末尾：`clippy::items_after_test_module` 不喜欢测试后面还有别的函数。
+#[cfg(test)]
+mod bubble_box_tests {
+    use super::{bottom_center_anchor, clamp_bubble_box};
+
+    #[test]
+    fn growing_for_the_menu_keeps_the_feet_on_the_ground() {
+        // 112 方窗开菜单 → 112×228：底边（y + h）必须落在同一像素上。
+        let before = (1600, 900);
+        let after = bottom_center_anchor(before, (112, 112), 112, 228);
+        assert_eq!(before.1 + 112, after.1 + 228);
+        assert_eq!(after, (1600, 784));
+    }
+
+    #[test]
+    fn a_larger_dial_stays_centred_on_the_same_spot() {
+        // 112 → 160：左右各让 24，底边仍然不动。
+        let after = bottom_center_anchor((1000, 900), (112, 112), 160, 160);
+        assert_eq!(after, (976, 852));
+        assert_eq!(after.1 + 160, 900 + 112);
+    }
+
+    #[test]
+    fn size_dial_values_pass_through_untouched() {
+        for dial in [96, 112, 128, 160] {
+            assert_eq!(clamp_bubble_box(dial, dial), (dial, dial));
+        }
+    }
+
+    #[test]
+    fn oversized_menu_box_is_clamped_not_rejected() {
+        // 菜单撑高只往头顶长：越界夹进 builder 区间，不能让窗建不出来。
+        assert_eq!(clamp_bubble_box(112, 4_000), (112, super::BUBBLE_BOX_MAX_H));
+        assert_eq!(clamp_bubble_box(4_000, 200), (super::BUBBLE_BOX_MAX_W, 200));
+        assert_eq!(clamp_bubble_box(10, 10), (super::BUBBLE_BOX_MIN, super::BUBBLE_BOX_MIN));
     }
 }

@@ -428,9 +428,11 @@ flowchart TD
 > 「改前确认」降下来的那一档出现（否则一按就把用户自己开的开关废了）。决定经
 > `agent_decide(scope="always")` 回传，本轮内立即生效，下一次提问随 `alwaysAllow` 下发；
 > 后端只做 `always_allowed.contains(kind)` 判断，`Deny` 分支在这之前就返回，黑名单与受保护
-> 路径不受影响。设置页「记住的审批」显示条数并可一键清空。~~没做按仓库分表~~ **已补**（B8，
-> `agentAlwaysAllowByRepo`，选了仓库就只在这个仓库放行）；**分支粒度仍没做**：天玑侧拿不到
-> 当前分支，要先把 branch 接进 `agent` 上下文，等真实需要再做。
+> 路径不受影响。设置页「记住的审批」显示条数并可一键清空。~~没做按仓库 / 分支分表~~ **都已补**：
+> 仓库粒度见 B8（`agentAlwaysAllowByRepo`）；分支粒度 2026-10-24（`agentAlwaysAllowByBranch`，
+> `仓库 → 分支 → action_kind`，新命令 `git_current_branch` 在选中仓库后问一次当前分支，
+> detached HEAD 当「没有分支」）。「以后都允许」记在**最细的已知范围**：有分支 → 仓库+分支，
+> 只有仓库 → 仓库，都没有 → 全局；切分支或换仓库都要重新确认一次。
 
 - **现象与证据**：`scope="turn"` 只在本轮生效（`agent.rs:1723-1769`），跨轮仍逐次询问。
 - **改法要点**：新增 `settings.agentAlwaysAllow: string[]`（存 `action_kind`，如 `cmd:npm`、`cmd:git commit`，上限 20 条）；审批卡加「以后都这样做」（完全权限档不显示）；`tool_gate` 返回 Ask 后先查该表；设置页给清除入口；`command_blocked` 与 git 黑名单优先级更高，不因记忆而放行。
@@ -655,9 +657,10 @@ P0 的 7 项里，有 4 项（P0-1/2/4/5）不是"新增能力"，而是**当前
 **B. 欠账**（8 条：**8 条 ✅ 全部补齐（2026-10-23/24）**，逐条如下）。B/C 清零之后又做了
 **第二轮附带小项（2026-10-24）**：usage 回填校准（`calibrate_from_usage`）、计划步骤稳定 id、
 子代理「引用文件」清单、prompt cache 1k 阈值（`cache_worth_marking`）、设置页近 14 天用量走势图；
-各节正文里对应的「没做」注记已同步改掉，仍在的「没做」都是真没做或刻意不做：分支粒度审批记忆
-（天玑侧没有分支上下文）、工具调用对齐到计划步骤（要多花 token）、`start_process` 取杀子进程、
-`ai-hub-shown` 时的指纹检查：
+各节正文里对应的「没做」注记已同步改掉。2026-10-24 又补了分支粒度审批记忆（`git_current_branch`
++ `agentAlwaysAllowByBranch`）。仍在的「没做」只剩三条：工具调用对齐到计划步骤（要多花 token）、
+`start_process` 取消后杀子进程（`spawn_blocking` 拦不住）、`ai-hub-shown` 时的指纹检查
+（发送前 TTL 校验已覆盖）：
 
 1. **✅ 已修（2026-10-23/24）9 个设置开关全部到位**。两批补上：
    `agentParallelReads`（`plan_batches` 上限 4→1）、`agentRetries`（`model_turn` 重试 3→0，
