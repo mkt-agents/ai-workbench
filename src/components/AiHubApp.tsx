@@ -56,6 +56,30 @@ type QaTurn = AiHubTurn;
 const PINNED_KEY = "qa-pinned";
 const PERMISSION_KEY = "qa-permission";
 /** Set once the user stopped wanting to be asked before hiding a running round. */
+/**
+ * 一个仓库最多记住几个分支的「以后都允许」：来回切过的旧分支不该一直堆在设置里。
+ * 只按写入顺序回收（对象键序），不额外存时间戳。
+ */
+const MAX_REMEMBERED_BRANCHES = 5;
+
+/**
+ * 分支层只留最近用过的 N 个分支，当前分支排在最后（＝最近一次）。
+ * 键序没变时返回原对象，避免无谓的重渲染。
+ */
+function pruneRememberedBranches(
+  perRepo: Record<string, string[]>,
+  current: string,
+): Record<string, string[]> {
+  const names = Object.keys(perRepo);
+  const kept = names.filter((name) => name !== current).slice(-(MAX_REMEMBERED_BRANCHES - 1));
+  const order = [...kept, current];
+  if (order.length === names.length && order.every((name, i) => names[i] === name)) return perRepo;
+  const next: Record<string, string[]> = {};
+  for (const name of kept) next[name] = perRepo[name];
+  next[current] = perRepo[current];
+  return next;
+}
+
 const CLOSE_ACK_KEY = "qa-close-ack";
 /** Set once the user confirmed what 完全权限 means; later switches don't ask again.
     v2: the level now reaches the whole machine, so earlier acks must see the new warning. */
@@ -272,7 +296,7 @@ function AiHubApp() {
         setSettings({
           agentAlwaysAllowByBranch: {
             ...byBranch,
-            [key]: { ...perRepo, [branch]: [...list, kind].slice(-20) },
+            [key]: pruneRememberedBranches({ ...perRepo, [branch]: [...list, kind].slice(-20) }, branch),
           },
         });
       } else if (key) {
