@@ -262,7 +262,12 @@ export default function AiHubBubble() {
         else offs.push(un);
       });
     };
-    on<{ status: string }>("agent-step", (payload) => react({ kind: "step", status: payload.status }));
+    on<{ status: string }>("agent-step", (payload) => {
+      // done / info 只是单步收尾与通知（MCP 探测、压缩提示、重试预告…）：
+      // 不代表真的在执行动作，不动情绪——否则没干活的时候熊猫也举键盘盒。
+      if (payload.status === "done" || payload.status === "info") return;
+      react({ kind: "step", status: payload.status });
+    });
     on("agent-plan", () => react({ kind: "plan" }));
     on("agent-approval", () => react({ kind: "approval" }));
     // 流式每 token 一条：已经在思考就别再重渲一次。
