@@ -179,10 +179,18 @@ export default function AskThread(props: Props) {
     if (!busy) setShowJump(false);
   }, [busy]);
 
+  /**
+   * 内容长高之后跟着滚到底，并**重新判定是否真的在底部**。
+   * 以前只依赖 scroll 事件更新 atBottom：审批卡 / 计划卡是插进去的，内容变高时不会产生 scroll 事件，
+   * atBottom 就停在旧值 true —— 于是既不自动下滑，底部的吸底审批条也不出现，按钮全在视口外。
+   */
   useLayoutEffect(() => {
     const el = answerRef.current;
-    if (el && stickRef.current && !jumpingRef.current) el.scrollTop = el.scrollHeight;
-  }, [answer, agentSteps]);
+    if (!el) return;
+    if (stickRef.current && !jumpingRef.current) el.scrollTop = el.scrollHeight;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD;
+    setAtBottom(nearBottom);
+  }, [answer, agentSteps, agentPlan, agentApproval]);
 
   useEffect(() => {
     const onSelect = () => {
