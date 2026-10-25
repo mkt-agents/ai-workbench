@@ -122,6 +122,9 @@ const MICRO_HOLD_MS: Partial<Record<PetMicro, number>> = {
   struggle: 1600,
   lookaround: 1500,
   glance: 1400,
+  yawn: 1900,
+  rub: 1500,
+  walk: 2200,
   wave: 1300,
   peek: 1300,
   bounce: 1300,
@@ -133,6 +136,59 @@ const MICRO_HOLD_MS: Partial<Record<PetMicro, number>> = {
 };
 function microHoldMs(m: PetMicro): number {
   return MICRO_HOLD_MS[m] ?? 1000;
+}
+
+/** 踱步最大横移（逻辑 px）：按窗宽档位缩放，保证不踩到窗边裁切。 */
+function walkAmplitudePx(size: number): number {
+  return Math.round(size * 0.1);
+}
+
+/**
+ * 按时段挑一条待机连招链：早晨伸懒腰醒神、午后打哈欠犯困、深夜揉眼，
+ * 其余走通用池。每条链 2~3 步，链演完才回 idle。
+ */
+function pickMicroChain(hour: number): PetMicro[] {
+  const pools: PetMicro[][][] = [
+    // 深夜（22-5）：揉眼、哈欠
+    [
+      ["yawn", "rub"],
+      ["rub", "lookaround"],
+      ["walk", "yawn"],
+      ["nod", "rub"],
+    ],
+    // 早晨（6-11）：伸懒腰醒神
+    [
+      ["stretch", "lookaround"],
+      ["stretch", "wave"],
+      ["walk", "glance"],
+      ["wave", "bounce", "nod"],
+    ],
+    // 午后（13-17）：犯困
+    [
+      ["yawn", "lookaround"],
+      ["wobble", "yawn"],
+      ["walk", "peek"],
+      ["dust", "stretch"],
+    ],
+  ];
+  const generic: PetMicro[][] = [
+    ["stretch", "lookaround"],
+    ["walk", "glance", "wave"],
+    ["wave", "peek", "nod"],
+    ["dust", "wobble"],
+    ["lookaround", "ear"],
+    ["hop", "nod"],
+    ["yawn", "lookaround"],
+  ];
+  const pool =
+    hour >= 22 || hour < 5
+      ? pools[0]
+      : hour >= 6 && hour < 11
+        ? pools[1]
+        : hour >= 13 && hour < 17
+          ? pools[2]
+          : generic;
+  return pool[Math.floor(Math.random() * pool.length)] ?? ["lookaround"];
 }
 
 type HitZone = "head" | "body" | "tail";
@@ -185,6 +241,9 @@ export default function AiHubBubble() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [gesture, setGesture] = useState<PetGesturePlay | null>(null);
   const [micro, setMicro] = useState<PetMicro>("none");
+  /** 踱步位移（px）与朝向：走动时由连招 runner 更新，任何互动演出的 play() 归中。 */
+  const [walkX, setWalkX] = useState(0);
+  const [facing, setFacing] = useState<1 | -1>(1);
   const [celebrate, setCelebrate] = useState(false);
   const phaseRef = useRef<BubblePhase>("idle");
   phaseRef.current = phase;
@@ -216,6 +275,10 @@ export default function AiHubBubble() {
   const microTimerRef = useRef<number | null>(null);
   /** 单次微动作演出收尾 */
   const microHoldTimerRef = useRef<number | null>(null);
+  /** 连招链步与步之间的衔接计时 */
+  const chainTimerRef = useRef<number | null>(null);
+  /** 踱步当前位置镜像：挑新目标与判断转身方向用 */
+  const walkXRef = useRef(0);
   /** 悬停一会儿 = 摸头：停够 1.1 秒才反应，扫过去不算 */
   const hoverTimerRef = useRef<number | null>(null);
   const menuOpenRef = useRef(false);
@@ -315,10 +378,60 @@ export default function AiHubBubble() {
     [setSettings],
   );
 
+  /**
+   * 连招 runner：按序连播微动作，每步演完停一拍再下一步，链毕触发 onDone。
+   * 步前守卫不过（菜单/拖拽/说话/情绪被新信号抢走）整链作废、不触发 onDone ——
+   * 打断即意味着来了新信号（sleepTimer 已被重排），不该再走「演完犯困」之类的收尾。
+   * 遇到 walk 步：先定转身方向与位移目标，再开始颠步（横移由 CSS transition 接管）。
+   */
+  const runChain = useCallback((steps: PetMicro[], onDone?: () => void) => {
+    clearTimer(chainTimerRef);
+    const step = (i: number) => {
+      const next = steps[i];
+      if (!next) {
+        onDone?.();
+        return;
+      }
+      if (
+        (i === 0 && speechShowingRef.current) ||
+        menuOpenRef.current ||
+        dragRef.current ||
+        phaseRef.current !== "idle" ||
+        moodRef.current !== "idle"
+      ) {
+        return;
+      }
+      if (next === "walk") {
+        const amp = walkAmplitudePx(cfgRef.current.size);
+        const target = Math.round((Math.random() * 2 - 1) * amp);
+        if (target !== walkXRef.current) {
+          setFacing(target < walkXRef.current ? -1 : 1);
+        }
+        walkXRef.current = target;
+        setWalkX(target);
+      }
+      clearTimer(microHoldTimerRef);
+      setMicro(next);
+      microHoldTimerRef.current = window.setTimeout(() => {
+        setMicro("none");
+        microHoldTimerRef.current = null;
+        chainTimerRef.current = window.setTimeout(() => {
+          chainTimerRef.current = null;
+          step(i + 1);
+        }, 320);
+      }, microHoldMs(next));
+    };
+    step(0);
+  }, []);
+
   /** 情绪演完自己收回 idle；holdMs=0 的情绪一直停着，等下一条信号。 */
   const play = useCallback(
     (reaction: PetReaction) => {
       clearTimer(moodTimerRef);
+      // 任何正式演出都打断在跑的连招，并把踱步归中（回家站好再演）
+      clearTimer(chainTimerRef);
+      walkXRef.current = 0;
+      setWalkX(0);
       moodRef.current = reaction.mood;
       setMood(reaction.mood);
       setCelebrate(Boolean(reaction.celebrate));
@@ -342,7 +455,18 @@ export default function AiHubBubble() {
           gestureTimerRef.current = null;
         }, GESTURE_MS);
       }
-      if (reaction.micro) {
+      if (reaction.chain?.length) {
+        // 连招优先于单发 micro；链演完再切 thenMood（渐进犯困）
+        runChain(
+          reaction.chain,
+          reaction.thenMood
+            ? () => {
+                moodRef.current = reaction.thenMood!;
+                setMood(reaction.thenMood!);
+              }
+            : undefined,
+        );
+      } else if (reaction.micro) {
         setMicro(reaction.micro);
         clearTimer(microHoldTimerRef);
         microHoldTimerRef.current = window.setTimeout(() => {
@@ -363,7 +487,30 @@ export default function AiHubBubble() {
         }, reaction.holdMs);
       }
     },
-    [bumpAffinity, say, t],
+    [bumpAffinity, runChain, say, t],
+  );
+
+  /**
+   * 到点渐进犯困：先哈欠揉眼（chain）再换 sleepy 图。
+   * 起手时正忙（说话/被按住/菜单开着）链会自己作废，这里 20s 后重试，
+   * 别因为撞上一次旁白就永远醒着；已经睡着或来了新信号则不再排。
+   */
+  const armSleepTimer = useCallback(
+    (delay = sleepAfterMs()) => {
+      clearTimer(sleepTimerRef);
+      sleepTimerRef.current = window.setTimeout(() => {
+        const busy =
+          menuOpenRef.current ||
+          dragRef.current ||
+          speechShowingRef.current ||
+          phaseRef.current !== "idle";
+        play(reactTo({ kind: "idle" }, tierRef.current));
+        if (busy && moodRef.current === "idle") {
+          armSleepTimer(20000);
+        }
+      }, delay);
+    },
+    [play],
   );
 
   /** 收到任何信号都算"桌面有动静"：重新计打瞌睡倒计时，再演对应情绪。 */
@@ -373,10 +520,7 @@ export default function AiHubBubble() {
       const away = now - lastSeenAtRef.current;
       lastSeenAtRef.current = now;
       clearTimer(sleepTimerRef);
-      sleepTimerRef.current = window.setTimeout(
-        () => play(reactTo({ kind: "idle" }, tierRef.current)),
-        sleepAfterMs(),
-      );
+      armSleepTimer();
       const base = reactTo(signal, tierRef.current);
       // 离开很久后的第一条互动：台词换成「回来啦」，动作照演（睡着则优先唤醒）
       if (
@@ -450,10 +594,7 @@ export default function AiHubBubble() {
       syncBoxRef.current();
       await invoke("ai_hub_bubble_ready").catch(() => {});
       // 没人摸它也要会困：倒计时从显窗那刻就得起，不能等第一条事件。
-      sleepTimerRef.current = window.setTimeout(
-        () => play(reactTo({ kind: "idle" }, tierRef.current)),
-        sleepAfterMs(),
-      );
+      armSleepTimer();
 
       // 每日首次见面问候 + 微衰减
       const today = todayKey();
@@ -484,7 +625,7 @@ export default function AiHubBubble() {
         }
       }, 90_000 + Math.floor(Math.random() * 50_000));
 
-      // idle 微行为：偏重有立绘的动作，间隔拉长对齐鱼娘节奏
+      // idle 微行为：从时段连招池挑一条 2~3 步的小剧场连播（频率保持 12~26s）
       const scheduleMicro = () => {
         microTimerRef.current = window.setTimeout(() => {
           microTimerRef.current = null;
@@ -495,43 +636,19 @@ export default function AiHubBubble() {
             moodRef.current === "idle" &&
             phaseRef.current === "idle"
           ) {
-            const picks: PetMicro[] = [
-              "wave",
-              "wave",
-              "peek",
-              "peek",
-              "bounce",
-              "nod",
-              "nod",
-              "shy",
-              "stretch",
-              "ear",
-              // 新增：东张西望 / 摇摆 / 小跳 / 拍灰
-              "lookaround",
-              "lookaround",
-              "wobble",
-              "hop",
-              "dust",
-              // glance 少抽：横移多了像左右晃
-              "glance",
-            ];
-            const next = picks[Math.floor(Math.random() * picks.length)]!;
-            clearTimer(microHoldTimerRef);
-            setMicro(next);
-            microHoldTimerRef.current = window.setTimeout(() => {
-              setMicro("none");
-              microHoldTimerRef.current = null;
-            }, microHoldMs(next));
+            const chain = pickMicroChain(new Date().getHours());
+            runChain(chain);
             if (
               Math.random() < 0.18 &&
-              (next === "wave" ||
-                next === "peek" ||
-                next === "bounce" ||
-                next === "stretch" ||
-                next === "nod" ||
-                next === "hop" ||
-                next === "wobble" ||
-                next === "dust")
+              (chain[0] === "wave" ||
+                chain[0] === "peek" ||
+                chain[0] === "bounce" ||
+                chain[0] === "stretch" ||
+                chain[0] === "nod" ||
+                chain[0] === "hop" ||
+                chain[0] === "wobble" ||
+                chain[0] === "dust" ||
+                chain[0] === "walk")
             ) {
               say(t(pickPoolKey(tierRef.current, "micro")));
             }
@@ -610,6 +727,8 @@ export default function AiHubBubble() {
       clearTimer(speechTimerRef);
       clearTimer(moodTimerRef);
       clearTimer(sleepTimerRef);
+      clearTimer(chainTimerRef);
+      clearTimer(microHoldTimerRef);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: theme + ready handshake + saved geometry
   }, []);
@@ -1083,6 +1202,8 @@ export default function AiHubBubble() {
           micro={micro}
           celebrate={celebrate}
           pressZone={pressZone}
+          walkX={walkX}
+          facing={facing}
         />
       </div>
       {speech && !menuOpen && (

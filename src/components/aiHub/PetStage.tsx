@@ -29,6 +29,9 @@ interface Props {
   celebrate?: boolean;
   /** 按下分区：头/身/裙边不同压感 */
   pressZone?: PressZone | null;
+  /** 踱步位移与朝向（vector 皮肤专用；缺省=归中/正面） */
+  walkX?: number;
+  facing?: 1 | -1;
 }
 
 /**
@@ -45,6 +48,8 @@ export default function PetStage({
   micro = "none",
   celebrate = false,
   pressZone = null,
+  walkX = 0,
+  facing = 1,
 }: Props) {
   if (skin.kind === "vector") {
     return (
@@ -57,6 +62,8 @@ export default function PetStage({
           micro={micro}
           celebrate={celebrate}
           pressZone={pressZone}
+          walkX={walkX}
+          facing={facing}
         />
         <PetFx
           mood={mood}

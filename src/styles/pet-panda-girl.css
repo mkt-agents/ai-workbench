@@ -66,6 +66,23 @@
   z-index: 1;
 }
 
+/* 踱步位移层：走动时由 --qa-walk-x 平移，交互后归中 */
+.qa-panda-girl-walk {
+  position: absolute;
+  inset: 0;
+  transform: translateX(var(--qa-walk-x, 0px));
+  transition: transform 1400ms cubic-bezier(0.22, 0.7, 0.2, 1);
+  z-index: 1;
+}
+
+/* 朝向层：走左边时整只镜像，转身有过渡不跳切 */
+.qa-panda-girl-face {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(var(--qa-facing, 1));
+  transition: transform 420ms ease;
+}
+
 /* 悬停凑近：只抬高放大，不扭 */
 .qa-bubble-root:hover .qa-panda-girl:not(.is-dragging):not(.is-pressed) .qa-panda-girl-body-wrap {
   animation-play-state: paused;
@@ -384,7 +401,26 @@
     transform: translateY(0) scale(1, 1);
   }
   50% {
-    transform: translateY(-2.6%) scale(1.012, 0.988);
+    transform: translateY(-3.6%) scale(1.018, 0.982);
+  }
+}
+/* 低频重心转移：idle 背景循环，几秒换一次重心，像站着缓缓晃神 */
+.qa-panda-girl-stage {
+  animation: qa-panda-girl-weight-shift 7.5s ease-in-out infinite;
+}
+@keyframes qa-panda-girl-weight-shift {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  30% {
+    transform: translateX(1.1%) rotate(0.6deg);
+  }
+  55% {
+    transform: translateX(-0.7%) rotate(-0.4deg);
+  }
+  78% {
+    transform: translateX(0.35%) rotate(0.18deg);
   }
 }
 @keyframes qa-panda-girl-glow-pulse {
@@ -663,6 +699,26 @@
   animation: qa-panda-girl-dizzy 2.2s ease-in-out;
 }
 
+/* —— 待机提活新增：踱步 / 打哈欠 / 揉眼 —— */
+/* 踱步：上下颠步 + 随步子轻倾，横移由 walk 层的 transition 负责 */
+.qa-panda-girl.micro-walk .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-walk-bob 0.52s ease-in-out infinite;
+}
+/* 打哈欠：后仰吸气 → 前倾哈气 → 缓缓收回来，眼皮跟着耷拉 */
+.qa-panda-girl.micro-yawn .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-yawn 1.9s ease-in-out;
+}
+.qa-panda-girl.micro-yawn .qa-panda-girl-gaze {
+  transform: scale(1.01, 0.92);
+}
+/* 揉眼：小幅度左右摇头 + 身子下沉一点，困相 */
+.qa-panda-girl.micro-rub .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-rub 1.5s ease-in-out;
+}
+.qa-panda-girl.micro-rub .qa-panda-girl-gaze {
+  transform: scale(1.012, 0.9);
+}
+
 @keyframes qa-panda-girl-lookaround {
   0%,
   100% {
@@ -776,6 +832,58 @@
   }
 }
 
+/* 踱步步态：左右脚交替的颠步节拍 */
+@keyframes qa-panda-girl-walk-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-3.2%) scale(1.02, 0.98) rotate(1deg);
+  }
+  50% {
+    transform: translateY(0) scale(0.99, 1.01) rotate(0deg);
+  }
+  75% {
+    transform: translateY(-2.2%) scale(1.01, 0.99) rotate(-1deg);
+  }
+}
+/* 打哈欠：后仰吸气 → 前倾张口 → 缓缓收回 */
+@keyframes qa-panda-girl-yawn {
+  0%,
+  100% {
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+  30% {
+    transform: translateY(1.5%) scale(1.04, 0.96) rotate(-2deg);
+  }
+  55% {
+    transform: translateY(-1%) scale(1.06, 0.94) rotate(1.5deg);
+  }
+  80% {
+    transform: translateY(0.5%) scale(0.99, 1.01) rotate(0deg);
+  }
+}
+/* 揉眼：小幅左右摇头，身子压低 */
+@keyframes qa-panda-girl-rub {
+  0%,
+  100% {
+    transform: rotate(0deg) translateY(0);
+  }
+  20% {
+    transform: rotate(3.5deg) translateY(1%);
+  }
+  40% {
+    transform: rotate(-3.5deg) translateY(1%);
+  }
+  60% {
+    transform: rotate(3deg) translateY(1.5%);
+  }
+  80% {
+    transform: rotate(-2.5deg) translateY(1%);
+  }
+}
+
 /* —— 表情叠加层：星星眼 / 生气筋 / 嘴角弧线（叠在 gaze 层里跟视线走） —— */
 .qa-panda-girl-star {
   position: absolute;
@@ -864,6 +972,9 @@
 @media (prefers-reduced-motion: reduce) {
   .qa-panda-girl,
   .qa-panda-girl-body-wrap,
+  .qa-panda-girl-walk,
+  .qa-panda-girl-face,
+  .qa-panda-girl-stage,
   .qa-panda-girl-art,
   .qa-panda-girl-gaze,
   .qa-panda-girl-shadow,

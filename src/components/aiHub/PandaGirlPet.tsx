@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { PetMood } from "../../lib/petSkins";
 import type { BubblePhase } from "./PetStage";
 import idleUrl from "../../assets/pets/panda-girl/idle.png";
@@ -49,7 +49,10 @@ export type PetMicro =
   | "hop"
   | "dust"
   | "dizzy"
-  | "struggle";
+  | "struggle"
+  | "walk"
+  | "yawn"
+  | "rub";
 
 export type PressZone = "head" | "body" | "tail";
 
@@ -61,6 +64,10 @@ interface Props {
   micro?: PetMicro;
   celebrate?: boolean;
   pressZone?: PressZone | null;
+  /** 踱步水平位移（px，负左正右）；CSS transition 负责走过去，0 = 归中。 */
+  walkX?: number;
+  /** 朝向：1 正面 / -1 镜像（往左走时转身）。 */
+  facing?: 1 | -1;
 }
 
 function pickArt(mood: PetMood, phase: BubblePhase, celebrate: boolean): string {
@@ -81,6 +88,8 @@ export default function PandaGirlPet({
   micro = "none",
   celebrate = false,
   pressZone = null,
+  walkX = 0,
+  facing = 1,
 }: Props) {
   const [blink, setBlink] = useState(false);
   const [front, setFront] = useState(() => pickArt(mood, phase, celebrate));
@@ -194,23 +203,34 @@ export default function PandaGirlPet({
     .filter(Boolean)
     .join(" ");
 
+  const vars = {
+    "--qa-walk-x": `${walkX}px`,
+    "--qa-facing": facing,
+  } as CSSProperties;
+
   return (
-    <div className={className} aria-hidden>
+    <div className={className} style={vars} aria-hidden>
       <span className="qa-panda-girl-glow" />
       <span className="qa-panda-girl-shadow" />
       <div className="qa-panda-girl-body-wrap">
-        <div className="qa-panda-girl-stage">
-          {back && <img className="qa-panda-girl-art is-back" src={back} alt="" draggable={false} />}
-          <div className="qa-panda-girl-gaze">
-            <img className="qa-panda-girl-art is-front" src={front} alt="" draggable={false} />
-            <span className="qa-panda-girl-blush" />
-            <span className="qa-panda-girl-specular" />
-            <span className="qa-panda-girl-star">
-              <i>✦</i>
-              <i>✦</i>
-            </span>
-            <span className="qa-panda-girl-anger">💢</span>
-            <span className="qa-panda-girl-mouth" />
+        <div className="qa-panda-girl-walk">
+          <div className="qa-panda-girl-face">
+            <div className="qa-panda-girl-stage">
+              {back && (
+                <img className="qa-panda-girl-art is-back" src={back} alt="" draggable={false} />
+              )}
+              <div className="qa-panda-girl-gaze">
+                <img className="qa-panda-girl-art is-front" src={front} alt="" draggable={false} />
+                <span className="qa-panda-girl-blush" />
+                <span className="qa-panda-girl-specular" />
+                <span className="qa-panda-girl-star">
+                  <i>✦</i>
+                  <i>✦</i>
+                </span>
+                <span className="qa-panda-girl-anger">💢</span>
+                <span className="qa-panda-girl-mouth" />
+              </div>
+            </div>
           </div>
         </div>
       </div>

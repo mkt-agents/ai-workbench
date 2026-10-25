@@ -2,6 +2,7 @@ import type { PetSkinId } from "../core/types";
 import type { BondTier, SpeechPoolName } from "./petBond";
 import { pickPoolKey } from "./petBond";
 import type { PetMood } from "./petSkins";
+import type { PetMicro } from "../components/aiHub/PandaGirlPet";
 
 /**
  * 天玑那边发生的事 → 桌宠的演出指令。桌宠窗和主窗是两个 webview，但后端
@@ -48,18 +49,12 @@ export interface PetReaction {
   gesture?: PetGesturePlay;
   /** 完成庆祝：撒花 */
   celebrate?: boolean;
-  /** idle 微动作（睡醒伸懒腰等） */
-  micro?:
-    | "stretch"
-    | "shy"
-    | "nod"
-    | "wave"
-    | "lookaround"
-    | "wobble"
-    | "hop"
-    | "dust"
-    | "dizzy"
-    | "struggle";
+  /** idle 微动作（睡醒伸懒腰等）；与 chain 同时给出时以 chain 为准 */
+  micro?: PetMicro;
+  /** 连招链：按序连播 2~3 个微动作再回 idle；被打断（有新信号）整链作废 */
+  chain?: PetMicro[];
+  /** 链自然演完后再切到的情绪（困意渐进：先打哈欠揉眼，再换 sleepy 图） */
+  thenMood?: PetMood;
 }
 
 /** 一轮跑多久才算"干完活"：短答案不值得撒花，免得每次都跳。 */
@@ -225,7 +220,8 @@ export function reactTo(signal: PetSignal, tier: BondTier = 0): PetReaction {
     case "swap":
       return { mood: "happy", holdMs: 900, speechKey: "bubblePetSwap" };
     case "idle":
-      return { mood: "sleepy", holdMs: 0 };
+      // 渐进犯困：先打哈欠、揉眼，链演完才换 sleepy 图（thenMood）
+      return { mood: "idle", holdMs: 0, chain: ["yawn", "rub"], thenMood: "sleepy" };
     case "struggle":
       // 被拎太久：挣扎扭动 + 抗议；演完回粘性情绪
       return {
