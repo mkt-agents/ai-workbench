@@ -12,6 +12,13 @@
   min-height: 0;
   container: snippets-page / inline-size;
 }
+/* 嵌在模型管理 Tab 里：外层已有 .models-container 宽度与内边距 */
+.snippets-page.is-embedded {
+  max-width: none;
+  margin-inline: 0;
+  padding: 4px 0 0;
+  flex: 1 1 auto;
+}
 /* 上行：搜索有上限、操作靠右；下行：类型 | 标签。 */
 .snippets-toolbar {
   display: flex;

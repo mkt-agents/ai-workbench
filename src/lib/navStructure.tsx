@@ -11,7 +11,6 @@ import {
   AppWindow,
   Cloud,
   Cpu,
-  FileText,
   Gauge,
   GitBranch,
   KeyRound,
@@ -34,6 +33,7 @@ export type Tab =
   | "ai-models"
   | "runtime"
   | "cloudflared"
+  /** @deprecated 已并入模型管理「提示词」Tab；hash / navigate-tab 仍可认，App 会重定向。 */
   | "snippets"
   | "drafts"
   | "devtools"
@@ -77,7 +77,6 @@ export const NAV_NODES: NavNode[] = [
       },
       { id: "desktop-apps", labelKey: "desktopApps", icon: <AppWindow size={16} /> },
       { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
-      { id: "snippets", labelKey: "snippets", icon: <FileText size={16} /> },
       { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
       { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
     ],

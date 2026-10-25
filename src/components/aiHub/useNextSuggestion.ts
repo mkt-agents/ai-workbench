@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AIModelConfig, AiHubTurn } from "../../core/types";
 import { recordAiUsage } from "../../lib/aiUsage";
+import type { HarnessTrack } from "./harness";
 
 type GenerateText = (req: {
   config: AIModelConfig;
@@ -8,7 +9,7 @@ type GenerateText = (req: {
   user: string;
 }) => Promise<string>;
 
-const SUGGEST_SYSTEM = [
+const SUGGEST_SYSTEM_CODE = [
   "你是「天玑」AI 助手的输入建议器，根据对话预测用户下一步最可能发出的指令。",
   "背景：助手能回答代码/仓库问题；代理模式下还能读写文件、执行 git（提交、推送、查状态）。",
   "规则：",
@@ -20,6 +21,19 @@ const SUGGEST_SYSTEM = [
   "6. 输出是一条用户会说的话，不是助手的回答：禁止 Let me / 我来 开头，禁止以冒号结尾，",
   "   绝不允许工具调用语法、代码块或命令行（哪怕下一步要跑命令，也写成用户会说的话）。",
   "示例风格：「提交并推送这些改动」「排除临时文件后提交」「把警告也修掉」「为这个函数补个单测」",
+].join("\n");
+
+const SUGGEST_SYSTEM_WORK = [
+  "你是「天玑」AI 助手的输入建议器，根据对话预测用户下一步最可能发出的指令。",
+  "背景：当前是办公/文档轨——改写、翻译、整理文档、读表格、写周报日报；不要默认建议 git 提交或跑测试。",
+  "规则：",
+  "1. 只输出一条指令：不超过 24 个字、具体可执行的祈使句，无引号无结尾标点。",
+  "2. 默认用简体中文；仅当用户最近一条消息是外语时才用那种语言。",
+  "3. 优先推进文案/文档任务——再缩短、改语气、出表格要点、生成可粘贴的周报、翻译成另一语言。",
+  "4. 不要建议「查看/列出/解释」刚刚回答里已经展示过的内容。",
+  "5. 建议要落在对话里的具体对象上（段落、表格列、附件名），不要泛泛而谈。",
+  "6. 输出是一条用户会说的话：禁止助手口吻、工具调用语法、代码块。",
+  "示例风格：「改成更口语的群聊版」「翻成英文」「提炼成三条要点」「按这个表算一下合计」",
 ].join("\n");
 
 const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
@@ -74,10 +88,12 @@ export function useNextSuggestion(opts: {
   busy: boolean;
   /** Off = no extra model call per round (the chip is a nicety, not a requirement). */
   enabled: boolean;
+  /** Code 轨偏 git/测试；Work 轨偏改写/文档。 */
+  track?: HarnessTrack;
   generate: GenerateText;
   fallback?: () => string | null;
 }) {
-  const { model, turns, busy, enabled, generate, fallback } = opts;
+  const { model, turns, busy, enabled, track = "code", generate, fallback } = opts;
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const genRef = useRef(0);
   /** 唤出窗口会重载模型列表，model 对象换了 identity 但内容没变——
@@ -129,7 +145,7 @@ export function useNextSuggestion(opts: {
           const text = await generateRef.current({
             // 推理模型先花 token 思考：给太少会在正文出来前耗尽，只剩思考过程
             config: { ...model, maxTokens: 1024, temperature: 0.4 },
-            system: SUGGEST_SYSTEM,
+            system: track === "work" ? SUGGEST_SYSTEM_WORK : SUGGEST_SYSTEM_CODE,
             user: transcript,
           });
           if (genRef.current !== gen) return;
@@ -158,7 +174,7 @@ export function useNextSuggestion(opts: {
       // 计时器没跑就被清掉时，这个快照还没真正请求过，下次要重新发
       if (genRef.current === gen && !started) lastKeyRef.current = null;
     };
-  }, [turns, busy, enabled, modelId]);
+  }, [turns, busy, enabled, modelId, track]);
 
   const dismiss = useCallback(() => setSuggestion(null), []);
   return { suggestion, dismiss };

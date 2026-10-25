@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X } from "lucide-react";
-import { DAILY_STYLES } from "./dailyReport";
+import { ClipboardPaste, FilePlus2, FileText, Send, Sparkles, Square, X } from "lucide-react";
 import type { OpenSuggestion } from "./localActions";
 import PermissionPicker from "./PermissionPicker";
 import CommandPalette from "./CommandPalette";
@@ -10,12 +9,11 @@ import type { AskPanelProps } from "./AskPanel";
 type Props = Pick<
   AskPanelProps,
   | "input" | "setInput" | "inputRef" | "busy" | "lastQuestion" | "suggestion" | "onSuggestionPick"
-  | "onSuggestionDismiss" | "task" | "onTask" | "onDaily" | "hasSnippets"
+  | "onSuggestionDismiss" | "hasSnippets"
   | "onToggleSnippets" | "onPasteClipboard" | "onAttachFile" | "onSend" | "repoControl" | "modelControl"
-  | "modeChip"
+  | "modeChip" | "track" | "onTrack"
   | "permission" | "onPermission" | "diffConfirm" | "onDiffConfirm"
   | "permissionMenuOpen" | "onTogglePermissionMenu"
-  | "dailyStyle" | "onDailyStyle" | "dailyMenuOpen" | "onToggleDailyMenu"
   | "openList" | "onRunOpen" | "onStop"
   | "palette"
 >;
@@ -66,10 +64,9 @@ export default function AskComposer(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     input, setInput, inputRef, busy, lastQuestion, suggestion, onSuggestionPick, onSuggestionDismiss,
-    task, onTask, onDaily, hasSnippets, onToggleSnippets, onPasteClipboard, onAttachFile,
-    onSend, repoControl, modelControl, modeChip,
+    hasSnippets, onToggleSnippets, onPasteClipboard, onAttachFile,
+    onSend, repoControl, modelControl, modeChip, track, onTrack,
     permission, onPermission, diffConfirm, onDiffConfirm, permissionMenuOpen, onTogglePermissionMenu,
-    dailyStyle, onDailyStyle, dailyMenuOpen, onToggleDailyMenu,
     openList, onRunOpen, onStop,
     palette,
   } = props;
@@ -107,12 +104,33 @@ export default function AskComposer(props: Props) {
     onSend();
   };
 
+  const trackSwitch = onTrack ? (
+    <div className="qa-track-switch" role="group" aria-label={t("track.label")}>
+      <button
+        type="button"
+        className={`qa-track-btn${(track ?? "code") === "code" ? " is-active" : ""}`}
+        onClick={() => onTrack("code")}
+        title={t("track.codeDesc")}
+      >
+        {t("track.code")}
+      </button>
+      <button
+        type="button"
+        className={`qa-track-btn${track === "work" ? " is-active" : ""}`}
+        onClick={() => onTrack("work")}
+        title={t("track.workDesc")}
+      >
+        {t("track.work")}
+      </button>
+    </div>
+  ) : null;
+
   return (
     <div className="qa-input-card">
-      <div className="qa-compose-meta">
-        {repoControl}
-        {modeChip}
-      </div>
+      {/* 顶栏只放工作区：「在哪干活」是第一上下文 */}
+      <div className="qa-compose-meta">{repoControl}</div>
+      {/* 任务钉住单独一行，不与产品轨抢同一视觉层级 */}
+      {modeChip ? <div className="qa-mode-pin-row">{modeChip}</div> : null}
       {openList && (
         <OpenSuggestList
           items={openList}
@@ -160,11 +178,9 @@ export default function AskComposer(props: Props) {
         placeholder={
           openList
             ? t("openPlaceholder")
-            : task === "optimize"
-              ? t("taskPlaceholder.optimize")
-              : writes
-                ? t("permission.placeholderWrite")
-                : t("placeholder")
+            : writes
+              ? t("permission.placeholderWrite")
+              : t("placeholder")
         }
         value={input}
         onChange={(e) => setInput(e.target.value)}
@@ -251,69 +267,10 @@ export default function AskComposer(props: Props) {
               </button>
             )}
           </div>
-          <div className="qa-task-track">
-            <button
-              type="button"
-              className={`qa-task-btn${task === "optimize" ? " on" : ""}`}
-              onClick={() => onTask(task === "optimize" ? "none" : "optimize")}
-              title={t("task.optimize")}
-              aria-pressed={task === "optimize"}
-            >
-              {t("taskShort.optimize")}
-            </button>
-          </div>
-          <div className="qa-focus qa-daily">
-            <div className={`qa-daily-split${busy ? " is-disabled" : ""}`}>
-              <button
-                type="button"
-                className="qa-task-btn qa-daily-btn"
-                onClick={onDaily}
-                disabled={busy}
-                title={`${t("dailyTip")} · ${t(`dailyStyle.${dailyStyle}`)}`}
-              >
-                {t("dailyShort")}
-              </button>
-              <button
-                type="button"
-                className="qa-daily-caret"
-                onClick={onToggleDailyMenu}
-                aria-haspopup="listbox"
-                aria-expanded={dailyMenuOpen}
-                aria-label={t("dailyStyle.menu")}
-                title={t("dailyStyle.menu")}
-              >
-                <span className="qa-focus-caret">▾</span>
-              </button>
-            </div>
-            {dailyMenuOpen && (
-              <div className="qa-focus-pop is-up is-left qa-daily-pop" role="listbox">
-                {DAILY_STYLES.map((s) => {
-                  const on = s === dailyStyle;
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      role="option"
-                      aria-selected={on}
-                      className={`qa-focus-item qa-daily-item${on ? " on" : ""}`}
-                      onClick={() => {
-                        onDailyStyle(s);
-                        onToggleDailyMenu();
-                      }}
-                    >
-                      <span className="qa-daily-item-text">
-                        <span className="qa-daily-item-name">{t(`dailyStyle.${s}`)}</span>
-                        <span className="qa-daily-item-desc">{t(`dailyStyle.${s}Desc`)}</span>
-                      </span>
-                      {on && <Check size={12} className="qa-perm-item-check" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </div>
         <div className="qa-compose-end">
+          {/* 轨与权限同属「这一问能做什么」，成组放在发送钮左侧 */}
+          {trackSwitch}
           <PermissionPicker
             permission={permission}
             onPermission={onPermission}

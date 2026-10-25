@@ -1,10 +1,40 @@
-import type { AiHubTurn } from "../../core/types";
+import type { AiHubBlock, AiHubTurn } from "../../core/types";
 import { MAX_DIGEST_CHARS, MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, MAX_SAVED_TURNS, MAX_TURN_CHARS } from "./config";
+import { BLOCK_TOOL_OUTPUT_CAP } from "./harness";
 
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
   if (!flat) return "";
   return flat.length > max ? flat.slice(0, max) + "…" : flat;
+}
+
+/** 预算裁剪时缩短 tool_result，保留 tool_use id 对齐。 */
+function clipBlocks(blocks: AiHubBlock[]): AiHubBlock[] {
+  return blocks.map((block) => {
+    if (block.kind === "text") {
+      return block.text.length > MAX_TURN_CHARS
+        ? { ...block, text: block.text.slice(0, MAX_TURN_CHARS) + "\n…(truncated)" }
+        : block;
+    }
+    if (block.kind === "tool_result" && block.output.length > BLOCK_TOOL_OUTPUT_CAP) {
+      return { ...block, output: block.output.slice(0, BLOCK_TOOL_OUTPUT_CAP) + "\n…(truncated)" };
+    }
+    if (block.kind === "image") {
+      // 历史里的截图不重发：换成短占位，省 token
+      return { kind: "text", text: "[早先的截图已省略]" };
+    }
+    return block;
+  });
+}
+
+function blocksChars(blocks: AiHubBlock[] | undefined): number {
+  if (!blocks?.length) return 0;
+  return blocks.reduce((n, b) => {
+    if (b.kind === "text") return n + b.text.length;
+    if (b.kind === "tool_result") return n + b.output.length;
+    if (b.kind === "tool_use") return n + b.name.length + 40;
+    return n;
+  }, 0);
 }
 
 /** One line per dropped round, appended under any summary already stored. */
@@ -68,22 +98,33 @@ export function sessionDigest(turns: AiHubTurn[]): string {
  * Recent verbatim rounds for the model. The digest is attached to the system prompt.
  * Past `maxChars` the oldest rounds are dropped — 50 × 4000 chars would blow the
  * context window and the provider then answers with an opaque 400.
+ * 保留 `blocks`（含 tool_use / tool_result），好让下一轮模型看见上一轮工具事实。
  */
 export function requestHistory(
   turns: AiHubTurn[],
   maxChars = MAX_HISTORY_CHARS,
 ): { turns: AiHubTurn[]; dropped: number } {
-  const pairs = turns
+  const pairs: AiHubTurn[] = turns
     .filter((t) => !t.digest)
     .slice(-MAX_HISTORY_TURNS * 2)
-    .map((t) => ({
-      role: t.role,
-      content: clipTurn(historyContent(t)),
-    }));
-  let total = pairs.reduce((n, t) => n + t.content.length, 0);
+    .map((t) => {
+      const content = clipTurn(historyContent(t));
+      const blocks = t.blocks?.length ? clipBlocks(t.blocks) : undefined;
+      return {
+        role: t.role,
+        content,
+        ...(blocks ? { blocks } : {}),
+        ...(t.steps?.length ? { steps: t.steps } : {}),
+      };
+    });
+  let total = pairs.reduce(
+    (n, t) => n + Math.max(t.content.length, blocksChars(t.blocks)),
+    0,
+  );
   let dropped = 0;
   while (total > maxChars && pairs.length - dropped > 1) {
-    total -= pairs[dropped].content.length;
+    const gone = pairs[dropped];
+    total -= Math.max(gone.content.length, blocksChars(gone.blocks));
     dropped += 1;
   }
   return { turns: pairs.slice(dropped), dropped };

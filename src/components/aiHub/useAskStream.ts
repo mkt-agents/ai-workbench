@@ -3,14 +3,12 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AIModelConfig, AiHubPlanStep, AiHubTurn } from "../../core/types";
-import { buildPromptOptimizeMessages } from "../../lib/promptOptimize";
 import { recordAiUsage } from "../../lib/aiUsage";
 import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
 import { buildMeta, buildSystem, stepsMutatedWorkspace } from "./config";
 import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
-import { buildUserMessage, turnsToMessages } from "./harness";
+import { buildUserMessage, stepsToBlocks, turnsToMessages } from "./harness";
 import { cleanDailyReport, dailyReportSystem, isDailyReport, isDailyRevision, type DailyStyle } from "./dailyReport";
-import type { OptimizeConfig, TaskKind } from "./config";
 import { routeQuestion } from "./route";
 import type { AskMode, RouteOverride } from "./route";
 import { stripThinking } from "./thinking";
@@ -172,14 +170,17 @@ function appendTurn(
     ...(s.arg ? { arg: s.arg } : {}),
     ...(s.detail ? { detail: s.detail.slice(0, STEP_DETAIL_KEEP) } : {}),
   }));
+  // 工具块进会话：下一轮 messages 能看见上一轮调过什么、拿到了什么。
+  const blocks = stepsToBlocks(answer, kept);
   const next: QaTurn[] = [
     ...prev,
-    { role: "user", content: question },
+    { role: "user", content: question, blocks: [{ kind: "text", text: question }] },
     {
       role: "assistant",
       content: answer,
       ...(keepWhole ? { keep: "whole" as const } : {}),
       ...(kept && kept.length > 0 ? { steps: kept } : {}),
+      ...(blocks ? { blocks } : {}),
       ...(plan && plan.length > 0 ? { plan } : {}),
       ...(limited ? { limited: true } : {}),
       ...(usage?.elapsedMs != null ? { elapsedMs: usage.elapsedMs } : {}),
@@ -199,9 +200,6 @@ export type AskStreamOptions = {
   selectedModel: AIModelConfig | undefined;
   /** 备用模型：主模型这一轮彻底失败时后端换它重来（见 `resolveFallbackModel`）。 */
   fallbackModel?: AIModelConfig | null;
-  task: TaskKind;
-  /** Scenario/goals for the `optimize` task (ignored otherwise). */
-  optimize: OptimizeConfig;
   input: string;
   setInput: (updater: string | ((prev: string) => string)) => void;
   setSelectedText: (text: string) => void;
@@ -210,7 +208,7 @@ export type AskStreamOptions = {
   collectDailyBrief: () => Promise<{ text: string; repos: string[] }>;
   /** User override from the composer pill; "auto" = let routeQuestion decide. */
   routeOverride: RouteOverride;
-  /** Called once a request is dispatched: one-shot task + override reset. */
+  /** Called once a request is dispatched: one-shot override reset. */
   onSent: () => void;
   /** Drop the workbench context cache: this round changed the repo it describes. */
   onInvalidateContext: () => void;
@@ -236,7 +234,7 @@ export type AskStreamOptions = {
 export function useAskStream(opts: AskStreamOptions) {
   const { t } = useTranslation("aihub");
   const {
-    selectedModel, fallbackModel, task, optimize, input, setInput, setSelectedText, getContext, collectDailyBrief,
+    selectedModel, fallbackModel, input, setInput, setSelectedText, getContext, collectDailyBrief,
     routeOverride, onSent, onInvalidateContext, onRememberKind, persistTurns,
     profileSystemRole, profileTemperature, attachments = [], agent, dailyStyle = "chat",
   } = opts;
@@ -248,8 +246,6 @@ export function useAskStream(opts: AskStreamOptions) {
   /** Notes from the last daily report, so a short rewrite stays on the same facts. */
   const lastDailyBriefRef = useRef("");
   const lastDailyReposRef = useRef<string[]>([]);
-  /** Task the last question was sent with, so regenerate replays it. */
-  const lastTaskRef = useRef<TaskKind>("none");
   const [busy, setBusy] = useState(false);
   /** busy 的同步镜像：send 的重入守卫必须读 ref——state 在同帧双发时都是旧值，
       双击/双 Enter 会并发两个 agent_run 同写一个仓库。 */
@@ -285,7 +281,7 @@ export function useAskStream(opts: AskStreamOptions) {
   const [stopping, setStopping] = useState(false);
   /** Last request that failed (not stopped), so the error card can offer a retry. */
   const failedRef = useRef<{
-    question: string; history: QaTurn[]; task: TaskKind; mode: AskMode; attachments: AskAttachment[];
+    question: string; history: QaTurn[]; mode: AskMode; attachments: AskAttachment[];
   } | null>(null);
   const [failedMode, setFailedMode] = useState<AskMode | null>(null);
   /** Last question + the history snapshot it was sent with, for regenerate. */
@@ -306,14 +302,13 @@ export function useAskStream(opts: AskStreamOptions) {
   /** Attachments of the last dispatched round, so 重新生成 replays the same files. */
   const lastAttachmentsRef = useRef<AskAttachment[]>([]);
 
-  /** `replay` (regenerate / retry) pins the task, mode and files of the original question. */
+  /** `replay` (regenerate / retry) pins the mode and files of the original question. */
   const send = async (
     rawInput?: string,
     historyOverride?: QaTurn[],
-    replay?: { task: TaskKind; mode: AskMode; attachments?: AskAttachment[] },
+    replay?: { mode: AskMode; attachments?: AskAttachment[] },
   ) => {
     if (busyRef.current) return;
-    const sendTask = replay?.task ?? task;
     if (!selectedModel) {
       setError(t("noModel"));
       return;
@@ -405,7 +400,7 @@ export function useAskStream(opts: AskStreamOptions) {
       else setInput((prev) => prev || question);
       if (failed) {
         failedRef.current = {
-          question, history: baseHistory, task: sendTask, mode: sentMode, attachments: sentAttachments,
+          question, history: baseHistory, mode: sentMode, attachments: sentAttachments,
         };
         setFailedMode(sentMode);
       }
@@ -467,58 +462,50 @@ export function useAskStream(opts: AskStreamOptions) {
       let summary: ContextSummary = { repos: [], parts: [] };
       /** Did the context block get clipped? Surfaced on the answer source line. */
       let ctxTruncated = false;
-      if (sendTask !== "optimize" && route.mode === "project") setPhase("context");
-      if (sendTask === "optimize") {
-        // Prompt rewriting is self-contained: the draft IS the request, no
-        // workbench context needed.
-        const built = buildPromptOptimizeMessages(optimize.scenario, optimize.goals, question);
-        system = buildMeta(selectedModel) + built.system;
-        user = built.user;
-      } else {
-        const reviseDaily = isDailyRevision(question) && Boolean(lastDailyBriefRef.current);
-        if (isDailyReport(question) || reviseDaily) {
-          setPhase("context");
-          const brief = isDailyReport(question)
-            ? await collectDailyBrief()
-            : { text: lastDailyBriefRef.current, repos: lastDailyReposRef.current };
-          if (isDailyReport(question)) {
-            lastDailyBriefRef.current = brief.text;
-            lastDailyReposRef.current = brief.repos;
-          }
-          summary = { repos: brief.repos, parts: ["git", "dirty"] };
-          system = buildMeta(selectedModel) + dailyReportSystem(dailyStyle);
-          isDaily = true;
-          if (reviseDaily) {
-            system +=
-              " The user is revising the report you just wrote. Keep the same facts from the notes and apply only their instruction.";
-          }
-          if (profileSystemRole?.trim()) {
-            system += `\n\n[Profile] ${profileSystemRole.trim()}`;
-          }
-          user =
-            `${question}\n\n---\nToday's notes (source only — write the report, do not copy this structure):\n${brief.text}`;
-          user += formatAttachmentsBlock(sentAttachments);
-          sentMode = "project";
-          keepWhole = true;
-          if (stoppedEarly()) return;
-        } else {
-          lastDailyBriefRef.current = "";
-          lastDailyReposRef.current = [];
-          const ctxResult = await getContext(route.mode);
-          summary = ctxResult.summary;
-          ctxTruncated = ctxResult.truncated;
-          const hasProject = summary.parts.length > 0;
-          system = buildSystem(selectedModel, route.mode, hasProject);
-          if (profileSystemRole?.trim()) {
-            system += `\n\n[Profile] ${profileSystemRole.trim()}`;
-          }
-          const ctx = ctxResult.text;
-          user = ctx
-            ? `${question}\n\n---\nContext from workbench:\n${ctx}`
-            : question;
-          user += formatAttachmentsBlock(sentAttachments);
-          if (stoppedEarly()) return;
+      if (route.mode === "project") setPhase("context");
+      const reviseDaily = isDailyRevision(question) && Boolean(lastDailyBriefRef.current);
+      if (isDailyReport(question) || reviseDaily) {
+        setPhase("context");
+        const brief = isDailyReport(question)
+          ? await collectDailyBrief()
+          : { text: lastDailyBriefRef.current, repos: lastDailyReposRef.current };
+        if (isDailyReport(question)) {
+          lastDailyBriefRef.current = brief.text;
+          lastDailyReposRef.current = brief.repos;
         }
+        summary = { repos: brief.repos, parts: ["git", "dirty"] };
+        system = buildMeta(selectedModel) + dailyReportSystem(dailyStyle);
+        isDaily = true;
+        if (reviseDaily) {
+          system +=
+            " The user is revising the report you just wrote. Keep the same facts from the notes and apply only their instruction.";
+        }
+        if (profileSystemRole?.trim()) {
+          system += `\n\n[Profile] ${profileSystemRole.trim()}`;
+        }
+        user =
+          `${question}\n\n---\nToday's notes (source only — write the report, do not copy this structure):\n${brief.text}`;
+        user += formatAttachmentsBlock(sentAttachments);
+        sentMode = "project";
+        keepWhole = true;
+        if (stoppedEarly()) return;
+      } else {
+        lastDailyBriefRef.current = "";
+        lastDailyReposRef.current = [];
+        const ctxResult = await getContext(route.mode);
+        summary = ctxResult.summary;
+        ctxTruncated = ctxResult.truncated;
+        const hasProject = summary.parts.length > 0;
+        system = buildSystem(selectedModel, route.mode, hasProject);
+        if (profileSystemRole?.trim()) {
+          system += `\n\n[Profile] ${profileSystemRole.trim()}`;
+        }
+        const ctx = ctxResult.text;
+        user = ctx
+          ? `${question}\n\n---\nContext from workbench:\n${ctx}`
+          : question;
+        user += formatAttachmentsBlock(sentAttachments);
+        if (stoppedEarly()) return;
       }
       system = withSessionDigest(system, baseHistory);
       if (streamIdRef.current === myGen) setPhase("waiting");
@@ -530,7 +517,6 @@ export function useAskStream(opts: AskStreamOptions) {
         droppedTurns: budget.dropped || undefined,
       });
       lastModeRef.current = sentMode;
-      lastTaskRef.current = sendTask;
       if (!replay) onSent();
       const streamStarted = performance.now();
 
@@ -724,9 +710,7 @@ export function useAskStream(opts: AskStreamOptions) {
       if (stoppedEarly()) return;
       // A plain-chat round under 只读权限 has no business carrying the tool menu:
       // it invites a file/git round trip the question never asked for.
-      // The prompt-optimizer works on the draft alone — no tools either.
       const wantTools =
-        sendTask !== "optimize" &&
         !isDaily &&
         (sentMode === "project" || agent.permission !== "read");
       await invoke("agent_run", {
@@ -740,8 +724,7 @@ export function useAskStream(opts: AskStreamOptions) {
           repoPath: agent.repoPath,
           services: agent.services,
           history: budget.turns,
-          // 内容块历史 + 这一问：后端优先用它，旧字段保留一版方便回退。
-          // 现在每轮还是一个 Text 块；工具调用将来能留成 tool_use / tool_result。
+          // 内容块历史 + 这一问：后端优先用它；有 blocks 时透传 tool_use / tool_result。
           messages: [...turnsToMessages(budget.turns), buildUserMessage(user)],
           apps: agent.apps,
           permission: agent.permission,
@@ -844,7 +827,6 @@ export function useAskStream(opts: AskStreamOptions) {
     lastHistoryRef.current = [];
     lastAttachmentsRef.current = [];
     lastModeRef.current = null;
-    lastTaskRef.current = "none";
     lastDailyBriefRef.current = "";
     lastDailyReposRef.current = [];
     rememberSteps([]);
@@ -859,7 +841,6 @@ export function useAskStream(opts: AskStreamOptions) {
     setHistory(compacted);
     setSource(null);
     lastModeRef.current = null;
-    lastTaskRef.current = "none";
     lastDailyBriefRef.current = "";
     lastDailyReposRef.current = [];
     rememberSteps([]);
@@ -908,10 +889,9 @@ export function useAskStream(opts: AskStreamOptions) {
     [history],
   );
 
-  /** Replay the last question with the same history snapshot, task and files. */
+  /** Replay the last question with the same history snapshot and files. */
   const regenerate = () =>
     send(lastQuestionRef.current, lastHistoryRef.current, {
-      task: lastTaskRef.current,
       mode: lastModeRef.current ?? "chat",
       attachments: lastAttachmentsRef.current,
     });
@@ -923,7 +903,6 @@ export function useAskStream(opts: AskStreamOptions) {
     // A failed send put the question back into the input; the retry owns it now.
     setInput((prev) => (prev.trim() === f.question ? "" : prev));
     void send(f.question, f.history, {
-      task: f.task,
       mode: asChat ? "chat" : f.mode,
       attachments: f.attachments,
     });

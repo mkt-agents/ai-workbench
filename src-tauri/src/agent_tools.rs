@@ -162,7 +162,11 @@ pub(crate) fn mode_allows(mode: &str, tool: &str) -> bool {
     match mode {
         // 命令 / 系统 / 网页 / 电脑：对话模式一律不给；「记住一条事实」例外（属于对话本身的能力）
         "chat" => def.gate == GateKind::Change && def.group == ToolGroup::Meta,
-        "doc" | "data" => matches!(def.group, ToolGroup::Doc | ToolGroup::Data | ToolGroup::Meta | ToolGroup::Web),
+        // run_command 例外：文档/数据轨偶尔要 pandoc、python 一类只读管道，闸门仍走 Ask。
+        "doc" | "data" => {
+            matches!(def.group, ToolGroup::Doc | ToolGroup::Data | ToolGroup::Meta | ToolGroup::Web)
+                || tool == "run_command"
+        }
         "research" => matches!(def.group, ToolGroup::Web | ToolGroup::Meta),
         "ops" => matches!(def.group, ToolGroup::System | ToolGroup::Meta),
         _ => true,
@@ -223,6 +227,11 @@ mod tests {
         assert!(!mode_allows("ops", "web_fetch"));
         assert!(mode_allows("research", "web_fetch"));
         assert!(mode_allows("ops", "kill_process"));
+        // 文档/数据轨允许 run_command（闸门 Ask），方便 pandoc 一类流水线
+        assert!(mode_allows("doc", "run_command"));
+        assert!(mode_allows("data", "run_command"));
+        assert!(!mode_allows("doc", "kill_process"));
+        assert!(!mode_allows("chat", "run_command"));
         // 对话模式：只读 + 计划 + 记住事实，不写文件、不跑命令、不碰系统与网页
         assert!(mode_allows("chat", "read_file"));
         assert!(mode_allows("chat", "update_plan"));

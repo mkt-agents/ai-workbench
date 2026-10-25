@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PetSkinId } from "../core/types";
-import PANDA_TIMELINE_RAW from "../assets/pets/panda/timeline.json?raw";
 
 /**
  * 桌宠情绪：状态机只有这七个取值。帧清单（本文件）与演出层（PetStage 的 FX、
  * ai-hub-bubble.css 的 mood-* 规则）全部按这里的名字对齐，改名要一起改。
+ *
+ * 默认皮肤 id 仍叫 `panda`（兼容旧存档），画面是原创 PNG「熊猫娘」
+ *（`PandaGirlPet`）：行为对齐大肥鱼互动节奏，素材不搬 dsh-pet。
  */
 export type PetMood =
   | "idle"
@@ -33,7 +35,9 @@ export const PET_GESTURES: PetGesture[] = ["drag", "tap"];
 /** 自备素材包的皮肤 id：帧不入库，装在应用数据目录里（见 pet_pack_commands.rs）。 */
 export const CUSTOM_SKIN: PetSkinId = "custom";
 
-/** 内置熊猫：本仓库自己生成的原创帧，素材与节拍表都在 src/assets/pets/panda/。 */
+/**
+ * 默认形象 id（存档键）。UI 文案是「熊猫娘」；渲染走 `kind: "vector"`（PandaGirlPet PNG）。
+ */
 export const PANDA_SKIN: PetSkinId = "panda";
 
 /** 换装循环顺序：双击、菜单「换个形象」都按它走。 */
@@ -49,13 +53,12 @@ export interface PetClip {
 
 export interface PetSkinDef {
   id: PetSkinId;
-  /** sprite = 播素材清单；orb = 内置水晶圆盘 */
-  kind: "sprite" | "orb";
+  /** sprite = 播素材清单；orb = 内置水晶圆盘；vector = 分层 SVG（小肥鱼） */
+  kind: "sprite" | "orb" | "vector";
   clips: Partial<Record<PetMood, PetClip>>;
   gestures: Partial<Record<PetGesture, PetClip>>;
   /**
-   * 眨眼序列（半闭 → 闭 → 半闭）。它不是一段循环节拍，而是由 PetStage 在随机
-   * 时刻插播的：钉在 idle 循环里就等于「每 5.5 秒眨一次表」，机械感的源头。
+   * 眨眼序列（半闭 → 闭 → 半闭）。只用于 sprite；vector 自己在组件里随机眨。
    */
   blink?: string[];
 }
@@ -101,58 +104,13 @@ function bucketize(files: { name: string; url: string }[]) {
 
 const ORB_DEF: PetSkinDef = { id: "orb", kind: "orb", clips: {}, gestures: {} };
 
-/**
- * 内置皮肤的节拍表：`[姿势文件, 连续格数]`。播放器是定频轮播，所以「同一张图连续
- * 出现几次」就是停顿 —— 节奏全靠这张表表达（眨眼约 3 秒一次、敲键盘一阵一停），
- * 而不是把每个姿势钉在同一时长上。加新形象只要加一份素材目录和一份表，共用这条装配。
- */
-interface BuiltInTimeline {
-  fps: number;
-  clips: Record<string, [string, number][]>;
-}
-
-const PANDA_POSES = import.meta.glob<string>("../assets/pets/panda/*.png", {
-  eager: true,
-  import: "default",
-});
-
-/** 节拍表里眨眼段的名字（与 `clips` 其它键同格式，但不进情绪表）。 */
-const BLINK_CLIP = "blink";
-
-function builtInSkin(id: PetSkinId, raw: string, poses: Record<string, string>): PetSkinDef {
-  const timeline = JSON.parse(raw) as BuiltInTimeline;
-  const urls = new Map(
-    Object.entries(poses).map(([path, url]) => [path.slice(path.lastIndexOf("/") + 1), url]),
-  );
-  const framesOf = (name: string): string[] | undefined => {
-    const runs = timeline.clips[name];
-    if (!runs?.length) return undefined;
-    const frames: string[] = [];
-    for (const [file, hold] of runs) {
-      const url = urls.get(file);
-      if (!url) continue;
-      for (let i = 0; i < hold; i++) frames.push(url);
-    }
-    return frames.length ? frames : undefined;
-  };
-  const clip = (name: string): PetClip | undefined => {
-    const frames = framesOf(name);
-    return frames ? { frames, fps: timeline.fps, video: false } : undefined;
-  };
-  const clips = {} as Partial<Record<PetMood, PetClip>>;
-  for (const mood of PET_MOODS) {
-    const made = clip(mood);
-    if (made) clips[mood] = made;
-  }
-  const gestures = {} as Partial<Record<PetGesture, PetClip>>;
-  for (const name of PET_GESTURES) {
-    const made = clip(name);
-    if (made) gestures[name] = made;
-  }
-  return { id, kind: "sprite", clips, gestures, blink: framesOf(BLINK_CLIP) };
-}
-
-const PANDA_DEF = builtInSkin(PANDA_SKIN, PANDA_TIMELINE_RAW, PANDA_POSES);
+/** 默认小肥鱼：分层矢量，不吃 PNG 节拍表。 */
+const FISH_DEF: PetSkinDef = {
+  id: PANDA_SKIN,
+  kind: "vector",
+  clips: {},
+  gestures: {},
+};
 
 /** 自备包：内存里的一份镜像，由 loadUserPack 刷新。 */
 let pack = bucketize([]);
@@ -184,9 +142,9 @@ function hasUserPack(): boolean {
 
 export function petSkin(id: PetSkinId): PetSkinDef {
   if (id === "orb") return ORB_DEF;
-  if (id === PANDA_SKIN) return PANDA_DEF;
-  // 自备包还没放素材：用内置熊猫顶上，而不是留一个看不见的窗
-  if (!pack.clips.idle) return PANDA_DEF;
+  if (id === PANDA_SKIN) return FISH_DEF;
+  // 自备包还没放素材：用内置小肥鱼顶上，而不是留一个看不见的窗
+  if (!pack.clips.idle) return FISH_DEF;
   return { id, kind: "sprite", clips: pack.clips, gestures: pack.gestures };
 }
 

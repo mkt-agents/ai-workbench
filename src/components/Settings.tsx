@@ -40,6 +40,7 @@ import {
 } from "../lib/aiUsage";
 import { useConfirm } from "./ConfirmModal";
 import MenuManager from "./MenuManager";
+import WecomSettingsCard from "./WecomSettingsCard";
 import { emit } from "@tauri-apps/api/event";
 
 const THEME_OPTIONS: AppTheme[] = ["ice", "silver", "glass", "light", "dark", "system"];
@@ -381,6 +382,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   // 天玑助手卡内分组：跟顶部分类一样用 hidden 挂起不卸载。
   // 权限两项目前并进「交互」——它单独一页只有两行，太薄。
   const [hubGroup, setHubGroup] = useState<"interaction" | "capability" | "budget">("interaction");
+  const [netGroup, setNetGroup] = useState<"web" | "mcp" | "wecom">("web");
   useEffect(() => {
     const refresh = () => {
       setUsageRows(usageList());
@@ -430,7 +432,18 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   const [updateTarget, setUpdateTarget] = useState<{ version: string; htmlUrl: string } | null>(null);
   const [skipped, setSkipped] = useState<string | null>(() => getSkippedVersion());
   const [shortcutDraft, setShortcutDraft] = useState(settings.aiHubShortcut || DEFAULT_SHORTCUT);
+  const [webAllowDraft, setWebAllowDraft] = useState((settings.agentWebAllow ?? []).join(", "));
+  const webAllowFocused = useRef(false);
   const [dataBusy, setDataBusy] = useState(false);
+
+  // 设置可能晚于挂载才从 localStorage 水合，草稿要跟上已保存的值，否则「应用」会把默认值写回去
+  useEffect(() => {
+    setShortcutDraft(settings.aiHubShortcut || DEFAULT_SHORTCUT);
+  }, [settings.aiHubShortcut]);
+  const savedWebAllow = (settings.agentWebAllow ?? []).join(", ");
+  useEffect(() => {
+    if (!webAllowFocused.current) setWebAllowDraft(savedWebAllow);
+  }, [savedWebAllow]);
   const [tab, setTab] = useState<SettingsTab>("general");
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
@@ -1136,119 +1149,163 @@ function Settings({ onNoticeUpdate }: Props = {}) {
         <div className="card" hidden={tab !== "net"}>
           <div className="card-title">{t("net.title")}</div>
           <div className="card-body">
-            <div className="setting-item">
-              <div className="setting-row">
-                <span className="setting-label">{t("aiHub.webAllow")}</span>
-                <input
-                  className="input-field setting-web-allow"
-                  type="text"
-                  defaultValue={(settings.agentWebAllow ?? []).join(", ")}
-                  placeholder={t("aiHub.webAllowPlaceholder")}
-                  onBlur={(e) => setSettings({ agentWebAllow: parseDomainList(e.target.value) })}
-                  onKeyDown={(e) => {
-                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                    if (e.key === "Enter") e.currentTarget.blur();
-                  }}
-                />
-              </div>
-              <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
+            <div className="hub-tabs" role="tablist" aria-label={t("net.title")}>
+              {(
+                [
+                  ["web", "tabs.groupWeb"],
+                  ["mcp", "tabs.groupMcp"],
+                  ["wecom", "tabs.groupWecom"],
+                ] as const
+              ).map(([id, labelKey]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={netGroup === id}
+                  className={`hub-tab${netGroup === id ? " is-active" : ""}`}
+                  onClick={() => setNetGroup(id)}
+                >
+                  {t(labelKey)}
+                </button>
+              ))}
             </div>
 
-            <div className="setting-item">
-              <div className="setting-row">
-                <span className="setting-label">{t("aiHub.mcpEnabled")}</span>
-                <label className="toggle">
+            <section className="hub-group" hidden={netGroup !== "web"}>
+              <div className="net-panel">
+              <div className="hub-group-title">{t("net.groupFetch")}</div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.webAllow")}</span>
                   <input
-                    type="checkbox"
-                    checked={settings.agentMcpEnabled !== false}
-                    onChange={(e) => setSettings({ agentMcpEnabled: e.target.checked })}
+                    className="input-field setting-web-allow"
+                    type="text"
+                    value={webAllowDraft}
+                    placeholder={t("aiHub.webAllowPlaceholder")}
+                    onFocus={() => {
+                      webAllowFocused.current = true;
+                    }}
+                    onChange={(e) => setWebAllowDraft(e.target.value)}
+                    onBlur={() => {
+                      webAllowFocused.current = false;
+                      const next = parseDomainList(webAllowDraft);
+                      if (next.join(",") !== (settings.agentWebAllow ?? []).join(",")) {
+                        setSettings({ agentWebAllow: next });
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                      if (e.key === "Enter") e.currentTarget.blur();
+                    }}
                   />
-                  <span className="toggle-slider" />
-                </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
               </div>
-              <p className="setting-hint">{t("aiHub.mcpEnabledHint")}</p>
-            </div>
+              </div>
+            </section>
 
-            <div className="setting-item">
-              <span className="setting-label">{t("aiHub.mcp")}</span>
-              <div className="mcp-list">
-                {mcpServers.length === 0 && <p className="setting-hint">{t("aiHub.mcpEmpty")}</p>}
-                {mcpServers.map((server) => (
-                  <div className="mcp-row" key={server.id}>
-                    <label className="toggle" title={t("aiHub.mcpEnabled")}>
+            <section className="hub-group" hidden={netGroup !== "mcp"}>
+              <div className="net-panel">
+              <div className="hub-group-title">{t("net.groupMcpSwitch")}</div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.mcpEnabled")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentMcpEnabled !== false}
+                      onChange={(e) => setSettings({ agentMcpEnabled: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.mcpEnabledHint")}</p>
+              </div>
+              <div className="hub-group-title">{t("net.groupMcpServers")}</div>
+              <div className="setting-item">
+                <span className="setting-label">{t("aiHub.mcp")}</span>
+                <div className="mcp-list">
+                  {mcpServers.length === 0 && <p className="setting-hint">{t("aiHub.mcpEmpty")}</p>}
+                  {mcpServers.map((server) => (
+                    <div className="mcp-row" key={server.id}>
+                      <label className="toggle" title={t("aiHub.mcpEnabled")}>
+                        <input
+                          type="checkbox"
+                          checked={server.enabled}
+                          onChange={(e) => void updateMcpServer(server.id, { enabled: e.target.checked })}
+                        />
+                        <span className="toggle-slider" />
+                      </label>
                       <input
-                        type="checkbox"
-                        checked={server.enabled}
-                        onChange={(e) => void updateMcpServer(server.id, { enabled: e.target.checked })}
+                        className="input-field mcp-name"
+                        defaultValue={server.name}
+                        placeholder={t("aiHub.mcpName")}
+                        onBlur={(e) => void updateMcpServer(server.id, { name: parseServerName(e.target.value) })}
                       />
-                      <span className="toggle-slider" />
-                    </label>
+                      <input
+                        className="input-field mcp-command"
+                        defaultValue={server.command}
+                        placeholder={t("aiHub.mcpCommand")}
+                        onBlur={(e) => void updateMcpServer(server.id, { command: e.target.value.trim() })}
+                      />
+                      <input
+                        className="input-field mcp-args"
+                        defaultValue={server.args}
+                        placeholder={t("aiHub.mcpArgs")}
+                        onBlur={(e) => void updateMcpServer(server.id, { args: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => void deleteMcpServer(server.id)}
+                      >
+                        {t("aiHub.mcpDelete")}
+                      </button>
+                    </div>
+                  ))}
+                  <div className="mcp-row is-draft">
+                    <Plus size={13} className="mcp-add-icon" aria-hidden />
                     <input
                       className="input-field mcp-name"
-                      defaultValue={server.name}
+                      value={mcpDraft.name}
                       placeholder={t("aiHub.mcpName")}
-                      onBlur={(e) => void updateMcpServer(server.id, { name: parseServerName(e.target.value) })}
+                      onChange={(e) => setMcpDraft({ ...mcpDraft, name: e.target.value })}
                     />
                     <input
                       className="input-field mcp-command"
-                      defaultValue={server.command}
+                      value={mcpDraft.command}
                       placeholder={t("aiHub.mcpCommand")}
-                      onBlur={(e) => void updateMcpServer(server.id, { command: e.target.value.trim() })}
+                      onChange={(e) => setMcpDraft({ ...mcpDraft, command: e.target.value })}
                     />
                     <input
                       className="input-field mcp-args"
-                      defaultValue={server.args}
+                      value={mcpDraft.args}
                       placeholder={t("aiHub.mcpArgs")}
-                      onBlur={(e) => void updateMcpServer(server.id, { args: e.target.value })}
+                      onChange={(e) => setMcpDraft({ ...mcpDraft, args: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                        if (e.key === "Enter") void addServer();
+                      }}
                     />
                     <button
                       type="button"
-                      className="btn btn-secondary btn-small"
-                      onClick={() => void deleteMcpServer(server.id)}
+                      className="btn btn-primary btn-small"
+                      disabled={!mcpDraft.name.trim() || !mcpDraft.command.trim()}
+                      onClick={() => void addServer()}
                     >
-                      {t("aiHub.mcpDelete")}
+                      {t("aiHub.mcpAdd")}
                     </button>
                   </div>
-                ))}
-                <div className="mcp-row is-draft">
-                  <Plus size={13} className="mcp-add-icon" aria-hidden />
-                  <input
-                    className="input-field mcp-name"
-                    value={mcpDraft.name}
-                    placeholder={t("aiHub.mcpName")}
-                    onChange={(e) => setMcpDraft({ ...mcpDraft, name: e.target.value })}
-                  />
-                  <input
-                    className="input-field mcp-command"
-                    value={mcpDraft.command}
-                    placeholder={t("aiHub.mcpCommand")}
-                    onChange={(e) => setMcpDraft({ ...mcpDraft, command: e.target.value })}
-                  />
-                  <input
-                    className="input-field mcp-args"
-                    value={mcpDraft.args}
-                    placeholder={t("aiHub.mcpArgs")}
-                    onChange={(e) => setMcpDraft({ ...mcpDraft, args: e.target.value })}
-                    onKeyDown={(e) => {
-                      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                      if (e.key === "Enter") void addServer();
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-small"
-                    disabled={!mcpDraft.name.trim() || !mcpDraft.command.trim()}
-                    onClick={() => void addServer()}
-                  >
-                    {t("aiHub.mcpAdd")}
-                  </button>
                 </div>
+                <p className="setting-hint">{t("aiHub.mcpHint")}</p>
               </div>
-              <p className="setting-hint">{t("aiHub.mcpHint")}</p>
-            </div>
+              </div>
+            </section>
+
+            <section className="hub-group" hidden={netGroup !== "wecom"}>
+              <WecomSettingsCard />
+            </section>
           </div>
         </div>
-
         <div className="card" hidden={tab !== "data"}>
           <div className="card-title">{t("usage.title")}</div>
           <div className="card-body">

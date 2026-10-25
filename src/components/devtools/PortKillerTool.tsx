@@ -1,11 +1,11 @@
 /**
- * 端口查杀工具（工具箱页「系统」分组）。
+ * 端口查杀工具（工具箱页「系统」分组；天玑工具箱同样挂一份）。
  *
  * 后端 `port_commands.rs` 负责 netstat 解析、系统关键进程保护与杀前复检；这里只做
  * 展示与确认——保护判定不信任前端，受保护的进程后端同样会拒绝。
  *
- * 工具箱里唯一带后端命令的工具，其余 9 个仍是纯前端。确认框依赖 `ConfirmDialogProvider`，
- * 故只挂主窗工具箱，不进天玑的工具面板（那一栏刻意只放零后端命令的纯前端工具）。
+ * 工具箱里唯一带后端命令的工具，其余 9 个仍是纯前端。确认框走 `ConfirmDialogProvider`
+ *（主窗与天玑窗入口都有包一层）。
  */
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";

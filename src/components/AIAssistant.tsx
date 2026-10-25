@@ -3,10 +3,11 @@ import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle, MoreHorizontal, Radar, Columns2, Link2, MessageSquare, FileBarChart2, GitCommitHorizontal, Sparkles, Share2 } from "lucide-react";
+import { Loader2, Trash2, Plus, Edit2, Check, Eye, EyeOff, X, ArrowRightCircle, Zap, RefreshCw, ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Search, Download, Upload, Layers, AlertCircle, MoreHorizontal, Radar, Columns2, Link2, MessageSquare, FileBarChart2, GitCommitHorizontal, Share2, Sparkles } from "lucide-react";
 import AppLogoMark from "./AppLogoMark";
 import DropdownMenu from "./DropdownMenu";
 import ModelComparePlayground from "./ModelComparePlayground";
+import SnippetsManager from "./SnippetsManager";
 import { useGlobalStore } from "../core/store";
 import { MODEL_TEST_CONCURRENCY, mapPool } from "../core/asyncPool";
 import { useConfirm } from "./ConfirmModal";
@@ -32,7 +33,6 @@ const SCENE_ICONS: Record<AiScene, typeof MessageSquare> = {
   aiHub: MessageSquare,
   report: FileBarChart2,
   commit: GitCommitHorizontal,
-  optimize: Sparkles,
 };
 
 function finiteOr(value: unknown, fallback: number): number {
@@ -210,6 +210,29 @@ function truncateUrl(url: string, max = 42): string {
 /** List-view prefs (grouping, folds, sort, filter) survive page remounts. */
 /* v2: default flat multi-column grid (old key kept group-by-on and looked sparse). */
 const MODELS_VIEW_PREFS_KEY = "workbench-models-view-v2";
+/** Top-level page tab on 模型管理：list | compare | prompts（侧栏旧「提示词」并到此）。 */
+export const MODELS_PAGE_VIEW_KEY = "workbench-models-page-view";
+export const MODELS_PAGE_VIEW_EVENT = "workbench-models-page-view";
+export type ModelsPageView = "list" | "compare" | "prompts";
+
+function readModelsPageView(): ModelsPageView {
+  try {
+    const v = localStorage.getItem(MODELS_PAGE_VIEW_KEY);
+    if (v === "compare" || v === "prompts" || v === "list") return v;
+  } catch {
+    /* ignore */
+  }
+  return "list";
+}
+
+export function openModelsPromptsTab() {
+  try {
+    localStorage.setItem(MODELS_PAGE_VIEW_KEY, "prompts");
+  } catch {
+    /* ignore */
+  }
+  window.dispatchEvent(new Event(MODELS_PAGE_VIEW_EVENT));
+}
 
 function loadModelsViewPrefs(): {
   groupByProvider?: boolean;
@@ -318,7 +341,21 @@ function AIAssistant() {
   const setSettings = useGlobalStore((s) => s.setSettings);
   const aiSceneModels = useGlobalStore((s) => s.settings.aiSceneModels) || {};
 
-  const [pageView, setPageView] = useState<"list" | "compare">("list");
+  const [pageView, setPageViewState] = useState<ModelsPageView>(readModelsPageView);
+  const setPageView = (next: ModelsPageView) => {
+    setPageViewState(next);
+    try {
+      localStorage.setItem(MODELS_PAGE_VIEW_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  };
+  useEffect(() => {
+    const sync = () => setPageViewState(readModelsPageView());
+    window.addEventListener(MODELS_PAGE_VIEW_EVENT, sync);
+    return () => window.removeEventListener(MODELS_PAGE_VIEW_EVENT, sync);
+  }, []);
+  const snippets = useGlobalStore((s) => s.snippets);
   const [detectingLocal, setDetectingLocal] = useState(false);
   const [sceneOpen, setSceneOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -1602,9 +1639,21 @@ function AIAssistant() {
               >
                 <Columns2 size={13} /> {t("models.viewCompare")}
               </button>
+              <button
+                type="button"
+                role="tab"
+                className={`models-view-tab${pageView === "prompts" ? " is-active" : ""}`}
+                aria-selected={pageView === "prompts"}
+                onClick={() => setPageView("prompts")}
+              >
+                <Sparkles size={13} /> {t("models.viewPrompts")}
+                <span className="models-view-tab-count">{snippets.length}</span>
+              </button>
             </div>
             {pageView === "compare" ? (
               <ModelComparePlayground />
+            ) : pageView === "prompts" ? (
+              <SnippetsManager embedded />
             ) : (
             <>
             <div className="models-chrome">

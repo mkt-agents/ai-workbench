@@ -10,10 +10,16 @@
     "about": "About",
     "groupInteraction": "Interaction & permissions",
     "groupCapability": "Capabilities",
-    "groupBudget": "Budget & compatibility"
+    "groupBudget": "Budget & compatibility",
+    "groupWeb": "Web fetch",
+    "groupMcp": "MCP servers",
+    "groupWecom": "WeCom bot"
   },
   "net": {
-    "title": "Network & extensions"
+    "title": "Network & extensions",
+    "groupFetch": "Fetch allowlist",
+    "groupMcpSwitch": "Master switch",
+    "groupMcpServers": "Server list"
   },
   "general": {
     "title": "General settings",
@@ -41,10 +47,10 @@
     "suggestHint": "The prediction costs one extra model call (counted in the usage table below). Turning it off only removes the chip; Q&A is unchanged.",
     "bubble": "Desktop pet",
     "petEnabled": "Show desktop pet",
-    "bubbleHint": "The pet in the bottom-right corner: click opens AI Hub, double-click swaps skins, drag snaps to an edge, right-click opens its menu. It reacts to the agent too — it trots while commands run, knocks on the glass when a step waits for you, and celebrates when a round lands. Shortcut and tray still work.",
+    "bubbleHint": "The panda girl in the corner: pat head / poke tail to play, tap the belly to open AI Hub, hold for a hug, double-click to swap skins, drag to snap, right-click for the menu. It mirrors the agent — trots while commands run, nudges you on approval, petals when a round lands; affinity grows as you pet it. Shortcut and tray still work.",
     "petSkin": "Pet skin",
     "petNameOrb": "Crystal orb",
-    "petNamePanda": "Panda bun",
+    "petNamePanda": "Panda girl",
     "petNameCustom": "My own art",
     "petImport": "Import art",
     "petImportEmpty": "No custom art yet — import some to unlock this skin.",
@@ -90,7 +96,7 @@
     "webAllowHint": "One per line or comma separated; subdomains are included (example.com also allows api.example.com). Empty = no web access at all. https only, no redirects, no private addresses, and every fetch still asks you first.",
     "mcp": "MCP servers",
     "mcpEmpty": "None yet. One row is enough: a name (goes into tool names), a command, and its arguments.",
-    "mcpEnabled": "Enabled (disabled servers are not offered at all)",
+    "mcpEnabled": "Enable MCP",
     "mcpName": "Name, e.g. fs",
     "mcpCommand": "Command, e.g. npx",
     "mcpArgs": "Args, e.g. -y @modelcontextprotocol/server-filesystem \"D:\\work\"",
@@ -147,7 +153,6 @@
     "resultCapHint": "Upper bound for one tool result fed back to the model (12k characters by default); the head and tail are kept, with a hint on how to read on. Smaller saves tokens but cuts long logs and big files into smaller pieces.",
     "anthropicStream": "Stream Anthropic replies",
     "anthropicStreamHint": "On by default: the answer appears word by word. Some relay gateways break SSE mid-stream; turn it off to send a plain request instead — the answer then shows up only once it is complete.",
-    "mcpEnabled": "Enable MCP",
     "mcpEnabledHint": "Master switch. When off, this round starts no server processes and offers no mcp_* tools — the whole table below is paused; each server's own toggle still applies.",
     "freshContext": "Reuse context cache",
     "freshContextHint": "On by default: questions asked within two minutes reuse the last git snapshot, after a fingerprint check that nothing changed. Turn it off to re-collect every time — always the latest state, at the cost of a short wait per question."
@@ -205,5 +210,60 @@
     "skippedCleared": "Un-skipped v{{version}} — it will be offered again on next start",
     "checkFailed": "Update check failed: {{error}}",
     "privacyNote": "API keys are stored in local SQLite only — do not share the database file"
+  },
+  "wecom": {
+    "title": "WeCom bot",
+    "groupConnection": "Connection",
+    "groupAccess": "Access policy",
+    "groupPairing": "Pairing & allowlists",
+    "hint": "Connect via WeCom intelligent-bot long connection (Bot ID + Secret). Outbound only — no public callback URL. DM defaults to pairing; groups default to allowlist. WeCom usually only delivers group messages that @ the bot.",
+    "enabled": "Enable channel",
+    "status": "Status",
+    "restart": "Reconnect",
+    "restarted": "Reconnect requested",
+    "saved": "Saved and synced",
+    "botId": "Bot ID",
+    "botSecret": "Secret",
+    "secretKept": "Saved (leave blank to keep)",
+    "secretPlaceholder": "Long-connection Secret",
+    "displayName": "Bot display name",
+    "displayNamePlaceholder": "Used to strip @name in groups",
+    "dmPolicy": "DM policy",
+    "groupPolicy": "Group policy",
+    "requireMention": "Hint to @ in groups",
+    "allowUsers": "User allowlist",
+    "allowGroups": "Group allowlist",
+    "permission": "Channel permission",
+    "repoPath": "Workspace path",
+    "repoPlaceholder": "Defaults to current Git workspace",
+    "pairingTitle": "Pending pairings",
+    "pairingEmpty": "No pending pairing requests",
+    "pairedList": "Paired users",
+    "approve": "Approve",
+    "revoke": "Revoke",
+    "paired": "Approved {{userid}}",
+    "fullConfirm": "Full permission can control this PC and may be triggered from WeCom. Continue?",
+    "policy": {
+      "pairing": "Pairing",
+      "allowlist": "Allowlist",
+      "open": "Open",
+      "disabled": "Disabled"
+    },
+    "perm": {
+      "read": "Read-only",
+      "workspace": "Edit",
+      "review": "Review",
+      "full": "Full"
+    },
+    "state": {
+      "disconnected": "Disconnected",
+      "connecting": "Connecting",
+      "connected": "Connected",
+      "reconnecting": "Reconnecting",
+      "error": "Error"
+    },
+    "requireMentionHint": "WeCom usually only pushes group messages that @ the bot; this switch only changes welcome/hint copy. Add the group to the allowlist to use it.",
+    "showSecret": "Show secret",
+    "hideSecret": "Hide secret"
   }
 }

@@ -15,7 +15,7 @@ type Props = {
 const ICONS = {
   command: Terminal,
   skill: Sparkles,
-  snippet: FileText,
+  snippet: Sparkles,
   file: FileText,
 } as const;
 

@@ -279,7 +279,8 @@ export default function DraftsManager() {
         content: draft.content,
         tags: "",
         params: "",
-        kind: "text",
+        kind: "prompt",
+        scenario: "general",
       });
     } catch (e) {
       showMsg("error", t("toSnippetFailed", { error: String(e) }));

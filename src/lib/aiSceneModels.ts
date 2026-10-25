@@ -1,13 +1,12 @@
 import type { AIModelConfig, AiScene, AiSceneModels } from "../core/types";
 
 /** Scenes that can bind a preferred model (falls back to default). */
-export const AI_SCENES: AiScene[] = ["aiHub", "report", "commit", "optimize"];
+export const AI_SCENES: AiScene[] = ["aiHub", "report", "commit"];
 
 export const AI_SCENE_I18N_KEY: Record<AiScene, string> = {
   aiHub: "models.sceneAiHub",
   report: "models.sceneReport",
   commit: "models.sceneCommit",
-  optimize: "models.sceneOptimize",
 };
 
 /** Resolve the model for a scene: explicit binding → default → first. */

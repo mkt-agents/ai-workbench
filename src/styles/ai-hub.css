@@ -267,10 +267,20 @@
   border-radius: var(--radius-full);
   transition: var(--transition-colors-fast);
 }
+/* 已纳入下一问：与 Code/Work 选中胶囊同档 accent 高亮，工作区名一眼能认出 */
+.qa-ctx-trigger-row:has(.qa-ctx-include:not(.is-excluded)) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent-border);
+}
 .qa-ctx-trigger-row:hover,
 .qa-ctx-trigger-row.is-open {
   background: var(--bg-2);
   border-color: var(--border);
+}
+.qa-ctx-trigger-row:has(.qa-ctx-include:not(.is-excluded)):hover,
+.qa-ctx-trigger-row:has(.qa-ctx-include:not(.is-excluded)).is-open {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--accent-border);
 }
 .qa-ctx-include,
 .qa-ctx-caret {
@@ -291,11 +301,20 @@
   min-width: 0;
   padding: 0 4px 0 10px;
   border-radius: var(--radius-full) 0 0 var(--radius-full);
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+.qa-ctx-include .qa-focus-btn-label {
+  color: var(--accent-strong);
 }
 .qa-ctx-caret {
   padding: 0 8px 0 5px;
   color: var(--text-2);
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+.qa-ctx-trigger-row:has(.qa-ctx-include:not(.is-excluded)) .qa-ctx-caret {
+  color: var(--accent-strong);
+  opacity: 0.85;
 }
 .qa-ctx-caret:hover {
   color: var(--text-0);
@@ -307,11 +326,15 @@
   transform: rotate(180deg);
 }
 .qa-ctx-trigger-icon {
-  color: var(--accent);
+  color: var(--accent-strong);
   flex-shrink: 0;
 }
 /* Not sent with the next message: dimmed, icon hollowed out */
 .qa-ctx-include.is-excluded {
+  color: var(--text-3);
+  font-weight: 400;
+}
+.qa-ctx-include.is-excluded .qa-focus-btn-label {
   color: var(--text-3);
 }
 .qa-ctx-include.is-excluded .qa-ctx-trigger-icon {
@@ -555,42 +578,6 @@
   color: var(--text-1);
   background: var(--accent-dim);
 }
-/* Optimize task: scenario/goal chip rows above the input card */
-.qa-optimize-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 2px 0;
-}
-.qa-opt-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  align-items: center;
-}
-.qa-opt-chip {
-  display: inline-flex;
-  align-items: center;
-  font-size: 11px;
-  padding: 3px 9px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-  white-space: nowrap;
-}
-.qa-opt-chip:hover {
-  border-color: var(--accent);
-  color: var(--text-1);
-}
-.qa-opt-chip.active {
-  border-color: var(--accent);
-  color: var(--text-1);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
 /* ---------- AI Hub mode tabs + embedded tools ---------- */
 .qa-mode-tabs {
   display: flex;
@@ -779,6 +766,18 @@
   from { opacity: 0; transform: translate(-50%, 4px); }
   to { opacity: 1; transform: translateX(-50%); }
 }
+/* 与主窗 .page-panel 同套路：切 AI 助手 / 工具箱只隐藏，不卸载 */
+.ai-hub-pane {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  width: 100%;
+}
+.ai-hub-pane.is-active {
+  display: flex;
+}
 .ai-hub-tools {
   display: flex;
   flex-direction: column;
@@ -786,16 +785,61 @@
   flex: 1;
   min-height: 0;
 }
-/* 九个工具一排；窗口拖到最窄时横向滚动，不折成两行 */
+/* 十个工具一排（含端口清理）；窗口拖到最窄时横向滚动，不折成两行。
+   轨道只包住按钮本身（不拉满整行）。样式跟主窗工具条同一套：
+   以前这组按钮只挂了 .qa-opt-chip，样式随提示词优化一起删掉后，
+   就落回浏览器默认的白底黑字方块。 */
 .qa-tools-bar {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  align-self: flex-start;
+  gap: 2px;
+  width: max-content;
+  max-width: 100%;
   flex-shrink: 0;
+  padding: 3px;
   overflow-x: auto;
   scrollbar-width: none;
+  background: var(--bg-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  box-shadow: var(--surface-highlight);
+}
+.qa-tools-bar::-webkit-scrollbar {
+  display: none;
 }
 .qa-tools-bar > .qa-opt-chip {
+  appearance: none;
   flex-shrink: 0;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-tools-bar > .qa-opt-chip:hover {
+  background: var(--overlay-3);
+  color: var(--text-0);
+}
+.qa-tools-bar > .qa-opt-chip:active:not(.active) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.qa-tools-bar > .qa-opt-chip.active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-3));
+  border-color: var(--accent-border);
+  color: var(--text-0);
+  font-weight: 600;
+}
+.qa-tools-bar > .qa-opt-chip:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 .qa-tools-body {
   flex: 1;
@@ -804,11 +848,17 @@
   display: flex;
   flex-direction: column;
   padding-right: 2px;
-}
-/* The devtools pages are designed for the wide main window — collapse their
-   two-column IO grids and tighten spacing for the 720px ai-hub window. */
-.qa-tools-body {
   container-type: inline-size;
+}
+/* 进过的工具挂起：切 JWT ↔ Hash 只换显隐，输入别丢 */
+.qa-tool-pane {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.qa-tool-pane.is-active {
+  display: flex;
 }
 .qa-tools-body .devtools-tool {
   gap: 8px;
@@ -1183,34 +1233,65 @@
   height: 26px;
   border-radius: var(--radius-sm);
 }
-.qa-task-track {
-  gap: 1px;
-  padding: 2px;
-  border-radius: var(--radius-full);
-  background: var(--overlay-2);
-}
-.qa-task-track .qa-task-btn {
-  height: 24px;
-  padding: 0 10px;
-  font-size: 12px;
-}
 .qa-input-card > .qa-compose-meta {
   padding: 10px 14px 0;
 }
 .qa-compose-meta {
   display: flex;
   align-items: center;
-  /* 左对齐排（项目选择 + 钉住的模式 chip），右侧的上下文选择自己推开 */
+  /* 顶栏只放工作区，左对齐 */
   justify-content: flex-start;
   gap: 6px;
   flex-shrink: 0;
   min-width: 0;
 }
 .qa-compose-meta > .qa-ctx-picker {
-  flex: 1 1 auto;
-  max-width: none;
+  flex: 0 1 auto;
+  max-width: 100%;
   min-width: 0;
-  margin-left: auto;
+  margin-left: 0;
+}
+.qa-mode-pin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 0;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.qa-track-switch {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-2);
+  gap: 0;
+}
+.qa-track-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-track-btn:hover {
+  color: var(--text-1);
+}
+.qa-track-btn.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+}
+.qa-compose-end > .qa-track-switch {
+  /* 与权限 pill 成组，窄窗不换行挤破 */
+  flex-shrink: 0;
 }
 .qa-chip-btn {
   display: inline-flex;
@@ -1525,100 +1606,6 @@
   min-width: 168px;
   max-width: 260px;
   padding: 4px;
-}
-.qa-task-btn {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  height: 24px;
-  padding: 0 8px;
-  box-sizing: border-box;
-  font-size: 11.5px;
-  color: var(--text-2);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: var(--transition-colors-fast);
-}
-.qa-task-btn:hover {
-  color: var(--text-1);
-  background: var(--bg-2);
-}
-.qa-daily-btn {
-  height: 28px;
-  padding: 0 12px;
-  color: var(--text-1);
-  background: transparent;
-  border-color: var(--border-subtle);
-}
-.qa-daily-btn:hover:not(:disabled) {
-  color: var(--accent-strong);
-  background: var(--accent-dim);
-  border-color: var(--accent-border);
-}
-.qa-daily-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-/* 日报 + format caret read as one split button. */
-.qa-daily-split {
-  display: inline-flex;
-  align-items: stretch;
-}
-.qa-daily-split .qa-daily-btn {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-  padding-right: 10px;
-}
-.qa-daily-caret {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 28px;
-  padding: 0;
-  margin-left: -1px;
-  color: var(--text-2);
-  background: transparent;
-  border: 1px solid var(--border-subtle);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  cursor: pointer;
-  transition: var(--transition-colors-fast);
-}
-.qa-daily-caret:hover,
-.qa-daily-caret[aria-expanded="true"] {
-  color: var(--accent-strong);
-  background: var(--accent-dim);
-  border-color: var(--accent-border);
-}
-.qa-daily-pop {
-  width: 240px;
-  padding: 4px;
-  gap: 2px;
-}
-.qa-daily-item {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  box-sizing: border-box;
-}
-.qa-daily-item-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.qa-daily-item-name {
-  font-size: 12px;
-  color: var(--text-0);
-}
-.qa-daily-item-desc {
-  font-size: 11px;
-  color: var(--text-2);
 }
 /* 撤销：只在改过文件的那一轮出现，做完就变成一行结果 */
 .qa-undo {
@@ -2135,12 +2122,6 @@
   font-size: 12px;
   font-weight: 500;
   text-align: center;
-}
-.qa-task-btn.on {
-  color: var(--accent-strong);
-  background: var(--float-bg);
-  border-color: transparent;
-  box-shadow: var(--shadow-xs);
 }
 /* Answer source line: what this answer was based on */
 .qa-answer-source {

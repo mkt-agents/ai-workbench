@@ -1,19 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Copy, Pencil, Check, XCircle, Sparkles, X, Download, Upload, Loader2, FileText, Search, Zap, ChevronDown, MoreHorizontal, Terminal, ClipboardCopy, CopyPlus } from "lucide-react";
+import { Plus, Trash2, Copy, Pencil, Check, XCircle, Sparkles, X, Download, Upload, Loader2, Search, Zap, ChevronDown, MoreHorizontal, Terminal, ClipboardCopy, CopyPlus } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
-import type { Snippet, SnippetKind } from "../core/types";
+import type { Snippet } from "../core/types";
 
-const SNIPPET_EXPORT_VERSION = 2;
+const SNIPPET_EXPORT_VERSION = 3;
 /** Mirrors package.json; bump with release triad when shipping. */
 const APP_VERSION = "0.2.26";
 
 import ModalTitleRow from "./ModalTitleRow";
 import { useConfirm } from "./ConfirmModal";
 import DropdownMenu from "./DropdownMenu";
-import { PROMPT_SCENARIOS } from "../lib/promptOptimize";
-import { fillParams, parseParamNames, splitTags } from "../lib/snippets";
+import { fillParams, parseParamNames, splitTags, PROMPT_SCENARIOS } from "../lib/snippets";
 
 const UNDO_MS = 8000;
 
@@ -42,7 +41,6 @@ function renderPreview(content: string) {
 }
 
 type SortMode = "useCount" | "updated" | "manual";
-type KindFilter = "all" | "text" | "prompt";
 
 const SORT_KEY = "snippets-sort";
 const ORDER_KEY = "snippets-order";
@@ -86,7 +84,7 @@ function sortSnippets(list: Snippet[], mode: SortMode, order: string[]): Snippet
   });
 }
 
-export default function SnippetsManager() {
+export default function SnippetsManager({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation("snippets");
   const { t: tc } = useTranslation("common");
   // Prompt scenario labels live in the ai namespace (prompts.scenarios.*)
@@ -105,7 +103,6 @@ export default function SnippetsManager() {
 
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState<string>("");
-  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [sortMode, setSortModeState] = useState<SortMode>(loadSortMode);
   const [order, setOrder] = useState<string[]>(loadOrder);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -165,7 +162,7 @@ export default function SnippetsManager() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [snippets]);
 
-  /** Search + tag match, before the kind filter — the kind chips count from this. */
+  /** Search + tag match. */
   const matched = useMemo(() => {
     const q = query.trim().toLowerCase();
     return snippets.filter((s) => {
@@ -182,20 +179,9 @@ export default function SnippetsManager() {
     });
   }, [snippets, query, tagFilter]);
 
-  const kindCounts = useMemo(() => {
-    let prompt = 0;
-    for (const s of matched) if (s.kind === "prompt") prompt += 1;
-    return { all: matched.length, text: matched.length - prompt, prompt };
-  }, [matched]);
-
   const filtered = useMemo(
-    () =>
-      sortSnippets(
-        matched.filter((s) => kindFilter === "all" || (s.kind ?? "text") === kindFilter),
-        sortMode,
-        order,
-      ),
-    [matched, kindFilter, sortMode, order],
+    () => sortSnippets(matched, sortMode, order),
+    [matched, sortMode, order],
   );
 
   const setSortMode = (mode: SortMode) => {
@@ -229,7 +215,7 @@ export default function SnippetsManager() {
   };
 
   const openCreate = () => {
-    setEditing({ name: "", content: "", tags: "", params: "" });
+    setEditing({ name: "", content: "", tags: "", params: "", kind: "prompt", scenario: "general" });
   };
 
   const saveEdit = async () => {
@@ -241,8 +227,7 @@ export default function SnippetsManager() {
       return;
     }
     try {
-      const kind: SnippetKind = editing.kind === "prompt" ? "prompt" : "text";
-      const scenario = kind === "prompt" ? editing.scenario ?? "general" : undefined;
+      const scenario = editing.scenario || "general";
       // Params are derived from {{name}} in content — keep DB in sync, no hand-edit.
       const params = parseParamNames("", editing.content).join(", ");
       if (editing.id) {
@@ -251,7 +236,7 @@ export default function SnippetsManager() {
           content: editing.content,
           tags: editing.tags || "",
           params,
-          kind,
+          kind: "prompt",
           scenario,
         });
       } else {
@@ -260,7 +245,7 @@ export default function SnippetsManager() {
           content: editing.content,
           tags: editing.tags || "",
           params,
-          kind,
+          kind: "prompt",
           scenario,
         });
       }
@@ -277,8 +262,8 @@ export default function SnippetsManager() {
         content: s.content,
         tags: s.tags,
         params: s.params,
-        kind: s.kind,
-        scenario: s.scenario,
+        kind: "prompt",
+        scenario: s.scenario || "general",
       });
       showMsg("success", t("cloned", { name: s.name }));
     } catch (e) {
@@ -302,13 +287,13 @@ export default function SnippetsManager() {
           content: s.content,
           tags: s.tags,
           params: s.params,
-          kind: s.kind ?? "text",
-          scenario: s.scenario,
+          kind: "prompt" as const,
+          scenario: s.scenario || "general",
         })),
       };
       const path = await invokeSaveTextFile(
         JSON.stringify(payload, null, 2),
-        `snippets-${new Date().toISOString().slice(0, 10)}.json`,
+        `prompts-${new Date().toISOString().slice(0, 10)}.json`,
         t("export")
       );
       showMsg("success", t("exportDone", { path }));
@@ -361,8 +346,8 @@ export default function SnippetsManager() {
           content: entry.content,
           tags: String(item?.tags ?? ""),
           params: String(item?.params ?? ""),
-          kind: item?.kind === "prompt" ? "prompt" : "text",
-          scenario: item?.scenario ? String(item.scenario) : undefined,
+          kind: "prompt",
+          scenario: item?.scenario ? String(item.scenario) : "general",
         });
         added += 1;
       }
@@ -456,7 +441,7 @@ export default function SnippetsManager() {
   };
 
   return (
-    <div className="snippets-page">
+    <div className={`snippets-page${embedded ? " is-embedded" : ""}`}>
       <div className="snippets-toolbar">
         <div className="snippets-search">
           <Search size={13} className="snippets-search-icon" />
@@ -533,31 +518,8 @@ export default function SnippetsManager() {
         </div>
       </div>
 
-      <div className="snippets-filter-bar">
-        <div className="snippets-kind-seg" role="tablist" aria-label={t("kindLabel")}>
-          {(["all", "text", "prompt"] as KindFilter[]).map((k) => (
-            <button
-              key={k}
-              type="button"
-              role="tab"
-              aria-selected={kindFilter === k}
-              className={`snippets-kind-btn${kindFilter === k ? " is-active" : ""}`}
-              onClick={() => setKindFilter(k)}
-              title={k === "prompt" ? t("kindPromptHint") : undefined}
-            >
-              {k === "text" ? (
-                <FileText size={12} className="snippets-kind-icon" aria-hidden />
-              ) : k === "prompt" ? (
-                <Sparkles size={12} className="snippets-kind-icon" aria-hidden />
-              ) : null}
-              <span className="snippets-kind-label">
-                {k === "all" ? t("kindAll") : k === "text" ? t("kindText") : t("kindPrompt")}
-              </span>
-              <span className="snippets-kind-count">{kindCounts[k]}</span>
-            </button>
-          ))}
-        </div>
-        {allTags.length > 0 && (
+      {allTags.length > 0 && (
+        <div className="snippets-filter-bar">
           <div className="snippets-tags" role="group" aria-label={t("tags")}>
             {allTags.map((tag) => (
               <button
@@ -571,8 +533,8 @@ export default function SnippetsManager() {
               </button>
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="snippets-list">
         {filtered.map((s) => {
@@ -618,8 +580,8 @@ export default function SnippetsManager() {
               }}
             >
               <div className="snippet-card-head">
-                <span className={`snippet-kind-icon is-${s.kind === "prompt" ? "prompt" : codeLike ? "code" : "text"}`}>
-                  {s.kind === "prompt" ? <Sparkles size={14} /> : codeLike ? <Terminal size={14} /> : <FileText size={14} />}
+                <span className={`snippet-kind-icon is-${codeLike ? "code" : "prompt"}`}>
+                  {codeLike ? <Terminal size={14} /> : <Sparkles size={14} />}
                 </span>
                 <div className="snippet-head-text">
                   <div className="snippet-name-row">
@@ -631,15 +593,8 @@ export default function SnippetsManager() {
                     )}
                   </div>
                   <div className="snippet-subline">
-                    <span
-                      className={`snippet-kind-label${s.kind === "prompt" ? " is-prompt" : ""}`}
-                      title={s.kind === "prompt" ? t("kindPromptHint") : undefined}
-                    >
-                      {s.kind === "prompt"
-                        ? s.scenario
-                          ? `${t("kindPrompt")} · ${ta(`prompts.scenarios.${s.scenario}`)}`
-                          : t("kindPrompt")
-                        : t("kindText")}
+                    <span className="snippet-kind-label is-prompt" title={t("kindPromptHint")}>
+                      {ta(`prompts.scenarios.${s.scenario || "general"}`)}
                     </span>
                     {tags.map((tag) => (
                       <button
@@ -707,7 +662,7 @@ export default function SnippetsManager() {
         {filtered.length === 0 && (
           <div className="snippets-empty">
             <span className="snippets-empty-icon">
-              {snippets.length === 0 ? <FileText size={22} /> : <Search size={22} />}
+              {snippets.length === 0 ? <Sparkles size={22} /> : <Search size={22} />}
             </span>
             <p>{snippets.length === 0 ? t("empty") : t("noMatch")}</p>
             {snippets.length === 0 ? (
@@ -726,7 +681,6 @@ export default function SnippetsManager() {
                 onClick={() => {
                   setQuery("");
                   setTagFilter("");
-                  setKindFilter("all");
                 }}
               >
                 {t("clearSearch")}
@@ -752,41 +706,21 @@ export default function SnippetsManager() {
                   />
                 </div>
                 <div className="input-group">
-                  <label className="input-label">{t("kindLabel")}</label>
+                  <label className="input-label">{t("scenarioLabel")}</label>
                   <select
                     className="input-field"
-                    value={editing.kind ?? "text"}
-                    onChange={(e) => {
-                      const kind = e.target.value as SnippetKind;
-                      setEditing({
-                        ...editing,
-                        kind,
-                        scenario: kind === "prompt" ? editing.scenario ?? "general" : undefined,
-                      });
-                    }}
+                    value={editing.scenario ?? "general"}
+                    onChange={(e) => setEditing({ ...editing, scenario: e.target.value })}
                   >
-                    <option value="text">{t("kindText")}</option>
-                    <option value="prompt">{t("kindPrompt")}</option>
+                    {PROMPT_SCENARIOS.map((sc) => (
+                      <option key={sc} value={sc}>
+                        {ta(`prompts.scenarios.${sc}`)}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
               <div className="snippets-modal-row">
-                {(editing.kind ?? "text") === "prompt" && (
-                  <div className="input-group">
-                    <label className="input-label">{t("scenarioLabel")}</label>
-                    <select
-                      className="input-field"
-                      value={editing.scenario ?? "general"}
-                      onChange={(e) => setEditing({ ...editing, scenario: e.target.value })}
-                    >
-                      {PROMPT_SCENARIOS.map((sc) => (
-                        <option key={sc} value={sc}>
-                          {ta(`prompts.scenarios.${sc}`)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
                 <div className="input-group">
                   <label className="input-label">{t("tags")}</label>
                   <input

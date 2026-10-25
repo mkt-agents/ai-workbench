@@ -21,7 +21,7 @@ pub enum Block {
         text: String,
     },
     /// 图片一律 base64 内联（截图、附件预览都一样），不落盘。
-    #[serde(rename = "image")]
+    #[serde(rename = "image", rename_all = "camelCase")]
     Image {
         media_type: String,
         data: String,
@@ -32,7 +32,8 @@ pub enum Block {
         name: String,
         input: Value,
     },
-    #[serde(rename = "tool_result")]
+    /// 枚举上的 `rename_all` 只管变体名，字段名要在变体上单独声明。
+    #[serde(rename = "tool_result", rename_all = "camelCase")]
     ToolResult {
         tool_use_id: String,
         output: String,
@@ -336,5 +337,24 @@ mod tests {
         };
         let out = provider_messages(&[msg], false, "SYS");
         assert_eq!(out[1]["content"], "旧对话");
+    }
+
+    #[test]
+    fn block_fields_match_frontend_camel_case() {
+        let raw = json!([
+            { "kind": "tool_result", "toolUseId": "hist-0-git", "output": "ok", "isError": true },
+            { "kind": "image", "mediaType": "image/png", "data": "AAAA" },
+        ]);
+        let blocks: Vec<Block> = serde_json::from_value(raw).expect("camelCase blocks");
+        assert_eq!(
+            blocks[0],
+            Block::ToolResult { tool_use_id: "hist-0-git".into(), output: "ok".into(), is_error: true }
+        );
+        assert_eq!(
+            blocks[1],
+            Block::Image { media_type: "image/png".into(), data: "AAAA".into() }
+        );
+        let back = serde_json::to_value(&blocks[0]).unwrap();
+        assert_eq!(back["toolUseId"], "hist-0-git");
     }
 }

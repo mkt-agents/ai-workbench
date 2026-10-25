@@ -29,7 +29,7 @@
 
 | 能力域 | 功能 |
 |--------|------|
-| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、天玑（含流式 + 多轮）、代码片段与工作暂存、快捷应用（本机应用扫描 / 启动 / 运行态，2026-10-21 从系统工具移进这一组）、协同办公（接管本机应用窗口并嵌入，原名「桌面应用」）；提示词优化独立页已下线（`PromptOptimizer.tsx` 保留） |
+| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、天玑（含流式 + 多轮）、代码片段与工作暂存、快捷应用（本机应用扫描 / 启动 / 运行态，2026-10-21 从系统工具移进这一组）、协同办公（接管本机应用窗口并嵌入，原名「桌面应用」）；提示词优化已整体删除 |
 | **账号资产** | Cursor 多身份一键切换（独立 profile 目录）、账号配额看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
 | **工程管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK / Maven / Python 运行时切换（改注册表 PATH，页面名「环境变量」） |
 | **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
@@ -110,7 +110,6 @@ ai-workbench/
 │   ├── components/               # UI 组件层（全部无类型拆分，单文件单组件）
 │   │   ├── AIAssistant.tsx       # 模型配置页（CRUD + 连接测试 + 批量操作 + 分组；图标见 public/ai-providers/）
 │   │   ├── DeepSeekHarness.tsx   # DSH iframe 托管 + 启动/停止/端口配置
-│   │   ├── PromptOptimizer.tsx   # AI 提示词改写（侧栏已下线，恢复见 AGENTS.md）
 │   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出 + 类型筛选
 │   │   ├── AccountQuotaPanel.tsx # 账号额度看板（多服务商；样式见同名 .css）
 │   │   ├── AiHubApp.tsx       # 天玑主窗口（hash 路由 #/ai-hub）
@@ -168,7 +167,6 @@ ai-workbench/
 │   │   ├── webTools.ts           # URL 规范化 / `@match` 通配判定 / newId（唯一主键）
 │   │   ├── pluginHotkeys.ts      # 书签全局快捷键注册（应用层，切页不失效）
 │   │   ├── floatingMenu.ts       # 悬浮菜单定位计算
-│   │   ├── promptOptimize.ts     # 提示词构造器（天玑优化仍用）
 │   │   ├── reportAi.ts           # AI 用例行解析 `parseAiLine()`（与后端 `output_rules()` 成对）
 │   │   ├── reportRisk.ts         # 报告风险展示分类（纯前端侧）
 │   │   ├── workbuddy.ts          # WorkBuddy 前端适配辅助
@@ -516,7 +514,6 @@ bootApp(): Promise<void>
 | `providerLogos.ts` | 额度侧栏/卡片 glyph | `src/assets/providers/` + 本机安装图标优先 |
 | `snippets.ts` | `renderSnippet(template, params)` | `{{param}}` 替换引擎 |
 | `version.ts` | `compareVersions(a, b)` | 语义版本比较（含 prerelease） |
-| `promptOptimize.ts` | — | 提示词构造器（天玑「优化提示词」） |
 | `browser.ts` | — | 打开 webview 窗口 |
 
 ### 6.8 `hooks/useTauriEvent.ts`
@@ -545,7 +542,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 ### 6.11 页面内容宽度与自适应（2026-09-30 统一）
 
 - **宽度单一来源**：`src/styles/tokens.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)`）、`.snippets-page` / `.runtime-page` / `.models-container` / `.git-manager-column`、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。`.settings-page` 720px 是有意窄表单列；`.userscript-list`（≥1100 强制两列）尚未并入。
-- **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、模板片段 `.snippets-list` 320、模型配置与环境变量（`.models-*` / `.runtime-list`）340。
+- **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、提示词 `.snippets-list` 320、模型配置与环境变量（`.models-*` / `.runtime-list`）340。
 - **工具箱页（`DevTools.tsx` + `src/styles/devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
 - **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）。工具内 textarea 统一 `resize: none`。
 - **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。
@@ -558,7 +555,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 
 **核心职责**:
 - 侧边栏导航渲染（分组折叠 + 折叠模式自动合并）
-- Tab 切换（Git / DeepSeek / 模型配置 / 片段 / Cursor / 账号额度 / 版本 / Hosts / Cloudflared / 插件 / 设置；提示词页已下线）
+- Tab 切换（Git / DeepSeek / 模型配置 / 片段 / Cursor / 账号额度 / 版本 / Hosts / Cloudflared / 插件 / 设置）
 - 窗口标题栏（最小化 / 最大化 / 关闭隐藏到托盘）
 - 响应式自动折叠（< 720px 自动折叠，> 900px 自动展开）
 - 两个懒加载面板（Git / DSH 首次进入后常驻 DOM）
@@ -582,8 +579,7 @@ openGroups: Set<string>       // 分组展开状态
 |------|------|----------|
 | `DeepSeekHarness` | iframe 托管 DSH | 启动/停止/端口/认证补丁状态 |
 | `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `public/ai-providers/` |
-| `PromptOptimizer` | 提示词改写（侧栏已下线） | 调用 `generate_text` + system prompt 模板；恢复见 AGENTS.md；天玑优化仍用 |
-| `SnippetsManager` | 代码片段管理 | `{{param}}` 编辑 + JSON 导入导出 + 类型分段筛选 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`） |
+| `SnippetsManager` | 提示词管理 | `{{param}}` 编辑 + JSON 导入导出 + 场景标签 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`）；类型统一为 prompt |
 | `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（未安装 / 折叠时账号数胶囊、悬停换眼睛 / `+` 添加）下挂已连接账号，有账号的服务商点行可折叠（localStorage `aq-rail-folded`）；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
 | `AiHubApp` | 天玑主窗口（`#/ai-hub`） | 流式 + 多轮 + 上下文 chip + 片段选择器 + Profile；会话上限 `MAX_AI_HUB_SESSIONS = 50`（淘汰会提示丢了哪条）、拖拽附件、Esc 分层 |
@@ -1268,7 +1264,7 @@ App.tsx
        ├─ AIAssistant → aiProviders.ts, aiProviderLogos.ts, (Tauri ai_commands)
        ├─ AccountQuotaPanel → providerLogos.ts, (Tauri quota / wb / cursor oauth…)
        ├─ SnippetsManager → snippets.ts
-       ├─ AiHubApp → snippets.ts, promptOptimize.ts, (Tauri generate_text_stream)
+       ├─ AiHubApp → snippets.ts, (Tauri generate_text_stream)
        ├─ CursorManager → (Tauri cursor commands)
        ├─ DeepSeekHarness → (Tauri dsh_commands)
        ├─ CloudflaredManager → (Tauri cloudflared_commands)
@@ -1524,7 +1520,7 @@ t('myKey')
 
 ## 附录 B：示例模板
 
-模板片段页只保留一个示例「报错诊断」（`buildExampleSnippet()`，id `seed-debug`）：片段表为空时放入，只放一次（localStorage `snippets-example-seeded` 置 `1`），用户删掉后不再补回。旧版曾注入 5 个 `seed-*` 片段并在缺失时按 id 补回；其余 4 条（git status 简报 / curl JSON POST / 角色提示框架 / Commit message 模板）现在由 `loadSnippets` 删除，前提是名称与内容仍是原样，用户改过的保留。原文在 `store/helpers.ts` 的 `LEGACY_SEED_SNIPPETS`，仅用于比对。
+提示词页只保留一个示例「报错诊断」（`buildExampleSnippet()`，id `seed-debug`）：片段表为空时放入，只放一次（localStorage `snippets-example-seeded` 置 `1`），用户删掉后不再补回。旧版曾注入 5 个 `seed-*` 片段并在缺失时按 id 补回；其余 4 条（git status 简报 / curl JSON POST / 角色提示框架 / Commit message 模板）现在由 `loadSnippets` 删除，前提是名称与内容仍是原样，用户改过的保留。原文在 `store/helpers.ts` 的 `LEGACY_SEED_SNIPPETS`，仅用于比对。
 
 ---
 

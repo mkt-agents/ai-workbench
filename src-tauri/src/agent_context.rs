@@ -199,6 +199,34 @@ pub(crate) fn skill_names_in(ask: &str) -> Vec<String> {
     out
 }
 
+/// 本轮点名的技能若声明了 `allowed-tools`，取它们的并集再与已有工具表求交。
+/// 没有点名技能、或点名的技能都没写白名单 → 原样返回（不额外收窄）。
+pub(crate) fn intersect_skill_tools(
+    config: &HarnessConfig,
+    ask: &str,
+    tools: &mut Vec<&'static str>,
+) {
+    let mut allow: Option<std::collections::HashSet<String>> = None;
+    for name in skill_names_in(ask) {
+        let Some(skill) = config.skill(&name) else { continue };
+        if skill.allowed_tools.is_empty() {
+            continue;
+        }
+        let set = allow.get_or_insert_with(std::collections::HashSet::new);
+        for tool in &skill.allowed_tools {
+            let t = tool.trim();
+            if !t.is_empty() {
+                set.insert(t.to_string());
+            }
+        }
+    }
+    let Some(allow) = allow else { return };
+    if allow.is_empty() {
+        return;
+    }
+    tools.retain(|n| allow.contains(*n));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +260,30 @@ mod tests {
         );
         assert!(skill_names_in("没有命令").is_empty());
         assert!(skill_names_in("/skill:").is_empty());
+    }
+
+    #[test]
+    fn skill_allowed_tools_intersect_the_offer_set() {
+        let config = HarnessConfig {
+            skills: vec![harness_config::SkillEntry {
+                name: "review".into(),
+                description: "代码审查".into(),
+                when_to_use: String::new(),
+                allowed_tools: vec!["read_file".into(), "grep".into()],
+                mode: String::new(),
+                path: "x".into(),
+                scope: "project".into(),
+                body: "看".into(),
+            }],
+            ..HarnessConfig::default()
+        };
+        let mut tools = vec!["read_file", "grep", "write_file", "run_command"];
+        intersect_skill_tools(&config, "请 /skill:review", &mut tools);
+        assert_eq!(tools, vec!["read_file", "grep"]);
+        // 没点名技能 → 不收窄
+        let mut all = vec!["read_file", "write_file"];
+        intersect_skill_tools(&config, "普通问题", &mut all);
+        assert_eq!(all, vec!["read_file", "write_file"]);
     }
 
     #[test]

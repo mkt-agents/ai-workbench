@@ -360,20 +360,30 @@ pub(crate) fn filter_specs(specs: &Value, names: &[&str]) -> Vec<Value> {
 ///
 /// `services`: when `root` is a workspace folder (not itself a repository), the
 /// repositories inside it the user picked, as paths relative to `root`.
-pub(crate) fn policy_text(permission: Permission, root: Option<&Path>, services: &[String], reach: Reach) -> String {
+pub(crate) fn policy_text(permission: Permission, root: Option<&Path>, services: &[String], reach: Reach, hide_abs_path: bool) -> String {
     if !reach.tools {
         return String::new();
     }
     let anywhere = permission == Permission::Full;
     let kind = if services.is_empty() { "repository" } else { "workspace folder" };
+    let root_label = |root: &Path| -> String {
+        if hide_abs_path {
+            root.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "the workspace".into())
+        } else {
+            root.display().to_string()
+        }
+    };
     let mut place = match (root, anywhere) {
         (Some(root), false) => format!(
             "You work in the {kind} at {}. Stay inside that directory; paths outside it are refused.",
-            root.display()
+            root_label(root)
         ),
         (Some(root), true) => format!(
             "The current {kind} is {}; relative paths resolve there. You may also use absolute paths anywhere on this computer.",
-            root.display()
+            root_label(root)
         ),
         (None, true) => "No workspace is selected. Relative paths resolve against the user's home folder; absolute paths work anywhere on this computer.".into(),
         (None, false) => "No workspace is selected, so you cannot read or change files or run commands. Answer directly; you may open AI Workbench pages or check processes and ports.".into(),
@@ -624,7 +634,7 @@ mod tests {
     #[test]
     fn policy_tells_the_agent_to_hand_conflicts_over() {
         let reach = Reach { files: true, tools: true, vision: false, web: false };
-        let text = policy_text(Permission::Full, Some(Path::new("D:\\repo")), &[], reach);
+        let text = policy_text(Permission::Full, Some(Path::new("D:\\repo")), &[], reach, false);
         assert!(text.contains("Merge conflicts belong to the user") && text.contains("提交页"));
         assert!(REVIEW_SYSTEM.contains("merge conflicts"));
     }
@@ -701,16 +711,16 @@ mod tests {
     fn policy_mentions_level_reach_and_computer() {
         let root = std::env::temp_dir();
         let files = Reach { files: true, tools: true, vision: false, web: false };
-        assert!(policy_text(Permission::Read, Some(&root), &[], files).contains("read only"));
-        assert!(policy_text(Permission::Workspace, Some(&root), &[], files).contains("paths outside it are refused"));
-        assert!(policy_text(Permission::Full, Some(&root), &[], files).contains("anywhere on this computer"));
-        assert!(policy_text(Permission::Full, None, &[], files).contains("home folder"));
+        assert!(policy_text(Permission::Read, Some(&root), &[], files, false).contains("read only"));
+        assert!(policy_text(Permission::Workspace, Some(&root), &[], files, false).contains("paths outside it are refused"));
+        assert!(policy_text(Permission::Full, Some(&root), &[], files, false).contains("anywhere on this computer"));
+        assert!(policy_text(Permission::Full, None, &[], files, false).contains("home folder"));
         let none = Reach { files: false, tools: true, vision: false, web: false };
-        assert!(policy_text(Permission::Read, None, &[], none).contains("cannot read or change files"));
-        assert!(!policy_text(Permission::Full, Some(&root), &[], files).contains("Computer:"));
+        assert!(policy_text(Permission::Read, None, &[], none, false).contains("cannot read or change files"));
+        assert!(!policy_text(Permission::Full, Some(&root), &[], files, false).contains("Computer:"));
         let vision = Reach { vision: true, ..files };
-        assert!(policy_text(Permission::Full, Some(&root), &[], vision).contains("Computer:"));
-        assert!(policy_text(Permission::Full, Some(&root), &[], Reach { tools: false, ..files }).is_empty());
+        assert!(policy_text(Permission::Full, Some(&root), &[], vision, false).contains("Computer:"));
+        assert!(policy_text(Permission::Full, Some(&root), &[], Reach { tools: false, ..files }, false).is_empty());
     }
 
     #[test]
@@ -718,11 +728,21 @@ mod tests {
         let root = Path::new("D:\\work\\p1");
         let files = Reach { files: true, tools: true, vision: false, web: false };
         let services = vec!["order".to_string(), "user".to_string()];
-        let text = policy_text(Permission::Workspace, Some(root), &services, files);
+        let text = policy_text(Permission::Workspace, Some(root), &services, files, false);
         assert!(text.contains("workspace folder at D:\\work\\p1"), "{text}");
         assert!(text.contains("order, user") && text.contains("git -C"), "{text}");
-        let repo = policy_text(Permission::Workspace, Some(root), &[], files);
+        let repo = policy_text(Permission::Workspace, Some(root), &[], files, false);
         assert!(repo.contains("repository at") && !repo.contains("git -C <service>"), "{repo}");
+    }
+
+    #[test]
+    fn policy_text_hides_abs_path_for_wecom() {
+        let root = Path::new(r"D:\ai_project\ai-workbench");
+        let files = Reach { files: true, tools: true, vision: false, web: false };
+        let text = policy_text(Permission::Workspace, Some(root), &[], files, true);
+        assert!(!text.contains(r"D:\"));
+        assert!(!text.contains("ai_project"));
+        assert!(text.contains("ai-workbench"));
     }
 
     #[test]

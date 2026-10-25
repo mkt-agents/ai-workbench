@@ -12,7 +12,7 @@ import { storage } from './storage';
 import { matchCursorAccount } from './cursorMatch';
 import { normalizePath, pathKey, projectNameFromPath } from './pathUtils';
 import { compareVersions } from '../lib/version';
-import { takeLegacyCustomTemplates } from '../lib/promptOptimize';
+import { takeLegacyCustomTemplates } from '../lib/snippets';
 import {
   buildExampleSnippet,
   EXAMPLE_SNIPPET_SEEDED_KEY,
@@ -23,6 +23,7 @@ import {
 } from './store/helpers';
 import { invocations, type Invocations } from './store/invocations';
 import { readStoredString, writeStoredString } from './localState';
+import { markSettingsSynced, mergingSettingsStorage } from './settingsStorage';
 
 /** True when `v1` is older than `v2`; prerelease-aware (see `compareVersions`). */
 const isOlderVersion = (v1: string, v2: string): boolean =>
@@ -1265,6 +1266,18 @@ export const useGlobalStore = create<StoreState>()(
             await storage.snippets.save(snippets);
           }
         }
+        // Unify types: every row is a prompt; fill missing scenario as general.
+        let kindDirty = false;
+        snippets = snippets.map((s) => {
+          if (s.kind === 'prompt' && s.scenario) return s;
+          kindDirty = true;
+          return {
+            ...s,
+            kind: 'prompt' as const,
+            scenario: s.scenario || 'general',
+          };
+        });
+        if (kindDirty) await storage.snippets.save(snippets);
         set({ snippets });
       }),
 
@@ -1557,7 +1570,7 @@ export const useGlobalStore = create<StoreState>()(
     }),
     {
       name: 'workbench-settings',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => mergingSettingsStorage),
       partialize: (state) => ({ settings: state.settings }),
       merge: (persisted, current) => {
         const p = persisted as {
@@ -1578,25 +1591,29 @@ export const useGlobalStore = create<StoreState>()(
 );
 
 /**
- * 跨 webview 同步：主窗（设置页）和天玑窗共用一个 localStorage，却各持一份 store。
- * 天玑窗常驻不销毁，不补这一步就会出现「设置页刚换了角色 / 模式，天玑里还是旧的」。
- * 只同步输入框相关的这三项，别的偏好不互相覆盖。
+ * 跨 webview 同步：主窗、天玑窗、桌宠窗共用一个 localStorage，却各持一份 store。
+ * 另一个窗口写入后整份设置都跟上，否则本窗口手里的旧值会在下次写入时把别人的改动盖回去
+ * （写入侧另有按键合并兜底，见 `settingsStorage.ts`）。
  */
-const SYNCED_SETTING_KEYS = ['aiHubTaskMode', 'aiHubProfileId', 'aiHubProfiles'] as const;
-
 if (typeof window !== 'undefined') {
+  const settingsOf = (raw: string | null): Record<string, unknown> | undefined => {
+    if (!raw) return undefined;
+    return (JSON.parse(raw) as { state?: { settings?: Record<string, unknown> } }).state?.settings;
+  };
   window.addEventListener('storage', (event) => {
     if (event.key !== 'workbench-settings' || !event.newValue) return;
     try {
-      const saved = (JSON.parse(event.newValue) as {
-        state?: { settings?: Record<string, unknown> };
-      }).state?.settings;
+      const saved = settingsOf(event.newValue);
       if (!saved) return;
+      const before = settingsOf(event.oldValue) ?? {};
       const current = useGlobalStore.getState().settings as unknown as Record<string, unknown>;
       const patch: Record<string, unknown> = {};
-      for (const key of SYNCED_SETTING_KEYS) {
+      for (const key of new Set([...Object.keys(saved), ...Object.keys(current)])) {
+        // 磁盘上没有、之前也没有的键是本窗口的默认值，不算被别人删了
+        if (!(key in saved) && !(key in before)) continue;
         if (JSON.stringify(saved[key]) !== JSON.stringify(current[key])) patch[key] = saved[key];
       }
+      markSettingsSynced(saved);
       if (Object.keys(patch).length) {
         useGlobalStore.getState().setSettings(patch as Partial<AppSettings>);
       }

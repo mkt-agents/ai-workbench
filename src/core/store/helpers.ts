@@ -11,6 +11,8 @@ export function buildExampleSnippet(now = new Date().toISOString()): Snippet {
     content: '错误信息：\n{{error}}\n\n请分析根因、最小复现与修复建议。',
     tags: 'debug,prompt',
     params: 'error',
+    kind: 'prompt',
+    scenario: 'general',
     useCount: 0,
     createdAt: now,
     updatedAt: now,

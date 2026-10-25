@@ -1,9 +1,13 @@
 import type { PetSkinId } from "../core/types";
+import type { BondTier, SpeechPoolName } from "./petBond";
+import { pickPoolKey } from "./petBond";
 import type { PetMood } from "./petSkins";
 
 /**
  * 天玑那边发生的事 → 桌宠的演出指令。桌宠窗和主窗是两个 webview，但后端
  * `app.emit` 是广播，所以这里只吃事件、不需要任何新命令。
+ *
+ * 分区互动：摸头 / 戳身 / 裙边 / 抱一下；好感档决定话术池。
  */
 export type PetSignal =
   | { kind: "step"; status: string }
@@ -14,8 +18,18 @@ export type PetSignal =
   | { kind: "limited" }
   | { kind: "error" }
   | { kind: "tap"; skin: PetSkinId }
+  | { kind: "pat" }
+  | { kind: "poke"; skin: PetSkinId }
+  | { kind: "tail" }
+  | { kind: "hug" }
+  | { kind: "wake" }
+  | { kind: "shy" }
+  | { kind: "mutter"; topic: "think" | "work" }
+  | { kind: "greet"; slot: "morning" | "noon" | "night" }
   | { kind: "swap" }
   | { kind: "idle" };
+
+export type PetGesturePlay = "pat" | "poke" | "tail" | "hug" | "shy";
 
 export interface PetReaction {
   mood: PetMood;
@@ -24,15 +38,27 @@ export interface PetReaction {
   /** aihub 命名空间的话术键；undefined = 只做动作不说话 */
   speechKey?: string;
   speechParams?: Record<string, string | number>;
+  /** 好感增减；由 AiHubBubble 写入 settings */
+  affinityDelta?: number;
+  /** 矢量宠的短手势演出 */
+  gesture?: PetGesturePlay;
+  /** 完成庆祝：撒花 */
+  celebrate?: boolean;
+  /** idle 微动作（睡醒伸懒腰等） */
+  micro?: "stretch" | "shy" | "nod" | "wave";
 }
 
 /** 一轮跑多久才算"干完活"：短答案不值得撒花，免得每次都跳。 */
 const CELEBRATE_FROM_MS = 5000;
 
-export function reactTo(signal: PetSignal): PetReaction {
+function pool(tier: BondTier, name: SpeechPoolName): string {
+  return pickPoolKey(tier, name);
+}
+
+export function reactTo(signal: PetSignal, tier: BondTier = 0): PetReaction {
   switch (signal.kind) {
     case "approval":
-      return { mood: "waiting", holdMs: 0, speechKey: "petSayWaiting" };
+      return { mood: "waiting", holdMs: 0, speechKey: pool(tier, "waiting") };
     case "plan":
       return { mood: "thinking", holdMs: 0 };
     case "stream":
@@ -42,7 +68,7 @@ export function reactTo(signal: PetSignal): PetReaction {
         return { mood: "error", holdMs: 2200, speechKey: "petSayStepError" };
       }
       if (signal.status === "denied") {
-        return { mood: "error", holdMs: 1600, speechKey: "petSayDenied" };
+        return { mood: "error", holdMs: 1600, speechKey: "petSayDenied", affinityDelta: -1 };
       }
       if (signal.status === "conflict") {
         return { mood: "waiting", holdMs: 0, speechKey: "petSayConflict" };
@@ -52,19 +78,107 @@ export function reactTo(signal: PetSignal): PetReaction {
       }
       return { mood: "working", holdMs: 0 };
     case "done": {
+      const sec = Math.max(1, Math.round(signal.elapsedMs / 1000));
       if (signal.elapsedMs >= CELEBRATE_FROM_MS) {
-        const sec = Math.max(1, Math.round(signal.elapsedMs / 1000));
-        return { mood: "happy", holdMs: 1800, speechKey: "petSayDone", speechParams: { sec } };
+        return {
+          mood: "happy",
+          holdMs: 1800,
+          speechKey: pool(tier, "done"),
+          speechParams: { sec },
+          affinityDelta: 2,
+          celebrate: true,
+        };
       }
-      return { mood: "idle", holdMs: 0 };
+      // 短答也点头回一声，别突然变木桩
+      return {
+        mood: "happy",
+        holdMs: 900,
+        speechKey: pool(tier, "done"),
+        speechParams: { sec },
+        micro: "nod",
+      };
     }
     case "limited":
-      // 回合数用完：这轮不会跑完，桌宠要一副"卡住了"的样子，而不是撒花。
       return { mood: "error", holdMs: 2400, speechKey: "petSayLimited" };
     case "error":
       return { mood: "error", holdMs: 2400, speechKey: "petSayError" };
     case "tap":
-      return { mood: "happy", holdMs: 1200, speechKey: speechForSkin(signal.skin) };
+      return {
+        mood: "happy",
+        holdMs: 1200,
+        speechKey: speechForSkin(signal.skin),
+        affinityDelta: 1,
+      };
+    case "pat":
+      return {
+        mood: "happy",
+        holdMs: 1100,
+        speechKey: pool(tier, "pat"),
+        affinityDelta: 2,
+        gesture: "pat",
+      };
+    case "poke":
+      return {
+        mood: "happy",
+        holdMs: 1000,
+        speechKey: pool(tier, "poke"),
+        affinityDelta: 1,
+        gesture: "poke",
+      };
+    case "tail":
+      return {
+        mood: "happy",
+        holdMs: 1100,
+        speechKey: pool(tier, "tail"),
+        affinityDelta: 2,
+        gesture: "tail",
+      };
+    case "hug":
+      return {
+        mood: "happy",
+        holdMs: 1400,
+        speechKey: pool(tier, "hug"),
+        affinityDelta: 3,
+        gesture: "hug",
+        celebrate: true,
+      };
+    case "wake":
+      return {
+        mood: "happy",
+        holdMs: 1400,
+        speechKey: pool(tier, "wake"),
+        affinityDelta: 1,
+        micro: "stretch",
+      };
+    case "shy":
+      return {
+        mood: "happy",
+        holdMs: 1200,
+        speechKey: pool(tier, "shy"),
+        affinityDelta: 1,
+        gesture: "shy",
+        micro: "shy",
+      };
+    case "mutter":
+      return {
+        mood: signal.topic === "work" ? "working" : "thinking",
+        holdMs: 0,
+        speechKey: pool(tier, signal.topic === "work" ? "mutterWork" : "mutterThink"),
+      };
+    case "greet":
+      return {
+        mood: "happy",
+        holdMs: 1600,
+        speechKey: pool(
+          tier,
+          signal.slot === "morning"
+            ? "greetMorning"
+            : signal.slot === "noon"
+              ? "greetNoon"
+              : "greetNight",
+        ),
+        affinityDelta: 1,
+      };
     case "swap":
       return { mood: "happy", holdMs: 900, speechKey: "bubblePetSwap" };
     case "idle":
@@ -72,7 +186,6 @@ export function reactTo(signal: PetSignal): PetReaction {
   }
 }
 
-/** 每只宠物被摸一下说的是自己的话（文案键在 aihub 命名空间，按皮肤 id 拼）。 */
 function speechForSkin(skin: PetSkinId): string {
   return `bubblePet${skin.charAt(0).toUpperCase()}${skin.slice(1)}`;
 }

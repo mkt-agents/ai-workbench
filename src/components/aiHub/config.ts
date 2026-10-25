@@ -1,6 +1,4 @@
 import type { AIModelConfig, AiHubChips } from "../../core/types";
-import { DEFAULT_PROMPT_GOALS } from "../../lib/promptOptimize";
-import type { PromptGoal, PromptScenario } from "../../lib/promptOptimize";
 import type { AskMode } from "./route";
 
 /** Only appended when a non-empty workbench context block is actually attached. */
@@ -14,9 +12,6 @@ export const CHAT_SYSTEM =
 /** Project mode: developer assistant grounded in the attached workbench context. */
 export const PROJECT_SYSTEM =
   "You are an expert developer assistant embedded in AI Workbench. You help developers understand, debug, and improve their code. Be concise but thorough. When you see code changes, explain what they do and why. When you see errors, suggest fixes. Reply in the user's language.";
-
-/** Composer tasks: plain conversation, or the prompt-optimizer (优化提示词). */
-export type TaskKind = "none" | "optimize";
 
 /**
  * Self-knowledge block prepended to every system prompt, so "which model are
@@ -48,54 +43,6 @@ export const DEFAULT_CHIPS: AiHubChips = {
   git: true,
   dirty: true,
 };
-
-export type OptimizeConfig = { scenario: PromptScenario; goals: PromptGoal[] };
-
-export const DEFAULT_OPTIMIZE: OptimizeConfig = {
-  scenario: "general",
-  goals: DEFAULT_PROMPT_GOALS,
-};
-
-/**
- * Stored task string. The `optimize` task carries its scenario/goals inline
- * (`optimize:code:concrete,format`) so the SQLite `task` column needs no schema
- * change. Anything unparseable degrades to "none".
- */
-export function parseTask(value: string): { task: TaskKind; optimize: OptimizeConfig } {
-  if (value === "optimize" || value.startsWith("optimize:")) {
-    const [, scenario, goals] = value.split(":");
-    return {
-      task: "optimize",
-      optimize: {
-        scenario: isScenario(scenario) ? scenario : DEFAULT_OPTIMIZE.scenario,
-        goals: parseGoals(goals),
-      },
-    };
-  }
-  return {
-    // Legacy values (explain / polish / …) from older sessions degrade to "none".
-    task: value === "optimize" ? "optimize" : "none",
-    optimize: DEFAULT_OPTIMIZE,
-  };
-}
-
-export function encodeTask(task: TaskKind, optimize: OptimizeConfig): string {
-  if (task !== "optimize") return task;
-  return `optimize:${optimize.scenario}:${optimize.goals.join(",")}`;
-}
-
-function isScenario(v: string | undefined): v is PromptScenario {
-  return v === "general" || v === "translate" || v === "product" || v === "code" || v === "agent" || v === "copywriting";
-}
-
-function parseGoals(v: string | undefined): PromptGoal[] {
-  if (!v) return DEFAULT_OPTIMIZE.goals;
-  const valid = v.split(",").filter(
-    (g): g is PromptGoal =>
-      g === "concrete" || g === "role" || g === "format" || g === "constraints" || g === "shorten" || g === "preserve"
-  );
-  return valid.length > 0 ? valid : DEFAULT_OPTIMIZE.goals;
-}
 
 /** Truncate text to max chars, appending a marker if clipped. */
 export function truncate(text: string, max: number): { text: string; truncated: boolean } {

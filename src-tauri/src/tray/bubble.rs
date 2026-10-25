@@ -131,9 +131,11 @@ pub const AI_HUB_LABEL: &str = "ai-hub";
 pub(crate) const AI_HUB_BUBBLE_LABEL: &str = "ai-hub-bubble";
 pub(crate) const MAIN_LABEL: &str = "main";
 /// Bounding window size (logical px). The orb disc is 40px (`.qa-bubble-orb`);
-/// pet skins (皮卡丘 / 高达) anchor to the bottom and use the headroom above for
-/// the speech bubble. Keep CSS in sync. The window stays a plain (uncut)
-/// rectangle: DWM blur-behind makes the uncovered corners see-through.
+/// pet skins anchor to the bottom; front-end keeps a permanent speech headroom
+/// above (`PET_SPEECH_HEADROOM`) so talk bubbles fade in/out without resizing
+/// (resizing made the pet jump). Menu still temporarily grows the box.
+/// The window stays a plain (uncut) rectangle: DWM blur-behind makes the
+/// uncovered corners see-through.
 const BUBBLE_SIZE_DEFAULT: u32 = 112;
 /// builder 的尺寸区间：窗本身 non-resizable，只有 `set_ai_hub_bubble_box` 能改。
 /// 上界给「就地菜单」临时撑高用（菜单开=窗变高，桌宠底边不动）。

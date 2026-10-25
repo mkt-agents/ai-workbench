@@ -17,6 +17,7 @@ import {
   readPersistedTheme,
 } from "../lib/theme";
 import PetStage, { type BubblePhase } from "./aiHub/PetStage";
+import type { PetMicro, PressZone } from "./aiHub/PandaGirlPet";
 import {
   PET_CONFIG_EVENT,
   PET_GAZE_EVENT,
@@ -28,7 +29,16 @@ import {
   type PetConfigPatch,
   type PetMood,
 } from "../lib/petSkins";
-import { reactTo, type PetReaction, type PetSignal } from "../lib/petBrain";
+import { reactTo, type PetGesturePlay, type PetReaction, type PetSignal } from "../lib/petBrain";
+import {
+  applyAffinityDelta,
+  bondTier,
+  dailyDecay,
+  greetingSlot,
+  pickPoolKey,
+  todayKey,
+  type BondTier,
+} from "../lib/petBond";
 
 /** Below this screen travel, treat pointer-up as a click (not a drag). */
 const CLICK_MOVE_PX = 5;
@@ -38,13 +48,59 @@ const EDGE_MARGIN_LOGICAL = 24;
 const TOP_SAFE_LOGICAL = 96;
 /** 单击与双击的判别窗口（ms）：窗内第二击 = 换装，超时 = 打开天玑 */
 const DOUBLE_CLICK_MS = 280;
-/** 气泡语停留时长。 */
-const SPEECH_MS = 1600;
+/** 气泡语最短 / 最长停留（按字数伸缩）。 */
+const SPEECH_MS_MIN = 1600;
+const SPEECH_MS_MAX = 3200;
+/** 头顶长按多久算「多摸一会儿」。 */
+const HEAD_HOLD_MS = 600;
+/** 等审批时再次催一声的间隔。 */
+const WAIT_NUDGE_MS = 45_000;
 /** 就地菜单展开时临时撑高（逻辑 px）；菜单贴在桌宠头顶，底边不动（Rust 同规则）。
  *  高度要盖住 5 个菜单项：5×22 + 4×2 间隙 + 10 padding + 2 边框 + 4 缝隙 = 136。 */
 const PET_MENU_EXTRA = 136;
-/** 没有新信号超过这个时间就打瞌睡。 */
+/**
+ * 头顶常驻透明留白（对齐鱼娘/大肥鱼）：气泡只在里头淡入淡出，说话时不改窗尺寸，
+ * 人物才不会跟着跳。给到三行短句 + 三角缝；菜单仍临时再撑高。
+ */
+const PET_SPEECH_HEADROOM = 96;
+/** 窗宽下限：长句少折行，常驻，避免说话时忽宽忽窄。 */
+const PET_BOX_MIN_W = 192;
+/** 白天没人摸多久打瞌睡；夜晚更短（对齐大肥鱼「夜里更困」）。 */
 const SLEEP_AFTER_MS = 180_000;
+const SLEEP_AFTER_NIGHT_MS = 90_000;
+/** 身区长按多久算「抱一下」（未拖动）。 */
+const HUG_HOLD_MS = 450;
+/** 装饰手势演出时长。 */
+const GESTURE_MS = 900;
+/** 连续戳身算害羞的时间窗。 */
+const SHY_WINDOW_MS = 2500;
+/** 干活碎碎念冷却。 */
+const MUTTER_THINK_CD_MS = 25_000;
+const MUTTER_WORK_CD_MS = 40_000;
+const MUTTER_WORK_AFTER_MS = 8_000;
+
+type HitZone = "head" | "body" | "tail";
+
+function sleepAfterMs(): number {
+  const h = new Date().getHours();
+  return h >= 22 || h < 6 ? SLEEP_AFTER_NIGHT_MS : SLEEP_AFTER_MS;
+}
+
+/**
+ * 上=头、中=身、下/后缘=裙边（内部仍叫 tail）。
+ * 比例按形象自己的框算：窗顶有常驻说话留白、窗宽也有下限，按整窗算头区会落在
+ * 透明留白里永远点不到，下半身则全被算成裙边。
+ */
+function hitZoneAt(e: { clientX: number; clientY: number }, root: HTMLElement | null): HitZone {
+  const el = root?.querySelector<HTMLElement>(".qa-panda-girl, .qa-pet") ?? root;
+  const rect = el?.getBoundingClientRect();
+  if (!rect?.height || !rect.width) return "body";
+  const y = (e.clientY - rect.top) / rect.height;
+  const x = (e.clientX - rect.left) / rect.width;
+  if (y < 0.4) return "head";
+  if (y > 0.78 || x > 0.78) return "tail";
+  return "body";
+}
 
 /**
  * Desktop pet: click opens the hub, right-click opens an in-place menu, drag snaps
@@ -63,9 +119,18 @@ export default function AiHubBubble() {
     }),
   );
   const [phase, setPhase] = useState<BubblePhase>("idle");
+  const [pressZone, setPressZone] = useState<PressZone | null>(null);
   const [mood, setMood] = useState<PetMood>("idle");
   const [speech, setSpeech] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [gesture, setGesture] = useState<PetGesturePlay | null>(null);
+  const [micro, setMicro] = useState<PetMicro>("none");
+  const [celebrate, setCelebrate] = useState(false);
+  const phaseRef = useRef<BubblePhase>("idle");
+  phaseRef.current = phase;
+  const [affinity, setAffinity] = useState(() =>
+    Number.isFinite(settings.aiHubPetAffinity) ? Number(settings.aiHubPetAffinity) : 20,
+  );
   /** 自备素材包的帧数：清单存在模块级镜像里，靠这个数触发重算。 */
   const [packFrames, setPackFrames] = useState(0);
   const packRevRef = useRef(0);
@@ -74,14 +139,27 @@ export default function AiHubBubble() {
     startY: number;
     moved: boolean;
     dragging: boolean;
+    zone: HitZone;
+    hugged: boolean;
   } | null>(null);
   const fireTimerRef = useRef<number | null>(null);
   const landTimerRef = useRef<number | null>(null);
+  const hugTimerRef = useRef<number | null>(null);
+  const gestureTimerRef = useRef<number | null>(null);
+  /** idle 微行为调度（递归 setTimeout） */
+  const microTimerRef = useRef<number | null>(null);
+  /** 单次微动作演出收尾 */
+  const microHoldTimerRef = useRef<number | null>(null);
   /** 悬停一会儿 = 摸头：停够 1.1 秒才反应，扫过去不算 */
   const hoverTimerRef = useRef<number | null>(null);
   const menuOpenRef = useRef(false);
   menuOpenRef.current = menuOpen;
   const clickTimerRef = useRef<number | null>(null);
+  /** 上一次单击松手的时刻：双击与落在哪个分区无关。 */
+  const lastTapAtRef = useRef(0);
+  const affinityRef = useRef(affinity);
+  affinityRef.current = affinity;
+  const greetedOnRef = useRef(settings.aiHubPetGreetedOn);
   /** 指针倾角：直接写 CSS 变量，不走 state，鼠标划过时不用重渲。 */
   const rootRef = useRef<HTMLDivElement | null>(null);
   /** 最近一次视线方向（-1..1）：全局光标与窗内指针共用一台"眼睛"。 */
@@ -91,13 +169,25 @@ export default function AiHubBubble() {
   /** 指针是否停在窗里：在窗里就以本地精确值为准，离开后才吃全局方向。 */
   const hoverRef = useRef(false);
   const speechTimerRef = useRef<number | null>(null);
+  const speechShowingRef = useRef(false);
+  /** 天玑仍在干活时的粘性情绪：摸一下演完要回到这里，别冲成 idle。 */
+  const agentStickyRef = useRef<PetMood | null>(null);
+  const waitNudgeRef = useRef<number | null>(null);
+  const dragSaidRef = useRef(false);
   const moodTimerRef = useRef<number | null>(null);
   const sleepTimerRef = useRef<number | null>(null);
   const moodRef = useRef<PetMood>("idle");
   const cfgRef = useRef(cfg);
   cfgRef.current = cfg;
+  /** 身区连戳：2.5s 内满 3 次起害羞。 */
+  const bodyTapRef = useRef({ count: 0, at: 0 });
+  const mutterAtRef = useRef(0);
+  const workStartedAtRef = useRef(0);
+  const tierRef = useRef<BondTier>(0);
 
   const skinDef = useMemo(() => petSkin(cfg.skin), [cfg.skin, packFrames]);
+  const tier: BondTier = bondTier(affinity);
+  tierRef.current = tier;
 
   const clearTimer = (ref: { current: number | null }) => {
     if (ref.current != null) {
@@ -106,16 +196,50 @@ export default function AiHubBubble() {
     }
   };
 
-  /** 冒一句互动短语；安静模式不说话。 */
+  const pushBox = useCallback((width: number, height: number) => {
+    void invoke("set_ai_hub_bubble_box", { width, height }).catch(() => {});
+  }, []);
+
+  /** 常态 = 形象 + 头顶留白；菜单再临时撑高。说话绝不改尺寸。 */
+  const syncBox = useCallback(() => {
+    const size = cfgRef.current.size;
+    const w = Math.max(size, PET_BOX_MIN_W);
+    if (menuOpenRef.current) {
+      pushBox(w, size + PET_MENU_EXTRA);
+      return;
+    }
+    pushBox(w, size + PET_SPEECH_HEADROOM);
+  }, [pushBox]);
+  const syncBoxRef = useRef(syncBox);
+  syncBoxRef.current = syncBox;
+
+  /** 冒一句互动短语；安静模式不说话。只改 DOM，不改窗尺寸。 */
   const say = useCallback((text: string) => {
     if (cfgRef.current.quiet) return;
     setSpeech(text);
+    speechShowingRef.current = true;
+    const ms = Math.min(
+      SPEECH_MS_MAX,
+      Math.max(SPEECH_MS_MIN, 1400 + text.length * 48),
+    );
     clearTimer(speechTimerRef);
     speechTimerRef.current = window.setTimeout(() => {
       setSpeech(null);
+      speechShowingRef.current = false;
       speechTimerRef.current = null;
-    }, SPEECH_MS);
+    }, ms);
   }, []);
+
+  const bumpAffinity = useCallback(
+    (delta: number) => {
+      if (!delta) return;
+      const next = applyAffinityDelta(affinityRef.current, delta);
+      affinityRef.current = next;
+      setAffinity(next);
+      setSettings({ aiHubPetAffinity: next });
+    },
+    [setSettings],
+  );
 
   /** 情绪演完自己收回 idle；holdMs=0 的情绪一直停着，等下一条信号。 */
   const play = useCallback(
@@ -123,18 +247,40 @@ export default function AiHubBubble() {
       clearTimer(moodTimerRef);
       moodRef.current = reaction.mood;
       setMood(reaction.mood);
+      setCelebrate(Boolean(reaction.celebrate));
+      if (reaction.affinityDelta) bumpAffinity(reaction.affinityDelta);
+      if (reaction.gesture) {
+        setGesture(reaction.gesture);
+        clearTimer(gestureTimerRef);
+        gestureTimerRef.current = window.setTimeout(() => {
+          setGesture(null);
+          gestureTimerRef.current = null;
+        }, GESTURE_MS);
+      }
+      if (reaction.micro) {
+        setMicro(reaction.micro);
+        clearTimer(microHoldTimerRef);
+        const hold =
+          reaction.micro === "stretch" || reaction.micro === "shy" ? 1200 : 1000;
+        microHoldTimerRef.current = window.setTimeout(() => {
+          setMicro("none");
+          microHoldTimerRef.current = null;
+        }, hold);
+      }
       if (reaction.speechKey) {
         say(t(reaction.speechKey, reaction.speechParams ?? {}));
       }
       if (reaction.holdMs > 0) {
         moodTimerRef.current = window.setTimeout(() => {
-          moodRef.current = "idle";
-          setMood("idle");
+          const back = agentStickyRef.current ?? "idle";
+          moodRef.current = back;
+          setMood(back);
+          setCelebrate(false);
           moodTimerRef.current = null;
         }, reaction.holdMs);
       }
     },
-    [say, t],
+    [bumpAffinity, say, t],
   );
 
   /** 收到任何信号都算"桌面有动静"：重新计打瞌睡倒计时，再演对应情绪。 */
@@ -142,17 +288,47 @@ export default function AiHubBubble() {
     (signal: PetSignal) => {
       clearTimer(sleepTimerRef);
       sleepTimerRef.current = window.setTimeout(
-        () => play(reactTo({ kind: "idle" })),
-        SLEEP_AFTER_MS,
+        () => play(reactTo({ kind: "idle" }, tierRef.current)),
+        sleepAfterMs(),
       );
-      play(reactTo(signal));
+      play(reactTo(signal, tierRef.current));
     },
     [play],
   );
 
-  const pushBox = useCallback((width: number, height: number) => {
-    void invoke("set_ai_hub_bubble_box", { width, height }).catch(() => {});
-  }, []);
+  /** 节流旁白：干活/思考时偶发一句，安静模式由 say 自己挡。 */
+  const maybeMutter = useCallback(
+    (topic: "think" | "work") => {
+      const now = Date.now();
+      const cd = topic === "think" ? MUTTER_THINK_CD_MS : MUTTER_WORK_CD_MS;
+      if (now - mutterAtRef.current < cd) return;
+      mutterAtRef.current = now;
+      play(reactTo({ kind: "mutter", topic }, tierRef.current));
+    },
+    [play],
+  );
+
+  /** 企微回合专属旁白（安静模式仍演情绪，只是不说话）。 */
+  const wecomAside = useCallback(
+    (phase: "start" | "wait" | "done" | "err") => {
+      const now = Date.now();
+      if (now - mutterAtRef.current < 8_000) return;
+      mutterAtRef.current = now;
+      const pool =
+        phase === "start"
+          ? "wecomStart"
+          : phase === "wait"
+            ? "wecomWait"
+            : phase === "done"
+              ? "wecomDone"
+              : "wecomErr";
+      say(t(pickPoolKey(tierRef.current, pool)));
+    },
+    [say, t],
+  );
+
+  const isWecomId = (id: unknown) =>
+    typeof id === "string" && id.startsWith("wecom-");
 
   useEffect(() => {
     document.documentElement.classList.add("qa-bubble-mode");
@@ -174,24 +350,95 @@ export default function AiHubBubble() {
       if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
         await invoke("set_ai_hub_bubble_position", { x: pos.x, y: pos.y }).catch(() => {});
       }
-      await invoke("set_ai_hub_bubble_box", {
-        width: cfgRef.current.size,
-        height: cfgRef.current.size,
-      }).catch(() => {});
+      // 一上来就带头顶留白，说话时才不会再改尺寸导致人物跳
+      syncBoxRef.current();
       await invoke("ai_hub_bubble_ready").catch(() => {});
       // 没人摸它也要会困：倒计时从显窗那刻就得起，不能等第一条事件。
       sleepTimerRef.current = window.setTimeout(
-        () => play(reactTo({ kind: "idle" })),
-        SLEEP_AFTER_MS,
+        () => play(reactTo({ kind: "idle" }, tierRef.current)),
+        sleepAfterMs(),
       );
 
-      // 待机时自己唠叨一句（安静模式 / 菜单开着 / 正在干活时都不吭声）
+      // 每日首次见面问候 + 微衰减
+      const today = todayKey();
+      const prev = greetedOnRef.current;
+      const decayed = dailyDecay(affinityRef.current, prev, today);
+      if (decayed !== affinityRef.current) {
+        affinityRef.current = decayed;
+        setAffinity(decayed);
+        setSettings({ aiHubPetAffinity: decayed });
+      }
+      if (prev !== today && !cfgRef.current.quiet) {
+        greetedOnRef.current = today;
+        setSettings({ aiHubPetGreetedOn: today });
+        window.setTimeout(() => play(reactTo({ kind: "greet", slot: greetingSlot() })), 600);
+      }
+
+      // 待机碎碎念（按好感分档）；thinking/working 偶尔也冒一句
       chatterTimer = window.setInterval(() => {
         if (cfgRef.current.quiet || menuOpenRef.current || dragRef.current) return;
-        if (moodRef.current !== "idle" && moodRef.current !== "sleepy") return;
-        const keys = ["petChatter1", "petChatter2", "petChatter3", "petChatter4"];
-        say(t(keys[Math.floor(Math.random() * keys.length)]));
-      }, 105_000);
+        if (speechShowingRef.current) return;
+        const m = moodRef.current;
+        if (m === "idle" || m === "sleepy") {
+          say(t(pickPoolKey(tierRef.current, "chatter")));
+          return;
+        }
+        if ((m === "thinking" || m === "working") && Math.random() < 0.35) {
+          say(t(pickPoolKey(tierRef.current, m === "working" ? "mutterWork" : "mutterThink")));
+        }
+      }, 90_000 + Math.floor(Math.random() * 50_000));
+
+      // idle 微行为：偏重有立绘的动作，间隔拉长对齐鱼娘节奏
+      const scheduleMicro = () => {
+        microTimerRef.current = window.setTimeout(() => {
+          microTimerRef.current = null;
+          if (
+            !menuOpenRef.current &&
+            !dragRef.current &&
+            !speechShowingRef.current &&
+            moodRef.current === "idle" &&
+            phaseRef.current === "idle"
+          ) {
+            const picks: PetMicro[] = [
+              "wave",
+              "wave",
+              "peek",
+              "peek",
+              "bounce",
+              "nod",
+              "nod",
+              "shy",
+              "stretch",
+              "ear",
+              // glance 少抽：横移多了像左右晃
+              "glance",
+            ];
+            const next = picks[Math.floor(Math.random() * picks.length)]!;
+            const hold =
+              next === "wave" || next === "peek" || next === "bounce" || next === "shy"
+                ? 1300
+                : 1100;
+            clearTimer(microHoldTimerRef);
+            setMicro(next);
+            microHoldTimerRef.current = window.setTimeout(() => {
+              setMicro("none");
+              microHoldTimerRef.current = null;
+            }, hold);
+            if (
+              Math.random() < 0.18 &&
+              (next === "wave" ||
+                next === "peek" ||
+                next === "bounce" ||
+                next === "stretch" ||
+                next === "nod")
+            ) {
+              say(t(pickPoolKey(tierRef.current, "micro")));
+            }
+          }
+          scheduleMicro();
+        }, 12000 + Math.random() * 14000);
+      };
+      scheduleMicro();
     })();
 
     let unlistenTheme: (() => void) | undefined;
@@ -208,8 +455,8 @@ export default function AiHubBubble() {
       const next = normalizePetConfig({ ...cfgRef.current, ...payload });
       setCfg(next);
       if (next.size !== cfgRef.current.size) {
-        // 用 ref 而不是闭包里的 menuOpen：这个监听只注册一次，闭包里的值永远是首次渲染的 false
-        pushBox(next.size, next.size + (menuOpenRef.current ? PET_MENU_EXTRA : 0));
+        // 用 ref：这个监听只注册一次，闭包里的 syncBox 会过期
+        syncBoxRef.current();
       }
       // 主窗换了自备素材（导入或清除）：重读目录，皮肤清单才会变
       if (payload.packRev !== undefined && payload.packRev !== packRevRef.current) {
@@ -241,6 +488,10 @@ export default function AiHubBubble() {
       window.clearInterval(chatterTimer);
       clearTimer(fireTimerRef);
       clearTimer(landTimerRef);
+      clearTimer(hugTimerRef);
+      clearTimer(gestureTimerRef);
+      clearTimer(microTimerRef);
+      clearTimer(microHoldTimerRef);
       clearTimer(hoverTimerRef);
       clearTimer(clickTimerRef);
       clearTimer(speechTimerRef);
@@ -262,27 +513,83 @@ export default function AiHubBubble() {
         else offs.push(un);
       });
     };
-    on<{ status: string }>("agent-step", (payload) => {
+    on<{ id?: string; status: string }>("agent-step", (payload) => {
+      const wecom = isWecomId(payload.id);
       // done / info 只是单步收尾与通知（MCP 探测、压缩提示、重试预告…）：
       // 不代表真的在执行动作，不动情绪——否则没干活的时候熊猫也举键盘盒。
-      if (payload.status === "done" || payload.status === "info") return;
+      if (payload.status === "done" || payload.status === "info") {
+        workStartedAtRef.current = 0;
+        return;
+      }
+      if (payload.status === "running" || payload.status === "retry") {
+        if (!workStartedAtRef.current) {
+          workStartedAtRef.current = Date.now();
+          if (wecom) wecomAside("start");
+        }
+        agentStickyRef.current = "working";
+        react({ kind: "step", status: payload.status });
+        if (!wecom && Date.now() - workStartedAtRef.current >= MUTTER_WORK_AFTER_MS) {
+          maybeMutter("work");
+        }
+        return;
+      }
+      workStartedAtRef.current = 0;
+      if (payload.status === "conflict") agentStickyRef.current = "waiting";
+      else agentStickyRef.current = null;
       react({ kind: "step", status: payload.status });
     });
-    on("agent-plan", () => react({ kind: "plan" }));
-    on("agent-approval", () => react({ kind: "approval" }));
-    // 流式每 token 一条：已经在思考就别再重渲一次。
-    on("generate-text-chunk", () => {
-      if (moodRef.current !== "thinking") react({ kind: "stream" });
+    on<{ id?: string }>("agent-plan", (payload) => {
+      agentStickyRef.current = "thinking";
+      react({ kind: "plan" });
+      if (isWecomId(payload?.id)) wecomAside("start");
+      else maybeMutter("think");
     });
-    on<{ elapsedMs?: number; limited?: boolean }>("generate-text-done", (payload) =>
-      react(payload.limited ? { kind: "limited" } : { kind: "done", elapsedMs: payload.elapsedMs ?? 0 }),
-    );
-    on("generate-text-error", () => react({ kind: "error" }));
+    on<{ id?: string }>("agent-approval", (payload) => {
+      agentStickyRef.current = "waiting";
+      react({ kind: "approval" });
+      if (isWecomId(payload?.id)) wecomAside("wait");
+    });
+    // 流式每 token 一条：已经在思考就别再重渲一次。
+    on<{ id?: string }>("generate-text-chunk", (payload) => {
+      if (moodRef.current !== "thinking") {
+        agentStickyRef.current = "thinking";
+        react({ kind: "stream" });
+        if (isWecomId(payload?.id)) wecomAside("start");
+        else maybeMutter("think");
+      }
+    });
+    on<{ id?: string; elapsedMs?: number; limited?: boolean }>("generate-text-done", (payload) => {
+      workStartedAtRef.current = 0;
+      agentStickyRef.current = null;
+      react(
+        payload.limited
+          ? { kind: "limited" }
+          : { kind: "done", elapsedMs: payload.elapsedMs ?? 0 },
+      );
+      if (isWecomId(payload?.id)) wecomAside(payload.limited ? "err" : "done");
+    });
+    on<{ id?: string }>("generate-text-error", (payload) => {
+      workStartedAtRef.current = 0;
+      agentStickyRef.current = null;
+      react({ kind: "error" });
+      if (isWecomId(payload?.id)) wecomAside("err");
+    });
     return () => {
       dead = true;
       offs.forEach((off) => off());
     };
-  }, [react]);
+  }, [maybeMutter, react, wecomAside]);
+
+  /** 等审批太久再催一声（鱼娘会摇尾巴提醒）。 */
+  useEffect(() => {
+    clearTimer(waitNudgeRef);
+    if (mood !== "waiting") return;
+    waitNudgeRef.current = window.setInterval(() => {
+      if (cfgRef.current.quiet || speechShowingRef.current) return;
+      say(t(pickPoolKey(tierRef.current, "waiting")));
+    }, WAIT_NUDGE_MS);
+    return () => clearTimer(waitNudgeRef);
+  }, [mood, say, t]);
 
   const persistPosition = useCallback(
     async (x: number, y: number) => {
@@ -350,37 +657,71 @@ export default function AiHubBubble() {
     [setSettings],
   );
 
-  /** 换装：麻薯 → 超级玛丽 → 原始悬浮球，循环 */
+  /** 换装：熊猫娘 → 圆盘 →（有素材时）自备包，循环 */
   const cyclePet = useCallback(() => {
     setSkin(nextPetSkin(cfgRef.current.skin));
     playFire();
     react({ kind: "swap" });
   }, [playFire, react, setSkin]);
 
-  /** 单击：宠物先做个反应，稍等确认不是双击再打开天玑 */
-  const handleTap = useCallback(() => {
-    playFire();
-    react({ kind: "tap", skin: cfgRef.current.skin });
-    if (clickTimerRef.current != null) return;
-    clickTimerRef.current = window.setTimeout(() => {
-      clickTimerRef.current = null;
-      void invoke("show_ai_hub").catch((err) => console.error(err));
-    }, DOUBLE_CLICK_MS);
-  }, [playFire, react]);
+  /**
+   * 分区单击：
+   * - 睡着：先迷糊醒来，不开天玑
+   * - 头 / 裙边：只互动
+   * - 身：连戳满 3 次害羞；否则戳一下后延迟开天玑
+   */
+  const handleZoneTap = useCallback(
+    (zone: HitZone) => {
+      playFire();
+      if (moodRef.current === "sleepy") {
+        react({ kind: "wake" });
+        bodyTapRef.current = { count: 0, at: 0 };
+        return;
+      }
+      if (zone === "head") {
+        react({ kind: "pat" });
+        return;
+      }
+      if (zone === "tail") {
+        react({ kind: "tail" });
+        return;
+      }
+      const now = Date.now();
+      if (now - bodyTapRef.current.at < SHY_WINDOW_MS) {
+        bodyTapRef.current.count += 1;
+      } else {
+        bodyTapRef.current.count = 1;
+      }
+      bodyTapRef.current.at = now;
+      if (bodyTapRef.current.count >= 3) {
+        react({ kind: "shy" });
+        bodyTapRef.current = { count: 0, at: 0 };
+        return;
+      }
+      react({ kind: "poke", skin: cfgRef.current.skin });
+      if (clickTimerRef.current != null) return;
+      clickTimerRef.current = window.setTimeout(() => {
+        clickTimerRef.current = null;
+        void invoke("show_ai_hub").catch((err) => console.error(err));
+      }, DOUBLE_CLICK_MS);
+    },
+    [playFire, react],
+  );
 
   const closeMenu = useCallback(() => {
     setMenuOpen(false);
-    pushBox(cfgRef.current.size, cfgRef.current.size);
-  }, [pushBox]);
+    menuOpenRef.current = false;
+    syncBox();
+  }, [syncBox]);
 
   const toggleMenu = useCallback(() => {
     setMenuOpen((open) => {
       const next = !open;
-      const size = cfgRef.current.size;
-      pushBox(size, next ? size + PET_MENU_EXTRA : size);
+      menuOpenRef.current = next;
+      syncBox();
       return next;
     });
-  }, [pushBox]);
+  }, [syncBox]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -390,13 +731,37 @@ export default function AiHubBubble() {
       return;
     }
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const zone = hitZoneAt(e, rootRef.current);
     dragRef.current = {
       startX: e.screenX,
       startY: e.screenY,
       moved: false,
       dragging: false,
+      zone,
+      hugged: false,
     };
+    setPressZone(zone);
     setPhase("pressed");
+    dragSaidRef.current = false;
+    // 身区长按 = 抱一下；头区长按 = 多摸一会儿（未拖动）
+    clearTimer(hugTimerRef);
+    if (zone === "body") {
+      hugTimerRef.current = window.setTimeout(() => {
+        hugTimerRef.current = null;
+        const d = dragRef.current;
+        if (!d || d.moved || d.dragging) return;
+        d.hugged = true;
+        react({ kind: "hug" });
+      }, HUG_HOLD_MS);
+    } else if (zone === "head") {
+      hugTimerRef.current = window.setTimeout(() => {
+        hugTimerRef.current = null;
+        const d = dragRef.current;
+        if (!d || d.moved || d.dragging) return;
+        d.hugged = true;
+        react({ kind: "pat" });
+      }, HEAD_HOLD_MS);
+    }
   };
 
   /**
@@ -416,10 +781,12 @@ export default function AiHubBubble() {
     gazeKeyRef.current = key;
     // 图像层跟着光标同向平移（光标在右边就往右挪，就是"看过去"），
     // 身体层的 rotateX 反过来：负角 = 顶端前倾，才像低头凑近而不是后仰。
-    el.style.setProperty("--qa-tilt-x", (gx * 3.2 * k).toFixed(2));
-    el.style.setProperty("--qa-tilt-y", (-gy * 2.4 * k).toFixed(2));
-    el.style.setProperty("--qa-gaze-x", (gx * 3.6 * k).toFixed(2));
-    el.style.setProperty("--qa-gaze-y", (gy * 2.4 * k).toFixed(2));
+    // 倾角收一点：整只扭太狠会显得「永远斜着」；主要靠视线位移
+    // 身体倾角再收一档；左右晃主要靠视线位移，别整只拧
+    el.style.setProperty("--qa-tilt-x", (gx * 1.2 * k).toFixed(2));
+    el.style.setProperty("--qa-tilt-y", (-gy * 1.0 * k).toFixed(2));
+    el.style.setProperty("--qa-gaze-x", (gx * 3.2 * k).toFixed(2));
+    el.style.setProperty("--qa-gaze-y", (gy * 2.2 * k).toFixed(2));
   }, []);
 
   /** 指针在窗内：用局部坐标，比全局光标更跟手（窗很小，局部能给到满幅）。 */
@@ -437,6 +804,21 @@ export default function AiHubBubble() {
 
   const onPointerMove = async (e: React.PointerEvent) => {
     aimAt(e);
+    // 悬停摸头：从身上滑到头顶也要能触发（不只 pointerEnter）
+    if (hoverRef.current && !dragRef.current) {
+      const zone = hitZoneAt(e, rootRef.current);
+      if (zone === "head") {
+        if (hoverTimerRef.current == null) {
+          hoverTimerRef.current = window.setTimeout(() => {
+            hoverTimerRef.current = null;
+            if (dragRef.current || menuOpenRef.current) return;
+            react({ kind: "pat" });
+          }, 1100);
+        }
+      } else {
+        clearTimer(hoverTimerRef);
+      }
+    }
     const d = dragRef.current;
     if (!d) return;
     const dx = e.screenX - d.startX;
@@ -444,7 +826,12 @@ export default function AiHubBubble() {
     if (!d.moved && Math.hypot(dx, dy) >= CLICK_MOVE_PX) {
       d.moved = true;
       d.dragging = true;
+      clearTimer(hugTimerRef);
       setPhase("dragging");
+      if (!dragSaidRef.current) {
+        dragSaidRef.current = true;
+        say(t(pickPoolKey(tierRef.current, "drag")));
+      }
       try {
         await getCurrentWindow().startDragging();
       } catch {
@@ -456,34 +843,47 @@ export default function AiHubBubble() {
   const endPointer = async (e: React.PointerEvent, cancelled: boolean) => {
     const d = dragRef.current;
     dragRef.current = null;
+    clearTimer(hugTimerRef);
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
       /* ignore */
     }
+    setPressZone(null);
     if (!d || cancelled) {
       setPhase("idle");
       return;
     }
     if (d.moved || d.dragging) {
       await snapAndPersist();
-      // 放手后回弹一下再站定：直接切 idle 会像贴纸瞬移
+      // 放手：落地弹一下 + 欢呼表情，再站定
       setPhase("landing");
+      setMicro("bounce");
+      clearTimer(microHoldTimerRef);
       clearTimer(landTimerRef);
       landTimerRef.current = window.setTimeout(() => {
         setPhase("idle");
+        setMicro("none");
         landTimerRef.current = null;
-      }, 320);
+      }, 500);
       return;
     }
-    // 第二击落在双击窗口内 → 换装，取消本已排队的「打开天玑」
-    if (clickTimerRef.current != null) {
-      window.clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
+    // 已经触发过抱：松手不再当单击，也不开窗
+    if (d.hugged) {
+      setPhase("idle");
+      return;
+    }
+    // 第二击落在双击窗口内 → 换装，取消本已排队的「打开天玑」。
+    // 只有身区单击会排队开窗，头 / 裙边 / 睡醒那一下不排，所以不能拿计时器判双击。
+    const now = Date.now();
+    if (now - lastTapAtRef.current < DOUBLE_CLICK_MS) {
+      lastTapAtRef.current = 0;
+      clearTimer(clickTimerRef);
       cyclePet();
       return;
     }
-    handleTap();
+    lastTapAtRef.current = now;
+    handleZoneTap(d.zone);
   };
 
   const runMenuItem = (action: () => void) => {
@@ -501,14 +901,16 @@ export default function AiHubBubble() {
       onPointerMove={(e) => void onPointerMove(e)}
       onPointerUp={(e) => void endPointer(e, false)}
       onPointerCancel={(e) => void endPointer(e, true)}
-      onPointerEnter={() => {
+      onPointerEnter={(e) => {
         hoverRef.current = true;
-        // 摸头：停够 1.1 秒才高兴，扫过去不算
+        // 摸头：停在头区够 1.1 秒才高兴，扫过去不算
         clearTimer(hoverTimerRef);
+        const zone = hitZoneAt(e, rootRef.current);
+        if (zone !== "head") return;
         hoverTimerRef.current = window.setTimeout(() => {
           hoverTimerRef.current = null;
           if (dragRef.current || menuOpenRef.current) return;
-          react({ kind: "tap", skin: cfgRef.current.skin });
+          react({ kind: "pat" });
         }, 1100);
       }}
       onPointerLeave={() => {
@@ -526,9 +928,25 @@ export default function AiHubBubble() {
     >
       <div className="qa-bubble-stage">
         <div className="qa-bubble-aura" aria-hidden />
-        <PetStage skin={skinDef} mood={mood} phase={phase} />
-        {speech && !menuOpen && <span className="qa-pet-speech">{speech}</span>}
+        <PetStage
+          skin={skinDef}
+          mood={mood}
+          phase={phase}
+          bondTier={tier}
+          gesture={gesture}
+          micro={micro}
+          celebrate={celebrate}
+          pressZone={pressZone}
+        />
       </div>
+      {speech && !menuOpen && (
+        <span
+          className={`qa-pet-speech${speech.length > 10 ? " is-long" : ""}${speech.length > 18 ? " is-xl" : ""}`}
+          role="status"
+        >
+          {speech}
+        </span>
+      )}
       {menuOpen && (
         <div
           className="qa-bubble-menu"

@@ -82,7 +82,7 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
       return;
     }
     // Nothing insertable: a `/` is just text, don't pop an empty picker.
-    if (!(snippets || []).some((s) => s.kind !== "prompt")) return;
+    if (!(snippets || []).length) return;
     setSlashMode(true);
     setSnippetOpen(true);
     setSnippetQuery(hit.query);
@@ -90,9 +90,7 @@ export function useAskSnippets(opts: AskSnippetsOptions) {
 
   const snippetChoices = useMemo(() => {
     const q = snippetQuery.trim().toLowerCase();
-    // Prompt Studio templates (kind='prompt') are optimizer recipes, not insertable fragments
     const list = [...(snippets || [])]
-      .filter((s) => s.kind !== "prompt")
       .sort((a, b) => b.useCount - a.useCount || b.updatedAt.localeCompare(a.updatedAt));
     const filtered = q
       ? list.filter(

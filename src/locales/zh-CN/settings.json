@@ -10,10 +10,16 @@
     "about": "关于版本",
     "groupInteraction": "交互权限",
     "groupCapability": "助手能力",
-    "groupBudget": "预算兼容"
+    "groupBudget": "预算兼容",
+    "groupWeb": "网页抓取",
+    "groupMcp": "MCP 服务",
+    "groupWecom": "企微机器人"
   },
   "net": {
-    "title": "联网扩展"
+    "title": "联网扩展",
+    "groupFetch": "抓取白名单",
+    "groupMcpSwitch": "总开关",
+    "groupMcpServers": "服务列表"
   },
   "general": {
     "title": "常规设置",
@@ -41,10 +47,10 @@
     "suggestHint": "预测要多打一次模型（算进下面的用量台账）。关掉只少一条建议，问答本身不受影响。",
     "bubble": "桌面宠物",
     "petEnabled": "显示桌面宠物",
-    "bubbleHint": "桌面右下角的桌面宠物：单击打开天玑，双击换装，可拖动贴边，右键出就地菜单。它还会跟着天玑干活——跑命令时颠、等审批时拍玻璃、跑完撒花。也可用快捷键或托盘。",
+    "bubbleHint": "桌面右下角的熊猫娘：摸头/碰尾只互动，点肚皮打开天玑，长按抱抱，双击换装，拖动贴边，右键菜单。跟着天玑干活——跑命令时颠、等审批时催你、跑完撒花；越摸越好感。也可用快捷键或托盘。",
     "petSkin": "桌宠形象",
     "petNameOrb": "悬浮球",
-    "petNamePanda": "熊猫团子",
+    "petNamePanda": "熊猫娘",
     "petNameCustom": "自备形象",
     "petImport": "导入形象",
     "petImportEmpty": "还没有自备素材，导入了才有得换。",
@@ -90,7 +96,7 @@
     "webAllowHint": "每行/逗号分隔，子域自动允许（写 example.com 就含 api.example.com）。留空 = 天玑没有联网抓取能力。只抓 https、跳转只在白名单内跟随（最多 3 跳）、不抓内网地址，每次抓取仍会先问你。",
     "mcp": "MCP 服务",
     "mcpEmpty": "还没有配置。填一行就能用：名字（进工具名）、启动命令、参数。",
-    "mcpEnabled": "启用（关掉后工具完全不下发）",
+    "mcpEnabled": "启用 MCP",
     "mcpName": "名字（字母数字下划线），如 fs",
     "mcpCommand": "命令，如 npx",
     "mcpArgs": "参数，如 -y @modelcontextprotocol/server-filesystem \"D:\\work\"",
@@ -147,7 +153,6 @@
     "resultCapHint": "单条工具结果回灌给模型的上限（默认 12k 字符），超出保留头尾并给出续读提示。调小能省 token，但长日志、大文件会被截得更碎。",
     "anthropicStream": "Anthropic 走流式",
     "anthropicStreamHint": "默认开：回答逐字出现，能看到进度。有些中转网关的 SSE 会中途断流，那时关掉它改走普通请求，代价是回答要等整段生成完才出现。",
-    "mcpEnabled": "启用 MCP",
     "mcpEnabledHint": "总开关。关掉后这一轮不会为任何服务起进程、也不下发 mcp_* 工具，等于临时停用下面整张表；单个服务的开关仍然各自生效。",
     "freshContext": "复用上下文缓存",
     "freshContextHint": "默认开：两分钟内连续提问会复用上次采集的 git 数据，并先用工作区指纹确认文件没变。关掉后每次提问都重新采集——改动一定是最新的，代价是每次多等一下。"
@@ -205,5 +210,60 @@
     "skippedCleared": "已清除对 v{{version}} 的跳过，下次启动会重新提示",
     "checkFailed": "检查更新失败: {{error}}",
     "privacyNote": "API Key 仅保存在本机 SQLite，请勿分享数据库文件"
+  },
+  "wecom": {
+    "title": "企业微信机器人",
+    "groupConnection": "连接",
+    "groupAccess": "访问策略",
+    "groupPairing": "配对与白名单",
+    "hint": "接入企微「智能机器人」API 长连接（Bot ID + Secret）。本机出站即可，无需公网回调。私聊默认配对；群聊默认白名单。企微侧群聊一般只有 @ 才会推送。",
+    "enabled": "启用通道",
+    "status": "连接状态",
+    "restart": "重新连接",
+    "restarted": "已请求重连",
+    "saved": "已保存并同步到通道",
+    "botId": "Bot ID",
+    "botSecret": "Secret",
+    "secretKept": "已保存（留空不改）",
+    "secretPlaceholder": "长连接专用 Secret",
+    "displayName": "机器人显示名",
+    "displayNamePlaceholder": "用于去掉群聊 @名字",
+    "dmPolicy": "私聊策略",
+    "groupPolicy": "群聊策略",
+    "requireMention": "群聊提示请 @",
+    "allowUsers": "用户白名单",
+    "allowGroups": "群聊白名单",
+    "permission": "渠道权限",
+    "repoPath": "工作区路径",
+    "repoPlaceholder": "默认当前 Git 工作区",
+    "pairingTitle": "待配对",
+    "pairingEmpty": "没有待批准的配对请求",
+    "pairedList": "已配对用户",
+    "approve": "批准",
+    "revoke": "撤销",
+    "paired": "已批准 {{userid}}",
+    "fullConfirm": "完全权限可操作整台电脑，且企微侧可触发。确定要开启吗？",
+    "policy": {
+      "pairing": "配对",
+      "allowlist": "白名单",
+      "open": "开放",
+      "disabled": "关闭"
+    },
+    "perm": {
+      "read": "只读",
+      "workspace": "编辑",
+      "review": "审查",
+      "full": "完全"
+    },
+    "state": {
+      "disconnected": "未连接",
+      "connecting": "连接中",
+      "connected": "已连接",
+      "reconnecting": "重连中",
+      "error": "错误"
+    },
+    "requireMentionHint": "企微侧群聊一般只有 @ 才会推送；本开关只管欢迎语与提示文案。群要用请先加群白名单。",
+    "showSecret": "查看密钥",
+    "hideSecret": "隐藏密钥"
   }
 }

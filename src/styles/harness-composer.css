@@ -110,8 +110,7 @@
   color: var(--text-3);
 }
 
-/* 钉住的任务模式 chip：住在输入卡片元信息行、挨着工作区选择器，
-   整颗可点、点一下解除回到自动 */
+/* 钉住的任务模式 chip：独占 qa-mode-pin-row，整颗可点、点一下解除回到轨默认 */
 .qa-mode-pin-chip {
   display: inline-flex;
   align-items: center;

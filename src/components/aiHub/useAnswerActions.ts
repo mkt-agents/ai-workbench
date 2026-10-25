@@ -36,7 +36,14 @@ export function useAnswerActions(opts: {
     const question = history[index - 1]?.content;
     const name = makeTitle(question || text, t("saveSnippet"));
     try {
-      await addSnippet({ name, content: text, tags: "aihub,ai", params: "" });
+      await addSnippet({
+        name,
+        content: text,
+        tags: "aihub,ai",
+        params: "",
+        kind: "prompt",
+        scenario: "general",
+      });
       setSnippetSaved(index);
       window.setTimeout(() => setSnippetSaved((cur) => (cur === index ? null : cur)), 1500);
     } catch (e) {

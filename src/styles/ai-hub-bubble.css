@@ -383,8 +383,14 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   .qa-pet-speech,
   .qa-fx,
   .qa-fx i,
+  .qa-fx-petals,
+  .qa-fx-petals i,
   .qa-bubble-menu {
     animation: none !important;
+  }
+
+  .qa-fx-petals {
+    display: none !important;
   }
 
   /* 视线位移也跟着关：这里是"不想看动效"，不是"看不清方向"。
@@ -599,7 +605,7 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   color: var(--yellow);
   animation: qa-fx-knock-in 1.1s ease-in-out infinite;
 }
-/* 干活：一颗小点绕着身体转 */
+/* 干活：几颗小点错开绕着身体转 */
 .qa-fx-orbit {
   inset: 6%;
   animation: qa-fx-orbit 1.4s linear infinite;
@@ -613,6 +619,24 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   margin-left: -2.5px;
   border-radius: var(--radius-full);
   background: var(--accent);
+}
+.qa-fx-orbit-busy i:nth-child(2) {
+  top: auto;
+  bottom: 8%;
+  opacity: 0.7;
+  transform: scale(0.85);
+  animation: none;
+}
+.qa-fx-orbit-busy i:nth-child(3) {
+  top: 42%;
+  left: 8%;
+  margin-left: 0;
+  opacity: 0.55;
+  transform: scale(0.7);
+  animation: none;
+}
+.qa-fx-orbit-busy {
+  animation-duration: 1.05s;
 }
 /* 成功：三颗火花错开往外蹦（容器铺满身体，子粒子才按百分比定位得准） */
 .qa-fx-spark {
@@ -639,6 +663,82 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   top: 18%;
   left: 74%;
   animation-delay: 0.24s;
+}
+/* 撒花：真·花瓣下落（对齐大肥鱼庆祝感；不只火花+♥） */
+.qa-fx-petals {
+  inset: -8% 0 0;
+  overflow: visible;
+}
+.qa-fx-petals i {
+  position: absolute;
+  top: 8%;
+  left: calc(12% + (var(--p) * 7%));
+  width: 7px;
+  height: 9px;
+  border-radius: 50% 50% 50% 0;
+  background: color-mix(in srgb, var(--accent) 70%, #f5a9b8);
+  opacity: 0;
+  transform: rotate(calc(var(--p) * 28deg));
+  animation: qa-fx-petal 1.35s ease-out both;
+  animation-delay: calc(var(--p) * 55ms);
+}
+.qa-fx-petals i:nth-child(odd) {
+  background: color-mix(in srgb, var(--green) 55%, #ffe08a);
+}
+@keyframes qa-fx-petal {
+  0% {
+    opacity: 0;
+    transform: translateY(0) rotate(0deg) scale(0.6);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(78%) translateX(12%) rotate(160deg) scale(1);
+  }
+}
+/* 等审批：两滴冷汗 */
+.qa-fx-sweat {
+  top: 14%;
+  right: 10%;
+  width: 10px;
+  height: 18px;
+}
+.qa-fx-sweat i {
+  position: absolute;
+  width: 5px;
+  height: 8px;
+  border-radius: 40% 40% 50% 50%;
+  background: color-mix(in srgb, var(--accent) 55%, #fff);
+  opacity: 0;
+  animation: qa-fx-sweat 1.2s ease-in-out infinite;
+}
+.qa-fx-sweat i:nth-child(2) {
+  left: 6px;
+  top: 4px;
+  animation-delay: 0.35s;
+  transform: scale(0.85);
+}
+@keyframes qa-fx-sweat {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+.qa-fx-heart-2 {
+  left: 58%;
+  top: 6%;
+  animation-delay: 0.18s;
+  font-size: 0.85em;
+  opacity: 0.85;
 }
 /* 失败：头顶一小片乌云。透明窗叠在任意桌面上，用 --overlay-4 那种 12% 叠加色等于没有 */
 .qa-fx-cloud {
@@ -670,26 +770,100 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   animation: qa-fx-zzz 2.8s ease-in-out infinite;
 }
 
-/* 互动气泡语 */
+/* 互动气泡语：常驻头顶留白里淡入淡出（不改窗）；短句胶囊、长句圆角卡，按字数降字号 */
 .qa-pet-speech {
+  --qa-speech-fill: color-mix(in srgb, var(--float-bar-bg) 92%, #fff 8%);
+  --qa-speech-edge: color-mix(in srgb, var(--accent-border) 40%, var(--border));
   position: absolute;
-  top: 2px;
   left: 50%;
+  bottom: calc(var(--qa-bubble-size) + 8px);
+  top: auto;
   transform: translateX(-50%);
-  max-width: calc(var(--qa-bubble-size) - 16px);
-  padding: 2px 8px;
-  font-size: 10px;
-  line-height: 1.35;
+  z-index: 30;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100% - 12px);
+  padding: 7px 14px 8px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+  text-align: center;
   color: var(--text-0);
-  background: var(--float-bar-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--float-bar-bg) 40%, transparent),
+      transparent 48%
+    ),
+    var(--qa-speech-fill);
+  border: 1px solid var(--qa-speech-edge);
+  border-radius: var(--radius-full);
+  box-shadow:
+    var(--surface-highlight),
+    0 1px 2px rgba(var(--ink-rgb), 0.06),
+    0 8px 20px color-mix(in srgb, var(--accent) 16%, transparent);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
   pointer-events: none;
-  animation: qa-pet-speech-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: qa-pet-speech-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 略长：允许折行，圆角从胶囊改成对话卡 */
+.qa-pet-speech.is-long {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border-radius: var(--radius-xl);
+  padding: 8px 12px 9px;
+  line-height: 1.4;
+}
+
+/* 更长：再降一号字，塞进头顶留白 */
+.qa-pet-speech.is-xl {
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+  padding: 7px 11px 8px;
+  border-radius: var(--radius-lg);
+  max-width: calc(100% - 8px);
+}
+
+/* 底侧柔光，别抢角色 */
+.qa-pet-speech::before {
+  content: "";
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: -10px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--accent) 28%, transparent),
+    transparent 70%
+  );
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+/* 指向角色的小三角 */
+.qa-pet-speech::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: var(--qa-speech-fill);
+  border-right: 1px solid var(--qa-speech-edge);
+  border-bottom: 1px solid var(--qa-speech-edge);
+  border-radius: 1px;
+  transform: rotate(45deg);
 }
 
 /* —— 就地菜单：右键唤出，撑高只往头顶长 —— */
@@ -878,7 +1052,11 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
 @keyframes qa-pet-speech-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(4px) scale(0.9);
+    transform: translateX(-50%) translateY(6px) scale(0.9);
+  }
+  70% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-1px) scale(1.02);
   }
   to {
     opacity: 1;

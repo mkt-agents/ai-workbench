@@ -92,7 +92,7 @@ export interface AiHubChips {
 }
 
 /** AI call sites that can bind a preferred model (else fall back to default). */
-export type AiScene = 'aiHub' | 'report' | 'commit' | 'optimize';
+export type AiScene = 'aiHub' | 'report' | 'commit';
 
 export type AiSceneModels = Partial<Record<AiScene, string>>;
 
@@ -132,10 +132,12 @@ export interface AppSettings {
   aiHubExtraRepos?: string[];
   /** Sidebar menu customization (menu manager page): renames / order / custom groups. */
   navCustomization?: NavCustomization;
-  /** Last used ai-hub task (encoded, see aiHub/config encodeTask) */
+  /** @deprecated Prompt-optimize task removed; kept so old settings JSON still parses. */
   aiHubLastTask?: string;
   /** 任务模式（chat / code / doc / data / research / ops），决定工具子集与上下文采集。 */
   aiHubTaskMode?: string;
+  /** 产品轨：code | work。与任务模式正交；work 默认按 doc 收窄工具。 */
+  aiHubTrack?: 'code' | 'work';
   /** Predict the next prompt after every answer (one extra model call per round). */
   aiHubSuggest?: boolean;
   /** 编辑档的写入也先弹 diff 确认（默认关）。 */
@@ -182,6 +184,10 @@ export interface AppSettings {
   aiHubPetSize?: number;
   /** 安静模式：不冒话、不做主动情绪反应，只保留状态动画。 */
   aiHubPetQuiet?: boolean;
+  /** 桌宠好感度 0–100：影响话术档、腮红与撒花密度（无仪表盘 UI）。 */
+  aiHubPetAffinity?: number;
+  /** 今日已问候日期 `YYYY-MM-DD`，避免一天内重复早安。 */
+  aiHubPetGreetedOn?: string;
   /** One-shot tip after first close-to-tray */
   trayHintShown?: boolean;
   /** Preferred model id per AI scene (missing → global default). */
@@ -190,6 +196,24 @@ export interface AppSettings {
   aiHubProfiles?: AiHubProfile[];
   /** Active AI Hub profile id (builtin:* or custom). */
   aiHubProfileId?: string;
+  /** 企微智能机器人通道 */
+  wecomEnabled?: boolean;
+  wecomBotId?: string;
+  /** DPAPI enc:v1:… 密文 */
+  wecomBotSecret?: string;
+  wecomBotDisplayName?: string;
+  /** pairing | allowlist | open | disabled */
+  wecomDmPolicy?: string;
+  /** allowlist | open | disabled */
+  wecomGroupPolicy?: string;
+  wecomRequireMention?: boolean;
+  wecomAllowUsers?: string[];
+  wecomAllowGroups?: string[];
+  wecomPairedUsers?: string[];
+  /** read | workspace | review | full；默认 read */
+  wecomPermission?: string;
+  /** 空 = 用 currentGitRepo */
+  wecomRepoPath?: string;
 }
 
 /** Named AI Hub preset: role + optional temperature/model. */
@@ -205,7 +229,8 @@ export interface AiHubProfile {
   builtin?: boolean;
 }
 
-export type SnippetKind = 'text' | 'prompt';
+/** Writes are always `'prompt'`; `'text'` only appears in old rows until loadSnippets migrates. */
+export type SnippetKind = 'prompt' | 'text';
 
 export interface Snippet {
   id: string;
@@ -217,9 +242,9 @@ export interface Snippet {
   useCount: number;
   createdAt: string;
   updatedAt: string;
-  /** 'text' = reusable fragment; 'prompt' = Prompt Studio custom template */
+  /** Always `'prompt'` after migration — reusable prompt template. */
   kind?: SnippetKind;
-  /** Prompt Studio scenario key (PROMPT_SCENARIOS) when kind === 'prompt' */
+  /** Scenario key (PROMPT_SCENARIOS in lib/snippets); default `general`. */
   scenario?: string;
 }
 
@@ -242,6 +267,16 @@ export interface AiHubPlanStep {
   status: 'pending' | 'in_progress' | 'done';
 }
 
+/**
+ * 内容块协议（与 `aiHub/harness.ts` / Rust `agent_protocol::Block` 对齐）。
+ * 存在 `AiHubTurn.blocks` 里，跨轮发给模型；UI 仍主要看 `content` / `steps`。
+ */
+export type AiHubBlock =
+  | { kind: 'text'; text: string }
+  | { kind: 'image'; mediaType: string; data: string }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown }
+  | { kind: 'tool_result'; toolUseId: string; output: string; isError?: boolean };
+
 /** One Q&A exchange inside a ai-hub session. */
 export interface AiHubTurn {
   role: 'user' | 'assistant';
@@ -250,6 +285,11 @@ export interface AiHubTurn {
   keep?: 'whole';
   /** Tool steps from an agent turn. Not sent as the visible answer. */
   steps?: { tool: string; status: string; summary: string; arg?: string; detail?: string }[];
+  /**
+   * 模型可见的内容块（含 tool_use / tool_result）。有则 `turnsToMessages` 透传；
+   * 旧会话没有此字段时回退到纯文本 + steps 摘要。
+   */
+  blocks?: AiHubBlock[];
   /** The model's plan for this round, kept so the checklist survives a reload. */
   plan?: AiHubPlanStep[];
   /** The agent stopped at its round / action cap; the thread offers「继续」. */
@@ -288,7 +328,7 @@ export interface AiHubSession {
   id: string;
   /** Short label derived from the first question. */
   title: string;
-  /** Encoded TaskKind snapshot ('none' or 'optimize:…', see aiHub/config encodeTask). */
+  /** Legacy task snapshot (always "none" after prompt-optimize removal). */
   task: string;
   turns: AiHubTurn[];
   createdAt: string;

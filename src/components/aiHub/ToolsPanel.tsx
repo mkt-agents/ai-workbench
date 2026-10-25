@@ -8,6 +8,7 @@ import EncoderTool from "../devtools/EncoderTool";
 import HashTool from "../devtools/HashTool";
 import JsonTool from "../devtools/JsonTool";
 import JwtTool from "../devtools/JwtTool";
+import PortKillerTool from "../devtools/PortKillerTool";
 import RegexTool from "../devtools/RegexTool";
 import TimestampTool from "../devtools/TimestampTool";
 import UuidTool from "../devtools/UuidTool";
@@ -22,6 +23,7 @@ const EMBEDDED = [
   { id: "json", label: "json.title", C: JsonTool },
   { id: "cron", label: "cron.title", C: CronTool },
   { id: "regex", label: "regex.title", C: RegexTool },
+  { id: "ports", label: "ports.title", C: PortKillerTool },
 ] as const;
 
 type EmbeddedId = (typeof EMBEDDED)[number]["id"];
@@ -35,10 +37,12 @@ function loadTool(): EmbeddedId {
 
 export default function ToolsPanel() {
   const { t: td } = useTranslation("devtools");
-  // Survives mode switches — the panel unmounts every time the user leaves tools.
   const [tool, setTool] = useState<EmbeddedId>(loadTool);
+  /** 进过的工具挂起不卸，切走再回来输入还在。 */
+  const [visited, setVisited] = useState<Set<EmbeddedId>>(() => new Set([loadTool()]));
   const pickTool = (id: EmbeddedId) => {
     setTool(id);
+    setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
     writeStoredString(TOOL_KEY, id);
   };
   // Same order as the main window's toolbox (drag-sorted there); follows changes live.
@@ -57,7 +61,6 @@ export default function ToolsPanel() {
     };
     return [...EMBEDDED].sort((a, b) => rank(a.id) - rank(b.id));
   }, [order]);
-  const Active = EMBEDDED.find((e) => e.id === tool)!.C;
   return (
     <div className="ai-hub-tools">
       <div className="qa-tools-bar">
@@ -73,7 +76,19 @@ export default function ToolsPanel() {
         ))}
       </div>
       <div className="qa-tools-body">
-        <Active />
+        {EMBEDDED.map((e) => {
+          if (!visited.has(e.id)) return null;
+          const Comp = e.C;
+          return (
+            <div
+              key={e.id}
+              className={`qa-tool-pane${tool === e.id ? " is-active" : ""}`}
+              aria-hidden={tool !== e.id}
+            >
+              <Comp />
+            </div>
+          );
+        })}
       </div>
     </div>
   );

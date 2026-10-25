@@ -1,0 +1,660 @@
+/* ===== 原创 Q 版熊猫娘：立体光影 + 表情交叉淡入 ===== */
+
+.qa-panda-girl {
+  --ff-depth: 1;
+  position: relative;
+  width: calc(var(--qa-bubble-size) * 0.92);
+  height: calc(var(--qa-bubble-size) * 0.92);
+  /* 视线只做极轻 3D；幅度大了会像整只在左右晃 */
+  transform: perspective(420px) rotateY(calc(var(--qa-tilt-x) * 0.35deg))
+    rotateX(calc(var(--qa-tilt-y) * 0.28deg)) translateZ(0);
+  transform-origin: 50% 92%;
+  transition: transform 320ms cubic-bezier(0.22, 0.7, 0.2, 1);
+  will-change: transform;
+}
+
+.qa-panda-girl.bond-1 {
+  --ff-depth: 1.08;
+}
+.qa-panda-girl.bond-2 {
+  --ff-depth: 1.16;
+}
+
+/* 背后柔光：椭圆轻扫，不要圆球罩（会像装进玻璃泡） */
+.qa-panda-girl-glow {
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: 28%;
+  bottom: 12%;
+  border-radius: 40% 40% 48% 48%;
+  background: radial-gradient(
+    ellipse at 50% 35%,
+    color-mix(in srgb, #e8e4dc 32%, transparent),
+    transparent 68%
+  );
+  filter: blur(10px);
+  opacity: calc(0.4 * var(--ff-depth));
+  pointer-events: none;
+  animation: qa-panda-girl-glow-pulse 4.8s ease-in-out infinite;
+  z-index: 0;
+}
+
+.qa-panda-girl-shadow {
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  bottom: 0.5%;
+  height: 10%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(var(--ink-rgb), 0.36), transparent 70%);
+  /* 与 float-breathe 同拍，脚底更贴 */
+  animation: qa-panda-girl-shadow-breathe 3.8s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+  transform: translateX(calc(var(--qa-tilt-x) * -0.35px)) scaleX(1);
+}
+
+.qa-panda-girl-body-wrap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: end center;
+  transform-origin: 50% 100%;
+  /* 上下浮 + 轻呼吸（合并，避免立绘层 animation 重启闪一下） */
+  animation: qa-panda-girl-float-breathe 3.8s ease-in-out infinite;
+  z-index: 1;
+}
+
+/* 悬停凑近：只抬高放大，不扭 */
+.qa-bubble-root:hover .qa-panda-girl:not(.is-dragging):not(.is-pressed) .qa-panda-girl-body-wrap {
+  animation-play-state: paused;
+  transform: translateY(-2%) scale(1.03);
+}
+
+.qa-panda-girl-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* 立绘视线层；眨眼用眼线处轻压扁，不再叠眼皮/换 blink 图 */
+.qa-panda-girl-gaze {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  translate: calc(var(--qa-gaze-x) * 0.85px) calc(var(--qa-gaze-y) * 0.55px);
+  transform: scale(1, 1);
+  transform-origin: 50% 30%;
+  transition:
+    translate 110ms cubic-bezier(0.22, 0.7, 0.2, 1),
+    transform 70ms ease,
+    opacity 240ms ease;
+  will-change: translate, transform, opacity;
+}
+.qa-panda-girl.is-blinking .qa-panda-girl-gaze {
+  transform: scale(1.015, 0.9);
+  filter: brightness(0.97);
+}
+.qa-panda-girl.expr-shy:not(.is-blinking) .qa-panda-girl-gaze {
+  transform: scale(1.01, 0.95);
+}
+.qa-panda-girl.expr-happy:not(.is-blinking) .qa-panda-girl-gaze {
+  transform: scale(1.008, 0.97);
+}
+
+.qa-panda-girl-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: bottom center;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 3px 6px rgba(var(--ink-rgb), 0.3))
+    drop-shadow(0 0 1px color-mix(in srgb, #d8d2c8 45%, transparent));
+  transform-origin: 50% 90%;
+}
+
+.qa-panda-girl-art.is-front {
+  opacity: 1;
+}
+
+.qa-panda-girl-art.is-back {
+  z-index: 1;
+  opacity: 0;
+  transition: none;
+  /* 背面仍跟轻微视线，避免淡入时错位 */
+  translate: calc(var(--qa-gaze-x) * 0.85px) calc(var(--qa-gaze-y) * 0.55px);
+}
+
+.qa-panda-girl.is-fading .qa-panda-girl-art.is-back {
+  opacity: 1;
+}
+.qa-panda-girl.is-fading .qa-panda-girl-gaze {
+  opacity: 0;
+  transition: none;
+}
+.qa-panda-girl.is-fading.is-fade-on .qa-panda-girl-gaze {
+  opacity: 1;
+  transition: opacity 240ms ease, translate 110ms cubic-bezier(0.22, 0.7, 0.2, 1);
+}
+
+/* 表情腮红 */
+.qa-panda-girl-blush {
+  position: absolute;
+  left: 24%;
+  right: 24%;
+  top: 36%;
+  height: 16%;
+  z-index: 4;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, #ff8fa8 42%, transparent),
+    transparent 72%
+  );
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: soft-light;
+  transition: opacity 220ms ease;
+}
+.qa-panda-girl.expr-happy .qa-panda-girl-blush {
+  opacity: calc(0.5 + (var(--ff-depth) - 1) * 0.8);
+}
+.qa-panda-girl.expr-shy .qa-panda-girl-blush {
+  opacity: 0.92;
+  top: 35%;
+  height: 18%;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, #ff7a9a 58%, transparent),
+    transparent 70%
+  );
+}
+.qa-panda-girl.bond-1 .qa-panda-girl-blush {
+  opacity: max(0.35, calc(0.35 * var(--ff-depth)));
+}
+.qa-panda-girl.bond-2.expr-happy .qa-panda-girl-blush,
+.qa-panda-girl.bond-2.expr-shy .qa-panda-girl-blush {
+  opacity: 1;
+}
+
+/* 高光罩：斜向扫光，跟着视线挪 */
+.qa-panda-girl-specular {
+  position: absolute;
+  inset: 6% 10% 18%;
+  z-index: 3;
+  border-radius: 42% 48% 40% 44%;
+  background: linear-gradient(
+    125deg,
+    color-mix(in srgb, #fff 38%, transparent) 0%,
+    transparent 38%,
+    transparent 62%,
+    color-mix(in srgb, #c8c0b4 14%, transparent) 100%
+  );
+  mix-blend-mode: soft-light;
+  opacity: calc(0.48 * var(--ff-depth));
+  pointer-events: none;
+  transform: translate(
+    calc(var(--qa-gaze-x) * 2.1px),
+    calc(var(--qa-gaze-y) * 1.4px)
+  );
+  transition: transform 140ms cubic-bezier(0.22, 0.7, 0.2, 1), opacity 200ms ease;
+}
+.qa-panda-girl.expr-happy .qa-panda-girl-specular {
+  opacity: calc(0.62 * var(--ff-depth));
+}
+
+.qa-panda-girl-rim {
+  position: absolute;
+  inset: 4% 8% 12%;
+  z-index: 3;
+  border-radius: 46%;
+  box-shadow:
+    inset -3px -4px 10px color-mix(in srgb, #0a2048 22%, transparent),
+    inset 3px 2px 8px color-mix(in srgb, #fff 28%, transparent);
+  pointer-events: none;
+  opacity: 0.45;
+  mix-blend-mode: soft-light;
+}
+
+.qa-panda-girl.bond-2 .qa-panda-girl-glow {
+  opacity: calc(0.52 * var(--ff-depth));
+}
+.qa-panda-girl.bond-2 .qa-panda-girl-art.is-front {
+  filter: drop-shadow(0 3px 6px rgba(var(--ink-rgb), 0.3))
+    drop-shadow(0 0 8px color-mix(in srgb, #b8c8a8 36%, transparent));
+}
+
+/* —— 情绪动作 —— */
+.qa-panda-girl.mood-thinking .qa-panda-girl-gaze {
+  /* 眼神略上抬，像在想 */
+  translate: calc(var(--qa-gaze-x) * 0.85px) calc(var(--qa-gaze-y) * 0.55px - 1.2px);
+}
+.qa-panda-girl.mood-thinking .qa-panda-girl-art.is-front {
+  animation: qa-panda-girl-think 2.2s ease-in-out infinite;
+}
+.qa-panda-girl.mood-thinking .qa-panda-girl-specular {
+  opacity: 0.35;
+}
+.qa-panda-girl.gest-pat .qa-panda-girl-blush,
+.qa-panda-girl.gest-hug .qa-panda-girl-blush {
+  opacity: calc(0.72 * var(--ff-depth));
+}
+.qa-panda-girl.mood-working .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-toil 0.52s ease-in-out infinite;
+}
+.qa-panda-girl.mood-waiting .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-knock 1.05s ease-in-out infinite;
+}
+.qa-panda-girl.mood-happy .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-joy 0.55s ease-in-out 2;
+}
+.qa-panda-girl.mood-happy .qa-panda-girl-glow,
+.qa-panda-girl.expr-happy .qa-panda-girl-glow {
+  animation: qa-panda-girl-glow-pulse 2.4s ease-in-out infinite;
+  opacity: calc(0.5 * var(--ff-depth));
+}
+.qa-panda-girl.mood-error .qa-panda-girl-art.is-front {
+  animation: qa-panda-girl-sad 1.6s ease-in-out infinite;
+  filter: drop-shadow(0 3px 6px rgba(var(--ink-rgb), 0.3)) saturate(0.78) brightness(0.94);
+}
+.qa-panda-girl.mood-error .qa-panda-girl-glow {
+  opacity: 0.25;
+  filter: blur(8px) saturate(0.5);
+}
+.qa-panda-girl.mood-sleepy {
+  opacity: 0.94;
+}
+.qa-panda-girl.mood-sleepy .qa-panda-girl-body-wrap {
+  animation-duration: 5.4s;
+}
+.qa-panda-girl.mood-sleepy .qa-panda-girl-gaze {
+  translate: none;
+  transform: scale(1.01, 0.94);
+}
+.qa-panda-girl.mood-sleepy .qa-panda-girl-specular,
+.qa-panda-girl.mood-sleepy .qa-panda-girl-rim {
+  opacity: 0.2;
+}
+.qa-panda-girl.mood-sleepy .qa-panda-girl-glow {
+  opacity: 0.28;
+  animation: none;
+}
+
+/* —— 相位：分区压感 / 拎起 —— */
+.qa-panda-girl.is-pressed .qa-panda-girl-body-wrap {
+  animation: none;
+  transition: transform 90ms ease-out;
+}
+/* 默认身区：压扁 */
+.qa-panda-girl.is-pressed.press-body .qa-panda-girl-body-wrap {
+  transform: scaleX(1.12) scaleY(0.86);
+}
+.qa-panda-girl.is-pressed.press-body .qa-panda-girl-shadow {
+  transform: scaleX(1.18) scaleY(0.85);
+  opacity: 0.55;
+}
+/* 头区：轻压略低头 */
+.qa-panda-girl.is-pressed.press-head .qa-panda-girl-body-wrap {
+  transform: translateY(2.5%) scaleX(1.04) scaleY(0.94) rotateX(6deg);
+}
+.qa-panda-girl.is-pressed.press-head .qa-panda-girl-shadow {
+  transform: scaleX(1.08) scaleY(0.9);
+  opacity: 0.6;
+}
+/* 裙边区：侧倾轻弹 */
+.qa-panda-girl.is-pressed.press-tail .qa-panda-girl-body-wrap {
+  transform: translateX(2%) rotate(-4deg) scale(0.98, 1.02);
+}
+.qa-panda-girl.is-pressed.press-tail .qa-panda-girl-shadow {
+  transform: translateX(2px) scaleX(1.05) scaleY(0.88);
+  opacity: 0.5;
+}
+/* 拖动：换 drag.png（张手悬脚）+ 竖直拎起 */
+.qa-panda-girl.is-dragging .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-carry 0.7s ease-in-out infinite;
+}
+.qa-panda-girl.is-dragging .qa-panda-girl-glow {
+  opacity: calc(0.48 * var(--ff-depth));
+  animation: qa-panda-girl-glow-pulse 2s ease-in-out infinite;
+}
+.qa-panda-girl.is-dragging .qa-panda-girl-shadow {
+  opacity: 0.22;
+  transform: scaleX(0.65) scaleY(0.8);
+  animation: none;
+}
+.qa-panda-girl.is-firing .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-pop 0.42s cubic-bezier(0.2, 1.2, 0.3, 1);
+}
+.qa-panda-girl.is-landing .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-land 0.32s ease-out;
+}
+
+/* —— 手势 —— */
+.qa-panda-girl.gest-pat .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-pat 0.75s ease-in-out;
+}
+.qa-panda-girl.gest-poke .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-poke 0.48s ease-out;
+}
+.qa-panda-girl.gest-tail .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-tail-whip 0.6s ease-out;
+}
+.qa-panda-girl.gest-hug .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-hug 0.95s ease-in-out;
+}
+.qa-panda-girl.gest-hug .qa-panda-girl-glow {
+  opacity: 0.9;
+}
+.qa-panda-girl.gest-shy .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-shy 0.85s ease-in-out;
+}
+
+.qa-panda-girl.micro-wave .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-wave 1.15s ease-in-out;
+}
+.qa-panda-girl.micro-peek .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-peek 1.2s ease-in-out;
+}
+.qa-panda-girl.micro-bounce .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-joy 0.7s ease-in-out 2;
+}
+.qa-panda-girl.micro-stretch .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-stretch 1.2s ease-in-out;
+}
+.qa-panda-girl.micro-glance .qa-panda-girl-gaze {
+  animation: qa-panda-girl-glance 1.4s ease-in-out;
+}
+.qa-panda-girl.micro-ear .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-ear 0.85s ease-in-out;
+}
+.qa-panda-girl.micro-shy .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-shy 0.9s ease-in-out;
+}
+.qa-panda-girl.micro-nod .qa-panda-girl-body-wrap {
+  animation: qa-panda-girl-nod 0.95s ease-in-out;
+}
+
+@keyframes qa-panda-girl-float-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-2.6%) scale(1.012, 0.988);
+  }
+}
+@keyframes qa-panda-girl-glow-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.42;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 0.55;
+  }
+}
+@keyframes qa-panda-girl-shadow-breathe {
+  0%,
+  100% {
+    transform: translateX(calc(var(--qa-tilt-x) * -0.35px)) scaleX(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translateX(calc(var(--qa-tilt-x) * -0.35px)) scaleX(0.9);
+    opacity: 0.65;
+  }
+}
+/* 被拎着：上下弹，保持竖直 */
+@keyframes qa-panda-girl-carry {
+  0%,
+  100% {
+    transform: translateY(-4%) scale(1.02, 0.99);
+  }
+  50% {
+    transform: translateY(-7%) scale(0.99, 1.02);
+  }
+}
+@keyframes qa-panda-girl-sway {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2%);
+  }
+}
+/* 思考：点头呼吸感，不左右拧 */
+@keyframes qa-panda-girl-think {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-1.5%) scale(1.01, 0.99);
+  }
+}
+@keyframes qa-panda-girl-toil {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.5%);
+  }
+}
+/* 等待：轻微上下催，少横移 */
+@keyframes qa-panda-girl-knock {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-2.2%);
+  }
+  70% {
+    transform: translateY(-0.5%);
+  }
+}
+@keyframes qa-panda-girl-joy {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  35% {
+    transform: translateY(-11%) scale(1.04, 0.96);
+  }
+  65% {
+    transform: translateY(-2%) scale(0.97, 1.03);
+  }
+}
+@keyframes qa-panda-girl-sad {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(1.5%) scale(0.99, 1.01);
+  }
+}
+@keyframes qa-panda-girl-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.1, 0.9);
+  }
+  70% {
+    transform: scale(0.94, 1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes qa-panda-girl-land {
+  0% {
+    transform: scale(1.04, 0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes qa-panda-girl-pat {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  30% {
+    transform: translateY(3px) scale(1.02, 0.95);
+  }
+  60% {
+    transform: translateY(-3px) scale(0.99, 1.02);
+  }
+}
+@keyframes qa-panda-girl-poke {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.06, 0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+/* 裙边戳：短促弹一下即可，别甩成钟摆 */
+@keyframes qa-panda-girl-tail-whip {
+  0%,
+  100% {
+    transform: translateX(0) scale(1);
+  }
+  40% {
+    transform: translateX(3%) scale(1.02, 0.98);
+  }
+  70% {
+    transform: translateX(-1.5%) scale(0.99, 1.01);
+  }
+}
+@keyframes qa-panda-girl-hug {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(0.93, 1.07);
+  }
+  65% {
+    transform: scale(1.05, 0.96);
+  }
+}
+@keyframes qa-panda-girl-wave {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-4%) scale(1.02, 0.98);
+  }
+  50% {
+    transform: translateY(-7%) scale(0.99, 1.01);
+  }
+  75% {
+    transform: translateY(-2%);
+  }
+}
+@keyframes qa-panda-girl-peek {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  40% {
+    transform: translateY(-3%) scale(1.03, 0.97);
+  }
+  70% {
+    transform: translateY(-1%) scale(1.01);
+  }
+}
+@keyframes qa-panda-girl-stretch {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.05, 0.93) translateY(-4%);
+  }
+}
+/* 顾盼：只挪画面，不转整只 */
+@keyframes qa-panda-girl-glance {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  40% {
+    transform: translateX(2.5%);
+  }
+  70% {
+    transform: translateX(-2%);
+  }
+}
+@keyframes qa-panda-girl-ear {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  40% {
+    transform: scale(1.02, 0.98) translateY(-1.5%);
+  }
+  70% {
+    transform: scale(0.99, 1.01) translateY(-0.5%);
+  }
+}
+@keyframes qa-panda-girl-shy {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  40% {
+    transform: translateY(2%) scale(0.97, 1.03);
+  }
+  70% {
+    transform: translateY(1%) scale(0.99, 1.01);
+  }
+}
+@keyframes qa-panda-girl-nod {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(2.5%);
+  }
+  55% {
+    transform: translateY(-1%);
+  }
+  80% {
+    transform: translateY(1.5%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qa-panda-girl,
+  .qa-panda-girl-body-wrap,
+  .qa-panda-girl-art,
+  .qa-panda-girl-gaze,
+  .qa-panda-girl-shadow,
+  .qa-panda-girl-glow,
+  .qa-panda-girl-specular,
+  .qa-panda-girl-blush {
+    animation: none !important;
+    transition: none !important;
+  }
+  .qa-panda-girl-art,
+  .qa-panda-girl-gaze {
+    translate: none !important;
+    transform: none !important;
+  }
+}

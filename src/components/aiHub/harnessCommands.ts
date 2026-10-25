@@ -1,8 +1,8 @@
 /**
  * 输入语法层：`/` 命令、`@` 文件引用共用一个面板。
  *
- * 以前 `/` 只是片段检索（纯文本模板），没有任何「命令」语义。这里把三类条目
- * （内置命令 / 技能 / 片段）统一成 `PaletteItem`，键盘与渲染只认识这一种形状；
+ * 以前 `/` 只是提示词检索，没有任何「命令」语义。这里把三类条目
+ * （内置命令 / 技能 / 提示词）统一成 `PaletteItem`，键盘与渲染只认识这一种形状；
  * 真正执行什么由 `AiHubApp` 注入的回调决定。
  *
  * `drill` 的命令点下去不直接执行，而是在同一个浮层里展开二级列表（见 `option`）：
@@ -53,7 +53,7 @@ export function applyCompletion(input: string, token: "slash" | "at", replacemen
   return `${input.slice(0, start)}${replacement} `;
 }
 
-/** 片段/技能的名字是否匹配输入（大小写不敏感、子串即可）。 */
+/** 提示词/技能的名字是否匹配输入（大小写不敏感、子串即可）。 */
 export function matchesQuery(name: string, query: string): boolean {
   return name.toLowerCase().includes(query.trim().toLowerCase());
 }

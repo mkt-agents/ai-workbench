@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, UserAttentionType};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::agent_fs::{arg_str, Protected, Scope};
 use crate::agent_policy::{
@@ -160,6 +160,53 @@ type DecisionMsg = (bool, bool, bool);
 
 static DECISIONS: Mutex<Option<HashMap<String, oneshot::Sender<DecisionMsg>>>> = Mutex::new(None);
 
+/// 无 UI 调用方（企微渠道等）订阅某一 `request_id` 的文本流与审批提示。
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum AgentBridgeEvent {
+    Chunk(String),
+    Done { limited: bool },
+    Err(String),
+    /// 工具闸门在等桌面端确认
+    ApprovalNeeded { summary: String },
+}
+
+static TEXT_BRIDGES: Mutex<Option<HashMap<String, mpsc::UnboundedSender<AgentBridgeEvent>>>> =
+    Mutex::new(None);
+
+fn text_bridges(
+) -> std::sync::MutexGuard<'static, Option<HashMap<String, mpsc::UnboundedSender<AgentBridgeEvent>>>>
+{
+    let mut guard = TEXT_BRIDGES.lock().expect("agent text bridges");
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+}
+
+/// 注册桥接；调用方在 `agent_run` 结束后应 `unsubscribe_agent_bridge`。
+pub fn subscribe_agent_bridge(request_id: &str) -> mpsc::UnboundedReceiver<AgentBridgeEvent> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    if let Some(map) = text_bridges().as_mut() {
+        map.insert(request_id.to_string(), tx);
+    }
+    rx
+}
+
+pub fn unsubscribe_agent_bridge(request_id: &str) {
+    if let Some(map) = text_bridges().as_mut() {
+        map.remove(request_id);
+    }
+}
+
+fn bridge_send(id: &str, ev: AgentBridgeEvent) {
+    if let Some(map) = text_bridges().as_ref() {
+        if let Some(tx) = map.get(id) {
+            let _ = tx.send(ev);
+        }
+    }
+}
+
 fn decisions() -> std::sync::MutexGuard<'static, Option<HashMap<String, oneshot::Sender<DecisionMsg>>>> {
     let mut guard = DECISIONS.lock().expect("agent decisions");
     if guard.is_none() {
@@ -256,7 +303,7 @@ pub(crate) fn tool_specs() -> Value {
               &["steps"]
           ) },
         { "name": "read_document",
-          "description": "Read a document as plain text: docx (paragraph text), xlsx/xls (first sheet as TSV), or any text file (md/txt/csv/json). Layout is not reproduced. Files over 10MB are refused.",
+          "description": "Read a document as plain text: docx (paragraph text), xlsx/xls (first sheet as TSV), pdf (text layer only, no OCR), or any text file (md/txt/csv/json). Layout is not reproduced. Files over 10MB are refused.",
           "parameters": obj(json!({ "path": s("File path"), "limit": n("Max characters (default 12000, up to 60000)") }), &["path"]) },
         { "name": "read_table",
           "description": "Load a CSV/TSV/XLSX and show its columns plus the first rows. For filtering or aggregation use table_query instead of reading thousands of rows.",
@@ -542,6 +589,12 @@ fn emit_approval(
         }),
     );
     set_attention(app, true);
+    bridge_send(
+        id,
+        AgentBridgeEvent::ApprovalNeeded {
+            summary: summary.to_string(),
+        },
+    );
 }
 
 /// One operation inside a merged approval card.
@@ -609,6 +662,12 @@ fn emit_approval_batch(app: &AppHandle, id: &str, patches: &[ApprovalPatch], can
         }),
     );
     set_attention(app, true);
+    bridge_send(
+        id,
+        AgentBridgeEvent::ApprovalNeeded {
+            summary: format!("本轮有 {} 个操作需要确认", patches.len()),
+        },
+    );
 }
 
 /// The hub window is `skip_taskbar`, so it cannot flash a taskbar button of its own:
@@ -630,6 +689,7 @@ fn emit_text(app: &AppHandle, id: &str, text: &str) {
         return;
     }
     let _ = app.emit("generate-text-chunk", json!({ "id": id, "text": text }));
+    bridge_send(id, AgentBridgeEvent::Chunk(text.to_string()));
 }
 
 /// What the last round carried, for the answer source line. All fields are estimates
@@ -679,11 +739,13 @@ fn emit_done(
         payload["undoToken"] = json!(id);
     }
     let _ = app.emit("generate-text-done", payload);
+    bridge_send(id, AgentBridgeEvent::Done { limited });
 }
 
 fn emit_err(app: &AppHandle, id: &str, msg: &str) {
     set_attention(app, false);
     let _ = app.emit("generate-text-error", json!({ "id": id, "error": msg }));
+    bridge_send(id, AgentBridgeEvent::Err(msg.to_string()));
 }
 
 /// `Retry-After`（秒）。HTTP-date 形态忽略：实际遇到的都是秒数。
@@ -1547,6 +1609,64 @@ fn conflict_reason(state: &crate::git_merge::ConflictState) -> Option<String> {
 fn conflict_block(scope: &Scope, tool: &str, command: &str, args: &Value) -> Option<String> {
     let root = changed_repo(scope, tool, command, args)?;
     conflict_reason(&crate::git_merge::conflict_state(&root.to_string_lossy()))
+}
+
+/// 完整工具管道：pre(hooks) → execute → post_hooks → finalize（结果预算）。
+/// 调度循环只认这一层，方便加观测；prefetched 只读路径事后也走 post + finalize。
+async fn dispatch_tool(
+    ctx: &ToolCtx<'_>,
+    config: &AIModelConfig,
+    permission: Permission,
+    name: &str,
+    args: &Value,
+) -> Result<ToolOutput, String> {
+    let result = execute_tool(ctx, config, permission, name, args).await;
+    finalize_tool_result(ctx, permission, name, result).await
+}
+
+async fn finalize_tool_result(
+    ctx: &ToolCtx<'_>,
+    permission: Permission,
+    name: &str,
+    mut result: Result<ToolOutput, String>,
+) -> Result<ToolOutput, String> {
+    // PostToolUse：脚本输出追加到结果末尾（agent_hooks 已截到 2k）。
+    if permission != Permission::Read && !ctx.hooks.is_empty() {
+        let post: Vec<_> = ctx
+            .hooks
+            .iter()
+            .filter(|h| h.event == "postToolUse" && crate::agent_hooks::matches(&h.matcher, name))
+            .cloned()
+            .collect();
+        if !post.is_empty() {
+            let payload = match &result {
+                Ok(out) => format!("{} {}", name, out.text.chars().take(500).collect::<String>()),
+                Err(err) => format!("{} error={}", name, err.chars().take(300).collect::<String>()),
+            };
+            let cwd = ctx.scope.root.clone().unwrap_or_else(|| ctx.scope.base.clone());
+            let mut extra = String::new();
+            for hook in post {
+                let cwd = cwd.clone();
+                let payload = payload.clone();
+                if let Ok(outcome) =
+                    tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, &payload)).await
+                {
+                    if !outcome.output.is_empty() {
+                        extra.push_str(&format!("\n[hook] {}", outcome.output));
+                    }
+                }
+            }
+            if !extra.is_empty() {
+                if let Ok(out) = &mut result {
+                    out.text.push_str(&extra);
+                }
+            }
+        }
+    }
+    if let Ok(out) = &mut result {
+        out.text = clip_tool_result(name, &out.text, ctx.result_cap);
+    }
+    result
 }
 
 async fn execute_tool(
@@ -2647,6 +2767,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         emit_err(&app, &request_id, msg);
         return Err(msg.into());
     }
+    crate::agent_session_log::log_user(&request_id, &last_ask);
     let permission = Permission::parse(&req.permission);
     // 没选仓库也能问（只读权限 / 纯文本任务）：不挂任何要工作目录的工具
     let root = if req.repo_path.trim().is_empty() {
@@ -2674,7 +2795,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let services = root.as_deref().map(|r| workspace_services(r, &req.services)).unwrap_or_default();
     // 项目/全局 harness 配置：上下文注入、技能正文与 hooks 都从这里来。
     let harness_config = crate::harness_config::load(root.as_deref());
-    let mut system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach));
+    let hide_abs = req.request_id.starts_with("wecom-");
+    let mut system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach, hide_abs));
     // 上下文管道：项目文档 / 长期记忆 / 技能索引 / `@` 引用，全部只读且不越出工作区。
     let context_bundle = crate::agent_context::collect(&harness_config, root.as_deref(), &last_ask);
     if !context_bundle.text.is_empty() {
@@ -2707,6 +2829,8 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     if !req.mode.trim().is_empty() {
         tool_names.retain(|n| crate::agent_tools::mode_allows(&req.mode, n));
     }
+    // 技能 frontmatter 的 allowed-tools ∩ 已下发集合（空白名单 = 不额外收窄）。
+    crate::agent_context::intersect_skill_tools(&harness_config, &last_ask, &mut tool_names);
     let mut tools = provider_tools(&tool_names, anthropic);
     // MCP：工具名是运行时的，不在这张静态表里；列一次、追加进 tools，然后按名字查找
     // 总开关关掉时连进程都不起：这一轮就是没有 mcp_* 工具
@@ -2915,6 +3039,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 emit_err(&app, &request_id, msg);
                 return Err(msg.into());
             }
+            crate::agent_session_log::log_assistant(&request_id, &final_text);
             run_stop_hooks(&harness_config.hooks, &scope, permission);
             emit_done(&app, &request_id, started, usage_total, false, stats);
             return Ok(());
@@ -3135,49 +3260,18 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             }
         }
 
-        // —— 阶段 3：按 tool_use 顺序执行，跳过带 skip 理由的，结果按序回灌 ——
+        // —— 阶段 3：dispatch_tool 管道（pre → execute → post → finalize）按序回灌 ——
         for p in prepared {
             if let Some(reason) = p.skip {
+                crate::agent_session_log::log_tool(&request_id, &p.call_id, &p.name, &reason, true);
                 tool_results.push((p.call_id, reason.into()));
                 continue;
             }
-            let mut result = match prefetched.done.remove(&p.index) {
-                Some(done) => done,
-                None => execute_tool(&ctx, &config, permission, &p.name, &p.args).await,
+            // 并发预取只跑了 execute；仍要补 post_hooks + 结果预算。
+            let result = match prefetched.done.remove(&p.index) {
+                Some(done) => finalize_tool_result(&ctx, permission, &p.name, done).await,
+                None => dispatch_tool(&ctx, &config, permission, &p.name, &p.args).await,
             };
-            // PostToolUse：脚本输出追加到结果末尾（agent_hooks 已截到 2k）。
-            if permission != Permission::Read && !ctx.hooks.is_empty() {
-                let post: Vec<_> = ctx
-                    .hooks
-                    .iter()
-                    .filter(|h| h.event == "postToolUse" && crate::agent_hooks::matches(&h.matcher, &p.name))
-                    .cloned()
-                    .collect();
-                if !post.is_empty() {
-                    let payload = match &result {
-                        Ok(out) => format!("{} {}", p.name, out.text.chars().take(500).collect::<String>()),
-                        Err(err) => format!("{} error={}", p.name, err.chars().take(300).collect::<String>()),
-                    };
-                    let cwd = ctx.scope.root.clone().unwrap_or_else(|| ctx.scope.base.clone());
-                    let mut extra = String::new();
-                    for hook in post {
-                        let cwd = cwd.clone();
-                        let payload = payload.clone();
-                        if let Ok(outcome) =
-                            tokio::task::spawn_blocking(move || crate::agent_hooks::run(&hook, &cwd, &payload)).await
-                        {
-                            if !outcome.output.is_empty() {
-                                extra.push_str(&format!("\n[hook] {}", outcome.output));
-                            }
-                        }
-                    }
-                    if !extra.is_empty() {
-                        if let Ok(out) = &mut result {
-                            out.text.push_str(&extra);
-                        }
-                    }
-                }
-            }
             let failed = match &result {
                 Ok(out) => command_output_failed(&out.text),
                 Err(_) => true,
@@ -3195,8 +3289,6 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                             }
                         }
                     }
-                    // 回灌给模型的内容有预算（UI 的 DETAIL_CAP 只管界面）
-                    out.text = clip_tool_result(&p.name, &out.text, ctx.result_cap);
                     // 写入的步骤详情带上 diff，用户能在步骤里看到改了什么
                     let detail = if p.preview_is_diff && matches!(p.name.as_str(), "write_file" | "edit_file" | "hosts") {
                         format!("{}\n\n{}", out.text, clip(&p.preview, DETAIL_CAP))
@@ -3205,6 +3297,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     };
                     emit_step_full(&app, &request_id, &p.name, "done", &p.summary, &detail, Some(&p.arg_text));
                     notes.push(p.summary);
+                    crate::agent_session_log::log_tool(&request_id, &p.call_id, &p.name, &out.text, false);
                     tool_results.push((p.call_id, out));
                 }
                 Err(err) if err.contains("AI_REQUEST_CANCELLED") => {
@@ -3226,6 +3319,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     let text = repeated_command_result(
                         &last_shell_command, last_shell_failed, &p.command, &format!("错误: {err}"),
                     );
+                    crate::agent_session_log::log_tool(&request_id, &p.call_id, &p.name, &text, true);
                     tool_results.push((p.call_id, text.into()));
                 }
             }

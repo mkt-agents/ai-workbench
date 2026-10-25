@@ -26,9 +26,40 @@ pub(crate) fn read_document(path: &Path, cap: usize) -> Result<String, String> {
     let text = match ext.as_str() {
         "docx" => docx_text(path)?,
         "xlsx" | "xls" => table_text(path)?,
+        "pdf" => pdf_text(path)?,
         _ => std::fs::read_to_string(path).map_err(|e| format!("不是可读的文本文件：{e}"))?,
     };
     Ok(truncate(text, cap))
+}
+
+/// PDF 文本层抽取（无 OCR：扫描件会得到空/很少字）。
+fn pdf_text(path: &Path) -> Result<String, String> {
+    let doc = lopdf::Document::load(path).map_err(|e| format!("打不开 PDF：{e}"))?;
+    let mut pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    pages.sort_unstable();
+    let mut out = String::new();
+    for (i, page_id) in pages.iter().enumerate() {
+        // extract_text 要 1-based 页码列表
+        let chunk = doc
+            .extract_text(&[*page_id])
+            .unwrap_or_default();
+        let trimmed = chunk.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&format!("--- 第 {} 页 ---\n{}", i + 1, trimmed));
+        if out.chars().count() > 200_000 {
+            out.push_str("\n…(后续页省略)");
+            break;
+        }
+    }
+    if out.trim().is_empty() {
+        return Err("这份 PDF 没有可抽取的文字层（可能是扫描件，本机不做 OCR）".into());
+    }
+    Ok(out)
 }
 
 /// 读表格：返回 (列名, 数据行)。首行当表头，空名字补 `col_N`。

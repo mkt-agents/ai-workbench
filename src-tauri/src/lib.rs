@@ -24,6 +24,14 @@ mod agent_symbols;
 mod agent_tools;
 mod agent_undo;
 mod agent_web;
+mod agent_session_log;
+mod wecom_proto;
+mod wecom_sanitize;
+mod wecom_policy;
+mod wecom_session;
+mod wecom_ws;
+mod wecom_orchestrator;
+mod wecom_channel;
 mod mcp;
 mod harness_config;
 mod agent_sys;
@@ -123,6 +131,7 @@ pub fn run() {
         })
         .manage(cloudflared_commands::CloudflaredState::default())
         .manage(tray::TrayTunnelUrls::default())
+        .manage(wecom_channel::init_state())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("failed to get app data dir");
             fs::create_dir_all(&data_dir).expect("failed to create app data dir");
@@ -616,6 +625,15 @@ pub fn run() {
             agent_freshness::workspace_fingerprint,
             agent_undo::agent_undo,
             agent_undo::agent_undo_files,
+            wecom_channel::wecom_channel_status,
+            wecom_channel::wecom_channel_apply,
+            wecom_channel::wecom_channel_restart,
+            wecom_channel::wecom_pairing_list,
+            wecom_channel::wecom_pairing_approve,
+            wecom_channel::wecom_pairing_revoke,
+            wecom_channel::wecom_paired_users,
+            wecom_channel::wecom_protect_secret,
+            wecom_channel::wecom_reveal_secret,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::dsh_set_embed,

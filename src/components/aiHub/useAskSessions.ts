@@ -5,7 +5,7 @@ import type { AiHubSession, AiHubTurn } from "../../core/types";
 import { makeTitle } from "./config";
 
 export type AskSessionsOptions = {
-  /** Encoded task string (see config.encodeTask), stored verbatim per session. */
+  /** Legacy session task field (always "none"). */
   task: string;
   activeSessionId: string | null;
   setActiveSessionId: (id: string | null) => void;

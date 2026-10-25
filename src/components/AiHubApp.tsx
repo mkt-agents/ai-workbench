@@ -21,15 +21,13 @@ import AskPanel from "./aiHub/AskPanel";
 import AiHubHeader, { type AiHubMode } from "./aiHub/AiHubHeader";
 import AttachmentBar from "./aiHub/AttachmentBar";
 import ContextPicker from "./aiHub/ContextPicker";
-import OptimizeBar from "./aiHub/OptimizeBar";
 import ParamModal from "./aiHub/ParamModal";
 
 import QuickSelect from "./aiHub/QuickSelect";
 import SessionHistory from "./aiHub/SessionHistory";
 import ToolsPanel from "./aiHub/ToolsPanel";
 import { useNextSuggestion } from "./aiHub/useNextSuggestion";
-import { DEFAULT_CHIPS, DEFAULT_OPTIMIZE, encodeTask, parseTask } from "./aiHub/config";
-import type { OptimizeConfig, TaskKind } from "./aiHub/config";
+import { DEFAULT_CHIPS } from "./aiHub/config";
 import { routeQuestion } from "./aiHub/route";
 import { findProfile } from "../lib/aiHubProfiles";
 import { openSuggestions, type InstalledApp, type OpenSuggestion } from "./aiHub/localActions";
@@ -40,7 +38,10 @@ import { useAskEvents } from "./aiHub/useAskEvents";
 import { useAskSessions } from "./aiHub/useAskSessions";
 import { useAskSnippets } from "./aiHub/useAskSnippets";
 import { useHarnessComposer, type HarnessCommand, type HarnessSkillItem } from "./aiHub/useHarnessComposer";
-import { HARNESS_MODES, modeRoute, type HarnessMode } from "./aiHub/harness";
+import {
+  HARNESS_MODES, effectiveTaskMode, modeRoute,
+  type HarnessMode, type HarnessTrack,
+} from "./aiHub/harness";
 import { AGENT_PERMISSIONS, useAskStream, type AgentPermission } from "./aiHub/useAskStream";
 import { useConfirm, useConfirmChoice } from "./ConfirmModal";
 import { COMPUTER_TOOL_NAMES } from "./aiHub/AgentActivity";
@@ -133,23 +134,23 @@ function AiHubApp() {
   const [ready, setReady] = useState(false);
   const [pinned, setPinned] = useState(() => localStorage.getItem(PINNED_KEY) === "1");
   const [permission, setPermission] = useState<AgentPermission>(readPermission);
-  const [dailyStyle, setDailyStyleState] = useState<DailyStyle>(readDailyStyle);
-  const setDailyStyle = (style: DailyStyle) => {
-    setDailyStyleState(style);
-    localStorage.setItem(DAILY_STYLE_KEY, style);
-  };
+  /** 日报格式：无 UI 切换后沿用上次存档，默认群聊式；打「日报」或点空态芯片仍走专用管线。 */
+  const [dailyStyle] = useState<DailyStyle>(readDailyStyle);
   useEffect(() => {
     localStorage.setItem(PINNED_KEY, pinned ? "1" : "0");
     void invokeSetAiHubPinned(pinned).catch(() => {});
   }, [pinned, invokeSetAiHubPinned]);
   const togglePinned = () => setPinned((v) => !v);
   const [mode, setMode] = useState<AiHubMode>("ask");
+  /** 工具箱进过一次就挂着，切回 AI 助手只隐藏——输入框 / 查询结果别丢。 */
+  const [toolsMounted, setToolsMounted] = useState(false);
+  useEffect(() => {
+    if (mode === "tools") setToolsMounted(true);
+  }, [mode]);
   /** Drop events arrive from the window level, where `mode` is not in scope. */
   const modeRef = useRef<AiHubMode>("ask");
   modeRef.current = mode;
   const [input, setInput] = useState("");
-  const [task, setTask] = useState<TaskKind>("none");
-  const [optimize, setOptimize] = useState<OptimizeConfig>(DEFAULT_OPTIMIZE);
   const [modelId, setModelId] = useState<string>("");
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   /** 钉住的任务模式：undefined / "code" = 自动（不收窄工具，路由交给自动判断）。
@@ -160,13 +161,19 @@ function AiHubApp() {
     HARNESS_MODES.includes(settings.aiHubTaskMode as HarnessMode)
       ? (settings.aiHubTaskMode as HarnessMode)
       : null;
+  /** Code | Work 产品轨；与任务模式正交，Work 未钉住时默认按 doc 收窄。 */
+  const track: HarnessTrack = settings.aiHubTrack === "work" ? "work" : "code";
+  const runMode = effectiveTaskMode(pinnedMode, track);
   /** 项目 + 全局技能（只取名字与说明做补全；正文由后端按 `/skill:name` 注入）。 */
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkillItem[]>([]);
   /** Files are being dragged over the window (ask tab only). */
   const [dropHint, setDropHint] = useState(false);
-  const chips = settings.aiHubChips ?? DEFAULT_CHIPS;
+  // Work 轨默认弱化 git/dirty，除非用户显式改过 chips。
+  const chips = settings.aiHubChips ?? (track === "work"
+    ? { workspace: true, git: false, dirty: false }
+    : DEFAULT_CHIPS);
   /** Which popover is open — only one at a time (mutual exclusion). */
-  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission" | "daily">(null);
+  const [openPop, setOpenPop] = useState<null | "model" | "focus" | "permission">(null);
   const activeProfile = useMemo(
     () => findProfile(settings.aiHubProfileId, settings.aiHubProfiles),
     [settings.aiHubProfileId, settings.aiHubProfiles],
@@ -174,13 +181,14 @@ function AiHubApp() {
   /** Composer pill override for the next send only; "auto" = routeQuestion decides. */
   const [routeOverride, setRouteOverride] = useState<RouteOverride>("auto");
   /** Write-capable levels always work on the project; read-only follows the auto route. */
-  // 钉住的模式优先于自动路由：文档 / 数据 / 调研 / 运维必须带项目上下文，对话则不带；
-  // 未钉住时维持原判断（只读看 routeOverride、可写一律 project）。
+  // 钉住优先；否则 Work 轨按 doc 走项目路由；未钉住的 Code 轨维持原判断。
   const effectiveOverride: RouteOverride = pinnedMode
     ? modeRoute(pinnedMode)
-    : permission === "read"
-      ? routeOverride
-      : "project";
+    : track === "work"
+      ? "project"
+      : permission === "read"
+        ? routeOverride
+        : "project";
   const [ctxOpen, setCtxOpen] = useState(false);
   /** Persisted-session id the current chat belongs to (null = fresh chat). */
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -215,9 +223,8 @@ function AiHubApp() {
 
   const models = aiModels as AIModelConfig[];
   const selectedModel = useMemo(() => {
-    const scene = task === "optimize" ? "optimize" : "aiHub";
-    return resolveSceneModel(scene, models, settings.aiSceneModels, modelId || null) ?? undefined;
-  }, [models, modelId, task, settings.aiSceneModels]);
+    return resolveSceneModel("aiHub", models, settings.aiSceneModels, modelId || null) ?? undefined;
+  }, [models, modelId, settings.aiSceneModels]);
   // 主模型整轮失败（连不上 / 4xx / 5xx / 空回答）时的备胎：同协议的另一个可用模型
   const fallbackModel = useMemo(
     () => resolveFallbackModel(selectedModel, models),
@@ -276,8 +283,6 @@ function AiHubApp() {
   const stream = useAskStream({
     selectedModel,
     fallbackModel,
-    task,
-    optimize,
     input,
     setInput,
     setSelectedText,
@@ -286,8 +291,7 @@ function AiHubApp() {
     routeOverride: effectiveOverride,
     dailyStyle,
     onSent: () => {
-      // Quick actions and the pill override are one-shot.
-      setTask("none");
+      // Pill override is one-shot.
       setRouteOverride("auto");
       setAttachments([]);
     },
@@ -352,7 +356,7 @@ function AiHubApp() {
       mcp: mcpServers
         .filter((s) => s.enabled && s.name.trim() && s.command.trim())
         .map((s) => ({ name: s.name.trim(), command: s.command.trim(), args: s.args || "" })),
-      mode: pinnedMode ?? "",
+      mode: runMode,
     },
   });
   const invokeHarnessConfig = useGlobalStore((s) => s.invokeHarnessConfig);
@@ -374,7 +378,7 @@ function AiHubApp() {
     agentWasBusy.current = stream.busy;
   }, [stream.busy, refreshAgentBranch]);
   const sessions = useAskSessions({
-    task: encodeTask(task, optimize),
+    task: "none",
     activeSessionId,
     setActiveSessionId,
     setError: stream.setError,
@@ -491,6 +495,7 @@ function AiHubApp() {
     turns: stream.history,
     busy: stream.busy,
     enabled: settings.aiHubSuggest !== false,
+    track,
     generate: invokeGenerateText,
     fallback: buildFallbackSuggestion,
   });
@@ -509,12 +514,9 @@ function AiHubApp() {
       // never into the hidden input while the tools panel is up.
       setMode("ask");
     },
-    // An external prefill carrying a task arms it as a one-shot quick action.
-    onPrefillTask: (raw) => {
-      const parsed = parseTask(raw);
+    // Legacy prefill payloads may still carry a task string — ignore it.
+    onPrefillTask: () => {
       setMode("ask");
-      setTask(parsed.task);
-      setOptimize(parsed.optimize);
     },
   });
 
@@ -592,21 +594,6 @@ function AiHubApp() {
   useEffect(() => {
     if (!modelId && selectedModel) setModelId(selectedModel.id);
   }, [modelId, selectedModel]);
-
-  // Only the optimize scenario/goals are remembered; the task itself is one-shot
-  // and always starts as plain Q&A.
-  const optimizeRestoredRef = useRef(false);
-  useEffect(() => {
-    if (!ready || optimizeRestoredRef.current || !settings.aiHubLastTask) return;
-    optimizeRestoredRef.current = true;
-    const parsed = parseTask(settings.aiHubLastTask);
-    if (parsed.task === "optimize") setOptimize(parsed.optimize);
-  }, [ready, settings.aiHubLastTask]);
-
-  const changeTask = (next: TaskKind) => {
-    setTask(next);
-    requestAnimationFrame(() => inputRef.current?.focus());
-  };
 
   /** Fold picked/dropped files into the attachment list, saying what did not fit. */
   const attachFiles = (items: { name: string; text: string }[]) => {
@@ -705,15 +692,9 @@ function AiHubApp() {
     };
   }, []);
 
-  const changeOptimize = (next: OptimizeConfig) => {
-    setOptimize(next);
-    setSettings({ aiHubLastTask: encodeTask("optimize", next) });
-  };
-
   const startNewChat = () => {
     if (stream.busy) return;
     stream.resetChat();
-    setTask("none");
     setRouteOverride("auto");
     setAttachments([]);
     setActiveSessionId(null);
@@ -795,13 +776,6 @@ function AiHubApp() {
   const computerActive =
     stream.busy && stream.agentSteps.some((s) => COMPUTER_TOOL_NAMES.includes(s.tool));
 
-  const askDaily = () => {
-    if (stream.busy) return;
-    setHistoryOpen(false);
-    setInput("");
-    void stream.send(t("examples.daily"));
-  };
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -842,10 +816,6 @@ function AiHubApp() {
         void stream.stopStream();
         return;
       }
-      if (task !== "none") {
-        setTask("none");
-        return;
-      }
       if (input.trim()) {
         setInput("");
         return;
@@ -872,7 +842,7 @@ function AiHubApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [snippets.paramTarget, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, task, input, stream.busy, stream.agentApproval, permission, palette.drillTitle, palette.closeDrill]);
+  }, [snippets.paramTarget, snippets.snippetOpen, visibleOpenList, mode, openPop, historyOpen, ctxOpen, input, stream.busy, stream.agentApproval, permission, palette.drillTitle, palette.closeDrill]);
 
   const togglePop = (id: NonNullable<typeof openPop>) => {
     setOpenPop((cur) => (cur === id ? null : id));
@@ -933,7 +903,6 @@ function AiHubApp() {
     }
     const turns = s.turns || [];
     stream.loadSession(turns);
-    setTask("none");
     setRouteOverride("auto");
     setActiveSessionId(s.id);
     setHistoryOpen(false);
@@ -1046,10 +1015,18 @@ function AiHubApp() {
         </div>
       )}
 
-      {mode === "tools" ? (
-        <ToolsPanel />
-      ) : (
-        <>
+      {toolsMounted && (
+        <div
+          className={`ai-hub-pane${mode === "tools" ? " is-active" : ""}`}
+          aria-hidden={mode !== "tools"}
+        >
+          <ToolsPanel />
+        </div>
+      )}
+      <div
+        className={`ai-hub-pane${mode === "ask" ? " is-active" : ""}`}
+        aria-hidden={mode !== "ask"}
+      >
           <AttachmentBar
             attachments={attachments}
             onRemove={(id) => setAttachments((prev) => prev.filter((x) => x.id !== id))}
@@ -1067,8 +1044,6 @@ function AiHubApp() {
           )}
 
           {/* `/` 只有一个面板：命令、技能、片段都在这里，旧的片段浮层已下线。 */}
-          {task === "optimize" && <OptimizeBar value={optimize} onChange={changeOptimize} />}
-
           <AskPanel
             input={input}
             setInput={setComposerInput}
@@ -1102,9 +1077,6 @@ function AiHubApp() {
             selectedText={selectedText}
             setSelectedText={setSelectedText}
             projectLabel={repo.projectLabel}
-            task={task}
-            onTask={changeTask}
-            onDaily={askDaily}
             agentSteps={stream.agentSteps}
             agentPlan={stream.agentPlan}
             agentApproval={stream.agentApproval}
@@ -1130,9 +1102,14 @@ function AiHubApp() {
               drillTitle: palette.drillTitle,
               onCloseDrill: palette.closeDrill,
             }}
+            track={track}
+            pinnedMode={pinnedMode}
+            onTrack={(next) => {
+              setSettings({ aiHubTrack: next });
+            }}
             modeChip={
               pinnedMode ? (
-                /* 钉住的任务模式：住在输入卡片的元信息行，点一下解除回到自动 */
+                /* 钉住的任务模式：独立一行，点一下解除回到轨默认 */
                 <button
                   type="button"
                   className="qa-mode-pin-chip"
@@ -1204,10 +1181,6 @@ function AiHubApp() {
             }}
             permissionMenuOpen={openPop === "permission"}
             onTogglePermissionMenu={() => togglePop("permission")}
-            dailyStyle={dailyStyle}
-            onDailyStyle={setDailyStyle}
-            dailyMenuOpen={openPop === "daily"}
-            onToggleDailyMenu={() => togglePop("daily")}
             openList={visibleOpenList}
             onRunOpen={runOpen}
             onStop={() => void stream.stopStream()}
@@ -1262,9 +1235,7 @@ function AiHubApp() {
               onConfirm={() => void snippets.confirmSnippetParams()}
             />
           )}
-
-        </>
-      )}
+      </div>
       {hintOn && (
         <div className="qa-busy-hint" role="status">
           {hintText}

@@ -911,11 +911,16 @@ P0 的 7 项里，有 4 项（P0-1/2/4/5）不是"新增能力"，而是**当前
 - `remember` 工具 + `agent_memory.rs`：memory.md 追加式写入，32KB / 200 条上限
 
 ### 6. 非代码工具
-- `read_document`（docx / xlsx / txt / md / csv）、`read_table`、`table_query`（内存 SQLite，单条 SELECT，最多 500 行）
-- 依赖：`zip 0.6` + `calamine 0.26`（zip 版本必须跟随 calamine，否则编译期冲突）
+- `read_document`（docx / xlsx / txt / md / csv / **pdf 文本层**）、`read_table`、`table_query`（内存 SQLite，单条 SELECT，最多 500 行）
+- 依赖：`zip =2.2.0` + `calamine 0.26` + `lopdf 0.34`（zip 版本必须跟随 calamine，否则编译期冲突；扫描件 PDF 不做 OCR）
+
+### 7. Code / Work 双轨与协议闭环（续）
+- 产品轨 `settings.aiHubTrack`（`code` | `work`）：输入区胶囊切换；空态建议 / next-suggestion / 默认 chips 分轨；Work 未钉住时 `mode=doc`
+- `AiHubTurn.blocks` + `stepsToBlocks` / `turnsToMessages`：跨轮透传 `tool_use` / `tool_result`；`requestHistory` 保留并裁剪块
+- 技能 `intersect_skill_tools`：`allowed-tools` ∩ offered ∩ mode
+- `dispatch_tool` 管道显式化；`agent_session_log` JSONL 旁证；doc/data 允许 `run_command`（Ask）
 
 ### 尚未做（明确留白）
-- PDF 文本层（需 lopdf；扫描件不做 OCR）
 - `web_fetch` 白名单分级（off / allowlist / open）
-- 技能 `allowed-tools` 与模式工具集求交集（目前只注入正文）
 - 子代理可写与并行
+- 会话事件真源完整投影恢复（当前主路径仍是 SQLite `AiHubTurn.blocks`，JSONL 为旁证）

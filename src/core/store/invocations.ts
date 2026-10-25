@@ -251,6 +251,15 @@ export interface Invocations {
   invokeCancelRequest: (id: string) => Promise<void>;
   invokeUpdateLatestTag: () => Promise<string>;
   invokeFetchSiteIcon: (url: string) => Promise<string | null>;
+  invokeWecomChannelStatus: () => Promise<{ state: string; detail: string; enabled: boolean }>;
+  invokeWecomChannelApply: (req: Record<string, unknown>) => Promise<{ state: string; detail: string; enabled: boolean }>;
+  invokeWecomChannelRestart: () => Promise<{ state: string; detail: string; enabled: boolean }>;
+  invokeWecomPairingList: () => Promise<{ userid: string; code: string; createdMs: number }[]>;
+  invokeWecomPairingApprove: (code: string) => Promise<string>;
+  invokeWecomPairingRevoke: (userid: string) => Promise<void>;
+  invokeWecomPairedUsers: () => Promise<string[]>;
+  invokeWecomProtectSecret: (plain: string) => Promise<string>;
+  invokeWecomRevealSecret: (stored: string) => Promise<string>;
 }
 
 export const invocations: Invocations = {
@@ -640,6 +649,20 @@ export const invocations: Invocations = {
   invokeUpdateInstall: (path: string) => tauriInvoke<void>('update_install', { path }),
   invokeCancelRequest: (id: string) => tauriInvoke<void>('cancel_request', { id }),
   invokeFetchSiteIcon: (url: string) => tauriInvoke<string | null>('fetch_site_icon', { url }),
+  invokeWecomChannelStatus: () =>
+    tauriInvoke<{ state: string; detail: string; enabled: boolean }>('wecom_channel_status'),
+  invokeWecomChannelApply: (req: Record<string, unknown>) =>
+    tauriInvoke<{ state: string; detail: string; enabled: boolean }>('wecom_channel_apply', { req }),
+  invokeWecomChannelRestart: () =>
+    tauriInvoke<{ state: string; detail: string; enabled: boolean }>('wecom_channel_restart'),
+  invokeWecomPairingList: () =>
+    tauriInvoke<{ userid: string; code: string; createdMs: number }[]>('wecom_pairing_list'),
+  invokeWecomPairingApprove: (code: string) => tauriInvoke<string>('wecom_pairing_approve', { code }),
+  invokeWecomPairingRevoke: (userid: string) => tauriInvoke<void>('wecom_pairing_revoke', { userid }),
+  invokeWecomPairedUsers: () => tauriInvoke<string[]>('wecom_paired_users'),
+  invokeWecomProtectSecret: (plain: string) => tauriInvoke<string>('wecom_protect_secret', { plain }),
+  invokeWecomRevealSecret: (stored: string) => tauriInvoke<string>('wecom_reveal_secret', { stored }),
 };
+
 
 export default invocations;

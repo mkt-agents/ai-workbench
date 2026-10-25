@@ -19,17 +19,17 @@ import HostsManager from "./components/HostsManager";
 import AccountQuotaPanel from "./components/AccountQuotaPanel";
 import PluginBrowser from "./components/PluginBrowser";
 import CursorManager from "./components/CursorManager";
-import AIAssistant from "./components/AIAssistant";
+import AIAssistant, { openModelsPromptsTab } from "./components/AIAssistant";
 import DeepSeekHarness from "./components/DeepSeekHarness";
 import VersionSwitcher from "./components/VersionSwitcher";
 import CloudflaredManager from "./components/CloudflaredManager";
-import SnippetsManager from "./components/SnippetsManager";
 import DraftsManager from "./components/DraftsManager";
 import DevTools from "./components/DevTools";
 import DesktopAppsPage from "./components/DesktopAppsPage";
 import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
+import { applyWecomChannel } from "./lib/wecomChannel";
 import { useGlobalStore } from "./core/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
@@ -45,6 +45,23 @@ import {
 } from "./lib/navCustomize";
 import "./styles/index.css";
 
+/** Persist rehydration is async even for localStorage. Cap the wait so boot cannot hang. */
+function waitForSettingsHydration(timeoutMs = 2000): Promise<void> {
+  const persistApi = useGlobalStore.persist;
+  if (persistApi.hasHydrated()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      unsub();
+      resolve();
+    }, timeoutMs);
+    const unsub = persistApi.onFinishHydration(() => {
+      window.clearTimeout(timer);
+      unsub();
+      resolve();
+    });
+  });
+}
+
 const NARROW_COLLAPSE_PX = 720;
 const WIDE_EXPAND_PX = 900;
 
@@ -57,9 +74,25 @@ function App() {
   const setSettings = useGlobalStore((s) => s.setSettings);
   const webPlugins = useGlobalStore((s) => s.webPlugins);
 
+  const goTab = (tab: Tab) => {
+    // 旧侧栏「提示词」已并进模型管理第三 Tab
+    if (tab === "snippets") {
+      openModelsPromptsTab();
+      setActiveTab("ai-models");
+      if (typeof window !== "undefined") window.location.hash = "#ai-models";
+      return;
+    }
+    setActiveTab(tab);
+    if (typeof window !== "undefined") window.location.hash = `#${tab}`;
+  };
+
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "snippets", "drafts", "devtools", "app-launcher", "desktop-apps"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    if (h === "snippets") {
+      openModelsPromptsTab();
+      return "ai-models";
+    }
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "drafts", "devtools", "app-launcher", "desktop-apps"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -127,6 +160,20 @@ function App() {
         if (!result.ok) {
           console.warn("ai-hub shortcut failed:", result.error);
         }
+        // 企微通道：等 settings 从 localStorage 水合后再起长连接，避免读到默认空配置就跳过
+        try {
+          await waitForSettingsHydration();
+          const st = useGlobalStore.getState();
+          if (st.settings.wecomEnabled) {
+            await applyWecomChannel({
+              settings: st.settings,
+              models: st.aiModels,
+              mcpServers: st.mcpServers,
+            });
+          }
+        } catch (e) {
+          console.warn("wecom channel apply failed:", e);
+        }
         try {
           // Drop legacy top-right positions that cover the titlebar (pre-fix HiDPI bug).
           const pos = s.aiHubBubblePos;
@@ -163,8 +210,8 @@ function App() {
 
   useTauriEvent<string>("navigate-tab", (event) => {
     const tab = event.payload as Tab;
-    if (tab) setActiveTab(tab);
-  }, [setActiveTab]);
+    if (tab) goTab(tab);
+  }, []);
 
   useTauriEvent<string>("navigate-git-subtab", (event) => {
     const sub = event.payload;
@@ -231,7 +278,7 @@ function App() {
   const renderLeafButton = (leaf: { id: Tab; labelKey: string; icon: React.ReactNode }, className = "") => (
     <button
       key={leaf.id}
-      onClick={() => { setActiveTab(leaf.id); if (typeof window !== "undefined") window.location.hash = `#${leaf.id}`; }}
+      onClick={() => goTab(leaf.id)}
       className={`sidebar-nav-item ${className} ${activeTab === leaf.id ? "active" : ""}`.trim()}
       title={leafLabel(leaf)}
     >
@@ -480,7 +527,6 @@ function App() {
                   <DeepSeekHarness active={activeTab === "ai-chat"} />
                 </div>
               )}
-              {activeTab === "snippets" && <SnippetsManager />}
               {activeTab === "drafts" && <DraftsManager />}
               {activeTab === "plugins" && <PluginBrowser />}
               {activeTab === "cloudflared" && <CloudflaredManager />}

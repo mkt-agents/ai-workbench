@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 import type { AiHubTurn } from "../../core/types";
-import type { TaskKind } from "./config";
-import type { DailyStyle } from "./dailyReport";
 import type { AskMode } from "./route";
 import type {
   AgentDecision, AgentPermission, AnswerSource, AskPhase, AgentApproval, AgentPlanStep, AgentStep,
 } from "./useAskStream";
 import type { OpenSuggestion } from "./localActions";
 import type { PaletteItem } from "./harnessCommands";
+import type { HarnessMode, HarnessTrack } from "./harness";
 import AskThread from "./AskThread";
 import AskEmpty from "./AskEmpty";
 import AskErrorCard from "./AskErrorCard";
@@ -49,9 +48,6 @@ export type AskPanelProps = {
   setSelectedText: (v: string) => void;
   /** Repo label used in project mode; null = no repo available at all. */
   projectLabel: string | null;
-  task: TaskKind;
-  onTask: (task: TaskKind) => void;
-  onDaily: () => void;
   agentSteps: AgentStep[];
   /** Checklist the model published with `update_plan` for this round. */
   agentPlan: AgentPlanStep[];
@@ -60,15 +56,20 @@ export type AskPanelProps = {
   onDecideAgent: (decision: AgentDecision) => void;
   onContinue: () => void;
   hasSnippets: boolean;
-  /** 插入 `/`：命令、技能、片段统一由命令面板列出。 */
+  /** 插入 `/`：命令、技能、提示词统一由命令面板列出。 */
   onToggleSnippets: () => void;
   onPasteClipboard: () => void;
   onAttachFile: () => void;
   onSend: () => void;
   /** Project picker, shown at the top-left of the composer. */
   repoControl: ReactNode;
-  /** 钉住的任务模式 chip：挨着项目选择器，点一下解除；不钉时为 null。 */
+  /** 钉住的任务模式 chip：独占一行，点一下解除；不钉时为 null。 */
   modeChip?: ReactNode;
+  /** 当前钉住的模式 id（空态文案用）；与 modeChip 同步。 */
+  pinnedMode?: HarnessMode | null;
+  /** Code | Work 轨切换；与任务模式正交。 */
+  track?: HarnessTrack;
+  onTrack?: (track: HarnessTrack) => void;
   /** Model picker, shown at the bottom-right, beside send. */
   modelControl: ReactNode;
   /** `/` 命令与 `@` 文件引用共用的浮层；null = 没有候选。 */
@@ -91,11 +92,6 @@ export type AskPanelProps = {
   onDiffConfirm: (on: boolean) => void;
   permissionMenuOpen: boolean;
   onTogglePermissionMenu: () => void;
-  /** Daily report format, picked from the caret beside 日报. */
-  dailyStyle: DailyStyle;
-  onDailyStyle: (style: DailyStyle) => void;
-  dailyMenuOpen: boolean;
-  onToggleDailyMenu: () => void;
   /** Non-null while the composer is an "open …" phrase (empty = nothing matched). */
   openList: OpenSuggestion[] | null;
   onRunOpen: (item: OpenSuggestion) => void;
@@ -113,11 +109,21 @@ export type AskPanelProps = {
 
 /** Answer stage (flex) + composer card; answer actions live with the answer. */
 export default function AskPanel(props: AskPanelProps) {
-  const { turns, pending, busy, error, failedMode, onRetry, onDismissError, onExample } = props;
+  const {
+    turns, pending, busy, error, failedMode, onRetry, onDismissError, onExample, track, pinnedMode,
+  } = props;
   const showThread = turns.length > 0 || Boolean(pending) || busy;
   return (
     <div className="qa-stage">
-      {showThread ? <AskThread {...props} /> : <AskEmpty onExample={onExample} />}
+      {showThread ? (
+        <AskThread {...props} />
+      ) : (
+        <AskEmpty
+          onExample={onExample}
+          track={track ?? "code"}
+          pinnedMode={pinnedMode}
+        />
+      )}
       {error && (
         <AskErrorCard
           error={error}

@@ -23,7 +23,6 @@
 @import "./banners.css";
 @import "./responsive.css";
 @import "./runtime.css";
-@import "./prompt.css";
 @import "./git-pages.css";
 @import "./changelog.css";
 @import "./ai-hub.css";
@@ -31,6 +30,7 @@
 @import "./snippets.css";
 @import "./drafts.css";
 @import "./ai-hub-bubble.css";
+@import "./pet-panda-girl.css";
 @import "./plugin-tabs.css";
 @import "./devtools.css";
 @import "./git-diff.css";
