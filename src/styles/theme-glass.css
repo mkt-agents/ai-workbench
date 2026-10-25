@@ -456,14 +456,14 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-toolbar .dsh-version-group {
-  background: transparent;
-  border-color: transparent;
+  background: var(--overlay-1);
+  border-color: var(--border-subtle);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-toolbar .dsh-version-label {
   color: var(--text-2);
-  background: var(--overlay-1);
-  border-color: var(--overlay-3);
+  background: transparent;
+  border-color: transparent;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-toolbar .dsh-version-label svg {

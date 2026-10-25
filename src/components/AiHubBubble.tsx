@@ -163,12 +163,6 @@ export default function AiHubBubble() {
   const menuOpenRef = useRef(false);
   menuOpenRef.current = menuOpen;
   const clickTimerRef = useRef<number | null>(null);
-  /** 上一次单击松手的时刻：双击与落在哪个分区无关。 */
-  const lastTapAtRef = useRef(0);
-  /** 上上次单击松手的时刻：系统 dblclick 兜底时复核这两击间隔够不够快。 */
-  const prevTapAtRef = useRef(0);
-  /** 最近一次松手是什么：原生 dblclick 只在两下都是单击时才换装（拖动、长按不算）。 */
-  const lastUpRef = useRef<"tap" | "swap" | "drag" | "hold">("tap");
   const affinityRef = useRef(affinity);
   affinityRef.current = affinity;
   const greetedOnRef = useRef(settings.aiHubPetGreetedOn);
@@ -867,7 +861,6 @@ export default function AiHubBubble() {
       return;
     }
     if (d.moved || d.dragging) {
-      lastUpRef.current = "drag";
       await snapAndPersist();
       // 放手：落地弹一下 + 欢呼表情，再站定
       setPhase("landing");
@@ -883,39 +876,10 @@ export default function AiHubBubble() {
     }
     // 已经触发过抱：松手不再当单击，也不开窗
     if (d.hugged) {
-      lastUpRef.current = "hold";
       setPhase("idle");
       return;
     }
-    // 第二击落在窗口内 → 换装，取消本已排队的「打开天玑」。
-    // 只有身区单击会排队开窗，头 / 裙边 / 睡醒那一下不排，所以不能拿计时器判双击。
-    const now = Date.now();
-    if (now - lastTapAtRef.current < DOUBLE_CLICK_MS) {
-      swapOnDoubleTap();
-      return;
-    }
-    prevTapAtRef.current = lastTapAtRef.current;
-    lastTapAtRef.current = now;
-    lastUpRef.current = "tap";
     handleZoneTap(d.zone);
-  };
-
-  const swapOnDoubleTap = () => {
-    lastTapAtRef.current = 0;
-    lastUpRef.current = "swap";
-    clearTimer(clickTimerRef);
-    cyclePet();
-  };
-
-  /**
-   * 系统判定的双击兜底：Windows 的双击速度（默认 500ms，系统里可调得更慢）比
-   * DOUBLE_CLICK_MS 宽，慢点两下也会落到这里。换装只认快连击——
-   * 两击间隔 ≥ DOUBLE_CLICK_MS 的慢双击不换，维持各自的单击行为。
-   */
-  const onDoubleClick = () => {
-    if (lastUpRef.current !== "tap" || menuOpenRef.current) return;
-    if (lastTapAtRef.current - prevTapAtRef.current >= DOUBLE_CLICK_MS) return;
-    swapOnDoubleTap();
   };
 
   const runMenuItem = (action: () => void) => {
@@ -933,7 +897,6 @@ export default function AiHubBubble() {
       onPointerMove={(e) => void onPointerMove(e)}
       onPointerUp={(e) => void endPointer(e, false)}
       onPointerCancel={(e) => void endPointer(e, true)}
-      onDoubleClick={onDoubleClick}
       onPointerEnter={(e) => {
         hoverRef.current = true;
         // 摸头：停在头区够 1.1 秒才高兴，扫过去不算

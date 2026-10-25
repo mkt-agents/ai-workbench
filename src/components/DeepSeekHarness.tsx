@@ -931,7 +931,6 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
                       ) : (
                         <ArrowUpRight size={11} strokeWidth={2.2} />
                       )}
-                      <span>{t("dsh.updateAction")}</span>
                       <span className="dsh-update-chip-ver">v{dshLatestVersion}</span>
                     </button>
                   )}

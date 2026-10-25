@@ -1170,12 +1170,16 @@ pub async fn get_dsh_version() -> Result<String, String> {
         .ok_or_else(|| "Not installed".to_string())
 }
 
-/// Newest DeepSeek build the user should be offered: the `latest` dist-tag only.
+/// Newest DeepSeek build the user should be offered: the higher of the `latest`
+/// and `next` dist-tags, excluding alpha builds.
 ///
-/// `next` is deliberately excluded: it can point at a release candidate whose
-/// dependency packages are not yet published (e.g. 0.2.1-rc.3 shipped without
-/// dsh-deepseek-llm-api-extensions@0.2.1-rc.3), so an upgrade to it always fails
-/// with ETARGET. The alpha channel stays excluded, matching `get_dsh_versions`.
+/// `next` is included because DSH ships release candidates there before (or
+/// instead of) flipping `latest` — e.g. 0.2.1-rc.3 was only ever on `next`, so
+/// an install of 0.2.1-rc.2 never saw an update. The historical worry about
+/// `next` (a candidate whose dependency packages are not yet published, so the
+/// upgrade fails with ETARGET) is handled downstream: `update_dsh` installs the
+/// pinned version and surfaces npm's real error lines instead of a generic
+/// network hint. The alpha channel stays excluded, matching `get_dsh_versions`.
 #[tauri::command]
 pub async fn get_dsh_latest_version() -> Result<String, String> {
     let output = tokio::task::spawn_blocking(|| {
@@ -1200,10 +1204,15 @@ pub async fn get_dsh_latest_version() -> Result<String, String> {
         .map_err(|e| format!("Failed to parse dist-tags: {}", e))?;
 
     let mut best: Option<String> = None;
-    if let Some(version) = tags.get("latest").and_then(|v| v.as_str()) {
-        if !version.contains("alpha") {
-            best = Some(version.to_string());
-        }
+    for tag in ["latest", "next"] {
+        let version = match tags.get(tag).and_then(|v| v.as_str()) {
+            Some(v) if !v.contains("alpha") => v,
+            _ => continue,
+        };
+        best = Some(match best {
+            Some(prev) if crate::runtime_commands::compare_versions(prev.as_str(), version) != std::cmp::Ordering::Less => prev,
+            _ => version.to_string(),
+        });
     }
 
     best.ok_or_else(|| "Could not determine latest version".to_string())

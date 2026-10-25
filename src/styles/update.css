@@ -337,19 +337,17 @@
 
 .dsh-toolbar .dsh-version-group {
   height: 26px;
-  padding: 0;
-  gap: 6px;
-  background: transparent;
-  border-color: transparent;
+  padding: 2px;
+  gap: 2px;
 }
 
 .dsh-toolbar .dsh-version-label {
-  height: 26px;
-  padding: 0 8px;
+  height: 100%;
+  padding: 0 7px;
   font-size: 11px;
   color: var(--text-2);
-  background: var(--overlay-1);
-  border: 1px solid var(--border-subtle);
+  background: transparent;
+  border: none;
   border-radius: var(--radius-full);
 }
 
@@ -658,7 +656,7 @@
 .dsh-version-group {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   flex-shrink: 0;
   height: 24px;
   padding: 2px;
@@ -705,55 +703,44 @@
   animation: dsh-version-pulse 2.5s ease-in-out infinite;
 }
 
-/* Update chip — solid accent pill inside the capsule + breathing glow so an
-   available upgrade is impossible to miss. */
+/* Update chip — soft accent-tinted pill inside the capsule; the tint deepens
+   on hover instead of a breathing glow, which read as a smudge on the light
+   theme and fought the version label's quieter tone. */
 .dsh-update-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   height: 100%;
-  padding: 0 8px;
-  border: none;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--on-accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  animation: dsh-update-glow 2.4s ease-in-out infinite;
-  transition: background 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
 .dsh-update-chip-ver {
-  opacity: 0.85;
+  opacity: 0.8;
   font-weight: 500;
 }
 
-/* Soft breathing drop shadow — a spreading ring reads as a grey smudge on the
-   light theme, a depth pulse stays clean in both. */
-@keyframes dsh-update-glow {
-  0%, 100% {
-    box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent);
-  }
-  50% {
-    box-shadow: 0 2px 9px color-mix(in srgb, var(--accent) 55%, transparent);
-  }
-}
-
 .dsh-update-chip:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .dsh-update-chip:active:not(:disabled) {
-  background: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
 .dsh-update-chip:disabled {
   opacity: 0.45;
-  animation: none;
   cursor: not-allowed;
 }
 
