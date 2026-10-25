@@ -13,7 +13,25 @@
     "groupBudget": "Budget & compatibility",
     "groupWeb": "Web fetch",
     "groupMcp": "MCP servers",
-    "groupWecom": "WeCom bot"
+    "groupWecom": "WeCom bot",
+    "groupTianjiApi": "Tianji API"
+  },
+  "tianjiApi": {
+    "hint": "Tianji OpenAI-compatible endpoint: exposes Tianji (tools / approvals / sessions included) as /v1/chat/completions for OpenClaw (WeChat ClawBot) or any OpenAI-compatible client. In OpenClaw set base_url to the address below, api_key to the key here, and model to tianji. Once WeChat ClawBot is bound to OpenClaw via QR, you can chat with Tianji inside WeChat.",
+    "groupConnection": "Connection",
+    "enabled": "Enabled",
+    "status": "Status",
+    "state": {
+      "disabled": "Disabled",
+      "listening": "Listening",
+      "error": "Error"
+    },
+    "baseUrlHint": "base_url: {{baseUrl}}　model: {{model}} (localhost only; use a tunnel for external access. In OpenClaw the Base URL ends at /v1 — do not append /chat/completions)",
+    "port": "Local port",
+    "restart": "Restart",
+    "apiKey": "API key (optional)",
+    "keyPlaceholder": "Empty = no auth",
+    "saved": "Saved and applied"
   },
   "net": {
     "title": "Network & extensions",
@@ -226,6 +244,11 @@
     "botSecret": "Secret",
     "secretKept": "Saved (leave blank to keep)",
     "secretPlaceholder": "Long-connection Secret",
+    "corpId": "Business API Corp ID",
+    "corpIdPlaceholder": "e.g. wwxxxxxxxxxxxxxxxx (enterprise ID)",
+    "corpSecret": "App Secret",
+    "corpSecretPlaceholder": "Self-built app secret (for business APIs)",
+    "corpHint": "Business APIs (docs / calendar / smartsheet) require a self-built app's Corp ID + Secret (WeCom admin → Application Management). The bot Bot ID/Secret is only for the message channel and cannot call business APIs.",
     "displayName": "Bot display name",
     "displayNamePlaceholder": "Used to strip @name in groups",
     "dmPolicy": "DM policy",

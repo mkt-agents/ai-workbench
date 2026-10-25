@@ -105,6 +105,11 @@ export default function ContextPicker(props: Props) {
   const popHeightRef = useRef(popHeight);
   const resizeDrag = useRef<{ y: number; h: number } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // The panel shrinks to its content until the user grabs the handle; from that
+  // moment (this open only) it keeps the dragged height even if content is short,
+  // otherwise pulling up would visibly do nothing.
+  const [fixedHeight, setFixedHeight] = useState(false);
+  const fixedHeightRef = useRef(false);
 
   // The panel is capped, not fixed: short lists stay compact and the cap keeps
   // following the space above the trigger row when the window shrinks.
@@ -119,6 +124,13 @@ export default function ContextPicker(props: Props) {
     clamp();
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
+  }, [open]);
+
+  // Reopen compact: the dragged size stays stored as the cap, the mode does not.
+  useEffect(() => {
+    if (open) return;
+    fixedHeightRef.current = false;
+    setFixedHeight(false);
   }, [open]);
 
   // Each time the popover opens, expand groups that matter right now.
@@ -172,6 +184,10 @@ export default function ContextPicker(props: Props) {
   const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = resizeDrag.current;
     if (!drag) return;
+    if (!fixedHeightRef.current) {
+      fixedHeightRef.current = true;
+      setFixedHeight(true);
+    }
     const next = Math.min(ctxCap(rootRef.current), Math.max(CTX_HEIGHT_MIN, drag.h + (drag.y - e.clientY)));
     popHeightRef.current = next;
     setPopHeight(next);
@@ -212,7 +228,10 @@ export default function ContextPicker(props: Props) {
       </div>
 
       {open && (
-        <div className="qa-focus-pop qa-ctx-pop is-left is-up" style={{ maxHeight: popHeight }}>
+        <div
+          className="qa-focus-pop qa-ctx-pop is-left is-up"
+          style={fixedHeight ? { height: popHeight } : { maxHeight: popHeight }}
+        >
           <div
             className="qa-ctx-resize"
             role="separator"

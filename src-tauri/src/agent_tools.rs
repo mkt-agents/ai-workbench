@@ -101,6 +101,18 @@ pub(crate) const TOOLS: &[ToolDef] = &[
     ToolDef { name: "mouse", group: ToolGroup::System, gate: GateKind::Computer, parallel: false, action: true },
     ToolDef { name: "keyboard", group: ToolGroup::System, gate: GateKind::Computer, parallel: false, action: true },
     ToolDef { name: "wait", group: ToolGroup::System, gate: GateKind::Computer, parallel: false, action: false },
+    // —— 企微业务（复用机器人 Bot ID/Secret，走 Open API；只读查询不占动作步）——
+    ToolDef { name: "wecom_doc_list", group: ToolGroup::Doc, gate: GateKind::Look, parallel: true, action: false },
+    ToolDef { name: "wecom_doc_read", group: ToolGroup::Doc, gate: GateKind::Look, parallel: true, action: false },
+    ToolDef { name: "wecom_doc_create", group: ToolGroup::Doc, gate: GateKind::Change, parallel: false, action: true },
+    ToolDef { name: "wecom_calendar_list", group: ToolGroup::Doc, gate: GateKind::Look, parallel: true, action: false },
+    ToolDef { name: "wecom_calendar_create", group: ToolGroup::Doc, gate: GateKind::Change, parallel: false, action: true },
+    ToolDef { name: "wecom_sheet_list", group: ToolGroup::Data, gate: GateKind::Look, parallel: true, action: false },
+    ToolDef { name: "wecom_sheet_create", group: ToolGroup::Data, gate: GateKind::Change, parallel: false, action: true },
+    ToolDef { name: "wecom_sheet_add_row", group: ToolGroup::Data, gate: GateKind::Change, parallel: false, action: true },
+    // —— 企微出站富媒体：把本地生成的图片/文件发回当前企微对话（只读，不产生副作用审批）——
+    ToolDef { name: "wecom_send_image", group: ToolGroup::Doc, gate: GateKind::Look, parallel: false, action: false },
+    ToolDef { name: "wecom_send_file", group: ToolGroup::Doc, gate: GateKind::Look, parallel: false, action: false },
 ];
 
 pub(crate) fn get(name: &str) -> Option<&'static ToolDef> {

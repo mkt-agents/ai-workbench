@@ -84,6 +84,7 @@
   "hideToken": "Hide token",
   "copyToken": "Copy token",
   "stopAll": "Stop all",
+  "stopBatch": "Stop all",
   "alreadyRunning": "This tunnel is already running",
   "runningCount": "{{count}} tunnel(s) running",
   "runningTitle": "Running",

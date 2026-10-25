@@ -84,6 +84,7 @@
   "hideToken": "隐藏 Token",
   "copyToken": "复制 Token",
   "stopAll": "停止全部",
+  "stopBatch": "批量停止",
   "alreadyRunning": "该隧道已在运行",
   "runningCount": "运行中 {{count}} 条",
   "runningTitle": "运行中",

@@ -26,15 +26,28 @@ pub struct InboundFrame {
 }
 
 #[derive(Debug, Clone)]
+pub struct MediaRef {
+    pub kind: String, // "image" | "file"
+    pub url: String,
+    pub filename: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MsgCallback {
     pub req_id: String,
     pub msgid: String,
     pub chattype: String,
     pub chatid: Option<String>,
     pub userid: String,
+    /// 平台原始类型；分流逻辑在 extract_content 里完成，这里保留备查
+    #[allow(dead_code)]
     pub msgtype: String,
     pub text: String,
     pub quote_text: Option<String>,
+    /// 图片 / 文件附件（智能机器人回调里直接带可下载 url）
+    pub media: Vec<MediaRef>,
+    /// 语音消息但企微未回传转写文本（否则会静默丢消息）
+    pub voice_empty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +106,35 @@ pub fn respond_welcome_text(req_id: &str, content: &str) -> String {
     .to_string()
 }
 
+/// 出站图片：aibot 以 inline base64 回发（字段名以线上协议为准，待联调验证）。
+pub fn respond_image(req_id: &str, stream_id: &str, media_type: &str, data_base64: &str) -> String {
+    json!({
+        "cmd": "aibot_respond_msg",
+        "headers": { "req_id": req_id },
+        "body": {
+            "msgtype": "image",
+            "stream_id": stream_id,
+            "image": { "base64": data_base64, "media_type": media_type }
+        }
+    })
+    .to_string()
+}
+
+/// 出站文件：需先经企微媒体上传拿到 media_id（见 `wecom_media::upload_media`）。
+/// 若上传不可用，调用方会回退为文本提示。
+pub fn respond_file(req_id: &str, stream_id: &str, media_id: &str, filename: &str) -> String {
+    json!({
+        "cmd": "aibot_respond_msg",
+        "headers": { "req_id": req_id },
+        "body": {
+            "msgtype": "file",
+            "stream_id": stream_id,
+            "file": { "media_id": media_id, "filename": filename }
+        }
+    })
+    .to_string()
+}
+
 pub fn parse_inbound(raw: &str) -> Result<InboundFrame, String> {
     serde_json::from_str(raw).map_err(|e| format!("wecom frame json: {e}"))
 }
@@ -125,7 +167,7 @@ pub fn parse_msg_callback(frame: &InboundFrame) -> Option<MsgCallback> {
         .and_then(|v| v.as_str())
         .unwrap_or("text")
         .to_string();
-    let text = extract_text(body, &msgtype);
+    let (text, media, voice_empty) = extract_content(body, &msgtype);
     let quote_text = body.get("quote").and_then(extract_quote_text);
     Some(MsgCallback {
         req_id,
@@ -136,6 +178,8 @@ pub fn parse_msg_callback(frame: &InboundFrame) -> Option<MsgCallback> {
         msgtype,
         text,
         quote_text,
+        media,
+        voice_empty,
     })
 }
 
@@ -180,22 +224,29 @@ pub fn parse_event_callback(frame: &InboundFrame) -> Option<EventCallback> {
     })
 }
 
-fn extract_text(body: &Value, msgtype: &str) -> String {
+/// 抽出 (文本, 媒体列表, 语音是否空转写)。图片/文件只记可下载 url，无法下载的记成文本线索。
+fn extract_content(body: &Value, msgtype: &str) -> (String, Vec<MediaRef>, bool) {
     match msgtype {
-        "text" => body
-            .get("text")
-            .and_then(|t| t.get("content"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "voice" => body
-            .get("voice")
-            .and_then(|t| t.get("content").or_else(|| t.get("recognition")))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        "text" => (text_of(body), Vec::new(), false),
+        "voice" => {
+            let rec = body
+                .get("voice")
+                .and_then(|t| t.get("content").or_else(|| t.get("recognition")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let empty = rec.trim().is_empty();
+            (rec, Vec::new(), empty)
+        }
+        "image" => {
+            let m = body.get("image").and_then(|i| media_from(i, "image"));
+            (String::new(), m.into_iter().collect(), false)
+        }
+        "file" => {
+            let m = body.get("file").and_then(|i| media_from(i, "file"));
+            (String::new(), m.into_iter().collect(), false)
+        }
         "mixed" => {
-            // 图文混排：拼接文本项
             let items = body
                 .get("mixed")
                 .and_then(|m| m.get("msg_item"))
@@ -203,32 +254,65 @@ fn extract_text(body: &Value, msgtype: &str) -> String {
                 .cloned()
                 .unwrap_or_default();
             let mut parts = Vec::new();
+            let mut media = Vec::new();
             for item in items {
-                let t = item
-                    .get("msgtype")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if t == "text" {
-                    if let Some(c) = item
-                        .get("text")
-                        .and_then(|x| x.get("content"))
-                        .and_then(|v| v.as_str())
-                    {
-                        if !c.trim().is_empty() {
-                            parts.push(c.to_string());
+                let t = item.get("msgtype").and_then(|v| v.as_str()).unwrap_or("");
+                match t {
+                    "text" => {
+                        if let Some(c) = item
+                            .get("text")
+                            .and_then(|x| x.get("content"))
+                            .and_then(|v| v.as_str())
+                        {
+                            if !c.trim().is_empty() {
+                                parts.push(c.to_string());
+                            }
                         }
                     }
+                    "image" => {
+                        if let Some(m) = item.get("image").and_then(|i| media_from(i, "image")) {
+                            media.push(m);
+                        }
+                    }
+                    "file" => {
+                        if let Some(m) = item.get("file").and_then(|i| media_from(i, "file")) {
+                            media.push(m);
+                        }
+                    }
+                    _ => {}
                 }
             }
-            parts.join("\n")
+            (parts.join("\n"), media, false)
         }
-        _ => String::new(),
+        _ => (String::new(), Vec::new(), false),
     }
+}
+
+fn text_of(body: &Value) -> String {
+    body.get("text")
+        .and_then(|t| t.get("content"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// 从 image/file 子对象取可下载 url；没有 url（只有 media_id）就返回 None，由上层回退成提示。
+fn media_from(v: &Value, kind: &str) -> Option<MediaRef> {
+    let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string();
+    if url.trim().is_empty() {
+        return None;
+    }
+    let filename = v.get("filename").and_then(|f| f.as_str()).map(|s| s.to_string());
+    Some(MediaRef {
+        kind: kind.to_string(),
+        url,
+        filename,
+    })
 }
 
 fn extract_quote_text(quote: &Value) -> Option<String> {
     let msgtype = quote.get("msgtype")?.as_str()?;
-    let text = extract_text(quote, msgtype);
+    let text = extract_content(quote, msgtype).0;
     if text.trim().is_empty() {
         None
     } else {
@@ -325,5 +409,39 @@ mod tests {
         assert_eq!(msg.userid, "u1");
         assert_eq!(msg.chattype, "group");
         assert_eq!(msg.text, "@Bot hi");
+    }
+
+    #[test]
+    fn parse_image_msg_captures_media() {
+        let raw = r#"{
+            "cmd":"aibot_msg_callback",
+            "headers":{"req_id":"r2"},
+            "body":{
+                "msgid":"m2","chattype":"single",
+                "from":{"userid":"u2"},"msgtype":"image",
+                "image":{"url":"https://example.com/a.png","md5":"x"}
+            }
+        }"#;
+        let frame = parse_inbound(raw).unwrap();
+        let msg = parse_msg_callback(&frame).unwrap();
+        assert!(msg.text.is_empty());
+        assert_eq!(msg.media.len(), 1);
+        assert_eq!(msg.media[0].kind, "image");
+        assert_eq!(msg.media[0].url, "https://example.com/a.png");
+    }
+
+    #[test]
+    fn parse_voice_empty_recognition() {
+        let raw = r#"{
+            "cmd":"aibot_msg_callback",
+            "headers":{"req_id":"r3"},
+            "body":{"msgid":"m3","chattype":"single",
+                "from":{"userid":"u3"},"msgtype":"voice",
+                "voice":{"media_id":"M1"}}
+        }"#;
+        let frame = parse_inbound(raw).unwrap();
+        let msg = parse_msg_callback(&frame).unwrap();
+        assert!(msg.text.is_empty());
+        assert!(msg.voice_empty);
     }
 }

@@ -3,15 +3,19 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 use crate::agent::{
-    subscribe_agent_bridge, unsubscribe_agent_bridge, AgentBridgeEvent, AgentRunRequest,
+    agent_decide, subscribe_agent_bridge, unsubscribe_agent_bridge, AgentBridgeEvent,
+    AgentRunRequest,
 };
+use crate::agent_protocol::{Block, Message};
 use crate::ai_commands::AIModelConfig;
 use crate::mcp::McpServerSpec;
+use crate::wecom_channel::{PendingApproval, WecomState};
 use crate::wecom_policy::{GateDecision, MsgDeduper, PolicyState};
 use crate::wecom_proto::{self, EventCallback, MsgCallback};
 use crate::wecom_sanitize::redact_local_paths;
@@ -19,7 +23,6 @@ use crate::wecom_session::{self, SessionKey};
 use crate::wecom_ws::WecomSocket;
 
 const MAX_GLOBAL_JOBS: usize = 2;
-const APPROVAL_TIP: &str = "需要你在桌面端「天玑」确认后才能继续，请切换到 AI Workbench。";
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +143,20 @@ impl Orchestrator {
             }
         }
 
+        // 企微内审批回灌：若本条是「审批码 + 选择」回复，直接放行/拒绝对应回合
+        if let Some(answer) = self.try_resolve_approval(&app, &msg.text).await {
+            let _ = self
+                .sock
+                .send_raw(wecom_proto::respond_stream(
+                    &msg.req_id,
+                    &format!("appr-{}", msg.msgid),
+                    &answer,
+                    true,
+                ))
+                .await;
+            return;
+        }
+
         let bot_name = self.bot_display_name.lock().await.clone();
         let (text, mentioned) = wecom_proto::strip_mention(&msg.text, &bot_name);
         let mut user_text = text;
@@ -148,8 +165,22 @@ impl Orchestrator {
                 user_text = format!("（引用）{}\n\n{}", q.trim(), user_text);
             }
         }
-        if user_text.trim().is_empty() && msg.msgtype != "text" && msg.msgtype != "voice" {
-            let tip = "暂不支持该消息类型，请发文字。";
+        if msg.voice_empty {
+            let tip = "没能识别语音内容，请直接发文字或图片。";
+            let _ = self
+                .sock
+                .send_raw(wecom_proto::respond_stream(
+                    &msg.req_id,
+                    &format!("voice-{}", msg.msgid),
+                    tip,
+                    true,
+                ))
+                .await;
+            return;
+        }
+        if user_text.trim().is_empty() && msg.media.is_empty() {
+            // 既无文字也无媒体（表情/位置等）：礼貌提示，不再静默丢
+            let tip = "暂不支持该消息类型，请发文字、图片或文件。";
             let _ = self
                 .sock
                 .send_raw(wecom_proto::respond_stream(
@@ -159,9 +190,6 @@ impl Orchestrator {
                     true,
                 ))
                 .await;
-            return;
-        }
-        if user_text.trim().is_empty() {
             return;
         }
 
@@ -246,11 +274,30 @@ impl Orchestrator {
             }
         };
 
+        // 把文字 + 图片/文件附件组装成一条带 vision 块的用户消息
+        let user_msg =
+            build_user_message(&user_text, &msg.media, agent_cfg.vision).await;
+
+        // 记录当前回合的出站目标，供 wecom_send_image/file 把媒体发回同一条对话
+        {
+            let st = app.state::<WecomState>();
+            *st.last_target.lock().await = Some(crate::wecom_channel::OutTarget {
+                req_id: msg.req_id.clone(),
+                stream_id: format!("s-{}", msg.msgid),
+            });
+        }
+
         self.global_jobs.fetch_add(1, Ordering::SeqCst);
         let result = self
-            .run_agent_and_stream(&app, &msg, &session, &user_text, agent_cfg)
+            .run_agent_and_stream(&app, &msg, &session, &user_text, user_msg, agent_cfg)
             .await;
         self.global_jobs.fetch_sub(1, Ordering::SeqCst);
+
+        // 回合结束，清掉出站目标
+        {
+            let st = app.state::<WecomState>();
+            *st.last_target.lock().await = None;
+        }
 
         if let Err(e) = result {
             eprintln!("[wecom] agent turn failed: {e}");
@@ -282,6 +329,7 @@ impl Orchestrator {
         msg: &MsgCallback,
         session: &SessionKey,
         user_text: &str,
+        user_msg: crate::agent_protocol::Message,
         agent_cfg: WecomAgentConfig,
     ) -> Result<(), String> {
         let request_id = format!("wecom-{}", msg.msgid);
@@ -312,12 +360,19 @@ impl Orchestrator {
             config: agent_cfg.config,
             fallback_config: agent_cfg.fallback_config,
             system,
-            user: user_text.to_string(),
+            user: String::new(),
             request_id: request_id.clone(),
             repo_path: agent_cfg.repo_path,
             services: agent_cfg.services,
-            history,
-            messages: Vec::new(),
+            history: Vec::new(),
+            messages: {
+                let mut msgs: Vec<crate::agent_protocol::Message> = history
+                    .iter()
+                    .map(|t| crate::agent_protocol::Message::text(&t.role, &t.content))
+                    .collect();
+                msgs.push(user_msg);
+                msgs
+            },
             mode: agent_cfg.mode,
             apps: Vec::new(),
             permission,
@@ -343,14 +398,31 @@ impl Orchestrator {
         let req_id = msg.req_id.clone();
         let stream_id_clone = stream_id.clone();
         let repo_for_redact = req.repo_path.clone();
+        let pump_app = app.clone();
+        let pump_request_id = request_id.clone();
         let pump = tauri::async_runtime::spawn(async move {
             let redact = |s: &str| redact_local_paths(s, &repo_for_redact);
             let mut acc = String::new();
             let mut last_push = InstantApprox::now();
             let mut approval_told = false;
-            while let Some(ev) = rx.recv().await {
+            // 看门狗：比审批 5 分钟 TTL 和模型 120s 空闲超时都长；超过它没有任何事件就强制收尾
+            let watchdog = std::time::Duration::from_secs(420);
+            loop {
+                let ev = match tokio::time::timeout(watchdog, rx.recv()).await {
+                    Ok(ev) => ev,
+                    Err(_) => {
+                        let body = if acc.is_empty() {
+                            "（响应超时，已结束）".to_string()
+                        } else {
+                            format!("{}\n\n（长时间无响应，已自动收尾）", redact(&acc))
+                        };
+                        send_finish(&sock, &req_id, &stream_id_clone, &body).await;
+                        crate::cancellation::cancel_request(&pump_request_id);
+                        break body;
+                    }
+                };
                 match ev {
-                    AgentBridgeEvent::Chunk(t) => {
+                    Some(AgentBridgeEvent::Chunk(t)) => {
                         acc.push_str(&t);
                         // 节流推流，避免每 token 打一帧
                         if last_push.elapsed_ms() >= 400 || acc.chars().count() < 40 {
@@ -366,14 +438,27 @@ impl Orchestrator {
                             last_push = InstantApprox::now();
                         }
                     }
-                    AgentBridgeEvent::ApprovalNeeded { .. } => {
+                    Some(AgentBridgeEvent::ApprovalNeeded { call_ids, summary, can_remember }) => {
                         if !approval_told {
                             approval_told = true;
-                            let tip = if acc.is_empty() {
-                                APPROVAL_TIP.to_string()
+                            let code = register_approval(
+                                &pump_app,
+                                &pump_request_id,
+                                call_ids,
+                                can_remember,
+                            )
+                            .await;
+                            let remember_hint = if can_remember {
+                                format!("；回复「{code} 3」同意并本轮同类都允许")
                             } else {
-                                format!("{acc}\n\n—\n{APPROVAL_TIP}")
+                                String::new()
                             };
+                            let tip = format!(
+                                "🔐 需要你在企微里确认：{summary}\n回复「{code} 1」同意{remember_hint}；回复「{code} 2」拒绝（5 分钟内有效）。也可切到桌面端「天玑」点卡片。",
+                                summary = summary,
+                                code = code,
+                                remember_hint = remember_hint
+                            );
                             let out = redact(&tip);
                             let _ = sock
                                 .send_raw(wecom_proto::respond_stream(
@@ -385,56 +470,37 @@ impl Orchestrator {
                                 .await;
                         }
                     }
-                    AgentBridgeEvent::Done { .. } => {
+                    Some(AgentBridgeEvent::Done { .. }) => {
                         let body = if acc.is_empty() {
                             "（无文本回复）".to_string()
                         } else {
                             redact(&acc)
                         };
-                        let _ = sock
-                            .send_raw(wecom_proto::respond_stream(
-                                &req_id,
-                                &stream_id_clone,
-                                &body,
-                                true,
-                            ))
-                            .await;
-                        return body;
+                        send_finish(&sock, &req_id, &stream_id_clone, &body).await;
+                        break body;
                     }
-                    AgentBridgeEvent::Err(e) => {
+                    Some(AgentBridgeEvent::Err(e)) => {
                         let body = if acc.is_empty() {
                             format!("出错了：{e}")
                         } else {
                             format!("{acc}\n\n（中断：{e}）")
                         };
                         let body = redact(&body);
-                        let _ = sock
-                            .send_raw(wecom_proto::respond_stream(
-                                &req_id,
-                                &stream_id_clone,
-                                &body,
-                                true,
-                            ))
-                            .await;
-                        return body;
+                        send_finish(&sock, &req_id, &stream_id_clone, &body).await;
+                        break body;
+                    }
+                    None => {
+                        // 通道关闭但没 Done：补 finish
+                        let body = if acc.is_empty() {
+                            "（已结束）".to_string()
+                        } else {
+                            redact(&acc)
+                        };
+                        send_finish(&sock, &req_id, &stream_id_clone, &body).await;
+                        break body;
                     }
                 }
             }
-            // 通道关闭但没 Done：补 finish
-            let body = if acc.is_empty() {
-                "（已结束）".to_string()
-            } else {
-                redact(&acc)
-            };
-            let _ = sock
-                .send_raw(wecom_proto::respond_stream(
-                    &req_id,
-                    &stream_id_clone,
-                    &body,
-                    true,
-                ))
-                .await;
-            body
         });
 
         let run_result = crate::agent::agent_run(app.clone(), req).await;
@@ -451,6 +517,174 @@ impl Orchestrator {
         wecom_session::append_turn(session, user_text, &final_text);
         Ok(())
     }
+
+    /// 若 `text` 形如「AB12 1/2/3」，则视作对某个待决审批的回复：解析并回灌到 harness。
+    /// 返回要给用户的回复文案（None = 不是审批回复，按普通消息继续）。
+    async fn try_resolve_approval(&self, app: &AppHandle, text: &str) -> Option<String> {
+        let t = text.trim();
+        // 群聊回复可能带 @机器人 前缀：先剥掉整个 @token 再匹配审批码
+        let t = if t.starts_with('@') {
+            t.split_once(char::is_whitespace).map(|(_, rest)| rest.trim()).unwrap_or(t)
+        } else {
+            t
+        };
+        let mut it = t.split_whitespace();
+        let code = it.next()?.to_uppercase();
+        let choice = it.next()?;
+        if it.next().is_some() {
+            return None;
+        }
+        let choice = match choice {
+            "1" => 1u8,
+            "2" => 2u8,
+            "3" => 3u8,
+            _ => return None,
+        };
+        let st = app.state::<WecomState>();
+        let pending = {
+            let mut map = st.pending_approvals.lock().await;
+            map.remove(&code)?
+        };
+        if pending.created.elapsed() > crate::wecom_channel::APPROVAL_TTL {
+            return Some("该审批已超时（5 分钟内有效），请重新发起操作。".into());
+        }
+        let allow = choice != 2;
+        let scope = if choice == 3 {
+            Some("always".to_string())
+        } else if choice == 1 {
+            Some("turn".to_string())
+        } else {
+            None
+        };
+        match agent_decide(pending.request_id.clone(), pending.call_ids.clone(), allow, scope) {
+            Ok(()) => {
+                let msg = if choice == 2 {
+                    "已拒绝该操作。"
+                } else if choice == 3 {
+                    "已同意，本轮同类操作都放行。"
+                } else {
+                    "已同意。"
+                };
+                Some(msg.into())
+            }
+            Err(e) => Some(format!("审批回灌失败：{e}")),
+        }
+    }
+}
+
+/// finish 帧必须送达：断线重连窗口里首发失败的会退避重试，避免企微端永远显示「输入中」。
+async fn send_finish(sock: &WecomSocket, req_id: &str, stream_id: &str, body: &str) {
+    let frame = wecom_proto::respond_stream(req_id, stream_id, body, true);
+    let mut wait = 2u64;
+    for _ in 0..7 {
+        if sock.send_raw(frame.clone()).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        wait = (wait * 2).min(16);
+    }
+    eprintln!("[wecom] finish 帧多次发送失败 stream_id={stream_id}");
+}
+
+/// 企微内审批：把一条待决审批登记为「审批码」，等用户在聊天里用「码 + 选择」回复来放行/拒绝。
+/// 自由函数而非方法：泵闭包是 'static 的，不能借用 `self`。
+async fn register_approval(
+    app: &AppHandle,
+    request_id: &str,
+    call_ids: Vec<String>,
+    can_remember: bool,
+) -> String {
+    let st = app.state::<WecomState>();
+    let seq = st.approval_seq.fetch_add(1, Ordering::SeqCst);
+    let code = encode_approval_code(seq);
+    let now = Instant::now();
+    {
+        let mut map = st.pending_approvals.lock().await;
+        // 顺手清掉过期项，避免无限增长
+        map.retain(|_, p| p.created.elapsed() <= crate::wecom_channel::APPROVAL_TTL);
+        map.insert(
+            code.clone(),
+            PendingApproval {
+                request_id: request_id.to_string(),
+                call_ids,
+                can_remember,
+                created: now,
+            },
+        );
+    }
+    code
+}
+
+/// 把自增序号编码成 4 位大写字母数字审批码（36^4 循环）。
+fn encode_approval_code(seq: u32) -> String {
+    const CHARS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut n = seq % 1679616; // 36^4
+    let mut out = [b'0'; 4];
+    for i in (0..4).rev() {
+        out[i] = CHARS[(n % 36) as usize];
+        n /= 36;
+    }
+    String::from_utf8(out.to_vec()).unwrap()
+}
+
+/// 把文字 + 图片/文件附件组装成一条用户消息。
+/// 视觉模型且拿到图片 url 时，下载并内联为 Image 块；否则把文件/图片作为文本线索。
+async fn build_user_message(
+    user_text: &str,
+    media: &[wecom_proto::MediaRef],
+    vision: bool,
+) -> Message {
+    let mut blocks: Vec<Block> = Vec::new();
+    if !user_text.trim().is_empty() {
+        blocks.push(Block::Text {
+            text: user_text.to_string(),
+        });
+    }
+    for m in media {
+        if m.kind == "image" && vision {
+            match fetch_base64(m.url.trim()).await {
+                Ok((data, media_type)) => blocks.push(Block::Image { media_type, data }),
+                Err(e) => blocks.push(Block::Text {
+                    text: format!("[图片获取失败：{e}]"),
+                }),
+            }
+        } else {
+            let label = if m.kind == "image" { "图片" } else { "文件" };
+            let name = m.filename.clone().unwrap_or_default();
+            let note = if name.is_empty() {
+                format!("（{label}：{}）", m.url)
+            } else {
+                format!("（{label}「{name}」：{}）", m.url)
+            };
+            blocks.push(Block::Text { text: note });
+        }
+    }
+    Message {
+        role: "user".into(),
+        blocks,
+        meta: None,
+    }
+}
+
+async fn fetch_base64(url: &str) -> Result<(String, String), String> {
+    use base64::Engine;
+    let resp = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("图片下载失败：{e}"))?;
+    let media_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_string();
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("图片读取失败：{e}"))?;
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok((data, media_type))
 }
 
 /// 轻量时钟，避免为节流再引 Instant 到热路径签名里也行，直接用 std。

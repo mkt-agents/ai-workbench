@@ -99,10 +99,12 @@ fn store() -> std::sync::MutexGuard<'static, Option<SessionStore>> {
 
 pub fn session_history(key: &SessionKey) -> Vec<ChatTurn> {
     let k = key.as_str();
-    store()
-        .as_mut()
-        .map(|s| s.history(&k))
-        .unwrap_or_default()
+    // 内存优先；重启后内存为空时回读旁证 JSONL，避免多轮上下文丢失
+    let mem = store().as_mut().map(|s| s.history(&k)).unwrap_or_default();
+    if !mem.is_empty() {
+        return mem;
+    }
+    load_sidecar(&k)
 }
 
 pub fn append_turn(key: &SessionKey, user: &str, assistant: &str) {
@@ -133,6 +135,54 @@ fn sidecar_dir() -> Option<PathBuf> {
 fn dirs_data() -> Option<PathBuf> {
     // 与 agent_session_log 一致：%APPDATA%\com.ai-workbench.app\
     std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("com.ai-workbench.app"))
+}
+
+/// 从旁证 JSONL 回读历史（重启后内存为空时兜底）。每两行合成一对 user/assistant 轮次。
+fn load_sidecar(key: &str) -> Vec<ChatTurn> {
+    let dir = match sidecar_dir() {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+    let safe: String = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("{safe}.jsonl"));
+    let data = match std::fs::read_to_string(&path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let mut turns = Vec::new();
+    for line in data.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let (u, a) = (
+            v.get("user").and_then(|x| x.as_str()),
+            v.get("assistant").and_then(|x| x.as_str()),
+        );
+        if let (Some(u), Some(a)) = (u, a) {
+            turns.push(ChatTurn {
+                role: "user".into(),
+                content: u.to_string(),
+            });
+            turns.push(ChatTurn {
+                role: "assistant".into(),
+                content: a.to_string(),
+            });
+        }
+    }
+    while turns.len() > MAX_TURNS {
+        turns.remove(0);
+    }
+    turns
 }
 
 fn append_sidecar(key: &str, user: &str, assistant: &str) -> Result<(), String> {

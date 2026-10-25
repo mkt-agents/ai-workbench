@@ -41,6 +41,7 @@ import {
 import { useConfirm } from "./ConfirmModal";
 import MenuManager from "./MenuManager";
 import WecomSettingsCard from "./WecomSettingsCard";
+import TianjiApiSettingsCard from "./TianjiApiSettingsCard";
 import { emit } from "@tauri-apps/api/event";
 
 const THEME_OPTIONS: AppTheme[] = ["ice", "silver", "glass", "light", "dark", "system"];
@@ -382,7 +383,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   // 天玑助手卡内分组：跟顶部分类一样用 hidden 挂起不卸载。
   // 权限两项目前并进「交互」——它单独一页只有两行，太薄。
   const [hubGroup, setHubGroup] = useState<"interaction" | "capability" | "budget">("interaction");
-  const [netGroup, setNetGroup] = useState<"web" | "mcp" | "wecom">("web");
+  const [netGroup, setNetGroup] = useState<"web" | "mcp" | "wecom" | "tianjiApi">("web");
   useEffect(() => {
     const refresh = () => {
       setUsageRows(usageList());
@@ -1155,6 +1156,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                   ["web", "tabs.groupWeb"],
                   ["mcp", "tabs.groupMcp"],
                   ["wecom", "tabs.groupWecom"],
+                  ["tianjiApi", "tabs.groupTianjiApi"],
                 ] as const
               ).map(([id, labelKey]) => (
                 <button
@@ -1303,6 +1305,10 @@ function Settings({ onNoticeUpdate }: Props = {}) {
 
             <section className="hub-group" hidden={netGroup !== "wecom"}>
               <WecomSettingsCard />
+            </section>
+
+            <section className="hub-group" hidden={netGroup !== "tianjiApi"}>
+              <TianjiApiSettingsCard />
             </section>
           </div>
         </div>

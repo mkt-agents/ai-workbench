@@ -1394,15 +1394,23 @@
   background: var(--bg-2);
   border-color: var(--border-subtle);
 }
-/* Write-capable levels: tinted outline, never a solid fill */
-.qa-perm-pill.is-workspace,
-.qa-perm-pill.is-review {
+/* Write-capable levels: tinted outline, never a solid fill.
+   四档一档一色：只读绿（安全）/ 编辑 accent（写入）/ 审查黄（谨慎）/ 完全红（危险） */
+.qa-perm-pill.is-read {
+  color: var(--green);
+  border-color: var(--green-border);
+}
+.qa-perm-pill.is-workspace {
   color: var(--accent);
   border-color: var(--accent-border);
 }
-.qa-perm-pill.is-full {
+.qa-perm-pill.is-review {
   color: var(--yellow);
   border-color: var(--yellow-border);
+}
+.qa-perm-pill.is-full {
+  color: var(--red);
+  border-color: var(--red-border);
 }
 .qa-perm-label {
   min-width: 0;
@@ -1439,12 +1447,29 @@
   margin-top: 2px;
   color: var(--text-2);
 }
-.qa-perm-item.is-workspace .qa-perm-item-icon,
-.qa-perm-item.is-review .qa-perm-item-icon {
+.qa-perm-item.is-read .qa-perm-item-icon {
+  color: var(--green);
+}
+.qa-perm-item.is-workspace .qa-perm-item-icon {
   color: var(--accent);
 }
-.qa-perm-item.is-full .qa-perm-item-icon {
+.qa-perm-item.is-review .qa-perm-item-icon {
   color: var(--yellow);
+}
+.qa-perm-item.is-full .qa-perm-item-icon {
+  color: var(--red);
+}
+.qa-perm-item.is-read .qa-perm-item-name {
+  color: var(--green);
+}
+.qa-perm-item.is-workspace .qa-perm-item-name {
+  color: var(--accent);
+}
+.qa-perm-item.is-review .qa-perm-item-name {
+  color: var(--yellow);
+}
+.qa-perm-item.is-full .qa-perm-item-name {
+  color: var(--red);
 }
 .qa-perm-item-text {
   display: flex;
@@ -1468,31 +1493,93 @@
   margin-top: 2px;
   color: var(--accent);
 }
+.qa-perm-item.is-read .qa-perm-item-check {
+  color: var(--green);
+}
+.qa-perm-item.is-review .qa-perm-item-check {
+  color: var(--yellow);
+}
+.qa-perm-item.is-full .qa-perm-item-check {
+  color: var(--red);
+}
 .qa-perm-sep {
   height: 1px;
   margin: 4px 6px;
   background: var(--border-subtle);
 }
-/* 改前确认开关：贴在菜单底部、提示行之上，和档位选项分开 */
+/* 改前确认开关：贴在菜单底部、提示行之上，和档位选项同一套行内排版 */
 .qa-perm-diff {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-top: 4px;
-  padding: 6px 8px 0;
+  padding: 8px;
   border-top: 1px solid var(--border-subtle);
   color: var(--text-1);
-  font-size: 11px;
+  font-size: 12.5px;
   cursor: pointer;
+  transition: var(--transition-colors-fast);
 }
+.qa-perm-diff:hover {
+  background: var(--overlay-1);
+}
+/* 自定义勾选框：与档位图标同列宽，选中用 accent 实底 */
 .qa-perm-diff input {
-  accent-color: var(--accent);
+  appearance: none;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  box-sizing: border-box;
+  display: inline-grid;
+  place-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+.qa-perm-diff input::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  background: var(--on-accent);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  transform: scale(0);
+  transition: transform 100ms ease;
+}
+.qa-perm-diff input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.qa-perm-diff input:checked::before {
+  transform: scale(1);
+}
+.qa-perm-diff:hover input:not(:checked) {
+  border-color: var(--accent-border);
 }
 .qa-perm-foot {
-  padding: 6px 8px 4px;
-  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 6px;
   color: var(--text-3);
   font-size: 11px;
+}
+.qa-perm-foot kbd {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1;
 }
 /* Profile editor: role text + temperature per persona. */
 .qa-profile-note {

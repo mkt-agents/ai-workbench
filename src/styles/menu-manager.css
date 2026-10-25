@@ -291,9 +291,10 @@
   cursor: default;
 }
 
-/* 行内改名 / 恢复按钮：默认压低存在感，hover 或键盘聚焦时才点亮 */
+/* 行内改名 / 恢复按钮：默认完全隐藏（占位不收，避免行宽跳动），
+   行 hover 或键盘聚焦时才浮出——与整页「hover 才点亮」的语言一致 */
 .mm-item > .mm-icon-btn:not(:disabled) {
-  opacity: 0.65;
+  opacity: 0;
 }
 
 .mm-item:hover > .mm-icon-btn:not(:disabled),
@@ -312,9 +313,9 @@
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }
 
-/* 组头按钮常亮一档（比行内略高），避免整排看不清 */
+/* 组头按钮同款：默认隐藏，组头 hover / 聚焦时才出现 */
 .mm-group-header .mm-icon-btn:not(:disabled) {
-  opacity: 0.62;
+  opacity: 0;
   color: var(--text-2);
 }
 

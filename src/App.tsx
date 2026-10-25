@@ -30,6 +30,7 @@ import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
 import { applyWecomChannel } from "./lib/wecomChannel";
+import { applyTianjiApi } from "./lib/tianjiApi";
 import { useGlobalStore } from "./core/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
@@ -173,6 +174,19 @@ function App() {
           }
         } catch (e) {
           console.warn("wecom channel apply failed:", e);
+        }
+        // 天玑 OpenAI 兼容端点
+        try {
+          const st = useGlobalStore.getState();
+          if (st.settings.tianjiApiEnabled) {
+            await applyTianjiApi({
+              settings: st.settings,
+              models: st.aiModels,
+              mcpServers: st.mcpServers,
+            });
+          }
+        } catch (e) {
+          console.warn("tianji api apply failed:", e);
         }
         try {
           // Drop legacy top-right positions that cover the titlebar (pre-fix HiDPI bug).

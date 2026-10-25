@@ -167,8 +167,12 @@ pub enum AgentBridgeEvent {
     Chunk(String),
     Done { limited: bool },
     Err(String),
-    /// 工具闸门在等桌面端确认
-    ApprovalNeeded { summary: String },
+    /// 工具闸门在等桌面端确认。`call_ids` 用于回灌答案（企微渠道据此在聊天里发审批码并解析回复）。
+    ApprovalNeeded {
+        call_ids: Vec<String>,
+        summary: String,
+        can_remember: bool,
+    },
 }
 
 static TEXT_BRIDGES: Mutex<Option<HashMap<String, mpsc::UnboundedSender<AgentBridgeEvent>>>> =
@@ -406,7 +410,38 @@ pub(crate) fn tool_specs() -> Value {
           "parameters": obj(json!({ "action": s("type or key"), "text": s("Text to type"), "keys": s("Key combo") }), &["action"]) },
         { "name": "wait",
           "description": "Wait for the screen to update (max 10000 ms).",
-          "parameters": obj(json!({ "ms": n("Milliseconds") }), &[]) }
+          "parameters": obj(json!({ "ms": n("Milliseconds") }), &[]) },
+        // —— 企微业务（复用机器人 Bot ID/Secret，走 Open API；企微若未对机器人开放这些接口会回传 errcode） ——
+        { "name": "wecom_doc_list",
+          "description": "List WeChat Work docs you can access (by name search). Returns docid and url of each match.",
+          "parameters": obj(json!({ "query": s("Name fragment to search, empty = list all") }), &[]) },
+        { "name": "wecom_doc_read",
+          "description": "Read one WeChat Work doc by its docid.",
+          "parameters": obj(json!({ "docid": s("Doc id from wecom_doc_list") }), &["docid"]) },
+        { "name": "wecom_doc_create",
+          "description": "Create a new WeChat Work doc. doc_type: 1=doc, 2=slide, 3=smartdoc (default), 10=smartsheet.",
+          "parameters": obj(json!({ "title": s("Doc name"), "doc_type": n("1 doc / 2 slide / 3 smartdoc(default) / 10 smartsheet") }), &["title"]) },
+        { "name": "wecom_calendar_list",
+          "description": "List the WeChat Work calendars available to this bot.",
+          "parameters": obj(json!({}), &[]) },
+        { "name": "wecom_calendar_create",
+          "description": "Create a schedule/event on a WeChat Work calendar. start/end are unix seconds.",
+          "parameters": obj(json!({ "calendar_id": s("Calendar id from wecom_calendar_list"), "title": s("Event summary"), "start": n("Start unix time (seconds)"), "end": n("End unix time (seconds)"), "attendees": s("Comma-separated userids, optional") }), &["calendar_id", "title", "start", "end"]) },
+        { "name": "wecom_sheet_list",
+          "description": "List WeChat Work smartsheets you can access (by name search).",
+          "parameters": obj(json!({ "query": s("Name fragment to search, empty = list all") }), &[]) },
+        { "name": "wecom_sheet_create",
+          "description": "Create a new WeChat Work smartsheet.",
+          "parameters": obj(json!({ "title": s("Smartsheet name") }), &["title"]) },
+        { "name": "wecom_sheet_add_row",
+          "description": "Append one or more rows to a WeChat Work smartsheet. fields is a JSON array of row objects, e.g. [{\"标题\":\"买菜\",\"状态\":\"待办\"}].",
+          "parameters": obj(json!({ "sheet_id": s("Smartsheet docid from wecom_sheet_list"), "fields": s("JSON array of row objects") }), &["sheet_id", "fields"]) },
+        { "name": "wecom_send_image",
+          "description": "Send a local image file back to the current WeChat Work chat as an inline image. Use it after you produced or downloaded an image the user asked for. Path is absolute or workspace-relative.",
+          "parameters": obj(json!({ "path": s("Path to an image file (png/jpg/gif/webp)") }), &["path"]) },
+        { "name": "wecom_send_file",
+          "description": "Send a local file back to the current WeChat Work chat. Text files are pasted as text; binary files are uploaded when the media endpoint is available, otherwise a note is sent. Use to deliver generated artifacts.",
+          "parameters": obj(json!({ "path": s("Path to the file") }), &["path"]) }
     ])
 }
 
@@ -592,7 +627,9 @@ fn emit_approval(
     bridge_send(
         id,
         AgentBridgeEvent::ApprovalNeeded {
+            call_ids: vec![call_id.to_string()],
             summary: summary.to_string(),
+            can_remember,
         },
     );
 }
@@ -665,7 +702,9 @@ fn emit_approval_batch(app: &AppHandle, id: &str, patches: &[ApprovalPatch], can
     bridge_send(
         id,
         AgentBridgeEvent::ApprovalNeeded {
+            call_ids: patches.iter().map(|p| p.call_id.clone()).collect(),
             summary: format!("本轮有 {} 个操作需要确认", patches.len()),
+            can_remember,
         },
     );
 }
@@ -1828,6 +1867,31 @@ async fn execute_tool(
         "kill_process" => sys::kill_process(args)?,
         "find_port" => sys::find_port(args).await?,
         "kill_port" => sys::kill_port(args).await?,
+        // 企微业务：文档 / 日程 / 智能表格，复用机器人通道凭证，走 Open API
+        "wecom_doc_list" | "wecom_doc_read" | "wecom_doc_create"
+        | "wecom_calendar_list" | "wecom_calendar_create"
+        |         "wecom_sheet_list" | "wecom_sheet_create" | "wecom_sheet_add_row" => {
+            crate::wecom_biz::run(ctx.app.clone(), name, args).await?
+        }
+        // 企微出站富媒体：把本地文件发回当前对话
+        "wecom_send_image" => {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("缺少 path 参数")?
+                .trim()
+                .to_string();
+            crate::wecom_media::send_image(&ctx.app, &path).await?
+        }
+        "wecom_send_file" => {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("缺少 path 参数")?
+                .trim()
+                .to_string();
+            crate::wecom_media::send_file(&ctx.app, &path).await?
+        }
         // 会等用户/等屏幕的几步：停止键要在 200ms 内收住，而不是等它自己跑完
         "hosts" => await_cancellable(sys::hosts(args), ctx.request_id).await??,
         "tunnel" => sys::tunnel(ctx.app, args).await?,

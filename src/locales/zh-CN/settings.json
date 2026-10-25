@@ -13,7 +13,25 @@
     "groupBudget": "预算兼容",
     "groupWeb": "网页抓取",
     "groupMcp": "MCP 服务",
-    "groupWecom": "企微机器人"
+    "groupWecom": "企微机器人",
+    "groupTianjiApi": "天玑 API"
+  },
+  "tianjiApi": {
+    "hint": "天玑 OpenAI 兼容端点：把天玑（含工具 / 审批 / 会话）暴露成 /v1/chat/completions，供 OpenClaw（微信 ClawBot）或任何 OpenAI 兼容客户端接入。OpenClaw 配置：base_url 填下方地址、api_key 填这里设置的密钥、model 填 tianji。微信 ClawBot 扫码绑定 OpenClaw 后即可在微信聊天玑。",
+    "groupConnection": "连接",
+    "enabled": "启用",
+    "status": "状态",
+    "state": {
+      "disabled": "未启用",
+      "listening": "监听中",
+      "error": "出错"
+    },
+    "baseUrlHint": "base_url：{{baseUrl}}　model：{{model}}（仅监听本机，外部机器访问需用内网穿透；OpenClaw 的 Base URL 只填到 /v1，不要带 /chat/completions）",
+    "port": "本机端口",
+    "restart": "重启服务",
+    "apiKey": "API Key（选填）",
+    "keyPlaceholder": "留空 = 不鉴权",
+    "saved": "已保存并应用"
   },
   "net": {
     "title": "联网扩展",
@@ -226,6 +244,11 @@
     "botSecret": "Secret",
     "secretKept": "已保存（留空不改）",
     "secretPlaceholder": "长连接专用 Secret",
+    "corpId": "业务 API Corpid",
+    "corpIdPlaceholder": "如 wwxxxxxxxxxxxxxxxx（企业 ID）",
+    "corpSecret": "应用 Secret",
+    "corpSecretPlaceholder": "自建应用的 Secret（业务 API 用）",
+    "corpHint": "文档/日程/智能表格等业务接口需要「自建应用」的 Corpid + Secret（企微管理后台 → 应用管理 → 自建应用）。机器人 Bot ID/Secret 只用于长连接收发消息，不能调用业务接口。",
     "displayName": "机器人显示名",
     "displayNamePlaceholder": "用于去掉群聊 @名字",
     "dmPolicy": "私聊策略",

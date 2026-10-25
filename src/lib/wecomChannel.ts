@@ -24,6 +24,8 @@ type ApplyArgs = {
   mcpServers: McpServer[];
   /** When saving a new plaintext secret from the form */
   plainSecret?: string;
+  /** When saving a new plaintext business-API secret (自建应用) from the form */
+  plainCorpSecret?: string;
 };
 
 function splitCsv(list: string[] | undefined): string[] {
@@ -47,6 +49,9 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
   // undefined = leave stored secret; empty string must not wipe it
   const plain = args.plainSecret?.trim() ?? "";
   if (plain) botSecret = await protectSecret(plain);
+  let corpSecret = (settings.wecomCorpSecret ?? "").trim();
+  const plainCorp = args.plainCorpSecret?.trim() ?? "";
+  if (plainCorp) corpSecret = await protectSecret(plainCorp);
 
   const model =
     resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
@@ -94,6 +99,8 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       enabled: Boolean(settings.wecomEnabled),
       botId: (settings.wecomBotId ?? "").trim(),
       botSecret,
+      corpId: (settings.wecomCorpId ?? "").trim(),
+      corpSecret,
       botDisplayName: (settings.wecomBotDisplayName ?? "").trim(),
       dmPolicy: settings.wecomDmPolicy ?? "pairing",
       groupPolicy: settings.wecomGroupPolicy ?? "allowlist",

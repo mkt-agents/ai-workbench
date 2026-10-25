@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod git_commands;
 mod git_merge;
 mod hosts_commands;
@@ -32,6 +34,9 @@ mod wecom_session;
 mod wecom_ws;
 mod wecom_orchestrator;
 mod wecom_channel;
+mod wecom_biz;
+mod wecom_media;
+mod tianji_api;
 mod mcp;
 mod harness_config;
 mod agent_sys;
@@ -628,6 +633,8 @@ pub fn run() {
             wecom_channel::wecom_channel_status,
             wecom_channel::wecom_channel_apply,
             wecom_channel::wecom_channel_restart,
+            tianji_api::tianji_api_status,
+            tianji_api::tianji_api_apply,
             wecom_channel::wecom_pairing_list,
             wecom_channel::wecom_pairing_approve,
             wecom_channel::wecom_pairing_revoke,

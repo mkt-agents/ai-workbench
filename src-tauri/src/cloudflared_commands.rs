@@ -240,7 +240,16 @@ fn normalize_local_url(raw: &str) -> Result<String, String> {
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("仅支持 http/https".to_string());
     }
-    Ok(with_scheme)
+    // cloudflared 的 ingress 不支持带路径的 origin service（连末尾 `/` 都算）：
+    // "http://localhost:1420/" 会让隧道启动失败并退出，所以这里拦下并去掉末尾斜杠。
+    if parsed.path().len() > 1 {
+        return Err(format!(
+            "本地 URL 不能带路径（cloudflared ingress 不支持）：{}，请填形如 http://localhost:{} 的地址",
+            with_scheme,
+            parsed.port().map(|p| p.to_string()).unwrap_or_default()
+        ));
+    }
+    Ok(with_scheme.trim_end_matches('/').to_string())
 }
 
 fn kill_pid(pid: u32) {
@@ -1411,7 +1420,27 @@ fn replace_file(dest: &Path, replacement: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{browser_command_args, explain_cloudflared_line, route_dns_target_exists};
+    use super::{
+        browser_command_args, explain_cloudflared_line, normalize_local_url,
+        route_dns_target_exists,
+    };
+
+    #[test]
+    fn local_url_trailing_slash_is_stripped() {
+        assert_eq!(
+            normalize_local_url("http://localhost:1420/").unwrap(),
+            "http://localhost:1420"
+        );
+        assert_eq!(
+            normalize_local_url("localhost:1420").unwrap(),
+            "http://localhost:1420"
+        );
+    }
+
+    #[test]
+    fn local_url_with_path_is_rejected() {
+        assert!(normalize_local_url("http://localhost:1420/app").is_err());
+    }
 
     #[test]
     fn browser_command_uses_the_registered_executable() {

@@ -331,7 +331,9 @@
   row-gap: 14px;
   padding: 0 0 24px;
   width: 100%;
-  max-width: 940px;
+  /* 与其它页面级容器同一来源（tokens.css），写死窄值会在宽窗口下
+     居中出两条大空白缝（「设置」标题与导航之间最明显） */
+  max-width: var(--page-max-width);
   margin-inline: auto;
   align-self: stretch;
   flex: 1 1 auto;

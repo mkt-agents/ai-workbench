@@ -54,10 +54,12 @@ export default function WecomSettingsCard() {
   const [secretDraft, setSecretDraft] = useState("");
   const [revealedSecret, setRevealedSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
+  const [corpSecretDraft, setCorpSecretDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
   const botId = useFieldDraft(settings.wecomBotId ?? "");
+  const corpId = useFieldDraft(settings.wecomCorpId ?? "");
   const displayName = useFieldDraft(settings.wecomBotDisplayName ?? "");
   const allowUsers = useFieldDraft((settings.wecomAllowUsers ?? []).join(", "));
   const allowGroups = useFieldDraft((settings.wecomAllowGroups ?? []).join(", "));
@@ -79,7 +81,11 @@ export default function WecomSettingsCard() {
     return () => window.clearInterval(id);
   }, [refresh]);
 
-  const push = async (next: Partial<AppSettings> = {}, plainSecret?: string) => {
+  const push = async (
+    next: Partial<AppSettings> = {},
+    plainSecret?: string,
+    plainCorpSecret?: string,
+  ) => {
     setBusy(true);
     setMsg("");
     const enabling = next.wecomEnabled === true;
@@ -89,6 +95,10 @@ export default function WecomSettingsCard() {
       if (plain) {
         patch = { ...patch, wecomBotSecret: await protectSecret(plain) };
       }
+      const plainCorp = plainCorpSecret?.trim() ?? "";
+      if (plainCorp) {
+        patch = { ...patch, wecomCorpSecret: await protectSecret(plainCorp) };
+      }
       if (Object.keys(patch).length) setSettings(patch);
       const merged = { ...useGlobalStore.getState().settings, ...patch };
       const st = await applyWecomChannel({
@@ -96,6 +106,7 @@ export default function WecomSettingsCard() {
         models: aiModels,
         mcpServers,
         plainSecret: plain || undefined,
+        plainCorpSecret: plainCorp || undefined,
       });
       setStatus(st);
       if (plain) {
@@ -103,6 +114,7 @@ export default function WecomSettingsCard() {
         setRevealedSecret("");
         setShowSecret(false);
       }
+      if (plainCorp) setCorpSecretDraft("");
       await refresh();
       setMsg(t("wecom.saved"));
     } catch (e) {
@@ -240,6 +252,51 @@ export default function WecomSettingsCard() {
                 {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
             </div>
+          </div>
+
+          <div className="net-field">
+            <span className="setting-label">{t("wecom.corpId")}</span>
+            <input
+              className="input-field"
+              value={corpId.value}
+              placeholder={t("wecom.corpIdPlaceholder")}
+              onFocus={() => {
+                corpId.focused.current = true;
+              }}
+              onChange={(e) => corpId.setValue(e.target.value)}
+              onBlur={() => {
+                corpId.focused.current = false;
+                const v = corpId.value.trim();
+                if (v !== (settings.wecomCorpId ?? "")) void push({ wecomCorpId: v });
+              }}
+            />
+          </div>
+
+          <div className="net-field">
+            <span className="setting-label">{t("wecom.corpSecret")}</span>
+            <input
+              className="input-field"
+              type="password"
+              value={corpSecretDraft}
+              placeholder={
+                settings.wecomCorpSecret
+                  ? `••••••••  ${t("wecom.secretKept")}`
+                  : t("wecom.corpSecretPlaceholder")
+              }
+              onChange={(e) => setCorpSecretDraft(e.target.value)}
+              onBlur={() => {
+                const v = corpSecretDraft.trim();
+                if (!v) {
+                  setCorpSecretDraft("");
+                  return;
+                }
+                void push({}, undefined, v);
+              }}
+            />
+          </div>
+
+          <div className="net-field net-span-2">
+            <p className="setting-hint">{t("wecom.corpHint")}</p>
           </div>
 
           <div className="net-field net-span-2">

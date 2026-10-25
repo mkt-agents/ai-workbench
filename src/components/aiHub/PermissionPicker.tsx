@@ -96,7 +96,10 @@ export default function PermissionPicker({
             />
             <span>{t("permission.diffConfirm")}</span>
           </label>
-          <div className="qa-perm-foot">{t("permission.shortcutHint")}</div>
+          <div className="qa-perm-foot">
+            <kbd>{t("permission.shortcutKey")}</kbd>
+            <span>{t("permission.shortcutHint")}</span>
+          </div>
         </div>
       )}
     </div>

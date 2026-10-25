@@ -201,6 +201,10 @@ export interface AppSettings {
   wecomBotId?: string;
   /** DPAPI enc:v1:… 密文 */
   wecomBotSecret?: string;
+  /** 自建应用 Corpid：文档/日程/智能表格等业务 Open API 用（选填） */
+  wecomCorpId?: string;
+  /** DPAPI enc:v1:… 密文 */
+  wecomCorpSecret?: string;
   wecomBotDisplayName?: string;
   /** pairing | allowlist | open | disabled */
   wecomDmPolicy?: string;
@@ -214,6 +218,14 @@ export interface AppSettings {
   wecomPermission?: string;
   /** 空 = 用 currentGitRepo */
   wecomRepoPath?: string;
+  /** 天玑 OpenAI 兼容端点（ClawBot/OpenClaw 等外部 agent 接入用） */
+  tianjiApiEnabled?: boolean;
+  tianjiApiPort?: number;
+  /** DPAPI enc:v1:… 密文；空 = 不鉴权 */
+  tianjiApiKey?: string;
+  tianjiApiPermission?: string;
+  /** 空 = 用 currentGitRepo */
+  tianjiApiRepoPath?: string;
 }
 
 /** Named AI Hub preset: role + optional temperature/model. */

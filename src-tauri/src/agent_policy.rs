@@ -321,6 +321,18 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
         "runtime",
         // 只读子代理：默认不下发，`agent.rs` 按 `settings.agentSubagents` 过滤
         "task",
+        // 企微业务：文档 / 日程 / 智能表格（复用机器人凭证；未配置时执行会明确报错）
+        "wecom_doc_list",
+        "wecom_doc_read",
+        "wecom_doc_create",
+        "wecom_calendar_list",
+        "wecom_calendar_create",
+        "wecom_sheet_list",
+        "wecom_sheet_create",
+        "wecom_sheet_add_row",
+        // 企微出站富媒体：把本地文件发回当前对话
+        "wecom_send_image",
+        "wecom_send_file",
     ]);
     if writes {
         names.extend([

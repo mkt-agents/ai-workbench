@@ -192,7 +192,6 @@ function CloudflaredManager() {
     (s) => s.invokeCloudflaredStartNamedTunnel
   );
   const invokeCloudflaredStopTunnel = useGlobalStore((s) => s.invokeCloudflaredStopTunnel);
-  const invokeCloudflaredStopAllTunnels = useGlobalStore((s) => s.invokeCloudflaredStopAllTunnels);
   const invokeCloudflaredTunnelStatus = useGlobalStore((s) => s.invokeCloudflaredTunnelStatus);
   const invokeCloudflaredSetupNewDomain = useGlobalStore((s) => s.invokeCloudflaredSetupNewDomain);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
@@ -604,13 +603,15 @@ function CloudflaredManager() {
     }
   };
 
-  const handleStopAll = async () => {
-    if (runningTunnels.length === 0) return;
+  const handleStopNamedAll = async () => {
+    if (namedTunnels.length === 0) return;
     setBusy(true);
     try {
-      const msg = await invokeCloudflaredStopAllTunnels();
-      setTunnels([]);
-      showMsg("success", msg || t("stopOk"));
+      const results = await Promise.all(
+        namedTunnels.map((tn) => invokeCloudflaredStopTunnel(tn.id).catch(() => null))
+      );
+      setTunnels((prev) => prev.filter((t) => t.mode !== "named"));
+      showMsg("success", results.find(Boolean) || t("stopOk"));
     } catch (e) {
       showMsg("error", t("error", { error: String(e) }));
     } finally {
@@ -888,86 +889,6 @@ function CloudflaredManager() {
           </div>
         </div>
 
-        {runningTunnels.length > 0 && (
-          <div className="card cloudflared-running-card">
-            <div className="card-title cursor-card-title">
-              <span>
-                {t("runningTitle")}{" "}
-                <span className="runtime-muted">({runningTunnels.length})</span>
-              </span>
-              <button
-                type="button"
-                className="btn btn-danger btn-small"
-                onClick={handleStopAll}
-                disabled={busy}
-              >
-                {t("stopAll")}
-              </button>
-            </div>
-            <ul className="cloudflared-running-list">
-              {runningTunnels.map((tn) => {
-                const modeLabel =
-                  tn.mode === "quick" ? t("authModeQuick") : t("authModeNamed");
-                const primary = tn.publicUrl || tn.localUrl || tn.id;
-                const secondary =
-                  tn.mode === "quick"
-                    ? tn.publicUrl
-                      ? tn.localUrl
-                      : t("waitingUrl")
-                    : tn.localUrl;
-                return (
-                  <li key={tn.id} className="cloudflared-running-item">
-                    <div className="cloudflared-running-info">
-                      <div className="cloudflared-running-title">
-                        <span className="cloudflared-mode-badge">{modeLabel}</span>
-                        <span className="cloudflared-running-url" title={primary}>
-                          {primary}
-                        </span>
-                        {tn.pid ? (
-                          <span className="runtime-muted">pid {tn.pid}</span>
-                        ) : null}
-                      </div>
-                      {secondary && secondary !== primary ? (
-                        <div className="runtime-muted cloudflared-running-sub">
-                          {secondary}
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="account-actions">
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        onClick={() => void handleOpenUrl(tn.publicUrl)}
-                        disabled={!tn.publicUrl}
-                        title={t("openInBrowser")}
-                      >
-                        <ExternalLink size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        onClick={() => handleCopy(tn.publicUrl)}
-                        disabled={!tn.publicUrl}
-                      >
-                        <Copy size={12} />
-                        {t("copyUrl")}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-small"
-                        onClick={() => handleStop(tn.id)}
-                        disabled={busy}
-                      >
-                        {t("stop")}
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-
         <div className="cloudflared-tunnel-grid">
           <div className="card cloudflared-named-card">
             <div className="card-title cursor-card-title">
@@ -977,14 +898,26 @@ function CloudflaredManager() {
                   <span className="runtime-muted"> ({profiles.length})</span>
                 )}
               </span>
-              <button
-                type="button"
-                className="btn btn-primary btn-small"
-                onClick={openAdd}
-                disabled={busy}
-              >
-                + {t("namedAdd")}
-              </button>
+              <div className="account-actions">
+                {namedTunnels.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-small"
+                    onClick={handleStopNamedAll}
+                    disabled={busy}
+                  >
+                    {t("stopBatch")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-primary btn-small"
+                  onClick={openAdd}
+                  disabled={busy}
+                >
+                  + {t("namedAdd")}
+                </button>
+              </div>
             </div>
             <p className="runtime-muted cloudflared-hint">{t("namedHint")}</p>
             {profiles.length === 0 ? (
