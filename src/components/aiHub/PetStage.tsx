@@ -207,6 +207,24 @@ function PetFx({
   micro?: PetMicro;
   phase?: BubblePhase;
 }) {
+  // 被甩晕 / 被拎久挣扎：优先于拖拽特效，否则拖拽的星星爱心会抢掉演出
+  if (micro === "dizzy") {
+    return (
+      <span className="qa-fx qa-fx-dizzy" aria-hidden>
+        <i>✦</i>
+        <i>✦</i>
+        <i>✦</i>
+      </span>
+    );
+  }
+  if (micro === "struggle") {
+    return (
+      <span className="qa-fx qa-fx-sweat" aria-hidden>
+        <i />
+        <i />
+      </span>
+    );
+  }
   // 拖动：小星星 + 爱心，像被抱着走
   if (phase === "dragging") {
     return (

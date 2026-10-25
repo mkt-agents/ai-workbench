@@ -18,7 +18,7 @@ export type PetSignal =
   | { kind: "limited" }
   | { kind: "error" }
   | { kind: "tap"; skin: PetSkinId }
-  | { kind: "pat" }
+  | { kind: "pat"; streak?: number }
   | { kind: "poke"; skin: PetSkinId }
   | { kind: "tail" }
   | { kind: "hug" }
@@ -27,7 +27,11 @@ export type PetSignal =
   | { kind: "mutter"; topic: "think" | "work" }
   | { kind: "greet"; slot: "morning" | "noon" | "night" }
   | { kind: "swap" }
-  | { kind: "idle" };
+  | { kind: "idle" }
+  | { kind: "struggle" }
+  | { kind: "dizzy" }
+  | { kind: "return" }
+  | { kind: "bondUp" };
 
 export type PetGesturePlay = "pat" | "poke" | "tail" | "hug" | "shy";
 
@@ -45,11 +49,25 @@ export interface PetReaction {
   /** 完成庆祝：撒花 */
   celebrate?: boolean;
   /** idle 微动作（睡醒伸懒腰等） */
-  micro?: "stretch" | "shy" | "nod" | "wave";
+  micro?:
+    | "stretch"
+    | "shy"
+    | "nod"
+    | "wave"
+    | "lookaround"
+    | "wobble"
+    | "hop"
+    | "dust"
+    | "dizzy"
+    | "struggle";
 }
 
 /** 一轮跑多久才算"干完活"：短答案不值得撒花，免得每次都跳。 */
 const CELEBRATE_FROM_MS = 5000;
+
+/** 连摸头：窗口内满 3 次升级开心，满 6 次抗议（计数在 AiHubBubble 里维护）。 */
+export const PAT_HOT_STREAK = 3;
+export const PAT_OVER_STREAK = 6;
 
 function pool(tier: BondTier, name: SpeechPoolName): string {
   return pickPoolKey(tier, name);
@@ -109,7 +127,31 @@ export function reactTo(signal: PetSignal, tier: BondTier = 0): PetReaction {
         speechKey: speechForSkin(signal.skin),
         affinityDelta: 1,
       };
-    case "pat":
+    case "pat": {
+      const streak = signal.streak ?? 0;
+      if (streak >= PAT_OVER_STREAK) {
+        // 摸过头：害羞抗议，好感只给一点
+        return {
+          mood: "happy",
+          holdMs: 1300,
+          speechKey: pool(tier, "overpet"),
+          affinityDelta: 1,
+          gesture: "shy",
+          micro: "shy",
+        };
+      }
+      if (streak >= PAT_HOT_STREAK) {
+        // 连摸升级：在普通摸头之上加撒花
+        return {
+          mood: "happy",
+          holdMs: 1400,
+          speechKey: pool(tier, "pat"),
+          affinityDelta: 2,
+          gesture: "pat",
+          celebrate: true,
+          micro: "nod",
+        };
+      }
       return {
         mood: "happy",
         holdMs: 1100,
@@ -117,6 +159,7 @@ export function reactTo(signal: PetSignal, tier: BondTier = 0): PetReaction {
         affinityDelta: 2,
         gesture: "pat",
       };
+    }
     case "poke":
       return {
         mood: "happy",
@@ -183,6 +226,40 @@ export function reactTo(signal: PetSignal, tier: BondTier = 0): PetReaction {
       return { mood: "happy", holdMs: 900, speechKey: "bubblePetSwap" };
     case "idle":
       return { mood: "sleepy", holdMs: 0 };
+    case "struggle":
+      // 被拎太久：挣扎扭动 + 抗议；演完回粘性情绪
+      return {
+        mood: "waiting",
+        holdMs: 1800,
+        speechKey: pool(tier, "struggle"),
+        micro: "struggle",
+      };
+    case "dizzy":
+      // 被甩晕：error 图 + 摇晃 + 星星，晕一会儿再回
+      return {
+        mood: "error",
+        holdMs: 2400,
+        speechKey: pool(tier, "dizzy"),
+        micro: "dizzy",
+      };
+    case "return":
+      // 离开一阵子回来：招手问好
+      return {
+        mood: "happy",
+        holdMs: 1800,
+        speechKey: pool(tier, "return"),
+        affinityDelta: 1,
+        micro: "wave",
+      };
+    case "bondUp":
+      // 好感升档：撒花庆祝
+      return {
+        mood: "happy",
+        holdMs: 2200,
+        speechKey: pool(tier, "bondUp"),
+        celebrate: true,
+        micro: "hop",
+      };
   }
 }
 

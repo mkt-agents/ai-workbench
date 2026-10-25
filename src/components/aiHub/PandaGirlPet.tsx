@@ -8,6 +8,7 @@ import waitingUrl from "../../assets/pets/panda-girl/waiting.png";
 import errorUrl from "../../assets/pets/panda-girl/error.png";
 import thinkingUrl from "../../assets/pets/panda-girl/thinking.png";
 import dragUrl from "../../assets/pets/panda-girl/drag.png";
+import cheerUrl from "../../assets/pets/panda-girl/cheer.png";
 
 /** 立绘迭代时 bump，逼 WebView 丢掉旧 PNG 缓存。 */
 const ART_REV = "q6";
@@ -21,6 +22,8 @@ const ERROR = rev(errorUrl);
 const THINKING = rev(thinkingUrl);
 /** 被拎起：张手悬脚。与 idle 同底同比例，换图不会跳。 */
 const DRAG = rev(dragUrl);
+/** 欢呼：举手招手脸。celebrate / 升档 / 抱抱时交叉淡入，同底不跳。 */
+const CHEER = rev(cheerUrl);
 
 /** agent 长驻情绪才换图；happy/idle 一律 idle，避免比例跳。 */
 const STICKY_ART: Partial<Record<PetMood, string>> = {
@@ -40,7 +43,13 @@ export type PetMicro =
   | "peek"
   | "bounce"
   | "shy"
-  | "nod";
+  | "nod"
+  | "lookaround"
+  | "wobble"
+  | "hop"
+  | "dust"
+  | "dizzy"
+  | "struggle";
 
 export type PressZone = "head" | "body" | "tail";
 
@@ -54,8 +63,9 @@ interface Props {
   pressZone?: PressZone | null;
 }
 
-function pickArt(mood: PetMood, phase: BubblePhase): string {
+function pickArt(mood: PetMood, phase: BubblePhase, celebrate: boolean): string {
   if (phase === "dragging") return DRAG;
+  if (celebrate) return CHEER;
   return STICKY_ART[mood] ?? IDLE;
 }
 
@@ -73,7 +83,7 @@ export default function PandaGirlPet({
   pressZone = null,
 }: Props) {
   const [blink, setBlink] = useState(false);
-  const [front, setFront] = useState(() => pickArt(mood, phase));
+  const [front, setFront] = useState(() => pickArt(mood, phase, celebrate));
   const [back, setBack] = useState<string | null>(null);
   const [fading, setFading] = useState(false);
   const [fadeOn, setFadeOn] = useState(false);
@@ -118,7 +128,7 @@ export default function PandaGirlPet({
     };
   }, [mood, phase, gesture, micro]);
 
-  const want = pickArt(mood, phase);
+  const want = pickArt(mood, phase, celebrate);
 
   useEffect(() => {
     const cur = frontRef.current;
@@ -149,7 +159,7 @@ export default function PandaGirlPet({
       const img = new Image();
       img.src = url;
     }
-    for (const url of [IDLE, DRAG]) {
+    for (const url of [IDLE, DRAG, CHEER]) {
       const img = new Image();
       img.src = url;
     }
@@ -159,6 +169,10 @@ export default function PandaGirlPet({
   const expressHappy =
     mood === "happy" || g === "pat" || g === "hug" || g === "tail" || celebrate;
   const expressShy = g === "shy" || micro === "shy";
+  /** 星星眼：庆祝 / 升档 / 抱抱 */
+  const expressStar = celebrate || g === "hug" || micro === "hop";
+  /** 生气筋：出错 / 挣扎抗议 */
+  const expressAngry = mood === "error" || micro === "struggle";
 
   const className = [
     "qa-panda-girl",
@@ -173,6 +187,8 @@ export default function PandaGirlPet({
     fading && fadeOn ? "is-fade-on" : "",
     expressHappy ? "expr-happy" : "",
     expressShy ? "expr-shy" : "",
+    expressStar ? "expr-star" : "",
+    expressAngry ? "expr-angry" : "",
     phase === "pressed" && pressZone ? `press-${pressZone}` : "",
   ]
     .filter(Boolean)
@@ -189,6 +205,12 @@ export default function PandaGirlPet({
             <img className="qa-panda-girl-art is-front" src={front} alt="" draggable={false} />
             <span className="qa-panda-girl-blush" />
             <span className="qa-panda-girl-specular" />
+            <span className="qa-panda-girl-star">
+              <i>✦</i>
+              <i>✦</i>
+            </span>
+            <span className="qa-panda-girl-anger">💢</span>
+            <span className="qa-panda-girl-mouth" />
           </div>
         </div>
       </div>

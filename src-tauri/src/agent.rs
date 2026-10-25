@@ -2141,6 +2141,10 @@ fn decode_model_body(text: &str) -> Result<Value, String> {
 fn decode_sse(text: &str) -> Result<Value, String> {
     let mut content = String::new();
     let mut calls: Vec<Value> = Vec::new();
+    // 思考模型（DeepSeek R1 等）把正文前的推理放在 delta.reasoning / reasoning_content，
+    // 不累积它的话「只思考没正文」的流会被误判成没有有效内容。
+    let mut reasoning = String::new();
+    let mut finish_reason: Option<String> = None;
     let mut saw = false;
     for line in text.lines() {
         let Some(data) = line.trim().strip_prefix("data:") else {
@@ -2153,6 +2157,11 @@ fn decode_sse(text: &str) -> Result<Value, String> {
         let Ok(chunk) = serde_json::from_str::<Value>(data) else {
             continue;
         };
+        // OpenRouter 免费线路习惯把业务错误混在 HTTP 200 的 SSE 里：顶层 error 块，
+        // 不拦下来的话只会落进「没有有效内容」，真正的限流 / 上游错误被吞掉。
+        if let Some(err) = chunk.get("error") {
+            return Err(format!("模型返回错误：{}", sse_error_text(err)));
+        }
         saw = true;
         if chunk.pointer("/choices/0/message").is_some() {
             return Ok(chunk);
@@ -2160,6 +2169,11 @@ fn decode_sse(text: &str) -> Result<Value, String> {
         if let Some(delta) = chunk.pointer("/choices/0/delta") {
             if let Some(piece) = delta.get("content").and_then(|v| v.as_str()) {
                 content.push_str(piece);
+            }
+            for key in ["reasoning", "reasoning_content"] {
+                if let Some(piece) = delta.get(key).and_then(|v| v.as_str()) {
+                    reasoning.push_str(piece);
+                }
             }
             if let Some(arr) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                 for call in arr {
@@ -2171,9 +2185,33 @@ fn decode_sse(text: &str) -> Result<Value, String> {
                 }
             }
         }
+        if let Some(fr) = chunk.pointer("/choices/0/finish_reason").and_then(|v| v.as_str()) {
+            if !fr.is_empty() {
+                finish_reason = Some(fr.to_string());
+            }
+        }
     }
     if !saw || (content.trim().is_empty() && calls.iter().all(|c| c.as_object().map(|o| o.is_empty()).unwrap_or(true)))
     {
+        if !reasoning.trim().is_empty() {
+            return Err(
+                "模型只输出了思考过程（reasoning），没有正文。多半是输出上限被思考耗尽：调大模型配置里的输出上限，或换一个非思考模型。"
+                    .into(),
+            );
+        }
+        match finish_reason.as_deref() {
+            Some("length") => {
+                return Err(
+                    "模型输出被输出上限（max_tokens）截断，正文为空。请调大模型配置里的输出上限后重试。".into(),
+                );
+            }
+            Some("error") => {
+                return Err(
+                    "模型服务在中途返回错误（finish_reason: error），免费线路常见。请重试，或换一个模型。".into(),
+                );
+            }
+            _ => {}
+        }
         return Err("模型以流式返回，但没有有效内容。请重试，或换一个模型。".into());
     }
     Ok(json!({
@@ -2185,6 +2223,27 @@ fn decode_sse(text: &str) -> Result<Value, String> {
             }
         }]
     }))
+}
+
+/// OpenRouter 的 error 块可能是字符串，也可能是带 metadata 的对象；把人能看懂的部分拼出来。
+fn sse_error_text(err: &Value) -> String {
+    if let Some(msg) = err.as_str() {
+        return msg.to_string();
+    }
+    let mut parts = Vec::new();
+    if let Some(msg) = err.get("message").and_then(|v| v.as_str()) {
+        parts.push(msg.to_string());
+    }
+    if let Some(code) = err.get("code").and_then(|v| v.as_u64()) {
+        parts.push(format!("(code {code})"));
+    }
+    if let Some(provider) = err.pointer("/metadata/provider_name").and_then(|v| v.as_str()) {
+        parts.push(format!("由 {provider} 提供"));
+    }
+    if parts.is_empty() {
+        parts.push(err.to_string());
+    }
+    parts.join(" ")
 }
 
 fn merge_tool_delta(slot: &mut Value, delta: &Value) {
@@ -3604,6 +3663,53 @@ mod tests {
             body.pointer("/choices/0/message/tool_calls/0/function/name")
                 .and_then(|v| v.as_str()),
             Some("run_command")
+        );
+    }
+
+    #[test]
+    fn sse_error_chunk_surfaces_real_message() {
+        let raw = concat!(
+            ": OPENROUTER PROCESSING\n\n",
+            "data: {\"error\":{\"message\":\"Rate limit exceeded\",\"code\":429,\"metadata\":{\"provider_name\":\"Chutes\"}}}\n",
+        );
+        let err = decode_model_body(raw).unwrap_err();
+        assert!(err.contains("Rate limit exceeded"), "{err}");
+        assert!(err.contains("Chutes"), "{err}");
+        let plain = decode_model_body("data: {\"error\":\"upstream down\"}\n").unwrap_err();
+        assert!(plain.contains("upstream down"), "{plain}");
+    }
+
+    #[test]
+    fn sse_reasoning_only_stream_says_so() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"让我想想……\"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n",
+            "data: [DONE]\n",
+        );
+        let err = decode_model_body(raw).unwrap_err();
+        assert!(err.contains("思考过程"), "{err}");
+    }
+
+    #[test]
+    fn sse_empty_content_with_length_stop_mentions_max_tokens() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"length\"}]}\n",
+            "data: [DONE]\n",
+        );
+        let err = decode_model_body(raw).unwrap_err();
+        assert!(err.contains("max_tokens"), "{err}");
+    }
+
+    #[test]
+    fn sse_reasoning_alongside_content_is_ignored() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"想\",\"content\":\"答案\"}}]}\n",
+            "data: [DONE]\n",
+        );
+        let body = decode_model_body(raw).unwrap();
+        assert_eq!(
+            body.pointer("/choices/0/message/content").and_then(|v| v.as_str()),
+            Some("答案")
         );
     }
 

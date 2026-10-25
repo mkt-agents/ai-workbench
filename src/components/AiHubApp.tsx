@@ -1,12 +1,13 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { useGlobalStore, MAX_AI_HUB_SESSIONS } from "../core/store";
 import type { AIModelConfig, AiHubSession, AiHubTurn } from "../core/types";
 import { bootApp } from "../core/boot";
 import { writeStoredString } from "../core/localState";
 import { applyDocumentTheme } from "../lib/theme";
+import { PET_TRACK_EVENT } from "../lib/petSkins";
 import { resolveFallbackModel, resolveSceneModel } from "../lib/aiSceneModels";
 import { DEVTOOLS_TOOL_KEY } from "./DevTools";
 import {
@@ -1106,6 +1107,8 @@ function AiHubApp() {
             pinnedMode={pinnedMode}
             onTrack={(next) => {
               setSettings({ aiHubTrack: next });
+              // 桌宠窗闲聊话术按轨分流；事件失败不影响主窗切轨
+              void emit(PET_TRACK_EVENT, { track: next }).catch(() => {});
             }}
             modeChip={
               pinnedMode ? (

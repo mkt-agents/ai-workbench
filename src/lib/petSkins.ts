@@ -185,6 +185,12 @@ export const PET_SIZE_DEFAULT = 112;
 export const PET_CONFIG_EVENT = "ai-hub-pet-changed";
 
 /**
+ * 主窗切换产品轨（Code/Work）后广播给桌宠窗：闲聊话术按轨分流（聊代码 vs 聊日程）。
+ * payload `{ track: "code" | "work" }`；桌宠窗只更新本地 ref，不落盘（盘上以主窗 settings 为准）。
+ */
+export const PET_TRACK_EVENT = "ai-hub-pet-track";
+
+/**
  * 桌宠视线事件：Rust 侧（`tray/gaze.rs`）按节拍读全局光标，把「相对桌宠窗中心的方向」
  * 推给桌宠窗。payload `{ x, y }` 是 -1..1 的归一化方向（x 右为正、y 下为正），没有这条
  * 事件时前端就退回窗内 pointer 的局部跟随。

@@ -21,6 +21,7 @@ import type { PetMicro, PressZone } from "./aiHub/PandaGirlPet";
 import {
   PET_CONFIG_EVENT,
   PET_GAZE_EVENT,
+  PET_TRACK_EVENT,
   loadUserPack,
   nextPetSkin,
   normalizePetConfig,
@@ -29,7 +30,13 @@ import {
   type PetConfigPatch,
   type PetMood,
 } from "../lib/petSkins";
-import { reactTo, type PetGesturePlay, type PetReaction, type PetSignal } from "../lib/petBrain";
+import {
+  reactTo,
+  PAT_OVER_STREAK,
+  type PetGesturePlay,
+  type PetReaction,
+  type PetSignal,
+} from "../lib/petBrain";
 import {
   applyAffinityDelta,
   bondTier,
@@ -38,6 +45,7 @@ import {
   pickPoolKey,
   todayKey,
   type BondTier,
+  type SpeechPoolName,
 } from "../lib/petBond";
 
 /** Below this screen travel, treat pointer-up as a click (not a drag). */
@@ -82,6 +90,50 @@ const SHY_WINDOW_MS = 2500;
 const MUTTER_THINK_CD_MS = 25_000;
 const MUTTER_WORK_CD_MS = 40_000;
 const MUTTER_WORK_AFTER_MS = 8_000;
+/** 连摸头计数窗口；升级（开心）/ 抗议阈值由 petBrain 的 PAT_HOT_STREAK / PAT_OVER_STREAK 判。 */
+const PAT_WINDOW_MS = 5000;
+/** 距上次互动超过这么久，下一次互动先演「回来啦」。 */
+const RETURN_AFTER_MS = 30 * 60_000;
+/** 被拎着（拖拽中）多久开始挣扎。 */
+const STRUGGLE_AFTER_MS = 6000;
+/** 甩动检测：拖拽单步速度超过（px/ms）记一次猛甩，累计满阈值演头晕。 */
+const SHAKE_SPEED_PX_MS = 2.4;
+const SHAKE_LIMIT = 3;
+/** 回归问候只盖互动类信号；agent 事件有自己的情绪轴，不抢。 */
+const RETURN_GREET_KINDS = new Set<PetSignal["kind"]>([
+  "tap",
+  "pat",
+  "poke",
+  "tail",
+  "hug",
+  "shy",
+  "wake",
+]);
+/** idle 闲聊池按产品轨分流：Work 轨聊日程，Code 轨一半概率聊代码，其余走通用池。 */
+function chatterPoolFor(track: "code" | "work" | undefined): SpeechPoolName {
+  if (track === "work") return "chatterWork";
+  return Math.random() < 0.5 ? "chatterCode" : "chatter";
+}
+/** 微动作各自的演出收尾时长（ms）。 */
+const MICRO_HOLD_MS: Partial<Record<PetMicro, number>> = {
+  stretch: 1200,
+  shy: 1200,
+  dizzy: 2200,
+  struggle: 1600,
+  lookaround: 1500,
+  glance: 1400,
+  wave: 1300,
+  peek: 1300,
+  bounce: 1300,
+  wobble: 1300,
+  dust: 1300,
+  hop: 1100,
+  nod: 1100,
+  ear: 1100,
+};
+function microHoldMs(m: PetMicro): number {
+  return MICRO_HOLD_MS[m] ?? 1000;
+}
 
 type HitZone = "head" | "body" | "tail";
 
@@ -149,6 +201,12 @@ export default function AiHubBubble() {
     dragging: boolean;
     zone: HitZone;
     hugged: boolean;
+    /** 甩动检测：上一步位置 / 时间与累计猛甩次数 */
+    lastX: number;
+    lastY: number;
+    lastT: number;
+    shake: number;
+    dizzied: boolean;
   } | null>(null);
   const fireTimerRef = useRef<number | null>(null);
   const landTimerRef = useRef<number | null>(null);
@@ -187,9 +245,19 @@ export default function AiHubBubble() {
   cfgRef.current = cfg;
   /** 身区连戳：2.5s 内满 3 次起害羞。 */
   const bodyTapRef = useRef({ count: 0, at: 0 });
+  /** 头区连摸：PAT_WINDOW_MS 内计数，满 3 升级开心、满 6 抗议。 */
+  const headPatRef = useRef({ count: 0, at: 0 });
   const mutterAtRef = useRef(0);
   const workStartedAtRef = useRef(0);
   const tierRef = useRef<BondTier>(0);
+  /** 拎久挣扎计时（拖拽开始起算，松手作废）。 */
+  const struggleTimerRef = useRef<number | null>(null);
+  /** 好感升档庆祝（升档当次反应演完再接一场）。 */
+  const bondUpTimerRef = useRef<number | null>(null);
+  /** 最近一次互动时刻：离开很久后的第一条互动先演「回来啦」。 */
+  const lastSeenAtRef = useRef(Date.now());
+  /** 产品轨：主窗切轨时经 PET_TRACK_EVENT 同步（settings 只在主窗落盘）。 */
+  const trackRef = useRef<"code" | "work" | undefined>(settings.aiHubTrack);
 
   const skinDef = useMemo(() => petSkin(cfg.skin), [cfg.skin, packFrames]);
   const tier: BondTier = bondTier(affinity);
@@ -254,7 +322,18 @@ export default function AiHubBubble() {
       moodRef.current = reaction.mood;
       setMood(reaction.mood);
       setCelebrate(Boolean(reaction.celebrate));
-      if (reaction.affinityDelta) bumpAffinity(reaction.affinityDelta);
+      if (reaction.affinityDelta) {
+        const prevTier = bondTier(affinityRef.current);
+        bumpAffinity(reaction.affinityDelta);
+        // 好感跨档：当次反应演完再接一场撒花庆祝，不与当前台词抢帧
+        if (bondTier(affinityRef.current) > prevTier) {
+          clearTimer(bondUpTimerRef);
+          bondUpTimerRef.current = window.setTimeout(() => {
+            bondUpTimerRef.current = null;
+            play(reactTo({ kind: "bondUp" }, tierRef.current));
+          }, 1800);
+        }
+      }
       if (reaction.gesture) {
         setGesture(reaction.gesture);
         clearTimer(gestureTimerRef);
@@ -266,12 +345,10 @@ export default function AiHubBubble() {
       if (reaction.micro) {
         setMicro(reaction.micro);
         clearTimer(microHoldTimerRef);
-        const hold =
-          reaction.micro === "stretch" || reaction.micro === "shy" ? 1200 : 1000;
         microHoldTimerRef.current = window.setTimeout(() => {
           setMicro("none");
           microHoldTimerRef.current = null;
-        }, hold);
+        }, microHoldMs(reaction.micro));
       }
       if (reaction.speechKey) {
         say(t(reaction.speechKey, reaction.speechParams ?? {}));
@@ -292,12 +369,25 @@ export default function AiHubBubble() {
   /** 收到任何信号都算"桌面有动静"：重新计打瞌睡倒计时，再演对应情绪。 */
   const react = useCallback(
     (signal: PetSignal) => {
+      const now = Date.now();
+      const away = now - lastSeenAtRef.current;
+      lastSeenAtRef.current = now;
       clearTimer(sleepTimerRef);
       sleepTimerRef.current = window.setTimeout(
         () => play(reactTo({ kind: "idle" }, tierRef.current)),
         sleepAfterMs(),
       );
-      play(reactTo(signal, tierRef.current));
+      const base = reactTo(signal, tierRef.current);
+      // 离开很久后的第一条互动：台词换成「回来啦」，动作照演（睡着则优先唤醒）
+      if (
+        away > RETURN_AFTER_MS &&
+        moodRef.current !== "sleepy" &&
+        RETURN_GREET_KINDS.has(signal.kind)
+      ) {
+        play({ ...base, speechKey: pickPoolKey(tierRef.current, "return"), micro: "wave" });
+        return;
+      }
+      play(base);
     },
     [play],
   );
@@ -386,7 +476,7 @@ export default function AiHubBubble() {
         if (speechShowingRef.current) return;
         const m = moodRef.current;
         if (m === "idle" || m === "sleepy") {
-          say(t(pickPoolKey(tierRef.current, "chatter")));
+          say(t(pickPoolKey(tierRef.current, chatterPoolFor(trackRef.current))));
           return;
         }
         if ((m === "thinking" || m === "working") && Math.random() < 0.35) {
@@ -416,27 +506,32 @@ export default function AiHubBubble() {
               "shy",
               "stretch",
               "ear",
+              // 新增：东张西望 / 摇摆 / 小跳 / 拍灰
+              "lookaround",
+              "lookaround",
+              "wobble",
+              "hop",
+              "dust",
               // glance 少抽：横移多了像左右晃
               "glance",
             ];
             const next = picks[Math.floor(Math.random() * picks.length)]!;
-            const hold =
-              next === "wave" || next === "peek" || next === "bounce" || next === "shy"
-                ? 1300
-                : 1100;
             clearTimer(microHoldTimerRef);
             setMicro(next);
             microHoldTimerRef.current = window.setTimeout(() => {
               setMicro("none");
               microHoldTimerRef.current = null;
-            }, hold);
+            }, microHoldMs(next));
             if (
               Math.random() < 0.18 &&
               (next === "wave" ||
                 next === "peek" ||
                 next === "bounce" ||
                 next === "stretch" ||
-                next === "nod")
+                next === "nod" ||
+                next === "hop" ||
+                next === "wobble" ||
+                next === "dust")
             ) {
               say(t(pickPoolKey(tierRef.current, "micro")));
             }
@@ -487,11 +582,23 @@ export default function AiHubBubble() {
       unlistenGaze = fn;
     });
 
+    // 主窗切产品轨（Code/Work）广播：闲聊话术按轨分流（只更新本地 ref，盘上以主窗为准）
+    let unlistenTrack: (() => void) | undefined;
+    void listen<{ track?: "code" | "work" }>(PET_TRACK_EVENT, (event) => {
+      const track = event.payload?.track;
+      if (track === "code" || track === "work") trackRef.current = track;
+    }).then((fn) => {
+      unlistenTrack = fn;
+    });
+
     return () => {
       unlistenTheme?.();
       unlistenCfg?.();
       unlistenGaze?.();
+      unlistenTrack?.();
       window.clearInterval(chatterTimer);
+      clearTimer(struggleTimerRef);
+      clearTimer(bondUpTimerRef);
       clearTimer(fireTimerRef);
       clearTimer(landTimerRef);
       clearTimer(hugTimerRef);
@@ -682,10 +789,21 @@ export default function AiHubBubble() {
       if (moodRef.current === "sleepy") {
         react({ kind: "wake" });
         bodyTapRef.current = { count: 0, at: 0 };
+        headPatRef.current = { count: 0, at: 0 };
         return;
       }
       if (zone === "head") {
-        react({ kind: "pat" });
+        // 连摸升级：窗口内计数交给 petBrain 判（满 3 撒花、满 6 抗议）
+        const now = Date.now();
+        if (now - headPatRef.current.at < PAT_WINDOW_MS) {
+          headPatRef.current.count += 1;
+        } else {
+          headPatRef.current.count = 1;
+        }
+        headPatRef.current.at = now;
+        const streak = headPatRef.current.count;
+        react({ kind: "pat", streak });
+        if (streak >= PAT_OVER_STREAK) headPatRef.current = { count: 0, at: 0 };
         return;
       }
       if (zone === "tail") {
@@ -745,6 +863,11 @@ export default function AiHubBubble() {
       dragging: false,
       zone,
       hugged: false,
+      lastX: e.screenX,
+      lastY: e.screenY,
+      lastT: performance.now(),
+      shake: 0,
+      dizzied: false,
     };
     setPressZone(zone);
     setPhase("pressed");
@@ -838,11 +961,34 @@ export default function AiHubBubble() {
         dragSaidRef.current = true;
         say(t(pickPoolKey(tierRef.current, "drag")));
       }
+      // 拎久挣扎：拖拽开始起算，松手作废
+      clearTimer(struggleTimerRef);
+      struggleTimerRef.current = window.setTimeout(() => {
+        struggleTimerRef.current = null;
+        if (dragRef.current?.dragging) react({ kind: "struggle" });
+      }, STRUGGLE_AFTER_MS);
       try {
         await getCurrentWindow().startDragging();
       } catch {
         /* ignore */
       }
+      return;
+    }
+    // 甩动检测：只在真的拖起来之后算，快速来回甩累计到阈值演头晕（一次拖拽只演一回）
+    if (d.dragging) {
+      const now = performance.now();
+      const dt = now - d.lastT;
+      if (dt > 0) {
+        const speed = Math.hypot(e.screenX - d.lastX, e.screenY - d.lastY) / dt;
+        d.shake = speed > SHAKE_SPEED_PX_MS ? d.shake + 1 : Math.max(0, d.shake - 0.5);
+        if (d.shake >= SHAKE_LIMIT && !d.dizzied) {
+          d.dizzied = true;
+          react({ kind: "dizzy" });
+        }
+      }
+      d.lastX = e.screenX;
+      d.lastY = e.screenY;
+      d.lastT = now;
     }
   };
 
@@ -850,6 +996,7 @@ export default function AiHubBubble() {
     const d = dragRef.current;
     dragRef.current = null;
     clearTimer(hugTimerRef);
+    clearTimer(struggleTimerRef);
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
@@ -862,10 +1009,13 @@ export default function AiHubBubble() {
     }
     if (d.moved || d.dragging) {
       await snapAndPersist();
-      // 放手：落地弹一下 + 欢呼表情，再站定
+      // 放手：落地弹一下 + 欢呼表情，再站定；被甩晕则保留头晕演出，
+      // 不清 microHold 计时器——晕够时长由它自己收回
       setPhase("landing");
-      setMicro("bounce");
-      clearTimer(microHoldTimerRef);
+      if (!d.dizzied) {
+        setMicro("bounce");
+        clearTimer(microHoldTimerRef);
+      }
       clearTimer(landTimerRef);
       landTimerRef.current = window.setTimeout(() => {
         setPhase("idle");

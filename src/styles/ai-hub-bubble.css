@@ -769,6 +769,50 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   color: var(--text-2);
   animation: qa-fx-zzz 2.8s ease-in-out infinite;
 }
+/* 被甩晕：三颗金星绕头顶转 */
+.qa-fx-dizzy {
+  top: 2%;
+  left: 50%;
+  width: 56%;
+  height: 18%;
+  margin-left: -28%;
+  font-size: 11px;
+  line-height: 1;
+  color: #f5c84c; /* token-ok: 金星用固定金色，与熊猫娘星星眼同源 */
+}
+.qa-fx-dizzy i {
+  position: absolute;
+  font-style: normal;
+  animation: qa-fx-dizzy-orbit 1.15s linear infinite;
+}
+.qa-fx-dizzy i:nth-child(1) {
+  top: 0;
+  left: 50%;
+}
+.qa-fx-dizzy i:nth-child(2) {
+  top: 55%;
+  left: 6%;
+  animation-delay: 0.38s;
+  transform: scale(0.85);
+}
+.qa-fx-dizzy i:nth-child(3) {
+  top: 55%;
+  right: 6%;
+  animation-delay: 0.76s;
+  transform: scale(0.7);
+}
+@keyframes qa-fx-dizzy-orbit {
+  0% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1.05);
+  }
+  100% {
+    opacity: 0.25;
+  }
+}
 
 /* 互动气泡语：常驻头顶留白里淡入淡出（不改窗）；短句胶囊、长句圆角卡，按字数降字号 */
 .qa-pet-speech {
