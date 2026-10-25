@@ -124,7 +124,6 @@ const MICRO_HOLD_MS: Partial<Record<PetMicro, number>> = {
   glance: 1400,
   yawn: 1900,
   rub: 1500,
-  walk: 2200,
   wave: 1300,
   peek: 1300,
   bounce: 1300,
@@ -138,14 +137,9 @@ function microHoldMs(m: PetMicro): number {
   return MICRO_HOLD_MS[m] ?? 1000;
 }
 
-/** 踱步最大横移（逻辑 px）：按窗宽档位缩放，保证不踩到窗边裁切。 */
-function walkAmplitudePx(size: number): number {
-  return Math.round(size * 0.1);
-}
-
 /**
  * 按时段挑一条待机连招链：早晨伸懒腰醒神、午后打哈欠犯困、深夜揉眼，
- * 其余走通用池。每条链 2~3 步，链演完才回 idle。
+ * 其余走通用池。每条链 2~3 步，链演完才回 idle。全部是原地动作，不位移。
  */
 function pickMicroChain(hour: number): PetMicro[] {
   const pools: PetMicro[][][] = [
@@ -153,27 +147,27 @@ function pickMicroChain(hour: number): PetMicro[] {
     [
       ["yawn", "rub"],
       ["rub", "lookaround"],
-      ["walk", "yawn"],
+      ["glance", "yawn"],
       ["nod", "rub"],
     ],
     // 早晨（6-11）：伸懒腰醒神
     [
       ["stretch", "lookaround"],
       ["stretch", "wave"],
-      ["walk", "glance"],
+      ["glance", "ear"],
       ["wave", "bounce", "nod"],
     ],
     // 午后（13-17）：犯困
     [
       ["yawn", "lookaround"],
       ["wobble", "yawn"],
-      ["walk", "peek"],
+      ["peek", "nod"],
       ["dust", "stretch"],
     ],
   ];
   const generic: PetMicro[][] = [
     ["stretch", "lookaround"],
-    ["walk", "glance", "wave"],
+    ["glance", "ear", "wave"],
     ["wave", "peek", "nod"],
     ["dust", "wobble"],
     ["lookaround", "ear"],
@@ -241,9 +235,6 @@ export default function AiHubBubble() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [gesture, setGesture] = useState<PetGesturePlay | null>(null);
   const [micro, setMicro] = useState<PetMicro>("none");
-  /** 踱步位移（px）与朝向：走动时由连招 runner 更新，任何互动演出的 play() 归中。 */
-  const [walkX, setWalkX] = useState(0);
-  const [facing, setFacing] = useState<1 | -1>(1);
   const [celebrate, setCelebrate] = useState(false);
   const phaseRef = useRef<BubblePhase>("idle");
   phaseRef.current = phase;
@@ -277,8 +268,6 @@ export default function AiHubBubble() {
   const microHoldTimerRef = useRef<number | null>(null);
   /** 连招链步与步之间的衔接计时 */
   const chainTimerRef = useRef<number | null>(null);
-  /** 踱步当前位置镜像：挑新目标与判断转身方向用 */
-  const walkXRef = useRef(0);
   /** 悬停一会儿 = 摸头：停够 1.1 秒才反应，扫过去不算 */
   const hoverTimerRef = useRef<number | null>(null);
   const menuOpenRef = useRef(false);
@@ -382,7 +371,6 @@ export default function AiHubBubble() {
    * 连招 runner：按序连播微动作，每步演完停一拍再下一步，链毕触发 onDone。
    * 步前守卫不过（菜单/拖拽/说话/情绪被新信号抢走）整链作废、不触发 onDone ——
    * 打断即意味着来了新信号（sleepTimer 已被重排），不该再走「演完犯困」之类的收尾。
-   * 遇到 walk 步：先定转身方向与位移目标，再开始颠步（横移由 CSS transition 接管）。
    */
   const runChain = useCallback((steps: PetMicro[], onDone?: () => void) => {
     clearTimer(chainTimerRef);
@@ -400,15 +388,6 @@ export default function AiHubBubble() {
         moodRef.current !== "idle"
       ) {
         return;
-      }
-      if (next === "walk") {
-        const amp = walkAmplitudePx(cfgRef.current.size);
-        const target = Math.round((Math.random() * 2 - 1) * amp);
-        if (target !== walkXRef.current) {
-          setFacing(target < walkXRef.current ? -1 : 1);
-        }
-        walkXRef.current = target;
-        setWalkX(target);
       }
       clearTimer(microHoldTimerRef);
       setMicro(next);
@@ -428,10 +407,8 @@ export default function AiHubBubble() {
   const play = useCallback(
     (reaction: PetReaction) => {
       clearTimer(moodTimerRef);
-      // 任何正式演出都打断在跑的连招，并把踱步归中（回家站好再演）
+      // 任何正式演出都打断在跑的连招
       clearTimer(chainTimerRef);
-      walkXRef.current = 0;
-      setWalkX(0);
       moodRef.current = reaction.mood;
       setMood(reaction.mood);
       setCelebrate(Boolean(reaction.celebrate));
@@ -647,8 +624,7 @@ export default function AiHubBubble() {
                 chain[0] === "nod" ||
                 chain[0] === "hop" ||
                 chain[0] === "wobble" ||
-                chain[0] === "dust" ||
-                chain[0] === "walk")
+                chain[0] === "dust")
             ) {
               say(t(pickPoolKey(tierRef.current, "micro")));
             }
@@ -1202,8 +1178,6 @@ export default function AiHubBubble() {
           micro={micro}
           celebrate={celebrate}
           pressZone={pressZone}
-          walkX={walkX}
-          facing={facing}
         />
       </div>
       {speech && !menuOpen && (

@@ -66,23 +66,6 @@
   z-index: 1;
 }
 
-/* 踱步位移层：走动时由 --qa-walk-x 平移，交互后归中 */
-.qa-panda-girl-walk {
-  position: absolute;
-  inset: 0;
-  transform: translateX(var(--qa-walk-x, 0px));
-  transition: transform 1400ms cubic-bezier(0.22, 0.7, 0.2, 1);
-  z-index: 1;
-}
-
-/* 朝向层：走左边时整只镜像，转身有过渡不跳切 */
-.qa-panda-girl-face {
-  position: absolute;
-  inset: 0;
-  transform: scaleX(var(--qa-facing, 1));
-  transition: transform 420ms ease;
-}
-
 /* 悬停凑近：只抬高放大，不扭 */
 .qa-bubble-root:hover .qa-panda-girl:not(.is-dragging):not(.is-pressed) .qa-panda-girl-body-wrap {
   animation-play-state: paused;
@@ -699,11 +682,7 @@
   animation: qa-panda-girl-dizzy 2.2s ease-in-out;
 }
 
-/* —— 待机提活新增：踱步 / 打哈欠 / 揉眼 —— */
-/* 踱步：上下颠步 + 随步子轻倾，横移由 walk 层的 transition 负责 */
-.qa-panda-girl.micro-walk .qa-panda-girl-body-wrap {
-  animation: qa-panda-girl-walk-bob 0.52s ease-in-out infinite;
-}
+/* —— 待机提活新增：打哈欠 / 揉眼 —— */
 /* 打哈欠：后仰吸气 → 前倾哈气 → 缓缓收回来，眼皮跟着耷拉 */
 .qa-panda-girl.micro-yawn .qa-panda-girl-body-wrap {
   animation: qa-panda-girl-yawn 1.9s ease-in-out;
@@ -832,22 +811,6 @@
   }
 }
 
-/* 踱步步态：左右脚交替的颠步节拍 */
-@keyframes qa-panda-girl-walk-bob {
-  0%,
-  100% {
-    transform: translateY(0) scale(1) rotate(0deg);
-  }
-  25% {
-    transform: translateY(-3.2%) scale(1.02, 0.98) rotate(1deg);
-  }
-  50% {
-    transform: translateY(0) scale(0.99, 1.01) rotate(0deg);
-  }
-  75% {
-    transform: translateY(-2.2%) scale(1.01, 0.99) rotate(-1deg);
-  }
-}
 /* 打哈欠：后仰吸气 → 前倾张口 → 缓缓收回 */
 @keyframes qa-panda-girl-yawn {
   0%,
@@ -972,8 +935,6 @@
 @media (prefers-reduced-motion: reduce) {
   .qa-panda-girl,
   .qa-panda-girl-body-wrap,
-  .qa-panda-girl-walk,
-  .qa-panda-girl-face,
   .qa-panda-girl-stage,
   .qa-panda-girl-art,
   .qa-panda-girl-gaze,
