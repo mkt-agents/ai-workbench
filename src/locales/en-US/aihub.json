@@ -87,6 +87,7 @@
   "suggestPick": "Click to fill the input",
   "suggestDirty": "Commit and push these changes",
   "copy": "Copy answer",
+  "copyQuestion": "Copy question",
   "copyCode": "Copy code",
   "saveCode": "Save code",
   "copied": "Copied",

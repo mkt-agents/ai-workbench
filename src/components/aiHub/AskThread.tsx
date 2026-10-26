@@ -246,10 +246,10 @@ export default function AskThread(props: Props) {
                     type="button"
                     className="qa-mini-btn"
                     onClick={() => onCopyAnswer(i)}
-                    title={t("copy")}
+                    title={t("copyQuestion")}
                   >
                     {copied === i ? <Check size={12} className="qa-pop" /> : <Copy size={12} />}{" "}
-                    {copied === i ? t("copied") : t("copy")}
+                    {copied === i ? t("copied") : t("copyQuestion")}
                   </button>
                   <button
                     type="button"
