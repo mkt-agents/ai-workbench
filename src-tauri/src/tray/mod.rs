@@ -53,6 +53,10 @@ fn apply_tray_menu<R: Runtime>(
         .map_err(|e| e.to_string())?;
     let ai_hub = MenuItem::with_id(app, "ai_hub", "打开天玑", true, None::<&str>)
         .map_err(|e| e.to_string())?;
+    // 桌宠只能从它自己的右键菜单「隐藏桌宠」收起，托盘必须留一条把它叫回来的路。
+    // 状态（settings 在 localStorage）与位置都只有主窗知道，所以这里只发一条意向事件。
+    let pet_toggle = MenuItem::with_id(app, "pet_toggle", "显示/隐藏桌宠", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
 
     let dsh_label = if dsh_ports.is_empty() {
@@ -89,7 +93,7 @@ fn apply_tray_menu<R: Runtime>(
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>).map_err(|e| e.to_string())?;
 
     let mut refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
-        vec![&show_main, &ai_hub, &sep1, &dsh_toggle, &sep2];
+        vec![&show_main, &ai_hub, &pet_toggle, &sep1, &dsh_toggle, &sep2];
     for item in &tunnel_items {
         refs.push(item);
     }
@@ -117,6 +121,8 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let ai_hub = MenuItem::with_id(app, "ai_hub", "打开天玑", true, None::<&str>)
         .map_err(|e| e.to_string())?;
+    let pet_toggle = MenuItem::with_id(app, "pet_toggle", "显示/隐藏桌宠", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     let dsh_toggle = MenuItem::with_id(app, "dsh_toggle", "启动 DeepSeek", true, None::<&str>)
         .map_err(|e| e.to_string())?;
@@ -124,7 +130,7 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>).map_err(|e| e.to_string())?;
     let menu = Menu::with_items(
         app,
-        &[&show_main, &ai_hub, &sep1, &dsh_toggle, &sep2, &quit],
+        &[&show_main, &ai_hub, &pet_toggle, &sep1, &dsh_toggle, &sep2, &quit],
     )
     .map_err(|e| e.to_string())?;
 
@@ -138,6 +144,11 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
             match id {
                 "show_main" => bubble::show_main_window(app),
                 "ai_hub" => bubble::show_ai_hub(app),
+                // 桌宠的显隐与位置都记在主窗的 settings 里（localStorage），
+                // 这里只发一条意向让主窗去真正落盘 + 调 set_ai_hub_bubble_visible。
+                "pet_toggle" => {
+                    let _ = app.emit("ai-hub-pet-toggle", ());
+                }
                 "dsh_toggle" => handle_dsh_toggle(app),
                 "quit" => {
                     // Stop all cloudflared tunnels before exiting so they don't

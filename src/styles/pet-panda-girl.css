@@ -66,8 +66,11 @@
   z-index: 1;
 }
 
-/* 悬停凑近：只抬高放大，不扭 */
-.qa-bubble-root:hover .qa-panda-girl:not(.is-dragging):not(.is-pressed) .qa-panda-girl-body-wrap {
+/* 悬停凑近：只抬高放大，不扭。命中态由 Rust 的光标观察者推来（`.is-hot`），
+   穿透期间 webview 收不到 pointerenter/leave，单靠 `:hover` 会一直卡着。 */
+.qa-bubble-root:is(:hover, .is-hot)
+  .qa-panda-girl:not(.is-dragging):not(.is-pressed)
+  .qa-panda-girl-body-wrap {
   animation-play-state: paused;
   transform: translateY(-2%) scale(1.03);
 }

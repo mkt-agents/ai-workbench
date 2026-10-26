@@ -188,6 +188,8 @@ export interface AppSettings {
   aiHubPetAffinity?: number;
   /** 今日已问候日期 `YYYY-MM-DD`，避免一天内重复早安。 */
   aiHubPetGreetedOn?: string;
+  /** 首次运行说过一次「右键有菜单 / 双击叫我」的引导，之后不再重复。 */
+  aiHubPetHintShown?: boolean;
   /** One-shot tip after first close-to-tray */
   trayHintShown?: boolean;
   /** Preferred model id per AI scene (missing → global default). */

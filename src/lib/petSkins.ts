@@ -40,7 +40,7 @@ export const CUSTOM_SKIN: PetSkinId = "custom";
  */
 export const PANDA_SKIN: PetSkinId = "panda";
 
-/** 换装循环顺序：双击、菜单「换个形象」都按它走。 */
+/** 换装循环顺序：桌宠右键菜单的「换个形象」按它走（不再有双击换装手势）。 */
 export const PET_ORDER: PetSkinId[] = [PANDA_SKIN, "orb", CUSTOM_SKIN];
 
 export interface PetClip {
@@ -70,11 +70,30 @@ function stemOf(name: string): string {
   return name.replace(/\.[a-z0-9]+$/i, "").replace(/[-_].*$/, "");
 }
 
+/**
+ * 帧序号：`idle.png` 记 1（首帧永远排第一）、`idle-2.png` 记 2。
+ *
+ * 不能直接按文件名排：`-` 排在 `.` 前面，`idle-2.png` 会被排到 `idle.png` 之前，
+ * 于是动画从第 2 帧开始、循环错位。导入管线产出的正是这种命名（见 petPack.ts）。
+ */
+function frameIndex(name: string): number {
+  const tail = name
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/^[^-_]*/, "")
+    .replace(/^[-_]+/, "");
+  const n = Number.parseInt(tail, 10);
+  return Number.isFinite(n) ? n : 1;
+}
+
 function toClip(files: { name: string; url: string }[]): PetClip | undefined {
   if (!files.length) return undefined;
-  const sorted = [...files].sort((a, b) =>
-    a.name.localeCompare(b.name, "en", { numeric: true }),
-  );
+  const sorted = [...files].sort((a, b) => {
+    const base = stemOf(a.name).localeCompare(stemOf(b.name), "en", { numeric: true });
+    if (base !== 0) return base;
+    const byIndex = frameIndex(a.name) - frameIndex(b.name);
+    if (byIndex !== 0) return byIndex;
+    return a.name.localeCompare(b.name, "en", { numeric: true });
+  });
   const frames = sorted.map((f) => f.url);
   const video = VIDEO_EXT.test(frames[0]);
   return { frames, fps: video ? 0 : frames.length > 6 ? 12 : 8, video };
@@ -196,6 +215,14 @@ export const PET_TRACK_EVENT = "ai-hub-pet-track";
  * 事件时前端就退回窗内 pointer 的局部跟随。
  */
 export const PET_GAZE_EVENT = "ai-hub-pet-gaze";
+
+/**
+ * 命中事件：Rust 侧（`tray/gaze.rs`）按前端下发的可交互矩形判定光标是否压在桌宠上，
+ * 翻转时推一条。payload `{ hot, x, y }`，`x`/`y` 是光标在矩形内的归一化位置（0..1），
+ * 用来区分摸头 / 戳肚 / 裙边；同时 Rust 会按 `hot` 切 `set_ignore_cursor_events`，
+ * 让窗内透明留白不再吃掉桌面点击。
+ */
+export const PET_HOT_EVENT = "ai-hub-pet-hot";
 
 export interface PetConfigPatch extends Partial<PetConfig> {
   packRev?: number;

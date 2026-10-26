@@ -111,6 +111,21 @@ pub async fn get_auto_start() -> Result<bool, String> {
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// 系统双击间隔（毫秒）。桌宠的「双击打开天玑」跟用户自己的系统设置走：
+/// 写死 400ms 在慢手 / 触控板上会像"点了没反应"，在快手用户那儿又容易把两次
+/// 独立点击误判成双击。`GetDoubleClickTime` 是普通用户态查询，返回值本身就是毫秒。
+#[tauri::command]
+pub fn system_double_click_ms() -> u32 {
+    #[cfg(windows)]
+    {
+        unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() }
+    }
+    #[cfg(not(windows))]
+    {
+        500
+    }
+}
+
 fn get_auto_start_sync() -> Result<bool, String> {
     #[cfg(windows)]
     {

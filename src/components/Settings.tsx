@@ -357,6 +357,21 @@ function Settings({ onNoticeUpdate }: Props = {}) {
     void emit<PetConfigPatch>(PET_CONFIG_EVENT, { ...next, packRev: packRevRef.current }).catch(() => {});
   };
 
+  /** 好感回到初始值（与 AiHubBubble 的默认一致）；桌宠窗经 storage 事件跟盘上的走。 */
+  const resetPetAffinity = () => {
+    setSettings({ aiHubPetAffinity: 20 });
+  };
+
+  /** 位置回到「首次出现」的默认点：丢掉存档坐标，让 Rust 按主屏右下角重新摆。 */
+  const resetPetPosition = () => {
+    setSettings({ aiHubBubblePos: undefined });
+    void invoke("set_ai_hub_bubble_visible", {
+      visible: settings.aiHubBubbleEnabled !== false,
+      x: null,
+      y: null,
+    }).catch(() => {});
+  };
+
   /** 素材包落盘或清空之后：重读、把皮肤切上去（空了就回圆盘），代号 +1 通知桌宠窗。 */
   const afterPackChange = async () => {
     const count = await loadUserPack();
@@ -745,6 +760,29 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                 </label>
               </div>
               <p className="setting-hint">{t("aiHub.petQuietHint")}</p>
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-row pet-choice-row">
+                <span className="setting-label">{t("aiHub.petReset")}</span>
+                <div className="pet-chips">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={resetPetAffinity}
+                  >
+                    {t("aiHub.petResetAffinity")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={resetPetPosition}
+                  >
+                    {t("aiHub.petResetPos")}
+                  </button>
+                </div>
+              </div>
+              <p className="setting-hint">{t("aiHub.petResetHint")}</p>
             </div>
 
             <div className="setting-item">

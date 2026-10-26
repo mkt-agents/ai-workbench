@@ -29,11 +29,23 @@ export function applyAffinityDelta(affinity: number, delta: number): number {
   return clampAffinity(affinity + delta);
 }
 
+/**
+ * 每个池上一次取到的 key。池数组是模块级常量，用 WeakMap 记住「上一句」，
+ * 取到同一条就顺移一格——连着蹦同一句最出戏（池里只有 1 条时自然不生效）。
+ */
+const lastPick = new WeakMap<string[], string>();
+
 /** 按时段挑一句；pools 按好感档 [低, 中, 高]。 */
 export function pickLine(tier: BondTier, pools: [string[], string[], string[]]): string {
-  const pool = pools[tier];
-  if (!pool.length) return pools[0][0] ?? "";
-  return pool[Math.floor(Math.random() * pool.length)]!;
+  const pool = pools[tier].length ? pools[tier] : pools[0];
+  if (!pool.length) return "";
+  const prev = lastPick.get(pool);
+  let pick = pool[Math.floor(Math.random() * pool.length)]!;
+  if (pool.length > 1 && pick === prev) {
+    pick = pool[(pool.indexOf(pick) + 1) % pool.length]!;
+  }
+  lastPick.set(pool, pick);
+  return pick;
 }
 
 export function greetingSlot(date = new Date()): "morning" | "noon" | "night" {

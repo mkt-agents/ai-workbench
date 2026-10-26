@@ -2329,6 +2329,13 @@ async fn await_cancellable<T>(
     }
 }
 
+/// 「只有思考过程、没有正文」——`decode_sse` 给出的那句文案。
+/// 认出来才有机会在 `model_turn` 抬输出上限重试，而不是把错误直接丢给用户。
+/// 改文案必须同步改这里（`reasoning_only_error_is_recognised_for_the_retry` 锁着）。
+fn is_reasoning_only(err: &str) -> bool {
+    err.contains("只输出了思考过程")
+}
+
 fn decode_model_body(text: &str) -> Result<Value, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -2644,6 +2651,8 @@ async fn model_turn(
     // 上游说「不认识 cache_control」时退回无断点的请求体，只退一次
     let mut cache_dropped = !anthropic;
     let mut empty_retry_used = false;
+    // 思考模型可能把输出额度全花在 reasoning 上：抬一档重试一次，别让用户自己去翻设置
+    let mut tokens_boost_used = false;
     // 流式能不能用是运行时才知道的：半路断开且一个字都没吐出去时，退回非流式重来一次
     let mut body_stream = stream.is_some();
     let mut stream_fallback_used = false;
@@ -2789,6 +2798,27 @@ async fn model_turn(
                 }
                 let turn = if anthropic { parse_anthropic(&json)? } else { parse_openai(&json)? };
                 return Ok(RoundOutput { turn, streamed, usage, cache_hit });
+            }
+            // 只有思考、没有正文：多半是输出上限被 reasoning 吃光（免费线路常见）。
+            // 抬一档自己重试一次——成功就完全不用打扰用户；仍然失败才把原话报出去。
+            Err(e) if !tokens_boost_used && is_reasoning_only(&e) && max_tokens < MAX_OUTPUT_TOKENS => {
+                tokens_boost_used = true;
+                let boosted = (max_tokens * 2).max(4_096).min(MAX_OUTPUT_TOKENS);
+                body["max_tokens"] = json!(boosted);
+                if let Some(app) = stream {
+                    emit_step(
+                        app,
+                        request_id,
+                        "retry",
+                        "info",
+                        &format!("输出被思考过程耗尽，已把输出上限提高到 {boosted} 重试一次"),
+                        "",
+                    );
+                }
+                // 这次已经是最后一次尝试时，循环会直接结束：把原因留下，
+                // 否则会退化成「模型返回了空内容」这句误导人的话。
+                last_error = e;
+                continue;
             }
             Err(_) if !empty_retry_used && text.trim().is_empty() => {
                 empty_retry_used = true;
@@ -3747,7 +3777,8 @@ mod tests {
     use super::{
         arg_hint, await_cancellable, call_summary, candidates_error, unknown_tool_reason, clip_tool_result,
         command_blocked, command_is_readonly, command_output_failed, conflict_block, count_images, decode_model_body,
-        friendly_model_error, friendly_send_error, gate_arg, is_readonly_tool, limit_message, match_app_name, parse_args,
+        friendly_model_error, friendly_send_error, gate_arg, is_readonly_tool, is_reasoning_only, limit_message,
+        match_app_name, parse_args,
         retry_wait, with_grep_ignore, cache_worth_marking,
         plan_batches, plan_steps, prune_images, repeated_command_result, round_is_action, step_arg, subagent_tools,
         tool_result_messages, unique_hit, with_prompt_cache, workspace_services, BatchStep, ToolOutput, MAX_PARALLEL,
@@ -3967,6 +3998,20 @@ mod tests {
         );
         let err = decode_model_body(raw).unwrap_err();
         assert!(err.contains("思考过程"), "{err}");
+    }
+
+    /// 抬输出上限的重试靠这句文案认人：改文案不同步改 `is_reasoning_only` 会静默失效。
+    #[test]
+    fn reasoning_only_error_is_recognised_for_the_retry() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"让我想想……\"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n",
+            "data: [DONE]\n",
+        );
+        let err = decode_model_body(raw).unwrap_err();
+        assert!(is_reasoning_only(&err), "{err}");
+        assert!(!is_reasoning_only("连接模型服务失败"));
+        assert!(!is_reasoning_only("模型输出被输出上限（max_tokens）截断，正文为空。"));
     }
 
     #[test]

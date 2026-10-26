@@ -234,6 +234,19 @@ function App() {
     window.dispatchEvent(new Event("workbench-git-subtab"));
   });
 
+  // 托盘「显示/隐藏桌宠」：桌宠的显隐与位置只记在主窗 settings 里，托盘只发一条意向。
+  useTauriEvent("ai-hub-pet-toggle", () => {
+    const s = useGlobalStore.getState().settings;
+    const on = s.aiHubBubbleEnabled === false;
+    const pos = s.aiHubBubblePos;
+    setSettings({ aiHubBubbleEnabled: on });
+    void invoke("set_ai_hub_bubble_visible", {
+      visible: on,
+      x: pos?.x ?? null,
+      y: pos?.y ?? null,
+    }).catch(() => {});
+  }, [setSettings]);
+
   useTauriEvent("tray-minimized", () => {
     const s = useGlobalStore.getState().settings;
     if (!s.trayHintShown) {
@@ -242,10 +255,6 @@ function App() {
       setTimeout(() => setTrayToast(null), 4000);
     }
   }, [setSettings, tc]);
-
-  useTauriEvent<boolean>("ai-hub-bubble-enabled", (event) => {
-    setSettings({ aiHubBubbleEnabled: Boolean(event.payload) });
-  }, [setSettings]);
 
   const toggleGroup = (group: string) => {
     setOpenGroups((prev) => {

@@ -813,6 +813,7 @@ TunnelSession { id, pid, mode, local_url, public_url?, profile_id?, child }
 - 菜单:
   - 打开主窗口
   - 天玑
+  - 显示/隐藏桌宠（只 `emit("ai-hub-pet-toggle")`，状态与位置由主窗 settings 处理）
   - 当前隧道状态（动态）
   - 退出
 
@@ -1122,7 +1123,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `open_main_tab` | tab: String | — |
 | `set_ai_hub_bubble_visible` | visible, x?, y? | — |
 | `set_ai_hub_bubble_position` | x, y | — |
-| `set_ai_hub_bubble_box` | width, height | —（桌宠窗尺寸：设置档位 + 就地菜单临时撑高，底边中心锚定，`tray/bubble.rs`） |
+| `set_ai_hub_bubble_box` | width, height, hit?: `[x,y,w,h]` | —（桌宠窗尺寸：设置档位 + 就地菜单临时撑高，底边中心锚定；`hit` 是窗内可交互矩形（逻辑 px，`w = 0` = 整窗），`tray/gaze.rs` 按它切点击穿透，`tray/bubble.rs`） |
 | `pick_pet_images` | — | 路径数组（系统文件框多选自备桌宠素材，`pet_pack_commands.rs`；rfd 走 spawn_blocking） |
 | `read_pet_images` | paths | `[{name, dataUrl}]`（扩展名白名单 + 单文件 8MB 上限，交给前端画布抠像归一化） |
 | `save_pet_pack` | frames: `[{name, dataUrl}]` | 帧数（文件名必须过 `<情绪>[-序号].png\|webm` 白名单，先清旧帧再写进 `%APPDATA%\…\pets\custom\`） |
@@ -1142,6 +1143,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `import_data` | json: String | String |
 | `save_text_file` | default_name?, content | String |
 | `read_text_file` | path | String |
+| `system_double_click_ms` | — | u32（系统双击间隔，桌宠的"双击打开天玑"按它判） |
 | `pick_text_file` | — | Option\<String\> |
 | `pick_source_file` | — | Option\<String\> |
 
@@ -1497,11 +1499,12 @@ t('myKey')
 | `cloudflared-log` | `{ id, tag, line }` | cloudflared 日志行 |
 | `cloudflared-url` | `{ id, url }` | 隧道拿到公网 URL |
 | `tray-minimized` | — | 用户关闭窗口到托盘 |
+| `ai-hub-pet-toggle` | — | 托盘「显示/隐藏桌宠」：主窗读 settings 后真正写盘并调 `set_ai_hub_bubble_visible` |
 | `navigate-tab` | `Tab` | 托盘菜单跳转 |
 
 > 这些事件都由 `app.emit` **广播给所有窗口**，所以桌宠窗（`ai-hub-bubble`）不用自己的通道：它直接 `listen` `agent-*` / `generate-text-*` 演情绪（`src/lib/petBrain.ts` 是唯一映射表）。
 >
-> 旧表里列过的 `ai-hub-bubble-enabled`（`boolean`，气泡显隐）**没有任何发射方**：`App.tsx` 保留了监听，但开关实际走 `set_ai_hub_bubble_visible` 命令，别再按这条事件写代码。
+> 旧表里列过的 `ai-hub-bubble-enabled`（`boolean`，气泡显隐）**没有任何发射方**：`App.tsx` 里那条死监听已在 2026-10-26 删除，开关实际走 `set_ai_hub_bubble_visible` 命令（桌宠菜单里的"隐藏桌宠"写 `settings.aiHubBubbleEnabled`，主窗经 `storage` 事件同步），别再按这条事件写代码。
 
 ### Frontend → Frontend 跨窗广播
 
@@ -1509,6 +1512,8 @@ t('myKey')
 |--------|---------|------|
 | `app-theme-changed` | `AppTheme` | 设置页改主题后通知天玑 / 桌宠窗（各自 `applyDocumentTheme`） |
 | `ai-hub-pet-changed` | `PetConfig & { packRev? }` | 设置页改桌宠形象 / 尺寸 / 安静模式后通知桌宠窗——它是另一个 webview，自己的 store 不会自动刷新；`packRev` 变了桌宠窗才去重读自备素材目录 |
+| `ai-hub-pet-gaze` | `{ x, y }`（-1..1 归一化方向） | `tray/gaze.rs` 每 70ms 读全局光标推给桌宠窗（窗不可见时降频到 400ms 且不发） |
+| `ai-hub-pet-hot` | `{ hot, x, y }` | 同一节拍里的命中判定翻转：`hot` 决定 `set_ignore_cursor_events`（窗内透明留白穿透给桌面），`x/y` 是光标在可交互矩形内的归一化位置，前端据此做悬停摸头；左键按住期间强制不穿透 |
 
 ### Frontend → Rust Event
 

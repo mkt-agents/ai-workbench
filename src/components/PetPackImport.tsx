@@ -193,9 +193,13 @@ export default function PetPackImport({ onClose, onApplied }: Props) {
                   <select
                     className="input-field"
                     value={slots[i] ?? ""}
-                    onChange={(e) =>
-                      setSlots(slots.map((s, j) => (j === i ? ((e.target.value || null) as CellAssignment) : s)))
-                    }
+                    onChange={(e) => {
+                      setSlots(
+                        slots.map((s, j) => (j === i ? ((e.target.value || null) as CellAssignment) : s)),
+                      );
+                      // 预览是按旧的分配算出来的：改了就得作废，否则「保存」会存下那张旧图
+                      setPreview(null);
+                    }}
                   >
                     <option value="">{t("aiHub.petImportNone")}</option>
                     {SLOTS.map((slot) => (

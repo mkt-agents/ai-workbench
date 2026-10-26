@@ -658,6 +658,7 @@ pub fn run() {
             cancellation_commands::cancel_request,
             tool_commands::set_auto_start,
             tool_commands::get_auto_start,
+            tool_commands::system_double_click_ms,
             tool_commands::copy_to_clipboard,
             tool_commands::read_clipboard,
             tool_commands::read_clipboard_files,

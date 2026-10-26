@@ -184,6 +184,34 @@ fn bubble_box_physical(scale: f64) -> (i32, i32) {
     )
 }
 
+/// 窗内「真正能点」的矩形（逻辑像素，相对窗左上角）。
+///
+/// 窗比角色大一圈（头顶常驻说话留白 + 左右留白），但 Windows 整窗都吃鼠标，透明留白
+/// 会把下面窗口的点击拦下来。前端每次 `syncBox()` 把可交互区发下来，`gaze.rs` 按它切
+/// `set_ignore_cursor_events`；`w == 0` 表示整窗可点（就地菜单打开时）。
+static HIT_X: AtomicU32 = AtomicU32::new(0);
+static HIT_Y: AtomicU32 = AtomicU32::new(0);
+static HIT_W: AtomicU32 = AtomicU32::new(0);
+static HIT_H: AtomicU32 = AtomicU32::new(0);
+
+/// 当前可交互矩形（逻辑像素）；`w == 0` = 整窗。
+pub(crate) fn bubble_hit_rect() -> (u32, u32, u32, u32) {
+    (
+        HIT_X.load(Ordering::SeqCst),
+        HIT_Y.load(Ordering::SeqCst),
+        HIT_W.load(Ordering::SeqCst),
+        HIT_H.load(Ordering::SeqCst),
+    )
+}
+
+fn store_hit_rect(hit: Option<[u32; 4]>) {
+    let [x, y, w, h] = hit.unwrap_or([0, 0, 0, 0]);
+    HIT_X.store(x, Ordering::SeqCst);
+    HIT_Y.store(y, Ordering::SeqCst);
+    HIT_W.store(w, Ordering::SeqCst);
+    HIT_H.store(h, Ordering::SeqCst);
+}
+
 /// When true, `ai_hub_bubble_ready` may show the window (avoids white flash).
 static BUBBLE_SHOULD_SHOW: AtomicBool = AtomicBool::new(false);
 /// Frontend has painted transparent orb and called ready.
@@ -256,25 +284,78 @@ pub(crate) fn default_bubble_position<R: Runtime>(app: &AppHandle<R>) -> (i32, i
     clamp_bubble_position(app, x, y)
 }
 
-/// Keep bubble in the primary work area (physical pixels), below the titlebar-safe band.
-pub(crate) fn clamp_bubble_position<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) -> (i32, i32) {
-    let Ok(Some(monitor)) = app.primary_monitor() else {
-        return (x, y);
-    };
-    let scale = monitor.scale_factor();
+/// 一块屏的可用工作区（物理像素：左 / 上 / 宽 / 高）。
+pub(crate) type WorkArea = (i32, i32, i32, i32);
+
+pub(crate) fn work_area_of(monitor: &tauri::Monitor) -> WorkArea {
     let work = monitor.work_area();
-    let (bw, bh) = bubble_box_physical(scale);
+    (
+        work.position.x,
+        work.position.y,
+        work.size.width as i32,
+        work.size.height as i32,
+    )
+}
+
+/// 纯函数：把桌宠窗左上角夹进一块工作区（全物理像素）。
+///
+/// 左 / 下留 `BUBBLE_MARGIN`，顶部还额外让出主标题栏安全带 —— 与旧的
+/// `clamp_bubble_position` 语义完全一致，只是把「哪块屏」变成参数，好写跨屏单测。
+pub(crate) fn clamp_to_work_area(
+    work: WorkArea,
+    box_size: (i32, i32),
+    point: (i32, i32),
+    scale: f64,
+) -> (i32, i32) {
     let margin = (BUBBLE_MARGIN * scale).round() as i32;
     let top_safe = (BUBBLE_TOP_SAFE_LOGICAL * scale).round() as i32;
-    let min_x = work.position.x + margin;
-    // Never allow Y into the top band — that is exactly where main titlebar controls sit.
-    let min_y = work.position.y + margin.max(top_safe);
-    let max_x = work.position.x + work.size.width as i32 - bw - margin;
-    let max_y = work.position.y + work.size.height as i32 - bh - margin;
+    let min_x = work.0 + margin;
+    // 顶部安全带就是主标题栏按钮所在的那条，Y 永远不许进去。
+    let min_y = work.1 + margin.max(top_safe);
+    let max_x = work.0 + work.2 - box_size.0 - margin;
+    let max_y = work.1 + work.3 - box_size.1 - margin;
     (
-        x.clamp(min_x, max_x.max(min_x)),
-        y.clamp(min_y, max_y.max(min_y)),
+        point.0.clamp(min_x, max_x.max(min_x)),
+        point.1.clamp(min_y, max_y.max(min_y)),
     )
+}
+
+/// 桌宠窗该算在哪块屏：以**窗口中心**为准。
+///
+/// 只看左上角会在窗口跨屏时判错（左上角还在副屏、身体已经压到主屏），那样每次松手
+/// 都被拉回主屏。这里先用左上角找一块屏估出中心，再用中心定屏；最多两轮，
+/// 因为跨屏两端 DPI 不同时窗口的物理尺寸本身会变，需要再认一次。
+pub(crate) fn monitor_for_box<R: Runtime>(
+    app: &AppHandle<R>,
+    top_left: (i32, i32),
+) -> Option<(WorkArea, f64)> {
+    let mut probe = top_left;
+    let mut found = None;
+    for _ in 0..2 {
+        let monitor = app
+            .monitor_from_point(probe.0 as f64, probe.1 as f64)
+            .ok()
+            .flatten()
+            .or_else(|| app.primary_monitor().ok().flatten())?;
+        let scale = monitor.scale_factor();
+        let (bw, bh) = bubble_box_physical(scale);
+        found = Some((work_area_of(&monitor), scale));
+        let center = (top_left.0 + bw / 2, top_left.1 + bh / 2);
+        if center == probe {
+            break;
+        }
+        probe = center;
+    }
+    found
+}
+
+/// Keep the bubble on the work area of the monitor it mostly sits on (physical pixels),
+/// below the titlebar-safe band. 主屏只是「默认落点」，不是唯一允许的屏幕。
+pub(crate) fn clamp_bubble_position<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) -> (i32, i32) {
+    match monitor_for_box(app, (x, y)) {
+        Some((work, scale)) => clamp_to_work_area(work, bubble_box_physical(scale), (x, y), scale),
+        None => (x, y),
+    }
 }
 
 /// True when a persisted point sits in the top chrome band (legacy HiDPI clamp damage).
@@ -449,8 +530,11 @@ pub fn set_bubble_box<R: Runtime>(
     app: &AppHandle<R>,
     width: u32,
     height: u32,
+    hit: Option<[u32; 4]>,
 ) -> Result<(), String> {
     let (bw, bh) = store_bubble_box(width, height);
+    // 命中矩形跟尺寸一起下发：改尺寸（含开合菜单）时后端才能立刻按新的可交互区切穿透。
+    store_hit_rect(hit);
     let Some(win) = app.get_webview_window(AI_HUB_BUBBLE_LABEL) else {
         // 还没建窗：builder 与 reveal 会读到刚存下的尺寸。
         return Ok(());
@@ -479,8 +563,13 @@ pub fn set_bubble_box<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn set_ai_hub_bubble_box(app: AppHandle, width: u32, height: u32) -> Result<(), String> {
-    set_bubble_box(&app, width, height)
+pub fn set_ai_hub_bubble_box(
+    app: AppHandle,
+    width: u32,
+    height: u32,
+    hit: Option<[u32; 4]>,
+) -> Result<(), String> {
+    set_bubble_box(&app, width, height, hit)
 }
 
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
@@ -596,7 +685,11 @@ pub fn hide_ai_hub<R: Runtime>(app: &AppHandle<R>) {
 // 测试模块放文件末尾：`clippy::items_after_test_module` 不喜欢测试后面还有别的函数。
 #[cfg(test)]
 mod bubble_box_tests {
-    use super::{bottom_center_anchor, clamp_bubble_box};
+    use super::{bottom_center_anchor, clamp_bubble_box, clamp_to_work_area, WorkArea};
+
+    /// 主屏 1920×1040（0,0）+ 右侧副屏 1920×1040（1920,0），都是物理像素。
+    const PRIMARY: WorkArea = (0, 0, 1920, 1040);
+    const SECONDARY: WorkArea = (1920, 0, 1920, 1040);
 
     #[test]
     fn growing_for_the_menu_keeps_the_feet_on_the_ground() {
@@ -628,5 +721,67 @@ mod bubble_box_tests {
         assert_eq!(clamp_bubble_box(112, 4_000), (112, super::BUBBLE_BOX_MAX_H));
         assert_eq!(clamp_bubble_box(4_000, 200), (super::BUBBLE_BOX_MAX_W, 200));
         assert_eq!(clamp_bubble_box(10, 10), (super::BUBBLE_BOX_MIN, super::BUBBLE_BOX_MIN));
+    }
+
+    #[test]
+    fn a_point_on_the_secondary_monitor_stays_on_it() {
+        // 副屏上的正常位置原样通过：夹取只认拿到的这块 work area，不再回主屏。
+        assert_eq!(
+            clamp_to_work_area(SECONDARY, (192, 208), (3000, 700), 1.0),
+            (3000, 700)
+        );
+        // 越出副屏左缘也只在副屏内收，不会算成主屏的坐标。
+        assert_eq!(
+            clamp_to_work_area(SECONDARY, (192, 208), (1900, 700), 1.0),
+            (1944, 700)
+        );
+        // 副屏右/下越界同理（1920+1920-192-24 = 3624，1040-208-24 = 808）。
+        assert_eq!(
+            clamp_to_work_area(SECONDARY, (192, 208), (4000, 2000), 1.0),
+            (3624, 808)
+        );
+    }
+
+    #[test]
+    fn opening_the_menu_on_the_secondary_monitor_keeps_the_feet() {
+        // 副屏上撑高：底边不动，X 不跳回主屏。
+        let before = (2900, 600);
+        let anchored = bottom_center_anchor(before, (192, 208), 192, 248);
+        let after = clamp_to_work_area(SECONDARY, (192, 248), anchored, 1.0);
+        assert_eq!(after, (2900, 560));
+        assert_eq!(before.1 + 208, after.1 + 248);
+        assert!(after.0 >= SECONDARY.0, "不许被夹回主屏");
+    }
+
+    #[test]
+    fn the_top_safe_band_holds_on_a_secondary_monitor() {
+        // 顶部 96 逻辑像素一直留给主标题栏；副屏也照同一条规则。
+        assert_eq!(
+            clamp_to_work_area(SECONDARY, (192, 208), (2100, 10), 1.0),
+            (2100, 96)
+        );
+    }
+
+    #[test]
+    fn margins_scale_with_the_monitor_dpr() {
+        // 150%：边距 24→36、安全带 96→144，窗 192×208 → 288×312。
+        let (x, y) = clamp_to_work_area((0, 0, 2560, 1400), (288, 312), (0, 0), 1.5);
+        assert_eq!((x, y), (36, 144));
+        let (max_x, max_y) = clamp_to_work_area((0, 0, 2560, 1400), (288, 312), (9_000, 9_000), 1.5);
+        assert_eq!((max_x, max_y), (2560 - 288 - 36, 1400 - 312 - 36));
+    }
+
+    #[test]
+    fn clamping_is_idempotent() {
+        // 拖动松手会连夹两次（前端吸附 + 后端持久化），第二次不该再动。
+        for work in [PRIMARY, SECONDARY] {
+            let once = clamp_to_work_area(work, (192, 208), (9999, -40), 1.0);
+            assert_eq!(clamp_to_work_area(work, (192, 208), once, 1.0), once);
+        }
+        // 同一组坐标在相邻两块屏上得到不同结果：夹取真的跟着 work area 走。
+        assert_ne!(
+            clamp_to_work_area(PRIMARY, (192, 208), (1900, 700), 1.0),
+            clamp_to_work_area(SECONDARY, (192, 208), (1900, 700), 1.0)
+        );
     }
 }

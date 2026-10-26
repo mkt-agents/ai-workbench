@@ -63,9 +63,11 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   height: 100%;
   box-sizing: border-box;
   background: transparent !important;
-  /* 只有圆盘 / 形象 / 菜单吃点击，透明留白不参与命中；
-     整窗要不要穿透给桌面由 Rust 的 set_ignore_cursor_events 决定，这里管不到 */
-  pointer-events: none;
+  /* 整窗能吃到哪些点击由 Rust 决定：`tray/gaze.rs` 按前端下发的「可交互矩形」切
+     set_ignore_cursor_events，角色外圈的透明留白在系统层就穿透给桌面了。
+     所以这里用 auto：命中区以内（含就地菜单开着的整窗）任何一下都该被自己的
+     pointerdown 收掉——点到菜单外面才能收起菜单。 */
+  pointer-events: auto;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -173,8 +175,10 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
   filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 40%, transparent));
 }
 
-/* —— Hover (pointer over disc) —— */
-.qa-bubble-root:hover .qa-bubble-orb,
+/* —— Hover (pointer over disc) ——
+   `:hover` 只在真正收到指针事件时成立；切开穿透后 webview 会停在最后一次悬停态，
+   所以命中态由 `.is-hot`（Rust 的光标观察者）兜底，两者取并集。 */
+.qa-bubble-root:is(:hover, .is-hot) .qa-bubble-orb,
 .qa-bubble-root.is-pressed .qa-bubble-orb {
   color: color-mix(in srgb, var(--accent) 48%, #fff);
   border-color: color-mix(in srgb, var(--accent) 52%, rgba(255, 255, 255, 0.72));
@@ -186,17 +190,17 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
     var(--qa-bubble-drop);
 }
 
-.qa-bubble-root:hover .qa-bubble-orb {
+.qa-bubble-root:is(:hover, .is-hot) .qa-bubble-orb {
   transform: scale(1.06);
 }
 
-.qa-bubble-root:hover .qa-bubble-aura {
+.qa-bubble-root:is(:hover, .is-hot) .qa-bubble-aura {
   opacity: 0.85;
   transform: scale(1.05);
   animation-play-state: paused;
 }
 
-.qa-bubble-root:hover .qa-bubble-icon {
+.qa-bubble-root:is(:hover, .is-hot) .qa-bubble-icon {
   transform: scale(1.06);
   filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 55%, transparent));
 }
@@ -494,7 +498,7 @@ html.qa-bubble-mode[data-theme="dark"] body::before {
 }
 
 /* 悬停：凑近一点 */
-.qa-bubble-root:hover .qa-pet-body {
+.qa-bubble-root:is(:hover, .is-hot) .qa-pet-body {
   transform: translateY(-2px) scale(1.05);
 }
 
