@@ -59,8 +59,14 @@ pub(crate) struct ToolDef {
 pub(crate) const TOOLS: &[ToolDef] = &[
     // —— 规划 / 子代理 / 界面 ——
     ToolDef { name: "update_plan", group: ToolGroup::Meta, gate: GateKind::Plan, parallel: false, action: false },
+    // 计划闸门：plan_first 开启时先只读规划，用户批准后才升档执行。
+    ToolDef { name: "exit_plan_mode", group: ToolGroup::Meta, gate: GateKind::Plan, parallel: false, action: false },
+    // 结构化澄清：无副作用，全档放行，但执行时会等用户选答。
+    ToolDef { name: "ask_user", group: ToolGroup::Meta, gate: GateKind::Look, parallel: false, action: false },
     ToolDef { name: "task", group: ToolGroup::Meta, gate: GateKind::Look, parallel: false, action: false },
     ToolDef { name: "remember", group: ToolGroup::Meta, gate: GateKind::Change, parallel: false, action: true },
+    // 代码智能（stdio LSP）：不可用时返回结构化错误，不下线工具。
+    ToolDef { name: "lsp", group: ToolGroup::Code, gate: GateKind::Look, parallel: true, action: false },
     // —— 文档 / 表格：非代码任务的主力 ——
     ToolDef { name: "read_document", group: ToolGroup::Doc, gate: GateKind::Look, parallel: true, action: false },
     ToolDef { name: "read_table", group: ToolGroup::Data, gate: GateKind::Look, parallel: true, action: false },
@@ -84,6 +90,11 @@ pub(crate) const TOOLS: &[ToolDef] = &[
     ToolDef { name: "stop_process", group: ToolGroup::Code, gate: GateKind::Change, parallel: false, action: true },
     // —— 网页 ——
     ToolDef { name: "web_fetch", group: ToolGroup::Web, gate: GateKind::Sensitive, parallel: false, action: true },
+    // 仅当用户配置了搜索 API 时才下发（见 agent_policy::offered_tools / AgentRunRequest）。
+    ToolDef { name: "web_search", group: ToolGroup::Web, gate: GateKind::Sensitive, parallel: false, action: true },
+    // MCP resources（有启用的 MCP 服务时才有意义；agent.rs 在 attach 后追加下发）
+    ToolDef { name: "list_mcp_resources", group: ToolGroup::Meta, gate: GateKind::Look, parallel: false, action: false },
+    ToolDef { name: "read_mcp_resource", group: ToolGroup::Meta, gate: GateKind::Look, parallel: false, action: false },
     // —— 系统 ——
     ToolDef { name: "launch_app", group: ToolGroup::System, gate: GateKind::Change, parallel: false, action: true },
     ToolDef { name: "open_target", group: ToolGroup::System, gate: GateKind::Change, parallel: false, action: true },
@@ -145,6 +156,12 @@ pub(crate) fn names() -> impl Iterator<Item = &'static str> {
 
 pub(crate) fn by_gate(kind: GateKind) -> impl Iterator<Item = &'static str> {
     TOOLS.iter().filter(move |tool| tool.gate == kind).map(|tool| tool.name)
+}
+
+/// `plan_first` 锁定阶段只保留只读 / 计划 / 提问；写、命令、MCP、系统变更一律等 `exit_plan_mode`。
+pub(crate) fn is_plan_phase_tool(name: &str) -> bool {
+    matches!(name, "ask_user" | "exit_plan_mode" | "update_plan")
+        || matches!(gate_kind(name), Some(GateKind::Look) | Some(GateKind::Plan))
 }
 
 /// 某个模式下这个工具该不该下发。
@@ -248,6 +265,7 @@ mod tests {
         // 对话模式：只读 + 计划 + 记住事实，不写文件、不跑命令、不碰系统与网页
         assert!(mode_allows("chat", "read_file"));
         assert!(mode_allows("chat", "update_plan"));
+        assert!(mode_allows("chat", "ask_user"));
         assert!(mode_allows("chat", "remember"));
         assert!(!mode_allows("chat", "write_file"));
         assert!(!mode_allows("chat", "run_command"));
@@ -256,6 +274,18 @@ mod tests {
         // 空模式与未知模式不收窄，行为与改造前一致
         assert!(mode_allows("", "kill_process"));
         assert!(mode_allows("whatever", "web_fetch"));
+    }
+
+    #[test]
+    fn plan_phase_keeps_reads_and_blocks_writes() {
+        assert!(is_plan_phase_tool("read_file"));
+        assert!(is_plan_phase_tool("ask_user"));
+        assert!(is_plan_phase_tool("exit_plan_mode"));
+        assert!(is_plan_phase_tool("update_plan"));
+        assert!(is_plan_phase_tool("lsp"));
+        assert!(!is_plan_phase_tool("write_file"));
+        assert!(!is_plan_phase_tool("run_command"));
+        assert!(!is_plan_phase_tool("web_fetch"));
     }
 
     #[test]

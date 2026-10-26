@@ -921,6 +921,19 @@ P0 的 7 项里，有 4 项（P0-1/2/4/5）不是"新增能力"，而是**当前
 - `dispatch_tool` 管道显式化；`agent_session_log` JSONL 旁证；doc/data 允许 `run_command`（Ask）
 
 ### 尚未做（明确留白）
-- `web_fetch` 白名单分级（off / allowlist / open）
-- 子代理可写与并行
+- 子代理可写（编辑档 + 设置项；写操作仍走父会话审批）
 - 会话事件真源完整投影恢复（当前主路径仍是 SQLite `AiHubTurn.blocks`，JSONL 为旁证）
+- 命令输出流式回灌（Monitor 轻量版）、会话 resume/fork
+
+### P5 对标加强（2026-10-26，对标 Claude Code / DeepSeek Harness）
+
+| 项 | 状态 | 落点 |
+|----|------|------|
+| `ask_user` 结构化提问 | 已落地 | `agent_tools` + 审批通道 `kind=question` + 前端选项卡 |
+| 真·计划闸门 | 已落地 | `plan_first` → 只读工具集 → `exit_plan_mode` 批准后升档 |
+| `lsp` 最小集 | 已落地 | `agent_lsp.rs`（definition / references / diagnostics；TS+Rust；不可用 → `LSP_UNAVAILABLE`） |
+| MCP 进程池 + resources | 已落地 | `mcp.rs` 会话复用（空闲 120s）+ `list_mcp_resources` / `read_mcp_resource` |
+| 只读子代理预算 | 已落地 | 结论上限 800→3000；同轮多 `task` 仍并行 |
+| 联网三级 + 可选搜索 | 已落地 | `webTier` off/allowlist/open；Brave/Tavily `web_search`（需配置 key） |
+
+评分刷新（编码工作流口径，相对 M0 的 20/30）：治理仍 5；执行闭环 / 工具面 / 上下文 / 可观测约 4；生态约 3.5——合计约 **25.5 / 30**。仍弱于 Claude Code 的 LSP 深度与 Agent teams、弱于 DSH 的插件市场与 PTC；本机运维与四档治理仍是天玑独有优势。

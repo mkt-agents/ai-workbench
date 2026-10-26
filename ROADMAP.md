@@ -360,6 +360,20 @@ AI 能力不再列为不做。天玑已是多模型流式对话，并带当前�
 
 **成功标准**：任意界面 ≤1s 唤起 天玑窗；剪贴板日采集无感运行；后台服务状态托盘一目了然；数据可导出迁移。
 
+### 阶段 27：天玑对标 Claude Code / DeepSeek Harness（P5）✅ 已完成（2026-10-26）
+
+对标结论与细节见 [`docs/ai-harness-upgrade-plan.md`](docs/ai-harness-upgrade-plan.md) §P5。M1–M4 主干已关账后，按真实差距补「理解精度 / 交互编排 / 生态深度」，不堆权限复杂度。
+
+* [x] **`ask_user`**：结构化多选 / 自由文本澄清，复用审批通道（`kind=question`），全档放行、不占动作步
+* [x] **真·计划闸门**：`plan_first` 开启后只下发只读 + 计划工具，`exit_plan_mode` 等用户批准后升档（写 / 命令 / MCP）
+* [x] **`lsp` 最小集**：definition / references / diagnostics（TS + Rust stdio）；不可用返回 `LSP_UNAVAILABLE`
+* [x] **MCP 进程池 + resources**：同 server 会话复用（空闲 120s）；`list_mcp_resources` / `read_mcp_resource`
+* [x] **只读子代理**：结论预算 800→3000；同轮多 `task` 并行保持
+* [x] **联网三级 + 可选搜索**：`off` / `allowlist` / `open`；Brave / Tavily `web_search`（需配置 key）
+* [ ] 后续可选：可写子代理、命令输出流式回灌、会话 resume/fork、多显示器截图
+
+**成功标准**：先出计划再动手时写工具不可见直至批准；缺信息时模型能弹选项卡；装了 rust-analyzer / tsserver 时 `lsp` 能定位；同一 MCP 服务连续调用不再每次冷启。
+
 ### 企微渠道（2026-10-25）
 
 * [x] 智能机器人 WebSocket 长连接：私聊（pairing）+ 群聊（allowlist / @mention），设置页「联网扩展」配置 Bot ID / Secret，复用天玑 agent_run

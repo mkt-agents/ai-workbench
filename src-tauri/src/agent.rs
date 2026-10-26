@@ -104,9 +104,18 @@ pub struct AgentRunRequest {
     /// 用户说过「以后都允许」的 action_kind（设置项，跨轮生效，上限由前端维护）。
     #[serde(default)]
     pub always_allow: Vec<String>,
-    /// `web_fetch` 的域名白名单（设置项）；空 = 不给这个工具。
+    /// `web_fetch` 的域名白名单（设置项）；空 = 不给这个工具（allowlist 模式）。
     #[serde(default)]
     pub web_allow: Vec<String>,
+    /// 联网策略：`off` / `allowlist`（默认）/ `open`。open 仍禁私网，且 Ask。
+    #[serde(default)]
+    pub web_tier: String,
+    /// 搜索 API：`brave` / `tavily`；空 = 不下发 `web_search`。
+    #[serde(default)]
+    pub web_search_provider: String,
+    /// 搜索 API key（只进本轮请求，不落盘到日志）。
+    #[serde(default)]
+    pub web_search_key: String,
     /// 是否把只读子代理 `task` 下发给模型（设置项，默认关）。
     #[serde(default)]
     pub subagents: bool,
@@ -157,9 +166,15 @@ struct ModelTurn {
     assistant: Value,
 }
 
-/// User's answer on an approval card: allow?, "same kind for the rest of this turn",
-/// "same kind from now on" (persisted by the front end as `settings.agentAlwaysAllow`).
-type DecisionMsg = (bool, bool, bool);
+/// User's answer on an approval / question card.
+#[derive(Debug, Clone)]
+struct DecisionMsg {
+    allow: bool,
+    for_turn: bool,
+    always: bool,
+    /// `ask_user` 选中的选项 / 自由文本；普通审批为空。
+    answer: Option<String>,
+}
 
 static DECISIONS: Mutex<Option<HashMap<String, oneshot::Sender<DecisionMsg>>>> = Mutex::new(None);
 
@@ -233,6 +248,8 @@ pub fn agent_decide(
     call_ids: Vec<String>,
     allow: bool,
     scope: Option<String>,
+    // `ask_user` 的答案（选项文本或自由输入）；普通审批忽略。
+    answer: Option<String>,
 ) -> Result<(), String> {
     // 只认正在跑的回合：主循环结束后迟到的答案、别的窗口的「代按」都不该生效。
     if !crate::cancellation::is_active(&request_id) {
@@ -245,6 +262,14 @@ pub fn agent_decide(
     // 只把决定发给真正在等的那个 waiter（合并卡等的是第一个 call_id，其余只是跟着走）。
     let always = allow && scope.as_deref() == Some("always");
     let for_turn = allow && matches!(scope.as_deref(), Some("turn") | Some("always"));
+    let answer = answer.and_then(|s| {
+        let t = s.trim().to_string();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    });
     let mut guard = decisions();
     let Some(map) = guard.as_mut() else {
         return Err(format!(
@@ -255,7 +280,12 @@ pub fn agent_decide(
     let mut answered = 0usize;
     for call_id in &call_ids {
         if let Some(tx) = map.remove(&decision_key(&request_id, call_id)) {
-            let _ = tx.send((allow, for_turn, always));
+            let _ = tx.send(DecisionMsg {
+                allow,
+                for_turn,
+                always,
+                answer: answer.clone(),
+            });
             answered += 1;
         }
     }
@@ -315,6 +345,44 @@ pub(crate) fn tool_specs() -> Value {
               } }),
               &["steps"]
           ) },
+        { "name": "exit_plan_mode",
+          "description": "When plan-first is on, call this after update_plan to ask the user to approve the plan. Until they approve, you only have read/plan tools. On approval you get the normal write/command tools for the rest of this turn. If they deny, revise the plan and call again.",
+          "parameters": obj(json!({ "summary": s("One-sentence summary of what you will do after approval") }), &[]) },
+        { "name": "ask_user",
+          "description": "Ask the user a clarifying question before acting. Prefer short multiple-choice options; set allow_free_text when they may type something else. Blocks until they answer or skip. Do not guess when a choice changes the plan.",
+          "parameters": obj(
+              json!({
+                  "question": s("The question shown to the user"),
+                  "options": {
+                      "type": "array",
+                      "description": "2–6 short choices (recommended)",
+                      "items": { "type": "string" }
+                  },
+                  "allow_free_text": b("Also show a free-text input (default false)"),
+                  "multi": b("Allow selecting several options (default false)")
+              }),
+              &["question"]
+          ) },
+        { "name": "lsp",
+          "description": "Language-server code intelligence: definition, references, or diagnostics for a file. Returns LSP_UNAVAILABLE when no server is installed — fall back to grep/symbols. Prefer this over guessing symbol locations in TypeScript or Rust.",
+          "parameters": obj(
+              json!({
+                  "action": s("definition | references | diagnostics"),
+                  "path": s("File path (relative to the workspace or absolute)"),
+                  "line": n("1-based line (definition / references)"),
+                  "character": n("0-based column (definition / references; default 0)")
+              }),
+              &["action", "path"]
+          ) },
+        { "name": "web_search",
+          "description": "Search the web via the user's configured search API. Only offered when a search key is set. Prefer web_fetch when you already know the URL.",
+          "parameters": obj(json!({ "query": s("Search query"), "count": n("Results to return (default 5, max 10)") }), &["query"]) },
+        { "name": "list_mcp_resources",
+          "description": "List resources exposed by a connected MCP server (URI + name). Use read_mcp_resource to fetch one.",
+          "parameters": obj(json!({ "server": s("MCP server name as configured in settings") }), &["server"]) },
+        { "name": "read_mcp_resource",
+          "description": "Read one MCP resource by URI from a connected server.",
+          "parameters": obj(json!({ "server": s("MCP server name"), "uri": s("Resource URI from list_mcp_resources") }), &["server", "uri"]) },
         { "name": "read_document",
           "description": "Read a document as plain text: docx (paragraph text), xlsx/xls (first sheet as TSV), pdf (text layer only, no OCR), or any text file (md/txt/csv/json). Layout is not reproduced. Files over 10MB are refused.",
           "parameters": obj(json!({ "path": s("File path"), "limit": n("Max characters (default 12000, up to 60000)") }), &["path"]) },
@@ -343,7 +411,7 @@ pub(crate) fn tool_specs() -> Value {
           "description": "Where is a symbol defined? Heuristic scan (keyword + name: fn/def/class/interface/struct/impl/type/const…) over source files, returns path:line:signature. Use it before grepping a common name; it misses aliases and generated code, so cross-check with grep when the answer matters.",
           "parameters": obj(json!({ "query": s("Symbol name (or part of it)"), "path": s("File or folder (default: repo root)"), "kind": s("Only this kind: fn, class, interface, struct, impl, type, const…"), "max": n("Max hits (default 20, up to 50)") }), &["query"]) },
         { "name": "task",
-          "description": "Hand one self-contained search question to a read-only sub-agent; it returns at most 800 characters of findings (paths + the lines that matter) instead of dumping matches into this conversation. It cannot change files, cannot ask the user, and cannot spawn another sub-agent. Give it a precise goal; do not use it for things you can check with one grep.",
+          "description": "Hand one self-contained search question to a read-only sub-agent; it returns at most 3000 characters of findings (paths + the lines that matter) instead of dumping matches into this conversation. It cannot change files, cannot ask the user, and cannot spawn another sub-agent. Give it a precise goal; do not use it for things you can check with one grep. Multiple task calls in one round run in parallel.",
           "parameters": obj(json!({ "goal": s("What to find out, specific enough to answer alone"), "path": s("Folder to start from (default: workspace root)") }), &["goal"]) },
         { "name": "web_fetch",
           "description": "Download a web page as plain text. https only, and only hosts the user put on the allowlist. No redirects are followed: if it reports a redirect, call again with the final address. Text is capped, so ask for the page you actually need.",
@@ -607,6 +675,16 @@ fn clip_chars(s: &str, max: usize) -> String {
     out
 }
 
+/// Extra fields for `ask_user` / plan-gate cards (ordinary approvals leave these empty).
+#[derive(Debug, Default, Clone)]
+struct QuestionUi {
+    /// `"question"` | `"plan"` — frontend switches the card layout.
+    kind: &'static str,
+    options: Vec<String>,
+    allow_free_text: bool,
+    multi: bool,
+}
+
 /// `diff`: `preview` is a unified diff (file / hosts change) and is rendered with colours.
 /// The round is now blocked on the user, so the taskbar flashes until it is answered —
 /// silently auto-denying after `APPROVAL_WAIT` was indistinguishable from a failure.
@@ -622,11 +700,43 @@ fn emit_approval(
     action_kind: &str,
     can_remember: bool,
 ) {
+    emit_approval_ex(
+        app,
+        id,
+        call_id,
+        tool,
+        summary,
+        preview,
+        diff,
+        action_kind,
+        can_remember,
+        &QuestionUi::default(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_approval_ex(
+    app: &AppHandle,
+    id: &str,
+    call_id: &str,
+    tool: &str,
+    summary: &str,
+    preview: &str,
+    diff: bool,
+    action_kind: &str,
+    can_remember: bool,
+    question: &QuestionUi,
+) {
     let wait_ms = APPROVAL_WAIT.as_millis() as u64;
     let deadline_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64 + wait_ms)
         .unwrap_or(0);
+    let kind = if question.kind.is_empty() {
+        "approval"
+    } else {
+        question.kind
+    };
     let _ = app.emit(
         "agent-approval",
         json!({
@@ -640,6 +750,10 @@ fn emit_approval(
             // 前端拿它写进「以后都允许」表；后端只认同一套 action_kind。
             "actionKind": action_kind,
             "canRemember": can_remember,
+            "kind": kind,
+            "options": question.options,
+            "allowFreeText": question.allow_free_text,
+            "multi": question.multi,
         }),
     );
     set_attention(app, true);
@@ -688,6 +802,9 @@ struct Prepared {
     review_note: String,
     can_remember: bool,
     skip: Option<String>,
+    /// `ask_user` / `exit_plan_mode`：跳过 execute，直接把这段当工具结果回灌。
+    forced_result: Option<String>,
+    question: QuestionUi,
 }
 
 /// Merged approval: several changes in one round become one card instead of a stack.
@@ -1246,7 +1363,12 @@ fn launch_named(apps: &[AgentAppShortcut], name: &str) -> Result<String, String>
 enum Decision {
     /// `for_turn`: also allow the same kind of action for the rest of this turn.
     /// `always`: the user also wants this kind remembered across turns.
-    Allow { for_turn: bool, always: bool },
+    /// `answer`: `ask_user` 选中的选项 / 自由文本。
+    Allow {
+        for_turn: bool,
+        always: bool,
+        answer: Option<String>,
+    },
     Deny,
     /// Nobody answered within `APPROVAL_WAIT` (window hidden, user away).
     TimedOut,
@@ -1290,8 +1412,12 @@ async fn await_waiter(mut waiter: Waiter, request_id: &str) -> Result<Decision, 
     let deadline = tokio::time::Instant::now() + APPROVAL_WAIT;
     let outcome = tokio::select! {
         result = &mut waiter.rx => match result {
-            Ok((true, for_turn, always)) => Ok(Decision::Allow { for_turn, always }),
-            Ok((false, _, _)) => Ok(Decision::Deny),
+            Ok(msg) if msg.allow => Ok(Decision::Allow {
+                for_turn: msg.for_turn,
+                always: msg.always,
+                answer: msg.answer,
+            }),
+            Ok(_) => Ok(Decision::Deny),
             // sender 被 drop（收尾清理）等同于拒绝，不能当成放行
             Err(_) => Ok(Decision::Deny),
         },
@@ -1500,6 +1626,19 @@ fn call_summary(name: &str, args: &Value) -> String {
         "keyboard" => format!("键盘 {} {}", a("action"), if a("action") == "type" { clip(&a("text"), 30) } else { a("keys") }),
         "wait" => "等待".into(),
         "update_plan" => format!("更新计划（{} 步）", plan_steps(args).len()),
+        "exit_plan_mode" => {
+            let s = a("summary");
+            if s.is_empty() {
+                "请求批准计划".into()
+            } else {
+                format!("请求批准计划：{s}")
+            }
+        }
+        "ask_user" => format!("提问：{}", clip(&a("question"), 60)),
+        "lsp" => format!("LSP {} {}", a("action"), a("path")),
+        "web_search" => format!("搜索 {}", clip(&a("query"), 60)),
+        "list_mcp_resources" => format!("列出 MCP 资源 {}", a("server")),
+        "read_mcp_resource" => format!("读取 MCP 资源 {}", a("uri")),
         _ => format!("未知工具 {name}"),
     }
 }
@@ -1580,8 +1719,12 @@ struct ToolCtx<'a> {
     protected: &'a Protected,
     apps: &'a [AgentAppShortcut],
     request_id: &'a str,
-    /// `web_fetch` 只认这些域名（空 = 已经不该被下发）。
+    /// `web_fetch` 只认这些域名（空 + open 档 = 放行公网）。
     web_allow: &'a [String],
+    /// `off` / `allowlist` / `open`。
+    web_tier: &'a str,
+    web_search_provider: &'a str,
+    web_search_key: &'a str,
     client: &'a reqwest::Client,
     /// 本轮可用的 MCP 服务与它们的工具（工具名 → 服务/工具是多对一查找，不靠拆字符串）。
     mcp: &'a [(crate::mcp::McpServerSpec, Vec<crate::mcp::McpTool>)],
@@ -1595,6 +1738,39 @@ struct ToolCtx<'a> {
     grep_ignore: bool,
     /// 单条工具结果回灌上限（设置项「工具结果上限」，默认 12000 字符）。
     result_cap: usize,
+}
+
+fn normalize_web_tier(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "none" | "disabled" => "off",
+        "open" | "all" => "open",
+        _ => "allowlist",
+    }
+}
+
+fn ask_user_question_ui(args: &Value) -> QuestionUi {
+    let options = args
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .take(6)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    QuestionUi {
+        kind: "question",
+        options,
+        allow_free_text: args
+            .get("allow_free_text")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || args.get("allowFreeText").and_then(|v| v.as_bool()).unwrap_or(false),
+        multi: args.get("multi").and_then(|v| v.as_bool()).unwrap_or(false),
+    }
 }
 
 /// List every enabled MCP server's tools once per turn, appending the specs the model sees.
@@ -1671,13 +1847,14 @@ fn resolve_mcp(
 /// and it cannot ask the user, so it must not promise to.
 const TASK_SYSTEM: &str = "You are a read-only research sub-agent inside a coding agent. \
 Use the file tools to answer the question. You cannot change, create or delete anything, and you cannot ask the user \
-anything. Answer with findings only: the file paths and the one line that matters, at most 800 characters. If you find \
+anything. Answer with findings only: the file paths and the one line that matters, at most 3000 characters. If you find \
 nothing, say which patterns you tried.";
 
 /// Rounds the sub-agent may take before giving up.
 const TASK_ROUNDS: usize = 16;
 /// Characters of the sub-agent's answer that reach the main conversation.
-const TASK_REPORT_CAP: usize = 800;
+/// 子代理结论上限：调研半个仓需要比 800 字更宽的回传（仍远小于父会话预算）。
+const TASK_REPORT_CAP: usize = 3000;
 /// Tools a sub-agent may use: strictly read-only, and never `task` itself (no nesting).
 /// `web_fetch` is in the list but only *offered* when this permission level would not ask
 /// (see [`subagent_tools`]) — a sub-agent has no approval card to show.
@@ -1786,7 +1963,12 @@ async fn run_subagent(
             // 只走只读执行体：不经过 execute_tool，递归就断在这里（也就没有 async 递归）。
             let out = if call.name == "web_fetch" {
                 let url = crate::agent_fs::arg_str(&args, "url");
-                match await_cancellable(crate::agent_web::web_fetch(&url, ctx.web_allow), ctx.request_id).await {
+                match await_cancellable(
+                    crate::agent_web::web_fetch_tier(&url, ctx.web_allow, ctx.web_tier == "open"),
+                    ctx.request_id,
+                )
+                .await
+                {
                     Ok(Ok(text)) => ToolOutput::from(text),
                     Ok(Err(e)) => ToolOutput::from(format!("错误：{e}")),
                     Err(cancelled) => return Err(cancelled),
@@ -2053,7 +2235,74 @@ async fn execute_tool(
         "clipboard_read" => sys::clipboard_read()?,
         "web_fetch" => {
             let url = arg_str(args, "url");
-            await_cancellable(crate::agent_web::web_fetch(&url, ctx.web_allow), ctx.request_id).await??
+            let open = ctx.web_tier == "open";
+            await_cancellable(
+                crate::agent_web::web_fetch_tier(&url, ctx.web_allow, open),
+                ctx.request_id,
+            )
+            .await??
+        }
+        "web_search" => {
+            let query = arg_str(args, "query");
+            let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+            await_cancellable(
+                crate::agent_web::web_search(
+                    &query,
+                    count,
+                    ctx.web_search_provider,
+                    ctx.web_search_key,
+                ),
+                ctx.request_id,
+            )
+            .await??
+        }
+        "lsp" => {
+            let args = args.clone();
+            let scope = ctx.scope.clone();
+            await_cancellable(
+                tokio::task::spawn_blocking(move || crate::agent_lsp::lsp_query(&scope, &args)),
+                ctx.request_id,
+            )
+            .await?
+            .map_err(|e| e.to_string())??
+        }
+        "ask_user" | "exit_plan_mode" => {
+            // 这两步在主循环里等人并写好 forced_result；走到这里说明漏了。
+            return Err("内部错误：澄清 / 计划批准应在闸门阶段完成".into());
+        }
+        "list_mcp_resources" => {
+            let server = arg_str(args, "server");
+            let spec = ctx
+                .mcp
+                .iter()
+                .find(|(s, _)| s.name.eq_ignore_ascii_case(&server) || crate::mcp::sanitize_name(&s.name) == crate::mcp::sanitize_name(&server))
+                .map(|(s, _)| s.clone())
+                .ok_or_else(|| format!("没有叫 {server} 的 MCP 服务（本轮已连接的：{}）",
+                    ctx.mcp.iter().map(|(s, _)| s.name.as_str()).collect::<Vec<_>>().join(", ")))?;
+            let probe = spec.clone();
+            await_cancellable(
+                tokio::task::spawn_blocking(move || crate::mcp::list_resources(&probe)),
+                ctx.request_id,
+            )
+            .await?
+            .map_err(|e| e.to_string())??
+        }
+        "read_mcp_resource" => {
+            let server = arg_str(args, "server");
+            let uri = arg_str(args, "uri");
+            let spec = ctx
+                .mcp
+                .iter()
+                .find(|(s, _)| s.name.eq_ignore_ascii_case(&server) || crate::mcp::sanitize_name(&s.name) == crate::mcp::sanitize_name(&server))
+                .map(|(s, _)| s.clone())
+                .ok_or_else(|| format!("没有叫 {server} 的 MCP 服务"))?;
+            let probe = spec.clone();
+            await_cancellable(
+                tokio::task::spawn_blocking(move || crate::mcp::read_resource(&probe, &uri)),
+                ctx.request_id,
+            )
+            .await?
+            .map_err(|e| e.to_string())??
         }
         "task" => {
             let goal = arg_str(args, "goal");
@@ -3184,11 +3433,13 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     // 完全权限：整台电脑（受保护目录除外）；其它档位只在仓库里
     let scope = Scope::new(root.clone(), permission == Permission::Full);
     let protected = Protected::from_env();
+    let web_tier = normalize_web_tier(&req.web_tier);
     let reach = Reach {
         files: scope.has_files(),
         tools: req.tools,
         vision: req.vision,
-        web: !req.web_allow.is_empty(),
+        // off = 不下发；allowlist 需要非空白名单；open = 放开（仍禁私网）
+        web: web_tier != "off" && (web_tier == "open" || !req.web_allow.is_empty()),
     };
     let mut tools_enabled = req.tools;
     let services = root.as_deref().map(|r| workspace_services(r, &req.services)).unwrap_or_default();
@@ -3201,9 +3452,13 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     if !context_bundle.text.is_empty() {
         system.push_str(&context_bundle.text);
     }
-    if req.plan_first && req.tools {
-        // 设置项「先出计划」：只给一句引导，不强制——纯问答里加计划卡反而碍事
-        system.push_str("\n\n任务超过两步时，先调用 `update_plan` 列出步骤再动手；一句话能答完的问题不要用。");
+    // 真·计划闸门：先只读规划，用户批准 `exit_plan_mode` 后再升档。
+    let mut plan_locked = req.plan_first && req.tools;
+    if plan_locked {
+        system.push_str(
+            "\n\n【计划模式】这一轮先只读调研并调用 `update_plan` 列出步骤，再调用 `exit_plan_mode` 等用户批准。\
+批准前你没有写文件 / 跑命令 / 系统变更工具。一句话能答完的问题直接回答，不必出计划。",
+        );
     }
     let tool_names = offered_tools(permission, reach);
     // Tools that exist at some level: those not offered here get the permission denial instead.
@@ -3230,11 +3485,31 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     }
     // 技能 frontmatter 的 allowed-tools ∩ 已下发集合（空白名单 = 不额外收窄）。
     crate::agent_context::intersect_skill_tools(&harness_config, &last_ask, &mut tool_names);
+    // web_search：必须同时有 provider + key；offered_tools 只按 reach.web 给 web_fetch。
+    let search_ready = !req.web_search_provider.trim().is_empty() && !req.web_search_key.trim().is_empty();
+    if search_ready && reach.web {
+        if !tool_names.iter().any(|n| *n == "web_search") {
+            tool_names.push("web_search");
+        }
+    } else {
+        tool_names.retain(|n| *n != "web_search");
+    }
+    // 计划闸门解锁后要恢复的完整名单（含模式 / 技能 / 搜索过滤）。
+    let full_tool_names = tool_names.clone();
+    if plan_locked {
+        tool_names.retain(|n| crate::agent_tools::is_plan_phase_tool(n));
+    }
     let mut tools = provider_tools(&tool_names, anthropic);
     // MCP：工具名是运行时的，不在这张静态表里；列一次、追加进 tools，然后按名字查找
     // 总开关关掉时连进程都不起：这一轮就是没有 mcp_* 工具
+    // 计划锁定期间仍列服务（ctx 要能解析），但不把 mcp_* 塞进模型可见的 tools。
     let mcp_servers = if req.mcp_enabled && !req.mcp.is_empty() {
-        attach_mcp_tools(&app, &request_id, &req.mcp, &mut tools, anthropic, true).await
+        if plan_locked {
+            let mut hidden = Vec::new();
+            attach_mcp_tools(&app, &request_id, &req.mcp, &mut hidden, anthropic, false).await
+        } else {
+            attach_mcp_tools(&app, &request_id, &req.mcp, &mut tools, anthropic, true).await
+        }
     } else {
         Vec::new()
     };
@@ -3256,6 +3531,9 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         apps: &req.apps,
         request_id: &request_id,
         web_allow: &req.web_allow,
+        web_tier,
+        web_search_provider: req.web_search_provider.trim(),
+        web_search_key: req.web_search_key.trim(),
         client: &client,
         mcp: &mcp_servers,
         hooks: &harness_config.hooks,
@@ -3596,14 +3874,171 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                 && !matches!(permission, Permission::Read | Permission::Full)
                 && !call.name.starts_with("mcp_")
                 && !p.diff_confirming;
+            // ask_user / exit_plan_mode：闸门是 Allow，但仍要等人；不进「以后都允许」。
+            if call.name == "ask_user" {
+                p.needs_confirm = true;
+                p.can_remember = false;
+                p.question = ask_user_question_ui(&p.args);
+                let q = arg_str(&p.args, "question");
+                p.preview = if q.is_empty() { p.summary.clone() } else { q };
+                // 刚发的 running 会被审批卡盖住；提问本身不算「正在执行」
+            } else if call.name == "exit_plan_mode" {
+                if !plan_locked {
+                    p.forced_result = Some("当前不在计划模式，无需批准；可以直接执行。".into());
+                    p.needs_confirm = false;
+                } else {
+                    p.needs_confirm = true;
+                    p.can_remember = false;
+                    p.question = QuestionUi {
+                        kind: "plan",
+                        options: vec!["批准执行".into(), "继续改方案".into()],
+                        allow_free_text: true,
+                        multi: false,
+                    };
+                    let s = arg_str(&p.args, "summary");
+                    p.preview = if s.is_empty() {
+                        "批准后将开放写文件与命令等工具。".into()
+                    } else {
+                        s
+                    };
+                }
+            }
             prepared.push(p);
+        }
+
+        // —— 阶段 1.5：结构化提问 / 计划批准（一张一张问，不与写操作合并）——
+        let interactive: Vec<usize> = prepared
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.needs_confirm
+                    && p.skip.is_none()
+                    && matches!(p.name.as_str(), "ask_user" | "exit_plan_mode")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for i in interactive {
+            let call_id = prepared[i].call_id.clone();
+            let name = prepared[i].name.clone();
+            let summary = prepared[i].summary.clone();
+            let preview = prepared[i].preview.clone();
+            let question = prepared[i].question.clone();
+            let waiter = match register_waiter(&request_id, &call_id) {
+                Ok(w) => w,
+                Err(e) => {
+                    emit_err(&app, &request_id, &e);
+                    return Err(e);
+                }
+            };
+            emit_approval_ex(
+                &app,
+                &request_id,
+                &call_id,
+                &name,
+                &summary,
+                &preview,
+                false,
+                &name,
+                false,
+                &question,
+            );
+            let decision = match await_waiter(waiter, &request_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    emit_err(&app, &request_id, &e);
+                    return Err(e);
+                }
+            };
+            set_attention(&app, false);
+            prepared[i].needs_confirm = false;
+            match decision {
+                Decision::Allow { answer, .. } => {
+                    if name == "ask_user" {
+                        let text = answer.unwrap_or_else(|| "(用户确认，未填写文字)".into());
+                        prepared[i].forced_result = Some(format!("用户回答：{text}"));
+                        emit_step_full(
+                            &app,
+                            &request_id,
+                            &name,
+                            "done",
+                            &summary,
+                            &format!("用户回答：{text}"),
+                            Some(&prepared[i].arg_text),
+                        );
+                    } else {
+                        // exit_plan_mode：升档并重建工具表
+                        let approved = answer
+                            .as_deref()
+                            .map(|a| !a.contains("继续改") && !a.contains("改方案"))
+                            .unwrap_or(true);
+                        if approved {
+                            plan_locked = false;
+                            tool_names = full_tool_names.clone();
+                            tools = provider_tools(&tool_names, anthropic);
+                            // 把本轮已列好的 MCP 工具补进可见表（进程池仍热着）。
+                            for (spec, list) in &mcp_servers {
+                                for tool in list {
+                                    tools.push(crate::mcp::provider_spec(&spec.name, tool, anthropic));
+                                }
+                            }
+                            let note = answer.unwrap_or_else(|| "批准执行".into());
+                            prepared[i].forced_result = Some(format!(
+                                "用户已批准计划（{note}）。写文件、命令与 MCP 工具现已可用，开始执行。"
+                            ));
+                            emit_step(
+                                &app,
+                                &request_id,
+                                "notice",
+                                "info",
+                                "计划已批准，工具已升档",
+                                "",
+                            );
+                        } else {
+                            let note = answer.unwrap_or_else(|| "继续改方案".into());
+                            prepared[i].forced_result = Some(format!(
+                                "用户要求继续完善计划（{note}）。请 update_plan 后再次 exit_plan_mode。"
+                            ));
+                        }
+                        emit_step_full(
+                            &app,
+                            &request_id,
+                            &name,
+                            "done",
+                            &summary,
+                            prepared[i].forced_result.as_deref().unwrap_or(""),
+                            Some(&prepared[i].arg_text),
+                        );
+                    }
+                }
+                Decision::Deny | Decision::TimedOut => {
+                    let reason = if matches!(decision, Decision::TimedOut) {
+                        "等待用户回答超时，没有得到答复。"
+                    } else {
+                        "用户跳过了这个问题。"
+                    };
+                    prepared[i].forced_result = Some(reason.into());
+                    emit_step_full(
+                        &app,
+                        &request_id,
+                        &name,
+                        "denied",
+                        &summary,
+                        reason,
+                        Some(&prepared[i].arg_text),
+                    );
+                }
+            }
         }
 
         // —— 阶段 2：需要确认的操作合成一张卡，等一次决定 ——
         let confirming: Vec<usize> = prepared
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.needs_confirm && p.skip.is_none())
+            .filter(|(_, p)| {
+                p.needs_confirm
+                    && p.skip.is_none()
+                    && !matches!(p.name.as_str(), "ask_user" | "exit_plan_mode")
+            })
             .map(|(i, _)| i)
             .collect();
         if !confirming.is_empty() {
@@ -3663,7 +4098,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             for &i in &confirming {
                 let p = &mut prepared[i];
                 match decision {
-                    Decision::Allow { for_turn, always } => {
+                    Decision::Allow { for_turn, always, answer: _ } => {
                         // 审查转人工时不记「同类」：每条都要过审查
                         if for_turn && p.gate == Some(Gate::Ask) {
                             granted.insert(p.kind.clone());
@@ -3697,6 +4132,11 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             if let Some(reason) = p.skip {
                 crate::agent_session_log::log_tool(&request_id, &p.call_id, &p.name, &reason, true);
                 tool_results.push((p.call_id, reason.into()));
+                continue;
+            }
+            if let Some(text) = p.forced_result {
+                crate::agent_session_log::log_tool(&request_id, &p.call_id, &p.name, &text, false);
+                tool_results.push((p.call_id, text.into()));
                 continue;
             }
             // 并发预取只跑了 execute；仍要补 post_hooks + 结果预算。

@@ -1,21 +1,22 @@
 //! Minimal MCP (Model Context Protocol) client over stdio.
 //!
-//! Scope, deliberately small: one server = one command; we speak newline-delimited
-//! JSON-RPC 2.0 to `cmd /c <command> <args>`, do `initialize` → `notifications/initialized`
-//! → one request (`tools/list` or `tools/call`), then kill the process. No long-lived
-//! session, no resources / prompts / sampling, no HTTP transport yet.
+//! Speaks newline-delimited JSON-RPC 2.0 to `cmd /c <command> <args>`. Sessions are
+//! **pooled per server name** for the life of the process (idle timeout recycles them),
+//! so a turn that calls the same server three times does not pay three cold starts.
+//! A crashed server is dropped from the pool and the next call starts fresh.
 //!
-//! The cost of that choice is a process start per call (npx cold start is a second or two);
-//! the benefit is that a crashed or hung server can never poison the app — every call has
-//! its own deadline and its own process.
+//! Also supports `resources/list` + `resources/read` (exposed as `list_mcp_resources` /
+//! `read_mcp_resource`). No prompts / sampling / HTTP transport yet.
 //!
 //! Tools are exposed to the model as `mcp_<server>_<tool>`; the mapping back to
 //! (server, tool) is a lookup in the list built for this turn, never a string split
 //! (server names may contain `_`).
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -41,7 +42,76 @@ pub(crate) struct McpTool {
 const INIT_TIMEOUT: Duration = Duration::from_secs(20);
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const PROTOCOL_VERSION: &str = "2024-11-05";
+
+struct Pooled {
+    session: Session,
+    last_used: Instant,
+    /// Fingerprint of command+args so a settings edit invalidates the pool entry.
+    fingerprint: String,
+}
+
+fn fingerprint(spec: &McpServerSpec) -> String {
+    format!("{}|{}\0{}", sanitize_name(&spec.name), spec.command.trim(), spec.args)
+}
+
+fn with_pool<R>(f: impl FnOnce(&mut HashMap<String, Pooled>) -> R) -> R {
+    static POOL: Mutex<Option<HashMap<String, Pooled>>> = Mutex::new(None);
+    let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    let map = guard.as_mut().expect("pool just initialized");
+    let now = Instant::now();
+    map.retain(|_, p| {
+        if now.duration_since(p.last_used) > IDLE_TIMEOUT {
+            return false;
+        }
+        matches!(p.session.child.try_wait(), Ok(None))
+    });
+    f(map)
+}
+
+fn take_or_start(spec: &McpServerSpec) -> Result<Session, String> {
+    let key = sanitize_name(&spec.name);
+    if key.is_empty() {
+        return Err("服务名无效".into());
+    }
+    let fp = fingerprint(spec);
+    let existing = with_pool(|map| {
+        if let Some(p) = map.remove(&key) {
+            if p.fingerprint == fp {
+                return Some(p.session);
+            }
+        }
+        None
+    });
+    if let Some(session) = existing {
+        return Ok(session);
+    }
+    let mut session = Session::start(spec)?;
+    session.handshake()?;
+    Ok(session)
+}
+
+fn put_back(spec: &McpServerSpec, session: Session) {
+    let key = sanitize_name(&spec.name);
+    if key.is_empty() {
+        return;
+    }
+    let fp = fingerprint(spec);
+    with_pool(|map| {
+        map.insert(
+            key,
+            Pooled {
+                session,
+                last_used: Instant::now(),
+                fingerprint: fp,
+            },
+        );
+    });
+}
 
 /// `npx -y @modelcontextprotocol/server-filesystem "D:\my work"` → argv without quotes.
 /// Backslash is literal on purpose (Windows paths are the common argument).
@@ -219,9 +289,14 @@ impl Drop for Session {
 
 /// The server's tool list. Blocking: call it from `spawn_blocking`.
 pub(crate) fn list_tools(spec: &McpServerSpec) -> Result<Vec<McpTool>, String> {
-    let mut session = Session::start(spec)?;
-    session.handshake()?;
-    let result = session.request("tools/list", json!({}), LIST_TIMEOUT)?;
+    let mut session = take_or_start(spec)?;
+    let result = match session.request("tools/list", json!({}), LIST_TIMEOUT) {
+        Ok(r) => r,
+        Err(e) => {
+            // 坏会话不回池
+            return Err(e);
+        }
+    };
     let tools = result
         .get("tools")
         .and_then(|v| v.as_array())
@@ -238,14 +313,18 @@ pub(crate) fn list_tools(spec: &McpServerSpec) -> Result<Vec<McpTool>, String> {
                 .collect()
         })
         .unwrap_or_default();
+    put_back(spec, session);
     Ok(tools)
 }
 
 /// Call one tool; the text parts of the result are joined. Blocking.
 pub(crate) fn call_tool(spec: &McpServerSpec, tool: &str, args: &Value) -> Result<String, String> {
-    let mut session = Session::start(spec)?;
-    session.handshake()?;
-    let result = session.request("tools/call", json!({ "name": tool, "arguments": args }), CALL_TIMEOUT)?;
+    let mut session = take_or_start(spec)?;
+    let result = match session.request("tools/call", json!({ "name": tool, "arguments": args }), CALL_TIMEOUT) {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+    };
+    put_back(spec, session);
     let is_error = result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
     let text = result
         .get("content")
@@ -267,6 +346,75 @@ pub(crate) fn call_tool(spec: &McpServerSpec, tool: &str, args: &Value) -> Resul
         return Ok(if is_error { format!("工具返回错误：{result}") } else { "（工具没有返回文本）".into() });
     }
     Ok(if is_error { format!("工具返回错误：{text}") } else { text })
+}
+
+/// List resources exposed by one MCP server.
+pub(crate) fn list_resources(spec: &McpServerSpec) -> Result<String, String> {
+    let mut session = take_or_start(spec)?;
+    let result = match session.request("resources/list", json!({}), LIST_TIMEOUT) {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+    };
+    put_back(spec, session);
+    let resources = result
+        .get("resources")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if resources.is_empty() {
+        return Ok(format!("MCP 服务 {} 没有暴露资源。", spec.name));
+    }
+    let mut lines = vec![format!("MCP 服务 {} 的资源：", spec.name)];
+    for r in resources.iter().take(50) {
+        let uri = r.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+        let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let desc = r.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        lines.push(format!("- {name}  {uri}  {desc}"));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Read one MCP resource by URI.
+pub(crate) fn read_resource(spec: &McpServerSpec, uri: &str) -> Result<String, String> {
+    let uri = uri.trim();
+    if uri.is_empty() {
+        return Err("缺少 uri".into());
+    }
+    let mut session = take_or_start(spec)?;
+    let result = match session.request("resources/read", json!({ "uri": uri }), CALL_TIMEOUT) {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+    };
+    put_back(spec, session);
+    let text = result
+        .get("contents")
+        .and_then(|v| v.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| {
+                    if let Some(t) = p.get("text").and_then(|v| v.as_str()) {
+                        Some(t.to_string())
+                    } else if p.get("blob").is_some() {
+                        Some("[二进制资源已省略]".into())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        Ok("（资源没有返回文本）".into())
+    } else {
+        let capped: String = text.chars().take(12_000).collect();
+        Ok(if text.chars().count() > 12_000 {
+            format!("{capped}\n…（已截断）")
+        } else {
+            capped
+        })
+    }
 }
 
 #[cfg(test)]

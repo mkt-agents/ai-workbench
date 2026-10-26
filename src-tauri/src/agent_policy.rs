@@ -336,6 +336,7 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
             "find_files",
             "grep",
             "symbols",
+            "lsp",
             "run_command",
             // 文档 / 表格：只读，非代码任务的主力
             "read_document",
@@ -351,6 +352,10 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
     names.extend([
         // Planning is offered even without a repo: it is how the user follows a long turn.
         "update_plan",
+        "exit_plan_mode",
+        "ask_user",
+        "list_mcp_resources",
+        "read_mcp_resource",
         "open_page",
         "list_processes",
         "find_port",
@@ -385,8 +390,10 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
         ]);
     }
     // 白名单是空的就等于没联网能力：连工具都不下发，省得模型反复试
+    // web_search 也挂在这里；agent.rs 还会按「是否配置了搜索 API」再滤一次。
     if reach.web {
         names.push("web_fetch");
+        names.push("web_search");
     }
     if permission == Permission::Full && reach.vision {
         names.extend(crate::agent_tools::by_gate(GateKind::Computer));

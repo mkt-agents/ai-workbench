@@ -87,6 +87,11 @@ export type AgentApproval = {
   patches?: AgentApprovalPatch[];
   /** All call ids answered together (merged card). */
   callIds?: string[];
+  /** `approval` (default) | `question` (`ask_user`) | `plan` (`exit_plan_mode`). */
+  kind?: "approval" | "question" | "plan";
+  options?: string[];
+  allowFreeText?: boolean;
+  multi?: boolean;
 };
 
 /**
@@ -123,6 +128,12 @@ export type AgentRunOptions = {
   alwaysAllow: string[];
   /** `web_fetch` 的域名白名单（设置项）；空 = 不下发这个工具。 */
   webAllow: string[];
+  /** 联网策略：off / allowlist / open。 */
+  webTier: string;
+  /** 搜索服务商：brave / tavily；空 = 不下发 web_search。 */
+  webSearchProvider: string;
+  /** 搜索 API key。 */
+  webSearchKey: string;
   /** 允许派只读子代理（设置项，默认关）。 */
   subagents: boolean;
   /** 只读调用并发（设置项，默认开）。 */
@@ -708,9 +719,15 @@ export function useAskStream(opts: AskStreamOptions) {
           canRemember?: boolean;
           patches?: AgentApprovalPatch[];
           callIds?: string[];
+          kind?: string;
+          options?: string[];
+          allowFreeText?: boolean;
+          multi?: boolean;
         }>("agent-approval", (event) => {
           const payload = event.payload;
           if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
+          const kind =
+            payload.kind === "question" || payload.kind === "plan" ? payload.kind : "approval";
           setAgentApproval({
             callId: payload.callId,
             tool: payload.tool,
@@ -722,6 +739,10 @@ export function useAskStream(opts: AskStreamOptions) {
             canRemember: Boolean(payload.canRemember),
             patches: Array.isArray(payload.patches) ? payload.patches : undefined,
             callIds: Array.isArray(payload.callIds) ? payload.callIds : undefined,
+            kind,
+            options: Array.isArray(payload.options) ? payload.options.filter(Boolean) : undefined,
+            allowFreeText: Boolean(payload.allowFreeText),
+            multi: Boolean(payload.multi),
           });
           // The round is blocked on the user: an opt-in raise beats a silent
           // auto-deny five minutes later.
@@ -770,6 +791,9 @@ export function useAskStream(opts: AskStreamOptions) {
           diffConfirm: agent.diffConfirm,
           alwaysAllow: agent.alwaysAllow,
           webAllow: agent.webAllow,
+          webTier: agent.webTier || "allowlist",
+          webSearchProvider: agent.webSearchProvider || "",
+          webSearchKey: agent.webSearchKey || "",
           subagents: agent.subagents,
           parallelReads: agent.parallelReads,
           retries: agent.retries,
@@ -968,7 +992,7 @@ export function useAskStream(opts: AskStreamOptions) {
     persistRef.current(nextTurns, q);
   };
 
-  const decideAgent = async (decision: AgentDecision) => {
+  const decideAgent = async (decision: AgentDecision, answer?: string) => {
     const id = activeReqRef.current;
     const ids = agentApproval?.callIds?.length
       ? agentApproval.callIds
@@ -983,6 +1007,7 @@ export function useAskStream(opts: AskStreamOptions) {
         callIds: ids,
         allow: decision !== "deny",
         scope: decision === "always" ? "always" : decision === "turn" ? "turn" : "once",
+        answer: answer?.trim() || null,
       });
       // 收下之后再撤卡片：调用失败时卡片要留着，用户才能重试（以前先撤，失败就没得点了）
       setAgentApproval(null);

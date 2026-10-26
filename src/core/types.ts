@@ -150,8 +150,14 @@ export interface AppSettings {
   agentAlwaysAllowByBranch?: Record<string, Record<string, string[]>>;
   /** diff 确认按仓库覆盖（key = 工作区根路径）；缺省回落全局 `agentDiffConfirm`。 */
   agentDiffConfirmByRepo?: Record<string, boolean>;
-  /** 天玑可以抓取的域名（空 = 不给 web_fetch 工具）。 */
+  /** 天玑可以抓取的域名（空 = 不给 web_fetch 工具，除非 webTier=open）。 */
   agentWebAllow?: string[];
+  /** 联网策略：off / allowlist（默认）/ open。 */
+  agentWebTier?: "off" | "allowlist" | "open" | string;
+  /** 搜索服务商：brave / tavily；空 = 不下发 web_search。 */
+  agentWebSearchProvider?: string;
+  /** 搜索 API key（只存本机 settings）。 */
+  agentWebSearchKey?: string;
   /** 允许天玑派只读子代理（task 工具，默认关）。 */
   agentSubagents?: boolean;
   /** 只读调用并发执行（默认开；关掉就逐个跑，步骤顺序更好读）。 */

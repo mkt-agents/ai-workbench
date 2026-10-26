@@ -49,6 +49,12 @@ pub struct WecomAgentConfig {
     #[serde(default)]
     pub web_allow: Vec<String>,
     #[serde(default)]
+    pub web_tier: String,
+    #[serde(default)]
+    pub web_search_provider: String,
+    #[serde(default)]
+    pub web_search_key: String,
+    #[serde(default)]
     pub subagents: bool,
     #[serde(default = "default_true")]
     pub parallel_reads: bool,
@@ -381,6 +387,9 @@ impl Orchestrator {
             diff_confirm: agent_cfg.diff_confirm,
             always_allow: agent_cfg.always_allow,
             web_allow: agent_cfg.web_allow,
+            web_tier: agent_cfg.web_tier,
+            web_search_provider: agent_cfg.web_search_provider,
+            web_search_key: agent_cfg.web_search_key,
             subagents: agent_cfg.subagents,
             mcp: agent_cfg.mcp,
             parallel_reads: agent_cfg.parallel_reads,
@@ -556,7 +565,7 @@ impl Orchestrator {
         } else {
             None
         };
-        match agent_decide(pending.request_id.clone(), pending.call_ids.clone(), allow, scope) {
+        match agent_decide(pending.request_id.clone(), pending.call_ids.clone(), allow, scope, None) {
             Ok(()) => {
                 let msg = if choice == 2 {
                     "已拒绝该操作。"

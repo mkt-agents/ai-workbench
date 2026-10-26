@@ -1215,6 +1215,21 @@ function Settings({ onNoticeUpdate }: Props = {}) {
               <div className="hub-group-title">{t("net.groupFetch")}</div>
               <div className="setting-item">
                 <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.webTier")}</span>
+                  <select
+                    className="input-field"
+                    value={settings.agentWebTier || "allowlist"}
+                    onChange={(e) => setSettings({ agentWebTier: e.target.value })}
+                  >
+                    <option value="off">{t("aiHub.webTierOff")}</option>
+                    <option value="allowlist">{t("aiHub.webTierAllowlist")}</option>
+                    <option value="open">{t("aiHub.webTierOpen")}</option>
+                  </select>
+                </div>
+                <p className="setting-hint">{t("aiHub.webTierHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
                   <span className="setting-label">{t("aiHub.webAllow")}</span>
                   <input
                     className="input-field setting-web-allow"
@@ -1239,6 +1254,32 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                   />
                 </div>
                 <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
+              </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.webSearchProvider")}</span>
+                  <select
+                    className="input-field"
+                    value={settings.agentWebSearchProvider || ""}
+                    onChange={(e) => setSettings({ agentWebSearchProvider: e.target.value })}
+                  >
+                    <option value="">{t("aiHub.webSearchNone")}</option>
+                    <option value="brave">{t("aiHub.webSearchBrave")}</option>
+                    <option value="tavily">{t("aiHub.webSearchTavily")}</option>
+                  </select>
+                </div>
+                <div className="setting-row" style={{ marginTop: 8 }}>
+                  <span className="setting-label">{t("aiHub.webSearchKey")}</span>
+                  <input
+                    className="input-field setting-web-allow"
+                    type="password"
+                    autoComplete="off"
+                    value={settings.agentWebSearchKey || ""}
+                    placeholder={t("aiHub.webSearchKeyPlaceholder")}
+                    onChange={(e) => setSettings({ agentWebSearchKey: e.target.value })}
+                  />
+                </div>
+                <p className="setting-hint">{t("aiHub.webSearchHint")}</p>
               </div>
               </div>
             </section>

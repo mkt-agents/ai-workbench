@@ -328,7 +328,7 @@ export function AgentApprovalBar({
   onDecide,
 }: {
   approval: AgentApproval;
-  onDecide: (decision: AgentDecision) => void;
+  onDecide: (decision: AgentDecision, answer?: string) => void;
 }) {
   const { t } = useTranslation("aihub");
   const left = useDeadlineLeft(approval.deadlineAt);
@@ -373,26 +373,117 @@ export function AgentApprovalBar({
   );
 }
 
-/** Approval card for a change that needs the user: diff preview + allow once / for this turn / deny. */
+/** Approval / question / plan card. `onDecide` may carry a free-text or option answer. */
 export function AgentApprovalCard({
   approval,
   onDecide,
 }: {
   approval: AgentApproval;
-  onDecide: (decision: AgentDecision) => void;
+  onDecide: (decision: AgentDecision, answer?: string) => void;
 }) {
   const { t } = useTranslation("aihub");
   const left = useDeadlineLeft(approval.deadlineAt);
   const [raise, setRaise] = useState(() => localStorage.getItem(APPROVAL_FOCUS_KEY) === "1");
+  const [freeText, setFreeText] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
   const toggleRaise = (on: boolean) => {
     setRaise(on);
     localStorage.setItem(APPROVAL_FOCUS_KEY, on ? "1" : "0");
     // Turning it on should pay off for the call being answered right now.
     if (on) void invoke("show_ai_hub").catch(() => {});
   };
+  const isQuestion = approval.kind === "question" || approval.kind === "plan";
+  const options = approval.options || [];
   const patches: AgentApprovalPatch[] | null =
     approval.patches && approval.patches.length > 1 ? approval.patches : null;
   const { body: titleBody, note: titleNote } = splitSummary(approval.summary);
+
+  const toggleOption = (opt: string) => {
+    if (approval.multi) {
+      setPicked((prev) => (prev.includes(opt) ? prev.filter((x) => x !== opt) : [...prev, opt]));
+    } else {
+      setPicked([opt]);
+    }
+  };
+
+  const submitQuestion = (decision: AgentDecision) => {
+    if (decision === "deny") {
+      onDecide("deny");
+      return;
+    }
+    const fromOptions = picked.join("；");
+    const answer = [fromOptions, freeText.trim()].filter(Boolean).join("；");
+    onDecide("once", answer || undefined);
+  };
+
+  if (isQuestion) {
+    return (
+      <div className="qa-agent-approve is-question" role="group" aria-label={t("agent.askTitle")}>
+        <div className="qa-agent-approve-title">
+          <ShieldAlert size={12} className="qa-agent-approve-icon" aria-hidden />
+          <span className="qa-agent-approve-title-text">
+            {approval.kind === "plan" ? t("agent.planApproveTitle") : t("agent.askTitle")}
+          </span>
+        </div>
+        <div className="qa-agent-approve-question">{titleBody || approval.preview}</div>
+        {approval.preview && approval.preview !== titleBody && (
+          <DetailBlock text={approval.preview} />
+        )}
+        {options.length > 0 && (
+          <div className="qa-agent-ask-options">
+            {options.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                className={`qa-agent-ask-opt${picked.includes(opt) ? " is-on" : ""}`}
+                onClick={() => toggleOption(opt)}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        )}
+        {(approval.allowFreeText || options.length === 0) && (
+          <input
+            className="qa-agent-ask-input"
+            value={freeText}
+            onChange={(e) => setFreeText(e.target.value)}
+            placeholder={t("agent.askFreePlaceholder")}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitQuestion("once");
+              }
+            }}
+          />
+        )}
+        <div className="qa-agent-approve-actions">
+          <button
+            type="button"
+            className="qa-agent-allow"
+            onClick={() => submitQuestion("once")}
+            disabled={picked.length === 0 && !freeText.trim() && options.length > 0 && !approval.allowFreeText}
+          >
+            {approval.kind === "plan" ? t("agent.planApprove") : t("agent.askSubmit")}
+          </button>
+          <button type="button" className="qa-agent-deny" onClick={() => submitQuestion("deny")}>
+            {approval.kind === "plan" ? t("agent.planRevise") : t("agent.askSkip")}
+          </button>
+        </div>
+        <div className="qa-agent-approve-foot">
+          <span className="qa-agent-approve-count" title={t("agent.autoDenyTip")}>
+            {left ? t("agent.autoDenyIn", { time: left }) : t("agent.autoDeny")}
+          </span>
+          <label className="qa-agent-approve-raise">
+            <input type="checkbox" checked={raise} onChange={(e) => toggleRaise(e.target.checked)} />
+            {t("agent.raiseWindow")}
+          </label>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="qa-agent-approve" role="group" aria-label={t("agent.confirm")}>
       <div className="qa-agent-approve-title">

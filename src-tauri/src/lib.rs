@@ -23,6 +23,7 @@ mod agent_proc;
 mod agent_protocol;
 mod agent_stream;
 mod agent_symbols;
+mod agent_lsp;
 mod agent_tools;
 mod agent_undo;
 mod agent_web;

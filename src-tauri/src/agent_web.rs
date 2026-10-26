@@ -4,8 +4,8 @@
 //! nothing), never a loopback / private address, and the body is flattened to text before
 //! it reaches the model. Redirects are followed by hand, one hop at a time, because a 302
 //! pointing at another host is the classic way around a host allowlist — every hop is
-//! re-checked with the same [`url_allowed`] before it is requested. `web_search` needs a
-//! provider account, so it is not here.
+//! re-checked with the same [`url_allowed`] before it is requested. `web_search` lives here
+//! too, but only runs when the user configured a provider + API key.
 
 use std::net::IpAddr;
 use std::time::Duration;
@@ -120,9 +120,14 @@ fn is_private_host(host: &str) -> bool {
     }
 }
 
-/// `https://`, a public host, and a host on the allowlist (`*.example.com` and bare
-/// `example.com` both accept subdomains). Pure, so the policy is unit-tested.
+/// `https://`, a public host, and (unless `open`) a host on the allowlist
+/// (`*.example.com` and bare `example.com` both accept subdomains). Pure, so the policy
+/// is unit-tested. `open` still bans private/loopback hosts.
 pub(crate) fn url_allowed(url: &str, allow: &[String]) -> Result<(), String> {
+    url_allowed_tier(url, allow, false)
+}
+
+pub(crate) fn url_allowed_tier(url: &str, allow: &[String], open: bool) -> Result<(), String> {
     let trimmed = url.trim();
     let lower = trimmed.to_ascii_lowercase();
     // 只有 https：http 明文、file://、ftp:// 一律不许
@@ -146,6 +151,9 @@ pub(crate) fn url_allowed(url: &str, allow: &[String]) -> Result<(), String> {
     }
     if is_private_host(host) {
         return Err(format!("{host} 是本机或内网地址，不能抓取"));
+    }
+    if open {
+        return Ok(());
     }
     if allow.is_empty() {
         return Err("还没有允许任何域名：先到 设置 → 天玑 → 网页抓取白名单 里加上要访问的域名".into());
@@ -191,7 +199,11 @@ pub(crate) fn resolve_location(base: &str, location: &str) -> Option<String> {
 }
 
 pub(crate) async fn web_fetch(url: &str, allow: &[String]) -> Result<String, String> {
-    url_allowed(url, allow)?;
+    web_fetch_tier(url, allow, false).await
+}
+
+pub(crate) async fn web_fetch_tier(url: &str, allow: &[String], open: bool) -> Result<String, String> {
+    url_allowed_tier(url, allow, open)?;
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         // 不自动跟随：每一跳都要用白名单重新校验（302 到别的域名是绕过白名单最省事的办法）
@@ -213,8 +225,8 @@ pub(crate) async fn web_fetch(url: &str, allow: &[String]) -> Result<String, Str
             .unwrap_or("");
         let next = resolve_location(&current, to)
             .ok_or_else(|| format!("{current} 返回跳转，但 Location 看不懂：{to:?}"))?;
-        // 关键的一行：跳转目标也必须过同一道白名单
-        url_allowed(&next, allow)?;
+        // 关键的一行：跳转目标也必须过同一道白名单（open 档仍禁私网）
+        url_allowed_tier(&next, allow, open)?;
         hops += 1;
         if hops > MAX_REDIRECTS {
             return Err(format!("跳转超过 {MAX_REDIRECTS} 次，放弃（最后目标是 {next}）"));
@@ -267,6 +279,100 @@ pub(crate) async fn web_fetch(url: &str, allow: &[String]) -> Result<String, Str
         text.push_str(&format!("\n\n…（已截断，只保留前 {TEXT_CAP} 字）"));
     }
     Ok(format!("{url}\n\n{text}"))
+}
+
+/// Search via Brave or Tavily. Only called when the user configured provider + key.
+pub(crate) async fn web_search(
+    query: &str,
+    count: usize,
+    provider: &str,
+    api_key: &str,
+) -> Result<String, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("缺少 query".into());
+    }
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("未配置搜索 API key（设置 → 天玑 → 联网扩展）".into());
+    }
+    let n = count.clamp(1, 10);
+    let provider = provider.trim().to_ascii_lowercase();
+    let client = reqwest::Client::builder()
+        .timeout(TIMEOUT)
+        .build()
+        .map_err(|e| format!("创建请求失败: {e}"))?;
+    match provider.as_str() {
+        "brave" => {
+            let resp = client
+                .get("https://api.search.brave.com/res/v1/web/search")
+                .header("Accept", "application/json")
+                .header("X-Subscription-Token", key)
+                .query(&[("q", q), ("count", &n.to_string())])
+                .send()
+                .await
+                .map_err(|e| format!("Brave 搜索失败: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("Brave 搜索返回 {}", resp.status()));
+            }
+            let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            let results = body
+                .pointer("/web/results")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if results.is_empty() {
+                return Ok("没有搜索结果。".into());
+            }
+            let mut lines = vec![format!("Brave 搜索「{q}」：")];
+            for (i, item) in results.iter().take(n).enumerate() {
+                let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                let desc = item
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                lines.push(format!("{}. {title}\n   {url}\n   {desc}", i + 1));
+            }
+            Ok(lines.join("\n"))
+        }
+        "tavily" => {
+            let resp = client
+                .post("https://api.tavily.com/search")
+                .json(&serde_json::json!({
+                    "api_key": key,
+                    "query": q,
+                    "max_results": n,
+                    "include_answer": false
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("Tavily 搜索失败: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("Tavily 搜索返回 {}", resp.status()));
+            }
+            let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            let results = body
+                .get("results")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if results.is_empty() {
+                return Ok("没有搜索结果。".into());
+            }
+            let mut lines = vec![format!("Tavily 搜索「{q}」：")];
+            for (i, item) in results.iter().take(n).enumerate() {
+                let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                let desc = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                lines.push(format!("{}. {title}\n   {url}\n   {desc}", i + 1));
+            }
+            Ok(lines.join("\n"))
+        }
+        _ => Err(format!(
+            "未知搜索服务商「{provider}」：目前支持 brave / tavily"
+        )),
+    }
 }
 
 #[cfg(test)]

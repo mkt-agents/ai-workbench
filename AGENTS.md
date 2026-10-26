@@ -63,7 +63,8 @@ src-tauri/src/        # Rust 后端
                       # 每轮 `model_turn` 前由 `fit_context` 压到 48k；agent_freshness.rs：工作区指纹
                       # （git HEAD + status + dirty mtime；非 git 走封顶 3000 文件的 mtime/size 遍历）；
                       # agent_symbols.rs：`symbols` 启发式定义定位（关键字 + 名字，复用 agent_fs::walk）；
-                      # agent_web.rs：`web_fetch`（https + 域名白名单 + 跳转逐跳重过白名单 + html 转文本）；
+                      # agent_web.rs：`web_fetch`（https + 白名单三级 off/allowlist/open + 跳转逐跳重过白名单 + html 转文本）与可选 `web_search`（Brave/Tavily，需配置 key）；
+                      # agent_lsp.rs：`lsp`（definition / references / diagnostics；TS+Rust stdio，不可用 → LSP_UNAVAILABLE）；
                       # agent_undo.rs：写文件前的逐字节快照与撤销（保留 20 轮 / 50MB，命令 `agent_undo`）；
                       # mcp.rs：MCP 客户端（stdio + 换行 JSON-RPC，一次调用一个进程，工具名 `mcp_<server>_<tool>`）；
                       # —— harness 层（2026-10-25 泛化） ——
