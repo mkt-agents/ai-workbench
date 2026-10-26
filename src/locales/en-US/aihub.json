@@ -37,7 +37,8 @@
     "mode": "/mode switch task mode",
     "modeNow": "Now: {{mode}}",
     "modeHint": "Pick one: chat / code / docs / data / research / ops",
-    "backHint": "Esc to go back"
+    "backHint": "Esc to go back",
+    "label": "Commands and references"
   },
   "attach": {
     "file": "Attach file",

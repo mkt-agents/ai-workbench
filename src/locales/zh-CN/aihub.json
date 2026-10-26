@@ -37,7 +37,8 @@
     "mode": "/mode 切换任务模式",
     "modeNow": "当前：{{mode}}",
     "modeHint": "选一个：对话 / 代码 / 文档 / 数据 / 调研 / 运维",
-    "backHint": "Esc 返回"
+    "backHint": "Esc 返回",
+    "label": "命令与引用列表"
   },
   "attach": {
     "file": "附加文件",

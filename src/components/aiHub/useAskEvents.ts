@@ -35,6 +35,8 @@ export function useAskEvents(opts: AskEventsOptions) {
     let unlistenShown: (() => void) | undefined;
     let unlistenPrefill: (() => void) | undefined;
     let unlistenTheme: (() => void) | undefined;
+    /** 延后采集上下文的计时器：窗口反复显示时不能叠一堆（每次都会起一批 git 进程）。 */
+    let ctxTimer: number | undefined;
 
     const syncThemeFromStorage = () => {
       const theme = readPersistedTheme();
@@ -56,7 +58,8 @@ export function useAskEvents(opts: AskEventsOptions) {
       // Defer context build by 1.5s so the window paints instantly; the first
       // send will build it immediately anyway if the user is fast.
       invalidateContext();
-      window.setTimeout(() => {
+      window.clearTimeout(ctxTimer);
+      ctxTimer = window.setTimeout(() => {
         void getContextRef.current();
       }, 1500);
     }).then((fn) => {
@@ -98,6 +101,7 @@ export function useAskEvents(opts: AskEventsOptions) {
       unlistenTheme = fn;
     });
     return () => {
+      window.clearTimeout(ctxTimer);
       unlistenShown?.();
       unlistenPrefill?.();
       unlistenTheme?.();

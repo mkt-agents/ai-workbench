@@ -111,8 +111,9 @@ pub(crate) fn tool_gate(permission: Permission, tool: &str, arg: &str) -> Gate {
                 mutating(Gate::Ask)
             }
         }
-        // Unknown tools fall through to the executor's "unknown tool" error.
-        None => Gate::Allow,
+        // 注册表里没有的名字一律拒绝：`offered_tools` 手写了注册表没有的工具、
+        // 或者新增工具漏登记时，宁可让执行器报「未知工具」，也不能全档位静默放行。
+        None => Gate::Deny,
     }
 }
 
@@ -132,6 +133,9 @@ pub(crate) struct GitCall {
     pub args: Vec<String>,
     /// `-C <dir>` when given (original spelling).
     pub dir: Option<String>,
+    /// 子命令前面出现了不认识的全局选项（`git --foo status`）：判不出意图，
+    /// 按「可能危险」处理，不当作普通子命令继续往下判。
+    pub unknown_option: bool,
 }
 
 fn unquote(word: &str) -> &str {
@@ -154,24 +158,54 @@ pub(crate) fn git_calls(command: &str) -> Vec<GitCall> {
         };
         let mut i = start + 1;
         let mut dir = None;
+        let mut unknown_option = false;
         while i < words.len() {
             let w = unquote(words[i]);
-            match w {
-                "-C" => {
-                    dir = words.get(i + 1).map(|d| unquote(d).to_string());
-                    i += 2;
-                }
-                "-c" | "--git-dir" | "--work-tree" | "--namespace" => i += 2,
-                _ if w.starts_with("--git-dir=")
-                    || w.starts_with("--work-tree=")
-                    || w.starts_with("--namespace=")
-                    || w.starts_with("--exec-path")
-                    || matches!(w, "--no-pager" | "-p" | "--paginate" | "--bare" | "--no-replace-objects") =>
-                {
-                    i += 1
-                }
-                _ => break,
+            if w == "-C" {
+                dir = words.get(i + 1).map(|d| unquote(d).to_string());
+                i += 2;
+                continue;
             }
+            if matches!(w, "-c" | "--git-dir" | "--work-tree" | "--namespace") {
+                i += 2;
+                continue;
+            }
+            // 粘连写法：`git -C../repo status` / `git -ccore.pager=less status`。
+            // 旧实现只认独立成词的 `-C`，粘连时把选项本身当成子命令，黑名单整条失效。
+            if let Some(d) = w.strip_prefix("-C") {
+                dir = Some(d.to_string());
+                i += 1;
+                continue;
+            }
+            if w.len() > 2 && w.starts_with("-c") {
+                i += 1;
+                continue;
+            }
+            if w.starts_with("--git-dir=")
+                || w.starts_with("--work-tree=")
+                || w.starts_with("--namespace=")
+                || w.starts_with("--exec-path")
+                || w.starts_with("--super-prefix=")
+                || w.starts_with("--config-env=")
+                || matches!(
+                    w,
+                    "--no-pager" | "-p" | "-P" | "--paginate" | "--bare" | "--no-replace-objects"
+                        | "--no-optional-locks" | "--literal-pathspecs" | "--glob-pathspecs"
+                        | "--noglob-pathspecs" | "--icase-pathspecs" | "--no-lazy-fetch"
+                        | "--no-advice" | "--version" | "--help" | "-h"
+                        | "--html-path" | "--man-path" | "--info-path"
+                )
+            {
+                i += 1;
+                continue;
+            }
+            if w.starts_with('-') {
+                // 认不出的全局选项：不知道它会不会改工作区，按可能危险处理
+                unknown_option = true;
+                i += 1;
+                continue;
+            }
+            break;
         }
         let Some(sub) = words.get(i) else {
             continue;
@@ -180,6 +214,7 @@ pub(crate) fn git_calls(command: &str) -> Vec<GitCall> {
             sub: unquote(sub).to_lowercase(),
             args: words[i + 1..].iter().map(|w| unquote(w).to_string()).collect(),
             dir,
+            unknown_option,
         });
     }
     out
@@ -188,6 +223,10 @@ pub(crate) fn git_calls(command: &str) -> Vec<GitCall> {
 /// Git forms no permission level may run: they force-overwrite, rewrite history or
 /// resolve conflicts on the user's behalf (both pick-a-side and discard-the-merge).
 pub(crate) fn git_call_blocked(call: &GitCall) -> bool {
+    // 判不出子命令就不放行：`git -C../repo ` 这类粘连写法以前会漏到这里。
+    if call.unknown_option {
+        return true;
+    }
     let long = |flag: &str| call.args.iter().any(|a| a.eq_ignore_ascii_case(flag));
     // Short flag clusters such as `-fd` / `-uf` / `-Xtheirs`.
     let short_has = |c: char| {
@@ -324,13 +363,9 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
         // 企微业务：文档 / 日程 / 智能表格（复用机器人凭证；未配置时执行会明确报错）
         "wecom_doc_list",
         "wecom_doc_read",
-        "wecom_doc_create",
         "wecom_calendar_list",
-        "wecom_calendar_create",
         "wecom_sheet_list",
-        "wecom_sheet_create",
-        "wecom_sheet_add_row",
-        // 企微出站富媒体：把本地文件发回当前对话
+        // 企微出站富媒体：把本地文件发回当前对话（Sensitive，只读档也要问）
         "wecom_send_image",
         "wecom_send_file",
     ]);
@@ -341,6 +376,10 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
             "clipboard_write",
             "kill_process",
             "kill_port",
+            "wecom_doc_create",
+            "wecom_calendar_create",
+            "wecom_sheet_create",
+            "wecom_sheet_add_row",
             // 长期记忆：写 memory.md，编辑档先问一次
             "remember",
         ]);
@@ -528,6 +567,10 @@ mod tests {
         for tool in crate::agent_tools::by_gate(GateKind::Change) {
             expect(tool, "", [Deny, Ask, Review, Allow]);
         }
+        // 出网 / 读剪贴板 / 往企微发文件：只读档也要问
+        for tool in crate::agent_tools::by_gate(GateKind::Sensitive) {
+            expect(tool, "", [Ask, Ask, Review, Allow]);
+        }
         expect("clipboard_read", "", [Ask, Ask, Review, Allow]);
         expect("hosts", "read", [Allow; 4]);
         expect("hosts", "write", [Deny, Ask, Review, Allow]);
@@ -543,6 +586,37 @@ mod tests {
         expect("task", "", [Allow; 4]);
         // MCP 工具名是运行时的：能做什么由服务决定，只有完全权限不问
         expect("mcp_fs_write_file", "", [Ask, Ask, Review, Allow]);
+        // 没登记的工具不是"未知就放行"：闸门先拒，执行器再报 unknown
+        expect("no_such_tool", "", [Deny; 4]);
+    }
+
+    /// `offered_tools` 里出现注册表没有的名字，会让闸门走「未知」分支。
+    /// 这条测试保证下发清单永远是注册表的子集。
+    #[test]
+    fn offered_tools_are_all_registered() {
+        let all = Reach { files: true, tools: true, vision: true, web: true };
+        for p in ALL {
+            for name in offered_tools(p, all) {
+                assert!(
+                    crate::agent_tools::get(name).is_some(),
+                    "{name} 下发了但不在 agent_tools::TOOLS 里（{p:?}）"
+                );
+            }
+        }
+    }
+
+    /// 只读档不能下发「注定被拒」的工具：模型试一次就白扣一个动作步。
+    /// Workbench / Sensitive 例外——它们的读动作或确认路径在只读档仍然有效。
+    #[test]
+    fn readonly_tools_are_not_silently_denied() {
+        let all = Reach { files: true, tools: true, vision: true, web: true };
+        for name in offered_tools(Permission::Read, all) {
+            let kind = crate::agent_tools::gate_kind(name).expect("已由上一条测试保证");
+            assert!(
+                !matches!(kind, GateKind::Write | GateKind::Change | GateKind::Computer),
+                "{name} 在只读档必被拒，不该下发"
+            );
+        }
     }
 
     /// 工具表新增一项却没在 `tool_gate` / `offered_tools` 里做决定时，这条会失败。
@@ -595,6 +669,32 @@ mod tests {
         assert_eq!(calls[1].args, vec!["origin".to_string(), "main".to_string()]);
         assert!(git_calls("npm test").is_empty());
         assert!(git_calls("echo git").is_empty());
+    }
+
+    /// 粘连写法（`-C../repo`、`-ccore.pager=less`）必须被剥掉，否则子命令变成选项本身，
+    /// 黑名单整条失效。认不出的全局选项一律 fail-closed。
+    #[test]
+    fn git_calls_handle_glued_global_options() {
+        let blocked = |cmd: &str| git_calls(cmd).iter().any(git_call_blocked);
+        let calls = git_calls("git -C../repo status");
+        assert_eq!(calls[0].sub, "status");
+        assert_eq!(calls[0].dir.as_deref(), Some("../repo"));
+        assert!(!calls[0].unknown_option);
+        assert_eq!(git_calls("git -ccore.pager=less status")[0].sub, "status");
+        // 以前这四种全部漏判
+        for cmd in [
+            "git -C../repo reset --hard",
+            "git -C../repo push -f",
+            "git -C../repo clean -fd",
+            "git -C../repo rebase main",
+            "git -ccore.pager=less push -f",
+        ] {
+            assert!(blocked(cmd), "{cmd} 应该被拦");
+        }
+        // 认不出的全局选项按危险处理，普通查询不受影响
+        assert!(blocked("git --upload-pack=x status"));
+        assert!(!blocked("git --no-optional-locks status"));
+        assert!(!blocked("git --version"));
     }
 
     #[test]
@@ -669,8 +769,8 @@ mod tests {
         assert_eq!(tool_gate(Permission::Workspace, name, ""), Gate::Ask);
         assert_eq!(tool_gate(Permission::Review, name, ""), Gate::Review);
         assert_eq!(tool_gate(Permission::Full, name, ""), Gate::Allow);
-        // 前缀规则不能顺手放行别的工具
-        assert_eq!(tool_gate(Permission::Workspace, "mcpfs_read", ""), Gate::Allow);
+        // 前缀规则不能顺手把 `mcpfs_read` 当 MCP 工具：它没登记，按未知工具拒绝
+        assert_eq!(tool_gate(Permission::Workspace, "mcpfs_read", ""), Gate::Deny);
     }
 
     #[test]

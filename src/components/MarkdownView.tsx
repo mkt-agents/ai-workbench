@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Copy } from "lucide-react";
 import { useGlobalStore } from "../core/store";
@@ -255,7 +255,8 @@ function CodeBlock({ lang, text }: { lang: string; text: string }) {
   );
 }
 
-export default function MarkdownView({ text }: { text: string }) {
+/** `memo` 只比 `text`：流式输出时历史答案的文本没变，不必跟着重渲整段 markdown。 */
+function MarkdownView({ text }: { text: string }) {
   const blocks = useMemo(() => parseBlocks(text), [text]);
 
   return (
@@ -338,3 +339,5 @@ export default function MarkdownView({ text }: { text: string }) {
     </div>
   );
 }
+
+export default memo(MarkdownView);

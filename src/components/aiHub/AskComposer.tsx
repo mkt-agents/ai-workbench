@@ -175,6 +175,12 @@ export default function AskComposer(props: Props) {
       <textarea
         ref={inputRef}
         className="ai-hub-input"
+        // 输入框没有可见 label：没有 aria-label 时屏幕阅读器只会念"编辑框"
+        aria-label={t("placeholder")}
+        aria-controls={palette && paletteItems ? "qa-palette" : undefined}
+        aria-activedescendant={
+          palette && paletteItems ? `qa-palette-${palette.active}` : undefined
+        }
         placeholder={
           openList
             ? t("openPlaceholder")

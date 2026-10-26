@@ -160,42 +160,183 @@ pub(crate) fn resolve_in_repo(root: &Path, user_path: &str) -> Result<PathBuf, S
 pub(crate) struct Protected {
     /// Never written under: Windows, Program Files, this app's own data.
     pub trees: Vec<PathBuf>,
+    /// 命令里出现这些目录就整条拒。**不含 Program Files**：`"C:\Program Files\nodejs\npm.cmd"`
+    /// 是正常用法，写目标由 [`Protected::command_write_guard`] 单独判。
+    pub command_trees: Vec<PathBuf>,
     /// Never deleted / moved themselves (but their contents are fine): home folder.
     pub exact: Vec<PathBuf>,
 }
 
+/// 归一化后的可比较键：剥掉 `\\?\` / `\\.\` 设备前缀、统一分隔符、去尾随点与空格、小写。
+fn path_key(p: &Path) -> String {
+    let mut s = p.display().to_string().replace('/', "\\");
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        s = format!(r"\\{rest}");
+    } else if let Some(rest) = s.strip_prefix(r"\\?\").or_else(|| s.strip_prefix(r"\\.\")) {
+        s = rest.to_string();
+    }
+    // Win32 会忽略路径末尾的点与空格，字符串比较不会。
+    while s.ends_with('.') || s.ends_with(' ') {
+        s.pop();
+    }
+    s.trim_end_matches('\\').to_lowercase()
+}
+
+/// 尽量解析成真实路径：8.3 短名、junction、符号链接都靠它展开。
+/// 路径不存在时解析「存在的最长祖先」再拼回剩余部分（新文件也要能判）。
+fn real_path(path: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(path) {
+        return c;
+    }
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    while let Some(parent) = cur.parent().map(Path::to_path_buf) {
+        if let Some(name) = cur.file_name() {
+            rest.push(name.to_os_string());
+        }
+        cur = parent;
+        if let Ok(c) = std::fs::canonicalize(&cur) {
+            let mut out = c;
+            for name in rest.iter().rev() {
+                out.push(name);
+            }
+            return out;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// 会往指定路径写的命令：它们的路径参数都当写目标看。
+const WRITE_PROGRAMS: &[&str] = &[
+    "copy",
+    "xcopy",
+    "robocopy",
+    "move",
+    "ren",
+    "rename",
+    "mkdir",
+    "md",
+    "mklink",
+    "tee",
+    "set-content",
+    "add-content",
+    "out-file",
+    "new-item",
+    "copy-item",
+    "move-item",
+    "expand-archive",
+    "compress-archive",
+];
+
 impl Protected {
     pub(crate) fn from_env() -> Self {
         let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
-        let mut trees: Vec<PathBuf> = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]
-            .iter()
-            .filter_map(|k| env(k))
-            .collect();
-        if let Some(appdata) = env("APPDATA") {
-            trees.push(appdata.join("com.ai-workbench.app"));
+        let mut trees: Vec<PathBuf> = Vec::new();
+        let mut command_trees: Vec<PathBuf> = Vec::new();
+        for key in ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            let Some(path) = env(key) else { continue };
+            // Program Files 里有 npm / git 这些正常工具，只能判「写目标」，不能一见就拒
+            if key == "SystemRoot" {
+                command_trees.push(path.clone());
+            }
+            trees.push(path);
         }
-        Self { trees, exact: vec![home_dir()] }
+        if let Some(appdata) = env("APPDATA") {
+            let dir = appdata.join("com.ai-workbench.app");
+            trees.push(dir.clone());
+            command_trees.push(dir);
+        }
+        // 用户目录下的凭证：写进去等于把密钥交出去
+        let home = home_dir();
+        for name in [".ssh", ".aws", ".npmrc", ".config", ".docker", ".gitconfig"] {
+            let dir = home.join(name);
+            trees.push(dir.clone());
+            command_trees.push(dir);
+        }
+        Self { trees, command_trees, exact: vec![home] }
     }
 
     /// `Some(reason)` when `path` must not be touched. `destructive` = delete / move source.
     pub(crate) fn check(&self, path: &Path, destructive: bool) -> Option<String> {
-        let key = |p: &Path| p.display().to_string().replace('/', "\\").trim_end_matches('\\').to_lowercase();
-        let target = key(path);
+        // 网络共享先按字面拒：`canonicalize` 一个不可达的 UNC 路径会卡住几秒。
+        if path_key(path).starts_with(r"\\") {
+            return Some("不能修改网络共享（UNC）路径上的文件。".into());
+        }
+        // 再解析真实路径：`\\?\C:\Windows\x`、8.3 短名 `C:\PROGRA~1\`、指向系统目录的
+        // junction / 符号链接，字面比较都拦不住。
+        let real = real_path(path);
+        let target = path_key(&real);
         // Git's own state (index, MERGE_HEAD, refs, config) only changes through git.
-        if path.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git")) {
+        if real.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git")) {
             return Some("不能直接改 .git 目录里的文件，仓库状态只能通过 git 命令改变。".into());
         }
+        // canonicalize 之后才暴露出来的共享路径
+        if target.starts_with(r"\\") {
+            return Some("不能修改网络共享（UNC）路径上的文件。".into());
+        }
         for tree in &self.trees {
-            let t = key(tree);
+            let t = path_key(&real_path(tree));
             if !t.is_empty() && (target == t || target.starts_with(&format!("{t}\\"))) {
                 return Some(format!("{} 是受保护的系统或应用目录，任何权限下都不能修改。", tree.display()));
             }
         }
         if destructive {
             // A drive root (`C:` / `C:\`) or the home folder itself.
-            let is_root = path.parent().is_none() || target.len() <= 2;
-            if is_root || self.exact.iter().any(|p| key(p) == target) {
+            let is_root = real.parent().is_none() || target.len() <= 2;
+            if is_root || self.exact.iter().any(|p| path_key(&real_path(p)) == target) {
                 return Some("不能删除或移动磁盘根目录和用户主目录。".into());
+            }
+        }
+        None
+    }
+
+    /// shell 的前置闸门：命令里提到受保护目录、或用环境变量指向系统目录、或写网络共享，
+    /// 一律不执行。`copy a C:\Windows\x` 以前完全不受 `Protected` 约束。
+    pub(crate) fn command_write_guard(&self, command: &str, cwd: &Path) -> Option<String> {
+        let lower = command.replace('/', "\\").to_lowercase();
+        for tree in &self.command_trees {
+            let key = path_key(tree);
+            if !key.is_empty() && lower.contains(&key) {
+                return Some(format!(
+                    "命令里出现了受保护目录「{}」，shell 不能直接改它。要读内容请用 read_file / list_dir。",
+                    tree.display()
+                ));
+            }
+        }
+        // 环境变量间接指向系统目录：展开后就是上面那些树
+        const ENV_ALIASES: &[&str] = &[
+            "%systemroot%",
+            "%windir%",
+            "$env:systemroot",
+            "$env:windir",
+            "%appdata%",
+            "$env:appdata",
+        ];
+        if ENV_ALIASES.iter().any(|alias| lower.contains(alias)) {
+            return Some("命令通过环境变量指向系统目录，任何权限下都不执行。要读内容请用 read_file。".into());
+        }
+        // 网络共享：数据会离开本机
+        if command
+            .split_whitespace()
+            .any(|w| w.trim_matches(['"', '\'']).starts_with(r"\\"))
+        {
+            return Some("命令里出现了网络共享（UNC）路径，任何权限下都不执行。".into());
+        }
+        // 写类命令的路径参数都是潜在写目标（含带空格、已加引号的路径）
+        let words = crate::agent::split_words(command);
+        let Some(first) = words.first() else { return None };
+        if !WRITE_PROGRAMS.contains(&crate::agent::program_name(first).as_str()) {
+            return None;
+        }
+        for word in &words[1..] {
+            let token = word.trim_matches(['"', '\'']);
+            // 开关（`/y`、`-Force`）不是路径
+            if token.is_empty() || token.starts_with('/') || token.starts_with('-') {
+                continue;
+            }
+            let path = if Path::new(token).is_absolute() { PathBuf::from(token) } else { cwd.join(token) };
+            if let Some(reason) = self.check(&path, false) {
+                return Some(reason);
             }
         }
         None
@@ -719,6 +860,7 @@ mod tests {
     fn protected_paths_block_system_and_roots() {
         let p = Protected {
             trees: vec![PathBuf::from("C:\\Windows"), PathBuf::from("C:\\Program Files")],
+            command_trees: vec![PathBuf::from("C:\\Windows")],
             exact: vec![PathBuf::from("C:\\Users\\me")],
         };
         assert!(p.check(Path::new("C:\\Windows\\System32\\drivers\\etc\\x"), false).is_some());
@@ -730,6 +872,31 @@ mod tests {
         assert!(p.check(Path::new("D:\\"), true).is_some());
         assert!(p.check(Path::new("D:\\repo\\.git\\MERGE_HEAD"), false).is_some());
         assert!(p.check(Path::new("D:\\repo\\.github\\ci.yml"), false).is_none());
+    }
+
+    /// 设备前缀 / UNC / 尾随点不能靠字面比较绕过；shell 走同一道闸门。
+    #[test]
+    fn protected_paths_resist_prefix_tricks() {
+        let p = Protected {
+            trees: vec![PathBuf::from("C:\\Windows")],
+            command_trees: vec![PathBuf::from("C:\\Windows")],
+            exact: vec![PathBuf::from("C:\\Users\\me")],
+        };
+        assert!(p.check(Path::new(r"\\?\C:\Windows\System32\a.dll"), false).is_some());
+        assert!(p.check(Path::new(r"\\.\C:\Windows\a"), false).is_some());
+        assert!(p.check(Path::new("C:\\Windows.\\a"), false).is_some());
+        // UNC 不碰网络也能当场拒（canonicalize 会卡住）
+        assert!(p.check(Path::new(r"\\srv\share\a"), false).is_some());
+
+        let cwd = PathBuf::from("D:\\repo");
+        assert!(p.command_write_guard("copy a.exe C:\\Windows\\x.exe", &cwd).is_some());
+        assert!(p.command_write_guard("echo x > C:\\Windows\\x", &cwd).is_some());
+        assert!(p.command_write_guard("copy a %SystemRoot%\\x", &cwd).is_some());
+        assert!(p.command_write_guard(r"copy a \\srv\share\x", &cwd).is_some());
+        // 正常命令不误伤：Program Files 里的工具照常跑
+        assert!(p.command_write_guard("git status", &cwd).is_none());
+        assert!(p.command_write_guard("npm run build", &cwd).is_none());
+        assert!(p.command_write_guard("\"C:\\Program Files\\nodejs\\npm.cmd\" test", &cwd).is_none());
     }
 
     #[test]
@@ -772,7 +939,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let scope = Scope::new(Some(root.canonicalize().unwrap()), false);
-        let none = Protected { trees: vec![], exact: vec![] };
+        let none = Protected { trees: vec![], command_trees: vec![], exact: vec![] };
         let msg = write_or_edit(&scope, "write_file", &json!({ "path": "n/a.txt", "content": "x\ny\n" }), &none).unwrap();
         assert!(msg.contains("已新建") && msg.contains("+2"));
         let preview = change_preview(&scope, "edit_file", &json!({ "path": "n/a.txt", "old": "y", "new": "z" })).unwrap();

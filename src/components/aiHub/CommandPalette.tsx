@@ -39,7 +39,13 @@ export default function CommandPalette({ items, active, onHover, onPick, drillTi
   if (items.length === 0) return null;
   // 行按钮 onMouseDown 阻止默认：点完焦点仍留在输入框，↑↓ 可以接着选
   return (
-    <div ref={listRef} className={`qa-palette${drillTitle ? " is-drill" : ""}`} role="listbox">
+    <div
+      ref={listRef}
+      id="qa-palette"
+      className={`qa-palette${drillTitle ? " is-drill" : ""}`}
+      role="listbox"
+      aria-label={drillTitle ?? t("palette.label")}
+    >
       {drillTitle && (
         <div className="qa-palette-head" role="presentation">
           <span className="qa-palette-head-title">{drillTitle}</span>
@@ -52,6 +58,7 @@ export default function CommandPalette({ items, active, onHover, onPick, drillTi
         return (
           <button
             key={`${item.kind}:${item.id}`}
+            id={`qa-palette-${index}`}
             type="button"
             role="option"
             aria-selected={index === active}

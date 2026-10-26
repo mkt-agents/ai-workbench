@@ -40,6 +40,9 @@ const MAX_RETRIES: u32 = 3;
 const PREVIEW_CAP: usize = 2_000;
 /// Step detail sent to the UI (command output, errors, diffs).
 const DETAIL_CAP: usize = 2_000;
+/// `agent-step` 事件里 `arg` 的长度上限：`clipboard_write` 的整段文本、heredoc 命令
+/// 没必要整条推到前端（同一调用还会重复 emit 2-3 次）。
+const STEP_ARG_CAP: usize = 200;
 /// Screenshots kept in the conversation; older ones become a text placeholder.
 const KEEP_SHOTS: usize = 2;
 /// Steps `update_plan` keeps: the hub card is a checklist, not a document.
@@ -181,7 +184,8 @@ static TEXT_BRIDGES: Mutex<Option<HashMap<String, mpsc::UnboundedSender<AgentBri
 fn text_bridges(
 ) -> std::sync::MutexGuard<'static, Option<HashMap<String, mpsc::UnboundedSender<AgentBridgeEvent>>>>
 {
-    let mut guard = TEXT_BRIDGES.lock().expect("agent text bridges");
+    // 中毒就继续用：这里只有一张 `HashMap`，panic 过一次也不该让整个天玑瘫掉。
+    let mut guard = TEXT_BRIDGES.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
@@ -212,7 +216,7 @@ fn bridge_send(id: &str, ev: AgentBridgeEvent) {
 }
 
 fn decisions() -> std::sync::MutexGuard<'static, Option<HashMap<String, oneshot::Sender<DecisionMsg>>>> {
-    let mut guard = DECISIONS.lock().expect("agent decisions");
+    let mut guard = DECISIONS.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
@@ -242,7 +246,12 @@ pub fn agent_decide(
     let always = allow && scope.as_deref() == Some("always");
     let for_turn = allow && matches!(scope.as_deref(), Some("turn") | Some("always"));
     let mut guard = decisions();
-    let map = guard.as_mut().expect("map");
+    let Some(map) = guard.as_mut() else {
+        return Err(format!(
+            "[{}] 审批表不可用",
+            crate::config::ErrorCode::AiApprovalStale.as_str()
+        ));
+    };
     let mut answered = 0usize;
     for call_id in &call_ids {
         if let Some(tx) = map.remove(&decision_key(&request_id, call_id)) {
@@ -580,12 +589,22 @@ fn step_arg(args: &Value) -> String {
         "text",
     ] {
         match args.get(key) {
-            Some(Value::String(s)) if !s.trim().is_empty() => return s.trim().to_string(),
+            Some(Value::String(s)) if !s.trim().is_empty() => return clip_chars(s.trim(), STEP_ARG_CAP),
             Some(Value::Number(n)) => return n.to_string(),
             _ => {}
         }
     }
     String::new()
+}
+
+/// 按字符数截断（不能按字节切：中文会切出半个字）。
+fn clip_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
 }
 
 /// `diff`: `preview` is a unified diff (file / hosts change) and is rendered with colours.
@@ -806,38 +825,210 @@ fn emit_retry(app: &Option<&AppHandle>, id: &str, attempt: u32, wait: Duration, 
     }
 }
 
+/// 任何权限都不该跑的程序（按**程序名**判定，不是子串，`git log --grep=shutdown` 不受影响）。
+///
+/// 删除类整类禁掉是有意的：天玑的删除一律进回收站（`delete_path`），
+/// `del` / `rm` / `Remove-Item` 绕过回收站，等于把这条产品约束拆掉。
+const DENY_PROGRAMS: &[&str] = &[
+    "shutdown",
+    "logoff",
+    "diskpart",
+    "format",
+    "mkfs",
+    "bcdedit",
+    "bootrec",
+    "vssadmin",
+    "wevtutil",
+    "takeown",
+    "icacls",
+    "cipher",
+    "taskkill",
+    "tskill",
+    // 不走回收站的删除（cmd 与 PowerShell 的别名）
+    "del",
+    "erase",
+    "rd",
+    "rmdir",
+    "rm",
+    "ri",
+    "remove-item",
+    // 动态执行：命令体不在参数里，子串判定永远追不上
+    "iex",
+    "invoke-expression",
+];
+
+/// 套娃深度上限：`cmd /c powershell -c …` 这类一层层剥下去最多看三层。
+const SHELL_DEPTH: u8 = 3;
+
 pub(crate) fn command_blocked(command: &str) -> bool {
-    let lower = command.to_lowercase();
-    const BLOCKED: &[&str] = &[
-        "shutdown",
-        "restart-computer",
-        "stop-computer",
-        "logoff",
-        "diskpart",
-        "cipher /w",
-        "mkfs",
-        "format ",
-        "format.com",
-        "del /s",
-        "rd /s",
-        "rmdir /s",
-        "remove-item",
-        "filter-branch",
-    ];
-    if BLOCKED.iter().any(|word| lower.contains(word)) {
+    command_blocked_depth(command, 0)
+}
+
+fn command_blocked_depth(command: &str, depth: u8) -> bool {
+    if depth > SHELL_DEPTH {
         return true;
     }
-    // git 规则按子命令和 token 判定（agent_policy::git_call_blocked）：
-    // `git log --grep=rebase` 是查询，`git -C x rebase`、`reset  --hard`（多空格）也要拦住。
+    let lower = command.to_lowercase();
+    // `--force` 不管出现在哪一段都不放行（`git push -f` 由 git 规则兜住）
     if lower
         .split_whitespace()
         .any(|t| t == "--force" || t == "--force-with-lease" || t.starts_with("--force-with-lease="))
     {
         return true;
     }
-    crate::agent_policy::git_calls(command)
+    // git 规则按子命令和 token 判定（agent_policy::git_call_blocked）：
+    // `git log --grep=rebase` 是查询，`git -C x rebase`、`reset  --hard`（多空格）也要拦住。
+    if crate::agent_policy::git_calls(command)
         .iter()
         .any(crate::agent_policy::git_call_blocked)
+    {
+        return true;
+    }
+    command_segments(command)
+        .iter()
+        .any(|words| segment_blocked(words, depth))
+}
+
+/// `&` `|` `;` `(` `)` 换行都算分段：一条危险命令常常是链式命令里的第二段。
+fn command_segments(command: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for segment in command.split(['&', '|', ';', '(', ')', '\n']) {
+        let words = split_words(segment);
+        if !words.is_empty() {
+            out.push(words);
+        }
+    }
+    out
+}
+
+/// 按空白切词，双引号内的空格不切（`cmd /c "del /s x"` 要当成一个参数）。
+pub(crate) fn split_words(segment: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in segment.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// 程序名：去引号、去路径、去 `.exe/.cmd/.bat/.com/.ps1`。
+pub(crate) fn program_name(word: &str) -> String {
+    let w = word.trim().trim_matches(|c| c == '"' || c == '\'');
+    let name = w.rsplit(['\\', '/']).next().unwrap_or(w);
+    let lower = name.to_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".com", ".ps1"] {
+        if let Some(stripped) = lower.strip_suffix(ext) {
+            return stripped.to_string();
+        }
+    }
+    lower
+}
+
+fn segment_blocked(words: &[String], depth: u8) -> bool {
+    let Some(first) = words.first() else {
+        return false;
+    };
+    let prog = program_name(first);
+    let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+    if DENY_PROGRAMS.contains(&prog.as_str()) {
+        return true;
+    }
+    let sub = args.first().map(|a| a.to_ascii_lowercase()).unwrap_or_default();
+    match prog.as_str() {
+        // 注册表 / 服务：查询放行，其余（增删改、导入导出）一律拒
+        "reg" => matches!(
+            sub.as_str(),
+            "add" | "delete" | "import" | "copy" | "restore" | "load" | "unload" | "save"
+        ),
+        "sc" => matches!(
+            sub.as_str(),
+            "delete" | "create" | "config" | "start" | "stop" | "failure"
+        ),
+        // 下载即执行：certutil 的 urlcache 是常见的一句话落地方式
+        "certutil" => args.iter().any(|a| a.eq_ignore_ascii_case("-urlcache")),
+        // PowerShell 的 -EncodedCommand 把命令体编码成 base64，子串判定完全失效：
+        // 解出来再判一次；-Command / -c 的内联脚本同理。
+        "powershell" | "pwsh" => {
+            if let Some(inner) = encoded_payload(&args) {
+                return command_blocked_depth(&inner, depth + 1);
+            }
+            match command_payload(&args) {
+                Some(inner) => command_blocked_depth(&inner, depth + 1),
+                None => false,
+            }
+        }
+        "cmd" => match args
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case("/c") || a.eq_ignore_ascii_case("/k"))
+        {
+            Some(pos) => command_blocked_depth(&args[pos + 1..].join(" "), depth + 1),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+/// PowerShell 的 `-EncodedCommand`（含 `-e` / `-ec` / `-en` 这些缩写）。
+/// 注意：`-enc=<b64>` 的载荷必须**原样**取出——base64 大小写敏感，先转小写就解不出原文了。
+fn encoded_payload(args: &[&str]) -> Option<String> {
+    let strip_ci = |s: &str, prefix: &str| -> Option<String> {
+        let head = s.get(..prefix.len())?;
+        head.eq_ignore_ascii_case(prefix).then(|| s[prefix.len()..].to_string())
+    };
+    for (i, a) in args.iter().enumerate() {
+        let inline = strip_ci(a, "-encodedcommand=").or_else(|| strip_ci(a, "-enc="));
+        let shorthand = matches!(
+            a.to_ascii_lowercase().as_str(),
+            "-encodedcommand" | "-enc" | "-ec" | "-en" | "-e"
+        );
+        let b64 = match (inline, shorthand) {
+            (Some(v), _) => v,
+            (None, true) => args.get(i + 1)?.to_string(),
+            (None, false) => continue,
+        };
+        return decode_powershell(&b64);
+    }
+    None
+}
+
+/// base64 → UTF-16LE 文本；解不出来就当「看不出内容」，交给上层按未知处理。
+fn decode_powershell(b64: &str) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .ok()?;
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    let text = String::from_utf16_lossy(&units);
+    (!text.trim().is_empty()).then_some(text)
+}
+
+/// `-Command` / `-c` 后面的内联脚本。
+fn command_payload(args: &[&str]) -> Option<String> {
+    for (i, a) in args.iter().enumerate() {
+        if !matches!(a.to_ascii_lowercase().as_str(), "-command" | "-c" | "/command") {
+            continue;
+        }
+        let rest = args[i + 1..].join(" ");
+        if !rest.trim().is_empty() {
+            return Some(rest);
+        }
+    }
+    None
 }
 
 /// `git branch` 里真正只读的用法：只允许查询 flag；
@@ -1061,30 +1252,57 @@ enum Decision {
     TimedOut,
 }
 
-async fn wait_decision(request_id: &str, call_id: &str) -> Result<Decision, String> {
-    let (tx, mut rx) = oneshot::channel();
-    decisions()
-        .as_mut()
-        .expect("map")
-        .insert(decision_key(request_id, call_id), tx);
-    let deadline = Instant::now() + APPROVAL_WAIT;
-    loop {
-        if is_cancelled(request_id) {
-            decisions().as_mut().expect("map").remove(&decision_key(request_id, call_id));
-            return Err(format!("[{}] 已取消", crate::config::ErrorCode::AiRequestCancelled.as_str()));
-        }
-        match rx.try_recv() {
-            Ok((true, for_turn, always)) => return Ok(Decision::Allow { for_turn, always }),
-            Ok((false, _, _)) => return Ok(Decision::Deny),
-            Err(oneshot::error::TryRecvError::Empty) => {}
-            Err(oneshot::error::TryRecvError::Closed) => return Ok(Decision::Deny),
-        }
-        if Instant::now() > deadline {
-            decisions().as_mut().expect("map").remove(&decision_key(request_id, call_id));
-            return Ok(Decision::TimedOut);
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+/// 一个待决审批的接收端。注册与等待拆成两步：**先注册，再 emit 审批卡**。
+/// 旧实现先 emit 后注册，用户点得快（连点 / 自动化 UI）时 `agent_decide` 找不到 waiter，
+/// 决定被丢弃、主循环一直卡到 5 分钟超时。
+struct Waiter {
+    key: String,
+    rx: oneshot::Receiver<DecisionMsg>,
+}
+
+fn register_waiter(request_id: &str, call_id: &str) -> Result<Waiter, String> {
+    let (tx, rx) = oneshot::channel();
+    let key = decision_key(request_id, call_id);
+    let mut guard = decisions();
+    let Some(map) = guard.as_mut() else {
+        return Err("审批表不可用".into());
+    };
+    map.insert(key.clone(), tx);
+    Ok(Waiter { key, rx })
+}
+
+fn forget_waiter(key: &str) {
+    if let Some(map) = decisions().as_mut() {
+        map.remove(key);
     }
+}
+
+/// 等到被取消为止（停止键不该让人等满 5 分钟）。
+async fn wait_cancelled(request_id: &str) {
+    while !is_cancelled(request_id) {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// `select!` 三个出口：用户决定 / 超时 / 停止。旧实现是 200ms 轮询，决定最多滞后 200ms，
+/// 而且空转唤醒。
+async fn await_waiter(mut waiter: Waiter, request_id: &str) -> Result<Decision, String> {
+    let deadline = tokio::time::Instant::now() + APPROVAL_WAIT;
+    let outcome = tokio::select! {
+        result = &mut waiter.rx => match result {
+            Ok((true, for_turn, always)) => Ok(Decision::Allow { for_turn, always }),
+            Ok((false, _, _)) => Ok(Decision::Deny),
+            // sender 被 drop（收尾清理）等同于拒绝，不能当成放行
+            Err(_) => Ok(Decision::Deny),
+        },
+        _ = tokio::time::sleep_until(deadline) => Ok(Decision::TimedOut),
+        _ = wait_cancelled(request_id) => Err(format!(
+            "[{}] 已取消",
+            crate::config::ErrorCode::AiRequestCancelled.as_str()
+        )),
+    };
+    forget_waiter(&waiter.key);
+    outcome
 }
 
 fn message_text(content: &Value) -> String {
@@ -1810,6 +2028,11 @@ async fn execute_tool(
         }
         "run_command" => {
             let cwd = command_cwd(ctx.scope, args)?;
+            // shell 以前完全不受 `Protected` 约束：全权限下 `copy a C:\Windows\x` 是通的。
+            // 受保护目录 / 凭证目录 / 网络共享在这里统一挡掉。
+            if let Some(reason) = ctx.protected.command_write_guard(&fs::arg_str(args, "command"), &cwd) {
+                return Err(reason);
+            }
             let (args, rid) = (args.clone(), ctx.request_id.to_string());
             tokio::task::spawn_blocking(move || proc::run_command(&cwd, &args, &rid))
                 .await
@@ -1817,6 +2040,9 @@ async fn execute_tool(
         }
         "start_process" => {
             let cwd = command_cwd(ctx.scope, args)?;
+            if let Some(reason) = ctx.protected.command_write_guard(&fs::arg_str(args, "command"), &cwd) {
+                return Err(reason);
+            }
             let args = args.clone();
             // `spawn_blocking` 停不下来：这一轮被取消时它照样会把进程起起来。所以让它把编号
             // 送回异步侧——接收端已经没了（= 这一轮已取消）就当场按编号停掉，别留孤儿进程。
@@ -2767,7 +2993,7 @@ async fn prefetch_readonly(
     ctx: &ToolCtx<'_>,
     calls: &[ToolCall],
     permission: Permission,
-) -> Prefetched {
+) -> Result<Prefetched, String> {
     let mut prefetched = Prefetched::default();
     let upto = calls.len().min(MAX_CALLS_PER_ROUND);
     let mut parsed: Vec<Option<Value>> = Vec::with_capacity(upto);
@@ -2789,7 +3015,7 @@ async fn prefetch_readonly(
     }
     let picks = plan_batches(&steps, ctx.max_parallel);
     if picks.len() < 2 {
-        return prefetched;
+        return Ok(prefetched);
     }
     for &i in &picks {
         let Some(args) = parsed[i].clone() else { continue };
@@ -2811,14 +3037,19 @@ async fn prefetch_readonly(
             tokio::task::spawn_blocking(move || execute_readonly(&scope, &request_id, &name, &args, grep_ignore)),
         ));
     }
-    for (i, handle) in handles {
+    // 大仓库的 grep / 遍历可能跑很久：外层套 `await_cancellable`，点停止立刻返回。
+    // 已经起来的 `spawn_blocking` 停不下来，但它们是只读的，结果丢掉即可。
+    let futures = futures_util::future::join_all(handles.into_iter().map(|(i, handle)| async move {
         let result = match handle.await {
             Ok(result) => result,
             Err(e) => Err(format!("并发执行失败: {e}")),
         };
+        (i, result)
+    }));
+    for (i, result) in await_cancellable(futures, ctx.request_id).await? {
         prefetched.done.insert(i, result);
     }
-    prefetched
+    Ok(prefetched)
 }
 
 /// 只读子代理之间没有先后依赖（各自调查一块，只回结论），同一轮派出多个时并发跑，
@@ -2829,7 +3060,7 @@ async fn prefetch_tasks(
     config: &AIModelConfig,
     calls: &[ToolCall],
     permission: Permission,
-) -> Prefetched {
+) -> Result<Prefetched, String> {
     let mut prefetched = Prefetched::default();
     let mut picks: Vec<(usize, String, String)> = Vec::new();
     for (index, call) in calls.iter().take(MAX_CALLS_PER_ROUND).enumerate() {
@@ -2851,16 +3082,18 @@ async fn prefetch_tasks(
         picks.push((index, goal, crate::agent_fs::arg_str(&args, "path")));
     }
     if picks.len() < 2 {
-        return prefetched;
+        return Ok(prefetched);
     }
     let futures = picks
         .iter()
         .map(|(_, goal, path)| run_subagent(ctx, config, permission, goal, path));
-    for ((index, ..), result) in picks.iter().zip(futures_util::future::join_all(futures).await) {
+    // 子代理一轮最多 16 次模型调用：等它们跑完再响应停止会显得卡死，所以同样可取消
+    let results = await_cancellable(futures_util::future::join_all(futures), ctx.request_id).await?;
+    for ((index, ..), result) in picks.iter().zip(results) {
         // 子代理结论是一条文本，和别的工具结果一样装进 ToolOutput 再回灌
         prefetched.done.insert(*index, result.map(ToolOutput::from));
     }
-    prefetched
+    Ok(prefetched)
 }
 
 #[tauri::command]
@@ -3174,9 +3407,21 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         }
         let mut tool_results: Vec<(String, ToolOutput)> = Vec::new();
         // 只读调用先并发跑掉（`plan_batches` 只取开头连续的合格调用）；写类与要审批的仍串行
-        let mut prefetched = prefetch_readonly(&ctx, &turn.calls, permission).await;
+        let mut prefetched = match prefetch_readonly(&ctx, &turn.calls, permission).await {
+            Ok(v) => v,
+            Err(cancelled) => {
+                emit_err(&app, &request_id, &cancelled);
+                return Err(cancelled);
+            }
+        };
         // 只读子代理 `task` 也并发：结论仍按 tool_use 顺序回灌
-        let tasks = prefetch_tasks(&ctx, &config, &turn.calls, permission).await;
+        let tasks = match prefetch_tasks(&ctx, &config, &turn.calls, permission).await {
+            Ok(v) => v,
+            Err(cancelled) => {
+                emit_err(&app, &request_id, &cancelled);
+                return Err(cancelled);
+            }
+        };
         prefetched.started.extend(tasks.started);
         prefetched.done.extend(tasks.done);
         // —— 阶段 1：扫描。把每个调用归类（跳过 / 要审批 / 直接执行），先不执行 ——
@@ -3238,9 +3483,6 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             };
             p.summary = call_summary(&call.name, &args);
             p.arg_text = step_arg(&args);
-            if !prefetched.started.contains(&index) {
-                emit_step_full(&app, &request_id, &call.name, "running", &p.summary, "", Some(&p.arg_text));
-            }
             p.args = args;
             p.arg = gate_arg(&call.name, &p.args);
             p.command = if call.name == "run_command" { p.arg.clone() } else { String::new() };
@@ -3272,10 +3514,20 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             }
             p.gate = Some(gate);
             p.kind = action_kind(&call.name, &p.arg);
+            // 「正在执行」只在真会执行时发：Deny 已发过 denied，Ask 是在等用户（审批卡就是信号），
+            // Review 之后自己会发一条带审查结论的 running。
+            if gate == Gate::Allow && !prefetched.started.contains(&index) {
+                emit_step_full(&app, &request_id, &call.name, "running", &p.summary, "", Some(&p.arg_text));
+            }
             let (preview, preview_is_diff) = approval_preview(&scope, &call.name, &p.args, &p.summary);
             p.preview = preview;
             p.preview_is_diff = preview_is_diff;
-            p.needs_confirm = gate == Gate::Ask && !granted.contains(&p.kind) && !always_allowed.contains(&p.kind);
+            // 「以后都允许」的两个例外：只读档永远问（Sensitive / MCP 可能是外发），
+            // MCP 的能力由服务自己决定、不能靠一条历史记录常开。
+            let remembered = permission != Permission::Read
+                && !call.name.starts_with("mcp_")
+                && always_allowed.contains(&p.kind);
+            p.needs_confirm = gate == Gate::Ask && !granted.contains(&p.kind) && !remembered;
             // 审查托管：先让 AI 审一遍，只有明确放行才不打扰用户
             if gate == Gate::Review {
                 let (allow, reason) =
@@ -3295,7 +3547,12 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             }
             // 「以后都允许」只对 Ask 档提供：审查托管每次都要过 AI 审、完全权限本来不问；
             // 改前确认降下来的这一次也不提供——否则一按就把用户自己开的开关废了
-            p.can_remember = gate == Gate::Ask && permission != Permission::Full && !p.diff_confirming;
+            // 只读档不给「以后都允许」：那里的 Ask 全是出网 / 剪贴板 / MCP 外发，
+            // 一次点击就等于永久关掉询问。MCP 同理，能力边界只由服务决定。
+            p.can_remember = gate == Gate::Ask
+                && !matches!(permission, Permission::Read | Permission::Full)
+                && !call.name.starts_with("mcp_")
+                && !p.diff_confirming;
             prepared.push(p);
         }
 
@@ -3311,6 +3568,15 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             // 合并卡只在「所有操作都是同一类」时给「以后都允许」——一次点击记不住好几种
             let single_kind = confirming.iter().all(|&i| prepared[i].kind == first.kind);
             let can_remember = first.can_remember && single_kind;
+            // 先注册 waiter、再发审批卡：用户点得快（连点 / 自动化 UI）也不会落进
+            // 「还没人等」的空档，决定不会被丢掉。
+            let waiter = match register_waiter(&request_id, &first.call_id) {
+                Ok(waiter) => waiter,
+                Err(e) => {
+                    emit_err(&app, &request_id, &e);
+                    return Err(e);
+                }
+            };
             if confirming.len() == 1 {
                 let title = if first.review_note.is_empty() {
                     first.summary.clone()
@@ -3343,7 +3609,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     .collect();
                 emit_approval_batch(&app, &request_id, &patches, can_remember);
             }
-            let decision = match wait_decision(&request_id, &first.call_id).await {
+            let decision = match await_waiter(waiter, &request_id).await {
                 Ok(v) => v,
                 Err(e) => {
                     emit_err(&app, &request_id, &e);
@@ -3736,6 +4002,63 @@ mod tests {
         assert!(command_is_readonly("git diff"));
         assert!(!command_is_readonly("git push"));
         assert!(!command_is_readonly("git add -A && git commit -m x"));
+    }
+
+    /// 黑名单按「程序 + 参数」判定，不再依赖子串与参数顺序。
+    #[test]
+    fn blocks_destructive_programs_by_name() {
+        // 删除一律走回收站：这些绕过回收站的形态在任何顺序下都拒
+        for cmd in [
+            "del /s /q C:\\tmp\\x",
+            "del /q /s C:\\tmp\\x",
+            "rd /s /q C:\\tmp\\x",
+            "rmdir /q /s C:\\tmp\\x",
+            "rm -rf build",
+            "Remove-Item -Recurse -Force build",
+            "erase /f x.txt",
+        ] {
+            assert!(command_blocked(cmd), "{cmd} 应该被拦");
+        }
+        // 提权 / 改启动项 / 删卷影 / 清日志 / 强杀进程
+        for cmd in [
+            "icacls C:\\ /grant everyone:F",
+            "takeown /f C:\\Windows",
+            "bcdedit /set safeboot minimal",
+            "vssadmin delete shadows /all",
+            "wevtutil cl System",
+            "reg delete HKLM\\Software\\x /f",
+            "sc delete SomeService",
+            "taskkill /f /im explorer.exe",
+        ] {
+            assert!(command_blocked(cmd), "{cmd} 应该被拦");
+        }
+        // 只读的注册表 / 服务查询不受影响
+        assert!(!command_blocked("reg query HKLM\\Software"));
+        assert!(!command_blocked("sc query SomeService"));
+        // 链式命令的第二段同样要判
+        assert!(command_blocked("cd sub && del /s /q ."));
+        assert!(!command_blocked("git log --grep=shutdown"));
+    }
+
+    /// PowerShell 的 -EncodedCommand 把命令体编码成 base64：必须解出来再判，
+    /// 否则整张黑名单一句话就绕过去了（工具自身也用这条通道起进程）。
+    #[test]
+    fn blocks_encoded_powershell_payloads() {
+        let encode = |s: &str| {
+            use base64::Engine;
+            let bytes: Vec<u8> = s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        };
+        let payload = encode("Remove-Item -Recurse -Force C:\\tmp");
+        assert!(command_blocked(&format!("powershell -EncodedCommand {payload}")));
+        assert!(command_blocked(&format!("powershell -e {payload}")));
+        assert!(command_blocked(&format!("pwsh -enc={payload}")));
+        // 普通内联脚本照旧
+        assert!(command_blocked("powershell -Command \"del /s /q C:\\tmp\""));
+        assert!(command_blocked("cmd /c del /s /q C:\\tmp"));
+        // 正常命令不被误伤
+        assert!(!command_blocked("powershell -Command \"Get-ChildItem\""));
+        assert!(!command_blocked(&format!("powershell -EncodedCommand {}", encode("Get-ChildItem"))));
     }
 
     /// rebase / --force 按 token 拦截：`git log --grep=rebase` 是查询，必须放行

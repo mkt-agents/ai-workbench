@@ -110,9 +110,10 @@ pub(crate) const TOOLS: &[ToolDef] = &[
     ToolDef { name: "wecom_sheet_list", group: ToolGroup::Data, gate: GateKind::Look, parallel: true, action: false },
     ToolDef { name: "wecom_sheet_create", group: ToolGroup::Data, gate: GateKind::Change, parallel: false, action: true },
     ToolDef { name: "wecom_sheet_add_row", group: ToolGroup::Data, gate: GateKind::Change, parallel: false, action: true },
-    // —— 企微出站富媒体：把本地生成的图片/文件发回当前企微对话（只读，不产生副作用审批）——
-    ToolDef { name: "wecom_send_image", group: ToolGroup::Doc, gate: GateKind::Look, parallel: false, action: false },
-    ToolDef { name: "wecom_send_file", group: ToolGroup::Doc, gate: GateKind::Look, parallel: false, action: false },
+    // —— 企微出站富媒体：把本地生成的图片/文件发回当前企微对话 ——
+    // 发出去就是数据外发（可能是任意本地文件），按 Sensitive 处理：只读 / 编辑档先问。
+    ToolDef { name: "wecom_send_image", group: ToolGroup::Doc, gate: GateKind::Sensitive, parallel: false, action: true },
+    ToolDef { name: "wecom_send_file", group: ToolGroup::Doc, gate: GateKind::Sensitive, parallel: false, action: true },
 ];
 
 pub(crate) fn get(name: &str) -> Option<&'static ToolDef> {

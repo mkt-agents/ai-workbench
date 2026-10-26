@@ -264,11 +264,11 @@ export function useAskStream(opts: AskStreamOptions) {
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
   const agentStepsRef = useRef<AgentStep[]>([]);
   const rememberSteps = (next: AgentStep[] | ((prev: AgentStep[]) => AgentStep[])) => {
-    setAgentSteps((prev) => {
-      const value = typeof next === "function" ? next(prev) : next;
-      agentStepsRef.current = value;
-      return value;
-    });
+    // 同步写 ref：`finishTurn` 在同一个 tick 里读它，而 setState 的 updater 要等渲染才跑，
+    // 否则最后一条 `agent-step`（done）会丢，`stepsMutatedWorkspace` 也判不出来。
+    const value = typeof next === "function" ? next(agentStepsRef.current) : next;
+    agentStepsRef.current = value;
+    setAgentSteps(value);
   };
   /** Checklist published by `update_plan`; empty until the model writes one. */
   const [agentPlan, setAgentPlan] = useState<AgentPlanStep[]>([]);
@@ -294,6 +294,12 @@ export function useAskStream(opts: AskStreamOptions) {
   const stopRequestedRef = useRef(false);
   /** 当前这一轮的就地收尾函数（send 里定义）：停止看门狗超时后调用。 */
   const forceStopRef = useRef<(() => void) | null>(null);
+  /** 在飞的 Tauri 监听。放在 ref 里，`send` 结束时和组件卸载时都能注销。 */
+  const unlistenersRef = useRef<Array<() => void>>([]);
+  const dropListeners = useCallback(() => {
+    unlistenersRef.current.forEach((fn) => fn());
+    unlistenersRef.current.length = 0;
+  }, []);
 
   /** Persist (or create) the active session after a completed exchange. */
   const persistRef = useRef(persistTurns);
@@ -417,11 +423,20 @@ export function useAskStream(opts: AskStreamOptions) {
         estimatedTokens: Math.max(1, Math.round((question.length + full.length) / 4)),
       });
     };
-    const teardown = () => {
-      unlisteners.forEach((fn) => fn());
-      unlisteners.length = 0;
+    /** 一帧内到多个 chunk 只重渲一次：SSE 常常几毫秒推一个 delta，逐个 setState 会把
+        输入区、字幕、审批卡整棵树重渲几十次。 */
+    let answerFrame: number | null = null;
+    let answerPending = "";
+    const cancelAnswerFrame = () => {
+      if (answerFrame !== null) window.cancelAnimationFrame(answerFrame);
+      answerFrame = null;
     };
-    const unlisteners: Array<() => void> = [];
+    const teardown = () => {
+      cancelAnswerFrame();
+      dropListeners();
+    };
+    // 上一轮若没收干净（异常路径 / 窗口切换），这里先清掉，避免同一事件被两个 handler 处理
+    dropListeners();
     const stoppedEarly = () => {
       if (settled) return true;
       if (!stopRequestedRef.current && streamIdRef.current === myGen) return false;
@@ -439,6 +454,12 @@ export function useAskStream(opts: AskStreamOptions) {
     const forceStop = () => {
       if (settled) return;
       settled = true;
+      // 只做本地收尾会把后端留在原地：它还在跑这一轮的工具，而 busy 已经放开，
+      // 用户再问一句就有两个 `agent_run` 同时动同一个仓库。先发取消（不等它返回）。
+      const activeId = activeReqRef.current;
+      if (activeId) void invoke("cancel_request", { id: activeId }).catch(() => {});
+      // 让迟到的 done / error 失效
+      streamIdRef.current++;
       recordPartialUsage();
       const partial = landText(stripThinking(full));
       if (partial.trim()) finishTurn(partial);
@@ -524,10 +545,17 @@ export function useAskStream(opts: AskStreamOptions) {
         const payload = event.payload;
         if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
         full += payload.text || "";
-        const visible = stripThinking(full, true);
+        // `<` 都不出现时不可能有 <think>：跳过整段 toLowerCase + 三次扫描
+        const visible = full.includes("<") ? stripThinking(full, true) : full;
         // Still inside <think>: stay on the waiting indicator instead of an empty answer.
         if (visible) setPhase("streaming");
-        setAnswer(visible);
+        answerPending = visible;
+        if (answerFrame === null) {
+          answerFrame = window.requestAnimationFrame(() => {
+            answerFrame = null;
+            setAnswer(answerPending);
+          });
+        }
       };
       const onDone = async (event: {
         payload?: {
@@ -610,8 +638,8 @@ export function useAskStream(opts: AskStreamOptions) {
         teardown();
       };
 
-      unlisteners.push(await listen<{ id: string; text: string }>("generate-text-chunk", onChunk));
-      unlisteners.push(
+      unlistenersRef.current.push(await listen<{ id: string; text: string }>("generate-text-chunk", onChunk));
+      unlistenersRef.current.push(
         await listen<{
           id: string;
           elapsedMs?: number;
@@ -619,8 +647,8 @@ export function useAskStream(opts: AskStreamOptions) {
           completionTokens?: number;
         }>("generate-text-done", onDone)
       );
-      unlisteners.push(await listen<{ id: string; error: string }>("generate-text-error", onError));
-      unlisteners.push(
+      unlistenersRef.current.push(await listen<{ id: string; error: string }>("generate-text-error", onError));
+      unlistenersRef.current.push(
         await listen<{
           id: string;
           tool: string;
@@ -649,7 +677,7 @@ export function useAskStream(opts: AskStreamOptions) {
           });
         }),
       );
-      unlisteners.push(
+      unlistenersRef.current.push(
         await listen<{ id: string; steps: AgentPlanStep[] }>("agent-plan", (event) => {
           const payload = event.payload;
           if (!payload || payload.id !== reqId || streamIdRef.current !== myGen) return;
@@ -663,7 +691,7 @@ export function useAskStream(opts: AskStreamOptions) {
           if (steps.length > 0) rememberPlan(steps);
         }),
       );
-      unlisteners.push(
+      unlistenersRef.current.push(
         await listen<{
           id: string;
           callId: string;
@@ -723,8 +751,8 @@ export function useAskStream(opts: AskStreamOptions) {
           requestId: reqId,
           repoPath: agent.repoPath,
           services: agent.services,
-          history: budget.turns,
-          // 内容块历史 + 这一问：后端优先用它；有 blocks 时透传 tool_use / tool_result。
+          // 只发内容块历史：后端优先用 `messages`，再带一份 `history` 等于把同一份
+          // 上下文序列化两遍（长会话里这份重复是实打实的 IPC 成本）。
           messages: [...turnsToMessages(budget.turns), buildUserMessage(user)],
           apps: agent.apps,
           permission: agent.permission,
@@ -800,6 +828,9 @@ export function useAskStream(opts: AskStreamOptions) {
     try {
       await invoke("cancel_request", { id });
     } catch (e) {
+      // 取消没送到后端：撤销「已请求停止」，否则下一次 send 会被 stoppedEarly 当成已停止，
+      // 问题被静默塞回输入框。
+      stopRequestedRef.current = false;
       setStopping(false);
       setError(String(e));
     }
@@ -808,10 +839,12 @@ export function useAskStream(opts: AskStreamOptions) {
   // Cleanup any live stream listeners if the window closes mid-stream.
   useEffect(() => {
     return () => {
-      // Bump the generation counter so any in-flight callbacks become no-ops.
+      // Bump the generation counter so any in-flight callbacks become no-ops,
+      // and drop the Tauri listeners themselves — they outlive the component otherwise.
       streamIdRef.current++;
+      dropListeners();
     };
-  }, []);
+  }, [dropListeners]);
 
   /** Wipe the current chat (new-chat / deleting the active session). */
   const resetChat = useCallback(() => {
@@ -936,7 +969,6 @@ export function useAskStream(opts: AskStreamOptions) {
         : [];
     if (!id || ids.length === 0) return;
     const kind = agentApproval?.actionKind || "";
-    setAgentApproval(null);
     try {
       await invoke("agent_decide", {
         requestId: id,
@@ -944,10 +976,15 @@ export function useAskStream(opts: AskStreamOptions) {
         allow: decision !== "deny",
         scope: decision === "always" ? "always" : decision === "turn" ? "turn" : "once",
       });
+      // 收下之后再撤卡片：调用失败时卡片要留着，用户才能重试（以前先撤，失败就没得点了）
+      setAgentApproval(null);
       // 记住要等后端收下这次决定：被判定失效（回合已结束）就不该写进设置
       if (decision === "always" && kind) onRememberKind?.(kind, agent.repoPath);
     } catch (e) {
-      setError(String(e));
+      const message = String(e);
+      setError(message);
+      // 这一轮已经结束 / 没有等待项：卡片留着也没人能答，收掉
+      if (message.includes("AI_APPROVAL_STALE")) setAgentApproval(null);
     }
   };
 

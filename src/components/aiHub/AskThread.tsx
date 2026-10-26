@@ -190,7 +190,9 @@ export default function AskThread(props: Props) {
     if (stickRef.current && !jumpingRef.current) el.scrollTop = el.scrollHeight;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD;
     setAtBottom(nearBottom);
-  }, [answer, agentSteps, agentPlan, agentApproval]);
+    // 依赖用 `shownAnswer`（正文真正渲染的那份）：用 `answer` 会在文本变高之前就滚到底，
+    // 随后内容长高又不在底部，`atBottom` 抖动、"回到底部"按钮闪一下。
+  }, [shownAnswer, agentSteps, agentPlan, agentApproval]);
 
   useEffect(() => {
     const onSelect = () => {
