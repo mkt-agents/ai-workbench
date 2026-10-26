@@ -22,6 +22,8 @@ const MULTI_LOG_REPOS = 4;
 /** Several dirty focused services share this many full-diff files in total. */
 const MULTI_DIFF_FILE_BUDGET = 12;
 const MULTI_DIFF_PER_FILE = 1200;
+/** Secondary repos actually quoted in the context; only this many are worth querying. */
+const SECONDARY_REPOS_SHOWN = 4;
 
 /** Run async tasks with a concurrency cap to avoid overwhelming the git backend. */
 async function withConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
@@ -294,9 +296,12 @@ export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
       }
 
       // Secondary repos — status marks + a couple of small diffs.
-      if (secondaryEntries.length > 0) {
+      // 只对真正会写进上下文的这几个仓库跑 git：以前对最多 6 个各跑 status + 2 次 diff，
+      // 最后才 slice(0, 4)，三分之一的工作和进程是白花的。
+      const secondaryShown = secondaryEntries.slice(0, SECONDARY_REPOS_SHOWN);
+      if (secondaryShown.length > 0) {
         const secondaryResults = await withConcurrency(
-          secondaryEntries.map(({ path: repo, summary: s }) => async () => {
+          secondaryShown.map(({ path: repo, summary: s }) => async () => {
             const lines: string[] = [`${s.name || repo} (${s.branch}): ${s.dirtyCount} changes`];
             try {
               const entries = await invokeGitStatus(repo);
@@ -333,9 +338,9 @@ export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
         );
         const validResults = secondaryResults.filter(Boolean);
         if (validResults.length > 0) {
-          parts.push("Other dirty repos:\n" + validResults.slice(0, 4).join("\n\n"));
+          parts.push("Other dirty repos:\n" + validResults.join("\n\n"));
           included.add("dirty");
-          for (const { path, summary: s } of secondaryEntries.slice(0, 4)) {
+          for (const { path, summary: s } of secondaryShown) {
             repoNames.push(s.name || repoName(path));
           }
         }
@@ -390,12 +395,16 @@ export function useAskContext(chips: AiHubChips, focusedRepos: string[]) {
         setCtxTruncated(false);
         return { text: "", truncated: false, summary: EMPTY_SUMMARY };
       }
-      chipsSigRef.current = sig;
       setCtxLoading(true);
       try {
+        // 指纹采在收集**之前**：它要描述的就是这份内容对应的树。采在之后的话，
+        // 采集期间保存一次，就会把「新指纹 + 旧内容」缓存满 120 秒。
+        const fp = await fingerprintNow();
         const out = await refreshContext(mode);
-        // Digest after the collection: the next question notices anything edited since.
-        cachedContextRef.current = { ...out, at: Date.now(), fp: await fingerprintNow() };
+        cachedContextRef.current = { ...out, at: Date.now(), fp };
+        // 签名和缓存同一时刻提交：以前先写 sig 后写缓存，收集中途抛错会让新签名
+        // 配上旧内容，下一次提问读到的还是上一个仓库的上下文。
+        chipsSigRef.current = sig;
         return out;
       } finally {
         setCtxLoading(false);

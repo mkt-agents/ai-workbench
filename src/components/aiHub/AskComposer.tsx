@@ -10,7 +10,8 @@ type Props = Pick<
   AskPanelProps,
   | "input" | "setInput" | "inputRef" | "busy" | "lastQuestion" | "suggestion" | "onSuggestionPick"
   | "onSuggestionDismiss" | "hasSnippets"
-  | "onToggleSnippets" | "onPasteClipboard" | "onAttachFile" | "onSend" | "repoControl" | "modelControl"
+  | "onToggleSnippets" | "onPasteClipboard" | "onPasteFiles" | "onAttachFile" | "onSend" | "repoControl"
+  | "modelControl"
   | "modeChip" | "track" | "onTrack"
   | "permission" | "onPermission" | "diffConfirm" | "onDiffConfirm"
   | "permissionMenuOpen" | "onTogglePermissionMenu"
@@ -64,7 +65,7 @@ export default function AskComposer(props: Props) {
   const { t } = useTranslation("aihub");
   const {
     input, setInput, inputRef, busy, lastQuestion, suggestion, onSuggestionPick, onSuggestionDismiss,
-    hasSnippets, onToggleSnippets, onPasteClipboard, onAttachFile,
+    hasSnippets, onToggleSnippets, onPasteClipboard, onPasteFiles, onAttachFile,
     onSend, repoControl, modelControl, modeChip, track, onTrack,
     permission, onPermission, diffConfirm, onDiffConfirm, permissionMenuOpen, onTogglePermissionMenu,
     openList, onRunOpen, onStop,
@@ -190,6 +191,17 @@ export default function AskComposer(props: Props) {
         }
         value={input}
         onChange={(e) => setInput(e.target.value)}
+        onPaste={(e) => {
+          // 资源管理器里「复制」的文件只有 CF_HDROP，Chromium 交给我们的是没有路径的
+          // File 对象，内容读不到。所以必须在粘贴时拦下来，让主进程去读剪贴板文件列表，
+          // 再走和拖放同一条附件管线。纯文本粘贴不受影响（交给默认行为）。
+          const data = e.clipboardData;
+          const hasFiles =
+            data.files.length > 0 || Array.from(data.types || []).includes("Files");
+          if (!hasFiles) return;
+          e.preventDefault();
+          onPasteFiles();
+        }}
         onKeyDown={(e) => {
           // IME in the middle of composing: Enter / ↑↓ belong to the candidate window,
           // never to send or list navigation (a pinyin commit would fire a whole agent run).

@@ -236,9 +236,17 @@ pub(crate) async fn web_fetch(url: &str, allow: &[String]) -> Result<String, Str
             return Err(format!("页面太大（{} KB），只抓 2MB 以内的", len / 1024));
         }
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("读取响应失败: {e}"))?;
-    if bytes.len() as u64 > BODY_CAP {
-        return Err("页面太大（超过 2MB），只抓 2MB 以内的".into());
+    // 边收边数：`resp.bytes()` 会先把整个响应读进内存，chunked / 无 Content-Length 的
+    // 服务器上 2MB 上限完全不生效（一个白名单内的域名就能把进程撑爆）。
+    use futures_util::StreamExt;
+    let mut stream = std::pin::pin!(resp.bytes_stream());
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("读取响应失败: {e}"))?;
+        if bytes.len() as u64 + chunk.len() as u64 > BODY_CAP {
+            return Err("页面太大（超过 2MB），只抓 2MB 以内的".into());
+        }
+        bytes.extend_from_slice(&chunk);
     }
     let raw = String::from_utf8_lossy(&bytes).to_string();
     let text = if content_type.contains("html") || raw.trim_start().starts_with('<') {

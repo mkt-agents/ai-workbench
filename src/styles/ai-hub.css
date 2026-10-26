@@ -84,6 +84,15 @@
 .qa-attach-chip.is-cut { border-color: var(--yellow-border); }
 .qa-attach-cut { flex-shrink: 0; color: var(--yellow); }
 
+/* 图片附件：缩略图本身就是「这是张图」的最短说明 */
+.qa-attach-thumb {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
 .qa-attach-chip-x {
   display: inline-flex;
   align-items: center;

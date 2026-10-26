@@ -660,6 +660,8 @@ pub fn run() {
             tool_commands::get_auto_start,
             tool_commands::copy_to_clipboard,
             tool_commands::read_clipboard,
+            tool_commands::read_clipboard_files,
+            tool_commands::read_image_file,
             tool_commands::export_data,
             tool_commands::import_data,
             tool_commands::save_text_file,

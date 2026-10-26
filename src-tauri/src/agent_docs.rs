@@ -64,6 +64,15 @@ fn pdf_text(path: &Path) -> Result<String, String> {
 
 /// 读表格：返回 (列名, 数据行)。首行当表头，空名字补 `col_N`。
 pub(crate) fn read_rows(path: &Path, limit: usize) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    // 和 read_document 同一道体积闸门：以前这里没有，2GB 的 CSV 会先全量读入再全量解析，
+    // 最后才 truncate 丢掉多余行。
+    let meta = std::fs::metadata(path).map_err(|e| format!("读不到表：{e}"))?;
+    if !meta.is_file() {
+        return Err("不是文件".into());
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(format!("文件超过 {}MB，先拆分再读", MAX_FILE_BYTES / 1024 / 1024));
+    }
     let ext = extension(path);
     let mut rows: Vec<Vec<String>> = match ext.as_str() {
         "xlsx" | "xls" => calamine_rows(path)?,
@@ -107,16 +116,26 @@ fn truncate(text: String, cap: usize) -> String {
     text.chars().take(cap).collect()
 }
 
+/// 解压后的 `document.xml` 上限：磁盘上 10MB 的 zip 可以膨胀成几 GB XML（zip 炸弹）。
+const DOCX_XML_CAP: u64 = 32 * 1024 * 1024;
+
 fn docx_text(path: &Path) -> Result<String, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("打开失败：{e}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("不是有效的 docx：{e}"))?;
-    let mut xml = String::new();
-    archive
+    let entry = archive
         .by_name("word/document.xml")
-        .map_err(|_| "docx 里没有正文（document.xml）".to_string())?
+        .map_err(|_| "docx 里没有正文（document.xml）".to_string())?;
+    let clipped = entry.size() > DOCX_XML_CAP;
+    let mut xml = String::new();
+    entry
+        .take(DOCX_XML_CAP)
         .read_to_string(&mut xml)
         .map_err(|e| format!("读取 docx 正文失败：{e}"))?;
-    Ok(xml_to_text(&xml))
+    let mut text = xml_to_text(&xml);
+    if clipped {
+        text.push_str("\n…(正文超过 32MB，后面省略)");
+    }
+    Ok(text)
 }
 
 /// Word 的段落 / 换行 / 制表符 → 文本，再剥标签、解实体。

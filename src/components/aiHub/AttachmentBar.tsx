@@ -18,8 +18,19 @@ export default function AttachmentBar({
         <span
           key={a.id}
           className={`qa-attach-chip${a.truncated ? " is-cut" : ""}`}
-          title={`${a.name} · ${a.content.length} chars${a.truncated ? ` · ${t("attach.truncated")}` : ""}`}
+          title={
+            a.image
+              ? `${a.name} · ${t("attach.image")}`
+              : `${a.name} · ${a.content.length} chars${a.truncated ? ` · ${t("attach.truncated")}` : ""}`
+          }
         >
+          {a.image && (
+            <img
+              className="qa-attach-thumb"
+              src={`data:${a.image.mediaType};base64,${a.image.data}`}
+              alt=""
+            />
+          )}
           <span className="qa-attach-name">{a.name}</span>
           {a.truncated && <Scissors size={10} className="qa-attach-cut" />}
           <button

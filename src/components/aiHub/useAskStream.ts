@@ -4,7 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AIModelConfig, AiHubPlanStep, AiHubTurn } from "../../core/types";
 import { recordAiUsage } from "../../lib/aiUsage";
-import { formatAttachmentsBlock, type AskAttachment } from "../../lib/askAttachments";
+import {
+  formatAttachmentsBlock,
+  imageAttachmentsOf,
+  type AskAttachment,
+} from "../../lib/askAttachments";
 import { buildMeta, buildSystem, stepsMutatedWorkspace } from "./config";
 import { compactSession, requestHistory, withSessionDigest } from "./sessionCompact";
 import { buildUserMessage, stepsToBlocks, turnsToMessages } from "./harness";
@@ -753,7 +757,11 @@ export function useAskStream(opts: AskStreamOptions) {
           services: agent.services,
           // 只发内容块历史：后端优先用 `messages`，再带一份 `history` 等于把同一份
           // 上下文序列化两遍（长会话里这份重复是实打实的 IPC 成本）。
-          messages: [...turnsToMessages(budget.turns), buildUserMessage(user)],
+          // 图片附件作为 image 块跟在正文后面：文本附件已经拼进 `user`，不重复发
+          messages: [
+            ...turnsToMessages(budget.turns),
+            buildUserMessage(user, imageAttachmentsOf(sentAttachments)),
+          ],
           apps: agent.apps,
           permission: agent.permission,
           // The daily notes are already collected: the report needs no repo tools.

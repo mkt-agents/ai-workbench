@@ -205,6 +205,10 @@ export interface Invocations {
   invokePickTextFile: (title?: string) => Promise<string>;
   invokePickSourceFile: (title?: string) => Promise<string>;
   invokeReadTextFile: (path: string) => Promise<string>;
+  /** 资源管理器里「复制」的文件路径；粘图片 / 纯文本时是空数组。 */
+  invokeReadClipboardFiles: () => Promise<string[]>;
+  /** 图片文件 → base64（不看图的模型用不上，调用方自己挡）。 */
+  invokeReadImageFile: (path: string) => Promise<{ mediaType: string; data: string }>;
   invokeListRuntimeVersions: (kind: RuntimeKind) => Promise<RuntimeVersion[]>;
   invokeGetActiveRuntime: (kind: RuntimeKind) => Promise<RuntimeVersion | null>;
   invokeAddCustomRuntime: (kind: RuntimeKind, path: string) => Promise<RuntimeVersion>;
@@ -562,6 +566,9 @@ export const invocations: Invocations = {
     tauriInvoke<string>('pick_source_file', { title: title ?? null }),
   invokeReadTextFile: (path: string) =>
     tauriInvoke<string>('read_text_file', { path }),
+  invokeReadClipboardFiles: () => tauriInvoke<string[]>('read_clipboard_files'),
+  invokeReadImageFile: (path: string) =>
+    tauriInvoke<{ mediaType: string; data: string }>('read_image_file', { path }),
 
   // Runtime switch
   invokeListRuntimeVersions: (kind: RuntimeKind) =>

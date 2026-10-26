@@ -59,24 +59,32 @@ pub(crate) fn estimate_tokens(text: &str) -> usize {
 fn content_text(message: &Value) -> String {
     match message.get("content") {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(parts)) => {
-            let mut out = String::new();
-            for part in parts {
-                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
-                    out.push_str(t);
-                } else if let Some(t) = part.get("content").and_then(|v| v.as_str()) {
-                    out.push_str(t);
-                } else if let Some(t) = part.get("thinking").and_then(|v| v.as_str()) {
-                    out.push_str(t);
-                } else if part.get("type").and_then(|v| v.as_str()) == Some("image") {
-                    // An image's cost depends on its resolution; charge a flat estimate.
-                    out.push_str(&" ".repeat(3_200));
-                }
-            }
-            out
-        }
+        Some(Value::Array(parts)) => parts_text(parts),
         _ => String::new(),
     }
+}
+
+fn parts_text(parts: &[Value]) -> String {
+    let mut out = String::new();
+    for part in parts {
+        if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+            out.push_str(t);
+        } else if let Some(t) = part.get("thinking").and_then(|v| v.as_str()) {
+            out.push_str(t);
+        } else if part.get("type").and_then(|v| v.as_str()) == Some("image") {
+            // An image's cost depends on its resolution; charge a flat estimate.
+            out.push_str(&" ".repeat(3_200));
+        } else {
+            match part.get("content") {
+                Some(Value::String(t)) => out.push_str(t),
+                // Anthropic 的 tool_result 带截图时 content 是**数组**：不递归就等于
+                // 这条工具结果一个 token 都不算，三级裁剪直接绕过它。
+                Some(Value::Array(inner)) => out.push_str(&parts_text(inner)),
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 /// Rough token cost of one message, including protocol overhead per message.

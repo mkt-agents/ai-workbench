@@ -162,6 +162,109 @@ pub async fn read_clipboard() -> Result<String, String> {
     .map_err(|e| format!("剪贴板任务异常: {e}"))?
 }
 
+/// Paths of the files the user copied in Explorer (empty when the clipboard holds
+/// text or an image instead).
+///
+/// The webview cannot see them: pasting from Explorer only carries the `CF_HDROP`
+/// clipboard format, and Chromium hands the page `File` objects without paths. So the
+/// paths have to come from the OS side. `Clipboard.GetFileDropList()` is exactly that
+/// read; going through PowerShell keeps this dependency-free (a direct `CF_HDROP` +
+/// `DragQueryFileW` version is the obvious later optimisation, but it needs another
+/// `windows` feature and it is not worth the added unsafe surface for one paste).
+#[tauri::command]
+pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(read_clipboard_files_sync)
+        .await
+        .map_err(|e| format!("剪贴板任务异常: {e}"))?
+}
+
+#[cfg(windows)]
+fn read_clipboard_files_sync() -> Result<Vec<String>, String> {
+    // 一行一个路径。先钉 UTF-8：中文路径按控制台代码页解码会变乱码。
+    const SCRIPT: &str = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+        Add-Type -AssemblyName System.Windows.Forms; \
+        [System.Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { $_ }";
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", SCRIPT])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("读取剪贴板文件失败: {e}"))?;
+    if !output.status.success() {
+        // 剪贴板里没有文件时 GetFileDropList 会抛，按「没有文件」返回就好
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut out: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    // 附件上限本来就只有 3 个，别为一堆文件起一长串读盘
+    out.truncate(8);
+    Ok(out)
+}
+
+#[cfg(not(windows))]
+fn read_clipboard_files_sync() -> Result<Vec<String>, String> {
+    Ok(Vec::new())
+}
+
+/// 一张可以直接塞进对话的图片。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlineImage {
+    pub media_type: String,
+    /// base64，不带 `data:` 前缀（协议层自己拼）。
+    pub data: String,
+}
+
+/// 视觉附件的文件上限。base64 会再涨 ~33%，而 Anthropic 单图上限 5MB。
+const IMAGE_FILE_CAP: u64 = 3 * 1024 * 1024;
+
+/// Read an image file into a base64 payload for the vision models.
+///
+/// 只认模型服务都支持的四种格式：想发 bmp / tiff 得先转，否则各家会直接 400。
+#[tauri::command]
+pub async fn read_image_file(path: String) -> Result<InlineImage, String> {
+    tokio::task::spawn_blocking(move || read_image_file_sync(&path))
+        .await
+        .map_err(|e| format!("读取图片任务异常: {e}"))?
+}
+
+fn read_image_file_sync(path: &str) -> Result<InlineImage, String> {
+    use base64::Engine;
+    let file = std::path::Path::new(path);
+    let ext = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let media_type = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => return Err("只支持 png / jpg / webp / gif 图片".into()),
+    };
+    let meta = std::fs::metadata(file).map_err(|e| format!("读不到图片：{e}"))?;
+    if !meta.is_file() {
+        return Err("不是文件".into());
+    }
+    if meta.len() > IMAGE_FILE_CAP {
+        return Err(format!(
+            "图片超过 {}MB，先压缩再发",
+            IMAGE_FILE_CAP / 1024 / 1024
+        ));
+    }
+    let bytes = std::fs::read(file).map_err(|e| format!("读取图片失败：{e}"))?;
+    Ok(InlineImage {
+        media_type: media_type.into(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
 fn row_to_json(row: &rusqlite::Row, columns: &[String]) -> Result<serde_json::Value, String> {
     let mut map = serde_json::Map::new();
     for (i, name) in columns.iter().enumerate() {

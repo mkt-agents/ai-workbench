@@ -1971,38 +1971,20 @@ async fn execute_tool(
             let path = crate::agent_memory::append(ctx.scope.root.as_deref(), text, scope)?;
             format!("已记住（{}）：{}", path, text.trim())
         }
-        // 文档 / 表格：非代码任务的主力，只读、可并发
-        "read_document" => {
-            let path = ctx
-                .scope
-                .resolve(args.get("path").and_then(|v| v.as_str()).unwrap_or(""))?;
-            let cap = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(12_000).min(60_000) as usize;
-            crate::agent_docs::read_document(&path, cap)?
-        }
-        "read_table" => {
-            let path = ctx
-                .scope
-                .resolve(args.get("path").and_then(|v| v.as_str()).unwrap_or(""))?;
-            let rows = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(30).clamp(1, 200) as usize;
-            let (header, data) = crate::agent_docs::read_rows(&path, rows)?;
-            let preview = data.iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n");
-            format!("列：{}\n\n{}", header.join(" | "), preview)
-        }
-        "table_query" => {
-            let path = ctx
-                .scope
-                .resolve(args.get("path").and_then(|v| v.as_str()).unwrap_or(""))?;
-            let sql = args.get("sql").and_then(|v| v.as_str()).unwrap_or("");
-            crate::agent_table::query(&path, sql, crate::agent_table::ROW_LIMIT)?
-        }
-        // 只读文件工具走同一个执行体：并发批会把它搬到后台线程上跑
-        "read_file" | "list_dir" | "find_files" | "grep" | "symbols" => {
+        // 只读工具（含文档 / 表格）走同一个执行体：并发预取会把它搬到后台线程上跑。
+        // 注意 `parallel: true` 的工具必须在这里实现，否则预取会拿到「不是只读工具」。
+        "read_file" | "list_dir" | "find_files" | "grep" | "symbols" | "read_document"
+        | "read_table" | "table_query" => {
             return execute_readonly(ctx.scope, ctx.request_id, name, args, ctx.grep_ignore);
         }
         "write_file" | "edit_file" => {
-            // 落盘前留一份原文件：这一轮的「撤销这次改动」靠它逐字节还原
+            // 落盘前留一份原文件：这一轮的「撤销这次改动」靠它逐字节还原。
+            // 受保护路径不拍快照——否则即使写入被拒，`.env` / 私钥的内容也已经
+            // 被逐字节复制进了 APPDATA 的快照目录（和 delete_path 对齐）。
             if let Ok(path) = ctx.scope.resolve(&fs::arg_str(args, "path")) {
-                crate::agent_undo::snapshot_before(ctx.request_id, &path);
+                if ctx.protected.check(&path, false).is_none() {
+                    crate::agent_undo::snapshot_before(ctx.request_id, &path);
+                }
             }
             fs::write_or_edit(ctx.scope, name, args, ctx.protected)?
         }
@@ -2128,8 +2110,20 @@ async fn execute_tool(
                 .map_err(|e| e.to_string())??;
             return Ok(ToolOutput { text, image: Some(png) });
         }
-        "mouse" => pc::mouse(args)?,
-        "keyboard" => pc::keyboard(args)?,
+        // 鼠标 / 键盘带 150-200ms 的等待和拖动：留在 tokio worker 上会卡住流式输出，
+        // 也让停止键在这段时间里失灵。和 screenshot / wait 一样搬进后台线程。
+        "mouse" => {
+            let args = args.clone();
+            await_cancellable(tokio::task::spawn_blocking(move || pc::mouse(&args)), ctx.request_id)
+                .await?
+                .map_err(|e| e.to_string())??
+        }
+        "keyboard" => {
+            let args = args.clone();
+            await_cancellable(tokio::task::spawn_blocking(move || pc::keyboard(&args)), ctx.request_id)
+                .await?
+                .map_err(|e| e.to_string())??
+        }
         "wait" => {
             let args = args.clone();
             // 等到一半被停止：不再返回「等完了」，直接让这一轮收尾
@@ -2975,7 +2969,26 @@ fn execute_readonly(
         "find_files" => fs::find_files(scope, args, request_id)?,
         "grep" => fs::grep(scope, args, request_id)?,
         "symbols" => crate::agent_symbols::symbols(scope, args, request_id)?,
-        other => return Err(format!("{other} 不是只读文件工具")),
+        // 文档 / 表格同样是「Scope + 参数」就够：它们被标了 `parallel`，
+        // 不在这里实现的话并发预取会拿到「不是只读文件工具」。
+        "read_document" => {
+            let path = scope.resolve(&crate::agent_fs::arg_str(args, "path"))?;
+            let cap = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(12_000).min(60_000) as usize;
+            crate::agent_docs::read_document(&path, cap)?
+        }
+        "read_table" => {
+            let path = scope.resolve(&crate::agent_fs::arg_str(args, "path"))?;
+            let rows = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(30).clamp(1, 200) as usize;
+            let (header, data) = crate::agent_docs::read_rows(&path, rows)?;
+            let preview = data.iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n");
+            format!("列：{}\n\n{}", header.join(" | "), preview)
+        }
+        "table_query" => {
+            let path = scope.resolve(&crate::agent_fs::arg_str(args, "path"))?;
+            let sql = args.get("sql").and_then(|v| v.as_str()).unwrap_or("");
+            crate::agent_table::query(&path, sql, crate::agent_table::ROW_LIMIT)?
+        }
+        other => return Err(format!("{other} 不是只读工具")),
     };
     Ok(out.into())
 }

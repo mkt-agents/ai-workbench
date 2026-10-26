@@ -42,14 +42,17 @@
   },
   "attach": {
     "file": "Attach file",
+    "image": "Image",
     "remove": "Remove attachment",
-    "pickTitle": "Pick a text file",
+    "pickTitle": "Pick a text or image file",
     "tooMany": "At most 3 attachments",
     "tooLarge": "Attachments exceed the ~12K character budget",
     "truncated": "Over 8000 characters — only the first part is sent",
     "empty": "That file is empty",
     "notText": "Only text files can be attached: {{name}}",
-    "dropHint": "Release to attach text files"
+    "noFiles": "No files on the clipboard (text or an image?)",
+    "noVision": "This model can't see images — switch to one marked vision-capable ({{name}})",
+    "dropHint": "Release to attach files (text or images)"
   },
   "errorRaw": "Show raw error",
   "emptyInput": "Enter a question",

@@ -59,6 +59,8 @@ export type AskPanelProps = {
   /** 插入 `/`：命令、技能、提示词统一由命令面板列出。 */
   onToggleSnippets: () => void;
   onPasteClipboard: () => void;
+  /** Ctrl+V 时剪贴板里是文件（资源管理器复制）：走同一条附件管线。 */
+  onPasteFiles: () => void;
   onAttachFile: () => void;
   onSend: () => void;
   /** Project picker, shown at the top-left of the composer. */

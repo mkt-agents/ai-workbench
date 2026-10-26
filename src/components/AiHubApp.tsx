@@ -14,8 +14,10 @@ import {
   ASK_ATTACH_MAX_FILES,
   attachmentNameFromPath,
   canAddAttachment,
+  isImageAttachmentPath,
   isTextAttachmentPath,
   makeAttachment,
+  makeImageAttachment,
   type AskAttachment,
 } from "../lib/askAttachments";
 import AskPanel from "./aiHub/AskPanel";
@@ -130,6 +132,8 @@ function AiHubApp() {
   useEffect(() => refreshInstalledApps(), [refreshInstalledApps]);
   const invokePickSourceFile = useGlobalStore((s) => s.invokePickSourceFile);
   const invokeReadTextFile = useGlobalStore((s) => s.invokeReadTextFile);
+  const invokeReadClipboardFiles = useGlobalStore((s) => s.invokeReadClipboardFiles);
+  const invokeReadImageFile = useGlobalStore((s) => s.invokeReadImageFile);
   const invokeSetAiHubPinned = useGlobalStore((s) => s.invokeSetAiHubPinned);
 
   const [ready, setReady] = useState(false);
@@ -622,10 +626,33 @@ function AiHubApp() {
     }
   };
 
+  /** 图片附件：只占「个数」额度，不吃字符预算（base64 按字符算没有意义）。 */
+  const attachImages = (items: { name: string; mediaType: string; data: string }[]) => {
+    const next = [...attachments];
+    const rejected: string[] = [];
+    for (const item of items) {
+      const check = canAddAttachment(next, { name: item.name, content: "" });
+      if (!check.ok) {
+        rejected.push(item.name);
+        continue;
+      }
+      next.push(makeImageAttachment(item.name, { mediaType: item.mediaType, data: item.data }));
+    }
+    setAttachments(next);
+    if (rejected.length) {
+      stream.setError(`${t("attach.tooMany")}（${rejected.join(", ")}）`);
+    }
+  };
+
   /** Real filename, no silent truncation: pick → read by path instead of the content-only picker. */
   const addAttachmentFromFile = async () => {
     try {
       const path = await invokePickSourceFile(t("attach.pickTitle"));
+      // 选到图片就走图片那条路（粘贴 / 拖放 / 选择器共用一套判断）
+      if (isImageAttachmentPath(path)) {
+        await attachDroppedFiles([path]);
+        return;
+      }
       const text = await invokeReadTextFile(path);
       if (!text.trim()) {
         showHint(t("attach.empty"));
@@ -641,9 +668,24 @@ function AiHubApp() {
 
   const attachDroppedFiles = async (paths: string[]) => {
     const picked: { name: string; text: string }[] = [];
+    const images: { name: string; mediaType: string; data: string }[] = [];
     const unreadable: string[] = [];
+    const noVision: string[] = [];
     for (const path of paths.slice(0, ASK_ATTACH_MAX_FILES)) {
       const name = attachmentNameFromPath(path);
+      if (isImageAttachmentPath(path)) {
+        // 图片以 image 块发给模型，只有标了「支持看图」的模型能收
+        if (!selectedModel?.vision) {
+          noVision.push(name);
+          continue;
+        }
+        try {
+          images.push({ name, ...(await invokeReadImageFile(path)) });
+        } catch (e) {
+          stream.setError(String(e));
+        }
+        continue;
+      }
       if (!isTextAttachmentPath(path)) {
         unreadable.push(name);
         continue;
@@ -656,8 +698,29 @@ function AiHubApp() {
       }
     }
     if (picked.length) attachFiles(picked);
+    if (images.length) attachImages(images);
+    if (noVision.length) {
+      stream.setError(t("attach.noVision", { name: noVision.join(", ") }));
+    }
     if (unreadable.length) {
       stream.setError(t("attach.notText", { name: unreadable.join(", ") }));
+    }
+  };
+
+  /**
+   * Ctrl+V 时剪贴板里是文件：路径只有主进程读得到（见 `read_clipboard_files`），
+   * 拿到之后和拖放完全同一条管线——同样的文本判断、限额与提示。
+   */
+  const pasteClipboardFiles = async () => {
+    try {
+      const paths = await invokeReadClipboardFiles();
+      if (paths.length === 0) {
+        showHint(t("attach.noFiles"));
+        return;
+      }
+      await attachDroppedFiles(paths);
+    } catch (e) {
+      stream.setError(String(e));
     }
   };
 
@@ -758,6 +821,11 @@ function AiHubApp() {
   };
 
   const sendAsk = async () => {
+    // 图片附件只有看图模型能吃：粘完再换模型的话，别把 image 块发给不懂的 provider
+    if (attachments.some((a) => a.image) && !selectedModel?.vision) {
+      stream.setError(t("attach.noVision", { name: attachments.filter((a) => a.image).map((a) => a.name).join(", ") }));
+      return;
+    }
     // Screenshots leave the machine: ask once before the first turn that could take them.
     if (permission === "full" && selectedModel?.vision && localStorage.getItem(COMPUTER_ACK_KEY) !== "1") {
       const ok = await confirm({
@@ -890,10 +958,14 @@ function AiHubApp() {
   const fillClipboard = async () => {
     try {
       const clip = (await invoke<string>("read_clipboard")).trim();
-      if (clip) setInput((prev) => (prev ? `${prev}\n${clip}` : clip));
-    } catch (e) {
-      stream.setError(String(e));
+      if (clip) {
+        setInput((prev) => (prev ? `${prev}\n${clip}` : clip));
+        return;
+      }
+    } catch {
+      // 剪贴板里没有文本（复制的是文件 / 图片）：按文件再试一次
     }
+    await pasteClipboardFiles();
   };
 
   /** Restore a persisted session into the current chat. */
@@ -1091,6 +1163,7 @@ function AiHubApp() {
               requestAnimationFrame(() => inputRef.current?.focus());
             }}
             onPasteClipboard={() => void fillClipboard()}
+            onPasteFiles={() => void pasteClipboardFiles()}
             onAttachFile={() => void addAttachmentFromFile()}
             onSend={() => void sendAsk()}
             palette={{

@@ -42,14 +42,17 @@
   },
   "attach": {
     "file": "附加文件",
+    "image": "图片",
     "remove": "移除附件",
-    "pickTitle": "选择文本文件",
+    "pickTitle": "选择文本或图片文件",
     "tooMany": "最多附加 3 个文件",
     "tooLarge": "附件总长度超限（约 12K 字符）",
     "truncated": "内容超过 8000 字符，只发送了前半部分",
     "empty": "这个文件是空的",
     "notText": "只能附加文本文件：{{name}}",
-    "dropHint": "松开即可附加文本文件"
+    "noFiles": "剪贴板里没有可附加的文件（复制的是文本或图片？）",
+    "noVision": "当前模型不支持看图，换个标了「支持看图」的模型再试（{{name}}）",
+    "dropHint": "松开即可附加文件（文本或图片）"
   },
   "errorRaw": "查看原始报错",
   "emptyInput": "请输入问题",

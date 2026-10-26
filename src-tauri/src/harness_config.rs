@@ -136,8 +136,21 @@ fn read_layer(dir: &Path, scope: &str, config: &mut HarnessConfig, override_laye
     config.hooks.append(&mut hooks);
 }
 
+/// `path` 展开符号链接之后是否仍在 `dir` 之下。
+/// 仓库里可以把 `.ai-workbench/context.md` 提交成指向 `~/.ssh/id_rsa` 的链接，
+/// 内容会直接进系统提示，所以每次读都要确认落点没跑出这一层目录。
+fn within(dir: &Path, path: &Path) -> bool {
+    let (Ok(dir), Ok(path)) = (std::fs::canonicalize(dir), std::fs::canonicalize(path)) else {
+        return false;
+    };
+    path.starts_with(dir)
+}
+
 fn read_text(dir: &Path, name: &str, scope: &str, cap: usize) -> Option<LoadedText> {
     let path = dir.join(name);
+    if !within(dir, &path) {
+        return None;
+    }
     let text = std::fs::read_to_string(&path).ok()?;
     if text.trim().is_empty() {
         return None;
@@ -169,6 +182,7 @@ fn read_skills(dir: &Path, scope: &str) -> Vec<SkillEntry> {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("md"))
+        .filter(|path| within(&skills_dir, path))
         .filter_map(|path| parse_skill(&path, scope))
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -228,7 +242,11 @@ fn split_frontmatter(raw: &str) -> (Option<String>, String) {
 }
 
 fn read_hooks(dir: &Path, scope: &str) -> Vec<HookEntry> {
-    let Ok(raw) = std::fs::read_to_string(dir.join("hooks.json")) else {
+    let path = dir.join("hooks.json");
+    if !within(dir, &path) {
+        return Vec::new();
+    }
+    let Ok(raw) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
