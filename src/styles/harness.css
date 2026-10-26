@@ -23,6 +23,68 @@
   color: var(--text-1);
 }
 
+/* Launch failure: the reason stays on screen (the toolbar line is ellipsised and
+   auto-clears) with the captured process output underneath. */
+.dsh-failure-panel {
+  flex-shrink: 0;
+  margin: 8px 12px 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--red-border);
+  border-radius: var(--radius-md);
+  background: var(--red-dim);
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.dsh-failure-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dsh-failure-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--red);
+}
+
+.dsh-failure-summary {
+  flex: 1;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-0);
+}
+
+.dsh-failure-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.dsh-failure-detail {
+  margin: 8px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
 .dsh-sync-bar-label {
   color: var(--text-2);
   font-weight: 560;

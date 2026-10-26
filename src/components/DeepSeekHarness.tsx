@@ -14,6 +14,7 @@ import {
   Download,
   Rocket,
   X,
+  AlertTriangle,
 } from "lucide-react";
 
 import { useGlobalStore } from "../core/store";
@@ -151,6 +152,13 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
   const [autoStart, setAutoStart] = useState<boolean>(() => loadAutoStart());
   const autoStartRef = useRef(autoStart);
   const [alertBanner, setAlertBanner] = useState<string | null>(null);
+  /**
+   * Full text of the last failed launch (first line = reason, rest = detail). Kept
+   * separately from `status` because the toolbar truncates to one ellipsised line and
+   * clears after a few seconds — which left "启动失败" as the only visible clue.
+   */
+  const [startFailure, setStartFailure] = useState<string | null>(null);
+  const [failureCopied, setFailureCopied] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(
     () => localStorage.getItem("workbench-onboarding-dismissed") !== "1"
   );
@@ -525,6 +533,7 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
     startCancelledRef.current = false;
     pollAbortRef.current = false;
     setStarting(true);
+    setStartFailure(null);
     setStatus(t("dsh.starting"));
     try {
       const result = await invokeStartDsh(port);
@@ -546,11 +555,15 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
       if (result?.auth_url) setIframeLoading(false);
       else remountIframe();
     } catch (error) {
+      // Backend failures are multi-line: line 1 is the reason, the rest is diagnostics
+      // (start command, Node/DSH versions, guessed cause, tail of the process output).
+      // The toolbar keeps the one-line reason; the panel keeps everything until dismissed,
+      // because the status line is truncated and cleared after 6s on its own.
       const msg = String(error);
-      setStatus(t("dsh.startFailed", { error: msg }));
-      if (/端口|port|Node|npx|not installed|占用/i.test(msg)) {
-        showCriticalAlert(t("dsh.startFailed", { error: msg }));
-      }
+      const [reason] = msg.split("\n");
+      setStartFailure(msg);
+      setFailureCopied(false);
+      setStatus(t("dsh.startFailed", { error: reason }));
       clearStatusAfter(6000);
     } finally {
       setStarting(false);
@@ -764,6 +777,21 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
     }
   };
 
+  const copyFailure = async () => {
+    if (!startFailure) return;
+    try {
+      await invokeCopyToClipboard(startFailure);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(startFailure);
+      } catch {
+        return;
+      }
+    }
+    setFailureCopied(true);
+    setTimeout(() => setFailureCopied(false), 1500);
+  };
+
   const busy = starting || stopping || updating || installing;
   const installed = !!dshVersion && dshVersion !== "";
   const detecting = dshVersion === null;
@@ -779,6 +807,9 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
         : installed
           ? t("dsh.idle")
           : t("dsh.notInstalledShort"));
+  const failureLines = startFailure ? startFailure.split("\n") : [];
+  const failureSummary = failureLines[0] ?? "";
+  const failureDetail = failureLines.slice(1).join("\n");
 
   return (
     <div className="dsh-container">
@@ -793,6 +824,47 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
           >
             <X size={14} />
           </button>
+        </div>
+      )}
+      {startFailure && (
+        <div className="dsh-failure-panel" role="alert">
+          <div className="dsh-failure-head">
+            <span className="dsh-failure-title">
+              <AlertTriangle size={13} />
+              {t("dsh.startFailedTitle")}
+            </span>
+            <span className="dsh-failure-summary" title={failureSummary}>
+              {failureSummary}
+            </span>
+            <div className="dsh-failure-actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => void copyFailure()}
+              >
+                {failureCopied ? <Check size={12} /> : <Copy size={12} />}
+                {failureCopied ? t("dsh.detailsCopied") : t("dsh.copyDetails")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => void startOnPort(startPortValid ? startPort : DEFAULT_PORT)}
+                disabled={busy || dshNodejsInstalled === false}
+              >
+                <RefreshCw size={12} />
+                {t("dsh.retryStart")}
+              </button>
+              <button
+                type="button"
+                className="alert-banner-dismiss"
+                onClick={() => setStartFailure(null)}
+                aria-label={t("dsh.dismiss")}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+          {failureDetail && <pre className="dsh-failure-detail">{failureDetail}</pre>}
         </div>
       )}
       {syncBarVisible && syncMeta && (
@@ -1109,6 +1181,35 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
               )}
             </>
             )
+          ) : starting ? (
+            <div className="dsh-empty-state is-starting" role="status" aria-busy="true">
+              <div className="dsh-start-hero" aria-hidden="true">
+                <span className="dsh-start-glow" />
+                <div className="dsh-start-orbit">
+                  <span className="dsh-start-orbit-track" />
+                  <span className="dsh-start-orbit-arc" />
+                  <span className="dsh-start-orbit-arc is-secondary" />
+                  <div className="dsh-empty-state-icon">
+                    <img src="/deepseek-logo.png" alt="" />
+                  </div>
+                </div>
+              </div>
+              <div className="dsh-start-copy">
+                <div className="dsh-empty-state-title">{t("dsh.serviceTitle")}</div>
+                <div className="dsh-start-status">
+                  <span className="dsh-start-status-label">{t("dsh.startingLabel")}</span>
+                  <span className="dsh-start-dots">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </div>
+                <div className="dsh-start-bar">
+                  <span />
+                </div>
+                <div className="dsh-empty-state-hint">{t("dsh.startingHint")}</div>
+              </div>
+            </div>
           ) : (
             <div className="dsh-empty-state">
               <div className="dsh-empty-state-icon">

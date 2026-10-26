@@ -512,7 +512,19 @@
 
 .dsh-status-dot.busy {
   background: var(--accent);
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: dsh-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dsh-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
 }
 
 .dsh-iframe-container {
@@ -838,6 +850,250 @@
 /* Empty state primary action (install branch). */
 .dsh-empty-state-btn {
   margin-top: 4px;
+}
+
+/* Startup wait — soft glow + dual arcs + slim bar (no double spinner). */
+.dsh-empty-state.is-starting {
+  gap: 22px;
+  animation: dsh-start-enter 420ms ease-out both;
+}
+
+.dsh-start-hero {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  display: grid;
+  place-items: center;
+}
+
+.dsh-start-glow {
+  position: absolute;
+  inset: 8%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--accent) 28%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 8%, transparent) 42%,
+    transparent 72%
+  );
+  filter: blur(2px);
+  animation: dsh-start-glow 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.dsh-start-orbit {
+  position: relative;
+  z-index: 1;
+  width: 108px;
+  height: 108px;
+  display: grid;
+  place-items: center;
+}
+
+.dsh-start-orbit-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border-subtle));
+  box-shadow: var(--surface-highlight);
+}
+
+.dsh-start-orbit-arc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  animation: dsh-start-spin 1.35s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.dsh-start-orbit-arc.is-secondary {
+  inset: 7px;
+  border-width: 1.5px;
+  border-top-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-right-color: transparent;
+  border-bottom-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  animation-duration: 2.1s;
+  animation-direction: reverse;
+  opacity: 0.85;
+}
+
+.dsh-empty-state.is-starting .dsh-empty-state-icon {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 0;
+  width: 68px;
+  height: 68px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-2) 72%, transparent);
+  box-shadow: var(--shadow-sm), var(--surface-highlight);
+  animation: dsh-start-breathe 2.6s ease-in-out infinite;
+}
+
+.dsh-start-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.dsh-empty-state.is-starting .dsh-empty-state-title {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+}
+
+.dsh-start-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 18px;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.dsh-start-status-label {
+  letter-spacing: 0.02em;
+}
+
+.dsh-start-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  width: 18px;
+}
+
+.dsh-start-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: dsh-start-dot 1.2s ease-in-out infinite;
+}
+
+.dsh-start-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.dsh-start-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.dsh-start-bar {
+  width: min(200px, 56vw);
+  height: 2px;
+  margin-top: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 14%, var(--overlay-2));
+  overflow: hidden;
+}
+
+.dsh-start-bar > span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 55%, transparent)
+  );
+  animation: dsh-start-bar 1.6s ease-in-out infinite;
+}
+
+.dsh-empty-state.is-starting .dsh-empty-state-hint {
+  margin-top: 2px;
+  max-width: 280px;
+  color: var(--text-3);
+}
+
+@keyframes dsh-start-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dsh-start-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dsh-start-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
+@keyframes dsh-start-glow {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes dsh-start-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes dsh-start-bar {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dsh-empty-state.is-starting,
+  .dsh-start-glow,
+  .dsh-start-orbit-arc,
+  .dsh-empty-state.is-starting .dsh-empty-state-icon,
+  .dsh-start-dots i,
+  .dsh-start-bar > span,
+  .dsh-status-dot.busy {
+    animation: none;
+  }
+
+  .dsh-start-bar > span {
+    width: 100%;
+    transform: none;
+    opacity: 0.55;
+  }
+
+  .dsh-start-dots i {
+    opacity: 0.55;
+  }
 }
 
 .dsh-install-link {

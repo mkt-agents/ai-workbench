@@ -1470,14 +1470,18 @@ export default function AiHubBubble() {
           <button
             type="button"
             role="menuitem"
-            onClick={() => runMenuItem(() => void invoke("open_main").catch(() => {}))}
+            onClick={() =>
+              runMenuItem(() => void invoke("open_main").catch((err) => console.error(err)))
+            }
           >
             {t("petMenuMain")}
           </button>
           <button
             type="button"
             role="menuitem"
-            onClick={() => runMenuItem(() => void invoke("show_ai_hub").catch(() => {}))}
+            onClick={() =>
+              runMenuItem(() => void invoke("show_ai_hub").catch((err) => console.error(err)))
+            }
           >
             {t("petMenuOpen")}
           </button>

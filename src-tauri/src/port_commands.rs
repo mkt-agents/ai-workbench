@@ -179,8 +179,8 @@ pub(crate) fn is_port_in_use(port: u16) -> bool {
 }
 
 /// Wait for a killed server to release its port, so its replacement can bind it.
-/// Without this, `wait_for_port` can see the dying socket and start the successor too
-/// early, which then fails to listen.
+/// Without this, the launch-time port wait can see the dying socket and treat the
+/// successor as up too early, which then fails to listen.
 ///
 /// Returns `true` when the port is free; `false` if still bound after the deadline.
 pub(crate) fn wait_for_port_release(port: u16) -> bool {

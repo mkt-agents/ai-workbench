@@ -572,23 +572,105 @@ pub fn set_ai_hub_bubble_box(
     set_bubble_box(&app, width, height, hit)
 }
 
+/// 主窗的「关闭 = 收进托盘」处理器。初始化挂一次，窗口被重建时再挂一次
+///（重建出来的窗口没有这个处理器的话，点 X 会真的销毁它）。
+pub(crate) fn attach_main_close_handler<R: Runtime>(app: &AppHandle<R>, win: &WebviewWindow<R>) {
+    let handle = app.clone();
+    win.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            if let Some(w) = handle.get_webview_window(MAIN_LABEL) {
+                let _ = w.hide();
+            }
+            let _ = handle.emit("tray-minimized", ());
+        }
+        // 主窗被真的销毁时留一条记录：之后「显示主窗口」就再也找不到它了
+        //（`show_main_window` 会打 window missing），先分清是"藏起来"还是"没了"。
+        tauri::WindowEvent::Destroyed => {
+            eprintln!("[tray] main window destroyed");
+        }
+        _ => {}
+    });
+}
+
+/// 主窗万一真被销毁（外部结束任务、渲染进程崩了被带走），按 tauri.conf 的同款参数重建一个：
+/// 没有它，桌宠和托盘的「显示主窗口」就永远没东西可显示。
+///
+/// 和 `prebuild_ai_hub_window` 一样必须回主线程建窗——在命令线程上 `build()` 会永久阻塞。
+pub fn ensure_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if app.get_webview_window(MAIN_LABEL).is_some() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let inner = app.clone();
+        if let Err(e) = app.run_on_main_thread(move || {
+            if inner.get_webview_window(MAIN_LABEL).is_some() {
+                return;
+            }
+            match WebviewWindowBuilder::new(&inner, MAIN_LABEL, WebviewUrl::App("index.html".into()))
+                .title("AI Workbench")
+                .inner_size(1024.0, 768.0)
+                .min_inner_size(800.0, 560.0)
+                .resizable(true)
+                .decorations(false)
+                .shadow(true)
+                .visible(true)
+                .build()
+            {
+                Ok(win) => {
+                    attach_main_close_handler(&inner, &win);
+                    let _ = win.unminimize();
+                    if !vis::bring_to_front(&win) {
+                        let _ = win.set_focus();
+                        vis::force_visible(&win, true);
+                    }
+                }
+                Err(e) => eprintln!("[tray] rebuild main failed: {e}"),
+            }
+        }) {
+            eprintln!("[tray] rebuild main dispatch failed: {e}");
+        }
+    });
+}
+
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(win) = app.get_webview_window(MAIN_LABEL) {
-        if let Err(e) = win.show() {
-            eprintln!("[tray] show main failed: {e}");
-        }
-        if let Err(e) = win.unminimize() {
-            eprintln!("[tray] unminimize main failed: {e}");
-        }
+    let Some(win) = app.get_webview_window(MAIN_LABEL) else {
+        // 把当前还剩哪些窗口带出来：到底是"主窗被销毁了"还是"标签变了"，一眼可辨。
+        let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+        eprintln!("[tray] show main: window missing; windows={labels:?}; rebuilding");
+        ensure_main_window(app);
+        return;
+    };
+    if let Err(e) = win.show() {
+        eprintln!("[tray] show main failed: {e}");
+    }
+    if let Err(e) = win.unminimize() {
+        eprintln!("[tray] unminimize main failed: {e}");
+    }
+    // 只 `set_focus` 不够：从桌宠菜单点进来时前台是浏览器，而 `show()` 本身可能是
+    // 静默 no-op（见 `vis` 顶部注释），于是窗口"显示了但埋在别的应用后面"，
+    // 看起来就是点了没反应。`bring_to_front` = SetWindowPos + SetForegroundWindow，
+    // 既真显示又抬到最前；失败才退回老的 focus + force_visible。
+    if !vis::bring_to_front(&win) {
         if let Err(e) = win.set_focus() {
             eprintln!("[tray] focus main failed: {e}");
         }
-        // Tray click / second launch must always bring the window back: apply the real
-        // visibility last so nothing above can undo it.
         if !vis::force_visible(&win, true) {
             eprintln!("[tray] main window still hidden after force_visible");
         }
     }
+    // 最后再核一次真实可见性：真被藏起来了就再掰一次（tray 点击 / 二次启动都走这里）。
+    if !vis::really_visible(&win).unwrap_or(true) {
+        eprintln!("[tray] main window still hidden, forcing visible");
+        vis::force_visible(&win, true);
+    }
+    // 一行诊断：桌宠 / 托盘点「显示主窗口」没反应时，先看这里到底是"没显示"还是"没抬到前台"。
+    eprintln!(
+        "[tray] show main: visible={:?} foreground={:?}",
+        vis::really_visible(&win),
+        vis::is_foreground(&win)
+    );
 }
 
 pub fn toggle_ai_hub<R: Runtime>(app: &AppHandle<R>) {

@@ -3,7 +3,7 @@ use std::process::Command;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::Manager;
@@ -60,6 +60,47 @@ const DSH_POLL_INTERVAL_MS: u64 = 250;
 /// auth probe retries briefly instead of judging on the first attempt.
 const DSH_HTTP_TIMEOUT_SECS: u64 = 6;
 const DSH_HTTP_POLL_MS: u64 = 400;
+
+/// How many lines of the child's own output are kept for a failure report. A launch that
+/// dies on `Error: Cannot find module …` used to report only "启动失败" because stderr
+/// went to `Stdio::null()`; the tail is what makes the cause visible.
+const DSH_LOG_TAIL_LINES: usize = 24;
+/// One pathological line (minified stack traces) must not push the rest out.
+const DSH_LOG_LINE_MAX_CHARS: usize = 400;
+
+/// Rolling tail of everything the DSH process printed, shared by the stdout/stderr
+/// reader threads and the launcher.
+type LaunchLog = Arc<Mutex<Vec<String>>>;
+
+fn new_launch_log() -> LaunchLog {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+fn push_launch_log(log: &LaunchLog, line: &str) {
+    let trimmed = line.trim_end();
+    if trimmed.trim().is_empty() {
+        return;
+    }
+    let mut text = String::new();
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx >= DSH_LOG_LINE_MAX_CHARS {
+            text.push('…');
+            break;
+        }
+        text.push(ch);
+    }
+    if let Ok(mut lines) = log.lock() {
+        lines.push(text);
+        let overflow = lines.len().saturating_sub(DSH_LOG_TAIL_LINES);
+        if overflow > 0 {
+            lines.drain(0..overflow);
+        }
+    }
+}
+
+fn launch_log_tail(log: &LaunchLog) -> Vec<String> {
+    log.lock().map(|lines| lines.clone()).unwrap_or_default()
+}
 
 /// Backup path for the DSH auth patch. The pre-rename suffix is still
 /// recognised so a patch applied by an older build can still be restored.
@@ -129,6 +170,290 @@ fn node_dirs_on_path(path_value: &str) -> Vec<PathBuf> {
         .filter(|dir| !dir.as_os_str().is_empty())
         .filter(|dir| dir.join("node.exe").is_file() || dir.join("npm.cmd").is_file())
         .collect()
+}
+
+/// The `node.exe` that this PATH would resolve, or `None` when Node is not installed.
+fn node_exe(path_value: &str) -> Option<PathBuf> {
+    node_dirs_on_path(path_value)
+        .into_iter()
+        .map(|dir| dir.join("node.exe"))
+        .find(|exe| exe.is_file())
+}
+
+/// `<exe> -v`, e.g. `v20.11.1`. Used for the failure report and the engine gate.
+fn node_version_of(exe: &Path) -> Option<String> {
+    let mut cmd = Command::new(exe);
+    cmd.arg("-v");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// `major.minor.patch`, tolerating a leading `v` and a prerelease suffix. `None` when the
+/// string is not a version at all (a wildcard range such as `18.x`, an npm alias, …).
+fn parse_semver_triple(value: &str) -> Option<(u64, u64, u64)> {
+    let core = value.trim().trim_start_matches(['v', 'V']);
+    let core = core.split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = match parts.next() {
+        Some(part) => part.parse::<u64>().ok()?,
+        None => 0,
+    };
+    let patch = match parts.next() {
+        Some(part) => part.parse::<u64>().ok()?,
+        None => 0,
+    };
+    Some((major, minor, patch))
+}
+
+/// Lowest version a (simplified) `engines.node` range accepts.
+///
+/// Only the lower bound is considered: npm treats `engines` as advisory, and a Node
+/// *newer* than the range's ceiling usually still runs DSH, so refusing to try would
+/// break working setups. `None` when the range has no parsable lower bound (`18.x`,
+/// `*`, `||` alternatives, `-` ranges) — then the launch is not blocked on a guess.
+fn node_range_minimum(range: &str) -> Option<(u64, u64, u64)> {
+    let range = range.trim();
+    if range.is_empty() || range.contains("||") || range.contains(" - ") {
+        return None;
+    }
+    if range == "*" || range.eq_ignore_ascii_case("latest") {
+        return None;
+    }
+    let mut minimum: Option<(u64, u64, u64)> = None;
+    for part in range.split_whitespace() {
+        // Upper bounds say nothing about the minimum; skip them outright.
+        if part.starts_with('<') {
+            continue;
+        }
+        let version = if let Some(rest) = part.strip_prefix(">=") {
+            rest
+        } else if let Some(rest) = part.strip_prefix('>') {
+            rest
+        } else if let Some(rest) = part.strip_prefix('^') {
+            rest
+        } else if let Some(rest) = part.strip_prefix('~') {
+            rest
+        } else if let Some(rest) = part.strip_prefix('=') {
+            rest
+        } else {
+            part
+        };
+        let Some(want) = parse_semver_triple(version) else {
+            return None;
+        };
+        minimum = Some(match minimum {
+            Some(current) if current >= want => current,
+            _ => want,
+        });
+    }
+    minimum
+}
+
+/// Fail fast on the classic "版本不兼容" case: DSH declares `engines.node` in its own
+/// package.json, so the launcher can name both versions instead of letting the child die
+/// with a stack trace the user never sees.
+fn node_engine_mismatch(pkg: &Path, node: &Path) -> Option<String> {
+    let manifest = read_package_json(&pkg.join("package.json"))?;
+    let required = manifest
+        .get("engines")?
+        .get("node")?
+        .as_str()?
+        .trim()
+        .to_string();
+    if required.is_empty() {
+        return None;
+    }
+    let minimum = node_range_minimum(&required)?;
+    let actual_text = node_version_of(node)?;
+    let actual = parse_semver_triple(&actual_text)?;
+    if actual >= minimum {
+        return None;
+    }
+    let dsh_version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    Some(format!(
+        "Node.js 版本不兼容：DSH {dsh_version} 要求 Node {required}，当前为 {actual_text}\n\
+         请到「版本管理 → 运行时」切换或安装满足要求的 Node，再回来启动；\n\
+         或者安装一个与当前 Node 兼容的 DSH 版本（工具栏的版本下拉可选旧版本）。"
+    ))
+}
+
+/// A guess at the cause from what the child printed. Cheap substring matching only —
+/// the raw output is always included below it, so a miss costs nothing.
+fn dsh_launch_hint(log: &[String]) -> Option<&'static str> {
+    let joined = log.join("\n").to_ascii_lowercase();
+    let has = |needle: &str| joined.contains(needle);
+    if has("eaddrinuse") {
+        return Some("端口已被占用，换一个端口（工具栏的端口输入框）后重试");
+    }
+    if has("ebadengine") || has("unsupported engine") || has("requires node") {
+        return Some("当前 Node.js 版本不满足 DSH 要求，请在「版本管理 → 运行时」切换 Node");
+    }
+    if has("err_unknown_builtin_module") || has("err_require_esm") || has("node: not found") {
+        return Some("Node.js 版本过旧（或与 DSH 不匹配），请切换 Node 版本");
+    }
+    if has("cannot find module") || has("err_module_not_found") {
+        return Some("DSH 安装不完整（缺少依赖），请在工具栏重新安装或更新 DSH");
+    }
+    if has("syntaxerror") || has("unexpected token") || has("is not a function") {
+        return Some("DSH 代码与当前 Node.js 版本不兼容：换 Node 版本，或把 DSH 换成与当前 Node 匹配的版本");
+    }
+    if has("eacces") || has("eperm") {
+        return Some("权限不足：可能被杀毒软件拦截，或以管理员身份运行后重试");
+    }
+    if has("'npx'") || has("不是内部或外部命令") || has("is not recognized") {
+        return Some("找不到 Node.js / npx，请先安装 Node.js，或在「版本管理 → 运行时」选择可用的 Node");
+    }
+    if has("credentials.yaml.lock") || has("timed out waiting for the writer lock") {
+        return Some(
+            "凭证文件锁卡住（~/.dsh/.credentials.yaml.lock）：上一次 DSH 异常退出常会留下空锁，删掉该文件后重试",
+        );
+    }
+    None
+}
+
+/// `%USERPROFILE%\.dsh` — same root DSH itself uses for credentials and profiles.
+fn dsh_home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.join(".dsh"))
+}
+
+/// Whether a PID recorded in a `.lock` file still refers to a live process.
+/// Mirrors `@deepseek-ai/dsh-atomic-write`'s `process.kill(pid, 0)` probe.
+#[cfg(target_os = "windows")]
+fn pid_is_alive(pid: u32) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    if pid == 0 {
+        return false;
+    }
+    unsafe {
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(handle) => {
+                let _ = CloseHandle(handle);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn pid_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    // Best-effort: signal 0 does not kill; ESRCH means gone.
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// DSH's atomic-write lock records `"<pid>\n"`. An empty / corrupt file is never
+/// taken over by DSH itself (incomplete record → wait → timeout), which leaves the
+/// web UI stuck on `GET /` 404 with no `dsh web: http…?token=` line. Clear those
+/// here before we spawn; leave locks whose PID is still alive alone.
+fn dsh_lock_record_is_stale(record: &str) -> bool {
+    let trimmed = record.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    // Same shape DSH writes: digits only (optionally with trailing newline already trimmed).
+    let Ok(pid) = trimmed.parse::<u32>() else {
+        return true;
+    };
+    !pid_is_alive(pid)
+}
+
+/// Drop a leftover `~/.dsh/.credentials.yaml.lock` when its holder is gone or the
+/// record is unusable. Returns whether a file was removed (for tests / logging).
+fn clear_stale_dsh_credential_lock() -> bool {
+    let Some(home) = dsh_home_dir() else {
+        return false;
+    };
+    let lock_path = home.join(".credentials.yaml.lock");
+    if !lock_path.is_file() {
+        return false;
+    }
+    let record = fs::read_to_string(&lock_path).unwrap_or_default();
+    if !dsh_lock_record_is_stale(&record) {
+        return false;
+    }
+    match fs::remove_file(&lock_path) {
+        Ok(()) => {
+            eprintln!(
+                "[dsh] 已清除陈旧凭证锁 {}（内容: {:?}）",
+                lock_path.display(),
+                record.trim()
+            );
+            true
+        }
+        Err(e) => {
+            eprintln!(
+                "[dsh] 无法清除陈旧凭证锁 {}: {e}",
+                lock_path.display()
+            );
+            false
+        }
+    }
+}
+
+/// One launch attempt's worth of context, used to build a diagnosable error string.
+struct LaunchContext<'a> {
+    port: u16,
+    /// What was executed, so the user can run it in a terminal themselves.
+    command_line: &'a str,
+    /// The other strategy's spawn error, when there was one.
+    previous: Option<&'a str>,
+    log: &'a [String],
+}
+
+/// First line is a one-sentence reason (it goes into the toolbar status); everything
+/// after it is the detail the UI shows in the failure panel.
+fn dsh_failure_message(reason: &str, ctx: &LaunchContext) -> String {
+    let mut lines: Vec<String> = vec![reason.to_string(), format!("端口: {}", ctx.port)];
+    if !ctx.command_line.is_empty() {
+        lines.push(format!("启动命令: {}", ctx.command_line));
+    }
+    let node = node_exe(&current_path_value()).and_then(|exe| node_version_of(&exe));
+    let mut env = vec![match node {
+        Some(version) => format!("Node {version}"),
+        None => "Node 未检测到".to_string(),
+    }];
+    if let Some(version) = installed_dsh_version() {
+        env.push(format!("DSH {version}"));
+    }
+    lines.push(format!("运行环境: {}", env.join(" · ")));
+    if let Some(previous) = ctx.previous {
+        lines.push(format!("另一种启动方式也失败: {previous}"));
+    }
+    if let Some(hint) = dsh_launch_hint(ctx.log) {
+        lines.push(format!("可能原因: {hint}"));
+    }
+    if ctx.log.is_empty() {
+        lines.push(
+            "进程没有任何输出：可能被安全软件拦截，或 Node 不在 PATH 里".to_string(),
+        );
+    } else {
+        lines.push(format!("进程输出（最后 {} 行）:", ctx.log.len()));
+        for line in ctx.log {
+            lines.push(format!("| {line}"));
+        }
+    }
+    lines.join("\n")
 }
 
 /// Where the globally installed DSH package lives, without paying npm's ~2.3s startup.
@@ -467,11 +792,12 @@ fn dsh_web_args(port: u16) -> Vec<String> {
     ]
 }
 
-/// Environment and flags shared by every launch attempt.
+/// Environment and flags shared by every launch attempt. stderr is piped (not null):
+/// when the child dies immediately its own error text is the only clue we get.
 fn configure_dsh_command(cmd: &mut Command, path_value: &str) {
     apply_path_value(cmd, path_value);
     cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::piped());
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -481,22 +807,38 @@ struct SpawnedDsh {
     child: std::process::Child,
     /// First `dsh web: http…` line. The reader keeps draining stdout afterwards.
     auth_url: mpsc::Receiver<String>,
+    /// Rolling tail of stdout + stderr, for the failure report.
+    log: LaunchLog,
+    /// Human-readable form of what was executed.
+    command_line: String,
+    /// Spawn error of the strategy tried before this one, if any.
+    previous: Option<String>,
 }
 
-fn watch_launch_url(child: &mut std::process::Child) -> mpsc::Receiver<String> {
+/// Drain both pipes on their own threads (a full stderr pipe would block the child, so
+/// this is required, not just for the log) and pick out the launch-token URL.
+fn watch_launch_url(child: &mut std::process::Child, log: &LaunchLog) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel();
-    let Some(stdout) = child.stdout.take() else {
-        return rx;
-    };
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else { continue };
-            if let Some(url) = parse_dsh_web_line(&line) {
-                let _ = tx.send(url);
+    if let Some(stdout) = child.stdout.take() {
+        let log = Arc::clone(log);
+        let tx = tx.clone();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(url) = parse_dsh_web_line(&line) {
+                    let _ = tx.send(url);
+                }
+                push_launch_log(&log, &line);
             }
-        }
-    });
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let log = Arc::clone(log);
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                push_launch_log(&log, &line);
+            }
+        });
+    }
     rx
 }
 
@@ -521,19 +863,25 @@ fn spawn_dsh_server(port: u16, path_value: &str) -> Result<SpawnedDsh, String> {
         if let Some(entry) = entry {
             // Absolute node.exe from the same PATH the package came from: the child gets a
             // different PATH of its own, so a bare "node" could resolve elsewhere.
-            let program = node_dirs_on_path(path_value)
-                .into_iter()
-                .map(|dir| dir.join("node.exe"))
-                .find(|exe| exe.is_file())
-                .unwrap_or_else(|| PathBuf::from("node"));
+            let program = node_exe(path_value).unwrap_or_else(|| PathBuf::from("node"));
             let mut cmd = Command::new(&program);
             cmd.arg(&entry).args(&args);
             configure_dsh_command(&mut cmd, path_value);
+            let log = new_launch_log();
             match cmd.spawn() {
                 Ok(mut child) => {
+                    let auth_url = watch_launch_url(&mut child, &log);
                     return Ok(SpawnedDsh {
-                        auth_url: watch_launch_url(&mut child),
                         child,
+                        auth_url,
+                        log,
+                        command_line: format!(
+                            "{} {} {}",
+                            program.display(),
+                            entry.display(),
+                            args.join(" ")
+                        ),
+                        previous: None,
                     });
                 }
                 Err(e) => previous = Some(format!("node 直接启动失败: {e}")),
@@ -545,6 +893,7 @@ fn spawn_dsh_server(port: u16, path_value: &str) -> Result<SpawnedDsh, String> {
     let mut cmd = Command::new("cmd");
     cmd.args(["/c", "npx", "@deepseek-ai/dsh"]).args(&args);
     configure_dsh_command(&mut cmd, path_value);
+    let log = new_launch_log();
     let mut child = cmd.spawn().map_err(|e| {
         let hint = if e.kind() == std::io::ErrorKind::NotFound {
             "未找到 Node.js，请先安装，或在「版本切换」里选择可用的 Node"
@@ -556,22 +905,50 @@ fn spawn_dsh_server(port: u16, path_value: &str) -> Result<SpawnedDsh, String> {
             None => format!("{hint}: {e}"),
         }
     })?;
+    let auth_url = watch_launch_url(&mut child, &log);
     Ok(SpawnedDsh {
-        auth_url: watch_launch_url(&mut child),
         child,
+        auth_url,
+        log,
+        command_line: format!("cmd /c npx @deepseek-ai/dsh {}", args.join(" ")),
+        previous,
     })
 }
 
-/// Wait until the port listens: the authoritative "process is up" signal.
-fn wait_for_port(port: u16) -> bool {
+/// Outcome of waiting for the port to listen.
+enum PortWait {
+    Listening,
+    /// The child is gone: no point sitting out the rest of the timeout.
+    Exited(Option<i32>),
+    Timeout,
+}
+
+/// Wait until the port listens — the authoritative "process is up" signal — but stop
+/// early when the child has already exited. A crashed launch used to burn the full 30s
+/// and then report a bare timeout, which hid the real (printed) cause.
+fn wait_for_port_or_exit(port: u16, child: &mut std::process::Child) -> PortWait {
     let deadline = std::time::Instant::now() + Duration::from_secs(DSH_START_TIMEOUT_SECS);
-    while std::time::Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(DSH_POLL_INTERVAL_MS));
+    loop {
         if is_port_in_use(port) {
-            return true;
+            return PortWait::Listening;
         }
+        if let Ok(Some(status)) = child.try_wait() {
+            // The server binds a moment before it can print, so give a dying process a
+            // short grace period instead of declaring failure on the same tick.
+            let grace = std::time::Instant::now() + Duration::from_millis(1500);
+            while std::time::Instant::now() < grace {
+                if is_port_in_use(port) {
+                    return PortWait::Listening;
+                }
+                thread::sleep(Duration::from_millis(DSH_POLL_INTERVAL_MS));
+            }
+            return PortWait::Exited(status.code());
+        }
+        if std::time::Instant::now() >= deadline {
+            return PortWait::Timeout;
+        }
+        thread::sleep(Duration::from_millis(DSH_POLL_INTERVAL_MS));
     }
-    false
 }
 
 /// Kill the server and the children `cmd /c npx` spawned.
@@ -719,11 +1096,18 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
         let stderr = child.stderr.take().unwrap();
         let reader = BufReader::new(stderr);
         let mut last_msg = String::new();
+        // Same treatment as `update_dsh`: keep npm's own error lines so a failed install
+        // can quote them instead of a bare "请检查网络连接".
+        let mut npm_errors: Vec<String> = Vec::new();
 
         // `map_while`：读出错就收摊，别让 `flatten` 在坏管道上无限转
         for line in reader.lines().map_while(Result::ok) {
             let trimmed = line.trim().to_string();
             if trimmed.is_empty() { continue; }
+
+            if trimmed.starts_with("npm error") && npm_errors.len() < 5 {
+                npm_errors.push(trimmed.clone());
+            }
 
             // Parse npm progress output
             let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
@@ -748,11 +1132,15 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
             }
         }
 
-        child.wait().map_err(|e| format!("Wait failed: {}", e))
+        child
+            .wait()
+            .map(|status| (status, npm_errors))
+            .map_err(|e| format!("Wait failed: {}", e))
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
     .map_err(|e| format!("Install failed: {}", e))?;
+    let (result, npm_errors) = result;
 
     if result.success() {
         window.emit("dsh:install_progress", serde_json::json!({
@@ -762,7 +1150,15 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
         })).ok();
         Ok("安装成功".to_string())
     } else {
-        Err("安装失败，请检查网络连接".to_string())
+        let code = result.code().unwrap_or(-1);
+        if npm_errors.is_empty() {
+            Err(format!("安装失败（npm 退出码 {code}），请检查网络连接"))
+        } else {
+            Err(format!(
+                "安装失败（npm 退出码 {code}）：{}",
+                npm_errors.join(" | ")
+            ))
+        }
     }
 }
 
@@ -837,21 +1233,62 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
 
     // Install check from disk: `npm list -g` costs ~2.3s here, and a missing Node surfaces
     // from the spawn below with a clear message of its own.
-    if dsh_package_dir(&path_value).is_none() {
-        return Err(format!("[{}] DeepSeek Harness is not installed. Please install it first.", crate::config::ErrorCode::DshNotInstalled.as_str()));
+    let Some(pkg_dir) = dsh_package_dir(&path_value) else {
+        return Err(format!(
+            "[{}] 未安装 DeepSeek Harness：请先在工具栏点「安装」，再启动。",
+            crate::config::ErrorCode::DshNotInstalled.as_str()
+        ));
+    };
+
+    // Version gate before spawning: an `engines.node` mismatch is the most common
+    // "it only says 启动失败" case, and the child's own complaint never reaches the UI.
+    if let Some(exe) = node_exe(&path_value) {
+        if let Some(mismatch) = node_engine_mismatch(&pkg_dir, &exe) {
+            return Err(mismatch);
+        }
     }
 
     // Do not rewrite DSH's install. 0.2+ mints a launch token and exchanges it for a
     // signed cookie. If an older build left its auth patch on disk, put the original
     // file back before this process reads it.
     restore_leftover_patch()?;
+    // Crash leftovers: an empty/dead-PID `.credentials.yaml.lock` makes DSH's own
+    // lock takeover refuse to run, so `client-connection` times out, never prints
+    // the launch-token URL, and GET / stays 404 — the "服务尚未就绪" blank page.
+    clear_stale_dsh_credential_lock();
     let mut launch = spawn_dsh_server(target_port, &path_value)?;
-    if !wait_for_port(target_port) {
-        stop_child(&mut launch.child);
-        return Err(format!(
-            "DSH 启动超时（{} 秒）: 端口 {} 未监听。请尝试手动运行 `npx @deepseek-ai/dsh web --port {}` 查看错误。",
-            DSH_START_TIMEOUT_SECS, target_port, target_port
-        ));
+    match wait_for_port_or_exit(target_port, &mut launch.child) {
+        PortWait::Listening => {}
+        PortWait::Exited(code) => {
+            let log = launch_log_tail(&launch.log);
+            stop_child(&mut launch.child);
+            let reason = match code {
+                Some(code) => format!("DSH 进程启动后立即退出（退出码 {code}）"),
+                None => "DSH 进程启动后立即退出（无退出码，可能被强制结束）".to_string(),
+            };
+            let ctx = LaunchContext {
+                port: target_port,
+                command_line: &launch.command_line,
+                previous: launch.previous.as_deref(),
+                log: &log,
+            };
+            return Err(dsh_failure_message(&reason, &ctx));
+        }
+        PortWait::Timeout => {
+            let log = launch_log_tail(&launch.log);
+            stop_child(&mut launch.child);
+            let reason = format!(
+                "DSH 在 {} 秒内没有开始监听端口 {target_port}",
+                DSH_START_TIMEOUT_SECS
+            );
+            let ctx = LaunchContext {
+                port: target_port,
+                command_line: &launch.command_line,
+                previous: launch.previous.as_deref(),
+                log: &log,
+            };
+            return Err(dsh_failure_message(&reason, &ctx));
+        }
     }
 
     let auth_url = launch
@@ -869,7 +1306,12 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
             "服务拒绝了回环地址（403）。请确认本机 DSH 接受 --trusted-host 127.0.0.1。".into(),
         ),
         (IndexAuth::NotReady, false) => {
-            Some("服务尚未就绪，页面可能空白，可稍后刷新。".into())
+            // Most often a stuck ~/.dsh/.credentials.yaml.lock (cleared above on the
+            // next start). Point at that rather than a vague "refresh later".
+            Some(
+                "服务尚未就绪：没有读到启动登录地址。若反复出现，删除 %USERPROFILE%\\.dsh\\.credentials.yaml.lock 后重试。"
+                    .into(),
+            )
         }
     };
 
@@ -900,9 +1342,15 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
 
 #[tauri::command]
 pub async fn start_dsh(port: Option<u16>, window: tauri::Window) -> Result<DshInstance, String> {
-    tokio::task::spawn_blocking(move || start_dsh_sync(port, window))
+    let result = tokio::task::spawn_blocking(move || start_dsh_sync(port, window))
         .await
-        .map_err(|e| format!("Task failed: {e}"))?
+        .map_err(|e| format!("Task failed: {e}"))?;
+    // Same text the user sees, mirrored to the dev console / stderr log so a report
+    // pasted from the UI can be matched against what the process actually printed.
+    if let Err(error) = &result {
+        eprintln!("[dsh] 启动失败: {error}");
+    }
+    result
 }
 
 /// Blocking core of `stop_dsh`: kill the owned Child (if any), then fall back to
@@ -1498,7 +1946,76 @@ pub fn sync_model_to_dsh(
 
 #[cfg(test)]
 mod tests {
-    use super::{dsh_popup_stays_in_webview, parse_dsh_web_line};
+    use super::{
+        dsh_launch_hint, dsh_lock_record_is_stale, dsh_popup_stays_in_webview, node_range_minimum,
+        parse_dsh_web_line, parse_semver_triple,
+    };
+
+    #[test]
+    fn reads_semver_triples() {
+        assert_eq!(parse_semver_triple("v20.11.1"), Some((20, 11, 1)));
+        assert_eq!(parse_semver_triple("18"), Some((18, 0, 0)));
+        assert_eq!(parse_semver_triple("20.0.0-rc.1"), Some((20, 0, 0)));
+        assert_eq!(parse_semver_triple("18.x"), None);
+    }
+
+    #[test]
+    fn reads_the_minimum_of_an_engine_range() {
+        assert_eq!(node_range_minimum(">=20.0.0"), Some((20, 0, 0)));
+        assert_eq!(node_range_minimum("^20.10.0"), Some((20, 10, 0)));
+        assert_eq!(node_range_minimum(">=18 <21"), Some((18, 0, 0)));
+        assert_eq!(node_range_minimum("18"), Some((18, 0, 0)));
+        assert_eq!(node_range_minimum(">=20.0.0 <23"), Some((20, 0, 0)));
+        // No parsable lower bound: never block a launch on a guess.
+        assert_eq!(node_range_minimum("18.x"), None);
+        assert_eq!(node_range_minimum("18.x || >=20"), None);
+        assert_eq!(node_range_minimum("*"), None);
+        assert_eq!(node_range_minimum("<21"), None);
+    }
+
+    #[test]
+    fn a_too_old_node_is_flagged() {
+        let minimum = node_range_minimum(">=20.0.0").unwrap();
+        assert!(parse_semver_triple("v18.16.0").unwrap() < minimum);
+        assert!(parse_semver_triple("v20.11.1").unwrap() >= minimum);
+    }
+
+    #[test]
+    fn guesses_the_cause_from_the_output() {
+        let port: Vec<String> = vec!["Error: listen EADDRINUSE 127.0.0.1:3080".to_string()];
+        assert!(dsh_launch_hint(&port).unwrap().contains("端口"));
+
+        let module: Vec<String> = vec!["Error: Cannot find module 'undici'".to_string()];
+        assert!(dsh_launch_hint(&module).unwrap().contains("安装不完整"));
+
+        let syntax: Vec<String> = vec!["SyntaxError: Unexpected token '?'".to_string()];
+        assert!(dsh_launch_hint(&syntax).unwrap().contains("不兼容"));
+
+        let unknown: Vec<String> = vec!["some unrelated line".to_string()];
+        assert_eq!(dsh_launch_hint(&unknown), None);
+
+        let lock: Vec<String> = vec![
+            "Error: atomic-write: timed out waiting for the writer lock at C:\\Users\\x\\.dsh\\.credentials.yaml.lock"
+                .to_string(),
+        ];
+        assert!(dsh_launch_hint(&lock).unwrap().contains("凭证文件锁"));
+    }
+
+    #[test]
+    fn empty_or_garbage_credential_locks_are_stale() {
+        assert!(dsh_lock_record_is_stale(""));
+        assert!(dsh_lock_record_is_stale("   \n"));
+        assert!(dsh_lock_record_is_stale("not-a-pid\n"));
+        // PID 0 is never a real holder in DSH's protocol.
+        assert!(dsh_lock_record_is_stale("0\n"));
+    }
+
+    #[test]
+    fn our_own_pid_is_not_treated_as_a_stale_lock() {
+        let record = format!("{}\n", std::process::id());
+        assert!(!dsh_lock_record_is_stale(&record));
+    }
+
 
     #[test]
     fn login_popup_stays_in_the_embed() {

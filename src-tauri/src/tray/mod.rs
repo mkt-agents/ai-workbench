@@ -196,16 +196,9 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     if let Some(main) = app.get_webview_window(bubble::MAIN_LABEL) {
-        let app_handle = app.clone();
-        main.on_window_event(move |event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                if let Some(win) = app_handle.get_webview_window(bubble::MAIN_LABEL) {
-                    let _ = win.hide();
-                }
-                let _ = app_handle.emit("tray-minimized", ());
-            }
-        });
+        bubble::attach_main_close_handler(app, &main);
+    } else {
+        eprintln!("[tray] init: main window missing, close-to-tray disabled");
     }
 
     let poll_app = app.clone();
