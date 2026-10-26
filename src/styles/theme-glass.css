@@ -421,15 +421,16 @@
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-stage {
-  background: var(--overlay-1);
-  border-color: var(--overlay-2);
+  /* Match .dapps-page: stay on --bg-1; overlay fill made the bar look foreign. */
+  background: var(--bg-1);
+  border-color: var(--border);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-toolbar {
-  background: var(--chrome-bg);
-  border-bottom-color: var(--overlay-2);
-  backdrop-filter: blur(20px) saturate(1.08);
-  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+  background: transparent;
+  border-bottom-color: var(--border-subtle);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .dsh-iframe-container {

@@ -216,6 +216,8 @@
     "startingLabel": "Starting",
     "startingHint": "Starting the local service — usually takes about 10–20 seconds",
     "stopping": "Stopping...",
+    "stoppingLabel": "Stopping",
+    "stoppingHint": "Shutting down the local service and freeing the port",
     "stopped": "Stopped",
     "startFailed": "Start failed: {{error}}",
     "startFailedTitle": "Start failed",

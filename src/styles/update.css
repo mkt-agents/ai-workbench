@@ -285,31 +285,32 @@
   }
 }
 
-/* Shared chrome strip — idle and running use the same bar so the page doesn't
-   jump from "floating card" to "edge toolbar" when the service starts. */
+/* Same pattern as .dapps-bar: inherit the card surface, only a hairline below.
+   Avoid --chrome-bg here — that paints a second title strip and reads as a
+   foreign browser chrome on top of Harness. */
 .dsh-toolbar {
   display: flex;
   flex-direction: column;
   gap: 0;
   margin: 0;
-  padding: 0 12px;
-  min-height: 36px;
+  padding: 2px 8px;
+  min-height: 28px;
   justify-content: center;
-  background: var(--chrome-bg);
+  background: transparent;
   border: none;
   border-bottom: 1px solid var(--border-subtle);
   border-radius: 0;
   flex-shrink: 0;
 }
 
-/* Inset panel: fills the flush gutter, keeps a soft gap from the window chrome. */
+/* Same card shell as .dapps-page so Harness and 协同办公 share one host look. */
 .dsh-stage {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   margin: 0;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-1);
   overflow: hidden;
@@ -320,8 +321,8 @@
 }
 
 .dsh-toolbar .dsh-url-badge {
-  height: 26px;
-  padding: 0 8px;
+  height: 22px;
+  padding: 0 7px;
   font-size: 11px;
   color: var(--text-1);
   background: var(--overlay-2);
@@ -336,8 +337,8 @@
 }
 
 .dsh-toolbar .dsh-version-group {
-  height: 26px;
-  padding: 2px;
+  height: 22px;
+  padding: 1px;
   gap: 2px;
 }
 
@@ -353,7 +354,7 @@
 
 .dsh-toolbar .dsh-version-select,
 .dsh-toolbar .dsh-port-input {
-  height: 26px;
+  height: 22px;
   border-radius: var(--radius-full);
   background: var(--overlay-1);
   border-color: var(--border-subtle);
@@ -362,8 +363,8 @@
 }
 
 .dsh-toolbar .dsh-toolbar-actions .commit-icon-btn {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border-radius: var(--radius-full);
   border-color: transparent;
@@ -378,11 +379,11 @@
   color: var(--text-0);
 }
 
-/* Any labeled action must grow — fixed 28px was clipping 「取消等待」over 「启动中」. */
+/* Any labeled action must grow — fixed square was clipping 「取消等待」over 「启动中」. */
 .dsh-toolbar .dsh-toolbar-actions .commit-icon-btn:has(span) {
   width: auto;
-  min-width: 28px;
-  padding: 0 12px;
+  min-width: 24px;
+  padding: 0 10px;
   gap: 5px;
   transition: var(--transition-colors-fast);
 }
@@ -418,7 +419,7 @@
   justify-content: space-between;
   gap: 6px 8px;
   min-width: 0;
-  min-height: 36px;
+  min-height: 24px;
   flex-wrap: nowrap;
 }
 
@@ -852,10 +853,32 @@
   margin-top: 4px;
 }
 
-/* Startup wait — soft glow + dual arcs + slim bar (no double spinner). */
-.dsh-empty-state.is-starting {
+/* Startup / shutdown wait — soft glow + dual arcs + slim bar (no double spinner). */
+.dsh-empty-state.is-starting,
+.dsh-empty-state.is-stopping {
   gap: 22px;
   animation: dsh-start-enter 420ms ease-out both;
+}
+
+.dsh-empty-state.is-stopping .dsh-start-status {
+  color: var(--text-2);
+}
+
+.dsh-empty-state.is-stopping .dsh-start-orbit-arc {
+  animation-direction: reverse;
+}
+
+.dsh-empty-state.is-stopping .dsh-start-orbit-arc.is-secondary {
+  animation-direction: normal;
+}
+
+.dsh-empty-state.is-stopping .dsh-start-glow {
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--text-2) 18%, transparent) 0%,
+    color-mix(in srgb, var(--text-2) 6%, transparent) 42%,
+    transparent 72%
+  );
 }
 
 .dsh-start-hero {
@@ -919,7 +942,8 @@
   opacity: 0.85;
 }
 
-.dsh-empty-state.is-starting .dsh-empty-state-icon {
+.dsh-empty-state.is-starting .dsh-empty-state-icon,
+.dsh-empty-state.is-stopping .dsh-empty-state-icon {
   position: relative;
   z-index: 1;
   margin-bottom: 0;
@@ -939,7 +963,8 @@
   max-width: 320px;
 }
 
-.dsh-empty-state.is-starting .dsh-empty-state-title {
+.dsh-empty-state.is-starting .dsh-empty-state-title,
+.dsh-empty-state.is-stopping .dsh-empty-state-title {
   font-size: 15px;
   letter-spacing: 0.01em;
   color: var(--text-0);
@@ -1007,7 +1032,8 @@
   animation: dsh-start-bar 1.6s ease-in-out infinite;
 }
 
-.dsh-empty-state.is-starting .dsh-empty-state-hint {
+.dsh-empty-state.is-starting .dsh-empty-state-hint,
+.dsh-empty-state.is-stopping .dsh-empty-state-hint {
   margin-top: 2px;
   max-width: 280px;
   color: var(--text-3);
@@ -1076,9 +1102,11 @@
 
 @media (prefers-reduced-motion: reduce) {
   .dsh-empty-state.is-starting,
+  .dsh-empty-state.is-stopping,
   .dsh-start-glow,
   .dsh-start-orbit-arc,
   .dsh-empty-state.is-starting .dsh-empty-state-icon,
+  .dsh-empty-state.is-stopping .dsh-empty-state-icon,
   .dsh-start-dots i,
   .dsh-start-bar > span,
   .dsh-status-dot.busy {

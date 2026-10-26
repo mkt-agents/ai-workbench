@@ -216,6 +216,8 @@
     "startingLabel": "启动中",
     "startingHint": "正在拉起本机服务，通常需要十几秒，请稍候",
     "stopping": "停止中...",
+    "stoppingLabel": "正在停止",
+    "stoppingHint": "正在关闭本机服务并释放端口，请稍候",
     "stopped": "已停止",
     "startFailed": "启动失败: {{error}}",
     "startFailedTitle": "启动失败",

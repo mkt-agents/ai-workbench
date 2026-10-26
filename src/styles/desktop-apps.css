@@ -29,8 +29,9 @@
   flex-wrap: wrap;
   row-gap: 6px;
   flex: none;
-  min-height: 40px;
-  padding: 6px 10px;
+  /* Keep in lockstep with .dsh-toolbar so Harness / 协同办公 chrome match. */
+  min-height: 28px;
+  padding: 2px 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -89,7 +90,7 @@
   align-items: center;
   gap: 6px;
   flex: none;
-  padding: 5px 10px;
+  padding: 3px 8px;
   font-size: 12px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
@@ -113,7 +114,7 @@
 /* Icon-only tab: the name lives in the hover title. */
 .dapps-tab.is-icon {
   gap: 0;
-  padding: 5px 8px;
+  padding: 3px 6px;
 }
 
 .dapps-tab-icon {
@@ -153,7 +154,8 @@
 
 .dapps-status.is-running .dapps-dot,
 .dapps-status.is-polling .dapps-dot,
-.dapps-status.is-launching .dapps-dot {
+.dapps-status.is-launching .dapps-dot,
+.dapps-status.is-closing .dapps-dot {
   background: var(--yellow);
 }
 
@@ -338,10 +340,32 @@
   color: var(--text-3);
 }
 
-/* Launch / wait-for-window: same visual language as Harness startup. */
-.dapps-hint.is-starting {
+/* Launch / wait / close: same visual language as Harness startup. */
+.dapps-hint.is-starting,
+.dapps-hint.is-stopping {
   gap: 22px;
   animation: dapps-start-enter 420ms ease-out both;
+}
+
+.dapps-hint.is-stopping .dapps-start-status {
+  color: var(--text-2);
+}
+
+.dapps-hint.is-stopping .dapps-start-orbit-arc {
+  animation-direction: reverse;
+}
+
+.dapps-hint.is-stopping .dapps-start-orbit-arc.is-secondary {
+  animation-direction: normal;
+}
+
+.dapps-hint.is-stopping .dapps-start-glow {
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--text-2) 18%, transparent) 0%,
+    color-mix(in srgb, var(--text-2) 6%, transparent) 42%,
+    transparent 72%
+  );
 }
 
 .dapps-start-hero {
@@ -438,7 +462,8 @@
   max-width: 320px;
 }
 
-.dapps-hint.is-starting .dapps-hint-title {
+.dapps-hint.is-starting .dapps-hint-title,
+.dapps-hint.is-stopping .dapps-hint-title {
   margin: 0;
   font-size: 15px;
   letter-spacing: 0.01em;
@@ -504,7 +529,8 @@
   animation: dapps-start-bar 1.6s ease-in-out infinite;
 }
 
-.dapps-hint.is-starting .dapps-hint-text {
+.dapps-hint.is-starting .dapps-hint-text,
+.dapps-hint.is-stopping .dapps-hint-text {
   margin-top: 2px;
   max-width: 280px;
   color: var(--text-3);
@@ -573,6 +599,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .dapps-hint.is-starting,
+  .dapps-hint.is-stopping,
   .dapps-start-glow,
   .dapps-start-orbit-arc,
   .dapps-start-icon,

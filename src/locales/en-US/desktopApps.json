@@ -11,6 +11,7 @@
     "attached": "Embedded",
     "launching": "Starting…",
     "polling": "Waiting for its window…",
+    "closing": "Closing…",
     "missing": "Executable not found",
     "error": "Embedding failed"
   },
@@ -30,8 +31,10 @@
     "note": "Embedding takes over the app's own native window: leaving this page hides it (the app keeps running) and closing the workbench gives the window back to the desktop.",
     "startingLabel": "Starting",
     "waitingLabel": "Waiting for window",
+    "closingLabel": "Closing",
     "starting": "Launching the app — a cold start can take up to a minute",
-    "waiting": "The app is up; waiting for a window we can embed"
+    "waiting": "The app is up; waiting for a window we can embed",
+    "closing": "Ending the process and releasing its window"
   },
   "error": {
     "title": "Why it failed",

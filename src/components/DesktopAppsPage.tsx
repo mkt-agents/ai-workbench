@@ -41,7 +41,15 @@ import {
   type DesktopAppDef,
 } from "../lib/desktopApps";
 
-type Phase = "idle" | "running" | "attached" | "launching" | "polling" | "missing" | "error";
+type Phase =
+  | "idle"
+  | "running"
+  | "attached"
+  | "launching"
+  | "polling"
+  | "closing"
+  | "missing"
+  | "error";
 
 /** Logical slot rect + devicePixelRatio, as sent to the embed backend. */
 type SlotRect = { x: number; y: number; width: number; height: number; dpr: number };
@@ -819,16 +827,29 @@ export default function DesktopAppsPage() {
 
   const detach = useCallback(async () => {
     setBusy(true);
+    setPhase("closing");
+    // Native child paints above the webview — hide first so the closing
+    // overlay is visible for the whole detach, same idea as kill.
+    void enqueueShow(processName, () =>
+      invokeDesktopEmbedShow(processName, false).catch(() => undefined)
+    );
     try {
       await invokeDesktopEmbedDetach(processName);
       if (activeIdRef.current === active.id) {
         attachedRef.current = false;
         setPhase("running");
       }
+    } catch {
+      if (aliveRef.current && activeIdRef.current === active.id && attachedRef.current) {
+        setPhase("attached");
+        void enqueueShow(processName, () =>
+          invokeDesktopEmbedShow(processName, true).catch(() => undefined)
+        );
+      }
     } finally {
       if (aliveRef.current && activeIdRef.current === active.id) setBusy(false);
     }
-  }, [active.id, invokeDesktopEmbedDetach, processName]);
+  }, [active.id, invokeDesktopEmbedDetach, invokeDesktopEmbedShow, processName]);
 
   /** Clear an app-side minimize/maximize, then re-place it in the slot now. */
   const restoreWindow = useCallback(async () => {
@@ -906,6 +927,7 @@ export default function DesktopAppsPage() {
       return;
     }
     setBusy(true);
+    setPhase("closing");
     try {
       // Kill FIRST, while the window is still our child: terminating the
       // process destroys the child window in place. Detaching first would
@@ -921,6 +943,7 @@ export default function DesktopAppsPage() {
       const stillRunning = await invokeIsAppRunning(processName).catch(() => true);
       if (stillRunning) {
         if (attachedRef.current) {
+          setPhase("attached");
           setWarning("kill-failed");
           // It survived — it is only hidden right now, so bring it back.
           void enqueueShow(processName, () =>
@@ -940,6 +963,7 @@ export default function DesktopAppsPage() {
       // The window is still embedded (its process survived); keep phase
       // attached so nothing floats over the workbench.
       if (attachedRef.current) {
+        setPhase("attached");
         setWarning("kill-failed");
         void enqueueShow(processName, () =>
           invokeDesktopEmbedShow(processName, true).catch(() => undefined)
@@ -1036,6 +1060,8 @@ export default function DesktopAppsPage() {
         return t("status.launching");
       case "polling":
         return t("status.polling");
+      case "closing":
+        return t("status.closing");
       case "missing":
         return t("status.missing");
       case "error":
@@ -1139,7 +1165,8 @@ export default function DesktopAppsPage() {
               : undefined
           }
         >
-          {busy && (phase === "launching" || phase === "polling") ? (
+          {busy &&
+          (phase === "launching" || phase === "polling" || phase === "closing") ? (
             <Loader2 size={13} className="dapps-spin" />
           ) : (
             <span className="dapps-dot" />
@@ -1218,8 +1245,12 @@ export default function DesktopAppsPage() {
       <div className="dapps-body">
         <div className="dapps-slot" ref={slotRef} />
         {phase !== "attached" && (
-          phase === "launching" || phase === "polling" ? (
-            <div className="dapps-hint is-starting" role="status" aria-busy="true">
+          phase === "launching" || phase === "polling" || phase === "closing" ? (
+            <div
+              className={`dapps-hint ${phase === "closing" ? "is-stopping" : "is-starting"}`}
+              role="status"
+              aria-busy="true"
+            >
               <div className="dapps-start-hero" aria-hidden="true">
                 <span className="dapps-start-glow" />
                 <div className="dapps-start-orbit">
@@ -1235,7 +1266,11 @@ export default function DesktopAppsPage() {
                 <p className="dapps-hint-title">{label(active)}</p>
                 <div className="dapps-start-status">
                   <span>
-                    {phase === "launching" ? t("hint.startingLabel") : t("hint.waitingLabel")}
+                    {phase === "closing"
+                      ? t("hint.closingLabel")
+                      : phase === "launching"
+                        ? t("hint.startingLabel")
+                        : t("hint.waitingLabel")}
                   </span>
                   <span className="dapps-start-dots">
                     <i />
@@ -1247,7 +1282,11 @@ export default function DesktopAppsPage() {
                   <span />
                 </div>
                 <p className="dapps-hint-text">
-                  {phase === "launching" ? t("hint.starting") : t("hint.waiting")}
+                  {phase === "closing"
+                    ? t("hint.closing")
+                    : phase === "launching"
+                      ? t("hint.starting")
+                      : t("hint.waiting")}
                 </p>
               </div>
             </div>

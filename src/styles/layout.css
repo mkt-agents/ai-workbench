@@ -515,9 +515,9 @@
   overflow: hidden;
 }
 
-/* Harness: light inset (not page-wide 24px, not flush-to-chrome zero). */
+/* Harness / 协同办公: light inset (tighter than page-wide 24px). */
 .main-body.is-flush {
-  padding: 10px 12px 12px;
+  padding: 6px 8px 8px;
 }
 
 .page-in {

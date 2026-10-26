@@ -1162,7 +1162,44 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
         </div>
 
         <div className="dsh-iframe-container" ref={containerRef}>
-          {isRunning ? (
+          {stopping || starting ? (
+            <div
+              className={`dsh-empty-state ${stopping ? "is-stopping" : "is-starting"}`}
+              role="status"
+              aria-busy="true"
+            >
+              <div className="dsh-start-hero" aria-hidden="true">
+                <span className="dsh-start-glow" />
+                <div className="dsh-start-orbit">
+                  <span className="dsh-start-orbit-track" />
+                  <span className="dsh-start-orbit-arc" />
+                  <span className="dsh-start-orbit-arc is-secondary" />
+                  <div className="dsh-empty-state-icon">
+                    <img src="/deepseek-logo.png" alt="" />
+                  </div>
+                </div>
+              </div>
+              <div className="dsh-start-copy">
+                <div className="dsh-empty-state-title">{t("dsh.serviceTitle")}</div>
+                <div className="dsh-start-status">
+                  <span className="dsh-start-status-label">
+                    {stopping ? t("dsh.stoppingLabel") : t("dsh.startingLabel")}
+                  </span>
+                  <span className="dsh-start-dots">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </div>
+                <div className="dsh-start-bar">
+                  <span />
+                </div>
+                <div className="dsh-empty-state-hint">
+                  {stopping ? t("dsh.stoppingHint") : t("dsh.startingHint")}
+                </div>
+              </div>
+            </div>
+          ) : isRunning ? (
             authUrl ? null : (
             <>
               <iframe
@@ -1181,35 +1218,6 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
               )}
             </>
             )
-          ) : starting ? (
-            <div className="dsh-empty-state is-starting" role="status" aria-busy="true">
-              <div className="dsh-start-hero" aria-hidden="true">
-                <span className="dsh-start-glow" />
-                <div className="dsh-start-orbit">
-                  <span className="dsh-start-orbit-track" />
-                  <span className="dsh-start-orbit-arc" />
-                  <span className="dsh-start-orbit-arc is-secondary" />
-                  <div className="dsh-empty-state-icon">
-                    <img src="/deepseek-logo.png" alt="" />
-                  </div>
-                </div>
-              </div>
-              <div className="dsh-start-copy">
-                <div className="dsh-empty-state-title">{t("dsh.serviceTitle")}</div>
-                <div className="dsh-start-status">
-                  <span className="dsh-start-status-label">{t("dsh.startingLabel")}</span>
-                  <span className="dsh-start-dots">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                </div>
-                <div className="dsh-start-bar">
-                  <span />
-                </div>
-                <div className="dsh-empty-state-hint">{t("dsh.startingHint")}</div>
-              </div>
-            </div>
           ) : (
             <div className="dsh-empty-state">
               <div className="dsh-empty-state-icon">
