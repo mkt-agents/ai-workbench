@@ -338,6 +338,261 @@
   color: var(--text-3);
 }
 
+/* Launch / wait-for-window: same visual language as Harness startup. */
+.dapps-hint.is-starting {
+  gap: 22px;
+  animation: dapps-start-enter 420ms ease-out both;
+}
+
+.dapps-start-hero {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  display: grid;
+  place-items: center;
+}
+
+.dapps-start-glow {
+  position: absolute;
+  inset: 8%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--accent) 28%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 8%, transparent) 42%,
+    transparent 72%
+  );
+  filter: blur(2px);
+  animation: dapps-start-glow 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.dapps-start-orbit {
+  position: relative;
+  z-index: 1;
+  width: 108px;
+  height: 108px;
+  display: grid;
+  place-items: center;
+}
+
+.dapps-start-orbit-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border-subtle));
+  box-shadow: var(--surface-highlight);
+}
+
+.dapps-start-orbit-arc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  animation: dapps-start-spin 1.35s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.dapps-start-orbit-arc.is-secondary {
+  inset: 7px;
+  border-width: 1.5px;
+  border-top-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-right-color: transparent;
+  border-bottom-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  animation-duration: 2.1s;
+  animation-direction: reverse;
+  opacity: 0.85;
+}
+
+.dapps-start-icon {
+  position: relative;
+  z-index: 1;
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-2) 72%, transparent);
+  box-shadow: var(--shadow-sm), var(--surface-highlight);
+  animation: dapps-start-breathe 2.6s ease-in-out infinite;
+  color: var(--text-1);
+}
+
+.dapps-start-icon .dapps-tab-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+}
+
+.dapps-start-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.dapps-start-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.dapps-hint.is-starting .dapps-hint-title {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+}
+
+.dapps-start-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 18px;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.dapps-start-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  width: 18px;
+}
+
+.dapps-start-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: dapps-start-dot 1.2s ease-in-out infinite;
+}
+
+.dapps-start-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.dapps-start-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.dapps-start-bar {
+  width: min(200px, 56vw);
+  height: 2px;
+  margin-top: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 14%, var(--overlay-2));
+  overflow: hidden;
+}
+
+.dapps-start-bar > span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 55%, transparent)
+  );
+  animation: dapps-start-bar 1.6s ease-in-out infinite;
+}
+
+.dapps-hint.is-starting .dapps-hint-text {
+  margin-top: 2px;
+  max-width: 280px;
+  color: var(--text-3);
+}
+
+@keyframes dapps-start-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dapps-start-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dapps-start-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
+@keyframes dapps-start-glow {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes dapps-start-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes dapps-start-bar {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dapps-hint.is-starting,
+  .dapps-start-glow,
+  .dapps-start-orbit-arc,
+  .dapps-start-icon,
+  .dapps-start-dots i,
+  .dapps-start-bar > span,
+  .dapps-spin {
+    animation: none;
+  }
+
+  .dapps-start-bar > span {
+    width: 100%;
+    transform: none;
+    opacity: 0.55;
+  }
+
+  .dapps-start-dots i {
+    opacity: 0.55;
+  }
+}
+
 /* Window picker modal: the escape hatch when the automatic pick is the wrong
    window of the right process (splash, helper frame, second window). */
 .dapps-picker {

@@ -1218,6 +1218,40 @@ export default function DesktopAppsPage() {
       <div className="dapps-body">
         <div className="dapps-slot" ref={slotRef} />
         {phase !== "attached" && (
+          phase === "launching" || phase === "polling" ? (
+            <div className="dapps-hint is-starting" role="status" aria-busy="true">
+              <div className="dapps-start-hero" aria-hidden="true">
+                <span className="dapps-start-glow" />
+                <div className="dapps-start-orbit">
+                  <span className="dapps-start-orbit-track" />
+                  <span className="dapps-start-orbit-arc" />
+                  <span className="dapps-start-orbit-arc is-secondary" />
+                  <div className="dapps-start-icon">
+                    <AppTabIcon app={active} installed={installed} />
+                  </div>
+                </div>
+              </div>
+              <div className="dapps-start-copy">
+                <p className="dapps-hint-title">{label(active)}</p>
+                <div className="dapps-start-status">
+                  <span>
+                    {phase === "launching" ? t("hint.startingLabel") : t("hint.waitingLabel")}
+                  </span>
+                  <span className="dapps-start-dots">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </div>
+                <div className="dapps-start-bar">
+                  <span />
+                </div>
+                <p className="dapps-hint-text">
+                  {phase === "launching" ? t("hint.starting") : t("hint.waiting")}
+                </p>
+              </div>
+            </div>
+          ) : (
           <div className="dapps-hint">
             <AppWindow size={28} />
             <p className="dapps-hint-title">{label(active)}</p>
@@ -1279,6 +1313,7 @@ export default function DesktopAppsPage() {
               </div>
             ) : null}
           </div>
+          )
         )}
       </div>
 

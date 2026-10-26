@@ -27,7 +27,11 @@
     "running": "Its window is running but not embedded yet. Click “Re-embed” to take it over.",
     "missing": "No executable found. Install the app first, or use “Add app” to pick an .exe by hand.",
     "error": "Could not take over its window. The reason and the windows that process owns are below; a slow starter such as an IDE may need a minute or two the first time.",
-    "note": "Embedding takes over the app's own native window: leaving this page hides it (the app keeps running) and closing the workbench gives the window back to the desktop."
+    "note": "Embedding takes over the app's own native window: leaving this page hides it (the app keeps running) and closing the workbench gives the window back to the desktop.",
+    "startingLabel": "Starting",
+    "waitingLabel": "Waiting for window",
+    "starting": "Launching the app — a cold start can take up to a minute",
+    "waiting": "The app is up; waiting for a window we can embed"
   },
   "error": {
     "title": "Why it failed",

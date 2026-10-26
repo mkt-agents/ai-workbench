@@ -1474,6 +1474,11 @@ pub async fn dsh_set_embed(
     .focused(false)
     .background_color(tauri::webview::Color(15, 17, 19, 255))
     .initialization_script(DSH_EXTERNAL_LINK_SCRIPT)
+    // Same as the plugin browser windows: Tauri's default drag-drop handler
+    // (on by default for child webviews) turns off HTML5 DnD inside WebView2
+    // on Windows, so dropping files onto DSH's composer does nothing. Disable
+    // it so the Harness page can receive OS file drops itself.
+    .disable_drag_drop_handler()
     // Sign-in does window.open("about:blank") and then location.replace.
     // WebView2 drops that open unless a handler allows it, so the login UI
     // only shows the copy-link dialog. Account links (usage, top-up, the
