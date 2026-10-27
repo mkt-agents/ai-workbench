@@ -39,7 +39,7 @@ src/                  # React 前端
 src-tauri/src/        # Rust 后端
   lib.rs              # Tauri Builder + invoke_handler 注册 + setup（建表/迁移/托盘）
   *_commands.rs       # 按域拆分的 IPC 命令（git/report/ai/dsh/hosts/cursor/cloudflared/plugin/
-                      # runtime/tool/db/cancellation/app_launcher/port/update/pet_pack…）；共 245 条注册
+                      # runtime/tool/db/cancellation/app_launcher/port/update/pet_pack…）；共 248 条注册（含 `read_document_file`：文档附件文本层、`ocr_image_file`：图片 OCR）
                       # （计数口径：`generate_handler!` 列表里 `模块::命令,` 的行；含
                       # `workspace_fingerprint`（2026-10-23 M2：工作区新鲜度摘要，见 `agent_freshness.rs`）/
                       # `agent_undo`（2026-10-23 M4：撤销一整轮的写文件，见 `agent_undo.rs`）/

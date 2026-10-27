@@ -1607,6 +1607,82 @@
   color: var(--text-3);
 }
 
+/* 模型类型标签（图文 / 文本），挂在模型 id 之后 */
+.ai-model-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+
+.ai-model-tag--vision {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--accent-border);
+}
+
+.ai-model-tag--text {
+  color: var(--text-2);
+  background: var(--overlay-2);
+  border-color: var(--border-subtle);
+}
+
+/* 模型类型三态分段控件（自动 / 文本 / 图文） */
+.ai-vision-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ai-vision-label {
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.ai-vision-seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+}
+
+.ai-vision-seg-btn {
+  padding: 3px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.ai-vision-seg-btn:hover:not(.is-active):not(:disabled) {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+.ai-vision-seg-btn.is-active {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+.ai-vision-seg-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-vision-hint-inline {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
 /* Keep the copy affordance visible at rest (it is the point of this list), brighter on hover. */
 .ai-model-option-copy {
   display: inline-flex;

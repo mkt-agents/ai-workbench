@@ -3,7 +3,7 @@ import type { AIModelConfig, AuthType } from "../core/types";
 export type AIProviderId = AIModelConfig["provider"];
 export type AuthMode = "bearer" | "api-key" | "anthropic";
 
-export type ModelPreset = { id: string; label?: string };
+export type ModelPreset = { id: string; label?: string; modality?: string };
 
 export type AIProviderMeta = {
   value: AIProviderId;

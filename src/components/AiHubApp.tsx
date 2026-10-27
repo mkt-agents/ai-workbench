@@ -8,12 +8,14 @@ import { bootApp } from "../core/boot";
 import { writeStoredString } from "../core/localState";
 import { applyDocumentTheme } from "../lib/theme";
 import { PET_TRACK_EVENT } from "../lib/petSkins";
-import { resolveFallbackModel, resolveSceneModel } from "../lib/aiSceneModels";
+import { findVisionModel, resolveFallbackModel, resolveSceneModel } from "../lib/aiSceneModels";
 import { DEVTOOLS_TOOL_KEY } from "./DevTools";
 import {
   ASK_ATTACH_MAX_FILES,
+  ASK_ATTACH_MAX_FILE_CHARS,
   attachmentNameFromPath,
   canAddAttachment,
+  isDocumentAttachmentPath,
   isImageAttachmentPath,
   isTextAttachmentPath,
   makeAttachment,
@@ -134,6 +136,8 @@ function AiHubApp() {
   const invokeReadTextFile = useGlobalStore((s) => s.invokeReadTextFile);
   const invokeReadClipboardFiles = useGlobalStore((s) => s.invokeReadClipboardFiles);
   const invokeReadImageFile = useGlobalStore((s) => s.invokeReadImageFile);
+  const invokeReadDocumentFile = useGlobalStore((s) => s.invokeReadDocumentFile);
+  const invokeOcrImageFile = useGlobalStore((s) => s.invokeOcrImageFile);
   const invokeSetAiHubPinned = useGlobalStore((s) => s.invokeSetAiHubPinned);
 
   const [ready, setReady] = useState(false);
@@ -345,6 +349,7 @@ function AiHubApp() {
       webSearchProvider: settings.agentWebSearchProvider || "",
       webSearchKey: settings.agentWebSearchKey || "",
       subagents: settings.agentSubagents === true,
+      subagentWrite: settings.agentSubagentWrite === true,
       parallelReads: settings.agentParallelReads !== false,
       retries: settings.agentRetries !== false,
       grepIgnore: settings.agentGrepIgnore !== false,
@@ -630,7 +635,7 @@ function AiHubApp() {
   };
 
   /** 图片附件：只占「个数」额度，不吃字符预算（base64 按字符算没有意义）。 */
-  const attachImages = (items: { name: string; mediaType: string; data: string }[]) => {
+  const attachImages = (items: { name: string; mediaType: string; data: string; path?: string }[]) => {
     const next = [...attachments];
     const rejected: string[] = [];
     for (const item of items) {
@@ -639,7 +644,7 @@ function AiHubApp() {
         rejected.push(item.name);
         continue;
       }
-      next.push(makeImageAttachment(item.name, { mediaType: item.mediaType, data: item.data }));
+      next.push(makeImageAttachment(item.name, { mediaType: item.mediaType, data: item.data }, item.path));
     }
     setAttachments(next);
     if (rejected.length) {
@@ -647,12 +652,34 @@ function AiHubApp() {
     }
   };
 
+  /** 对一个图片附件「识别文字」：OCR 成文本后，原地替换成文本附件（纯文本模型也能读图里的字）。 */
+  const ocrAttachment = async (id: string) => {
+    const target = attachments.find((a) => a.id === id);
+    if (!target?.image || !target.path) {
+      showHint(t("attach.ocrNoPath"));
+      return;
+    }
+    showHint(t("attach.ocrRunning"));
+    try {
+      const text = await invokeOcrImageFile(target.path);
+      if (!text.trim()) {
+        stream.setError(t("attach.ocrEmpty"));
+        return;
+      }
+      const replaced = makeAttachment(`${target.name}.txt`, text);
+      setAttachments((prev) => prev.map((a) => (a.id === id ? replaced : a)));
+      showHint(t("attach.ocrDone"));
+    } catch (e) {
+      stream.setError(String(e));
+    }
+  };
+
   /** Real filename, no silent truncation: pick → read by path instead of the content-only picker. */
   const addAttachmentFromFile = async () => {
     try {
       const path = await invokePickSourceFile(t("attach.pickTitle"));
-      // 选到图片就走图片那条路（粘贴 / 拖放 / 选择器共用一套判断）
-      if (isImageAttachmentPath(path)) {
+      // 图片 / 文档（docx/pdf/xlsx…）都走统一管线：图片走 image 块，文档走后端文本层。
+      if (isImageAttachmentPath(path) || isDocumentAttachmentPath(path)) {
         await attachDroppedFiles([path]);
         return;
       }
@@ -671,39 +698,49 @@ function AiHubApp() {
 
   const attachDroppedFiles = async (paths: string[]) => {
     const picked: { name: string; text: string }[] = [];
-    const images: { name: string; mediaType: string; data: string }[] = [];
+    const images: { name: string; mediaType: string; data: string; path?: string }[] = [];
     const unreadable: string[] = [];
-    const noVision: string[] = [];
     for (const path of paths.slice(0, ASK_ATTACH_MAX_FILES)) {
       const name = attachmentNameFromPath(path);
       if (isImageAttachmentPath(path)) {
-        // 图片以 image 块发给模型，只有标了「支持看图」的模型能收
-        if (!selectedModel?.vision) {
-          noVision.push(name);
-          continue;
-        }
+        // 图片以 image 块发给模型。即便当前模型不看图也先收下：发送时再决定
+        // 自动切到会话里的看图模型，或退化成文字占位——不在这里把图挡掉。
         try {
-          images.push({ name, ...(await invokeReadImageFile(path)) });
+          images.push({ name, path, ...(await invokeReadImageFile(path)) });
         } catch (e) {
           stream.setError(String(e));
         }
         continue;
       }
-      if (!isTextAttachmentPath(path)) {
-        unreadable.push(name);
+      if (isTextAttachmentPath(path)) {
+        try {
+          const text = await invokeReadTextFile(path);
+          if (text.trim()) picked.push({ name, text });
+        } catch {
+          unreadable.push(name);
+        }
         continue;
       }
-      try {
-        const text = await invokeReadTextFile(path);
-        if (text.trim()) picked.push({ name, text });
-      } catch {
-        unreadable.push(name);
+      if (isDocumentAttachmentPath(path)) {
+        // docx/pdf/xlsx 等走后端文本层（agent_docs），抽出的纯文本当普通文本附件注入。
+        try {
+          const text = await invokeReadDocumentFile(path, ASK_ATTACH_MAX_FILE_CHARS);
+          if (text.trim()) picked.push({ name, text });
+          else unreadable.push(name);
+        } catch (e) {
+          // 扫描件 PDF 无文字层、解析失败等：明确告知这一个文件，不连累其它附件。
+          stream.setError(String(e));
+        }
+        continue;
       }
+      unreadable.push(name);
     }
     if (picked.length) attachFiles(picked);
     if (images.length) attachImages(images);
-    if (noVision.length) {
-      stream.setError(t("attach.noVision", { name: noVision.join(", ") }));
+    // 收了图但当前模型不看图：给一句温和提示（发送时会自动切看图模型或退化文字），不拦截。
+    if (images.length && !selectedModel?.vision) {
+      const vm = findVisionModel(models, selectedModel);
+      showHint(vm ? t("attach.willSwitchVision", { model: vm.name }) : t("attach.noVisionModel"));
     }
     if (unreadable.length) {
       stream.setError(t("attach.notText", { name: unreadable.join(", ") }));
@@ -823,13 +860,11 @@ function AiHubApp() {
     })();
   };
 
-  const sendAsk = async () => {
-    // 图片附件只有看图模型能吃：粘完再换模型的话，别把 image 块发给不懂的 provider
-    if (attachments.some((a) => a.image) && !selectedModel?.vision) {
-      stream.setError(t("attach.noVision", { name: attachments.filter((a) => a.image).map((a) => a.name).join(", ") }));
-      return;
-    }
-    // Screenshots leave the machine: ask once before the first turn that could take them.
+  /** 发送前要求的看图模型切换：置位后由 effect 等 selectedModel 更新到位再真正发。 */
+  const pendingVisionSendRef = useRef(false);
+
+  /** 真正发送前的一次性确认（截屏授权），与模型无关。 */
+  const confirmComputerAck = async (): Promise<boolean> => {
     if (permission === "full" && selectedModel?.vision && localStorage.getItem(COMPUTER_ACK_KEY) !== "1") {
       const ok = await confirm({
         title: t("computer.confirmTitle"),
@@ -838,11 +873,42 @@ function AiHubApp() {
         confirmText: t("computer.confirmOk"),
         icon: "warning",
       });
-      if (!ok) return;
+      if (!ok) return false;
       localStorage.setItem(COMPUTER_ACK_KEY, "1");
     }
+    return true;
+  };
+
+  const doSend = async () => {
+    if (!(await confirmComputerAck())) return;
     setHistoryOpen(false);
     void stream.send();
+  };
+
+  // 等 modelId 切到看图模型、selectedModel 随之更新后，再发出这一轮。
+  useEffect(() => {
+    if (!pendingVisionSendRef.current) return;
+    if (!selectedModel?.vision) return;
+    pendingVisionSendRef.current = false;
+    void doSend();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModel]);
+
+  const sendAsk = async () => {
+    const hasImages = attachments.some((a) => a.image);
+    // 图片 + 当前模型不看图：优先自动切到会话里的看图模型（下一帧再发），
+    // 没有看图模型则直接发——harness 会把图降级成文字占位，不再硬拦。
+    if (hasImages && !selectedModel?.vision) {
+      const vm = findVisionModel(models, selectedModel);
+      if (vm) {
+        showHint(t("attach.switchedVision", { model: vm.name }));
+        pendingVisionSendRef.current = true;
+        setModelId(vm.id);
+        return;
+      }
+      showHint(t("attach.imageAsText"));
+    }
+    await doSend();
   };
   /** A screen tool is running this turn: keep the emergency stop visible. */
   const computerActive =
@@ -1106,6 +1172,7 @@ function AiHubApp() {
           <AttachmentBar
             attachments={attachments}
             onRemove={(id) => setAttachments((prev) => prev.filter((x) => x.id !== id))}
+            onOcr={(id) => void ocrAttachment(id)}
           />
 
           {dropHint && (

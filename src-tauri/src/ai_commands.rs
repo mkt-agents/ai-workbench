@@ -28,6 +28,9 @@ pub struct AIModelConfig {
     /// Accepts images (user setting); the agent offers computer-use tools only then.
     #[serde(default)]
     pub vision: bool,
+    /// 模态来源："auto"（规则库推断）/ "text" / "vision"；仅前端/存储使用，后端只认 `vision`。
+    #[serde(default)]
+    pub vision_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -121,6 +124,8 @@ pub struct ListedModel {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// 离线启发式推断的模态："vision" / "text" / "unknown"，前端据此预填「支持看图」。
+    pub modality: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -194,7 +199,7 @@ pub async fn list_provider_models(config: ListModelsRequest) -> Result<ListModel
                 });
             }
 
-            let models = parse_openai_models_response(&text);
+            let models = parse_openai_models_response(&text, &provider);
             Ok(ListModelsResult {
                 success: true,
                 models,
@@ -209,7 +214,7 @@ pub async fn list_provider_models(config: ListModelsRequest) -> Result<ListModel
     }
 }
 
-fn parse_openai_models_response(text: &str) -> Vec<ListedModel> {
+fn parse_openai_models_response(text: &str, provider: &str) -> Vec<ListedModel> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return vec![];
     };
@@ -233,13 +238,80 @@ fn parse_openai_models_response(text: &str) -> Vec<ListedModel> {
             if id.is_empty() {
                 return None;
             }
-            Some(ListedModel { id, label: None })
+            // 优先采信厂商返回的 capabilities/modalities（部分 OpenAI 兼容网关会带），
+            // 没有再回落到离线名称规则。
+            let modality = modality_from_item(&item)
+                .unwrap_or_else(|| {
+                    crate::model_capability::infer_modality(provider, &id)
+                        .as_str()
+                        .to_string()
+                });
+            Some(ListedModel {
+                id,
+                label: None,
+                modality,
+            })
         })
         .collect();
 
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
     models
+}
+
+/// 从 /models 单条记录里尽力读出厂商声明的多模态能力（字段无统一标准，尽力而为）。
+/// 命中图片输入类字样 → "vision"；否则返回 None 让调用方回落名称规则。
+fn modality_from_item(item: &serde_json::Value) -> Option<String> {
+    // 常见位置：architecture.input_modalities (OpenRouter)、input_modalities、modalities、capabilities
+    let mut buckets: Vec<String> = Vec::new();
+    for key in ["input_modalities", "modalities", "capabilities", "supported_modalities"] {
+        collect_strings(item.get(key), &mut buckets);
+    }
+    if let Some(arch) = item.get("architecture") {
+        collect_strings(arch.get("input_modalities"), &mut buckets);
+        collect_strings(arch.get("modality"), &mut buckets);
+    }
+    if buckets.is_empty() {
+        return None;
+    }
+    let joined = buckets.join(",").to_lowercase();
+    if joined.contains("image") || joined.contains("vision") || joined.contains("multimodal") {
+        Some("vision".to_string())
+    } else {
+        // 明确声明了模态但不含图片 → 纯文本
+        Some("text".to_string())
+    }
+}
+
+/// 把 JSON 值里的字符串（标量或数组或对象的 bool 真值键）收集进 out。
+fn collect_strings(value: Option<&serde_json::Value>, out: &mut Vec<String>) {
+    match value {
+        Some(serde_json::Value::String(s)) => out.push(s.clone()),
+        Some(serde_json::Value::Array(arr)) => {
+            for v in arr {
+                if let Some(s) = v.as_str() {
+                    out.push(s.to_string());
+                }
+            }
+        }
+        Some(serde_json::Value::Object(map)) => {
+            // { "image": true, "text": true } 形态：收集值为真的键名
+            for (k, v) in map {
+                if v.as_bool() == Some(true) {
+                    out.push(k.clone());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 离线推断单个模型的模态（供前端「添加模型」表单预填「支持看图」）。
+#[tauri::command]
+pub fn infer_model_modality(provider: String, model: String) -> String {
+    crate::model_capability::infer_modality(&provider, &model)
+        .as_str()
+        .to_string()
 }
 
 pub(crate) fn trim_trailing_slash(s: &str) -> String {

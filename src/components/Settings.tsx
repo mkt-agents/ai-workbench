@@ -1095,6 +1095,21 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                 </div>
                 <p className="setting-hint">{t("aiHub.subagentsHint")}</p>
               </div>
+              <div className="setting-item">
+                <div className="setting-row">
+                  <span className="setting-label">{t("aiHub.subagentWrite")}</span>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentSubagentWrite === true}
+                      disabled={settings.agentSubagents !== true}
+                      onChange={(e) => setSettings({ agentSubagentWrite: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+                <p className="setting-hint">{t("aiHub.subagentWriteHint")}</p>
+              </div>
               <div className="hub-group-title">{t("aiHub.groupProject")}</div>
               <div className="setting-item">
                 <div className="setting-row">

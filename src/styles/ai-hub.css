@@ -110,6 +110,23 @@
 
 .qa-attach-chip-x:hover { color: var(--red); }
 
+/* 图片附件上的「识别文字」按钮：与 × 同尺寸，hover 用品牌色区分「这是动作不是删除」 */
+.qa-attach-chip-ocr {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0;
+}
+
+.qa-attach-chip-ocr:hover { color: var(--accent); }
+
 /* Files dragged over the window: where they would land */
 .qa-drop-hint {
   margin: 0 12px 8px;
@@ -2500,6 +2517,23 @@
   margin: 2px 0 0 -7px;
   opacity: 0;
   transition: var(--transition-colors-fast);
+}
+/* 回答模型徽标：常驻、低饱和，hover 态更清楚 */
+.qa-msg-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+  width: fit-content;
+}
+.qa-msg.is-ai:hover .qa-msg-model {
+  color: var(--text-2);
 }
 .qa-msg.is-ai:hover .qa-msg-actions,
 .qa-msg-actions:focus-within,

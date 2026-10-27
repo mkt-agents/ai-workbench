@@ -378,3 +378,25 @@ AI 能力不再列为不做。天玑已是多模型流式对话，并带当前�
 
 * [x] 智能机器人 WebSocket 长连接：私聊（pairing）+ 群聊（allowlist / @mention），设置页「联网扩展」配置 Bot ID / Secret，复用天玑 agent_run
 * [ ] Webhook / 自建应用 Agent 双模、媒体消息、企微业务 CLI
+
+### 阶段 28：同会话多模型 + 图文对话 + 模型类型自动识别（P1）✅ 已完成（2026-10-27）
+
+对标 DeepSeek Harness / Claude Code 后补齐三项用户明确需求，纯增量、不改权限模型。
+
+* [x] **模型类型自动识别**：新纯函数层 `model_capability.rs`（名称规则库 + `cargo test` 9 例），命令 `infer_model_modality`；`list_provider_models` 每条带 `modality`（优先采信厂商 `/models` 的 capabilities，回落规则库）。模型管理「添加 / 编辑」表单把旧的「支持看图」单勾改成**自动 / 文本 / 图文三态**：选模型即按规则预填、自动态下保存前再兜底重算；`/models` 列表标注「文本 / 图文」标签。存储加 `vision_mode` 列（幂等 ALTER，旧库按旧 `vision` 回填意图）
+* [x] **同一会话多模型轮级切换**：`AiHubTurn` 记 `modelId` / `modelName`；composer 切模型即作用于下一轮、历史不清空；答案气泡标注「由 X 回答」；降级到 fallback 时后端 `emit_done` 带 `usedModel` 如实标注
+* [x] **图文对话打通**：放开 vision 硬门控——附图时当前模型不看图则自动切到会话里的看图模型（下一帧再发）或退化成文字占位；`turnsToMessages` 新增 `stripImages`，切到不看图模型时历史 `image` 块换成文字占位，保上下文不发无效图
+* [x] **文档附件走文本层（M5）**：docx / pdf / xlsx / xls / csv / tsv 拖放、粘贴或选择后经新命令 `read_document_file`（复用 `agent_docs::read_document`）抽取文本层，当普通文本附件注入上下文（PDF 无 OCR，扫描件明确提示）；分模型用量台账经核对**早已实现**（`aiUsage.ts` 按 modelId + 设置页逐模型明细 / 走势），本轮补上 fallback 场景按真正回答模型归账
+* [x] 可写子代理 + 图片 OCR 已在阶段 29 落地（见下）
+
+### 阶段 29：可写子代理 + 图片 OCR（P2）✅ 已完成（2026-10-27）
+
+天玑最后两项后续可选项，纯增量、不降低安全下限。
+
+* [x] **可写子代理**：`task` 子代理在**编辑权限及以上**可用 `write_file / edit_file / run_command`；fail-closed——只读 / 审查档即便开了开关也永不获得（`subagent_tools` + 单测 `subagent_write_is_fail_closed`）。写 / 命令复用父回合的 `conflict_block` → `tool_gate` → 审批卡 → `execute_tool`，撤销快照与审批都挂父 `request_id`，审批 `action_kind` 加 `task:` 前缀隔离「以后都允许」记忆。不放删除 / 移动、禁嵌套。新设置 `agentSubagentWrite`（默认关，需先开只读子代理）。可写生效时给模型补一句系统提示纠正静态 task 描述。
+* [x] **图片 OCR（方案 B：Tesseract）**：新 `agent_ocr.rs` + 命令 `ocr_image_file`，解析顺序 环境变量 → 打包 `resources/tesseract` → PATH，缺引擎明确报错不静默。附件 chip 的「识别文字」把图 OCR 成文本附件（纯文本模型也能读图里字），图片附件新带 `path` 供重读。打包槽位 `src-tauri/resources/tesseract/`（`bundle.resources` 已声明 + README 说明布局与许可；二进制不进 git，发布构建前放入）。
+* [ ] 后续可选：子代理可删除 / 移动；扫描件 PDF→位图再 OCR（需 pdfium）；命令输出流式回灌
+
+**成功标准**：编辑档开启后子代理能改文件 / 跑命令并触发审批、与主回合共用撤销；只读 / 审查档拿不到写；装了 Tesseract（或打包分发）时「识别文字」把截图里的字抽成文本附件，没装时明确提示。
+
+**成功标准**：添加模型时类型默认正确、可手动锁定；同一会话用 A 问完切 B 接着问、历史与标注都在；给纯文本模型发图不再报错而是自动切看图模型或降级文字。

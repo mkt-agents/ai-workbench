@@ -8,6 +8,8 @@ mod site_icon;
 mod db_commands;
 pub mod cursor;
 mod ai_commands;
+mod model_capability;
+mod agent_ocr;
 mod agent;
 mod agent_budget;
 mod agent_context;
@@ -401,6 +403,8 @@ pub fn run() {
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN last_test_msg TEXT;");
             // 模型支持看图：天玑完全权限下据此提供截屏和键鼠操作
             let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN vision INTEGER DEFAULT 0;");
+            // visionMode：auto（规则库推断）/ text / vision；旧库回填 auto，由 storage.ts 把旧 vision=1 读成 vision、其余 auto
+            let _ = conn.execute_batch("ALTER TABLE ai_models ADD COLUMN vision_mode TEXT DEFAULT 'auto';");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN auth_mode TEXT DEFAULT 'token';");
             let _ = conn.execute_batch("ALTER TABLE cloudflared_profiles ADD COLUMN config_path TEXT;");
             let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NOT NULL DEFAULT '';");
@@ -622,6 +626,7 @@ pub fn run() {
             cursor::slim_cursor_state_dbs,
             ai_commands::test_model_connection,
             ai_commands::list_provider_models,
+            ai_commands::infer_model_modality,
             ai_commands::generate_text,
             ai_commands::generate_text_stream,
             agent::agent_run,
@@ -664,6 +669,8 @@ pub fn run() {
             tool_commands::read_clipboard,
             tool_commands::read_clipboard_files,
             tool_commands::read_image_file,
+            tool_commands::read_document_file,
+            tool_commands::ocr_image_file,
             tool_commands::export_data,
             tool_commands::import_data,
             tool_commands::save_text_file,

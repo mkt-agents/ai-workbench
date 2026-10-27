@@ -391,6 +391,7 @@ impl Orchestrator {
             web_search_provider: agent_cfg.web_search_provider,
             web_search_key: agent_cfg.web_search_key,
             subagents: agent_cfg.subagents,
+            subagent_write: false,
             mcp: agent_cfg.mcp,
             parallel_reads: agent_cfg.parallel_reads,
             retries: agent_cfg.retries,

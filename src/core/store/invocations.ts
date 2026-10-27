@@ -53,7 +53,8 @@ export interface HarnessConfigView {
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
   invokeGenerateText: (params: { config: AIModelConfig; system: string; user: string }) => Promise<string>;
-  invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) => Promise<{ success: boolean; models: { id: string; label?: string }[]; message?: string }>;
+  invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) => Promise<{ success: boolean; models: { id: string; label?: string; modality: string }[]; message?: string }>;
+  invokeInferModelModality: (params: { provider: string; model: string }) => Promise<string>;
   invokeDetectLocalAiEndpoints: () => Promise<
     Array<{ kind: string; baseUrl: string; label: string; reachable: boolean; models: string[] }>
   >;
@@ -209,6 +210,10 @@ export interface Invocations {
   invokeReadClipboardFiles: () => Promise<string[]>;
   /** 图片文件 → base64（不看图的模型用不上，调用方自己挡）。 */
   invokeReadImageFile: (path: string) => Promise<{ mediaType: string; data: string }>;
+  /** 文档类附件（docx/pdf/xlsx/csv…）→ 纯文本，按字符上限截断；用于轻附件注入上下文。 */
+  invokeReadDocumentFile: (path: string, cap?: number) => Promise<string>;
+  /** 图片 OCR（Tesseract）→ 纯文本；供纯文本模型也能「读图里的字」。langs 空用默认 chi_sim+eng。 */
+  invokeOcrImageFile: (path: string, langs?: string) => Promise<string>;
   invokeListRuntimeVersions: (kind: RuntimeKind) => Promise<RuntimeVersion[]>;
   invokeGetActiveRuntime: (kind: RuntimeKind) => Promise<RuntimeVersion | null>;
   invokeAddCustomRuntime: (kind: RuntimeKind, path: string) => Promise<RuntimeVersion>;
@@ -273,10 +278,13 @@ export const invocations: Invocations = {
   invokeGenerateText: (params: { config: AIModelConfig; system: string; user: string }) =>
     tauriInvoke<string>('generate_text', { req: params }),
   invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) =>
-    tauriInvoke<{ success: boolean; models: { id: string; label?: string }[]; message?: string }>(
-      'list_provider_models',
-      { config: params },
-    ),
+    tauriInvoke<{
+      success: boolean;
+      models: { id: string; label?: string; modality: string }[];
+      message?: string;
+    }>('list_provider_models', { config: params }),
+  invokeInferModelModality: (params: { provider: string; model: string }) =>
+    tauriInvoke<string>('infer_model_modality', params),
   invokeDetectLocalAiEndpoints: () =>
     tauriInvoke<
       Array<{ kind: string; baseUrl: string; label: string; reachable: boolean; models: string[] }>
@@ -569,6 +577,10 @@ export const invocations: Invocations = {
   invokeReadClipboardFiles: () => tauriInvoke<string[]>('read_clipboard_files'),
   invokeReadImageFile: (path: string) =>
     tauriInvoke<{ mediaType: string; data: string }>('read_image_file', { path }),
+  invokeReadDocumentFile: (path: string, cap?: number) =>
+    tauriInvoke<string>('read_document_file', { path, cap }),
+  invokeOcrImageFile: (path: string, langs?: string) =>
+    tauriInvoke<string>('ocr_image_file', { path, langs }),
 
   // Runtime switch
   invokeListRuntimeVersions: (kind: RuntimeKind) =>

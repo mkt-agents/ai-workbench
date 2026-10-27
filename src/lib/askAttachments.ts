@@ -16,6 +16,8 @@ export type AskAttachment = {
    * 模型收）；base64 不进字符预算，也不拼进 `formatAttachmentsBlock`。
    */
   image?: { mediaType: string; data: string };
+  /** 图片附件的原始文件路径：OCR「识别文字」要凭它重新读图（base64 不含路径）。 */
+  path?: string;
 };
 
 /** 各家模型服务都认的四种；bmp / tiff 之类先让用户转一下。 */
@@ -59,6 +61,16 @@ export function isTextAttachmentPath(path: string): boolean {
   return TEXT_SUFFIXES.includes(name.slice(dot + 1));
 }
 
+/** 需要后端解析才能取文本的文档类附件（docx/pdf/xlsx…），走 `read_document_file`。 */
+const DOC_SUFFIXES = ["docx", "pdf", "xlsx", "xls"];
+
+export function isDocumentAttachmentPath(path: string): boolean {
+  const name = attachmentNameFromPath(path).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return DOC_SUFFIXES.includes(name.slice(dot + 1));
+}
+
 export function attachmentChars(list: AskAttachment[]): number {
   return list.reduce((n, a) => n + a.name.length + a.content.length, 0);
 }
@@ -88,7 +100,8 @@ export function makeAttachment(name: string, content: string): AskAttachment {
 
 export function makeImageAttachment(
   name: string,
-  image: { mediaType: string; data: string }
+  image: { mediaType: string; data: string },
+  path?: string
 ): AskAttachment {
   return {
     id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -96,6 +109,7 @@ export function makeImageAttachment(
     content: "",
     truncated: false,
     image,
+    ...(path ? { path } : {}),
   };
 }
 

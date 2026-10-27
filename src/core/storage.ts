@@ -375,6 +375,12 @@ export const storage = {
                 message: (r['last_test_msg'] as string) || "",
               },
         vision: ((r['vision'] as number) || 0) === 1,
+        // 旧库迁移：vision_mode 缺省时，用旧 vision 推回意图（手动勾过的保留 vision，其余 auto）。
+        visionMode: ((): AIModelConfig['visionMode'] => {
+          const raw = (r['vision_mode'] as string | null | undefined)?.trim();
+          if (raw === 'text' || raw === 'vision' || raw === 'auto') return raw;
+          return ((r['vision'] as number) || 0) === 1 ? 'vision' : 'auto';
+        })(),
       }));
     },
     save: async (items: AIModelConfig[]): Promise<void> => {
@@ -395,6 +401,7 @@ export const storage = {
         created_at: item.createdAt,
         updated_at: item.updatedAt,
         vision: item.vision ? 1 : 0,
+        vision_mode: item.visionMode || 'auto',
       })));
     },
   },

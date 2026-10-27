@@ -480,7 +480,6 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
-
 fn read_text_file_sync(path: String) -> Result<String, String> {
     const MAX_SOURCE_BYTES: u64 = 200 * 1024;
     let file = std::fs::File::open(&path).map_err(|e| format!("读取失败: {e}"))?;
@@ -509,8 +508,43 @@ fn pick_source_file_sync(title: Option<String>) -> Result<String, String> {
             "Source",
             &["ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "py", "go", "java", "cs", "cpp", "c", "h"],
         )
+        .add_filter("文档", &["docx", "pdf", "xlsx", "xls", "csv", "tsv", "md", "txt"])
+        .add_filter("图片", &["png", "jpg", "jpeg", "webp", "gif"])
         .add_filter("所有文件", &["*"])
         .pick_file()
         .ok_or_else(|| "已取消选择".to_string())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// 读文档类附件（docx / pdf / xlsx / xls / csv / tsv 等）为纯文本，供天玑轻附件注入上下文。
+/// 复用 `agent_docs::read_document` 的解析与体积闸门；`cap` 对齐附件单文件字符预算。
+#[tauri::command]
+pub async fn read_document_file(path: String, cap: Option<usize>) -> Result<String, String> {
+    let cap = cap.unwrap_or(8000).clamp(200, 200_000);
+    tokio::task::spawn_blocking(move || {
+        crate::agent_docs::read_document(std::path::Path::new(&path), cap)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// 图片 OCR（Tesseract，方案 B）：把图片里的文字识别成纯文本，供轻附件在纯文本模型下也能用。
+/// 引擎解析顺序见 `agent_ocr`：环境变量 → 打包 resources/tesseract → PATH。`langs` 空用默认 chi_sim+eng。
+#[tauri::command]
+pub async fn ocr_image_file(
+    app: tauri::AppHandle,
+    path: String,
+    langs: Option<String>,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let resource_dir = app.path().resource_dir().ok();
+    tokio::task::spawn_blocking(move || {
+        crate::agent_ocr::ocr_image(
+            resource_dir.as_deref(),
+            std::path::Path::new(&path),
+            langs.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
 }

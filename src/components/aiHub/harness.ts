@@ -105,12 +105,16 @@ export function stepsToBlocks(answer: string, steps?: StepLike[]): HarnessBlock[
  * 有 `blocks` 时按协议拆开：assistant 的 tool_use（+ 可选 text）一条，
  * tool_result 跟一条 user（OpenAI 侧翻成 role:tool）；旧会话回退纯文本。
  */
-export function turnsToMessages(turns: AiHubTurn[]): HarnessMessage[] {
+export function turnsToMessages(
+  turns: AiHubTurn[],
+  opts?: { stripImages?: boolean },
+): HarnessMessage[] {
   const out: HarnessMessage[] = [];
   for (const turn of turns) {
     const meta = turn.digest ? { digest: true as const } : undefined;
     if (turn.blocks && turn.blocks.length > 0) {
-      out.push(...expandBlocks(turn.role, turn.blocks, meta));
+      const blocks = opts?.stripImages ? stripImageBlocks(turn.blocks) : turn.blocks;
+      out.push(...expandBlocks(turn.role, blocks, meta));
       continue;
     }
     if (!turn.content.trim()) continue;
@@ -121,6 +125,15 @@ export function turnsToMessages(turns: AiHubTurn[]): HarnessMessage[] {
     });
   }
   return out;
+}
+
+/** 历史里的图片块换成文本占位：切到不看图的模型时，既保住上下文又不发无效图。 */
+function stripImageBlocks(blocks: HarnessBlock[]): HarnessBlock[] {
+  return blocks.map((block) =>
+    block.kind === "image"
+      ? textBlock("[图片：已省略，当前模型不支持看图]")
+      : block,
+  );
 }
 
 /** 把混在一轮里的块拆成 provider 友好的消息序列。 */

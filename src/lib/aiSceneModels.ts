@@ -68,3 +68,20 @@ export function resolveFallbackModel(
   });
   return usable.find((m) => m.isDefault) || usable[0] || null;
 }
+
+/**
+ * 会话里能看图的模型：用户把图发给一个纯文本模型时，优先自动切到它。
+ * 偏好顺序：与当前模型同 provider 的 → 默认 → 第一个。`prefer` 为当前所选模型。
+ */
+export function findVisionModel(
+  models: AIModelConfig[],
+  prefer?: AIModelConfig,
+): AIModelConfig | null {
+  const vision = models.filter((m) => m.vision && m.model?.trim() && m.baseUrl?.trim());
+  if (vision.length === 0) return null;
+  if (prefer) {
+    const sameProvider = vision.find((m) => m.provider === prefer.provider);
+    if (sameProvider) return sameProvider;
+  }
+  return vision.find((m) => m.isDefault) || vision[0];
+}

@@ -136,6 +136,8 @@ export type AgentRunOptions = {
   webSearchKey: string;
   /** 允许派只读子代理（设置项，默认关）。 */
   subagents: boolean;
+  /** 子代理可写（write_file / edit_file / run_command；设置项，默认关；仅编辑档及以上生效）。 */
+  subagentWrite: boolean;
   /** 只读调用并发（设置项，默认开）。 */
   parallelReads: boolean;
   /** 429 / 5xx 自动重试（设置项，默认开）。 */
@@ -175,6 +177,9 @@ function appendTurn(
     trimmedRounds?: number;
     cacheHitTokens?: number;
     undoToken?: string;
+    /** 回答这一轮的模型（同一会话逐轮可切换；fallback 时为备用模型）。 */
+    modelId?: string;
+    modelName?: string;
   },
   plan?: AgentPlanStep[],
 ): QaTurn[] {
@@ -189,7 +194,13 @@ function appendTurn(
   const blocks = stepsToBlocks(answer, kept);
   const next: QaTurn[] = [
     ...prev,
-    { role: "user", content: question, blocks: [{ kind: "text", text: question }] },
+    {
+      role: "user",
+      content: question,
+      blocks: [{ kind: "text", text: question }],
+      ...(usage?.modelId ? { modelId: usage.modelId } : {}),
+      ...(usage?.modelName ? { modelName: usage.modelName } : {}),
+    },
     {
       role: "assistant",
       content: answer,
@@ -206,6 +217,8 @@ function appendTurn(
       ...(usage?.trimmedRounds ? { trimmedRounds: usage.trimmedRounds } : {}),
       ...(usage?.cacheHitTokens ? { cacheHitTokens: usage.cacheHitTokens } : {}),
       ...(usage?.undoToken ? { undoToken: usage.undoToken } : {}),
+      ...(usage?.modelId ? { modelId: usage.modelId } : {}),
+      ...(usage?.modelName ? { modelName: usage.modelName } : {}),
     },
   ];
   return compactSession(next);
@@ -394,10 +407,15 @@ export function useAskStream(opts: AskStreamOptions) {
         trimmedRounds?: number;
         cacheHitTokens?: number;
         undoToken?: string;
+        modelId?: string;
+        modelName?: string;
       },
     ) => {
       const nextTurns = appendTurn(
-        baseHistory, question, text, keepWhole, agentStepsRef.current, limited, usage, agentPlanRef.current,
+        baseHistory, question, text, keepWhole, agentStepsRef.current, limited,
+        // 没有显式报告回答模型时，默认用本轮所选模型（轮级记忆的锚点）。
+        { modelId: selectedModel.id, modelName: selectedModel.name, ...usage },
+        agentPlanRef.current,
       );
       setHistory(nextTurns);
       setPending(null);
@@ -587,6 +605,8 @@ export function useAskStream(opts: AskStreamOptions) {
           cacheHitTokens?: number;
           /** Present when the turn wrote files and left a snapshot to restore. */
           undoToken?: string;
+          /** 降级到备用模型时带上其展示名（主模型成功则缺省）。 */
+          usedModel?: string;
         };
       }) => {
         const payload = event.payload;
@@ -616,15 +636,23 @@ export function useAskStream(opts: AskStreamOptions) {
           );
           const finalText = landText(stripThinking(full));
           if (finalText.trim()) {
+            // 降级时后端报告真正回答的模型，用量台账也按它记，分模型统计才准。
+            const answered =
+              payload.usedModel && fallbackModel?.name === payload.usedModel
+                ? { id: fallbackModel.id, name: fallbackModel.name }
+                : payload.usedModel
+                ? { id: selectedModel.id, name: payload.usedModel }
+                : { id: selectedModel.id, name: selectedModel.name };
             recordAiUsage({
-              modelId: selectedModel.id,
-              modelName: selectedModel.name,
+              modelId: answered.id,
+              modelName: answered.name,
               promptTokens,
               completionTokens,
               estimatedTokens,
             });
             finishTurn(finalText, payload.limited === true, {
               elapsedMs, promptTokens, completionTokens, ...telemetry, undoToken: payload.undoToken,
+              modelId: answered.id, modelName: answered.name,
             });
           } else {
             failTurn(false);
@@ -780,7 +808,7 @@ export function useAskStream(opts: AskStreamOptions) {
           // 上下文序列化两遍（长会话里这份重复是实打实的 IPC 成本）。
           // 图片附件作为 image 块跟在正文后面：文本附件已经拼进 `user`，不重复发
           messages: [
-            ...turnsToMessages(budget.turns),
+            ...turnsToMessages(budget.turns, { stripImages: !selectedModel.vision }),
             buildUserMessage(user, imageAttachmentsOf(sentAttachments)),
           ],
           apps: agent.apps,
@@ -795,6 +823,7 @@ export function useAskStream(opts: AskStreamOptions) {
           webSearchProvider: agent.webSearchProvider || "",
           webSearchKey: agent.webSearchKey || "",
           subagents: agent.subagents,
+          subagentWrite: agent.subagentWrite,
           parallelReads: agent.parallelReads,
           retries: agent.retries,
           grepIgnore: agent.grepIgnore,

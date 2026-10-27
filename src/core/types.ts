@@ -160,6 +160,8 @@ export interface AppSettings {
   agentWebSearchKey?: string;
   /** 允许天玑派只读子代理（task 工具，默认关）。 */
   agentSubagents?: boolean;
+  /** 子代理可写（write_file / edit_file / run_command，默认关；仅编辑档及以上生效，复用父回合审批与撤销）。 */
+  agentSubagentWrite?: boolean;
   /** 只读调用并发执行（默认开；关掉就逐个跑，步骤顺序更好读）。 */
   agentParallelReads?: boolean;
   /** 429 / 5xx 自动重试（默认开；关掉直接报错，避免重复计费）。 */
@@ -330,6 +332,13 @@ export interface AiHubTurn {
   cacheHitTokens?: number;
   /** 这一轮改过文件时的快照令牌（= requestId），用来「撤销这次改动」。 */
   undoToken?: string;
+  /**
+   * 回答这一轮用的模型 id（同一会话可逐轮切换）。user 轮记下提问时所选模型，
+   * assistant 轮记下真正回答的模型（主模型失败降级到 fallback 时即 fallback 的 id）。
+   */
+  modelId?: string;
+  /** 回答模型的展示名，持久化后即便模型被删也能在气泡上标注「由 X 回答」。 */
+  modelName?: string;
 }
 
 /** One file a turn can still undo (see `agent_undo.rs`). */
@@ -696,6 +705,12 @@ export interface AIModelConfig {
   lastTest?: AIModelTestResult | null;
   /** Accepts images: needed for the AI hub to operate the computer (完全权限). */
   vision?: boolean;
+  /**
+   * 模态来源：`auto` 用名称规则库推断（默认）、`text` / `vision` 为用户手动锁定。
+   * `vision` 是运行时真值（后端只认它）；`visionMode` 决定它怎么来：
+   * auto 时由 `resolveVision()` 根据 provider+model 现算，手动则直接采信。
+   */
+  visionMode?: 'auto' | 'text' | 'vision';
 }
 
 export interface AIModelTestResult {

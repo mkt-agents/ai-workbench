@@ -119,6 +119,10 @@ pub struct AgentRunRequest {
     /// 是否把只读子代理 `task` 下发给模型（设置项，默认关）。
     #[serde(default)]
     pub subagents: bool,
+    /// 子代理是否获得写能力（write_file / edit_file / run_command；设置项，默认关）。
+    /// 仅在编辑档及以上生效，复用父回合的闸门、审批与撤销；只读 / 审查档一律不给。
+    #[serde(default)]
+    pub subagent_write: bool,
     /// 用户启用并配置好的 MCP 服务；工具名是 `mcp_<server>_<tool>`。
     #[serde(default)]
     pub mcp: Vec<crate::mcp::McpServerSpec>,
@@ -889,6 +893,8 @@ fn emit_done(
     usage: Option<(u64, u64)>,
     limited: bool,
     stats: TurnStats,
+    // 实际回答的模型名：仅当本轮降级到备用模型时带上，供前端在气泡标注。
+    used_model: Option<&str>,
 ) {
     set_attention(app, false);
     let mut payload = json!({
@@ -912,6 +918,9 @@ fn emit_done(
     // 这一轮改过文件才给撤销入口：requestId 就是快照目录名
     if crate::agent_undo::has_snapshot(id) {
         payload["undoToken"] = json!(id);
+    }
+    if let Some(name) = used_model {
+        payload["usedModel"] = json!(name);
     }
     let _ = app.emit("generate-text-done", payload);
     bridge_send(id, AgentBridgeEvent::Done { limited });
@@ -1738,6 +1747,8 @@ struct ToolCtx<'a> {
     grep_ignore: bool,
     /// 单条工具结果回灌上限（设置项「工具结果上限」，默认 12000 字符）。
     result_cap: usize,
+    /// 子代理是否可写（write_file / edit_file / run_command）；见 `AgentRunRequest.subagent_write`。
+    subagent_write: bool,
 }
 
 fn normalize_web_tier(raw: &str) -> &'static str {
@@ -1863,14 +1874,28 @@ const TASK_TOOLS: &[&str] = &[
     "web_fetch",
 ];
 
+/// 可写子代理额外获得的工具（用户显式开启 + 编辑档及以上才追加）。
+/// 不含 delete / move（破坏性更强、撤销语义更复杂，首版不放）；仍然永远拿不到 `task`（禁嵌套）。
+const TASK_TOOLS_WRITE: &[&str] = &["write_file", "edit_file", "run_command"];
+
 /// What a sub-agent gets in this permission level.
 ///
 /// Every [`TASK_TOOLS`] entry is Allow-gated except `web_fetch`, which asks the user in
 /// 只读 / 编辑 / 审查档. A sub-agent has no channel to ask, so it simply does not get that
 /// tool there; an empty whitelist also means "no web" (same rule as `offered_tools`).
-fn subagent_tools(permission: Permission, web_allow: &[String]) -> Vec<&'static str> {
+fn subagent_tools(permission: Permission, write_enabled: bool, web_allow: &[String]) -> Vec<&'static str> {
     let may_fetch = !web_allow.is_empty() && tool_gate(permission, "web_fetch", "") == Gate::Allow;
-    TASK_TOOLS.iter().copied().filter(|name| *name != "web_fetch" || may_fetch).collect()
+    let mut tools: Vec<&'static str> = TASK_TOOLS
+        .iter()
+        .copied()
+        .filter(|name| *name != "web_fetch" || may_fetch)
+        .collect();
+    // 写能力 fail-closed：必须用户显式开启，且父档位本身就是「不询问即可写」的那两档。
+    // 只读 / 审查档永不获得——审查档的语义是「AI 先审」，子代理没有审通道，直接不给。
+    if write_enabled && matches!(permission, Permission::Workspace | Permission::Full) {
+        tools.extend_from_slice(TASK_TOOLS_WRITE);
+    }
+    tools
 }
 
 /// `task`: run a small read-only loop and bring back only the conclusion, so a wide search
@@ -1885,7 +1910,7 @@ async fn run_subagent(
     let anthropic = config.provider.to_lowercase() == "anthropic";
     let start = if path.trim().is_empty() { ctx.scope.base.display().to_string() } else { path.trim().to_string() };
     let system = format!("{TASK_SYSTEM}\nStart from: {start}");
-    let allowed = subagent_tools(permission, ctx.web_allow);
+    let allowed = subagent_tools(permission, ctx.subagent_write, ctx.web_allow);
     let tools = provider_tools(&allowed, anthropic);
     let mut messages: Vec<Value> = vec![json!({ "role": "user", "content": goal })];
     // 子代理读过的文件（去重、相对路径）：结论旁边附一份，主代理和用户都知道它看了哪里
@@ -1976,6 +2001,14 @@ async fn run_subagent(
             } else if is_readonly_tool(&call.name) {
                 execute_readonly(ctx.scope, ctx.request_id, &call.name, &args, ctx.grep_ignore)
                     .unwrap_or_else(|e| ToolOutput::from(format!("错误：{e}")))
+            } else if matches!(call.name.as_str(), "write_file" | "edit_file" | "run_command") {
+                // 可写子代理：写 / 命令复用父回合的闸门 → 冲突检查 → 审批 → execute_tool，
+                // 撤销快照与审批都挂在父 request_id 上。取消要向上抛（和只读分支一致）。
+                match subagent_write_call(ctx, config, permission, &call.name, &args).await {
+                    Ok(out) => out,
+                    Err(e) if e.contains("AI_REQUEST_CANCELLED") => return Err(e),
+                    Err(e) => ToolOutput::from(format!("错误：{e}")),
+                }
             } else {
                 match call.name.as_str() {
                     "process_output" => crate::agent_proc::process_output(&args).map(ToolOutput::from),
@@ -1990,6 +2023,96 @@ async fn run_subagent(
         messages.extend(tool_result_messages(anthropic, results));
     }
     Ok("（子代理到 16 轮上限，没有给出结论；缩小范围再试，或直接用 grep）".into())
+}
+
+/// 可写子代理的写 / 命令调用：复用父回合的闸门、冲突检查、审批与 `execute_tool`。
+///
+/// 安全不变量（全部复用父管道，不复制逻辑）：
+/// - `conflict_block`：冲突仓库里一律拒绝；
+/// - `tool_gate`：`Allow`（完全权限）直接执行；`Ask`（编辑权限）走父审批卡等人；
+///   `Deny` / `Review` 拒绝（子代理没有审查通道）；
+/// - `execute_tool`：撤销快照、受保护路径、hooks 全自动挂在父 `request_id` 上。
+///
+/// 审批卡 `action_kind` 加 `task:` 前缀，与主回合的「以后都允许」记忆隔离，
+/// 避免子代理的一次放行污染主回合语义。
+async fn subagent_write_call(
+    ctx: &ToolCtx<'_>,
+    config: &AIModelConfig,
+    permission: Permission,
+    name: &str,
+    args: &Value,
+) -> Result<ToolOutput, String> {
+    let gate_arg_str = gate_arg(name, args);
+    let summary = call_summary(name, args);
+    let arg_text = step_arg(args);
+
+    // 冲突仓库：看得改不得，任何档位都拦。
+    if let Some(reason) = conflict_block(ctx.scope, name, &gate_arg_str, args) {
+        emit_step_full(ctx.app, ctx.request_id, name, "denied", &summary, &reason, Some(&arg_text));
+        return Ok(ToolOutput::from(reason));
+    }
+
+    let gate = tool_gate(permission, name, &gate_arg_str);
+    match gate {
+        Gate::Allow => {
+            // 完全权限：不询问，直接执行。
+            emit_step_full(ctx.app, ctx.request_id, name, "running", &summary, "子代理", Some(&arg_text));
+        }
+        Gate::Ask => {
+            // 编辑权限：走父回合审批卡等人。子代理 action_kind 前缀隔离记忆。
+            let call_id = format!(
+                "task-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+            let kind = format!("task:{}", action_kind(name, &gate_arg_str));
+            let (preview, _is_diff) = approval_preview(ctx.scope, name, args, &summary);
+            let waiter = register_waiter(ctx.request_id, &call_id)?;
+            emit_approval_ex(
+                ctx.app,
+                ctx.request_id,
+                &call_id,
+                name,
+                &summary,
+                &preview,
+                false,
+                &kind,
+                false, // 子代理审批不提供「以后都允许」：一次放行就够，别常开
+                &QuestionUi::default(),
+            );
+            let decision = await_waiter(waiter, ctx.request_id).await?;
+            set_attention(ctx.app, false);
+            match decision {
+                Decision::Allow { .. } => {
+                    emit_step_full(ctx.app, ctx.request_id, name, "running", &summary, "子代理（已确认）", Some(&arg_text));
+                }
+                Decision::Deny => {
+                    let msg = "用户拒绝了子代理的这次写操作".to_string();
+                    emit_step_full(ctx.app, ctx.request_id, name, "denied", &summary, &msg, Some(&arg_text));
+                    return Ok(ToolOutput::from(msg));
+                }
+                Decision::TimedOut => {
+                    let msg = "等待确认超时，子代理的这次写操作未执行".to_string();
+                    emit_step_full(ctx.app, ctx.request_id, name, "denied", &summary, &msg, Some(&arg_text));
+                    return Ok(ToolOutput::from(msg));
+                }
+            }
+        }
+        Gate::Deny | Gate::Review => {
+            // 只读 / 审查档不该走到这里（subagent_tools 已挡），兜底再拒一次。
+            let msg = format!("子代理在当前权限档位下不能执行 {name}");
+            emit_step_full(ctx.app, ctx.request_id, name, "denied", &summary, &msg, Some(&arg_text));
+            return Ok(ToolOutput::from(msg));
+        }
+    }
+
+    // Box::pin 打断 async 递归环：run_subagent → subagent_write_call → dispatch_tool
+    // → execute_tool → (task 分支) run_subagent。写工具不触发 task，但编译器只看类型图。
+    let out = Box::pin(dispatch_tool(ctx, config, permission, name, args)).await?;
+    emit_step_full(ctx.app, ctx.request_id, name, "done", &summary, &out.text, Some(&arg_text));
+    Ok(out)
 }
 
 /// Working directory for command tools: `cwd` inside the scope, else the base.
@@ -3478,6 +3601,13 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut tool_names = tool_names;
     if !req.subagents {
         tool_names.retain(|n| *n != "task");
+    } else if req.subagent_write && matches!(permission, Permission::Workspace | Permission::Full) {
+        // 可写子代理生效：静态 task 描述说「只读」，这里补一句纠正，模型才知道能派它改文件。
+        system.push_str(
+            "\n\n【子代理可写】本轮 `task` 子代理除搜索外还能写文件 / 改文件 / 跑命令，\
+受和你一样的安全约束（冲突仓库拒绝、受保护路径拦截、编辑档每次写先经用户确认），\
+撤销与你共用一次。把能自成一体的小改动整体交给它，但别让它做需要你反复确认的大改。",
+        );
     }
     // 按任务模式收窄工具子集（对话是最小集；具体规则见 `agent_tools::mode_allows`）。
     if !req.mode.trim().is_empty() {
@@ -3541,6 +3671,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         max_parallel: if req.parallel_reads { MAX_PARALLEL } else { 1 },
         max_retries: if req.retries { MAX_RETRIES } else { 0 },
         grep_ignore: req.grep_ignore,
+        subagent_write: req.subagent_write,
     };
 
     // 历史统一走内容块协议：新入参直接用，旧入参包成 Text 块，翻译成 provider 形状只做一次。
@@ -3718,7 +3849,15 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             }
             crate::agent_session_log::log_assistant(&request_id, &final_text);
             run_stop_hooks(&harness_config.hooks, &scope, permission);
-            emit_done(&app, &request_id, started, usage_total, false, stats);
+            emit_done(
+                &app,
+                &request_id,
+                started,
+                usage_total,
+                false,
+                stats,
+                if fell_back { Some(config.name.as_str()) } else { None },
+            );
             return Ok(());
         }
         if anthropic {
@@ -4180,7 +4319,15 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
                     // 紧急停止：不再给模型机会继续动鼠标键盘
                     emit_step_full(&app, &request_id, &p.name, "denied", &p.summary, &err, Some(&p.arg_text));
                     emit_text(&app, &request_id, &format!("\n\n{err}"));
-                    emit_done(&app, &request_id, started, usage_total, false, stats);
+                    emit_done(
+                        &app,
+                        &request_id,
+                        started,
+                        usage_total,
+                        false,
+                        stats,
+                        if fell_back { Some(config.name.as_str()) } else { None },
+                    );
                     return Ok(());
                 }
                 Err(err) => {
@@ -4208,7 +4355,15 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let msg = limit_message(action_steps >= MAX_ACTION_STEPS, &notes);
     emit_text(&app, &request_id, &msg);
     run_stop_hooks(&harness_config.hooks, &scope, permission);
-    emit_done(&app, &request_id, started, usage_total, true, stats);
+    emit_done(
+        &app,
+        &request_id,
+        started,
+        usage_total,
+        true,
+        stats,
+        if fell_back { Some(config.name.as_str()) } else { None },
+    );
     Ok(())
 }
 
@@ -4249,12 +4404,46 @@ mod tests {
     fn subagent_offers_web_fetch_only_where_it_is_allowed() {
         use crate::agent_policy::Permission;
         let allow = vec!["example.com".to_string()];
-        assert!(!subagent_tools(Permission::Read, &allow).contains(&"web_fetch"));
-        assert!(!subagent_tools(Permission::Workspace, &allow).contains(&"web_fetch"));
-        assert!(!subagent_tools(Permission::Review, &allow).contains(&"web_fetch"));
-        assert!(subagent_tools(Permission::Full, &allow).contains(&"web_fetch"));
+        assert!(!subagent_tools(Permission::Read, false, &allow).contains(&"web_fetch"));
+        assert!(!subagent_tools(Permission::Workspace, false, &allow).contains(&"web_fetch"));
+        assert!(!subagent_tools(Permission::Review, false, &allow).contains(&"web_fetch"));
+        assert!(subagent_tools(Permission::Full, false, &allow).contains(&"web_fetch"));
         // 白名单为空 = 没有联网能力，完全权限也不给
-        assert!(!subagent_tools(Permission::Full, &[]).contains(&"web_fetch"));
+        assert!(!subagent_tools(Permission::Full, false, &[]).contains(&"web_fetch"));
+    }
+
+    /// 可写子代理 fail-closed：写工具必须用户显式开启，且只在编辑档 / 完全权限出现；
+    /// 只读 / 审查档即使开了开关也永远拿不到；关着开关时任何档位都没有写工具；禁嵌套 task。
+    #[test]
+    fn subagent_write_is_fail_closed() {
+        use crate::agent_policy::Permission;
+        let allow: Vec<String> = vec![];
+        let has_write = |p, enabled| {
+            let t = subagent_tools(p, enabled, &allow);
+            t.contains(&"write_file") || t.contains(&"edit_file") || t.contains(&"run_command")
+        };
+        // 开关关：谁都没有写
+        assert!(!has_write(Permission::Read, false));
+        assert!(!has_write(Permission::Workspace, false));
+        assert!(!has_write(Permission::Review, false));
+        assert!(!has_write(Permission::Full, false));
+        // 开关开：只读 / 审查档仍然没有（审查档无子代理审通道）
+        assert!(!has_write(Permission::Read, true));
+        assert!(!has_write(Permission::Review, true));
+        // 开关开：编辑档 / 完全权限才获得全部三样
+        for p in [Permission::Workspace, Permission::Full] {
+            let t = subagent_tools(p, true, &allow);
+            assert!(t.contains(&"write_file"), "{p:?} 应有 write_file");
+            assert!(t.contains(&"edit_file"), "{p:?} 应有 edit_file");
+            assert!(t.contains(&"run_command"), "{p:?} 应有 run_command");
+        }
+        // 永不嵌套：任何情况下都没有 task / delete / move
+        for p in [Permission::Workspace, Permission::Full] {
+            let t = subagent_tools(p, true, &allow);
+            assert!(!t.contains(&"task"), "子代理不能再派子代理");
+            assert!(!t.contains(&"delete_path"), "首版不放删除");
+            assert!(!t.contains(&"move_path"), "首版不放移动");
+        }
     }
 
     /// 「自动重试」关掉时一次都不该等：`retry_plan` 只认自己那 3 次上限，光靠它会在

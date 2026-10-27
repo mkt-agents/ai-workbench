@@ -199,6 +199,7 @@ const emptyForm = (): Omit<AIModelConfig, "id" | "createdAt" | "updatedAt"> => (
   maxTokens: 4096,
   isDefault: false,
   vision: false,
+  visionMode: "auto",
 });
 
 function truncateUrl(url: string, max = 42): string {
@@ -334,6 +335,7 @@ function AIAssistant() {
   const invokeSyncModelToDsh = useGlobalStore((s) => s.invokeSyncModelToDsh);
   const invokeTestModelConnection = useGlobalStore((s) => s.invokeTestModelConnection);
   const invokeListProviderModels = useGlobalStore((s) => s.invokeListProviderModels);
+  const invokeInferModelModality = useGlobalStore((s) => s.invokeInferModelModality);
   const invokeDetectLocalAiEndpoints = useGlobalStore((s) => s.invokeDetectLocalAiEndpoints);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeSaveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
@@ -435,7 +437,33 @@ function AIAssistant() {
     setTestStatus((cur) => (cur.testing || !cur.result ? cur : { testing: false, result: null }));
   };
 
-  const commitModel = (id: string) => {
+  /**
+   * 当 visionMode=auto 时，根据 provider+model 现算 vision 真值。
+   * 已知 modality（来自 /models 列表）直接采信，省一次 IPC；否则调后端规则库。
+   * 手动锁定（text/vision）不动。
+   */
+  const applyAutoVision = (provider: string, model: string, knownModality?: string) => {
+    const value = model.trim();
+    if (!value) return;
+    const decide = (modality: string) => {
+      setFormData((cur) => {
+        if (cur.visionMode && cur.visionMode !== "auto") return cur;
+        if (cur.model.trim() !== value || cur.provider !== provider) return cur;
+        return { ...cur, vision: modality === "vision" };
+      });
+    };
+    if (knownModality) {
+      decide(knownModality);
+      return;
+    }
+    void invokeInferModelModality({ provider, model: value })
+      .then(decide)
+      .catch(() => {
+        /* 推断失败就维持现状，用户可手动改 */
+      });
+  };
+
+  const commitModel = (id: string, modality?: string) => {
     const value = id.trim();
     if (!value) return;
     invalidateTestResult();
@@ -446,6 +474,7 @@ function AIAssistant() {
       }
       return next;
     });
+    applyAutoVision(formData.provider, value, modality);
     closeModelPicker();
   };
 
@@ -756,6 +785,13 @@ function AIAssistant() {
           isCreate && !nameTouched ? suggestConfigName(provider, newModel) : cur.name,
       };
     });
+    // provider 变了，模型往往换成新厂商默认值：auto 模式下重算一次看图能力。
+    const prevMeta = getProviderMeta(formData.provider);
+    const modelMatchesPrevDefault =
+      !prevMeta || !formData.model || formData.model === prevMeta.defaultModel;
+    const nextModel =
+      !editingId || modelMatchesPrevDefault ? next?.defaultModel ?? "" : formData.model;
+    applyAutoVision(provider, nextModel);
   };
 
   const handleAuthTypeChange = (authType: AuthType) => {
@@ -776,6 +812,7 @@ function AIAssistant() {
       model,
       name: !editingId && !nameTouched ? suggestConfigName(cur.provider, model) : cur.name,
     }));
+    applyAutoVision(formData.provider, model);
   };
 
   const handleRefreshModels = async () => {
@@ -809,7 +846,11 @@ function AIAssistant() {
         });
         return;
       }
-      const fetched = result.models.map((m) => ({ id: m.id, label: m.label || m.id }));
+      const fetched = result.models.map((m) => ({
+        id: m.id,
+        label: m.label || m.id,
+        modality: m.modality,
+      }));
       setFetchedModels(fetched);
       setModalStatus({
         type: "success",
@@ -839,6 +880,7 @@ function AIAssistant() {
       maxTokens: config.maxTokens,
       isDefault: config.isDefault,
       vision: Boolean(config.vision),
+      visionMode: config.visionMode || (config.vision ? "vision" : "auto"),
     });
     setFetchedModels(null);
     closeModelPicker();
@@ -914,6 +956,19 @@ function AIAssistant() {
       baseUrl: formData.baseUrl.trim().replace(/\/+$/, ""),
       model: formData.model.trim(),
     };
+
+    // auto 模式：保存前兜底重算一次 vision（表单可能从未触发 commit，如默认值直接保存）。
+    if ((payload.visionMode || "auto") === "auto") {
+      try {
+        const modality = await invokeInferModelModality({
+          provider: payload.provider,
+          model: payload.model,
+        });
+        payload.vision = modality === "vision";
+      } catch {
+        /* 保持当前 vision */
+      }
+    }
 
     try {
       if (editingId) {
@@ -997,6 +1052,7 @@ function AIAssistant() {
           temperature: config.temperature,
           maxTokens: config.maxTokens,
           vision: Boolean(config.vision),
+          visionMode: config.visionMode || (config.vision ? "vision" : "auto"),
         })),
       };
       const path = await invokeSaveTextFile(
@@ -1067,6 +1123,12 @@ function AIAssistant() {
           maxTokens: finiteOr(item?.maxTokens, 4096),
           isDefault: false,
           vision: item?.vision === true,
+          visionMode:
+            item?.visionMode === "text" || item?.visionMode === "vision" || item?.visionMode === "auto"
+              ? item.visionMode
+              : item?.vision === true
+              ? "vision"
+              : "auto",
         });
         added += 1;
       }
@@ -2218,7 +2280,7 @@ function AIAssistant() {
                                       const exact = listedModels.find(
                                         (m) => m.id === customCandidate
                                       );
-                                      if (exact) commitModel(exact.id);
+                                      if (exact) commitModel(exact.id, exact.modality);
                                       else if (showCustomRow) commitModel(customCandidate);
                                     }}
                                     placeholder={t("models.modelSearch")}
@@ -2241,9 +2303,19 @@ function AIAssistant() {
                                             type="button"
                                             className="ai-model-option-main"
                                             title={m.id}
-                                            onClick={() => commitModel(m.id)}
+                                            onClick={() => commitModel(m.id, m.modality)}
                                           >
                                             <span className="ai-model-option-id">{m.id}</span>
+                                            {m.modality === "vision" && (
+                                              <span className="ai-model-tag ai-model-tag--vision">
+                                                {t("models.modalityVision")}
+                                              </span>
+                                            )}
+                                            {m.modality === "text" && (
+                                              <span className="ai-model-tag ai-model-tag--text">
+                                                {t("models.modalityText")}
+                                              </span>
+                                            )}
                                             {m.label && m.label !== m.id && (
                                               <span className="ai-model-option-label">
                                                 {m.label}
@@ -2339,15 +2411,49 @@ function AIAssistant() {
                         />
                         {t("models.setDefaultCheckbox")}
                       </label>
-                      <label className="ai-checkbox" title={t("models.visionHint")}>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(formData.vision)}
-                          onChange={(e) => setFormData({ ...formData, vision: e.target.checked })}
-                          disabled={modalBusy}
-                        />
-                        {t("models.visionCheckbox")}
-                      </label>
+                      <div className="ai-vision-field" title={t("models.visionHint")}>
+                        <span className="ai-vision-label">{t("models.modalityLabel")}</span>
+                        <div className="ai-vision-seg" role="radiogroup" aria-label={t("models.modalityLabel")}>
+                          {(["auto", "text", "vision"] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              role="radio"
+                              aria-checked={(formData.visionMode || "auto") === mode}
+                              className={`ai-vision-seg-btn ${
+                                (formData.visionMode || "auto") === mode ? "is-active" : ""
+                              }`}
+                              disabled={modalBusy}
+                              onClick={() => {
+                                if (mode === "auto") {
+                                  setFormData((cur) => ({ ...cur, visionMode: "auto" }));
+                                  // 切回自动：立刻按当前 provider+model 重算
+                                  applyAutoVision(formData.provider, formData.model);
+                                } else {
+                                  setFormData((cur) => ({
+                                    ...cur,
+                                    visionMode: mode,
+                                    vision: mode === "vision",
+                                  }));
+                                }
+                              }}
+                            >
+                              {mode === "auto"
+                                ? t("models.modalityAuto")
+                                : mode === "text"
+                                ? t("models.modalityText")
+                                : t("models.modalityVision")}
+                            </button>
+                          ))}
+                        </div>
+                        {(formData.visionMode || "auto") === "auto" && (
+                          <span className="ai-vision-hint-inline">
+                            {formData.vision
+                              ? t("models.modalityAutoVision")
+                              : t("models.modalityAutoText")}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -894,6 +894,8 @@ cancel_request(request_id)    // 前端调用取消
 | temperature | REAL | DEFAULT 0.7 |
 | max_tokens | INTEGER | DEFAULT 4096 |
 | is_default | INTEGER | DEFAULT 0 |
+| vision | INTEGER | DEFAULT 0（运行时真值：模型是否看图） |
+| vision_mode | TEXT | DEFAULT 'auto'（auto 规则库推断 / text / vision 手动锁定） |
 | created_at | TEXT | NOT NULL |
 | updated_at | TEXT | NOT NULL |
 
@@ -1009,7 +1011,8 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | 命令 | 参数 | 返回 |
 |------|------|------|
 | `test_model_connection` | AIModelConfig | ModelConnectionResult |
-| `list_provider_models` | provider, api_key, base_url | ListModelsResult |
+| `list_provider_models` | provider, api_key, base_url | ListModelsResult（每条带 `modality`：vision/text/unknown） |
+| `infer_model_modality` | provider, model | String（离线名称规则推断模态，见 `model_capability.rs`） |
 | `generate_text` | config, system, user | String |
 | `generate_text_stream` | config, system, user, request_id, history? | — (emit 事件) |
 
@@ -1143,6 +1146,8 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `import_data` | json: String | String |
 | `save_text_file` | default_name?, content | String |
 | `read_text_file` | path | String |
+| `read_document_file` | path, cap? | String（docx/pdf/xlsx/csv 文本层，复用 `agent_docs::read_document`；PDF 无 OCR） |
+| `ocr_image_file` | path, langs? | String（图片 OCR，Tesseract 方案 B，见 `agent_ocr.rs`；引擎缺失时明确报错） |
 | `system_double_click_ms` | — | u32（系统双击间隔，桌宠的"双击打开天玑"按它判） |
 | `pick_text_file` | — | Option\<String\> |
 | `pick_source_file` | — | Option\<String\> |

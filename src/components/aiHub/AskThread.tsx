@@ -2,7 +2,7 @@ import { useEffect, useDeferredValue, useLayoutEffect, useRef, useState } from "
 import { useTranslation } from "react-i18next";
 import {
   ArrowDown, BookmarkPlus, Check, Copy, Download, FolderGit2, Gauge, MessageCircle, MessageSquarePlus,
-  Pencil, RefreshCw, RotateCcw,
+  Pencil, RefreshCw, RotateCcw, Sparkles,
 } from "lucide-react";
 import type { AiHubTurn } from "../../core/types";
 import MarkdownView from "../MarkdownView";
@@ -281,6 +281,12 @@ export default function AskThread(props: Props) {
               aria-label={t("assistant")}
             >
               <MarkdownView text={stripThinking(turn.content)} />
+              {turn.modelName && (
+                <div className="qa-msg-model" title={t("answeredBy", { model: turn.modelName })}>
+                  <Sparkles size={10} />
+                  <span>{turn.modelName}</span>
+                </div>
+              )}
               <MessageActions turn={turn} index={i} isLast={isLast} props={props} />
               {turn.plan && turn.plan.length > 0 && <AgentPlanCard plan={turn.plan} />}
               {turn.undoToken && <AgentUndoButton token={turn.undoToken} />}

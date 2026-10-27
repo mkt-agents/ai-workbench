@@ -571,6 +571,7 @@ fn build_agent_request(
         web_search_provider: agent.web_search_provider.clone(),
         web_search_key: agent.web_search_key.clone(),
         subagents: agent.subagents,
+        subagent_write: false,
         mcp: agent.mcp.clone(),
         parallel_reads: agent.parallel_reads,
         retries: agent.retries,
