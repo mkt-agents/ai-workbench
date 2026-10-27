@@ -36,6 +36,7 @@
   "net": {
     "title": "联网扩展",
     "groupFetch": "抓取白名单",
+    "groupSearch": "网页搜索",
     "groupMcpSwitch": "总开关",
     "groupMcpServers": "服务列表"
   },
@@ -115,13 +116,13 @@
     "rememberedClear": "全部清除",
     "webAllow": "网页抓取白名单",
     "webAllowPlaceholder": "docs.rs, *.anthropic.com",
-    "webAllowHint": "每行/逗号分隔，子域自动允许（写 example.com 就含 api.example.com）。与下方「联网策略」配合：allowlist 时留空 = 不下发抓取；open 时白名单可空。只抓 https、跳转仍禁私网、每次抓取仍会先问你。",
+    "webAllowHint": "每行 / 逗号分隔，子域自动包含（example.com 含 api.example.com）。白名单策略下留空 = 不下发抓取。只抓 https，跳转仍禁私网，每次仍会先问你。",
     "webTier": "联网策略",
     "webTierOff": "关闭",
     "webTierAllowlist": "白名单",
     "webTierOpen": "开放公网",
     "webTierHint": "关闭 = 不下发网页工具；白名单 = 只抓列表内域名；开放公网 = 任意 https（仍禁内网），每次仍询问。",
-    "webSearchProvider": "网页搜索",
+    "webSearchProvider": "服务商",
     "webSearchNone": "不启用",
     "webSearchBrave": "Brave",
     "webSearchTavily": "Tavily",

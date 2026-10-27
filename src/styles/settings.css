@@ -683,11 +683,6 @@
   }
 }
 
-.settings-page .setting-web-allow {
-  width: min(320px, 100%);
-  min-width: 180px;
-}
-
 /* 「记住的审批」逐条清单：一条一行，作用域短的靠左拉长，规则用等宽字 */
 .settings-page .remembered-list {
   margin-top: 8px;
@@ -1262,9 +1257,30 @@
 .settings-page .net-field > .toggle {
   margin-top: 2px;
 }
-.settings-page .net-panel .setting-web-allow {
-  width: 100%;
-  max-width: none;
+/* 网页抓取：单列排布（下拉收窄，白名单 / 密钥占满整行），两段之间用细线断开 */
+.settings-page .net-grid.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.settings-page .net-grid.is-single > .net-field {
+  padding: 7px 0;
+}
+.settings-page .net-grid.is-single > .net-field + .net-field {
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 45%, transparent);
+}
+.settings-page .net-field.is-compact > .input-field {
+  max-width: 260px;
+}
+.settings-page .net-field > .net-textarea {
+  min-height: 54px;
+  max-height: 132px;
+  padding-block: 5px;
+  line-height: 1.5;
+  resize: none;
+}
+.settings-page .net-panel .net-field > .setting-hint {
+  padding-top: 2px;
+  font-size: 11px;
+  line-height: 1.45;
 }
 @media (max-width: 720px) {
   .settings-page .net-grid {

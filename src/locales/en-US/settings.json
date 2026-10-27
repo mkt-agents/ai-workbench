@@ -36,6 +36,7 @@
   "net": {
     "title": "Network & extensions",
     "groupFetch": "Fetch allowlist",
+    "groupSearch": "Web search",
     "groupMcpSwitch": "Master switch",
     "groupMcpServers": "Server list"
   },
@@ -115,13 +116,13 @@
     "rememberedClear": "Forget them",
     "webAllow": "Web fetch allowlist",
     "webAllowPlaceholder": "docs.rs, *.anthropic.com",
-    "webAllowHint": "One per line or comma separated; subdomains are included (example.com also allows api.example.com). Works with the web tier below: empty allowlist under allowlist = no fetch; open ignores the list. https only, private hosts still blocked, and every fetch still asks first.",
+    "webAllowHint": "One per line or comma separated; subdomains are included (example.com also allows api.example.com). Empty under the allowlist tier = no fetch. https only, private hosts blocked, every fetch asks first.",
     "webTier": "Web access",
     "webTierOff": "Off",
     "webTierAllowlist": "Allowlist",
     "webTierOpen": "Open (public HTTPS)",
     "webTierHint": "Off = no web tools. Allowlist = only listed hosts. Open = any public https (private hosts still blocked); every fetch still asks.",
-    "webSearchProvider": "Web search",
+    "webSearchProvider": "Provider",
     "webSearchNone": "Disabled",
     "webSearchBrave": "Brave",
     "webSearchTavily": "Tavily",

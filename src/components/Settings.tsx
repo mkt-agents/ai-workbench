@@ -1227,75 +1227,74 @@ function Settings({ onNoticeUpdate }: Props = {}) {
 
             <section className="hub-group" hidden={netGroup !== "web"}>
               <div className="net-panel">
-              <div className="hub-group-title">{t("net.groupFetch")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.webTier")}</span>
-                  <select
-                    className="input-field"
-                    value={settings.agentWebTier || "allowlist"}
-                    onChange={(e) => setSettings({ agentWebTier: e.target.value })}
-                  >
-                    <option value="off">{t("aiHub.webTierOff")}</option>
-                    <option value="allowlist">{t("aiHub.webTierAllowlist")}</option>
-                    <option value="open">{t("aiHub.webTierOpen")}</option>
-                  </select>
+                <div className="hub-group-title">{t("net.groupFetch")}</div>
+                <div className="net-grid is-single">
+                  <div className="net-field is-compact">
+                    <span className="setting-label">{t("aiHub.webTier")}</span>
+                    <select
+                      className="input-field"
+                      value={settings.agentWebTier || "allowlist"}
+                      onChange={(e) => setSettings({ agentWebTier: e.target.value })}
+                    >
+                      <option value="off">{t("aiHub.webTierOff")}</option>
+                      <option value="allowlist">{t("aiHub.webTierAllowlist")}</option>
+                      <option value="open">{t("aiHub.webTierOpen")}</option>
+                    </select>
+                    <p className="setting-hint">{t("aiHub.webTierHint")}</p>
+                  </div>
+                  <div className="net-field">
+                    <span className="setting-label">{t("aiHub.webAllow")}</span>
+                    <textarea
+                      className="input-field net-textarea"
+                      rows={2}
+                      spellCheck={false}
+                      value={webAllowDraft}
+                      placeholder={t("aiHub.webAllowPlaceholder")}
+                      onFocus={() => {
+                        webAllowFocused.current = true;
+                      }}
+                      onChange={(e) => setWebAllowDraft(e.target.value)}
+                      onBlur={() => {
+                        webAllowFocused.current = false;
+                        const next = parseDomainList(webAllowDraft);
+                        if (next.join(",") !== (settings.agentWebAllow ?? []).join(",")) {
+                          setSettings({ agentWebAllow: next });
+                        }
+                      }}
+                    />
+                    <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
+                  </div>
                 </div>
-                <p className="setting-hint">{t("aiHub.webTierHint")}</p>
               </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.webAllow")}</span>
-                  <input
-                    className="input-field setting-web-allow"
-                    type="text"
-                    value={webAllowDraft}
-                    placeholder={t("aiHub.webAllowPlaceholder")}
-                    onFocus={() => {
-                      webAllowFocused.current = true;
-                    }}
-                    onChange={(e) => setWebAllowDraft(e.target.value)}
-                    onBlur={() => {
-                      webAllowFocused.current = false;
-                      const next = parseDomainList(webAllowDraft);
-                      if (next.join(",") !== (settings.agentWebAllow ?? []).join(",")) {
-                        setSettings({ agentWebAllow: next });
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                      if (e.key === "Enter") e.currentTarget.blur();
-                    }}
-                  />
+              <div className="net-panel">
+                <div className="hub-group-title">{t("net.groupSearch")}</div>
+                <div className="net-grid is-single">
+                  <div className="net-field is-compact">
+                    <span className="setting-label">{t("aiHub.webSearchProvider")}</span>
+                    <select
+                      className="input-field"
+                      value={settings.agentWebSearchProvider || ""}
+                      onChange={(e) => setSettings({ agentWebSearchProvider: e.target.value })}
+                    >
+                      <option value="">{t("aiHub.webSearchNone")}</option>
+                      <option value="brave">{t("aiHub.webSearchBrave")}</option>
+                      <option value="tavily">{t("aiHub.webSearchTavily")}</option>
+                    </select>
+                  </div>
+                  <div className="net-field">
+                    <span className="setting-label">{t("aiHub.webSearchKey")}</span>
+                    <input
+                      className="input-field"
+                      type="password"
+                      autoComplete="off"
+                      disabled={!settings.agentWebSearchProvider}
+                      value={settings.agentWebSearchKey || ""}
+                      placeholder={t("aiHub.webSearchKeyPlaceholder")}
+                      onChange={(e) => setSettings({ agentWebSearchKey: e.target.value })}
+                    />
+                    <p className="setting-hint">{t("aiHub.webSearchHint")}</p>
+                  </div>
                 </div>
-                <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.webSearchProvider")}</span>
-                  <select
-                    className="input-field"
-                    value={settings.agentWebSearchProvider || ""}
-                    onChange={(e) => setSettings({ agentWebSearchProvider: e.target.value })}
-                  >
-                    <option value="">{t("aiHub.webSearchNone")}</option>
-                    <option value="brave">{t("aiHub.webSearchBrave")}</option>
-                    <option value="tavily">{t("aiHub.webSearchTavily")}</option>
-                  </select>
-                </div>
-                <div className="setting-row" style={{ marginTop: 8 }}>
-                  <span className="setting-label">{t("aiHub.webSearchKey")}</span>
-                  <input
-                    className="input-field setting-web-allow"
-                    type="password"
-                    autoComplete="off"
-                    value={settings.agentWebSearchKey || ""}
-                    placeholder={t("aiHub.webSearchKeyPlaceholder")}
-                    onChange={(e) => setSettings({ agentWebSearchKey: e.target.value })}
-                  />
-                </div>
-                <p className="setting-hint">{t("aiHub.webSearchHint")}</p>
-              </div>
               </div>
             </section>
 
