@@ -393,9 +393,9 @@ AI 能力不再列为不做。天玑已是多模型流式对话，并带当前�
 
 天玑最后两项后续可选项，纯增量、不降低安全下限。
 
-* [x] **可写子代理**：`task` 子代理在**编辑权限及以上**可用 `write_file / edit_file / run_command`；fail-closed——只读 / 审查档即便开了开关也永不获得（`subagent_tools` + 单测 `subagent_write_is_fail_closed`）。写 / 命令复用父回合的 `conflict_block` → `tool_gate` → 审批卡 → `execute_tool`，撤销快照与审批都挂父 `request_id`，审批 `action_kind` 加 `task:` 前缀隔离「以后都允许」记忆。不放删除 / 移动、禁嵌套。新设置 `agentSubagentWrite`（默认关，需先开只读子代理）。可写生效时给模型补一句系统提示纠正静态 task 描述。
+* [x] **可写子代理**：`task` 子代理在**编辑权限及以上**可用 `write_file / edit_file / run_command / delete_path / move_path`；fail-closed——只读 / 审查档即便开了开关也永不获得（`subagent_tools` + 单测 `subagent_write_is_fail_closed`）。写 / 命令 / 删除 / 移动复用父回合的 `conflict_block` → `tool_gate` → 审批卡 → `execute_tool`，删除进回收站并留字节快照、move 反向改名撤销，撤销与审批都挂父 `request_id`，审批 `action_kind` 加 `task:` 前缀隔离「以后都允许」记忆。禁嵌套。新设置 `agentSubagentWrite`（默认关，需先开只读子代理）。可写生效时给模型补一句系统提示纠正静态 task 描述。
 * [x] **图片 OCR（方案 B：Tesseract）**：新 `agent_ocr.rs` + 命令 `ocr_image_file`，解析顺序 环境变量 → 打包 `resources/tesseract` → PATH，缺引擎明确报错不静默。附件 chip 的「识别文字」把图 OCR 成文本附件（纯文本模型也能读图里字），图片附件新带 `path` 供重读。打包槽位 `src-tauri/resources/tesseract/`（`bundle.resources` 已声明 + README 说明布局与许可；二进制不进 git，发布构建前放入）。
-* [ ] 后续可选：子代理可删除 / 移动；扫描件 PDF→位图再 OCR（需 pdfium）；命令输出流式回灌
+* [ ] 后续可选：扫描件 PDF→位图再 OCR（需 pdfium）；命令输出流式回灌
 
 **成功标准**：编辑档开启后子代理能改文件 / 跑命令并触发审批、与主回合共用撤销；只读 / 审查档拿不到写；装了 Tesseract（或打包分发）时「识别文字」把截图里的字抽成文本附件，没装时明确提示。
 

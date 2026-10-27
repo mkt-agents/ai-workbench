@@ -239,6 +239,7 @@ export interface Invocations {
   invokeDesktopEmbedRelayout: (params: { processName: string; x: number; y: number; width: number; height: number; dpr?: number }) => Promise<DesktopRelayoutResult>;
   invokeDesktopEmbedShow: (processName: string, visible: boolean) => Promise<void>;
   invokeDesktopEmbedFocus: (processName: string) => Promise<void>;
+  invokeDesktopEmbedReactivate: (processName: string) => Promise<void>;
   invokeDesktopEmbedRestore: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetach: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetachAll: () => Promise<void>;
@@ -639,6 +640,8 @@ export const invocations: Invocations = {
     tauriInvoke<void>('desktop_embed_show', { processName, visible }),
   invokeDesktopEmbedFocus: (processName: string) =>
     tauriInvoke<void>('desktop_embed_focus', { processName }),
+  invokeDesktopEmbedReactivate: (processName: string) =>
+    tauriInvoke<void>('desktop_embed_reactivate', { processName }),
   invokeDesktopEmbedRestore: (processName: string) =>
     tauriInvoke<void>('desktop_embed_restore', { processName }),
   invokeDesktopEmbedDetach: (processName: string) =>

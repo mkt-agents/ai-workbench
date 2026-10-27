@@ -753,3 +753,11 @@
   max-width: none;
 }
 
+/* 列表吃掉菜单剩余高度并内部滚动；flex item 默认 min-height:auto 不会收缩，
+   不显式归零会按条目总数撑开把菜单 max-height 顶破 */
+.prompt-model-menu-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+

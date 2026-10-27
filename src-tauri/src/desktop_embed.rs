@@ -461,6 +461,38 @@ mod imp {
         BOOL(1)
     }
 
+    /// A standard Win32 dialog (`#32770`) an Electron/Chromium app throws up
+    /// is NEVER its UI frame, and adopting one is actively harmful.
+    ///
+    /// Electron's real window is always `Chrome_WidgetWin_1`; a `#32770` is a
+    /// modal it raised — a certificate/print dialog, or, the one that bit us
+    /// here, the "<App> is unavailable / is not responding" error box Windows
+    /// (or the shell) shows while the renderer is mid-rebuild. That box has no
+    /// Chromium render widget, so it can never take keyboard focus: once it is
+    /// embedded, `GetFocus()` on it is always the slot's parent and every
+    /// Ctrl+V is dropped (the user's reported symptom), while a right-click
+    /// paste on a real frame still worked because that goes through Chromium's
+    /// own last-focused element, not the Win32 focus chain. The window-rebuild
+    /// churn (`frame gone -> re-adopt`) is exactly when the real frame is
+    /// momentarily absent and this decoy is the only thing the scan finds, so
+    /// it MUST be rejected or the slot latches onto the error box.
+    ///
+    /// Scoped to the two dialog classes plus the known crash/unresponsive
+    /// titles so an app whose genuine frame happens to be a dialog class is not
+    /// swept up by title alone.
+    fn is_crash_or_dialog_window(c: &Candidate) -> bool {
+        // #32770 = Win32 dialog class, #32768 = menu. Neither renders app UI.
+        if matches!(c.class.as_str(), "#32770" | "#32768") {
+            return true;
+        }
+        let title = c.title.to_ascii_lowercase();
+        title.contains("is unavailable")
+            || title.contains("is not responding")
+            || title.contains("no responde")
+            || title.contains("未响应")
+            || title.contains("无响应")
+    }
+
     /// Helper windows Windows keeps around for every process; never the frame.
     /// A real app frame: visible, unowned, not a tool window, titled, not an
     /// IME/helper class, has a movable frame border, and comfortably larger
@@ -477,6 +509,7 @@ mod imp {
             && !c.toolwindow
             && !c.title.is_empty()
             && !is_helper_class(&c.class)
+            && !is_crash_or_dialog_window(c)
             && c.area >= MIN_FRAME_AREA
             && (c.style & (WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize)) != 0
     }
@@ -491,6 +524,7 @@ mod imp {
             && !c.owned
             && !c.toolwindow
             && !is_helper_class(&c.class)
+            && !is_crash_or_dialog_window(c)
             && c.area >= MIN_FRAME_AREA
             && (c.style & (WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize)) != 0
             && title_is_workspace(&c.title, process)
@@ -521,6 +555,7 @@ mod imp {
     /// titled, so nothing the user could mean is caught here.
     fn is_non_ui_window(c: &Candidate) -> bool {
         is_helper_class(&c.class)
+            || is_crash_or_dialog_window(c)
             || matches!(
                 c.class.as_str(),
                 "Chrome_WidgetWin_0"
@@ -2087,10 +2122,184 @@ mod imp {
         focus_hosted(app, as_hwnd(parent), as_hwnd(hwnd), child_thread);
     }
 
+    /// Force the hosted Chromium/Electron document to re-activate, the way a
+    /// tab switch does, WITHOUT the user leaving the page.
+    ///
+    /// Why `focus` is not enough: `focus_hosted` → `sync_hosted_focus` hands
+    /// the window HWND-level keyboard focus (`GetFocus()==hwnd`), but its
+    /// hide→show is instantaneous — the two `SetWindowPos` calls land in the
+    /// same message-pump iteration, so no `WM_WINDOWPOSCHANGED` with an actual
+    /// occlusion change reaches the renderer. Chromium only flips the page's
+    /// document-active / page-visibility state (`document.hasFocus()`,
+    /// `visibilityState`) when its window really goes hidden and then shown
+    /// with a pump turn in between — which is exactly what a tab switch does
+    /// (the window sits hidden on another tab for a while). That document
+    /// state is the gate the ASYNC clipboard / image-paste path checks, so a
+    /// keyboard-focused-but-not-document-active window silently drops an image
+    /// Ctrl+V while a plain text paste (lower bar) sometimes slips through.
+    ///
+    /// This reproduces the tab-switch occlusion deterministically: hide the
+    /// window, let the host queue drain one pump turn so the renderer actually
+    /// processes WasHidden, then show + focus so it processes WasShown and
+    /// re-activates the document. Guarded on the host being foreground (same as
+    /// focus) so it can never yank input out of the workbench's own fields, and
+    /// skipped while the entry is deliberately hidden (picker/menu up).
+    pub fn reactivate(app: &tauri::AppHandle, process: &str) {
+        let key = map_key(process);
+        let live = with_map(|m| {
+            m.get(&key)
+                .map(|e| (e.hwnd, e.parent, e.pid, e.attached_thread, e.shown))
+        });
+        let Some((hwnd, parent, pid, child_thread, shown)) = live else {
+            return;
+        };
+        if shown == 0 || !entry_live(hwnd, pid) {
+            if !entry_live(hwnd, pid) {
+                with_map(|m| {
+                    m.remove(&key);
+                });
+            }
+            return;
+        }
+        let parent_raw = parent;
+        let hwnd_raw = hwnd;
+        // Step 1 (main thread): only hide while WE are foreground, and only a
+        // window the app itself still shows — never fight a picker/menu hide.
+        let proceed = app
+            .run_on_main_thread(move || unsafe {
+                let hosted = as_hwnd(hwnd_raw);
+                let host = as_hwnd(parent_raw);
+                if GetForegroundWindow() != host
+                    || IsHungAppWindow(hosted).as_bool()
+                    || !IsWindowVisible(hosted).as_bool()
+                {
+                    return;
+                }
+                let _ = SetWindowPos(
+                    hosted,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW,
+                );
+            })
+            .is_ok();
+        if !proceed {
+            return;
+        }
+        // Step 2: let the renderer actually run its WasHidden handler. A single
+        // pump iteration is not enough across the process boundary; ~48ms (two
+        // 24fps compositor frames) reliably lands the occlusion change without
+        // being visible as a flicker.
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(48));
+            let _ = app2.run_on_main_thread(move || unsafe {
+                let hosted = as_hwnd(hwnd_raw);
+                let host = as_hwnd(parent_raw);
+                // The page may have hidden it meanwhile, or the user left.
+                if GetForegroundWindow() != host || IsHungAppWindow(hosted).as_bool() {
+                    // Leave no window stuck hidden: if it is still ours, show it.
+                    if IsWindow(Some(hosted)).as_bool() {
+                        let _ = ShowWindow(hosted, SW_SHOWNA);
+                    }
+                    return;
+                }
+                let attached = ensure_queue_shared(host, hosted, child_thread);
+                let _ = SetWindowPos(
+                    hosted,
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+                let _ = SetFocus(Some(hosted));
+                let nudged = sync_hosted_focus(hosted, attached);
+                debug_log(&format!(
+                    "reactivate 0x{:X} focused={} nudged={nudged}",
+                    hosted.0 as usize,
+                    GetFocus() == hosted
+                ));
+            });
+        });
+    }
+
     pub fn detach_all() {
         let entries: Vec<Embedded> = with_map(|m| m.drain().map(|(_, e)| e).collect());
         for entry in entries {
             release(entry);
+        }
+    }
+
+    #[cfg(test)]
+    mod frame_tests {
+        use super::*;
+
+        fn cand(class: &str, title: &str, visible: bool, style: isize, area: i64) -> Candidate {
+            Candidate {
+                hwnd: as_hwnd(0x1000),
+                pid: 42,
+                stem: "deepseek harness".into(),
+                class: class.into(),
+                title: title.into(),
+                visible,
+                owned: false,
+                toolwindow: false,
+                iconic: false,
+                style,
+                area,
+                foreground: visible,
+            }
+        }
+
+        // A real Electron frame.
+        const FRAME_STYLE: isize = (WS_CAPTION.0 as isize) | (WS_THICKFRAME.0 as isize);
+
+        #[test]
+        fn electron_error_dialog_is_never_a_main_frame() {
+            // The exact window the slot latched onto: #32770 "… is unavailable",
+            // visible, captioned, half-a-megapixel. It passed every old check.
+            let decoy = cand(
+                "#32770",
+                "DeepSeek Harness is unavailable",
+                true,
+                FRAME_STYLE,
+                555_966,
+            );
+            assert!(is_crash_or_dialog_window(&decoy));
+            assert!(!looks_like_main_frame(&decoy));
+            assert!(is_non_ui_window(&decoy));
+        }
+
+        #[test]
+        fn real_chromium_frame_still_qualifies() {
+            let frame = cand(
+                "Chrome_WidgetWin_1",
+                "DeepSeek Harness",
+                true,
+                FRAME_STYLE,
+                3_920_304,
+            );
+            assert!(!is_crash_or_dialog_window(&frame));
+            assert!(looks_like_main_frame(&frame));
+            assert!(!is_non_ui_window(&frame));
+        }
+
+        #[test]
+        fn unresponsive_title_is_rejected_even_on_other_classes() {
+            let hung = cand(
+                "Chrome_WidgetWin_1",
+                "DeepSeek Harness (无响应)",
+                true,
+                FRAME_STYLE,
+                3_920_304,
+            );
+            assert!(is_crash_or_dialog_window(&hung));
+            assert!(!looks_like_main_frame(&hung));
         }
     }
 }
@@ -2282,6 +2491,25 @@ pub async fn desktop_embed_focus(
     #[cfg(windows)]
     {
         imp::focus(&app, &process_name);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, process_name);
+        Err("当前系统不支持嵌入桌面应用".into())
+    }
+}
+
+/// Re-activate the hosted window's document the way a tab switch does, so an
+/// async image paste works without the user switching tabs.
+#[tauri::command]
+pub async fn desktop_embed_reactivate(
+    app: tauri::AppHandle,
+    process_name: String,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        imp::reactivate(&app, &process_name);
         Ok(())
     }
     #[cfg(not(windows))]

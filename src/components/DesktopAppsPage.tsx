@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AlertTriangle,
   AppWindow,
@@ -176,6 +177,7 @@ export default function DesktopAppsPage() {
   const invokeDesktopEmbedRelayout = useGlobalStore((s) => s.invokeDesktopEmbedRelayout);
   const invokeDesktopEmbedShow = useGlobalStore((s) => s.invokeDesktopEmbedShow);
   const invokeDesktopEmbedFocus = useGlobalStore((s) => s.invokeDesktopEmbedFocus);
+  const invokeDesktopEmbedReactivate = useGlobalStore((s) => s.invokeDesktopEmbedReactivate);
   const invokeDesktopEmbedRestore = useGlobalStore((s) => s.invokeDesktopEmbedRestore);
   const invokeDesktopEmbedDetach = useGlobalStore((s) => s.invokeDesktopEmbedDetach);
   const invokeDesktopEmbedCandidates = useGlobalStore((s) => s.invokeDesktopEmbedCandidates);
@@ -205,6 +207,8 @@ export default function DesktopAppsPage() {
   const attachedRef = useRef(false);
   const aliveRef = useRef(true);
   const activeIdRef = useRef(activeId);
+  /** Live process name for listeners that must not re-subscribe per tab. */
+  const processNameRef = useRef(BUILTIN_DESKTOP_APPS[0].processName);
   /** Bumped on every per-app effect run; stale async results must not win. */
   const generationRef = useRef(0);
   const pickerSearchRef = useRef<HTMLInputElement>(null);
@@ -240,6 +244,7 @@ export default function DesktopAppsPage() {
   );
   const processName = active.processName;
   activeIdRef.current = activeId;
+  processNameRef.current = processName;
 
   const label = useCallback(
     (app: DesktopAppDef) => (app.labelKey ? t(app.labelKey) : app.label ?? app.processName),
@@ -701,6 +706,41 @@ export default function DesktopAppsPage() {
     processName,
     slotRect,
   ]);
+
+  // Re-activate the hosted window whenever the workbench regains the
+  // foreground, so an image paste (and typing) works without switching tabs.
+  //
+  // The embedded window is a cross-process WS_CHILD whose input queue is
+  // attached to the host thread; Win32 focus is per-queue, and Chromium's own
+  // document-active / page-visibility state is separate again. When the user
+  // leaves the workbench (企微 screenshot, a browser, the AI Hub window, …)
+  // and comes back, the child regains HWND keyboard focus, but the hosted
+  // Chromium document does NOT re-activate on its own — and the ASYNC
+  // clipboard path an image Ctrl+V uses is gated on `document.hasFocus()`, so
+  // the image paste is silently dropped (a plain text paste has a lower bar
+  // and sometimes slips through). Switching tabs "fixes" it only because the
+  // window really goes hidden on another tab and Chromium processes
+  // WasHidden→WasShown, which re-activates the document. `desktop_embed_reactivate`
+  // reproduces that occlusion deterministically (hide → one pump turn → show),
+  // and is a no-op unless the host is foreground and the window is shown, so it
+  // is safe to fire on every foreground gain.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let dead = false;
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (!focused || !attachedRef.current) return;
+        void invokeDesktopEmbedReactivate(processNameRef.current).catch(() => undefined);
+      })
+      .then((fn) => {
+        if (dead) fn();
+        else unlisten = fn;
+      });
+    return () => {
+      dead = true;
+      unlisten?.();
+    };
+  }, [invokeDesktopEmbedReactivate]);
 
   const startAndAttach = useCallback(async () => {
     setBusy(true);

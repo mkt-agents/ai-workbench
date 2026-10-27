@@ -141,7 +141,7 @@
     "subagents": "Allow read-only sub-agents",
     "subagentsHint": "Lets the model hand a wide search to a read-only sub-agent: up to 16 rounds, only 800 characters of findings come back, so the main conversation does not fill with raw matches. It cannot edit files, ask you anything, or spawn another sub-agent. Costs more than a single search.",
     "subagentWrite": "Let sub-agents edit files / run commands",
-    "subagentWriteHint": "Requires \"Allow read-only sub-agents\". When on, a sub-agent can also use write / edit / run_command, but only at Edit permission or above (Read / Review never get it). Every write or command reuses the main turn's safety: conflicted repos are refused, protected paths are blocked, Edit shows an approval card first, and undo is shared with the main turn. It still cannot delete / move, or spawn another sub-agent.",
+    "subagentWriteHint": "Requires \"Allow read-only sub-agents\". When on, a sub-agent can also use write / edit / run_command / delete (to Recycle Bin) / move, but only at Edit permission or above (Read / Review never get it). Every write or command reuses the main turn's safety: conflicted repos are refused, protected paths are blocked, Edit shows an approval card first, and undo is shared with the main turn. It still cannot spawn another sub-agent.",
     "planFirst": "Plan long tasks first",
     "rememberedScope": "Remembered at the narrowest known scope: with a repo selected it is stored per repo + current branch, so switching branch or repo asks once more; only a repo-less session stores it globally. With several service repos selected there is no single branch, so it is stored for the whole workspace.",
     "rememberedListTitle": "{{n}} remembered — open to remove one",

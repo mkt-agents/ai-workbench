@@ -1875,8 +1875,10 @@ const TASK_TOOLS: &[&str] = &[
 ];
 
 /// 可写子代理额外获得的工具（用户显式开启 + 编辑档及以上才追加）。
-/// 不含 delete / move（破坏性更强、撤销语义更复杂，首版不放）；仍然永远拿不到 `task`（禁嵌套）。
-const TASK_TOOLS_WRITE: &[&str] = &["write_file", "edit_file", "run_command"];
+/// 含删除 / 移动：删除一律进回收站并留字节快照、move 反向改名撤销（与主回合同一套 `execute_tool`）；
+/// 仍然永远拿不到 `task`（禁嵌套）。
+const TASK_TOOLS_WRITE: &[&str] =
+    &["write_file", "edit_file", "run_command", "delete_path", "move_path"];
 
 /// What a sub-agent gets in this permission level.
 ///
@@ -2001,7 +2003,10 @@ async fn run_subagent(
             } else if is_readonly_tool(&call.name) {
                 execute_readonly(ctx.scope, ctx.request_id, &call.name, &args, ctx.grep_ignore)
                     .unwrap_or_else(|e| ToolOutput::from(format!("错误：{e}")))
-            } else if matches!(call.name.as_str(), "write_file" | "edit_file" | "run_command") {
+            } else if matches!(
+                call.name.as_str(),
+                "write_file" | "edit_file" | "run_command" | "delete_path" | "move_path"
+            ) {
                 // 可写子代理：写 / 命令复用父回合的闸门 → 冲突检查 → 审批 → execute_tool，
                 // 撤销快照与审批都挂在父 request_id 上。取消要向上抛（和只读分支一致）。
                 match subagent_write_call(ctx, config, permission, &call.name, &args).await {
@@ -3604,7 +3609,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     } else if req.subagent_write && matches!(permission, Permission::Workspace | Permission::Full) {
         // 可写子代理生效：静态 task 描述说「只读」，这里补一句纠正，模型才知道能派它改文件。
         system.push_str(
-            "\n\n【子代理可写】本轮 `task` 子代理除搜索外还能写文件 / 改文件 / 跑命令，\
+            "\n\n【子代理可写】本轮 `task` 子代理除搜索外还能写文件 / 改文件 / 跑命令 / 删除（进回收站）/ 移动，\
 受和你一样的安全约束（冲突仓库拒绝、受保护路径拦截、编辑档每次写先经用户确认），\
 撤销与你共用一次。把能自成一体的小改动整体交给它，但别让它做需要你反复确认的大改。",
         );
@@ -4430,19 +4435,25 @@ mod tests {
         // 开关开：只读 / 审查档仍然没有（审查档无子代理审通道）
         assert!(!has_write(Permission::Read, true));
         assert!(!has_write(Permission::Review, true));
-        // 开关开：编辑档 / 完全权限才获得全部三样
+        // 开关开：编辑档 / 完全权限才获得全部写工具（含删除 / 移动）
         for p in [Permission::Workspace, Permission::Full] {
             let t = subagent_tools(p, true, &allow);
             assert!(t.contains(&"write_file"), "{p:?} 应有 write_file");
             assert!(t.contains(&"edit_file"), "{p:?} 应有 edit_file");
             assert!(t.contains(&"run_command"), "{p:?} 应有 run_command");
+            assert!(t.contains(&"delete_path"), "{p:?} 应有 delete_path");
+            assert!(t.contains(&"move_path"), "{p:?} 应有 move_path");
         }
-        // 永不嵌套：任何情况下都没有 task / delete / move
+        // 只读 / 审查档即便开关开，删除 / 移动也一律没有（fail-closed）
+        for p in [Permission::Read, Permission::Review] {
+            let t = subagent_tools(p, true, &allow);
+            assert!(!t.contains(&"delete_path"), "{p:?} 不该有 delete_path");
+            assert!(!t.contains(&"move_path"), "{p:?} 不该有 move_path");
+        }
+        // 永不嵌套：任何情况下都没有 task
         for p in [Permission::Workspace, Permission::Full] {
             let t = subagent_tools(p, true, &allow);
             assert!(!t.contains(&"task"), "子代理不能再派子代理");
-            assert!(!t.contains(&"delete_path"), "首版不放删除");
-            assert!(!t.contains(&"move_path"), "首版不放移动");
         }
     }
 
