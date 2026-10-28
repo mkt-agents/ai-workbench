@@ -352,7 +352,11 @@ export default function WecomSettingsCard() {
 
   const investigation = status?.lastInvestigation;
   const investigationState = investigation?.status ?? "";
-  const reportedCount = (value: number | undefined) =>
+  const decisionGaps = Array.isArray(investigation?.decisionGaps)
+    && investigation.decisionGaps.every((gap) => typeof gap === "string")
+    ? investigation.decisionGaps
+    : null;
+  const reportedCount = (value: number | null | undefined) =>
     typeof value === "number" && Number.isFinite(value) && value >= 0
       ? String(value)
       : t("wecom.diag.notReported");
@@ -402,6 +406,18 @@ export default function WecomSettingsCard() {
               </span>
               <span className="wecom-chip">
                 {t("wecom.diag.evidenceCount", { countText: reportedCount(investigation.evidenceCount) })}
+              </span>
+              <span className="wecom-chip">
+                {t("wecom.diag.shownCount", { countText: reportedCount(investigation.shownCount) })}
+              </span>
+              <span className="wecom-chip">
+                {t("wecom.diag.warnCount", { countText: reportedCount(investigation.warnCount) })}
+              </span>
+              <span className="wecom-chip">
+                {t("wecom.diag.truncatedCount", { countText: reportedCount(investigation.truncatedCount) })}
+              </span>
+              <span className="wecom-chip">
+                {t("wecom.diag.incompletePages", { countText: reportedCount(investigation.incompletePages) })}
               </span>
               <span className="wecom-chip">
                 {t("wecom.diag.source", {
@@ -469,6 +485,20 @@ export default function WecomSettingsCard() {
             </p>
           ) : null}
           {investigation?.detail ? <p className="setting-hint">{investigation.detail}</p> : null}
+          {investigation ? (
+            <>
+              <p className="setting-hint">
+                {t("wecom.diag.decisionGaps", {
+                  countText: decisionGaps === null
+                    ? t("wecom.diag.notReported")
+                    : reportedCount(decisionGaps.length),
+                })}
+              </p>
+              {decisionGaps?.map((gap, index) => (
+                <p className="setting-hint" key={`${index}-${gap}`}>{gap}</p>
+              ))}
+            </>
+          ) : null}
           <p className="setting-hint">{t("wecom.diag.countHint")}</p>
         </details>
       </div>
@@ -615,44 +645,60 @@ export default function WecomSettingsCard() {
         <div className="wecom-rows">
           <div className="wecom-subhead">{t("wecom.subEngine")}</div>
 
+          {/* 引擎与它的实时状态同在一行：选了 DSH 就在下拉右边直接报状态，不再另起一空格子 */}
           <Row
+            wide
             label={t("wecom.engineLabel")}
             control={
-              <select
-                className="input-field"
-                value={engine}
-                disabled={busy}
-                onChange={(e) => void push({ wecomEngine: e.target.value })}
-              >
-                <option value="tianji">{t("wecom.engineTianji")}</option>
-                <option value="dsh">{t("wecom.engineDsh")}</option>
-              </select>
+              <>
+                <select
+                  className="input-field wecom-split"
+                  value={engine}
+                  disabled={busy}
+                  onChange={(e) => void push({ wecomEngine: e.target.value })}
+                >
+                  <option value="tianji">{t("wecom.engineTianji")}</option>
+                  <option value="dsh">{t("wecom.engineDsh")}</option>
+                </select>
+                {engine === "dsh" ? (
+                  <>
+                    <span
+                      className={`wecom-status-pill ${dshStateClass(dshState)}`}
+                      title={status?.dsh?.detail || undefined}
+                    >
+                      <i className="wecom-status-dot" aria-hidden />
+                      {dshLabel}
+                    </span>
+                    {status?.dsh?.cliVersion || status?.dsh?.version ? (
+                      <span
+                        className="wecom-chip"
+                        title={[
+                          status.dsh.cliVersion
+                            ? `DeepSeek Harness v${status.dsh.cliVersion}`
+                            : "",
+                          status.dsh.version ? `ACP v${status.dsh.version}` : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      >
+                        {status.dsh.cliVersion
+                          ? `DSH v${status.dsh.cliVersion}`
+                          : `ACP v${status.dsh.version}`}
+                      </span>
+                    ) : null}
+                  </>
+                ) : null}
+              </>
             }
-            hint={<Hint summary={t("wecom.engineHintShort")} details={t("wecom.engineHint")} />}
+            hint={
+              <>
+                <Hint summary={t("wecom.engineHintShort")} details={t("wecom.engineHint")} />
+                {engine === "dsh" && status?.dsh?.detail ? (
+                  <p className="setting-hint">{status.dsh.detail}</p>
+                ) : null}
+              </>
+            }
           />
-
-          {engine === "dsh" ? (
-            <Row
-              label={t("wecom.dshState")}
-              control={
-                <>
-                  <span
-                    className={`wecom-status-pill ${dshStateClass(dshState)}`}
-                    title={status?.dsh?.detail || undefined}
-                  >
-                    <i className="wecom-status-dot" aria-hidden />
-                    {dshLabel}
-                  </span>
-                  {status?.dsh?.version ? (
-                    <span className="wecom-chip">v{status.dsh.version}</span>
-                  ) : null}
-                </>
-              }
-              hint={
-                status?.dsh?.detail ? <p className="setting-hint">{status.dsh.detail}</p> : undefined
-              }
-            />
-          ) : null}
 
           {engine === "dsh" ? (
             <Row

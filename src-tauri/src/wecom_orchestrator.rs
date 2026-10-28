@@ -709,6 +709,10 @@ impl Orchestrator {
         }
         let mut evidence = outcome.context.clone();
         let mut has_evidence = outcome.may_analyze;
+        let mut assessed_level = "unknown".to_string();
+        let mut assessed_gaps = outcome.decision_gaps.clone();
+        let mut last_stop_reason = String::new();
+        let mut forced_context_used = false;
         if outcome.source_ready {
             if let Some(original) = outcome.query.clone() {
                 for round in 0..2 {
@@ -747,7 +751,7 @@ impl Orchestrator {
                             &draft, &original, &evidence, &repo,
                         );
                     }
-                    let plan = match parsed {
+                    let mut plan = match parsed {
                         Ok(plan) => plan,
                         Err(_) => {
                             evidence.push_str(
@@ -756,6 +760,23 @@ impl Orchestrator {
                             break;
                         }
                     };
+                    assessed_level = plan.conclusion_level.clone();
+                    assessed_gaps = plan.gaps.clone();
+                    last_stop_reason = plan.stop_reason.clone();
+                    let missing_decision = !assessed_gaps.is_empty()
+                        || !outcome.decision_gaps.is_empty()
+                        || outcome.incomplete_pages > 0
+                        || outcome.truncated_count > 0;
+                    if plan.queries.is_empty() && missing_decision && !forced_context_used {
+                        forced_context_used = true;
+                        let mandatory = crate::wecom_investigation_plan::decision_context_plan(
+                            &evidence, &original,
+                        )?;
+                        if !mandatory.queries.is_empty() {
+                            evidence.push_str("\n【结束检查】当前仅定位结果/失败出口，仍有WARN或决策上下文缺口，先执行证据锚定回溯。\n");
+                            plan = mandatory;
+                        }
+                    }
                     if plan.queries.is_empty() {
                         break;
                     }
@@ -778,7 +799,8 @@ impl Orchestrator {
                         120_000u64.saturating_sub(outcome.collected_ms),
                     )
                     .await?;
-                    outcome.collected_ms = outcome.collected_ms.saturating_add(extra.collected_ms);
+                    merge_investigation_coverage(&mut outcome, &extra);
+                    crate::wecom_investigation::record_cumulative(&outcome, preflight_request);
                     has_evidence |= extra.may_analyze;
                     let extra_context = extra
                         .context
@@ -792,8 +814,16 @@ impl Orchestrator {
                     ));
                     // The latest round is bounded, and only source metadata is retained across turns.
                     if evidence.chars().count() > 48_000 {
-                        evidence = evidence.chars().take(47_800).collect();
-                        evidence.push_str("\n证据累计达到48k字符上限，后续结果未完整展示。\n");
+                        // Retain the newest targeted evidence instead of silently cutting it off after a large first batch.
+                        let tail: String = extra_context.chars().take(24_000).collect();
+                        let head: String = evidence.chars().take(23_500).collect();
+                        evidence = format!("{head}\n【累计证据摘录：早期记录部分省略；以下优先保留最新补查】\n{tail}\n覆盖不完整，不据缺失记录断因。\n");
+                        outcome.truncated_count = outcome.truncated_count.saturating_add(1);
+                        outcome.status = crate::wecom_investigation::InvestigationStatus::Partial;
+                        outcome
+                            .decision_gaps
+                            .push("累计证据超过48k，早期记录部分未完整展示".into());
+                        crate::wecom_investigation::record_cumulative(&outcome, preflight_request);
                         break;
                     }
                     if !extra.source_ready {
@@ -808,10 +838,17 @@ impl Orchestrator {
                 return Ok(());
             }
         }
+        for gap in &assessed_gaps {
+            if !outcome.decision_gaps.contains(gap) {
+                outcome.decision_gaps.push(gap.clone());
+            }
+        }
+        crate::wecom_investigation::record_cumulative(&outcome, preflight_request);
         let evidence_rules = if has_evidence {
-            "\n必须先引用实际日志编号和时间，再用代码解释分支，再用补查验证。禁止把推测写成业务已确认根因；缺日志不等于分支未执行；指出采样、异步、分页与版本覆盖。"
+            let level = permitted_conclusion_level(&assessed_level, &assessed_gaps, &outcome);
+            format!("\n结论分层评审：允许最高层级={level}；模型停止理由={last_stop_reason}；尚未解释的决策={:?}；未完成页={}；截断记录={}。必须依次列出结果、直接原因、具体触发原因。过滤为0/STATUS_FILTERED_EMPTY仅是失败出口，不等于已定位具体过滤器。未取得实际规则、判定值及WARN/异常证据时，写‘已确认失败出口，具体触发原因尚未确认’，禁止‘证据链已闭合/根因直接命中’。正常span仅表示没有APM技术错误，不能据此排除业务警告、被捕获异常或降级。先引用日志和时间，再用代码解释分支，再用补查验证。共用兜底文案不唯一指向去重/库存/价格；缺日志不等于分支未执行；说明分页、采样、异步与版本覆盖。", assessed_gaps, outcome.incomplete_pages, outcome.truncated_count)
         } else {
-            ""
+            String::new()
         };
         let prompt_blocks = build_dsh_prompt(
             user_text,
@@ -1967,6 +2004,61 @@ impl InstantApprox {
     }
 }
 
+fn merge_investigation_coverage(
+    base: &mut crate::wecom_investigation::InvestigationOutcome,
+    extra: &crate::wecom_investigation::InvestigationOutcome,
+) {
+    use crate::wecom_investigation::InvestigationStatus;
+    base.collected_ms = base.collected_ms.saturating_add(extra.collected_ms);
+    base.request_count = base.budget.used();
+    base.evidence_count = base.evidence_count.saturating_add(extra.evidence_count);
+    base.shown_count = base.shown_count.saturating_add(extra.shown_count);
+    base.warn_count = base.warn_count.saturating_add(extra.warn_count);
+    base.truncated_count = base.truncated_count.saturating_add(extra.truncated_count);
+    base.incomplete_pages = base.incomplete_pages.saturating_add(extra.incomplete_pages);
+    base.may_analyze |= extra.may_analyze;
+    for gap in &extra.decision_gaps {
+        if !base.decision_gaps.contains(gap) {
+            base.decision_gaps.push(gap.clone());
+        }
+    }
+    if base.status == InvestigationStatus::Partial
+        || matches!(
+            extra.status,
+            InvestigationStatus::Partial | InvestigationStatus::SourceError
+        )
+        || base.incomplete_pages > 0
+        || base.truncated_count > 0
+    {
+        base.status = InvestigationStatus::Partial;
+    }
+    base.detail = format!(
+        "累计采集（含重复查询）={} 展示={} WARN={} 截断={} 未完成页={}；最新补查：{}",
+        base.evidence_count,
+        base.shown_count,
+        base.warn_count,
+        base.truncated_count,
+        base.incomplete_pages,
+        extra.detail
+    );
+}
+
+fn permitted_conclusion_level<'a>(
+    proposed: &'a str,
+    gaps: &[String],
+    outcome: &crate::wecom_investigation::InvestigationOutcome,
+) -> &'a str {
+    if proposed == "trigger_verified"
+        && (!gaps.is_empty() || outcome.incomplete_pages > 0 || outcome.truncated_count > 0)
+    {
+        "direct_cause"
+    } else if proposed == "trigger_verified" && !outcome.may_analyze {
+        "unknown"
+    } else {
+        proposed
+    }
+}
+
 fn source_failure_reply(outcome: &crate::wecom_investigation::InvestigationOutcome) -> bool {
     !outcome.context.is_empty()
         && (!outcome.source_ready
@@ -1991,6 +2083,11 @@ mod tests {
             budget: crate::wecom_skywalking::QueryBudget::new(),
             collected_ms: 0,
             detail: String::new(),
+            shown_count: 0,
+            warn_count: 0,
+            truncated_count: 0,
+            incomplete_pages: 0,
+            decision_gaps: Vec::new(),
         };
         assert!(source_failure_reply(&o));
         o.status = InvestigationStatus::SourceError;
@@ -1999,6 +2096,25 @@ mod tests {
         o.status = InvestigationStatus::Empty;
         assert!(!source_failure_reply(&o)); // only bounded source/code query planning, not business summary
         assert!(!o.may_analyze);
+        assert_eq!(
+            permitted_conclusion_level("trigger_verified", &[], &o),
+            "unknown"
+        );
+        o.may_analyze = true;
+        o.incomplete_pages = 1;
+        assert_eq!(
+            permitted_conclusion_level("trigger_verified", &[], &o),
+            "direct_cause"
+        );
+        let mut cumulative = o.clone();
+        cumulative.status = InvestigationStatus::Partial;
+        let mut extra = o.clone();
+        extra.status = InvestigationStatus::Evidence;
+        extra.incomplete_pages = 0;
+        extra.evidence_count = 30;
+        merge_investigation_coverage(&mut cumulative, &extra);
+        assert_eq!(cumulative.status, InvestigationStatus::Partial);
+        assert_eq!(cumulative.incomplete_pages, 1);
         o.context.clear();
         o.source_ready = false;
         o.status = InvestigationStatus::NotExecuted;

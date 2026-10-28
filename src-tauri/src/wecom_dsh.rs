@@ -84,7 +84,10 @@ pub struct DshStatus {
     /// stopped | starting | ready | error
     pub state: String,
     pub detail: String,
+    /// ACP 进程在 initialize 里自报的版本（`agentInfo.version`，桥接层自己的号）
     pub version: Option<String>,
+    /// 本机安装的 `@deepseek-ai/dsh` 包版本（界面优先显示它）
+    pub cli_version: Option<String>,
     /// 上一次 profile 镜像的结果（来源 / bundle 数 / 是否联接 / 同步时间）
     pub mirror: Option<MirrorReport>,
 }
@@ -172,7 +175,10 @@ struct Runtime {
     child: tokio::process::Child,
     writer: mpsc::UnboundedSender<Value>,
     shared: Arc<RuntimeShared>,
+    /// ACP 自报版本
     version: String,
+    /// 安装包版本（启动时读 package.json，之后不再变）
+    cli_version: String,
 }
 
 /// `Arc<RpcShared>` + stderr 尾巴，一起传给读线程。
@@ -337,6 +343,7 @@ impl DshEngine {
     pub async fn status(&self) -> DshStatus {
         let g = self.inner.lock().await;
         let version = g.runtime.as_ref().map(|r| r.version.clone());
+        let cli_version = g.runtime.as_ref().map(|r| r.cli_version.clone());
         let mirror = g.mirror.clone();
         // 进程死了但状态还停在 Ready：如实报错，下一条消息会自动重启。
         if g.state == EngineState::Ready {
@@ -346,6 +353,7 @@ impl DshEngine {
                         state: "error".into(),
                         detail: "DSH 进程已退出，下一条消息会自动重启".into(),
                         version,
+                        cli_version,
                         mirror,
                     };
                 }
@@ -355,6 +363,7 @@ impl DshEngine {
             state: g.state.label().into(),
             detail: g.detail.clone(),
             version,
+            cli_version,
             mirror,
         }
     }
@@ -793,6 +802,7 @@ impl DshEngine {
             writer: tx,
             shared,
             version: version.clone(),
+            cli_version: prepared.cli_version.clone(),
         });
         g.mirror = prepared.mirror;
         g.image_prompt = image_prompt;
@@ -956,6 +966,8 @@ struct PreparedLaunch {
     workspace: PathBuf,
     path_value: String,
     mirror: Option<MirrorReport>,
+    /// 安装包版本（`@deepseek-ai/dsh` 的 version）
+    cli_version: String,
 }
 
 /// 阻塞部分：解析 CLI、清陈旧凭证锁、写 patch、校验工作区。
@@ -1002,6 +1014,7 @@ fn prepare_launch(tier: Tier, workspace: &str) -> Result<PreparedLaunch, String>
         workspace,
         path_value,
         mirror: Some(mirror),
+        cli_version: version,
     })
 }
 

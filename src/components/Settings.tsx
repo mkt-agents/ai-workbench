@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, XCircle, Loader2, Settings2, Sparkles, Globe, Database, Info, ListTree, Plus } from "lucide-react";
+import { Check, XCircle, Loader2, Settings2, Sparkles, Globe, Database, Info, ListTree, Plus, Bot } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
@@ -56,7 +56,7 @@ const CHART_COLORS = [
   "var(--chart-6)",
 ];
 
-type SettingsTab = "general" | "menu" | "hub" | "net" | "data" | "about";
+type SettingsTab = "general" | "menu" | "hub" | "im" | "net" | "data" | "about";
 
 /** 一条「以后都允许」：记在哪一层 + 规则本身。 */
 type RememberedAllow = {
@@ -286,6 +286,7 @@ const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings2; labelKey: string
   { id: "general", icon: Settings2, labelKey: "tabs.general" },
   { id: "menu", icon: ListTree, labelKey: "tabs.menu" },
   { id: "hub", icon: Sparkles, labelKey: "tabs.hub" },
+  { id: "im", icon: Bot, labelKey: "tabs.im" },
   { id: "net", icon: Globe, labelKey: "tabs.net" },
   { id: "data", icon: Database, labelKey: "tabs.data" },
   { id: "about", icon: Info, labelKey: "tabs.about" },
@@ -398,7 +399,9 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   // 天玑助手卡内分组：跟顶部分类一样用 hidden 挂起不卸载。
   // 权限两项目前并进「交互」——它单独一页只有两行，太薄。
   const [hubGroup, setHubGroup] = useState<"interaction" | "capability" | "budget">("interaction");
-  const [netGroup, setNetGroup] = useState<"web" | "mcp" | "wecom" | "tianjiApi">("web");
+  // IM 机器人页的通道子标签：当前只有企业微信，后期加钉钉/飞书等追加一个即可。
+  const [imChannel, setImChannel] = useState<"wecom">("wecom");
+  const [netGroup, setNetGroup] = useState<"web" | "mcp" | "tianjiApi">("web");
   useEffect(() => {
     const refresh = () => {
       setUsageRows(usageList());
@@ -1200,6 +1203,34 @@ function Settings({ onNoticeUpdate }: Props = {}) {
           </div>
         </div>
 
+        <div className="card" hidden={tab !== "im"}>
+          <div className="card-title">{t("imBot.title")}</div>
+          <div className="card-body">
+            {/* 通道子标签：数组驱动，后期加钉钉 / 飞书 / Slack 等追加一项即可。
+                `is-channel`：数量少时不均分整行，选中项用主题色描边 */}
+            <div className="hub-tabs is-channel" role="tablist" aria-label={t("imBot.title")}>
+              {(
+                [["wecom", "imBot.channelWecom"]] as const
+              ).map(([id, labelKey]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={imChannel === id}
+                  className={`hub-tab${imChannel === id ? " is-active" : ""}`}
+                  onClick={() => setImChannel(id)}
+                >
+                  {t(labelKey)}
+                </button>
+              ))}
+            </div>
+
+            <section className="hub-group" hidden={imChannel !== "wecom"}>
+              <WecomSettingsCard />
+            </section>
+          </div>
+        </div>
+
         <div className="card" hidden={tab !== "net"}>
           <div className="card-title">{t("net.title")}</div>
           <div className="card-body">
@@ -1208,7 +1239,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                 [
                   ["web", "tabs.groupWeb"],
                   ["mcp", "tabs.groupMcp"],
-                  ["wecom", "tabs.groupWecom"],
                   ["tianjiApi", "tabs.groupTianjiApi"],
                 ] as const
               ).map(([id, labelKey]) => (
@@ -1394,10 +1424,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
                 <p className="setting-hint">{t("aiHub.mcpHint")}</p>
               </div>
               </div>
-            </section>
-
-            <section className="hub-group" hidden={netGroup !== "wecom"}>
-              <WecomSettingsCard />
             </section>
 
             <section className="hub-group" hidden={netGroup !== "tianjiApi"}>

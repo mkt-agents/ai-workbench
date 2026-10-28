@@ -1,5 +1,159 @@
-//! Offline HTTP integration fixtures for the investigation collector.
-//! Included as a child module of wecom_investigation; no real OAP or model is used.
+#[tokio::test]
+async fn supplemental_uses_thirty_row_page_and_keeps_next_warn() {
+    let oap = MockOap::start(
+        |req| {
+            if query_name(req, "__typename") {
+                return (200, json!({"data":{"__typename":"Query"}}));
+            }
+            let c = &req["variables"]["condition"];
+            if c["paging"]["pageSize"] == 1 {
+                return log_page(vec![]);
+            }
+            assert_eq!(c["paging"]["pageSize"], 30);
+            if c["paging"]["pageNum"] == 1 {
+                log_page(
+                    (0..30)
+                        .map(|i| log("svc", "", &format!("normal {i}"), "INFO", i))
+                        .collect(),
+                )
+            } else {
+                log_page(vec![log("svc", "", "LATE_WARN_REASON", "WARN", 31)])
+            }
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let budget = QueryBudget::new();
+    let out = supplemental(
+        &oap.addr,
+        "",
+        &fixture_query(),
+        &[json!({"page_size":30})],
+        "supp-30",
+        &budget,
+        5000,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.evidence_count, 31);
+    assert_eq!(out.warn_count, 1);
+    assert_eq!(out.incomplete_pages, 0);
+    assert!(out.context.contains("LATE_WARN_REASON"));
+    assert_eq!(out.request_count, oap.captured().len());
+}
+
+#[test]
+fn context_filter_preserves_other_logger_but_excludes_other_instance_trace() {
+    let row = LogRow {
+        ts: epoch(),
+        service: "svc".into(),
+        instance: "i".into(),
+        endpoint: "".into(),
+        level: "WARN".into(),
+        thread: "t".into(),
+        logger: "Filter".into(),
+        trace_id: "".into(),
+        content: "过滤结果=0".into(),
+    };
+    let anchor =
+        json!({"service":"svc","instance":"i","thread":"t","logger":"Caller","trace_id":"main"});
+    assert!(context_matches(&row, &anchor));
+    let mut wrong = row.clone();
+    wrong.instance = "other".into();
+    assert!(!context_matches(&wrong, &anchor));
+    wrong = row.clone();
+    wrong.trace_id = "other".into();
+    assert!(!context_matches(&wrong, &anchor));
+    wrong = row.clone();
+    wrong.service = "other".into();
+    assert!(!context_matches(&wrong, &anchor));
+    wrong = row.clone();
+    wrong.trace_id = "main".into();
+    wrong.thread = "async".into();
+    assert!(context_matches(&wrong, &anchor));
+}
+
+#[tokio::test]
+async fn decision_backfill_runs_despite_existing_trace_info() {
+    let oap = MockOap::start(|req| {
+        if query_name(req, "findService") { return service_response(req); }
+        if query_name(req, "queryTrace") { return (200, json!({"data":{"trace":{"spans":[]}}})); }
+        let c = &req["variables"]["condition"];
+        if c.get("serviceId").is_some() {
+            let mut warn = log("svc", "", "实际过滤原因：报价商品数量：0", "WARN", 1);
+            warn["tags"] = json!([{"key":"level","value":"WARN"},{"key":"thread","value":"worker"},{"key":"logger","value":"Filter"}]);
+            return log_page(vec![warn, log("svc", "other", "WRONG_TRACE", "WARN", 2)]);
+        }
+        let mut entry = log("svc", "main", "ORD123456 autoQuotationSuccessFlag=false", "INFO", 0);
+        entry["tags"] = json!([{"key":"level","value":"INFO"},{"key":"thread","value":"worker"},{"key":"logger","value":"Caller"}]);
+        log_page(vec![entry])
+    }, Duration::ZERO).await;
+    let budget = QueryBudget::new();
+    let report = collect_fixture(&oap, &fixture_query(), &budget).await;
+    assert!(report
+        .rows
+        .iter()
+        .any(|r| r.row.content.contains("实际过滤原因") && r.strength.contains("候选")));
+    assert!(!report.rows.iter().any(|r| r.row.content == "WRONG_TRACE"));
+    assert!(report
+        .rows
+        .iter()
+        .any(|r| r.row.trace_id == "main" && r.strength == "同trace精确关联"));
+}
+
+#[test]
+fn render_preserves_late_reason_and_prioritizes_warn_before_bulk_info() {
+    let mut report = Report::default();
+    for i in 0..60 {
+        report.merge(
+            vec![LogRow {
+                ts: i,
+                service: "svc".into(),
+                instance: "i".into(),
+                endpoint: "".into(),
+                level: "INFO".into(),
+                thread: "worker".into(),
+                logger: "Caller".into(),
+                trace_id: "main".into(),
+                content: "x".repeat(900),
+            }],
+            "入口条件匹配",
+        );
+    }
+    report.merge(
+        vec![LogRow {
+            ts: 61,
+            service: "svc".into(),
+            instance: "i".into(),
+            endpoint: "".into(),
+            level: "WARN".into(),
+            thread: "worker".into(),
+            logger: "Filter".into(),
+            trace_id: "".into(),
+            content: format!("identity {} 原因：库存不足 END", "x".repeat(1000)),
+        }],
+        "候选",
+    );
+    let out = report_outcome(
+        fixture_query(),
+        &report,
+        true,
+        &QueryBudget::new(),
+        Duration::ZERO,
+    );
+    assert!(out.context.contains("库存不足"));
+    assert!(out
+        .context
+        .contains("thread=worker logger=Filter full_length="));
+    assert!(out.context.contains("digest=sha256:"));
+    assert!(out.context.contains("offset="));
+    assert_eq!(out.warn_count, 1);
+    assert!(out.shown_count < 61 && out.truncated_count > 0);
+    assert_eq!(out.status, InvestigationStatus::Partial);
+}
+
+// Offline HTTP integration fixtures for the investigation collector.
+// Included as a child module of wecom_investigation; no real OAP or model is used.
 // diagnostic() is cfg(test) no-op: fixtures never touch the real APPDATA log.
 use super::*;
 use std::sync::Arc;
@@ -566,11 +720,19 @@ async fn two_ids_are_separate_and_queries_keep_explicit_keywords() {
 async fn screenshot_auto_quote_request_queries_each_business_id_independently() {
     let oap = MockOap::start(
         |req| {
+            if query_name(req, "findService") {
+                return service_response(req);
+            }
             if query_name(req, "__typename") {
                 return (200, json!({"data":{"__typename":"Query"}}));
             }
             let c = &req["variables"]["condition"];
             if c["paging"]["pageSize"] == 1 {
+                return log_page(vec![]);
+            }
+            if c.get("serviceId").is_some() {
+                assert_eq!(c["serviceId"], "id-collector");
+                assert!(c.get("keywordsOfContent").is_none());
                 return log_page(vec![]);
             }
             let words = c["keywordsOfContent"].as_array().unwrap();
@@ -605,7 +767,21 @@ async fn screenshot_auto_quote_request_queries_each_business_id_independently() 
     .await
     .unwrap();
     assert_eq!(out.status, InvestigationStatus::Evidence, "{out:?}");
-    assert_eq!(out.request_count, 4);
+    assert_eq!(out.request_count, oap.captured().len());
+    let entry_requests = oap
+        .captured()
+        .into_iter()
+        .filter(|r| {
+            r["variables"]["condition"]
+                .get("keywordsOfContent")
+                .is_some()
+        })
+        .count();
+    assert_eq!(entry_requests, 2);
+    assert!(
+        out.request_count > 4,
+        "decision context runs independently of entry ID queries"
+    );
     assert_eq!(out.evidence_count, 2);
     assert!(out.context.contains("matchId=1454798851378978816"));
     assert!(out.context.contains("nlpIdOriginal=8414548098086706628"));

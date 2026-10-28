@@ -451,6 +451,26 @@
 .hub-tab:hover {
   color: var(--accent);
 }
+/* IM 机器人页的通道标签：只有一两个通道时不均分整行（否则「企业微信」会拉成
+   一条空荡荡的长条），选中项改用主题色描边 + 淡底，跟随 light/dark/glass/ice/silver */
+.settings-page .hub-tabs.is-channel {
+  align-self: flex-start;
+  gap: 4px;
+  width: auto;
+  max-width: 100%;
+}
+.settings-page .hub-tabs.is-channel > .hub-tab {
+  flex: 0 0 auto;
+  padding: 3px 14px;
+}
+.settings-page .hub-tabs.is-channel > .hub-tab.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.settings-page .hub-tabs.is-channel > .hub-tab.is-active:hover {
+  color: var(--accent-strong);
+}
 /* 面板不再套一层带边框的「卡片里的卡片」，行直接铺在卡片正文里，
    和常规设置页其它卡片一致；分隔线按「项」画（见 .setting-item）。 */
 .hub-group {
@@ -1186,15 +1206,18 @@
 .settings-page .net-panel + .net-panel {
   margin-top: 6px;
 }
-/* 企微侧参考系统设置式布局：单层面板、扁平表单，不再嵌套一组组小卡片。 */
+/* 企微侧参考系统设置式布局：单层面板、扁平表单，不再嵌套一组组小卡片。
+   和「天玑助手」页一致：面板不画底色和边框，只有标题下的细线和条目分隔线，
+   否则一整页浮着一层灰底，看着比其它页发灰。 */
 .settings-page .wecom-settings > .net-panel {
-  padding: 10px 12px 12px;
-  border-radius: var(--radius-md);
-  background: var(--overlay-1);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
 }
 .settings-page .wecom-settings > .net-panel + .net-panel {
-  margin-top: 12px;
+  margin-top: 18px;
 }
 .settings-page .net-panel > .hub-group-title {
   margin: 0;
@@ -1311,17 +1334,19 @@
   line-height: 1.45;
   font-size: 11px;
 }
-/* 顶部概览：状态 / 引擎 / 时长在左，重连与总开关在右，说明铺在下面一行 */
+/* 顶部概览：状态 / 引擎 / 时长在左，重连与总开关在右，说明铺在下面一行。
+   同样不带底色，只用一条底线和下面的「通道」分开 */
 .settings-page .wecom-hero {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  margin-top: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--overlay-1);
+  margin-top: 2px;
+  padding: 8px 0 12px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0; /* token-ok: 扁平区块不使用圆角 */
+  background: transparent;
 }
 .settings-page .wecom-hero-main {
   display: flex;
@@ -1565,7 +1590,7 @@
   min-width: 0;
   padding: 10px 0;
   border: none;
-  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 50%, transparent);
+  border-top: 1px solid var(--border-subtle);
   border-radius: 0; /* token-ok: 扁平表单行不使用圆角 */
   background: transparent;
   box-shadow: none;
@@ -1593,9 +1618,10 @@
   align-items: center;
   padding-top: 1px;
 }
+/* 字段名与其它设置页的 .setting-label 对齐（13px / text-1），整页才不会显得更小更灰 */
 .settings-page .wecom-row-label {
   min-width: 0;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-1);
   overflow-wrap: anywhere;

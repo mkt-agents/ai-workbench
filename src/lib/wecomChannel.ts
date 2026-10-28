@@ -16,17 +16,30 @@ export type WecomDshStatus = {
   /** stopped | starting | ready | error */
   state: string;
   detail: string;
+  /** ACP 进程 initialize 自报的版本（桥接层自己的号） */
   version: string | null;
+  /** 本机安装的 @deepseek-ai/dsh 版本；界面优先显示它 */
+  cliVersion?: string | null;
   mirror: DshMirrorReport | null;
 };
 
 export type WecomInvestigationStatus = {
   status: string;
   requestId: string;
-  /** 后端实际计数；零表示未发出请求 / 未取得证据，不能从状态文案推测。 */
-  requestCount: number;
-  evidenceCount: number;
-  sourceReady: boolean;
+  /** 当前后端实例实际计数；旧实例缺字段保持未提供，不从状态或回复文案推测。 */
+  requestCount?: number | null;
+  /** 采集日志 + trace spans；累计补查可含重复。 */
+  evidenceCount?: number | null;
+  /** 已展示日志条目数，不含 trace spans。 */
+  shownCount?: number | null;
+  /** 采集 WARN 数，不推测其中已展示多少。 */
+  warnCount?: number | null;
+  truncatedCount?: number | null;
+  /** 后端报告的未完成分页标记数，不是精确剩余页总数。 */
+  incompletePages?: number | null;
+  /** 空数组表示后端未报告未解释决策；缺字段不是空数组。 */
+  decisionGaps?: string[] | null;
+  sourceReady?: boolean | null;
   detail: string;
 };
 

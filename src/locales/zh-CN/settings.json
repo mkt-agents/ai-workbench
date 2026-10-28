@@ -4,6 +4,7 @@
     "aria": "设置分类",
     "hub": "天玑助手",
     "net": "联网扩展",
+    "im": "IM机器人",
     "general": "常规设置",
     "menu": "菜单配置",
     "data": "用量统计",
@@ -15,6 +16,10 @@
     "groupMcp": "MCP 服务",
     "groupWecom": "企微机器人",
     "groupTianjiApi": "天玑 API"
+  },
+  "imBot": {
+    "title": "IM机器人",
+    "channelWecom": "企业微信"
   },
   "tianjiApi": {
     "hint": "天玑 OpenAI 兼容端点：把天玑（含工具 / 审批 / 会话）暴露成 /v1/chat/completions，供 OpenClaw（微信 ClawBot）或任何 OpenAI 兼容客户端接入。OpenClaw 配置：base_url 填下方地址、api_key 填这里设置的密钥、model 填 tianji。微信 ClawBot 扫码绑定 OpenClaw 后即可在微信聊天玑。",
@@ -412,12 +417,17 @@
       "investigation": "最近排障：{{status}}",
       "noInvestigation": "暂无实例内记录",
       "actualRequests": "实际 HTTP 请求：{{countText}}",
-      "evidenceCount": "证据数：{{countText}}",
+      "evidenceCount": "采集证据：{{countText}}",
+      "shownCount": "展示日志：{{countText}}",
+      "warnCount": "采集 WARN：{{countText}}",
+      "truncatedCount": "截断：{{countText}}",
+      "incompletePages": "待查页：{{countText}}",
+      "decisionGaps": "未解释决策：{{countText}}",
       "source": "日志源：{{state}}",
       "sourceReady": "就绪",
       "sourceNotReady": "未就绪",
       "requestId": "排障请求 ID：",
-      "countHint": "仅显示此实例后端报告的实际计数；未执行不等于查空，回复文字不代表已访问日志源。",
+      "countHint": "仅显示此实例后端报告的采集、展示、采集 WARN、截断与待查页计数，累计补查可能含重复；缺字段显示「未提供」，不补零。未解释决策为 0 仅表示后端未报告缺口，不代表已定位根因；normal trace 不排除业务异常。未执行不等于查空，回复文字不代表已访问日志源。",
       "investigationState": {
         "not_executed": "未执行查询",
         "source_error": "日志源失败",

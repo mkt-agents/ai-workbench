@@ -376,7 +376,7 @@ pub async fn wecom_channel_status(state: State<'_, WecomState>) -> Result<WecomS
         last_error,
         connected_ms,
         process_id: std::process::id(),
-        build_label: format!("{}-{} / investigation-v2", env!("CARGO_PKG_VERSION"), if cfg!(debug_assertions) { "dev" } else { "release" }),
+        build_label: format!("{}-{} / investigation-v3-warn", env!("CARGO_PKG_VERSION"), if cfg!(debug_assertions) { "dev" } else { "release" }),
         last_investigation: crate::wecom_investigation::last_diagnostic(),
     })
 }

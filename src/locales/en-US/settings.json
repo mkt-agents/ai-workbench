@@ -4,6 +4,7 @@
     "aria": "Settings sections",
     "hub": "AI Hub",
     "net": "Network",
+    "im": "IM bots",
     "general": "General",
     "menu": "Menus",
     "data": "Usage",
@@ -15,6 +16,10 @@
     "groupMcp": "MCP servers",
     "groupWecom": "WeCom bot",
     "groupTianjiApi": "Tianji API"
+  },
+  "imBot": {
+    "title": "IM bots",
+    "channelWecom": "WeCom"
   },
   "tianjiApi": {
     "hint": "Tianji OpenAI-compatible endpoint: exposes Tianji (tools / approvals / sessions included) as /v1/chat/completions for OpenClaw (WeChat ClawBot) or any OpenAI-compatible client. In OpenClaw set base_url to the address below, api_key to the key here, and model to tianji. Once WeChat ClawBot is bound to OpenClaw via QR, you can chat with Tianji inside WeChat.",
@@ -412,12 +417,17 @@
       "investigation": "Latest investigation: {{status}}",
       "noInvestigation": "No record in this instance",
       "actualRequests": "Actual HTTP requests: {{countText}}",
-      "evidenceCount": "Evidence count: {{countText}}",
+      "evidenceCount": "Collected evidence: {{countText}}",
+      "shownCount": "Shown logs: {{countText}}",
+      "warnCount": "Collected WARN: {{countText}}",
+      "truncatedCount": "Truncated: {{countText}}",
+      "incompletePages": "Pending pages: {{countText}}",
+      "decisionGaps": "Unexplained decisions: {{countText}}",
       "source": "Log source: {{state}}",
       "sourceReady": "Ready",
       "sourceNotReady": "Not ready",
       "requestId": "Investigation request ID:",
-      "countHint": "Counts come from this backend instance only. Not executed differs from an empty result; reply text does not prove the log source was accessed.",
+      "countHint": "Collected, shown, collected WARN, truncated and pending-page counts come from this backend instance only; cumulative follow-ups may include duplicates. Missing fields display Not reported, never zero. Zero unexplained decisions only means no gaps were reported, not a verified root cause; a normal trace does not rule out business exceptions. Not executed differs from an empty result; reply text does not prove source access.",
       "investigationState": {
         "not_executed": "Query not executed",
         "source_error": "Log source failed",

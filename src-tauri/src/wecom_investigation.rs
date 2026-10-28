@@ -9,6 +9,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::wecom_decision_evidence::{decision_gap, digest, excerpt};
 use crate::wecom_investigation_query::{is_followup, parse_query, InvestigationQuery};
 use crate::wecom_skywalking::{self as sky, LogRow, QueryBudget};
 
@@ -42,6 +43,12 @@ pub struct InvestigationOutcome {
     pub context: String,
     pub query: Option<InvestigationQuery>,
     pub evidence_count: usize,
+    /// Per-batch displayed log records (the orchestrator owns cumulative accounting).
+    pub shown_count: usize,
+    pub warn_count: usize,
+    pub truncated_count: usize,
+    pub incomplete_pages: usize,
+    pub decision_gaps: Vec<String>,
     pub request_count: usize,
     pub may_analyze: bool,
     pub source_ready: bool,
@@ -106,12 +113,19 @@ fn finish(outcome: InvestigationOutcome, request: &str, parsed: bool) -> Investi
         *last = Some(
             json!({"status":outcome.status.as_str(), "requestId":request,
             "requestCount":outcome.request_count,"evidenceCount":outcome.evidence_count,
+            "shownCount":outcome.shown_count,"warnCount":outcome.warn_count,
+            "truncatedCount":outcome.truncated_count,"incompletePages":outcome.incomplete_pages,
+            "decisionGaps":outcome.decision_gaps,
             "sourceReady":outcome.source_ready,"detail":outcome.detail}),
         );
     }
     diagnostic("investigation", &format!("request={request} parsed={parsed} status={} requests={} evidence={} source_ready={} may_analyze={} elapsed_ms={}",
         outcome.status.as_str(), outcome.request_count, outcome.evidence_count, outcome.source_ready, outcome.may_analyze, outcome.collected_ms));
     outcome
+}
+/// Publish only: merging and cumulative coverage remain the orchestrator's responsibility.
+pub fn record_cumulative(outcome: &InvestigationOutcome, request: &str) {
+    let _ = finish(outcome.clone(), request, outcome.query.is_some());
 }
 fn not_executed(
     context: String,
@@ -131,6 +145,11 @@ fn not_executed(
             context,
             query,
             evidence_count: 0,
+            shown_count: 0,
+            warn_count: 0,
+            truncated_count: 0,
+            incomplete_pages: 0,
+            decision_gaps: Vec::new(),
             request_count: 0,
             may_analyze: false,
             source_ready: false,
@@ -229,6 +248,11 @@ struct Report {
     metrics: Option<String>,
     source_detail: String,
     effective_window: Option<(String, String)>,
+    incomplete_pages: usize,
+    decision_gaps: Vec<String>,
+    // Completed service/time scans prevent missing-service fallback from querying them again.
+    context_scans: Vec<(String, String, i64, i64, String)>,
+    context_raw: Vec<LogRow>,
 }
 impl Report {
     fn note(&mut self, message: impl Into<String>) {
@@ -547,16 +571,42 @@ fn report_outcome(
             .iter()
             .map(|(_, spans)| spans.len())
             .sum::<usize>();
+    let (mut context, shown_count, truncated_count) =
+        render_evidence(&query, report, budget.used());
+    let warn_count = report
+        .rows
+        .iter()
+        .filter(|r| {
+            warn_row(&r.row)
+                && (query.exclude_keyword.is_empty()
+                    || !r.row.content.contains(&query.exclude_keyword))
+        })
+        .count();
+    let mut decision_gaps = report.decision_gaps.clone();
+    for (i, row) in report.rows.iter().enumerate() {
+        if decision_gap(&row.row.content)
+            && row.row.trace_id.is_empty()
+            && (query.exclude_keyword.is_empty()
+                || !row.row.content.contains(&query.exclude_keyword))
+        {
+            decision_gaps.push(format!(
+                "L{} decision记录缺少trace关联；同thread/短窗仅候选，触发条件尚未核验",
+                i + 1
+            ));
+        }
+    }
     let status = if !ready || (evidence_count == 0 && (report.fatal || !report.had_success)) {
         InvestigationStatus::SourceError
-    } else if report.partial {
+    } else if report.partial || truncated_count > 0 || report.incomplete_pages > 0 {
         InvestigationStatus::Partial
     } else if evidence_count == 0 {
         InvestigationStatus::Empty
     } else {
         InvestigationStatus::Evidence
     };
-    let mut context = render(&query, report, budget.used());
+    for gap in &decision_gaps {
+        context.push_str(&format!("\n明确证据缺口：{gap}\n"));
+    }
     if evidence_count == 0 {
         context.push_str("\n【尚无实际日志或非空调用链证据】查询失败、查空或业务未执行是不同状态。仅陈述已执行查询和覆盖缺口；禁止泛化根因、虚构调用链或输出通用故障清单。后续仅可据明确条件补查。\n");
     }
@@ -574,6 +624,11 @@ fn report_outcome(
         context,
         query: Some(query),
         evidence_count,
+        shown_count,
+        warn_count,
+        truncated_count,
+        incomplete_pages: report.incomplete_pages,
+        decision_gaps,
         request_count: budget.used(),
         may_analyze: evidence_count > 0,
         source_ready: ready,
@@ -651,14 +706,20 @@ pub async fn supplemental(
                         selected[name] = query_args(original)[name].clone();
                     }
                 }
-                if let Some(page) =
-                    logs(addr, header, &selected, budget, &mut report, "模型定点补查").await
-                {
-                    if page.fetched_count >= PAGE_SIZE {
-                        report.note("补查仅覆盖首批记录");
-                    }
-                    report.merge(page.rows, "补查条件匹配（各查询独立，不证明同一请求）");
+                if !clamp_args_window(&mut selected, original) {
+                    report.note("query_error: 补查时间不在原始窗口内");
+                    continue;
                 }
+                collect_pages(
+                    addr,
+                    header,
+                    &selected,
+                    budget,
+                    &mut report,
+                    "模型定点补查",
+                    "补查条件匹配（各查询独立，不证明同一请求）",
+                )
+                .await;
             }
             if report.fatal {
                 break;
@@ -683,6 +744,279 @@ pub async fn supplemental(
         request_id,
         true,
     ))
+}
+
+fn page_size(args: &Value) -> usize {
+    args["page_size"]
+        .as_i64()
+        .filter(|s| *s >= 1)
+        .unwrap_or(PAGE_SIZE as i64)
+        .min(100) as usize
+}
+fn clamp_args_window(args: &mut Value, q: &InvestigationQuery) -> bool {
+    let parse = |s: &str| DateTime::parse_from_rfc3339(s).ok();
+    let (Some(qs), Some(qe)) = (parse(&q.start), parse(&q.end)) else {
+        return false;
+    };
+    let (Some(start), Some(end)) = (
+        args["start"].as_str().and_then(parse),
+        args["end"].as_str().and_then(parse),
+    ) else {
+        return false;
+    };
+    let start = start.max(qs);
+    let end = end.min(qe);
+    if start > end {
+        return false;
+    }
+    args["start"] = json!(start.to_rfc3339());
+    args["end"] = json!(end.to_rfc3339());
+    args["timezone_offset_minutes"] = json!(q.timezone_offset_minutes);
+    true
+}
+fn context_matches(row: &LogRow, args: &Value) -> bool {
+    let get = |name: &str| args[name].as_str().unwrap_or("");
+    let service = get("service");
+    if service.is_empty() || row.service != service {
+        return false;
+    }
+    if !get("instance").is_empty() && get("instance") != row.instance {
+        return false;
+    }
+    if !row.trace_id.is_empty() {
+        return !get("trace_id").is_empty() && row.trace_id == get("trace_id");
+    }
+    // A trace-less row needs the observed thread when available. Logger is a
+    // soft clue only: the same execution regularly crosses class/logger boundaries.
+    get("thread").is_empty() || get("thread") == row.thread
+}
+async fn collect_pages(
+    addr: &str,
+    header: &str,
+    selected: &Value,
+    budget: &QueryBudget,
+    report: &mut Report,
+    stage: &str,
+    strength: &'static str,
+) -> bool {
+    let first = selected["page"].as_i64().filter(|n| *n >= 1).unwrap_or(1);
+    let context = selected["context_candidate"].as_bool() == Some(true);
+    if context && selected["service"].as_str().unwrap_or("").is_empty() {
+        report.note("query_error: context补查缺少实际service");
+        return false;
+    }
+    let mut complete = false;
+    for n in 0..3 {
+        if budget.remaining() == 0 {
+            report.incomplete_pages += 1;
+            report.note(format!("budget_exceeded: {stage}分页未完成"));
+            break;
+        }
+        let mut args = selected.clone();
+        args["page"] = json!(first.saturating_add(n));
+        args["page_size"] = json!(page_size(selected));
+        // Never send trace constraint for context: it would hide trace-less WARNs.
+        if context {
+            args.as_object_mut().unwrap().remove("trace_id");
+        }
+        let Some(page) = logs(addr, header, &args, budget, report, stage).await else {
+            report.incomplete_pages += 1;
+            break;
+        };
+        let full = page.fetched_count >= page_size(&args);
+        for row in page.rows {
+            if context
+                && report.context_raw.len() < MAX_ROWS
+                && !report
+                    .context_raw
+                    .iter()
+                    .any(|r| row_key(r) == row_key(&row))
+            {
+                report.context_raw.push(row.clone());
+            }
+            if context && !context_matches(&row, selected) {
+                continue;
+            }
+            let relation = if context {
+                if !row.trace_id.is_empty() {
+                    "同trace精确关联"
+                } else if !row.thread.is_empty()
+                    && selected["thread"].as_str() == Some(row.thread.as_str())
+                {
+                    "同thread上下文候选（未证实同一请求，不证明原因）"
+                } else {
+                    "同服务短时间窗候选（未证实同一请求）"
+                }
+            } else {
+                strength
+            };
+            report.merge(vec![row], relation);
+        }
+        if !full {
+            complete = true;
+            break;
+        }
+        if n == 2 {
+            report.incomplete_pages += 1;
+            report.note(format!("{stage}达到3页上限，满页后仍可能有记录"));
+        }
+    }
+    complete
+}
+
+/// Bounded context lookup for an observed LogRow anchor. `args` contains service,
+/// ts(epoch ms), instance/thread/logger and optional observed trace_id. Metadata
+/// is filtered locally; same thread is only a candidate, never causality proof.
+pub async fn decision_context(
+    addr: &str,
+    header: &str,
+    original: &InvestigationQuery,
+    args: &Value,
+    request_id: &str,
+    budget: &QueryBudget,
+    remaining_ms: u64,
+) -> Result<InvestigationOutcome, String> {
+    let started = Instant::now();
+    let mut report = Report {
+        request: request_id.into(),
+        ..Report::default()
+    };
+    let mut ready = false;
+    if cancelled(request_id) {
+        return Err("cancelled: decision补查已停止".into());
+    }
+    if remaining_ms == 0 || budget.remaining() == 0 {
+        report.incomplete_pages += 1;
+        report.note("budget_exceeded: decision补查预算耗尽");
+    } else {
+        let work = async {
+            match source_ready(addr, header, &query_args(original), budget).await {
+                Ok(()) => ready = true,
+                Err(e) => {
+                    report.note(format!("decision日志源：{}", category(&e)));
+                    return;
+                }
+            }
+            collect_decision_anchor(addr, header, original, args, budget, &mut report).await;
+        };
+        tokio::select! {
+            biased;
+            _ = wait_cancel(request_id) => return Err("cancelled: decision补查已停止".into()),
+            result = tokio::time::timeout(Duration::from_millis(remaining_ms.min(120_000)), work) => {
+                if result.is_err() { report.incomplete_pages += 1; report.note("timeout: decision补查时限耗尽"); }
+            }
+        }
+    }
+    Ok(finish(
+        report_outcome(original.clone(), &report, ready, budget, started.elapsed()),
+        request_id,
+        true,
+    ))
+}
+fn anchor_args(row: &LogRow) -> Value {
+    json!({"service":row.service,"ts":row.ts,"instance":row.instance,
+        "thread":row.thread,"logger":row.logger,"trace_id":row.trace_id})
+}
+async fn collect_decision_anchor(
+    addr: &str,
+    header: &str,
+    q: &InvestigationQuery,
+    anchor: &Value,
+    budget: &QueryBudget,
+    report: &mut Report,
+) {
+    let service = anchor["service"].as_str().unwrap_or("");
+    let Some(ts) = anchor["ts"].as_i64().filter(|t| *t > 0) else {
+        report
+            .decision_gaps
+            .push("decision锚点缺少有效时间戳".into());
+        return;
+    };
+    if service.is_empty() {
+        report
+            .decision_gaps
+            .push("decision锚点缺少真实service".into());
+        return;
+    }
+    let instance = anchor["instance"].as_str().unwrap_or("");
+    let signature = json!([anchor["thread"], anchor["trace_id"]]).to_string();
+    // Skip only equivalent selector coverage, never a different thread/logger/trace.
+    if report.context_scans.iter().any(|(s, i, start, end, sig)| {
+        s == service
+            && i == instance
+            && sig == &signature
+            && *start <= ts.saturating_sub(2000)
+            && *end >= ts.saturating_add(2000)
+    }) {
+        return;
+    }
+    for radius in [2_000i64, 30_000] {
+        if report.fatal {
+            break;
+        }
+        let mut args = anchor.clone();
+        let Some(start) = DateTime::from_timestamp_millis(ts.saturating_sub(radius)) else {
+            break;
+        };
+        let Some(end) = DateTime::from_timestamp_millis(ts.saturating_add(radius)) else {
+            break;
+        };
+        args["start"] = json!(start.to_rfc3339());
+        args["end"] = json!(end.to_rfc3339());
+        args["page_size"] = json!(PAGE_SIZE);
+        args["context_candidate"] = json!(true);
+        args["exclude_keyword"] = json!(q.exclude_keyword);
+        if !clamp_args_window(&mut args, q) {
+            report
+                .decision_gaps
+                .push(format!("decision service={service} ts={ts}不在原始窗口"));
+            break;
+        }
+        let before: HashSet<_> = report.rows.iter().map(|r| digest(&r.row.content)).collect();
+        let complete = collect_pages(
+            addr,
+            header,
+            &args,
+            budget,
+            report,
+            if radius == 2000 {
+                "decision前后2秒上下文"
+            } else {
+                "decision前后30秒上下文"
+            },
+            "同服务短时间窗候选（未证实同一请求）",
+        )
+        .await;
+        if complete && report.context_raw.len() < MAX_ROWS {
+            let start = DateTime::parse_from_rfc3339(args["start"].as_str().unwrap())
+                .unwrap()
+                .timestamp_millis();
+            let end = DateTime::parse_from_rfc3339(args["end"].as_str().unwrap())
+                .unwrap()
+                .timestamp_millis();
+            report.context_scans.push((
+                service.into(),
+                instance.into(),
+                start,
+                end,
+                signature.clone(),
+            ));
+        }
+        // New INFO alone does not close the search for a decision/WARN. A new
+        // decision/WARN ends widening, but is still not a verified root cause.
+        if report.rows.iter().any(|r| {
+            context_matches(&r.row, anchor)
+                && (warn_row(&r.row) || decision_gap(&r.row.content))
+                && !before.contains(&digest(&r.row.content))
+        }) {
+            break;
+        }
+        if radius == 30_000 {
+            report.decision_gaps.push(format!(
+                "decision service={service} ts={ts}邻近上下文未补充新记录；不代表已确认触发原因"
+            ));
+        }
+    }
 }
 
 pub async fn followup_query(
@@ -817,6 +1151,7 @@ async fn collect(
             }
             for page_no in q.page..q.page.saturating_add(3) {
                 if budget.remaining() == 0 {
+                    report.incomplete_pages += 1;
                     report.note("budget_exceeded: 入口日志分页尚未完成");
                     break;
                 }
@@ -837,6 +1172,7 @@ async fn collect(
                     break;
                 }
                 if page_no == q.page.saturating_add(2) {
+                    report.incomplete_pages += 1;
                     report.note("入口日志达到3页上限，可能仍有后续记录");
                 }
             }
@@ -1002,12 +1338,46 @@ async fn collect(
                 break;
             }
             if page_no == trace_page.saturating_add(1) {
+                report.incomplete_pages += 1;
                 report.note(format!("T{}关联日志达到2页上限，覆盖不完整", index + 1));
             }
         }
         if report.fatal {
             return;
         }
+    }
+    // Decisions are anchored in actual rows, independent of whether a service has
+    // already returned a trace-linked INFO row. Snapshot prevents recursive backfill.
+    let mut anchors = Vec::new();
+    for evidence in &report.rows {
+        if (decision_gap(&evidence.row.content) || warn_row(&evidence.row))
+            && (q.exclude_keyword.is_empty() || !evidence.row.content.contains(&q.exclude_keyword))
+        {
+            let args = anchor_args(&evidence.row);
+            if !anchors.contains(&args) {
+                anchors.push(args);
+            }
+        }
+    }
+    if anchors.len() > 2 {
+        report.decision_gaps.push(format!(
+            "decision上下文锚点{}项，仅自动处理前2项",
+            anchors.len()
+        ));
+        report.note("decision上下文目标达到上限，仍有未覆盖锚点");
+    }
+    for anchor in anchors.iter().take(2) {
+        if report.fatal {
+            return;
+        }
+        if budget.remaining() <= 4 {
+            report
+                .decision_gaps
+                .push("decision自动上下文未完成；保留剩余HTTP预算给定点代码补查".into());
+            report.note("decision自动上下文预算保留，仍有未覆盖锚点");
+            break;
+        }
+        collect_decision_anchor(addr, header, q, anchor, budget, report).await;
     }
     let targets = related_services(&report.traces);
     let metrics_service = q
@@ -1047,6 +1417,45 @@ async fn collect(
             done += 1;
             continue;
         };
+        let window_start = DateTime::parse_from_rfc3339(&start)
+            .unwrap()
+            .timestamp_millis();
+        let window_end = DateTime::parse_from_rfc3339(&end)
+            .unwrap()
+            .timestamp_millis();
+        if report.context_scans.iter().any(|(s, _, from, to, _)| {
+            s == &target.service && *from <= window_start && *to >= window_end
+        }) {
+            // Reapply fallback's own selectors to retained raw rows, not the
+            // decision's thread-filtered rows; coverage is never borrowed blindly.
+            let cached: Vec<_> = report
+                .context_raw
+                .iter()
+                .filter(|r| {
+                    r.service == target.service
+                        && (target.instance.is_empty() || r.instance == target.instance)
+                        && (r.trace_id.is_empty() || r.trace_id == target.trace_id)
+                        && r.ts >= window_start
+                        && r.ts <= window_end
+                })
+                .cloned()
+                .collect();
+            for row in cached {
+                let relation = if row.trace_id == target.trace_id {
+                    "同trace精确关联"
+                } else {
+                    "同服务短时间窗候选（未证实同一请求）"
+                };
+                report.merge(vec![row], relation);
+            }
+            report.completed_services.push(target_key(target));
+            report.notes.push(format!(
+                "服务 {} 短窗复用已返回原始记录，未重复请求",
+                target.service
+            ));
+            done += 1;
+            continue;
+        }
         progress(
             tx,
             format!(
@@ -1219,11 +1628,16 @@ fn skipped_row(row: &LogRow) -> bool {
     .iter()
     .any(|word| content.contains(word))
 }
+fn warn_row(row: &LogRow) -> bool {
+    matches!(row.level.to_ascii_uppercase().as_str(), "WARN" | "WARNING")
+}
 fn error_row(row: &LogRow) -> bool {
     matches!(
         row.level.to_ascii_uppercase().as_str(),
         "ERROR" | "FATAL" | "SEVERE"
-    ) || row.content.to_ascii_lowercase().contains("exception")
+    ) || (!warn_row(row)
+        && !decision_gap(&row.content)
+        && row.content.to_ascii_lowercase().contains("exception"))
 }
 #[derive(Clone, Debug)]
 struct ServiceTarget {
@@ -1372,6 +1786,11 @@ fn trace_excerpt(spans: &[Value]) -> String {
     out
 }
 fn render(q: &InvestigationQuery, report: &Report, used: usize) -> String {
+    render_evidence(q, report, used).0
+}
+fn render_evidence(q: &InvestigationQuery, report: &Report, used: usize) -> (String, usize, usize) {
+    let mut shown_count = 0;
+    let mut truncated_count = 0;
     let mut out = format!("【SkyWalking排障证据：{}】\n查询时间：{} 至 {}；OAP偏移={}分钟\n关键词={}；方式={}；排除={}；入口服务={}\n实际HTTP请求={used}/24；日志={}；调用链={}\n",
         if report.partial { "部分完成" } else { "采集完成" }, q.start,q.end,q.timezone_offset_minutes,
         q.keywords.join("、"), if q.match_any { "任一" } else { "全部" },q.exclude_keyword,
@@ -1419,11 +1838,11 @@ fn render(q: &InvestigationQuery, report: &Report, used: usize) -> String {
         (
             if Some(*i) == earliest {
                 0
-            } else if skipped_row(&r.row) {
+            } else if warn_row(&r.row) || decision_gap(&r.row.content) {
                 1
-            } else if Some(*i) == latest {
-                2
             } else if error_row(&r.row) {
+                2
+            } else if Some(*i) == latest {
                 3
             } else {
                 4
@@ -1444,8 +1863,19 @@ fn render(q: &InvestigationQuery, report: &Report, used: usize) -> String {
         } else {
             "查询范围内"
         };
+        let full_length = r.row.content.chars().count();
+        let truncated = full_length > 700;
+        let class = if decision_gap(&r.row.content) {
+            "decision（触发信号，非根因证明）"
+        } else if warn_row(&r.row) {
+            "warning"
+        } else if error_row(&r.row) {
+            "error"
+        } else {
+            "info"
+        };
         let line = format!(
-            "\n[L{}] {scope} {} matched_ids={} service={} instance={} level={} trace={} ts={}\n{}\n",
+            "\n[L{}] {scope} {} matched_ids={} service={} instance={} level={} trace={} ts={} thread={} logger={} full_length={} digest=sha256:{} truncated={} class={}\n{}\n",
             i + 1,
             r.strength,
             if r.matched_ids.is_empty() { "未绑定业务ID（仅按本行trace判断）".into() } else { r.matched_ids.join("；") },
@@ -1454,19 +1884,33 @@ fn render(q: &InvestigationQuery, report: &Report, used: usize) -> String {
             r.row.level,
             r.row.trace_id,
             r.row.ts,
-            clip(&r.row.content, 700)
+            r.row.thread,
+            r.row.logger,
+            full_length,
+            digest(&r.row.content),
+            truncated,
+            class,
+            excerpt(&r.row.content, 700)
         );
         if out.chars().count() + line.chars().count() > MAX_TEXT - 160 {
             out.push_str("\n证据正文达到32,000字符上限，部分日志未展示；不代表没有更多异常。\n");
             break;
         }
         out.push_str(&line);
+        shown_count += 1;
+        truncated_count += usize::from(truncated);
     }
+    let visible_count = report
+        .rows
+        .iter()
+        .filter(|r| q.exclude_keyword.is_empty() || !r.row.content.contains(&q.exclude_keyword))
+        .count();
+    truncated_count += visible_count.saturating_sub(shown_count);
     if out.chars().count() > MAX_TEXT {
         out = clip(&out, MAX_TEXT - 60);
         out.push_str("\n证据正文已截断，覆盖不完整。\n");
     }
-    out
+    (out, shown_count, truncated_count)
 }
 
 #[cfg(test)]
