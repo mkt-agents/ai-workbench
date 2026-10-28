@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Eye, EyeOff } from "lucide-react";
+import { Cpu, Eye, EyeOff, FileText, KeyRound, Plug, ShieldCheck, Users } from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
+import GroupedSelect from "./GroupedSelect";
 import { useGlobalStore } from "../core/store";
 import type { AppSettings, DshModelCatalog } from "../core/types";
 import {
@@ -10,12 +11,17 @@ import {
   revealWecomSecret,
   approveWecomPairing,
   fetchDshModels,
+  fetchWecomLog,
   fetchWecomPairings,
+  fetchWecomSessionLog,
   fetchWecomStatus,
   restartWecomChannel,
   revokeWecomUser,
+  runWecomDocgenNow,
   syncDshProfile,
+  testWecomDocgen,
   type WecomPairing,
+  type WecomSessionLogEntry,
   type WecomStatus,
 } from "../lib/wecomChannel";
 
@@ -41,6 +47,18 @@ function statusClass(state: string | undefined): string {
   if (state === "error") return "is-error";
   if (state === "connecting" || state === "reconnecting") return "is-pending";
   return "";
+}
+
+/** 已连接时长（ms）→ 简短中文：如 2小时3分、5分12秒、38秒。 */
+function fmtDuration(ms: number | null | undefined): string {
+  if (ms == null || ms < 0) return "";
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h${m}m`;
+  if (m > 0) return `${m}m${sec}s`;
+  return `${sec}s`;
 }
 
 /** DSH 子状态：ready / starting / error 复用同一套胶囊配色。 */
@@ -88,6 +106,27 @@ function Row({
   );
 }
 
+/** 面板头部：左侧 accent 图标徽记 + 标题，右侧可挂开关 / 徽标等插槽。 */
+function PanelHead({
+  icon: Icon,
+  title,
+  aside,
+}: {
+  icon: typeof Plug;
+  title: string;
+  aside?: React.ReactNode;
+}) {
+  return (
+    <div className="wecom-panel-head">
+      <span className="wecom-panel-icon" aria-hidden>
+        <Icon size={13} />
+      </span>
+      <div className="hub-group-title">{title}</div>
+      {aside ? <div className="wecom-panel-aside">{aside}</div> : null}
+    </div>
+  );
+}
+
 export default function WecomSettingsCard() {
   const { t } = useTranslation("settings");
   const confirm = useConfirm();
@@ -104,10 +143,16 @@ export default function WecomSettingsCard() {
   const [corpSecretDraft, setCorpSecretDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [docgenBusy, setDocgenBusy] = useState(false);
   // DSH 引擎的模型目录（ACP configOptions），按引擎就绪懒加载
   const [catalog, setCatalog] = useState<DshModelCatalog | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogError, setCatalogError] = useState("");
+  // 排障折叠区：通道日志尾 + 最近会话
+  const [logText, setLogText] = useState("");
+  const [logBusy, setLogBusy] = useState(false);
+  const [sessionLog, setSessionLog] = useState<WecomSessionLogEntry[]>([]);
+  const [sessionBusy, setSessionBusy] = useState(false);
 
   const botId = useFieldDraft(settings.wecomBotId ?? "");
   const corpId = useFieldDraft(settings.wecomCorpId ?? "");
@@ -115,6 +160,12 @@ export default function WecomSettingsCard() {
   const allowUsers = useFieldDraft((settings.wecomAllowUsers ?? []).join(", "));
   const allowGroups = useFieldDraft((settings.wecomAllowGroups ?? []).join(", "));
   const repoPath = useFieldDraft(settings.wecomRepoPath ?? "");
+  const docDir = useFieldDraft(settings.wecomDocDir ?? "");
+  const skywalkingAddr = useFieldDraft(settings.wecomSkywalkingAddr ?? "");
+  const skywalkingHeader = useFieldDraft(settings.wecomSkywalkingHeader ?? "");
+  const releaseBranch = useFieldDraft(settings.wecomReleaseBranch ?? "");
+  const autoUpdateTime = useFieldDraft(settings.wecomAutoUpdateTime ?? "");
+  const [webhookDraft, setWebhookDraft] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -203,6 +254,28 @@ export default function WecomSettingsCard() {
   const dshState = status?.dsh?.state ?? "stopped";
   const dshLabel = t(`wecom.dsh.state.${dshState}`, { defaultValue: dshState });
   const dshReady = dshState === "ready";
+
+  const loadLog = useCallback(async () => {
+    setLogBusy(true);
+    try {
+      setLogText(await fetchWecomLog(200));
+    } catch (e) {
+      setLogText(String(e));
+    } finally {
+      setLogBusy(false);
+    }
+  }, []);
+
+  const loadSessionLog = useCallback(async () => {
+    setSessionBusy(true);
+    try {
+      setSessionLog(await fetchWecomSessionLog(30));
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setSessionBusy(false);
+    }
+  }, []);
   const mirror = status?.dsh?.mirror ?? null;
 
   const loadModels = useCallback(async (refresh: boolean) => {
@@ -240,9 +313,6 @@ export default function WecomSettingsCard() {
   };
 
   const modelValue = settings.wecomDshModel ?? "";
-  const modelKnown =
-    !modelValue ||
-    Boolean(catalog?.groups.some((g) => g.options.some((o) => o.value === modelValue)));
   const modelCount =
     catalog?.groups.reduce((total, group) => total + group.options.length, 0) ?? 0;
 
@@ -252,18 +322,21 @@ export default function WecomSettingsCard() {
 
       {/* 1 · 通道：连不连得上（开关放在块标题右侧，省一行） */}
       <div className="net-panel">
-        <div className="wecom-panel-head">
-          <div className="hub-group-title">{t("wecom.groupChannel")}</div>
-          <label className="toggle" title={t("wecom.enabled")}>
-            <input
-              type="checkbox"
-              checked={Boolean(settings.wecomEnabled)}
-              disabled={busy}
-              onChange={(e) => void push({ wecomEnabled: e.target.checked })}
-            />
-            <span className="toggle-slider" />
-          </label>
-        </div>
+        <PanelHead
+          icon={Plug}
+          title={t("wecom.groupChannel")}
+          aside={
+            <label className="toggle" title={t("wecom.enabled")}>
+              <input
+                type="checkbox"
+                checked={Boolean(settings.wecomEnabled)}
+                disabled={busy}
+                onChange={(e) => void push({ wecomEnabled: e.target.checked })}
+              />
+              <span className="toggle-slider" />
+            </label>
+          }
+        />
         <div className="wecom-rows">
           <Row
             label={t("wecom.status")}
@@ -298,6 +371,82 @@ export default function WecomSettingsCard() {
             hint={status?.detail ? <p className="setting-hint">{status.detail}</p> : undefined}
           />
 
+          {settings.wecomEnabled ? (
+            <div className="wecom-diag">
+              <div className="wecom-diag-meta">
+                {status?.connectedMs != null ? (
+                  <span className="wecom-diag-chip">
+                    {t("wecom.diag.connectedFor", { duration: fmtDuration(status.connectedMs) })}
+                  </span>
+                ) : null}
+                {status?.lastError ? (
+                  <span className="wecom-diag-chip is-error" title={status.lastError}>
+                    {t("wecom.diag.lastError", { error: status.lastError })}
+                  </span>
+                ) : null}
+              </div>
+              <details
+                className="wecom-hint"
+                onToggle={(e) => {
+                  if ((e.target as HTMLDetailsElement).open && !logText && !logBusy) void loadLog();
+                }}
+              >
+                <summary>
+                  <span>{t("wecom.diag.channelLog")}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={logBusy}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void loadLog();
+                    }}
+                  >
+                    {t("wecom.diag.refresh")}
+                  </button>
+                </summary>
+                <p className="setting-hint">{t("wecom.diag.logHint")}</p>
+                <pre className="wecom-diag-log">{logText || t("wecom.diag.empty")}</pre>
+              </details>
+              <details
+                className="wecom-hint"
+                onToggle={(e) => {
+                  if ((e.target as HTMLDetailsElement).open && sessionLog.length === 0 && !sessionBusy)
+                    void loadSessionLog();
+                }}
+              >
+                <summary>
+                  <span>{t("wecom.diag.sessionLog")}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={sessionBusy}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void loadSessionLog();
+                    }}
+                  >
+                    {t("wecom.diag.refresh")}
+                  </button>
+                </summary>
+                <p className="setting-hint">{t("wecom.diag.sessionHint")}</p>
+                {sessionLog.length === 0 ? (
+                  <p className="setting-hint">{t("wecom.diag.empty")}</p>
+                ) : (
+                  <ul className="wecom-diag-sessions">
+                    {sessionLog.map((e, i) => (
+                      <li key={`${e.session}-${e.ts}-${i}`}>
+                        <span className="wecom-diag-ts">{e.ts}</span>
+                        <span className="wecom-diag-u">{e.user}</span>
+                        <span className="wecom-diag-a">{e.assistant}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
+            </div>
+          ) : null}
+
           <Row
             label={t("wecom.displayName")}
             control={
@@ -322,7 +471,7 @@ export default function WecomSettingsCard() {
 
       {/* 2 · AI 引擎：谁来回话（DSH 档把状态、镜像、模型都收在这一块） */}
       <div className="net-panel">
-        <div className="hub-group-title">{t("wecom.groupEngine")}</div>
+        <PanelHead icon={Cpu} title={t("wecom.groupEngine")} />
         <div className="wecom-rows">
           <Row
             label={t("wecom.engine")}
@@ -408,26 +557,25 @@ export default function WecomSettingsCard() {
               label={t("wecom.dshModelRow")}
               control={
                 <>
-                  <select
-                    className="input-field wecom-split"
+                  <GroupedSelect
+                    className="wecom-split"
                     value={modelValue}
                     disabled={busy || catalogBusy}
-                    onChange={(e) => void push({ wecomDshModel: e.target.value })}
-                  >
-                    <option value="">{t("wecom.dshModelDefault")}</option>
-                    {!modelKnown ? (
-                      <option value={modelValue}>{t("wecom.dshModelMissing")}</option>
-                    ) : null}
-                    {(catalog?.groups ?? []).map((group) => (
-                      <optgroup key={group.group || group.name} label={group.name || group.group}>
-                        {group.options.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.name || option.value}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
+                    fallbackLabel={t("wecom.dshModelDefault")}
+                    staleLabel={t("wecom.dshModelMissing")}
+                    searchPlaceholder={t("wecom.dshModelSearch")}
+                    emptyLabel={t("wecom.dshModelNoMatch")}
+                    groups={(catalog?.groups ?? []).map((group) => ({
+                      key: group.group || group.name,
+                      label: group.name || group.group,
+                      options: group.options.map((option) => ({
+                        value: option.value,
+                        label: option.name || option.value,
+                        hint: option.description,
+                      })),
+                    }))}
+                    onChange={(next) => void push({ wecomDshModel: next })}
+                  />
                   <select
                     className="input-field wecom-split-effort"
                     value={settings.wecomDshEffort ?? ""}
@@ -471,9 +619,279 @@ export default function WecomSettingsCard() {
         </div>
       </div>
 
+      {/* 2.5 · 文档问答与线上排障 + 逆向文档自动更新 */}
+      <div className="net-panel">
+        <PanelHead icon={FileText} title={t("wecom.groupDocqa")} />
+        <div className="wecom-rows">
+          <Row
+            label={t("wecom.answerMode")}
+            control={
+              <select
+                className="input-field"
+                value={settings.wecomAnswerMode ?? "auto"}
+                onChange={(e) => void push({ wecomAnswerMode: e.target.value })}
+              >
+                <option value="auto">{t("wecom.answerMode.auto")}</option>
+                <option value="doc">{t("wecom.answerMode.doc")}</option>
+                <option value="doc_code">{t("wecom.answerMode.docCode")}</option>
+                <option value="code">{t("wecom.answerMode.code")}</option>
+              </select>
+            }
+            hint={<Hint summary={t("wecom.answerModeHintShort")} details={t("wecom.answerModeHint")} />}
+          />
+
+          <Row
+            label={t("wecom.docDir")}
+            control={
+              <input
+                className="input-field"
+                value={docDir.value}
+                placeholder="doc"
+                onFocus={() => {
+                  docDir.focused.current = true;
+                }}
+                onChange={(e) => docDir.setValue(e.target.value)}
+                onBlur={() => {
+                  docDir.focused.current = false;
+                  const v = docDir.value.trim();
+                  if (v !== (settings.wecomDocDir ?? "")) void push({ wecomDocDir: v || undefined });
+                }}
+              />
+            }
+          />
+
+          <div className="wecom-subhead">{t("wecom.subSkywalking")}</div>
+
+          <Row
+            label={t("wecom.skywalkingAddr")}
+            control={
+              <input
+                className="input-field"
+                value={skywalkingAddr.value}
+                placeholder="http://skywalking-oap:12800"
+                onFocus={() => {
+                  skywalkingAddr.focused.current = true;
+                }}
+                onChange={(e) => skywalkingAddr.setValue(e.target.value)}
+                onBlur={() => {
+                  skywalkingAddr.focused.current = false;
+                  const v = skywalkingAddr.value.trim();
+                  if (v !== (settings.wecomSkywalkingAddr ?? ""))
+                    void push({ wecomSkywalkingAddr: v || undefined });
+                }}
+              />
+            }
+            hint={<Hint summary={t("wecom.skywalkingHintShort")} details={t("wecom.skywalkingHint")} />}
+          />
+
+          <Row
+            label={t("wecom.skywalkingTimezone")}
+            control={
+              <select
+                className="input-field"
+                aria-label={t("wecom.skywalkingTimezone")}
+                value={settings.wecomSkywalkingTimezoneOffsetMinutes ?? ""}
+                disabled={busy}
+                onChange={(e) =>
+                  void push({
+                    wecomSkywalkingTimezoneOffsetMinutes:
+                      e.target.value === "" ? undefined : Number(e.target.value),
+                  })
+                }
+              >
+                <option value="">{t("wecom.skywalkingTimezoneLocal")}</option>
+                <option value={0}>UTC</option>
+                <option value={480}>UTC+8</option>
+                <option value={540}>UTC+9</option>
+                <option value={330}>UTC+5:30</option>
+                <option value={-300}>UTC-5</option>
+                <option value={-480}>UTC-8</option>
+              </select>
+            }
+            hint={<p className="setting-hint">{t("wecom.skywalkingTimezoneHint")}</p>}
+          />
+
+          <Row
+            label={t("wecom.skywalkingHeader")}
+            control={
+              <input
+                className="input-field"
+                value={skywalkingHeader.value}
+                placeholder="Authorization: Bearer xxx"
+                onFocus={() => {
+                  skywalkingHeader.focused.current = true;
+                }}
+                onChange={(e) => skywalkingHeader.setValue(e.target.value)}
+                onBlur={() => {
+                  skywalkingHeader.focused.current = false;
+                  const v = skywalkingHeader.value.trim();
+                  if (v !== (settings.wecomSkywalkingHeader ?? ""))
+                    void push({ wecomSkywalkingHeader: v || undefined });
+                }}
+              />
+            }
+          />
+
+          <div className="wecom-subhead">{t("wecom.subAutoUpdate")}</div>
+
+          <Row
+            label={t("wecom.autoUpdateEnabled")}
+            control={
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.wecomAutoUpdateEnabled)}
+                  onChange={(e) => void push({ wecomAutoUpdateEnabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            }
+            hint={<Hint summary={t("wecom.autoUpdateHintShort")} details={t("wecom.autoUpdateHint")} />}
+          />
+
+          <Row
+            label={t("wecom.autoUpdateTime")}
+            control={
+              <input
+                className="input-field"
+                type="time"
+                value={autoUpdateTime.value || "23:00"}
+                onFocus={() => {
+                  autoUpdateTime.focused.current = true;
+                }}
+                onChange={(e) => autoUpdateTime.setValue(e.target.value)}
+                onBlur={() => {
+                  autoUpdateTime.focused.current = false;
+                  const v = autoUpdateTime.value.trim();
+                  if (v !== (settings.wecomAutoUpdateTime ?? ""))
+                    void push({ wecomAutoUpdateTime: v || undefined });
+                }}
+              />
+            }
+          />
+
+          <Row
+            label={t("wecom.releaseBranch")}
+            control={
+              <input
+                className="input-field"
+                value={releaseBranch.value}
+                placeholder="release"
+                onFocus={() => {
+                  releaseBranch.focused.current = true;
+                }}
+                onChange={(e) => releaseBranch.setValue(e.target.value)}
+                onBlur={() => {
+                  releaseBranch.focused.current = false;
+                  const v = releaseBranch.value.trim();
+                  if (v !== (settings.wecomReleaseBranch ?? ""))
+                    void push({ wecomReleaseBranch: v || undefined });
+                }}
+              />
+            }
+          />
+
+          <Row
+            label={t("wecom.webhookUrl")}
+            control={
+              <input
+                className="input-field"
+                type="password"
+                value={webhookDraft}
+                placeholder={
+                  settings.wecomWebhookUrl
+                    ? `••••••••  ${t("wecom.secretKept")}`
+                    : t("wecom.webhookPlaceholder")
+                }
+                onChange={(e) => setWebhookDraft(e.target.value)}
+                onBlur={() => {
+                  const v = webhookDraft.trim();
+                  if (!v) {
+                    setWebhookDraft("");
+                    return;
+                  }
+                  void push({ wecomWebhookUrl: v }).then(() => setWebhookDraft(""));
+                }}
+              />
+            }
+            hint={<Hint summary={t("wecom.webhookHintShort")} details={t("wecom.webhookHint")} />}
+          />
+
+          <Row
+            label={t("wecom.autoCommit")}
+            control={
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.wecomAutoCommit !== false}
+                  onChange={(e) => void push({ wecomAutoCommit: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            }
+            hint={<Hint summary={t("wecom.autoCommitHintShort")} details={t("wecom.autoCommitHint")} />}
+          />
+
+          <Row
+            label={t("wecom.autoPush")}
+            control={
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.wecomAutoPush)}
+                  disabled={settings.wecomAutoCommit === false}
+                  onChange={(e) => void push({ wecomAutoPush: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            }
+            hint={<p className="setting-hint">{t("wecom.autoPushHint")}</p>}
+          />
+
+          <Row
+            label={t("wecom.docgenRunNow")}
+            control={
+              <div className="wecom-inline">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={docgenBusy}
+                  onClick={() => {
+                    setDocgenBusy(true);
+                    setMsg("");
+                    void testWecomDocgen()
+                      .then((r) => setMsg(r))
+                      .catch((e) => setMsg(String(e)))
+                      .finally(() => setDocgenBusy(false));
+                  }}
+                >
+                  {t("wecom.docgenTestBtn")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={docgenBusy}
+                  onClick={() => {
+                    setDocgenBusy(true);
+                    setMsg("");
+                    void runWecomDocgenNow()
+                      .then((r) => setMsg(r))
+                      .catch((e) => setMsg(String(e)))
+                      .finally(() => setDocgenBusy(false));
+                  }}
+                >
+                  {docgenBusy ? t("wecom.docgenRunning") : t("wecom.docgenRunNowBtn")}
+                </button>
+              </div>
+            }
+            hint={<p className="setting-hint">{t("wecom.docgenRunNowHint")}</p>}
+          />
+        </div>
+      </div>
+
       {/* 3 · 凭据：长连接必填，业务 API 只有文档/日程/表格要 */}
       <div className="net-panel">
-        <div className="hub-group-title">{t("wecom.groupCredentials")}</div>
+        <PanelHead icon={KeyRound} title={t("wecom.groupCredentials")} />
         <div className="wecom-rows">
           <div className="wecom-subhead">{t("wecom.subBot")}</div>
 
@@ -588,7 +1006,7 @@ export default function WecomSettingsCard() {
 
       {/* 4 · 访问策略：谁能用 + 能用什么 */}
       <div className="net-panel">
-        <div className="hub-group-title">{t("wecom.groupAccess")}</div>
+        <PanelHead icon={ShieldCheck} title={t("wecom.groupAccess")} />
         <div className="wecom-rows">
           <div className="wecom-subhead">{t("wecom.subWho")}</div>
 
@@ -680,6 +1098,24 @@ export default function WecomSettingsCard() {
             hint={<Hint summary={t("wecom.requireMentionHintShort")} details={t("wecom.requireMentionHint")} />}
           />
 
+          <Row
+            label={t("wecom.maxJobs")}
+            control={
+              <select
+                className="input-field"
+                value={String(settings.wecomMaxJobs || 2)}
+                onChange={(e) => void push({ wecomMaxJobs: Number(e.target.value) })}
+              >
+                {[1, 2, 3, 4, 6, 8].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            }
+            hint={<p className="setting-hint">{t("wecom.maxJobsHint")}</p>}
+          />
+
           <div className="wecom-subhead">{t("wecom.subWhat")}</div>
 
           <Row
@@ -742,13 +1178,25 @@ export default function WecomSettingsCard() {
 
       {/* 5 · 配对：私聊配对码与已批准用户 */}
       <div className="net-panel">
-        <div className="hub-group-title">{t("wecom.groupPairing")}</div>
+        <PanelHead
+          icon={Users}
+          title={t("wecom.groupPairing")}
+          aside={
+            (settings.wecomPairedUsers ?? []).length > 0 ? (
+              <span className="wecom-count-badge">{(settings.wecomPairedUsers ?? []).length}</span>
+            ) : pairings.length > 0 ? (
+              <span className="wecom-count-badge is-pending">{pairings.length}</span>
+            ) : null
+          }
+        />
         <div className="setting-item">
           <span className="setting-label">{t("wecom.pairingTitle")}</span>
           {pairings.length === 0 ? (
             <p className="setting-hint">{t("wecom.pairingEmpty")}</p>
           ) : (
-            <ul className="wecom-pairing-list">
+            <>
+              <p className="setting-hint">{t("wecom.pairingRestartHint")}</p>
+              <ul className="wecom-pairing-list">
               {pairings.map((p) => (
                 <li key={p.code} className="wecom-pairing-row">
                   <code className="tabular-nums wecom-pair-code">{p.code}</code>
@@ -776,6 +1224,7 @@ export default function WecomSettingsCard() {
                 </li>
               ))}
             </ul>
+            </>
           )}
           {(settings.wecomPairedUsers ?? []).length > 0 && (
             <div className="wecom-paired">

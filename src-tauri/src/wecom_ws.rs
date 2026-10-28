@@ -48,6 +48,8 @@ pub type EventHandler = Arc<dyn Fn(EventCallback) + Send + Sync>;
 struct Shared {
     state: RwLock<ConnState>,
     last_error: RwLock<String>,
+    /// 最近一次进入 Connected 的时间戳（ms since epoch）；0 = 从未连上/已断。
+    connected_since: AtomicU64,
     gen: AtomicU64,
     stop: AtomicBool,
 }
@@ -63,6 +65,7 @@ impl WecomSocket {
             shared: Arc::new(Shared {
                 state: RwLock::new(ConnState::Disconnected),
                 last_error: RwLock::new(String::new()),
+                connected_since: AtomicU64::new(0),
                 gen: AtomicU64::new(0),
                 stop: AtomicBool::new(false),
             }),
@@ -80,6 +83,18 @@ impl WecomSocket {
         (st.label().to_string(), detail)
     }
 
+    /// 连接详情：最近一次错误、已连接时长（毫秒，未连上为 None）。
+    pub async fn detail(&self) -> (String, Option<u64>) {
+        let last_error = self.shared.last_error.read().await.clone();
+        let since = self.shared.connected_since.load(Ordering::SeqCst);
+        let connected_ms = if since > 0 {
+            Some(now_ms().saturating_sub(since))
+        } else {
+            None
+        };
+        (last_error, connected_ms)
+    }
+
     pub async fn send_raw(&self, json: String) -> Result<(), String> {
         let guard = self.out_tx.lock().await;
         let tx = guard.as_ref().ok_or_else(|| "企微长连接未建立".to_string())?;
@@ -94,6 +109,7 @@ impl WecomSocket {
             let _ = tx.send(Outbound::Stop);
         }
         *self.shared.state.write().await = ConnState::Disconnected;
+        self.shared.connected_since.store(0, Ordering::SeqCst);
         emit_status_changed(&self.shared).await;
     }
 
@@ -120,6 +136,15 @@ impl WecomSocket {
             crate::wecom_log::write("socket", &format!("state=error {e}"));
         } else {
             crate::wecom_log::write("socket", &format!("state={}", st.label()));
+        }
+        // 维护「已连接时长」的起点：进 Connected 记时间，离开清零。
+        match &st {
+            ConnState::Connected => {
+                self.shared.connected_since.store(now_ms(), Ordering::SeqCst);
+            }
+            _ => {
+                self.shared.connected_since.store(0, Ordering::SeqCst);
+            }
         }
         *self.shared.state.write().await = st;
         emit_status_changed(&self.shared).await;
@@ -354,3 +379,10 @@ pub async fn current_state_payload(sock: &WecomSocket) -> serde_json::Value {
 // 避免未使用警告：InboundFrame 在 handle 里用到了
 #[allow(dead_code)]
 fn _touch_frame(_: &InboundFrame) {}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}

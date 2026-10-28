@@ -373,6 +373,8 @@ pub(crate) fn offered_tools(permission: Permission, reach: Reach) -> Vec<&'stati
         // 企微出站富媒体：把本地文件发回当前对话（Sensitive，只读档也要问）
         "wecom_send_image",
         "wecom_send_file",
+        // SkyWalking 只读查询：排查线上问题取日志/调用链（agent.rs 按是否配置地址再滤一次）
+        "skywalking_query",
     ]);
     if writes {
         names.extend([

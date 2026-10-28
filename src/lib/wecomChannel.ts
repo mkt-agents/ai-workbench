@@ -27,6 +27,17 @@ export type WecomStatus = {
   /** tianji | dsh */
   engine: string;
   dsh: WecomDshStatus;
+  /** 最近一次长连接错误（空串 = 无） */
+  lastError?: string;
+  /** 已连接时长（毫秒）；未连上为 null */
+  connectedMs?: number | null;
+};
+
+export type WecomSessionLogEntry = {
+  session: string;
+  ts: string;
+  user: string;
+  assistant: string;
 };
 
 export type WecomPairing = {
@@ -69,6 +80,12 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
   let corpSecret = (settings.wecomCorpSecret ?? "").trim();
   const plainCorp = args.plainCorpSecret?.trim() ?? "";
   if (plainCorp) corpSecret = await protectSecret(plainCorp);
+
+  // webhook 当密文存：已是 enc:v1: 直接用，明文则加密后下发。
+  let webhookUrl = (settings.wecomWebhookUrl ?? "").trim();
+  if (webhookUrl && !webhookUrl.startsWith("enc:v1:")) {
+    webhookUrl = await protectSecret(webhookUrl);
+  }
 
   const model =
     resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
@@ -136,6 +153,19 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       workspace: repoPath,
       dshModel: (settings.wecomDshModel ?? "").trim(),
       dshEffort: (settings.wecomDshEffort ?? "").trim(),
+      // 文档问答 + 排障 + 自动更新
+      answerMode: settings.wecomAnswerMode ?? "auto",
+      docDir: (settings.wecomDocDir ?? "").trim(),
+      skywalkingAddr: (settings.wecomSkywalkingAddr ?? "").trim(),
+      skywalkingHeader: (settings.wecomSkywalkingHeader ?? "").trim(),
+      skywalkingTimezoneOffsetMinutes: settings.wecomSkywalkingTimezoneOffsetMinutes ?? null,
+      autoUpdateEnabled: Boolean(settings.wecomAutoUpdateEnabled),
+      autoUpdateTime: (settings.wecomAutoUpdateTime ?? "").trim(),
+      releaseBranch: (settings.wecomReleaseBranch ?? "").trim(),
+      webhookUrl,
+      autoCommit: settings.wecomAutoCommit !== false,
+      autoPush: Boolean(settings.wecomAutoPush),
+      maxJobs: Number(settings.wecomMaxJobs) || 0,
       agent,
     },
   });
@@ -179,4 +209,26 @@ export async function revokeWecomUser(userid: string): Promise<void> {
 
 export async function restartWecomChannel(): Promise<WecomStatus> {
   return invoke<WecomStatus>("wecom_channel_restart");
+}
+
+/** 「立即更新一次」逆向文档：手动触发自动更新流程，返回人类可读的结果摘要。 */
+export async function runWecomDocgenNow(): Promise<string> {
+  return invoke<string>("wecom_docgen_run_now");
+}
+
+/** 连通自检：校验 release 分支 / webhook / SkyWalking，返回多行结果。 */
+export async function testWecomDocgen(): Promise<string> {
+  return invoke<string>("wecom_docgen_test");
+}
+
+/** 读通道排障日志最后 N 行（设置页「通道日志」折叠区）。 */
+export async function fetchWecomLog(lines = 200): Promise<string> {
+  return invoke<string>("wecom_log_tail", { lines });
+}
+
+/** 读最近若干条企微会话旁证（设置页「会话日志」折叠区）。 */
+export async function fetchWecomSessionLog(
+  limit = 30,
+): Promise<WecomSessionLogEntry[]> {
+  return invoke<WecomSessionLogEntry[]>("wecom_session_recent", { limit });
 }

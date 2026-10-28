@@ -33,12 +33,17 @@ mod agent_session_log;
 mod wecom_proto;
 mod wecom_sanitize;
 mod wecom_policy;
+mod wecom_intent;
+mod wecom_investigation_query;
+mod wecom_investigation;
 mod wecom_session;
 mod wecom_ws;
 mod wecom_orchestrator;
 mod wecom_channel;
 mod wecom_biz;
 mod wecom_media;
+mod wecom_skywalking;
+mod wecom_docgen;
 mod wecom_dsh;
 mod wecom_dsh_profile;
 mod wecom_log;
@@ -652,6 +657,10 @@ pub fn run() {
             wecom_channel::wecom_reveal_secret,
             wecom_channel::wecom_dsh_models,
             wecom_channel::wecom_dsh_sync,
+            wecom_channel::wecom_docgen_run_now,
+            wecom_channel::wecom_docgen_test,
+            wecom_channel::wecom_log_tail,
+            wecom_channel::wecom_session_recent,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::dsh_set_embed,

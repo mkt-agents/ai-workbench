@@ -244,6 +244,8 @@ struct EngineInner {
     catalog: Option<DshModelCatalog>,
     /// 上一次 profile 镜像结果
     mirror: Option<MirrorReport>,
+    /// 企微通道配置的 MCP 服务（随 session/new|resume 以 ACP mcpServers 下发；空 = 不带）。
+    mcp: Vec<crate::mcp::McpServerSpec>,
     /// ACP `initialize` 宣告的 `promptCapabilities.image`：当前模型是否支持图片输入。
     /// 换模型会重启进程 → 重新握手刷新；没宣告按 false（降级文本）。
     image_prompt: bool,
@@ -277,6 +279,7 @@ impl DshEngine {
                 probe: None,
                 catalog: None,
                 mirror: None,
+                mcp: Vec::new(),
                 image_prompt: false,
             }),
             start_lock: Mutex::new(()),
@@ -305,6 +308,30 @@ impl DshEngine {
             g.applied.clear();
         }
         changed
+    }
+
+    /// 更新随会话下发的 MCP 服务列表（企微通道配置）。只影响后续新建/恢复的会话。
+    pub async fn set_mcp(&self, mcp: Vec<crate::mcp::McpServerSpec>) {
+        self.inner.lock().await.mcp = mcp;
+    }
+
+    /// 当前 MCP 列表转成 ACP `mcpServers` 数组（stdio 传输：name/command/args）。
+    /// 名称或命令为空的条目跳过；参数按用户输入切词，复用 `mcp::split_args`。
+    async fn acp_mcp_servers(&self) -> Value {
+        let mcp = self.inner.lock().await.mcp.clone();
+        let list: Vec<Value> = mcp
+            .iter()
+            .filter(|s| !s.name.trim().is_empty() && !s.command.trim().is_empty())
+            .map(|s| {
+                json!({
+                    "name": s.name.trim(),
+                    "command": s.command.trim(),
+                    "args": crate::mcp::split_args(&s.args),
+                    "env": [],
+                })
+            })
+            .collect();
+        Value::Array(list)
     }
 
     pub async fn status(&self) -> DshStatus {
@@ -535,13 +562,14 @@ impl DshEngine {
             let g = self.inner.lock().await;
             (g.workspace.clone(), g.sessions.get(key).cloned())
         };
+        let mcp_servers = self.acp_mcp_servers().await;
         let (shared, writer) = self.parts().await?;
 
         if let Some(id) = existing {
             let params = json!({
                 "sessionId": id,
                 "cwd": workspace,
-                "mcpServers": [],
+                "mcpServers": mcp_servers,
             });
             match rpc_call(&shared, &writer, "session/resume", params, SESSION_TIMEOUT).await {
                 Ok(_) => return Ok(id),
@@ -559,7 +587,7 @@ impl DshEngine {
             &shared,
             &writer,
             "session/new",
-            json!({ "cwd": workspace, "mcpServers": [] }),
+            json!({ "cwd": workspace, "mcpServers": mcp_servers }),
             SESSION_TIMEOUT,
         )
         .await?;

@@ -101,6 +101,9 @@ pub fn spawn(app: tauri::AppHandle) {
             if let Err(e) = crate::trae_quota::auto_tick(&app).await {
                 eprintln!("[trae] auto-checkin tick failed: {e}");
             }
+            if let Err(e) = crate::wecom_docgen::auto_tick(&app).await {
+                eprintln!("[wecom] docgen tick failed: {e}");
+            }
         }
     });
 }

@@ -185,6 +185,79 @@ fn load_sidecar(key: &str) -> Vec<ChatTurn> {
     turns
 }
 
+/// 设置页「会话日志」折叠区的一条展示项。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLogEntry {
+    pub session: String,
+    pub ts: String,
+    pub user: String,
+    pub assistant: String,
+}
+
+/// 读最近 `limit` 条会话旁证，按时间倒序。
+/// `key` 传 `None` 汇总所有会话文件；传会话键（`wecom:dm:u1`）只读该会话。
+pub fn recent_entries(key: Option<&str>, limit: usize) -> Vec<SessionLogEntry> {
+    let dir = match sidecar_dir() {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    match key {
+        Some(k) => {
+            let safe = sanitize_key(k);
+            files.push((k.to_string(), dir.join(format!("{safe}.jsonl"))));
+        }
+        None => {
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for entry in rd.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                        let name = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        files.push((name, path));
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<SessionLogEntry> = Vec::new();
+    for (session, path) in files {
+        let Ok(data) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in data.lines().filter(|l| !l.trim().is_empty()) {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            out.push(SessionLogEntry {
+                session: session.clone(),
+                ts: v.get("ts").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                user: v.get("user").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                assistant: v
+                    .get("assistant")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+    }
+    // 按时间戳倒序（RFC3339 字典序即时间序）；取最近 limit 条。
+    out.sort_by(|a, b| b.ts.cmp(&a.ts));
+    out.truncate(limit);
+    out
+}
+
+/// 会话键 → 安全文件名（与 append_sidecar / load_sidecar 同规则）。
+fn sanitize_key(key: &str) -> String {
+    key.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
 fn append_sidecar(key: &str, user: &str, assistant: &str) -> Result<(), String> {
     let dir = sidecar_dir().ok_or_else(|| "no app data dir".to_string())?;
     let safe: String = key

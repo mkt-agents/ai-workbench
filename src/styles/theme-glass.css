@@ -141,9 +141,20 @@
 /* Native select popup: force readable options (WebView often uses light chrome) */
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select option,
 [data-theme="dark"] select option,
-.dark select option {
+.dark select option,
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select optgroup,
+[data-theme="dark"] select optgroup,
+.dark select optgroup {
   background-color: #1a1c20; /* token-ok: native option list ignores variables and needs a solid floor */
   color: #f4f3f1;
+}
+
+/* 选中 / hover 那一条是系统画的浅色高亮：不给它自己的深底就等于白字压白底 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select option:checked,
+[data-theme="dark"] select option:checked,
+.dark select option:checked {
+  background-color: #2f3a47; /* token-ok: 系统高亮层的实底，变量在原生弹层里不生效 */
+  color: #ffffff;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) select,

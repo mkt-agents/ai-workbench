@@ -279,8 +279,10 @@ pub(crate) fn default_bubble_position<R: Runtime>(app: &AppHandle<R>) -> (i32, i
     let work = monitor.work_area();
     let (bw, bh) = bubble_box_physical(scale);
     let margin = (BUBBLE_MARGIN * scale).round() as i32;
-    let x = work.position.x + work.size.width as i32 - bw - margin;
-    let y = work.position.y + work.size.height as i32 - bh - margin;
+    // 默认落点也按角色边贴：窗口右 / 下边各探出一圈留白，角色才距屏 margin。
+    let (_il, _it, ir, ib) = current_hit_insets(scale);
+    let x = work.position.x + work.size.width as i32 - bw - margin + ir;
+    let y = work.position.y + work.size.height as i32 - bh - margin + ib;
     clamp_bubble_position(app, x, y)
 }
 
@@ -306,18 +308,59 @@ pub(crate) fn clamp_to_work_area(
     box_size: (i32, i32),
     point: (i32, i32),
     scale: f64,
+    insets: (i32, i32, i32, i32),
 ) -> (i32, i32) {
     let margin = (BUBBLE_MARGIN * scale).round() as i32;
     let top_safe = (BUBBLE_TOP_SAFE_LOGICAL * scale).round() as i32;
-    let min_x = work.0 + margin;
-    // 顶部安全带就是主标题栏按钮所在的那条，Y 永远不许进去。
-    let min_y = work.1 + margin.max(top_safe);
-    let max_x = work.0 + work.2 - box_size.0 - margin;
-    let max_y = work.1 + work.3 - box_size.1 - margin;
+    // insets = 角色在窗内四周的透明留白（左, 上, 右, 下，物理像素）。贴边要让「角色」
+    // 贴边而不是「窗」：窗比角色大一圈（两侧对称留白 + 头顶常驻说话留白），按窗口边
+    // 留 margin 会把角色顶出屏幕一大截（右 / 下各空一条）。把留白量加回边界，角色边就
+    // 正好距屏 margin；窗口允许探出工作区，探出的只是那圈透明留白。
+    let (il, it, ir, ib) = insets;
+    let min_x = work.0 + margin - il;
+    // 顶部安全带对「角色上沿」生效：角色永不钻进主标题栏按钮那条带。
+    let min_y = work.1 + margin.max(top_safe) - it;
+    let max_x = work.0 + work.2 - box_size.0 - margin + ir;
+    let max_y = work.1 + work.3 - box_size.1 - margin + ib;
     (
         point.0.clamp(min_x, max_x.max(min_x)),
         point.1.clamp(min_y, max_y.max(min_y)),
     )
+}
+
+/// 角色在窗内四周的留白（物理像素：左, 上, 右, 下）。
+///
+/// 桌宠窗比角色大一圈：两侧对称留白（窗宽有下限 `PET_BOX_MIN_W`）、头顶常驻说话
+/// 留白（`PET_SPEECH_HEADROOM`）。贴边时要抵消这圈留白，角色才真的贴到屏幕边。
+/// `hit_w == 0`（整窗，就地菜单打开时）没有可言的留白，返回全 0 —— 吸附本就不在
+/// 开菜单时发生。入参是逻辑像素，按 DPR 换算成物理 insets，与 clamp 的物理口径一致。
+pub(crate) fn hit_insets(
+    box_logical: (u32, u32),
+    hit_logical: (u32, u32, u32, u32),
+    scale: f64,
+) -> (i32, i32, i32, i32) {
+    let (bw, bh) = (box_logical.0 as i32, box_logical.1 as i32);
+    let (hx, hy, hw, hh) = (
+        hit_logical.0 as i32,
+        hit_logical.1 as i32,
+        hit_logical.2 as i32,
+        hit_logical.3 as i32,
+    );
+    if hw == 0 || hh == 0 {
+        return (0, 0, 0, 0);
+    }
+    let to_phys = |v: i32| ((v.max(0) as f64) * scale).round() as i32;
+    (
+        to_phys(hx),
+        to_phys(hy),
+        to_phys(bw - hx - hw),
+        to_phys(bh - hy - hh),
+    )
+}
+
+/// 当前实际 insets（读全局窗尺寸与命中矩形，都是逻辑像素）。
+fn current_hit_insets(scale: f64) -> (i32, i32, i32, i32) {
+    hit_insets(bubble_box(), bubble_hit_rect(), scale)
 }
 
 /// 桌宠窗该算在哪块屏：以**窗口中心**为准。
@@ -353,7 +396,13 @@ pub(crate) fn monitor_for_box<R: Runtime>(
 /// below the titlebar-safe band. 主屏只是「默认落点」，不是唯一允许的屏幕。
 pub(crate) fn clamp_bubble_position<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) -> (i32, i32) {
     match monitor_for_box(app, (x, y)) {
-        Some((work, scale)) => clamp_to_work_area(work, bubble_box_physical(scale), (x, y), scale),
+        Some((work, scale)) => clamp_to_work_area(
+            work,
+            bubble_box_physical(scale),
+            (x, y),
+            scale,
+            current_hit_insets(scale),
+        ),
         None => (x, y),
     }
 }
@@ -767,11 +816,15 @@ pub fn hide_ai_hub<R: Runtime>(app: &AppHandle<R>) {
 // 测试模块放文件末尾：`clippy::items_after_test_module` 不喜欢测试后面还有别的函数。
 #[cfg(test)]
 mod bubble_box_tests {
-    use super::{bottom_center_anchor, clamp_bubble_box, clamp_to_work_area, WorkArea};
+    use super::{
+        bottom_center_anchor, clamp_bubble_box, clamp_to_work_area, hit_insets, WorkArea,
+    };
 
     /// 主屏 1920×1040（0,0）+ 右侧副屏 1920×1040（1920,0），都是物理像素。
     const PRIMARY: WorkArea = (0, 0, 1920, 1040);
     const SECONDARY: WorkArea = (1920, 0, 1920, 1040);
+    /// 现有用例用整窗 insets（0）保持旧语义；贴边抵消由单独用例覆盖。
+    const NO_INSETS: (i32, i32, i32, i32) = (0, 0, 0, 0);
 
     #[test]
     fn growing_for_the_menu_keeps_the_feet_on_the_ground() {
@@ -809,17 +862,17 @@ mod bubble_box_tests {
     fn a_point_on_the_secondary_monitor_stays_on_it() {
         // 副屏上的正常位置原样通过：夹取只认拿到的这块 work area，不再回主屏。
         assert_eq!(
-            clamp_to_work_area(SECONDARY, (192, 208), (3000, 700), 1.0),
+            clamp_to_work_area(SECONDARY, (192, 208), (3000, 700), 1.0, NO_INSETS),
             (3000, 700)
         );
         // 越出副屏左缘也只在副屏内收，不会算成主屏的坐标。
         assert_eq!(
-            clamp_to_work_area(SECONDARY, (192, 208), (1900, 700), 1.0),
+            clamp_to_work_area(SECONDARY, (192, 208), (1900, 700), 1.0, NO_INSETS),
             (1944, 700)
         );
         // 副屏右/下越界同理（1920+1920-192-24 = 3624，1040-208-24 = 808）。
         assert_eq!(
-            clamp_to_work_area(SECONDARY, (192, 208), (4000, 2000), 1.0),
+            clamp_to_work_area(SECONDARY, (192, 208), (4000, 2000), 1.0, NO_INSETS),
             (3624, 808)
         );
     }
@@ -829,7 +882,7 @@ mod bubble_box_tests {
         // 副屏上撑高：底边不动，X 不跳回主屏。
         let before = (2900, 600);
         let anchored = bottom_center_anchor(before, (192, 208), 192, 248);
-        let after = clamp_to_work_area(SECONDARY, (192, 248), anchored, 1.0);
+        let after = clamp_to_work_area(SECONDARY, (192, 248), anchored, 1.0, NO_INSETS);
         assert_eq!(after, (2900, 560));
         assert_eq!(before.1 + 208, after.1 + 248);
         assert!(after.0 >= SECONDARY.0, "不许被夹回主屏");
@@ -839,7 +892,7 @@ mod bubble_box_tests {
     fn the_top_safe_band_holds_on_a_secondary_monitor() {
         // 顶部 96 逻辑像素一直留给主标题栏；副屏也照同一条规则。
         assert_eq!(
-            clamp_to_work_area(SECONDARY, (192, 208), (2100, 10), 1.0),
+            clamp_to_work_area(SECONDARY, (192, 208), (2100, 10), 1.0, NO_INSETS),
             (2100, 96)
         );
     }
@@ -847,9 +900,10 @@ mod bubble_box_tests {
     #[test]
     fn margins_scale_with_the_monitor_dpr() {
         // 150%：边距 24→36、安全带 96→144，窗 192×208 → 288×312。
-        let (x, y) = clamp_to_work_area((0, 0, 2560, 1400), (288, 312), (0, 0), 1.5);
+        let (x, y) = clamp_to_work_area((0, 0, 2560, 1400), (288, 312), (0, 0), 1.5, NO_INSETS);
         assert_eq!((x, y), (36, 144));
-        let (max_x, max_y) = clamp_to_work_area((0, 0, 2560, 1400), (288, 312), (9_000, 9_000), 1.5);
+        let (max_x, max_y) =
+            clamp_to_work_area((0, 0, 2560, 1400), (288, 312), (9_000, 9_000), 1.5, NO_INSETS);
         assert_eq!((max_x, max_y), (2560 - 288 - 36, 1400 - 312 - 36));
     }
 
@@ -857,13 +911,35 @@ mod bubble_box_tests {
     fn clamping_is_idempotent() {
         // 拖动松手会连夹两次（前端吸附 + 后端持久化），第二次不该再动。
         for work in [PRIMARY, SECONDARY] {
-            let once = clamp_to_work_area(work, (192, 208), (9999, -40), 1.0);
-            assert_eq!(clamp_to_work_area(work, (192, 208), once, 1.0), once);
+            let once = clamp_to_work_area(work, (192, 208), (9999, -40), 1.0, NO_INSETS);
+            assert_eq!(clamp_to_work_area(work, (192, 208), once, 1.0, NO_INSETS), once);
         }
         // 同一组坐标在相邻两块屏上得到不同结果：夹取真的跟着 work area 走。
         assert_ne!(
-            clamp_to_work_area(PRIMARY, (192, 208), (1900, 700), 1.0),
-            clamp_to_work_area(SECONDARY, (192, 208), (1900, 700), 1.0)
+            clamp_to_work_area(PRIMARY, (192, 208), (1900, 700), 1.0, NO_INSETS),
+            clamp_to_work_area(SECONDARY, (192, 208), (1900, 700), 1.0, NO_INSETS)
         );
+    }
+
+    #[test]
+    fn the_character_hugs_the_edge_not_the_window_box() {
+        // 112 档：窗 192×208（两侧各留 40、头顶留 96），命中矩形 = 角色那块 112×112。
+        // 右下贴边时，角色右 / 下边应正好距屏 24，而不是窗口边距屏 24。
+        let ins = hit_insets((192, 208), (40, 96, 112, 112), 1.0);
+        assert_eq!(ins, (40, 96, 40, 0));
+        // 远超右下：窗允许探出，角色右边 = x + 40 + 112，应距屏右 24 → x+152 = 1920-24。
+        let (x, y) = clamp_to_work_area(PRIMARY, (192, 208), (9_000, 9_000), 1.0, ins);
+        assert_eq!(x + 40 + 112, PRIMARY.2 - 24, "角色右边距屏 24");
+        assert_eq!(y + 96 + 112, PRIMARY.3 - 24, "角色底边距屏 24");
+        // 左 / 顶贴边：角色左边距屏 24；顶部安全带对角色上沿生效（上沿距屏 96）。
+        let (lx, ty) = clamp_to_work_area(PRIMARY, (192, 208), (-9_000, -9_000), 1.0, ins);
+        assert_eq!(lx + 40, 24, "角色左边距屏 24");
+        assert_eq!(ty + 96, 96, "角色上沿压在安全带上");
+    }
+
+    #[test]
+    fn full_window_hit_rect_disables_inset_compensation() {
+        // 就地菜单打开 = 整窗可点（hit_w == 0）：没有留白可抵消，退回按窗口边夹。
+        assert_eq!(hit_insets((192, 320), (0, 0, 0, 0), 1.0), (0, 0, 0, 0));
     }
 }

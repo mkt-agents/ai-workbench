@@ -58,6 +58,11 @@ pub struct WecomState {
     pub last_target: Mutex<Option<OutTarget>>,
     /// DSH 引擎（常驻 `dsh --profile acp` 子进程）；天玑档时保持 Stopped。
     pub dsh: Arc<DshEngine>,
+    /// SkyWalking 排障：`(OAP 地址, 可选 "Key: Value" header)`，空地址 = 不下发 skywalking 工具。
+    pub skywalking: Mutex<(String, String)>,
+    pub skywalking_timezone: Mutex<Option<i32>>,
+    /// 逆向文档自动更新 + 群通知的配置快照（设置页下发）。
+    pub docgen: Mutex<crate::wecom_docgen::DocgenConfig>,
 }
 
 /// 审批码有效期（与 harness 的 APPROVAL_WAIT 对齐）
@@ -85,6 +90,9 @@ impl WecomState {
             approval_seq: AtomicU32::new(0),
             last_target: Mutex::new(None),
             dsh: Arc::new(DshEngine::new()),
+            skywalking: Mutex::new((String::new(), String::new())),
+            skywalking_timezone: Mutex::new(None),
+            docgen: Mutex::new(crate::wecom_docgen::DocgenConfig::default()),
         }
     }
 }
@@ -136,6 +144,42 @@ pub struct WecomApplyRequest {
     /// DSH 引擎的思考强度（空 = provider 默认）
     #[serde(default)]
     pub dsh_effort: String,
+    /// 问答模式：`doc`（文档优先）| `doc_code`（文档+代码回退）| `code`（仅代码）。空 = doc_code。
+    #[serde(default)]
+    pub answer_mode: String,
+    /// 逆向文档目录（相对工作区），默认 `doc`。
+    #[serde(default)]
+    pub doc_dir: String,
+    /// SkyWalking OAP 地址（空 = 不下发排障工具）。
+    #[serde(default)]
+    pub skywalking_addr: String,
+    /// SkyWalking 可选 header（`Key: Value`，鉴权版 OAP 用）。
+    #[serde(default)]
+    pub skywalking_header: String,
+    /// OAP fixed UTC offset in minutes; absent uses the local clock.
+    #[serde(default)]
+    pub skywalking_timezone_offset_minutes: Option<i32>,
+    /// 每日自动更新逆向文档：开关。
+    #[serde(default)]
+    pub auto_update_enabled: bool,
+    /// 每日自动更新时间（`HH:MM`），默认 23:00。
+    #[serde(default)]
+    pub auto_update_time: String,
+    /// 要跟踪的 release 分支名，默认 `release`。
+    #[serde(default)]
+    pub release_branch: String,
+    /// 企微群机器人 webhook URL（或仅 key）；变动通知推到这里。可为 enc:v1: 密文。
+    #[serde(default)]
+    pub webhook_url: String,
+    /// 文档更新后自动 commit（默认开）。
+    #[serde(default = "default_true")]
+    pub auto_commit: bool,
+    /// commit 后 push 到远端（默认关）。
+    #[serde(default)]
+    pub auto_push: bool,
+    /// 全局并发回合上限（默认 2，范围 1–8；0/越界回落默认）。
+    #[serde(default)]
+    pub max_jobs: usize,
 }
 
 fn default_true() -> bool {
@@ -151,6 +195,17 @@ pub fn normalize_engine(raw: &str) -> String {
     }
 }
 
+/// 问答模式归一化：`doc` / `code` / `doc_code` / `auto` 原样；空或未知回落 `auto`
+/// （auto = 按本条消息意图分流：排障走监控+代码、要代码走代码、其余文档优先）。
+pub fn normalize_answer_mode(raw: &str) -> String {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "doc" => "doc".into(),
+        "code" => "code".into(),
+        "doc_code" => "doc_code".into(),
+        _ => "auto".into(),
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WecomStatus {
@@ -159,6 +214,10 @@ pub struct WecomStatus {
     pub enabled: bool,
     pub engine: String,
     pub dsh: DshStatus,
+    /// 最近一次长连接错误（空串 = 无）。
+    pub last_error: String,
+    /// 已连接时长（毫秒）；未连上为 None。
+    pub connected_ms: Option<u64>,
 }
 
 /// 列 DSH 引擎可用模型（ACP `configOptions`）：设置页「DSH 模型」下拉用。
@@ -183,6 +242,113 @@ pub async fn wecom_dsh_sync(
     Ok(report)
 }
 
+/// 连通自检：校验 release 分支是否存在、webhook 是否可达、SkyWalking 是否可查。
+/// 返回一段人类可读的多行结果（每项一行，✅/⚠️/❌）。设置页「测试连通」按钮用。
+#[tauri::command]
+pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, String> {
+    let (cfg, sky) = {
+        let docgen = state.docgen.lock().await.clone();
+        let sky = state.skywalking.lock().await.clone();
+        (docgen, sky)
+    };
+    let mut lines: Vec<String> = Vec::new();
+
+    // 1) 工作区 + release 分支
+    let workspace = cfg.workspace.trim().to_string();
+    if workspace.is_empty() {
+        lines.push("⚠️ 工作区未配置（自动更新依赖它）".into());
+    } else if crate::git_commands::ensure_git_repo(&workspace).is_err() {
+        lines.push(format!("❌ 工作区不是 Git 仓库：{workspace}"));
+    } else {
+        let branch = cfg.branch_or_default();
+        let ws = workspace.clone();
+        let br = branch.clone();
+        let exists = tokio::task::spawn_blocking(move || {
+            // 本地或远端跟踪分支任一存在即可
+            let local = crate::git_commands::git_output(&ws, &["rev-parse", "--verify", "-q", &br]);
+            let remote = crate::git_commands::git_output(
+                &ws,
+                &["rev-parse", "--verify", "-q", &format!("origin/{br}")],
+            );
+            local.map(|o| o.status.success()).unwrap_or(false)
+                || remote.map(|o| o.status.success()).unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+        if exists {
+            lines.push(format!("✅ release 分支「{branch}」存在"));
+        } else {
+            lines.push(format!(
+                "⚠️ 未找到分支「{branch}」（本地与 origin 都没有，自动更新会失败）"
+            ));
+        }
+    }
+
+    // 2) webhook
+    if cfg.webhook_url.trim().is_empty() {
+        lines.push("⚠️ 群 webhook 未配置（不会推送变动通知）".into());
+    } else {
+        match crate::wecom_docgen::send_webhook(
+            &cfg.webhook_url,
+            "✅ AI Workbench 连通测试：逆向文档通道可用。",
+        )
+        .await
+        {
+            Ok(()) => lines.push("✅ 群 webhook 可达（已发一条测试消息）".into()),
+            Err(e) => lines.push(format!("❌ 群 webhook 失败：{e}")),
+        }
+    }
+
+    // 3) SkyWalking
+    if sky.0.trim().is_empty() {
+        lines.push("ℹ️ 未配置 SkyWalking（线上排障不启用）".into());
+    } else {
+        let offset = *state.skywalking_timezone.lock().await;
+        let mut probe = serde_json::json!({ "keyword": "", "minutes": 5 });
+        if let Some(offset) = offset { probe["timezone_offset_minutes"] = serde_json::json!(offset); }
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            crate::wecom_skywalking::run(&sky.0, &sky.1, &probe),
+        )
+        .await
+        {
+            Ok(Ok(_)) => lines.push("✅ SkyWalking 可查（GraphQL 正常响应）".into()),
+            Ok(Err(e)) => lines.push(format!("❌ SkyWalking 查询失败：{e}")),
+            Err(_) => lines.push("❌ SkyWalking 查询超时（检查地址/网络）".into()),
+        }
+    }
+
+    Ok(lines.join("\n"))
+}
+
+/// 「立即更新一次」逆向文档（设置页按钮）：手动触发一轮，便于验证配置。
+/// 返回一句人类可读的结果摘要。
+#[tauri::command]
+pub async fn wecom_docgen_run_now(
+    app: AppHandle,
+    state: State<'_, WecomState>,
+) -> Result<String, String> {
+    let cfg = state.docgen.lock().await.clone();
+    if cfg.workspace.trim().is_empty() {
+        return Err("请先填写工作区路径（即逆向文档所在的 Git 仓库）".into());
+    }
+    let report = crate::wecom_docgen::run_update(&app, &cfg).await?;
+    if let Some(reason) = report.skipped_reason {
+        return Ok(format!("已跳过：{reason}"));
+    }
+    Ok(format!(
+        "已更新：分支 {}，{} 个变更文件，群通知{}。\n{}",
+        report.branch,
+        report.new_commits,
+        if report.pushed { "已推送" } else { "未推送（检查 webhook）" },
+        if report.updated_docs.is_empty() {
+            "（无摘要）".to_string()
+        } else {
+            report.updated_docs
+        }
+    ))
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WecomPairingView {
@@ -194,6 +360,7 @@ pub struct WecomPairingView {
 #[tauri::command]
 pub async fn wecom_channel_status(state: State<'_, WecomState>) -> Result<WecomStatus, String> {
     let (s, detail) = state.sock.status().await;
+    let (last_error, connected_ms) = state.sock.detail().await;
     let enabled = state.applied.lock().await.is_some();
     let engine = state.orch.engine.lock().await.clone();
     let dsh = state.dsh.status().await;
@@ -203,6 +370,8 @@ pub async fn wecom_channel_status(state: State<'_, WecomState>) -> Result<WecomS
         enabled,
         engine,
         dsh,
+        last_error,
+        connected_ms,
     })
 }
 
@@ -212,6 +381,9 @@ pub async fn wecom_channel_apply(
     state: State<'_, WecomState>,
     req: WecomApplyRequest,
 ) -> Result<WecomStatus, String> {
+    if req.skywalking_timezone_offset_minutes.is_some_and(|v| !(-720..=840).contains(&v)) {
+        return Err("OAP时区偏移须在UTC-12至UTC+14之间".into());
+    }
     // 解密 Secret（机器人长连接 + 业务 API 各一套，后者选填）
     let secret = crate::secret_protect::unprotect_secret(req.bot_secret.trim())
         .map_err(|e| format!("Secret 解密失败: {e}"))?;
@@ -269,10 +441,65 @@ pub async fn wecom_channel_apply(
     } else {
         req.workspace.trim().to_string()
     };
+    // DSH 档随会话下发的 MCP 服务：从 agent 配置里取（总开关关掉则不带）。
+    let dsh_mcp = req
+        .agent
+        .as_ref()
+        .filter(|a| a.mcp_enabled)
+        .map(|a| a.mcp.clone())
+        .unwrap_or_default();
     if let Some(agent) = req.agent {
         *state.orch.agent.lock().await = Some(agent);
     }
     *state.orch.engine.lock().await = engine.clone();
+    // 全局并发上限（0/越界在 set_max_jobs 内回落默认）。
+    state.orch.set_max_jobs(req.max_jobs);
+
+    // Changing query namespace invalidates short-lived investigation cursors, including switching back.
+    let old_sky = state.skywalking.lock().await.clone();
+    let old_zone = *state.skywalking_timezone.lock().await;
+    let old_bot = state.applied.lock().await.as_ref().map(|c| c.bot_id.clone()).unwrap_or_default();
+    let old_workspace = state.dsh.workspace().await;
+    if old_sky != (req.skywalking_addr.trim().to_string(), req.skywalking_header.trim().to_string())
+        || old_zone != req.skywalking_timezone_offset_minutes || old_bot != req.bot_id.trim()
+        || old_workspace != workspace {
+        crate::wecom_investigation::clear_contexts();
+    }
+    // SkyWalking 排障地址（空 = 问答时不下发 skywalking 工具）。
+    *state.skywalking.lock().await = (
+        req.skywalking_addr.trim().to_string(),
+        req.skywalking_header.trim().to_string(),
+    );
+
+    *state.skywalking_timezone.lock().await = req.skywalking_timezone_offset_minutes;
+
+    // 问答模式写进 orchestrator 的 agent 配置副本里（供 run_agent_and_stream 读）。
+    {
+        let mut g = state.orch.answer_mode.lock().await;
+        *g = normalize_answer_mode(&req.answer_mode);
+    }
+    {
+        let d = req.doc_dir.trim();
+        *state.orch.doc_dir.lock().await =
+            if d.is_empty() { "doc".into() } else { d.to_string() };
+    }
+
+    // 逆向文档自动更新配置（webhook 可能是 enc:v1: 密文）。
+    let webhook_plain = if req.webhook_url.trim().is_empty() {
+        String::new()
+    } else {
+        crate::secret_protect::unprotect_secret(req.webhook_url.trim()).unwrap_or_default()
+    };
+    *state.docgen.lock().await = crate::wecom_docgen::DocgenConfig {
+        enabled: req.auto_update_enabled,
+        time: req.auto_update_time.trim().to_string(),
+        release_branch: req.release_branch.trim().to_string(),
+        workspace: workspace.clone(),
+        doc_dir: req.doc_dir.trim().to_string(),
+        webhook_url: webhook_plain,
+        auto_commit: req.auto_commit,
+        auto_push: req.auto_push,
+    };
 
     if !req.enabled {
         state.sock.stop().await;
@@ -307,6 +534,8 @@ pub async fn wecom_channel_apply(
                 req.dsh_effort.trim().to_string(),
             )
             .await;
+        // MCP 服务随会话下发（ACP mcpServers）；总开关关掉时 dsh_mcp 为空。
+        state.dsh.set_mcp(dsh_mcp).await;
         // 档位/工作区变了就带 restart 标记；否则 ensure_ready 命中 Ready 会直接返回。
         kick_dsh(&app, changed);
     } else {
@@ -486,6 +715,24 @@ pub fn wecom_protect_secret(plain: String) -> Result<String, String> {
 #[tauri::command]
 pub fn wecom_reveal_secret(stored: String) -> Result<String, String> {
     crate::secret_protect::unprotect_secret(stored.trim())
+}
+
+/// 读通道排障日志最后 N 行（设置页「通道日志」折叠区）。N 缺省 200，封顶 2000。
+#[tauri::command]
+pub fn wecom_log_tail(lines: Option<usize>) -> Result<String, String> {
+    let n = lines.unwrap_or(200).clamp(1, 2000);
+    Ok(crate::wecom_log::tail(n))
+}
+
+/// 读最近若干条企微会话旁证（设置页「会话日志」折叠区）。
+/// 不传 key 则汇总所有会话文件；按时间倒序，最多 `limit`（缺省 30，封顶 200）条。
+#[tauri::command]
+pub fn wecom_session_recent(
+    key: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::wecom_session::SessionLogEntry>, String> {
+    let n = limit.unwrap_or(30).clamp(1, 200);
+    Ok(crate::wecom_session::recent_entries(key.as_deref(), n))
 }
 
 fn emit_status(app: &AppHandle, st: &WecomStatus) {

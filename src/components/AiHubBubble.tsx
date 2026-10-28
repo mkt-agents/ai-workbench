@@ -1004,10 +1004,19 @@ export default function AiHubBubble() {
       const margin = Math.round(EDGE_MARGIN_LOGICAL * scale);
       const topSafe = Math.round(TOP_SAFE_LOGICAL * scale);
       const work = monitor.workArea;
-      const minX = work.position.x + margin;
-      const maxX = work.position.x + work.size.width - size.width - margin;
-      const minY = work.position.y + Math.max(margin, topSafe);
-      const maxY = work.position.y + work.size.height - size.height - margin;
+      // 角色在窗内四周的留白（物理像素）：窗比角色大一圈 —— 两侧对称留白（窗宽有下限
+      // PET_BOX_MIN_W）、头顶常驻说话留白 PET_SPEECH_HEADROOM，底边则贴窗底。贴边要让
+      // 「角色」贴屏而不是「窗」，否则右 / 下会空出这圈留白（截图里那条）。与后端
+      // tray/bubble.rs 的 hit_insets 同口径。拖拽时菜单必关，用无菜单口径即可。
+      const petSize = cfgRef.current.size;
+      const inLeft = Math.round((Math.max(petSize, PET_BOX_MIN_W) - petSize) / 2 * scale);
+      const inTop = Math.round(PET_SPEECH_HEADROOM * scale);
+      const inRight = inLeft;
+      const inBottom = 0;
+      const minX = work.position.x + margin - inLeft;
+      const maxX = work.position.x + work.size.width - size.width - margin + inRight;
+      const minY = work.position.y + Math.max(margin, topSafe) - inTop;
+      const maxY = work.position.y + work.size.height - size.height - margin + inBottom;
       const centerX = pos.x + size.width / 2;
       const midX = work.position.x + work.size.width / 2;
       const x = centerX < midX ? minX : Math.max(minX, maxX);

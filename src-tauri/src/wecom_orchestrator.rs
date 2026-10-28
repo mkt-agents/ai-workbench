@@ -16,7 +16,7 @@ use crate::agent_protocol::{Block, Message};
 use crate::ai_commands::AIModelConfig;
 use crate::mcp::McpServerSpec;
 use crate::wecom_channel::{ApprovalKind, PendingApproval, WecomState, APPROVAL_TTL};
-use crate::wecom_dsh::{permission_options, permission_summary, DshEvent};
+use crate::wecom_dsh::{permission_options, permission_summary, DshEvent, DshResponder};
 use crate::wecom_policy::{GateDecision, MsgDeduper, PolicyState};
 use crate::wecom_proto::{self, EventCallback, MsgCallback};
 use crate::wecom_sanitize::redact_local_paths;
@@ -24,6 +24,9 @@ use crate::wecom_session::{self, SessionKey};
 use crate::wecom_ws::WecomSocket;
 
 const MAX_GLOBAL_JOBS: usize = 2;
+/// 全局并发上限的允许范围（设置页可调；fail-safe 到默认）。
+const MIN_GLOBAL_JOBS: usize = 1;
+const MAX_GLOBAL_JOBS_CAP: usize = 8;
 /// DSH 单回合上限：比天玑的 420s 看门狗宽，因为 ACP 侧可能连着跑很久的工具。
 const DSH_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 /// 回合里超过这么久没有任何事件，就给聊天里补一句「还在处理」，别让人对着「思考中」干等。
@@ -96,10 +99,48 @@ pub struct Orchestrator {
     pub bot_display_name: Arc<Mutex<String>>,
     /// 回话引擎：`tianji` | `dsh`（由设置页下发）
     pub engine: Arc<Mutex<String>>,
+    /// 问答模式：`doc`（文档优先）| `doc_code`（文档+代码回退）| `code`（仅代码）。
+    pub answer_mode: Arc<Mutex<String>>,
+    /// 逆向文档目录（相对工作区），默认 `doc`。
+    pub doc_dir: Arc<Mutex<String>>,
     deduper: Arc<Mutex<MsgDeduper>>,
     /// 同会话串行
     session_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// 当前每个会话正在跑的那一轮（供「停止」指令真正取消 + 收尾卡住的气泡）。
+    running: Arc<Mutex<HashMap<String, RunningTurn>>>,
     global_jobs: Arc<AtomicUsize>,
+    /// 全局并发上限（设置页可调；默认 MAX_GLOBAL_JOBS）。
+    max_jobs: Arc<AtomicUsize>,
+}
+
+/// 一个会话正在进行中的回合：记录出站目标 + 如何取消。
+struct RunningTurn {
+    /// 平台回帧用的 req_id 与当前正文流 id（取消后往这条补 finish 帧，收尾「正在思考…」）。
+    req_id: String,
+    stream_id: String,
+    cancel: CancelHandle,
+}
+
+/// 取消句柄：两档引擎各一套。
+enum CancelHandle {
+    /// 天玑档：按 request_id 走 `cancellation::cancel_request`。
+    Tianji { request_id: String },
+    /// DSH 档：发 `session/cancel`。
+    Dsh { responder: DshResponder },
+}
+
+impl RunningTurn {
+    /// 真正中断这一轮。返回后调用方还要给 `stream_id` 补一帧 finish 收尾气泡。
+    fn cancel(&self) {
+        match &self.cancel {
+            CancelHandle::Tianji { request_id } => {
+                crate::cancellation::cancel_request(request_id);
+            }
+            CancelHandle::Dsh { responder } => {
+                responder.cancel();
+            }
+        }
+    }
 }
 
 impl Orchestrator {
@@ -113,10 +154,24 @@ impl Orchestrator {
             agent: Arc::new(Mutex::new(None)),
             bot_display_name: Arc::new(Mutex::new(String::new())),
             engine: Arc::new(Mutex::new("tianji".to_string())),
+            answer_mode: Arc::new(Mutex::new("auto".to_string())),
+            doc_dir: Arc::new(Mutex::new("doc".to_string())),
             deduper: Arc::new(Mutex::new(MsgDeduper::new(2048))),
             session_locks: Arc::new(Mutex::new(HashMap::new())),
+            running: Arc::new(Mutex::new(HashMap::new())),
             global_jobs: Arc::new(AtomicUsize::new(0)),
+            max_jobs: Arc::new(AtomicUsize::new(MAX_GLOBAL_JOBS)),
         }
+    }
+
+    /// 设置全局并发上限（设置页下发）；越界回落默认值。
+    pub fn set_max_jobs(&self, n: usize) {
+        let v = if (MIN_GLOBAL_JOBS..=MAX_GLOBAL_JOBS_CAP).contains(&n) {
+            n
+        } else {
+            MAX_GLOBAL_JOBS
+        };
+        self.max_jobs.store(v, Ordering::SeqCst);
     }
 
     pub fn handle_msg(self: &Arc<Self>, app: AppHandle, msg: MsgCallback) {
@@ -212,12 +267,26 @@ impl Orchestrator {
         let is_group = msg.chattype == "group";
         let session = if is_group {
             let chatid = msg.chatid.clone().unwrap_or_default();
-            // Platform already filters group callbacks to @-bot deliveries; treat as mentioned
-            // so strip_mention false-negatives (stripped/@ not at start) do not silent-drop.
-            let _ = mentioned;
+            // @ 判定优先用平台显式字段（body_mentioned）；该字段缺失时回落到
+            // 「平台已过滤非@投递」的宽松假设（兼容老策略，避免 strip_mention 漏判导致静默丢）。
+            let is_mentioned = match msg.body_mentioned {
+                Some(b) => b,
+                None => {
+                    if !mentioned {
+                        crate::wecom_log::write(
+                            "mention",
+                            &format!(
+                                "msgid={} 无显式@字段且未命中 strip_mention，按平台已过滤假设放行",
+                                msg.msgid
+                            ),
+                        );
+                    }
+                    true
+                }
+            };
             let decision = {
                 let policy = self.policy.lock().await;
-                policy.gate_group(&chatid, true)
+                policy.gate_group(&chatid, is_mentioned)
             };
             if decision != GateDecision::Allow {
                 return;
@@ -249,8 +318,48 @@ impl Orchestrator {
             }
         };
 
-        // 全局并发
-        if self.global_jobs.load(Ordering::SeqCst) >= MAX_GLOBAL_JOBS {
+        // 「停止」指令：在拿会话串行锁**之前**处理（上一轮没结束它拿不到锁）。
+        // 真正取消那一轮并给卡住的「正在思考…」气泡补一帧 finish，而不是当普通消息答一句。
+        if is_stop_command(&user_text) {
+            let key = session.as_str();
+            let running = {
+                let mut map = self.running.lock().await;
+                map.remove(&key)
+            };
+            match running {
+                Some(rt) => {
+                    rt.cancel();
+                    crate::wecom_log::write("stop", &format!("msgid={} 取消会话 {key} 的在跑回合", msg.msgid));
+                    // 收尾原气泡：往上一轮的 stream 补 finish（幂等，多发无害）。
+                    send_finish(&self.sock, &rt.req_id, &rt.stream_id, "已停止，本轮已取消。").await;
+                    // 再对「停止」这条本身回执一句。
+                    let _ = self
+                        .sock
+                        .send_raw(wecom_proto::respond_stream(
+                            &msg.req_id,
+                            &format!("stop-{}", msg.msgid),
+                            "已停止当前任务。",
+                            true,
+                        ))
+                        .await;
+                }
+                None => {
+                    crate::wecom_log::write("stop", &format!("msgid={} 会话 {key} 无在跑回合", msg.msgid));
+                    let _ = self
+                        .sock
+                        .send_raw(wecom_proto::respond_stream(
+                            &msg.req_id,
+                            &format!("stop-{}", msg.msgid),
+                            "当前没有正在进行的任务。",
+                            true,
+                        ))
+                        .await;
+                }
+            }
+            return;
+        }
+
+        if self.global_jobs.load(Ordering::SeqCst) >= self.max_jobs.load(Ordering::SeqCst) {
             let tip = "当前还有任务在跑，请稍后再试。";
             let _ = self
                 .sock
@@ -407,12 +516,32 @@ impl Orchestrator {
     /// - 授权走 `session/request_permission` → 企微审批码（只有一次性授权）；
     /// - 图片/文件首期降级为文本线索（ACP 图片要求 attachment store + 图像 route）。
     async fn run_dsh_turn(
-        &self,
-        app: &AppHandle,
-        msg: &MsgCallback,
-        session: &SessionKey,
-        user_text: &str,
-        stream_id: &str,
+        &self, app: &AppHandle, msg: &MsgCallback, session: &SessionKey,
+        user_text: &str, stream_id: &str,
+    ) -> Result<(), String> {
+        let request = format!("wecom-preflight-{}", msg.msgid);
+        let _guard = crate::cancellation::CancelGuard::new(&request);
+        self.running.lock().await.insert(session.as_str(), RunningTurn {
+            req_id: msg.req_id.clone(), stream_id: stream_id.to_string(),
+            cancel: CancelHandle::Tianji { request_id: request.clone() },
+        });
+        let result = tokio::select! {
+            biased;
+            _ = async {
+                loop {
+                    if crate::cancellation::is_cancelled(&request) { break; }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            } => Ok(()),
+            result = self.run_dsh_turn_inner(app, msg, session, user_text, stream_id, &request) => result,
+        };
+        self.unregister_running(session, stream_id).await;
+        result
+    }
+
+    async fn run_dsh_turn_inner(
+        &self, app: &AppHandle, msg: &MsgCallback, session: &SessionKey,
+        user_text: &str, stream_id: &str, preflight_request: &str,
     ) -> Result<(), String> {
         let state = app.state::<WecomState>();
         let engine = Arc::clone(&state.dsh);
@@ -470,8 +599,71 @@ impl Orchestrator {
                 &format!("msgid={} apply_selection timeout", msg.msgid),
             ),
         }
-        let prompt_blocks = build_dsh_prompt(user_text, &msg.media, engine.image_prompt_enabled().await).await;
+        // 问答模式规则也带进 DSH 档（它用 DSH 自己的工具读文档/代码，这里用 prompt 引导先查文档）。
+        let answer_mode = self.answer_mode.lock().await.clone();
+        let doc_dir = {
+            let d = self.doc_dir.lock().await.clone();
+            if d.trim().is_empty() { "doc".to_string() } else { d }
+        };
+        let mode_rules = answer_mode_rules(&answer_mode, &doc_dir, user_text, true);
+        // 排障类消息 + 已配 SkyWalking 时，Rust 先预取日志/调用链，作为上下文注入 prompt，
+        // 让 DSH 结合代码排查——这是 dsh 档的「排障能力」等价实现。
+        let (addr, header) = state.skywalking.lock().await.clone();
+        let offset = *state.skywalking_timezone.lock().await;
+        let bot = state.applied.lock().await.as_ref().map(|c| c.bot_id.clone()).unwrap_or_default();
+        let context_key = crate::wecom_investigation::context_key(
+            &bot, &session.as_str(), &msg.userid, &repo, &addr, &header, offset,
+        );
+        let zone = chrono::FixedOffset::east_opt(offset.unwrap_or_else(|| chrono::Local::now().offset().local_minus_utc() / 60) * 60)
+            .ok_or("OAP时区配置无效")?;
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let investigation = crate::wecom_investigation::investigate(
+            &addr, &header, &context_key, user_text, chrono::Utc::now().with_timezone(&zone),
+            preflight_request, progress_tx,
+        );
+        tokio::pin!(investigation);
+        let mut progress_clock = Instant::now() - Duration::from_secs(1);
+        let mut progress_open = true;
+        let sky_context = loop {
+            tokio::select! {
+                result = &mut investigation => break result?,
+                note = progress_rx.recv(), if progress_open => {
+                    match note {
+                        Some(note) if progress_clock.elapsed() >= Duration::from_millis(800) => {
+                            let _ = self.sock.send_raw(wecom_proto::respond_stream(&req_id, stream_id, &note, false)).await;
+                            progress_clock = Instant::now();
+                        }
+                        None => progress_open = false,
+                        _ => {}
+                    }
+                }
+            }
+        };
+        if crate::cancellation::is_cancelled(preflight_request) { return Ok(()); }
+        let prompt_blocks = build_dsh_prompt(
+            user_text,
+            &msg.media,
+            engine.image_prompt_enabled().await,
+            &mode_rules,
+            &sky_context,
+        )
+        .await;
         let mut turn = engine.prompt(&acp_session, prompt_blocks).await?;
+
+        // 登记为该会话「在跑的回合」，供「停止」指令 session/cancel + 收尾气泡。
+        {
+            let mut map = self.running.lock().await;
+            map.insert(
+                session.as_str(),
+                RunningTurn {
+                    req_id: req_id.clone(),
+                    stream_id: stream_id.to_string(),
+                    cancel: CancelHandle::Dsh {
+                        responder: turn.responder(),
+                    },
+                },
+            );
+        }
 
         let mut acc = String::new();
         let mut last_push = InstantApprox::now();
@@ -708,8 +900,21 @@ impl Orchestrator {
                 responder.answer_permission(rpc_id, None);
             }
         }
+        // 注销「在跑回合」登记（仅当还是本回合时移除，避免误删后来者）。
+        self.unregister_running(session, stream_id).await;
         wecom_session::append_turn(session, user_text, &final_text);
         Ok(())
+    }
+
+    /// 注销某会话的在跑回合（仅当登记的 stream_id 与本回合一致时移除）。
+    async fn unregister_running(&self, session: &SessionKey, stream_id: &str) {
+        let key = session.as_str();
+        let mut map = self.running.lock().await;
+        if let Some(rt) = map.get(&key) {
+            if rt.stream_id == stream_id {
+                map.remove(&key);
+            }
+        }
     }
 
     /// 收到消息先占位一条，满足平台对「首次应答」的时间窗；后面的正文更新同一个 stream id。
@@ -761,6 +966,21 @@ impl Orchestrator {
         let stream_id = format!("stream-{}", msg.msgid);
         let history = wecom_session::session_history(session);
 
+        // 登记为该会话「在跑的回合」：「停止」指令据此 cancel_request + 收尾气泡。
+        {
+            let mut map = self.running.lock().await;
+            map.insert(
+                session.as_str(),
+                RunningTurn {
+                    req_id: msg.req_id.clone(),
+                    stream_id: stream_id.clone(),
+                    cancel: CancelHandle::Tianji {
+                        request_id: request_id.clone(),
+                    },
+                },
+            );
+        }
+
         let mut permission = agent_cfg.permission.clone();
         if permission.trim().is_empty() {
             permission = "read".into();
@@ -775,9 +995,35 @@ impl Orchestrator {
         } else {
             "企业微信私聊"
         };
+        // 问答模式 + 文档目录：决定「先查文档还是先读代码」。
+        let answer_mode = self.answer_mode.lock().await.clone();
+        let doc_dir = {
+            let d = self.doc_dir.lock().await.clone();
+            if d.trim().is_empty() { "doc".to_string() } else { d }
+        };
+        let mode_rules = answer_mode_rules(&answer_mode, &doc_dir, user_text, false);
+        let skywalking_ready = {
+            let st = app.state::<WecomState>();
+            let empty = st.skywalking.lock().await.0.trim().is_empty();
+            !empty
+        };
+        // 已配 SkyWalking 且本条是排障意图：把抽到的线索直接喂进 system，让模型第一刀就带参数查。
+        let sky_rule = if skywalking_ready {
+            let a = crate::wecom_intent::analyze(user_text);
+            if a.intent == crate::wecom_intent::QaIntent::Troubleshoot {
+                let clues = troubleshoot_clue_line(&a);
+                format!(
+                    "\n排查线上问题时：{clues}用 `skywalking_query` 按这些线索查日志（服务名/关键词/时间窗），看 [ERROR] 行的 traceId 再查调用链定位根因，必要时 `kind=metrics` 看趋势，最后结合代码确认。线索是推测，以实际查询为准。"
+                )
+            } else {
+                "\n若要排查线上问题，用 `skywalking_query` 查日志/调用链（给服务名或关键词；有 traceId 就查调用链），再结合代码定位根因。".to_string()
+            }
+        } else {
+            String::new()
+        };
         let system = format!(
             "你是 AI Workbench 的天玑助手，正在通过{where_from}回答。回复简洁、适合即时通讯；少用大段代码围栏。\n\
-回复勿输出本机绝对路径，文件用相对路径或文件名。\n{}",
+回复勿输出本机绝对路径，文件用相对路径或文件名。\n{mode_rules}{sky_rule}\n{}",
             agent_cfg.system_extra
         );
 
@@ -935,6 +1181,9 @@ impl Orchestrator {
         let run_result = crate::agent::agent_run(app.clone(), req).await;
         unsubscribe_agent_bridge(&request_id);
         let final_text = pump.await.unwrap_or_default();
+
+        // 注销「在跑回合」登记（仅当还是本回合时移除）。
+        self.unregister_running(session, &stream_id).await;
 
         if let Err(e) = run_result {
             // pump 可能已经 finish；仍记历史
@@ -1140,6 +1389,120 @@ fn decode_ready(
     }
 }
 
+/// 按问答模式 + 文档目录生成一段系统提示规则。
+/// `auto`（默认）：用 `wecom_intent::analyze` 做意图分类 + 槽位抽取，排障时把识别到的
+/// 服务/错误特征/时间窗/traceId 直接写进 SOP，让模型第一刀就带着具体参数查。
+/// `is_dsh`：DSH 档模型拿不到 `skywalking_query` 工具（日志已由 Rust 预取注入在上文），
+/// 排障 SOP 要改成「据上文已附的跨服务日志/调用链定位」，不让它去调拿不到的工具。
+/// 固定模式（doc/doc_code/code）保留钉住语义；doc/doc_code 仍在用户要读代码时临时放行。
+fn answer_mode_rules(mode: &str, doc_dir: &str, user_text: &str, is_dsh: bool) -> String {
+    use crate::wecom_intent::{analyze, QaIntent};
+    let wants_code = crate::wecom_intent::mentions_code(user_text);
+    match mode {
+        "auto" => {
+            let a = analyze(user_text);
+            match a.intent {
+                QaIntent::Troubleshoot => {
+                    let clues = troubleshoot_clue_line(&a);
+                    let hedge = if a.confidence < 40 { "疑似" } else { "" };
+                    if is_dsh {
+                        format!(
+                            "回答规则（自动判定：{hedge}排查线上问题）。{clues}上文已附**跨服务**的 SkyWalking 日志/调用链（若查到）。步骤：① 先看这些日志里的 [ERROR] 行与调用链中报错的 span，判断是哪个上游/下游服务出问题；② 结合 `{doc_dir}/` 文档与各服务代码定位根因；③ 若上文没有日志或信息不足，直接说明还需要哪个 traceId / 订单号 / 用户ID / 关键词 / 时间窗，让用户补充再查。不要先翻文档而耽误排障。"
+                        )
+                    } else {
+                        format!(
+                            "回答规则（自动判定：{hedge}排查线上问题）。{clues}步骤：① 用 `skywalking_query` 查日志（默认**不限定服务、跨全部服务查**，只有明确指向某服务时才传 service；问题里带订单号/用户ID/手机号/requestId 等关键信息时，优先把它们作为 keyword 精确匹配，可逗号分隔传多个联合收窄；带时间窗）；② 日志结果带 [ERROR] 行与 traceId 摘要，挑错误行的 traceId 用 `trace_id` 查调用链（跨服务，看哪个服务的 span 报错）定位根因；③ 必要时 `kind=metrics` 看端点/实例趋势；④ 结合 `{doc_dir}/` 文档与工作区代码确认。线索是推测，以实际查询为准；不要先翻文档而耽误排障。"
+                        )
+                    }
+                }
+                QaIntent::ReadCode => format!(
+                    "回答规则（自动判定：用户要看代码）：直接阅读工作区相关源码核对后回答（`read_file`/`grep`/`symbols`）。`{doc_dir}/` 下有逆向文档可作参考。"
+                ),
+                QaIntent::DocLookup => format!(
+                    "回答规则（自动判定：实现/原理类问题，文档优先，必要时读代码）：先用 `grep`/`read_file` 查 `{doc_dir}/` 下的逆向文档；文档能答就基于文档回答。文档答不了时再阅读工作区相关源码来回答。"
+                ),
+            }
+        }
+        "code" => format!(
+            "回答规则：直接阅读工作区代码来回答（`read_file`/`grep`/`symbols`）。`{doc_dir}/` 下有逆向文档可作参考。"
+        ),
+        "doc" => {
+            if wants_code {
+                format!(
+                    "回答规则（文档优先，但用户这次要求看代码）：先用 `grep`/`read_file` 查 `{doc_dir}/` 下的逆向文档；用户已明确要从代码读，可直接阅读相关源码核对后回答。"
+                )
+            } else {
+                format!(
+                    "回答规则（文档优先）：先用 `grep`/`read_file` 在 `{doc_dir}/` 下的逆向文档里找答案；能答就基于文档回答，不要去读业务代码。只有文档确实没有时，才说明「文档未覆盖」并可读代码补充。"
+                )
+            }
+        }
+        // doc_code
+        _ => format!(
+            "回答规则（文档优先，必要时读代码）：先用 `grep`/`read_file` 查 `{doc_dir}/` 下的逆向文档；文档能答就基于文档回答。文档答不了、或用户要求从代码读时，再阅读工作区相关源码来回答。"
+        ),
+    }
+}
+
+/// 是否是「停止当前任务」的指令。仅当整条消息≈纯停止词时才算，
+/// 含其它实质内容（如「停车场接口超时」「停止服务一直报错」）的排障问句不拦。
+fn is_stop_command(text: &str) -> bool {
+    // 去掉首尾标点 / 空白，取纯净文本
+    let t = text
+        .trim()
+        .trim_matches(|c: char| c.is_whitespace() || matches!(c, '，' | ',' | '。' | '.' | '、' | '！' | '!' | '~' | '～'))
+        .trim();
+    if t.is_empty() {
+        return false;
+    }
+    let lower = t.to_lowercase();
+    // 整条精确匹配（中文无空格，按整句判断）
+    const EXACT: &[&str] = &[
+        "停止", "停", "停下", "停一下", "停止任务", "停止排查", "别查了", "别跑了",
+        "别找了", "不用查了", "取消", "取消任务", "结束", "中止",
+        "stop", "stop it", "cancel", "abort", "halt",
+    ];
+    if EXACT.iter().any(|w| lower == *w) {
+        return true;
+    }
+    // 英文 "stop"/"cancel"/"abort" 开头的纯英文短句（≤3 词、全 ASCII）也算，如 "stop now"。
+    // 含中文（如「stop service 为什么挂了」）说明是排障描述，不拦。
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let all_ascii = t.is_ascii();
+    if all_ascii
+        && words.len() <= 3
+        && matches!(words.first().copied(), Some("stop") | Some("cancel") | Some("abort"))
+    {
+        return true;
+    }
+    false
+}
+
+/// 把排障分析里抽到的槽位拼成一行「已识别线索」（为空时返回空串）。
+fn troubleshoot_clue_line(a: &crate::wecom_intent::QaAnalysis) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(s) = &a.service {
+        parts.push(format!("服务≈{s}"));
+    }
+    if !a.keywords.is_empty() {
+        parts.push(format!("关键信息≈{}", a.keywords.join("、")));
+    }
+    if let Some(m) = a.minutes {
+        parts.push(format!("时间窗≈最近{m}分钟"));
+    }
+    if let Some(t) = &a.trace_id {
+        parts.push(format!("traceId={t}"));
+    }
+    if let Some(l) = &a.level {
+        parts.push(format!("级别={l}"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("已识别线索：{}。", parts.join("、"))
+    }
+}
+
 /// DSH 档的 prompt 组装：返回 ACP content block 数组。
 /// - `image_enabled`（ACP `promptCapabilities.image`）为真时，把企微图片下载并内联成
 ///   image block —— 图片才真正进模型，对齐原版 DSH 的图片理解能力；
@@ -1149,8 +1512,21 @@ async fn build_dsh_prompt(
     user_text: &str,
     media: &[wecom_proto::MediaRef],
     image_enabled: bool,
+    mode_rules: &str,
+    sky_context: &str,
 ) -> Vec<serde_json::Value> {
     let mut blocks: Vec<serde_json::Value> = Vec::new();
+    // 先放一条「怎么回答」的指引（文档优先 / 读代码），再放用户问题。
+    if !mode_rules.trim().is_empty() {
+        blocks.push(crate::wecom_dsh::acp_text_block(&format!(
+            "【回答指引】{}",
+            mode_rules.trim()
+        )));
+    }
+    // 排障预取的 SkyWalking 数据（dsh 档没有 skywalking_query 工具，这里以上下文形式给它）。
+    if !sky_context.trim().is_empty() {
+        blocks.push(crate::wecom_dsh::acp_text_block(sky_context.trim()));
+    }
     let text = user_text.trim();
     if !text.is_empty() {
         blocks.push(crate::wecom_dsh::acp_text_block(text));
@@ -1252,5 +1628,95 @@ impl InstantApprox {
     }
     fn elapsed_ms(&self) -> u128 {
         self.0.elapsed().as_millis()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answer_mode_doc_blocks_code_unless_asked() {
+        let r = answer_mode_rules("doc", "doc", "这个功能怎么实现的", false);
+        assert!(r.contains("文档优先"));
+        assert!(r.contains("不要去读业务代码"));
+        // 用户说读代码 → doc 模式也放行
+        let r2 = answer_mode_rules("doc", "doc", "帮我看源码里怎么写的", false);
+        assert!(r2.contains("可直接阅读相关源码"));
+    }
+
+    #[test]
+    fn answer_mode_code_always_reads_source() {
+        let r = answer_mode_rules("code", "doc", "随便问", false);
+        assert!(r.contains("直接阅读工作区代码"));
+    }
+
+    #[test]
+    fn answer_mode_auto_routes_by_intent() {
+        // 排障 → SkyWalking + 代码，不被文档优先挡住（tianji 档用工具）
+        let r = answer_mode_rules("auto", "doc", "帮我排查下线上 500 报错", false);
+        assert!(r.contains("skywalking_query"), "{r}");
+        assert!(r.contains("排查线上问题"), "{r}");
+        assert!(!r.contains("不要去读业务代码"), "{r}");
+        // 要看代码 → 直接读源码
+        let r2 = answer_mode_rules("auto", "doc", "看下源码里是怎么写的", false);
+        assert!(r2.contains("直接阅读工作区相关源码"), "{r2}");
+        // 实现/原理 → 文档优先、必要时读代码
+        let r3 = answer_mode_rules("auto", "doc", "登录模块怎么实现的", false);
+        assert!(r3.contains("文档优先"), "{r3}");
+        assert!(r3.contains("文档答不了"), "{r3}");
+    }
+
+    #[test]
+    fn auto_troubleshoot_dsh_vs_tianji_sop_differs() {
+        // DSH 档：日志已注入在上文，不让它调 skywalking_query 工具
+        let dsh = answer_mode_rules("auto", "doc", "帮我排查下线上 500 报错", true);
+        assert!(dsh.contains("上文已附"), "{dsh}");
+        assert!(!dsh.contains("skywalking_query"), "DSH 档不该提工具：{dsh}");
+        // tianji 档：用工具查
+        let tj = answer_mode_rules("auto", "doc", "帮我排查下线上 500 报错", false);
+        assert!(tj.contains("skywalking_query"), "{tj}");
+        assert!(tj.contains("跨全部服务"), "{tj}");
+    }
+
+    #[test]
+    fn auto_troubleshoot_embeds_clues() {
+        // 抽到的服务/错误特征应出现在排障 SOP 的「已识别线索」里
+        let r = answer_mode_rules("auto", "doc", "排查 OrderService 的 NullPointerException", false);
+        assert!(r.contains("已识别线索"), "{r}");
+        assert!(r.contains("OrderService"), "{r}");
+        assert!(r.contains("NullPointerException"), "{r}");
+    }
+
+    #[test]
+    fn stop_command_detection() {
+        // 纯停止指令判真
+        for q in ["停止", "停", "别查了", "取消", "停止任务", "stop", "cancel", "abort now", "停。", " 停止 "] {
+            assert!(is_stop_command(q), "应判停止：{q}");
+        }
+        // 含实质排障内容的不拦
+        for q in [
+            "停止服务一直报错",
+            "停车场接口超时排查下",
+            "订单停滞了怎么回事",
+            "介绍下停机流程",
+            "stop service 为什么挂了",
+        ] {
+            assert!(!is_stop_command(q), "不该判停止：{q}");
+        }
+        assert!(!is_stop_command(""));
+    }
+
+    #[test]
+    fn set_max_jobs_clamps_out_of_range() {        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
+        orch.set_max_jobs(4);
+        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), 4);
+        // 0 / 越界回落默认
+        orch.set_max_jobs(0);
+        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), MAX_GLOBAL_JOBS);
+        orch.set_max_jobs(99);
+        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), MAX_GLOBAL_JOBS);
+        orch.set_max_jobs(8);
+        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), 8);
     }
 }

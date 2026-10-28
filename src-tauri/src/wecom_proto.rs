@@ -48,6 +48,9 @@ pub struct MsgCallback {
     pub media: Vec<MediaRef>,
     /// 语音消息但企微未回传转写文本（否则会静默丢消息）
     pub voice_empty: bool,
+    /// 平台回调里显式的 @ 标志（`mentioned` / `is_mentioned` 字段）；无该字段为 None。
+    /// 群聊闸门优先用它；缺失时回落到「平台已过滤非@投递」的宽松假设。
+    pub body_mentioned: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +172,7 @@ pub fn parse_msg_callback(frame: &InboundFrame) -> Option<MsgCallback> {
         .to_string();
     let (text, media, voice_empty) = extract_content(body, &msgtype);
     let quote_text = body.get("quote").and_then(extract_quote_text);
+    let body_mentioned = extract_mentioned(body);
     Some(MsgCallback {
         req_id,
         msgid,
@@ -180,7 +184,24 @@ pub fn parse_msg_callback(frame: &InboundFrame) -> Option<MsgCallback> {
         quote_text,
         media,
         voice_empty,
+        body_mentioned,
     })
+}
+
+/// 从回调 body 里读显式 @ 标志：兼容 `mentioned` / `is_mentioned`（bool 或 0/1）。
+/// 没有这些字段返回 None（表示平台未显式标注，由上层按宽松假设处理）。
+fn extract_mentioned(body: &Value) -> Option<bool> {
+    for key in ["mentioned", "is_mentioned", "at_me", "ismentioned"] {
+        if let Some(v) = body.get(key) {
+            if let Some(b) = v.as_bool() {
+                return Some(b);
+            }
+            if let Some(n) = v.as_i64() {
+                return Some(n != 0);
+            }
+        }
+    }
+    None
 }
 
 pub fn parse_event_callback(frame: &InboundFrame) -> Option<EventCallback> {
@@ -443,5 +464,34 @@ mod tests {
         let msg = parse_msg_callback(&frame).unwrap();
         assert!(msg.text.is_empty());
         assert!(msg.voice_empty);
+    }
+
+    #[test]
+    fn parse_group_mentioned_flag() {
+        // 显式 is_mentioned=false → body_mentioned Some(false)
+        let raw = r#"{
+            "cmd":"aibot_msg_callback",
+            "headers":{"req_id":"r4"},
+            "body":{"msgid":"m4","chattype":"group","chatid":"c1",
+                "from":{"userid":"u4"},"msgtype":"text",
+                "text":{"content":"hi"},"is_mentioned":false}
+        }"#;
+        let msg = parse_msg_callback(&parse_inbound(raw).unwrap()).unwrap();
+        assert_eq!(msg.body_mentioned, Some(false));
+
+        // 数字 1 → true
+        let raw2 = r#"{"cmd":"aibot_msg_callback","headers":{"req_id":"r5"},
+            "body":{"msgid":"m5","chattype":"group","chatid":"c1",
+                "from":{"userid":"u5"},"msgtype":"text",
+                "text":{"content":"hi"},"mentioned":1}}"#;
+        let msg2 = parse_msg_callback(&parse_inbound(raw2).unwrap()).unwrap();
+        assert_eq!(msg2.body_mentioned, Some(true));
+
+        // 无字段 → None
+        let raw3 = r#"{"cmd":"aibot_msg_callback","headers":{"req_id":"r6"},
+            "body":{"msgid":"m6","chattype":"group","chatid":"c1",
+                "from":{"userid":"u6"},"msgtype":"text","text":{"content":"hi"}}}"#;
+        let msg3 = parse_msg_callback(&parse_inbound(raw3).unwrap()).unwrap();
+        assert_eq!(msg3.body_mentioned, None);
     }
 }

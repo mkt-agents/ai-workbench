@@ -867,3 +867,181 @@
 .empty-state-icon { font-size: 24px; margin-bottom: 10px; opacity: 0.4; position: relative; }
 .empty-state p { font-size: 11.5px; color: var(--text-3); position: relative; }
 
+/* === GROUPED SELECT（自绘分组单选） ===
+   原生 <select> 弹层里选项底色归我们、但「选中 / hover」那一条由系统画成浅色，
+   深色主题下白字压上去看不见，optgroup 标题也会被压成近灰；80 项的模型列表尤其难看。
+   弹层没有可覆盖的点，所以触发器、列表、高亮、选中态全部自己画（GroupedSelect.tsx）。 */
+.mp { position: relative; display: block; min-width: 0; }
+
+.mp-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-0);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-colors-fast), border-color var(--transition-colors-fast),
+    box-shadow var(--transition-colors-fast);
+}
+.mp-trigger:hover:not(:disabled) { background: var(--bg-hover); }
+.mp-trigger[aria-expanded="true"],
+.mp-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.mp-trigger:disabled { opacity: 0.4; cursor: not-allowed; }
+.mp-trigger-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-trigger-label.is-empty { color: var(--text-2); }
+.mp-chevron {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--text-2);
+  transition: transform var(--transition-colors-fast), color var(--transition-colors-fast);
+}
+.mp-trigger[aria-expanded="true"] .mp-chevron { transform: rotate(180deg); color: var(--accent); }
+
+.mp-menu {
+  position: fixed;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  background: var(--float-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-highlight), var(--float-shadow);
+  animation: mp-in 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes mp-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.mp-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px;
+  background: var(--overlay-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-2);
+}
+.mp-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-0);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.mp-search input::placeholder { color: var(--text-3); }
+
+.mp-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* 分组标题：吸顶 + 该组条数；比选项轻一档，但仍要读得清（原生弹层的分组行对比度是 0） */
+.mp-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 8px 3px;
+  background: var(--float-bg);
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.mp-group-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mp-group-count {
+  flex: none;
+  color: var(--text-3);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* 每组之间一条发丝线，分组读起来才是一段一段的 */
+.mp-group:not(:first-child) {
+  margin-top: 3px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.mp-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-colors-fast), border-color var(--transition-colors-fast),
+    color var(--transition-colors-fast);
+}
+.mp-option-copy { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
+.mp-option-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-option-hint {
+  color: var(--text-2);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 键盘 / 鼠标高亮：直接吃 accent 实底 + on-accent 字色，任何主题都保证对比 */
+.mp-option.is-active,
+.mp-option.is-active.is-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  box-shadow: none;
+}
+.mp-option.is-active .mp-option-hint { color: color-mix(in srgb, var(--on-accent) 72%, transparent); }
+.mp-option.is-active .mp-check { color: var(--on-accent); }
+.mp-option.is-selected { color: var(--accent); font-weight: 600; }
+.mp-option.is-selected .mp-option-hint { color: var(--text-2); }
+.mp-check { flex: none; width: 13px; height: 13px; color: var(--accent); }
+.mp-empty { padding: 10px 8px; color: var(--text-3); font-size: 11.5px; }
+
+/* 磨砂主题：触发器与原生 select.input-field 同一档质感 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .mp-trigger {
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .mp-trigger[aria-expanded="true"],
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .mp-trigger:focus-visible {
+  border-color: var(--accent-border);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 3px var(--accent-dim);
+}
+

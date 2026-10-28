@@ -522,7 +522,10 @@ pub(crate) fn tool_specs() -> Value {
           "parameters": obj(json!({ "path": s("Path to an image file (png/jpg/gif/webp)") }), &["path"]) },
         { "name": "wecom_send_file",
           "description": "Send a local file back to the current WeChat Work chat. Text files are pasted as text; binary files are uploaded when the media endpoint is available, otherwise a note is sent. Use to deliver generated artifacts.",
-          "parameters": obj(json!({ "path": s("Path to the file") }), &["path"]) }
+          "parameters": obj(json!({ "path": s("Path to the file") }), &["path"]) },
+        { "name": "skywalking_query",
+          "description": "Query SkyWalking (APM) for production troubleshooting. Three modes, chain them across turns: (1) logs — give a service name and/or keyword to search logs in the last `minutes`, with optional exclude_keyword/level and page/page_size; results carry a summary of ERROR-level count and the traceIds worth following (error traces first), each line prefixed with its level and traceId; (2) trace — give a trace_id (omit `kind`) to fetch the full call trace rebuilt as a parent/child tree with error-span tags/logs; (3) metrics — set kind=metrics with a service to get endpoint response-time/throughput TopN and instance list (correlation evidence, not proven root cause). Recommended flow: search logs → read the ERROR lines and copy their traceId → fetch that trace → optionally metrics, together with reading the code.",
+          "parameters": obj(json!({ "service": s("Service name, optional"), "endpoint": s("Endpoint name, optional"), "keyword": s("Keywords to match in log content; pass multiple comma-separated (e.g. 2024102812345,error) and they AND-narrow. Prefer business identifiers from the question: order id, user id, phone, requestId, merchant id."), "exclude_keyword": s("Substring to exclude from log content, optional"), "level": s("Log level tag to filter, e.g. ERROR, optional"), "trace_id": s("Trace id; alone returns the call trace tree"), "minutes": n("Look-back window in minutes (default 240 for logs, 60 for metrics)"), "start": s("Optional explicit RFC3339 start time, paired with end; overrides minutes"), "end": s("Optional explicit RFC3339 end time; reuse the same fixed range across pages"), "timezone_offset_minutes": n("OAP fixed UTC offset minutes; defaults to channel setting/local clock"), "page": n("Log page number, 1-based (default 1)"), "page_size": n("Logs per page, max 100 (default 40)"), "kind": s("logs to force log query even with a trace_id; metrics for endpoint/instance diagnosis") }), &[]) }
     ])
 }
 
@@ -2477,6 +2480,22 @@ async fn execute_tool(
                 .to_string();
             crate::wecom_media::send_file(&ctx.app, &path).await?
         }
+        // SkyWalking 只读查询：排查线上问题时取日志 / 调用链（地址来自企微渠道配置）
+        "skywalking_query" => {
+            use tauri::Manager;
+            let st = ctx.app.state::<crate::wecom_channel::WecomState>();
+            let (addr, header) = {
+                let g = st.skywalking.lock().await;
+                (g.0.clone(), g.1.clone())
+            };
+            let mut query_args = args.clone();
+            if query_args.get("timezone_offset_minutes").is_none() {
+                if let Some(offset) = *st.skywalking_timezone.lock().await {
+                    query_args["timezone_offset_minutes"] = json!(offset);
+                }
+            }
+            crate::wecom_skywalking::run(&addr, &header, &query_args).await?
+        }
         // 会等用户/等屏幕的几步：停止键要在 200ms 内收住，而不是等它自己跑完
         "hosts" => await_cancellable(sys::hosts(args), ctx.request_id).await??,
         "tunnel" => sys::tunnel(ctx.app, args).await?,
@@ -3628,6 +3647,22 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         }
     } else {
         tool_names.retain(|n| *n != "web_search");
+    }
+    // SkyWalking 排障工具：地址没配就不下发（企微渠道外的回合也没有这个 State 则直接去掉）。
+    {
+        use tauri::Manager;
+        let sky_ready = app
+            .try_state::<crate::wecom_channel::WecomState>()
+            .map(|st| {
+                st.skywalking
+                    .try_lock()
+                    .map(|g| !g.0.trim().is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !sky_ready {
+            tool_names.retain(|n| *n != "skywalking_query");
+        }
     }
     // 计划闸门解锁后要恢复的完整名单（含模式 / 技能 / 搜索过滤）。
     let full_tool_names = tool_names.clone();

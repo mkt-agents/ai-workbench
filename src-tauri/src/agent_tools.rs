@@ -125,6 +125,8 @@ pub(crate) const TOOLS: &[ToolDef] = &[
     // 发出去就是数据外发（可能是任意本地文件），按 Sensitive 处理：只读 / 编辑档先问。
     ToolDef { name: "wecom_send_image", group: ToolGroup::Doc, gate: GateKind::Sensitive, parallel: false, action: true },
     ToolDef { name: "wecom_send_file", group: ToolGroup::Doc, gate: GateKind::Sensitive, parallel: false, action: true },
+    // —— SkyWalking 只读查询：排查线上问题取日志/调用链（地址来自企微渠道配置，空则不下发）——
+    ToolDef { name: "skywalking_query", group: ToolGroup::Doc, gate: GateKind::Look, parallel: false, action: false },
 ];
 
 pub(crate) fn get(name: &str) -> Option<&'static ToolDef> {

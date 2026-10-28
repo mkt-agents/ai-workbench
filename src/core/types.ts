@@ -234,6 +234,30 @@ export interface AppSettings {
   wecomDshModel?: string;
   /** DSH 引擎的思考强度；空 = provider 默认 */
   wecomDshEffort?: string;
+  /** 问答模式：auto 按问题意图分流（默认）/ doc 文档优先 / doc_code 文档+代码回退 / code 仅代码 */
+  wecomAnswerMode?: "auto" | "doc" | "doc_code" | "code" | string;
+  /** 逆向文档目录（相对工作区），默认 doc */
+  wecomDocDir?: string;
+  /** SkyWalking OAP 地址（空 = 不下发排障工具） */
+  wecomSkywalkingAddr?: string;
+  /** SkyWalking 可选 header（Key: Value，鉴权版 OAP 用） */
+  wecomSkywalkingHeader?: string;
+  /** OAP 时区的 UTC 偏移分钟数；undefined 跟随本机，0 表示 UTC */
+  wecomSkywalkingTimezoneOffsetMinutes?: number;
+  /** 每日自动更新逆向文档：开关 */
+  wecomAutoUpdateEnabled?: boolean;
+  /** 每日自动更新时间（HH:MM），默认 23:00 */
+  wecomAutoUpdateTime?: string;
+  /** 跟踪的 release 分支名，默认 release */
+  wecomReleaseBranch?: string;
+  /** 企微群机器人 webhook（DPAPI enc:v1:… 密文或完整 URL/key） */
+  wecomWebhookUrl?: string;
+  /** 文档更新后自动 commit（默认开；关掉会导致下次因脏工作区跳过） */
+  wecomAutoCommit?: boolean;
+  /** commit 后 push 到远端（默认关） */
+  wecomAutoPush?: boolean;
+  /** 企微全局并发回合上限（默认 2，范围 1–8） */
+  wecomMaxJobs?: number;
   /** 天玑 OpenAI 兼容端点（ClawBot/OpenClaw 等外部 agent 接入用） */
   tianjiApiEnabled?: boolean;
   tianjiApiPort?: number;

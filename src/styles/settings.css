@@ -1186,6 +1186,17 @@
 .settings-page .net-panel + .net-panel {
   margin-top: 6px;
 }
+/* 企微侧：面板升级为卡片表面（发丝顶边高光 + 轻投影 + 稍舒展的内边距），
+   让 6 个区块一眼可分；只针对 wecom，不影响 web/mcp 两个 tab */
+.settings-page .wecom-settings > .net-panel {
+  padding: 10px 12px 8px;
+  border-radius: var(--radius-lg);
+  background: var(--overlay-2);
+  box-shadow: var(--surface-highlight), var(--shadow-xs);
+}
+.settings-page .wecom-settings > .net-panel + .net-panel {
+  margin-top: 8px;
+}
 .settings-page .net-panel > .hub-group-title {
   margin: 0;
   padding: 0 0 5px;
@@ -1292,8 +1303,9 @@
 }
 .settings-page .wecom-lead {
   margin: 0;
-  padding: 6px 9px;
+  padding: 7px 10px 7px 12px;
   border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 6%, var(--overlay-1));
   color: var(--text-2);
@@ -1349,18 +1361,20 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 0 0;
+  margin-top: 4px;
+  padding: 5px 0 1px;
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--text-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 .settings-page .net-subhead::after,
 .settings-page .wecom-subhead::after {
   content: "";
   flex: 1 1 auto;
   height: 1px;
-  background: color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 /* 企微：行式布局 —— 左「字段名」右「控件」，控件统一收窄到 420px，说明另起一行铺满。
    比之前两列网格整齐得多：标签不会撑开、输入框不会拉到整行、也不再到处是空格子。 */
@@ -1369,30 +1383,79 @@
   flex-direction: column;
   padding-top: 2px;
 }
-/* 块标题右侧可以挂一个开关（通道块），省掉一整行 */
+/* 块标题带图标徽记：左侧 accent 小方块 + 标题，右侧可挂开关 / 徽标 */
 .settings-page .wecom-panel-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding-bottom: 4px;
+  gap: 8px;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--border-subtle);
+}
+.settings-page .wecom-panel-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid var(--accent-border);
 }
 .settings-page .wecom-panel-head > .hub-group-title {
   flex: 1 1 auto;
   margin: 0;
   padding: 0;
+  border-top: none;
   border-bottom: none;
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.settings-page .wecom-panel-aside {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 面板头部右侧的计数徽标（已批准 / 待批准数量，只读展示） */
+.settings-page .wecom-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.settings-page .wecom-count-badge.is-pending {
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+  border-color: color-mix(in srgb, var(--yellow) 30%, transparent);
+  color: var(--yellow);
 }
 .settings-page .wecom-row {
   display: grid;
   /* 名称占满左侧，控件右对齐成一列（macOS 设置那种读法）：既不会把输入框拉长，
-     也不会右侧留一大片空白 */
-  grid-template-columns: minmax(0, 1fr) 380px;
+     也不会右侧留一大片空白。宽度弹性收窄，窄窗自动压缩 */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
   align-items: center;
   gap: 0 16px;
-  padding: 4px 0;
+  padding: 5px 8px;
+  margin: 0 -8px;
+  border-radius: var(--radius-sm);
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 30%, transparent);
+  transition: var(--transition-colors-fast);
+}
+.settings-page .wecom-row:hover {
+  background: var(--overlay-1);
 }
 .settings-page .wecom-rows > .wecom-row:first-child,
 .settings-page .wecom-rows > .wecom-subhead + .wecom-row {
@@ -1563,4 +1626,95 @@
   background: var(--overlay-1);
   border: 1px solid var(--border-subtle);
   font-size: 11px;
+  /* 连通自检返回多行（每项一行 ✅/⚠️/❌），保留换行 */
+  white-space: pre-line;
+}
+
+/* —— 排障折叠区（通道日志 / 会话日志） —— */
+.settings-page .wecom-diag {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.settings-page .wecom-diag-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings-page .wecom-diag-chip {
+  font-size: 11px;
+  color: var(--text-2);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+}
+
+.settings-page .wecom-diag-chip.is-error {
+  color: var(--red);
+  border-color: var(--red-border);
+  background: var(--red-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-page .wecom-diag-log {
+  margin-top: var(--space-2);
+  max-height: 260px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+.settings-page .wecom-diag-sessions {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 280px;
+  overflow: auto;
+}
+
+.settings-page .wecom-diag-sessions > li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  font-size: 11.5px;
+}
+
+.settings-page .wecom-diag-ts {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.settings-page .wecom-diag-u {
+  color: var(--text-0);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.settings-page .wecom-diag-a {
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
