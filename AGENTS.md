@@ -208,6 +208,7 @@ $env:TEMP = (Resolve-Path .build-tmp).Path; $env:TMP = $env:TEMP; npm run build
 - `src-tauri/src/bin/` 内部诊断工具由 `dev-tools` feature 门控，默认不进安装包。
 - 不把 `%APPDATA%\com.ai-workbench.app\` 用户数据打进安装包。
 - **应用内升级依赖资产命名**：release 里的 NSIS 资产名必须以 `_x64-setup.exe` 结尾（`update_commands.rs` 的 `pick_setup_asset` 按此后缀匹配，MSI 认 `.msi`）。改名 = 升级弹窗静默退化成「去浏览器下载」，不会报错，务必发布前核对。仓库名同时写在 `src/lib/version.ts` 的 `APP_GITHUB_REPO` 与 `src-tauri/src/update_commands.rs` 的 `GITHUB_REPO`，改一处必须改两处。
+- **Release 命名统一用纯 tag**：GitHub Release 的 `name` 字段必须与 tag 完全一致（如 `v0.2.38`），**不要**加 `AI Workbench ` 之类前缀——侧栏 Release 列表、Latest 徽标、`/releases/latest` API 返回都按这个名字渲染，加前缀会和 tag 列重复。tag 本身遵循 `vMAJOR.MINOR.PATCH` 不变。发版脚本若用 REST API，`POST /releases` 的 `name` 直接写 `v<version>`。
 
 ## 危险操作提示
 
