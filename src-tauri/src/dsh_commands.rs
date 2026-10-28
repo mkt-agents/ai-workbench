@@ -485,6 +485,68 @@ fn dsh_package_dir(path_value: &str) -> Option<PathBuf> {
     installed(npm_global_root()?)
 }
 
+/// Program + leading args for running the installed DSH CLI.
+///
+/// The ACP engine (`wecom_dsh.rs`) reuses this so it starts the very entry point the
+/// web server does: `node <pkg>/lib/bin.js` costs ~0.2s, while `npx` spends ~2.5s
+/// resolving the package before node even starts. Stdio is left to the caller — the
+/// ACP engine needs a piped stdin, which `configure_dsh_command` does not set up.
+pub(crate) struct DshCli {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// Human-readable form, used in error reports ("命令行").
+    pub command_line: String,
+}
+
+pub(crate) fn dsh_cli(path_value: &str) -> Result<DshCli, String> {
+    if let Some(pkg) = dsh_package_dir(path_value) {
+        let entry = read_package_json(&pkg.join("package.json"))
+            .and_then(|json| match json.get("bin") {
+                Some(serde_json::Value::String(script)) => Some(script.clone()),
+                Some(bin) => bin.get("dsh").and_then(|v| v.as_str()).map(str::to_string),
+                None => None,
+            })
+            .map(|rel| pkg.join(rel))
+            .filter(|path| path.is_file());
+        if let Some(entry) = entry {
+            let program = node_exe(path_value).unwrap_or_else(|| PathBuf::from("node"));
+            let command_line = format!("{} {}", program.display(), entry.display());
+            return Ok(DshCli {
+                program,
+                args: vec![entry.to_string_lossy().to_string()],
+                command_line,
+            });
+        }
+    }
+    Ok(DshCli {
+        program: PathBuf::from("cmd"),
+        args: vec![
+            "/c".into(),
+            "npx".into(),
+            "@deepseek-ai/dsh".into(),
+        ],
+        command_line: "npx @deepseek-ai/dsh".into(),
+    })
+}
+
+/// Machine+User PATH as the registry has it now — the engine must hand the same
+/// value to the child so a runtime switch (nvm/fnm) is respected.
+pub(crate) fn dsh_path_value() -> String {
+    current_path_value()
+}
+
+/// Installed `@deepseek-ai/dsh` version, `None` when the package is missing.
+pub(crate) fn dsh_installed_version() -> Option<String> {
+    installed_dsh_version()
+}
+
+/// Drop a leftover `~/.dsh/.credentials.yaml.lock` whose owner is gone. The ACP
+/// profile reads the managed credential store, and DSH itself waits on that lock
+/// until it times out — clearing it here is what turns that hang into a clean start.
+pub(crate) fn dsh_clear_stale_lock() -> bool {
+    clear_stale_dsh_credential_lock()
+}
+
 fn find_dsh_connection_index() -> Result<PathBuf, String> {
     // Fast path first: derived from disk, so a normal install never starts npm here.
     if let Some(pkg) = dsh_package_dir(&current_path_value()) {

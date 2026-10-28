@@ -93,39 +93,16 @@ pub async fn send_file(app: &AppHandle, path: &str) -> Result<String, String> {
     }
 }
 
-/// 媒体上传（best-effort）：用机器人凭证换 token 后 POST 到 media/upload。
+/// 媒体上传（best-effort）：用**自建应用凭证**换 token 后 POST 到 media/upload。
+/// 复用 `wecom_biz::access_token`（自建应用 Corpid/Secret 优先、带缓存与 40013 可操作提示）；
+/// 机器人 Bot ID/Secret 当 corpid 用会被企微拒（40013），所以绝不能直接拿它换 token。
 /// 端点/字段以线上协议为准；失败由调用方兜底。
 async fn upload_media(app: &AppHandle, bytes: &[u8], media_type: &str) -> Result<String, String> {
     let st = app.state::<WecomState>();
     let creds = st.applied.lock().await.clone().ok_or("企微未连接")?;
     let client = reqwest::Client::new();
 
-    let token_url = format!(
-        "{QYAPI}/gettoken?corpid={}&corpsecret={}",
-        creds.bot_id, creds.secret
-    );
-    let v: Value = client
-        .get(&token_url)
-        .send()
-        .await
-        .map_err(|e| format!("换取 token 失败：{e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("token 解析失败：{e}"))?;
-    let code = v.get("errcode").and_then(|c| c.as_i64()).unwrap_or(-1);
-    if code != 0 {
-        return Err(format!(
-            "企微 token 失败 errcode={} {}",
-            code,
-            v.get("errmsg").and_then(|m| m.as_str()).unwrap_or("")
-        ));
-    }
-    let token = v
-        .get("access_token")
-        .and_then(|t| t.as_str())
-        .ok_or("token 缺失")?
-        .to_string();
-
+    let token = crate::wecom_biz::access_token(&st, &creds).await?;
     let up = format!("{QYAPI}/media/upload?access_token={token}&type=file");
     let boundary = "----wecomrustbnd";
     let mut body: Vec<u8> = Vec::new();

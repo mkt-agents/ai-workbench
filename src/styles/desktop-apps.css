@@ -30,7 +30,7 @@
   row-gap: 6px;
   flex: none;
   /* Keep in lockstep with .dsh-toolbar so Harness / 协同办公 chrome match. */
-  min-height: 28px;
+  min-height: 34px;
   padding: 2px 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -196,10 +196,24 @@
   display: none;
 }
 
+/* Same button scale as the Harness toolbar (22px tall, 11px label, 12px icon,
+   pill) so the two host pages read as one chrome family. */
+.dapps-bar .btn {
+  height: 22px;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: 11px;
+  border-radius: var(--radius-full);
+}
+
+.dapps-bar .btn svg {
+  width: 12px;
+  height: 12px;
+}
+
 .dapps-actions .btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
 }
 
 .dapps-body {

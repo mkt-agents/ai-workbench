@@ -116,6 +116,11 @@ impl WecomSocket {
     }
 
     async fn set_state(&self, st: ConnState) {
+        if let ConnState::Error(e) = &st {
+            crate::wecom_log::write("socket", &format!("state=error {e}"));
+        } else {
+            crate::wecom_log::write("socket", &format!("state={}", st.label()));
+        }
         *self.shared.state.write().await = st;
         emit_status_changed(&self.shared).await;
     }
@@ -292,11 +297,39 @@ fn handle_text(t: &str, on_msg: &MsgHandler, on_event: &EventHandler) {
             return;
         }
     };
-    // 心跳 / 订阅响应
-    if frame.cmd.is_none() && frame.errcode.is_some() {
-        return;
+    // 平台对出站帧的回执：errcode != 0 说明这条回复被拒了（流式 id 过期 / req_id 失效…）。
+    // 以前这里一律静默丢掉，排查「Bot 不回话」时完全没线索，所以至少留一行日志。
+    if frame.errcode.is_some() {
+        let cmd = frame.cmd.clone().unwrap_or_default();
+        let req_id = frame
+            .headers
+            .as_ref()
+            .map(|h| h.req_id.clone())
+            .unwrap_or_default();
+        crate::wecom_log::write(
+            "errcode",
+            &format!(
+                "cmd={} req_id={} errcode={:?} errmsg={:?}",
+                cmd, req_id, frame.errcode, frame.errmsg
+            ),
+        );
+        if frame.cmd.is_none() {
+            return;
+        }
     }
     if let Some(msg) = wecom_proto::parse_msg_callback(&frame) {
+        crate::wecom_log::write(
+            "recv",
+            &format!(
+                "msgid={} user={} chat={} req_id={} text_len={} media={}",
+                msg.msgid,
+                msg.userid,
+                msg.chattype,
+                if msg.req_id.is_empty() { "<empty>" } else { msg.req_id.as_str() },
+                msg.text.chars().count(),
+                msg.media.len()
+            ),
+        );
         on_msg(msg);
         return;
     }

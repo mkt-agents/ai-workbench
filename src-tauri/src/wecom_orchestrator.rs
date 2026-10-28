@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
@@ -15,7 +15,8 @@ use crate::agent::{
 use crate::agent_protocol::{Block, Message};
 use crate::ai_commands::AIModelConfig;
 use crate::mcp::McpServerSpec;
-use crate::wecom_channel::{PendingApproval, WecomState};
+use crate::wecom_channel::{ApprovalKind, PendingApproval, WecomState, APPROVAL_TTL};
+use crate::wecom_dsh::{permission_options, permission_summary, DshEvent};
 use crate::wecom_policy::{GateDecision, MsgDeduper, PolicyState};
 use crate::wecom_proto::{self, EventCallback, MsgCallback};
 use crate::wecom_sanitize::redact_local_paths;
@@ -23,6 +24,12 @@ use crate::wecom_session::{self, SessionKey};
 use crate::wecom_ws::WecomSocket;
 
 const MAX_GLOBAL_JOBS: usize = 2;
+/// DSH 单回合上限：比天玑的 420s 看门狗宽，因为 ACP 侧可能连着跑很久的工具。
+const DSH_TURN_TIMEOUT: Duration = Duration::from_secs(600);
+/// 回合里超过这么久没有任何事件，就给聊天里补一句「还在处理」，别让人对着「思考中」干等。
+const DSH_STALL_NOTE: Duration = Duration::from_secs(90);
+/// 等同一会话上一轮结束时，超过这么久提示用户「在排队」。
+const SESSION_QUEUE_NOTE: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +94,8 @@ pub struct Orchestrator {
     pub policy: Arc<Mutex<PolicyState>>,
     pub agent: Arc<Mutex<Option<WecomAgentConfig>>>,
     pub bot_display_name: Arc<Mutex<String>>,
+    /// 回话引擎：`tianji` | `dsh`（由设置页下发）
+    pub engine: Arc<Mutex<String>>,
     deduper: Arc<Mutex<MsgDeduper>>,
     /// 同会话串行
     session_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -103,6 +112,7 @@ impl Orchestrator {
             })),
             agent: Arc::new(Mutex::new(None)),
             bot_display_name: Arc::new(Mutex::new(String::new())),
+            engine: Arc::new(Mutex::new("tianji".to_string())),
             deduper: Arc::new(Mutex::new(MsgDeduper::new(2048))),
             session_locks: Arc::new(Mutex::new(HashMap::new())),
             global_jobs: Arc::new(AtomicUsize::new(0)),
@@ -261,7 +271,68 @@ impl Orchestrator {
                 .or_insert_with(|| Arc::new(Mutex::new(())))
                 .clone()
         };
-        let _session_guard = lock.lock().await;
+
+        let stream_id = format!("stream-{}", msg.msgid);
+        // 平台对「收到消息后的首次应答」有时间窗，而引擎冷启动 / 模型首 token 都可能更久；
+        // 先无条件占位一条（同一个 stream id），后面的正文继续更新它，避免整轮被平台丢掉。
+        // 注意：占位要在拿会话锁**之前**——同一会话上一轮如果卡住，这一条至少不会无声无息。
+        self.ack(&msg, &stream_id).await;
+        let engine_name = self.engine.lock().await.clone();
+        crate::wecom_log::write(
+            "turn",
+            &format!(
+                "msgid={} user={} chat={} text_len={} engine={}",
+                msg.msgid,
+                msg.userid,
+                msg.chattype,
+                user_text.chars().count(),
+                engine_name
+            ),
+        );
+
+        // 同会话串行：上一轮如果卡住，这里先说明在排队，别让用户以为消息丢了。
+        let _session_guard = match tokio::time::timeout(SESSION_QUEUE_NOTE, lock.lock()).await {
+            Ok(guard) => guard,
+            Err(_) => {
+                let _ = self
+                    .sock
+                    .send_raw(wecom_proto::respond_stream(
+                        &msg.req_id,
+                        &stream_id,
+                        "上一条还在处理，本条已排队；处理完会接着回。",
+                        false,
+                    ))
+                    .await;
+                lock.lock().await
+            }
+        };
+
+        // 引擎分流：DSH 档不读天玑的模型快照，直接交给常驻 ACP 进程。
+        if engine_name == "dsh" {
+            self.global_jobs.fetch_add(1, Ordering::SeqCst);
+            let result = self
+                .run_dsh_turn(&app, &msg, &session, &user_text, &stream_id)
+                .await;
+            self.global_jobs.fetch_sub(1, Ordering::SeqCst);
+            if let Err(e) = result {
+                eprintln!("[wecom] dsh turn failed: {e}");
+                let repo = self.dsh_workspace(&app).await;
+                let tip = redact_local_paths(
+                    &format!("出错了：{}", crate::wecom_dsh::friendly_turn_error(&e)),
+                    &repo,
+                );
+                let _ = self
+                    .sock
+                    .send_raw(wecom_proto::respond_stream(
+                        &msg.req_id,
+                        &stream_id,
+                        &tip,
+                        true,
+                    ))
+                    .await;
+            }
+            return;
+        }
 
         let agent_cfg = match self.agent.lock().await.clone() {
             Some(c) => c,
@@ -271,7 +342,7 @@ impl Orchestrator {
                     .sock
                     .send_raw(wecom_proto::respond_stream(
                         &msg.req_id,
-                        &format!("cfg-{}", msg.msgid),
+                        &stream_id,
                         tip,
                         true,
                     ))
@@ -321,12 +392,360 @@ impl Orchestrator {
                 .sock
                 .send_raw(wecom_proto::respond_stream(
                     &msg.req_id,
-                    &format!("err-{}", msg.msgid),
+                    &stream_id,
                     &tip,
                     true,
                 ))
                 .await;
         }
+    }
+
+    /// DSH（DeepSeek Harness）档的一轮：常驻 ACP 进程跑完 prompt，提交点节流回写。
+    ///
+    /// 与天玑档的差别：
+    /// - 上下文由 DSH 的 session 自己维护，不把 `wecom_session` 历史塞进 prompt；
+    /// - 授权走 `session/request_permission` → 企微审批码（只有一次性授权）；
+    /// - 图片/文件首期降级为文本线索（ACP 图片要求 attachment store + 图像 route）。
+    async fn run_dsh_turn(
+        &self,
+        app: &AppHandle,
+        msg: &MsgCallback,
+        session: &SessionKey,
+        user_text: &str,
+        stream_id: &str,
+    ) -> Result<(), String> {
+        let state = app.state::<WecomState>();
+        let engine = Arc::clone(&state.dsh);
+        let req_id = msg.req_id.clone();
+
+        // 冷启动 / 首次初始化 profile 可能要几十秒：启动放在独立任务里跑（它要拿引擎的
+        // start 锁），这里只等结果；超过 3 秒就在**同一个** stream id 上更新一句进度，
+        // 不另外开消息（平台对首帧的时间窗已经用 on_msg 的占位帧满足了）。
+        let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
+        let dsh = Arc::clone(&engine);
+        tauri::async_runtime::spawn(async move {
+            let _ = ready_tx.send(dsh.ensure_ready().await);
+        });
+        let ready = tokio::select! {
+            res = &mut ready_rx => decode_ready(res),
+            _ = tokio::time::sleep(Duration::from_secs(3)) => {
+                if let Err(e) = self
+                    .sock
+                    .send_raw(wecom_proto::respond_stream(
+                        &req_id,
+                        stream_id,
+                        "正在启动 DeepSeek Harness（首次使用需要初始化，可能要几十秒）…",
+                        false,
+                    ))
+                    .await
+                {
+                    crate::wecom_log::write("stream", &format!("msgid={} send failed: {e}", msg.msgid));
+                }
+                decode_ready(ready_rx.await)
+            }
+        };
+        ready.map_err(|e| format!("DSH 引擎未就绪：{e}"))?;
+
+        let repo = engine.workspace().await;
+        let redact = |s: &str| redact_local_paths(s, &repo);
+
+        let key = session.as_str();
+        let acp_session = engine.acquire_session(&key).await?;
+        crate::wecom_log::write(
+            "dsh",
+            &format!("msgid={} key={key} session={acp_session}", msg.msgid),
+        );
+        // 设置页选的模型 / 思考强度按轮下发；失败只记日志，别让整轮崩（会话会退回 DSH 默认路由）。
+        // 列模型要走一次网络，卡住的话不能把整轮拖死，所以给个上限。
+        match tokio::time::timeout(
+            Duration::from_secs(20),
+            engine.apply_selection(&acp_session),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => crate::wecom_log::write("dsh", &format!("msgid={} {e}", msg.msgid)),
+            Err(_) => crate::wecom_log::write(
+                "dsh",
+                &format!("msgid={} apply_selection timeout", msg.msgid),
+            ),
+        }
+        let prompt_blocks = build_dsh_prompt(user_text, &msg.media, engine.image_prompt_enabled().await).await;
+        let mut turn = engine.prompt(&acp_session, prompt_blocks).await?;
+
+        let mut acc = String::new();
+        let mut last_push = InstantApprox::now();
+        let mut last_event = std::time::Instant::now();
+        // 最近一次动作（工具名），用来解释「为什么还在等」。
+        let mut last_activity = String::new();
+        let mut stall_notes = 0u32;
+        let mut open_approvals: Vec<u64> = Vec::new();
+        let deadline = tokio::time::Instant::now() + DSH_TURN_TIMEOUT;
+        let mut tick = tokio::time::interval(Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        let final_text = loop {
+            let event = tokio::select! {
+                ev = turn.next() => ev,
+                // 长时间没有任何事件：往同一个气泡里补一句「还在处理」，别让人对着「思考中」干等。
+                // 提示按 90s / 180s / 270s… 递增间隔，最多 5 次，不刷屏。
+                _ = tick.tick() => {
+                    let due = DSH_STALL_NOTE + Duration::from_secs(90 * stall_notes as u64);
+                    if last_event.elapsed() >= due && stall_notes < 5 {
+                        stall_notes += 1;
+                        let what = if last_activity.is_empty() {
+                            "模型还在思考".to_string()
+                        } else {
+                            format!("最近一步：{last_activity}")
+                        };
+                        let note = redact(&if acc.trim().is_empty() {
+                            format!("（已 {} 秒没有新输出，{what}）", last_event.elapsed().as_secs())
+                        } else {
+                            format!("{acc}\n\n（已 {} 秒没有新输出，{what}）", last_event.elapsed().as_secs())
+                        });
+                        crate::wecom_log::write(
+                            "stall",
+                            &format!("msgid={} {:?} {}", msg.msgid, last_event.elapsed(), what),
+                        );
+                        let _ = self
+                            .sock
+                            .send_raw(wecom_proto::respond_stream(
+                                &req_id,
+                                stream_id,
+                                &note,
+                                false,
+                            ))
+                            .await;
+                    }
+                    continue;
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    turn.cancel();
+                    let body = if acc.trim().is_empty() {
+                        "（响应超时，已结束）".to_string()
+                    } else {
+                        redact(&format!("{}\n\n（长时间无响应，已自动收尾）", acc))
+                    };
+                    send_finish(&self.sock, &req_id, stream_id, &body).await;
+                    break body;
+                }
+            };
+            match event {
+                Some(DshEvent::Update(update)) => {
+                    last_event = std::time::Instant::now();
+                    let kind = update
+                        .get("sessionUpdate")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // 只播报正文；thought / tool_call / usage 不逐步刷屏，但要留进排障日志：
+                    // 「卡住时最后在做什么」只能从这里看出来。
+                    if kind == "agent_message_chunk" {
+                        if let Some(text) = update
+                            .get("content")
+                            .and_then(|c| c.get("text"))
+                            .and_then(|v| v.as_str())
+                        {
+                            acc.push_str(text);
+                        }
+                        if last_push.elapsed_ms() >= 400 || acc.chars().count() < 40 {
+                            let out = redact(&acc);
+                            if let Err(e) = self
+                                .sock
+                                .send_raw(wecom_proto::respond_stream(
+                                    &req_id,
+                                    stream_id,
+                                    &out,
+                                    false,
+                                ))
+                                .await
+                            {
+                                crate::wecom_log::write(
+                                    "stream",
+                                    &format!("msgid={} send failed: {e}", msg.msgid),
+                                );
+                            }
+                            last_push = InstantApprox::now();
+                        }
+                    } else if kind == "tool_call" || kind == "tool_call_update" {
+                        if let Some(title) = update
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            if title != last_activity {
+                                crate::wecom_log::write(
+                                    "tool",
+                                    &format!("msgid={} {kind} {title}", msg.msgid),
+                                );
+                                last_activity = title.to_string();
+                            }
+                        }
+                    } else if kind == "agent_thought_chunk" {
+                        // 思考链不逐步刷屏（聊天里一堆「思考中」反而吵），但要进排障日志，
+                        // 并更新「最近一步」——卡住时 stall 提示能说清是在想还是在等工具。
+                        if let Some(text) = update
+                            .get("content")
+                            .and_then(|c| c.get("text"))
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            last_activity = "模型正在思考".to_string();
+                            let head: String = text.chars().take(80).collect();
+                            crate::wecom_log::write(
+                                "thought",
+                                &format!("msgid={} {head}", msg.msgid),
+                            );
+                        }
+                    }
+                }
+                Some(DshEvent::Permission { rpc_id, params }) => {
+                    open_approvals.push(rpc_id);
+                    let summary = permission_summary(&params);
+                    let (allow_option, reject_option) = permission_options(&params);
+                    let (code, reply) = register_dsh_approval(app, summary.clone()).await;
+                    let tip = format!(
+                        "🔐 DeepSeek Harness 需要你确认：{summary}\n回复「{code} 1」同意；回复「{code} 2」拒绝（5 分钟内有效）。",
+                        summary = summary,
+                        code = code
+                    );
+                    // 审批提示单独发一条**已结束**的消息：正文流还在跑，而平台对未结束的
+                    // 流式更新不一定立刻显示；这条必须让用户看见，否则只能干等 5 分钟超时。
+                    crate::wecom_log::write(
+                        "perm",
+                        &format!("msgid={} {summary}", msg.msgid),
+                    );
+                    let _ = self
+                        .sock
+                        .send_raw(wecom_proto::respond_stream(
+                            &req_id,
+                            &format!("appr-{}", msg.msgid),
+                            &redact(&tip),
+                            true,
+                        ))
+                        .await;
+
+                    // 等待用户作答不阻塞主循环：独立的等待端负责回执 ACP。
+                    let responder = turn.responder();
+                    tauri::async_runtime::spawn(async move {
+                        let decision = match tokio::time::timeout(APPROVAL_TTL, reply).await {
+                            Ok(Ok(allow)) => Some(allow),
+                            _ => None,
+                        };
+                        match decision {
+                            Some(true) => {
+                                responder.answer_permission(rpc_id, allow_option.as_deref())
+                            }
+                            Some(false) => {
+                                responder.answer_permission(rpc_id, reject_option.as_deref())
+                            }
+                            None => responder.answer_permission(rpc_id, None),
+                        }
+                    });
+                }
+                Some(DshEvent::Done(result)) => {
+                    crate::wecom_log::write(
+                        "dsh",
+                        &format!(
+                            "msgid={} done ok={} acc_len={}",
+                            msg.msgid,
+                            result.is_ok(),
+                            acc.chars().count()
+                        ),
+                    );
+                    let body = match result {
+                        Ok(value) => {
+                            let stop = value
+                                .get("stopReason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let note = match stop {
+                                "max_tokens" => "\n\n（达到长度上限，回答被截断）",
+                                "max_turn_requests" => "\n\n（达到工具步数上限）",
+                                "refusal" => "\n\n（模型拒绝了这次请求）",
+                                "cancelled" => "\n\n（本轮已取消）",
+                                _ => "",
+                            };
+                            if acc.trim().is_empty() {
+                                if stop == "cancelled" {
+                                    "（本轮已取消）".to_string()
+                                } else {
+                                    "（无文本回复）".to_string()
+                                }
+                            } else {
+                                format!("{}{}", redact(&acc), note)
+                            }
+                        }
+                        Err(e) => {
+                            let e = crate::wecom_dsh::friendly_turn_error(&e);
+                            if acc.trim().is_empty() {
+                                redact(&format!("出错了：{e}"))
+                            } else {
+                                redact(&format!("{acc}\n\n（中断：{e}）"))
+                            }
+                        }
+                    };
+                    send_finish(&self.sock, &req_id, stream_id, &body).await;
+                    break body;
+                }
+                None => {
+                    let body = if acc.trim().is_empty() {
+                        "（已结束）".to_string()
+                    } else {
+                        redact(&acc)
+                    };
+                    send_finish(&self.sock, &req_id, stream_id, &body).await;
+                    break body;
+                }
+            }
+        };
+
+        // 回合收尾：还挂着的授权统一回 cancelled，别让 DSH 的工具调用悬着。
+        if !open_approvals.is_empty() {
+            let responder = turn.responder();
+            for rpc_id in open_approvals {
+                responder.answer_permission(rpc_id, None);
+            }
+        }
+        wecom_session::append_turn(session, user_text, &final_text);
+        Ok(())
+    }
+
+    /// 收到消息先占位一条，满足平台对「首次应答」的时间窗；后面的正文更新同一个 stream id。
+    /// 失败只记日志——这一帧丢了也还有后续帧，但日志能说明是不是根本没发出去。
+    async fn ack(&self, msg: &MsgCallback, stream_id: &str) {
+        match self
+            .sock
+            .send_raw(wecom_proto::respond_stream(
+                &msg.req_id,
+                stream_id,
+                "正在思考…",
+                false,
+            ))
+            .await
+        {
+            Ok(()) => crate::wecom_log::write(
+                "ack",
+                &format!(
+                    "msgid={} req_id={} stream={stream_id}",
+                    msg.msgid,
+                    if msg.req_id.is_empty() {
+                        "<empty>"
+                    } else {
+                        msg.req_id.as_str()
+                    }
+                ),
+            ),
+            Err(e) => crate::wecom_log::write(
+                "ack",
+                &format!("msgid={} send failed: {e}", msg.msgid),
+            ),
+        }
+    }
+
+    async fn dsh_workspace(&self, app: &AppHandle) -> String {
+        app.state::<WecomState>().dsh.workspace().await
     }
 
     async fn run_agent_and_stream(
@@ -551,33 +970,70 @@ impl Orchestrator {
             _ => return None,
         };
         let st = app.state::<WecomState>();
+        // 先探一下：DSH 只有一次性授权，没有「3 本轮同类都允许」。
+        {
+            let map = st.pending_approvals.lock().await;
+            let Some(pending) = map.get(&code) else {
+                return None;
+            };
+            let expired = pending.created.elapsed() > APPROVAL_TTL;
+            let dsh = matches!(pending.kind, ApprovalKind::Dsh { .. });
+            drop(map);
+            if expired {
+                st.pending_approvals.lock().await.remove(&code);
+                return Some("该审批已超时（5 分钟内有效），请重新发起操作。".into());
+            }
+            if choice == 3 && dsh {
+                return Some(format!(
+                    "DeepSeek Harness 只有一次性授权：回复「{code} 1」同意或「{code} 2」拒绝。"
+                ));
+            }
+        }
         let pending = {
             let mut map = st.pending_approvals.lock().await;
             map.remove(&code)?
         };
-        if pending.created.elapsed() > crate::wecom_channel::APPROVAL_TTL {
-            return Some("该审批已超时（5 分钟内有效），请重新发起操作。".into());
-        }
-        let allow = choice != 2;
-        let scope = if choice == 3 {
-            Some("always".to_string())
-        } else if choice == 1 {
-            Some("turn".to_string())
-        } else {
-            None
-        };
-        match agent_decide(pending.request_id.clone(), pending.call_ids.clone(), allow, scope, None) {
-            Ok(()) => {
-                let msg = if choice == 2 {
-                    "已拒绝该操作。"
-                } else if choice == 3 {
-                    "已同意，本轮同类操作都放行。"
+        match pending.kind {
+            ApprovalKind::Tianji {
+                request_id,
+                call_ids,
+            } => {
+                let allow = choice != 2;
+                // 审批码语义必须和提示文案一一对应（提示里 1=同意一次、3=本轮同类都允许）：
+                // - choice 1 → scope None：只放行这一次（对齐桌面端的 once）；
+                // - choice 3 → scope "turn"：本轮同类都放行（对齐桌面端的 allow-turn）；
+                // 绝不映射成 "always"（那是桌面端「以后都允许」，会静默写进 alwaysAllow）。
+                let scope = if choice == 3 {
+                    Some("turn".to_string())
                 } else {
-                    "已同意。"
+                    None
                 };
-                Some(msg.into())
+                match agent_decide(request_id, call_ids, allow, scope, None) {
+                    Ok(()) => {
+                        let msg = if choice == 2 {
+                            "已拒绝该操作。"
+                        } else if choice == 3 {
+                            "已同意，本轮同类操作都放行。"
+                        } else {
+                            "已同意（仅此一次）。"
+                        };
+                        Some(msg.into())
+                    }
+                    Err(e) => Some(format!("审批回灌失败：{e}")),
+                }
             }
-            Err(e) => Some(format!("审批回灌失败：{e}")),
+            ApprovalKind::Dsh { summary } => {
+                let allow = choice != 2;
+                // 等待端收到后回执 ACP；这里只负责交付决定。
+                if let Some(tx) = pending.reply {
+                    let _ = tx.send(allow);
+                }
+                Some(if allow {
+                    format!("已同意：{summary}")
+                } else {
+                    format!("已拒绝：{summary}")
+                })
+            }
         }
     }
 }
@@ -587,8 +1043,17 @@ async fn send_finish(sock: &WecomSocket, req_id: &str, stream_id: &str, body: &s
     let frame = wecom_proto::respond_stream(req_id, stream_id, body, true);
     let mut wait = 2u64;
     for _ in 0..7 {
-        if sock.send_raw(frame.clone()).await.is_ok() {
-            return;
+        match sock.send_raw(frame.clone()).await {
+            Ok(()) => {
+                crate::wecom_log::write(
+                    "finish",
+                    &format!("stream={stream_id} len={}", body.chars().count()),
+                );
+                return;
+            }
+            Err(e) => {
+                crate::wecom_log::write("finish", &format!("stream={stream_id} send failed: {e}"));
+            }
         }
         tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
         wait = (wait * 2).min(16);
@@ -611,18 +1076,46 @@ async fn register_approval(
     {
         let mut map = st.pending_approvals.lock().await;
         // 顺手清掉过期项，避免无限增长
-        map.retain(|_, p| p.created.elapsed() <= crate::wecom_channel::APPROVAL_TTL);
+        map.retain(|_, p| p.created.elapsed() <= APPROVAL_TTL);
         map.insert(
             code.clone(),
             PendingApproval {
-                request_id: request_id.to_string(),
-                call_ids,
+                kind: ApprovalKind::Tianji {
+                    request_id: request_id.to_string(),
+                    call_ids,
+                },
                 can_remember,
                 created: now,
+                reply: None,
             },
         );
     }
     code
+}
+
+/// DSH 档的待决授权：返回审批码与「用户决定」的接收端。
+async fn register_dsh_approval(
+    app: &AppHandle,
+    summary: String,
+) -> (String, tokio::sync::oneshot::Receiver<bool>) {
+    let st = app.state::<WecomState>();
+    let seq = st.approval_seq.fetch_add(1, Ordering::SeqCst);
+    let code = encode_approval_code(seq);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut map = st.pending_approvals.lock().await;
+        map.retain(|_, p| p.created.elapsed() <= APPROVAL_TTL);
+        map.insert(
+            code.clone(),
+            PendingApproval {
+                kind: ApprovalKind::Dsh { summary },
+                can_remember: false,
+                created: Instant::now(),
+                reply: Some(tx),
+            },
+        );
+    }
+    (code, rx)
 }
 
 /// 把自增序号编码成 4 位大写字母数字审批码（36^4 循环）。
@@ -635,6 +1128,60 @@ fn encode_approval_code(seq: u32) -> String {
         n /= 36;
     }
     String::from_utf8(out.to_vec()).unwrap()
+}
+
+/// DSH 启动任务的回报：`oneshot` 两层 Result 摊平。
+fn decode_ready(
+    res: Result<Result<(), String>, tokio::sync::oneshot::error::RecvError>,
+) -> Result<(), String> {
+    match res {
+        Ok(inner) => inner,
+        Err(_) => Err("启动任务意外结束".into()),
+    }
+}
+
+/// DSH 档的 prompt 组装：返回 ACP content block 数组。
+/// - `image_enabled`（ACP `promptCapabilities.image`）为真时，把企微图片下载并内联成
+///   image block —— 图片才真正进模型，对齐原版 DSH 的图片理解能力；
+/// - 否则（模型不支持图片，或下载失败）降级成文本线索，与旧行为一致。
+/// 文件一律降级为文本线索（ACP 文件输入需要 attachment receipt，首期不做）。
+async fn build_dsh_prompt(
+    user_text: &str,
+    media: &[wecom_proto::MediaRef],
+    image_enabled: bool,
+) -> Vec<serde_json::Value> {
+    let mut blocks: Vec<serde_json::Value> = Vec::new();
+    let text = user_text.trim();
+    if !text.is_empty() {
+        blocks.push(crate::wecom_dsh::acp_text_block(text));
+    }
+    for m in media {
+        if m.kind == "image" && image_enabled {
+            match fetch_base64(m.url.trim()).await {
+                Ok((data, media_type)) => {
+                    blocks.push(crate::wecom_dsh::acp_image_block(&media_type, &data));
+                    continue;
+                }
+                Err(e) => {
+                    blocks.push(crate::wecom_dsh::acp_text_block(&format!("[图片获取失败：{e}]")));
+                    continue;
+                }
+            }
+        }
+        let label = if m.kind == "image" { "图片" } else { "文件" };
+        let name = m.filename.clone().unwrap_or_default();
+        let note = if name.is_empty() {
+            format!("（{label}：{}）", m.url)
+        } else {
+            format!("（{label}「{name}」：{}）", m.url)
+        };
+        blocks.push(crate::wecom_dsh::acp_text_block(&note));
+    }
+    // ACP 不接受空 prompt：既无文字也无可内联媒体时补一个占位，交给上游的空消息兜底。
+    if blocks.is_empty() {
+        blocks.push(crate::wecom_dsh::acp_text_block(user_text));
+    }
+    blocks
 }
 
 /// 把文字 + 图片/文件附件组装成一条用户消息。

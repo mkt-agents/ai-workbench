@@ -66,6 +66,13 @@ pub async fn run(app: AppHandle, name: &str, args: &Value) -> Result<String, Str
 
 /// 取 access_token：优先用自建应用 Corpid/Secret（业务 API 的正规凭证）；
 /// 未配置时回落机器人凭证——企微大概率回 40013，错误里给出可操作提示。
+///
+/// 出站媒体上传（`wecom_media`）与业务 CLI 共用这套取 token 逻辑：两者都走企微
+/// Open API（`qyapi`），都要求自建应用凭证，机器人 Bot ID/Secret 当 corpid 用会 40013。
+pub async fn access_token(state: &WecomState, creds: &AppliedCreds) -> Result<String, String> {
+    token_for(state, creds).await
+}
+
 async fn token_for(state: &WecomState, creds: &AppliedCreds) -> Result<String, String> {
     let (corpid, secret, from_corp) = match (
         creds.corp_id.as_deref(),

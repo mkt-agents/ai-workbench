@@ -39,6 +39,9 @@ mod wecom_orchestrator;
 mod wecom_channel;
 mod wecom_biz;
 mod wecom_media;
+mod wecom_dsh;
+mod wecom_dsh_profile;
+mod wecom_log;
 mod tianji_api;
 mod mcp;
 mod harness_config;
@@ -647,6 +650,8 @@ pub fn run() {
             wecom_channel::wecom_paired_users,
             wecom_channel::wecom_protect_secret,
             wecom_channel::wecom_reveal_secret,
+            wecom_channel::wecom_dsh_models,
+            wecom_channel::wecom_dsh_sync,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::dsh_set_embed,
@@ -750,7 +755,7 @@ desktop_embed::desktop_embed_relayout,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
             // Dev servers / watchers the agent started must not outlive the workbench.
             //
             // Release adopted windows only here, on the real exit path. Hooking
@@ -760,6 +765,8 @@ desktop_embed::desktop_embed_relayout,
             if let tauri::RunEvent::Exit = event {
                 agent_proc::kill_all();
                 desktop_embed::release_all();
+                // 企微 DSH 引擎：常驻 node 子进程同样不能活过应用。
+                app.state::<wecom_channel::WecomState>().dsh.kill_now();
             }
         });
 }

@@ -6,21 +6,35 @@ use std::sync::atomic::AtomicU32;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
-use tokio::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::{oneshot, Mutex};
 
+use crate::wecom_dsh::{DshEngine, DshStatus, Tier};
 use crate::wecom_orchestrator::{Orchestrator, WecomAgentConfig};
 use crate::wecom_policy::{DmPolicy, GroupPolicy, PendingPair, PolicyState};
 use crate::wecom_ws::WecomSocket;
 
+/// 待决审批的来源：两个引擎的回执通道完全不同。
+pub enum ApprovalKind {
+    /// 天玑：回灌 `agent_decide`。
+    Tianji {
+        request_id: String,
+        call_ids: Vec<String>,
+    },
+    /// DSH：只留一句摘要，真正的回执由等待方（握有 ACP 请求 id）完成。
+    Dsh { summary: String },
+}
+
 /// 一次企微审批待决项：用户用聊天里的「审批码」回复来放行/拒绝。
 pub struct PendingApproval {
-    pub request_id: String,
-    pub call_ids: Vec<String>,
-    /// 记录在案备用（当前「码 3」直接走 always scope，不读它）
+    pub kind: ApprovalKind,
+    /// 天玑档才有意义：「本轮同类都允许」；DSH 只有一次性授权。
+    /// 目前提示文案在 emit 时就已经写好，这里只留档备查。
     #[allow(dead_code)]
     pub can_remember: bool,
     pub created: Instant,
+    /// DSH 档的等待端：用户作答后从这里回传 allow/deny。
+    pub reply: Option<oneshot::Sender<bool>>,
 }
 
 /// 当前回合的企微出站目标（用于把媒体发回同一条对话流）。
@@ -42,6 +56,8 @@ pub struct WecomState {
     pub approval_seq: AtomicU32,
     /// 当前回合的出站目标（wecom_send_image/file 工具用）
     pub last_target: Mutex<Option<OutTarget>>,
+    /// DSH 引擎（常驻 `dsh --profile acp` 子进程）；天玑档时保持 Stopped。
+    pub dsh: Arc<DshEngine>,
 }
 
 /// 审批码有效期（与 harness 的 APPROVAL_WAIT 对齐）
@@ -68,6 +84,7 @@ impl WecomState {
             pending_approvals: Mutex::new(HashMap::new()),
             approval_seq: AtomicU32::new(0),
             last_target: Mutex::new(None),
+            dsh: Arc::new(DshEngine::new()),
         }
     }
 }
@@ -100,13 +117,38 @@ pub struct WecomApplyRequest {
     pub allow_groups: Vec<String>,
     #[serde(default)]
     pub paired_users: Vec<String>,
-    /// 绑定天玑跑回合所需的模型与权限；enabled 时必填
+    /// 绑定天玑跑回合所需的模型与权限；天玑档 enabled 时必填
     #[serde(default)]
     pub agent: Option<WecomAgentConfig>,
+    /// 回话引擎：`tianji`（默认）| `dsh`
+    #[serde(default)]
+    pub engine: String,
+    /// 渠道权限档位（read/workspace/review/full）；天玑档仍以 agent.permission 为准，
+    /// 这份顶层副本给 DSH 档用（它不需要天玑的模型快照）。
+    #[serde(default)]
+    pub permission: String,
+    /// DSH 引擎的工作区绝对路径；空则回落 agent.repo_path
+    #[serde(default)]
+    pub workspace: String,
+    /// DSH 引擎选中的模型（ACP 的不透明 value：`["provider","model"]`）；空 = DSH 默认路由
+    #[serde(default)]
+    pub dsh_model: String,
+    /// DSH 引擎的思考强度（空 = provider 默认）
+    #[serde(default)]
+    pub dsh_effort: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// 引擎名归一化：只认 `dsh`，其余一律天玑（旧配置缺省不会漂移）。
+pub fn normalize_engine(raw: &str) -> String {
+    if raw.trim().eq_ignore_ascii_case("dsh") {
+        "dsh".into()
+    } else {
+        "tianji".into()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +157,30 @@ pub struct WecomStatus {
     pub state: String,
     pub detail: String,
     pub enabled: bool,
+    pub engine: String,
+    pub dsh: DshStatus,
+}
+
+/// 列 DSH 引擎可用模型（ACP `configOptions`）：设置页「DSH 模型」下拉用。
+/// `refresh = true` 时丢掉缓存与旧探针会话重新拉一遍。
+#[tauri::command]
+pub async fn wecom_dsh_models(
+    state: State<'_, WecomState>,
+    refresh: Option<bool>,
+) -> Result<crate::wecom_dsh::DshModelCatalog, String> {
+    state.dsh.ensure_ready().await?;
+    state.dsh.models(refresh.unwrap_or(false)).await
+}
+
+/// 重新镜像 DSH 的 profile（把 web 的组合带到 acp），然后重连引擎让新配置生效。
+#[tauri::command]
+pub async fn wecom_dsh_sync(
+    app: AppHandle,
+    state: State<'_, WecomState>,
+) -> Result<crate::wecom_dsh_profile::MirrorReport, String> {
+    let report = state.dsh.sync_profile().await?;
+    kick_dsh(&app, true);
+    Ok(report)
 }
 
 #[derive(Debug, Serialize)]
@@ -129,10 +195,14 @@ pub struct WecomPairingView {
 pub async fn wecom_channel_status(state: State<'_, WecomState>) -> Result<WecomStatus, String> {
     let (s, detail) = state.sock.status().await;
     let enabled = state.applied.lock().await.is_some();
+    let engine = state.orch.engine.lock().await.clone();
+    let dsh = state.dsh.status().await;
     Ok(WecomStatus {
         state: s,
         detail,
         enabled,
+        engine,
+        dsh,
     })
 }
 
@@ -181,12 +251,32 @@ pub async fn wecom_channel_apply(
     {
         *state.orch.bot_display_name.lock().await = req.bot_display_name.trim().to_string();
     }
+    // 引擎与档位在 agent 被 move 之前取出来：DSH 档不需要天玑的模型快照。
+    let engine = normalize_engine(&req.engine);
+    let tier = if req.permission.trim().is_empty() {
+        req.agent
+            .as_ref()
+            .map(|a| a.permission.clone())
+            .unwrap_or_default()
+    } else {
+        req.permission.clone()
+    };
+    let workspace = if req.workspace.trim().is_empty() {
+        req.agent
+            .as_ref()
+            .map(|a| a.repo_path.clone())
+            .unwrap_or_default()
+    } else {
+        req.workspace.trim().to_string()
+    };
     if let Some(agent) = req.agent {
         *state.orch.agent.lock().await = Some(agent);
     }
+    *state.orch.engine.lock().await = engine.clone();
 
     if !req.enabled {
         state.sock.stop().await;
+        stop_dsh_async(&app);
         *state.applied.lock().await = None;
         let st = wecom_channel_status(state).await?;
         emit_status(&app, &st);
@@ -197,8 +287,34 @@ pub async fn wecom_channel_apply(
     if bot_id.is_empty() || secret.is_empty() {
         return Err("请填写 Bot ID 与 Secret".into());
     }
-    if state.orch.agent.lock().await.is_none() {
-        return Err("请先配置天玑模型，再启用企微通道".into());
+    if engine == "dsh" {
+        // 这里同步校验，错误直接弹在设置页；进程启动放在后台，别卡住 UI。
+        if workspace.trim().is_empty() {
+            return Err("DSH 引擎需要工作区路径：请填「工作区路径」或先选一个 Git 仓库".into());
+        }
+        if !std::path::Path::new(&workspace).is_absolute() {
+            return Err("DSH 工作区必须是绝对路径".into());
+        }
+        if crate::dsh_commands::dsh_installed_version().is_none() {
+            return Err("未检测到 DeepSeek Harness：请先在「Harness」页安装后再启用 DSH 引擎".into());
+        }
+        let changed = state
+            .dsh
+            .configure(
+                Tier::parse(&tier),
+                workspace.clone(),
+                req.dsh_model.trim().to_string(),
+                req.dsh_effort.trim().to_string(),
+            )
+            .await;
+        // 档位/工作区变了就带 restart 标记；否则 ensure_ready 命中 Ready 会直接返回。
+        kick_dsh(&app, changed);
+    } else {
+        // 切回天玑：DSH 进程不再需要，顺手回收（放后台，别让保存卡在启动流程上）。
+        stop_dsh_async(&app);
+        if state.orch.agent.lock().await.is_none() {
+            return Err("请先配置天玑模型，再启用企微通道".into());
+        }
     }
 
     let corp_id = req.corp_id.trim().to_string();
@@ -249,6 +365,35 @@ pub async fn wecom_channel_apply(
     Ok(st)
 }
 
+/// 后台回收 DSH 进程：`stop()` 会等启动流程释放锁，不能在 `apply` 里同步等。
+fn stop_dsh_async(app: &AppHandle) {
+    let dsh = Arc::clone(&app.state::<WecomState>().dsh);
+    tauri::async_runtime::spawn(async move {
+        dsh.stop().await;
+    });
+}
+
+/// 后台拉起 DSH 引擎（`restart` = 先杀掉现有进程），完成后主动推一次状态，
+/// 设置页不必等下一个 5 秒轮询。
+fn kick_dsh(app: &AppHandle, restart: bool) {
+    let dsh = Arc::clone(&app.state::<WecomState>().dsh);
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = if restart {
+            dsh.restart().await
+        } else {
+            dsh.ensure_ready().await
+        };
+        if let Err(e) = result {
+            eprintln!("[wecom] DSH 引擎启动失败：{e}");
+        }
+        let st = wecom_channel_status(app_handle.state::<WecomState>()).await;
+        if let Ok(st) = st {
+            emit_status(&app_handle, &st);
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn wecom_channel_restart(
     app: AppHandle,
@@ -260,6 +405,10 @@ pub async fn wecom_channel_restart(
         .await
         .clone()
         .ok_or_else(|| "通道未启用".to_string())?;
+    let engine = state.orch.engine.lock().await.clone();
+    if engine == "dsh" {
+        kick_dsh(&app, true);
+    }
     state.sock.stop().await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 

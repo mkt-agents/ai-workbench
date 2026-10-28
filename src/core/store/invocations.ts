@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, AgentUndoFile, DshInstance, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
+import type { AIModelConfig, AgentUndoFile, DshInstance, DshMirrorReport, DshModelCatalog, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -49,6 +49,20 @@ export interface HarnessConfigView {
   skills: HarnessSkillView[];
   hooks: HarnessHookView[];
 }
+
+/** `wecom_channel_status` 的返回：连接状态 + 当前引擎 + DSH 子状态。 */
+export type WecomChannelStatus = {
+  state: string;
+  detail: string;
+  enabled: boolean;
+  engine: string;
+  dsh: {
+    state: string;
+    detail: string;
+    version: string | null;
+    mirror: DshMirrorReport | null;
+  };
+};
 
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
@@ -261,9 +275,11 @@ export interface Invocations {
   invokeCancelRequest: (id: string) => Promise<void>;
   invokeUpdateLatestTag: () => Promise<string>;
   invokeFetchSiteIcon: (url: string) => Promise<string | null>;
-  invokeWecomChannelStatus: () => Promise<{ state: string; detail: string; enabled: boolean }>;
-  invokeWecomChannelApply: (req: Record<string, unknown>) => Promise<{ state: string; detail: string; enabled: boolean }>;
-  invokeWecomChannelRestart: () => Promise<{ state: string; detail: string; enabled: boolean }>;
+  invokeWecomChannelStatus: () => Promise<WecomChannelStatus>;
+  invokeWecomChannelApply: (req: Record<string, unknown>) => Promise<WecomChannelStatus>;
+  invokeWecomChannelRestart: () => Promise<WecomChannelStatus>;
+  invokeWecomDshModels: (refresh?: boolean) => Promise<DshModelCatalog>;
+  invokeWecomDshSync: () => Promise<DshMirrorReport>;
   invokeWecomPairingList: () => Promise<{ userid: string; code: string; createdMs: number }[]>;
   invokeWecomPairingApprove: (code: string) => Promise<string>;
   invokeWecomPairingRevoke: (userid: string) => Promise<void>;
@@ -671,12 +687,13 @@ export const invocations: Invocations = {
   invokeUpdateInstall: (path: string) => tauriInvoke<void>('update_install', { path }),
   invokeCancelRequest: (id: string) => tauriInvoke<void>('cancel_request', { id }),
   invokeFetchSiteIcon: (url: string) => tauriInvoke<string | null>('fetch_site_icon', { url }),
-  invokeWecomChannelStatus: () =>
-    tauriInvoke<{ state: string; detail: string; enabled: boolean }>('wecom_channel_status'),
+  invokeWecomChannelStatus: () => tauriInvoke<WecomChannelStatus>('wecom_channel_status'),
   invokeWecomChannelApply: (req: Record<string, unknown>) =>
-    tauriInvoke<{ state: string; detail: string; enabled: boolean }>('wecom_channel_apply', { req }),
-  invokeWecomChannelRestart: () =>
-    tauriInvoke<{ state: string; detail: string; enabled: boolean }>('wecom_channel_restart'),
+    tauriInvoke<WecomChannelStatus>('wecom_channel_apply', { req }),
+  invokeWecomChannelRestart: () => tauriInvoke<WecomChannelStatus>('wecom_channel_restart'),
+  invokeWecomDshModels: (refresh = false) =>
+    tauriInvoke<DshModelCatalog>('wecom_dsh_models', { refresh }),
+  invokeWecomDshSync: () => tauriInvoke<DshMirrorReport>('wecom_dsh_sync'),
   invokeWecomPairingList: () =>
     tauriInvoke<{ userid: string; code: string; createdMs: number }[]>('wecom_pairing_list'),
   invokeWecomPairingApprove: (code: string) => tauriInvoke<string>('wecom_pairing_approve', { code }),

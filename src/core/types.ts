@@ -228,6 +228,12 @@ export interface AppSettings {
   wecomPermission?: string;
   /** 空 = 用 currentGitRepo */
   wecomRepoPath?: string;
+  /** 回话引擎：tianji（默认，内置天玑）| dsh（DeepSeek Harness，常驻 ACP 进程） */
+  wecomEngine?: "tianji" | "dsh" | string;
+  /** DSH 引擎选中的模型（ACP 的不透明 value：`["provider","model"]`）；空 = DSH 默认路由 */
+  wecomDshModel?: string;
+  /** DSH 引擎的思考强度；空 = provider 默认 */
+  wecomDshEffort?: string;
   /** 天玑 OpenAI 兼容端点（ClawBot/OpenClaw 等外部 agent 接入用） */
   tianjiApiEnabled?: boolean;
   tianjiApiPort?: number;
@@ -818,3 +824,35 @@ export interface GlobalStore {
   setState: (partial: Partial<GlobalState> | ((state: GlobalState) => GlobalState)) => void;
   subscribe: (listener: (state: GlobalState) => void) => () => void;
 }
+
+/** 企微 DSH 引擎：把托管的 acp profile 镜像 DSH 的 web 配置后的结果。 */
+export type DshMirrorReport = {
+  source: string;
+  target: string;
+  bundles: number;
+  dropped: string[];
+  patchEntries: number;
+  linked: boolean;
+  syncedAt: number;
+  warning: string | null;
+};
+
+export type DshModelOption = {
+  /** ACP 的不透明取值（`["provider","model"]` 的 JSON） */
+  value: string;
+  name: string;
+  description: string | null;
+};
+
+export type DshModelGroup = {
+  group: string;
+  name: string;
+  options: DshModelOption[];
+};
+
+/** DSH 引擎可用模型（ACP `configOptions` 的解析结果）。 */
+export type DshModelCatalog = {
+  current: string;
+  groups: DshModelGroup[];
+  effort: { current: string; options: DshModelOption[] } | null;
+};

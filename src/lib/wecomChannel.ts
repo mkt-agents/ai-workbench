@@ -3,13 +3,30 @@
  * Settings UI and app boot both call `applyWecomChannel`.
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { AIModelConfig, AppSettings, McpServer } from "../core/types";
+import type {
+  AIModelConfig,
+  AppSettings,
+  DshMirrorReport,
+  DshModelCatalog,
+  McpServer,
+} from "../core/types";
 import { resolveFallbackModel, resolveSceneModel } from "./aiSceneModels";
+
+export type WecomDshStatus = {
+  /** stopped | starting | ready | error */
+  state: string;
+  detail: string;
+  version: string | null;
+  mirror: DshMirrorReport | null;
+};
 
 export type WecomStatus = {
   state: string;
   detail: string;
   enabled: boolean;
+  /** tianji | dsh */
+  engine: string;
+  dsh: WecomDshStatus;
 };
 
 export type WecomPairing = {
@@ -74,7 +91,9 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
         repoPath,
         services: [] as string[],
         permission,
-        tools: permission !== "read" ? true : true,
+        // 「有没有工具」与「能做什么」是两件事：只读档也要读写文件/搜索，
+        // 真正的边界由 permission 在闸门里决定（这里本来就是恒 true）。
+        tools: true,
         mode: "",
         vision: Boolean(model.vision),
         diffConfirm: Boolean(settings.agentDiffConfirm),
@@ -111,6 +130,12 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       allowUsers: splitCsv(settings.wecomAllowUsers),
       allowGroups: splitCsv(settings.wecomAllowGroups),
       pairedUsers: splitCsv(settings.wecomPairedUsers),
+      // 引擎与档位另带一份：DSH 档不需要天玑的模型快照，但要工作区、档位与模型选择。
+      engine: settings.wecomEngine === "dsh" ? "dsh" : "tianji",
+      permission,
+      workspace: repoPath,
+      dshModel: (settings.wecomDshModel ?? "").trim(),
+      dshEffort: (settings.wecomDshEffort ?? "").trim(),
       agent,
     },
   });
@@ -128,6 +153,16 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
 
 export async function fetchWecomStatus(): Promise<WecomStatus> {
   return invoke<WecomStatus>("wecom_channel_status");
+}
+
+/** 读 DSH 引擎可用的模型目录（ACP configOptions）。`refresh` 会丢掉缓存重拉。 */
+export async function fetchDshModels(refresh = false): Promise<DshModelCatalog> {
+  return invoke<DshModelCatalog>("wecom_dsh_models", { refresh });
+}
+
+/** 重新把 DSH 的 web 配置镜像到 acp profile（引擎随后自动重启）。 */
+export async function syncDshProfile(): Promise<DshMirrorReport> {
+  return invoke<DshMirrorReport>("wecom_dsh_sync");
 }
 
 export async function fetchWecomPairings(): Promise<WecomPairing[]> {
