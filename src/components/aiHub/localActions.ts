@@ -25,6 +25,8 @@ const PAGES: Alias[] = [
   { tab: "cursor-accounts", label: "Cursor", names: ["cursor 账号", "cursor"] },
   { tab: "account-quota", label: "账号配额", names: ["账号配额", "账号额度", "配额", "额度", "签到"] },
   { tab: "runtime", label: "环境变量", names: ["环境变量", "runtime"] },
+  { tab: "tianji-assistant", label: "天玑助手", names: ["天玑助手", "天玑设置", "交互与权限", "联网扩展", "网页抓取", "mcp 服务"] },
+  { tab: "im-bots", label: "IM 机器人", names: ["im 机器人", "im机器人", "企微机器人", "企业微信", "im"] },
   { tab: "plugins", label: "网页工具", names: ["网页工具"] },
   { tab: "cloudflared", label: "内网穿透", names: ["内网穿透", "cloudflared", "穿透"] },
   { tab: "hosts", label: "Hosts 管理", names: ["hosts 管理", "hosts"] },

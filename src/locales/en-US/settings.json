@@ -9,6 +9,8 @@
     "menu": "Menus",
     "data": "Usage",
     "about": "About",
+    "groupPerm": "Behavior & permissions",
+    "groupNetExt": "Network extensions",
     "groupInteraction": "Interaction & permissions",
     "groupCapability": "Capabilities",
     "groupBudget": "Budget & compatibility",
@@ -19,7 +21,9 @@
   },
   "imBot": {
     "title": "IM bots",
-    "channelWecom": "WeCom"
+    "channelWecom": "WeCom",
+    "channelWechat": "WeChat",
+    "soon": "Coming soon"
   },
   "tianjiApi": {
     "hint": "Tianji OpenAI-compatible endpoint: exposes Tianji (tools / approvals / sessions included) as /v1/chat/completions for OpenClaw (WeChat ClawBot) or any OpenAI-compatible client. In OpenClaw set base_url to the address below, api_key to the key here, and model to tianji. Once WeChat ClawBot is bound to OpenClaw via QR, you can chat with Tianji inside WeChat.",
@@ -265,9 +269,14 @@
     "groupTroubleshoot": "Live troubleshooting",
     "subWorkspace": "Workspace",
     "subEngine": "Engine & model",
+    "sectionOff": "Off",
+    "sectionUnset": "Not set",
+    "sectionDailyAt": "Daily {{time}}",
+    "sectionPaired": "{{count}} paired",
+    "sectionLogs": "Channel & session logs",
     "groupAutoupdate": "Doc auto-update & push",
     "groupDiag": "Diagnostics",
-    "groupDiagHint": "Expand when it won't connect or answers look wrong",
+    "groupDiagHint": "Check here when it won't connect or answers look wrong",
     "subAnswer": "Answer strategy",
     "subSkywalking": "Live troubleshooting (SkyWalking)",
     "subAutoUpdate": "Reverse-doc auto update",

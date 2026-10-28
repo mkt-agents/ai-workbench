@@ -1,19 +1,16 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, XCircle, Loader2, Settings2, Sparkles, Globe, Database, Info, ListTree, Plus, Bot } from "lucide-react";
+import { Check, XCircle, Loader2, Settings2, Database, Info, ListTree } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { useGlobalStore } from "../core/store";
-import type { AppSettings, AppTheme } from "../core/types";
-import type { HarnessConfigView } from "../core/store/invocations";
-import { HARNESS_MODES, type HarnessMode } from "./aiHub/harness";
+import type { AppTheme } from "../core/types";
 import {
   APP_RELEASES_URL,
   checkForUpdatesMultiSource as checkForUpdates,
   clearSkippedVersion,
   getSkippedVersion,
 } from "../lib/version";
-import { registerAiHubShortcut, DEFAULT_SHORTCUT } from "../lib/aiHubShortcut";
 import {
   CUSTOM_SKIN,
   PANDA_SKIN,
@@ -26,8 +23,6 @@ import {
   type PetConfigPatch,
 } from "../lib/petSkins";
 import PetPackImport from "./PetPackImport";
-import ProfileModal from "./aiHub/ProfileModal";
-import { mergeProfiles } from "../lib/aiHubProfiles";
 import { applyDocumentTheme, APP_THEME_CHANGED_EVENT } from "../lib/theme";
 import {
   clearAiUsage,
@@ -40,8 +35,6 @@ import {
 } from "../lib/aiUsage";
 import { useConfirm } from "./ConfirmModal";
 import MenuManager from "./MenuManager";
-import WecomSettingsCard from "./WecomSettingsCard";
-import TianjiApiSettingsCard from "./TianjiApiSettingsCard";
 import { emit } from "@tauri-apps/api/event";
 
 const THEME_OPTIONS: AppTheme[] = ["ice", "silver", "glass", "light", "dark", "system"];
@@ -56,69 +49,7 @@ const CHART_COLORS = [
   "var(--chart-6)",
 ];
 
-type SettingsTab = "general" | "menu" | "hub" | "im" | "net" | "data" | "about";
-
-/** 一条「以后都允许」：记在哪一层 + 规则本身。 */
-type RememberedAllow = {
-  scope: "global" | "repo" | "branch";
-  /** 仓库根路径；`global` 时为空。 */
-  repo: string;
-  /** 分支名；只有 `branch` 层才有。 */
-  branch: string;
-  kind: string;
-};
-
-/** 三层摊平成一张表，列表展示与逐条删除共用。 */
-function rememberedAllowEntries(s: AppSettings): RememberedAllow[] {
-  const out: RememberedAllow[] = (s.agentAlwaysAllow || []).map((kind) => ({
-    scope: "global",
-    repo: "",
-    branch: "",
-    kind,
-  }));
-  for (const [repo, list] of Object.entries(s.agentAlwaysAllowByRepo || {})) {
-    for (const kind of list || []) out.push({ scope: "repo", repo, branch: "", kind });
-  }
-  for (const [repo, perRepo] of Object.entries(s.agentAlwaysAllowByBranch || {})) {
-    for (const [branch, list] of Object.entries(perRepo || {})) {
-      for (const kind of list || []) out.push({ scope: "branch", repo, branch, kind });
-    }
-  }
-  return out;
-}
-
-/** 「以后都允许」全局 + 各仓库 + 各分支的总条数，清空按钮和文案共用。 */
-function rememberedAllowCount(s: AppSettings): number {
-  return rememberedAllowEntries(s).length;
-}
-
-/** 列表里只露最后一段目录名，完整路径放 title。 */
-function shortRepoName(repo: string): string {
-  const parts = repo.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] || repo;
-}
-
-/** 摘掉一条；空掉的仓库 / 分支整个删掉，别在设置里留空对象。 */
-function withoutRemembered(s: AppSettings, entry: RememberedAllow): Partial<AppSettings> {
-  if (entry.scope === "global") {
-    return { agentAlwaysAllow: (s.agentAlwaysAllow || []).filter((k) => k !== entry.kind) };
-  }
-  if (entry.scope === "repo") {
-    const byRepo = { ...(s.agentAlwaysAllowByRepo || {}) };
-    const list = (byRepo[entry.repo] || []).filter((k) => k !== entry.kind);
-    if (list.length) byRepo[entry.repo] = list;
-    else delete byRepo[entry.repo];
-    return { agentAlwaysAllowByRepo: byRepo };
-  }
-  const byBranch = { ...(s.agentAlwaysAllowByBranch || {}) };
-  const perRepo = { ...(byBranch[entry.repo] || {}) };
-  const list = (perRepo[entry.branch] || []).filter((k) => k !== entry.kind);
-  if (list.length) perRepo[entry.branch] = list;
-  else delete perRepo[entry.branch];
-  if (Object.keys(perRepo).length) byBranch[entry.repo] = perRepo;
-  else delete byBranch[entry.repo];
-  return { agentAlwaysAllowByBranch: byBranch };
-}
+type SettingsTab = "general" | "menu" | "data" | "about";
 
 /**
  * 近 14 天 token 用量的迷你柱状图。刻度取「最高的一天」和「每日预算」里大的那个，
@@ -278,16 +209,15 @@ function UsageTrend({
 
 /**
  * 左栏分类。卡片自己带 `hidden={tab !== id}`，切换时只有 `display` 变——
- * 挂载状态保住了，白名单输入框里的半截草稿、MCP 新增行不会被切走就丢。
+ * 挂载状态保住了，输入框里的半截草稿不会被切走就丢。
+ *
+ * 「天玑助手」（交互/能力/预算）和「联网扩展」（抓取/MCP/API）已经搬到侧栏的
+ * 「天玑助手」分组里，这里只剩通用 / 菜单 / 用量 / 关于。
  */
 const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings2; labelKey: string }[] = [
-  // 成对相邻：外观（通用 + 菜单）→ 能力（助手 + 联网）→ 数据 → 关于；
-  // 数据管理并入通用设置，关于程序保留独立分类
+  // 外观（通用 + 菜单）→ 数据 → 关于；「天玑助手」「联网扩展」已搬到侧栏的「天玑助手」分组
   { id: "general", icon: Settings2, labelKey: "tabs.general" },
   { id: "menu", icon: ListTree, labelKey: "tabs.menu" },
-  { id: "hub", icon: Sparkles, labelKey: "tabs.hub" },
-  { id: "im", icon: Bot, labelKey: "tabs.im" },
-  { id: "net", icon: Globe, labelKey: "tabs.net" },
   { id: "data", icon: Database, labelKey: "tabs.data" },
   { id: "about", icon: Info, labelKey: "tabs.about" },
 ];
@@ -299,33 +229,10 @@ type Props = {
 
 function Settings({ onNoticeUpdate }: Props = {}) {
   const { t, i18n } = useTranslation("settings");
-  /** 角色档位的名字与说明在天玑的命名空间里（内置档位共用同一套文案）。 */
-  const { t: tHub } = useTranslation("aihub");
   const confirm = useConfirm();
 
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
-  // 项目 harness 配置（`.ai-workbench/` 与全局目录）：只读展示来源、技能与 hooks 数量
-  const invokeHarnessConfig = useGlobalStore((s) => s.invokeHarnessConfig);
-  const [harnessConfig, setHarnessConfig] = useState<HarnessConfigView | null>(null);
-  const harnessRoot = settings.currentGitRepo?.trim() || "";
-  useEffect(() => {
-    if (!harnessRoot) {
-      setHarnessConfig(null);
-      return;
-    }
-    let alive = true;
-    void invokeHarnessConfig(harnessRoot)
-      .then((config) => {
-        if (alive) setHarnessConfig(config);
-      })
-      .catch(() => {
-        if (alive) setHarnessConfig(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [harnessRoot, invokeHarnessConfig]);
   // 桌宠三项都可能缺省（旧版只写 localStorage 的 qa-bubble-pet），统一按归一化结果渲染。
   const petCfg = useMemo(
     () =>
@@ -340,16 +247,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   const packRevRef = useRef(0);
   const [packCount, setPackCount] = useState(0);
   const [importOpen, setImportOpen] = useState(false);
-  /** 角色档位编辑器（内置只读 + 自定义增删改）。 */
-  const [profileOpen, setProfileOpen] = useState(false);
-  const profiles = useMemo(() => mergeProfiles(settings.aiHubProfiles), [settings.aiHubProfiles]);
-  /** 钉住的任务模式：undefined / "code" 都算自动，与天玑侧同一套判定。 */
-  const pinnedTaskMode =
-    settings.aiHubTaskMode &&
-    settings.aiHubTaskMode !== "code" &&
-    HARNESS_MODES.includes(settings.aiHubTaskMode as HarnessMode)
-      ? settings.aiHubTaskMode
-      : "";
 
   const applyPetConfig = (patch: Partial<PetConfig>) => {
     const next = normalizePetConfig({ ...petCfg, ...patch });
@@ -384,11 +281,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   useEffect(() => {
     void loadUserPack().then(setPackCount);
   }, []);
-  const mcpServers = useGlobalStore((s) => s.mcpServers);
-  const addMcpServer = useGlobalStore((s) => s.addMcpServer);
-  const updateMcpServer = useGlobalStore((s) => s.updateMcpServer);
-  const deleteMcpServer = useGlobalStore((s) => s.deleteMcpServer);
-  const [mcpDraft, setMcpDraft] = useState({ name: "", command: "", args: "" });
   const [usageRows, setUsageRows] = useState<AiUsageEntry[]>(() => usageList());
   // 当日桶：跨天自动归零，用来跟「每日预算」比
   const [today, setToday] = useState<AiUsageDay>(() => readAiUsageDay());
@@ -396,12 +288,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   const [trend, setTrend] = useState<AiUsageHistoryPoint[]>(() => readAiUsageHistory());
   // 模型明细口径：默认「近 14 天」与上面走势图同窗口，避免两个数字对不上
   const [usageScope, setUsageScope] = useState<"trend" | "all">("trend");
-  // 天玑助手卡内分组：跟顶部分类一样用 hidden 挂起不卸载。
-  // 权限两项目前并进「交互」——它单独一页只有两行，太薄。
-  const [hubGroup, setHubGroup] = useState<"interaction" | "capability" | "budget">("interaction");
-  // IM 机器人页的通道子标签：当前只有企业微信，后期加钉钉/飞书等追加一个即可。
-  const [imChannel, setImChannel] = useState<"wecom">("wecom");
-  const [netGroup, setNetGroup] = useState<"web" | "mcp" | "tianjiApi">("web");
   useEffect(() => {
     const refresh = () => {
       setUsageRows(usageList());
@@ -450,19 +336,7 @@ function Settings({ onNoticeUpdate }: Props = {}) {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [updateTarget, setUpdateTarget] = useState<{ version: string; htmlUrl: string } | null>(null);
   const [skipped, setSkipped] = useState<string | null>(() => getSkippedVersion());
-  const [shortcutDraft, setShortcutDraft] = useState(settings.aiHubShortcut || DEFAULT_SHORTCUT);
-  const [webAllowDraft, setWebAllowDraft] = useState((settings.agentWebAllow ?? []).join(", "));
-  const webAllowFocused = useRef(false);
   const [dataBusy, setDataBusy] = useState(false);
-
-  // 设置可能晚于挂载才从 localStorage 水合，草稿要跟上已保存的值，否则「应用」会把默认值写回去
-  useEffect(() => {
-    setShortcutDraft(settings.aiHubShortcut || DEFAULT_SHORTCUT);
-  }, [settings.aiHubShortcut]);
-  const savedWebAllow = (settings.agentWebAllow ?? []).join(", ");
-  useEffect(() => {
-    if (!webAllowFocused.current) setWebAllowDraft(savedWebAllow);
-  }, [savedWebAllow]);
   const [tab, setTab] = useState<SettingsTab>("general");
 
   const showMsg = useCallback((type: "success" | "error", text: string) => {
@@ -470,29 +344,11 @@ function Settings({ onNoticeUpdate }: Props = {}) {
     setTimeout(() => setMessage(null), 5000);
   }, []);
 
-  /** Add the draft MCP server; the name is what shows up inside every tool name. */
-  const addServer = useCallback(async () => {
-    const name = parseServerName(mcpDraft.name);
-    const command = mcpDraft.command.trim();
-    if (!name || !command) return;
-    try {
-      await addMcpServer({ name, command, args: mcpDraft.args.trim(), enabled: true });
-      setMcpDraft({ name: "", command: "", args: "" });
-      showMsg("success", t("aiHub.mcpAdded", { name }));
-    } catch (e) {
-      showMsg("error", String(e));
-    }
-  }, [mcpDraft, addMcpServer, showMsg, t]);
-
   useEffect(() => {
     getVersion()
       .then(setAppVersion)
       .catch(() => setAppVersion("0.1.0"));
   }, []);
-
-  useEffect(() => {
-    setShortcutDraft(settings.aiHubShortcut || DEFAULT_SHORTCUT);
-  }, [settings.aiHubShortcut]);
 
   useEffect(() => {
     invokeGetAutoStart()
@@ -530,16 +386,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
 
   const handleSidebarToggle = () => {
     setSettings({ sidebarCollapsed: !settings.sidebarCollapsed });
-  };
-
-  const handleApplyShortcut = async () => {
-    const result = await registerAiHubShortcut(shortcutDraft);
-    if (result.ok) {
-      setSettings({ aiHubShortcut: shortcutDraft.trim() || DEFAULT_SHORTCUT });
-      showMsg("success", t("aiHub.shortcutOk", { shortcut: shortcutDraft }));
-    } else {
-      showMsg("error", t("aiHub.shortcutFail", { error: result.error || "unknown" }));
-    }
   };
 
   const handleExport = async () => {
@@ -846,591 +692,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
           <MenuManager />
         </div>
 
-        <div className="card" hidden={tab !== "hub"}>
-          <div className="card-title">{t("aiHub.title")}</div>
-          <div className="card-body">
-            <div className="hub-tabs" role="tablist" aria-label={t("aiHub.title")}>
-              {(
-                [
-                  ["interaction", "tabs.groupInteraction"],
-                  ["capability", "tabs.groupCapability"],
-                  ["budget", "tabs.groupBudget"],
-                ] as const
-              ).map(([id, labelKey]) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={hubGroup === id}
-                  className={`hub-tab${hubGroup === id ? " is-active" : ""}`}
-                  onClick={() => setHubGroup(id)}
-                >
-                  {t(labelKey)}
-                </button>
-              ))}
-            </div>
-            <section className="hub-group" hidden={hubGroup !== "interaction"}>
-              {/* 按「影响面」分三段：窗口 → 每轮怎么答 → 写入与审批（安全类压轴） */}
-              <div className="hub-group-title">{t("aiHub.groupWindow")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.shortcut")}</span>
-                  <div className="setting-row-controls">
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      onClick={() => void handleApplyShortcut()}
-                    >
-                      {t("aiHub.shortcutApply")}
-                    </button>
-                    <input
-                      className="input-field setting-shortcut-input"
-                      value={shortcutDraft}
-                      onChange={(e) => setShortcutDraft(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <p className="setting-hint">{t("aiHub.shortcutHint")}</p>
-              </div>
-              <div className="hub-group-title">{t("aiHub.groupAnswer")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.taskMode")}</span>
-                  <select
-                    className="input-field"
-                    style={{ width: 160 }}
-                    value={pinnedTaskMode ?? ""}
-                    onChange={(e) => setSettings({ aiHubTaskMode: e.target.value || undefined })}
-                  >
-                    <option value="">{t("aiHub.taskModeAuto")}</option>
-                    {HARNESS_MODES.filter((option) => option !== "code").map((option) => (
-                      <option key={option} value={option}>
-                        {t(`aiHub.modeNames.${option}`)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <p className="setting-hint">{t("aiHub.taskModeHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.profile")}</span>
-                  <div className="setting-row-controls">
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      onClick={() => setProfileOpen(true)}
-                    >
-                      {t("aiHub.profileManage")}
-                    </button>
-                    <select
-                      className="input-field"
-                      style={{ width: 160 }}
-                      value={settings.aiHubProfileId ?? ""}
-                      onChange={(e) => setSettings({ aiHubProfileId: e.target.value || undefined })}
-                    >
-                      <option value="">{t("aiHub.profileNone")}</option>
-                      {profiles.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {tHub(p.nameKey || "", { defaultValue: p.name })}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <p className="setting-hint">{t("aiHub.profileHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.planFirst")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentPlanFirst === true}
-                      onChange={(e) => setSettings({ agentPlanFirst: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.planFirstHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.suggest")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.aiHubSuggest !== false}
-                      onChange={(e) => setSettings({ aiHubSuggest: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.suggestHint")}</p>
-              </div>
-              <div className="hub-group-title">{t("aiHub.groupWrite")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.diffConfirm")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentDiffConfirm === true}
-                      onChange={(e) => setSettings({ agentDiffConfirm: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.diffConfirmHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.remembered")}</span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    disabled={rememberedAllowCount(settings) === 0}
-                    onClick={() =>
-                      setSettings({
-                        agentAlwaysAllow: [],
-                        agentAlwaysAllowByRepo: {},
-                        agentAlwaysAllowByBranch: {},
-                      })
-                    }
-                  >
-                    {t("aiHub.rememberedClear")}
-                  </button>
-                </div>
-                <p className="setting-hint">
-                  {rememberedAllowCount(settings) > 0
-                    ? t("aiHub.rememberedCount", { n: rememberedAllowCount(settings) })
-                    : t("aiHub.rememberedEmpty")}
-                </p>
-                <p className="setting-hint">{t("aiHub.rememberedScope")}</p>
-                {rememberedAllowCount(settings) > 0 && (
-                  <details className="remembered-list">
-                    <summary>{t("aiHub.rememberedListTitle", { n: rememberedAllowCount(settings) })}</summary>
-                    {rememberedAllowEntries(settings).map((entry) => (
-                      <div
-                        className="remembered-row"
-                        key={`${entry.scope}|${entry.repo}|${entry.branch}|${entry.kind}`}
-                      >
-                        <span className="remembered-scope" title={entry.repo || undefined}>
-                          {entry.scope === "global"
-                            ? t("aiHub.rememberedScopeGlobal")
-                            : entry.scope === "repo"
-                              ? t("aiHub.rememberedScopeRepo", { repo: shortRepoName(entry.repo) })
-                              : t("aiHub.rememberedScopeBranch", {
-                                  repo: shortRepoName(entry.repo),
-                                  branch: entry.branch,
-                                })}
-                        </span>
-                        <code className="remembered-kind">{entry.kind}</code>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() => setSettings(withoutRemembered(settings, entry))}
-                        >
-                          {t("aiHub.rememberedRemove")}
-                        </button>
-                      </div>
-                    ))}
-                  </details>
-                )}
-              </div>
-            </section>
-            <section className="hub-group" hidden={hubGroup !== "capability"}>
-              <div className="hub-group-title">{t("aiHub.groupRead")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.parallelReads")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentParallelReads !== false}
-                      onChange={(e) => setSettings({ agentParallelReads: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.parallelReadsHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.grepIgnore")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentGrepIgnore !== false}
-                      onChange={(e) => setSettings({ agentGrepIgnore: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.grepIgnoreHint")}</p>
-              </div>
-              <div className="hub-group-title">{t("aiHub.groupRun")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.retries")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentRetries !== false}
-                      onChange={(e) => setSettings({ agentRetries: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.retriesHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.subagents")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentSubagents === true}
-                      onChange={(e) => setSettings({ agentSubagents: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.subagentsHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.subagentWrite")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentSubagentWrite === true}
-                      disabled={settings.agentSubagents !== true}
-                      onChange={(e) => setSettings({ agentSubagentWrite: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.subagentWriteHint")}</p>
-              </div>
-              <div className="hub-group-title">{t("aiHub.groupProject")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.harnessConfig")}</span>
-                  <span className="setting-value">
-                    {harnessConfig
-                      ? t("aiHub.harnessCounts", {
-                          skills: harnessConfig.skills.length,
-                          hooks: harnessConfig.hooks.length,
-                        })
-                      : "—"}
-                  </span>
-                </div>
-                <p className="setting-hint">
-                  {harnessConfig
-                    ? t("aiHub.harnessSources", {
-                        project: harnessConfig.projectDir || "—",
-                        global: harnessConfig.globalDir || "—",
-                      })
-                    : t("aiHub.harnessHint")}
-                </p>
-              </div>
-            </section>
-            <section className="hub-group" hidden={hubGroup !== "budget"}>
-              <div className="hub-group-title">{t("aiHub.groupContext")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.contextTokens")}</span>
-                  <select
-                    className="input-field"
-                    style={{ width: 120 }}
-                    value={String(settings.agentContextTokens ?? 48000)}
-                    onChange={(e) => setSettings({ agentContextTokens: Number(e.target.value) })}
-                  >
-                    <option value="24000">24k</option>
-                    <option value="48000">48k</option>
-                    <option value="96000">96k</option>
-                  </select>
-                </div>
-                <p className="setting-hint">{t("aiHub.contextTokensHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.resultCap")}</span>
-                  <select
-                    className="input-field"
-                    style={{ width: 120 }}
-                    value={String(settings.agentResultCap ?? 12000)}
-                    onChange={(e) => setSettings({ agentResultCap: Number(e.target.value) })}
-                  >
-                    <option value="6000">6k</option>
-                    <option value="12000">12k</option>
-                    <option value="24000">24k</option>
-                  </select>
-                </div>
-                <p className="setting-hint">{t("aiHub.resultCapHint")}</p>
-              </div>
-              <div className="hub-group-title">{t("aiHub.groupCompat")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.anthropicStream")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentAnthropicStream !== false}
-                      onChange={(e) => setSettings({ agentAnthropicStream: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.anthropicStreamHint")}</p>
-              </div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.freshContext")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentFreshContext !== false}
-                      onChange={(e) => setSettings({ agentFreshContext: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.freshContextHint")}</p>
-              </div>
-            </section>
-          </div>
-        </div>
-
-        <div className="card" hidden={tab !== "im"}>
-          <div className="card-title">{t("imBot.title")}</div>
-          <div className="card-body">
-            {/* 通道子标签：数组驱动，后期加钉钉 / 飞书 / Slack 等追加一项即可。
-                `is-channel`：数量少时不均分整行，选中项用主题色描边 */}
-            <div className="hub-tabs is-channel" role="tablist" aria-label={t("imBot.title")}>
-              {(
-                [["wecom", "imBot.channelWecom"]] as const
-              ).map(([id, labelKey]) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={imChannel === id}
-                  className={`hub-tab${imChannel === id ? " is-active" : ""}`}
-                  onClick={() => setImChannel(id)}
-                >
-                  {t(labelKey)}
-                </button>
-              ))}
-            </div>
-
-            <section className="hub-group" hidden={imChannel !== "wecom"}>
-              <WecomSettingsCard />
-            </section>
-          </div>
-        </div>
-
-        <div className="card" hidden={tab !== "net"}>
-          <div className="card-title">{t("net.title")}</div>
-          <div className="card-body">
-            <div className="hub-tabs" role="tablist" aria-label={t("net.title")}>
-              {(
-                [
-                  ["web", "tabs.groupWeb"],
-                  ["mcp", "tabs.groupMcp"],
-                  ["tianjiApi", "tabs.groupTianjiApi"],
-                ] as const
-              ).map(([id, labelKey]) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={netGroup === id}
-                  className={`hub-tab${netGroup === id ? " is-active" : ""}`}
-                  onClick={() => setNetGroup(id)}
-                >
-                  {t(labelKey)}
-                </button>
-              ))}
-            </div>
-
-            <section className="hub-group" hidden={netGroup !== "web"}>
-              <div className="net-panel">
-                <div className="hub-group-title">{t("net.groupFetch")}</div>
-                <div className="net-grid is-single">
-                  <div className="net-field is-compact">
-                    <span className="setting-label">{t("aiHub.webTier")}</span>
-                    <select
-                      className="input-field"
-                      value={settings.agentWebTier || "allowlist"}
-                      onChange={(e) => setSettings({ agentWebTier: e.target.value })}
-                    >
-                      <option value="off">{t("aiHub.webTierOff")}</option>
-                      <option value="allowlist">{t("aiHub.webTierAllowlist")}</option>
-                      <option value="open">{t("aiHub.webTierOpen")}</option>
-                    </select>
-                    <p className="setting-hint">{t("aiHub.webTierHint")}</p>
-                  </div>
-                  <div className="net-field">
-                    <span className="setting-label">{t("aiHub.webAllow")}</span>
-                    <textarea
-                      className="input-field net-textarea"
-                      rows={2}
-                      spellCheck={false}
-                      value={webAllowDraft}
-                      placeholder={t("aiHub.webAllowPlaceholder")}
-                      onFocus={() => {
-                        webAllowFocused.current = true;
-                      }}
-                      onChange={(e) => setWebAllowDraft(e.target.value)}
-                      onBlur={() => {
-                        webAllowFocused.current = false;
-                        const next = parseDomainList(webAllowDraft);
-                        if (next.join(",") !== (settings.agentWebAllow ?? []).join(",")) {
-                          setSettings({ agentWebAllow: next });
-                        }
-                      }}
-                    />
-                    <p className="setting-hint">{t("aiHub.webAllowHint")}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="net-panel">
-                <div className="hub-group-title">{t("net.groupSearch")}</div>
-                <div className="net-grid is-single">
-                  <div className="net-field is-compact">
-                    <span className="setting-label">{t("aiHub.webSearchProvider")}</span>
-                    <select
-                      className="input-field"
-                      value={settings.agentWebSearchProvider || ""}
-                      onChange={(e) => setSettings({ agentWebSearchProvider: e.target.value })}
-                    >
-                      <option value="">{t("aiHub.webSearchNone")}</option>
-                      <option value="brave">{t("aiHub.webSearchBrave")}</option>
-                      <option value="tavily">{t("aiHub.webSearchTavily")}</option>
-                    </select>
-                  </div>
-                  <div className="net-field">
-                    <span className="setting-label">{t("aiHub.webSearchKey")}</span>
-                    <input
-                      className="input-field"
-                      type="password"
-                      autoComplete="off"
-                      disabled={!settings.agentWebSearchProvider}
-                      value={settings.agentWebSearchKey || ""}
-                      placeholder={t("aiHub.webSearchKeyPlaceholder")}
-                      onChange={(e) => setSettings({ agentWebSearchKey: e.target.value })}
-                    />
-                    <p className="setting-hint">{t("aiHub.webSearchHint")}</p>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="hub-group" hidden={netGroup !== "mcp"}>
-              <div className="net-panel">
-              <div className="hub-group-title">{t("net.groupMcpSwitch")}</div>
-              <div className="setting-item">
-                <div className="setting-row">
-                  <span className="setting-label">{t("aiHub.mcpEnabled")}</span>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.agentMcpEnabled !== false}
-                      onChange={(e) => setSettings({ agentMcpEnabled: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-                <p className="setting-hint">{t("aiHub.mcpEnabledHint")}</p>
-              </div>
-              <div className="hub-group-title">{t("net.groupMcpServers")}</div>
-              <div className="setting-item">
-                <span className="setting-label">{t("aiHub.mcp")}</span>
-                <div className="mcp-list">
-                  {mcpServers.length === 0 && <p className="setting-hint">{t("aiHub.mcpEmpty")}</p>}
-                  {mcpServers.map((server) => (
-                    <div className="mcp-row" key={server.id}>
-                      <label className="toggle" title={t("aiHub.mcpEnabled")}>
-                        <input
-                          type="checkbox"
-                          checked={server.enabled}
-                          onChange={(e) => void updateMcpServer(server.id, { enabled: e.target.checked })}
-                        />
-                        <span className="toggle-slider" />
-                      </label>
-                      <input
-                        className="input-field mcp-name"
-                        defaultValue={server.name}
-                        placeholder={t("aiHub.mcpName")}
-                        onBlur={(e) => void updateMcpServer(server.id, { name: parseServerName(e.target.value) })}
-                      />
-                      <input
-                        className="input-field mcp-command"
-                        defaultValue={server.command}
-                        placeholder={t("aiHub.mcpCommand")}
-                        onBlur={(e) => void updateMcpServer(server.id, { command: e.target.value.trim() })}
-                      />
-                      <input
-                        className="input-field mcp-args"
-                        defaultValue={server.args}
-                        placeholder={t("aiHub.mcpArgs")}
-                        onBlur={(e) => void updateMcpServer(server.id, { args: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        onClick={() => void deleteMcpServer(server.id)}
-                      >
-                        {t("aiHub.mcpDelete")}
-                      </button>
-                    </div>
-                  ))}
-                  <div className="mcp-row is-draft">
-                    <Plus size={13} className="mcp-add-icon" aria-hidden />
-                    <input
-                      className="input-field mcp-name"
-                      value={mcpDraft.name}
-                      placeholder={t("aiHub.mcpName")}
-                      onChange={(e) => setMcpDraft({ ...mcpDraft, name: e.target.value })}
-                    />
-                    <input
-                      className="input-field mcp-command"
-                      value={mcpDraft.command}
-                      placeholder={t("aiHub.mcpCommand")}
-                      onChange={(e) => setMcpDraft({ ...mcpDraft, command: e.target.value })}
-                    />
-                    <input
-                      className="input-field mcp-args"
-                      value={mcpDraft.args}
-                      placeholder={t("aiHub.mcpArgs")}
-                      onChange={(e) => setMcpDraft({ ...mcpDraft, args: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                        if (e.key === "Enter") void addServer();
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-small"
-                      disabled={!mcpDraft.name.trim() || !mcpDraft.command.trim()}
-                      onClick={() => void addServer()}
-                    >
-                      {t("aiHub.mcpAdd")}
-                    </button>
-                  </div>
-                </div>
-                <p className="setting-hint">{t("aiHub.mcpHint")}</p>
-              </div>
-              </div>
-            </section>
-
-            <section className="hub-group" hidden={netGroup !== "tianjiApi"}>
-              <TianjiApiSettingsCard />
-            </section>
-          </div>
-        </div>
         <div className="card" hidden={tab !== "data"}>
           <div className="card-title">{t("usage.title")}</div>
           <div className="card-body">
@@ -1673,14 +934,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
         />
       )}
 
-      {profileOpen && (
-        <ProfileModal
-          custom={settings.aiHubProfiles || []}
-          onChange={(next) => setSettings({ aiHubProfiles: next })}
-          onClose={() => setProfileOpen(false)}
-        />
-      )}
-
       {message && (
         <div className={`toast toast-${message.type}`} role="status">
           <span className="toast-icon">
@@ -1691,24 +944,6 @@ function Settings({ onNoticeUpdate }: Props = {}) {
       )}
     </div>
   );
-}
-
-/** MCP 服务名会进工具名（`mcp_<name>_<tool>`）：只留字母数字与下划线。 */
-function parseServerName(raw: string): string {
-  return raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-}
-
-/** "docs.rs, *.anthropic.com\nhttps://x.dev/a" → 去重、去协议、只留主机名。 */
-function parseDomainList(raw: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const part of raw.split(/[\s,;]+/)) {
-    const host = part.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0];
-    if (!host || seen.has(host)) continue;
-    seen.add(host);
-    out.push(host);
-  }
-  return out;
 }
 
 export default Settings;

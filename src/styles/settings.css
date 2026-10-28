@@ -458,10 +458,13 @@
   gap: 4px;
   width: auto;
   max-width: 100%;
+  padding: 3px;
 }
 .settings-page .hub-tabs.is-channel > .hub-tab {
   flex: 0 0 auto;
-  padding: 3px 14px;
+  padding: 5px 20px;
+  font-size: 13px;
+  font-weight: 600;
 }
 .settings-page .hub-tabs.is-channel > .hub-tab.is-active {
   color: var(--accent);
@@ -470,6 +473,28 @@
 }
 .settings-page .hub-tabs.is-channel > .hub-tab.is-active:hover {
   color: var(--accent-strong);
+}
+/* 还没做的通道：摆一颗灰标签 + 「开发中」小徽标，不可点 */
+.settings-page .hub-tabs.is-channel > .hub-tab.is-soon,
+.settings-page .hub-tabs.is-channel > .hub-tab.is-soon:hover {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  color: var(--text-3);
+  background: transparent;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+.settings-page .hub-tab-soon {
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
 }
 /* 面板不再套一层带边框的「卡片里的卡片」，行直接铺在卡片正文里，
    和常规设置页其它卡片一致；分隔线按「项」画（见 .setting-item）。 */
@@ -562,6 +587,22 @@
 
 .settings-page .card[hidden] {
   display: none;
+}
+
+/* 单栏页面（智能互联 → IM 机器人）：复用设置页的卡片与表单样式，只要去掉左栏分类 */
+.settings-page.is-solo {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 0;
+}
+
+/* 卡片标题位放一级 Tab（天玑助手页）：不再重复页面名，Tab 顶到卡片头上 */
+.settings-page .card-title.is-tabs {
+  display: flex;
+  align-items: center;
+  padding: 10px 18px;
+}
+.settings-page .card-title.is-tabs .hub-tabs {
+  margin-bottom: 0;
 }
 
 /* 非卡片形态的分类内容（如菜单配置：组件自带分组卡与吸顶工具条） */
@@ -1210,14 +1251,17 @@
    和「天玑助手」页一致：面板不画底色和边框，只有标题下的细线和条目分隔线，
    否则一整页浮着一层灰底，看着比其它页发灰。 */
 .settings-page .wecom-settings > .net-panel {
+  margin-top: 0;
   padding: 0;
   border: none;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
+/* 一次只显示一块，间距交给上面的小卡片 Tab 控制；这里再叠 margin 会变成
+   「第一块 0、其余 18」的两套间距（隐藏的兄弟节点仍会命中 + 选择器） */
 .settings-page .wecom-settings > .net-panel + .net-panel {
-  margin-top: 18px;
+  margin-top: 0;
 }
 .settings-page .net-panel > .hub-group-title {
   margin: 0;
@@ -1322,6 +1366,53 @@
   .settings-page .net-field:nth-child(2) {
     border-top: 1px solid color-mix(in srgb, var(--border-subtle) 45%, transparent);
   }
+}
+/* —— 页内小卡片 Tab：一屏只看一组设置 —— */
+.settings-page .wecom-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+  /* 与下面唯一可见的面板之间的固定间距 */
+  margin: 12px 0 14px;
+}
+.settings-page .wecom-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+}
+.settings-page .wecom-section:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-hover);
+}
+.settings-page .wecom-section.is-active {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.settings-page .wecom-section-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-page .wecom-section.is-active .wecom-section-title {
+  color: var(--accent);
+}
+.settings-page .wecom-section-summary {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 「联网扩展」各 Tab 顶部那句总说明（天玑 API 等仍在用） */
 .settings-page .wecom-lead {
@@ -1847,12 +1938,13 @@
 .settings-page .wecom-diag-grid {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 10px 12px 12px;
+  gap: 14px;
+  /* 面板本身已经没有内边距，这里只留上下，左右和其它内容对齐 */
+  padding: 8px 0 0;
 }
 .settings-page .wecom-diag-block + .wecom-diag-block {
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
 }
 .settings-page .wecom-diag-head {
   display: flex;
@@ -1863,16 +1955,18 @@
   font-weight: 600;
   color: var(--text-2);
 }
+/* 日志不折行：长 JSON / 命令行整行保留，横向滚动，读起来不像一堵墙 */
 .settings-page .wecom-diag-log {
-  margin: 4px 0 0;
-  max-height: 200px;
+  margin: 6px 0 0;
+  max-height: 240px;
   overflow: auto;
   padding: 8px 10px;
   font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
+  line-height: 1.55;
+  white-space: pre;
+  word-break: normal;
+  tab-size: 2;
   color: var(--text-2);
   background: var(--bg-2);
   border: 1px solid var(--border-subtle);

@@ -9,6 +9,7 @@
 import type { ReactNode } from "react";
 import {
   AppWindow,
+  Bot,
   Cloud,
   Cpu,
   Gauge,
@@ -17,6 +18,7 @@ import {
   Layers,
   Network,
   Puzzle,
+  Sparkles,
   Rocket,
   StickyNote,
   Terminal,
@@ -33,6 +35,10 @@ export type Tab =
   | "ai-models"
   | "runtime"
   | "cloudflared"
+  /** 智能互联 → IM 机器人（企业微信 / 后续微信等通道） */
+  | "im-bots"
+  /** 智能互联 → 天玑助手（页内 Tab：交互与权限 / 联网扩展） */
+  | "tianji-assistant"
   /** @deprecated 已并入模型管理「提示词」Tab；hash / navigate-tab 仍可认，App 会重定向。 */
   | "snippets"
   | "drafts"
@@ -107,6 +113,15 @@ export const NAV_NODES: NavNode[] = [
       { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
       { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
       { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
+    ],
+  },
+  {
+    group: "smart",
+    labelKey: "smartConnect",
+    defaultOpen: true,
+    children: [
+      { id: "tianji-assistant", labelKey: "tianjiAssistant", icon: <Sparkles size={16} /> },
+      { id: "im-bots", labelKey: "imBots", icon: <Bot size={16} /> },
     ],
   },
   {

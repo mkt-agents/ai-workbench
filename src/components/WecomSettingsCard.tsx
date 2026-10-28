@@ -155,6 +155,9 @@ function Row({
   );
 }
 
+/** 页面内部的小卡片 Tab：点谁只看谁，一屏放得下。 */
+type WecomSection = "channel" | "answer" | "trouble" | "autoupdate" | "access" | "diag";
+
 /** 扁平分区标题：与参考图一致，不使用图标卡片；右侧可挂开关 / 计数。 */
 function PanelHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
@@ -191,6 +194,10 @@ export default function WecomSettingsCard() {
   const [logBusy, setLogBusy] = useState(false);
   const [sessionLog, setSessionLog] = useState<WecomSessionLogEntry[]>([]);
   const [sessionBusy, setSessionBusy] = useState(false);
+  /** 小卡片 Tab：一页只显示一组设置，别把六七块叠成一条长滚动 */
+  const [section, setSection] = useState<WecomSection>("channel");
+  /** 诊断日志只在第一次切过去时拉一次（空日志也不会反复请求） */
+  const diagLoaded = useRef(false);
 
   const botId = useFieldDraft(settings.wecomBotId ?? "");
   const corpId = useFieldDraft(settings.wecomCorpId ?? "");
@@ -314,6 +321,15 @@ export default function WecomSettingsCard() {
       setSessionBusy(false);
     }
   }, []);
+
+  // 切到「运行诊断」那一刻才拉日志；拉过一次就不再自动请求（空日志也一样）
+  useEffect(() => {
+    if (section !== "diag" || diagLoaded.current) return;
+    diagLoaded.current = true;
+    void loadLog();
+    void loadSessionLog();
+  }, [section, loadLog, loadSessionLog]);
+
   const mirror = status?.dsh?.mirror ?? null;
 
   const loadModels = useCallback(async (refresh: boolean) => {
@@ -503,8 +519,60 @@ export default function WecomSettingsCard() {
         </details>
       </div>
 
+      {/* 小卡片 Tab：一屏只看一组设置，不再把六七块叠成一条长滚动 */}
+      <div className="wecom-sections" role="tablist" aria-label={t("wecom.title")}>
+        {(
+          [
+            {
+              id: "channel",
+              title: t("wecom.groupChannel"),
+              summary: settings.wecomEnabled ? stateLabel : t("wecom.sectionOff"),
+            },
+            {
+              id: "answer",
+              title: t("wecom.groupAnswer"),
+              summary: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
+            },
+            {
+              id: "trouble",
+              title: t("wecom.groupTroubleshoot"),
+              summary: settings.wecomSkywalkingAddr?.trim() || t("wecom.sectionUnset"),
+            },
+            {
+              id: "autoupdate",
+              title: t("wecom.groupAutoupdate"),
+              summary: settings.wecomAutoUpdateEnabled
+                ? t("wecom.sectionDailyAt", { time: settings.wecomAutoUpdateTime || "23:00" })
+                : t("wecom.sectionOff"),
+            },
+            {
+              id: "access",
+              title: t("wecom.groupAccess"),
+              summary: t("wecom.sectionPaired", { count: (settings.wecomPairedUsers ?? []).length }),
+            },
+            {
+              id: "diag",
+              title: t("wecom.groupDiag"),
+              summary: t("wecom.sectionLogs"),
+            },
+          ] as const
+        ).map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={section === item.id}
+            className={`wecom-section${section === item.id ? " is-active" : ""}`}
+            onClick={() => setSection(item.id)}
+          >
+            <span className="wecom-section-title">{item.title}</span>
+            <span className="wecom-section-summary">{item.summary}</span>
+          </button>
+        ))}
+      </div>
+
       {/* 1 · 通道与凭据：开了没、连上没、用哪个机器人 */}
-      <div className="net-panel">
+      <div className="net-panel" hidden={section !== "channel"}>
         <PanelHead title={t("wecom.groupChannel")} />
         <div className="wecom-rows">
           <div className="wecom-subhead">{t("wecom.subBot")}</div>
@@ -640,7 +708,7 @@ export default function WecomSettingsCard() {
       </div>
 
       {/* 2 · 回答设置：谁来回答、按什么口径回答、在哪个工作区回答 */}
-      <div className="net-panel">
+      <div className="net-panel" hidden={section !== "answer"}>
         <PanelHead title={t("wecom.groupAnswer")} />
         <div className="wecom-rows">
           <div className="wecom-subhead">{t("wecom.subEngine")}</div>
@@ -883,7 +951,7 @@ export default function WecomSettingsCard() {
       </div>
 
       {/* 3 · 线上排障：查日志与调用链的证据源 */}
-      <div className="net-panel">
+      <div className="net-panel" hidden={section !== "trouble"}>
         <PanelHead title={t("wecom.groupTroubleshoot")} />
         <div className="wecom-rows">
           <Row
@@ -960,7 +1028,7 @@ export default function WecomSettingsCard() {
       </div>
 
       {/* 4 · 逆向文档自动更新：到点拉分支、改文档、提交、推群 */}
-      <div className="net-panel">
+      <div className="net-panel" hidden={section !== "autoupdate"}>
         <PanelHead title={t("wecom.groupAutoupdate")} />
         <div className="wecom-rows">
           <Row
@@ -1124,7 +1192,7 @@ export default function WecomSettingsCard() {
       </div>
 
       {/* 5 · 访问控制：谁能用 + 能用什么 + 配对授权 */}
-      <div className="net-panel">
+      <div className="net-panel" hidden={section !== "access"}>
         <PanelHead title={t("wecom.groupAccess")} />
         <div className="wecom-rows">
           <div className="wecom-subhead">{t("wecom.subWho")}</div>
@@ -1352,19 +1420,12 @@ export default function WecomSettingsCard() {
         </div>
       </div>
 
-      {/* 7 · 运行诊断：连不上 / 答得不对时再展开，两块日志各自滚动 */}
-      <details
-        className="net-panel wecom-diag-panel"
-        onToggle={(e) => {
-          if (!(e.target as HTMLDetailsElement).open) return;
-          if (!logText && !logBusy) void loadLog();
-          if (sessionLog.length === 0 && !sessionBusy) void loadSessionLog();
-        }}
-      >
-        <summary className="wecom-panel-head">
-          <span className="hub-group-title">{t("wecom.groupDiag")}</span>
-          <span className="wecom-diag-hint">{t("wecom.groupDiagHint")}</span>
-        </summary>
+      {/* 6 · 运行诊断：连不上 / 答得不对时再看，两块日志各自滚动 */}
+      <div className="net-panel wecom-diag-panel" hidden={section !== "diag"}>
+        <PanelHead
+          title={t("wecom.groupDiag")}
+          aside={<span className="wecom-diag-hint">{t("wecom.groupDiagHint")}</span>}
+        />
         <div className="wecom-diag-grid">
           <section className="wecom-diag-block">
             <div className="wecom-diag-head">
@@ -1414,7 +1475,7 @@ export default function WecomSettingsCard() {
             )}
           </section>
         </div>
-      </details>
+      </div>
 
       {msg ? <p className="setting-hint wecom-toast">{msg}</p> : null}
     </div>

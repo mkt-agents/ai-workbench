@@ -26,6 +26,8 @@ import CloudflaredManager from "./components/CloudflaredManager";
 import DraftsManager from "./components/DraftsManager";
 import DevTools from "./components/DevTools";
 import DesktopAppsPage from "./components/DesktopAppsPage";
+import ImBotPage from "./components/ImBotPage";
+import TianjiAssistantPage from "./components/TianjiAssistantPage";
 import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
@@ -93,7 +95,7 @@ function App() {
       openModelsPromptsTab();
       return "ai-models";
     }
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "drafts", "devtools", "app-launcher", "desktop-apps"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "drafts", "devtools", "app-launcher", "desktop-apps", "im-bots", "tianji-assistant"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -118,7 +120,7 @@ function App() {
     setSettings({ sidebarCollapsed: next });
   };
   const [openGroups, setOpenGroups] = useState<Set<string>>(
-    () => new Set<string>(["ai", "account", "version", "network", "system"])
+    () => new Set<string>(["ai", "account", "version", "network", "smart", "system"])
   );
   const [isReady, setIsReady] = useState(false);
   const [trayToast, setTrayToast] = useState<string | null>(null);
@@ -568,6 +570,8 @@ function App() {
                   <DesktopAppsPage />
                 </div>
               )}
+              {activeTab === "tianji-assistant" && <TianjiAssistantPage />}
+              {activeTab === "im-bots" && <ImBotPage />}
               {activeTab === "settings" && (
                 <SettingsPage onNoticeUpdate={setUpdateNotice} />
               )}

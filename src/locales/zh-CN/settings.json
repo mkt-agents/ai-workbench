@@ -9,6 +9,8 @@
     "menu": "菜单配置",
     "data": "用量统计",
     "about": "关于版本",
+    "groupPerm": "交互与权限",
+    "groupNetExt": "联网扩展",
     "groupInteraction": "交互权限",
     "groupCapability": "助手能力",
     "groupBudget": "预算兼容",
@@ -19,7 +21,9 @@
   },
   "imBot": {
     "title": "IM机器人",
-    "channelWecom": "企业微信"
+    "channelWecom": "企业微信",
+    "channelWechat": "微信",
+    "soon": "开发中"
   },
   "tianjiApi": {
     "hint": "天玑 OpenAI 兼容端点：把天玑（含工具 / 审批 / 会话）暴露成 /v1/chat/completions，供 OpenClaw（微信 ClawBot）或任何 OpenAI 兼容客户端接入。OpenClaw 配置：base_url 填下方地址、api_key 填这里设置的密钥、model 填 tianji。微信 ClawBot 扫码绑定 OpenClaw 后即可在微信聊天玑。",
@@ -265,9 +269,14 @@
     "groupTroubleshoot": "线上排障",
     "subWorkspace": "工作区",
     "subEngine": "引擎与模型",
+    "sectionOff": "未启用",
+    "sectionUnset": "未配置",
+    "sectionDailyAt": "每天 {{time}}",
+    "sectionPaired": "已配对 {{count}} 人",
+    "sectionLogs": "通道 / 会话日志",
     "groupAutoupdate": "文档自动更新与推送",
     "groupDiag": "运行诊断",
-    "groupDiagHint": "连不上或回答异常时展开",
+    "groupDiagHint": "连不上或回答异常时看这里",
     "subAnswer": "回答策略",
     "subSkywalking": "线上排障（SkyWalking）",
     "subAutoUpdate": "逆向文档自动更新",
