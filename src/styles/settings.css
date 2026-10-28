@@ -1186,16 +1186,15 @@
 .settings-page .net-panel + .net-panel {
   margin-top: 6px;
 }
-/* 企微侧：面板升级为卡片表面（发丝顶边高光 + 轻投影 + 稍舒展的内边距），
-   让 6 个区块一眼可分；只针对 wecom，不影响 web/mcp 两个 tab */
+/* 企微侧参考系统设置式布局：单层面板、扁平表单，不再嵌套一组组小卡片。 */
 .settings-page .wecom-settings > .net-panel {
-  padding: 10px 12px 8px;
-  border-radius: var(--radius-lg);
-  background: var(--overlay-2);
-  box-shadow: var(--surface-highlight), var(--shadow-xs);
+  padding: 10px 12px 12px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  box-shadow: none;
 }
 .settings-page .wecom-settings > .net-panel + .net-panel {
-  margin-top: 8px;
+  margin-top: 12px;
 }
 .settings-page .net-panel > .hub-group-title {
   margin: 0;
@@ -1301,16 +1300,122 @@
     border-top: 1px solid color-mix(in srgb, var(--border-subtle) 45%, transparent);
   }
 }
+/* 「联网扩展」各 Tab 顶部那句总说明（天玑 API 等仍在用） */
 .settings-page .wecom-lead {
   margin: 0;
-  padding: 7px 10px 7px 12px;
+  padding: 6px 9px;
   border: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 6%, var(--overlay-1));
+  background: var(--overlay-1);
   color: var(--text-2);
   line-height: 1.45;
   font-size: 11px;
+}
+/* 顶部概览：状态 / 引擎 / 时长在左，重连与总开关在右，说明铺在下面一行 */
+.settings-page .wecom-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+}
+.settings-page .wecom-hero-main {
+  display: flex;
+  /* 基准 340px：窗口窄到放不下胶囊 + 按钮时，按钮那组整排掉到下一行 */
+  flex: 1 1 340px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-page .wecom-hero-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+}
+.settings-page .wecom-hero-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+/* 概览行/控件行里的附加信息（时长 / 请求 / 数据源 / 版本号）统一做成小胶囊，
+   和状态胶囊同一视觉重量与行高，放在同一行才不会高低不齐 */
+.settings-page .wecom-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* 镜像来源：web → acp 收成小胶囊（箭头用 accent 提一下），时间只留时刻 */
+.settings-page .wecom-mirror-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.settings-page .wecom-mirror-path > i {
+  font-style: normal;
+  color: var(--accent);
+  opacity: 0.85;
+}
+.settings-page .wecom-mirror-time {
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 概览条里折叠的「说明」：自己占一整行，展开后竖着排几句小字 */
+.settings-page .wecom-hero-hint {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+.settings-page .wecom-hero-hint > .setting-hint {
+  margin: 3px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.settings-page .wecom-hero-error {
+  flex: 1 0 100%;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--red);
 }
 /* 字段说明折叠：默认只露一句摘要，长文案收进「说明 ⌄」 */
 .settings-page .wecom-hint {
@@ -1361,47 +1466,58 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 4px;
-  padding: 5px 0 1px;
+  /* 小节标题也是分隔：上方留白比行间距大，一组的结尾才看得出来 */
+  margin-top: 12px;
+  padding: 0 0 6px;
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--accent);
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+/* 面板里的第一个小节紧跟块标题，不用再空一大段 */
+.settings-page .wecom-rows > .wecom-subhead:first-child {
+  margin-top: 4px;
 }
 .settings-page .net-subhead::after,
 .settings-page .wecom-subhead::after {
   content: "";
   flex: 1 1 auto;
   height: 1px;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--border-subtle) 60%, transparent);
 }
-/* 企微：行式布局 —— 左「字段名」右「控件」，控件统一收窄到 420px，说明另起一行铺满。
-   比之前两列网格整齐得多：标签不会撑开、输入框不会拉到整行、也不再到处是空格子。 */
+/* 参考图：等宽双列表单。标签在上、控件在下；分类标题和诊断内容横跨整行。
+   列数跟随容器：≥ 736px 两列、再窄一列；上限 1080px 保证大窗也停在北京两列，
+   不会因为窗口变宽就冒出第三列，也不会在右侧空出一条带 */
 .settings-page .wecom-rows {
-  display: flex;
-  flex-direction: column;
-  padding-top: 2px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
+  column-gap: 16px;
+  row-gap: 0;
+  max-width: 1080px;
+  padding-top: 3px;
 }
-/* 块标题带图标徽记：左侧 accent 小方块 + 标题，右侧可挂开关 / 徽标 */
+.settings-page .wecom-rows > .wecom-subhead,
+.settings-page .wecom-rows > .wecom-diag {
+  grid-column: 1 / -1;
+}
+/* 长字段（密钥、路径、请求头、模型、日志动作）横跨两列，别挤在半个格子里 */
+.settings-page .wecom-rows > .wecom-row.is-wide {
+  grid-column: 1 / -1;
+}
+/* 面板内整块的列表（配对码 / 已批准用户）同样横跨两列 */
+.settings-page .wecom-rows > .setting-item {
+  grid-column: 1 / -1;
+}
+.settings-page .wecom-rows > .wecom-diag {
+  order: 2;
+}
+/* 扁平分区标题：弱化装饰，贴近参考图的系统设置视觉。 */
 .settings-page .wecom-panel-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-bottom: 6px;
+  padding: 0 0 8px;
   border-bottom: 1px solid var(--border-subtle);
-}
-.settings-page .wecom-panel-icon {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border: 1px solid var(--accent-border);
 }
 .settings-page .wecom-panel-head > .hub-group-title {
   flex: 1 1 auto;
@@ -1410,9 +1526,9 @@
   border-top: none;
   border-bottom: none;
   color: var(--text-1);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 .settings-page .wecom-panel-aside {
   flex: none;
@@ -1442,81 +1558,104 @@
   color: var(--yellow);
 }
 .settings-page .wecom-row {
-  display: grid;
-  /* 名称占满左侧，控件右对齐成一列（macOS 设置那种读法）：既不会把输入框拉长，
-     也不会右侧留一大片空白。宽度弹性收窄，窄窗自动压缩 */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
-  align-items: center;
-  gap: 0 16px;
-  padding: 5px 8px;
-  margin: 0 -8px;
-  border-radius: var(--radius-sm);
-  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 30%, transparent);
-  transition: var(--transition-colors-fast);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 50%, transparent);
+  border-radius: 0; /* token-ok: 扁平表单行不使用圆角 */
+  background: transparent;
+  box-shadow: none;
 }
-.settings-page .wecom-row:hover {
-  background: var(--overlay-1);
-}
-.settings-page .wecom-rows > .wecom-row:first-child,
+.settings-page .wecom-rows > .wecom-row:nth-child(-n + 2),
 .settings-page .wecom-rows > .wecom-subhead + .wecom-row {
-  border-top: none;
+  border-top-color: transparent;
+}
+/* 布尔项：标签与说明在左、开关贴右，整行一条——开关不再孤零零占半个格子 */
+.settings-page .wecom-switch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  grid-column: 1 / -1;
+}
+.settings-page .wecom-switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.settings-page .wecom-switch-control {
+  display: flex;
+  align-items: center;
+  padding-top: 1px;
 }
 .settings-page .wecom-row-label {
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-1);
   overflow-wrap: anywhere;
 }
 .settings-page .wecom-row-control {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   min-width: 0;
 }
+/* 控件铺满所在列：两列各占一半、同一行左右两端对齐，才不会一边长一边短 */
 .settings-page .wecom-row-control > .input-field,
 .settings-page .wecom-row-control > select.input-field,
 .settings-page .wecom-row-control > .input-with-toggle {
   width: 100%;
-  min-height: 24px;
-  padding-block: 2px;
+  min-height: 26px;
+  padding-block: 3px;
 }
-/* 控件行里的小字备注（镜像时间这类），比说明再轻一档 */
+/* 控件行里的小字备注（镜像时间这类）：贴着控件排，不再推到行尾空一大截 */
 .settings-page .wecom-row-meta {
-  flex: 1 1 auto;
   min-width: 0;
   font-size: 10.5px;
   color: var(--text-3);
-  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
-/* 一行两个控件：模型占满剩余宽度，思考强度固定小宽度 */
+/* 一行三个控件：模型框给一个够用的上限（不铺满整行），思考强度固定小宽度 */
 .settings-page .wecom-row-control > .wecom-split {
-  flex: 1 1 0;
-  width: auto;
-  min-width: 0;
+  flex: 0 1 340px;
+  width: 340px;
+  min-width: 180px;
+  max-width: 340px;
 }
 .settings-page .wecom-row-control > .wecom-split-effort {
   flex: 0 0 116px;
   width: 116px;
   min-width: 0;
 }
-/* 说明另起一行、从左侧名称列开始，读起来像这条设置的注脚 */
+/* 同一行的刷新按钮：固定宽度、与输入框同高，不参与拉伸 */
+.settings-page .wecom-row-control > .wecom-split-refresh {
+  flex: 0 0 auto;
+  min-height: 24px;
+  white-space: nowrap;
+}
+/* 说明作为卡片内注脚，不再跨列拉伸；长句限宽，避免一行铺满 1000px 读不动 */
 .settings-page .wecom-row-hint {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 620px;
   min-width: 0;
+  max-width: 76ch;
 }
 @media (max-width: 720px) {
-  .settings-page .wecom-row {
+  .settings-page .wecom-rows {
     grid-template-columns: minmax(0, 1fr);
   }
-  .settings-page .wecom-row-control {
-    justify-content: flex-start;
+  .settings-page .wecom-rows > .wecom-row:nth-child(2) {
+    border-top-color: color-mix(in srgb, var(--border-subtle) 50%, transparent);
   }
 }
 .settings-page .wecom-inline {
@@ -1535,7 +1674,9 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 1px 8px 1px 6px;
+  /* 与 .wecom-chip 同高：状态胶囊和版本号并排时不能一高一矮 */
+  height: 18px;
+  padding: 0 8px 0 6px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border-subtle);
   background: var(--overlay-2);
@@ -1612,9 +1753,9 @@
   font-size: 12px;
 }
 .settings-page .wecom-paired {
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border-subtle);
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1630,91 +1771,149 @@
   white-space: pre-line;
 }
 
-/* —— 排障折叠区（通道日志 / 会话日志） —— */
-.settings-page .wecom-diag {
+/* —— 运行诊断：默认收起的整块面板，里面两块日志各自滚动 —— */
+/* 面板自己不设内边距，上下留白交给 summary 与 .wecom-diag-grid（比
+   `.wecom-settings > .net-panel` 的 8px 内边距更具体才盖得住） */
+.settings-page .wecom-settings > .net-panel.wecom-diag-panel {
+  padding: 0;
+  overflow: hidden;
+}
+.settings-page .wecom-diag-panel > summary.wecom-panel-head {
+  padding: 9px 12px;
+  border-bottom: none;
+  list-style: none;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.settings-page .wecom-diag-panel > summary.wecom-panel-head::-webkit-details-marker {
+  display: none;
+}
+.settings-page .wecom-diag-panel > summary.wecom-panel-head:hover {
+  background: var(--bg-hover);
+}
+.settings-page .wecom-diag-panel[open] > summary.wecom-panel-head {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-page .wecom-diag-panel > summary > .hub-group-title {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  font-size: 11.5px;
+  color: var(--text-1);
+}
+.settings-page .wecom-diag-panel > summary::after {
+  content: "⌄";
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+.settings-page .wecom-diag-panel[open] > summary::after {
+  transform: rotate(180deg);
+}
+.settings-page .wecom-diag-hint {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.settings-page .wecom-diag-grid {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
+  gap: 12px;
+  padding: 10px 12px 12px;
 }
-
-.settings-page .wecom-diag-meta {
+.settings-page .wecom-diag-block + .wecom-diag-block {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+}
+.settings-page .wecom-diag-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.settings-page .wecom-diag-chip {
-  font-size: 11px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--text-2);
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  background: var(--overlay-1);
-  border: 1px solid var(--border-subtle);
 }
-
-.settings-page .wecom-diag-chip.is-error {
-  color: var(--red);
-  border-color: var(--red-border);
-  background: var(--red-dim);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .settings-page .wecom-diag-log {
-  margin-top: var(--space-2);
-  max-height: 260px;
+  margin: 4px 0 0;
+  max-height: 200px;
   overflow: auto;
+  padding: 8px 10px;
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
-  color: var(--text-1);
+  color: var(--text-2);
   background: var(--bg-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: var(--space-2);
 }
-
+/* 会话日志：一条一行摘要，点开才铺正文，避免整页被答案文本淹没 */
 .settings-page .wecom-diag-sessions {
-  margin: var(--space-2) 0 0;
+  margin: 4px 0 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  max-height: 280px;
+  max-height: 240px;
   overflow: auto;
 }
-
-.settings-page .wecom-diag-sessions > li {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-2);
-  font-size: 11.5px;
+.settings-page .wecom-diag-sessions > li + li {
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 45%, transparent);
 }
-
+.settings-page .wecom-session > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 4px;
+  border-radius: var(--radius-sm);
+  list-style: none;
+  cursor: pointer;
+}
+.settings-page .wecom-session > summary::-webkit-details-marker {
+  display: none;
+}
+.settings-page .wecom-session > summary:hover {
+  background: var(--bg-hover);
+}
+.settings-page .wecom-session-peek {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.settings-page .wecom-session-full {
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--overlay-1);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .settings-page .wecom-diag-ts {
+  flex: none;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--text-3);
 }
-
 .settings-page .wecom-diag-u {
-  color: var(--text-0);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.settings-page .wecom-diag-a {
-  color: var(--text-2);
-  white-space: pre-wrap;
-  word-break: break-word;
+  flex: none;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-1);
 }

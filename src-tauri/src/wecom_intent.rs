@@ -284,7 +284,36 @@ pub fn extract_trace_id(t: &str) -> Option<String> {
             }
         }
     }
-    for tok in t.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))) {
+    // 字段赋值是明确业务语义，优先于 hex/点分段的形状猜测。
+    let mut unlabeled = t.to_string();
+    let mut ranges = Vec::new();
+    for (equal, _) in t.match_indices('=') {
+        let key_end = t[..equal].trim_end().len();
+        let key_start = t[..key_end]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .map(|i| i + t[i..].chars().next().unwrap().len_utf8())
+            .unwrap_or(0);
+        if key_start == key_end || !t.as_bytes()[key_start].is_ascii_alphabetic() {
+            continue;
+        }
+        let rest = &t[equal + 1..];
+        let value_start = equal + 1 + rest.len() - rest.trim_start().len();
+        let value_end = value_start
+            + t[value_start..]
+                .chars()
+                .take_while(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '"' | '\'')
+                })
+                .map(char::len_utf8)
+                .sum::<usize>();
+        ranges.push((key_start, value_end));
+    }
+    for (start, end) in ranges.into_iter().rev() {
+        unlabeled.replace_range(start..end, &" ".repeat(end - start));
+    }
+    for tok in
+        unlabeled.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
+    {
         let tok = tok.trim_matches('.');
         let hex = matches!(tok.len(), 16 | 32)
             && tok.chars().all(|c| c.is_ascii_hexdigit())
@@ -497,7 +526,17 @@ pub fn extract_identifiers(text: &str, exclude_trace: Option<&str>) -> Vec<Strin
     // token 化：按「非字母数字、非 - 、非 _」切分（允许 ID 里的连字符/下划线）
     for raw in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
         let tok = raw.trim_matches(|c: char| c == '-' || c == '_');
-        if tok.is_empty() {
+        let bytes = tok.as_bytes();
+        let date_prefix = bytes.len() >= 10
+            && bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes[..4]
+                .iter()
+                .chain(&bytes[5..7])
+                .chain(&bytes[8..10])
+                .all(u8::is_ascii_digit)
+            && (bytes.len() == 10 || matches!(bytes[10], b'T' | b't'));
+        if tok.is_empty() || date_prefix {
             continue;
         }
         let digits = tok.chars().filter(|c| c.is_ascii_digit()).count();
@@ -678,6 +717,20 @@ fn extract_level(lower: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates_and_labeled_business_ids_are_not_trace_guesses() {
+        assert_eq!(
+            extract_trace_id("matchId=abcdef1234567890 nlpIdOriginal=8414548098086706628"),
+            None
+        );
+        assert_eq!(
+            extract_trace_id("requestId=abc.def.1234567890123456 traceId=real-trace"),
+            Some("real-trace".into())
+        );
+        assert!(extract_identifiers("2026-10-28 11:31:12", None).is_empty());
+        assert!(extract_identifiers("2026-10-28T11:31:12+08:00", None).is_empty());
+    }
 
     #[test]
     fn identifiers_from_business_ids() {

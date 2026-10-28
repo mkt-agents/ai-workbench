@@ -218,6 +218,9 @@ pub struct WecomStatus {
     pub last_error: String,
     /// 已连接时长（毫秒）；未连上为 None。
     pub connected_ms: Option<u64>,
+    pub process_id: u32,
+    pub build_label: String,
+    pub last_investigation: Option<serde_json::Value>,
 }
 
 /// 列 DSH 引擎可用模型（ACP `configOptions`）：设置页「DSH 模型」下拉用。
@@ -372,6 +375,9 @@ pub async fn wecom_channel_status(state: State<'_, WecomState>) -> Result<WecomS
         dsh,
         last_error,
         connected_ms,
+        process_id: std::process::id(),
+        build_label: format!("{}-{} / investigation-v2", env!("CARGO_PKG_VERSION"), if cfg!(debug_assertions) { "dev" } else { "release" }),
+        last_investigation: crate::wecom_investigation::last_diagnostic(),
     })
 }
 

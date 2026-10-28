@@ -36,6 +36,7 @@ mod wecom_policy;
 mod wecom_intent;
 mod wecom_investigation_query;
 mod wecom_investigation;
+mod wecom_investigation_plan;
 mod wecom_session;
 mod wecom_ws;
 mod wecom_orchestrator;

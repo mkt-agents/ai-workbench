@@ -41,9 +41,10 @@ async fn mock(responses: Vec<(String, Duration)>) -> (String, tokio::task::JoinH
                         })
                         .unwrap();
                     if bytes.len() >= end + 4 + length {
-                        requests.push(
-                            serde_json::from_slice(&bytes[end + 4..end + 4 + length]).unwrap(),
-                        );
+                        let mut request: Value =
+                            serde_json::from_slice(&bytes[end + 4..end + 4 + length]).unwrap();
+                        request["_request_line"] = json!(headers.lines().next().unwrap());
+                        requests.push(request);
                         break;
                     }
                 }
@@ -58,6 +59,27 @@ async fn mock(responses: Vec<(String, Duration)>) -> (String, tokio::task::JoinH
 
 fn response(status: &str, body: &str) -> String {
     format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}", body.len())
+}
+
+#[test]
+fn graphql_endpoint_accepts_base_and_full_paths_without_duplication() {
+    for (input, expected) in [
+        ("http://host", "http://host/graphql"),
+        ("http://host/base/", "http://host/base/graphql"),
+        (" http://host/base/graphql/ ", "http://host/base/graphql"),
+        ("http://host/base/graphql", "http://host/base/graphql"),
+        (
+            "https://host/base?token=secret#fragment",
+            "https://host/base/graphql?token=secret",
+        ),
+    ] {
+        assert_eq!(graphql_endpoint(input).unwrap(), expected);
+    }
+    for input in ["", "host/base", "ftp://host/base", "http://"] {
+        assert!(graphql_endpoint(input)
+            .unwrap_err()
+            .starts_with("source_endpoint_error:"));
+    }
 }
 
 #[test]
@@ -157,7 +179,7 @@ fn local_filter_preserves_raw_count_and_instance() {
 }
 
 #[test]
-fn budget_clones_share_atomic_sixteen_request_limit() {
+fn budget_clones_share_atomic_twenty_four_request_limit() {
     let budget = QueryBudget::new();
     let handles: Vec<_> = (0..32)
         .map(|_| {
@@ -169,9 +191,25 @@ fn budget_clones_share_atomic_sixteen_request_limit() {
         .into_iter()
         .map(|h| usize::from(h.join().unwrap()))
         .sum::<usize>();
-    assert_eq!(count, 16);
-    assert_eq!(budget.used(), 16);
+    assert_eq!(count, 24);
+    assert_eq!(budget.used(), 24);
     assert_eq!(budget.remaining(), 0);
+}
+
+#[test]
+fn custom_budget_is_shared_and_never_exceeds_hard_cap() {
+    for (limit, expected) in [(0, 0), (2, 2), (usize::MAX, 24)] {
+        let b = QueryBudget::with_limit(limit);
+        assert_eq!(b.remaining(), expected);
+        let clone = b.clone();
+        for _ in 0..expected {
+            clone.acquire().unwrap();
+        }
+        assert!(b.acquire().is_err());
+        assert_eq!(b.used(), expected);
+        assert_eq!(b.remaining(), 0);
+    }
+    assert_eq!(QueryBudget::default().remaining(), 24);
 }
 
 #[tokio::test]
@@ -187,6 +225,68 @@ async fn http_trace_returns_unmodified_spans_and_counts_request() {
     assert_eq!(b.used(), 1);
     let requests = task.await.unwrap();
     assert_eq!(requests[0]["variables"]["traceId"], "tid");
+}
+
+#[tokio::test]
+async fn source_probe_checks_logs_capability_in_same_window_with_two_requests() {
+    for logs in [json!([]), json!([log(1793174400000, "some-service")])] {
+        let (addr, task) = mock(vec![
+            (
+                response("200 OK", r#"{"data":{"__typename":"Query"}}"#),
+                Duration::ZERO,
+            ),
+            (
+                response(
+                    "200 OK",
+                    &json!({"data":{"queryLogs":{"logs":logs}}}).to_string(),
+                ),
+                Duration::ZERO,
+            ),
+        ])
+        .await;
+        let mut args = fixed_args();
+        args["service"] = json!("target-not-proven");
+        args["trace_id"] = json!("target-trace");
+        args["keyword"] = json!("secret-order");
+        let b = QueryBudget::with_limit(2);
+        let source = probe_source(
+            &format!("{addr}/base/graphql?token=secret-query"),
+            "X-Test: secret-header",
+            &args,
+            &b,
+        )
+        .await
+        .unwrap();
+        assert_eq!(source.status, "ok");
+        assert_eq!(source.endpoint, format!("{addr}/base/graphql"));
+        assert!(source.detail.contains("不证明目标存在"));
+        assert!(source.detail.contains("HTTP 200"));
+        assert!(source.detail.contains("application/json"));
+        assert!(!source.detail.contains("secret"));
+        assert_eq!(b.used(), 2);
+        let requests = task.await.unwrap();
+        assert!(requests[0]["query"]
+            .as_str()
+            .unwrap()
+            .contains("__typename"));
+        for req in &requests {
+            assert_eq!(
+                req["_request_line"],
+                "POST /base/graphql?token=secret-query HTTP/1.1"
+            );
+        }
+        let c = &requests[1]["variables"]["condition"];
+        assert_eq!(c["paging"], json!({"pageNum":1,"pageSize":1}));
+        assert_eq!(
+            c["queryDuration"],
+            QueryWindow::from_args(&fixed_args(), 240)
+                .unwrap()
+                .duration()
+        );
+        assert!(c.get("serviceId").is_none());
+        assert!(c.get("relatedTrace").is_none());
+        assert!(c.get("keywordsOfContent").is_none());
+    }
 }
 
 #[tokio::test]
@@ -235,13 +335,86 @@ async fn http_service_resolution_consumes_shared_budget_and_fixed_window() {
     let c = &requests[1]["variables"]["condition"];
     assert_eq!(c["serviceId"], "real-id");
     assert_eq!(c["queryDuration"]["start"], "2026-10-28 160000");
-    for _ in 2..16 {
+    for _ in 2..24 {
         b.acquire().unwrap();
     }
     assert!(fetch_trace_spans_budgeted(&addr, "", "tid", &b)
         .await
         .unwrap_err()
         .contains("budget exhausted"));
+}
+
+#[tokio::test]
+async fn source_probe_errors_keep_category_http_metadata_and_no_secrets() {
+    for (status, body, category) in [
+        (
+            "405 Method Not Allowed",
+            "secret-body",
+            "source_endpoint_error:",
+        ),
+        ("404 Not Found", "secret-body", "source_endpoint_error:"),
+        ("401 Unauthorized", "secret-body", "auth_error:"),
+        (
+            "200 OK",
+            "secret-body",
+            "schema_error: invalid GraphQL JSON",
+        ),
+        ("200 OK", r#"{"data":{}}"#, "schema_error: data.__typename"),
+        (
+            "200 OK",
+            r#"{"errors":[{"message":"secret-body"}],"data":{}}"#,
+            "schema_error:",
+        ),
+    ] {
+        let wire =
+            response(status, body).replace("application/json", "text/html; private=secret-header");
+        let (addr, task) = mock(vec![(wire, Duration::ZERO)]).await;
+        let addr = addr.replacen("http://", "http://secret-user:secret-password@", 1);
+        let b = QueryBudget::new();
+        let error = probe_source(
+            &format!("{addr}/base/graphql?token=secret-query"),
+            "Authorization: Bearer secret-auth",
+            &fixed_args(),
+            &b,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.starts_with(category), "{error}");
+        assert!(error.contains(&format!("HTTP {}", &status[..3])), "{error}");
+        assert!(error.contains("content-type=text/html"), "{error}");
+        assert!(error.contains("/base/graphql"), "{error}");
+        assert!(!error.contains("secret"), "{error}");
+        assert_eq!(b.used(), 1);
+        assert_eq!(task.await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn source_probe_requires_query_logs_and_propagates_budget_exhaustion() {
+    for second in [Some(r#"{"data":{"queryLogs":{"logs":null}}}"#), None] {
+        let mut replies = vec![(
+            response("200 OK", r#"{"data":{"__typename":"Query"}}"#),
+            Duration::ZERO,
+        )];
+        if let Some(body) = second {
+            replies.push((response("200 OK", body), Duration::ZERO));
+        }
+        let (addr, task) = mock(replies).await;
+        let b = QueryBudget::with_limit(if second.is_some() { 2 } else { 1 });
+        let error = probe_source(&addr, "", &fixed_args(), &b)
+            .await
+            .unwrap_err();
+        if second.is_some() {
+            assert!(
+                error.starts_with("schema_error: data.queryLogs.logs"),
+                "{error}"
+            );
+            assert!(error.contains("HTTP 200"), "{error}");
+        } else {
+            assert!(error.contains("budget exhausted"), "{error}");
+        }
+        assert_eq!(task.await.unwrap().len(), b.used());
+    }
 }
 
 #[tokio::test]

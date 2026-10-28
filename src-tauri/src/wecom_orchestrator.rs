@@ -329,9 +329,18 @@ impl Orchestrator {
             match running {
                 Some(rt) => {
                     rt.cancel();
-                    crate::wecom_log::write("stop", &format!("msgid={} 取消会话 {key} 的在跑回合", msg.msgid));
+                    crate::wecom_log::write(
+                        "stop",
+                        &format!("msgid={} 取消会话 {key} 的在跑回合", msg.msgid),
+                    );
                     // 收尾原气泡：往上一轮的 stream 补 finish（幂等，多发无害）。
-                    send_finish(&self.sock, &rt.req_id, &rt.stream_id, "已停止，本轮已取消。").await;
+                    send_finish(
+                        &self.sock,
+                        &rt.req_id,
+                        &rt.stream_id,
+                        "已停止，本轮已取消。",
+                    )
+                    .await;
                     // 再对「停止」这条本身回执一句。
                     let _ = self
                         .sock
@@ -344,7 +353,10 @@ impl Orchestrator {
                         .await;
                 }
                 None => {
-                    crate::wecom_log::write("stop", &format!("msgid={} 会话 {key} 无在跑回合", msg.msgid));
+                    crate::wecom_log::write(
+                        "stop",
+                        &format!("msgid={} 会话 {key} 无在跑回合", msg.msgid),
+                    );
                     let _ = self
                         .sock
                         .send_raw(wecom_proto::respond_stream(
@@ -461,8 +473,7 @@ impl Orchestrator {
         };
 
         // 把文字 + 图片/文件附件组装成一条带 vision 块的用户消息
-        let user_msg =
-            build_user_message(&user_text, &msg.media, agent_cfg.vision).await;
+        let user_msg = build_user_message(&user_text, &msg.media, agent_cfg.vision).await;
 
         // 记录当前回合的出站目标，供 wecom_send_image/file 把媒体发回同一条对话
         {
@@ -516,15 +527,25 @@ impl Orchestrator {
     /// - 授权走 `session/request_permission` → 企微审批码（只有一次性授权）；
     /// - 图片/文件首期降级为文本线索（ACP 图片要求 attachment store + 图像 route）。
     async fn run_dsh_turn(
-        &self, app: &AppHandle, msg: &MsgCallback, session: &SessionKey,
-        user_text: &str, stream_id: &str,
+        &self,
+        app: &AppHandle,
+        msg: &MsgCallback,
+        session: &SessionKey,
+        user_text: &str,
+        stream_id: &str,
     ) -> Result<(), String> {
         let request = format!("wecom-preflight-{}", msg.msgid);
         let _guard = crate::cancellation::CancelGuard::new(&request);
-        self.running.lock().await.insert(session.as_str(), RunningTurn {
-            req_id: msg.req_id.clone(), stream_id: stream_id.to_string(),
-            cancel: CancelHandle::Tianji { request_id: request.clone() },
-        });
+        self.running.lock().await.insert(
+            session.as_str(),
+            RunningTurn {
+                req_id: msg.req_id.clone(),
+                stream_id: stream_id.to_string(),
+                cancel: CancelHandle::Tianji {
+                    request_id: request.clone(),
+                },
+            },
+        );
         let result = tokio::select! {
             biased;
             _ = async {
@@ -533,6 +554,12 @@ impl Orchestrator {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             } => Ok(()),
+            _ = tokio::time::sleep(DSH_TURN_TIMEOUT) => {
+                crate::cancellation::cancel_request(&request);
+                if let Some(rt) = self.running.lock().await.get(&session.as_str()) { rt.cancel(); }
+                send_finish(&self.sock, &msg.req_id, stream_id, "排障回合达到600秒期限，已停止；未完成项不视为查询无数据。").await;
+                Ok(())
+            },
             result = self.run_dsh_turn_inner(app, msg, session, user_text, stream_id, &request) => result,
         };
         self.unregister_running(session, stream_id).await;
@@ -540,13 +567,94 @@ impl Orchestrator {
     }
 
     async fn run_dsh_turn_inner(
-        &self, app: &AppHandle, msg: &MsgCallback, session: &SessionKey,
-        user_text: &str, stream_id: &str, preflight_request: &str,
+        &self,
+        app: &AppHandle,
+        msg: &MsgCallback,
+        session: &SessionKey,
+        user_text: &str,
+        stream_id: &str,
+        preflight_request: &str,
     ) -> Result<(), String> {
         let state = app.state::<WecomState>();
         let engine = Arc::clone(&state.dsh);
         let req_id = msg.req_id.clone();
+        let turn_deadline = tokio::time::Instant::now() + DSH_TURN_TIMEOUT;
 
+        let repo = engine.workspace().await;
+        let redact = |s: &str| redact_local_paths(s, &repo);
+
+        // 问答模式规则也带进 DSH 档（它用 DSH 自己的工具读文档/代码，这里用 prompt 引导先查文档）。
+        let answer_mode = self.answer_mode.lock().await.clone();
+        let doc_dir = {
+            let d = self.doc_dir.lock().await.clone();
+            if d.trim().is_empty() {
+                "doc".to_string()
+            } else {
+                d
+            }
+        };
+        let mode_rules = answer_mode_rules(&answer_mode, &doc_dir, user_text, true);
+        // 排障类消息 + 已配 SkyWalking 时，Rust 先预取日志/调用链，作为上下文注入 prompt，
+        // 让 DSH 结合代码排查——这是 dsh 档的「排障能力」等价实现。
+        let (addr, header) = state.skywalking.lock().await.clone();
+        let offset = *state.skywalking_timezone.lock().await;
+        let bot = state
+            .applied
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.bot_id.clone())
+            .unwrap_or_default();
+        let context_key = crate::wecom_investigation::context_key(
+            &bot,
+            &session.as_str(),
+            &msg.userid,
+            &repo,
+            &addr,
+            &header,
+            offset,
+        );
+        let zone = chrono::FixedOffset::east_opt(
+            offset.unwrap_or_else(|| chrono::Local::now().offset().local_minus_utc() / 60) * 60,
+        )
+        .ok_or("OAP时区配置无效")?;
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let investigation = crate::wecom_investigation::investigate(
+            &addr,
+            &header,
+            &context_key,
+            user_text,
+            chrono::Utc::now().with_timezone(&zone),
+            preflight_request,
+            progress_tx,
+        );
+        tokio::pin!(investigation);
+        let mut progress_clock = Instant::now() - Duration::from_secs(1);
+        let mut progress_open = true;
+        let mut outcome = loop {
+            tokio::select! {
+                result = &mut investigation => break result?,
+                note = progress_rx.recv(), if progress_open => {
+                    match note {
+                        Some(note) if progress_clock.elapsed() >= Duration::from_millis(800) => {
+                            let _ = self.sock.send_raw(wecom_proto::respond_stream(&req_id, stream_id, &note, false)).await;
+                            progress_clock = Instant::now();
+                        }
+                        None => progress_open = false,
+                        _ => {}
+                    }
+                }
+            }
+        };
+        if crate::cancellation::is_cancelled(preflight_request) {
+            return Ok(());
+        }
+        // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
+        if source_failure_reply(&outcome) {
+            send_finish(&self.sock, &req_id, stream_id, &redact(&outcome.context)).await;
+            wecom_session::append_turn(session, user_text, &redact(&outcome.context));
+            return Ok(());
+        }
         // 冷启动 / 首次初始化 profile 可能要几十秒：启动放在独立任务里跑（它要拿引擎的
         // start 锁），这里只等结果；超过 3 秒就在**同一个** stream id 上更新一句进度，
         // 不另外开消息（平台对首帧的时间窗已经用 on_msg 的占位帧满足了）。
@@ -575,10 +683,10 @@ impl Orchestrator {
         };
         ready.map_err(|e| format!("DSH 引擎未就绪：{e}"))?;
 
-        let repo = engine.workspace().await;
-        let redact = |s: &str| redact_local_paths(s, &repo);
-
         let key = session.as_str();
+        if crate::wecom_investigation_query::starts_new_investigation(user_text) {
+            engine.reset_channel_session(&key).await;
+        }
         let acp_session = engine.acquire_session(&key).await?;
         crate::wecom_log::write(
             "dsh",
@@ -599,53 +707,118 @@ impl Orchestrator {
                 &format!("msgid={} apply_selection timeout", msg.msgid),
             ),
         }
-        // 问答模式规则也带进 DSH 档（它用 DSH 自己的工具读文档/代码，这里用 prompt 引导先查文档）。
-        let answer_mode = self.answer_mode.lock().await.clone();
-        let doc_dir = {
-            let d = self.doc_dir.lock().await.clone();
-            if d.trim().is_empty() { "doc".to_string() } else { d }
-        };
-        let mode_rules = answer_mode_rules(&answer_mode, &doc_dir, user_text, true);
-        // 排障类消息 + 已配 SkyWalking 时，Rust 先预取日志/调用链，作为上下文注入 prompt，
-        // 让 DSH 结合代码排查——这是 dsh 档的「排障能力」等价实现。
-        let (addr, header) = state.skywalking.lock().await.clone();
-        let offset = *state.skywalking_timezone.lock().await;
-        let bot = state.applied.lock().await.as_ref().map(|c| c.bot_id.clone()).unwrap_or_default();
-        let context_key = crate::wecom_investigation::context_key(
-            &bot, &session.as_str(), &msg.userid, &repo, &addr, &header, offset,
-        );
-        let zone = chrono::FixedOffset::east_opt(offset.unwrap_or_else(|| chrono::Local::now().offset().local_minus_utc() / 60) * 60)
-            .ok_or("OAP时区配置无效")?;
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let investigation = crate::wecom_investigation::investigate(
-            &addr, &header, &context_key, user_text, chrono::Utc::now().with_timezone(&zone),
-            preflight_request, progress_tx,
-        );
-        tokio::pin!(investigation);
-        let mut progress_clock = Instant::now() - Duration::from_secs(1);
-        let mut progress_open = true;
-        let sky_context = loop {
-            tokio::select! {
-                result = &mut investigation => break result?,
-                note = progress_rx.recv(), if progress_open => {
-                    match note {
-                        Some(note) if progress_clock.elapsed() >= Duration::from_millis(800) => {
-                            let _ = self.sock.send_raw(wecom_proto::respond_stream(&req_id, stream_id, &note, false)).await;
-                            progress_clock = Instant::now();
+        let mut evidence = outcome.context.clone();
+        let mut has_evidence = outcome.may_analyze;
+        if outcome.source_ready {
+            if let Some(original) = outcome.query.clone() {
+                for round in 0..2 {
+                    if outcome.budget.remaining() == 0 || outcome.collected_ms >= 120_000 {
+                        break;
+                    }
+                    let note = if has_evidence {
+                        "已取得日志，正在按日志定点核对代码并制定补查…"
+                    } else {
+                        "日志源正常但业务未命中，正在核对日志字段与服务映射，不生成业务根因结论…"
+                    };
+                    let _ = self
+                        .sock
+                        .send_raw(wecom_proto::respond_stream(&req_id, stream_id, note, false))
+                        .await;
+                    let instruction = format!("{}\n原问题：{}\n固定查询范围：{} 至 {}\n已有证据：{}\n本次只输出JSON补查计划，不输出最终业务分析。没有日志时只查项目日志配置、服务标识、字段别名和日志模板；不要搜索本地.log，不要把业务ID在源码无命中当故障证据。",
+                        crate::wecom_investigation_plan::planning_instruction(), user_text, original.start, original.end, evidence);
+                    let mut draft = self
+                        .dsh_plan_text(
+                            app,
+                            &engine,
+                            &acp_session,
+                            &instruction,
+                            preflight_request,
+                            &req_id,
+                            stream_id,
+                            turn_deadline,
+                        )
+                        .await?;
+                    let mut parsed = crate::wecom_investigation_plan::parse_plan(
+                        &draft, &original, &evidence, &repo,
+                    );
+                    if let Err(error) = &parsed {
+                        draft = self.dsh_plan_text(app, &engine, &acp_session, &format!("补查计划未通过本地校验：{error}。请修正一次，仅输出符合schema的JSON；不要执行计划。{}", crate::wecom_investigation_plan::planning_instruction()), preflight_request, &req_id, stream_id, turn_deadline).await?;
+                        parsed = crate::wecom_investigation_plan::parse_plan(
+                            &draft, &original, &evidence, &repo,
+                        );
+                    }
+                    let plan = match parsed {
+                        Ok(plan) => plan,
+                        Err(_) => {
+                            evidence.push_str(
+                                "\n补查计划两次未通过校验，未执行；当前结论仅限已有证据。\n",
+                            );
+                            break;
                         }
-                        None => progress_open = false,
-                        _ => {}
+                    };
+                    if plan.queries.is_empty() {
+                        break;
+                    }
+                    let _ = self
+                        .sock
+                        .send_raw(wecom_proto::respond_stream(
+                            &req_id,
+                            stream_id,
+                            &format!("正在执行第{}轮代码线索补查…", round + 1),
+                            false,
+                        ))
+                        .await;
+                    let extra = crate::wecom_investigation::supplemental(
+                        &addr,
+                        &header,
+                        &original,
+                        &plan.queries,
+                        preflight_request,
+                        &outcome.budget,
+                        120_000u64.saturating_sub(outcome.collected_ms),
+                    )
+                    .await?;
+                    outcome.collected_ms = outcome.collected_ms.saturating_add(extra.collected_ms);
+                    has_evidence |= extra.may_analyze;
+                    let extra_context = extra
+                        .context
+                        .replace("[L", &format!("[R{}L", round + 1))
+                        .replace("[T", &format!("[R{}T", round + 1));
+                    evidence.push_str(&format!(
+                        "\n【补查轮次{}；来源候选：{}】\n{}",
+                        round + 1,
+                        plan.reason,
+                        extra_context
+                    ));
+                    // The latest round is bounded, and only source metadata is retained across turns.
+                    if evidence.chars().count() > 48_000 {
+                        evidence = evidence.chars().take(47_800).collect();
+                        evidence.push_str("\n证据累计达到48k字符上限，后续结果未完整展示。\n");
+                        break;
+                    }
+                    if !extra.source_ready {
+                        break;
                     }
                 }
             }
+            if !has_evidence {
+                let body = redact(&format!("本轮尚未取得该业务的真实日志证据，未生成业务根因结论。\n{}\n请核对环境、日志保留周期或提供可查的服务/请求标识。", evidence));
+                send_finish(&self.sock, &req_id, stream_id, &body).await;
+                wecom_session::append_turn(session, user_text, &body);
+                return Ok(());
+            }
+        }
+        let evidence_rules = if has_evidence {
+            "\n必须先引用实际日志编号和时间，再用代码解释分支，再用补查验证。禁止把推测写成业务已确认根因；缺日志不等于分支未执行；指出采样、异步、分页与版本覆盖。"
+        } else {
+            ""
         };
-        if crate::cancellation::is_cancelled(preflight_request) { return Ok(()); }
         let prompt_blocks = build_dsh_prompt(
             user_text,
             &msg.media,
             engine.image_prompt_enabled().await,
-            &mode_rules,
-            &sky_context,
+            &format!("{mode_rules}{evidence_rules}"),
+            &evidence,
         )
         .await;
         let mut turn = engine.prompt(&acp_session, prompt_blocks).await?;
@@ -672,7 +845,7 @@ impl Orchestrator {
         let mut last_activity = String::new();
         let mut stall_notes = 0u32;
         let mut open_approvals: Vec<u64> = Vec::new();
-        let deadline = tokio::time::Instant::now() + DSH_TURN_TIMEOUT;
+        let deadline = turn_deadline;
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -744,10 +917,7 @@ impl Orchestrator {
                             if let Err(e) = self
                                 .sock
                                 .send_raw(wecom_proto::respond_stream(
-                                    &req_id,
-                                    stream_id,
-                                    &out,
-                                    false,
+                                    &req_id, stream_id, &out, false,
                                 ))
                                 .await
                             {
@@ -804,10 +974,7 @@ impl Orchestrator {
                     );
                     // 审批提示单独发一条**已结束**的消息：正文流还在跑，而平台对未结束的
                     // 流式更新不一定立刻显示；这条必须让用户看见，否则只能干等 5 分钟超时。
-                    crate::wecom_log::write(
-                        "perm",
-                        &format!("msgid={} {summary}", msg.msgid),
-                    );
+                    crate::wecom_log::write("perm", &format!("msgid={} {summary}", msg.msgid));
                     let _ = self
                         .sock
                         .send_raw(wecom_proto::respond_stream(
@@ -906,6 +1073,134 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Internal read/code planning turn: hold JSON privately; approvals still use the existing channel.
+    async fn dsh_plan_text(
+        &self,
+        app: &AppHandle,
+        engine: &Arc<crate::wecom_dsh::DshEngine>,
+        acp_session: &str,
+        prompt: &str,
+        request: &str,
+        req_id: &str,
+        stream_id: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<String, String> {
+        let mut turn = engine
+            .prompt(acp_session, vec![crate::wecom_dsh::acp_text_block(prompt)])
+            .await?;
+        struct PlanCancelOnDrop {
+            cancel: Option<DshResponder>,
+            responder: DshResponder,
+            app: AppHandle,
+            approvals: Vec<(String, u64)>,
+        }
+        impl Drop for PlanCancelOnDrop {
+            fn drop(&mut self) {
+                if let Some(r) = &self.cancel {
+                    r.cancel();
+                }
+                let approvals = std::mem::take(&mut self.approvals);
+                if !approvals.is_empty() {
+                    let app = self.app.clone();
+                    let responder = self.responder.clone();
+                    tauri::async_runtime::spawn(async move {
+                        for (code, id) in approvals {
+                            app.state::<WecomState>()
+                                .pending_approvals
+                                .lock()
+                                .await
+                                .remove(&code);
+                            responder.answer_permission(id, None);
+                        }
+                    });
+                }
+            }
+        }
+        let mut cleanup = PlanCancelOnDrop {
+            cancel: Some(turn.responder()),
+            responder: turn.responder(),
+            app: app.clone(),
+            approvals: Vec::new(),
+        };
+        let mut text = String::new();
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+
+        let result = loop {
+            let event = tokio::select! {
+                biased;
+                _ = tick.tick() => {
+                    if crate::cancellation::is_cancelled(request) {
+                        turn.cancel(); break Err("cancelled: 已停止日志补查计划".into());
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        turn.cancel(); break Err("timeout: 排障回合已达到600秒期限".into());
+                    }
+                    continue;
+                }
+                event = turn.next() => event,
+            };
+            match event {
+                Some(DshEvent::Update(update))
+                    if update["sessionUpdate"] == "agent_message_chunk" =>
+                {
+                    if let Some(chunk) = update["content"]["text"].as_str() {
+                        text.push_str(chunk);
+                        if text.len() > 64 * 1024 {
+                            turn.cancel();
+                            break Err("补查计划超过64KiB，已停止".into());
+                        }
+                    }
+                }
+                Some(DshEvent::Permission { rpc_id, params }) => {
+                    let summary = permission_summary(&params);
+                    let (allow, reject) = permission_options(&params);
+                    let (code, reply) = register_dsh_approval(app, summary.clone()).await;
+                    cleanup.approvals.push((code.clone(), rpc_id));
+                    let tip = redact_local_paths(&format!("日志取证需确认：{summary}\n回复「{code} 1」允许一次；「{code} 2」取消（5分钟有效）"), &engine.workspace().await);
+                    let _ = self
+                        .sock
+                        .send_raw(wecom_proto::respond_stream(
+                            req_id,
+                            &format!("{stream_id}-plan-{code}"),
+                            &tip,
+                            true,
+                        ))
+                        .await;
+                    let responder = turn.responder();
+                    tauri::async_runtime::spawn(async move {
+                        let answer = match tokio::time::timeout(APPROVAL_TTL, reply).await {
+                            Ok(Ok(true)) => allow,
+                            Ok(Ok(false)) => reject,
+                            _ => None,
+                        };
+                        responder.answer_permission(rpc_id, answer.as_deref());
+                    });
+                }
+                Some(DshEvent::Done(Ok(result))) => {
+                    if result["stopReason"] == "cancelled" {
+                        break Err("cancelled: DSH计划已取消".into());
+                    }
+                    break Ok(text);
+                }
+                Some(DshEvent::Done(Err(e))) => break Err(e),
+                None => break Err("DSH计划会话意外结束".into()),
+                _ => {}
+            }
+        };
+        if result.is_ok() {
+            cleanup.cancel = None;
+        }
+        for (code, id) in std::mem::take(&mut cleanup.approvals) {
+            app.state::<WecomState>()
+                .pending_approvals
+                .lock()
+                .await
+                .remove(&code);
+            turn.responder().answer_permission(id, None);
+        }
+        result
+    }
+
     /// 注销某会话的在跑回合（仅当登记的 stream_id 与本回合一致时移除）。
     async fn unregister_running(&self, session: &SessionKey, stream_id: &str) {
         let key = session.as_str();
@@ -942,10 +1237,9 @@ impl Orchestrator {
                     }
                 ),
             ),
-            Err(e) => crate::wecom_log::write(
-                "ack",
-                &format!("msgid={} send failed: {e}", msg.msgid),
-            ),
+            Err(e) => {
+                crate::wecom_log::write("ack", &format!("msgid={} send failed: {e}", msg.msgid))
+            }
         }
     }
 
@@ -999,7 +1293,11 @@ impl Orchestrator {
         let answer_mode = self.answer_mode.lock().await.clone();
         let doc_dir = {
             let d = self.doc_dir.lock().await.clone();
-            if d.trim().is_empty() { "doc".to_string() } else { d }
+            if d.trim().is_empty() {
+                "doc".to_string()
+            } else {
+                d
+            }
         };
         let mode_rules = answer_mode_rules(&answer_mode, &doc_dir, user_text, false);
         let skywalking_ready = {
@@ -1113,7 +1411,11 @@ impl Orchestrator {
                             last_push = InstantApprox::now();
                         }
                     }
-                    Some(AgentBridgeEvent::ApprovalNeeded { call_ids, summary, can_remember }) => {
+                    Some(AgentBridgeEvent::ApprovalNeeded {
+                        call_ids,
+                        summary,
+                        can_remember,
+                    }) => {
                         if !approval_told {
                             approval_told = true;
                             let code = register_approval(
@@ -1202,7 +1504,9 @@ impl Orchestrator {
         let t = text.trim();
         // 群聊回复可能带 @机器人 前缀：先剥掉整个 @token 再匹配审批码
         let t = if t.starts_with('@') {
-            t.split_once(char::is_whitespace).map(|(_, rest)| rest.trim()).unwrap_or(t)
+            t.split_once(char::is_whitespace)
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or(t)
         } else {
             t
         };
@@ -1450,7 +1754,10 @@ fn is_stop_command(text: &str) -> bool {
     // 去掉首尾标点 / 空白，取纯净文本
     let t = text
         .trim()
-        .trim_matches(|c: char| c.is_whitespace() || matches!(c, '，' | ',' | '。' | '.' | '、' | '！' | '!' | '~' | '～'))
+        .trim_matches(|c: char| {
+            c.is_whitespace()
+                || matches!(c, '，' | ',' | '。' | '.' | '、' | '！' | '!' | '~' | '～')
+        })
         .trim();
     if t.is_empty() {
         return false;
@@ -1458,9 +1765,25 @@ fn is_stop_command(text: &str) -> bool {
     let lower = t.to_lowercase();
     // 整条精确匹配（中文无空格，按整句判断）
     const EXACT: &[&str] = &[
-        "停止", "停", "停下", "停一下", "停止任务", "停止排查", "别查了", "别跑了",
-        "别找了", "不用查了", "取消", "取消任务", "结束", "中止",
-        "stop", "stop it", "cancel", "abort", "halt",
+        "停止",
+        "停",
+        "停下",
+        "停一下",
+        "停止任务",
+        "停止排查",
+        "别查了",
+        "别跑了",
+        "别找了",
+        "不用查了",
+        "取消",
+        "取消任务",
+        "结束",
+        "中止",
+        "stop",
+        "stop it",
+        "cancel",
+        "abort",
+        "halt",
     ];
     if EXACT.iter().any(|w| lower == *w) {
         return true;
@@ -1471,7 +1794,10 @@ fn is_stop_command(text: &str) -> bool {
     let all_ascii = t.is_ascii();
     if all_ascii
         && words.len() <= 3
-        && matches!(words.first().copied(), Some("stop") | Some("cancel") | Some("abort"))
+        && matches!(
+            words.first().copied(),
+            Some("stop") | Some("cancel") | Some("abort")
+        )
     {
         return true;
     }
@@ -1539,12 +1865,18 @@ async fn build_dsh_prompt(
                     continue;
                 }
                 Err(e) => {
-                    blocks.push(crate::wecom_dsh::acp_text_block(&format!("[图片获取失败：{e}]")));
+                    blocks.push(crate::wecom_dsh::acp_text_block(&format!(
+                        "[图片获取失败：{e}]"
+                    )));
                     continue;
                 }
             }
         }
-        let label = if m.kind == "image" { "图片" } else { "文件" };
+        let label = if m.kind == "image" {
+            "图片"
+        } else {
+            "文件"
+        };
         let name = m.filename.clone().unwrap_or_default();
         let note = if name.is_empty() {
             format!("（{label}：{}）", m.url)
@@ -1582,7 +1914,11 @@ async fn build_user_message(
                 }),
             }
         } else {
-            let label = if m.kind == "image" { "图片" } else { "文件" };
+            let label = if m.kind == "image" {
+                "图片"
+            } else {
+                "文件"
+            };
             let name = m.filename.clone().unwrap_or_default();
             let note = if name.is_empty() {
                 format!("（{label}：{}）", m.url)
@@ -1631,9 +1967,43 @@ impl InstantApprox {
     }
 }
 
+fn source_failure_reply(outcome: &crate::wecom_investigation::InvestigationOutcome) -> bool {
+    !outcome.context.is_empty()
+        && (!outcome.source_ready
+            || outcome.status == crate::wecom_investigation::InvestigationStatus::SourceError)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unexecuted_or_failed_source_never_enters_business_model() {
+        use crate::wecom_investigation::{InvestigationOutcome, InvestigationStatus};
+        let mut o = InvestigationOutcome {
+            status: InvestigationStatus::NotExecuted,
+            context: "未执行：时间解析失败".into(),
+            query: None,
+            evidence_count: 0,
+            request_count: 0,
+            may_analyze: false,
+            source_ready: false,
+            budget: crate::wecom_skywalking::QueryBudget::new(),
+            collected_ms: 0,
+            detail: String::new(),
+        };
+        assert!(source_failure_reply(&o));
+        o.status = InvestigationStatus::SourceError;
+        o.source_ready = true;
+        assert!(source_failure_reply(&o));
+        o.status = InvestigationStatus::Empty;
+        assert!(!source_failure_reply(&o)); // only bounded source/code query planning, not business summary
+        assert!(!o.may_analyze);
+        o.context.clear();
+        o.source_ready = false;
+        o.status = InvestigationStatus::NotExecuted;
+        assert!(!source_failure_reply(&o)); // unrelated conversation continues as before
+    }
 
     #[test]
     fn answer_mode_doc_blocks_code_unless_asked() {
@@ -1682,7 +2052,12 @@ mod tests {
     #[test]
     fn auto_troubleshoot_embeds_clues() {
         // 抽到的服务/错误特征应出现在排障 SOP 的「已识别线索」里
-        let r = answer_mode_rules("auto", "doc", "排查 OrderService 的 NullPointerException", false);
+        let r = answer_mode_rules(
+            "auto",
+            "doc",
+            "排查 OrderService 的 NullPointerException",
+            false,
+        );
         assert!(r.contains("已识别线索"), "{r}");
         assert!(r.contains("OrderService"), "{r}");
         assert!(r.contains("NullPointerException"), "{r}");
@@ -1691,7 +2066,18 @@ mod tests {
     #[test]
     fn stop_command_detection() {
         // 纯停止指令判真
-        for q in ["停止", "停", "别查了", "取消", "停止任务", "stop", "cancel", "abort now", "停。", " 停止 "] {
+        for q in [
+            "停止",
+            "停",
+            "别查了",
+            "取消",
+            "停止任务",
+            "stop",
+            "cancel",
+            "abort now",
+            "停。",
+            " 停止 ",
+        ] {
             assert!(is_stop_command(q), "应判停止：{q}");
         }
         // 含实质排障内容的不拦
@@ -1708,7 +2094,8 @@ mod tests {
     }
 
     #[test]
-    fn set_max_jobs_clamps_out_of_range() {        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
+    fn set_max_jobs_clamps_out_of_range() {
+        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
         orch.set_max_jobs(4);
         assert_eq!(orch.max_jobs.load(Ordering::SeqCst), 4);
         // 0 / 越界回落默认

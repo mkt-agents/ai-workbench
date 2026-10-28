@@ -556,6 +556,12 @@ impl DshEngine {
         }
     }
 
+    /// Forget only this channel mapping; old ACP history stays intact but is no longer resumed.
+    pub async fn reset_channel_session(&self, key: &str) {
+        self.inner.lock().await.sessions.remove(key);
+        self.persist_sessions().await;
+    }
+
     /// 取该企微会话对应的 ACP 会话：先 resume，失败（工作区变了 / 会话被清理）再新建。
     pub async fn acquire_session(&self, key: &str) -> Result<String, String> {
         let (workspace, existing) = {

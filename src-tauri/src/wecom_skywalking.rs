@@ -1,6 +1,6 @@
 //! SkyWalking（OAP）只读查询：供企微问答在「排查线上问题」时取日志与调用链。
 //!
-//! 走标准 GraphQL（`POST {addr}/graphql`），查询串与预设脚本
+//! 走标准 GraphQL（地址支持 OAP 基址或完整 `/graphql` 端点），查询串与预设脚本
 //! `scripts/skywalking-log-query.user.js` 同协议并对齐其关键细节：
 //! - 日志条件按 `serviceId`（经 `findService` 查真实 id，不是 serviceName）；
 //! - `queryDuration` 用 OAP UTC 偏移（默认本机）+ SECOND；start/end RFC3339 优先于 minutes；
@@ -19,28 +19,49 @@ use std::time::Duration;
 use chrono::{DateTime, FixedOffset, Local, Utc};
 
 /// 一个排障回合共享的实际 HTTP 请求预算。Clone 共享计数，失败请求也消耗预算。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct QueryBudget {
     used: Arc<AtomicUsize>,
+    limit: usize,
+}
+
+const MAX_QUERY_REQUESTS: usize = 24;
+
+impl Default for QueryBudget {
+    fn default() -> Self {
+        Self::with_limit(MAX_QUERY_REQUESTS)
+    }
 }
 
 impl QueryBudget {
     pub fn new() -> Self {
         Self::default()
     }
+    /// 测试/子流程可收紧预算，但始终保留 24 次硬上限。
+    pub fn with_limit(limit: usize) -> Self {
+        Self {
+            used: Arc::new(AtomicUsize::new(0)),
+            limit: limit.min(MAX_QUERY_REQUESTS),
+        }
+    }
     pub fn used(&self) -> usize {
         self.used.load(Ordering::SeqCst)
     }
     pub fn remaining(&self) -> usize {
-        16usize.saturating_sub(self.used())
+        self.limit.saturating_sub(self.used())
     }
     fn acquire(&self) -> Result<(), String> {
         self.used
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < 16).then_some(n + 1)
+                (n < self.limit).then_some(n + 1)
             })
             .map(|_| ())
-            .map_err(|_| "transport_error: query budget exhausted (16 requests)".into())
+            .map_err(|_| {
+                format!(
+                    "transport_error: query budget exhausted ({} requests)",
+                    self.limit
+                )
+            })
     }
 }
 
@@ -115,6 +136,25 @@ pub async fn run(addr: &str, header: &str, args: &Value) -> Result<String, Strin
     query_logs(addr, header, args).await
 }
 
+/// 接受 OAP 基址或完整 GraphQL 路径；只追加缺失的最后一段。
+/// 请求保留 query / userinfo，诊断输出另行去除，fragment 不会发到服务端。
+pub fn graphql_endpoint(addr: &str) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(addr.trim())
+        .map_err(|_| "source_endpoint_error: invalid SkyWalking HTTP endpoint".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err("source_endpoint_error: expected an absolute HTTP(S) endpoint".into());
+    }
+    let path = url.path().trim_end_matches('/');
+    let path = if path.rsplit('/').next() == Some("graphql") {
+        path.to_string()
+    } else {
+        format!("{path}/graphql")
+    };
+    url.set_path(&path);
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
 fn request_error(e: reqwest::Error) -> String {
     // 不把 URL/header 或远端响应正文带入错误，避免凭证与业务数据泄漏。
     if e.is_timeout() {
@@ -142,16 +182,79 @@ async fn graphql_with_timeout(
     budget: &QueryBudget,
     timeout: Duration,
 ) -> Result<Value, String> {
-    let addr = addr.trim();
-    if addr.is_empty() {
-        return Err("transport_error: 未配置 SkyWalking 地址".into());
-    }
-    let url = format!("{}/graphql", addr.trim_end_matches('/'));
+    Ok(
+        graphql_response(addr, header, query, variables, budget, timeout)
+            .await?
+            .body,
+    )
+}
+
+struct GraphqlResponse {
+    body: Value,
+    endpoint: String,
+    context: String,
+}
+
+fn sanitized_endpoint(endpoint: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(endpoint) else {
+        return "[invalid endpoint]".into();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
+fn response_context(resp: &reqwest::Response) -> String {
+    // 只保留已知媒体类型，不回显任意响应头值/参数（可能带秘密）。
+    let media = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+        .map(|s| {
+            s.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        });
+    let content_type = match media.as_deref() {
+        Some(
+            m @ ("application/json"
+            | "application/graphql-response+json"
+            | "text/html"
+            | "text/plain"
+            | "application/octet-stream"),
+        ) => m,
+        None => "[missing]",
+        _ => "[other]",
+    };
+    format!(
+        "endpoint={}; HTTP {}; content-type={content_type}",
+        sanitized_endpoint(resp.url().as_str()),
+        resp.status().as_u16()
+    )
+}
+
+async fn graphql_response(
+    addr: &str,
+    header: &str,
+    query: &str,
+    variables: Value,
+    budget: &QueryBudget,
+    timeout: Duration,
+) -> Result<GraphqlResponse, String> {
+    let url = graphql_endpoint(addr)?;
+    let pending_context = format!(
+        "endpoint={}; HTTP unavailable; content-type=[unavailable]",
+        sanitized_endpoint(&url)
+    );
     // 禁止自动重定向：每次实际请求都应计数，也避免把鉴权头转交其它地址。
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(request_error)?;
+        .map_err(|e| format!("{}; {pending_context}", request_error(e)))?;
     let mut req = client
         .post(&url)
         .timeout(timeout)
@@ -159,33 +262,106 @@ async fn graphql_with_timeout(
     for (k, v) in parse_headers(header) {
         req = req.header(k, v);
     }
-    let req = req.build().map_err(request_error)?;
-    budget.acquire()?;
-    let mut resp = client.execute(req).await.map_err(request_error)?;
+    let req = req
+        .build()
+        .map_err(|e| format!("{}; {pending_context}", request_error(e)))?;
+    budget
+        .acquire()
+        .map_err(|e| format!("{e}; {pending_context}"))?;
+    let mut resp = client
+        .execute(req)
+        .await
+        .map_err(|e| format!("{}; {pending_context}", request_error(e)))?;
     let status = resp.status();
-    if matches!(status.as_u16(), 401 | 403) {
-        return Err(format!("auth_error: SkyWalking HTTP {}", status.as_u16()));
-    }
+    let context = response_context(&resp);
+    let endpoint = sanitized_endpoint(resp.url().as_str());
     if !status.is_success() {
-        return Err(format!(
-            "transport_error: SkyWalking HTTP {}",
-            status.as_u16()
-        ));
+        let category = match status.as_u16() {
+            401 | 403 => "auth_error",
+            404 | 405 => "source_endpoint_error",
+            _ => "transport_error",
+        };
+        return Err(format!("{category}: SkyWalking request failed; {context}"));
     }
     if resp
         .content_length()
         .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
     {
-        return Err("schema_error: response exceeds 4 MiB".into());
+        return Err(format!("schema_error: response exceeds 4 MiB; {context}"));
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(request_error)? {
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("{}; {context}", request_error(e)))?
+    {
         if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(bytes.len()) {
-            return Err("schema_error: response exceeds 4 MiB".into());
+            return Err(format!("schema_error: response exceeds 4 MiB; {context}"));
         }
         bytes.extend_from_slice(&chunk);
     }
-    parse_graphql_body(&bytes)
+    let body = parse_graphql_body(&bytes).map_err(|e| format!("{e}; {context}"))?;
+    Ok(GraphqlResponse {
+        body,
+        endpoint,
+        context,
+    })
+}
+
+/// 源能力证据，不代表某个服务、订单或 trace 已存在。缓存由编排层管理。
+#[derive(Debug, Clone)]
+pub struct SourceProbe {
+    pub endpoint: String,
+    pub status: String,
+    pub detail: String,
+}
+
+/// 两次有预算的只读请求：GraphQL 握手 + 同一时间窗内无目标筛选的日志能力测试。
+/// 调用方传固定 start/end，可与整个排障回合复用完全一致的窗口。
+pub async fn probe_source(
+    addr: &str,
+    header: &str,
+    args: &Value,
+    budget: &QueryBudget,
+) -> Result<SourceProbe, String> {
+    let window = QueryWindow::from_args(args, DEFAULT_WINDOW_MIN)?;
+    let handshake = graphql_response(
+        addr,
+        header,
+        "query { __typename }",
+        json!({}),
+        budget,
+        REQUEST_TIMEOUT,
+    )
+    .await?;
+    if !handshake
+        .body
+        .pointer("/data/__typename")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty())
+    {
+        return Err(format!(
+            "schema_error: data.__typename must be a nonempty string; {}",
+            handshake.context
+        ));
+    }
+    let condition = build_log_condition("", "", &[], "", "", "", &window.duration(), 1, 1);
+    let logs = graphql_response(
+        addr,
+        header,
+        QUERY_LOGS,
+        json!({"condition":condition}),
+        budget,
+        REQUEST_TIMEOUT,
+    )
+    .await?;
+    let page =
+        parse_logs_page(&logs.body, &window, "").map_err(|e| format!("{e}; {}", logs.context))?;
+    Ok(SourceProbe {
+        endpoint: logs.endpoint,
+        status: "ok".into(),
+        detail: format!("GraphQL __typename 与 queryLogs 能力已验证（原始页 {} 条，空页亦正常）；不证明目标存在；握手：{}；日志能力：{}", page.fetched_count, handshake.context, logs.context),
+    })
 }
 
 fn parse_graphql_body(bytes: &[u8]) -> Result<Value, String> {

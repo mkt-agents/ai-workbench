@@ -4,13 +4,40 @@ use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveTime, TimeZone};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+/// 字段为空表示无标签的形状推断值；显式字段保留用户拼写。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BusinessIdentifier {
+    pub field: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TimeKind {
+    Anchor,
+    Range,
+    #[default]
+    Relative,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InvestigationQuery {
+    #[serde(default)]
+    pub time_kind: TimeKind,
+    /// 用户是否以「大概/大约/左右」修饰单故障时刻。
+    #[serde(default)]
+    pub approximate_anchor: bool,
+    /// 单故障时刻（RFC3339）；start/end 为该时刻前后各 15 分钟。
+    #[serde(default)]
+    pub anchor: Option<String>,
     pub start: String,
     pub end: String,
     pub timezone_offset_minutes: i32,
+    /// 兼容旧调用保留推断 ID；collector 应按 identifiers 拆出分查，勿混入关键词 AND。
     pub keywords: Vec<String>,
+    #[serde(default)]
+    pub identifiers: Vec<BusinessIdentifier>,
     pub exclude_keyword: String,
     /// false = AND，true = OR；执行层需明确支持 OR，不应静默降为 AND。
     pub match_any: bool,
@@ -26,7 +53,17 @@ fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("static investigation query regex")
 }
 
+/// 仅识别独立命令子句，不把引号里的文字、否定句或说明性提问当作清会话指令。
+pub fn starts_new_investigation(text: &str) -> bool {
+    let text = re(r#""[^"]*"|'[^']*'|“[^”]*”"#).replace_all(text, " ");
+    re(r"(?:^|[，,。；;\n])\s*(?:请|帮我)?\s*(?:起新会话|新建会话|开启新会话|开始新会话|新开会话|重新开始排查|start_new)(?:\s*$|[，,。；;\n])")
+        .is_match(&text)
+}
+
 pub fn is_followup(text: &str) -> bool {
+    if starts_new_investigation(text) {
+        return false;
+    }
     [
         "扩大",
         "扩展",
@@ -61,6 +98,7 @@ pub fn parse_query(
     previous: Option<&InvestigationQuery>,
     now: DateTime<FixedOffset>,
 ) -> Result<InvestigationQuery, String> {
+    let previous = previous.filter(|_| !starts_new_investigation(text));
     let followup = is_followup(text) && previous.is_some();
     if previous.is_none()
         && (expanding(text)
@@ -74,10 +112,14 @@ pub fn parse_query(
         previous.cloned().ok_or("缺少上一条查询")?
     } else {
         InvestigationQuery {
+            time_kind: TimeKind::Relative,
+            approximate_anchor: false,
+            anchor: None,
             start: subtract(now, Duration::hours(4))?.to_rfc3339(),
             end: now.to_rfc3339(),
             timezone_offset_minutes: now.offset().local_minus_utc() / 60,
             keywords: Vec::new(),
+            identifiers: Vec::new(),
             exclude_keyword: String::new(),
             match_any: false,
             service: None,
@@ -140,6 +182,8 @@ pub fn parse_query(
     for (start, end) in natural_ranges.into_iter().rev() {
         remaining.replace_range(start..end, &" ".repeat(end - start));
     }
+    // 显式业务字段先消耗，避免其值被误判为时间、服务或 trace。
+    let mut identifiers = extract_business_fields(&mut remaining);
     let mut time_text = remaining.clone();
     let quote_pattern = re(r#""[^"]*"|'[^']*'|“[^”]*”"#);
     let quote_ranges: Vec<_> = quote_pattern
@@ -150,7 +194,13 @@ pub fn parse_query(
         time_text.replace_range(start..end, &" ".repeat(end - start));
     }
     let (window, time_ranges) = parse_window(&time_text, &query, now, followup)?;
-    if let Some((start, end)) = window {
+    if let Some((start, end, kind, anchor)) = window {
+        query.time_kind = kind;
+        query.anchor = anchor.map(|value| value.to_rfc3339());
+        query.approximate_anchor = kind == TimeKind::Anchor
+            && ["大概", "大约", "约", "左右", "附近", "前后"]
+                .iter()
+                .any(|w| time_text.contains(w));
         if start >= end {
             return Err("开始时间必须早于结束时间；跨午夜请写明两端日期。".into());
         }
@@ -174,9 +224,17 @@ pub fn parse_query(
         remaining.replace_range(start..end, &" ".repeat(end - start));
     }
     let analysis = crate::wecom_intent::analyze(&remaining);
-    let ids = crate::wecom_intent::extract_identifiers(&remaining, trace.as_deref());
-    let changed_subject =
-        followup && !ids.is_empty() && ids.iter().any(|id| !query.keywords.contains(id));
+    for value in crate::wecom_intent::extract_identifiers(&remaining, trace.as_deref()) {
+        if !identifiers.iter().any(|id| id.value == value) {
+            identifiers.push(BusinessIdentifier {
+                field: String::new(),
+                value,
+            });
+        }
+    }
+    let changed_subject = followup
+        && !identifiers.is_empty()
+        && identifiers.iter().any(|id| !query.identifiers.contains(id));
     // 新订单独立于之前自动追查到的 trace；同时丢掉旧订单/错误关键词。
     if changed_subject
         || (followup
@@ -186,13 +244,14 @@ pub fn parse_query(
     {
         query.trace_id = None;
         query.keywords.clear();
+        query.identifiers.clear();
         query.exclude_keyword.clear();
         query.match_any = false;
     }
     let mut keywords = explicit_keywords.unwrap_or_else(|| {
         let mut out = quotes;
-        for id in ids {
-            push_unique(&mut out, id);
+        for id in &identifiers {
+            push_unique(&mut out, id.value.clone());
         }
         for value in analysis.keywords {
             // 旧 analyze 的兜底可能是自然语言整句或服务名；这里只接纳错误信号。
@@ -216,6 +275,9 @@ pub fn parse_query(
         }
         query.keywords = keywords;
         query.match_any = false;
+    }
+    if !identifiers.is_empty() || fields.iter().any(|f| f.kind == "keyword") {
+        query.identifiers = identifiers;
     }
     if let Some(value) = explicit_exclude {
         query.exclude_keyword = value;
@@ -244,6 +306,7 @@ pub fn parse_query(
             p.start == query.start
                 && p.end == query.end
                 && p.keywords == query.keywords
+                && p.identifiers == query.identifiers
                 && p.exclude_keyword == query.exclude_keyword
                 && p.service == query.service
                 && p.trace_id == query.trace_id
@@ -281,6 +344,99 @@ fn subtract(
 ) -> Result<DateTime<FixedOffset>, String> {
     time.checked_sub_signed(duration)
         .ok_or_else(|| "时间范围超出支持范围。".into())
+}
+
+/// Extract ASCII key=value business clues, preserving each field even when values coincide.
+/// Control fields never become identifiers; quoted keyword phrases remain literals.
+fn extract_business_fields(text: &mut String) -> Vec<BusinessIdentifier> {
+    let pattern = re(
+        r#"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([A-Za-z0-9_.-]+)"|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_.-]+))"#,
+    );
+    let quotes: Vec<_> = re(r#""[^"]*"|'[^']*'|“[^”]*”"#)
+        .find_iter(text)
+        .map(|m| (m.start(), m.end()))
+        .collect();
+    let mut out = Vec::new();
+    let mut ranges = Vec::new();
+    for cap in pattern.captures_iter(text) {
+        let m = cap.get(0).unwrap();
+        if (m.start() > 0
+            && (text.as_bytes()[m.start() - 1].is_ascii_alphanumeric()
+                || matches!(text.as_bytes()[m.start() - 1], b'_' | b'-' | b'.')))
+            || quotes
+                .iter()
+                .any(|(s, e)| m.start() >= *s && m.start() < *e)
+        {
+            continue;
+        }
+        let field = cap[1].to_string();
+        let value = (2..=4)
+            .find_map(|i| cap.get(i))
+            .unwrap()
+            .as_str()
+            .to_string();
+        let control = matches!(
+            field.to_ascii_lowercase().as_str(),
+            "time"
+                | "date"
+                | "datetime"
+                | "timestamp"
+                | "start"
+                | "end"
+                | "starttime"
+                | "endtime"
+                | "start_time"
+                | "end_time"
+                | "timezone"
+                | "timezoneoffsetminutes"
+                | "minutes"
+                | "duration"
+                | "service"
+                | "serviceid"
+                | "service_id"
+                | "keyword"
+                | "keywords"
+                | "exclude"
+                | "exclude_keyword"
+                | "level"
+                | "page"
+                | "pagesize"
+                | "page_size"
+                | "limit"
+                | "matchany"
+                | "traceid"
+                | "trace_id"
+        );
+        if control {
+            // Keep human-readable temporal values for parse_window; remove other controls entirely.
+            if [
+                "time",
+                "date",
+                "datetime",
+                "start",
+                "end",
+                "starttime",
+                "endtime",
+                "start_time",
+                "end_time",
+            ]
+            .contains(&field.to_ascii_lowercase().as_str())
+                && (value.contains('-') || text[m.end()..].starts_with(':'))
+            {
+                continue;
+            }
+        } else {
+            let id = BusinessIdentifier { field, value };
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        ranges.push((m.start(), m.end()));
+    }
+    for (start, end) in ranges.into_iter().rev() {
+        text.replace_range(start..end, &" ".repeat(end - start));
+    }
+    out
 }
 
 struct Field {
@@ -341,6 +497,7 @@ fn keyword_field_len(rest: &str) -> usize {
     let temporal = re(
         r"^(?:今天|昨天|昨晚|今晚|最近|过去|近[0-9零一二两三四五六七八九十]|[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}:[0-9]{2}|[0-9零一二两三四五六七八九十]+点)",
     );
+    let assignment = re(r"^[A-Za-z_][A-Za-z0-9_]*\s*=");
     let mut closing = None;
     for (index, ch) in rest.char_indices() {
         if let Some(close) = closing {
@@ -367,7 +524,7 @@ fn keyword_field_len(rest: &str) -> usize {
                 .next_back()
                 .map(|c| c.is_whitespace() || matches!(c, ',' | '，'))
                 .unwrap_or(false);
-        if boundary && temporal.is_match(&rest[index..]) {
+        if boundary && (temporal.is_match(&rest[index..]) || assignment.is_match(&rest[index..])) {
             return index;
         }
     }
@@ -480,7 +637,12 @@ fn extract_service_filter(text: &str) -> Option<String> {
     crate::wecom_intent::extract_service(text)
 }
 
-type Window = (DateTime<FixedOffset>, DateTime<FixedOffset>);
+type Window = (
+    DateTime<FixedOffset>,
+    DateTime<FixedOffset>,
+    TimeKind,
+    Option<DateTime<FixedOffset>>,
+);
 type TimeParse = (Option<Window>, Vec<(usize, usize)>);
 
 fn parse_window(
@@ -501,6 +663,22 @@ fn parse_window(
     );
     let clocks: Vec<_> = clock.find_iter(text).collect();
     if !clocks.is_empty() {
+        if clocks.len() == 1 {
+            let m = clocks[0];
+            let (anchor, _) = parse_clock(m.as_str(), now.date_naive(), *now.offset(), false)?;
+            let end = anchor
+                .checked_add_signed(Duration::minutes(15))
+                .ok_or("时间范围超出支持范围。")?;
+            return Ok((
+                Some((
+                    subtract(anchor, Duration::minutes(15))?,
+                    end,
+                    TimeKind::Anchor,
+                    Some(anchor),
+                )),
+                vec![(m.start(), m.end())],
+            ));
+        }
         if clocks.len() != 2 {
             return Err("请给出完整起止时间，例如今天10点到11点。".into());
         }
@@ -520,7 +698,7 @@ fn parse_window(
         };
         let (end, _) = parse_clock(clocks[1].as_str(), end_base, *start.offset(), evening)?;
         return Ok((
-            Some((start, end)),
+            Some((start, end, TimeKind::Range, None)),
             clocks.iter().map(|m| (m.start(), m.end())).collect(),
         ));
     }
@@ -562,7 +740,7 @@ fn parse_window(
         };
         let m = cap.get(0).unwrap();
         return Ok((
-            Some((subtract(end, delta)?, end)),
+            Some((subtract(end, delta)?, end, TimeKind::Relative, None)),
             vec![(m.start(), m.end())],
         ));
     }
@@ -593,7 +771,10 @@ fn parse_window(
                 .checked_add_signed(Duration::days(1))
                 .ok_or("日期超出支持范围")?
         };
-        return Ok((Some((start, end)), vec![(day.start(), day.end())]));
+        return Ok((
+            Some((start, end, TimeKind::Range, None)),
+            vec![(day.start(), day.end())],
+        ));
     }
     if [
         "最近",
@@ -613,7 +794,12 @@ fn parse_window(
     }
     if text.contains("刚才") || text.contains("刚刚") {
         return Ok((
-            Some((subtract(now, Duration::minutes(15))?, now)),
+            Some((
+                subtract(now, Duration::minutes(15))?,
+                now,
+                TimeKind::Relative,
+                None,
+            )),
             Vec::new(),
         ));
     }
@@ -746,6 +932,114 @@ mod tests {
         parse_query(text, None, now()).unwrap()
     }
     #[test]
+    fn time_metadata_offsets_and_explicit_identifier_dates_are_preserved() {
+        let q = parse("2026-10-28T11:31:12Z matchId=2026-10-28");
+        assert_eq!(q.time_kind, TimeKind::Anchor);
+        assert!(!q.approximate_anchor);
+        assert_eq!(q.start, "2026-10-28T11:16:12+00:00");
+        assert_eq!(q.end, "2026-10-28T11:46:12+00:00");
+        assert_eq!(q.timezone_offset_minutes, 480);
+        assert_eq!(q.identifiers[0].value, "2026-10-28");
+        let range = parse("大概2026-10-28 11:31:12到11:32:12");
+        assert_eq!(range.time_kind, TimeKind::Range);
+        assert_eq!(range.start, "2026-10-28T11:31:12+08:00");
+        assert_eq!(range.end, "2026-10-28T11:32:12+08:00");
+        assert!(!range.approximate_anchor);
+        assert!(range.anchor.is_none());
+        let relative = parse_query("扩大到8小时", Some(&q), now()).unwrap();
+        assert_eq!(relative.time_kind, TimeKind::Relative);
+        assert!(relative.anchor.is_none());
+        assert!(!relative.approximate_anchor);
+        let keyword = parse("keyword=\"matchId=123456 timeout\" AND \"payment failed\"");
+        assert!(keyword.identifiers.is_empty());
+        assert_eq!(
+            keyword.keywords,
+            vec!["matchId=123456 timeout", "payment failed"]
+        );
+        assert!(!keyword.match_any);
+        let single = parse("今天10点");
+        assert_eq!(single.start, "2026-10-28T09:45:00+08:00");
+        assert_eq!(single.end, "2026-10-28T10:15:00+08:00");
+    }
+    #[test]
+    fn start_new_is_an_independent_intent() {
+        for text in [
+            "起新会话",
+            "请起新会话，继续查日志",
+            "新建会话；只看错误",
+            "start_new",
+        ] {
+            assert!(starts_new_investigation(text), "{text}");
+            assert!(!is_followup(text), "{text}");
+        }
+        for text in [
+            "不要起新会话",
+            "怎么起新会话",
+            "关键词=\"起新会话\"",
+            "关键词=\"操作，起新会话，继续\"",
+            "继续下一页",
+        ] {
+            assert!(!starts_new_investigation(text), "{text}");
+        }
+    }
+    #[test]
+    fn new_session_clears_all_inherited_query_filters() {
+        let previous = parse("昨天10点到11点 matchId=123456 keyword=timeout; traceId=old service=old-api level=ERROR 排除=health");
+        let q = parse_query(
+            "起新会话，继续排查，只看服务 new-api",
+            Some(&previous),
+            now(),
+        )
+        .unwrap();
+        assert_eq!(q.start, "2026-10-28T13:30:00+08:00");
+        assert_eq!(q.service.as_deref(), Some("new-api"));
+        assert!(q.keywords.is_empty());
+        assert!(q.identifiers.is_empty());
+        assert!(q.trace_id.is_none());
+        assert!(q.level.is_none());
+        assert!(q.exclude_keyword.is_empty());
+        assert_eq!(q.page, 1);
+    }
+    #[test]
+    fn explicit_keyword_and_business_fields_remain_separate() {
+        let q = parse("keyword=\"payment failed\" AND timeout matchId=1454798851378978816 salesMatchId=1454798851378978816 nlpIdOriginal=8414548098086706628 requestId=abcdef1234567890 orderId=ORD20261028 custom_key=foo-123 service=pay-api level=INFO page=123456 timestamp=1793187072");
+        assert_eq!(q.keywords, vec!["payment failed", "timeout"]);
+        assert_eq!(q.identifiers.len(), 6);
+        assert_eq!(q.identifiers[3].field, "requestId");
+        assert_eq!(q.identifiers[3].value, "abcdef1234567890");
+        assert_eq!(q.trace_id, None);
+        assert!(!q.match_any);
+        assert_eq!(q.service.as_deref(), Some("pay-api"));
+    }
+    #[test]
+    fn screenshot_business_identifiers_have_fields_not_trace() {
+        let q = parse("起新会话，个微电子行业，根据日志排查问题，时间大概是：2026-10-28 11:31:12 关键信息 matchId=1454798851378978816，nlpIdOriginal =8414548098086706628 查下为什么没有自动报价，查询原因，并输出对应日志证据链");
+        assert_eq!(
+            q.identifiers,
+            vec![
+                BusinessIdentifier {
+                    field: "matchId".into(),
+                    value: "1454798851378978816".into()
+                },
+                BusinessIdentifier {
+                    field: "nlpIdOriginal".into(),
+                    value: "8414548098086706628".into()
+                },
+            ]
+        );
+        assert_eq!(q.trace_id, None);
+        assert_eq!(q.time_kind, TimeKind::Anchor);
+        assert!(q.approximate_anchor);
+        assert_eq!(q.anchor.as_deref(), Some("2026-10-28T11:31:12+08:00"));
+    }
+    #[test]
+    fn single_incident_time_uses_fifteen_minute_context() {
+        let q = parse("时间大概是：2026-10-28 11:31:12 查下为什么没有自动报价");
+        assert_eq!(q.start, "2026-10-28T11:16:12+08:00");
+        assert_eq!(q.end, "2026-10-28T11:46:12+08:00");
+        assert!(q.keywords.is_empty());
+    }
+    #[test]
     fn default_and_symptom_are_not_literal_keywords() {
         let q = parse("下单一直失败帮我排查下");
         assert!(q.keywords.is_empty());
@@ -816,7 +1110,6 @@ mod tests {
             "25:00到26:00",
             "最近9223372036854775807天",
             "昨晚",
-            "今天10点",
             "过去三百小时",
         ] {
             assert!(parse_query(text, None, now()).is_err(), "{text}");

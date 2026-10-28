@@ -20,7 +20,20 @@ export type WecomDshStatus = {
   mirror: DshMirrorReport | null;
 };
 
+export type WecomInvestigationStatus = {
+  status: string;
+  requestId: string;
+  /** 后端实际计数；零表示未发出请求 / 未取得证据，不能从状态文案推测。 */
+  requestCount: number;
+  evidenceCount: number;
+  sourceReady: boolean;
+  detail: string;
+};
+
 export type WecomStatus = {
+  processId: number;
+  buildLabel: string;
+  lastInvestigation?: WecomInvestigationStatus | null;
   state: string;
   detail: string;
   enabled: boolean;
