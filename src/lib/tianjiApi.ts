@@ -1,6 +1,6 @@
 /**
  * 天玑 OpenAI 兼容端点：把设置推给 Rust HTTP 服务单例。
- * OpenClaw（微信 ClawBot）等外部 agent 以 base_url=http://127.0.0.1:{port}/v1 接入。
+ * 外部客户端以 base_url=http://127.0.0.1:{port}/v1 接入。
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { AIModelConfig, AppSettings, McpServer } from "../core/types";

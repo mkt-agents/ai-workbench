@@ -1,4 +1,4 @@
-//! 企微渠道访问策略（对齐 OpenClaw：pairing / allowlist / open / disabled）。
+//! 企微渠道访问策略（pairing / allowlist / open / disabled）。
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

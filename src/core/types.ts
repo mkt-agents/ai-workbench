@@ -258,7 +258,7 @@ export interface AppSettings {
   wecomAutoPush?: boolean;
   /** 企微全局并发回合上限（默认 2，范围 1–8） */
   wecomMaxJobs?: number;
-  /** 天玑 OpenAI 兼容端点（ClawBot/OpenClaw 等外部 agent 接入用） */
+  /** 天玑 OpenAI 兼容端点（外部 OpenAI 兼容客户端接入用） */
   tianjiApiEnabled?: boolean;
   tianjiApiPort?: number;
   /** DPAPI enc:v1:… 密文；空 = 不鉴权 */

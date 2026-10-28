@@ -26,7 +26,7 @@
     "soon": "Coming soon"
   },
   "tianjiApi": {
-    "hint": "Tianji OpenAI-compatible endpoint: exposes Tianji (tools / approvals / sessions included) as /v1/chat/completions for OpenClaw (WeChat ClawBot) or any OpenAI-compatible client. In OpenClaw set base_url to the address below, api_key to the key here, and model to tianji. Once WeChat ClawBot is bound to OpenClaw via QR, you can chat with Tianji inside WeChat.",
+    "hint": "Tianji OpenAI-compatible endpoint: exposes Tianji (tools / approvals / sessions included) as /v1/chat/completions for any OpenAI-compatible client. Setup: base_url is the address below, api_key is the key set here, model is tianji.",
     "groupConnection": "Connection",
     "enabled": "Enabled",
     "status": "Status",
@@ -35,7 +35,7 @@
       "listening": "Listening",
       "error": "Error"
     },
-    "baseUrlHint": "base_url: {{baseUrl}}　model: {{model}} (localhost only; use a tunnel for external access. In OpenClaw the Base URL ends at /v1 — do not append /chat/completions)",
+    "baseUrlHint": "base_url: {{baseUrl}}　model: {{model}} (localhost only; use a tunnel for external access. Base URL ends at /v1 — do not append /chat/completions)",
     "port": "Local port",
     "restart": "Restart",
     "apiKey": "API key (optional)",

@@ -1,9 +1,9 @@
 //! 天玑 OpenAI 兼容端点：`/v1/chat/completions` → 一个完整天玑回合。
 //!
-//! 链路：微信 ClawBot → OpenClaw（自定义 provider）→ 本端点 → agent_run，
-//! 天玑的工具 / 审批 / 会话能力全部保留。同时可供任何 OpenAI 兼容客户端使用。
+//! 任何 OpenAI 兼容客户端都能接：请求 → 本端点 → agent_run，
+//! 天玑的工具 / 审批 / 会话能力全部保留。
 //!
-//! 无状态：请求里的 messages 就是完整上下文（OpenClaw 每轮带全量历史）。
+//! 无状态：请求里的 messages 就是完整上下文（客户端每轮带全量历史）。
 //! 审批沿用桌面端流程（agent.rs 的审批卡 + 5 分钟超时自动拒绝）。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -469,7 +469,7 @@ async fn fetch_base64(url: &str) -> Result<(String, String), String> {
 fn parse_data_url(url: &str) -> Option<(String, String)> {
     let rest = url.strip_prefix("data:")?;
     let (mime_part, data) = rest.split_once(',')?;
-    // 只支持 base64 数据（OpenClaw 转发的图片都是 base64 data URL）
+    // 只支持 base64 数据（OpenAI 兼容请求里的图片都是 base64 data URL）
     let mime = mime_part.strip_suffix(";base64")?;
     if mime.is_empty() || data.is_empty() {
         return None;

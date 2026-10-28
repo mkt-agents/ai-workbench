@@ -26,7 +26,7 @@
     "soon": "开发中"
   },
   "tianjiApi": {
-    "hint": "天玑 OpenAI 兼容端点：把天玑（含工具 / 审批 / 会话）暴露成 /v1/chat/completions，供 OpenClaw（微信 ClawBot）或任何 OpenAI 兼容客户端接入。OpenClaw 配置：base_url 填下方地址、api_key 填这里设置的密钥、model 填 tianji。微信 ClawBot 扫码绑定 OpenClaw 后即可在微信聊天玑。",
+    "hint": "天玑 OpenAI 兼容端点：把天玑（含工具 / 审批 / 会话）暴露成 /v1/chat/completions，任何 OpenAI 兼容客户端都能接入。接入参数：base_url 填下方地址、api_key 填这里设置的密钥、model 填 tianji。",
     "groupConnection": "连接",
     "enabled": "启用",
     "status": "状态",
@@ -35,7 +35,7 @@
       "listening": "监听中",
       "error": "出错"
     },
-    "baseUrlHint": "base_url：{{baseUrl}}　model：{{model}}（仅监听本机，外部机器访问需用内网穿透；OpenClaw 的 Base URL 只填到 /v1，不要带 /chat/completions）",
+    "baseUrlHint": "base_url：{{baseUrl}}　model：{{model}}（仅监听本机，外部机器访问需用内网穿透；Base URL 只填到 /v1，不要带 /chat/completions）",
     "port": "本机端口",
     "restart": "重启服务",
     "apiKey": "API Key（选填）",
