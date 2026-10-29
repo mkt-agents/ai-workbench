@@ -6,46 +6,65 @@
 
 use base64::Engine;
 use serde_json::Value;
+use std::collections::HashMap;
 use tauri::{AppHandle, Manager};
 
-use crate::wecom_channel::WecomState;
+use crate::wecom_channel::{OutTarget, WecomState};
 use crate::wecom_proto;
 
 const QYAPI: &str = "https://qyapi.weixin.qq.com/cgi-bin";
 
-/// 当前回合的企微出站目标（由 orchestrator 在处理消息时写入）。
-async fn target(app: &AppHandle) -> Result<(String, String), String> {
+/// 只查当前请求，缺失时不回退到其它会话的目标。
+fn lookup_target(
+    targets: &HashMap<String, OutTarget>,
+    request_id: &str,
+) -> Result<(String, String), String> {
+    targets
+        .get(request_id)
+        .map(|t| (t.req_id.clone(), t.stream_id.clone()))
+        .ok_or_else(|| "当前请求没有进行中的企微对话，发送目标已失效".into())
+}
+
+/// 当前回合的企微出站目标（由 orchestrator 按 agent request_id 登记）。
+async fn target(app: &AppHandle, request_id: &str) -> Result<(String, String), String> {
     let st = app.state::<WecomState>();
-    let g = st.last_target.lock().await;
-    match g.as_ref() {
-        Some(t) => Ok((t.req_id.clone(), t.stream_id.clone())),
-        None => Err("当前没有进行中的企微对话，无法定位发送目标".into()),
-    }
+    let targets = st.out_targets.lock().await;
+    lookup_target(&targets, request_id)
 }
 
 /// 把本地图片作为 inline base64 发回当前企微对话。
-pub async fn send_image(app: &AppHandle, path: &str) -> Result<String, String> {
+pub async fn send_image(
+    app: &AppHandle,
+    path: &str,
+    request_id: &str,
+) -> Result<String, String> {
+    let (req_id, stream_id) = target(app, request_id).await?;
+    let name = file_name(path);
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| format!("读取图片失败：{e}"))?;
     let media_type = mime_of(path);
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    let (req_id, stream_id) = target(app).await?;
     let sock = app.state::<WecomState>().sock.clone();
     sock.send_raw(wecom_proto::respond_image(
         &req_id, &stream_id, &media_type, &data,
     ))
     .await
     .map_err(|e| format!("发送图片失败：{e}"))?;
-    Ok(format!("已发送图片：{path}"))
+    Ok(format!("已发送图片：{name}"))
 }
 
 /// 把本地文件发回当前企微对话：文本直接贴出，二进制尝试上传，失败兜底提示。
-pub async fn send_file(app: &AppHandle, path: &str) -> Result<String, String> {
+pub async fn send_file(
+    app: &AppHandle,
+    path: &str,
+    request_id: &str,
+) -> Result<String, String> {
+    let (req_id, stream_id) = target(app, request_id).await?;
+    let name = file_name(path);
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| format!("读取文件失败：{e}"))?;
-    let (req_id, stream_id) = target(app).await?;
     let sock = app.state::<WecomState>().sock.clone();
 
     if let Ok(text) = std::str::from_utf8(&bytes) {
@@ -57,12 +76,12 @@ pub async fn send_file(app: &AppHandle, path: &str) -> Result<String, String> {
         sock.send_raw(wecom_proto::respond_stream(
             &req_id,
             &stream_id,
-            &format!("📄 {path}\n```\n{preview}\n```"),
+            &format!("📄 {name}\n```\n{preview}\n```"),
             true,
         ))
         .await
         .map_err(|e| format!("发送文件内容失败：{e}"))?;
-        return Ok(format!("已发送文件内容：{path}"));
+        return Ok(format!("已发送文件内容：{name}"));
     }
 
     match upload_media(app, &bytes, &mime_of(path)).await {
@@ -71,24 +90,24 @@ pub async fn send_file(app: &AppHandle, path: &str) -> Result<String, String> {
                 &req_id,
                 &stream_id,
                 &media_id,
-                &file_name(path),
+                &name,
             ))
             .await
             .map_err(|e| format!("发送文件失败：{e}"))?;
-            Ok(format!("已发送文件：{path}"))
+            Ok(format!("已发送文件：{name}"))
         }
         Err(e) => {
             sock.send_raw(wecom_proto::respond_stream(
                 &req_id,
                 &stream_id,
                 &format!(
-                    "📎 已生成文件「{path}」（二进制，无法经企微直接发送：{e}；请在桌面端查看）"
+                    "📎 已生成文件「{name}」（二进制，无法经企微直接发送：{e}；请在桌面端查看）"
                 ),
                 true,
             ))
             .await
             .map_err(|e| format!("发送提示失败：{e}"))?;
-            Ok(format!("文件已生成（文本兜底）：{path}"))
+            Ok(format!("文件已生成（文本兜底）：{name}"))
         }
     }
 }
@@ -116,6 +135,7 @@ async fn upload_media(app: &AppHandle, bytes: &[u8], media_type: &str) -> Result
 
     let r: Value = client
         .post(&up)
+        .timeout(std::time::Duration::from_secs(20))
         .header(
             reqwest::header::CONTENT_TYPE,
             format!("multipart/form-data; boundary={boundary}"),
@@ -171,4 +191,70 @@ fn file_name(p: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("file")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn targets() -> HashMap<String, OutTarget> {
+        HashMap::from([
+            (
+                "agent-a".into(),
+                OutTarget {
+                    req_id: "callback-a".into(),
+                    stream_id: "stream-a".into(),
+                },
+            ),
+            (
+                "agent-b".into(),
+                OutTarget {
+                    req_id: "callback-b".into(),
+                    stream_id: "stream-b".into(),
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn media_routes_each_request_to_its_own_target() {
+        let targets = targets();
+        assert_eq!(
+            lookup_target(&targets, "agent-a").unwrap(),
+            ("callback-a".into(), "stream-a".into())
+        );
+        assert_eq!(
+            lookup_target(&targets, "agent-b").unwrap(),
+            ("callback-b".into(), "stream-b".into())
+        );
+    }
+
+    #[test]
+    fn cleaning_up_a_preserves_b_and_never_redirects_a() {
+        let mut targets = targets();
+        targets.remove("agent-a");
+        assert!(lookup_target(&targets, "agent-a").is_err());
+        assert_eq!(
+            lookup_target(&targets, "agent-b").unwrap(),
+            ("callback-b".into(), "stream-b".into())
+        );
+    }
+
+    #[test]
+    fn unknown_or_callback_id_does_not_fall_back_to_active_target() {
+        let targets = targets();
+        for request_id in ["", "unknown", "callback-a", "stream-b"] {
+            assert!(lookup_target(&targets, request_id).is_err());
+        }
+        assert!(lookup_target(&HashMap::new(), "agent-a").is_err());
+    }
+
+    #[test]
+    fn media_display_uses_only_file_name() {
+        assert_eq!(file_name("private/workspace/report.csv"), "report.csv");
+        assert_eq!(file_name("/private/workspace/chart.png"), "chart.png");
+        assert_eq!(file_name(""), "file");
+        #[cfg(windows)]
+        assert_eq!(file_name(r"C:\private\workspace\report.csv"), "report.csv");
+    }
 }

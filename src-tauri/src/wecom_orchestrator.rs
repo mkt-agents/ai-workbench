@@ -1,7 +1,7 @@
 //! 企微入站 → 策略 → agent_run → 流式回写。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,10 +23,6 @@ use crate::wecom_sanitize::redact_local_paths;
 use crate::wecom_session::{self, SessionKey};
 use crate::wecom_ws::WecomSocket;
 
-const MAX_GLOBAL_JOBS: usize = 2;
-/// 全局并发上限的允许范围（设置页可调；fail-safe 到默认）。
-const MIN_GLOBAL_JOBS: usize = 1;
-const MAX_GLOBAL_JOBS_CAP: usize = 8;
 /// DSH 单回合上限：比天玑的 420s 看门狗宽，因为 ACP 侧可能连着跑很久的工具。
 const DSH_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 /// 回合里超过这么久没有任何事件，就给聊天里补一句「还在处理」，别让人对着「思考中」干等。
@@ -108,9 +104,7 @@ pub struct Orchestrator {
     session_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     /// 当前每个会话正在跑的那一轮（供「停止」指令真正取消 + 收尾卡住的气泡）。
     running: Arc<Mutex<HashMap<String, RunningTurn>>>,
-    global_jobs: Arc<AtomicUsize>,
-    /// 全局并发上限（设置页可调；默认 MAX_GLOBAL_JOBS）。
-    max_jobs: Arc<AtomicUsize>,
+    pub admission: crate::wecom_admission::Admission,
 }
 
 /// 一个会话正在进行中的回合：记录出站目标 + 如何取消。
@@ -118,6 +112,7 @@ struct RunningTurn {
     /// 平台回帧用的 req_id 与当前正文流 id（取消后往这条补 finish 帧，收尾「正在思考…」）。
     req_id: String,
     stream_id: String,
+    initiator: String,
     cancel: CancelHandle,
 }
 
@@ -159,19 +154,13 @@ impl Orchestrator {
             deduper: Arc::new(Mutex::new(MsgDeduper::new(2048))),
             session_locks: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashMap::new())),
-            global_jobs: Arc::new(AtomicUsize::new(0)),
-            max_jobs: Arc::new(AtomicUsize::new(MAX_GLOBAL_JOBS)),
+            admission: crate::wecom_admission::Admission::default(),
         }
     }
 
     /// 设置全局并发上限（设置页下发）；越界回落默认值。
     pub fn set_max_jobs(&self, n: usize) {
-        let v = if (MIN_GLOBAL_JOBS..=MAX_GLOBAL_JOBS_CAP).contains(&n) {
-            n
-        } else {
-            MAX_GLOBAL_JOBS
-        };
-        self.max_jobs.store(v, Ordering::SeqCst);
+        self.admission.set_limit(n);
     }
 
     pub fn handle_msg(self: &Arc<Self>, app: AppHandle, msg: MsgCallback) {
@@ -207,25 +196,27 @@ impl Orchestrator {
     }
 
     async fn on_msg(&self, app: AppHandle, msg: MsgCallback) {
+        let stream_id = format!("stream-{}", msg.msgid);
+        if crate::wecom_reply::is_finished(&stream_id) {
+            return;
+        }
+        if !crate::wecom_reply::register(&stream_id) {
+            let _ = self
+                .sock
+                .send_raw(wecom_proto::respond_stream(
+                    &msg.req_id,
+                    &stream_id,
+                    "当前任务登记已满，请稍后再试。\n\n⏱ 本次耗时：0秒",
+                    true,
+                ))
+                .await;
+            return;
+        }
         {
             let mut d = self.deduper.lock().await;
             if d.seen_or_insert(&msg.msgid) {
                 return;
             }
-        }
-
-        // 企微内审批回灌：若本条是「审批码 + 选择」回复，直接放行/拒绝对应回合
-        if let Some(answer) = self.try_resolve_approval(&app, &msg.text).await {
-            let _ = self
-                .sock
-                .send_raw(wecom_proto::respond_stream(
-                    &msg.req_id,
-                    &format!("appr-{}", msg.msgid),
-                    &answer,
-                    true,
-                ))
-                .await;
-            return;
         }
 
         let bot_name = self.bot_display_name.lock().await.clone();
@@ -238,34 +229,39 @@ impl Orchestrator {
         }
         if msg.voice_empty {
             let tip = "没能识别语音内容，请直接发文字或图片。";
-            let _ = self
-                .sock
-                .send_raw(wecom_proto::respond_stream(
-                    &msg.req_id,
-                    &format!("voice-{}", msg.msgid),
-                    tip,
-                    true,
-                ))
-                .await;
+            send_finish(&self.sock, &msg.req_id, &stream_id, tip).await;
             return;
         }
         if user_text.trim().is_empty() && msg.media.is_empty() {
             // 既无文字也无媒体（表情/位置等）：礼貌提示，不再静默丢
             let tip = "暂不支持该消息类型，请发文字、图片或文件。";
-            let _ = self
-                .sock
-                .send_raw(wecom_proto::respond_stream(
-                    &msg.req_id,
-                    &format!("s-{}", msg.msgid),
-                    tip,
-                    true,
-                ))
-                .await;
+            send_finish(&self.sock, &msg.req_id, &stream_id, tip).await;
             return;
         }
 
         let is_group = msg.chattype == "group";
-        let session = if is_group {
+        let bot = app
+            .state::<WecomState>()
+            .applied
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.bot_id.clone())
+            .unwrap_or_default();
+        if bot.is_empty()
+            || msg.userid.trim().is_empty()
+            || (is_group && msg.chatid.as_deref().unwrap_or("").trim().is_empty())
+        {
+            send_finish(
+                &self.sock,
+                &msg.req_id,
+                &stream_id,
+                "消息缺少机器人、用户或群身份，未创建公共会话。",
+            )
+            .await;
+            return;
+        }
+        let mut session = if is_group {
             let chatid = msg.chatid.clone().unwrap_or_default();
             // @ 判定优先用平台显式字段（body_mentioned）；该字段缺失时回落到
             // 「平台已过滤非@投递」的宽松假设（兼容老策略，避免 strip_mention 漏判导致静默丢）。
@@ -291,39 +287,161 @@ impl Orchestrator {
             if decision != GateDecision::Allow {
                 return;
             }
-            SessionKey::group(&chatid)
+            SessionKey::group_user(&bot, &chatid, &msg.userid)
         } else {
             let decision = {
                 let mut policy = self.policy.lock().await;
                 policy.gate_dm(&msg.userid)
             };
             match decision {
-                GateDecision::Allow => SessionKey::dm(&msg.userid),
+                GateDecision::Allow => SessionKey::dm_for(&bot, &msg.userid),
                 GateDecision::NeedPairing(code) => {
                     let tip = format!(
                         "首次私聊需要配对。请在 AI Workbench → 设置 → 联网扩展 → 企业微信机器人 中批准配对码：{code}"
                     );
-                    let _ = self
-                        .sock
-                        .send_raw(wecom_proto::respond_stream(
-                            &msg.req_id,
-                            &format!("pair-{}", msg.msgid),
-                            &tip,
-                            true,
-                        ))
-                        .await;
+                    send_finish(&self.sock, &msg.req_id, &stream_id, &tip).await;
                     return;
                 }
                 GateDecision::DenySilent | GateDecision::DenyWith(_) => return,
             }
         };
 
+        let mut task_id: Option<String> = None;
+        let mut task_owner: Option<String> = None;
+        if is_group {
+            let db = app.state::<crate::DbState>().conn.clone();
+            let (b, g, u, t) = (
+                bot.clone(),
+                msg.chatid.clone().unwrap(),
+                msg.userid.clone(),
+                user_text.clone(),
+            );
+            let control = is_stop_command(&user_text) || is_approval_text(&user_text);
+            let routed = tokio::task::spawn_blocking(move || {
+                let conn = db.lock().map_err(|_| "共享任务数据库锁失败".to_string())?;
+                if control {
+                    crate::wecom_tasks::lookup_route(
+                        &conn,
+                        &b,
+                        &g,
+                        &u,
+                        chrono::Utc::now().timestamp_millis(),
+                    )
+                } else {
+                    crate::wecom_tasks::route(
+                        &conn,
+                        &b,
+                        &g,
+                        &u,
+                        &t,
+                        chrono::Utc::now().timestamp_millis(),
+                    )
+                }
+            })
+            .await;
+            let routed = match routed {
+                Ok(Ok(r)) => r,
+                other => {
+                    send_finish(
+                        &self.sock,
+                        &msg.req_id,
+                        &stream_id,
+                        &format!("共享任务路由失败：{other:?}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            if let Some(ended) = &routed.ended_task_id {
+                let ended_session =
+                    SessionKey::shared_task(&bot, msg.chatid.as_deref().unwrap(), ended);
+                let ended_key = ended_session.as_str();
+                closed_sessions().lock().unwrap().insert(ended_key.clone());
+                if let Some(rt) = self.running.lock().await.remove(&ended_key) {
+                    rt.cancel();
+                    send_finish(
+                        &self.sock,
+                        &rt.req_id,
+                        &rt.stream_id,
+                        "共享任务已结束，本轮停止。",
+                    )
+                    .await;
+                }
+                app.state::<WecomState>()
+                    .pending_approvals
+                    .lock()
+                    .await
+                    .retain(|_, p| p.owner.session != ended_key);
+                app.state::<WecomState>()
+                    .dsh
+                    .reset_channel_session(&ended_key)
+                    .await;
+                // Task identity is never reused; preserve archived reply history, remove live metadata after the current turn settles.
+                let cleanup_session = ended_session.clone();
+                match tokio::task::spawn_blocking(move || {
+                    wecom_session::clear_session_checked(&cleanup_session)
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    other => crate::wecom_log::write(
+                        "task-cleanup",
+                        &format!("history cleanup incomplete: {other:?}"),
+                    ),
+                }
+            }
+            task_owner = routed.owner_id;
+            task_id = routed.task_id;
+            if let Some(reply) = routed.reply {
+                send_finish(&self.sock, &msg.req_id, &stream_id, &reply).await;
+                return;
+            }
+            if let Some(task) = &task_id {
+                session = SessionKey::shared_task(&bot, msg.chatid.as_deref().unwrap(), task);
+            }
+        } else if crate::wecom_tasks::is_task_command(&user_text) {
+            send_finish(
+                &self.sock,
+                &msg.req_id,
+                &stream_id,
+                "共享任务仅在群内创建和加入；私聊保持个人会话。",
+            )
+            .await;
+            return;
+        }
+        let owner = crate::wecom_channel::ApprovalOwner {
+            bot: bot.clone(),
+            chat: if is_group {
+                msg.chatid.clone().unwrap()
+            } else {
+                format!("dm:{}", msg.userid)
+            },
+            user: msg.userid.clone(),
+            session: session.as_str(),
+        };
+        if let Some(answer) = self.try_resolve_approval(&app, &user_text, &owner).await {
+            send_finish(&self.sock, &msg.req_id, &stream_id, &answer).await;
+            return;
+        }
         // 「停止」指令：在拿会话串行锁**之前**处理（上一轮没结束它拿不到锁）。
         // 真正取消那一轮并给卡住的「正在思考…」气泡补一帧 finish，而不是当普通消息答一句。
         if is_stop_command(&user_text) {
             let key = session.as_str();
             let running = {
                 let mut map = self.running.lock().await;
+                if map.get(&key).is_some_and(|rt| {
+                    rt.initiator != msg.userid && task_owner.as_deref() != Some(msg.userid.as_str())
+                }) {
+                    drop(map);
+                    send_finish(
+                        &self.sock,
+                        &msg.req_id,
+                        &stream_id,
+                        "共享任务仅当前轮发起人或任务创建者可停止。",
+                    )
+                    .await;
+                    return;
+                }
                 map.remove(&key)
             };
             match running {
@@ -342,48 +460,35 @@ impl Orchestrator {
                     )
                     .await;
                     // 再对「停止」这条本身回执一句。
-                    let _ = self
-                        .sock
-                        .send_raw(wecom_proto::respond_stream(
-                            &msg.req_id,
-                            &format!("stop-{}", msg.msgid),
-                            "已停止当前任务。",
-                            true,
-                        ))
-                        .await;
+                    send_finish(&self.sock, &msg.req_id, &stream_id, "已停止当前任务。").await;
                 }
                 None => {
                     crate::wecom_log::write(
                         "stop",
                         &format!("msgid={} 会话 {key} 无在跑回合", msg.msgid),
                     );
-                    let _ = self
-                        .sock
-                        .send_raw(wecom_proto::respond_stream(
-                            &msg.req_id,
-                            &format!("stop-{}", msg.msgid),
-                            "当前没有正在进行的任务。",
-                            true,
-                        ))
-                        .await;
+                    send_finish(
+                        &self.sock,
+                        &msg.req_id,
+                        &stream_id,
+                        "当前没有正在进行的任务。",
+                    )
+                    .await;
                 }
             }
             return;
         }
 
-        if self.global_jobs.load(Ordering::SeqCst) >= self.max_jobs.load(Ordering::SeqCst) {
-            let tip = "当前还有任务在跑，请稍后再试。";
-            let _ = self
-                .sock
-                .send_raw(wecom_proto::respond_stream(
-                    &msg.req_id,
-                    &format!("busy-{}", msg.msgid),
-                    tip,
-                    true,
-                ))
-                .await;
+        let Some(queued) = self.admission.queue(&session.as_str()) else {
+            send_finish(
+                &self.sock,
+                &msg.req_id,
+                &stream_id,
+                "本会话已有8条消息等待处理，请稍后再试。",
+            )
+            .await;
             return;
-        }
+        };
 
         let lock = {
             let key = session.as_str();
@@ -393,7 +498,6 @@ impl Orchestrator {
                 .clone()
         };
 
-        let stream_id = format!("stream-{}", msg.msgid);
         // 平台对「收到消息后的首次应答」有时间窗，而引擎冷启动 / 模型首 token 都可能更久；
         // 先无条件占位一条（同一个 stream id），后面的正文继续更新它，避免整轮被平台丢掉。
         // 注意：占位要在拿会话锁**之前**——同一会话上一轮如果卡住，这一条至少不会无声无息。
@@ -412,6 +516,7 @@ impl Orchestrator {
         );
 
         // 同会话串行：上一轮如果卡住，这里先说明在排队，别让用户以为消息丢了。
+        let queue_started = Instant::now();
         let _session_guard = match tokio::time::timeout(SESSION_QUEUE_NOTE, lock.lock()).await {
             Ok(guard) => guard,
             Err(_) => {
@@ -428,13 +533,101 @@ impl Orchestrator {
             }
         };
 
+        crate::wecom_performance::mark_queue(
+            &format!("wecom-preflight-{}", msg.msgid),
+            queue_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        );
+        drop(queued);
+        if let Some(task) = &task_id {
+            let db = app.state::<crate::DbState>().conn.clone();
+            let (b, g, u, t) = (
+                bot.clone(),
+                msg.chatid.clone().unwrap(),
+                msg.userid.clone(),
+                task.clone(),
+            );
+            let valid = tokio::task::spawn_blocking(move || {
+                let c = db.lock().map_err(|_| "db lock".to_string())?;
+                crate::wecom_tasks::is_member(
+                    &c,
+                    &b,
+                    &g,
+                    &t,
+                    &u,
+                    chrono::Utc::now().timestamp_millis(),
+                )
+            })
+            .await;
+            if !matches!(valid, Ok(Ok(true))) {
+                send_finish(
+                    &self.sock,
+                    &msg.req_id,
+                    &stream_id,
+                    "共享任务已结束、过期或已退出，本条待处理消息已取消。",
+                )
+                .await;
+                return;
+            }
+        }
+        let Some(_execution_permit) = self.admission.try_acquire() else {
+            send_finish(
+                &self.sock,
+                &msg.req_id,
+                &stream_id,
+                "当前全局并发已满，请稍后再试。",
+            )
+            .await;
+            return;
+        };
+
+        let owner_keys = [
+            format!("wecom-{}", msg.msgid),
+            format!("wecom-preflight-{}", msg.msgid),
+        ];
+        {
+            let st = app.state::<WecomState>();
+            let mut owners = st.approval_owners.lock().await;
+            for k in &owner_keys {
+                owners.insert(k.clone(), owner.clone());
+            }
+        }
+        struct OwnerCleanup {
+            app: AppHandle,
+            keys: [String; 2],
+        }
+        impl Drop for OwnerCleanup {
+            fn drop(&mut self) {
+                let app = self.app.clone();
+                let keys = self.keys.clone();
+                tauri::async_runtime::spawn(async move {
+                    let st = app.state::<WecomState>();
+                    let mut map = st.approval_owners.lock().await;
+                    for k in keys {
+                        map.remove(&k);
+                        st.out_targets.lock().await.remove(&k);
+                        st.pending_approvals
+                            .lock()
+                            .await
+                            .retain(|_, p| p.request_id != k);
+                    }
+                });
+            }
+        }
+        let _owner_cleanup = OwnerCleanup {
+            app: app.clone(),
+            keys: owner_keys,
+        };
+        if let Some(task) = &task_id {
+            if let Ok(mut labels) = reply_task_labels().lock() {
+                labels.insert(stream_id.clone(), task.clone());
+            }
+            user_text = format!("【共享任务 {task}；发起用户 {}】\n{user_text}", msg.userid);
+        }
         // 引擎分流：DSH 档不读天玑的模型快照，直接交给常驻 ACP 进程。
         if engine_name == "dsh" {
-            self.global_jobs.fetch_add(1, Ordering::SeqCst);
             let result = self
                 .run_dsh_turn(&app, &msg, &session, &user_text, &stream_id)
                 .await;
-            self.global_jobs.fetch_sub(1, Ordering::SeqCst);
             if let Err(e) = result {
                 eprintln!("[wecom] dsh turn failed: {e}");
                 let repo = self.dsh_workspace(&app).await;
@@ -442,15 +635,7 @@ impl Orchestrator {
                     &format!("出错了：{}", crate::wecom_dsh::friendly_turn_error(&e)),
                     &repo,
                 );
-                let _ = self
-                    .sock
-                    .send_raw(wecom_proto::respond_stream(
-                        &msg.req_id,
-                        &stream_id,
-                        &tip,
-                        true,
-                    ))
-                    .await;
+                send_finish(&self.sock, &msg.req_id, &stream_id, &tip).await;
             }
             return;
         }
@@ -459,15 +644,7 @@ impl Orchestrator {
             Some(c) => c,
             None => {
                 let tip = "企微通道未绑定模型：请在设置里保存一次配置。";
-                let _ = self
-                    .sock
-                    .send_raw(wecom_proto::respond_stream(
-                        &msg.req_id,
-                        &stream_id,
-                        tip,
-                        true,
-                    ))
-                    .await;
+                send_finish(&self.sock, &msg.req_id, &stream_id, tip).await;
                 return;
             }
         };
@@ -478,22 +655,25 @@ impl Orchestrator {
         // 记录当前回合的出站目标，供 wecom_send_image/file 把媒体发回同一条对话
         {
             let st = app.state::<WecomState>();
-            *st.last_target.lock().await = Some(crate::wecom_channel::OutTarget {
-                req_id: msg.req_id.clone(),
-                stream_id: format!("s-{}", msg.msgid),
-            });
+            st.out_targets.lock().await.insert(
+                format!("wecom-{}", msg.msgid),
+                crate::wecom_channel::OutTarget {
+                    req_id: msg.req_id.clone(),
+                    stream_id: format!("s-{}", msg.msgid),
+                },
+            );
         }
-
-        self.global_jobs.fetch_add(1, Ordering::SeqCst);
         let result = self
             .run_agent_and_stream(&app, &msg, &session, &user_text, user_msg, agent_cfg)
             .await;
-        self.global_jobs.fetch_sub(1, Ordering::SeqCst);
 
         // 回合结束，清掉出站目标
         {
             let st = app.state::<WecomState>();
-            *st.last_target.lock().await = None;
+            st.out_targets
+                .lock()
+                .await
+                .remove(&format!("wecom-{}", msg.msgid));
         }
 
         if let Err(e) = result {
@@ -508,15 +688,7 @@ impl Orchestrator {
                     .unwrap_or_default();
                 redact_local_paths(&format!("出错了：{e}"), &repo)
             };
-            let _ = self
-                .sock
-                .send_raw(wecom_proto::respond_stream(
-                    &msg.req_id,
-                    &stream_id,
-                    &tip,
-                    true,
-                ))
-                .await;
+            send_finish(&self.sock, &msg.req_id, &stream_id, &tip).await;
         }
     }
 
@@ -535,34 +707,53 @@ impl Orchestrator {
         stream_id: &str,
     ) -> Result<(), String> {
         let request = format!("wecom-preflight-{}", msg.msgid);
+        if session_closed(&session.as_str()) {
+            return Ok(());
+        }
+        let _total_phase = crate::wecom_performance::Phase::new(&request, "total", 0);
         let _guard = crate::cancellation::CancelGuard::new(&request);
         self.running.lock().await.insert(
             session.as_str(),
             RunningTurn {
                 req_id: msg.req_id.clone(),
                 stream_id: stream_id.to_string(),
+                initiator: msg.userid.clone(),
                 cancel: CancelHandle::Tianji {
                     request_id: request.clone(),
                 },
             },
         );
+        if session_closed(&session.as_str()) {
+            crate::cancellation::cancel_request(&request);
+        }
         let result = tokio::select! {
             biased;
             _ = async {
                 loop {
-                    if crate::cancellation::is_cancelled(&request) { break; }
+                    if crate::cancellation::is_cancelled(&request) || session_closed(&session.as_str()) { break; }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-            } => Ok(()),
+            } => {
+                send_finish(&self.sock, &msg.req_id, stream_id, "已停止，本轮已取消。").await;
+                append_reply_history(session,user_text,stream_id,"");
+                Ok(())
+            },
             _ = tokio::time::sleep(DSH_TURN_TIMEOUT) => {
                 crate::cancellation::cancel_request(&request);
                 if let Some(rt) = self.running.lock().await.get(&session.as_str()) { rt.cancel(); }
                 send_finish(&self.sock, &msg.req_id, stream_id, "排障回合达到600秒期限，已停止；未完成项不视为查询无数据。").await;
+                append_reply_history(session,user_text,stream_id,"");
                 Ok(())
             },
             result = self.run_dsh_turn_inner(app, msg, session, user_text, stream_id, &request) => result,
         };
         self.unregister_running(session, stream_id).await;
+        if session_closed(&session.as_str()) {
+            app.state::<WecomState>()
+                .dsh
+                .reset_channel_session(&session.as_str())
+                .await;
+        }
         result
     }
 
@@ -608,7 +799,7 @@ impl Orchestrator {
         let context_key = crate::wecom_investigation::context_key(
             &bot,
             &session.as_str(),
-            &msg.userid,
+            &session.as_str(),
             &repo,
             &addr,
             &header,
@@ -631,6 +822,8 @@ impl Orchestrator {
         tokio::pin!(investigation);
         let mut progress_clock = Instant::now() - Duration::from_secs(1);
         let mut progress_open = true;
+        let collect_phase =
+            crate::wecom_performance::Phase::new(preflight_request, "acquisition", 0);
         let mut outcome = loop {
             tokio::select! {
                 result = &mut investigation => break result?,
@@ -646,18 +839,26 @@ impl Orchestrator {
                 }
             }
         };
+        drop(collect_phase);
         if crate::cancellation::is_cancelled(preflight_request) {
             return Ok(());
         }
         // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
         if source_failure_reply(&outcome) {
-            send_finish(&self.sock, &req_id, stream_id, &redact(&outcome.context)).await;
-            wecom_session::append_turn(session, user_text, &redact(&outcome.context));
+            let body = redact(&crate::wecom_report::fallback(
+                outcome.query.as_ref(),
+                "",
+                &outcome.context,
+            ));
+            send_finish(&self.sock, &req_id, stream_id, &body).await;
+            append_reply_history(session, user_text, stream_id, &body);
             return Ok(());
         }
         // 冷启动 / 首次初始化 profile 可能要几十秒：启动放在独立任务里跑（它要拿引擎的
         // start 锁），这里只等结果；超过 3 秒就在**同一个** stream id 上更新一句进度，
         // 不另外开消息（平台对首帧的时间窗已经用 on_msg 的占位帧满足了）。
+        let ready_phase =
+            crate::wecom_performance::Phase::new(preflight_request, "engine_ready", 0);
         let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
         let dsh = Arc::clone(&engine);
         tauri::async_runtime::spawn(async move {
@@ -682,12 +883,21 @@ impl Orchestrator {
             }
         };
         ready.map_err(|e| format!("DSH 引擎未就绪：{e}"))?;
+        drop(ready_phase);
+        let session_phase =
+            crate::wecom_performance::Phase::new(preflight_request, "session_setup", 0);
 
         let key = session.as_str();
         if crate::wecom_investigation_query::starts_new_investigation(user_text) {
             engine.reset_channel_session(&key).await;
         }
-        let acp_session = engine.acquire_session(&key).await?;
+        let (acp_session, session_action) = engine.acquire_session_with_action(&key).await?;
+        crate::wecom_performance::record_session(
+            preflight_request,
+            &session_action,
+            "unobserved",
+            "configured",
+        );
         crate::wecom_log::write(
             "dsh",
             &format!("msgid={} key={key} session={acp_session}", msg.msgid),
@@ -707,7 +917,30 @@ impl Orchestrator {
                 &format!("msgid={} apply_selection timeout", msg.msgid),
             ),
         }
-        let mut evidence = outcome.context.clone();
+        drop(session_phase);
+        let mut store = crate::wecom_evidence_store::EvidenceStore::new();
+        store.insert(&outcome.context);
+        let mut evidence = store.full_context();
+        let mut next_payload = store.bounded_prompt(16_000);
+        if outcome.may_analyze {
+            let source_evidence = evidence.clone();
+            let source_repo = repo.clone();
+            let hints = tokio::task::spawn_blocking(move || {
+                crate::wecom_source_hints::hints(&source_evidence, &source_repo)
+            })
+            .await
+            .unwrap_or_default();
+            if !hints.is_empty() {
+                let clipped: String = hints.chars().take(8_000).collect();
+                next_payload.push_str(&format!("\n【日志对应的定点源码线索；已验证当前文件内容，优先核对而非全库扫描】\n{clipped}"));
+                if hints.chars().count() > 8_000 {
+                    next_payload.push_str(
+                        "\n源码线索展示已截断，按相对路径定点展开；不可据省略内容断因。\n",
+                    );
+                }
+            }
+        }
+        let mut final_report: Option<crate::wecom_report::DiagnosticReport> = None;
         let mut has_evidence = outcome.may_analyze;
         let mut assessed_level = "unknown".to_string();
         let mut assessed_gaps = outcome.decision_gaps.clone();
@@ -715,8 +948,10 @@ impl Orchestrator {
         let mut forced_context_used = false;
         if outcome.source_ready {
             if let Some(original) = outcome.query.clone() {
-                for round in 0..2 {
-                    if outcome.budget.remaining() == 0 || outcome.collected_ms >= 120_000 {
+                let mut query_round = 0usize;
+                let mut expansion_round = 0usize;
+                for _analysis_pass in 0..4 {
+                    if tokio::time::Instant::now() >= turn_deadline {
                         break;
                     }
                     let note = if has_evidence {
@@ -728,8 +963,9 @@ impl Orchestrator {
                         .sock
                         .send_raw(wecom_proto::respond_stream(&req_id, stream_id, note, false))
                         .await;
-                    let instruction = format!("{}\n原问题：{}\n固定查询范围：{} 至 {}\n已有证据：{}\n本次只输出JSON补查计划，不输出最终业务分析。没有日志时只查项目日志配置、服务标识、字段别名和日志模板；不要搜索本地.log，不要把业务ID在源码无命中当故障证据。",
-                        crate::wecom_investigation_plan::planning_instruction(), user_text, original.start, original.end, evidence);
+                    let budget_hint = format!("宿主剩余HTTP={}，剩余采集={}ms，已补查={}轮。余额不足时不要再生成查询计划，直接输出当前已验证的result/direct_cause层级diagnostic_report并将影响当前结论与扩展取证的缺口分开列出。",outcome.budget.remaining(),120_000u64.saturating_sub(outcome.collected_ms),query_round);
+                    let instruction = format!("{budget_hint}\n{}\n原问题：{}\n固定查询范围：{} 至 {}\n已有证据：{}\n本次只输出协议JSON：需要查日志给queries，需要展开已采集摘录给read_evidence_ids，已有证据则直接给diagnostic_report，用summary/时间线/分层原因/代码核对/误判线索/缺口构成完整报告，禁止只给机器式claims清单，不要先输出停止计划再重复总结。以下仅为本轮新增证据/索引，之前证据在同会话内沿用；已核验且未改变的代码不要重复读。没有日志时只查项目日志配置、服务标识、字段别名和日志模板；不要搜索本地.log，不要把业务ID在源码无命中当故障证据。",
+                        crate::wecom_investigation_plan::planning_instruction(), user_text, original.start, original.end, next_payload);
                     let mut draft = self
                         .dsh_plan_text(
                             app,
@@ -740,13 +976,24 @@ impl Orchestrator {
                             &req_id,
                             stream_id,
                             turn_deadline,
+                            if _analysis_pass == 0 {
+                                "planning_initial"
+                            } else if expansion_round > 0 && query_round == 0 {
+                                "evidence_expand"
+                            } else {
+                                "planning_followup"
+                            },
                         )
                         .await?;
                     let mut parsed = crate::wecom_investigation_plan::parse_plan(
                         &draft, &original, &evidence, &repo,
                     );
                     if let Err(error) = &parsed {
-                        draft = self.dsh_plan_text(app, &engine, &acp_session, &format!("补查计划未通过本地校验：{error}。请修正一次，仅输出符合schema的JSON；不要执行计划。{}", crate::wecom_investigation_plan::planning_instruction()), preflight_request, &req_id, stream_id, turn_deadline).await?;
+                        crate::wecom_performance::note_validation(
+                            preflight_request,
+                            crate::wecom_investigation_plan::validation_error_code(error),
+                        );
+                        draft = self.dsh_plan_text(app, &engine, &acp_session, &format!("补查计划未通过本地校验：{error}。请修正一次，仅输出符合schema的JSON；不要执行计划。{}", crate::wecom_investigation_plan::planning_instruction()), preflight_request, &req_id, stream_id, turn_deadline, "planning_repair").await?;
                         parsed = crate::wecom_investigation_plan::parse_plan(
                             &draft, &original, &evidence, &repo,
                         );
@@ -763,6 +1010,42 @@ impl Orchestrator {
                     assessed_level = plan.conclusion_level.clone();
                     assessed_gaps = plan.gaps.clone();
                     last_stop_reason = plan.stop_reason.clone();
+                    let candidate = plan.diagnostic_report.clone().or_else(|| {
+                        plan.final_answer.as_ref().map(|a| {
+                            crate::wecom_report::from_legacy(
+                                a,
+                                &assessed_level,
+                                &assessed_gaps,
+                                &last_stop_reason,
+                            )
+                        })
+                    });
+                    if let Some(report) = candidate {
+                        let allowed = if plan.diagnostic_report.is_some()
+                            && !report.gaps.iter().any(|g| g.blocking)
+                            && outcome.may_analyze
+                        {
+                            report.level.as_str()
+                        } else {
+                            permitted_conclusion_level(&assessed_level, &assessed_gaps, &outcome)
+                        };
+                        if can_render_verified_answer(&assessed_level, allowed, has_evidence) {
+                            // Direct rendering avoids a second model summary without bypassing coverage limits.
+                            final_report = Some(report);
+                            break;
+                        }
+                        assessed_gaps
+                            .push("结构化结论超过当前证据覆盖允许层级，需要保留未完成项".into());
+                    }
+                    if !plan.read_evidence_ids.is_empty() {
+                        if expansion_round >= 1 {
+                            last_stop_reason = "已达本轮摘录展开次数上限".into();
+                            break;
+                        }
+                        next_payload = store.expand(&plan.read_evidence_ids, 12_000)?;
+                        expansion_round += 1;
+                        continue;
+                    }
                     let missing_decision = !assessed_gaps.is_empty()
                         || !outcome.decision_gaps.is_empty()
                         || outcome.incomplete_pages > 0
@@ -780,12 +1063,20 @@ impl Orchestrator {
                     if plan.queries.is_empty() {
                         break;
                     }
+                    if query_round >= 2
+                        || outcome.budget.remaining() == 0
+                        || outcome.collected_ms >= 120_000
+                    {
+                        last_stop_reason = "日志补查已达次数/预算上限，保留当前证据".into();
+                        break;
+                    }
+                    query_round += 1;
                     let _ = self
                         .sock
                         .send_raw(wecom_proto::respond_stream(
                             &req_id,
                             stream_id,
-                            &format!("正在执行第{}轮代码线索补查…", round + 1),
+                            &format!("正在执行第{}轮代码线索补查…", query_round),
                             false,
                         ))
                         .await;
@@ -804,27 +1095,15 @@ impl Orchestrator {
                     has_evidence |= extra.may_analyze;
                     let extra_context = extra
                         .context
-                        .replace("[L", &format!("[R{}L", round + 1))
-                        .replace("[T", &format!("[R{}T", round + 1));
-                    evidence.push_str(&format!(
-                        "\n【补查轮次{}；来源候选：{}】\n{}",
-                        round + 1,
-                        plan.reason,
-                        extra_context
+                        .replace("[L", &format!("[R{}L", query_round))
+                        .replace("[T", &format!("[R{}T", query_round));
+                    next_payload = store.insert(&format!(
+                        "【补查轮次{}；来源候选：{}】\n{}",
+                        query_round, plan.reason, extra_context
                     ));
-                    // The latest round is bounded, and only source metadata is retained across turns.
-                    if evidence.chars().count() > 48_000 {
-                        // Retain the newest targeted evidence instead of silently cutting it off after a large first batch.
-                        let tail: String = extra_context.chars().take(24_000).collect();
-                        let head: String = evidence.chars().take(23_500).collect();
-                        evidence = format!("{head}\n【累计证据摘录：早期记录部分省略；以下优先保留最新补查】\n{tail}\n覆盖不完整，不据缺失记录断因。\n");
-                        outcome.truncated_count = outcome.truncated_count.saturating_add(1);
-                        outcome.status = crate::wecom_investigation::InvestigationStatus::Partial;
-                        outcome
-                            .decision_gaps
-                            .push("累计证据超过48k，早期记录部分未完整展示".into());
-                        crate::wecom_investigation::record_cumulative(&outcome, preflight_request);
-                        break;
+                    evidence = store.full_context();
+                    if next_payload.chars().count() > 20_000 {
+                        next_payload = format!("本轮新增证据较多，先看优先摘录及索引，缺少记录可read_evidence_ids展开。\n{}", store.bounded_prompt(20_000));
                     }
                     if !extra.source_ready {
                         break;
@@ -832,9 +1111,13 @@ impl Orchestrator {
                 }
             }
             if !has_evidence {
-                let body = redact(&format!("本轮尚未取得该业务的真实日志证据，未生成业务根因结论。\n{}\n请核对环境、日志保留周期或提供可查的服务/请求标识。", evidence));
+                let body = redact(&crate::wecom_report::fallback(
+                    outcome.query.as_ref(),
+                    &store.full_context(),
+                    "本轮尚未取得足够业务证据；核对环境、时间范围和业务标识后继续取证。",
+                ));
                 send_finish(&self.sock, &req_id, stream_id, &body).await;
-                wecom_session::append_turn(session, user_text, &body);
+                append_reply_history(session, user_text, stream_id, &body);
                 return Ok(());
             }
         }
@@ -844,8 +1127,27 @@ impl Orchestrator {
             }
         }
         crate::wecom_investigation::record_cumulative(&outcome, preflight_request);
+        if has_evidence {
+            if let (Some(report), Some(original)) = (final_report, outcome.query.as_ref()) {
+                let rendered =
+                    crate::wecom_report::render(&report, original, &store.full_context());
+                let body = redact(&rendered);
+                let mut phase = crate::wecom_performance::Phase::new(
+                    preflight_request,
+                    "render_verified_answer",
+                    0,
+                );
+                phase.output(&body);
+                send_finish(&self.sock, &req_id, stream_id, &body).await;
+                append_reply_history(session, user_text, stream_id, &body);
+                return Ok(());
+            }
+        }
+        let protected_answer = !outcome.context.is_empty();
+        let answer_level =
+            permitted_conclusion_level(&assessed_level, &assessed_gaps, &outcome).to_string();
         let evidence_rules = if has_evidence {
-            let level = permitted_conclusion_level(&assessed_level, &assessed_gaps, &outcome);
+            let level = if has_evidence { "trigger_verified（仅限真实规则/判定值/代码引用齐备且无阻断性缺口的局部结论；否则direct_cause或result）" } else { "unknown" };
             format!("\n结论分层评审：允许最高层级={level}；模型停止理由={last_stop_reason}；尚未解释的决策={:?}；未完成页={}；截断记录={}。必须依次列出结果、直接原因、具体触发原因。过滤为0/STATUS_FILTERED_EMPTY仅是失败出口，不等于已定位具体过滤器。未取得实际规则、判定值及WARN/异常证据时，写‘已确认失败出口，具体触发原因尚未确认’，禁止‘证据链已闭合/根因直接命中’。正常span仅表示没有APM技术错误，不能据此排除业务警告、被捕获异常或降级。先引用日志和时间，再用代码解释分支，再用补查验证。共用兜底文案不唯一指向去重/库存/价格；缺日志不等于分支未执行；说明分页、采样、异步与版本覆盖。", assessed_gaps, outcome.incomplete_pages, outcome.truncated_count)
         } else {
             String::new()
@@ -854,10 +1156,19 @@ impl Orchestrator {
             user_text,
             &msg.media,
             engine.image_prompt_enabled().await,
-            &format!("{mode_rules}{evidence_rules}"),
-            &evidence,
+            &format!("{mode_rules}{evidence_rules}{}", if protected_answer { format!("\n最终输出只用于内部验证和统一渲染，用户不会看到JSON。输出{{\"queries\":[],\"reason\":\"简短停止理由\",\"conclusion_level\":\"与报告相同\",\"gaps\":[],\"diagnostic_report\":<下列契约>}}；完整报告的时间/原文由宿主证据提供，勿发自由Markdown或旧claims代替。耗时由宿主追加。\n{}",crate::wecom_report::schema_instruction()) } else { String::new() }),
+            &if has_evidence { format!("沿用同会话已返回的证据与核验源码，不要重复全库检索。按最新补查结果直接回答；需要的证据编号如下：\n{}", store.render_index()) } else { evidence.clone() },
         )
         .await;
+        let mut answer_phase = crate::wecom_performance::Phase::new(
+            preflight_request,
+            "final_model",
+            prompt_blocks
+                .iter()
+                .filter_map(|b| b["text"].as_str())
+                .map(|s| s.chars().count())
+                .sum(),
+        );
         let mut turn = engine.prompt(&acp_session, prompt_blocks).await?;
 
         // 登记为该会话「在跑的回合」，供「停止」指令 session/cancel + 收尾气泡。
@@ -868,6 +1179,7 @@ impl Orchestrator {
                 RunningTurn {
                     req_id: req_id.clone(),
                     stream_id: stream_id.to_string(),
+                    initiator: msg.userid.clone(),
                     cancel: CancelHandle::Dsh {
                         responder: turn.responder(),
                     },
@@ -876,6 +1188,7 @@ impl Orchestrator {
         }
 
         let mut acc = String::new();
+        let mut answer_buffer = crate::wecom_answer::AnswerBuffer::new(protected_answer);
         let mut last_push = InstantApprox::now();
         let mut last_event = std::time::Instant::now();
         // 最近一次动作（工具名），用来解释「为什么还在等」。
@@ -893,7 +1206,7 @@ impl Orchestrator {
                 // 提示按 90s / 180s / 270s… 递增间隔，最多 5 次，不刷屏。
                 _ = tick.tick() => {
                     let due = DSH_STALL_NOTE + Duration::from_secs(90 * stall_notes as u64);
-                    if last_event.elapsed() >= due && stall_notes < 5 {
+                    if last_event.elapsed() >= due && stall_notes < 5 && !crate::wecom_reply::is_finished(stream_id) {
                         stall_notes += 1;
                         let what = if last_activity.is_empty() {
                             "模型还在思考".to_string()
@@ -934,6 +1247,7 @@ impl Orchestrator {
             };
             match event {
                 Some(DshEvent::Update(update)) => {
+                    answer_phase.event();
                     last_event = std::time::Instant::now();
                     let kind = update
                         .get("sessionUpdate")
@@ -947,9 +1261,16 @@ impl Orchestrator {
                             .and_then(|c| c.get("text"))
                             .and_then(|v| v.as_str())
                         {
-                            acc.push_str(text);
+                            answer_phase.output(text);
+                            answer_buffer.push(text);
+                            if !protected_answer {
+                                acc.push_str(text);
+                            }
                         }
-                        if last_push.elapsed_ms() >= 400 || acc.chars().count() < 40 {
+                        if !protected_answer
+                            && !crate::wecom_reply::is_finished(stream_id)
+                            && (last_push.elapsed_ms() >= 400 || acc.chars().count() < 40)
+                        {
                             let out = redact(&acc);
                             if let Err(e) = self
                                 .sock
@@ -966,6 +1287,9 @@ impl Orchestrator {
                             last_push = InstantApprox::now();
                         }
                     } else if kind == "tool_call" || kind == "tool_call_update" {
+                        if kind == "tool_call" {
+                            answer_phase.tool();
+                        }
                         if let Some(title) = update
                             .get("title")
                             .and_then(|v| v.as_str())
@@ -1003,7 +1327,8 @@ impl Orchestrator {
                     open_approvals.push(rpc_id);
                     let summary = permission_summary(&params);
                     let (allow_option, reject_option) = permission_options(&params);
-                    let (code, reply) = register_dsh_approval(app, summary.clone()).await;
+                    let (code, reply) =
+                        register_dsh_approval(app, summary.clone(), preflight_request).await;
                     let tip = format!(
                         "🔐 DeepSeek Harness 需要你确认：{summary}\n回复「{code} 1」同意；回复「{code} 2」拒绝（5 分钟内有效）。",
                         summary = summary,
@@ -1063,7 +1388,20 @@ impl Orchestrator {
                                 "cancelled" => "\n\n（本轮已取消）",
                                 _ => "",
                             };
-                            if acc.trim().is_empty() {
+                            if protected_answer && stop != "cancelled" {
+                                let shown = answer_buffer.finish_with_report_ceiling(
+                                    outcome.query.as_ref(),
+                                    &store.full_context(),
+                                    &repo,
+                                    &answer_level,
+                                    if has_evidence {
+                                        "trigger_verified"
+                                    } else {
+                                        "unknown"
+                                    },
+                                );
+                                format!("{}{}", redact(&shown), note)
+                            } else if acc.trim().is_empty() {
                                 if stop == "cancelled" {
                                     "（本轮已取消）".to_string()
                                 } else {
@@ -1106,7 +1444,7 @@ impl Orchestrator {
         }
         // 注销「在跑回合」登记（仅当还是本回合时移除，避免误删后来者）。
         self.unregister_running(session, stream_id).await;
-        wecom_session::append_turn(session, user_text, &final_text);
+        append_reply_history(session, user_text, &stream_id, &final_text);
         Ok(())
     }
 
@@ -1121,7 +1459,10 @@ impl Orchestrator {
         req_id: &str,
         stream_id: &str,
         deadline: tokio::time::Instant,
+        phase_name: &'static str,
     ) -> Result<String, String> {
+        let mut phase =
+            crate::wecom_performance::Phase::new(request, phase_name, prompt.chars().count());
         let mut turn = engine
             .prompt(acp_session, vec![crate::wecom_dsh::acp_text_block(prompt)])
             .await?;
@@ -1181,6 +1522,7 @@ impl Orchestrator {
                     if update["sessionUpdate"] == "agent_message_chunk" =>
                 {
                     if let Some(chunk) = update["content"]["text"].as_str() {
+                        phase.output(chunk);
                         text.push_str(chunk);
                         if text.len() > 64 * 1024 {
                             turn.cancel();
@@ -1191,7 +1533,7 @@ impl Orchestrator {
                 Some(DshEvent::Permission { rpc_id, params }) => {
                     let summary = permission_summary(&params);
                     let (allow, reject) = permission_options(&params);
-                    let (code, reply) = register_dsh_approval(app, summary.clone()).await;
+                    let (code, reply) = register_dsh_approval(app, summary.clone(), request).await;
                     cleanup.approvals.push((code.clone(), rpc_id));
                     let tip = redact_local_paths(&format!("日志取证需确认：{summary}\n回复「{code} 1」允许一次；「{code} 2」取消（5分钟有效）"), &engine.workspace().await);
                     let _ = self
@@ -1213,6 +1555,12 @@ impl Orchestrator {
                         responder.answer_permission(rpc_id, answer.as_deref());
                     });
                 }
+                Some(DshEvent::Update(update)) => {
+                    phase.event();
+                    if update["sessionUpdate"] == "tool_call" {
+                        phase.tool();
+                    }
+                }
                 Some(DshEvent::Done(Ok(result))) => {
                     if result["stopReason"] == "cancelled" {
                         break Err("cancelled: DSH计划已取消".into());
@@ -1221,7 +1569,6 @@ impl Orchestrator {
                 }
                 Some(DshEvent::Done(Err(e))) => break Err(e),
                 None => break Err("DSH计划会话意外结束".into()),
-                _ => {}
             }
         };
         if result.is_ok() {
@@ -1295,6 +1642,9 @@ impl Orchestrator {
     ) -> Result<(), String> {
         let request_id = format!("wecom-{}", msg.msgid);
         let stream_id = format!("stream-{}", msg.msgid);
+        if session_closed(&session.as_str()) {
+            return Ok(());
+        }
         let history = wecom_session::session_history(session);
 
         // 登记为该会话「在跑的回合」：「停止」指令据此 cancel_request + 收尾气泡。
@@ -1305,6 +1655,7 @@ impl Orchestrator {
                 RunningTurn {
                     req_id: msg.req_id.clone(),
                     stream_id: stream_id.clone(),
+                    initiator: msg.userid.clone(),
                     cancel: CancelHandle::Tianji {
                         request_id: request_id.clone(),
                     },
@@ -1414,7 +1765,7 @@ impl Orchestrator {
             let redact = |s: &str| redact_local_paths(s, &repo_for_redact);
             let mut acc = String::new();
             let mut last_push = InstantApprox::now();
-            let mut approval_told = false;
+            let mut seen_approvals = std::collections::HashSet::new();
             // 看门狗：比审批 5 分钟 TTL 和模型 120s 空闲超时都长；超过它没有任何事件就强制收尾
             let watchdog = std::time::Duration::from_secs(420);
             loop {
@@ -1435,7 +1786,9 @@ impl Orchestrator {
                     Some(AgentBridgeEvent::Chunk(t)) => {
                         acc.push_str(&t);
                         // 节流推流，避免每 token 打一帧
-                        if last_push.elapsed_ms() >= 400 || acc.chars().count() < 40 {
+                        if !crate::wecom_reply::is_finished(&stream_id_clone)
+                            && (last_push.elapsed_ms() >= 400 || acc.chars().count() < 40)
+                        {
                             let out = redact(&acc);
                             let _ = sock
                                 .send_raw(wecom_proto::respond_stream(
@@ -1453,8 +1806,9 @@ impl Orchestrator {
                         summary,
                         can_remember,
                     }) => {
-                        if !approval_told {
-                            approval_told = true;
+                        if seen_approvals.insert(call_ids.clone())
+                            && !crate::wecom_reply::is_finished(&stream_id_clone)
+                        {
                             let code = register_approval(
                                 &pump_app,
                                 &pump_request_id,
@@ -1517,7 +1871,14 @@ impl Orchestrator {
             }
         });
 
-        let run_result = crate::agent::agent_run(app.clone(), req).await;
+        let run_result = tokio::select! {
+            biased;
+            _=async {loop {if session_closed(&session.as_str()){break;}tokio::time::sleep(Duration::from_millis(100)).await;}} => {
+                crate::cancellation::cancel_request(&request_id);
+                Err("共享任务已结束".to_string())
+            },
+            result=crate::agent::agent_run(app.clone(), req)=>result,
+        };
         unsubscribe_agent_bridge(&request_id);
         let final_text = pump.await.unwrap_or_default();
 
@@ -1527,17 +1888,22 @@ impl Orchestrator {
         if let Err(e) = run_result {
             // pump 可能已经 finish；仍记历史
             if !final_text.is_empty() {
-                wecom_session::append_turn(session, user_text, &final_text);
+                append_reply_history(session, user_text, &stream_id, &final_text);
             }
             return Err(e);
         }
-        wecom_session::append_turn(session, user_text, &final_text);
+        append_reply_history(session, user_text, &stream_id, &final_text);
         Ok(())
     }
 
     /// 若 `text` 形如「AB12 1/2/3」，则视作对某个待决审批的回复：解析并回灌到 harness。
     /// 返回要给用户的回复文案（None = 不是审批回复，按普通消息继续）。
-    async fn try_resolve_approval(&self, app: &AppHandle, text: &str) -> Option<String> {
+    async fn try_resolve_approval(
+        &self,
+        app: &AppHandle,
+        text: &str,
+        owner: &crate::wecom_channel::ApprovalOwner,
+    ) -> Option<String> {
         let t = text.trim();
         // 群聊回复可能带 @机器人 前缀：先剥掉整个 @token 再匹配审批码
         let t = if t.starts_with('@') {
@@ -1566,6 +1932,12 @@ impl Orchestrator {
             let Some(pending) = map.get(&code) else {
                 return None;
             };
+            if session_closed(&pending.owner.session) {
+                return Some("共享任务已结束，该审批已失效。".into());
+            }
+            if !pending.owner.matches(owner) {
+                return Some("该审批仅限原聊天中的动作发起人处理。".into());
+            }
             let expired = pending.created.elapsed() > APPROVAL_TTL;
             let dsh = matches!(pending.kind, ApprovalKind::Dsh { .. });
             drop(map);
@@ -1628,9 +2000,53 @@ impl Orchestrator {
     }
 }
 
+fn is_approval_text(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    matches!((words.next(),words.next(),words.next()),(Some(code),Some("1"|"2"|"3"),None) if code.len()==4 && code.bytes().all(|b|b.is_ascii_alphanumeric()))
+}
+
+fn closed_sessions() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static CLOSED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    CLOSED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+fn session_closed(key: &str) -> bool {
+    closed_sessions()
+        .lock()
+        .map(|set| set.contains(key))
+        .unwrap_or(true)
+}
+
+fn append_reply_history(session: &SessionKey, user: &str, stream: &str, fallback: &str) {
+    if session_closed(&session.as_str()) {
+        return;
+    }
+    if let Some(shown) = crate::wecom_reply::final_text(stream) {
+        wecom_session::append_turn(session, user, &shown);
+    } else if !crate::wecom_reply::is_finished(stream) {
+        wecom_session::append_turn(session, user, fallback);
+    }
+}
+
+fn reply_task_labels() -> &'static std::sync::Mutex<HashMap<String, String>> {
+    static LABELS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    LABELS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
 /// finish 帧必须送达：断线重连窗口里首发失败的会退避重试，避免企微端永远显示「输入中」。
 async fn send_finish(sock: &WecomSocket, req_id: &str, stream_id: &str, body: &str) {
-    let frame = wecom_proto::respond_stream(req_id, stream_id, body, true);
+    let task = reply_task_labels()
+        .lock()
+        .ok()
+        .and_then(|mut labels| labels.remove(stream_id));
+    let labeled = task
+        .map(|task| format!("【共享任务 {task}】\n{body}"))
+        .unwrap_or_else(|| body.to_string());
+    let Some(final_body) = crate::wecom_reply::finish(stream_id, &labeled) else {
+        return;
+    };
+    let frame = wecom_proto::respond_stream(req_id, stream_id, &final_body, true);
     let mut wait = 2u64;
     for _ in 0..7 {
         match sock.send_raw(frame.clone()).await {
@@ -1663,6 +2079,13 @@ async fn register_approval(
     let seq = st.approval_seq.fetch_add(1, Ordering::SeqCst);
     let code = encode_approval_code(seq);
     let now = Instant::now();
+    let owner = st.approval_owners.lock().await.get(request_id).cloned();
+    let Some(owner) = owner else {
+        return "已结束".into();
+    };
+    if session_closed(&owner.session) {
+        return "已结束".into();
+    }
     {
         let mut map = st.pending_approvals.lock().await;
         // 顺手清掉过期项，避免无限增长
@@ -1670,6 +2093,8 @@ async fn register_approval(
         map.insert(
             code.clone(),
             PendingApproval {
+                request_id: request_id.to_string(),
+                owner,
                 kind: ApprovalKind::Tianji {
                     request_id: request_id.to_string(),
                     call_ids,
@@ -1687,17 +2112,29 @@ async fn register_approval(
 async fn register_dsh_approval(
     app: &AppHandle,
     summary: String,
+    request_id: &str,
 ) -> (String, tokio::sync::oneshot::Receiver<bool>) {
     let st = app.state::<WecomState>();
     let seq = st.approval_seq.fetch_add(1, Ordering::SeqCst);
     let code = encode_approval_code(seq);
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let owner = st.approval_owners.lock().await.get(request_id).cloned();
+    let Some(owner) = owner else {
+        drop(tx);
+        return ("已结束".into(), rx);
+    };
+    if session_closed(&owner.session) {
+        drop(tx);
+        return ("已结束".into(), rx);
+    }
     {
         let mut map = st.pending_approvals.lock().await;
         map.retain(|_, p| p.created.elapsed() <= APPROVAL_TTL);
         map.insert(
             code.clone(),
             PendingApproval {
+                request_id: request_id.to_string(),
+                owner,
                 kind: ApprovalKind::Dsh { summary },
                 can_remember: false,
                 created: Instant::now(),
@@ -2004,6 +2441,12 @@ impl InstantApprox {
     }
 }
 
+fn can_render_verified_answer(proposed: &str, allowed: &str, has_evidence: bool) -> bool {
+    has_evidence
+        && proposed == allowed
+        && matches!(allowed, "result" | "direct_cause" | "trigger_verified")
+}
+
 fn merge_investigation_coverage(
     base: &mut crate::wecom_investigation::InvestigationOutcome,
     extra: &crate::wecom_investigation::InvestigationOutcome,
@@ -2011,6 +2454,7 @@ fn merge_investigation_coverage(
     use crate::wecom_investigation::InvestigationStatus;
     base.collected_ms = base.collected_ms.saturating_add(extra.collected_ms);
     base.request_count = base.budget.used();
+    base.cache_hits = base.budget.cache_hits();
     base.evidence_count = base.evidence_count.saturating_add(extra.evidence_count);
     base.shown_count = base.shown_count.saturating_add(extra.shown_count);
     base.warn_count = base.warn_count.saturating_add(extra.warn_count);
@@ -2070,6 +2514,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn streamed_protocol_becomes_one_readable_timed_reply() {
+        let stream = "integration-protocol-timed";
+        crate::wecom_reply::begin(stream);
+        let q = crate::wecom_investigation_query::parse_query(
+            "查日志",
+            None,
+            chrono::DateTime::parse_from_rfc3339("2026-10-28T09:00:00+08:00").unwrap(),
+        )
+        .unwrap();
+        let raw=serde_json::json!({"queries":[],"reason":"观察[L1]","conclusion_level":"result","gaps":[],"final_answer":{"summary":"发现业务警告","claims":[{"text":"结果为零","evidence_refs":["L1"]}]}}).to_string();
+        let mut answer = crate::wecom_answer::AnswerBuffer::new(true);
+        for ch in raw.chars() {
+            assert!(answer.push(&ch.to_string()).is_none());
+        }
+        let body = answer.finish(Some(&q), "[L1] service=orders WARN result=0", ".", "result");
+        let final_body = crate::wecom_reply::finish(stream, &body).unwrap();
+        assert!(final_body.contains("排查结论"));
+        assert!(final_body.contains("一、关键证据链"));
+        assert!(final_body.contains("二、原因与代码核对"));
+        assert!(!final_body.contains("final_answer"));
+        assert_eq!(final_body.matches("⏱ 本次耗时：").count(), 1);
+        assert!(crate::wecom_reply::finish(stream, "迟到原始JSON").is_none());
+        assert_eq!(crate::wecom_reply::final_text(stream).unwrap(), final_body);
+    }
+
+    #[test]
+    fn verified_answer_route_skips_summary_only_at_permitted_level() {
+        assert!(can_render_verified_answer(
+            "direct_cause",
+            "direct_cause",
+            true
+        ));
+        assert!(can_render_verified_answer(
+            "trigger_verified",
+            "trigger_verified",
+            true
+        ));
+        assert!(!can_render_verified_answer(
+            "trigger_verified",
+            "direct_cause",
+            true
+        ));
+        assert!(!can_render_verified_answer("unknown", "unknown", true));
+        assert!(!can_render_verified_answer("result", "result", false));
+    }
+
+    #[test]
     fn unexecuted_or_failed_source_never_enters_business_model() {
         use crate::wecom_investigation::{InvestigationOutcome, InvestigationStatus};
         let mut o = InvestigationOutcome {
@@ -2078,6 +2569,7 @@ mod tests {
             query: None,
             evidence_count: 0,
             request_count: 0,
+            cache_hits: 0,
             may_analyze: false,
             source_ready: false,
             budget: crate::wecom_skywalking::QueryBudget::new(),
@@ -2210,16 +2702,57 @@ mod tests {
     }
 
     #[test]
+    fn approvals_are_bound_to_bot_user_chat_and_session() {
+        let a = crate::wecom_channel::ApprovalOwner {
+            bot: "b".into(),
+            chat: "g".into(),
+            user: "u".into(),
+            session: "t".into(),
+        };
+        assert!(a.matches(&a));
+        for b in [
+            crate::wecom_channel::ApprovalOwner {
+                user: "v".into(),
+                ..a.clone()
+            },
+            crate::wecom_channel::ApprovalOwner {
+                chat: "g2".into(),
+                ..a.clone()
+            },
+            crate::wecom_channel::ApprovalOwner {
+                bot: "b2".into(),
+                ..a.clone()
+            },
+            crate::wecom_channel::ApprovalOwner {
+                session: "t2".into(),
+                ..a.clone()
+            },
+        ] {
+            assert!(!a.matches(&b));
+        }
+        assert!(is_approval_text("AB12 1"));
+        assert!(!is_approval_text("AB12 1 然后继续"));
+    }
+
+    #[test]
     fn set_max_jobs_clamps_out_of_range() {
         let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
         orch.set_max_jobs(4);
-        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), 4);
+        assert_eq!(orch.admission.limit(), 4);
         // 0 / 越界回落默认
         orch.set_max_jobs(0);
-        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), MAX_GLOBAL_JOBS);
+        assert_eq!(
+            orch.admission.limit(),
+            crate::wecom_admission::DEFAULT_LIMIT
+        );
         orch.set_max_jobs(99);
-        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), MAX_GLOBAL_JOBS);
-        orch.set_max_jobs(8);
-        assert_eq!(orch.max_jobs.load(Ordering::SeqCst), 8);
+        assert_eq!(
+            orch.admission.limit(),
+            crate::wecom_admission::DEFAULT_LIMIT
+        );
+        orch.set_max_jobs(32);
+        assert_eq!(orch.admission.limit(), 32);
+        orch.set_max_jobs(33);
+        assert_eq!(orch.admission.limit(), 2);
     }
 }

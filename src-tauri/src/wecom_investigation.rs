@@ -50,6 +50,8 @@ pub struct InvestigationOutcome {
     pub incomplete_pages: usize,
     pub decision_gaps: Vec<String>,
     pub request_count: usize,
+    /// Cache/singleflight reuse is separate from the actual HTTP hard budget.
+    pub cache_hits: usize,
     pub may_analyze: bool,
     pub source_ready: bool,
     #[serde(skip)]
@@ -112,15 +114,15 @@ fn finish(outcome: InvestigationOutcome, request: &str, parsed: bool) -> Investi
     if let Ok(mut last) = LAST_DIAGNOSTIC.get_or_init(|| Mutex::new(None)).lock() {
         *last = Some(
             json!({"status":outcome.status.as_str(), "requestId":request,
-            "requestCount":outcome.request_count,"evidenceCount":outcome.evidence_count,
+            "requestCount":outcome.request_count,"cacheHits":outcome.cache_hits,"evidenceCount":outcome.evidence_count,
             "shownCount":outcome.shown_count,"warnCount":outcome.warn_count,
             "truncatedCount":outcome.truncated_count,"incompletePages":outcome.incomplete_pages,
             "decisionGaps":outcome.decision_gaps,
             "sourceReady":outcome.source_ready,"detail":outcome.detail}),
         );
     }
-    diagnostic("investigation", &format!("request={request} parsed={parsed} status={} requests={} evidence={} source_ready={} may_analyze={} elapsed_ms={}",
-        outcome.status.as_str(), outcome.request_count, outcome.evidence_count, outcome.source_ready, outcome.may_analyze, outcome.collected_ms));
+    diagnostic("investigation", &format!("request={request} parsed={parsed} status={} requests={} cache_hits={} evidence={} source_ready={} may_analyze={} elapsed_ms={}",
+        outcome.status.as_str(), outcome.request_count, outcome.cache_hits, outcome.evidence_count, outcome.source_ready, outcome.may_analyze, outcome.collected_ms));
     outcome
 }
 /// Publish only: merging and cumulative coverage remain the orchestrator's responsibility.
@@ -151,6 +153,7 @@ fn not_executed(
             incomplete_pages: 0,
             decision_gaps: Vec::new(),
             request_count: 0,
+            cache_hits: 0,
             may_analyze: false,
             source_ready: false,
             budget: QueryBudget::new(),
@@ -234,6 +237,9 @@ struct EvidenceRow {
 #[derive(Default)]
 struct Report {
     rows: Vec<EvidenceRow>,
+    row_index: HashMap<(String, String, i64, String, String, Vec<String>), usize>,
+    // Stored on the outer report so a collection timeout retains completed pages.
+    pending_entries: Vec<Report>,
     traces: Vec<(String, Vec<Value>)>,
     notes: Vec<String>,
     steps: Vec<String>,
@@ -253,8 +259,37 @@ struct Report {
     // Completed service/time scans prevent missing-service fallback from querying them again.
     context_scans: Vec<(String, String, i64, i64, String)>,
     context_raw: Vec<LogRow>,
+    time_window_mismatches: usize,
 }
 impl Report {
+    fn flush_entries(&mut self) {
+        for group in std::mem::take(&mut self.pending_entries) {
+            for evidence in group.rows {
+                self.merge_identified(vec![evidence.row], evidence.strength, &evidence.matched_ids);
+            }
+            self.notes.extend(
+                group
+                    .notes
+                    .into_iter()
+                    .take(40usize.saturating_sub(self.notes.len())),
+            );
+            self.steps.extend(group.steps);
+            self.partial |= group.partial;
+            self.fatal |= group.fatal;
+            self.had_success |= group.had_success;
+            self.incomplete_pages += group.incomplete_pages;
+            self.time_window_mismatches += group.time_window_mismatches;
+            if group.next_page > 0 {
+                self.next_page = group.next_page;
+            }
+            if group.effective_window.is_some() {
+                self.effective_window = group.effective_window;
+            }
+            if !group.source_detail.is_empty() {
+                self.source_detail = group.source_detail;
+            }
+        }
+    }
     fn note(&mut self, message: impl Into<String>) {
         self.partial = true;
         if self.notes.len() < 40 {
@@ -271,10 +306,20 @@ impl Report {
         matched_ids: &[String],
     ) {
         for row in rows {
-            if let Some(existing) = self.rows.iter_mut().find(|v| {
-                row_key(&v.row) == row_key(&row)
-                    && (!row.trace_id.is_empty() || v.matched_ids == matched_ids)
-            }) {
+            let key = (
+                row.service.clone(),
+                row.instance.clone(),
+                row.ts,
+                row.trace_id.clone(),
+                row.content.clone(),
+                if row.trace_id.is_empty() {
+                    matched_ids.to_vec()
+                } else {
+                    Vec::new()
+                },
+            );
+            if let Some(&index) = self.row_index.get(&key) {
+                let existing = &mut self.rows[index];
                 if strength == "同trace精确关联" {
                     existing.strength = strength;
                 }
@@ -289,6 +334,7 @@ impl Report {
                 self.note("日志已达300条上限，其余记录未收集");
                 break;
             }
+            self.row_index.insert(key, self.rows.len());
             self.rows.push(EvidenceRow {
                 row,
                 strength,
@@ -440,6 +486,8 @@ pub async fn investigate(
         Vec::new()
     };
     let budget = QueryBudget::new();
+    // Probe HTTP is included in the initial 18; preserve six calls for code supplements.
+    let initial_budget = budget.child_limit(18);
     let mut report = Report::default();
     report.next_page = query.page;
     report.request = request.to_string();
@@ -459,7 +507,7 @@ pub async fn investigate(
     let work = async {
         progress(&tx, "正在验证日志源…");
         let args = query_args(&query);
-        match source_ready(addr, header, &args, &budget).await {
+        match source_ready(addr, header, &args, &initial_budget).await {
             Ok(()) => {
                 ready = true;
                 log_step(
@@ -495,7 +543,7 @@ pub async fn investigate(
             &query,
             &seeds,
             &completed_services,
-            &budget,
+            &initial_budget,
             &mut report,
             &tx,
         )
@@ -509,6 +557,7 @@ pub async fn investigate(
         },
         result = tokio::time::timeout(TOTAL_TIMEOUT, work) => result,
     };
+    report.flush_entries();
     if result.is_err() {
         report.note("timeout: 已达到120秒采集期限，以下仅为已返回的部分证据");
     }
@@ -630,6 +679,7 @@ fn report_outcome(
         incomplete_pages: report.incomplete_pages,
         decision_gaps,
         request_count: budget.used(),
+        cache_hits: budget.cache_hits(),
         may_analyze: evidence_count > 0,
         source_ready: ready,
         budget: budget.clone(),
@@ -790,6 +840,61 @@ fn context_matches(row: &LogRow, args: &Value) -> bool {
     // soft clue only: the same execution regularly crosses class/logger boundaries.
     get("thread").is_empty() || get("thread") == row.thread
 }
+#[derive(Default)]
+struct PageTimeGuard {
+    previous: Option<(i64, i64, bool, bool, i64, i64)>,
+}
+#[derive(PartialEq, Eq)]
+enum PageTimeAction {
+    Continue,
+    Complete,
+    Mismatch,
+}
+impl PageTimeGuard {
+    fn observe(&mut self, page: &sky::LogPage, size: usize) -> PageTimeAction {
+        let known = page.raw_count > 0 && page.unknown_time_count == 0;
+        let range = page.min_ts.zip(page.max_ts).filter(|_| known);
+        let full_outside = page.raw_count >= size && page.time_matched == 0 && known;
+        let mut action = PageTimeAction::Continue;
+        if let (Some((prev_min, _prev_max, prev_outside, prev_des, start, end)), Some((_, max))) =
+            (self.previous, range)
+        {
+            if start == page.window_start_ts && end == page.window_end_ts {
+                // Only an explicit DES query plus two non-overlapping raw ranges
+                // crossing the lower boundary establishes completed time coverage.
+                if prev_des
+                    && page.query_order_des
+                    && !prev_outside
+                    && prev_min >= start
+                    && max < start
+                    && max <= prev_min
+                {
+                    action = PageTimeAction::Complete;
+                } else if prev_outside && full_outside {
+                    action = PageTimeAction::Mismatch;
+                }
+            }
+        }
+        self.previous = range.map(|(min, max)| {
+            (
+                min,
+                max,
+                full_outside,
+                page.query_order_des,
+                page.window_start_ts,
+                page.window_end_ts,
+            )
+        });
+        action
+    }
+}
+fn note_time_mismatch(report: &mut Report, stage: &str) {
+    report.time_window_mismatches += 1;
+    report.incomplete_pages += 1;
+    report.note(format!(
+        "time_window_mismatch: {stage}连续满页均在提交时间窗外；停止该查询组，覆盖未知，不代表查空"
+    ));
+}
 async fn collect_pages(
     addr: &str,
     header: &str,
@@ -806,6 +911,7 @@ async fn collect_pages(
         return false;
     }
     let mut complete = false;
+    let mut time_guard = PageTimeGuard::default();
     for n in 0..3 {
         if budget.remaining() == 0 {
             report.incomplete_pages += 1;
@@ -817,6 +923,7 @@ async fn collect_pages(
         args["page_size"] = json!(page_size(selected));
         // Never send trace constraint for context: it would hide trace-less WARNs.
         if context {
+            args["diagnostic_trace_id"] = selected["trace_id"].clone();
             args.as_object_mut().unwrap().remove("trace_id");
         }
         let Some(page) = logs(addr, header, &args, budget, report, stage).await else {
@@ -824,6 +931,7 @@ async fn collect_pages(
             break;
         };
         let full = page.fetched_count >= page_size(&args);
+        let time_action = time_guard.observe(&page, page_size(&args));
         for row in page.rows {
             if context
                 && report.context_raw.len() < MAX_ROWS
@@ -852,7 +960,11 @@ async fn collect_pages(
             };
             report.merge(vec![row], relation);
         }
-        if !full {
+        if time_action == PageTimeAction::Mismatch {
+            note_time_mismatch(report, stage);
+            break;
+        }
+        if !full || time_action == PageTimeAction::Complete {
             complete = true;
             break;
         }
@@ -973,6 +1085,7 @@ async fn collect_decision_anchor(
             break;
         }
         let before: HashSet<_> = report.rows.iter().map(|r| digest(&r.row.content)).collect();
+        let mismatches_before = report.time_window_mismatches;
         let complete = collect_pages(
             addr,
             header,
@@ -987,6 +1100,12 @@ async fn collect_decision_anchor(
             "同服务短时间窗候选（未证实同一请求）",
         )
         .await;
+        if report.time_window_mismatches > mismatches_before {
+            report
+                .decision_gaps
+                .push("time_window_mismatch: decision上下文时间覆盖未知，未扩大半径".into());
+            break;
+        }
         if complete && report.context_raw.len() < MAX_ROWS {
             let start = DateTime::parse_from_rfc3339(args["start"].as_str().unwrap())
                 .unwrap()
@@ -1077,9 +1196,10 @@ async fn logs(
         Ok(page) => {
             report.had_success = true;
             report.steps.push(format!(
-                "{stage}: success fetched={} kept={} elapsed={}ms",
+                "{stage}: success fetched={} kept={} {} elapsed={}ms",
                 page.fetched_count,
                 page.rows.len(),
+                log_filter_counts(&page, args),
                 start.elapsed().as_millis()
             ));
             log_step(
@@ -1089,6 +1209,14 @@ async fn logs(
                 args,
                 start.elapsed().as_millis(),
                 page.rows.len(),
+            );
+            diagnostic(
+                "investigation-log-fetch",
+                &format!(
+                    "request={} stage={stage} {}",
+                    report.request,
+                    log_filter_counts(&page, args)
+                ),
             );
             Some(page)
         }
@@ -1111,6 +1239,45 @@ async fn logs(
     }
 }
 
+// Raw time statistics are captured before filtering; local selector counts are
+// subsequent stages. No identifiers or log bodies enter these diagnostics.
+fn log_filter_counts(page: &sky::LogPage, args: &Value) -> String {
+    let text = |key: &str| args[key].as_str().unwrap_or("");
+    let context = args["context_candidate"].as_bool() == Some(true)
+        || args.get("diagnostic_trace_id").is_some();
+    let trace = if context {
+        text("diagnostic_trace_id")
+    } else {
+        text("trace_id")
+    };
+    let mut instance_matched = 0;
+    let mut thread_matched = 0;
+    let mut dropped_trace = 0;
+    for row in &page.rows {
+        if !text("service").is_empty() && row.service != text("service") {
+            continue;
+        }
+        if !text("instance").is_empty()
+            && row.instance != text("instance")
+            && !(args["diagnostic_allow_empty_instance"].as_bool() == Some(true)
+                && row.instance.is_empty())
+        {
+            continue;
+        }
+        instance_matched += 1;
+        if row.trace_id.is_empty() && !text("thread").is_empty() && row.thread != text("thread") {
+            continue;
+        }
+        thread_matched += 1;
+        if (context && !row.trace_id.is_empty() && row.trace_id != trace)
+            || (!context && !trace.is_empty() && row.trace_id != trace)
+        {
+            dropped_trace += 1;
+        }
+    }
+    format!("rawFetched={} timeMatched={} instanceMatched={instance_matched} threadMatched={thread_matched} dropDifferentTrace={dropped_trace} rawMinTs={:?} rawMaxTs={:?} unknownTime={} windowStartTs={} windowEndTs={} submittedStart={} submittedEnd={} durationSubmitted={} oapOffsetMinutes={} queryOrderDES={}", page.raw_count, page.time_matched, page.min_ts, page.max_ts, page.unknown_time_count, page.window_start_ts, page.window_end_ts, page.submitted_start, page.submitted_end, page.duration_submitted, page.oap_offset_minutes, page.query_order_des)
+}
+
 fn log_step(report: &Report, stage: &str, outcome: &str, args: &Value, elapsed: u128, rows: usize) {
     if report.request.is_empty() {
         return;
@@ -1120,6 +1287,147 @@ fn log_step(report: &Report, stage: &str, outcome: &str, args: &Value, elapsed: 
     diagnostic("investigation-step", &format!(
         "request={} stage={stage} outcome={outcome} condition_hash={} page={} elapsed_ms={elapsed} rows={rows}",
         report.request, &digest[..12], args["page"].as_i64().unwrap_or(1)));
+}
+
+// Five possible log calls (three pages, relax, widen), each with at most one
+// transport retry. Service resolution can add HTTP calls: those groups stay serial.
+const ENTRY_PAIR_HTTP_RESERVE: usize = 20;
+async fn collect_entry_group(
+    addr: &str,
+    header: &str,
+    q: &InvestigationQuery,
+    group: &[String],
+    matched_ids: &[String],
+    budget: &QueryBudget,
+    report: &mut Report,
+) {
+    let mut group_succeeded = false;
+    let mut group_failed = false;
+    let mut group_had_rows = false;
+    let mut time_guard = PageTimeGuard::default();
+    if report.fatal {
+        return;
+    }
+    for page_no in q.page..q.page.saturating_add(3) {
+        if budget.remaining() == 0 {
+            report.incomplete_pages += 1;
+            report.note("budget_exceeded: 入口日志分页尚未完成");
+            break;
+        }
+        let mut args = query_args(q);
+        args["keywords"] = json!(group);
+        args["page"] = json!(page_no);
+        let Some(page) = logs(addr, header, &args, budget, report, "入口日志").await else {
+            group_failed = true;
+            break;
+        };
+        group_succeeded = true;
+        group_had_rows |= !page.rows.is_empty();
+        let count = page.fetched_count;
+        let time_action = time_guard.observe(&page, PAGE_SIZE);
+        report.next_page = page_no.saturating_add(1);
+        report.merge_identified(page.rows, "入口条件匹配", &matched_ids);
+        if time_action == PageTimeAction::Mismatch {
+            note_time_mismatch(report, "入口日志");
+            group_failed = true;
+            break;
+        }
+        if count < PAGE_SIZE || time_action == PageTimeAction::Complete {
+            break;
+        }
+        if page_no == q.page.saturating_add(2) {
+            report.incomplete_pages += 1;
+            report.note("入口日志达到3页上限，可能仍有后续记录");
+        }
+    }
+    // Relax per identifier, not globally: one ID succeeding must not hide another ID's empty result.
+    if group_succeeded && !group_failed && !group_had_rows && report.relax_inferred_errors {
+        let retained: Vec<_> = group
+            .iter()
+            .filter(|k| !inferred_error(k))
+            .cloned()
+            .collect();
+        if !retained.is_empty() && retained.len() < group.len() && budget.remaining() > 0 {
+            let mut args = query_args(q);
+            args["keywords"] = json!(retained);
+            args["page"] = json!(1);
+            if let Some(page) = logs(
+                addr,
+                header,
+                &args,
+                budget,
+                report,
+                "保留业务标识去除推测错误词补查",
+            )
+            .await
+            {
+                group_had_rows |= !page.rows.is_empty();
+                if page.fetched_count >= PAGE_SIZE {
+                    report.note("放宽错误词后的查询仅覆盖首批记录");
+                }
+                report.merge_identified(
+                    page.rows,
+                    "业务标识匹配（推测错误词已放宽）",
+                    &matched_ids,
+                );
+            } else {
+                group_failed = true;
+            }
+        }
+    }
+    if group_succeeded
+        && !group_failed
+        && !report.fatal
+        && !group_had_rows
+        && q.approximate_anchor
+        && q.time_kind == crate::wecom_investigation_query::TimeKind::Anchor
+        && budget.remaining() > 0
+    {
+        if let Some(anchor) = q
+            .anchor
+            .as_deref()
+            .and_then(|a| DateTime::parse_from_rfc3339(a).ok())
+        {
+            let mut args = query_args(q);
+            let words: Vec<_> = group
+                .iter()
+                .filter(|k| !report.relax_inferred_errors || !inferred_error(k))
+                .cloned()
+                .collect();
+            // Approximate anchor only; explicit ranges and relative windows stay unchanged.
+            args["keywords"] = json!(if words.is_empty() {
+                group.to_vec()
+            } else {
+                words
+            });
+            args["start"] = json!((anchor - chrono::Duration::minutes(60)).to_rfc3339());
+            args["end"] = json!((anchor + chrono::Duration::minutes(60)).to_rfc3339());
+            report.effective_window = Some((
+                args["start"].as_str().unwrap().into(),
+                args["end"].as_str().unwrap().into(),
+            ));
+            args["page"] = json!(1);
+            if let Some(page) = logs(
+                addr,
+                header,
+                &args,
+                budget,
+                report,
+                "近似故障时刻前后60分钟补查",
+            )
+            .await
+            {
+                report.notes.push(format!(
+                    "近似时刻查空后扩窗：{} 至 {}，仅本组补查；原条件未覆盖部分另计。",
+                    args["start"], args["end"]
+                ));
+                if page.fetched_count >= PAGE_SIZE {
+                    report.note("扩窗补查仅覆盖首批记录");
+                }
+                report.merge_identified(page.rows, "近似时刻扩窗业务标识匹配", &matched_ids);
+            }
+        }
+    }
 }
 
 async fn collect(
@@ -1142,131 +1450,50 @@ async fn collect(
         if q.match_any && q.keywords.len() > 3 && q.identifiers.is_empty() {
             report.note("任一关键词查询仅覆盖前3项，其他词尚未查询");
         }
-        for (group, matched_ids) in groups {
-            let mut group_succeeded = false;
-            let mut group_failed = false;
-            let mut group_had_rows = false;
+        let mut groups = groups.into_iter().peekable();
+        while let Some((group, matched_ids)) = groups.next() {
             if report.fatal {
                 return;
             }
-            for page_no in q.page..q.page.saturating_add(3) {
-                if budget.remaining() == 0 {
-                    report.incomplete_pages += 1;
-                    report.note("budget_exceeded: 入口日志分页尚未完成");
-                    break;
-                }
-                let mut args = query_args(q);
-                args["keywords"] = json!(group);
-                args["page"] = json!(page_no);
-                let Some(page) = logs(addr, header, &args, budget, report, "入口日志").await
-                else {
-                    group_failed = true;
-                    break;
-                };
-                group_succeeded = true;
-                group_had_rows |= !page.rows.is_empty();
-                let count = page.fetched_count;
-                report.next_page = page_no.saturating_add(1);
-                report.merge_identified(page.rows, "入口条件匹配", &matched_ids);
-                if count < PAGE_SIZE {
-                    break;
-                }
-                if page_no == q.page.saturating_add(2) {
-                    report.incomplete_pages += 1;
-                    report.note("入口日志达到3页上限，可能仍有后续记录");
-                }
-            }
-            // Relax per identifier, not globally: one ID succeeding must not hide another ID's empty result.
-            if group_succeeded && !group_failed && !group_had_rows && report.relax_inferred_errors {
-                let retained: Vec<_> = group
-                    .iter()
-                    .filter(|k| !inferred_error(k))
-                    .cloned()
-                    .collect();
-                if !retained.is_empty() && retained.len() < group.len() && budget.remaining() > 0 {
-                    let mut args = query_args(q);
-                    args["keywords"] = json!(retained);
-                    args["page"] = json!(1);
-                    if let Some(page) = logs(
-                        addr,
-                        header,
-                        &args,
-                        budget,
-                        report,
-                        "保留业务标识去除推测错误词补查",
-                    )
-                    .await
-                    {
-                        group_had_rows |= !page.rows.is_empty();
-                        if page.fetched_count >= PAGE_SIZE {
-                            report.note("放宽错误词后的查询仅覆盖首批记录");
-                        }
-                        report.merge_identified(
-                            page.rows,
-                            "业务标识匹配（推测错误词已放宽）",
-                            &matched_ids,
-                        );
-                    } else {
-                        group_failed = true;
-                    }
-                }
-            }
-            if group_succeeded
-                && !group_failed
-                && !report.fatal
-                && !group_had_rows
-                && q.approximate_anchor
-                && q.time_kind == crate::wecom_investigation_query::TimeKind::Anchor
-                && budget.remaining() > 0
+            // Only admit a pair when neither branch can starve its sibling by
+            // racing for the last budget slots. Later phases keep their old order.
+            if q.service.as_deref().unwrap_or("").is_empty()
+                && groups.peek().is_some()
+                && budget.remaining() >= ENTRY_PAIR_HTTP_RESERVE
             {
-                if let Some(anchor) = q
-                    .anchor
-                    .as_deref()
-                    .and_then(|a| DateTime::parse_from_rfc3339(a).ok())
-                {
-                    let mut args = query_args(q);
-                    let words: Vec<_> = group
-                        .iter()
-                        .filter(|k| !report.relax_inferred_errors || !inferred_error(k))
-                        .cloned()
-                        .collect();
-                    // Approximate anchor only; explicit ranges and relative windows stay unchanged.
-                    args["keywords"] = json!(if words.is_empty() {
-                        group.clone()
-                    } else {
-                        words
-                    });
-                    args["start"] = json!((anchor - chrono::Duration::minutes(60)).to_rfc3339());
-                    args["end"] = json!((anchor + chrono::Duration::minutes(60)).to_rfc3339());
-                    report.effective_window = Some((
-                        args["start"].as_str().unwrap().into(),
-                        args["end"].as_str().unwrap().into(),
-                    ));
-                    args["page"] = json!(1);
-                    if let Some(page) = logs(
+                let (other_group, other_ids) = groups.next().unwrap();
+                report.pending_entries = (0..2)
+                    .map(|_| Report {
+                        request: report.request.clone(),
+                        relax_inferred_errors: report.relax_inferred_errors,
+                        next_page: 0,
+                        ..Report::default()
+                    })
+                    .collect();
+                let (left, right) = report.pending_entries.split_at_mut(1);
+                tokio::join!(
+                    collect_entry_group(
                         addr,
                         header,
-                        &args,
+                        q,
+                        &group,
+                        &matched_ids,
                         budget,
-                        report,
-                        "近似故障时刻前后60分钟补查",
-                    )
-                    .await
-                    {
-                        report.notes.push(format!(
-                            "近似时刻查空后扩窗：{} 至 {}，仅本组补查；原条件未覆盖部分另计。",
-                            args["start"], args["end"]
-                        ));
-                        if page.fetched_count >= PAGE_SIZE {
-                            report.note("扩窗补查仅覆盖首批记录");
-                        }
-                        report.merge_identified(
-                            page.rows,
-                            "近似时刻扩窗业务标识匹配",
-                            &matched_ids,
-                        );
-                    }
-                }
+                        &mut left[0]
+                    ),
+                    collect_entry_group(
+                        addr,
+                        header,
+                        q,
+                        &other_group,
+                        &other_ids,
+                        budget,
+                        &mut right[0]
+                    ),
+                );
+                report.flush_entries();
+            } else {
+                collect_entry_group(addr, header, q, &group, &matched_ids, budget, report).await;
             }
         }
         trace_ids = select_traces(&report.rows);
@@ -1318,6 +1545,7 @@ async fn collect(
         report.traces.push((tid.clone(), spans));
         // trace query must NOT inherit entry keywords/service; downstream may carry neither.
         let trace_page = if q.trace_id.is_some() { q.page } else { 1 };
+        let mut time_guard = PageTimeGuard::default();
         for page_no in trace_page..trace_page.saturating_add(2) {
             let args = json!({"trace_id":tid,"start":q.start,"end":q.end,"page":page_no,"page_size":PAGE_SIZE});
             let Some(page) = logs(addr, header, &args, budget, report, "同trace跨服务日志").await
@@ -1325,6 +1553,7 @@ async fn collect(
                 break;
             };
             let count = page.fetched_count;
+            let time_action = time_guard.observe(&page, PAGE_SIZE);
             if q.trace_id.is_some() {
                 report.next_page = page_no.saturating_add(1);
             }
@@ -1334,7 +1563,11 @@ async fn collect(
                 .filter(|r| r.trace_id == *tid)
                 .collect();
             report.merge(exact, "同trace精确关联");
-            if count < PAGE_SIZE {
+            if time_action == PageTimeAction::Mismatch {
+                note_time_mismatch(report, "同trace跨服务日志");
+                break;
+            }
+            if count < PAGE_SIZE || time_action == PageTimeAction::Complete {
                 break;
             }
             if page_no == trace_page.saturating_add(1) {
@@ -1466,7 +1699,9 @@ async fn collect(
         );
         // Short-time-window fallback is a candidate, not proof of request identity.
         let args = json!({"service":target.service,"start":start,"end":end,
-            "timezone_offset_minutes":q.timezone_offset_minutes,"page":1,"page_size":PAGE_SIZE});
+            "timezone_offset_minutes":q.timezone_offset_minutes,"page":1,"page_size":PAGE_SIZE,
+            "instance":target.instance,"diagnostic_trace_id":target.trace_id,
+            "diagnostic_allow_empty_instance":true});
         if let Some(page) = logs(addr, header, &args, budget, report, "关联服务短窗补查").await
         {
             report.completed_services.push(target_key(target));
@@ -1785,6 +2020,12 @@ fn trace_excerpt(spans: &[Value]) -> String {
     }
     out
 }
+fn indent_evidence(body: &str) -> String {
+    body.lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 fn render(q: &InvestigationQuery, report: &Report, used: usize) -> String {
     render_evidence(q, report, used).0
 }
@@ -1828,7 +2069,7 @@ fn render_evidence(q: &InvestigationQuery, report: &Report, used: usize) -> (Str
             "\n[T{}] trace={}\n{}\n",
             i + 1,
             tid,
-            trace_excerpt(spans)
+            indent_evidence(&trace_excerpt(spans))
         ));
     }
     let mut rows: Vec<_> = report.rows.iter().enumerate().collect();
@@ -1890,7 +2131,7 @@ fn render_evidence(q: &InvestigationQuery, report: &Report, used: usize) -> (Str
             digest(&r.row.content),
             truncated,
             class,
-            excerpt(&r.row.content, 700)
+            indent_evidence(&excerpt(&r.row.content, 700))
         );
         if out.chars().count() + line.chars().count() > MAX_TEXT - 160 {
             out.push_str("\n证据正文达到32,000字符上限，部分日志未展示；不代表没有更多异常。\n");

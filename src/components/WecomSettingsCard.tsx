@@ -15,6 +15,7 @@ import {
   fetchWecomPairings,
   fetchWecomSessionLog,
   fetchWecomStatus,
+  normalizeWecomMaxJobs,
   restartWecomChannel,
   revokeWecomUser,
   runWecomDocgenNow,
@@ -24,6 +25,8 @@ import {
   type WecomSessionLogEntry,
   type WecomStatus,
 } from "../lib/wecomChannel";
+
+const MAX_JOBS_CHOICES = [1, 2, 4, 8, 12, 16, 24, 32];
 
 /** Controlled text that follows persisted settings unless the field is focused. */
 function useFieldDraft(saved: string) {
@@ -366,6 +369,14 @@ export default function WecomSettingsCard() {
     }
   };
 
+  const performance = status?.lastPerformance;
+  // Never merge independently sampled requests or sum parent/child phase snapshots.
+  const performanceSummary = performance?.summary?.requestId === performance?.requestId
+    ? performance?.summary
+    : null;
+  const phaseLabel = (phase: string) => phase
+    ? t(`wecom.diag.phases.${phase}`, { defaultValue: phase })
+    : t("wecom.diag.notReported");
   const investigation = status?.lastInvestigation;
   const investigationState = investigation?.status ?? "";
   const decisionGaps = Array.isArray(investigation?.decisionGaps)
@@ -377,6 +388,16 @@ export default function WecomSettingsCard() {
       ? String(value)
       : t("wecom.diag.notReported");
 
+  const reportedMs = (value: number | null | undefined) =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? `${value} ms`
+      : t("wecom.diag.notReported");
+
+  const maxJobs = normalizeWecomMaxJobs(settings.wecomMaxJobs);
+  // 保留已保存的 3/6 或其它合法值，避免原生 select 无匹配项而显示错误档位。
+  const maxJobsChoices = MAX_JOBS_CHOICES.includes(maxJobs)
+    ? MAX_JOBS_CHOICES
+    : [...MAX_JOBS_CHOICES, maxJobs].sort((a, b) => a - b);
   const modelValue = settings.wecomDshModel ?? "";
   const modelCount =
     catalog?.groups.reduce((total, group) => total + group.options.length, 0) ?? 0;
@@ -400,52 +421,6 @@ export default function WecomSettingsCard() {
             <span className="wecom-chip">
               {t("wecom.diag.connectedFor", { duration: fmtDuration(status.connectedMs) })}
             </span>
-          ) : null}
-          <span
-            className={`wecom-status-pill${
-              ["source_error", "source_failed", "error"].includes(investigationState) ? " is-error" : ""
-            }`}
-          >
-            <i className="wecom-status-dot" aria-hidden />
-            {t("wecom.diag.investigation", {
-              status: investigation
-                ? t(`wecom.diag.investigationState.${investigationState}`, {
-                    defaultValue: investigationState,
-                  })
-                : t("wecom.diag.noInvestigation"),
-            })}
-          </span>
-          {investigation ? (
-            <>
-              <span className="wecom-chip">
-                {t("wecom.diag.actualRequests", { countText: reportedCount(investigation.requestCount) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.evidenceCount", { countText: reportedCount(investigation.evidenceCount) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.shownCount", { countText: reportedCount(investigation.shownCount) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.warnCount", { countText: reportedCount(investigation.warnCount) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.truncatedCount", { countText: reportedCount(investigation.truncatedCount) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.incompletePages", { countText: reportedCount(investigation.incompletePages) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.source", {
-                  state:
-                    investigation.sourceReady === true
-                      ? t("wecom.diag.sourceReady")
-                      : investigation.sourceReady === false
-                        ? t("wecom.diag.sourceNotReady")
-                        : t("wecom.diag.notReported"),
-                })}
-              </span>
-            </>
           ) : null}
         </div>
         <div className="wecom-hero-actions">
@@ -476,6 +451,75 @@ export default function WecomSettingsCard() {
             <span className="toggle-slider" />
           </label>
         </div>
+        {/* 计数按用途归两行：通道运行态 / 最近一次排障的采样结果 */}
+        <div className="wecom-facts">
+          <div className="wecom-fact">
+            <span className="wecom-fact-label">{t("wecom.groupChannel")}</span>
+            <span className="wecom-fact-items">
+              <span className="wecom-chip">
+                {t("wecom.diag.activeJobs", { countText: reportedCount(status?.activeJobs) })}
+              </span>
+              <span className="wecom-chip">
+                {t("wecom.diag.maxJobs", { countText: reportedCount(status?.maxJobs) })}
+              </span>
+              <span className="wecom-chip">
+                {t("wecom.diag.waitingJobs", { countText: reportedCount(status?.waitingJobs) })}
+              </span>
+              <span className="wecom-chip">
+                {t("wecom.diag.sharedTasks", { countText: reportedCount(status?.sharedTasks) })}
+              </span>
+            </span>
+          </div>
+          <div className="wecom-fact">
+            <span className="wecom-fact-label">{t("wecom.diag.factTroubleshoot")}</span>
+            <span className="wecom-fact-items">
+              <span
+                className={`wecom-status-pill${
+                  ["source_error", "source_failed", "error"].includes(investigationState) ? " is-error" : ""
+                }`}
+              >
+                <i className="wecom-status-dot" aria-hidden />
+                {investigation
+                  ? t(`wecom.diag.investigationState.${investigationState}`, {
+                      defaultValue: investigationState,
+                    })
+                  : t("wecom.diag.noInvestigation")}
+              </span>
+              {investigation ? (
+                <>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.actualRequests", { countText: reportedCount(investigation.requestCount) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.evidenceCount", { countText: reportedCount(investigation.evidenceCount) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.shownCount", { countText: reportedCount(investigation.shownCount) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.warnCount", { countText: reportedCount(investigation.warnCount) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.truncatedCount", { countText: reportedCount(investigation.truncatedCount) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.incompletePages", { countText: reportedCount(investigation.incompletePages) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.source", {
+                      state:
+                        investigation.sourceReady === true
+                          ? t("wecom.diag.sourceReady")
+                          : investigation.sourceReady === false
+                            ? t("wecom.diag.sourceNotReady")
+                            : t("wecom.diag.notReported"),
+                    })}
+                  </span>
+                </>
+              ) : null}
+            </span>
+          </div>
+        </div>
         {status?.lastError ? (
           <p className="wecom-hero-error" title={status.lastError}>
             {t("wecom.diag.lastError", { error: status.lastError })}
@@ -488,6 +532,7 @@ export default function WecomSettingsCard() {
             <span className="wecom-hint-more">{t("wecom.hintMore")}</span>
           </summary>
           <p className="setting-hint">{t("wecom.hint")}</p>
+          <p className="setting-hint">{t("wecom.diag.jobsHint")}</p>
           {status?.detail ? <p className="setting-hint">{status.detail}</p> : null}
           <p className="setting-hint" title={t("wecom.diag.instanceHint")}>
             {t("wecom.diag.instance", {
@@ -1328,10 +1373,12 @@ export default function WecomSettingsCard() {
             control={
               <select
                 className="input-field"
-                value={String(settings.wecomMaxJobs || 2)}
+                aria-label={t("wecom.maxJobs")}
+                value={maxJobs}
+                disabled={busy}
                 onChange={(e) => void push({ wecomMaxJobs: Number(e.target.value) })}
               >
-                {[1, 2, 3, 4, 6, 8].map((n) => (
+                {maxJobsChoices.map((n) => (
                   <option key={n} value={n}>
                     {n}
                   </option>
@@ -1340,6 +1387,14 @@ export default function WecomSettingsCard() {
             }
             hint={<p className="setting-hint">{t("wecom.maxJobsHint")}</p>}
           />
+
+          <div className="wecom-subhead">{t("wecom.sessionRules")}</div>
+          <div className="wecom-row is-wide">
+            <Hint summary={t("wecom.sessionRulesShort")} details={t("wecom.sessionRulesHint")} />
+            <Hint summary={t("wecom.sharedTasksShort")} details={t("wecom.sharedTasksHint")} />
+            <p className="setting-hint">{t("wecom.groupVisibilityHint")}</p>
+            <p className="setting-hint">{t("wecom.sessionMigrationHint")}</p>
+          </div>
 
           <div className="wecom-subhead">
             <span>{t("wecom.groupPairing")}</span>
@@ -1426,6 +1481,96 @@ export default function WecomSettingsCard() {
           title={t("wecom.groupDiag")}
           aside={<span className="wecom-diag-hint">{t("wecom.groupDiagHint")}</span>}
         />
+        <section className="wecom-diag-block">
+          <div className="wecom-diag-head">
+            <span>{t("wecom.diag.performance")}</span>
+          </div>
+          <p className="setting-hint">{t("wecom.diag.performanceHint")}</p>
+          {performance ? (
+            <>
+              <p className="setting-hint">
+                {t("wecom.diag.performanceRequestId")} <code>{performance.requestId}</code>
+              </p>
+              <div className="wecom-inline">
+                <span className="wecom-chip">
+                  {t("wecom.diag.lastPhase", { phase: phaseLabel(performance.phase) })}
+                </span>
+                <span className="wecom-chip">
+                  {t(performance.phase === "total" ? "wecom.diag.totalElapsed" : "wecom.diag.phaseElapsed", {
+                    duration: reportedMs(performance.elapsedMs),
+                  })}
+                </span>
+                <span className="wecom-chip">
+                  {t("wecom.diag.firstEvent", { duration: reportedMs(performance.firstEventMs) })}
+                </span>
+                <span className="wecom-chip">
+                  {t("wecom.diag.inputChars", { countText: reportedCount(performance.inputChars) })}
+                </span>
+                <span className="wecom-chip">
+                  {t("wecom.diag.outputChars", { countText: reportedCount(performance.outputChars) })}
+                </span>
+                <span className="wecom-chip">
+                  {t("wecom.diag.toolEvents", { countText: reportedCount(performance.toolEvents) })}
+                </span>
+              </div>
+              {performanceSummary ? (
+                <details className="wecom-hint" key={performanceSummary.requestId}>
+                  <summary>{t("wecom.diag.phaseTable")}</summary>
+                  <p className="setting-hint">
+                    {t("wecom.diag.performanceRequestId")} <code>{performanceSummary.requestId}</code>
+                  </p>
+                  <p className="setting-hint">{t("wecom.diag.phaseTableHint")}</p>
+                  <div className="wecom-inline">
+                    <span className="wecom-chip">{t("wecom.diag.totalElapsed", { duration: reportedMs(performanceSummary.totalMs) })}</span>
+                    <span className="wecom-chip">{t("wecom.diag.queueElapsed", { duration: reportedMs(performanceSummary.queueMs) })}</span>
+                    <span className="wecom-chip">{t("wecom.diag.elapsedWithQueue", { duration: reportedMs(performanceSummary.elapsedWithQueueMs) })}</span>
+                    <span className="wecom-chip">{t("wecom.diag.sessionAction", {
+                      action: performanceSummary.sessionAction
+                        ? t(`wecom.diag.sessionActions.${performanceSummary.sessionAction}`, { defaultValue: performanceSummary.sessionAction })
+                        : t("wecom.diag.notReported"),
+                    })}</span>
+                  </div>
+                  <p className="setting-hint">{t("wecom.diag.modelReported", { model: performanceSummary.model || t("wecom.diag.notReported"), effort: performanceSummary.effort || t("wecom.diag.notReported") })}</p>
+                  {Array.isArray(performanceSummary.phases) && performanceSummary.phases.length > 0 ? (
+                    <div className="wecom-diag-log" tabIndex={0} role="region" aria-label={t("wecom.diag.phaseTable")}>
+                      <table>
+                        <thead><tr>
+                          {(["phase", "elapsed", "calls", "input", "output", "tools", "first"] as const).map((column) => (
+                            <th scope="col" key={column}>{t(`wecom.diag.columns.${column}`)}</th>
+                          ))}
+                        </tr></thead>
+                        <tbody>{performanceSummary.phases.map((row, index) => (
+                          <tr key={`${row.phase}-${index}`}>
+                            <th scope="row">{phaseLabel(row.phase)} <code>{row.phase}</code></th>
+                            <td>{reportedMs(row.elapsedMs)}</td>
+                            <td>{reportedCount(row.calls)}</td>
+                            <td>{reportedCount(row.inputChars)}</td>
+                            <td>{reportedCount(row.outputChars)}</td>
+                            <td>{reportedCount(row.toolEvents)}</td>
+                            <td>{reportedMs(row.firstEventMs)}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
+                  <p className="setting-hint">{t("wecom.diag.validationFailures", {
+                    countText: Array.isArray(performanceSummary.validationFailures)
+                      ? reportedCount(performanceSummary.validationFailures.length)
+                      : t("wecom.diag.notReported"),
+                  })}</p>
+                  {performanceSummary.validationFailures?.map((failure, index) => (
+                    <p className="setting-hint" key={`${index}-${failure}`}>{failure}</p>
+                  ))}
+                </details>
+              ) : null}
+            </>
+          ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
+          <p className="setting-hint">
+            {t("wecom.diag.cacheHits", { countText: reportedCount(investigation?.cacheHits) })}
+            {investigation?.requestId ? <> · {t("wecom.diag.requestId")} <code>{investigation.requestId}</code></> : null}
+          </p>
+          <p className="setting-hint">{t("wecom.diag.cacheHitsHint")}</p>
+        </section>
         <div className="wecom-diag-grid">
           <section className="wecom-diag-block">
             <div className="wecom-diag-head">

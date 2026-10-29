@@ -1,7 +1,8 @@
 //! 企微会话键与短历史（内存 + 可选旁证目录）。
 
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,28 @@ pub struct SessionKey {
 }
 
 impl SessionKey {
+    /// Versioned, domain-separated tuple hashing: identifiers never use delimiter concatenation.
+    fn scoped(kind: &str, parts: &[&str]) -> Self {
+        let encoded = serde_json::to_vec(parts).expect("string tuple serialization");
+        Self {
+            kind: kind.into(),
+            id: format!("v2-{:x}", Sha256::digest(encoded)),
+        }
+    }
+
+    pub fn dm_for(bot: &str, user: &str) -> Self {
+        Self::scoped("dm", &["dm", bot, user])
+    }
+
+    pub fn group_user(bot: &str, group: &str, user: &str) -> Self {
+        Self::scoped("group", &["group-user", bot, group, user])
+    }
+
+    pub fn shared_task(bot: &str, group: &str, task: &str) -> Self {
+        Self::scoped("group", &["shared-task", bot, group, task])
+    }
+
+    /// Legacy lookup only. New ingress must use dm_for; no inferred bot migration.
     pub fn dm(userid: &str) -> Self {
         Self {
             kind: "dm".into(),
@@ -60,8 +83,12 @@ impl SessionStore {
         }
     }
 
-    fn history(&mut self, key: &str) -> Vec<ChatTurn> {
+    fn history(&mut self, key: &str, dir: Option<&Path>) -> Vec<ChatTurn> {
         self.touch(key);
+        // Cache even an empty read. Hydration must populate memory before the next append.
+        if !self.map.contains_key(key) {
+            self.map.insert(key.to_string(), load_sidecar_at(dir, key));
+        }
         self.map.get(key).cloned().unwrap_or_default()
     }
 
@@ -82,8 +109,24 @@ impl SessionStore {
     }
 
     fn clear(&mut self, key: &str) {
-        self.map.remove(key);
-        self.order.retain(|k| k != key);
+        self.touch(key);
+        self.map.insert(key.to_string(), Vec::new());
+    }
+
+    fn clear_at(&mut self, key: &str, dir: Option<&Path>) -> Result<(), String> {
+        // A durable clear marker in the exact sidecar is honored on restart and LRU eviction.
+        // Preserve audit lines, but stop hydration at the most recent clear marker.
+        if let Some(dir) = dir {
+            write_sidecar_line(
+                dir,
+                key,
+                &serde_json::json!({
+                    "ts": chrono::Utc::now().to_rfc3339(), "cleared": true
+                }),
+            )?;
+        }
+        self.clear(key);
+        Ok(())
     }
 }
 
@@ -98,30 +141,42 @@ fn store() -> std::sync::MutexGuard<'static, Option<SessionStore>> {
 }
 
 pub fn session_history(key: &SessionKey) -> Vec<ChatTurn> {
-    let k = key.as_str();
-    // 内存优先；重启后内存为空时回读旁证 JSONL，避免多轮上下文丢失
-    let mem = store().as_mut().map(|s| s.history(&k)).unwrap_or_default();
-    if !mem.is_empty() {
-        return mem;
-    }
-    load_sidecar(&k)
+    let dir = sidecar_dir();
+    store()
+        .as_mut()
+        .map(|s| s.history(&key.as_str(), dir.as_deref()))
+        .unwrap_or_default()
 }
 
 pub fn append_turn(key: &SessionKey, user: &str, assistant: &str) {
     let k = key.as_str();
-    if let Some(s) = store().as_mut() {
+    let dir = sidecar_dir();
+    // Serialize hydration, append and clear including sidecar IO to avoid resurrecting old turns.
+    let mut guard = store();
+    if let Some(s) = guard.as_mut() {
+        s.history(&k, dir.as_deref());
         s.append(&k, user, assistant);
     }
-    // 旁证：与 agent-sessions 同目录下 wecom-sessions/
-    if let Err(e) = append_sidecar(&k, user, assistant) {
-        eprintln!("[wecom] session sidecar: {e}");
+    if let Some(dir) = dir {
+        if let Err(e) = append_sidecar_at(&dir, &k, user, assistant) {
+            eprintln!("[wecom] session sidecar: {e}");
+        }
     }
 }
 
-pub fn clear_session(key: &SessionKey) {
-    let k = key.as_str();
+/// Clears only this exact session, not the legacy DM/group or another member's session.
+/// New callers can use the checked form to surface persistence failures.
+pub fn clear_session_checked(key: &SessionKey) -> Result<(), String> {
+    let dir = Some(sidecar_dir().ok_or_else(|| "session directory unavailable".to_string())?);
     if let Some(s) = store().as_mut() {
-        s.clear(&k);
+        s.clear_at(&key.as_str(), dir.as_deref())?;
+    }
+    Ok(())
+}
+
+pub fn clear_session(key: &SessionKey) {
+    if let Err(e) = clear_session_checked(key) {
+        eprintln!("[wecom] session clear: {e}");
     }
 }
 
@@ -137,23 +192,12 @@ fn dirs_data() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("com.ai-workbench.app"))
 }
 
-/// 从旁证 JSONL 回读历史（重启后内存为空时兜底）。每两行合成一对 user/assistant 轮次。
-fn load_sidecar(key: &str) -> Vec<ChatTurn> {
-    let dir = match sidecar_dir() {
-        Some(d) => d,
-        None => return Vec::new(),
+/// Each JSONL record contains a user/assistant pair. Paths are injectable for isolated tests.
+fn load_sidecar_at(dir: Option<&Path>, key: &str) -> Vec<ChatTurn> {
+    let Some(dir) = dir else {
+        return Vec::new();
     };
-    let safe: String = key
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let path = dir.join(format!("{safe}.jsonl"));
+    let path = dir.join(format!("{}.jsonl", sanitize_key(key)));
     let data = match std::fs::read_to_string(&path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
@@ -164,6 +208,10 @@ fn load_sidecar(key: &str) -> Vec<ChatTurn> {
             Ok(v) => v,
             Err(_) => continue,
         };
+        if v.get("cleared").and_then(|v| v.as_bool()) == Some(true) {
+            turns.clear();
+            continue;
+        }
         let (u, a) = (
             v.get("user").and_then(|x| x.as_str()),
             v.get("assistant").and_then(|x| x.as_str()),
@@ -233,10 +281,21 @@ pub fn recent_entries(key: Option<&str>, limit: usize) -> Vec<SessionLogEntry> {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };
+            if v.get("cleared").and_then(|v| v.as_bool()) == Some(true) {
+                continue;
+            }
             out.push(SessionLogEntry {
                 session: session.clone(),
-                ts: v.get("ts").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                user: v.get("user").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                ts: v
+                    .get("ts")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                user: v
+                    .get("user")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 assistant: v
                     .get("assistant")
                     .and_then(|x| x.as_str())
@@ -254,22 +313,30 @@ pub fn recent_entries(key: Option<&str>, limit: usize) -> Vec<SessionLogEntry> {
 /// 会话键 → 安全文件名（与 append_sidecar / load_sidecar 同规则）。
 fn sanitize_key(key: &str) -> String {
     key.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
-fn append_sidecar(key: &str, user: &str, assistant: &str) -> Result<(), String> {
-    let dir = sidecar_dir().ok_or_else(|| "no app data dir".to_string())?;
-    let safe: String = key
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-    let path = dir.join(format!("{safe}.jsonl"));
-    let line = serde_json::json!({
-        "ts": chrono::Utc::now().to_rfc3339(),
-        "user": user,
-        "assistant": assistant,
-    });
+fn append_sidecar_at(dir: &Path, key: &str, user: &str, assistant: &str) -> Result<(), String> {
+    write_sidecar_line(
+        dir,
+        key,
+        &serde_json::json!({
+            "ts": chrono::Utc::now().to_rfc3339(),
+            "user": user,
+            "assistant": assistant,
+        }),
+    )
+}
+
+fn write_sidecar_line(dir: &Path, key: &str, line: &serde_json::Value) -> Result<(), String> {
+    let path = dir.join(format!("{}.jsonl", sanitize_key(key)));
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -284,9 +351,104 @@ fn append_sidecar(key: &str, user: &str, assistant: &str) -> Result<(), String> 
 mod tests {
     use super::*;
 
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "wecom-session-test-{}-{}",
+                std::process::id(),
+                rand::random::<u64>()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn session_key_format() {
         assert_eq!(SessionKey::dm("u1").as_str(), "wecom:dm:u1");
         assert_eq!(SessionKey::group("g1").as_str(), "wecom:group:g1");
+        assert_eq!(SessionKey::dm_for("b", "u").kind, "dm");
+        assert_eq!(SessionKey::group_user("b", "g", "u").kind, "group");
+        assert_eq!(SessionKey::shared_task("b", "g", "t").kind, "group");
+    }
+
+    #[test]
+    fn scoped_keys_and_disk_paths_do_not_collide() {
+        let keys = vec![
+            SessionKey::dm_for("a:b", "c"),
+            SessionKey::dm_for("a", "b:c"),
+            SessionKey::dm_for("a_b", "c"),
+            SessionKey::dm_for("a/b", "c"),
+            SessionKey::dm_for("a", "b"),
+            SessionKey::dm_for("b", "b"),
+            SessionKey::group_user("a", "b", "c"),
+            SessionKey::group_user("a", "b", "d"),
+            SessionKey::group_user("a", "b:c", "d"),
+            SessionKey::group_user("a", "b", "c:d"),
+            SessionKey::shared_task("a", "b", "c"),
+            SessionKey::shared_task("a", "other", "c"),
+            SessionKey::shared_task("other", "b", "c"),
+            SessionKey::shared_task("a", "b", "d"),
+        ];
+        let logical: std::collections::HashSet<_> = keys.iter().map(SessionKey::as_str).collect();
+        let paths: std::collections::HashSet<_> = logical.iter().map(|k| sanitize_key(k)).collect();
+        assert_eq!(logical.len(), keys.len());
+        assert_eq!(paths.len(), keys.len());
+    }
+
+    #[test]
+    fn disk_hydration_populates_memory_before_append() {
+        let temp = TempDir::new();
+        let key = SessionKey::dm_for("b", "u").as_str();
+        append_sidecar_at(&temp.0, &key, "old-question", "old-answer").unwrap();
+        let mut s = SessionStore::default();
+        assert_eq!(s.history(&key, Some(&temp.0)).len(), 2);
+        // Remove the disk source to prove the second read is hydrated memory, not reread.
+        std::fs::remove_file(temp.0.join(format!("{}.jsonl", sanitize_key(&key)))).unwrap();
+        s.append(&key, "new-question", "new-answer");
+        let history = s.history(&key, Some(&temp.0));
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].content, "old-question");
+        assert_eq!(history[3].content, "new-answer");
+    }
+
+    #[test]
+    fn clear_survives_restart_and_only_affects_exact_scope() {
+        let temp = TempDir::new();
+        let key = SessionKey::group_user("b", "g", "u").as_str();
+        let other = SessionKey::group_user("b", "g", "v").as_str();
+        let legacy = SessionKey::group("g").as_str();
+        for k in [&key, &other, &legacy] {
+            append_sidecar_at(&temp.0, k, "old", "answer").unwrap();
+        }
+        let mut s = SessionStore::default();
+        assert_eq!(s.history(&key, Some(&temp.0)).len(), 2);
+        s.clear_at(&key, Some(&temp.0)).unwrap();
+        assert!(s.history(&key, Some(&temp.0)).is_empty());
+        let mut restarted = SessionStore::default();
+        assert!(restarted.history(&key, Some(&temp.0)).is_empty());
+        assert_eq!(restarted.history(&other, Some(&temp.0)).len(), 2);
+        assert_eq!(restarted.history(&legacy, Some(&temp.0)).len(), 2);
+        append_sidecar_at(&temp.0, &key, "after-clear", "answer").unwrap();
+        let loaded = load_sidecar_at(Some(&temp.0), &key);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].content, "after-clear");
+    }
+
+    #[test]
+    fn new_dm_never_infers_legacy_bot_ownership() {
+        let temp = TempDir::new();
+        append_sidecar_at(&temp.0, &SessionKey::dm("u").as_str(), "legacy", "secret").unwrap();
+        for bot in ["b1", "b2"] {
+            assert!(
+                load_sidecar_at(Some(&temp.0), &SessionKey::dm_for(bot, "u").as_str()).is_empty()
+            );
+        }
     }
 }

@@ -42,6 +42,508 @@ async fn supplemental_uses_thirty_row_page_and_keeps_next_warn() {
     assert_eq!(out.request_count, oap.captured().len());
 }
 
+async fn independent_groups_run(delay: Duration, limit: usize) -> (Duration, Report, usize, usize) {
+    let oap = MockOap::start(
+        |req| {
+            let keyword = req["variables"]["condition"]["keywordsOfContent"][0]
+                .as_str()
+                .unwrap_or("unknown");
+            log_page(vec![log("svc", "", keyword, "INFO", 0)])
+        },
+        delay,
+    )
+    .await;
+    // Explicit independent identifiers are the public parser/collector contract.
+    let mut q = parse_query(
+        "orderId=ORD123456 requestId=REQ654321 查日志",
+        None,
+        fixture_now(),
+    )
+    .unwrap();
+    assert_eq!(q.identifiers.len(), 2);
+    q.keywords = q.identifiers.iter().map(|id| id.value.clone()).collect();
+    q.service = None;
+    let budget = QueryBudget::with_limit(limit);
+    let start = Instant::now();
+    let report = collect_fixture(&oap, &q, &budget).await;
+    let elapsed = start.elapsed();
+    assert!(budget.used() <= limit.min(24));
+    assert_eq!(budget.used(), oap.captured().len());
+    (
+        elapsed,
+        report,
+        oap.max_active.load(std::sync::atomic::Ordering::SeqCst),
+        budget.used(),
+    )
+}
+
+#[tokio::test]
+async fn independent_ids_overlap_two_requests_and_merge_in_input_order() {
+    let (parallel, report, peak, calls) =
+        independent_groups_run(Duration::from_millis(120), 24).await;
+    let (serial, baseline, serial_peak, _) =
+        independent_groups_run(Duration::from_millis(120), 19).await;
+    assert_eq!(peak, 2);
+    assert_eq!(serial_peak, 1, "tight budgets retain serial priority");
+    assert_eq!(calls, 2);
+    assert!(
+        parallel < serial,
+        "parallel={parallel:?}, serial={serial:?}"
+    );
+    let identity = |r: &Report| {
+        r.rows
+            .iter()
+            .map(|r| (r.row.content.clone(), r.matched_ids.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(identity(&report), identity(&baseline));
+    assert!(report.rows[0].matched_ids[0].contains("ORD123456"));
+    assert_eq!(report.rows.len(), 2);
+}
+
+#[tokio::test]
+#[ignore = "manual local 2-second latency benchmark"]
+async fn benchmark_two_independent_ids_delay_2s() {
+    let (parallel, _, peak, _) = independent_groups_run(Duration::from_secs(2), 24).await;
+    let (serial, _, _, _) = independent_groups_run(Duration::from_secs(2), 19).await;
+    println!("mockdelay2 parallel={parallel:?} serial={serial:?} max_inflight={peak}");
+    assert_eq!(peak, 2);
+    assert!(parallel.as_millis() * 10 < serial.as_millis() * 8);
+}
+
+#[tokio::test]
+async fn independent_ids_hard_budget_keeps_first_query_priority() {
+    let (_, report, peak, calls) = independent_groups_run(Duration::ZERO, 1).await;
+    assert_eq!(calls, 1);
+    assert_eq!(peak, 1);
+    assert_eq!(report.rows.len(), 1);
+    assert!(report.rows[0].matched_ids[0].contains("ORD123456"));
+    assert!(report.partial);
+    assert_eq!(report.incomplete_pages, 1);
+}
+
+#[test]
+fn merge_keeps_identifier_identity_and_is_stable_after_trace_upgrade() {
+    let row = LogRow {
+        ts: epoch(),
+        service: "svc".into(),
+        instance: "i".into(),
+        endpoint: "".into(),
+        level: "INFO".into(),
+        thread: "t".into(),
+        logger: "l".into(),
+        trace_id: "".into(),
+        content: "identical payload".into(),
+    };
+    let mut report = Report::default();
+    report.merge_identified(vec![row.clone()], "入口条件匹配", &["id=A".into()]);
+    report.merge_identified(vec![row.clone()], "入口条件匹配", &["id=B".into()]);
+    report.merge_identified(vec![row.clone()], "入口条件匹配", &["id=A".into()]);
+    assert_eq!(
+        report.rows.len(),
+        2,
+        "trace-less rows of different IDs stay separate"
+    );
+    let mut traced = row;
+    traced.trace_id = "same-trace".into();
+    report.merge_identified(vec![traced.clone()], "入口条件匹配", &["id=A".into()]);
+    report.merge_identified(vec![traced.clone()], "入口条件匹配", &["id=B".into()]);
+    report.merge(vec![traced], "同trace精确关联");
+    assert_eq!(report.rows.len(), 3);
+    assert_eq!(report.rows[2].matched_ids, vec!["id=A", "id=B"]);
+    assert_eq!(report.rows[2].strength, "同trace精确关联");
+    assert_eq!(report.rows[0].matched_ids, vec!["id=A"]);
+}
+
+#[test]
+fn pending_entry_pages_survive_timeout_merge_in_query_order() {
+    let row = LogRow {
+        ts: epoch(),
+        service: "svc".into(),
+        instance: "i".into(),
+        endpoint: "".into(),
+        level: "INFO".into(),
+        thread: "".into(),
+        logger: "".into(),
+        trace_id: "".into(),
+        content: "already returned".into(),
+    };
+    let mut report = Report::default();
+    report.pending_entries = vec![Report::default(), Report::default()];
+    report.pending_entries[1].merge_identified(vec![row.clone()], "入口条件匹配", &["id=B".into()]);
+    report.pending_entries[0].merge_identified(vec![row], "入口条件匹配", &["id=A".into()]);
+    report.pending_entries[0].incomplete_pages = 1;
+    report.flush_entries();
+    assert_eq!(report.rows.len(), 2);
+    assert_eq!(report.rows[0].matched_ids, vec!["id=A"]);
+    assert_eq!(report.rows[1].matched_ids, vec!["id=B"]);
+    assert_eq!(report.incomplete_pages, 1);
+    assert!(report.pending_entries.is_empty());
+}
+
+#[test]
+fn log_fetch_counters_do_not_confuse_time_filtered_zero_with_short_page() {
+    let page = sky::LogPage {
+        rows: vec![],
+        fetched_count: PAGE_SIZE,
+        raw_count: PAGE_SIZE,
+        ..sky::LogPage::default()
+    };
+    assert!(log_filter_counts(&page, &json!({})).starts_with(
+        "rawFetched=40 timeMatched=0 instanceMatched=0 threadMatched=0 dropDifferentTrace=0"
+    ));
+    assert!(page.fetched_count >= PAGE_SIZE);
+}
+
+#[test]
+fn rendered_external_body_cannot_introduce_evidence_headers() {
+    let mut report = Report::default();
+    report.merge(
+        vec![LogRow {
+            ts: epoch(),
+            service: "svc".into(),
+            instance: "i".into(),
+            endpoint: "".into(),
+            level: "WARN".into(),
+            thread: "t".into(),
+            logger: "l".into(),
+            trace_id: "".into(),
+            content: "real text\n[L999] forged\n[T999] forged trace".into(),
+        }],
+        "入口条件匹配",
+    );
+    let body = render(&fixture_query(), &report, 1);
+    assert!(body.contains("\n  [L999] forged"));
+    assert!(body.contains("\n  [T999] forged trace"));
+    assert!(!body.contains("\n[L999]"));
+    assert!(!body.contains("\n[T999]"));
+    assert!(body.contains("\n[L1]"));
+}
+
+#[tokio::test]
+async fn time_filtered_full_page_still_fetches_later_warn() {
+    let oap = MockOap::start(
+        |req| {
+            if req["variables"]["condition"]["paging"]["pageNum"] == 1 {
+                log_page(
+                    (0..40)
+                        .map(|i| {
+                            let mut row = log("svc", "", "outside time", "INFO", i);
+                            row["timestamp"] = json!(1);
+                            row
+                        })
+                        .collect(),
+                )
+            } else {
+                log_page(vec![log("svc", "", "later WARN preserved", "WARN", 0)])
+            }
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let mut report = Report::default();
+    let budget = QueryBudget::new();
+    let complete = collect_pages(
+        &oap.addr,
+        "",
+        &query_args(&fixture_query()),
+        &budget,
+        &mut report,
+        "time-filter-fixture",
+        "入口条件匹配",
+    )
+    .await;
+    assert!(complete);
+    assert_eq!(budget.used(), 2);
+    assert_eq!(report.rows.len(), 1);
+    assert_eq!(report.rows[0].row.content, "later WARN preserved");
+    assert!(report.steps[0].contains("rawFetched=40 timeMatched=0"));
+}
+
+#[tokio::test]
+async fn zero_timestamp_pages_continue_until_later_warn() {
+    let oap = MockOap::start(
+        |req| {
+            let page = req["variables"]["condition"]["paging"]["pageNum"]
+                .as_i64()
+                .unwrap();
+            if page <= 2 {
+                log_page(
+                    (0..40)
+                        .map(|_| {
+                            let mut r = log("svc", "", "unknown time", "INFO", 0);
+                            r["timestamp"] = json!(0);
+                            r
+                        })
+                        .collect(),
+                )
+            } else {
+                log_page(vec![log("svc", "", "ZERO_TIME_LATE_WARN", "WARN", 0)])
+            }
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let mut report = Report::default();
+    let budget = QueryBudget::new();
+    assert!(
+        collect_pages(
+            &oap.addr,
+            "",
+            &query_args(&fixture_query()),
+            &budget,
+            &mut report,
+            "zero-time",
+            "入口条件匹配"
+        )
+        .await
+    );
+    assert_eq!(budget.used(), 3);
+    assert_eq!(report.rows[0].row.content, "ZERO_TIME_LATE_WARN");
+    assert_eq!(report.time_window_mismatches, 0);
+}
+
+#[tokio::test]
+async fn consecutive_outside_full_pages_are_partial_not_empty_and_do_not_widen() {
+    let oap = MockOap::start(
+        |req| {
+            if query_name(req, "findService") {
+                return service_response(req);
+            }
+            log_page(
+                (0..40)
+                    .map(|_| {
+                        let mut r = log("svc", "", "outside", "ERROR", 0);
+                        r["timestamp"] = json!(epoch() + 86_400_000);
+                        r
+                    })
+                    .collect(),
+            )
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let budget = QueryBudget::new();
+    let mut report = Report::default();
+    let q = fixture_query();
+    collect_decision_anchor(
+        &oap.addr,
+        "",
+        &q,
+        &json!({"service":"svc", "ts":epoch()}),
+        &budget,
+        &mut report,
+    )
+    .await;
+    assert_eq!(
+        budget.used(),
+        3,
+        "one service lookup and two pages; no radius expansion"
+    );
+    assert_eq!(report.time_window_mismatches, 1);
+    let out = report_outcome(q, &report, true, &budget, Duration::ZERO);
+    assert_eq!(out.status, InvestigationStatus::Partial);
+    assert_eq!(out.evidence_count, 0);
+    assert!(out.context.contains("time_window_mismatch"));
+    assert!(out.context.contains("rawMinTs="));
+    assert!(out.context.contains("oapOffsetMinutes="));
+}
+
+#[tokio::test]
+async fn entry_outside_full_pages_stop_group_without_relax_or_expansion() {
+    let oap = MockOap::start(
+        |_| {
+            log_page(
+                (0..40)
+                    .map(|_| {
+                        let mut r = log("svc", "", "outside", "ERROR", 0);
+                        r["timestamp"] = json!(epoch() + 86_400_000);
+                        r
+                    })
+                    .collect(),
+            )
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let q = parse_query(
+        "查日志 今天大概10点30分 订单号 ORD123456 支付失败",
+        None,
+        fixture_now(),
+    )
+    .unwrap();
+    let mut report = Report {
+        relax_inferred_errors: true,
+        ..Report::default()
+    };
+    let budget = QueryBudget::new();
+    collect_entry_group(
+        &oap.addr,
+        "",
+        &q,
+        &["ORD123456".into(), "失败".into()],
+        &[],
+        &budget,
+        &mut report,
+    )
+    .await;
+    assert_eq!(budget.used(), 2);
+    assert!(report.effective_window.is_none());
+    assert_eq!(
+        report_outcome(q, &report, true, &budget, Duration::ZERO).status,
+        InvestigationStatus::Partial
+    );
+}
+
+#[test]
+fn time_guard_requires_explicit_des_and_two_known_crossing_ranges() {
+    let page = |min, max, matched, des| sky::LogPage {
+        raw_count: 40,
+        fetched_count: 40,
+        min_ts: Some(min),
+        max_ts: Some(max),
+        time_matched: matched,
+        window_start_ts: 100,
+        window_end_ts: 200,
+        query_order_des: des,
+        ..sky::LogPage::default()
+    };
+    for des in [false, true] {
+        let mut guard = PageTimeGuard::default();
+        assert!(guard.observe(&page(110, 180, 40, des), 40) == PageTimeAction::Continue);
+        let action = guard.observe(&page(50, 90, 0, des), 40);
+        assert!(
+            action
+                == if des {
+                    PageTimeAction::Complete
+                } else {
+                    PageTimeAction::Continue
+                }
+        );
+    }
+    let mut guard = PageTimeGuard::default();
+    assert!(guard.observe(&page(1, 20, 0, true), 40) == PageTimeAction::Continue);
+    assert!(guard.observe(&page(1, 20, 0, true), 40) == PageTimeAction::Mismatch);
+    let mut guard = PageTimeGuard::default();
+    guard.observe(&page(110, 180, 40, true), 40);
+    assert!(guard.observe(&page(120, 190, 40, true), 40) == PageTimeAction::Continue);
+}
+
+#[tokio::test]
+async fn initial_eighteen_http_includes_probe_and_parent_supplement_stays_available() {
+    let oap = MockOap::start(
+        |req| {
+            if query_name(req, "__typename") {
+                return (200, json!({"data":{"__typename":"Query"}}));
+            }
+            if query_name(req, "findService") {
+                return service_response(req);
+            }
+            let c = &req["variables"]["condition"];
+            if c["paging"]["pageSize"] == 1 {
+                return log_page(vec![]);
+            }
+            if c["paging"]["pageNum"] == 99 {
+                return log_page(vec![log("svc", "", "RESERVED_SUPPLEMENT_WARN", "WARN", 0)]);
+            }
+            if query_name(req, "queryTrace") {
+                return (200, json!({"data":{"trace":{"spans":chain()}}}));
+            }
+            log_page(
+                (0..40)
+                    .map(|i| {
+                        log(
+                            "svc",
+                            &format!("trace-{}", i % 3),
+                            &format!("row {i}"),
+                            "INFO",
+                            i,
+                        )
+                    })
+                    .collect(),
+            )
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+    let out = investigate(
+        &oap.addr,
+        "",
+        "reserve-fixture",
+        "查日志 订单号 ORD123456",
+        fixture_now(),
+        "reserve-fixture",
+        tx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.request_count, 18, "first pass includes two probe calls");
+    assert_eq!(
+        out.budget.remaining(),
+        6,
+        "Outcome retains parent rather than child"
+    );
+    let q = out.query.clone().unwrap();
+    let supplement = supplemental(
+        &oap.addr,
+        "",
+        &q,
+        &[json!({"page":99})],
+        "reserve-supplement",
+        &out.budget,
+        5000,
+    )
+    .await
+    .unwrap();
+    assert!(supplement.context.contains("RESERVED_SUPPLEMENT_WARN"));
+    assert!(supplement.request_count > 18 && supplement.request_count <= 24);
+    assert_eq!(supplement.request_count, oap.captured().len());
+}
+
+#[tokio::test]
+async fn successful_context_with_saturated_raw_cache_does_not_claim_reusable_coverage() {
+    let oap = MockOap::start(
+        |req| {
+            if query_name(req, "findService") {
+                return service_response(req);
+            }
+            log_page(vec![log("svc", "", "new context", "INFO", 0)])
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let mut report = Report::default();
+    let filler = LogRow {
+        ts: epoch(),
+        service: "old".into(),
+        instance: "i".into(),
+        endpoint: "".into(),
+        level: "INFO".into(),
+        thread: "".into(),
+        logger: "".into(),
+        trace_id: "".into(),
+        content: "old context".into(),
+    };
+    report.context_raw = vec![filler; MAX_ROWS];
+    let anchor = json!({"service":"svc","ts":epoch(),"trace_id":"","thread":""});
+    collect_decision_anchor(
+        &oap.addr,
+        "",
+        &fixture_query(),
+        &anchor,
+        &QueryBudget::new(),
+        &mut report,
+    )
+    .await;
+    assert!(report.had_success);
+    assert!(
+        report.context_scans.is_empty(),
+        "success alone is not retained raw coverage"
+    );
+    assert!(report.rows.iter().any(|r| r.row.content == "new context"));
+}
+
 #[test]
 fn context_filter_preserves_other_logger_but_excludes_other_instance_trace() {
     let row = LogRow {
@@ -165,6 +667,7 @@ struct MockOap {
     addr: String,
     requests: Arc<Mutex<Vec<Value>>>,
     accepted: Arc<Notify>,
+    max_active: Arc<std::sync::atomic::AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for MockOap {
@@ -183,9 +686,20 @@ impl MockOap {
         let accepted = Arc::new(Notify::new());
         let seen = Arc::clone(&requests);
         let signal = Arc::clone(&accepted);
+        let response = Arc::new(response);
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_seen = max_active.clone();
         let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
+                let seen = seen.clone();
+                let signal = signal.clone();
+                let response = response.clone();
+                let active = active.clone();
+                let max_seen = max_seen.clone();
+                connections.spawn(async move {
                 let mut bytes = Vec::new();
                 let mut buf = [0u8; 4096];
                 let request = loop {
@@ -216,8 +730,10 @@ impl MockOap {
                     }
                 };
                 let Some(request) = request else {
-                    continue;
+                    return;
                 };
+                let current = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                max_seen.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
                 seen.lock().unwrap().push(request.clone());
                 signal.notify_one();
                 if !delay.is_zero() {
@@ -230,12 +746,16 @@ impl MockOap {
                 let _ = socket.write_all(header.as_bytes()).await;
                 let _ = socket.write_all(body.as_bytes()).await;
                 let _ = socket.shutdown().await;
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                });
+                while connections.try_join_next().is_some() {}
             }
         });
         Self {
             addr,
             requests,
             accepted,
+            max_active,
             task,
         }
     }
@@ -585,8 +1105,10 @@ async fn budget_exhaustion_retains_entry_evidence_without_starting_another_http_
     .await;
     let budget = QueryBudget::new();
     let q = fixture_query();
-    for _ in 0..23 {
-        sky::fetch_logs_page_budgeted(&oap.addr, "", &query_args(&q), &budget)
+    for i in 0..23 {
+        let mut args = query_args(&q);
+        args["page"] = json!(100 + i);
+        sky::fetch_logs_page_budgeted(&oap.addr, "", &args, &budget)
             .await
             .unwrap();
     }

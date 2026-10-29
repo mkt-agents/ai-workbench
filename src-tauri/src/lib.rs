@@ -38,7 +38,15 @@ mod wecom_investigation_query;
 mod wecom_investigation;
 mod wecom_investigation_plan;
 mod wecom_decision_evidence;
+mod wecom_evidence_store;
+mod wecom_performance;
+mod wecom_source_hints;
+mod wecom_answer;
+mod wecom_report;
+mod wecom_reply;
 mod wecom_session;
+mod wecom_tasks;
+mod wecom_admission;
 mod wecom_ws;
 mod wecom_orchestrator;
 mod wecom_channel;
@@ -378,6 +386,7 @@ pub fn run() {
 
             // The AI history is the one report-related thing that is persisted;
             // its schema lives next to its own code (see report_history.rs).
+            wecom_tasks::ensure_schema(&conn).expect("failed to init shared WeCom task schema");
             report_history::ensure_schema(&conn).expect("failed to init report history schema");
             codebuddy::ensure_schema(&conn).expect("failed to init workbuddy schema");
             codex_quota::ensure_schema(&conn).expect("failed to init codex account schema");

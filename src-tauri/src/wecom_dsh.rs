@@ -132,7 +132,6 @@ impl DshModelCatalog {
     }
 }
 
-
 /// 一回合里编排层关心的事件。
 pub enum DshEvent {
     /// 完整的 `update` 对象（`sessionUpdate` 在里面）。
@@ -145,7 +144,7 @@ pub enum DshEvent {
 
 /// JSON-RPC 共享状态：读线程写、回合与请求读。
 struct RpcShared {
-    pending: StdMutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
+    pending: StdMutex<HashMap<u64, oneshot::Sender<Result<Value, RpcFailure>>>>,
     /// sessionId → 当前回合的事件通道（一个会话同时只有一个 prompt）。
     turns: StdMutex<HashMap<String, mpsc::UnboundedSender<DshEvent>>>,
     /// `session/prompt` 的 rpc id → sessionId，用于把应答路由回回合。
@@ -230,6 +229,68 @@ impl EngineState {
     }
 }
 
+/// Successful acquisition metadata only; no prompts, MCP arguments or credentials.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAction {
+    pub action: String,
+    pub session_id: String,
+    pub generation: u64,
+}
+
+#[derive(Default)]
+struct ActiveSessions {
+    generation: u64,
+    config_revision: u64,
+    validated: HashMap<String, (String, u64, u64)>,
+    actions: HashMap<String, SessionAction>,
+}
+
+impl ActiveSessions {
+    fn matches(&self, key: &str, id: &str) -> bool {
+        self.validated
+            .get(key)
+            .map(|(active, generation, config)| {
+                active == id && *generation == self.generation && *config == self.config_revision
+            })
+            .unwrap_or(false)
+    }
+
+    fn clear(&mut self) {
+        self.validated.clear();
+        self.actions.clear();
+    }
+
+    fn started(&mut self) {
+        self.generation += 1;
+        self.clear();
+    }
+
+    fn config_changed(&mut self) {
+        self.config_revision += 1;
+        self.clear();
+    }
+
+    fn forget(&mut self, key: &str) {
+        self.validated.remove(key);
+        self.actions.remove(key);
+    }
+
+    fn record(&mut self, key: &str, id: &str, action: &str) -> SessionAction {
+        self.validated.insert(
+            key.into(),
+            (id.into(), self.generation, self.config_revision),
+        );
+        let entry = SessionAction {
+            action: action.into(),
+            session_id: id.into(),
+            generation: self.generation,
+        };
+        self.actions.insert(key.into(), entry.clone());
+        entry
+    }
+}
+
 struct EngineInner {
     state: EngineState,
     detail: String,
@@ -242,6 +303,7 @@ struct EngineInner {
     runtime: Option<Runtime>,
     /// 企微会话键（`wecom:dm:u1`）→ ACP sessionId。落盘，重启后还能 resume。
     sessions: HashMap<String, String>,
+    active: ActiveSessions,
     /// sessionId → 上一次成功应用的 (model, effort)，避免每轮重复下发
     applied: HashMap<String, (String, String)>,
     /// 列模型用的探针会话（不带用户对话，随时可重建）
@@ -281,6 +343,7 @@ impl DshEngine {
                 effort: String::new(),
                 runtime: None,
                 sessions: load_sessions(),
+                active: ActiveSessions::default(),
                 applied: HashMap::new(),
                 probe: None,
                 catalog: None,
@@ -301,6 +364,7 @@ impl DshEngine {
         model: String,
         effort: String,
     ) -> bool {
+        let _guard = self.start_lock.lock().await;
         let mut g = self.inner.lock().await;
         let changed = g.tier != tier || g.workspace != workspace;
         g.tier = tier;
@@ -313,31 +377,31 @@ impl DshEngine {
             g.effort = effort;
             g.applied.clear();
         }
+        if changed {
+            g.active.config_changed();
+        }
+        drop(g);
+        if changed {
+            // Only retire here. The caller's kick/ensure_ready starts the next process.
+            self.teardown().await;
+        }
         changed
     }
 
-    /// 更新随会话下发的 MCP 服务列表（企微通道配置）。只影响后续新建/恢复的会话。
+    /// ACP binds MCP at new/resume time. Retire the old process on effective config
+    /// changes so an active session can never silently retain its old MCP clients.
     pub async fn set_mcp(&self, mcp: Vec<crate::mcp::McpServerSpec>) {
-        self.inner.lock().await.mcp = mcp;
-    }
-
-    /// 当前 MCP 列表转成 ACP `mcpServers` 数组（stdio 传输：name/command/args）。
-    /// 名称或命令为空的条目跳过；参数按用户输入切词，复用 `mcp::split_args`。
-    async fn acp_mcp_servers(&self) -> Value {
-        let mcp = self.inner.lock().await.mcp.clone();
-        let list: Vec<Value> = mcp
-            .iter()
-            .filter(|s| !s.name.trim().is_empty() && !s.command.trim().is_empty())
-            .map(|s| {
-                json!({
-                    "name": s.name.trim(),
-                    "command": s.command.trim(),
-                    "args": crate::mcp::split_args(&s.args),
-                    "env": [],
-                })
-            })
-            .collect();
-        Value::Array(list)
+        let _guard = self.start_lock.lock().await;
+        let mut g = self.inner.lock().await;
+        let changed = acp_mcp_servers(&g.mcp) != acp_mcp_servers(&mcp);
+        g.mcp = mcp;
+        if changed {
+            g.active.config_changed();
+        }
+        drop(g);
+        if changed {
+            self.teardown().await;
+        }
     }
 
     pub async fn status(&self) -> DshStatus {
@@ -380,11 +444,9 @@ impl DshEngine {
     pub async fn sync_profile(&self) -> Result<MirrorReport, String> {
         let root = wecom_dsh_profile::dsh_profiles_root()
             .ok_or_else(|| "找不到用户目录（USERPROFILE）".to_string())?;
-        let report = tokio::task::spawn_blocking(move || {
-            wecom_dsh_profile::mirror_profiles(&root)
-        })
-        .await
-        .map_err(|e| format!("同步任务失败：{e}"))??;
+        let report = tokio::task::spawn_blocking(move || wecom_dsh_profile::mirror_profiles(&root))
+            .await
+            .map_err(|e| format!("同步任务失败：{e}"))??;
         let mut g = self.inner.lock().await;
         g.mirror = Some(report.clone());
         Ok(report)
@@ -435,11 +497,7 @@ impl DshEngine {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "DSH 没有返回 sessionId".to_string())?
             .to_string();
-        let catalog = parse_config_options(
-            created
-                .get("configOptions")
-                .unwrap_or(&Value::Null),
-        );
+        let catalog = parse_config_options(created.get("configOptions").unwrap_or(&Value::Null));
         {
             let mut g = self.inner.lock().await;
             g.probe = Some(session_id);
@@ -465,9 +523,7 @@ impl DshEngine {
                 .flat_map(|g| g.options.iter().map(|o| o.value.clone()))
                 .collect();
             if available.is_empty() {
-                return Err(
-                    "DSH 里没有可用模型：请在 Harness → 模型页配好模型与密钥/登录".into(),
-                );
+                return Err("DSH 里没有可用模型：请在 Harness → 模型页配好模型与密钥/登录".into());
             }
             model = if available.iter().any(|v| v == &catalog.current) {
                 catalog.current
@@ -510,8 +566,7 @@ impl DshEngine {
             .map_err(|e| format!("应用思考强度失败（保留模型选择）：{e}"))?;
         }
         let mut g = self.inner.lock().await;
-        g.applied
-            .insert(session_id.to_string(), (model, effort));
+        g.applied.insert(session_id.to_string(), (model, effort));
         Ok(())
     }
 
@@ -545,7 +600,9 @@ impl DshEngine {
             (g.tier, g.workspace.clone())
         };
         if workspace.trim().is_empty() {
-            return Err("DSH 引擎需要工作区路径：请在「访问策略 → 工作区路径」填一个绝对路径".into());
+            return Err(
+                "DSH 引擎需要工作区路径：请在「访问策略 → 工作区路径」填一个绝对路径".into(),
+            );
         }
         self.teardown().await;
         self.set_state(EngineState::Starting, "正在启动 DeepSeek Harness…")
@@ -565,58 +622,78 @@ impl DshEngine {
         }
     }
 
-    /// Forget only this channel mapping; old ACP history stays intact but is no longer resumed.
+    /// Forget only this key; serialize with acquisition so a late reply cannot restore it.
     pub async fn reset_channel_session(&self, key: &str) {
-        self.inner.lock().await.sessions.remove(key);
+        let _guard = self.start_lock.lock().await;
+        let mut g = self.inner.lock().await;
+        if let Some(id) = g.sessions.remove(key) {
+            g.applied.remove(&id);
+        }
+        g.active.forget(key);
+        drop(g);
         self.persist_sessions().await;
     }
 
-    /// 取该企微会话对应的 ACP 会话：先 resume，失败（工作区变了 / 会话被清理）再新建。
+    /// Reuse validated live sessions, otherwise resume persisted history once.
     pub async fn acquire_session(&self, key: &str) -> Result<String, String> {
-        let (workspace, existing) = {
+        self.acquire_session_with_action(key)
+            .await
+            .map(|(id, _)| id)
+    }
+
+    /// The action belongs to this acquisition, not a racy global "last action".
+    pub async fn acquire_session_with_action(&self, key: &str) -> Result<(String, String), String> {
+        let _guard = self.start_lock.lock().await;
+        let (workspace, existing, validated, mcp_servers) = {
             let g = self.inner.lock().await;
-            (g.workspace.clone(), g.sessions.get(key).cloned())
+            let existing = g.sessions.get(key).cloned();
+            let validated = existing
+                .as_ref()
+                .map(|id| g.active.matches(key, id))
+                .unwrap_or(false);
+            (
+                g.workspace.clone(),
+                existing,
+                validated,
+                acp_mcp_servers(&g.mcp),
+            )
         };
-        let mcp_servers = self.acp_mcp_servers().await;
+        // Even reuse requires a live current runtime, never just a persisted mapping.
         let (shared, writer) = self.parts().await?;
-
-        if let Some(id) = existing {
-            let params = json!({
-                "sessionId": id,
-                "cwd": workspace,
-                "mcpServers": mcp_servers,
-            });
-            match rpc_call(&shared, &writer, "session/resume", params, SESSION_TIMEOUT).await {
-                Ok(_) => return Ok(id),
-                Err(e) => {
-                    eprintln!("[wecom-dsh] resume {} 失败，改为新建：{e}", key);
-                    crate::wecom_log::write(
-                        "dsh",
-                        &format!("resume {key} 失败（新建会话，上下文重置）：{e}"),
-                    );
-                }
-            }
-        }
-
-        let created = rpc_call(
+        let (id, action) = acquire_rpc_session(
             &shared,
             &writer,
-            "session/new",
-            json!({ "cwd": workspace, "mcpServers": mcp_servers }),
-            SESSION_TIMEOUT,
+            &workspace,
+            mcp_servers,
+            existing.as_deref(),
+            validated,
         )
         .await?;
-        let id = created
-            .get("sessionId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "DSH 没有返回 sessionId".to_string())?
-            .to_string();
-        {
+        let entry = {
             let mut g = self.inner.lock().await;
+            if !shared.rpc.alive.load(Ordering::SeqCst) {
+                return Err("DSH 进程已退出，会话恢复结果未应用".into());
+            }
             g.sessions.insert(key.to_string(), id.clone());
+            g.active.record(key, &id, action)
+        };
+        if action == "new" {
+            self.persist_sessions().await;
         }
-        self.persist_sessions().await;
-        Ok(id)
+        // JSON escaping prevents control characters in an opaque session id forging log lines.
+        crate::wecom_log::write(
+            "dsh-session-action",
+            &json!({
+                "action": entry.action, "id": entry.session_id, "generation": entry.generation
+            })
+            .to_string(),
+        );
+        Ok((id, action.into()))
+    }
+
+    #[allow(dead_code)]
+    pub async fn session_action(&self, key: &str) -> Option<SessionAction> {
+        self.inner.lock().await.active.actions.get(key).cloned()
     }
 
     /// 发起一轮 prompt；返回的 `DshTurn` 负责收流、回审批、取消。
@@ -624,7 +701,11 @@ impl DshEngine {
     /// `prompt_blocks` 是 ACP 的 content block 数组（`text` / `image`）。纯文本回合也走这里
     /// （传一个 `{type:"text"}`）；vision 模型且宣告 image 能力时，编排层会内联 image block，
     /// 这样图片才真正进模型，而不是降级成文本 URL。
-    pub async fn prompt(&self, session_id: &str, prompt_blocks: Vec<Value>) -> Result<DshTurn, String> {
+    pub async fn prompt(
+        &self,
+        session_id: &str,
+        prompt_blocks: Vec<Value>,
+    ) -> Result<DshTurn, String> {
         let (shared, writer) = self.parts().await?;
         let (tx, rx) = mpsc::unbounded_channel();
         {
@@ -700,7 +781,9 @@ impl DshEngine {
             g.probe = None;
             g.catalog = None;
             g.applied.clear();
+            g.active.clear();
             g.image_prompt = false;
+            g.state = EngineState::Stopped;
             g.runtime.take()
         };
         if let Some(mut rt) = runtime {
@@ -732,7 +815,8 @@ impl DshEngine {
 
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "启动 DSH 失败：找不到 Node.js / dsh，请先在「Harness」页安装 DeepSeek Harness".to_string()
+                "启动 DSH 失败：找不到 Node.js / dsh，请先在「Harness」页安装 DeepSeek Harness"
+                    .to_string()
             } else {
                 format!("启动 DSH 失败：{e}")
             }
@@ -797,6 +881,7 @@ impl DshEngine {
             .unwrap_or(false);
 
         let mut g = self.inner.lock().await;
+        g.active.started();
         g.runtime = Some(Runtime {
             child,
             writer: tx,
@@ -813,6 +898,8 @@ impl DshEngine {
     /// 正常路径走 `stop()`；这里只是防止留下一只没人管的 node。
     pub fn kill_now(&self) {
         if let Ok(mut g) = self.inner.try_lock() {
+            g.active.clear();
+            g.applied.clear();
             if let Some(mut rt) = g.runtime.take() {
                 rt.shared.rpc.alive.store(false, Ordering::SeqCst);
                 let _ = rt.child.start_kill();
@@ -826,6 +913,99 @@ impl DshEngine {
             g.sessions.clone()
         };
         let _ = tokio::task::spawn_blocking(move || write_sessions(&map)).await;
+    }
+}
+
+fn acp_mcp_servers(mcp: &[crate::mcp::McpServerSpec]) -> Value {
+    Value::Array(
+        mcp.iter()
+            .filter(|s| !s.name.trim().is_empty() && !s.command.trim().is_empty())
+            .map(|s| {
+                json!({
+                    "name": s.name.trim(), "command": s.command.trim(),
+                    "args": crate::mcp::split_args(&s.args), "env": []
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Shared production/mock seam. A resume error never invalidates history unless
+/// the peer explicitly identifies a missing/expired session using structured data.
+async fn acquire_rpc_session(
+    shared: &Arc<RuntimeShared>,
+    writer: &mpsc::UnboundedSender<Value>,
+    workspace: &str,
+    mcp_servers: Value,
+    existing: Option<&str>,
+    validated: bool,
+) -> Result<(String, &'static str), String> {
+    if let Some(id) = existing {
+        if validated {
+            return Ok((id.into(), "reuse"));
+        }
+        let params = json!({ "sessionId": id, "cwd": workspace, "mcpServers": mcp_servers });
+        match rpc_call_typed(shared, writer, "session/resume", params, SESSION_TIMEOUT).await {
+            Ok(result) => {
+                if !result.is_object() {
+                    return Err("DSH resume 返回格式错误，保留原历史映射".into());
+                }
+                // ACP resume may omit sessionId; if supplied it must be the requested identity.
+                if let Some(returned) = result.get("sessionId") {
+                    if returned.as_str() != Some(id) {
+                        return Err("DSH resume 返回了不同的 sessionId，保留原历史映射".into());
+                    }
+                }
+                return Ok((id.into(), "resume"));
+            }
+            Err(error) if error.session_unavailable() => {}
+            Err(error) => return Err(format!("session/resume 失败：{}", error.text())),
+        }
+    }
+    let created = rpc_call(
+        shared,
+        writer,
+        "session/new",
+        json!({ "cwd": workspace, "mcpServers": mcp_servers }),
+        SESSION_TIMEOUT,
+    )
+    .await?;
+    let id = created
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| "DSH 没有返回 sessionId".to_string())?;
+    Ok((id.into(), "new"))
+}
+
+#[derive(Debug)]
+enum RpcFailure {
+    Remote(Value),
+    Transport(String),
+}
+
+impl RpcFailure {
+    fn text(&self) -> String {
+        match self {
+            Self::Remote(error) => rpc_error_text(error),
+            Self::Transport(error) => error.clone(),
+        }
+    }
+
+    fn session_unavailable(&self) -> bool {
+        let Self::Remote(error) = self else {
+            return false;
+        };
+        // Numeric JSON-RPC Internal/InvalidParams codes and human messages are not
+        // session-lifetime evidence. Unknown server versions fail closed.
+        match error.pointer("/data/code").and_then(Value::as_str) {
+            Some("session_not_found" | "session_expired") => true,
+            Some("not_found" | "expired") => {
+                // A bare `expired` could mean an auth token or an MCP resource.
+                error.pointer("/data/resource").and_then(Value::as_str) == Some("session")
+            }
+            _ => false,
+        }
     }
 }
 
@@ -913,7 +1093,10 @@ pub fn permission_options(params: &Value) -> (Option<String>, Option<String>) {
     if let Some(options) = params.get("options").and_then(|v| v.as_array()) {
         for opt in options {
             let kind = opt.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let id = opt.get("optionId").and_then(|v| v.as_str()).map(str::to_string);
+            let id = opt
+                .get("optionId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
             match kind {
                 "allow_once" | "allow_always" if allow.is_none() => allow = id,
                 "reject_once" | "reject_always" if reject.is_none() => reject = id,
@@ -951,7 +1134,12 @@ pub fn acp_text_block(text: &str) -> Value {
 }
 
 fn normalize_image_media_type(raw: &str) -> &'static str {
-    let base = raw.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let base = raw
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     match base.as_str() {
         "image/png" => "image/png",
         "image/webp" => "image/webp",
@@ -980,8 +1168,9 @@ fn prepare_launch(tier: Tier, workspace: &str) -> Result<PreparedLaunch, String>
         return Err(format!("DSH 工作区不存在：{}", workspace.display()));
     }
     let path_value = dsh_commands::dsh_path_value();
-    let version = dsh_commands::dsh_installed_version()
-        .ok_or_else(|| "未检测到 DeepSeek Harness：请在「Harness」页安装后再启用 DSH 引擎".to_string())?;
+    let version = dsh_commands::dsh_installed_version().ok_or_else(|| {
+        "未检测到 DeepSeek Harness：请在「Harness」页安装后再启用 DSH 引擎".to_string()
+    })?;
     // ACP 档用托管凭证库；上一次异常退出留下的空锁会让 DSH 等到超时。
     dsh_commands::dsh_clear_stale_lock();
     // 先镜像 DSH 的组合：没有这一步，acp 档只有 deepseek-official，跑起来就是
@@ -1291,7 +1480,7 @@ fn handle_frame(line: &str, shared: &Arc<RuntimeShared>, writer: &mpsc::Unbounde
                 .and_then(|mut map| map.remove(&id));
             if let Some(tx) = waiter {
                 let value = match frame.get("error") {
-                    Some(err) => Err(rpc_error_text(err)),
+                    Some(err) => Err(RpcFailure::Remote(err.clone())),
                     None => Ok(frame.get("result").cloned().unwrap_or(Value::Null)),
                 };
                 let _ = tx.send(value);
@@ -1369,6 +1558,18 @@ async fn rpc_call(
     params: Value,
     timeout: Duration,
 ) -> Result<Value, String> {
+    rpc_call_typed(shared, writer, method, params, timeout)
+        .await
+        .map_err(|error| format!("{method} 失败：{}", error.text()))
+}
+
+async fn rpc_call_typed(
+    shared: &Arc<RuntimeShared>,
+    writer: &mpsc::UnboundedSender<Value>,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value, RpcFailure> {
     let id = shared.rpc.next_id();
     let (tx, rx) = oneshot::channel();
     {
@@ -1376,7 +1577,7 @@ async fn rpc_call(
             .rpc
             .pending
             .lock()
-            .map_err(|e| format!("锁失败：{e}"))?;
+            .map_err(|e| RpcFailure::Transport(format!("锁失败：{e}")))?;
         map.insert(id, tx);
     }
     let frame = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
@@ -1384,17 +1585,18 @@ async fn rpc_call(
         if let Ok(mut map) = shared.rpc.pending.lock() {
             map.remove(&id);
         }
-        return Err("DSH 发送通道已关闭".into());
+        return Err(RpcFailure::Transport("DSH 发送通道已关闭".into()));
     }
     match tokio::time::timeout(timeout, rx).await {
-        Ok(Ok(Ok(value))) => Ok(value),
-        Ok(Ok(Err(e))) => Err(format!("{method} 失败：{e}")),
-        Ok(Err(_)) => Err(format!("{method} 响应通道已关闭")),
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(RpcFailure::Transport(format!("{method} 响应通道已关闭"))),
         Err(_) => {
             if let Ok(mut map) = shared.rpc.pending.lock() {
                 map.remove(&id);
             }
-            Err(format!("{method} 超时（{timeout:?}）"))
+            Err(RpcFailure::Transport(format!(
+                "{method} 超时（{timeout:?}）"
+            )))
         }
     }
 }
@@ -1402,6 +1604,408 @@ async fn rpc_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mock_rpc(
+        replies: Vec<Value>,
+    ) -> (
+        Arc<RuntimeShared>,
+        mpsc::UnboundedSender<Value>,
+        Arc<StdMutex<Vec<Value>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let shared = Arc::new(RuntimeShared {
+            rpc: Arc::new(RpcShared::new()),
+            stderr: StdMutex::new(Vec::new()),
+        });
+        let (writer, mut rx) = mpsc::unbounded_channel::<Value>();
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let captured = Arc::clone(&calls);
+        let peer = Arc::clone(&shared);
+        let response_writer = writer.clone();
+        let task = tokio::spawn(async move {
+            for reply in replies {
+                let frame = rx.recv().await.expect("expected request");
+                captured.lock().unwrap().push(frame.clone());
+                let mut response = reply;
+                response["jsonrpc"] = json!("2.0");
+                response["id"] = frame["id"].clone();
+                handle_frame(&response.to_string(), &peer, &response_writer);
+            }
+            // Drain extra calls and make them fail promptly instead of hanging a test.
+            while let Some(frame) = rx.recv().await {
+                captured.lock().unwrap().push(frame.clone());
+                handle_frame(&json!({"id": frame["id"], "error": {"code": -32603, "message": "unexpected request"}}).to_string(), &peer, &response_writer);
+            }
+        });
+        (shared, writer, calls, task)
+    }
+
+    async fn acquire_fixture(
+        active: &mut ActiveSessions,
+        sessions: &mut HashMap<String, String>,
+        key: &str,
+        shared: &Arc<RuntimeShared>,
+        writer: &mpsc::UnboundedSender<Value>,
+        mcp: Value,
+    ) -> Result<(String, &'static str), String> {
+        let existing = sessions.get(key).cloned();
+        let validated = existing
+            .as_ref()
+            .map(|id| active.matches(key, id))
+            .unwrap_or(false);
+        let (id, action) = acquire_rpc_session(
+            shared,
+            writer,
+            "D:/fixture",
+            mcp,
+            existing.as_deref(),
+            validated,
+        )
+        .await?;
+        sessions.insert(key.into(), id.clone());
+        active.record(key, &id, action);
+        Ok((id, action))
+    }
+
+    #[tokio::test]
+    async fn multi_turn_reuses_without_resume_and_restart_resumes_once() {
+        let (shared, writer, calls, task) = mock_rpc(vec![
+            json!({"result":{"sessionId":"s1"}}),
+            json!({"result":{}}),
+        ]);
+        let mut active = ActiveSessions::default();
+        let mut sessions = HashMap::new();
+        active.started();
+        for expected in ["new", "reuse", "reuse"] {
+            assert_eq!(
+                acquire_fixture(
+                    &mut active,
+                    &mut sessions,
+                    "dm",
+                    &shared,
+                    &writer,
+                    json!([])
+                )
+                .await
+                .unwrap()
+                .1,
+                expected
+            );
+        }
+        active.clear(); // teardown preserves persisted mapping
+        active.started();
+        for expected in ["resume", "reuse", "reuse"] {
+            assert_eq!(
+                acquire_fixture(
+                    &mut active,
+                    &mut sessions,
+                    "dm",
+                    &shared,
+                    &writer,
+                    json!([])
+                )
+                .await
+                .unwrap()
+                .1,
+                expected
+            );
+        }
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|v| v["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["session/new", "session/resume"]
+        );
+        assert_eq!(active.actions["dm"].generation, 2);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn unknown_auth_and_already_active_errors_preserve_history_without_new() {
+        for error in [
+            json!({"code":-32603,"message":"Session not found, expired or already_active"}),
+            json!({"code":-32000,"message":"auth failed","data":{"code":"unauthenticated"}}),
+            json!({"code":-32000,"data":{"code":"expired","resource":"token"}}),
+            json!({"code":-32603,"data":{"code":"not_found"}}),
+            json!({"code":-32603,"message":"already active","data":{"code":"already_active"}}),
+        ] {
+            let (shared, writer, calls, task) = mock_rpc(vec![json!({"error":error})]);
+            let mut active = ActiveSessions::default();
+            active.started();
+            let mut sessions = HashMap::from([("dm".into(), "history".into())]);
+            assert!(acquire_fixture(
+                &mut active,
+                &mut sessions,
+                "dm",
+                &shared,
+                &writer,
+                json!([])
+            )
+            .await
+            .is_err());
+            assert_eq!(sessions["dm"], "history");
+            assert!(active.validated.is_empty());
+            assert_eq!(calls.lock().unwrap().len(), 1);
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_missing_or_expired_is_the_only_resume_fallback() {
+        for code in [
+            "session_not_found",
+            "session_expired",
+            "not_found",
+            "expired",
+        ] {
+            let (shared, writer, calls, task) = mock_rpc(vec![
+                json!({"error":{"code":-32603,"data":{"code":code,"resource":"session"}}}),
+                json!({"result":{"sessionId":"replacement"}}),
+            ]);
+            assert_eq!(
+                acquire_rpc_session(
+                    &shared,
+                    &writer,
+                    "D:/fixture",
+                    json!([]),
+                    Some("old"),
+                    false
+                )
+                .await
+                .unwrap(),
+                ("replacement".into(), "new")
+            );
+            assert_eq!(calls.lock().unwrap().len(), 2);
+            task.abort();
+        }
+        assert!(!RpcFailure::Transport("not_found".into()).session_unavailable());
+    }
+
+    #[tokio::test]
+    async fn reset_is_key_local_and_next_acquisition_is_new() {
+        let (shared, writer, calls, task) = mock_rpc(vec![json!({"result":{"sessionId":"fresh"}})]);
+        let mut active = ActiveSessions::default();
+        active.started();
+        let mut sessions = HashMap::from([
+            ("dm".into(), "old".into()),
+            ("group".into(), "other".into()),
+        ]);
+        active.record("dm", "old", "new");
+        active.record("group", "other", "resume");
+        sessions.remove("dm");
+        active.forget("dm");
+        assert_eq!(
+            acquire_fixture(
+                &mut active,
+                &mut sessions,
+                "dm",
+                &shared,
+                &writer,
+                json!([])
+            )
+            .await
+            .unwrap()
+            .1,
+            "new"
+        );
+        assert_eq!(
+            acquire_fixture(
+                &mut active,
+                &mut sessions,
+                "group",
+                &shared,
+                &writer,
+                json!([])
+            )
+            .await
+            .unwrap()
+            .1,
+            "reuse"
+        );
+        assert_eq!(sessions["group"], "other");
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn mcp_config_change_invalidates_active_and_resume_sends_new_config() {
+        let (shared, writer, calls, task) = mock_rpc(vec![json!({"result":{}})]);
+        let mut active = ActiveSessions::default();
+        active.started();
+        active.record("dm", "history", "new");
+        let mut sessions = HashMap::from([("dm".into(), "history".into())]);
+        active.config_changed();
+        assert!(!active.matches("dm", "history"));
+        active.started();
+        let mcp = json!([{"name":"fixture","command":"node","args":["new.js"],"env":[]}]);
+        assert_eq!(
+            acquire_fixture(
+                &mut active,
+                &mut sessions,
+                "dm",
+                &shared,
+                &writer,
+                mcp.clone()
+            )
+            .await
+            .unwrap()
+            .1,
+            "resume"
+        );
+        assert_eq!(calls.lock().unwrap()[0]["params"]["mcpServers"], mcp);
+        assert_eq!(sessions["dm"], "history");
+        assert!(!active.matches("dm", "different-id"));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn transport_failure_and_resume_identity_mismatch_do_not_create_session() {
+        let (shared, writer, calls, task) =
+            mock_rpc(vec![json!({"result":{"sessionId":"someone-else"}})]);
+        assert!(acquire_rpc_session(
+            &shared,
+            &writer,
+            "D:/fixture",
+            json!([]),
+            Some("history"),
+            false
+        )
+        .await
+        .is_err());
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        task.abort();
+        let (closed_writer, receiver) = mpsc::unbounded_channel();
+        drop(receiver);
+        assert!(acquire_rpc_session(
+            &shared,
+            &closed_writer,
+            "D:/fixture",
+            json!([]),
+            Some("history"),
+            false
+        )
+        .await
+        .is_err());
+        assert!(shared.rpc.pending.lock().unwrap().is_empty());
+    }
+
+    fn engine_fixture() -> DshEngine {
+        DshEngine {
+            inner: Mutex::new(EngineInner {
+                state: EngineState::Ready,
+                detail: String::new(),
+                tier: Tier::Read,
+                workspace: "D:/fixture".into(),
+                model: String::new(),
+                effort: String::new(),
+                runtime: None,
+                sessions: HashMap::from([("dm".into(), "history".into())]),
+                active: ActiveSessions::default(),
+                applied: HashMap::new(),
+                probe: None,
+                catalog: None,
+                mirror: None,
+                mcp: Vec::new(),
+                image_prompt: false,
+            }),
+            start_lock: Mutex::new(()),
+        }
+    }
+
+    #[tokio::test]
+    async fn configure_and_set_mcp_retire_validation_without_erasing_history() {
+        let engine = engine_fixture();
+        {
+            let mut g = engine.inner.lock().await;
+            g.active.started();
+            g.active.record("dm", "history", "new");
+        }
+        // Model selection does not invalidate the runtime session.
+        assert!(
+            !engine
+                .configure(
+                    Tier::Read,
+                    "D:/fixture".into(),
+                    "model".into(),
+                    "high".into()
+                )
+                .await
+        );
+        assert!(engine.inner.lock().await.active.matches("dm", "history"));
+        assert!(
+            engine
+                .configure(
+                    Tier::Workspace,
+                    "D:/fixture".into(),
+                    "model".into(),
+                    "high".into()
+                )
+                .await
+        );
+        {
+            let g = engine.inner.lock().await;
+            assert!(g.active.validated.is_empty());
+            assert_eq!(g.sessions["dm"], "history");
+            assert_eq!(g.state, EngineState::Stopped);
+        }
+        let spec = || crate::mcp::McpServerSpec {
+            name: "fixture".into(),
+            command: "node".into(),
+            args: "a.js".into(),
+        };
+        engine.set_mcp(vec![spec()]).await;
+        {
+            let mut g = engine.inner.lock().await;
+            g.active.started();
+            g.active.record("dm", "history", "resume");
+        }
+        engine.set_mcp(vec![spec()]).await;
+        assert!(engine.inner.lock().await.active.matches("dm", "history"));
+        engine.set_mcp(Vec::new()).await;
+        {
+            let g = engine.inner.lock().await;
+            assert!(g.active.validated.is_empty());
+            assert_eq!(g.sessions["dm"], "history");
+        }
+        assert!(
+            engine
+                .configure(
+                    Tier::Workspace,
+                    "D:/changed".into(),
+                    "model".into(),
+                    "high".into()
+                )
+                .await
+        );
+    }
+
+    #[test]
+    fn effective_mcp_config_detects_command_args_and_removal() {
+        let spec = |command: &str, args: &str| crate::mcp::McpServerSpec {
+            name: "fixture".into(),
+            command: command.into(),
+            args: args.into(),
+        };
+        assert_eq!(
+            acp_mcp_servers(&[spec(" node ", "a.js")]),
+            acp_mcp_servers(&[spec("node", "a.js")])
+        );
+        assert_ne!(
+            acp_mcp_servers(&[spec("node", "a.js")]),
+            acp_mcp_servers(&[spec("node", "b.js")])
+        );
+        assert_ne!(
+            acp_mcp_servers(&[spec("node", "a.js")]),
+            acp_mcp_servers(&[])
+        );
+        assert_ne!(
+            acp_mcp_servers(&[spec("node", "a.js")]),
+            acp_mcp_servers(&[spec("other", "a.js")])
+        );
+    }
 
     #[test]
     fn tier_mapping_covers_all_four() {
@@ -1439,13 +2043,19 @@ mod tests {
     fn acp_image_block_normalizes_media_type() {
         let b = acp_image_block("image/jpeg; charset=binary", "AAAA");
         assert_eq!(b.get("type").and_then(|v| v.as_str()), Some("image"));
-        assert_eq!(b.get("mimeType").and_then(|v| v.as_str()), Some("image/jpeg"));
+        assert_eq!(
+            b.get("mimeType").and_then(|v| v.as_str()),
+            Some("image/jpeg")
+        );
         assert_eq!(b.get("data").and_then(|v| v.as_str()), Some("AAAA"));
         // png / webp / gif 原样保留，未知类型回退 jpeg
         assert_eq!(normalize_image_media_type("image/PNG"), "image/png");
         assert_eq!(normalize_image_media_type("image/webp"), "image/webp");
         assert_eq!(normalize_image_media_type("image/gif"), "image/gif");
-        assert_eq!(normalize_image_media_type("application/octet-stream"), "image/jpeg");
+        assert_eq!(
+            normalize_image_media_type("application/octet-stream"),
+            "image/jpeg"
+        );
     }
 
     #[test]
@@ -1528,6 +2138,9 @@ mod tests {
                 .and_then(|m| m.as_str()),
             Some("ask")
         );
-        assert_eq!(rows[0].get("disabled").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            rows[0].get("disabled").and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 }

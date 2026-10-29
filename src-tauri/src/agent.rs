@@ -2469,7 +2469,12 @@ async fn execute_tool(
                 .ok_or("缺少 path 参数")?
                 .trim()
                 .to_string();
-            crate::wecom_media::send_image(&ctx.app, &path).await?
+            let path = ctx.scope.resolve(&path)?;
+            await_cancellable(
+                crate::wecom_media::send_image(ctx.app, &path.to_string_lossy(), ctx.request_id),
+                ctx.request_id,
+            )
+            .await??
         }
         "wecom_send_file" => {
             let path = args
@@ -2478,7 +2483,12 @@ async fn execute_tool(
                 .ok_or("缺少 path 参数")?
                 .trim()
                 .to_string();
-            crate::wecom_media::send_file(&ctx.app, &path).await?
+            let path = ctx.scope.resolve(&path)?;
+            await_cancellable(
+                crate::wecom_media::send_file(ctx.app, &path.to_string_lossy(), ctx.request_id),
+                ctx.request_id,
+            )
+            .await??
         }
         // SkyWalking 只读查询：排查线上问题时取日志 / 调用链（地址来自企微渠道配置）
         "skywalking_query" => {

@@ -28,6 +28,8 @@ export type WecomInvestigationStatus = {
   requestId: string;
   /** 当前后端实例实际计数；旧实例缺字段保持未提供，不从状态或回复文案推测。 */
   requestCount?: number | null;
+  /** 本轮成功响应复用次数（含 singleflight 等待后复用），不计实际 HTTP。 */
+  cacheHits?: number | null;
   /** 采集日志 + trace spans；累计补查可含重复。 */
   evidenceCount?: number | null;
   /** 已展示日志条目数，不含 trace spans。 */
@@ -43,13 +45,60 @@ export type WecomInvestigationStatus = {
   detail: string;
 };
 
+export type WecomPerformancePhase = {
+  phase: string;
+  elapsedMs: number;
+  calls: number;
+  inputChars: number;
+  outputChars: number;
+  toolEvents: number;
+  firstEventMs?: number | null;
+};
+
+export type WecomPerformanceSummary = {
+  requestId: string;
+  /** 后端独立计时；不由 phases 或父子阶段相加推算。 */
+  totalMs?: number | null;
+  queueMs?: number | null;
+  /** 后端报告的含排队耗时；前端不自行相加，亦非送达时延。 */
+  elapsedWithQueueMs?: number | null;
+  phases: WecomPerformancePhase[];
+  sessionAction: string;
+  model: string;
+  effort: string;
+  validationFailures: string[];
+};
+
+export type WecomPerformanceStatus = {
+  requestId: string;
+  /** 同 request 的累计快照；旧后端可缺省。 */
+  summary?: WecomPerformanceSummary | null;
+  /** 最近完成的阶段；total 表示执行耗时，排队与消息尾注口径另计。 */
+  phase: string;
+  elapsedMs: number;
+  inputChars: number;
+  outputChars: number;
+  toolEvents: number;
+  /** 阶段开始至首事件；未观察到事件时后端可省略或返回 null。 */
+  firstEventMs?: number | null;
+};
+
 export type WecomStatus = {
   processId: number;
   buildLabel: string;
   lastInvestigation?: WecomInvestigationStatus | null;
+  lastPerformance?: WecomPerformanceStatus | null;
   state: string;
   detail: string;
   enabled: boolean;
+  /** 当前实例实际持有全局回合许可的任务数；不是 HTTP 并发数。 */
+  activeJobs: number;
+  /** 当前实例等待同会话上一轮完成的消息数。 */
+  waitingJobs: number;
+  /** 当前后端生效的全局回合上限；不从前端设置推算。 */
+  maxJobs: number;
+  /** 当前有效共享任务数，不是正在运行的模型回合数。 */
+  sharedTasks: number;
   /** tianji | dsh */
   engine: string;
   dsh: WecomDshStatus;
@@ -81,6 +130,13 @@ type ApplyArgs = {
   /** When saving a new plaintext business-API secret (自建应用) from the form */
   plainCorpSecret?: string;
 };
+
+/** 保留任意合法整数（含旧档 3/6）；缺省或非法值回落 2，不主动抬高并发。 */
+export function normalizeWecomMaxJobs(value: number | undefined): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 32
+    ? value
+    : 2;
+}
 
 function splitCsv(list: string[] | undefined): string[] {
   return (list ?? []).map((s) => s.trim()).filter(Boolean);
@@ -191,7 +247,7 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       webhookUrl,
       autoCommit: settings.wecomAutoCommit !== false,
       autoPush: Boolean(settings.wecomAutoPush),
-      maxJobs: Number(settings.wecomMaxJobs) || 0,
+      maxJobs: normalizeWecomMaxJobs(settings.wecomMaxJobs),
       agent,
     },
   });

@@ -55,8 +55,9 @@ fn re(pattern: &str) -> Regex {
 
 /// 仅识别独立命令子句，不把引号里的文字、否定句或说明性提问当作清会话指令。
 pub fn starts_new_investigation(text: &str) -> bool {
-    let text = re(r#""[^"]*"|'[^']*'|“[^”]*”"#).replace_all(text, " ");
-    re(r"(?:^|[，,。；;\n])\s*(?:请|帮我)?\s*(?:起新会话|新建会话|开启新会话|开始新会话|新开会话|重新开始排查|start_new)(?:\s*$|[，,。；;\n])")
+    let text = re(r#"(?s)```.*?```|`[^`]*`|"[^"]*"|'[^']*'|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』"#)
+        .replace_all(text, "引用");
+    re(r"(?:^|[，,。；;\n])\s*(?:请|帮我)?\s*(?:新会话|起新会话|新建会话|开启新会话|开始新会话|新开会话|重新开始排查|start_new)(?:\s*$|[，,。；;\n])")
         .is_match(&text)
 }
 
@@ -964,6 +965,9 @@ mod tests {
     #[test]
     fn start_new_is_an_independent_intent() {
         for text in [
+            "新会话",
+            "新会话，继续查日志",
+            "请新会话；只看错误",
             "起新会话",
             "请起新会话，继续查日志",
             "新建会话；只看错误",
@@ -973,6 +977,18 @@ mod tests {
             assert!(!is_followup(text), "{text}");
         }
         for text in [
+            "不要新会话",
+            "别新会话",
+            "新会话是什么意思",
+            "新会话？",
+            "说明：新会话",
+            "引用：新会话",
+            "‘新会话’",
+            "「说明，新会话，继续」",
+            "`新会话`",
+            "```text\n新会话\n```",
+            "新会话‘是什么意思’",
+            "“新会话”",
             "不要起新会话",
             "怎么起新会话",
             "关键词=\"起新会话\"",
@@ -1032,6 +1048,28 @@ mod tests {
         assert!(q.approximate_anchor);
         assert_eq!(q.anchor.as_deref(), Some("2026-10-28T11:31:12+08:00"));
     }
+    #[test]
+    fn screenshot_same_text_resets_private_and_group_queries_identically() {
+        let text = "新会话，个微电子行业，根据日志排查问题，时间大概是：2026-10-28 11:31:12 关键信息 matchId=1454798851378978816，nlpIdOriginal =8414548098086706628 查下为什么没有自动报价，查询原因，并输出对应日志证据链";
+        let old_dm =
+            parse("昨天10点到11点 traceId=private-old service=private-api level=ERROR 排除=health");
+        let old_group =
+            parse("最近8小时 traceId=group-old service=group-api level=INFO 排除=timeout");
+        assert!(starts_new_investigation(text));
+        let dm = parse_query(text, Some(&old_dm), now()).unwrap();
+        let group = parse_query(text, Some(&old_group), now()).unwrap();
+        assert_eq!(dm, group);
+        assert_eq!(dm, parse(text));
+        assert_eq!(dm.identifiers.len(), 2);
+        assert_eq!(dm.identifiers[0].value, "1454798851378978816");
+        assert_eq!(dm.identifiers[1].value, "8414548098086706628");
+        assert_eq!(dm.anchor.as_deref(), Some("2026-10-28T11:31:12+08:00"));
+        assert!(dm.trace_id.is_none());
+        assert!(dm.service.is_none());
+        assert!(dm.level.is_none());
+        assert!(dm.exclude_keyword.is_empty());
+    }
+
     #[test]
     fn single_incident_time_uses_fifteen_minute_context() {
         let q = parse("时间大概是：2026-10-28 11:31:12 查下为什么没有自动报价");

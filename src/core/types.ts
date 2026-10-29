@@ -256,7 +256,7 @@ export interface AppSettings {
   wecomAutoCommit?: boolean;
   /** commit 后 push 到远端（默认关） */
   wecomAutoPush?: boolean;
-  /** 企微全局并发回合上限（默认 2，范围 1–8） */
+  /** 企微全局活动回合上限（默认 2，整数 1–32；不是 OAP HTTP 并发） */
   wecomMaxJobs?: number;
   /** 天玑 OpenAI 兼容端点（外部 OpenAI 兼容客户端接入用） */
   tianjiApiEnabled?: boolean;

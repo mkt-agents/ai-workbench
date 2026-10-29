@@ -1507,6 +1507,35 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* 概览条里的计数按用途归行：左侧小标签 + 右侧胶囊，两行分别对齐 */
+.settings-page .wecom-facts {
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-page .wecom-fact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.settings-page .wecom-fact-label {
+  flex: none;
+  min-width: 48px;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.settings-page .wecom-fact-items {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 /* 概览条里折叠的「说明」：自己占一整行，展开后竖着排几句小字 */
 .settings-page .wecom-hero-hint {
   flex: 1 0 100%;

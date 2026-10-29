@@ -20,6 +20,29 @@ pub struct LookupPlan {
     pub conclusion_level: String,
     pub gaps: Vec<String>,
     pub stop_reason: String,
+    /// Present only after strict schema, real evidence and optional source checks pass.
+    pub final_answer: Option<VerifiedAnswer>,
+    /// Versioned final report, validated through the shared report contract.
+    pub diagnostic_report: Option<crate::wecom_report::DiagnosticReport>,
+    pub read_evidence_ids: Vec<String>,
+    pub schema_version: Option<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifiedAnswer {
+    pub summary: String,
+    pub claims: Vec<VerifiedClaim>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifiedClaim {
+    pub text: String,
+    #[serde(alias = "evidenceRefs")]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub code_refs: Vec<CodeRef>,
 }
 
 // Missing is optional, explicit null is not part of this protocol.
@@ -36,12 +59,22 @@ where
 struct WirePlan {
     queries: Vec<WireQuery>,
     reason: String,
-    #[serde(default, deserialize_with = "present")]
+    // Serde aliases only normalize known field names; values stay byte-for-byte strings.
+    // Alias + canonical name (or repeated names) is a duplicate-field schema error.
+    #[serde(default, alias = "conclusionLevel", deserialize_with = "present")]
     conclusion_level: Option<String>,
     #[serde(default, deserialize_with = "present")]
     gaps: Option<Vec<String>>,
-    #[serde(default, deserialize_with = "present")]
+    #[serde(default, alias = "stopReason", deserialize_with = "present")]
     stop_reason: Option<String>,
+    #[serde(default, alias = "finalAnswer", deserialize_with = "present")]
+    final_answer: Option<VerifiedAnswer>,
+    #[serde(default, deserialize_with = "present")]
+    diagnostic_report: Option<crate::wecom_report::DiagnosticReport>,
+    #[serde(default, alias = "readEvidenceIds", deserialize_with = "present")]
+    read_evidence_ids: Option<Vec<String>>,
+    #[serde(default, alias = "schemaVersion", deserialize_with = "present")]
+    schema_version: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -58,7 +91,7 @@ struct WireQuery {
     #[serde(default, deserialize_with = "present")]
     end: Option<String>,
     reason: String,
-    #[serde(default, deserialize_with = "present")]
+    #[serde(default, alias = "evidenceRefs", deserialize_with = "present")]
     evidence_refs: Option<Vec<String>>,
     #[serde(default, deserialize_with = "present")]
     code_ref: Option<CodeRef>,
@@ -72,12 +105,12 @@ struct WireQuery {
     page_size: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CodeRef {
-    path: String,
-    line: usize,
-    excerpt: String,
+pub struct CodeRef {
+    pub path: String,
+    pub line: usize,
+    pub excerpt: String,
 }
 
 fn nonempty(value: &str, limit: usize, name: &str) -> Result<(), String> {
@@ -193,6 +226,109 @@ fn referenced_text<'a>(evidence: &'a str, id: &str) -> Option<&'a str> {
         offset += line.len();
     }
     start.map(|begin| &evidence[begin..])
+}
+
+/// Strict references need a unique producer-shaped header; embedded/indented labels are data.
+fn unique_record<'a>(evidence: &'a str, id: &str) -> Result<&'a str, String> {
+    let mut headers = evidence
+        .lines()
+        .filter(|line| evidence_id(line) == Some(id));
+    let header = headers
+        .next()
+        .ok_or_else(|| format!("plan_error: missing evidence record [{id}]"))?;
+    if headers.next().is_some()
+        || !header
+            .split_whitespace()
+            .any(|v| v.starts_with("service=") || v.starts_with("trace="))
+    {
+        return Err(format!(
+            "plan_error: ambiguous or malformed evidence record [{id}]"
+        ));
+    }
+    referenced_text(evidence, id)
+        .ok_or_else(|| format!("plan_error: missing evidence record [{id}]"))
+}
+
+/// Shared report lookup: require the same unique producer-shaped record as final claims.
+/// Record boundaries and ID parsing remain owned by referenced_text/unique_record.
+pub(crate) fn evidence_record<'a>(evidence: &'a str, id: &str) -> Option<&'a str> {
+    unique_record(evidence, id).ok()
+}
+
+/// Pure display, never an executable instruction. Escape user/model markup into literal prose.
+fn markdown_text(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars() {
+        match c {
+            '\r' | '\n' => out.push(' '),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '\\' | '`' | '*' | '_' | '[' | ']' | '#' | '!' | '|' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+pub fn render_answer(answer: &VerifiedAnswer, level: &str) -> String {
+    render_answer_with_gaps(answer, level, &[], "")
+}
+
+/// Render a bounded conclusion without implying that its outstanding work is complete.
+/// Callers must still validate the plan and enforce their evidence-level stop gate.
+pub fn render_answer_with_gaps(
+    answer: &VerifiedAnswer,
+    level: &str,
+    gaps: &[String],
+    stop_reason: &str,
+) -> String {
+    let label = match level {
+        "result" => "观察到的结果",
+        "direct_cause" => "直接业务原因",
+        "trigger_verified" => "具体触发条件已核对",
+        _ => "未确定",
+    };
+    let mut out = format!(
+        "## 排障结论\n\n{}\n\n结论层级：{label}\n\n### 事实与引用\n",
+        markdown_text(&answer.summary)
+    );
+    for (i, claim) in answer.claims.iter().enumerate() {
+        let refs = claim
+            .evidence_refs
+            .iter()
+            .map(|id| format!("[{}]", markdown_text(id)))
+            .collect::<Vec<_>>()
+            .join("、");
+        out.push_str(&format!(
+            "\n{}. {}（证据：{refs}）\n",
+            i + 1,
+            markdown_text(&claim.text)
+        ));
+        for code in &claim.code_refs {
+            out.push_str(&format!(
+                "   - 工作区代码：{}:{}；片段：{}\n",
+                markdown_text(&code.path.replace('\\', "/")),
+                code.line,
+                markdown_text(&code.excerpt)
+            ));
+        }
+    }
+    if !gaps.is_empty() {
+        out.push_str("\n### 未完成项\n\n以下事项仍未验证，本轮结论不表示具体触发条件已闭合。\n");
+        for gap in gaps {
+            out.push_str(&format!("\n- {}\n", markdown_text(gap)));
+        }
+    }
+    if !stop_reason.trim().is_empty() {
+        out.push_str(&format!("\n停止原因：{}\n", markdown_text(stop_reason)));
+    }
+    out.push_str("\n> 证据引用不等于因果证明；引用已核对到已保留 excerpt，未额外读取 OAP 原始全文。工作区代码不自动代表线上版本。\n");
+    out
 }
 
 /// Header metadata only: body text and model fields never establish a context boundary.
@@ -367,6 +503,82 @@ fn source_excerpt(code: &CodeRef, repo: &str) -> Result<String, String> {
     Ok(code.excerpt.clone())
 }
 
+/// Shared report source check; preserve the existing path, file and exact-line guards.
+pub(crate) fn verify_code_ref(
+    path: &str,
+    line: usize,
+    excerpt: &str,
+    repo: &str,
+) -> Result<(), String> {
+    source_excerpt(
+        &CodeRef {
+            path: path.to_owned(),
+            line,
+            excerpt: excerpt.to_owned(),
+        },
+        repo,
+    )
+    .map(|_| ())
+}
+
+/// Stable, low-cardinality categories for timing/validation telemetry. No model text is logged.
+pub fn validation_error_code(error: &str) -> &'static str {
+    let error = error.strip_prefix("plan_error: ").unwrap_or(error);
+    if error.starts_with("strict JSON format:") || error == "expected exactly one json fence" {
+        "format"
+    } else if error.starts_with("strict JSON schema:") {
+        "schema"
+    } else if error.starts_with("source ")
+        || error.starts_with("workspace ")
+        || error.starts_with("code_ref")
+        || error.starts_with("excerpt does not match source line")
+    {
+        "code"
+    } else if error.contains("window")
+        || error.starts_with("invalid original start")
+        || error.starts_with("invalid original end")
+        || error.starts_with("start must be RFC3339")
+        || error.starts_with("end must be RFC3339")
+        || error.starts_with("anchor header requires unambiguous ts")
+    {
+        "window"
+    } else if error.starts_with("missing evidence record")
+        || error.starts_with("ambiguous or malformed evidence record")
+        || error.starts_with("missing context anchor")
+        || error.starts_with("ambiguous anchor header")
+        || error.starts_with("anchor header requires")
+        || error.starts_with("context_anchor requires")
+        || error.starts_with("ordinary follow-up must retain")
+        || error.contains("no matching evidence")
+        || error.starts_with("trace_id must occur")
+        || error.starts_with("each claim requires")
+    {
+        "references"
+    } else if error.starts_with("plan exceeds")
+        || error.starts_with("at most ")
+        || error.starts_with("read_evidence_ids allows at most")
+        || error.starts_with("page must be")
+        || error.contains("must be nonempty and at most")
+        || error.starts_with("final_answer requires 1..20 claims")
+    {
+        "budget"
+    } else if error.starts_with("final_answer requires")
+        || error.starts_with("diagnostic_report requires")
+        || error.starts_with("trigger_verified requires")
+        || error.starts_with("invalid conclusion_level")
+        || error.starts_with("schema_version must be")
+        || error.starts_with("choose exactly one")
+        || error.starts_with("context query boundaries")
+        || error.starts_with("context_widen requires")
+        || error.starts_with("query requires")
+        || error.contains("must be a literal")
+    {
+        "schema"
+    } else {
+        "other"
+    }
+}
+
 pub fn parse_plan(
     text: &str,
     original: &InvestigationQuery,
@@ -376,26 +588,123 @@ pub fn parse_plan(
     if text.len() > 32 * 1024 {
         return Err("plan_error: plan exceeds 32 KiB".into());
     }
-    let plan: WirePlan = serde_json::from_str(json_body(text)?)
-        .map_err(|e| format!("plan_error: strict JSON schema: {e}"))?;
+    let mut plan: WirePlan = serde_json::from_str(json_body(text)?).map_err(|e| {
+        let category = match e.classify() {
+            serde_json::error::Category::Data => "schema",
+            _ => "format",
+        };
+        format!("plan_error: strict JSON {category}: {e}")
+    })?;
     nonempty(&plan.reason, 2048, "reason")?;
     if plan.queries.len() > 3 {
         return Err("plan_error: at most three queries".into());
     }
-    let conclusion_level = plan.conclusion_level.unwrap_or_else(|| "unknown".into());
+    let mut conclusion_level = plan.conclusion_level.unwrap_or_else(|| "unknown".into());
     if !["result", "direct_cause", "trigger_verified", "unknown"]
         .contains(&conclusion_level.as_str())
     {
         return Err("plan_error: invalid conclusion_level".into());
     }
-    let gaps = plan.gaps.unwrap_or_default();
+    if plan.final_answer.is_some() && plan.gaps.is_none() {
+        return Err("plan_error: final_answer requires explicit gaps array".into());
+    }
+    if plan.diagnostic_report.is_some() && plan.gaps.is_none() {
+        return Err("plan_error: diagnostic_report requires explicit gaps array".into());
+    }
+    let mut gaps = plan.gaps.unwrap_or_default();
     if gaps.len() > 20 {
         return Err("plan_error: at most twenty gaps".into());
     }
     for gap in &gaps {
         nonempty(gap, 2048, "gaps item")?;
     }
-    if conclusion_level == "trigger_verified" {
+    if plan.schema_version.is_some_and(|v| v != 1) {
+        return Err("plan_error: schema_version must be 1 when present".into());
+    }
+    let read_evidence_ids = plan.read_evidence_ids.unwrap_or_default();
+    if read_evidence_ids.len() > 6 {
+        return Err("plan_error: read_evidence_ids allows at most six IDs".into());
+    }
+    for id in &read_evidence_ids {
+        unique_record(evidence, id)?;
+    }
+    let modes = [
+        !plan.queries.is_empty(),
+        !read_evidence_ids.is_empty(),
+        plan.final_answer.is_some(),
+        plan.diagnostic_report.is_some(),
+    ];
+    // Zero active modes remains the legacy stop plan; final payloads never mix with lookups.
+    if modes.into_iter().filter(|active| *active).count() > 1 {
+        return Err(
+            "plan_error: choose exactly one of queries/read_evidence_ids/final_answer/diagnostic_report".into(),
+        );
+    }
+    if let Some(report) = &mut plan.diagnostic_report {
+        crate::wecom_report::validate(report, original, evidence, repo, &conclusion_level)?;
+        // Legacy outer gaps have no classification: conservatively preserve them as blocking
+        // in the actual report that gets rendered, including an existing nonblocking label.
+        for text in &gaps {
+            if let Some(gap) = report.gaps.iter_mut().find(|gap| gap.text == *text) {
+                gap.blocking = true;
+            } else {
+                report.gaps.push(crate::wecom_report::Gap {
+                    text: text.clone(),
+                    blocking: true,
+                });
+            }
+        }
+        if report.gaps.len() > 8 {
+            return Err(
+                "plan_error: at most eight diagnostic_report gaps including outer gaps".into(),
+            );
+        }
+        crate::wecom_report::validate(report, original, evidence, repo, &conclusion_level)?;
+        // The outer level is only a ceiling: consumers must use the report's actual level.
+        conclusion_level = report.level.clone();
+        for gap in report.gaps.iter().filter(|gap| gap.blocking) {
+            if !gaps.contains(&gap.text) {
+                gaps.push(gap.text.clone());
+            }
+        }
+        if gaps.len() > 20 {
+            return Err("plan_error: at most twenty gaps".into());
+        }
+        if conclusion_level == "trigger_verified" && !gaps.is_empty() {
+            return Err("plan_error: trigger_verified requires no gaps".into());
+        }
+    }
+    if let Some(answer) = &plan.final_answer {
+        if !plan.queries.is_empty() || conclusion_level == "unknown" {
+            return Err("plan_error: final_answer requires empty queries and an established conclusion_level".into());
+        }
+        if conclusion_level == "trigger_verified" && !gaps.is_empty() {
+            return Err("plan_error: trigger_verified requires no gaps".into());
+        }
+        nonempty(&answer.summary, 4096, "final_answer.summary")?;
+        if answer.claims.is_empty() || answer.claims.len() > 20 {
+            return Err("plan_error: final_answer requires 1..20 claims".into());
+        }
+        for claim in &answer.claims {
+            nonempty(&claim.text, 4096, "claim.text")?;
+            if claim.evidence_refs.is_empty() || claim.evidence_refs.len() > 20 {
+                return Err("plan_error: each claim requires 1..20 real evidence_refs".into());
+            }
+            for id in &claim.evidence_refs {
+                unique_record(evidence, id)?;
+            }
+            if claim.code_refs.len() > 6 {
+                return Err("plan_error: at most six code_refs per claim".into());
+            }
+            for code in &claim.code_refs {
+                source_excerpt(code, repo)?;
+            }
+        }
+    }
+    if conclusion_level == "trigger_verified"
+        && plan.final_answer.is_none()
+        && plan.diagnostic_report.is_none()
+    {
         let cites_record = evidence
             .lines()
             .filter_map(evidence_id)
@@ -412,6 +721,10 @@ pub fn parse_plan(
         conclusion_level,
         gaps,
         stop_reason,
+        final_answer: plan.final_answer,
+        diagnostic_report: plan.diagnostic_report,
+        read_evidence_ids,
+        schema_version: plan.schema_version,
     };
     // A stop plan does not require filesystem or time parsing.
     if plan.queries.is_empty() {
@@ -617,7 +930,10 @@ pub fn decision_context_plan(
 }
 
 pub fn planning_instruction() -> String {
-    r#"你正在制定只读补查计划，不是输出最终业务结论。只输出严格JSON（可用单个json代码围栏），固定schema：
+    let mut instruction = r#"每轮只输出一个严格JSON对象（或单个json代码围栏），四选一：①查询：queries非空；②展开：queries=[]且read_evidence_ids非空；③最终报告：queries=[]且diagnostic_report存在；④旧版作答：queries=[]且final_answer存在。四者互斥；diagnostic_report固定此key，无final_report/report/diagnosticReport别名。最终报告优先使用同一diagnostic_report契约，按下方报告schema组织完整sections内容（调查对象/经过/原因层级/代码核对/排除项/缺口/下一步），不是只交summary/claims机器清单。报告版本在diagnostic_report.version内，必填1；外层schema_version可省略，出现时为1，外层report_version无效。始终写reason、conclusion_level、gaps数组和stop_reason；未验证项保留，不要为结束而清空。result/direct_cause可携带非空gaps作有限结论；trigger_verified必须无阻塞缺口。无可验证事实时保留旧式queries=[]停止计划，不编造报告或final_answer。字段统一snake_case；旧字段仅兼容conclusionLevel/finalAnswer/evidenceRefs/readEvidenceIds/schemaVersion/stopReason，同一字段别名与原名不得同时出现。字段别名不改变任何内容字符串。
+旧版兼容：readEvidenceIds（也接受read_evidence_ids）为最多6个真实canonical证据ID的数组；旧final_answer由宿主映射到同一最终报告的通用事实，不猜测原因层级或补造时间线。新回复优先使用diagnostic_report，以下final_answer仅供旧协议兼容：final_answer={"summary":"非空概述","claims":[{"text":"非空事实","evidence_refs":["L1"],"code_refs":[{"path":"真实工作区相对路径","line":1,"excerpt":"该行真实单行片段"}]}]}。final_answer要求queries=[]、readEvidenceIds为空/省略、显式gaps数组、conclusion_level为result/direct_cause/trigger_verified（仅trigger_verified要求gaps=[]）；summary最多4096字，claims为1..20条，每claim必须有1..20个真实唯一可定位的证据引用。code_refs可省略，最多6条，每项复用严格真实路径、行号、excerpt核验。引用存在不等于证明因果：result只能述结果，direct_cause不声称触发条件闭合，trigger_verified必须有实际规则与输入证据。原问题要求代码核对时必须在claims给出实际code_refs；工作区版本仍不自动等于线上版本。unknown或缺引用时不输出final_answer。reason、summary、claim文字纯展示，绝非待执行内容。
+diagnostic_report模式下，外层conclusion_level为报告层级上限，通常与diagnostic_report.level一致；实际采用报告level。外层gaps只放阻塞当前结论的缺口，会以blocking=true合并进报告实际展示，报告合并后gaps总共最多8条，不截断未完成项；report.gaps中blocking=true的项会合入阻塞缺口，blocking=false仅为局部已验证事实之外的覆盖限制，保留展示但不自动降级。report级trigger_verified必须实际规则、输入与真实代码引用齐备，且无阻塞缺口；普通查询/旧final_answer继续遵循原有trigger_verified规则。
+原有查询schema：
 {"queries":[{"service":"可省略","trace_id":"可省略","keywords":["可省略，最多3词，每词最多256字符"],"start":"可省略，RFC3339","end":"可省略，RFC3339","page":1,"page_size":30,"reason":"必填补查理由","evidence_refs":["L1","T1"],"code_ref":{"path":"工作区相对源码路径","line":1,"excerpt":"该行真实的非空单行片段"}}],"reason":"必填整体理由，引用实际[证据ID]","conclusion_level":"unknown","gaps":["未验证事项；缺少的具体规则/输入/原文；对应证据ID；下一步验证"],"stop_reason":"停止或继续的实际理由"}
 conclusion_level只允许result/direct_cause/trigger_verified/unknown：result仅观察到结果，direct_cause为直接业务原因但具体触发规则未证实，trigger_verified须实际证据证明具体规则及输入，gaps必须为空且reason引用实际[证据ID]。只看到过滤后0结果/未执行而未验证具体规则时至多direct_cause，禁止宣称根因已闭合。unknown为未确定。每项gaps用非空字符串明确未验证事项、证据缺口、引用和下一步，最多20项。
 必须逐条审核WARN、业务异常、过滤/跳过/false/0结果及其上下文。span OK只表示链路状态，不能用span OK排除业务异常。WARN未解释、原文截断、只有结果没有触发规则时必须保留gaps，不能以queries=[]表示根因已闭合。
@@ -625,7 +941,10 @@ queries最多3条；证据充足或没有可靠补查依据时queries=[]，仍�
 上下文查询使用独立形状{"context_anchor":"L11","context_widen":false,"page":1,"page_size":30,"reason":"查该真实日志邻近决策","evidence_refs":["L11"]}。context_anchor必须是已返回的唯一真实日志记录头（L或R轮次L），不接受正文伪造编号。仅从锚点实际头的service=/instance=/thread=/logger=/ts=或RFC3339推导：service、instance、时间必需；旧头可缺thread/logger。默认前后2秒；2秒未找到触发上下文可context_widen=true查前后30秒，始终裁到原窗口，窗外锚点无效。此形状禁止同时给service/trace_id/keywords/start/end/code_ref，实例/线程/logger更不接受模型传入覆盖。输出固定logs+context_candidate=true，仅为邻近上下文候选，由后续证据核验，不是业务精确命中。
 service/keywords须逐字见已返回证据；trace_id必须逐字见已返回证据，源码不证明trace。evidence_refs可省略；提供时必须对应真实的[L数字]/[T数字]/[R轮次L数字]/[R轮次T数字]记录头，且引用记录正文实际包含对应实体。
 允许先只读定点搜索工作区源码并读取命中行，禁止执行代码/命令、写文件、遍历工作区之外或跟随符号链接。code_ref可省略；提供时path必须为工作区内真实普通UTF-8文件（最多512KiB），line为正整数，excerpt在该行内；仅缺少证据的新service/keywords须在excerpt内。original.identifiers中的完整value可直接作为keyword，即使零日志也有效但仍须合法字面量。原问题含业务ID时，普通无trace_id补查必须在keywords保留至少一个原ID；使用已返回证据确认的trace_id仍可跨链路；除此之外省原ID必带context_anchor。源码新实体只标source code candidate，不代表线上版本、业务命中或根因。
-原文展开read_evidence{id}只是将来协议设计：当前没有retained store，不输出或假装执行该查询；需要更多原文时在gaps/stop_reason建议引用long excerpt（含原因/WARN邻域），明确原文覆盖缺口。仅trace_id查调用链；同时给service或keywords查日志；普通查询至少有service/trace_id/keywords之一。"#.to_string()
+要展开时输出queries=[]及readEvidenceIds:["L1"]，不同时给final_answer或diagnostic_report；只展开内存已保留context excerpt而非OAP原始全文，不发生网络补查。索引中的summary是导航提示而非可验证全文；canonical ID才用于引用/展开，source_aliases仅说明来源。first prompt有预算，后续仅增量证据；不要索取或重发全部证据。缺失原文超出retained excerpt时必须保留gaps，不能假称展开了原始全文。仅trace_id查调用链；同时给service或keywords查日志；普通查询至少有service/trace_id/keywords之一。"#.to_string();
+    instruction.push_str("\n\n统一最终报告契约（规划结束与最终回复使用同一格式）：\n");
+    instruction.push_str(&crate::wecom_report::schema_instruction());
+    instruction
 }
 
 #[cfg(test)]
@@ -659,6 +978,528 @@ mod tests {
             ".",
         )
     }
+    fn report_plan() -> Value {
+        json!({"queries":[],"reason":"核对保留证据","conclusion_level":"result","gaps":[],
+            "diagnostic_report":{"version":1,"level":"result",
+                "summary":{"text":"观察到过滤结果为零","evidence_refs":["L11"]},
+                "timeline":[{"evidence_refs":["L11"],"interpretation":"日志显示过滤数量"}],
+                "cause":{"result":[{"text":"filteredCount=0","evidence_refs":["L11"]}],"direct":[],"trigger":[]},
+                "code_checks":[],"ruled_out":[],
+                "gaps":[{"text":"具体规则与输入仍待核对","blocking":true}],
+                "next_actions":[{"text":"查阅过滤规则输入","evidence_refs":[]}]}})
+    }
+
+    #[test]
+    fn diagnostic_report_uses_real_contract_and_preserves_legacy_modes() {
+        let value = report_plan();
+        let parsed = parse_plan(
+            &value.to_string(),
+            &original(),
+            anchor_evidence(),
+            "missing",
+        )
+        .unwrap();
+        assert!(parsed.final_answer.is_none());
+        assert_eq!(parsed.diagnostic_report.as_ref().unwrap().version, 1);
+        assert_eq!(parsed.gaps, vec!["具体规则与输入仍待核对"]);
+        assert_eq!(parsed.conclusion_level, "result");
+        let mut higher_ceiling = value.clone();
+        higher_ceiling["conclusion_level"] = json!("trigger_verified");
+        let lower = parse_plan(
+            &higher_ceiling.to_string(),
+            &original(),
+            anchor_evidence(),
+            "missing",
+        )
+        .unwrap();
+        assert_eq!(lower.conclusion_level, "result");
+        let mut low_ceiling = value.clone();
+        low_ceiling["conclusion_level"] = json!("unknown");
+        assert!(parse_plan(
+            &low_ceiling.to_string(),
+            &original(),
+            anchor_evidence(),
+            "."
+        )
+        .is_err());
+        let legacy = json!({"queries":[],"reason":"legacy","conclusion_level":"result","gaps":[],
+            "final_answer":{"summary":"zero","claims":[{"text":"zero","evidence_refs":["L11"]}]}});
+        let old = parse_plan(&legacy.to_string(), &original(), anchor_evidence(), ".").unwrap();
+        assert!(old.final_answer.is_some() && old.diagnostic_report.is_none());
+        let old_stop = parse_plan(
+            r#"{"queries":[],"reason":"stop"}"#,
+            &original(),
+            "",
+            "missing",
+        )
+        .unwrap();
+        assert!(old_stop.final_answer.is_none() && old_stop.diagnostic_report.is_none());
+    }
+
+    #[test]
+    fn outer_report_gaps_are_rendered_as_blocking_without_silent_truncation() {
+        let mut value = report_plan();
+        value["gaps"] = json!(["外层缺少输入", "具体规则与输入仍待核对"]);
+        let parsed = parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").unwrap();
+        let report = parsed.diagnostic_report.unwrap();
+        assert_eq!(report.gaps.len(), 2);
+        assert!(report
+            .gaps
+            .iter()
+            .any(|gap| gap.text == "外层缺少输入" && gap.blocking));
+        value["diagnostic_report"]["gaps"] = json!([{"text":"外层缺少输入","blocking":false}]);
+        value["gaps"] = json!(["外层缺少输入"]);
+        let parsed = parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").unwrap();
+        let report = parsed.diagnostic_report.unwrap();
+        assert_eq!(report.gaps.len(), 1);
+        assert!(report.gaps[0].blocking);
+        value["diagnostic_report"]["gaps"] = json!([]);
+        value["gaps"] = json!((0..8).map(|i| format!("gap {i}")).collect::<Vec<_>>());
+        assert!(parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").is_ok());
+        value["gaps"] = json!((0..9).map(|i| format!("gap {i}")).collect::<Vec<_>>());
+        assert!(
+            parse_plan(&value.to_string(), &original(), anchor_evidence(), ".")
+                .unwrap_err()
+                .contains("at most eight diagnostic_report gaps")
+        );
+    }
+
+    #[test]
+    fn all_four_plan_modes_are_pairwise_exclusive() {
+        let report = report_plan()["diagnostic_report"].clone();
+        let modes = [
+            ("queries", json!([{"service":"orders","reason":"lookup"}])),
+            ("read_evidence_ids", json!(["L11"])),
+            (
+                "final_answer",
+                json!({"summary":"zero","claims":[{"text":"zero","evidence_refs":["L11"]}]}),
+            ),
+            ("diagnostic_report", report),
+        ];
+        for a in 0..modes.len() {
+            for b in (a + 1)..modes.len() {
+                let mut value =
+                    json!({"queries":[],"reason":"mixed","conclusion_level":"result","gaps":[]});
+                value[modes[a].0] = modes[a].1.clone();
+                value[modes[b].0] = modes[b].1.clone();
+                let error = parse_plan(&value.to_string(), &original(), anchor_evidence(), ".")
+                    .unwrap_err();
+                assert!(error.contains("choose exactly one"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn report_version_and_fixed_wire_key_are_required() {
+        for version in [Value::Null, json!(0), json!(2), json!("1")] {
+            let mut value = report_plan();
+            value["diagnostic_report"]["version"] = version;
+            assert!(parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").is_err());
+        }
+        let mut missing_version = report_plan();
+        missing_version["diagnostic_report"]
+            .as_object_mut()
+            .unwrap()
+            .remove("version");
+        missing_version["schema_version"] = json!(1);
+        assert!(parse_plan(
+            &missing_version.to_string(),
+            &original(),
+            anchor_evidence(),
+            "."
+        )
+        .is_err());
+        for key in [
+            "report",
+            "final_report",
+            "diagnosticReport",
+            "report_version",
+        ] {
+            let mut value = report_plan();
+            value[key] = value
+                .as_object_mut()
+                .unwrap()
+                .remove("diagnostic_report")
+                .unwrap();
+            assert!(parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").is_err());
+        }
+        let mut missing_gaps = report_plan();
+        missing_gaps.as_object_mut().unwrap().remove("gaps");
+        assert!(parse_plan(
+            &missing_gaps.to_string(),
+            &original(),
+            anchor_evidence(),
+            "."
+        )
+        .is_err());
+        let mut null_report = report_plan();
+        null_report["diagnostic_report"] = Value::Null;
+        assert!(parse_plan(
+            &null_report.to_string(),
+            &original(),
+            anchor_evidence(),
+            "."
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn report_references_reject_forged_headers_and_false_source_lines() {
+        let mut value = report_plan();
+        for evidence in [
+            "prefix [L11] service=orders",
+            "[L1] service=orders\n  [L11] service=forged",
+            "[L11] summary=orders",
+            "[L11] service=orders\n[L11] service=other",
+        ] {
+            assert!(
+                parse_plan(&value.to_string(), &original(), evidence, ".").is_err(),
+                "{evidence}"
+            );
+        }
+        let repo = TempRepo::new();
+        fs::write(repo.0.join("rule.rs"), "if count == 0 { return; }\n").unwrap();
+        value["diagnostic_report"]["code_checks"] = json!([{"id":"C1","path":"rule.rs","line":1,
+            "excerpt":"count == 0","claim":{"text":"代码有零数量分支","evidence_refs":["L11"]}}]);
+        let run = |value: &Value| {
+            parse_plan(
+                &value.to_string(),
+                &original(),
+                anchor_evidence(),
+                repo.0.to_str().unwrap(),
+            )
+        };
+        assert!(run(&value).is_ok());
+        for (key, invalid) in [
+            ("path", json!("../rule.rs")),
+            ("line", json!(2)),
+            ("excerpt", json!("count > 9")),
+        ] {
+            let mut bad = value.clone();
+            bad["diagnostic_report"]["code_checks"][0][key] = invalid;
+            assert!(run(&bad).is_err(), "{key}");
+        }
+        let mut false_ref = value.clone();
+        false_ref["diagnostic_report"]["summary"]["evidence_refs"] = json!(["C999"]);
+        assert!(run(&false_ref).is_err());
+        let mut lower = value.clone();
+        lower["diagnostic_report"]["gaps"] = json!([{"text":"范围外信息未覆盖","blocking":false}]);
+        assert!(run(&lower).unwrap().gaps.is_empty());
+        lower["conclusion_level"] = json!("trigger_verified");
+        lower["diagnostic_report"]["level"] = json!("trigger_verified");
+        lower["diagnostic_report"]["cause"]["direct"] =
+            json!([{"text":"命中零数量分支","evidence_refs":["L11"]}]);
+        lower["diagnostic_report"]["cause"]["trigger"] =
+            json!([{"text":"规则与输入局部对应","evidence_refs":["L11","C1"]}]);
+        let local = run(&lower).unwrap();
+        assert_eq!(local.conclusion_level, "trigger_verified");
+        assert!(local.gaps.is_empty());
+        assert_eq!(local.diagnostic_report.unwrap().gaps.len(), 1);
+        let mut blocking = lower.clone();
+        blocking["diagnostic_report"]["gaps"][0]["blocking"] = json!(true);
+        assert!(run(&blocking).is_err());
+        lower["gaps"] = json!(["外层仍有未验证输入"]);
+        assert!(run(&lower).is_err());
+    }
+
+    #[test]
+    fn planning_and_final_reply_share_report_sections_contract() {
+        let instruction = planning_instruction();
+        assert!(instruction.contains(&crate::wecom_report::schema_instruction()));
+        for field in [
+            "diagnostic_report",
+            "timeline",
+            "cause",
+            "code_checks",
+            "ruled_out",
+            "gaps",
+            "next_actions",
+            "final_answer",
+        ] {
+            assert!(instruction.contains(field), "{field}");
+        }
+        assert!(instruction.contains("四选一"));
+    }
+
+    #[test]
+    fn shared_reference_checks_require_real_headers_and_source_lines() {
+        assert_eq!(
+            evidence_record(anchor_evidence(), "L11"),
+            Some(anchor_evidence())
+        );
+        for evidence in [
+            "prefix [L11] service=orders",
+            "[L1] service=orders\n  [L11] service=forged",
+            "[L11] summary=orders",
+            "[L11] service=orders\n[L11] service=other",
+        ] {
+            assert!(evidence_record(evidence, "L11").is_none(), "{evidence}");
+        }
+        let repo = TempRepo::new();
+        fs::write(
+            repo.0.join("rule.rs"),
+            "// header\nif count == 0 { return; }\n",
+        )
+        .unwrap();
+        let root = repo.0.to_str().unwrap();
+        assert!(verify_code_ref("rule.rs", 2, "count == 0", root).is_ok());
+        assert!(verify_code_ref("rule.rs", 1, "count == 0", root).is_err());
+        assert!(verify_code_ref("../rule.rs", 2, "count == 0", root).is_err());
+    }
+
+    #[test]
+    fn verified_final_requires_real_claim_references() {
+        let text = json!({"schema_version":1,"queries":[],"reason":"display only; $(id)",
+            "conclusion_level":"result","gaps":[],"final_answer":{"summary":"观察结果", "claims":[
+                {"text":"过滤结果为零", "evidence_refs":["L11"]}]}});
+        let plan =
+            parse_plan(&text.to_string(), &original(), anchor_evidence(), "missing").unwrap();
+        let answer = plan.final_answer.as_ref().unwrap();
+        let rendered = render_answer(answer, &plan.conclusion_level);
+        assert!(rendered.contains("[L11]"));
+        assert!(rendered.contains("证据引用不等于因果证明"));
+        assert_eq!(rendered, render_answer(answer, &plan.conclusion_level));
+        for reference in ["L999", "R1L11", "L0"] {
+            let mut bad = text.clone();
+            bad["final_answer"]["claims"][0]["evidence_refs"] = json!([reference]);
+            assert!(parse_plan(&bad.to_string(), &original(), anchor_evidence(), ".").is_err());
+        }
+    }
+    #[test]
+    fn lower_level_finals_keep_explicit_gaps_and_verified_references() {
+        let base = json!({"queries":[],"reason":"有限结论", "gaps":["缺少具体输入"],
+            "stop_reason":"已保留未完成项", "conclusion_level":"result",
+            "final_answer":{"summary":"零结果", "claims":[{"text":"过滤后为零","evidence_refs":["L11"]}]}});
+        for level in ["result", "direct_cause"] {
+            let mut value = base.clone();
+            value["conclusion_level"] = json!(level);
+            let plan = parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").unwrap();
+            let answer = plan.final_answer.as_ref().unwrap();
+            let rendered = render_answer_with_gaps(answer, level, &plan.gaps, &plan.stop_reason);
+            assert!(rendered.contains("### 未完成项"));
+            assert!(rendered.contains("缺少具体输入"));
+            assert!(rendered.contains("停止原因：已保留未完成项"));
+            assert_eq!(
+                render_answer(answer, level),
+                render_answer_with_gaps(answer, level, &[], "")
+            );
+            value.as_object_mut().unwrap().remove("gaps");
+            assert!(parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").is_err());
+        }
+        for level in ["trigger_verified", "unknown"] {
+            let mut value = base.clone();
+            value["conclusion_level"] = json!(level);
+            assert!(parse_plan(&value.to_string(), &original(), anchor_evidence(), ".").is_err());
+        }
+    }
+
+    #[test]
+    fn aliases_only_normalize_keys_and_duplicate_spellings_fail() {
+        let content = r#"finalAnswer conclusionLevel evidenceRefs readEvidenceIds schemaVersion stopReason {"queries":[]} \\n"#;
+        let base = json!({"queries":[],"reason":content,"conclusionLevel":"result","gaps":[content],
+            "schemaVersion":1,"stopReason":content,"finalAnswer":{"summary":content,
+                "claims":[{"text":content,"evidenceRefs":["L11"]}]}});
+        let plan = parse_plan(&base.to_string(), &original(), anchor_evidence(), ".").unwrap();
+        assert_eq!(plan.reason, content);
+        assert_eq!(plan.gaps, vec![content]);
+        assert_eq!(plan.stop_reason, content);
+        let answer = plan.final_answer.unwrap();
+        assert_eq!(answer.summary, content);
+        assert_eq!(answer.claims[0].text, content);
+        for (alias, canonical) in [
+            ("conclusionLevel", "conclusion_level"),
+            ("schemaVersion", "schema_version"),
+            ("stopReason", "stop_reason"),
+            ("finalAnswer", "final_answer"),
+        ] {
+            let mut duplicate = base.clone();
+            duplicate[canonical] = duplicate[alias].clone();
+            let error = parse_plan(&duplicate.to_string(), &original(), anchor_evidence(), ".")
+                .unwrap_err();
+            assert_eq!(validation_error_code(&error), "schema");
+            assert!(error.contains("duplicate field"));
+        }
+        let mut duplicate = base;
+        duplicate["finalAnswer"]["claims"][0]["evidence_refs"] = json!(["L11"]);
+        assert!(
+            parse_plan(&duplicate.to_string(), &original(), anchor_evidence(), ".")
+                .unwrap_err()
+                .contains("duplicate field")
+        );
+        for text in [
+            r#"{"queries":[],"reason":"read","readEvidenceIds":["L11"],"read_evidence_ids":["L11"]}"#,
+            r#"{"queries":[{"service":"orders","reason":"q","evidenceRefs":["L11"],"evidence_refs":["L11"]}],"reason":"read"}"#,
+        ] {
+            assert!(parse_plan(text, &original(), anchor_evidence(), ".")
+                .unwrap_err()
+                .contains("duplicate field"));
+        }
+        assert!(parse(
+            json!({"service":"orders","reason":"q","evidenceRefs":["L11"]}),
+            anchor_evidence()
+        )
+        .is_ok());
+        assert!(parse(
+            json!({"service":"orders","reason":"q","traceId":"invented"}),
+            anchor_evidence()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn validation_errors_have_stable_categories() {
+        for (message, expected) in [
+            ("strict JSON format: EOF while parsing", "format"),
+            ("expected exactly one json fence", "format"),
+            ("strict JSON schema: duplicate field", "schema"),
+            ("invalid conclusion_level", "schema"),
+            ("missing evidence record [L999]", "references"),
+            (
+                "trace_id must occur in returned evidence and supplied references",
+                "references",
+            ),
+            ("source line does not exist", "code"),
+            ("excerpt does not match source line", "code"),
+            (
+                "code_ref.path must be nonempty and at most 1024 characters",
+                "code",
+            ),
+            ("follow-up must stay inside original window", "window"),
+            (
+                "anchor header requires unambiguous ts milliseconds or RFC3339",
+                "window",
+            ),
+            ("plan exceeds 32 KiB", "budget"),
+            ("read_evidence_ids allows at most six IDs", "budget"),
+            ("unrecognized error", "other"),
+        ] {
+            assert_eq!(
+                validation_error_code(&format!("plan_error: {message}")),
+                expected
+            );
+        }
+        for (text, expected) in [("{", "format"), (r#"{"queries":[]}"#, "schema")] {
+            let error = parse_plan(text, &original(), "", ".").unwrap_err();
+            assert_eq!(validation_error_code(&error), expected);
+        }
+    }
+
+    #[test]
+    fn final_schema_modes_and_source_refs_fail_closed() {
+        let repo = TempRepo::new();
+        fs::write(repo.0.join("rule.rs"), "if count == 0 { return; }\n").unwrap();
+        let base = json!({"queries":[],"reason":"display only", "gaps":[],"conclusion_level":"trigger_verified",
+            "final_answer":{"summary":"rule matched","claims":[{"text":"count is zero","evidence_refs":["L11"],
+                "code_refs":[{"path":"rule.rs","line":1,"excerpt":"count == 0"}]}]}});
+        let run = |v: &Value| {
+            parse_plan(
+                &v.to_string(),
+                &original(),
+                anchor_evidence(),
+                repo.0.to_str().unwrap(),
+            )
+        };
+        assert!(run(&base).is_ok());
+        for path in [
+            "../rule.rs",
+            "C:\\rule.rs",
+            "missing.rs",
+            "/rule.rs",
+            "rule.rs:stream",
+        ] {
+            let mut bad = base.clone();
+            bad["final_answer"]["claims"][0]["code_refs"][0]["path"] = json!(path);
+            assert!(run(&bad).is_err());
+        }
+        for (key, value) in [
+            ("line", json!(2)),
+            ("excerpt", json!("imaginary")),
+            ("extra", json!(true)),
+        ] {
+            let mut bad = base.clone();
+            bad["final_answer"]["claims"][0]["code_refs"][0][key] = value;
+            assert!(run(&bad).is_err());
+        }
+        for (key, value) in [
+            ("conclusion_level", json!("unknown")),
+            ("gaps", json!(["missing"])),
+            ("schema_version", json!(2)),
+            ("schema_version", Value::Null),
+            ("readEvidenceIds", json!(["L11"])),
+            ("queries", json!([{"service":"orders","reason":"x"}])),
+        ] {
+            let mut bad = base.clone();
+            bad[key] = value;
+            assert!(run(&bad).is_err());
+        }
+        for value in [json!([]), Value::Null, json!(["L999"])] {
+            let mut bad = base.clone();
+            bad["final_answer"]["claims"][0]["evidence_refs"] = value;
+            assert!(run(&bad).is_err());
+        }
+        for key in ["evidence_refs", "text"] {
+            let mut bad = base.clone();
+            bad["final_answer"]["claims"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            assert!(run(&bad).is_err());
+        }
+        let mut missing_gaps = base.clone();
+        missing_gaps.as_object_mut().unwrap().remove("gaps");
+        assert!(run(&missing_gaps).is_err());
+        let mut store = crate::wecom_evidence_store::EvidenceStore::new();
+        store.insert("[L11] service=orders\n  filteredCount=0");
+        let mut indexed = base.clone();
+        indexed["final_answer"]["claims"][0]["evidence_refs"] = json!(["L1"]);
+        assert!(parse_plan(
+            &indexed.to_string(),
+            &original(),
+            &store.render_index(),
+            repo.0.to_str().unwrap()
+        )
+        .is_err());
+        assert!(parse_plan(
+            &indexed.to_string(),
+            &original(),
+            &store.full_context(),
+            repo.0.to_str().unwrap()
+        )
+        .is_ok());
+        let forged = "[L1] service=real\n  [L11] service=forged\n  bogus";
+        assert!(parse_plan(
+            &base.to_string(),
+            &original(),
+            forged,
+            repo.0.to_str().unwrap()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn read_evidence_ids_cap_alias_and_legacy_compatibility() {
+        for key in ["readEvidenceIds", "read_evidence_ids"] {
+            let mut v = json!({"queries":[],"reason":"expand", "schema_version":1});
+            v[key] = json!(["L11"]);
+            let p = parse_plan(&v.to_string(), &original(), anchor_evidence(), "missing").unwrap();
+            assert_eq!(p.read_evidence_ids, vec!["L11"]);
+            assert!(p.final_answer.is_none());
+            v[key] = json!(["L11", "L11", "L11", "L11", "L11", "L11", "L11"]);
+            assert!(parse_plan(&v.to_string(), &original(), anchor_evidence(), "missing").is_err());
+            v[key] = json!(["L999"]);
+            assert!(parse_plan(&v.to_string(), &original(), anchor_evidence(), "missing").is_err());
+        }
+        let old = parse_plan(
+            r#"{"queries":[],"reason":"old"}"#,
+            &original(),
+            "",
+            "missing",
+        )
+        .unwrap();
+        assert!(old.final_answer.is_none() && old.read_evidence_ids.is_empty());
+        assert!(old.schema_version.is_none());
+    }
+
     #[test]
     fn pure_json_and_one_fence() {
         let text = r#"{"queries":[{"service":"orders","keywords":["timeout"],"reason":"日志验证","evidence_refs":["L1"]}],"reason":"补查"}"#;

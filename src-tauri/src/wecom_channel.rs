@@ -1,8 +1,8 @@
 //! 企微智能机器人通道：生命周期、Tauri 命令、与设置页对接。
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -25,9 +25,29 @@ pub enum ApprovalKind {
     Dsh { summary: String },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApprovalOwner {
+    pub bot: String,
+    pub chat: String,
+    pub user: String,
+    pub session: String,
+}
+
+impl ApprovalOwner {
+    pub fn matches(&self, other: &Self) -> bool {
+        !self.bot.is_empty()
+            && !self.user.is_empty()
+            && !self.chat.is_empty()
+            && !self.session.is_empty()
+            && self == other
+    }
+}
+
 /// 一次企微审批待决项：用户用聊天里的「审批码」回复来放行/拒绝。
 pub struct PendingApproval {
     pub kind: ApprovalKind,
+    pub owner: ApprovalOwner,
+    pub request_id: String,
     /// 天玑档才有意义：「本轮同类都允许」；DSH 只有一次性授权。
     /// 目前提示文案在 emit 时就已经写好，这里只留档备查。
     #[allow(dead_code)]
@@ -55,7 +75,8 @@ pub struct WecomState {
     /// 自增审批码序号
     pub approval_seq: AtomicU32,
     /// 当前回合的出站目标（wecom_send_image/file 工具用）
-    pub last_target: Mutex<Option<OutTarget>>,
+    pub out_targets: Mutex<HashMap<String, OutTarget>>,
+    pub approval_owners: Mutex<HashMap<String, ApprovalOwner>>,
     /// DSH 引擎（常驻 `dsh --profile acp` 子进程）；天玑档时保持 Stopped。
     pub dsh: Arc<DshEngine>,
     /// SkyWalking 排障：`(OAP 地址, 可选 "Key: Value" header)`，空地址 = 不下发 skywalking 工具。
@@ -88,7 +109,8 @@ impl WecomState {
             api_token: Mutex::new(None),
             pending_approvals: Mutex::new(HashMap::new()),
             approval_seq: AtomicU32::new(0),
-            last_target: Mutex::new(None),
+            out_targets: Mutex::new(HashMap::new()),
+            approval_owners: Mutex::new(HashMap::new()),
             dsh: Arc::new(DshEngine::new()),
             skywalking: Mutex::new((String::new(), String::new())),
             skywalking_timezone: Mutex::new(None),
@@ -221,6 +243,11 @@ pub struct WecomStatus {
     pub process_id: u32,
     pub build_label: String,
     pub last_investigation: Option<serde_json::Value>,
+    pub last_performance: Option<serde_json::Value>,
+    pub active_jobs: usize,
+    pub waiting_jobs: usize,
+    pub max_jobs: usize,
+    pub shared_tasks: usize,
 }
 
 /// 列 DSH 引擎可用模型（ACP `configOptions`）：设置页「DSH 模型」下拉用。
@@ -308,7 +335,9 @@ pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, S
     } else {
         let offset = *state.skywalking_timezone.lock().await;
         let mut probe = serde_json::json!({ "keyword": "", "minutes": 5 });
-        if let Some(offset) = offset { probe["timezone_offset_minutes"] = serde_json::json!(offset); }
+        if let Some(offset) = offset {
+            probe["timezone_offset_minutes"] = serde_json::json!(offset);
+        }
         match tokio::time::timeout(
             std::time::Duration::from_secs(15),
             crate::wecom_skywalking::run(&sky.0, &sky.1, &probe),
@@ -343,7 +372,11 @@ pub async fn wecom_docgen_run_now(
         "已更新：分支 {}，{} 个变更文件，群通知{}。\n{}",
         report.branch,
         report.new_commits,
-        if report.pushed { "已推送" } else { "未推送（检查 webhook）" },
+        if report.pushed {
+            "已推送"
+        } else {
+            "未推送（检查 webhook）"
+        },
         if report.updated_docs.is_empty() {
             "（无摘要）".to_string()
         } else {
@@ -361,7 +394,24 @@ pub struct WecomPairingView {
 }
 
 #[tauri::command]
-pub async fn wecom_channel_status(state: State<'_, WecomState>) -> Result<WecomStatus, String> {
+pub async fn wecom_channel_status(
+    app: AppHandle,
+    state: State<'_, WecomState>,
+) -> Result<WecomStatus, String> {
+    let bot = state
+        .applied
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.bot_id.clone())
+        .unwrap_or_default();
+    let db = app.state::<crate::DbState>().conn.clone();
+    let shared_tasks = tokio::task::spawn_blocking(move || {
+        let c = db.lock().map_err(|_| "task db lock".to_string())?;
+        crate::wecom_tasks::active_count(&c, &bot, chrono::Utc::now().timestamp_millis())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let (s, detail) = state.sock.status().await;
     let (last_error, connected_ms) = state.sock.detail().await;
     let enabled = state.applied.lock().await.is_some();
@@ -376,8 +426,21 @@ pub async fn wecom_channel_status(state: State<'_, WecomState>) -> Result<WecomS
         last_error,
         connected_ms,
         process_id: std::process::id(),
-        build_label: format!("{}-{} / investigation-v3-warn", env!("CARGO_PKG_VERSION"), if cfg!(debug_assertions) { "dev" } else { "release" }),
+        build_label: format!(
+            "{}-{} / report-v1-unified-concurrency32",
+            env!("CARGO_PKG_VERSION"),
+            if cfg!(debug_assertions) {
+                "dev"
+            } else {
+                "release"
+            }
+        ),
         last_investigation: crate::wecom_investigation::last_diagnostic(),
+        last_performance: crate::wecom_performance::latest(),
+        active_jobs: state.orch.admission.active(),
+        waiting_jobs: state.orch.admission.waiting(),
+        max_jobs: state.orch.admission.limit(),
+        shared_tasks,
     })
 }
 
@@ -387,7 +450,10 @@ pub async fn wecom_channel_apply(
     state: State<'_, WecomState>,
     req: WecomApplyRequest,
 ) -> Result<WecomStatus, String> {
-    if req.skywalking_timezone_offset_minutes.is_some_and(|v| !(-720..=840).contains(&v)) {
+    if req
+        .skywalking_timezone_offset_minutes
+        .is_some_and(|v| !(-720..=840).contains(&v))
+    {
         return Err("OAP时区偏移须在UTC-12至UTC+14之间".into());
     }
     // 解密 Secret（机器人长连接 + 业务 API 各一套，后者选填）
@@ -464,11 +530,23 @@ pub async fn wecom_channel_apply(
     // Changing query namespace invalidates short-lived investigation cursors, including switching back.
     let old_sky = state.skywalking.lock().await.clone();
     let old_zone = *state.skywalking_timezone.lock().await;
-    let old_bot = state.applied.lock().await.as_ref().map(|c| c.bot_id.clone()).unwrap_or_default();
+    let old_bot = state
+        .applied
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.bot_id.clone())
+        .unwrap_or_default();
     let old_workspace = state.dsh.workspace().await;
-    if old_sky != (req.skywalking_addr.trim().to_string(), req.skywalking_header.trim().to_string())
-        || old_zone != req.skywalking_timezone_offset_minutes || old_bot != req.bot_id.trim()
-        || old_workspace != workspace {
+    if old_sky
+        != (
+            req.skywalking_addr.trim().to_string(),
+            req.skywalking_header.trim().to_string(),
+        )
+        || old_zone != req.skywalking_timezone_offset_minutes
+        || old_bot != req.bot_id.trim()
+        || old_workspace != workspace
+    {
         crate::wecom_investigation::clear_contexts();
     }
     // SkyWalking 排障地址（空 = 问答时不下发 skywalking 工具）。
@@ -486,8 +564,11 @@ pub async fn wecom_channel_apply(
     }
     {
         let d = req.doc_dir.trim();
-        *state.orch.doc_dir.lock().await =
-            if d.is_empty() { "doc".into() } else { d.to_string() };
+        *state.orch.doc_dir.lock().await = if d.is_empty() {
+            "doc".into()
+        } else {
+            d.to_string()
+        };
     }
 
     // 逆向文档自动更新配置（webhook 可能是 enc:v1: 密文）。
@@ -511,7 +592,7 @@ pub async fn wecom_channel_apply(
         state.sock.stop().await;
         stop_dsh_async(&app);
         *state.applied.lock().await = None;
-        let st = wecom_channel_status(state).await?;
+        let st = wecom_channel_status(app.clone(), state).await?;
         emit_status(&app, &st);
         return Ok(st);
     }
@@ -529,7 +610,9 @@ pub async fn wecom_channel_apply(
             return Err("DSH 工作区必须是绝对路径".into());
         }
         if crate::dsh_commands::dsh_installed_version().is_none() {
-            return Err("未检测到 DeepSeek Harness：请先在「Harness」页安装后再启用 DSH 引擎".into());
+            return Err(
+                "未检测到 DeepSeek Harness：请先在「Harness」页安装后再启用 DSH 引擎".into(),
+            );
         }
         let changed = state
             .dsh
@@ -556,8 +639,16 @@ pub async fn wecom_channel_apply(
     let creds = AppliedCreds {
         bot_id: bot_id.clone(),
         secret: secret.clone(),
-        corp_id: if corp_id.is_empty() { None } else { Some(corp_id) },
-        corp_secret: if corp_secret.is_empty() { None } else { Some(corp_secret) },
+        corp_id: if corp_id.is_empty() {
+            None
+        } else {
+            Some(corp_id)
+        },
+        corp_secret: if corp_secret.is_empty() {
+            None
+        } else {
+            Some(corp_secret)
+        },
     };
     let prev = state.applied.lock().await.clone();
     let bot_same = matches!(
@@ -595,7 +686,7 @@ pub async fn wecom_channel_apply(
 
     // 等一小会儿让 Connecting → Connected/Error 有机会更新
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    let st = wecom_channel_status(state).await?;
+    let st = wecom_channel_status(app.clone(), state).await?;
     emit_status(&app, &st);
     Ok(st)
 }
@@ -622,7 +713,7 @@ fn kick_dsh(app: &AppHandle, restart: bool) {
         if let Err(e) = result {
             eprintln!("[wecom] DSH 引擎启动失败：{e}");
         }
-        let st = wecom_channel_status(app_handle.state::<WecomState>()).await;
+        let st = wecom_channel_status(app_handle.clone(), app_handle.state::<WecomState>()).await;
         if let Ok(st) = st {
             emit_status(&app_handle, &st);
         }
@@ -667,7 +758,7 @@ pub async fn wecom_channel_restart(
     *state.applied.lock().await = Some(creds);
 
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    let st = wecom_channel_status(state).await?;
+    let st = wecom_channel_status(app.clone(), state).await?;
     emit_status(&app, &st);
     Ok(st)
 }

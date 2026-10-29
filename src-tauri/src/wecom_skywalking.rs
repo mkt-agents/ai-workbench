@@ -10,11 +10,14 @@
 //! 地址由设置页下发到 `WecomState.skywalking`（空 = 不下发 `skywalking_query` 工具）。
 //! 可选 header（鉴权版 OAP）由 `skywalking_header` 以 `Key: Value` 形式下发。
 
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex, OnceLock,
 };
 use std::time::Duration;
+use tokio::sync::{Mutex as AsyncMutex, Notify, Semaphore};
 
 use chrono::{DateTime, FixedOffset, Local, Utc};
 
@@ -23,6 +26,28 @@ use chrono::{DateTime, FixedOffset, Local, Utc};
 pub struct QueryBudget {
     used: Arc<AtomicUsize>,
     limit: usize,
+    /// Absolute shared-used ceiling; child clones never reset accounting.
+    ceiling: usize,
+    session: Arc<QuerySession>,
+}
+
+/// Only this investigation owns business responses and pooled connections.
+#[derive(Default)]
+struct QuerySession {
+    client: OnceLock<Result<reqwest::Client, String>>,
+    hits: AtomicUsize,
+    requests: Mutex<HashMap<[u8; 32], Arc<AsyncMutex<Option<GraphqlResponse>>>>>,
+}
+
+// QueryBudget historically had a harmless Debug representation. Keep cached business
+// bodies out of it now that the budget also owns session data.
+impl std::fmt::Debug for QuerySession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuerySession")
+            .field("client_initialized", &self.client.get().is_some())
+            .field("cache_hits", &self.hits.load(Ordering::SeqCst))
+            .finish_non_exhaustive()
+    }
 }
 
 const MAX_QUERY_REQUESTS: usize = 24;
@@ -42,24 +67,40 @@ impl QueryBudget {
         Self {
             used: Arc::new(AtomicUsize::new(0)),
             limit: limit.min(MAX_QUERY_REQUESTS),
+            ceiling: limit.min(MAX_QUERY_REQUESTS),
+            session: Arc::new(QuerySession::default()),
         }
+    }
+    /// Limit this phase to at most `allowance` further HTTP calls. The parent
+    /// remains usable for reserved supplements, sharing counters and cached responses.
+    pub fn child_limit(&self, allowance: usize) -> Self {
+        Self {
+            used: self.used.clone(),
+            limit: self.limit,
+            ceiling: self.ceiling.min(self.used().saturating_add(allowance)),
+            session: self.session.clone(),
+        }
+    }
+    /// Completed response reuse, including callers coalesced behind an in-flight query.
+    pub fn cache_hits(&self) -> usize {
+        self.session.hits.load(Ordering::SeqCst)
     }
     pub fn used(&self) -> usize {
         self.used.load(Ordering::SeqCst)
     }
     pub fn remaining(&self) -> usize {
-        self.limit.saturating_sub(self.used())
+        self.ceiling.saturating_sub(self.used())
     }
     fn acquire(&self) -> Result<(), String> {
         self.used
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < self.limit).then_some(n + 1)
+                (n < self.ceiling).then_some(n + 1)
             })
             .map(|_| ())
             .map_err(|_| {
                 format!(
-                    "transport_error: query budget exhausted ({} requests)",
-                    self.limit
+                    "transport_error: query budget exhausted ({} requests; phase ceiling {})",
+                    self.limit, self.ceiling
                 )
             })
     }
@@ -101,7 +142,7 @@ const MAX_TRACE_IDS: usize = 8;
 pub async fn run(addr: &str, header: &str, args: &Value) -> Result<String, String> {
     let addr = addr.trim();
     if addr.is_empty() {
-        return Err("transport_error: 未配置 SkyWalking 地址：请在「设置 → 联网扩展 → 企业微信机器人」填写 OAP 地址后再排查线上问题。".into());
+        return Err("transport_error: 未配置 SkyWalking 地址：请在「设置 → IM机器人 → 企业微信」填写 OAP 地址后再排查线上问题。".into());
     }
     // 显式要「指标 / 诊断」：查端点 TopN 延迟/吞吐 + 实例清单，给出根因趋势证据。
     let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("");
@@ -189,6 +230,7 @@ async fn graphql_with_timeout(
     )
 }
 
+#[derive(Debug, Clone)]
 struct GraphqlResponse {
     body: Value,
     endpoint: String,
@@ -237,6 +279,119 @@ fn response_context(resp: &reqwest::Response) -> String {
     )
 }
 
+// The only global state is a bounded endpoint admission registry, never query data.
+// Strong references pin both active requests and semaphore waiters against eviction.
+#[derive(Default)]
+struct EndpointRegistry {
+    entries: Mutex<HashMap<String, Arc<Semaphore>>>,
+    changed: Notify,
+}
+
+struct EndpointLease {
+    semaphore: Option<Arc<Semaphore>>,
+    registry: &'static EndpointRegistry,
+}
+impl Drop for EndpointLease {
+    fn drop(&mut self) {
+        self.semaphore.take();
+        self.registry.changed.notify_waiters();
+    }
+}
+
+async fn endpoint_lease(url: &str) -> EndpointLease {
+    static REGISTRY: OnceLock<EndpointRegistry> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(EndpointRegistry::default);
+    // Credentials/query parameters must not split an OAP's concurrency allowance.
+    let endpoint = sanitized_endpoint(url);
+    loop {
+        let changed = registry.changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        {
+            let mut entries = registry.entries.lock().unwrap_or_else(|e| e.into_inner());
+            if !entries.contains_key(&endpoint) && entries.len() >= 32 {
+                if let Some(idle) = entries
+                    .iter()
+                    .find(|(_, semaphore)| Arc::strong_count(semaphore) == 1)
+                    .map(|(key, _)| key.clone())
+                {
+                    entries.remove(&idle);
+                }
+            }
+            if entries.contains_key(&endpoint) || entries.len() < 32 {
+                let semaphore = entries
+                    .entry(endpoint.clone())
+                    .or_insert_with(|| Arc::new(Semaphore::new(2)))
+                    .clone();
+                return EndpointLease {
+                    semaphore: Some(semaphore),
+                    registry,
+                };
+            }
+        }
+        changed.await;
+    }
+}
+
+fn request_cache_key(url: &str, header: &str, query: &str, variables: &Value) -> [u8; 32] {
+    // Hash credentials separately: no raw header material in session map keys/debug output.
+    let header_hash = Sha256::digest(header.as_bytes());
+    let mut digest = Sha256::new();
+    for part in [
+        url.as_bytes(),
+        header_hash.as_slice(),
+        query.as_bytes(),
+        variables.to_string().as_bytes(),
+    ] {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part);
+    }
+    digest.finalize().into()
+}
+
+/// Keep malformed/partial operation payloads out of the generic response cache too.
+/// Callers retain their existing validation and error strings.
+fn cacheable_response(query: &str, body: &Value) -> bool {
+    let string_rows = |path: &str, key: &str| {
+        body.pointer(path)
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter()
+                    .all(|row| row.get(key).is_some_and(Value::is_string))
+            })
+    };
+    match query {
+        QUERY_TRACE => parse_trace_spans(body).is_ok(),
+        QUERY_LOGS => body
+            .pointer("/data/queryLogs/logs")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| rows.iter().all(|row| parse_log_row(row).is_ok())),
+        QUERY_FIND_SERVICE => body
+            .pointer("/data/service/id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty()),
+        QUERY_LIST_METRICS => string_rows("/data/metrics", "name"),
+        QUERY_INSTANCES => string_rows("/data/instances", "name"),
+        QUERY_SORT_METRICS => body
+            .pointer("/data/records")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter().all(|row| {
+                    row.get("name").is_some_and(Value::is_string)
+                        && row
+                            .get("value")
+                            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()))
+                            .is_some_and(f64::is_finite)
+                })
+            }),
+        "query { __typename }" => body
+            .pointer("/data/__typename")
+            .and_then(Value::as_str)
+            .is_some_and(|name| !name.is_empty()),
+        _ => false,
+    }
+}
+
 async fn graphql_response(
     addr: &str,
     header: &str,
@@ -250,14 +405,74 @@ async fn graphql_response(
         "endpoint={}; HTTP unavailable; content-type=[unavailable]",
         sanitized_endpoint(&url)
     );
-    // 禁止自动重定向：每次实际请求都应计数，也避免把鉴权头转交其它地址。
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| format!("{}; {pending_context}", request_error(e)))?;
+    let key = request_cache_key(&url, header, query, &variables);
+    let slot = {
+        let mut requests = budget
+            .session
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Discard idle failed/cancelled slots; never replace a slot another caller holds.
+        requests.retain(|_, slot| {
+            Arc::strong_count(slot) > 1
+                || slot.try_lock().map(|value| value.is_some()).unwrap_or(true)
+        });
+        requests
+            .entry(key)
+            .or_insert_with(|| Arc::new(AsyncMutex::new(None)))
+            .clone()
+    };
+    // One deadline covers singleflight wait + endpoint admission + complete HTTP body.
+    tokio::time::timeout(timeout.min(REQUEST_TIMEOUT), async {
+        let mut cached = slot.lock().await;
+        if let Some(response) = cached.as_ref() {
+            budget.session.hits.fetch_add(1, Ordering::SeqCst);
+            return Ok(response.clone());
+        }
+        let response = graphql_http(
+            &url,
+            header,
+            query,
+            variables,
+            budget,
+            timeout,
+            &pending_context,
+        )
+        .await?;
+        if cacheable_response(query, &response.body) {
+            *cached = Some(response.clone());
+        }
+        Ok(response)
+    })
+    .await
+    .map_err(|_| format!("timeout: SkyWalking request exceeded 20s; {pending_context}"))?
+}
+
+async fn graphql_http(
+    url: &str,
+    header: &str,
+    query: &str,
+    variables: Value,
+    budget: &QueryBudget,
+    timeout: Duration,
+    pending_context: &str,
+) -> Result<GraphqlResponse, String> {
+    // Lazy once-per-session construction preserves infallible new/default and pools sockets.
+    // No default headers: each request owns its current authentication configuration.
+    let client = budget
+        .session
+        .client
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(request_error)
+        })
+        .as_ref()
+        .map_err(|e| format!("{e}; {pending_context}"))?;
     let mut req = client
-        .post(&url)
-        .timeout(timeout)
+        .post(url)
+        .timeout(timeout.min(REQUEST_TIMEOUT))
         .json(&json!({ "query": query, "variables": variables }));
     for (k, v) in parse_headers(header) {
         req = req.header(k, v);
@@ -265,6 +480,14 @@ async fn graphql_response(
     let req = req
         .build()
         .map_err(|e| format!("{}; {pending_context}", request_error(e)))?;
+    let lease = endpoint_lease(url).await;
+    let _permit = lease
+        .semaphore
+        .as_ref()
+        .expect("live endpoint lease")
+        .acquire()
+        .await
+        .map_err(|_| format!("transport_error: endpoint limiter closed; {pending_context}"))?;
     budget
         .acquire()
         .map_err(|e| format!("{e}; {pending_context}"))?;
@@ -578,10 +801,24 @@ fn validate_tags(value: Option<&Value>) -> Result<(), String> {
 }
 
 /// 原始页条数与筛选后行数分开，筛后空页不代表 OAP 分页结束。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LogPage {
     pub rows: Vec<LogRow>,
     pub fetched_count: usize,
+    pub raw_count: usize,
+    /// Raw extrema, before time/service filtering. Zero timestamps remain visible.
+    pub min_ts: Option<i64>,
+    pub max_ts: Option<i64>,
+    pub time_matched: usize,
+    pub unknown_time_count: usize,
+    pub window_start_ts: i64,
+    pub window_end_ts: i64,
+    pub submitted_start: String,
+    pub submitted_end: String,
+    pub duration_submitted: bool,
+    pub oap_offset_minutes: i32,
+    /// Set only from the actual submitted condition, not inferred from row order.
+    pub query_order_des: bool,
 }
 
 /// 结构化日志查询：供链路闭环（编排层预取）复用，返回 LogRow 列表。
@@ -654,6 +891,8 @@ pub async fn fetch_logs_page_budgeted(
         page,
         page_size,
     );
+    let query_order_des = condition["queryOrder"].as_str() == Some("DES");
+    let duration_submitted = condition.get("queryDuration").is_some();
     let body = graphql_budgeted(
         addr,
         header,
@@ -662,11 +901,20 @@ pub async fn fetch_logs_page_budgeted(
         budget,
     )
     .await?;
-    parse_logs_page(
+    let mut page = parse_logs_page(
         &body,
         &window,
         if trace_id.is_empty() { "" } else { &service },
-    )
+    )?;
+    page.query_order_des = query_order_des;
+    page.duration_submitted = duration_submitted;
+    if !duration_submitted {
+        // relatedTrace deliberately omits queryDuration; distinguish the local
+        // filter window from parameters actually transmitted to the OAP.
+        page.submitted_start.clear();
+        page.submitted_end.clear();
+    }
+    Ok(page)
 }
 
 fn parse_logs_page(
@@ -680,13 +928,31 @@ fn parse_logs_page(
         .ok_or("schema_error: data.queryLogs.logs must be an array")?;
     // 先验证整页再筛选，坏行即使落在窗口之外也不能被静默吞掉。
     let rows: Vec<LogRow> = logs.iter().map(parse_log_row).collect::<Result<_, _>>()?;
+    let start = window.start.timestamp_millis();
+    let end = window.end.timestamp_millis();
+    let duration = window.duration();
     Ok(LogPage {
         fetched_count: logs.len(),
+        raw_count: logs.len(),
+        min_ts: rows.iter().map(|row| row.ts).min(),
+        max_ts: rows.iter().map(|row| row.ts).max(),
+        time_matched: rows
+            .iter()
+            .filter(|row| row.ts >= start && row.ts <= end)
+            .count(),
+        unknown_time_count: rows.iter().filter(|row| row.ts <= 0).count(),
+        window_start_ts: start,
+        window_end_ts: end,
+        submitted_start: duration["start"].as_str().unwrap_or("").into(),
+        submitted_end: duration["end"].as_str().unwrap_or("").into(),
+        duration_submitted: false,
+        oap_offset_minutes: window.start.offset().local_minus_utc() / 60,
+        query_order_des: false,
         rows: rows
             .into_iter()
             .filter(|row| {
-                row.ts >= window.start.timestamp_millis()
-                    && row.ts <= window.end.timestamp_millis()
+                row.ts >= start
+                    && row.ts <= end
                     && (service_filter.is_empty() || row.service == service_filter)
             })
             .collect(),
