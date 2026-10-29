@@ -1188,7 +1188,7 @@ impl Orchestrator {
         }
 
         let mut acc = String::new();
-        let mut answer_buffer = crate::wecom_answer::AnswerBuffer::new(protected_answer);
+        let mut answer_buffer = crate::wecom_answer::AnswerBuffer::with_request(protected_answer, preflight_request);
         let mut last_push = InstantApprox::now();
         let mut last_event = std::time::Instant::now();
         // 最近一次动作（工具名），用来解释「为什么还在等」。
@@ -2530,9 +2530,9 @@ mod tests {
         }
         let body = answer.finish(Some(&q), "[L1] service=orders WARN result=0", ".", "result");
         let final_body = crate::wecom_reply::finish(stream, &body).unwrap();
-        assert!(final_body.contains("排查结论"));
-        assert!(final_body.contains("一、关键证据链"));
-        assert!(final_body.contains("二、原因与代码核对"));
+        assert!(final_body.contains("排障结论"));
+        assert!(final_body.contains("一、结果（现象）"));
+        assert!(final_body.contains("二、直接原因"));
         assert!(!final_body.contains("final_answer"));
         assert_eq!(final_body.matches("⏱ 本次耗时：").count(), 1);
         assert!(crate::wecom_reply::finish(stream, "迟到原始JSON").is_none());

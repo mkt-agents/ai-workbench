@@ -10,6 +10,7 @@ pub struct AnswerBuffer {
     protected: bool,
     text: String,
     overflowed: bool,
+    diagnostic_request: Option<String>,
 }
 
 impl AnswerBuffer {
@@ -18,7 +19,32 @@ impl AnswerBuffer {
             protected,
             text: String::new(),
             overflowed: false,
+            diagnostic_request: None,
         }
+    }
+
+    pub fn with_request(protected: bool, request: &str) -> Self {
+        let mut buffer = Self::new(protected);
+        buffer.diagnostic_request = Some(request.to_string());
+        buffer
+    }
+
+    fn failure(
+        &self,
+        original: Option<&InvestigationQuery>,
+        evidence: &str,
+        stage: &str,
+        error: &str,
+    ) -> String {
+        if let Some(request) = &self.diagnostic_request {
+            let code = crate::wecom_investigation_plan::validation_error_code(error);
+            crate::wecom_performance::note_validation(request, code);
+            crate::wecom_log::write(
+                "answer-validation",
+                &serde_json::json!({"requestId":request,"stage":stage,"code":code}).to_string(),
+            );
+        }
+        unverified(original, evidence)
     }
 
     pub fn push(&mut self, chunk: &str) -> Option<String> {
@@ -68,9 +94,10 @@ impl AnswerBuffer {
         let Some(original) = original else {
             return unverified(None, evidence);
         };
-        let Ok(plan) = crate::wecom_investigation_plan::parse_plan(text, original, evidence, repo)
-        else {
-            return unverified(Some(original), evidence);
+        let plan = match crate::wecom_investigation_plan::parse_plan(text, original, evidence, repo)
+        {
+            Ok(plan) => plan,
+            Err(error) => return self.failure(Some(original), evidence, "parse", &error),
         };
         let max_level = if plan.diagnostic_report.is_some() {
             report_max
@@ -83,9 +110,10 @@ impl AnswerBuffer {
         let report = if let Some(report) = plan.diagnostic_report {
             // Recheck the report's own level against the runtime coverage ceiling,
             // rather than relying only on the outer plan label.
-            if crate::wecom_report::validate(&report, original, evidence, repo, max_level).is_err()
+            if let Err(error) =
+                crate::wecom_report::validate(&report, original, evidence, repo, max_level)
             {
-                return unverified(Some(original), evidence);
+                return self.failure(Some(original), evidence, "validate", &error);
             }
             report
         } else if let Some(answer) = plan.final_answer {
@@ -232,7 +260,7 @@ mod tests {
             ".",
             "result",
         );
-        assert!(answer.contains("## 排查结论"));
+        assert!(answer.contains("## 排障结论"));
         assert!(answer.contains("[L1]"));
         assert!(!answer.contains("final_answer"));
         assert!(!answer.contains("queries"));
@@ -356,8 +384,8 @@ mod tests {
                 assert_eq!(buffer.push(&ch.to_string()), None);
             }
             let rendered = buffer.finish(Some(&original()), "[L1] service=orders", ".", level);
-            assert!(rendered.contains("## 排查结论"));
-            assert!(rendered.contains("### 四、未确认项与下一步"));
+            assert!(rendered.contains("## 排障结论"));
+            assert!(rendered.contains("### 未完成项"));
             assert!(rendered.contains("缺触发依据 &lt;tag&gt; \\# forged"));
             assert!(rendered.contains("本轮停止说明：预算已用完，保留缺口"));
             assert!(!rendered.contains("final_answer"));
@@ -536,6 +564,34 @@ mod tests {
         let rendered = buffer.finish(Some(&query), evidence, ".", "result");
         assert_eq!(rendered, direct);
         assert!(!rendered.contains("尚未形成通过本地核对的诊断结论"));
+    }
+
+    #[test]
+    fn recorded_shapes_keep_the_cause_in_picture_one_layout() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/wecom-report-recovery");
+        let evidence = std::fs::read_to_string(root.join("evidence.txt")).unwrap();
+        let q = original();
+        for name in ["seq-47.json", "seq-55.json", "seq-63.json"] {
+            let text = std::fs::read_to_string(root.join(name)).unwrap();
+            let mut buffer = AnswerBuffer::new(true);
+            for c in text.chars() {
+                assert!(buffer.push(&c.to_string()).is_none());
+            }
+            let body = buffer.finish_with_report_ceiling(
+                Some(&q),
+                &evidence,
+                root.to_str().unwrap(),
+                "direct_cause",
+                "trigger_verified",
+            );
+            assert!(body.contains("库存"), "{name}: {body}");
+            assert!(body.contains("PRODUCT-A"), "{name}: {body}");
+            assert!(body.contains("STATUS"), "{name}: {body}");
+            assert!(!body.contains("尚未形成通过本地核对"), "{name}: {body}");
+            assert!(!body.contains("| --- |"));
+            assert!(!body.contains("diagnostic_report"));
+        }
     }
 
     fn diagnostic_protocol() -> serde_json::Value {

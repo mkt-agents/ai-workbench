@@ -121,22 +121,27 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 
 ## 排障回复保护、统一报告与每条消息耗时（2026-10-29）
 
-**最新任务是同提示的私聊/群聊格式与内容回归。** 旧路径在合格 final 直接输出 summary/claims 并附最多 6k 字符摘录，fallback 则让模型自由生成 Markdown，形成两套报告结构。当前源码将两路收敛到 [wecom_report.rs](<../src-tauri/src/wecom_report.rs>) 的 `DiagnosticReport` version 1；不额外调用模型润色（polish），也不改变耗时尾注与内部 JSON 隔离。
+**最新明确要求：以图一纵向排障格式替代宽表。** 同提示私聊/群聊仍共用 [报告 renderer](<../src-tauri/src/wecom_report.rs>)；内部 `DiagnosticReport version=1` 不因展示 build 升至 v2 而变更。不新增模型润色（polish），保留耗时尾注与内部 JSON 隔离。
 
-统一报告本轮验证：Rust 全量测试 **868 通过、0 失败、14 忽略**；最终企微定向回归 **308 通过、0 失败、2 忽略**；前端 `npm run build` 通过。覆盖新旧报告直接/缓冲路径逐字渲染一致、四章节快照、宿主元数据、WARN值、阻断缺口、代码引用和JSON隔离。真实企微/OAP回放与人工内容质量验收仍待进行；既有回复修正的 774/215 等数字属于此前快照。
+**旧回归的直接发现**：实际模型已查出 stock 线索；最终 fallback 不等于没有查到业务原因。旧响应存在裸报告/外层 wrapper 形状、`subject` 字符串、10 个 timeline 引用超过旧校验上限 8，以及代码 C 引用未与触发项 L 引用 join 等契约问题。本轮分开修复解析兼容、机械关联和纵向展示，不据此自动升级结论。
+
+**验证状态**：本轮 Rust 全量 **881通过、0失败、14忽略**；前端及开发程序构建通过。真实失败输出的三种脱敏形状经过逐字符 AnswerBuffer 回放，库存原因、商品和失败出口保留，不再因已知格式兼容问题落入空结论；其证据和源码使用明确标注的合成 fixture，不冒充完整线上重放。真实企微/OAP回放及手机端人工验收仍待进行。此前868/308、774/215属于历史快照。
 
 ### 同一报告契约与展示结构
 
-[计划解析器](<../src-tauri/src/wecom_investigation_plan.rs>) 接受互斥的 `queries`、`read_evidence_ids`、`diagnostic_report` 或旧 `final_answer`；没有最终报告的旧停止计划仍可进入 `final_model`。新报告固定 key 为 `diagnostic_report`、`version=1`，包含 `summary`、`timeline`、分层 `cause`、`code_checks`、`ruled_out`、`gaps`、`next_actions`，不接受模型自报 `verified` 或时间线原文元数据。
+[计划解析器](<../src-tauri/src/wecom_investigation_plan.rs>) 接受互斥的 `queries`、`read_evidence_ids`、`diagnostic_report` 或旧 `final_answer`；没有最终报告的旧停止计划仍可进入 `final_model`。报告 envelope 使用 key `diagnostic_report`（另支持下述严格裸报告）、报告 `version=1`，包含 `summary`、`timeline`、分层 `cause`、`code_checks`、`ruled_out`、`gaps`、`next_actions`，不接受模型自报 `verified` 或时间线原文元数据。
 
-用户看到的是结论先行和查询对象/时间/宿主筛选，随后固定四章：
+用户看到的是查询对象/时间/宿主筛选与纵向排障正文，按图一顺序组织：
 
-1. **一、关键证据链**：证据 ID、时间、服务/实例、级别、原文短摘录表；模型解释单独标注，不混作原文。
-2. **二、原因与代码核对**：分别列结果、直接原因、具体触发条件及实际源码行。没有代码引用就明示「本报告未附代码行核对」，不补造源码或规则。
-3. **三、容易误判的线索**：最多三条已引用的排除项；没有时明确未核对，日志级别、时间相邻、同 trace 本身不等于根因。
-4. **四、未确认项与下一步**：区分阻断触发结论的缺口与非阻断限制；建议标注「未执行」。
+1. **结果**：先说本次请求发生了什么，附已核对的证据引用。
+2. **直接原因**：说明失败出口；过滤为 0 不直接充当具体触发原因。
+3. **具体触发原因**：展示触发事实及对应代码核对；缺代码则明确未核对，不补造源码或规则。
+4. **下游伴随**：单列下游错误、伴随现象与容易误判的线索；日志级别、时间相邻、同 trace 本身不等于根因。
+5. **未完成**：保留阻断缺口、非阻断取证限制与下一步（标注未执行）。
 
-时间、服务、实例、级别及摘录取自宿主保留记录；时间按查询偏移显示，缺失就显示未记录。查询对象来自原始查询，兼容字段 `subject` 不替换它。默认最多八条证据表行，每条原文100字符；另保留最多六条200字符短引文，替代旧6k raw dump。digest/offset等内部元数据不作为展示列，并经输出脱敏处理；短摘录不代表完整线上日志。
+证据链恢复纵向短条目，不再用宽表。时间、服务、实例、级别及短引文取自宿主保留记录，解释与原文分开；时间按查询偏移显示，缺失就显示未记录。查询对象来自原始查询，兼容 `subject` 字符串不替换宿主查询对象。timeline 最多 **32 条参与校验、8 条展示、6 条短引文**，校验上限与展示预算分离；不再因 10 条有效引用超过展示 8 条就整份 fallback。短引文取实际 message，剥离 thread/logger 前缀及 excerpt 元数据，不把 digest/offset/full_length 等内部字段当正文，也不声称短摘录是完整线上日志。
+
+**协议恢复边界**：[计划解析器](<../src-tauri/src/wecom_investigation_plan.rs>) 支持严格裸报告（strict bare）及省略 `queries` 的报告 envelope；兼容仅消除形状差异，不接收任意对象作为报告。已核对的 code claim 仅在其 L 引用与 trigger 的 L 引用有交集时，机械补齐对应 C join；不改 `level`，不重写结论 text，不绕过无效代码引用检查；旧 `final_answer` 的 summary 恢复保留。恢复范围限于已有证据与已核对关联，不从缺失证据自动猜结论。
 
 **核对边界**：事实引用检查记录真实存在且可唯一定位；源码检查工作区路径、行号和单行 excerpt 匹配。两者不证明句子语义、因果关系或线上部署版本。`trigger_verified` 新报告要求结果/直接原因/触发条件、触发项引用已核对代码且无 blocking gaps；非阻断的扩展取证缺口（例如全局截断但局部记录已保留）不自动否定局部事实。外层未分类 `gaps` 保守合并为 `blocking=true`，总数超限报错，不静默丢项。
 
@@ -148,7 +153,7 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 
 - **排障全缓冲**：`protected` 模型正文直到 `Done` 才处理；Markdown 前缀也不提前推送。采集、启动、排队、停滞进度和审批提示继续显示。
 - **合格两路同渲染**：新 `diagnostic_report` 校验后交给 `wecom_report::render`；旧 `final_answer` 先经旧协议引用/源码校验，再由 `from_legacy` 映射到同一 renderer。旧事实保留为「旧版映射，未自动归类」，不猜哪句是直接原因或触发条件；沿用旧层级不代表补齐新协议语义。
-- **fallback 不是自由文章**：`final_model` 也要求输出同一内部报告协议。protected 普通 Markdown、协议混合前文、不完整/非法 JSON、只有查询没有最终报告、无效引用或超出宿主层级均转同四章的部分报告，只显示宿主已保留证据，不回显未经核对的模型原文。非排障任务的 Markdown/显式 JSON 仍走原有正文行为。
+- **fallback 不是自由文章**：`final_model` 也要求输出同一内部报告协议。protected 普通 Markdown、协议混合前文、不完整/非法 JSON、只有查询没有最终报告、无效引用或超出宿主层级均转同一纵向结构的部分报告，只显示宿主已保留证据，不回显未经核对的模型原文。非排障任务的 Markdown/显式 JSON 仍走原有正文行为。
 - **有界正文**：protected 缓冲与渲染后正文上限为64 KiB UTF-8字节；当前外层 `parse_plan` 另有32 KiB输入限制。超限转部分报告，不释放截断前文。取消、错误、超时与事件流提前关闭保留各自收尾语义，不释放未经核对的 protected 正文。
 
 格式/引用校验失败的部分报告以「尚未形成通过本地核对的诊断结论，以下仅展示已保留的证据」开头；这不代表已验证根因。合格 planning 报告直接渲染省去 `final_model`，未形成合格报告才走原有最终模型阶段，没有新增专门排版的模型往返。
@@ -177,7 +182,11 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 | 超大正文 | 首次准备可返回完整正文，但超过快照预算时不缓存正文 |
 | 幂等有效期 | 仅覆盖仍被保留的状态；标记被回收后不再承诺去重，消息 stream ID 应保持唯一 |
 
-当前源码 build 标记为 `report-v1-unified-concurrency32`，用于和前轮 `sessions-v3-perf-concurrency32` / `sessions-v2-concurrency32` / `investigation-v4-reply` 实例区分。核对运行诊断的 PID/build 后再验收；文档更新不代表已构建、重启或替换正在运行的通道。
+本轮 build 标记为 `report-v2-readable-concurrency32`，用于和前轮 `report-v1-unified-concurrency32` 及更早实例区分。核对运行诊断的 PID/build 后再验收；文档更新不代表已构建、重启或替换正在运行的通道。
+
+[AnswerBuffer](<../src-tauri/src/wecom_answer.rs>) 的报告失败诊断按 request 作用域记录稳定 code，便于区分解析、引用与代码关联失败；不把跨请求的最后一次失败当成本次原因。
+
+[恢复 fixture 目录](<../src-tauri/tests/fixtures/wecom-report-recovery/>) 保留实际 47/55/63 响应形状的脱敏材料，并配 synthetic evidence / toy source；它是协议与恢复复现材料，不是完整原 OAP 证据。后续先用 `code-review` 核对契约，再用 `diagnose` 复现；测试结果待主流程回报，本轮文档子任务不执行测试或修改源码。
 
 待验证：逐字符与 Markdown 前缀后的协议 JSON、转义键、不完整围栏、无效证据/源码引用、正文超限、普通 Markdown 与非排障 JSON；两档引擎所有最终状态的耗时、排队起点、审批提示无尾注、停止与迟到完成竞争、相同正文重试、历史一致性，以及登记器容量/字节/过期边界。真实企微端到端结果另行记录。
 
@@ -414,7 +423,7 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 | `src-tauri/src/wecom_channel.rs` | `engine`/`permission`/`workspace` 入参、DSH 校验与状态、按引擎启停、`PendingApproval` 枚举 |
 | [wecom_orchestrator.rs](<../src-tauri/src/wecom_orchestrator.rs>) | `on_msg` 入口计时、引擎分流、`run_dsh_turn`、审批码回灌、统一 final 重试与含耗时历史 |
 | [wecom_answer.rs](<../src-tauri/src/wecom_answer.rs>) | 排障正文缓冲、协议候选识别、计划/报告校验与部分报告 fallback |
-| [wecom_report.rs](<../src-tauri/src/wecom_report.rs>) | DiagnosticReport version 1、引用/源码行核对、旧 final 映射及同四章 renderer |
+| [wecom_report.rs](<../src-tauri/src/wecom_report.rs>) | DiagnosticReport version 1、引用/源码行核对、旧 final 映射及纵向排障 renderer |
 | [wecom_reply.rs](<../src-tauri/src/wecom_reply.rs>) | 单调时钟、耗时格式、首次 final 冻结与有界回复登记器 |
 | `src-tauri/src/wecom_investigation.rs` | 有限采集、trace/服务补查、证据强度、预算与短期追问上下文 |
 | `src-tauri/src/wecom_investigation_query.rs` | 无 IO 的查询条件、明确时间与追问解析 |

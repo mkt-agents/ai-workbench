@@ -1,0 +1,211 @@
+{
+  "conclusion_level": "trigger_verified",
+  "gaps": [],
+  "reason": "已核验 [L5][L6][L8][L9][L10] 与工作区源码 QuotationUtils.removeNoQuantityProduct、prepareQuotationProducts、apiChannelAutoQuotation 抛异常分支一致，触发规则与输入闭合。",
+  "stop_reason": "证据链与代码核对齐备，无阻塞缺口，输出最终报告。",
+  "diagnostic_report": {
+    "version": 1,
+    "level": "trigger_verified",
+    "summary": {
+      "text": "报价设置为“无库存/库存不足不报价”，唯一商品PRODUCT-A被剔除致过滤后报价商品数=0，抛BusinessException未自动报价",
+      "evidence_refs": [
+        "L5",
+        "L6",
+        "L8"
+      ]
+    },
+    "subject": "matchId=MATCH-FIXTURE / nlpIdOriginal=REQUEST-FIXTURE 自动报价未发送",
+    "timeline": [
+      {
+        "evidence_refs": [
+          "L2"
+        ],
+        "interpretation": "match.service 收到该商机进入报价主流程，入参含 autoQuotationSuccessFlag=false 与关键词 PRODUCT-A/PRODUCT-B"
+      },
+      {
+        "evidence_refs": [
+          "L3",
+          "L4"
+        ],
+        "interpretation": "MATCH_PUSH_TOPIC、MATCH_PUSH_FUNNEL 判“无能力，跳过”，属推送能力位旁路，非本次不报价直接原因"
+      },
+      {
+        "evidence_refs": [
+          "L5"
+        ],
+        "interpretation": "removeNoQuantityProduct 将 PRODUCT-A 以“库存不足/无库存不报价(quotationNoStock:1)”剔除"
+      },
+      {
+        "evidence_refs": [
+          "L6"
+        ],
+        "interpretation": "prepareQuotationProducts 过滤后“报价商品数量：0”"
+      },
+      {
+        "evidence_refs": [
+          "L7"
+        ],
+        "interpretation": "过滤后列表空走 STATUS_FILTERED_EMPTY 分支（该分支日志文案为“重复求购”）"
+      },
+      {
+        "evidence_refs": [
+          "L9"
+        ],
+        "interpretation": "apiChannelAutoQuotation 记录“未匹配到资源或者自动报价额度用完”"
+      },
+      {
+        "evidence_refs": [
+          "L8",
+          "L10"
+        ],
+        "interpretation": "抛 BusinessException“当前商品不符合您的报价设置，暂不可报价”，报价终止"
+      },
+      {
+        "evidence_refs": [
+          "L11"
+        ],
+        "interpretation": "matchhelper 仅做“同一原始商机对同一坐席只转发一次”的分发去重，与报价拦截独立"
+      }
+    ],
+    "cause": {
+      "result": [
+        {
+          "text": "该商机自动报价最终未发送，报价流程以业务异常终止",
+          "evidence_refs": [
+            "L8",
+            "L10",
+            "L9"
+          ]
+        }
+      ],
+      "direct": [
+        {
+          "text": "参与报价的商品经库存过滤后数量为0，无可报价商品",
+          "evidence_refs": [
+            "L6",
+            "L5"
+          ]
+        }
+      ],
+      "trigger": [
+        {
+          "text": "报价模板配置“无库存/库存不足不报价”(quotationNoStock:1)，唯一候选商品 PRODUCT-A 库存不足被 removeNoQuantityProduct 剔除，过滤后空→STATUS_FILTERED_EMPTY→抛“当前商品不符合您的报价设置，暂不可报价”",
+          "evidence_refs": [
+            "L5",
+            "L6",
+            "L8"
+          ]
+        }
+      ]
+    },
+    "code_checks": [
+      {
+        "id": "C1",
+        "path": "rule.rs",
+        "line": 4,
+        "excerpt": "if !allow_empty_stock {",
+        "claim": {
+          "text": "仅当报价设置=无库存不报价才进入剔除逻辑；L5 剔除日志被打印证明开关已命中",
+          "evidence_refs": [
+            "L5"
+          ]
+        }
+      },
+      {
+        "id": "C2",
+        "path": "rule.rs",
+        "line": 5,
+        "excerpt": "if stock <= 0 {",
+        "claim": {
+          "text": "库存空/≤0或小于需求量即判无货剔除，对应 L5 “库存不足不报价”",
+          "evidence_refs": [
+            "L5"
+          ]
+        }
+      },
+      {
+        "id": "C3",
+        "path": "rule.rs",
+        "line": 6,
+        "excerpt": "status = FILTERED_EMPTY;",
+        "claim": {
+          "text": "过滤后商品为空置 STATUS_FILTERED_EMPTY，对应 L6 报价商品数量0 与 L7 分支",
+          "evidence_refs": [
+            "L6",
+            "L7"
+          ]
+        }
+      },
+      {
+        "id": "C4",
+        "path": "rule.rs",
+        "line": 7,
+        "excerpt": "return Err(\"当前商品不符合您的报价设置，暂不可报价\");",
+        "claim": {
+          "text": "STATUS_FILTERED_EMPTY/内容为空时抛该异常终止报价，对应 L8/L10 异常栈",
+          "evidence_refs": [
+            "L8",
+            "L10"
+          ]
+        }
+      }
+    ],
+    "ruled_out": [
+      {
+        "text": "非“无能力跳过”(L3/L4)导致：那是推送能力位旁路，主流程仍继续到库存过滤",
+        "evidence_refs": [
+          "L3",
+          "L4"
+        ]
+      },
+      {
+        "text": "非 matchhelper 分发去重(L11)拦截：其只控对坐席重复转发，与报价计算分属不同流程",
+        "evidence_refs": [
+          "L11"
+        ]
+      },
+      {
+        "text": "非“超今日自动报价额度”：无 STATUS_QUOTA_EXCEEDED 记录，实际走过滤后为空分支",
+        "evidence_refs": [
+          "L6",
+          "L7"
+        ]
+      }
+    ],
+    "gaps": [
+      {
+        "text": "QuotationNoStockEnum.NO_QUOTATION 的 code 值不在工作区源码，依 L5 “quotationNoStock:1”及剔除日志已打印反推开关命中",
+        "blocking": false
+      },
+      {
+        "text": "PRODUCT-A 的具体库存数量与需求量不在 retained excerpt，仅有“库存不足”结论文案(L5)",
+        "blocking": false
+      },
+      {
+        "text": "工作区代码版本是否等同线上部署版本未核对；行号/文案一致不自证同版本",
+        "blocking": false
+      }
+    ],
+    "next_actions": [
+      {
+        "text": "核对企业 enterpriseId=COMPANY-FIXTURE 报价模板 quotationNoStock 配置，若期望无货也报价则改为允许报价",
+        "evidence_refs": [
+          "L5"
+        ]
+      },
+      {
+        "text": "核查商品 PRODUCT-A 库存/seekCount 数据源，确认真实缺货还是库存同步缺失",
+        "evidence_refs": [
+          "L5",
+          "L6"
+        ]
+      },
+      {
+        "text": "建议区分 STATUS_FILTERED_EMPTY 分支日志(当前文案“重复求购”L7)与真实无货场景，避免误导排查",
+        "evidence_refs": [
+          "L7"
+        ]
+      }
+    ]
+  }
+}

@@ -57,7 +57,9 @@ where
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WirePlan {
-    queries: Vec<WireQuery>,
+    // Only a final diagnostic report may omit queries; null remains a schema error.
+    #[serde(default, deserialize_with = "present")]
+    queries: Option<Vec<WireQuery>>,
     reason: String,
     // Serde aliases only normalize known field names; values stay byte-for-byte strings.
     // Alias + canonical name (or repeated names) is a duplicate-field schema error.
@@ -523,6 +525,34 @@ pub(crate) fn verify_code_ref(
 
 /// Stable, low-cardinality categories for timing/validation telemetry. No model text is logged.
 pub fn validation_error_code(error: &str) -> &'static str {
+    if let Some(report_error) = error.strip_prefix("report_error: ") {
+        return match report_error {
+            "unclosed json fence" => "format",
+            "invalid original start" | "invalid original end" | "invalid original window" => {
+                "window"
+            }
+            "missing, duplicate or ambiguous evidence reference"
+            | "invalid legacy code evidence"
+            | "invalid legacy fact reference" => "references",
+            "duplicate legacy code ID"
+            | "invalid or duplicate code ID"
+            | "trigger needs a locally checked code reference" => "code",
+            "report exceeds 96 KiB"
+            | "collection exceeds report limits"
+            | "timeline exceeds eight records"
+            | "timeline exceeds 32 records"
+            | "each factual claim needs 1..8 references"
+            | "code reference join exceeds eight references" => "budget",
+            "invalid diagnostic report schema"
+            | "invalid level"
+            | "invalid max_level"
+            | "unsupported version or level above host ceiling"
+            | "empty, oversized or control-bearing text"
+            | "invalid legacy report bounds or blocking gaps"
+            | "cause structure or blocking gaps contradict level" => "schema",
+            _ => "other",
+        };
+    }
     let error = error.strip_prefix("plan_error: ").unwrap_or(error);
     if error.starts_with("strict JSON format:") || error == "expected exactly one json fence" {
         "format"
@@ -579,6 +609,90 @@ pub fn validation_error_code(error: &str) -> &'static str {
     }
 }
 
+/// Preserve strict duplicate/unknown-field detection on both accepted wire shapes.
+fn deserialize_plan(body: &str) -> Result<WirePlan, String> {
+    match serde_json::from_str::<WirePlan>(body) {
+        Ok(plan) => Ok(plan),
+        Err(plan_error) => {
+            match serde_json::from_str::<crate::wecom_report::DiagnosticReport>(body) {
+                Ok(report) => Ok(WirePlan {
+                    queries: Some(Vec::new()),
+                    reason: "已返回诊断报告".into(),
+                    conclusion_level: Some(report.level.clone()),
+                    gaps: Some(
+                        report
+                            .gaps
+                            .iter()
+                            .filter(|gap| gap.blocking)
+                            .map(|gap| gap.text.clone())
+                            .collect(),
+                    ),
+                    stop_reason: Some("已返回诊断报告".into()),
+                    final_answer: None,
+                    diagnostic_report: Some(report),
+                    read_evidence_ids: None,
+                    schema_version: None,
+                }),
+                Err(report_error) => {
+                    let category = match plan_error.classify() {
+                        serde_json::error::Category::Data => "schema",
+                        _ => "format",
+                    };
+                    Err(format!("plan_error: strict JSON {category}: {plan_error}; bare diagnostic report: {report_error}"))
+                }
+            }
+        }
+    }
+}
+
+/// Bind already declared code checks to trigger claims through shared, verified record IDs.
+/// This is a mechanical reference join, not a causal/semantic proof or a level upgrade.
+/// Validate before joining, then validate a clone in full before committing any additions.
+fn normalize_report_code_links(
+    report: &mut crate::wecom_report::DiagnosticReport,
+    original: &InvestigationQuery,
+    evidence: &str,
+    repo: &str,
+    max_level: &str,
+) -> Result<(), String> {
+    match crate::wecom_report::validate(report, original, evidence, repo, max_level) {
+        Ok(()) => {}
+        // This exact structural failure occurs after all code lines and factual refs pass.
+        Err(error) if error == "report_error: trigger needs a locally checked code reference" => {}
+        Err(error) => return Err(error),
+    }
+    if report.level != "trigger_verified" {
+        return Ok(());
+    }
+    let mut normalized = report.clone();
+    for trigger in &mut normalized.cause.trigger {
+        if report
+            .code_checks
+            .iter()
+            .any(|code| trigger.evidence_refs.contains(&code.id))
+        {
+            continue;
+        }
+        for code in &report.code_checks {
+            if code
+                .claim
+                .evidence_refs
+                .iter()
+                .any(|id| trigger.evidence_refs.contains(id))
+                && !trigger.evidence_refs.contains(&code.id)
+            {
+                if trigger.evidence_refs.len() >= 8 {
+                    return Err("report_error: code reference join exceeds eight references".into());
+                }
+                trigger.evidence_refs.push(code.id.clone());
+            }
+        }
+    }
+    crate::wecom_report::validate(&normalized, original, evidence, repo, max_level)?;
+    *report = normalized;
+    Ok(())
+}
+
 pub fn parse_plan(
     text: &str,
     original: &InvestigationQuery,
@@ -588,15 +702,14 @@ pub fn parse_plan(
     if text.len() > 32 * 1024 {
         return Err("plan_error: plan exceeds 32 KiB".into());
     }
-    let mut plan: WirePlan = serde_json::from_str(json_body(text)?).map_err(|e| {
-        let category = match e.classify() {
-            serde_json::error::Category::Data => "schema",
-            _ => "format",
-        };
-        format!("plan_error: strict JSON {category}: {e}")
-    })?;
+    let mut plan = deserialize_plan(json_body(text)?)?;
+    let queries = match plan.queries.take() {
+        Some(queries) => queries,
+        None if plan.diagnostic_report.is_some() => Vec::new(),
+        None => return Err("plan_error: strict JSON schema: missing field `queries`".into()),
+    };
     nonempty(&plan.reason, 2048, "reason")?;
-    if plan.queries.len() > 3 {
+    if queries.len() > 3 {
         return Err("plan_error: at most three queries".into());
     }
     let mut conclusion_level = plan.conclusion_level.unwrap_or_else(|| "unknown".into());
@@ -629,7 +742,7 @@ pub fn parse_plan(
         unique_record(evidence, id)?;
     }
     let modes = [
-        !plan.queries.is_empty(),
+        !queries.is_empty(),
         !read_evidence_ids.is_empty(),
         plan.final_answer.is_some(),
         plan.diagnostic_report.is_some(),
@@ -641,7 +754,7 @@ pub fn parse_plan(
         );
     }
     if let Some(report) = &mut plan.diagnostic_report {
-        crate::wecom_report::validate(report, original, evidence, repo, &conclusion_level)?;
+        normalize_report_code_links(report, original, evidence, repo, &conclusion_level)?;
         // Legacy outer gaps have no classification: conservatively preserve them as blocking
         // in the actual report that gets rendered, including an existing nonblocking label.
         for text in &gaps {
@@ -675,7 +788,7 @@ pub fn parse_plan(
         }
     }
     if let Some(answer) = &plan.final_answer {
-        if !plan.queries.is_empty() || conclusion_level == "unknown" {
+        if !queries.is_empty() || conclusion_level == "unknown" {
             return Err("plan_error: final_answer requires empty queries and an established conclusion_level".into());
         }
         if conclusion_level == "trigger_verified" && !gaps.is_empty() {
@@ -727,7 +840,7 @@ pub fn parse_plan(
         schema_version: plan.schema_version,
     };
     // A stop plan does not require filesystem or time parsing.
-    if plan.queries.is_empty() {
+    if queries.is_empty() {
         return Ok(result);
     }
     let original_start = DateTime::parse_from_rfc3339(&original.start)
@@ -737,7 +850,7 @@ pub fn parse_plan(
     if original_start >= original_end {
         return Err("plan_error: invalid original window".into());
     }
-    for (index, q) in plan.queries.into_iter().enumerate() {
+    for (index, q) in queries.into_iter().enumerate() {
         nonempty(&q.reason, 2048, "query.reason")?;
         let page = q.page.unwrap_or(1);
         let page_size = q.page_size.unwrap_or(30);
@@ -987,6 +1100,213 @@ mod tests {
                 "code_checks":[],"ruled_out":[],
                 "gaps":[{"text":"具体规则与输入仍待核对","blocking":true}],
                 "next_actions":[{"text":"查阅过滤规则输入","evidence_refs":[]}]}})
+    }
+
+    const RECOVERY_47: &str = include_str!("../tests/fixtures/wecom-report-recovery/seq-47.json");
+    const RECOVERY_55: &str = include_str!("../tests/fixtures/wecom-report-recovery/seq-55.json");
+    const RECOVERY_63: &str = include_str!("../tests/fixtures/wecom-report-recovery/seq-63.json");
+    const RECOVERY_EVIDENCE: &str =
+        include_str!("../tests/fixtures/wecom-report-recovery/evidence.txt");
+
+    fn recovery_repo() -> TempRepo {
+        let repo = TempRepo::new();
+        fs::write(
+            repo.0.join("rule.rs"),
+            include_str!("../tests/fixtures/wecom-report-recovery/rule.rs"),
+        )
+        .unwrap();
+        repo
+    }
+
+    #[test]
+    fn captured_report_shapes_recover_without_discarding_report() {
+        let repo = recovery_repo();
+        for raw in [RECOVERY_47, RECOVERY_55, RECOVERY_63] {
+            for text in [raw.to_string(), format!("```json\n{raw}\n```")] {
+                let parsed = parse_plan(
+                    &text,
+                    &original(),
+                    RECOVERY_EVIDENCE,
+                    repo.0.to_str().unwrap(),
+                )
+                .unwrap();
+                assert!(parsed.queries.is_empty() && parsed.final_answer.is_none());
+                assert_eq!(parsed.conclusion_level, "trigger_verified");
+                assert!(parsed.gaps.is_empty());
+                let report = parsed.diagnostic_report.unwrap();
+                assert_eq!(report.timeline.len(), 8);
+                assert_eq!(report.gaps.len(), 3);
+                assert_eq!(report.code_checks.len(), 4);
+                assert_eq!(
+                    report.cause.trigger[0].evidence_refs,
+                    ["L5", "L6", "L8", "C1", "C2", "C3", "C4"]
+                );
+                let input: Value = serde_json::from_str(raw).unwrap();
+                let input = input.get("diagnostic_report").unwrap_or(&input);
+                assert_eq!(
+                    report.summary.text,
+                    input["summary"]["text"].as_str().unwrap()
+                );
+                assert_eq!(
+                    report.cause.trigger[0].text,
+                    input["cause"]["trigger"][0]["text"].as_str().unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_keeps_strict_wire_duplicates_unknowns_nulls_and_modes() {
+        let repo = recovery_repo();
+        let run = |raw: &str| {
+            parse_plan(
+                raw,
+                &original(),
+                RECOVERY_EVIDENCE,
+                repo.0.to_str().unwrap(),
+            )
+        };
+        for (field, value) in [
+            ("queries", json!([])),
+            ("report", json!({})),
+            ("shell", json!("id")),
+            ("verified", json!(true)),
+        ] {
+            let mut bare: Value = serde_json::from_str(RECOVERY_47).unwrap();
+            bare[field] = value;
+            assert!(run(&bare.to_string()).is_err(), "{field}");
+        }
+        for raw in [RECOVERY_47, RECOVERY_55, RECOVERY_63] {
+            assert!(
+                run(&raw.replacen("\"version\": 1", "\"version\": 1, \"version\": 1", 1)).is_err()
+            );
+            assert!(run(&raw.replacen(
+                "\"evidence_refs\":",
+                "\"evidenceRefs\": [], \"evidence_refs\":",
+                1
+            ))
+            .is_err());
+        }
+        let base: Value = serde_json::from_str(RECOVERY_55).unwrap();
+        for (field, value) in [
+            ("queries", Value::Null),
+            ("readEvidenceIds", json!(["L5"])),
+            ("queries", json!([{"service":"quote","reason":"lookup"}])),
+            ("final_answer", json!({"summary":"mixed","claims":[]})),
+        ] {
+            let mut bad = base.clone();
+            bad[field] = value;
+            assert!(run(&bad.to_string()).is_err(), "{field}");
+        }
+        for raw in [
+            r#"{"reason":"stop"}"#,
+            r#"{"reason":"read","read_evidence_ids":["L5"]}"#,
+            r#"{"reason":"legacy","conclusion_level":"result","gaps":[],"final_answer":{"summary":"x","claims":[{"text":"x","evidence_refs":["L5"]}]}}"#,
+        ] {
+            assert!(run(raw).unwrap_err().contains("missing field `queries`"));
+        }
+        let mut bad = base;
+        bad.as_object_mut().unwrap().remove("gaps");
+        assert!(run(&bad.to_string()).is_err());
+    }
+
+    #[test]
+    fn code_link_join_is_atomic_bounded_and_never_repairs_invalid_evidence() {
+        let repo = recovery_repo();
+        let original_report: crate::wecom_report::DiagnosticReport =
+            serde_json::from_str(RECOVERY_47).unwrap();
+        assert_eq!(
+            crate::wecom_report::validate(
+                &original_report,
+                &original(),
+                RECOVERY_EVIDENCE,
+                repo.0.to_str().unwrap(),
+                "trigger_verified"
+            )
+            .unwrap_err(),
+            "report_error: trigger needs a locally checked code reference"
+        );
+        let normalize = |report: &mut crate::wecom_report::DiagnosticReport| {
+            normalize_report_code_links(
+                report,
+                &original(),
+                RECOVERY_EVIDENCE,
+                repo.0.to_str().unwrap(),
+                "trigger_verified",
+            )
+        };
+        for mutation in 0..8 {
+            let mut report = original_report.clone();
+            match mutation {
+                0 => report.code_checks[0].excerpt = "invented source".into(),
+                1 => report.code_checks[0].path = "../rule.rs".into(),
+                2 => report.code_checks[0].claim.evidence_refs = vec!["L999".into()],
+                3 => report.cause.trigger[0].evidence_refs.push("C999".into()),
+                4 => report.cause.trigger[0].evidence_refs.push("L5".into()),
+                5 => report.cause.trigger[0].evidence_refs = vec!["L2".into()],
+                6 => {
+                    report.cause.trigger[0].evidence_refs =
+                        (2..=9).map(|i| format!("L{i}")).collect()
+                }
+                _ => report.next_actions[0].evidence_refs = vec!["L999".into()],
+            }
+            let unchanged = report.clone();
+            assert!(normalize(&mut report).is_err(), "mutation {mutation}");
+            assert_eq!(report, unchanged, "mutation {mutation}");
+        }
+        let mut report = original_report.clone();
+        let mut second = report.cause.trigger[0].clone();
+        report.cause.trigger[0].evidence_refs.push("C1".into());
+        second.evidence_refs = vec!["L8".into()];
+        report.cause.trigger.push(second);
+        normalize(&mut report).unwrap();
+        assert_eq!(
+            report.cause.trigger[0].evidence_refs,
+            ["L5", "L6", "L8", "C1"]
+        );
+        assert_eq!(report.cause.trigger[1].evidence_refs, ["L8", "C4"]);
+        let once = report.clone();
+        normalize(&mut report).unwrap();
+        assert_eq!(report, once);
+    }
+
+    #[test]
+    fn bare_report_preserves_blocking_gaps_without_inventing_queries() {
+        let report = report_plan()["diagnostic_report"].clone();
+        let plan = parse_plan(
+            &report.to_string(),
+            &original(),
+            anchor_evidence(),
+            "missing",
+        )
+        .unwrap();
+        assert_eq!(plan.reason, "已返回诊断报告");
+        assert_eq!(plan.stop_reason, "已返回诊断报告");
+        assert_eq!(plan.conclusion_level, "result");
+        assert_eq!(plan.gaps, ["具体规则与输入仍待核对"]);
+        assert!(plan.queries.is_empty());
+        assert_eq!(plan.diagnostic_report.unwrap().gaps.len(), 1);
+    }
+
+    #[test]
+    fn report_validation_errors_have_stable_categories() {
+        for (error, code) in [
+            ("report_error: invalid diagnostic report schema", "schema"),
+            (
+                "report_error: missing, duplicate or ambiguous evidence reference",
+                "references",
+            ),
+            (
+                "report_error: trigger needs a locally checked code reference",
+                "code",
+            ),
+            ("report_error: collection exceeds report limits", "budget"),
+            ("report_error: timeline exceeds 32 records", "budget"),
+            ("report_error: invalid original window", "window"),
+            ("report_error: unclosed json fence", "format"),
+        ] {
+            assert_eq!(validation_error_code(error), code);
+        }
     }
 
     #[test]

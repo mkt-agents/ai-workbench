@@ -54,7 +54,7 @@ pub struct DiagnosticReport {
     pub level: String,
     pub summary: Claim,
     /// Compatibility only. The renderer always uses the original host query as subject.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_subject")]
     pub subject: Option<Claim>,
     pub timeline: Vec<TimelineEntry>,
     pub cause: Cause,
@@ -70,10 +70,31 @@ pub struct DiagnosticReport {
     pub legacy_facts: Option<Vec<Claim>>,
 }
 
+fn deserialize_subject<'de, D>(deserializer: D) -> Result<Option<Claim>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Subject {
+        Text(String),
+        Claim(Claim),
+    }
+    Ok(
+        Option::<Subject>::deserialize(deserializer)?.map(|value| match value {
+            Subject::Text(text) => Claim {
+                text,
+                evidence_refs: vec![],
+            },
+            Subject::Claim(claim) => claim,
+        }),
+    )
+}
+
 pub fn schema_instruction() -> String {
     r#"diagnostic_report is a strict version-1 object (no unknown fields or verification booleans):
 {"version":1,"level":"result","summary":{"text":"short conclusion","evidence_refs":["L1"]},"subject":null,"timeline":[{"evidence_refs":["L1"],"interpretation":"model interpretation, not quoted log content"}],"cause":{"result":[{"text":"observed result","evidence_refs":["L1"]}],"direct":[],"trigger":[]},"code_checks":[],"ruled_out":[],"gaps":[{"text":"missing trigger evidence","blocking":true}],"next_actions":[{"text":"suggest collecting the missing decision input","evidence_refs":[]}]}
-level is exactly unknown/result/direct_cause/trigger_verified, never above the host max_level. Each factual claim needs real retained record IDs (L1/T1/R1L1) or verified code IDs C1. A code_check is {"id":"C1","path":"src/file.rs","line":1,"excerpt":"actual single source line fragment","claim":{"text":"code observation","evidence_refs":["L1"]}}; it must reference real log/trace records, not itself or other code IDs. timeline accepts record IDs only; timestamp/service/instance/content are read locally from evidence, never supplied by the model. subject is optional and ignored for query display. summary <=240 characters; timeline <=8 entries/8 distinct record IDs; code_checks <=8; ruled_out <=3; cause arrays <=8 each; gaps and next_actions <=8. trigger_verified requires result/direct/trigger claims, a referenced code check, and zero blocking gaps. Nonblocking limitations (such as global truncation) do not negate verified local facts. next_actions are unexecuted suggestions and may have no refs. Source-line and record-existence verification does NOT prove causality or deployed-version identity. Do not assert verified=true or invent timestamps, service names, WARN numbers, source lines or original quotations."#.into()
+level is exactly unknown/result/direct_cause/trigger_verified, never above the host max_level. Each factual claim needs real retained record IDs (L1/T1/R1L1) or verified code IDs C1. A code_check is {"id":"C1","path":"src/file.rs","line":1,"excerpt":"actual single source line fragment","claim":{"text":"code observation","evidence_refs":["L1"]}}; it must reference real log/trace records, not itself or other code IDs. timeline accepts record IDs only; timestamp/service/instance/content are read locally from evidence, never supplied by the model. subject accepts string/Claim/null and is ignored for query display: the host query owns the title. Render sections are 一、结果（现象）；二、直接原因；三、具体触发原因；下游与伴随信号；未完成项, with a short 证据范围 blockquote and no wide table or repeated original dump. Separate cause.result (observable outcome), cause.direct (immediate reason) and cause.trigger (specific rule plus actual decision values, not merely filteredCount=0). Do not invent a domain-specific trigger. Each claim is rendered with its own real short log quotations. summary <=240 characters; timeline <=32 entries/32 distinct record IDs (display only 8 key records and 6 original excerpts); code_checks <=8; ruled_out <=3; cause arrays <=8 each; gaps and next_actions <=8. trigger_verified requires result/direct/trigger claims, a referenced code check, and zero blocking gaps. Nonblocking limitations (such as global truncation) do not negate verified local facts. next_actions are unexecuted suggestions and may have no refs. Source-line and record-existence verification does NOT prove causality or deployed-version identity. Do not assert verified=true or invent timestamps, service names, WARN numbers, source lines or original quotations."#.into()
 }
 
 pub fn parse_report(
@@ -209,7 +230,7 @@ pub fn validate(
         }
         return Ok(());
     }
-    if report.timeline.len() > 8
+    if report.timeline.len() > 32
         || report.code_checks.len() > 8
         || report.ruled_out.len() > 3
         || report.gaps.len() > 8
@@ -257,7 +278,9 @@ pub fn validate(
     };
     check_claim(&report.summary, level > 0, 240)?;
     if let Some(subject) = &report.subject {
-        check_claim(subject, true, 240)?;
+        // Compatibility metadata is not a factual claim or a title authority.
+        text_bound(&subject.text, 240)?;
+        check_refs(&subject.evidence_refs, evidence, &codes, false)?;
     }
     for claims in [
         &report.cause.result,
@@ -284,8 +307,8 @@ pub fn validate(
         check_refs(&item.evidence_refs, evidence, &empty, true)?;
         timeline_ids.extend(item.evidence_refs.iter());
     }
-    if timeline_ids.len() > 8 {
-        return Err("report_error: timeline exceeds eight records".into());
+    if timeline_ids.len() > 32 {
+        return Err("report_error: timeline exceeds 32 records".into());
     }
     for gap in &report.gaps {
         text_bound(&gap.text, 600)?;
@@ -376,8 +399,8 @@ fn timestamp(header: &str, offset: i32) -> String {
         });
     match ts {
         Some(ts) => match offset.checked_mul(60).and_then(FixedOffset::east_opt) {
-            Some(zone) => ts.with_timezone(&zone).to_rfc3339(),
-            None => ts.to_rfc3339(),
+            Some(zone) => ts.with_timezone(&zone).format("%H:%M:%S%.3f").to_string(),
+            None => ts.format("%H:%M:%S%.3f").to_string(),
         },
         None => "时间未记录".into(),
     }
@@ -401,118 +424,256 @@ fn evidence_ids(evidence: &str) -> Vec<String> {
     ids
 }
 
-fn query_header(original: Option<&InvestigationQuery>) -> String {
+fn query_subject(original: Option<&InvestigationQuery>) -> String {
     let Some(q) = original else {
-        return "查询对象：未解析\n查询时间：未解析\n宿主筛选：未解析\n".into();
+        return "当前问题".into();
     };
-    let objects = if !q.identifiers.is_empty() {
+    if !q.identifiers.is_empty() {
         q.identifiers
             .iter()
-            .map(|id| {
-                if id.field.is_empty() {
-                    id.value.clone()
-                } else {
-                    format!("{}={}", id.field, id.value)
-                }
-            })
+            .map(|id| id.value.clone())
             .collect::<Vec<_>>()
             .join("；")
     } else if !q.keywords.is_empty() {
         q.keywords.join("；")
     } else {
-        "未指定业务对象".into()
+        "当前问题".into()
+    }
+}
+
+fn query_header(original: Option<&InvestigationQuery>) -> String {
+    let Some(q) = original else {
+        return "> 证据范围：查询条件未解析。\n".into();
     };
-    format!(
-        "查询对象：{}\n查询时间：{} — {}\n宿主筛选：service={}；trace={}；level={}\n",
-        display(&objects),
-        display(&q.start),
-        display(&q.end),
-        display(q.service.as_deref().unwrap_or("未限定")),
-        display(q.trace_id.as_deref().unwrap_or("未限定")),
-        display(q.level.as_deref().unwrap_or("未限定"))
-    )
+    let mut scope = vec![format!("{} — {}", q.start, q.end)];
+    for (key, value) in [
+        ("服务", &q.service),
+        ("trace", &q.trace_id),
+        ("级别", &q.level),
+    ] {
+        if let Some(value) = value.as_deref().filter(|v| !v.is_empty()) {
+            scope.push(format!("{key}={value}"));
+        }
+    }
+    format!("> 证据范围：{}。\n", display(&scope.join("；")))
 }
 
 fn record_body(block: &str) -> String {
-    // Producer indents body lines. Unindented collection summaries/footer are not log content.
-    block
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static EXCERPT: OnceLock<Regex> = OnceLock::new();
+    static RANGE: OnceLock<Regex> = OnceLock::new();
+    let header = block.lines().next().unwrap_or("");
+    let lines: Vec<_> = block
         .lines()
         .skip(1)
         .take_while(|line| line.is_empty() || line.starts_with(char::is_whitespace))
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn render_evidence(
-    out: &mut String,
-    ids: &[String],
-    timeline: &[TimelineEntry],
-    evidence: &str,
-    offset: i32,
-) {
-    out.push_str("\n### 一、关键证据链\n\n");
-    let records: Vec<_> = ids
-        .iter()
-        .filter_map(|id| record(evidence, id).map(|block| (id, block)))
-        .take(8)
         .collect();
-    if records.is_empty() {
-        out.push_str("尚无可展示的已核对记录。\n");
-        return;
-    }
-    out.push_str("| 证据 / 时间 | 服务 / 实例 | 级别 | 原文短摘录 |\n| --- | --- | --- | --- |\n");
-    for (id, block) in &records {
-        let header = block.lines().next().unwrap_or("");
-        let body = record_body(block);
-        out.push_str(&format!(
-            "| [{}] {} | {} / {} | {} | {} |\n",
-            display(id),
-            display(&timestamp(header, offset)),
-            display(field(header, "service").unwrap_or("未记录")),
-            display(field(header, "instance").unwrap_or("未记录")),
-            display(field(header, "level").unwrap_or("未记录")),
-            display(&short(&body, 100))
-        ));
-    }
-    for entry in timeline.iter().take(8) {
-        if entry
-            .evidence_refs
+    // Only a complete first-line producer envelope followed by an offset range owns
+    // range labels. Metadata is cross-checked when present; legacy record heads omit it.
+    // An identical-looking phrase elsewhere in business text is ordinary source data.
+    let envelope = EXCERPT.get_or_init(|| Regex::new(
+        r"^\[excerpt original_length=([0-9]+) hash=(sha256:[a-f0-9]{64}) truncated=true offset_unit=char\]$"
+    ).expect("excerpt envelope regex"));
+    let range = RANGE.get_or_init(|| {
+        Regex::new(r"^\[offset=([0-9]+)\.\.([0-9]+)\] (.*)$").expect("excerpt range regex")
+    });
+    let generated = lines
+        .first()
+        .and_then(|line| envelope.captures(line))
+        .is_some_and(|caps| {
+            field(header, "truncated").is_none_or(|v| v == "true")
+                && field(header, "full_length")
+                    .is_none_or(|v| Some(v) == caps.get(1).map(|v| v.as_str()))
+                && field(header, "digest")
+                    .is_none_or(|v| Some(v) == caps.get(2).map(|v| v.as_str()))
+                && lines.get(1).is_some_and(|line| range.is_match(line))
+        });
+    if generated {
+        lines
             .iter()
-            .all(|id| record(evidence, id).is_some())
-        {
-            out.push_str(&format!(
-                "\n- 模型解释 {}：{}\n",
-                refs(&entry.evidence_refs),
-                display(&short(&entry.interpretation, 400))
-            ));
-        }
-    }
-    out.push_str("\n原文片段（仅保留短摘录，不代表完整日志）：\n");
-    for (id, block) in records.iter().take(6) {
-        let body = record_body(block);
-        if !body.is_empty() {
-            out.push_str(&format!(
-                "\n> [{}] {}\n",
-                display(id),
-                display(&short(&body, 200))
-            ));
-        }
+            .skip(1)
+            .map(|line| {
+                range
+                    .captures(line)
+                    .map_or_else(|| (*line).to_owned(), |caps| caps[3].to_owned())
+            })
+            .collect::<Vec<_>>()
+            .join(" … ")
+    } else {
+        lines.join(" ")
     }
 }
 
-fn render_claims(out: &mut String, label: &str, claims: &[Claim]) {
-    out.push_str(&format!("\n**{label}**\n"));
-    if claims.is_empty() {
-        out.push_str("\n尚未确认。\n");
+/// Select a contiguous original business fragment, not a timestamp/thread/logger prefix.
+/// Signals are domain-neutral. Never clip in the middle of a WARN numeric token.
+fn business_excerpt(body: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static SIGNAL: OnceLock<Regex> = OnceLock::new();
+    let business = body.split_once(" - ").map_or(body, |(_, text)| text).trim();
+    let signal = SIGNAL.get_or_init(|| Regex::new(
+        r"(?i)原因|判定|规则|条件|\breason\b|\bcause(?:d by)?\b|\bWARN(?:ING)?\b|\bBusinessException\b|\b[a-z_]*(?:limit|actual|threshold|count|allowed|eligible|successflag)\s*[=:]"
+    ).expect("business excerpt regex"));
+    let chars: Vec<_> = business.chars().collect();
+    if chars.len() <= 240 {
+        return business.to_owned();
     }
-    for claim in claims {
+    let at = signal
+        .find(business)
+        .map_or(0, |m| business[..m.start()].chars().count());
+    let mut start = at.saturating_sub(32).min(chars.len().saturating_sub(240));
+    while start > 0 && !chars[start - 1].is_whitespace() && chars[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    let mut end = (start + 240).min(chars.len());
+    // A number and its sign/fraction/unit are a single display token.
+    while end < chars.len()
+        && !chars[end].is_whitespace()
+        && (chars[end].is_ascii_digit() || matches!(chars[end], '.' | '_' | '%' | '+' | '-'))
+    {
+        end += 1;
+    }
+    format!(
+        "{}{}{}",
+        if start > 0 { "…" } else { "" },
+        chars[start..end].iter().collect::<String>(),
+        if end < chars.len() { "…" } else { "" }
+    )
+}
+
+struct EvidenceDisplay<'a> {
+    report: &'a DiagnosticReport,
+    evidence: &'a str,
+    offset: i32,
+    key_ids: Vec<String>,
+    quoted: BTreeSet<String>,
+    shown: BTreeSet<String>,
+}
+
+impl<'a> EvidenceDisplay<'a> {
+    fn new(report: &'a DiagnosticReport, evidence: &'a str, offset: i32) -> Self {
+        let mut key_ids = Vec::new();
+        // Prefer causal evidence over incidental timeline rows when the mobile budget fills.
+        for id in report
+            .cause
+            .trigger
+            .iter()
+            .chain(&report.cause.direct)
+            .chain(&report.cause.result)
+            .chain(report.legacy_facts.iter().flatten())
+            .chain(std::iter::once(&report.summary))
+            .flat_map(|claim| &claim.evidence_refs)
+            .chain(
+                report
+                    .timeline
+                    .iter()
+                    .flat_map(|entry| &entry.evidence_refs),
+            )
+            .chain(
+                report
+                    .ruled_out
+                    .iter()
+                    .flat_map(|claim| &claim.evidence_refs),
+            )
+        {
+            let expanded: Vec<_> = if record(evidence, id).is_some() {
+                vec![id]
+            } else {
+                report
+                    .code_checks
+                    .iter()
+                    .find(|code| &code.id == id)
+                    .map(|code| code.claim.evidence_refs.iter().collect())
+                    .unwrap_or_default()
+            };
+            for id in expanded {
+                if key_ids.len() < 8 && record(evidence, id).is_some() && !key_ids.contains(id) {
+                    key_ids.push(id.clone());
+                }
+            }
+        }
+        Self {
+            report,
+            evidence,
+            offset,
+            key_ids,
+            quoted: BTreeSet::new(),
+            shown: BTreeSet::new(),
+        }
+    }
+
+    fn evidence(&mut self, out: &mut String, ids: &[String]) {
+        let mut expanded = Vec::new();
+        for id in ids {
+            if record(self.evidence, id).is_some() {
+                expanded.push(id.clone());
+            } else if let Some(code) = self.report.code_checks.iter().find(|code| &code.id == id) {
+                expanded.extend(code.claim.evidence_refs.clone());
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for id in expanded {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let Some(block) = record(self.evidence, &id) else {
+                continue;
+            };
+            if !self.key_ids.contains(&id) {
+                continue;
+            }
+            self.shown.insert(id.clone());
+            let header = block.lines().next().unwrap_or("");
+            let logger = field(header, "logger")
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.rsplit('.').next())
+                .unwrap_or("类名未记录");
+            out.push_str(&format!(
+                "\n  > [{}] {} · {} · {}",
+                display(&id),
+                display(&timestamp(header, self.offset)),
+                display(logger),
+                display(field(header, "level").unwrap_or("级别未记录"))
+            ));
+            if self.quoted.contains(&id) {
+                out.push_str("（原文见上）\n");
+            } else if self.key_ids.iter().take(6).any(|key| key == &id) {
+                let body = business_excerpt(&record_body(block));
+                if !body.is_empty() {
+                    self.quoted.insert(id);
+                    out.push_str(&format!("：{}\n", display(&body)));
+                } else {
+                    out.push_str("（原文未保留）\n");
+                }
+            } else {
+                out.push_str("（原文未展开）\n");
+            }
+        }
+    }
+
+    fn claim(&mut self, out: &mut String, claim: &Claim) {
         out.push_str(&format!(
-            "\n- {}（引用：{}）\n",
+            "\n- {}{}\n",
             display(&claim.text),
-            refs(&claim.evidence_refs)
+            if claim.evidence_refs.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", refs(&claim.evidence_refs))
+            }
         ));
+        self.evidence(out, &claim.evidence_refs);
+    }
+
+    fn claims(&mut self, out: &mut String, claims: &[Claim], empty: &str) {
+        if claims.is_empty() {
+            out.push_str(&format!("\n{empty}\n"));
+        }
+        for claim in claims {
+            self.claim(out, claim);
+        }
     }
 }
 
@@ -527,127 +688,105 @@ fn render_inner(
     original: Option<&InvestigationQuery>,
     evidence: &str,
 ) -> String {
-    let label = match report.level.as_str() {
-        "result" => "观察到的结果",
-        "direct_cause" => "直接原因（证据支持的解释）",
-        "trigger_verified" => "具体触发条件（引用与代码已核对）",
-        _ => "未确定 / 部分报告",
-    };
     let mut out = format!(
-        "## 排查结论\n\n{}\n\n结论层级：{label}\n\n{}",
-        display(&short(&report.summary.text, 240)),
+        "## 排障结论：{}\n\n{}",
+        display(&short(&query_subject(original), 240)),
         query_header(original)
     );
-    let mut ids = Vec::new();
-    for id in report
-        .timeline
-        .iter()
-        .flat_map(|e| &e.evidence_refs)
-        .chain(report.summary.evidence_refs.iter())
-        .chain(
-            report
-                .code_checks
-                .iter()
-                .flat_map(|code| &code.claim.evidence_refs),
-        )
-        .chain(
-            report
-                .legacy_facts
-                .iter()
-                .flatten()
-                .flat_map(|claim| &claim.evidence_refs),
-        )
-        .chain(
-            report
-                .cause
-                .result
-                .iter()
-                .chain(&report.cause.direct)
-                .chain(&report.cause.trigger)
-                .flat_map(|c| &c.evidence_refs),
-        )
-    {
-        if record(evidence, id).is_some() && !ids.contains(id) {
-            ids.push(id.clone());
-        }
-        if ids.len() == 8 {
-            break;
-        }
-    }
-    render_evidence(
-        &mut out,
-        &ids,
-        &report.timeline,
+    let mut view = EvidenceDisplay::new(
+        report,
         evidence,
         original.map_or(0, |q| q.timezone_offset_minutes),
     );
-    out.push_str("\n### 二、原因与代码核对\n");
+    out.push_str("\n### 一、结果（现象）\n");
     if let Some(facts) = &report.legacy_facts {
-        out.push_str("\n层级沿用旧协议核对结果；旧事实未自动归类为结果、直接原因或触发条件。\n");
-        render_claims(&mut out, "已验证事实（旧版映射，未自动归类）", facts);
+        // Legacy summaries may qualify facts without repeating their individual wording.
+        view.claim(
+            &mut out,
+            &Claim {
+                text: short(&report.summary.text, 240),
+                evidence_refs: report.summary.evidence_refs.clone(),
+            },
+        );
+        out.push_str(
+            "\n已验证事实（旧版映射，未自动归类）：以下保留旧事实，不据句式猜测结果或原因。\n",
+        );
+        view.claims(&mut out, facts, "尚无已核对事实。");
+    } else if report.cause.result.is_empty() {
+        view.claim(&mut out, &report.summary);
+    } else {
+        view.claims(&mut out, &report.cause.result, "尚未确认。");
     }
-    render_claims(&mut out, "结果 / 已验证事实", &report.cause.result);
-    render_claims(&mut out, "直接原因", &report.cause.direct);
-    render_claims(&mut out, "具体触发条件", &report.cause.trigger);
-    out.push_str("\n**代码核对**\n");
-    if report.code_checks.is_empty() {
-        out.push_str("\n本报告未附代码行核对。\n");
-    }
-    for code in &report.code_checks {
-        out.push_str(&format!(
-            "\n- [{}] {}:{}；{}（引用：{}）\n  原文：{}\n",
-            display(&code.id),
-            display(&code.path.replace('\\', "/")),
-            code.line,
-            display(&code.claim.text),
-            refs(&code.claim.evidence_refs),
-            display(&short(&code.excerpt, 240))
-        ));
-    }
-    out.push_str(
-        "\n引用和代码匹配不证明因果关系；代码按当前工作区核对，线上版本可能不同。未确认项见下。\n",
+    out.push_str("\n### 二、直接原因\n");
+    view.claims(&mut out, &report.cause.direct, "尚未确认直接原因。");
+    out.push_str("\n### 三、具体触发原因\n");
+    view.claims(
+        &mut out,
+        &report.cause.trigger,
+        "尚缺规则及实际判定值；结果为零本身不等于触发原因。",
     );
-    out.push_str("\n### 三、容易误判的线索\n");
-    if report.ruled_out.is_empty() {
-        out.push_str("\n尚无已核对的排除项；日志级别、时间相邻和同一 trace 本身不等于根因。\n");
+    if !report.code_checks.is_empty() {
+        out.push_str("\n**规则与代码核对**\n");
+        for code in &report.code_checks {
+            out.push_str(&format!(
+                "\n- [{}] {}:{}：{}\n  > {}\n",
+                display(&code.id),
+                display(&code.path.replace('\\', "/")),
+                code.line,
+                display(&code.claim.text),
+                display(&short(&code.excerpt, 240))
+            ));
+            view.evidence(&mut out, &code.claim.evidence_refs);
+        }
+        out.push_str("\n引用和代码匹配不证明因果关系；当前工作区与线上版本仍需对应。\n");
     }
-    for claim in report.ruled_out.iter().take(3) {
-        out.push_str(&format!(
-            "\n- {}（引用：{}）\n",
-            display(&claim.text),
-            refs(&claim.evidence_refs)
-        ));
+    out.push_str("\n### 下游与伴随信号\n");
+    view.claims(
+        &mut out,
+        &report.ruled_out,
+        "未列出已核对的下游或伴随结论；时间相邻、同 trace、WARN 级别不单独证明根因。",
+    );
+    for entry in report.timeline.iter().take(32) {
+        let unused: Vec<_> = entry
+            .evidence_refs
+            .iter()
+            .filter(|id| view.key_ids.contains(id) && !view.shown.contains(*id))
+            .cloned()
+            .collect();
+        if !unused.is_empty() {
+            view.claim(
+                &mut out,
+                &Claim {
+                    text: entry.interpretation.clone(),
+                    evidence_refs: unused,
+                },
+            );
+        }
     }
-    out.push_str("\n### 四、未确认项与下一步\n");
+    out.push_str("\n### 未完成项\n");
     if report.gaps.is_empty() {
-        out.push_str("\n未列出额外缺口；这不表示全局事实完整。\n");
+        out.push_str("\n未列出额外缺口；不代表全局事实完整。\n");
     }
     for gap in &report.gaps {
         out.push_str(&format!(
             "\n- {}：{}\n",
             if gap.blocking {
-                "阻断触发结论"
+                "待核对"
             } else {
                 "非阻断限制"
             },
             display(&gap.text)
         ));
     }
-    if report.next_actions.is_empty() {
-        out.push_str(
-            "\n建议（未执行）：补充缺失的决策输入、对应上下文和线上版本信息，再核对触发条件。\n",
-        );
-    }
     for action in &report.next_actions {
-        out.push_str(&format!(
-            "\n- 建议（未执行）：{}{}\n",
-            display(&action.text),
-            if action.evidence_refs.is_empty() {
-                String::new()
-            } else {
-                format!("（依据：{}）", refs(&action.evidence_refs))
-            }
-        ));
+        let action = Claim {
+            text: format!("建议（未执行）：{}", action.text),
+            evidence_refs: action.evidence_refs.clone(),
+        };
+        view.claim(&mut out, &action);
+    }
+    if report.next_actions.is_empty() {
+        out.push_str("\n建议（未执行）：补充决策输入、规则和线上版本后再核对。\n");
     }
     out
 }
@@ -813,11 +952,12 @@ mod tests {
         assert_eq!(report, sample());
         let actual = render(&report, &original(), EVIDENCE);
         assert_eq!(actual, render(&report, &original(), EVIDENCE));
-        assert!(actual.starts_with(
-            "## 排查结论\n\n已观察到拒绝结果，触发原因仍待核对。\n\n结论层级：观察到的结果\n"
-        ));
-        assert!(actual.contains("| [L1] 2026-10-29T10:00:01+08:00 | orders / host-a | WARN | WARN rejected limit=17 actual=23 |"));
-        assert_eq!(actual, "## 排查结论\n\n已观察到拒绝结果，触发原因仍待核对。\n\n结论层级：观察到的结果\n\n查询对象：ORDER-1\n查询时间：2026-10-29T10:00:00+08:00 — 2026-10-29T10:10:00+08:00\n宿主筛选：service=orders；trace=未限定；level=未限定\n\n### 一、关键证据链\n\n| 证据 / 时间 | 服务 / 实例 | 级别 | 原文短摘录 |\n| --- | --- | --- | --- |\n| [L1] 2026-10-29T10:00:01+08:00 | orders / host-a | WARN | WARN rejected limit=17 actual=23 |\n\n- 模型解释 [L1]：拒绝日志是结果证据。\n\n原文片段（仅保留短摘录，不代表完整日志）：\n\n> [L1] WARN rejected limit=17 actual=23\n\n### 二、原因与代码核对\n\n**结果 / 已验证事实**\n\n- 记录包含拒绝结果。（引用：[L1]）\n\n**直接原因**\n\n尚未确认。\n\n**具体触发条件**\n\n尚未确认。\n\n**代码核对**\n\n本报告未附代码行核对。\n\n引用和代码匹配不证明因果关系；代码按当前工作区核对，线上版本可能不同。未确认项见下。\n\n### 三、容易误判的线索\n\n尚无已核对的排除项；日志级别、时间相邻和同一 trace 本身不等于根因。\n\n### 四、未确认项与下一步\n\n- 阻断触发结论：尚缺决策输入。\n\n- 建议（未执行）：采集相邻决策日志。\n");
+        assert_eq!(actual, "## 排障结论：ORDER-1\n\n> 证据范围：2026-10-29T10:00:00+08:00 — 2026-10-29T10:10:00+08:00；服务=orders。\n\n### 一、结果（现象）\n\n- 记录包含拒绝结果。（[L1]）\n\n  > [L1] 10:00:01.000 · 类名未记录 · WARN：WARN rejected limit=17 actual=23\n\n### 二、直接原因\n\n尚未确认直接原因。\n\n### 三、具体触发原因\n\n尚缺规则及实际判定值；结果为零本身不等于触发原因。\n\n### 下游与伴随信号\n\n未列出已核对的下游或伴随结论；时间相邻、同 trace、WARN 级别不单独证明根因。\n\n### 未完成项\n\n- 待核对：尚缺决策输入。\n\n- 建议（未执行）：采集相邻决策日志。\n");
+        assert!(!actual.lines().any(|line| line.starts_with('|')));
+        assert_eq!(
+            actual.matches("WARN rejected limit=17 actual=23").count(),
+            1
+        );
     }
 
     #[test]
@@ -834,7 +974,7 @@ mod tests {
         assert!(!out.contains("offset="));
         assert!(out.contains("limit=17 actual=23"));
         let out = render(&report, &original(), "[L1] service=orders level=WARN\n  service=fake ts=1999-01-01\ncollection footer secret=private");
-        assert!(out.contains("| [L1] 时间未记录 | orders / 未记录 | WARN |"));
+        assert!(out.contains("[L1] 时间未记录 · 类名未记录 · WARN"));
         assert!(!out.contains("collection footer"));
     }
 
@@ -943,7 +1083,9 @@ mod tests {
         let mut report = sample();
         report.summary.text = "<script>x</script> [link](https://evil) | **bold**".into();
         let evidence = "[L1] service=orders ts=2026-10-29T10:00:01+08:00 level=WARN\n  WARN actual=23 | <img> secret=abc digest=sha256:abc offset=7 C:\\private\\file.txt";
+        report.cause.result[0].text = report.summary.text.clone();
         let out = render(&report, &original(), evidence);
+        assert!(out.contains("&lt;script&gt;"));
         assert!(!out.contains("<script>"));
         assert!(!out.contains("<img>"));
         assert!(!out.contains("[link]("));
@@ -981,6 +1123,8 @@ mod tests {
         );
         let out = render(&report, &original(), EVIDENCE);
         assert!(out.contains(&answer.claims[0].text));
+        assert!(out.contains(&short(&answer.summary, 240)));
+        assert_eq!(out.matches("WARN rejected limit=17 actual=23").count(), 1);
         assert!(out.contains("仍有缺口"));
     }
 
@@ -1030,16 +1174,154 @@ mod tests {
                 "<script>unverified model secret</script>",
             );
             for heading in [
-                "## 排查结论",
-                "### 一、关键证据链",
-                "### 二、原因与代码核对",
-                "### 三、容易误判的线索",
-                "### 四、未确认项与下一步",
+                "## 排障结论：",
+                "### 一、结果（现象）",
+                "### 二、直接原因",
+                "### 三、具体触发原因",
+                "### 下游与伴随信号",
+                "### 未完成项",
             ] {
                 assert!(out.contains(heading));
             }
             assert!(!out.contains("unverified model secret"));
             assert!(out.contains("WARN rejected limit=17 actual=23"));
         }
+    }
+
+    #[test]
+    fn subject_accepts_string_claim_null_without_overriding_host_query() {
+        for subject in [
+            serde_json::json!("FAKE 为什么付款失败"),
+            serde_json::json!({"text":"FAKE", "evidence_refs":["L1"]}),
+            serde_json::Value::Null,
+        ] {
+            let mut value = serde_json::to_value(sample()).unwrap();
+            value["subject"] = subject;
+            let report =
+                parse_report(&value.to_string(), &original(), EVIDENCE, ".", "result").unwrap();
+            let out = render(&report, &original(), EVIDENCE);
+            assert!(out.starts_with("## 排障结论：ORDER-1"));
+            assert!(!out.contains("FAKE"));
+        }
+    }
+
+    #[test]
+    fn real_producer_excerpt_is_unwrapped_and_long_logger_does_not_hide_warn_values() {
+        let logger = format!("com.{}.PaymentDecision", "verylongpackage.".repeat(22));
+        let raw = format!("2026-10-29 10:00:01.123 [worker-thread-123] WARN {logger} - WARN refused limit=17.50 actual=23001.25 retry=1000001");
+        let hash = "a".repeat(64);
+        let block = format!("[L1] service=payments logger={logger} level=WARN ts=2026-10-29T10:00:01.123+08:00 full_length=9999 digest=sha256:{hash} truncated=true\n  [excerpt original_length=9999 hash=sha256:{hash} truncated=true offset_unit=char]\n  [offset=0..700] {raw}\n  [offset=9900..9999] end\n");
+        let out = render(&sample(), &original(), &block);
+        assert!(out.contains("10:00:01.123 · PaymentDecision · WARN"));
+        assert!(out.contains("WARN refused limit=17.50 actual=23001.25 retry=1000001"));
+        for metadata in [
+            "original_length",
+            "offset_unit",
+            "truncated=true",
+            "hash=",
+            "verylongpackage",
+            "worker-thread",
+            "| ---",
+        ] {
+            assert!(!out.contains(metadata), "{metadata}: {out}");
+        }
+        assert_eq!(out.matches("WARN refused limit=17.50").count(), 1);
+        assert!(!out.contains("库存"));
+    }
+
+    #[test]
+    fn excerpt_lookalikes_inside_business_body_are_not_headers() {
+        let envelope = format!(
+            "[excerpt original_length=9999 hash=sha256:{} truncated=true offset_unit=char]",
+            "a".repeat(64)
+        );
+        let block = format!(
+            "[L1] service=payments\n  note {envelope}\n  [offset=0..9] real business text\n"
+        );
+        let body = record_body(&block);
+        assert!(body.contains(&envelope));
+        assert!(body.contains("[offset=0..9]"));
+        let block =
+            format!("[L1] service=payments\n  {envelope}\n  [offset=0..9] real business text\n");
+        assert_eq!(record_body(&block), "real business text");
+        let block =
+            format!("[L1] service=payments\n  {envelope}\n  ordinary text, not an offset range\n");
+        assert!(record_body(&block).contains(&envelope));
+    }
+
+    #[test]
+    fn business_excerpt_finds_generic_rule_values_and_keeps_boundary_number_complete() {
+        let body = format!(
+            "prefix.logger WARN - {} reason=rate_limit actual=12345678901234567890 limit=5 {}",
+            "x ".repeat(180),
+            "tail ".repeat(80)
+        );
+        let shown = business_excerpt(&body);
+        assert!(shown.contains("reason=rate_limit actual=12345678901234567890 limit=5"));
+        assert!(!shown.contains("prefix.logger"));
+        let body = format!("{}12345678901234567890 end", "x ".repeat(117));
+        assert!(business_excerpt(&body).contains("12345678901234567890"));
+    }
+
+    #[test]
+    fn timeline_accepts_32_records_but_mobile_display_is_eight_keys_six_excerpts() {
+        let mut report = sample();
+        let mut evidence = String::new();
+        report.timeline.clear();
+        for n in 1..=32 {
+            evidence.push_str(&format!("[L{n}] service=payments level=INFO ts=2026-10-29T10:00:01+08:00\n  retained-message-{n}\n"));
+            report.timeline.push(TimelineEntry {
+                evidence_refs: vec![format!("L{n}")],
+                interpretation: format!("观察 {n}"),
+            });
+        }
+        assert!(validate(&report, &original(), &evidence, ".", "result").is_ok());
+        let before = report.clone();
+        let out = render(&report, &original(), &evidence);
+        assert_eq!(report, before);
+        assert_eq!(out.matches(" · INFO").count(), 8);
+        assert_eq!(out.matches("retained-message-").count(), 6);
+        assert!(!out.contains("[L9]"));
+        assert!(!out.lines().any(|line| line.starts_with('|')));
+        report.timeline.push(TimelineEntry {
+            evidence_refs: vec!["L1".into()],
+            interpretation: "extra".into(),
+        });
+        assert!(validate(&report, &original(), &evidence, ".", "result").is_err());
+    }
+
+    #[test]
+    fn each_cause_has_real_evidence_but_shared_original_is_not_dumped_twice() {
+        let mut report = sample();
+        report.cause.direct = vec![Claim {
+            text: "直接原因".into(),
+            evidence_refs: vec!["L1".into()],
+        }];
+        report.cause.trigger = vec![Claim {
+            text: "规则 limit=17；实际 actual=23".into(),
+            evidence_refs: vec!["L1".into()],
+        }];
+        let out = render(&report, &original(), EVIDENCE);
+        assert_eq!(out.matches("WARN rejected limit=17 actual=23").count(), 1);
+        assert_eq!(out.matches("[L1] 10:00:01.000").count(), 3);
+        assert_eq!(out.matches("（原文见上）").count(), 2);
+    }
+
+    #[test]
+    fn production_warn_business_ids_survive_long_runtime_prefix() {
+        let evidence = "[L1] 查询范围内 service=pmys.saas.match.service instance=10.80.85.103 level=WARN ts=1793159847950 thread=wxSalesMatchDisruptor-thread-7 logger=com.pmys.saas.match.capability.AbstractMatchPackageCapabilityAction\n  11:57:27.950 [wxSalesMatchDisruptor-thread-7] WARN  com.pmys.saas.match.capability.AbstractMatchPackageCapabilityAction - pmys.saas.match.service-[|]-prod-[|]-10.80.85.103-[|]-MATCH_PUSH_TOPIC-[|]-无能力，跳过 pkid=1454805448406827008 nlpId=4209234431769610323_wxid_w1r8igtdjjmi29 accountId=1429785674462261248\n";
+        let out = render(&sample(), &original(), evidence);
+        assert!(out.contains("11:57:27.950 · AbstractMatchPackageCapabilityAction · WARN"));
+        for text in [
+            "无能力，跳过",
+            "1454805448406827008",
+            "4209234431769610323",
+            "1429785674462261248",
+        ] {
+            assert!(out.contains(text), "missing {text}: {out}");
+        }
+        assert!(!out.contains("wxSalesMatchDisruptor-thread-7"));
+        assert!(!out.contains("com.pmys.saas.match.capability."));
+        assert!(!out.lines().any(|line| line.starts_with('|')));
     }
 }

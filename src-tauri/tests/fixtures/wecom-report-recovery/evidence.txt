@@ -1,0 +1,20 @@
+[L2] service=quote instance=fixture-1 ts=2026-10-28T08:30:00Z
+matchId=MATCH-FIXTURE nlpIdOriginal=REQUEST-FIXTURE autoQuotationSuccessFlag=false PRODUCT-A PRODUCT-B
+[L3] service=quote instance=fixture-1 level=INFO ts=2026-10-28T08:30:01Z
+MATCH_PUSH_TOPIC 无能力，跳过
+[L4] service=quote instance=fixture-1 level=INFO ts=2026-10-28T08:30:02Z
+MATCH_PUSH_FUNNEL 无能力，跳过
+[L5] service=quote instance=fixture-1 level=WARN ts=2026-10-28T08:30:03Z
+removeNoQuantityProduct 库存不足不报价 productCode:PRODUCT-A quotationNoStock:1
+[L6] service=quote instance=fixture-1 ts=2026-10-28T08:30:04Z
+prepareQuotationProducts 报价商品数量：0
+[L7] service=quote instance=fixture-1 ts=2026-10-28T08:30:05Z
+STATUS_FILTERED_EMPTY 重复求购
+[L8] service=quote instance=fixture-1 level=WARN ts=2026-10-28T08:30:06Z
+BusinessException 当前商品不符合您的报价设置，暂不可报价
+[L9] service=quote instance=fixture-1 ts=2026-10-28T08:30:07Z
+apiChannelAutoQuotation 未匹配到资源或者自动报价额度用完
+[L10] service=quote instance=fixture-1 level=WARN ts=2026-10-28T08:30:08Z
+BusinessException 发送事件处理异常
+[L11] service=helper instance=fixture-2 ts=2026-10-28T08:30:09Z
+同一原始商机对同一坐席只转发一次

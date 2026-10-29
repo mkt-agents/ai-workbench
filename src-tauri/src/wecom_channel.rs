@@ -427,7 +427,7 @@ pub async fn wecom_channel_status(
         connected_ms,
         process_id: std::process::id(),
         build_label: format!(
-            "{}-{} / report-v1-unified-concurrency32",
+            "{}-{} / report-v2-readable-concurrency32",
             env!("CARGO_PKG_VERSION"),
             if cfg!(debug_assertions) {
                 "dev"
