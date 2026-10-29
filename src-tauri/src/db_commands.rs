@@ -529,6 +529,81 @@ pub async fn db_save(
     Ok(())
 }
 
+/// 设置副本的一行：`value` 为 null / 缺省表示删除该键。
+#[derive(Debug, Deserialize)]
+pub struct SettingsEntry {
+    pub key: String,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+}
+
+/// 读出全部设置副本（键 → 值）。localStorage 仍是主存，这份用于重装 / 清缓存后回填。
+/// 坏行直接跳过，不让一条脏数据拖垮整份设置。
+#[tauri::command]
+pub async fn settings_load(
+    state: tauri::State<'_, DbState>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM app_settings")
+        .map_err(|e| format!("读取设置失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let key: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            Ok((key, raw))
+        })
+        .map_err(|e| format!("读取设置失败: {e}"))?;
+    let mut out = serde_json::Map::new();
+    for (key, raw) in rows.flatten() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            out.insert(key, value);
+        }
+    }
+    Ok(out)
+}
+
+/// 按键增量写入设置副本：只写本次真正变化的键，未涉及的键不动。
+#[tauri::command]
+pub async fn settings_patch(
+    state: tauri::State<'_, DbState>,
+    entries: Vec<SettingsEntry>,
+) -> Result<(), String> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let _ = conn.execute_batch(
+        "PRAGMA busy_timeout=8000; PRAGMA synchronous=NORMAL;
+         CREATE TABLE IF NOT EXISTS app_settings (
+             key TEXT PRIMARY KEY,
+             value TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );",
+    );
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启事务失败: {e}"))?;
+    for entry in entries {
+        match entry.value {
+            None => {
+                tx.execute("DELETE FROM app_settings WHERE key = ?1", rusqlite::params![entry.key])
+                    .map_err(|e| format!("删除设置失败: {e}"))?;
+            }
+            Some(value) => {
+                tx.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    rusqlite::params![entry.key, value.to_string()],
+                )
+                .map_err(|e| format!("写入设置失败: {e}"))?;
+            }
+        }
+    }
+    tx.commit().map_err(|e| format!("提交事务失败: {e}"))?;
+    Ok(())
+}
+
 /// Tables renamed after release. Must run before `CREATE TABLE IF NOT EXISTS`, otherwise
 /// an empty table under the new name would block the rename and orphan the old rows.
 const RENAMED_TABLES: &[(&str, &str)] = &[("quick_ask_sessions", "ai_hub_sessions")];

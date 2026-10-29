@@ -172,6 +172,13 @@ pub fn run() {
             }
 
             conn.execute_batch(r#"
+                /* 设置的 SQLite 副本：localStorage 仍是主存，这份用于重装 / 清缓存后回填。
+                   一行 = settings 的一个键（value 存 JSON 文本），按键增量写入。 */
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS git_accounts (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -614,6 +621,8 @@ pub fn run() {
             site_icon::fetch_site_icon,
             db_commands::db_load,
             db_commands::db_save,
+            db_commands::settings_load,
+            db_commands::settings_patch,
             cursor::inspect_cursor_backup,
             cursor::get_cursor_login_status,
             cursor::is_cursor_running,

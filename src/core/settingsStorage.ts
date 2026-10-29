@@ -1,4 +1,5 @@
 import type { StateStorage } from 'zustand/middleware';
+import { queueSettingsPatch } from '../lib/settingsDb';
 
 /**
  * 主窗、天玑窗、桌宠窗各持一份 store，却共用 localStorage 的同一个键。persist 默认整份覆盖：
@@ -23,6 +24,18 @@ function parse(raw: string | null): Envelope | null {
   } catch {
     return null;
   }
+}
+
+/** 相对磁盘上那份，本次真正变化的键；值为 undefined 表示这个键被删了。 */
+export function changedSettings(disk: Settings, merged: Settings): Settings {
+  const out: Settings = {};
+  for (const key of Object.keys(merged)) {
+    if (!same(merged[key], disk[key])) out[key] = merged[key];
+  }
+  for (const key of Object.keys(disk)) {
+    if (!(key in merged)) out[key] = undefined;
+  }
+  return out;
 }
 
 /** ours 相对 base 改过的键用 ours，其它键用 disk；值为 undefined 表示删除。 */
@@ -59,6 +72,8 @@ export const mergingSettingsStorage: StateStorage = {
     const merged = mergeSettings(lastSynced, ours, disk);
     lastSynced = merged;
     localStorage.setItem(name, JSON.stringify({ ...next, state: { ...next.state, settings: merged } }));
+    // 顺手把变化的键推到 SQLite 副本（防抖）：重装 / 清缓存后靠它回填
+    queueSettingsPatch(changedSettings(disk, merged));
   },
   removeItem: (name) => {
     lastSynced = {};
