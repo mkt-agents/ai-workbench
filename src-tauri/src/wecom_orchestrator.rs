@@ -1,7 +1,7 @@
 //! 企微入站 → 策略 → agent_run → 流式回写。
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,6 @@ use crate::wecom_channel::{ApprovalKind, PendingApproval, WecomState, APPROVAL_T
 use crate::wecom_dsh::{permission_options, permission_summary, DshEvent, DshResponder};
 use crate::wecom_policy::{GateDecision, MsgDeduper, PolicyState};
 use crate::wecom_proto::{self, EventCallback, MsgCallback};
-use crate::wecom_sanitize::redact_local_paths;
 use crate::wecom_session::{self, SessionKey};
 use crate::wecom_ws::WecomSocket;
 
@@ -30,7 +29,7 @@ const DSH_STALL_NOTE: Duration = Duration::from_secs(90);
 /// 等同一会话上一轮结束时，超过这么久提示用户「在排队」。
 const SESSION_QUEUE_NOTE: Duration = Duration::from_secs(8);
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WecomAgentConfig {
     pub config: AIModelConfig,
@@ -93,6 +92,8 @@ pub struct Orchestrator {
     pub policy: Arc<Mutex<PolicyState>>,
     pub agent: Arc<Mutex<Option<WecomAgentConfig>>>,
     pub bot_display_name: Arc<Mutex<String>>,
+    /// Optional self-introduction returned verbatim for full-sentence identity prompts.
+    pub self_intro: Arc<Mutex<String>>,
     /// 回话引擎：`tianji` | `dsh`（由设置页下发）
     pub engine: Arc<Mutex<String>>,
     /// 问答模式：`doc`（文档优先）| `doc_code`（文档+代码回退）| `code`（仅代码）。
@@ -105,6 +106,14 @@ pub struct Orchestrator {
     /// 当前每个会话正在跑的那一轮（供「停止」指令真正取消 + 收尾卡住的气泡）。
     running: Arc<Mutex<HashMap<String, RunningTurn>>>,
     pub admission: crate::wecom_admission::Admission,
+    /// Invalidates every queued/in-flight ingress on channel reconfiguration.
+    pub generation: tokio::sync::watch::Sender<u64>,
+    /// Serializes detached DSH startup with channel transitions.
+    pub dsh_lifecycle: Arc<Mutex<()>>,
+    retiring: AtomicBool,
+    /// Only requests that have been accepted for a visible reply (including queues).
+    reply_targets: Arc<Mutex<HashMap<String, (String, String)>>>,
+
 }
 
 /// 一个会话正在进行中的回合：记录出站目标 + 如何取消。
@@ -148,6 +157,7 @@ impl Orchestrator {
             })),
             agent: Arc::new(Mutex::new(None)),
             bot_display_name: Arc::new(Mutex::new(String::new())),
+            self_intro: Arc::new(Mutex::new(String::new())),
             engine: Arc::new(Mutex::new("tianji".to_string())),
             answer_mode: Arc::new(Mutex::new("auto".to_string())),
             doc_dir: Arc::new(Mutex::new("doc".to_string())),
@@ -155,6 +165,10 @@ impl Orchestrator {
             session_locks: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashMap::new())),
             admission: crate::wecom_admission::Admission::default(),
+            generation: tokio::sync::watch::channel(0).0,
+            dsh_lifecycle: Arc::new(Mutex::new(())),
+            retiring: AtomicBool::new(false),
+            reply_targets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -164,10 +178,51 @@ impl Orchestrator {
     }
 
     pub fn handle_msg(self: &Arc<Self>, app: AppHandle, msg: MsgCallback) {
+        let generation = self.current_generation();
         let this = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
-            this.on_msg(app, msg).await;
+            this.on_msg(app, msg, generation).await;
         });
+    }
+
+    pub fn current_generation(&self) -> u64 {
+        *self.generation.borrow()
+    }
+
+    pub async fn invalidate(&self) {
+        self.generation.send_modify(|g| *g = g.wrapping_add(1));
+        for rt in self.running.lock().await.values() {
+            rt.cancel();
+        }
+    }
+
+    pub fn resume_ingress(&self) { self.retiring.store(false, Ordering::SeqCst); }
+
+    /// Freeze final replies while the original socket/bot still owns their request IDs.
+    /// The transport drain is bounded and never claims platform delivery.
+    pub async fn retire(&self, reason: &str) {
+        self.retiring.store(true, Ordering::SeqCst);
+        let targets = self.reply_targets.lock().await.clone();
+        crate::wecom_diagnostics::record("wecom-channel", "retirement", "started", Some(reason), None,
+            serde_json::json!({"count":targets.len(),"channelGeneration":self.current_generation()}));
+        let mut frames = Vec::new();
+        for (request, (req_id, stream)) in &targets {
+            crate::wecom_progress::finish(request, "cancelled", "channel_changed");
+            if let Some(body) = crate::wecom_reply::finish(stream, "通道配置或连接发生变化，本次排查已中断；请查看任务进度后重新发起。") {
+                frames.push((request.clone(), wecom_proto::respond_stream(req_id, stream, &body, true)));
+            }
+            crate::cancellation::cancel_request(request);
+            if let Some(id) = request.strip_prefix("wecom-") { crate::cancellation::cancel_request(&format!("wecom-preflight-{id}")); }
+        }
+        self.invalidate().await;
+        let delivery = tokio::time::timeout(Duration::from_secs(2), async {
+            for (_, frame) in &frames { self.sock.send_raw(frame.clone()).await?; }
+            self.sock.flush().await
+        }).await;
+        let status = if matches!(delivery, Ok(Ok(()))) { "socket_drained" } else { "delivery_unavailable" };
+        for (request, _) in &frames {
+            crate::wecom_diagnostics::record(request, "retirement", status, Some(reason), None, serde_json::json!({"final":true}));
+        }
     }
 
     pub fn handle_event(self: &Arc<Self>, app: AppHandle, ev: EventCallback) {
@@ -195,10 +250,18 @@ impl Orchestrator {
         let _ = self.sock.send_raw(payload).await;
     }
 
-    async fn on_msg(&self, app: AppHandle, msg: MsgCallback) {
+    async fn on_msg(&self, app: AppHandle, msg: MsgCallback, generation: u64) {
+        let mut changes = self.generation.subscribe();
+        if self.retiring.load(Ordering::SeqCst) || *changes.borrow_and_update() != generation {
+            return;
+        }
         let stream_id = format!("stream-{}", msg.msgid);
         if crate::wecom_reply::is_finished(&stream_id) {
             return;
+        }
+        {
+            let mut d = self.deduper.lock().await;
+            if d.seen_or_insert(&msg.msgid) { return; }
         }
         if !crate::wecom_reply::register(&stream_id) {
             let _ = self
@@ -212,16 +275,68 @@ impl Orchestrator {
                 .await;
             return;
         }
-        {
-            let mut d = self.deduper.lock().await;
-            if d.seen_or_insert(&msg.msgid) {
-                return;
+        let _registration = crate::wecom_reply::RegistrationGuard::new(&stream_id);
+        let diagnostic_request = format!("wecom-{}", msg.msgid);
+        crate::wecom_diagnostics::bind_transport(&msg.req_id, &diagnostic_request);
+        crate::wecom_diagnostics::record(&diagnostic_request, "ingress", "received", None, None,
+            serde_json::json!({"msgId":msg.msgid,"streamId":stream_id,"channelGeneration":generation,"processId":std::process::id()}));
+        let processing = self.process_msg(app, &msg, &stream_id, generation);
+        tokio::pin!(processing);
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
+        loop { tokio::select! {
+            biased;
+            _ = changes.changed() => {
+                // Close locally: old req_id belongs to the retired socket/bot.
+                crate::cancellation::cancel_request(&format!("wecom-{}", msg.msgid));
+                crate::cancellation::cancel_request(&format!("wecom-preflight-{}", msg.msgid));
+                unsubscribe_agent_bridge(&format!("wecom-{}", msg.msgid));
+                crate::wecom_diagnostics::record(&diagnostic_request, "request", "cancelled", Some("channel_changed"), None, serde_json::json!({}));
+                let mut running = self.running.lock().await;
+                running.retain(|_, rt| {
+                    if rt.stream_id == stream_id { rt.cancel(); false } else { true }
+                });
+                break;
             }
-        }
+            _ = &mut processing => {
+                crate::wecom_diagnostics::record(&diagnostic_request, "request", "ended", None, None,
+                    serde_json::json!({"final":crate::wecom_reply::is_finished(&stream_id)}));
+                break;
+            }
+            _ = heartbeat.tick() => {
+                if !self.retiring.load(Ordering::SeqCst) && !crate::wecom_reply::is_finished(&stream_id) {
+                    if let Some(note) = crate::wecom_progress::heartbeat(&diagnostic_request) {
+                        // A slow/closed socket must not block the cancellation or work future.
+                        let _ = tokio::time::timeout(Duration::from_millis(200), self.sock.send_raw(
+                            wecom_proto::respond_stream(&msg.req_id, &stream_id, &note, false))).await;
+                    }
+                }
+            }
+        } }
+        self.reply_targets.lock().await.remove(&diagnostic_request);
+    }
 
+    /// Runs after access checks and optional reset, before any AI work.
+    async fn reply_self_intro(&self, req_id: &str, stream_id: &str, text: &str) -> bool {
+        if !is_self_intro_command(text) { return false; }
+        let configured = self.self_intro.lock().await.clone();
+        let is_default = configured.trim().is_empty();
+        let intro = if is_default { DEFAULT_SELF_INTRO.to_string() } else { configured };
+        if let Some(id) = stream_id.strip_prefix("stream-") {
+            crate::wecom_diagnostics::record(&format!("wecom-{id}"), "self_intro",
+                if is_default { "default" } else { "configured" }, None, None, serde_json::json!({}));
+        }
+        send_finish(&self.sock, req_id, stream_id, &intro).await;
+        true
+    }
+
+    async fn process_msg(&self, app: AppHandle, msg: &MsgCallback, stream_id: &String, generation: u64) {
         let bot_name = self.bot_display_name.lock().await.clone();
         let (text, mentioned) = wecom_proto::strip_mention(&msg.text, &bot_name);
         let mut user_text = text;
+        let new_session = crate::wecom_investigation_query::new_session_remainder(&user_text);
+        if let Some(remainder) = &new_session {
+            user_text = remainder.clone();
+        }
         if let Some(q) = &msg.quote_text {
             if !q.trim().is_empty() {
                 user_text = format!("（引用）{}\n\n{}", q.trim(), user_text);
@@ -232,7 +347,7 @@ impl Orchestrator {
             send_finish(&self.sock, &msg.req_id, &stream_id, tip).await;
             return;
         }
-        if user_text.trim().is_empty() && msg.media.is_empty() {
+        if user_text.trim().is_empty() && msg.media.is_empty() && new_session.is_none() {
             // 既无文字也无媒体（表情/位置等）：礼貌提示，不再静默丢
             let tip = "暂不支持该消息类型，请发文字、图片或文件。";
             send_finish(&self.sock, &msg.req_id, &stream_id, tip).await;
@@ -285,6 +400,7 @@ impl Orchestrator {
                 policy.gate_group(&chatid, is_mentioned)
             };
             if decision != GateDecision::Allow {
+                crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "policy", "filtered", Some("group_policy"), None, serde_json::json!({}));
                 return;
             }
             SessionKey::group_user(&bot, &chatid, &msg.userid)
@@ -302,7 +418,10 @@ impl Orchestrator {
                     send_finish(&self.sock, &msg.req_id, &stream_id, &tip).await;
                     return;
                 }
-                GateDecision::DenySilent | GateDecision::DenyWith(_) => return,
+                GateDecision::DenySilent | GateDecision::DenyWith(_) => {
+                    crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "policy", "filtered", Some("dm_policy"), None, serde_json::json!({}));
+                    return;
+                },
             }
         };
 
@@ -316,7 +435,9 @@ impl Orchestrator {
                 msg.userid.clone(),
                 user_text.clone(),
             );
-            let control = is_stop_command(&user_text) || is_approval_text(&user_text);
+            let control = is_stop_command(&user_text) || is_approval_text(&user_text)
+                || crate::wecom_progress::is_status_command(&user_text)
+                || is_self_intro_command(&user_text);
             let routed = tokio::task::spawn_blocking(move || {
                 let conn = db.lock().map_err(|_| "共享任务数据库锁失败".to_string())?;
                 if control {
@@ -423,6 +544,41 @@ impl Orchestrator {
             send_finish(&self.sock, &msg.req_id, &stream_id, &answer).await;
             return;
         }
+        if new_session.is_some() {
+            if task_id.is_some() && task_owner.as_deref() != Some(msg.userid.as_str()) {
+                send_finish(&self.sock, &msg.req_id, stream_id, "共享任务仅创建者可重置会话；退出任务后可开启个人新会话。").await;
+                return;
+            }
+            let key = session.as_str();
+            let lock = self.session_locks.lock().await.entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+            // Never clear history while an older turn can still append to it.
+            let Ok(_reset_guard) = lock.try_lock_owned() else {
+                send_finish(&self.sock, &msg.req_id, stream_id, "当前会话仍有任务运行，请先停止或等待完成，再开启新会话。").await;
+                return;
+            };
+            let cleanup = session.clone();
+            if !matches!(tokio::task::spawn_blocking(move || wecom_session::clear_session_checked(&cleanup)).await, Ok(Ok(()))) {
+                send_finish(&self.sock, &msg.req_id, stream_id, "会话历史重置失败，未开始新会话；请查看本机日志后重试。").await;
+                return;
+            }
+            let state = app.state::<WecomState>();
+            let repo = state.dsh.workspace().await;
+            let (addr, header) = state.skywalking.lock().await.clone();
+            let offset = *state.skywalking_timezone.lock().await;
+            let query_key = crate::wecom_investigation::context_key(&bot, &key, &key, &repo, &addr, &header, offset);
+            crate::wecom_investigation::clear_context_for(&query_key);
+            state.dsh.reset_channel_session(&key).await;
+            crate::wecom_diagnostics::record(&format!("wecom-{}", msg.msgid), "session", "reset", None, None,
+                serde_json::json!({"sessionKey":key}));
+            if user_text.trim().is_empty() {
+                send_finish(&self.sock, &msg.req_id, stream_id, "新会话已开始。直接发送问题即可；回复「你是谁」可查看助手介绍。").await;
+                return;
+            }
+        }
+        if msg.media.is_empty() && self.reply_self_intro(&msg.req_id, stream_id, &user_text).await {
+            return;
+        }
         // 「停止」指令：在拿会话串行锁**之前**处理（上一轮没结束它拿不到锁）。
         // 真正取消那一轮并给卡住的「正在思考…」气泡补一帧 finish，而不是当普通消息答一句。
         if is_stop_command(&user_text) {
@@ -447,6 +603,9 @@ impl Orchestrator {
             match running {
                 Some(rt) => {
                     rt.cancel();
+                    if let Some(id) = rt.stream_id.strip_prefix("stream-") {
+                        crate::wecom_progress::finish(&format!("wecom-{id}"), "cancelled", "user_cancelled");
+                    }
                     crate::wecom_log::write(
                         "stop",
                         &format!("msgid={} 取消会话 {key} 的在跑回合", msg.msgid),
@@ -479,7 +638,26 @@ impl Orchestrator {
             return;
         }
 
+        if crate::wecom_progress::is_status_command(&user_text) {
+            let reply = crate::wecom_progress::status_reply(&session.as_str());
+            send_finish(&self.sock, &msg.req_id, stream_id, &reply).await;
+            return;
+        }
+        let progress_request = format!("wecom-{}", msg.msgid);
+        {
+            // Retirement sets the flag before locking/snapshotting this same map.
+            let mut targets = self.reply_targets.lock().await;
+            if self.retiring.load(Ordering::SeqCst) || self.current_generation() != generation { return; }
+            targets.insert(progress_request.clone(), (msg.req_id.clone(), stream_id.clone()));
+        }
+        crate::wecom_progress::begin(&session.as_str(), &progress_request);
+        struct ProgressGuard(String);
+        impl Drop for ProgressGuard {
+            fn drop(&mut self) { crate::wecom_progress::finish(&self.0, "ended", "unknown"); }
+        }
+        let _progress_guard = ProgressGuard(progress_request.clone());
         let Some(queued) = self.admission.queue(&session.as_str()) else {
+            crate::wecom_progress::finish(&progress_request, "busy", "busy");
             send_finish(
                 &self.sock,
                 &msg.req_id,
@@ -503,6 +681,8 @@ impl Orchestrator {
         // 注意：占位要在拿会话锁**之前**——同一会话上一轮如果卡住，这一条至少不会无声无息。
         self.ack(&msg, &stream_id).await;
         let engine_name = self.engine.lock().await.clone();
+        crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "admission", "queued", None, None,
+            serde_json::json!({"engine":engine_name,"sessionKey":session.as_str(),"channelGeneration":generation}));
         crate::wecom_log::write(
             "turn",
             &format!(
@@ -538,6 +718,9 @@ impl Orchestrator {
             queue_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         );
         drop(queued);
+        if self.current_generation() != generation {
+            return;
+        }
         if let Some(task) = &task_id {
             let db = app.state::<crate::DbState>().conn.clone();
             let (b, g, u, t) = (
@@ -629,12 +812,10 @@ impl Orchestrator {
                 .run_dsh_turn(&app, &msg, &session, &user_text, &stream_id)
                 .await;
             if let Err(e) = result {
+                crate::wecom_progress::finish(&progress_request, "failed", "failed");
+                crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "engine", "failed", Some("dsh_turn_failed"), None, serde_json::json!({"engine":"dsh"}));
                 eprintln!("[wecom] dsh turn failed: {e}");
-                let repo = self.dsh_workspace(&app).await;
-                let tip = redact_local_paths(
-                    &format!("出错了：{}", crate::wecom_dsh::friendly_turn_error(&e)),
-                    &repo,
-                );
+                let tip = format!("出错了：{}", crate::wecom_dsh::friendly_turn_error(&e));
                 send_finish(&self.sock, &msg.req_id, &stream_id, &tip).await;
             }
             return;
@@ -677,17 +858,10 @@ impl Orchestrator {
         }
 
         if let Err(e) = result {
+            crate::wecom_progress::finish(&progress_request, "failed", "failed");
+            crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "engine", "failed", Some("tianji_turn_failed"), None, serde_json::json!({"engine":"tianji"}));
             eprintln!("[wecom] agent turn failed: {e}");
-            let tip = {
-                let repo = self
-                    .agent
-                    .lock()
-                    .await
-                    .as_ref()
-                    .map(|c| c.repo_path.clone())
-                    .unwrap_or_default();
-                redact_local_paths(&format!("出错了：{e}"), &repo)
-            };
+            let tip = format!("出错了：{e}");
             send_finish(&self.sock, &msg.req_id, &stream_id, &tip).await;
         }
     }
@@ -734,6 +908,8 @@ impl Orchestrator {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             } => {
+                crate::wecom_progress::finish(&request, "cancelled", "user_cancelled");
+                crate::wecom_diagnostics::record(&request, "engine", "cancelled", Some("user_cancelled"), None, serde_json::json!({}));
                 send_finish(&self.sock, &msg.req_id, stream_id, "已停止，本轮已取消。").await;
                 append_reply_history(session,user_text,stream_id,"");
                 Ok(())
@@ -741,6 +917,8 @@ impl Orchestrator {
             _ = tokio::time::sleep(DSH_TURN_TIMEOUT) => {
                 crate::cancellation::cancel_request(&request);
                 if let Some(rt) = self.running.lock().await.get(&session.as_str()) { rt.cancel(); }
+                crate::wecom_progress::finish(&request, "timeout", "timeout");
+                crate::wecom_diagnostics::record(&request, "engine", "timeout", Some("turn_deadline"), None, serde_json::json!({}));
                 send_finish(&self.sock, &msg.req_id, stream_id, "排障回合达到600秒期限，已停止；未完成项不视为查询无数据。").await;
                 append_reply_history(session,user_text,stream_id,"");
                 Ok(())
@@ -772,7 +950,6 @@ impl Orchestrator {
         let turn_deadline = tokio::time::Instant::now() + DSH_TURN_TIMEOUT;
 
         let repo = engine.workspace().await;
-        let redact = |s: &str| redact_local_paths(s, &repo);
 
         // 问答模式规则也带进 DSH 档（它用 DSH 自己的工具读文档/代码，这里用 prompt 引导先查文档）。
         let answer_mode = self.answer_mode.lock().await.clone();
@@ -845,11 +1022,12 @@ impl Orchestrator {
         }
         // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
         if source_failure_reply(&outcome) {
-            let body = redact(&crate::wecom_report::fallback(
+            crate::wecom_progress::finish(preflight_request, "failed", "no_evidence");
+            let body = crate::wecom_report::fallback(
                 outcome.query.as_ref(),
                 "",
                 &outcome.context,
-            ));
+            );
             send_finish(&self.sock, &req_id, stream_id, &body).await;
             append_reply_history(session, user_text, stream_id, &body);
             return Ok(());
@@ -861,8 +1039,20 @@ impl Orchestrator {
             crate::wecom_performance::Phase::new(preflight_request, "engine_ready", 0);
         let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
         let dsh = Arc::clone(&engine);
+        let lifecycle = Arc::clone(&self.dsh_lifecycle);
+        let generation = self.current_generation();
+        let generations = self.generation.subscribe();
         tauri::async_runtime::spawn(async move {
-            let _ = ready_tx.send(dsh.ensure_ready().await);
+            let _lifecycle = lifecycle.lock().await;
+            if *generations.borrow() != generation || ready_tx.is_closed() {
+                return;
+            }
+            let result = dsh.ensure_ready().await;
+            // A detached startup must not resurrect a disabled/reconfigured channel.
+            if *generations.borrow() != generation {
+                dsh.stop().await;
+            }
+            let _ = ready_tx.send(result);
         });
         let ready = tokio::select! {
             res = &mut ready_rx => decode_ready(res),
@@ -902,20 +1092,30 @@ impl Orchestrator {
             "dsh",
             &format!("msgid={} key={key} session={acp_session}", msg.msgid),
         );
-        // 设置页选的模型 / 思考强度按轮下发；失败只记日志，别让整轮崩（会话会退回 DSH 默认路由）。
-        // 列模型要走一次网络，卡住的话不能把整轮拖死，所以给个上限。
+        // A model/effort acknowledgement is required before prompting; errors never select a silent fallback.
+        // Catalog/configuration work shares a 20-second deadline independent of the full turn.
         match tokio::time::timeout(
             Duration::from_secs(20),
             engine.apply_selection(&acp_session),
         )
         .await
         {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => crate::wecom_log::write("dsh", &format!("msgid={} {e}", msg.msgid)),
-            Err(_) => crate::wecom_log::write(
-                "dsh",
-                &format!("msgid={} apply_selection timeout", msg.msgid),
-            ),
+            Ok(Ok((model, effort))) => {
+                crate::wecom_performance::record_session(preflight_request, &session_action, &model,
+                    if effort.is_empty() { "unknown" } else { &effort });
+                let public_model = serde_json::from_str::<Vec<String>>(&model).ok()
+                    .filter(|v| v.len() == 2).map(|v| v.join("/")).unwrap_or(model);
+                crate::wecom_diagnostics::record(preflight_request, "model_selection", "acknowledged", None, None,
+                    serde_json::json!({"model":public_model,"effort":effort,"selectionState":"applied","sessionAction":session_action}));
+            }
+            Ok(Err(e)) => {
+                crate::wecom_diagnostics::record(preflight_request, "model_selection", "failed", Some("model_config_failed"), None, serde_json::json!({}));
+                return Err(e);
+            }
+            Err(_) => {
+                crate::wecom_diagnostics::record(preflight_request, "model_selection", "timeout", Some("model_config_timeout"), None, serde_json::json!({}));
+                return Err("模型配置等待超过20秒，本轮未提交模型任务；请检查模型与思考强度后重试。".into());
+            },
         }
         drop(session_phase);
         let mut store = crate::wecom_evidence_store::EvidenceStore::new();
@@ -1000,7 +1200,9 @@ impl Orchestrator {
                     }
                     let mut plan = match parsed {
                         Ok(plan) => plan,
-                        Err(_) => {
+                        Err(error) => {
+                            crate::wecom_performance::note_validation(preflight_request,
+                                crate::wecom_investigation_plan::validation_error_code(&error));
                             evidence.push_str(
                                 "\n补查计划两次未通过校验，未执行；当前结论仅限已有证据。\n",
                             );
@@ -1080,6 +1282,7 @@ impl Orchestrator {
                             false,
                         ))
                         .await;
+                    crate::wecom_progress::phase(preflight_request, "supplemental");
                     let extra = crate::wecom_investigation::supplemental(
                         &addr,
                         &header,
@@ -1111,11 +1314,12 @@ impl Orchestrator {
                 }
             }
             if !has_evidence {
-                let body = redact(&crate::wecom_report::fallback(
+                crate::wecom_progress::finish(preflight_request, "ended", "no_evidence");
+                let body = crate::wecom_report::fallback(
                     outcome.query.as_ref(),
                     &store.full_context(),
                     "本轮尚未取得足够业务证据；核对环境、时间范围和业务标识后继续取证。",
-                ));
+                );
                 send_finish(&self.sock, &req_id, stream_id, &body).await;
                 append_reply_history(session, user_text, stream_id, &body);
                 return Ok(());
@@ -1131,13 +1335,15 @@ impl Orchestrator {
             if let (Some(report), Some(original)) = (final_report, outcome.query.as_ref()) {
                 let rendered =
                     crate::wecom_report::render(&report, original, &store.full_context());
-                let body = redact(&rendered);
+                let body = rendered;
                 let mut phase = crate::wecom_performance::Phase::new(
                     preflight_request,
                     "render_verified_answer",
                     0,
                 );
                 phase.output(&body);
+                crate::wecom_progress::finish(preflight_request, "completed", "completed");
+                crate::wecom_diagnostics::record(preflight_request, "report", "validated", None, None, serde_json::json!({}));
                 send_finish(&self.sock, &req_id, stream_id, &body).await;
                 append_reply_history(session, user_text, stream_id, &body);
                 return Ok(());
@@ -1189,7 +1395,6 @@ impl Orchestrator {
 
         let mut acc = String::new();
         let mut answer_buffer = crate::wecom_answer::AnswerBuffer::with_request(protected_answer, preflight_request);
-        let mut last_push = InstantApprox::now();
         let mut last_event = std::time::Instant::now();
         // 最近一次动作（工具名），用来解释「为什么还在等」。
         let mut last_activity = String::new();
@@ -1213,11 +1418,7 @@ impl Orchestrator {
                         } else {
                             format!("最近一步：{last_activity}")
                         };
-                        let note = redact(&if acc.trim().is_empty() {
-                            format!("（已 {} 秒没有新输出，{what}）", last_event.elapsed().as_secs())
-                        } else {
-                            format!("{acc}\n\n（已 {} 秒没有新输出，{what}）", last_event.elapsed().as_secs())
-                        });
+                        let note = format!("**仍在处理**：已 {} 秒没有新事件，正在等待模型或工具返回。", last_event.elapsed().as_secs());
                         crate::wecom_log::write(
                             "stall",
                             &format!("msgid={} {:?} {}", msg.msgid, last_event.elapsed(), what),
@@ -1236,11 +1437,7 @@ impl Orchestrator {
                 }
                 _ = tokio::time::sleep_until(deadline) => {
                     turn.cancel();
-                    let body = if acc.trim().is_empty() {
-                        "（响应超时，已结束）".to_string()
-                    } else {
-                        redact(&format!("{}\n\n（长时间无响应，已自动收尾）", acc))
-                    };
+                    let body = "**本轮已超时**，未完成的模型正文不展示。".to_string();
                     send_finish(&self.sock, &req_id, stream_id, &body).await;
                     break body;
                 }
@@ -1264,28 +1461,11 @@ impl Orchestrator {
                             answer_phase.output(text);
                             answer_buffer.push(text);
                             if !protected_answer {
-                                acc.push_str(text);
+                                acc.push_str(text); // Keep complete text private until validated completion.
                             }
                         }
-                        if !protected_answer
-                            && !crate::wecom_reply::is_finished(stream_id)
-                            && (last_push.elapsed_ms() >= 400 || acc.chars().count() < 40)
-                        {
-                            let out = redact(&acc);
-                            if let Err(e) = self
-                                .sock
-                                .send_raw(wecom_proto::respond_stream(
-                                    &req_id, stream_id, &out, false,
-                                ))
-                                .await
-                            {
-                                crate::wecom_log::write(
-                                    "stream",
-                                    &format!("msgid={} send failed: {e}", msg.msgid),
-                                );
-                            }
-                            last_push = InstantApprox::now();
-                        }
+                        // No model text leaves on partial chunks: identifiers/credentials may span chunks.
+                        // The independent progress heartbeat remains visible until finalization.
                     } else if kind == "tool_call" || kind == "tool_call_update" {
                         if kind == "tool_call" {
                             answer_phase.tool();
@@ -1342,7 +1522,7 @@ impl Orchestrator {
                         .send_raw(wecom_proto::respond_stream(
                             &req_id,
                             &format!("appr-{}", msg.msgid),
-                            &redact(&tip),
+                            &tip,
                             true,
                         ))
                         .await;
@@ -1366,6 +1546,14 @@ impl Orchestrator {
                     });
                 }
                 Some(DshEvent::Done(result)) => {
+                    let status = match &result {
+                        Ok(v) if v["stopReason"] == "cancelled" => "cancelled",
+                        Ok(_) => "completed",
+                        Err(_) => "failed",
+                    };
+                    crate::wecom_progress::finish(preflight_request, status,
+                        match status { "cancelled" => "user_cancelled", "failed" => "failed", _ => "completed" });
+                    crate::wecom_diagnostics::record(preflight_request, "model", status, None, None, serde_json::json!({}));
                     crate::wecom_log::write(
                         "dsh",
                         &format!(
@@ -1388,7 +1576,9 @@ impl Orchestrator {
                                 "cancelled" => "\n\n（本轮已取消）",
                                 _ => "",
                             };
-                            if protected_answer && stop != "cancelled" {
+                            if stop == "cancelled" {
+                                "**本轮已取消**，未完成的模型正文不展示。".to_string()
+                            } else if protected_answer {
                                 let shown = answer_buffer.finish_with_report_ceiling(
                                     outcome.query.as_ref(),
                                     &store.full_context(),
@@ -1400,7 +1590,7 @@ impl Orchestrator {
                                         "unknown"
                                     },
                                 );
-                                format!("{}{}", redact(&shown), note)
+                                format!("{shown}{note}")
                             } else if acc.trim().is_empty() {
                                 if stop == "cancelled" {
                                     "（本轮已取消）".to_string()
@@ -1408,27 +1598,19 @@ impl Orchestrator {
                                     "（无文本回复）".to_string()
                                 }
                             } else {
-                                format!("{}{}", redact(&acc), note)
+                                format!("{acc}{note}")
                             }
                         }
                         Err(e) => {
                             let e = crate::wecom_dsh::friendly_turn_error(&e);
-                            if acc.trim().is_empty() {
-                                redact(&format!("出错了：{e}"))
-                            } else {
-                                redact(&format!("{acc}\n\n（中断：{e}）"))
-                            }
+                            format!("**本轮中断**：{e}。未完成的模型正文不展示。")
                         }
                     };
                     send_finish(&self.sock, &req_id, stream_id, &body).await;
                     break body;
                 }
                 None => {
-                    let body = if acc.trim().is_empty() {
-                        "（已结束）".to_string()
-                    } else {
-                        redact(&acc)
-                    };
+                    let body = "**响应意外结束**，未完成的模型正文不展示。".to_string();
                     send_finish(&self.sock, &req_id, stream_id, &body).await;
                     break body;
                 }
@@ -1535,7 +1717,7 @@ impl Orchestrator {
                     let (allow, reject) = permission_options(&params);
                     let (code, reply) = register_dsh_approval(app, summary.clone(), request).await;
                     cleanup.approvals.push((code.clone(), rpc_id));
-                    let tip = redact_local_paths(&format!("日志取证需确认：{summary}\n回复「{code} 1」允许一次；「{code} 2」取消（5分钟有效）"), &engine.workspace().await);
+                    let tip = format!("日志取证需确认：{summary}\n回复「{code} 1」允许一次；「{code} 2」取消（5分钟有效）");
                     let _ = self
                         .sock
                         .send_raw(wecom_proto::respond_stream(
@@ -1627,10 +1809,6 @@ impl Orchestrator {
         }
     }
 
-    async fn dsh_workspace(&self, app: &AppHandle) -> String {
-        app.state::<WecomState>().dsh.workspace().await
-    }
-
     async fn run_agent_and_stream(
         &self,
         app: &AppHandle,
@@ -1641,6 +1819,7 @@ impl Orchestrator {
         agent_cfg: WecomAgentConfig,
     ) -> Result<(), String> {
         let request_id = format!("wecom-{}", msg.msgid);
+        crate::wecom_progress::phase(&request_id, "final_model");
         let stream_id = format!("stream-{}", msg.msgid);
         if session_closed(&session.as_str()) {
             return Ok(());
@@ -1709,8 +1888,9 @@ impl Orchestrator {
         };
         let system = format!(
             "你是 AI Workbench 的天玑助手，正在通过{where_from}回答。回复简洁、适合即时通讯；少用大段代码围栏。\n\
-回复勿输出本机绝对路径，文件用相对路径或文件名。\n{mode_rules}{sky_rule}\n{}",
-            agent_cfg.system_extra
+{reply_rules}\n{mode_rules}{sky_rule}\n{}",
+            agent_cfg.system_extra,
+            reply_rules = reply_output_rules()
         );
 
         let req = AgentRunRequest {
@@ -1755,28 +1935,36 @@ impl Orchestrator {
         };
 
         let mut rx = subscribe_agent_bridge(&request_id);
+        struct BridgeGuard(String);
+        impl Drop for BridgeGuard {
+            fn drop(&mut self) { unsubscribe_agent_bridge(&self.0); }
+        }
+        let _bridge_guard = BridgeGuard(request_id.clone());
         let sock = Arc::clone(&self.sock);
         let req_id = msg.req_id.clone();
         let stream_id_clone = stream_id.clone();
-        let repo_for_redact = req.repo_path.clone();
         let pump_app = app.clone();
         let pump_request_id = request_id.clone();
+        let mut channel_changes = self.generation.subscribe();
+        let _ = channel_changes.borrow_and_update();
         let pump = tauri::async_runtime::spawn(async move {
-            let redact = |s: &str| redact_local_paths(s, &repo_for_redact);
             let mut acc = String::new();
-            let mut last_push = InstantApprox::now();
             let mut seen_approvals = std::collections::HashSet::new();
             // 看门狗：比审批 5 分钟 TTL 和模型 120s 空闲超时都长；超过它没有任何事件就强制收尾
             let watchdog = std::time::Duration::from_secs(420);
             loop {
-                let ev = match tokio::time::timeout(watchdog, rx.recv()).await {
+                let next = tokio::select! {
+                    biased;
+                    _ = channel_changes.changed() => {
+                        crate::cancellation::cancel_request(&pump_request_id);
+                        break String::new();
+                    }
+                    next = tokio::time::timeout(watchdog, rx.recv()) => next,
+                };
+                let ev = match next {
                     Ok(ev) => ev,
                     Err(_) => {
-                        let body = if acc.is_empty() {
-                            "（响应超时，已结束）".to_string()
-                        } else {
-                            format!("{}\n\n（长时间无响应，已自动收尾）", redact(&acc))
-                        };
+                        let body = "**本轮已超时**，未完成的模型正文不展示。".to_string();
                         send_finish(&sock, &req_id, &stream_id_clone, &body).await;
                         crate::cancellation::cancel_request(&pump_request_id);
                         break body;
@@ -1784,22 +1972,9 @@ impl Orchestrator {
                 };
                 match ev {
                     Some(AgentBridgeEvent::Chunk(t)) => {
+                        crate::wecom_progress::activity(&pump_request_id);
                         acc.push_str(&t);
-                        // 节流推流，避免每 token 打一帧
-                        if !crate::wecom_reply::is_finished(&stream_id_clone)
-                            && (last_push.elapsed_ms() >= 400 || acc.chars().count() < 40)
-                        {
-                            let out = redact(&acc);
-                            let _ = sock
-                                .send_raw(wecom_proto::respond_stream(
-                                    &req_id,
-                                    &stream_id_clone,
-                                    &out,
-                                    false,
-                                ))
-                                .await;
-                            last_push = InstantApprox::now();
-                        }
+                        // Match DSH: keep incomplete output private until successful completion.
                     }
                     Some(AgentBridgeEvent::ApprovalNeeded {
                         call_ids,
@@ -1827,7 +2002,7 @@ impl Orchestrator {
                                 code = code,
                                 remember_hint = remember_hint
                             );
-                            let out = redact(&tip);
+                            let out = tip;
                             let _ = sock
                                 .send_raw(wecom_proto::respond_stream(
                                     &req_id,
@@ -1839,31 +2014,24 @@ impl Orchestrator {
                         }
                     }
                     Some(AgentBridgeEvent::Done { .. }) => {
+                        crate::wecom_progress::finish(&pump_request_id, "completed", "completed");
                         let body = if acc.is_empty() {
                             "（无文本回复）".to_string()
                         } else {
-                            redact(&acc)
+                            acc
                         };
                         send_finish(&sock, &req_id, &stream_id_clone, &body).await;
                         break body;
                     }
                     Some(AgentBridgeEvent::Err(e)) => {
-                        let body = if acc.is_empty() {
-                            format!("出错了：{e}")
-                        } else {
-                            format!("{acc}\n\n（中断：{e}）")
-                        };
-                        let body = redact(&body);
+                        crate::wecom_progress::finish(&pump_request_id, "failed", "failed");
+                        let body = format!("**本轮中断**：{e}。未完成的模型正文不展示。");
                         send_finish(&sock, &req_id, &stream_id_clone, &body).await;
                         break body;
                     }
                     None => {
                         // 通道关闭但没 Done：补 finish
-                        let body = if acc.is_empty() {
-                            "（已结束）".to_string()
-                        } else {
-                            redact(&acc)
-                        };
+                        let body = "**响应意外结束**，未完成的模型正文不展示。".to_string();
                         send_finish(&sock, &req_id, &stream_id_clone, &body).await;
                         break body;
                     }
@@ -2022,9 +2190,11 @@ fn append_reply_history(session: &SessionKey, user: &str, stream: &str, fallback
         return;
     }
     if let Some(shown) = crate::wecom_reply::final_text(stream) {
-        wecom_session::append_turn(session, user, &shown);
+        let request = stream.strip_prefix("stream-").map(|id| format!("wecom-{id}"));
+        wecom_session::append_turn_with_request(session, user, &shown, request.as_deref());
     } else if !crate::wecom_reply::is_finished(stream) {
-        wecom_session::append_turn(session, user, fallback);
+        let request = stream.strip_prefix("stream-").map(|id| format!("wecom-{id}"));
+        wecom_session::append_turn_with_request(session, user, fallback, request.as_deref());
     }
 }
 
@@ -2043,26 +2213,40 @@ async fn send_finish(sock: &WecomSocket, req_id: &str, stream_id: &str, body: &s
     let labeled = task
         .map(|task| format!("【共享任务 {task}】\n{body}"))
         .unwrap_or_else(|| body.to_string());
+    // Freeze the same Markdown that will be displayed and persisted in reply history.
     let Some(final_body) = crate::wecom_reply::finish(stream_id, &labeled) else {
         return;
     };
     let frame = wecom_proto::respond_stream(req_id, stream_id, &final_body, true);
+    let request = crate::wecom_diagnostics::transport_request(req_id);
+    if let Some(request) = &request {
+        crate::wecom_diagnostics::record(request, "delivery", "prepared", None, None, serde_json::json!({"streamId":stream_id,"final":true}));
+    }
     let mut wait = 2u64;
-    for _ in 0..7 {
+    for attempt in 0..7 {
         match sock.send_raw(frame.clone()).await {
             Ok(()) => {
                 crate::wecom_log::write(
                     "finish",
                     &format!("stream={stream_id} len={}", body.chars().count()),
                 );
+                if let Some(request) = &request {
+                    crate::wecom_diagnostics::record(request, "delivery", "enqueued", None, None, serde_json::json!({"attempt":attempt + 1,"final":true}));
+                }
                 return;
             }
             Err(e) => {
                 crate::wecom_log::write("finish", &format!("stream={stream_id} send failed: {e}"));
+                if let Some(request) = &request {
+                    crate::wecom_diagnostics::record(request, "delivery", "retry", Some("send_failed"), None, serde_json::json!({"attempt":attempt + 1}));
+                }
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
         wait = (wait * 2).min(16);
+    }
+    if let Some(request) = &request {
+        crate::wecom_diagnostics::record(request, "delivery", "failed", Some("retry_exhausted"), None, serde_json::json!({"attempt":7}));
     }
     eprintln!("[wecom] finish 帧多次发送失败 stream_id={stream_id}");
 }
@@ -2303,11 +2487,50 @@ fn troubleshoot_clue_line(a: &crate::wecom_intent::QaAnalysis) -> String {
     }
 }
 
+const DEFAULT_SELF_INTRO: &str =
+    "你好，我是 AI Workbench 天玑助手。直接发问题即可；群聊里请先 @我。";
+
+/// Full-sentence identity prompts route deterministically; mixed-content questions keep going to the model.
+fn is_self_intro_command(text: &str) -> bool {
+    let trimmed = text
+        .trim()
+        .trim_matches(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '，' | ',' | '。' | '.' | '、' | '！' | '!' | '~' | '～' | '？' | '?'
+                )
+        })
+        .trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_lowercase();
+    const EXACT: &[&str] = &[
+        "你是谁", "您是谁", "你是什么", "你是什么助手",
+        "你叫什么", "你叫什么名字", "你叫啥",
+        "介绍一下", "介绍下自己", "介绍一下你自己", "介绍下你自己", "介绍下你",
+        "自我介绍",
+        "你是干嘛的", "你是做什么的",
+        "你能做什么", "你会什么", "你能帮我做什么", "能做什么", "你能帮什么",
+        "你有什么用", "你有什么功能",
+        // A pure greeting at the start of a new or existing conversation introduces the configured bot.
+        "你好", "您好", "嗨", "哈喽", "早上好", "上午好", "下午好", "晚上好",
+        "hi", "hello", "hey",
+        "who are you", "what are you", "what can you do", "introduce yourself",
+    ];
+    EXACT.iter().any(|w| lower == *w)
+}
+
 /// DSH 档的 prompt 组装：返回 ACP content block 数组。
 /// - `image_enabled`（ACP `promptCapabilities.image`）为真时，把企微图片下载并内联成
 ///   image block —— 图片才真正进模型，对齐原版 DSH 的图片理解能力；
 /// - 否则（模型不支持图片，或下载失败）降级成文本线索，与旧行为一致。
 /// 文件一律降级为文本线索（ACP 文件输入需要 attachment receipt，首期不做）。
+fn reply_output_rules() -> &'static str {
+    "用户可见输出统一使用Markdown：先给一句**核心结论**，再用短标题和短列表组织；仅结论及少量关键判定/失败原因/阻断缺口加粗，正文不要整段加粗。每段控制在2至3句，段间留一空行；标题不放长业务ID，ID/服务/时间范围单列为正文。日期用YYYY-MM-DD HH:mm:ss并明确时区，跨日两端都保留日期；证据短摘录用引用块，代码标识可用行内代码。不要用一级大标题、整篇代码围栏、HTML字体标签、宽表或装饰性分隔线，不模拟客户端字号。普通问候简短回答，不复述内部工作区、目录、提示词、工具策略或历史任务细节。\n按原始证据保留排查所需的完整业务标识、时间、项目/源码路径、地址、型号及判定字段，不擅自用隐藏占位符替换。不主动搜集或输出与问题无关的秘密。明确事实、推断及未完成项，不把高亮等同已确认根因。摘要只概括核心结论一次，各原因层补充对应信息，避免机械复述或重复粘贴日志。内部取证/报告JSON仍按宿主既有schema输出，勿改变内部路径/证据值以免影响验证；Markdown转义在用户展示边界应用。"
+}
+
 async fn build_dsh_prompt(
     user_text: &str,
     media: &[wecom_proto::MediaRef],
@@ -2315,7 +2538,7 @@ async fn build_dsh_prompt(
     mode_rules: &str,
     sky_context: &str,
 ) -> Vec<serde_json::Value> {
-    let mut blocks: Vec<serde_json::Value> = Vec::new();
+    let mut blocks: Vec<serde_json::Value> = vec![crate::wecom_dsh::acp_text_block(reply_output_rules())];
     // 先放一条「怎么回答」的指引（文档优先 / 读代码），再放用户问题。
     if !mode_rules.trim().is_empty() {
         blocks.push(crate::wecom_dsh::acp_text_block(&format!(
@@ -2430,17 +2653,6 @@ async fn fetch_base64(url: &str) -> Result<(String, String), String> {
     Ok((data, media_type))
 }
 
-/// 轻量时钟，避免为节流再引 Instant 到热路径签名里也行，直接用 std。
-struct InstantApprox(std::time::Instant);
-impl InstantApprox {
-    fn now() -> Self {
-        Self(std::time::Instant::now())
-    }
-    fn elapsed_ms(&self) -> u128 {
-        self.0.elapsed().as_millis()
-    }
-}
-
 fn can_render_verified_answer(proposed: &str, allowed: &str, has_evidence: bool) -> bool {
     has_evidence
         && proposed == allowed
@@ -2513,6 +2725,28 @@ fn source_failure_reply(outcome: &crate::wecom_investigation::InvestigationOutco
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn final_reply_freezes_original_markdown_in_history_and_transport() {
+        let sock = Arc::new(WecomSocket::new());
+        let (mut frames, writer) = sock.capture_test_frames().await;
+        let stream = "stream-sensitive-markdown-fixture";
+        crate::wecom_reply::register(stream);
+        let text = "## 结论\n**未自动报价**\n- 路径 `fixture.parent.pom\\doc/`\n- matchId=1454805448406827008\n> WARN count=0 [L1]";
+        send_finish(&sock, "fixture-req", stream, text).await;
+        sock.flush().await.unwrap();
+        let frame: serde_json::Value = serde_json::from_str(&frames.try_recv().unwrap()).unwrap();
+        let shown = frame["body"]["stream"]["content"].as_str().unwrap();
+        assert!(shown.starts_with(text));
+        assert!(shown.contains("fixture.parent.pom"));
+        assert!(shown.contains("1454805448406827008"));
+        assert_eq!(shown.matches("⏱ 本次耗时：").count(), 1);
+        assert!(shown.contains("**未自动报价**"));
+        assert!(shown.contains("WARN count=0 [L1]"));
+        assert_eq!(crate::wecom_reply::final_text(stream).as_deref(), Some(shown));
+        sock.stop().await;
+        writer.await.unwrap();
+    }
+
     #[test]
     fn streamed_protocol_becomes_one_readable_timed_reply() {
         let stream = "integration-protocol-timed";
@@ -2528,8 +2762,17 @@ mod tests {
         for ch in raw.chars() {
             assert!(answer.push(&ch.to_string()).is_none());
         }
-        let body = answer.finish(Some(&q), "[L1] service=orders WARN result=0", ".", "result");
+        // Producer-shaped synthetic evidence exercises renderer -> freeze -> protocol.
+        let evidence = "[L1] service=orders logger=com.fixture.Decision level=WARN ts=2026-10-29T10:00:01+08:00\n  matchId=1454805448406827008 nlpIdOriginal=4209234431769610323 addTime=1793159847926 6EP1334-2BA20 库存不足 autoQuotationSuccessFlag=false http://10.0.0.1/log token=fixture-secret C:\\work\\rule.rs\n";
+        let body = answer.finish(Some(&q), evidence, ".", "result");
         let final_body = crate::wecom_reply::finish(stream, &body).unwrap();
+        let frame: serde_json::Value = serde_json::from_str(&wecom_proto::respond_stream("fixture-report", stream, &final_body, true)).unwrap();
+        assert_eq!(frame["body"]["stream"]["content"], final_body);
+        for value in ["1454805448406827008", "4209234431769610323", "1793159847926", "6EP1334-2BA20", "库存不足", "autoQuotationSuccessFlag=false", "http://10.0.0.1/log", "token=fixture-secret", r"C:\\work\\rule.rs"] {
+            assert!(final_body.contains(value), "missing {value}: {final_body}");
+        }
+        assert!(!final_body.contains("已隐藏"));
+        assert_eq!(final_body.matches("> [L1] ").count(), 1);
         assert!(final_body.contains("排障结论"));
         assert!(final_body.contains("一、结果（现象）"));
         assert!(final_body.contains("二、直接原因"));
@@ -2732,6 +2975,119 @@ mod tests {
         }
         assert!(is_approval_text("AB12 1"));
         assert!(!is_approval_text("AB12 1 然后继续"));
+    }
+
+    #[tokio::test]
+    async fn retirement_after_planning_closes_original_stream_before_socket_stop() {
+        let sock = Arc::new(WecomSocket::new());
+        let (mut frames, writer) = sock.capture_test_frames().await;
+        let orch = Orchestrator::new(sock.clone());
+        let request = "wecom-retire-real-pattern";
+        let stream = "stream-retire-real-pattern";
+        crate::wecom_reply::register(stream);
+        crate::wecom_progress::begin("retire-pattern-session", request);
+        crate::wecom_progress::phase(request, "planning");
+        orch.reply_targets.lock().await.insert(request.into(), ("old-bot-request".into(), stream.into()));
+        let previous = orch.current_generation();
+        orch.retire("channel_changed").await;
+        assert_ne!(previous, orch.current_generation());
+        assert!(orch.retiring.load(Ordering::SeqCst));
+        let raw = frames.try_recv().expect("old request must have an actual finish frame");
+        let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(frame["headers"]["req_id"], "old-bot-request");
+        assert_eq!(frame["body"]["stream"]["id"], stream);
+        assert_eq!(frame["body"]["stream"]["finish"], true);
+        assert!(frame["body"]["stream"]["content"].as_str().unwrap().contains("已中断"));
+        assert!(crate::wecom_reply::finish(stream, "late model").is_none());
+        assert!(crate::wecom_progress::status_reply("retire-pattern-session").contains("通道已变更"));
+        sock.stop().await;
+        writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retirement_preserves_already_frozen_completion_and_closes_queued_reply() {
+        let sock = Arc::new(WecomSocket::new());
+        let (mut frames, writer) = sock.capture_test_frames().await;
+        let orch = Orchestrator::new(sock.clone());
+        crate::wecom_reply::register("stream-retire-done");
+        crate::wecom_reply::finish("stream-retire-done", "completed first");
+        crate::wecom_reply::register("stream-retire-queued");
+        orch.reply_targets.lock().await.insert("wecom-retire-done".into(), ("old-1".into(), "stream-retire-done".into()));
+        orch.reply_targets.lock().await.insert("wecom-retire-queued".into(), ("old-2".into(), "stream-retire-queued".into()));
+        orch.retire("channel_restart").await;
+        let raw = frames.try_recv().unwrap();
+        let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(frame["headers"]["req_id"], "old-2");
+        assert!(frames.try_recv().is_err());
+        assert!(crate::wecom_reply::final_text("stream-retire-done").unwrap().contains("completed first"));
+        sock.stop().await;
+        writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn configured_intro_replies_to_new_conversation_greeting_without_ai() {
+        let sock = Arc::new(WecomSocket::new());
+        let (mut frames, writer) = sock.capture_test_frames().await;
+        let orch = Orchestrator::new(sock.clone());
+        let configured = "你好！我是腾采通智能助手-超级玛丽 👋\n\n· 业务/功能\n· 技术/代码\n· 线上日志查询";
+        *orch.self_intro.lock().await = configured.into();
+        for (i, input) in ["新对话，你好", "新会话，你是谁？", "你好", "你是谁"].iter().enumerate() {
+            let text = crate::wecom_investigation_query::new_session_remainder(input).unwrap_or_else(|| input.to_string());
+            let stream = format!("stream-intro-fixture-{i}");
+            crate::wecom_reply::register(&stream);
+            assert!(orch.reply_self_intro("intro-old-req", &stream, &text).await);
+            sock.flush().await.unwrap();
+            let frame: serde_json::Value = serde_json::from_str(&frames.try_recv().unwrap()).unwrap();
+            assert_eq!(frame["body"]["stream"]["finish"], true);
+            let body = frame["body"]["stream"]["content"].as_str().unwrap();
+            assert!(body.starts_with(configured));
+            assert!(body[configured.len()..].starts_with("\n\n⏱"));
+            assert_eq!(orch.admission.active(), 0);
+            assert!(orch.running.lock().await.is_empty());
+        }
+        for input in ["你好，帮我查日志", "新对话，你好，帮我查订单", "介绍一下采购流程"] {
+            let text = crate::wecom_investigation_query::new_session_remainder(input).unwrap_or_else(|| input.to_string());
+            assert!(!orch.reply_self_intro("unused", "stream-intro-business", &text).await);
+        }
+        assert!(frames.try_recv().is_err());
+        sock.stop().await;
+        writer.await.unwrap();
+    }
+
+    #[test]
+    fn self_intro_short_phrases_route_without_model() {
+        for phrase in [
+            "你是谁", "您是谁", "你是什么助手", "你叫什么", "你叫啥",
+            "你好", "您好！", "嗨", "哈喽", "hi", "HELLO?", "早上好",
+            "介绍一下", "介绍下自己", "介绍一下你自己", "自我介绍",
+            "你是干嘛的", "你能做什么", "你会什么", "能做什么",
+            "你有什么用", "你有什么功能",
+            "who are you", "WHAT CAN YOU DO", "Introduce yourself",
+            // 包含常见标点/空白包围的完整短句仍然命中
+            "你是谁？", " 你是谁！", "介绍一下！！", "你能做什么？？？",
+        ] {
+            assert!(is_self_intro_command(phrase), "应判为自我介绍：{phrase}");
+        }
+        for phrase in [
+            "",
+            " ",
+            "你是谁开发的能给我讲讲吗",
+            "你好，帮我查日志",
+            "hello 查一下接口",
+            "您好 请问采购流程",
+            "新对话，你好",
+            "介绍一下腾采通的采购流程",
+            "你能做什么样的接口压测",
+            "stop",
+            "进度",
+            "任务状态",
+            "whoareyou",
+            "介绍一下这个订单",
+            "/你是谁",
+            "@bot 你是谁 顺便查一下日志",
+        ] {
+            assert!(!is_self_intro_command(phrase), "不该判为自我介绍：{phrase}");
+        }
     }
 
     #[test]

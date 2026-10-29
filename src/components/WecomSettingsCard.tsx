@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Eye, EyeOff } from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
+import WecomRequestDiagnostics from "./WecomRequestDiagnostics";
 import { useGlobalStore } from "../core/store";
 import type { AppSettings, DshModelCatalog } from "../core/types";
 import {
@@ -13,7 +14,7 @@ import {
   fetchDshModels,
   fetchWecomLog,
   fetchWecomPairings,
-  fetchWecomSessionLog,
+  fetchWecomSessionLogPage,
   fetchWecomStatus,
   normalizeWecomMaxJobs,
   restartWecomChannel,
@@ -22,7 +23,7 @@ import {
   syncDshProfile,
   testWecomDocgen,
   type WecomPairing,
-  type WecomSessionLogEntry,
+  type WecomSessionLogPage,
   type WecomStatus,
 } from "../lib/wecomChannel";
 
@@ -195,12 +196,28 @@ export default function WecomSettingsCard() {
   // 排障折叠区：通道日志尾 + 最近会话
   const [logText, setLogText] = useState("");
   const [logBusy, setLogBusy] = useState(false);
-  const [sessionLog, setSessionLog] = useState<WecomSessionLogEntry[]>([]);
+  const [sessionPage, setSessionPage] = useState<WecomSessionLogPage | null>(null);
+  const sessionLog = sessionPage?.entries ?? [];
+  const [sessionError, setSessionError] = useState(false);
   const [sessionBusy, setSessionBusy] = useState(false);
+  const [diagnosticSelection, setDiagnosticSelection] = useState<{ requestId: string; revision: number } | null>(null);
   /** 小卡片 Tab：一页只显示一组设置，别把六七块叠成一条长滚动 */
   const [section, setSection] = useState<WecomSection>("channel");
   /** 诊断日志只在第一次切过去时拉一次（空日志也不会反复请求） */
   const diagLoaded = useRef(false);
+  const mounted = useRef(false);
+  const refreshGeneration = useRef(0);
+  const logGeneration = useRef(0);
+  const sessionGeneration = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      refreshGeneration.current += 1;
+      logGeneration.current += 1;
+      sessionGeneration.current += 1;
+    };
+  }, []);
 
   const botId = useFieldDraft(settings.wecomBotId ?? "");
   const corpId = useFieldDraft(settings.wecomCorpId ?? "");
@@ -209,6 +226,7 @@ export default function WecomSettingsCard() {
   const allowGroups = useFieldDraft((settings.wecomAllowGroups ?? []).join(", "));
   const repoPath = useFieldDraft(settings.wecomRepoPath ?? "");
   const docDir = useFieldDraft(settings.wecomDocDir ?? "");
+  const selfIntro = useFieldDraft(settings.wecomSelfIntro ?? "");
   const skywalkingAddr = useFieldDraft(settings.wecomSkywalkingAddr ?? "");
   const skywalkingHeader = useFieldDraft(settings.wecomSkywalkingHeader ?? "");
   const releaseBranch = useFieldDraft(settings.wecomReleaseBranch ?? "");
@@ -216,12 +234,14 @@ export default function WecomSettingsCard() {
   const [webhookDraft, setWebhookDraft] = useState("");
 
   const refresh = useCallback(async () => {
+    const version = ++refreshGeneration.current;
     try {
       const [st, pairs] = await Promise.all([fetchWecomStatus(), fetchWecomPairings()]);
+      if (!mounted.current || version !== refreshGeneration.current) return;
       setStatus(st);
       setPairings(pairs);
     } catch (e) {
-      setMsg(String(e));
+      if (mounted.current && version === refreshGeneration.current) setMsg(String(e));
     }
   }, []);
 
@@ -304,24 +324,29 @@ export default function WecomSettingsCard() {
   const dshReady = dshState === "ready";
 
   const loadLog = useCallback(async () => {
+    const version = ++logGeneration.current;
     setLogBusy(true);
     try {
-      setLogText(await fetchWecomLog(200));
+      const text = await fetchWecomLog(200);
+      if (mounted.current && version === logGeneration.current) setLogText(text);
     } catch (e) {
-      setLogText(String(e));
+      if (mounted.current && version === logGeneration.current) setLogText(String(e));
     } finally {
-      setLogBusy(false);
+      if (mounted.current && version === logGeneration.current) setLogBusy(false);
     }
   }, []);
 
   const loadSessionLog = useCallback(async () => {
+    const version = ++sessionGeneration.current;
     setSessionBusy(true);
+    setSessionError(false);
     try {
-      setSessionLog(await fetchWecomSessionLog(30));
-    } catch (e) {
-      setMsg(String(e));
+      const page = await fetchWecomSessionLogPage(30);
+      if (mounted.current && version === sessionGeneration.current) setSessionPage(page);
+    } catch {
+      if (mounted.current && version === sessionGeneration.current) setSessionError(true);
     } finally {
-      setSessionBusy(false);
+      if (mounted.current && version === sessionGeneration.current) setSessionBusy(false);
     }
   }, []);
 
@@ -950,6 +975,33 @@ export default function WecomSettingsCard() {
           />
 
           <Row
+            wide
+            label={t("wecom.selfIntro")}
+            control={
+              <textarea
+                className="input-field"
+                rows={6}
+                value={selfIntro.value}
+                placeholder={t("wecom.selfIntroPlaceholder")}
+                onFocus={() => {
+                  selfIntro.focused.current = true;
+                }}
+                onChange={(e) => selfIntro.setValue(Array.from(e.target.value).slice(0, 2000).join(""))}
+                onBlur={() => {
+                  selfIntro.focused.current = false;
+                  const v = selfIntro.value.trim();
+                  if (v !== (settings.wecomSelfIntro ?? "").trim()) void push({ wecomSelfIntro: v });
+                }}
+              />
+            }
+            hint={
+              <p className="setting-hint">
+                {t("wecom.selfIntroHint", { count: Array.from(selfIntro.value).length })}
+              </p>
+            }
+          />
+
+          <Row
             label={t("wecom.docDir")}
             control={
               <input
@@ -1481,6 +1533,7 @@ export default function WecomSettingsCard() {
           title={t("wecom.groupDiag")}
           aside={<span className="wecom-diag-hint">{t("wecom.groupDiagHint")}</span>}
         />
+        <WecomRequestDiagnostics selection={diagnosticSelection} />
         <section className="wecom-diag-block">
           <div className="wecom-diag-head">
             <span>{t("wecom.diag.performance")}</span>
@@ -1554,9 +1607,10 @@ export default function WecomSettingsCard() {
                     </div>
                   ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
                   <p className="setting-hint">{t("wecom.diag.validationFailures", {
-                    countText: Array.isArray(performanceSummary.validationFailures)
-                      ? reportedCount(performanceSummary.validationFailures.length)
-                      : t("wecom.diag.notReported"),
+                    countText: typeof performanceSummary.validationFailureCount === "number"
+                      && Number.isFinite(performanceSummary.validationFailureCount) && performanceSummary.validationFailureCount >= 0
+                      ? reportedCount(performanceSummary.validationFailureCount)
+                      : t("wecom.diag.validationNotReported"),
                   })}</p>
                   {performanceSummary.validationFailures?.map((failure, index) => (
                     <p className="setting-hint" key={`${index}-${failure}`}>{failure}</p>
@@ -1600,8 +1654,17 @@ export default function WecomSettingsCard() {
               </button>
             </div>
             <p className="setting-hint">{t("wecom.diag.sessionHint")}</p>
+            {sessionError ? <p className="setting-hint" role="alert">{t("wecom.diag.sessionReadFailed")}</p> : null}
+            {sessionPage ? <>
+              <p className="setting-hint">{t("wecom.diag.sessionCoverage", { count: sessionPage.entries.length, bytes: sessionPage.scannedBytes })}</p>
+              {sessionPage.partial ? <p className="setting-hint" role="status">{t("wecom.diag.sessionPartial")}</p> : null}
+              {sessionPage.readErrors.length > 0 ? <details className="wecom-hint">
+                <summary>{t("wecom.diag.sessionReadErrors", { count: sessionPage.readErrors.length })}</summary>
+                {sessionPage.readErrors.map((code, index) => <p className="setting-hint" key={`${index}-${code}`}><code>{code}</code></p>)}
+              </details> : null}
+            </> : null}
             {sessionLog.length === 0 ? (
-              <p className="setting-hint">{sessionBusy ? "…" : t("wecom.diag.empty")}</p>
+              !sessionError ? <p className="setting-hint">{sessionBusy ? "…" : t("wecom.diag.empty")}</p> : null
             ) : (
               <ul className="wecom-diag-sessions">
                 {sessionLog.map((entry, i) => (
@@ -1614,6 +1677,12 @@ export default function WecomSettingsCard() {
                       </summary>
                       <p className="wecom-session-full">{entry.assistant}</p>
                     </details>
+                    {entry.requestId ? (
+                      <button type="button" className="btn btn-secondary btn-small"
+                        onClick={() => setDiagnosticSelection((previous) => ({ requestId: entry.requestId!, revision: (previous?.revision ?? 0) + 1 }))}>
+                        {t("wecom.diag.requests.select")} <code>{entry.requestId}</code>
+                      </button>
+                    ) : null}
                   </li>
                 ))}
               </ul>

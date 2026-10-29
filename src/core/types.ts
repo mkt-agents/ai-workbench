@@ -216,6 +216,8 @@ export interface AppSettings {
   /** DPAPI enc:v1:… 密文 */
   wecomCorpSecret?: string;
   wecomBotDisplayName?: string;
+  /** Full-sentence identity answer; empty uses the built-in default. */
+  wecomSelfIntro?: string;
   /** pairing | allowlist | open | disabled */
   wecomDmPolicy?: string;
   /** allowlist | open | disabled */

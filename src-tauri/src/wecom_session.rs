@@ -149,6 +149,15 @@ pub fn session_history(key: &SessionKey) -> Vec<ChatTurn> {
 }
 
 pub fn append_turn(key: &SessionKey, user: &str, assistant: &str) {
+    append_turn_with_request(key, user, assistant, None);
+}
+
+pub fn append_turn_with_request(
+    key: &SessionKey,
+    user: &str,
+    assistant: &str,
+    request_id: Option<&str>,
+) {
     let k = key.as_str();
     let dir = sidecar_dir();
     // Serialize hydration, append and clear including sidecar IO to avoid resurrecting old turns.
@@ -158,7 +167,7 @@ pub fn append_turn(key: &SessionKey, user: &str, assistant: &str) {
         s.append(&k, user, assistant);
     }
     if let Some(dir) = dir {
-        if let Err(e) = append_sidecar_at(&dir, &k, user, assistant) {
+        if let Err(e) = append_sidecar_with_request_at(&dir, &k, user, assistant, request_id) {
             eprintln!("[wecom] session sidecar: {e}");
         }
     }
@@ -192,25 +201,65 @@ fn dirs_data() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("com.ai-workbench.app"))
 }
 
+const SIDECAR_READ_BYTES: u64 = 256 * 1024;
+const RECENT_READ_BYTES: u64 = 8 * 1024 * 1024;
+const RECENT_MAX_FILES: usize = 512;
+
+// Read a suffix only; discard partial boundary records rather than parsing fragments.
+fn read_suffix(path: &Path, budget: u64) -> Result<(String, u64, bool), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    let start = len.saturating_sub(budget);
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(budget)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let scanned = bytes.len() as u64;
+    let mut partial = start > 0;
+    let first = if start > 0 {
+        bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(bytes.len(), |p| p + 1)
+    } else {
+        0
+    };
+    let last = if bytes.last() == Some(&b'\n') {
+        bytes.len()
+    } else {
+        partial = !bytes.is_empty() || partial;
+        bytes
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(first, |p| p + 1)
+    };
+    let text = std::str::from_utf8(&bytes[first..last.max(first)])
+        .map_err(|_| "invalid UTF-8 in session suffix".to_string())?
+        .to_string();
+    Ok((text, scanned, partial))
+}
+
 /// Each JSONL record contains a user/assistant pair. Paths are injectable for isolated tests.
 fn load_sidecar_at(dir: Option<&Path>, key: &str) -> Vec<ChatTurn> {
     let Some(dir) = dir else {
         return Vec::new();
     };
     let path = dir.join(format!("{}.jsonl", sanitize_key(key)));
-    let data = match std::fs::read_to_string(&path) {
-        Ok(d) => d,
+    let data = match read_suffix(&path, SIDECAR_READ_BYTES) {
+        Ok((data, _, _)) => data,
         Err(_) => return Vec::new(),
     };
     let mut turns = Vec::new();
-    for line in data.lines().filter(|l| !l.trim().is_empty()) {
+    for line in data.lines().rev().filter(|l| !l.trim().is_empty()) {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => continue,
         };
         if v.get("cleared").and_then(|v| v.as_bool()) == Some(true) {
-            turns.clear();
-            continue;
+            break;
         }
         let (u, a) = (
             v.get("user").and_then(|x| x.as_str()),
@@ -218,18 +267,19 @@ fn load_sidecar_at(dir: Option<&Path>, key: &str) -> Vec<ChatTurn> {
         );
         if let (Some(u), Some(a)) = (u, a) {
             turns.push(ChatTurn {
-                role: "user".into(),
-                content: u.to_string(),
-            });
-            turns.push(ChatTurn {
                 role: "assistant".into(),
                 content: a.to_string(),
             });
+            turns.push(ChatTurn {
+                role: "user".into(),
+                content: u.to_string(),
+            });
+            if turns.len() >= MAX_TURNS {
+                break;
+            }
         }
     }
-    while turns.len() > MAX_TURNS {
-        turns.remove(0);
-    }
+    turns.reverse();
     turns
 }
 
@@ -241,15 +291,51 @@ pub struct SessionLogEntry {
     pub ts: String,
     pub user: String,
     pub assistant: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentEntriesPage {
+    pub entries: Vec<SessionLogEntry>,
+    pub partial: bool,
+    pub read_errors: Vec<String>,
+    pub scanned_bytes: u64,
 }
 
 /// 读最近 `limit` 条会话旁证，按时间倒序。
 /// `key` 传 `None` 汇总所有会话文件；传会话键（`wecom:dm:u1`）只读该会话。
 pub fn recent_entries(key: Option<&str>, limit: usize) -> Vec<SessionLogEntry> {
-    let dir = match sidecar_dir() {
-        Some(d) => d,
-        None => return Vec::new(),
-    };
+    recent_entries_page(key, limit)
+        .map(|p| p.entries)
+        .unwrap_or_default()
+}
+
+#[allow(dead_code)] // Compatibility adapter; structured consumers use recent_entries_page.
+pub fn recent_entries_checked(
+    key: Option<&str>,
+    limit: usize,
+) -> Result<Vec<SessionLogEntry>, String> {
+    let page = recent_entries_page(key, limit)?;
+    if !page.read_errors.is_empty() {
+        return Err(page.read_errors.join("; "));
+    }
+    Ok(page.entries)
+}
+
+pub fn recent_entries_page(key: Option<&str>, limit: usize) -> Result<RecentEntriesPage, String> {
+    let dir = sidecar_dir().ok_or_else(|| "session directory unavailable".to_string())?;
+    recent_entries_page_at(&dir, key, limit)
+}
+
+fn recent_entries_page_at(
+    dir: &Path,
+    key: Option<&str>,
+    limit: usize,
+) -> Result<RecentEntriesPage, String> {
+    let limit = limit.clamp(1, 200);
+    let mut page = RecentEntriesPage::default();
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     match key {
         Some(k) => {
@@ -257,34 +343,87 @@ pub fn recent_entries(key: Option<&str>, limit: usize) -> Vec<SessionLogEntry> {
             files.push((k.to_string(), dir.join(format!("{safe}.jsonl"))));
         }
         None => {
-            if let Ok(rd) = std::fs::read_dir(&dir) {
-                for entry in rd.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                        let name = path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
-                            .to_string();
-                        files.push((name, path));
+            let rd = match std::fs::read_dir(dir) {
+                Ok(rd) => rd,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(page),
+                Err(e) => return Err(crate::wecom_sanitize::redact_diagnostic(&e.to_string())),
+            };
+            for (index, entry) in rd.enumerate() {
+                if index >= RECENT_MAX_FILES {
+                    page.partial = true;
+                    break;
+                }
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        page.partial = true;
+                        if page.read_errors.len() < 32 {
+                            page.read_errors
+                                .push(crate::wecom_sanitize::redact_diagnostic(&e.to_string()));
+                        }
+                        continue;
                     }
+                };
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    files.push((name, path));
                 }
             }
         }
     }
+    files.sort_by_cached_key(|(_, path)| {
+        std::cmp::Reverse(std::fs::metadata(path).and_then(|m| m.modified()).ok())
+    });
     let mut out: Vec<SessionLogEntry> = Vec::new();
+    let mut remaining = RECENT_READ_BYTES;
     for (session, path) in files {
-        let Ok(data) = std::fs::read_to_string(&path) else {
-            continue;
+        if remaining == 0 {
+            page.partial = true;
+            break;
+        }
+        let budget = SIDECAR_READ_BYTES.min(remaining);
+        remaining -= budget; // Failed reads also consume admission, preventing retry amplification.
+        let data = match read_suffix(&path, budget) {
+            Ok((data, bytes, partial)) => {
+                remaining += budget - bytes;
+                page.scanned_bytes += bytes;
+                page.partial |= partial;
+                data
+            }
+            Err(e) => {
+                page.partial = true;
+                page.read_errors
+                    .push(crate::wecom_sanitize::redact_diagnostic(&e));
+                continue;
+            }
         };
-        for line in data.lines().filter(|l| !l.trim().is_empty()) {
+        let mut file_entries = 0;
+        for line in data.lines().rev().filter(|l| !l.trim().is_empty()) {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                page.partial = true;
+                if page.read_errors.len() < 32 {
+                    page.read_errors.push("invalid session JSONL record".into());
+                }
                 continue;
             };
+            if file_entries >= limit {
+                page.partial = true;
+                break;
+            }
             if v.get("cleared").and_then(|v| v.as_bool()) == Some(true) {
                 continue;
             }
+            file_entries += 1;
             out.push(SessionLogEntry {
+                request_id: v
+                    .get("requestId")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string),
                 session: session.clone(),
                 ts: v
                     .get("ts")
@@ -303,11 +442,15 @@ pub fn recent_entries(key: Option<&str>, limit: usize) -> Vec<SessionLogEntry> {
                     .to_string(),
             });
         }
+        out.sort_by(|a, b| b.ts.cmp(&a.ts));
+        if out.len() > limit {
+            page.partial = true;
+            out.truncate(limit);
+        }
     }
-    // 按时间戳倒序（RFC3339 字典序即时间序）；取最近 limit 条。
-    out.sort_by(|a, b| b.ts.cmp(&a.ts));
-    out.truncate(limit);
-    out
+    page.entries = out;
+    page.read_errors.truncate(32);
+    Ok(page)
 }
 
 /// 会话键 → 安全文件名（与 append_sidecar / load_sidecar 同规则）。
@@ -324,11 +467,22 @@ fn sanitize_key(key: &str) -> String {
 }
 
 fn append_sidecar_at(dir: &Path, key: &str, user: &str, assistant: &str) -> Result<(), String> {
+    append_sidecar_with_request_at(dir, key, user, assistant, None)
+}
+
+fn append_sidecar_with_request_at(
+    dir: &Path,
+    key: &str,
+    user: &str,
+    assistant: &str,
+    request_id: Option<&str>,
+) -> Result<(), String> {
     write_sidecar_line(
         dir,
         key,
         &serde_json::json!({
             "ts": chrono::Utc::now().to_rfc3339(),
+            "requestId": request_id,
             "user": user,
             "assistant": assistant,
         }),
@@ -367,6 +521,62 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn bounded_recent_page_preserves_request_and_reports_omissions() {
+        let temp = TempDir::new();
+        let key = "fixture";
+        let path = temp.0.join("fixture.jsonl");
+        std::fs::write(
+            &path,
+            format!("{}\n", "x".repeat(SIDECAR_READ_BYTES as usize + 100)),
+        )
+        .unwrap();
+        append_sidecar_with_request_at(
+            &temp.0,
+            key,
+            "synthetic question",
+            "synthetic answer",
+            Some("request-1"),
+        )
+        .unwrap();
+        let page = recent_entries_page_at(&temp.0, Some(key), 30).unwrap();
+        assert!(page.partial);
+        assert!(page.scanned_bytes <= SIDECAR_READ_BYTES);
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].request_id.as_deref(), Some("request-1"));
+        let loaded = load_sidecar_at(Some(&temp.0), key);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].content, "synthetic question");
+        let missing = recent_entries_page_at(&temp.0, Some("missing"), 1).unwrap();
+        assert!(missing.partial && !missing.read_errors.is_empty());
+    }
+
+    #[test]
+    fn absent_history_directory_is_an_empty_complete_page() {
+        let temp = TempDir::new();
+        let page = recent_entries_page_at(&temp.0.join("not-created"), None, 30).unwrap();
+        assert!(page.entries.is_empty());
+        assert!(page.read_errors.is_empty());
+        assert!(!page.partial);
+        assert_eq!(page.scanned_bytes, 0);
+    }
+
+    #[test]
+    fn incomplete_tail_and_invalid_records_are_visible() {
+        let temp = TempDir::new();
+        append_sidecar_at(&temp.0, "fixture", "question", "answer").unwrap();
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(temp.0.join("fixture.jsonl"))
+            .unwrap();
+        file.write_all(b"not-json\n{\"partial\":").unwrap();
+        let page = recent_entries_page_at(&temp.0, Some("fixture"), 30).unwrap();
+        assert!(page.partial);
+        assert_eq!(page.entries.len(), 1);
+        assert!(!page.read_errors.is_empty());
     }
 
     #[test]

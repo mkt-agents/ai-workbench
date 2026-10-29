@@ -1,6 +1,6 @@
 //! 确定性的日志查询/追问解析；无 IO，时间由调用方传入。
 //! 不把中文症状整句当日志字面量；未识别的时间表达式返回澄清错误。
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveTime, TimeZone};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveTime, TimeZone};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -57,8 +57,18 @@ fn re(pattern: &str) -> Regex {
 pub fn starts_new_investigation(text: &str) -> bool {
     let text = re(r#"(?s)```.*?```|`[^`]*`|"[^"]*"|'[^']*'|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』"#)
         .replace_all(text, "引用");
-    re(r"(?:^|[，,。；;\n])\s*(?:请|帮我)?\s*(?:新会话|起新会话|新建会话|开启新会话|开始新会话|新开会话|重新开始排查|start_new)(?:\s*$|[，,。；;\n])")
+    re(r"(?:^|[，,。；;\n])\s*(?:请|帮我)?\s*(?:新会话|新对话|起新会话|起新对话|新建会话|新建对话|开启新会话|开启新对话|开始新会话|开始新对话|新开会话|新开对话|重新开始排查|start_new)(?:\s*$|[，,。；;\n])")
         .is_match(&text)
+}
+
+/// Parse only a leading new-session control clause and return its remaining user text.
+/// This preserves the established `新会话，业务问题` behavior while letting the
+/// orchestrator handle `新对话，你好` without sending the control words to the model.
+pub fn new_session_remainder(text: &str) -> Option<String> {
+    let source = text.trim_start();
+    let pattern = re(r"^(?:请|帮我)?\s*(?:新会话|新对话|起新会话|起新对话|新建会话|新建对话|开启新会话|开启新对话|开始新会话|开始新对话|新开会话|新开对话|重新开始排查|start_new)(?:\s*$|\s*[，,。；;\n]\s*)");
+    let matched = pattern.find(source)?;
+    Some(source[matched.end()..].trim().to_string())
 }
 
 pub fn is_followup(text: &str) -> bool {
@@ -646,26 +656,75 @@ type Window = (
 );
 type TimeParse = (Option<Window>, Vec<(usize, usize)>);
 
+const CALENDAR_DATE: &str = r"(?:\d{4}-\d{1,2}-\d{1,2}|(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号])";
+
+fn validate_time_token(text: &str, start: usize, end: usize) -> Result<(), String> {
+    let invalid_before = text[..start].chars().next_back().is_some_and(|c| c.is_ascii_digit() || c == ':' || c == '/');
+    let invalid_after = text[end..].chars().next().is_some_and(|c| c.is_ascii_digit() || c == ':' || c == '/' || c == '年' || c == '月' || c == '秒' || c == '分');
+    if invalid_before || invalid_after { return Err("日期或时刻数字格式不完整，请核对年月日和时分秒。".into()); }
+    Ok(())
+}
+
+fn calendar_date(text: &str, base: NaiveDate) -> Result<NaiveDate, String> {
+    if text.contains('月') {
+        let cap = re(r"^(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]$")
+            .captures(text).ok_or("日期格式未识别")?;
+        let year = cap.get(1).map(|v| v.as_str().parse::<i32>()).transpose().map_err(|_| "年份无效")?.unwrap_or(base.year());
+        let month = cap[2].parse::<u32>().map_err(|_| "月份无效")?;
+        let day = cap[3].parse::<u32>().map_err(|_| "日期无效")?;
+        let date = NaiveDate::from_ymd_opt(year, month, day).ok_or("日期不存在，请核对年月日。")?;
+        if cap.get(1).is_none() && date > base {
+            return Err("未指定年份的日期落在未来，请明确查询年份。".into());
+        }
+        Ok(date)
+    } else {
+        NaiveDate::parse_from_str(text, "%Y-%m-%d").map_err(|_| "日期不存在，请核对年月日。".into())
+    }
+}
+
 fn parse_window(
     text: &str,
     previous: &InvestigationQuery,
     now: DateTime<FixedOffset>,
     followup: bool,
 ) -> Result<TimeParse, String> {
-    if ["前天", "明天", "后天", "凌晨", "中午", "上周", "上个月"]
+    let result = parse_window_inner(text, previous, now, followup)?;
+    // A recognized clock/duration must never hide another unconsumed explicit date.
+    // Fields and quoted literals were masked by parse_query before this boundary.
+    let mut residual = text.to_string();
+    for &(start, end) in result.1.iter().rev() {
+        residual.replace_range(start..end, &" ".repeat(end - start));
+    }
+    if re(r"\d+\s*[年月号日]|\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,2})?|今天|昨天|前天|昨晚|今晚|上午|下午|晚上|晚间|早上|\d+\s*[点分秒]|\d{1,2}\s*[:：]|最近|过去|近\s*[0-9零一二两三四五六七八九十半]+\s*(?:天|小时|分钟)").is_match(&residual) {
+        return Err("时间条件未完整识别或存在冲突，请明确一个查询日期或起止范围；未执行默认时间查询。".into());
+    }
+    Ok(result)
+}
+
+fn parse_window_inner(
+    text: &str,
+    previous: &InvestigationQuery,
+    now: DateTime<FixedOffset>,
+    followup: bool,
+) -> Result<TimeParse, String> {
+    if ["明天", "后天", "凌晨", "中午", "上周", "上个月"]
         .iter()
         .any(|w| text.contains(w))
     {
         return Err("此日期或时段表达式有歧义，请写明完整日期和24小时时刻。".into());
     }
     // RFC3339 优先；中文时刻允许共用日期与晚间修饰词。
-    let clock = re(
-        r"(?i)\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})|(?:(?:\d{4}-\d{2}-\d{2}|今天|昨天|昨晚|今晚)\s*)?(?:(?:上午|下午|晚上|晚间|早上)\s*)?(?:\d{1,2}:\d{2}(?::\d{2})?|[0-9零一二两三四五六七八九十]{1,3}点(?:半|[0-9零一二两三四五六七八九十]{1,3}分?)?)",
-    );
+    let clock = re(&format!(
+        r"(?i)\d{{4}}-\d{{2}}-\d{{2}}[Tt]\d{{2}}:\d{{2}}:\d{{2}}(?:\.\d+)?(?:[Zz]|[+-]\d{{2}}:\d{{2}})|(?:(?:{CALENDAR_DATE}|今天|昨天|前天|昨晚|今晚)\s*(?:大概|大约|约)?\s*)?(?:(?:上午|下午|晚上|晚间|早上)\s*)?(?:\d{{1,2}}:\d{{2}}(?::\d{{2}})?|[0-9零一二两三四五六七八九十]{{1,3}}点(?:半|[0-9零一二两三四五六七八九十]{{1,3}}分?)?)"
+    ));
     let clocks: Vec<_> = clock.find_iter(text).collect();
+    for token in &clocks { validate_time_token(text, token.start(), token.end())?; }
     if !clocks.is_empty() {
         if clocks.len() == 1 {
             let m = clocks[0];
+            if re(r"^\s*(?:至|到|~|～|—|to\b)").is_match(&text[m.end()..]) {
+                return Err("结束时刻缺失，请补充完整起止范围。".into());
+            }
             let (anchor, _) = parse_clock(m.as_str(), now.date_naive(), *now.offset(), false)?;
             let end = anchor
                 .checked_add_signed(Duration::minutes(15))
@@ -689,7 +748,7 @@ fn parse_window(
         }
         let (start, evening) =
             parse_clock(clocks[0].as_str(), now.date_naive(), *now.offset(), false)?;
-        let end_base = if ["今天", "昨天", "昨晚", "今晚"]
+        let end_base = if re(&format!(r"^{CALENDAR_DATE}")).is_match(clocks[1].as_str()) || ["今天", "昨天", "前天", "昨晚", "今晚"]
             .iter()
             .any(|w| clocks[1].as_str().contains(w))
         {
@@ -749,17 +808,26 @@ fn parse_window(
         // 不猜扩大倍数/边界；调用方将错误作为追问澄清，不回退旧查询。
         return Err("请说明扩大到多久，例如「扩大到8小时」。".into());
     }
-    let days = re(r"今天|昨天");
+    let calendar = re(CALENDAR_DATE);
+    let calendar_matches: Vec<_> = calendar.find_iter(text).collect();
+    if calendar_matches.len() > 1 {
+        return Err("多个日期请同时写明起止时刻。".into());
+    }
+    if let Some(day) = calendar_matches.first() {
+        validate_time_token(text, day.start(), day.end())?;
+        let date = calendar_date(day.as_str(), now.date_naive())?;
+        let start = at(date, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), *now.offset())?;
+        let end = at(date.succ_opt().ok_or("日期超出支持范围")?, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), *now.offset())?;
+        return Ok((Some((start, end, TimeKind::Range, None)), vec![(day.start(), day.end())]));
+    }
+    let days = re(r"今天|昨天|前天");
     let day_matches: Vec<_> = days.find_iter(text).collect();
     if day_matches.len() > 1 {
         return Err("多个日期缺少明确起止时刻。".into());
     }
     if let Some(day) = day_matches.first() {
-        let date = if day.as_str() == "昨天" {
-            now.date_naive().pred_opt().ok_or("日期超出支持范围")?
-        } else {
-            now.date_naive()
-        };
+        let days_back = match day.as_str() { "昨天" => 1, "前天" => 2, _ => 0 };
+        let date = now.date_naive().checked_sub_signed(Duration::days(days_back)).ok_or("日期超出支持范围")?;
         let start = at(
             date,
             NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
@@ -826,10 +894,12 @@ fn parse_clock(
     if let Ok(value) = DateTime::parse_from_rfc3339(text) {
         return Ok((value, false));
     }
-    let date_re = re(r"^\d{4}-\d{2}-\d{2}");
+    let date_re = re(&format!(r"^{CALENDAR_DATE}"));
     let explicit_date = date_re.find(text);
     let date = if let Some(m) = explicit_date {
-        NaiveDate::parse_from_str(m.as_str(), "%Y-%m-%d").map_err(|_| "日期格式错误")?
+        calendar_date(m.as_str(), base)?
+    } else if text.contains("前天") {
+        base.checked_sub_signed(Duration::days(2)).ok_or("日期超出支持范围")?
     } else if text.contains("昨天") || text.contains("昨晚") {
         base.pred_opt().ok_or("日期超出支持范围")?
     } else {
@@ -926,6 +996,40 @@ fn number(text: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_chinese_day_never_uses_current_four_hours() {
+        let now = DateTime::parse_from_rfc3339("2026-10-29T18:56:11+08:00").unwrap();
+        let q = parse_query("新对话 根据日志排查问题，企点电子行业，时间是10月26号，这个商机询价多个商品，商机列表匹配到三个商品，为什么只报出2个，关键信息 nlpIdOriginal:7700855226234612751，matchId:1454114372766658560", None, now).unwrap();
+        assert_eq!(q.start, "2026-10-26T00:00:00+08:00");
+        assert_eq!(q.end, "2026-10-27T00:00:00+08:00");
+        assert_eq!(q.identifiers.len(), 2);
+    }
+
+    #[test]
+    fn calendar_forms_and_relative_days_are_explicit() {
+        let now = DateTime::parse_from_rfc3339("2026-10-29T18:56:11+08:00").unwrap();
+        for (text, start, end) in [
+            ("10月26日", "2026-10-26T00:00:00+08:00", "2026-10-27T00:00:00+08:00"),
+            ("2026年10月26号", "2026-10-26T00:00:00+08:00", "2026-10-27T00:00:00+08:00"),
+            ("2026-10-26", "2026-10-26T00:00:00+08:00", "2026-10-27T00:00:00+08:00"),
+            ("前天", "2026-10-27T00:00:00+08:00", "2026-10-28T00:00:00+08:00"),
+            ("昨天", "2026-10-28T00:00:00+08:00", "2026-10-29T00:00:00+08:00"),
+            ("近三天", "2026-10-26T18:56:11+08:00", "2026-10-29T18:56:11+08:00"),
+            ("10月26日10点到11点", "2026-10-26T10:00:00+08:00", "2026-10-26T11:00:00+08:00"),
+            ("前天10点到11点", "2026-10-27T10:00:00+08:00", "2026-10-27T11:00:00+08:00"),
+            ("10月26号10点到10月27号11点", "2026-10-26T10:00:00+08:00", "2026-10-27T11:00:00+08:00"),
+            ("10月26号 11:31:12", "2026-10-26T11:16:12+08:00", "2026-10-26T11:46:12+08:00"),
+            ("10月26号大概11点", "2026-10-26T10:45:00+08:00", "2026-10-26T11:15:00+08:00"),
+            ("2024年2月29日", "2024-02-29T00:00:00+08:00", "2024-03-01T00:00:00+08:00"),
+        ] {
+            let q = parse_query(text, None, now).unwrap_or_else(|e| panic!("{text}: {e}"));
+            assert_eq!((q.start.as_str(), q.end.as_str()), (start, end), "{text}");
+        }
+        for text in ["2月30号", "2026年2月29日", "26号", "10月26号 最近三天", "10月26号 今天10点", "10月26号 10:", "10月26号 10点到", "12月31号", "10月26号 10月27号", "110月26号", "12026年10月26号", "10月26号 10:300", "110:00", "10月26号 晚间", "10月26号10点30分20秒", "10月26号10点30秒"] {
+            assert!(parse_query(text, None, now).is_err(), "{text}");
+        }
+    }
+
     fn now() -> DateTime<FixedOffset> {
         DateTime::parse_from_rfc3339("2026-10-28T17:30:00+08:00").unwrap()
     }
@@ -966,6 +1070,8 @@ mod tests {
     fn start_new_is_an_independent_intent() {
         for text in [
             "新会话",
+            "新对话",
+            "新对话，你好",
             "新会话，继续查日志",
             "请新会话；只看错误",
             "起新会话",
@@ -998,6 +1104,16 @@ mod tests {
             assert!(!starts_new_investigation(text), "{text}");
         }
     }
+    #[test]
+    fn new_session_remainder_removes_only_the_leading_control_clause() {
+        assert_eq!(new_session_remainder("新对话，你好").as_deref(), Some("你好"));
+        assert_eq!(new_session_remainder(" 请新会话；你是谁？ ").as_deref(), Some("你是谁？"));
+        assert_eq!(new_session_remainder("新会话").as_deref(), Some(""));
+        assert_eq!(new_session_remainder("起新会话，继续排查").as_deref(), Some("继续排查"));
+        assert_eq!(new_session_remainder("说明：新会话").as_deref(), None);
+        assert_eq!(new_session_remainder("不要新对话").as_deref(), None);
+    }
+
     #[test]
     fn new_session_clears_all_inherited_query_filters() {
         let previous = parse("昨天10点到11点 matchId=123456 keyword=timeout; traceId=old service=old-api level=ERROR 排除=health");
@@ -1200,7 +1316,9 @@ mod tests {
         let changed = parse_query("keyword=error", Some(&q), now()).unwrap();
         assert!(changed.trace_id.is_none());
         assert_eq!(changed.keywords, vec!["error"]);
-        assert!(parse_query("前天10点到11点", None, now()).is_err());
+        let before_yesterday = parse_query("前天10点到11点", None, now()).unwrap();
+        assert_eq!(before_yesterday.start, "2026-10-26T10:00:00+08:00");
+        assert_eq!(before_yesterday.end, "2026-10-26T11:00:00+08:00");
     }
 
     #[test]

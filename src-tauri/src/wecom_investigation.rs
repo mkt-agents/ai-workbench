@@ -111,6 +111,7 @@ pub fn last_diagnostic() -> Option<Value> {
         .and_then(|v| v.clone())
 }
 fn finish(outcome: InvestigationOutcome, request: &str, parsed: bool) -> InvestigationOutcome {
+    crate::wecom_progress::collected(request, outcome.evidence_count);
     if let Ok(mut last) = LAST_DIAGNOSTIC.get_or_init(|| Mutex::new(None)).lock() {
         *last = Some(
             json!({"status":outcome.status.as_str(), "requestId":request,
@@ -123,6 +124,12 @@ fn finish(outcome: InvestigationOutcome, request: &str, parsed: bool) -> Investi
     }
     diagnostic("investigation", &format!("request={request} parsed={parsed} status={} requests={} cache_hits={} evidence={} source_ready={} may_analyze={} elapsed_ms={}",
         outcome.status.as_str(), outcome.request_count, outcome.cache_hits, outcome.evidence_count, outcome.source_ready, outcome.may_analyze, outcome.collected_ms));
+    #[cfg(not(test))]
+    crate::wecom_diagnostics::record(request, "investigation", outcome.status.as_str(), None, Some(outcome.collected_ms),
+        json!({"requestCount":outcome.request_count,"cacheHits":outcome.cache_hits,
+            "evidenceCount":outcome.evidence_count,"shownCount":outcome.shown_count,
+            "warnCount":outcome.warn_count,"truncatedCount":outcome.truncated_count,
+            "incompletePages":outcome.incomplete_pages,"sourceReady":outcome.source_ready}));
     outcome
 }
 /// Publish only: merging and cumulative coverage remain the orchestrator's responsibility.
@@ -209,6 +216,12 @@ fn contexts() -> &'static Mutex<ContextStore> {
 pub fn clear_contexts() {
     if let Ok(mut store) = contexts().lock() {
         store.entries.clear();
+    }
+}
+
+pub fn clear_context_for(key: &str) {
+    if let Ok(mut store) = contexts().lock() {
+        store.entries.remove(key);
     }
 }
 
@@ -505,7 +518,7 @@ pub async fn investigate(
     );
     let mut ready = false;
     let work = async {
-        progress(&tx, "正在验证日志源…");
+        progress(&tx, format!("查询范围：{} 至 {}；正在验证日志源…", query.start, query.end));
         let args = query_args(&query);
         match source_ready(addr, header, &args, &initial_budget).await {
             Ok(()) => {
@@ -1287,6 +1300,9 @@ fn log_step(report: &Report, stage: &str, outcome: &str, args: &Value, elapsed: 
     diagnostic("investigation-step", &format!(
         "request={} stage={stage} outcome={outcome} condition_hash={} page={} elapsed_ms={elapsed} rows={rows}",
         report.request, &digest[..12], args["page"].as_i64().unwrap_or(1)));
+    #[cfg(not(test))]
+    crate::wecom_diagnostics::record(&report.request, "query", outcome, None, Some(elapsed.min(u64::MAX as u128) as u64),
+        json!({"conditionHash":digest,"page":args["page"].as_i64().unwrap_or(1),"rows":rows}));
 }
 
 // Five possible log calls (three pages, relax, widen), each with at most one

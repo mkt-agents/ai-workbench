@@ -33,15 +33,16 @@ impl AnswerBuffer {
         &self,
         original: Option<&InvestigationQuery>,
         evidence: &str,
-        stage: &str,
+        _stage: &str,
         error: &str,
     ) -> String {
         if let Some(request) = &self.diagnostic_request {
             let code = crate::wecom_investigation_plan::validation_error_code(error);
             crate::wecom_performance::note_validation(request, code);
+            #[cfg(not(test))]
             crate::wecom_log::write(
                 "answer-validation",
-                &serde_json::json!({"requestId":request,"stage":stage,"code":code}).to_string(),
+                &serde_json::json!({"requestId":request,"stage":_stage,"code":code}).to_string(),
             );
         }
         unverified(original, evidence)
@@ -83,16 +84,16 @@ impl AnswerBuffer {
         // is unverified model text, not an alternate report format for a final-model turn.
         // Never copy that text (including an overflow prefix) into the fallback report.
         if self.overflowed {
-            return unverified(original, evidence);
+            return self.failure(original, evidence, "buffer", "plan_error: plan exceeds answer budget");
         }
         let text = self
             .text
             .trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
         if !protocol_candidate(text) {
-            return unverified(original, evidence);
+            return self.failure(original, evidence, "format", "plan_error: strict JSON format: missing report protocol");
         }
         let Some(original) = original else {
-            return unverified(None, evidence);
+            return self.failure(None, evidence, "query", "plan_error: invalid original window");
         };
         let plan = match crate::wecom_investigation_plan::parse_plan(text, original, evidence, repo)
         {
@@ -105,7 +106,7 @@ impl AnswerBuffer {
             legacy_max
         };
         if level_rank(&plan.conclusion_level) > level_rank(max_level) {
-            return unverified(Some(original), evidence);
+            return self.failure(Some(original), evidence, "ceiling", "report_error: unsupported version or level above host ceiling");
         }
         let report = if let Some(report) = plan.diagnostic_report {
             // Recheck the report's own level against the runtime coverage ceiling,
@@ -127,15 +128,19 @@ impl AnswerBuffer {
                 &plan.stop_reason,
             )
         } else {
-            return unverified(Some(original), evidence);
+            return self.failure(Some(original), evidence, "report_missing", "plan_error: strict JSON schema: no final report");
         };
         if level_rank(&report.level) > level_rank(max_level) {
-            return unverified(Some(original), evidence);
+            return self.failure(Some(original), evidence, "ceiling", "report_error: unsupported version or level above host ceiling");
         }
         let rendered = crate::wecom_report::render(&report, original, evidence);
         if rendered.len() > MAX_ANSWER_BYTES {
-            unverified(Some(original), evidence)
+            self.failure(Some(original), evidence, "render", "plan_error: plan exceeds rendered answer budget")
         } else {
+            #[cfg(not(test))]
+            if let Some(request) = &self.diagnostic_request {
+                crate::wecom_diagnostics::record(request, "report", "validated", None, None, serde_json::json!({}));
+            }
             rendered
         }
     }
@@ -245,6 +250,25 @@ mod tests {
     fn final_protocol() -> String {
         serde_json::json!({"queries":[],"reason":"完成观察","conclusion_level":"result","gaps":[],
             "final_answer":{"summary":"记录存在业务警告","claims":[{"text":"记录返回零结果","evidence_refs":["L1"]}]}}).to_string()
+    }
+
+    #[test]
+    fn every_early_fallback_records_a_request_scoped_reason() {
+        let query = original();
+        for (request, text, with_query, code) in [
+            ("fallback-plain", "ordinary markdown".to_string(), true, "format"),
+            ("fallback-overflow", "x".repeat(MAX_ANSWER_BYTES + 1), true, "budget"),
+            ("fallback-query", "{}".to_string(), false, "window"),
+            ("fallback-no-report", r#"{"queries":[],"reason":"stopped"}"#.to_string(), true, "schema"),
+        ] {
+            let mut buffer = AnswerBuffer::with_request(true, request);
+            buffer.push(&text);
+            let shown = buffer.finish(if with_query { Some(&query) } else { None }, "", ".", "unknown");
+            assert!(shown.contains("排障"));
+            let metrics = crate::wecom_performance::summary(request).unwrap();
+            assert_eq!(metrics["validationFailureCount"], 1, "{request}");
+            assert_eq!(metrics["validationFailures"][0], code, "{request}");
+        }
     }
 
     #[test]

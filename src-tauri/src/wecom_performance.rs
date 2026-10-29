@@ -147,13 +147,24 @@ fn label(value: &str, max: usize) -> String {
     }
 }
 
+fn model_label(model: &str) -> String {
+    if let Ok(parts) = serde_json::from_str::<Vec<String>>(model) {
+        if parts.len() == 2 {
+            let provider = label(&parts[0], 64);
+            let model = label(&parts[1], 96);
+            return format!("{provider}/{model}");
+        }
+    }
+    label(model, 96)
+}
+
 /// Record only the selected model's public identifier and session action/effort labels.
 /// Repeated calls update labels without clearing timings or concurrent phases.
 pub fn record_session(request: &str, action: &str, model: &str, effort: &str) {
     if let Ok(mut cache) = cache().lock() {
         let metrics = cache.ensure(request);
         metrics.session_action = Some(label(action, 48));
-        metrics.model = Some(label(model, 96));
+        metrics.model = Some(model_label(model));
         metrics.effort = Some(label(effort, 24));
     }
 }
@@ -176,6 +187,8 @@ pub fn note_validation(request: &str, code: &str) {
             metrics.validation_failures.push(label(code, 64));
         }
     }
+    #[cfg(not(test))]
+    crate::wecom_diagnostics::record(request, "validation", "failed", Some(code), None, json!({}));
 }
 
 pub struct Phase {
@@ -190,6 +203,7 @@ pub struct Phase {
 }
 impl Phase {
     pub fn new(request: &str, name: &'static str, input_chars: usize) -> Self {
+        if name != "total" { crate::wecom_progress::phase(request, name); }
         let generation = cache()
             .lock()
             .ok()
@@ -206,6 +220,7 @@ impl Phase {
         }
     }
     pub fn event(&mut self) {
+        crate::wecom_progress::activity(&self.request);
         if self.first_ms.is_none() {
             self.first_ms = Some(elapsed_ms(self.start));
         }
@@ -243,7 +258,13 @@ impl Drop for Phase {
             }
         }
         #[cfg(not(test))]
-        crate::wecom_log::write("performance", &value.to_string());
+        {
+            crate::wecom_log::write("performance", &value.to_string());
+            // A dropped phase measures elapsed time only; it is not a success assertion.
+            crate::wecom_diagnostics::record(&self.request, self.name, "phase_ended", None, Some(elapsed_ms),
+                json!({"inputChars":self.input_chars,"outputChars":self.output_chars,
+                    "toolEvents":self.tools,"firstEventMs":self.first_ms}));
+        }
     }
 }
 
@@ -359,6 +380,13 @@ mod tests {
         }
         mark_queue("latest-a", 42);
         assert!(latest().unwrap().get("summary").is_none());
+    }
+
+    #[test]
+    fn opaque_model_selection_is_decoded_without_retaining_credentials() {
+        assert_eq!(model_label(r#"["provider","model-v2"]"#), "provider/model-v2");
+        assert_eq!(model_label(r#"["https://secret.example/key","sk-secret"]"#), "unknown/unknown");
+        assert_eq!(model_label("Bearer private"), "unknown");
     }
 
     #[test]

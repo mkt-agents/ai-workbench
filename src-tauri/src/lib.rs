@@ -57,6 +57,11 @@ mod wecom_docgen;
 mod wecom_dsh;
 mod wecom_dsh_profile;
 mod wecom_log;
+mod wecom_diagnostics;
+mod wecom_progress;
+mod wecom_channel_config;
+mod wecom_bot_lease;
+mod wecom_diagnostic_commands;
 mod tianji_api;
 mod mcp;
 mod harness_config;
@@ -680,7 +685,11 @@ pub fn run() {
             wecom_channel::wecom_docgen_run_now,
             wecom_channel::wecom_docgen_test,
             wecom_channel::wecom_log_tail,
+            wecom_diagnostic_commands::wecom_diagnostics_query,
+            wecom_diagnostic_commands::wecom_diagnostic_request,
+            wecom_diagnostic_commands::wecom_diagnostic_export,
             wecom_channel::wecom_session_recent,
+            wecom_diagnostic_commands::wecom_session_recent_page,
             ai_commands::detect_local_ai_endpoints,
             dsh_commands::start_dsh,
             dsh_commands::dsh_set_embed,

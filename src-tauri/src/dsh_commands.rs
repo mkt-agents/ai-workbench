@@ -1,8 +1,8 @@
-use std::net::{SocketAddr, TcpStream};
-use std::process::Command;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -77,7 +77,9 @@ fn new_launch_log() -> LaunchLog {
 }
 
 fn push_launch_log(log: &LaunchLog, line: &str) {
-    let trimmed = line.trim_end();
+    // Keep the real auth URL on the launch-control channel only, never in diagnostics.
+    let sanitized = crate::wecom_sanitize::redact_diagnostic(line);
+    let trimmed = sanitized.trim_end();
     if trimmed.trim().is_empty() {
         return;
     }
@@ -114,8 +116,8 @@ fn dsh_backup_path(target: &std::path::Path) -> PathBuf {
     }
 }
 
-use crate::{config::{DSH_DEFAULT_PORT}, DshInstance, DshState};
 use crate::port_commands::{find_pid_by_port, is_port_in_use, kill_pid, wait_for_port_release};
+use crate::{config::DSH_DEFAULT_PORT, DshInstance, DshState};
 
 /// Machine+User PATH exactly as the registry has it now. Every call costs a
 /// PowerShell spawn, so multi-step operations read it once and hand the value to
@@ -305,13 +307,17 @@ fn dsh_launch_hint(log: &[String]) -> Option<&'static str> {
         return Some("DSH 安装不完整（缺少依赖），请在工具栏重新安装或更新 DSH");
     }
     if has("syntaxerror") || has("unexpected token") || has("is not a function") {
-        return Some("DSH 代码与当前 Node.js 版本不兼容：换 Node 版本，或把 DSH 换成与当前 Node 匹配的版本");
+        return Some(
+            "DSH 代码与当前 Node.js 版本不兼容：换 Node 版本，或把 DSH 换成与当前 Node 匹配的版本",
+        );
     }
     if has("eacces") || has("eperm") {
         return Some("权限不足：可能被杀毒软件拦截，或以管理员身份运行后重试");
     }
     if has("'npx'") || has("不是内部或外部命令") || has("is not recognized") {
-        return Some("找不到 Node.js / npx，请先安装 Node.js，或在「版本管理 → 运行时」选择可用的 Node");
+        return Some(
+            "找不到 Node.js / npx，请先安装 Node.js，或在「版本管理 → 运行时」选择可用的 Node",
+        );
     }
     if has("credentials.yaml.lock") || has("timed out waiting for the writer lock") {
         return Some(
@@ -402,10 +408,7 @@ fn clear_stale_dsh_credential_lock() -> bool {
             true
         }
         Err(e) => {
-            eprintln!(
-                "[dsh] 无法清除陈旧凭证锁 {}: {e}",
-                lock_path.display()
-            );
+            eprintln!("[dsh] 无法清除陈旧凭证锁 {}: {e}", lock_path.display());
             false
         }
     }
@@ -444,9 +447,7 @@ fn dsh_failure_message(reason: &str, ctx: &LaunchContext) -> String {
         lines.push(format!("可能原因: {hint}"));
     }
     if ctx.log.is_empty() {
-        lines.push(
-            "进程没有任何输出：可能被安全软件拦截，或 Node 不在 PATH 里".to_string(),
-        );
+        lines.push("进程没有任何输出：可能被安全软件拦截，或 Node 不在 PATH 里".to_string());
     } else {
         lines.push(format!("进程输出（最后 {} 行）:", ctx.log.len()));
         for line in ctx.log {
@@ -458,18 +459,22 @@ fn dsh_failure_message(reason: &str, ctx: &LaunchContext) -> String {
 
 /// Where the globally installed DSH package lives, without paying npm's ~2.3s startup.
 ///
-/// npm on Windows installs globals into `%APPDATA%\npm\node_modules`, but the prefix can
-/// be customised (and can follow a switched runtime), so `npm root -g` stays as the
-/// fallback and only runs when the fast candidates miss.
+/// The copy that belongs to the Node runtime currently on PATH wins: this app ships its
+/// own runtimes (`<runtime>\node_modules`) and `npm install -g` writes there, whereas an
+/// older system-Node install left a copy under `%APPDATA%\npm\node_modules`. Probing the
+/// legacy location first made an upgraded package invisible — `npm ls -g` reported the
+/// new version, the toolbar kept offering the old one, and the launcher started the
+/// stale copy. `npm root -g` stays as the last resort for prefixes neither candidate
+/// covers.
 fn dsh_package_dir(path_value: &str) -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        roots.push(PathBuf::from(appdata).join("npm").join("node_modules"));
-    }
-    // Runtime-managed installs (nvm, fnm, a custom node dir) put globals under the node
-    // directory that is currently on PATH.
+    // Runtime-managed installs (nvm, fnm, a custom node dir, our own runtime) put
+    // globals under the node directory that is currently on PATH.
     for dir in node_dirs_on_path(path_value) {
         roots.push(dir.join("node_modules"));
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        roots.push(PathBuf::from(appdata).join("npm").join("node_modules"));
     }
 
     let installed = |root: PathBuf| {
@@ -520,11 +525,7 @@ pub(crate) fn dsh_cli(path_value: &str) -> Result<DshCli, String> {
     }
     Ok(DshCli {
         program: PathBuf::from("cmd"),
-        args: vec![
-            "/c".into(),
-            "npx".into(),
-            "@deepseek-ai/dsh".into(),
-        ],
+        args: vec!["/c".into(), "npx".into(), "@deepseek-ai/dsh".into()],
         command_line: "npx @deepseek-ai/dsh".into(),
     })
 }
@@ -622,8 +623,7 @@ const DSH_PATCH_SENTINEL: &str = "/* ai-workbench:dsh-auth-bypass */";
 /// The two expressions the patch rewrites. Both must be present for it to apply.
 const DSH_PATCH_AUTH_EXPR: &str =
     "return this.browserAuth.isAuthenticated(request) ? void 0 : 401;";
-const DSH_PATCH_INDEX_EXPR: &str =
-    "return this.browserAuth.authorizeIndex(request, response);";
+const DSH_PATCH_INDEX_EXPR: &str = "return this.browserAuth.authorizeIndex(request, response);";
 
 /// Result of a DSH auth patch operation.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -675,8 +675,7 @@ fn patch_dsh_auth() -> Result<DshPatchResult, String> {
     // Back up the original before patching so we can restore on failure/update.
     let backup_path = dsh_backup_path(&target);
     if !backup_path.exists() {
-        fs::write(&backup_path, &content)
-            .map_err(|e| format!("备份原始文件失败: {e}"))?;
+        fs::write(&backup_path, &content).map_err(|e| format!("备份原始文件失败: {e}"))?;
     }
 
     let patched = content
@@ -687,9 +686,7 @@ fn patch_dsh_auth() -> Result<DshPatchResult, String> {
         return Ok(DshPatchResult {
             patched: false,
             message: "DSH 认证补丁模式未找到".into(),
-            warning: Some(
-                "DSH 包布局可能已变更，iframe 嵌入可能需手动适配".into(),
-            ),
+            warning: Some("DSH 包布局可能已变更，iframe 嵌入可能需手动适配".into()),
         });
     }
 
@@ -1088,8 +1085,7 @@ fn is_instance_alive(port: u16) -> bool {
 fn prune_dead_instances(state: &DshState) -> Result<(), String> {
     let mut instances = state.instances.lock().map_err(|e| e.to_string())?;
     instances.retain(|i| is_instance_alive(i.port));
-    let alive: std::collections::HashSet<u16> =
-        instances.iter().map(|i| i.port).collect();
+    let alive: std::collections::HashSet<u16> = instances.iter().map(|i| i.port).collect();
     drop(instances);
 
     let mut children = state.children.lock().map_err(|e| e.to_string())?;
@@ -1134,11 +1130,16 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
         None => "@deepseek-ai/dsh".to_string(),
     };
 
-    window.emit("dsh:install_progress", serde_json::json!({
-        "stage": "downloading",
-        "percent": 10,
-        "message": format!("正在下载 {}...", pkg)
-    })).ok();
+    window
+        .emit(
+            "dsh:install_progress",
+            serde_json::json!({
+                "stage": "downloading",
+                "percent": 10,
+                "message": format!("正在下载 {}...", pkg)
+            }),
+        )
+        .ok();
 
     let window_clone = window.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -1150,9 +1151,11 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
         cmd.creation_flags(CREATE_NO_WINDOW);
 
         cmd.stdout(std::process::Stdio::null())
-           .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to start npm: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to start npm: {}", e))?;
 
         // Stream stderr for progress feedback
         let stderr = child.stderr.take().unwrap();
@@ -1165,14 +1168,17 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
         // `map_while`：读出错就收摊，别让 `flatten` 在坏管道上无限转
         for line in reader.lines().map_while(Result::ok) {
             let trimmed = line.trim().to_string();
-            if trimmed.is_empty() { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
 
             if trimmed.starts_with("npm error") && npm_errors.len() < 5 {
                 npm_errors.push(trimmed.clone());
             }
 
             // Parse npm progress output
-            let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
+            let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated")
+            {
                 ("installing", 70, format!("正在安装: {}", trimmed))
             } else if trimmed.contains("fetch") || trimmed.contains("http") {
                 ("downloading", 30, format!("下载中: {}", trimmed))
@@ -1186,11 +1192,14 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
 
             if trimmed != last_msg {
                 last_msg = trimmed;
-                let _ = window_clone.emit("dsh:install_progress", serde_json::json!({
-                    "stage": stage,
-                    "percent": percent,
-                    "message": msg
-                }));
+                let _ = window_clone.emit(
+                    "dsh:install_progress",
+                    serde_json::json!({
+                        "stage": stage,
+                        "percent": percent,
+                        "message": msg
+                    }),
+                );
             }
         }
 
@@ -1205,11 +1214,16 @@ pub async fn install_dsh(window: tauri::Window, version: Option<String>) -> Resu
     let (result, npm_errors) = result;
 
     if result.success() {
-        window.emit("dsh:install_progress", serde_json::json!({
-            "stage": "done",
-            "percent": 100,
-            "message": "安装完成"
-        })).ok();
+        window
+            .emit(
+                "dsh:install_progress",
+                serde_json::json!({
+                    "stage": "done",
+                    "percent": 100,
+                    "message": "安装完成"
+                }),
+            )
+            .ok();
         Ok("安装成功".to_string())
     } else {
         let code = result.code().unwrap_or(-1);
@@ -1353,10 +1367,7 @@ fn start_dsh_sync(port: Option<u16>, window: tauri::Window) -> Result<DshInstanc
         }
     }
 
-    let auth_url = launch
-        .auth_url
-        .recv_timeout(Duration::from_secs(8))
-        .ok();
+    let auth_url = launch.auth_url.recv_timeout(Duration::from_secs(8)).ok();
     let auth_patch_warning = match (wait_for_index_auth(target_port), auth_url.is_some()) {
         (IndexAuth::Serving, _) => None,
         (IndexAuth::LoginRequired | IndexAuth::NotReady, true) => None,
@@ -1477,7 +1488,11 @@ fn stop_dsh_sync(port: u16, window: tauri::Window) -> Result<String, String> {
         let detail = if kill_errors.is_empty() {
             port_owner_description(port)
         } else {
-            format!("（{}）{}", kill_errors.join("; "), port_owner_description(port))
+            format!(
+                "（{}）{}",
+                kill_errors.join("; "),
+                port_owner_description(port)
+            )
         };
         return Err(format!(
             "停止失败：端口 {port} 上的 DeepSeek 服务仍在运行{detail}"
@@ -1529,32 +1544,30 @@ pub async fn dsh_set_embed(
     }
 
     let window = app.get_window("main").ok_or("主窗口不存在")?;
-    let builder = tauri::webview::WebviewBuilder::new(
-        DSH_EMBED_LABEL,
-        tauri::WebviewUrl::External(parsed),
-    )
-    .focused(false)
-    .background_color(tauri::webview::Color(15, 17, 19, 255))
-    .initialization_script(DSH_EXTERNAL_LINK_SCRIPT)
-    // Same as the plugin browser windows: Tauri's default drag-drop handler
-    // (on by default for child webviews) turns off HTML5 DnD inside WebView2
-    // on Windows, so dropping files onto DSH's composer does nothing. Disable
-    // it so the Harness page can receive OS file drops itself.
-    .disable_drag_drop_handler()
-    // Sign-in does window.open("about:blank") and then location.replace.
-    // WebView2 drops that open unless a handler allows it, so the login UI
-    // only shows the copy-link dialog. Account links (usage, top-up, the
-    // platform home) are target=_blank to an external host. The default
-    // popup from this child webview never appears, so those clicks do
-    // nothing — send them to the system browser instead.
-    .on_new_window(|url, _features| {
-        if dsh_popup_stays_in_webview(&url) {
-            tauri::webview::NewWindowResponse::Allow
-        } else {
-            let _ = open_dsh_external(url.as_str());
-            tauri::webview::NewWindowResponse::Deny
-        }
-    });
+    let builder =
+        tauri::webview::WebviewBuilder::new(DSH_EMBED_LABEL, tauri::WebviewUrl::External(parsed))
+            .focused(false)
+            .background_color(tauri::webview::Color(15, 17, 19, 255))
+            .initialization_script(DSH_EXTERNAL_LINK_SCRIPT)
+            // Same as the plugin browser windows: Tauri's default drag-drop handler
+            // (on by default for child webviews) turns off HTML5 DnD inside WebView2
+            // on Windows, so dropping files onto DSH's composer does nothing. Disable
+            // it so the Harness page can receive OS file drops itself.
+            .disable_drag_drop_handler()
+            // Sign-in does window.open("about:blank") and then location.replace.
+            // WebView2 drops that open unless a handler allows it, so the login UI
+            // only shows the copy-link dialog. Account links (usage, top-up, the
+            // platform home) are target=_blank to an external host. The default
+            // popup from this child webview never appears, so those clicks do
+            // nothing — send them to the system browser instead.
+            .on_new_window(|url, _features| {
+                if dsh_popup_stays_in_webview(&url) {
+                    tauri::webview::NewWindowResponse::Allow
+                } else {
+                    let _ = open_dsh_external(url.as_str());
+                    tauri::webview::NewWindowResponse::Deny
+                }
+            });
     window
         .add_child(
             builder,
@@ -1635,9 +1648,7 @@ pub async fn check_nodejs_installed() -> bool {
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        cmd.output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        cmd.output().map(|o| o.status.success()).unwrap_or(false)
     })
     .await
     .unwrap_or(false)
@@ -1699,7 +1710,14 @@ pub async fn get_dsh_version() -> Result<String, String> {
 pub async fn get_dsh_latest_version() -> Result<String, String> {
     let output = tokio::task::spawn_blocking(|| {
         let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "npm", "view", "@deepseek-ai/dsh", "dist-tags", "--json"]);
+        cmd.args([
+            "/c",
+            "npm",
+            "view",
+            "@deepseek-ai/dsh",
+            "dist-tags",
+            "--json",
+        ]);
 
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1725,7 +1743,12 @@ pub async fn get_dsh_latest_version() -> Result<String, String> {
             _ => continue,
         };
         best = Some(match best {
-            Some(prev) if crate::runtime_commands::compare_versions(prev.as_str(), version) != std::cmp::Ordering::Less => prev,
+            Some(prev)
+                if crate::runtime_commands::compare_versions(prev.as_str(), version)
+                    != std::cmp::Ordering::Less =>
+            {
+                prev
+            }
             _ => version.to_string(),
         });
     }
@@ -1738,7 +1761,14 @@ pub async fn get_dsh_latest_version() -> Result<String, String> {
 pub async fn get_dsh_versions() -> Result<Vec<String>, String> {
     let output = tokio::task::spawn_blocking(|| {
         let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "npm", "view", "@deepseek-ai/dsh", "versions", "--json"]);
+        cmd.args([
+            "/c",
+            "npm",
+            "view",
+            "@deepseek-ai/dsh",
+            "versions",
+            "--json",
+        ]);
 
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1758,7 +1788,8 @@ pub async fn get_dsh_versions() -> Result<Vec<String>, String> {
         .map_err(|e| format!("Failed to parse versions: {}", e))?;
 
     // Filter out alpha versions
-    let versions: Vec<String> = all_versions.into_iter()
+    let versions: Vec<String> = all_versions
+        .into_iter()
         .filter(|v| !v.contains("alpha"))
         .collect();
 
@@ -1767,10 +1798,7 @@ pub async fn get_dsh_versions() -> Result<Vec<String>, String> {
 
 /// Update DSH to the version the UI offered, streaming progress.
 #[tauri::command]
-pub async fn update_dsh(
-    version: Option<String>,
-    window: tauri::Window,
-) -> Result<String, String> {
+pub async fn update_dsh(version: Option<String>, window: tauri::Window) -> Result<String, String> {
     use tauri::Emitter;
 
     // Install the exact offered version instead of the `latest` tag: with `@latest` npm
@@ -1786,11 +1814,16 @@ pub async fn update_dsh(
         None => "@deepseek-ai/dsh@latest".to_string(),
     };
 
-    window.emit("dsh:update_progress", serde_json::json!({
-        "stage": "downloading",
-        "percent": 10,
-        "message": format!("正在下载 {target}...")
-    })).ok();
+    window
+        .emit(
+            "dsh:update_progress",
+            serde_json::json!({
+                "stage": "downloading",
+                "percent": 10,
+                "message": format!("正在下载 {target}...")
+            }),
+        )
+        .ok();
 
     let window_clone = window.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -1802,9 +1835,11 @@ pub async fn update_dsh(
         cmd.creation_flags(CREATE_NO_WINDOW);
 
         cmd.stdout(std::process::Stdio::null())
-           .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to start npm: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to start npm: {}", e))?;
 
         let stderr = child.stderr.take().unwrap();
         let reader = BufReader::new(stderr);
@@ -1816,13 +1851,16 @@ pub async fn update_dsh(
 
         for line in reader.lines().map_while(Result::ok) {
             let trimmed = line.trim().to_string();
-            if trimmed.is_empty() { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
 
             if trimmed.starts_with("npm error") && npm_errors.len() < 5 {
                 npm_errors.push(trimmed.clone());
             }
 
-            let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated") {
+            let (stage, percent, msg) = if trimmed.contains("added") || trimmed.contains("updated")
+            {
                 ("installing", 70, format!("正在安装: {}", trimmed))
             } else if trimmed.contains("fetch") || trimmed.contains("http") {
                 ("downloading", 30, format!("下载中: {}", trimmed))
@@ -1836,11 +1874,14 @@ pub async fn update_dsh(
 
             if trimmed != last_msg {
                 last_msg = trimmed;
-                let _ = window_clone.emit("dsh:update_progress", serde_json::json!({
-                    "stage": stage,
-                    "percent": percent,
-                    "message": msg
-                }));
+                let _ = window_clone.emit(
+                    "dsh:update_progress",
+                    serde_json::json!({
+                        "stage": stage,
+                        "percent": percent,
+                        "message": msg
+                    }),
+                );
             }
         }
 
@@ -1868,11 +1909,16 @@ pub async fn update_dsh(
             (Some(now), _) => format!("已更新到 {now}"),
             (None, _) => "更新成功".to_string(),
         };
-        window.emit("dsh:update_progress", serde_json::json!({
-            "stage": "done",
-            "percent": 100,
-            "message": message.clone()
-        })).ok();
+        window
+            .emit(
+                "dsh:update_progress",
+                serde_json::json!({
+                    "stage": "done",
+                    "percent": 100,
+                    "message": message.clone()
+                }),
+            )
+            .ok();
         Ok(message)
     } else {
         let code = result.code().unwrap_or(-1);
@@ -1901,8 +1947,7 @@ pub fn sync_model_to_dsh(
         .map(|p| PathBuf::from(p).join(".dsh"))
         .map_err(|e| format!("Cannot find DSH home: {}", e))?;
 
-    fs::create_dir_all(&dsh_home)
-        .map_err(|e| format!("Cannot create ~/.dsh: {}", e))?;
+    fs::create_dir_all(&dsh_home).map_err(|e| format!("Cannot create ~/.dsh: {}", e))?;
 
     let settings_path = dsh_home.join("settings.yaml");
     let creds_path = dsh_home.join(".credentials.yaml");
@@ -1930,7 +1975,9 @@ pub fn sync_model_to_dsh(
     };
     let cred_ref = format!(
         "{}_API_KEY",
-        route.to_uppercase().replace(|c: char| !c.is_alphanumeric(), "_")
+        route
+            .to_uppercase()
+            .replace(|c: char| !c.is_alphanumeric(), "_")
     );
 
     // Map provider to DSH API protocol
@@ -1971,10 +2018,7 @@ pub fn sync_model_to_dsh(
         );
     }
     let models = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(model_map)]);
-    provider_map.insert(
-        serde_yaml::Value::String("models".into()),
-        models,
-    );
+    provider_map.insert(serde_yaml::Value::String("models".into()), models);
 
     // Insert provider into settings
     settings["llm-pi-ai"]["providers"][&route] = serde_yaml::Value::Mapping(provider_map);
@@ -2017,6 +2061,21 @@ mod tests {
         dsh_launch_hint, dsh_lock_record_is_stale, dsh_popup_stays_in_webview, node_range_minimum,
         parse_dsh_web_line, parse_semver_triple,
     };
+
+    #[test]
+    fn launch_log_redacts_credential_but_control_url_keeps_it() {
+        let line = format!(
+            "dsh web: http://127.0.0.1:3080/?token={}",
+            "fixture-secret".repeat(100)
+        );
+        let url = parse_dsh_web_line(&line).unwrap();
+        let log = super::new_launch_log();
+        super::push_launch_log(&log, &line);
+        let tail = super::launch_log_tail(&log).join("\n");
+        assert!(url.contains("fixture-secret"));
+        assert!(!tail.contains("fixture-secret"));
+        assert!(tail.contains("[REDACTED]"));
+    }
 
     #[test]
     fn reads_semver_triples() {
@@ -2082,7 +2141,6 @@ mod tests {
         let record = format!("{}\n", std::process::id());
         assert!(!dsh_lock_record_is_stale(&record));
     }
-
 
     #[test]
     fn login_popup_stays_in_the_embed() {

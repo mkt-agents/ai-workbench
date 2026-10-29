@@ -66,6 +66,8 @@ export type WecomPerformanceSummary = {
   sessionAction: string;
   model: string;
   effort: string;
+  /** Total failures, independent of the bounded validationFailures sample. */
+  validationFailureCount?: number | null;
   validationFailures: string[];
 };
 
@@ -108,12 +110,89 @@ export type WecomStatus = {
   connectedMs?: number | null;
 };
 
+export type WecomDiagnosticEvent = {
+  schemaVersion: 1;
+  timestamp: string;
+  requestId: string;
+  phase: string;
+  status: string;
+  code?: string | null;
+  durationMs?: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type WecomDiagnosticFilter = {
+  requestId?: string;
+  phase?: string;
+  status?: string;
+  from?: string;
+  to?: string;
+};
+
+export type WecomDiagnosticPage = {
+  events: WecomDiagnosticEvent[];
+  nextCursor: string | null;
+  partial: boolean;
+  scannedBytes: number;
+  readErrors: string[];
+  /** Schema is independent of the event schema; render only recognized fields. */
+  health: unknown;
+};
+
+/** Copy summaries deliberately omit free text, paths and arbitrary metadata values. */
+export function wecomDiagnosticSummary(events: WecomDiagnosticEvent[]): string {
+  const token = (value: string) => /^[a-zA-Z0-9_.:-]{1,160}$/.test(value) ? value : "[redacted]";
+  return JSON.stringify({
+    schemaVersion: 1,
+    scope: "loaded-events-only",
+    events: events.map((event) => ({
+      timestamp: Number.isFinite(Date.parse(event.timestamp)) ? new Date(event.timestamp).toISOString() : null,
+      requestId: token(event.requestId),
+      phase: token(event.phase),
+      status: token(event.status),
+      code: event.code ? token(event.code) : null,
+      durationMs: typeof event.durationMs === "number" && Number.isFinite(event.durationMs) && event.durationMs >= 0
+        ? event.durationMs : null,
+      // Do not copy metadata: even innocently named strings may contain user content.
+    })),
+  }, null, 2);
+}
+
+export function fetchWecomDiagnostics(
+  filter: WecomDiagnosticFilter,
+  cursor?: string,
+  limit = 50,
+): Promise<WecomDiagnosticPage> {
+  return invoke<WecomDiagnosticPage>("wecom_diagnostics_query", { filter, cursor, limit });
+}
+
+export function fetchWecomDiagnosticRequest(requestId: string): Promise<WecomDiagnosticPage> {
+  return invoke<WecomDiagnosticPage>("wecom_diagnostic_request", { requestId });
+}
+
+/** Returns a metadata-only JSON package; the caller must use the normal save dialog. */
+export function exportWecomDiagnosticRequest(requestId: string): Promise<string> {
+  return invoke<string>("wecom_diagnostic_export", { requestId });
+}
+
 export type WecomSessionLogEntry = {
+  requestId?: string;
   session: string;
   ts: string;
   user: string;
   assistant: string;
 };
+
+export type WecomSessionLogPage = {
+  entries: WecomSessionLogEntry[];
+  partial: boolean;
+  readErrors: string[];
+  scannedBytes: number;
+};
+
+export function fetchWecomSessionLogPage(limit = 30, key?: string): Promise<WecomSessionLogPage> {
+  return invoke<WecomSessionLogPage>("wecom_session_recent_page", { key, limit });
+}
 
 export type WecomPairing = {
   userid: string;
@@ -223,6 +302,7 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       corpId: (settings.wecomCorpId ?? "").trim(),
       corpSecret,
       botDisplayName: (settings.wecomBotDisplayName ?? "").trim(),
+      selfIntro: Array.from((settings.wecomSelfIntro ?? "").trim()).slice(0, 2000).join(""),
       dmPolicy: settings.wecomDmPolicy ?? "pairing",
       groupPolicy: settings.wecomGroupPolicy ?? "allowlist",
       requireMention: settings.wecomRequireMention !== false,
@@ -248,6 +328,9 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       autoCommit: settings.wecomAutoCommit !== false,
       autoPush: Boolean(settings.wecomAutoPush),
       maxJobs: normalizeWecomMaxJobs(settings.wecomMaxJobs),
+      // DSH still needs MCP settings when no AI Hub model is configured.
+      mcpEnabled: settings.agentMcpEnabled !== false,
+      mcp,
       agent,
     },
   });

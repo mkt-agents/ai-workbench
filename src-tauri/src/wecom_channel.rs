@@ -68,6 +68,9 @@ pub struct WecomState {
     pub orch: Arc<Orchestrator>,
     /// 上次成功 apply 的 bot 凭据指纹，避免无变化反复踢线
     pub applied: Mutex<Option<AppliedCreds>>,
+    /// Serializes validation + commit of channel configuration.
+    pub apply_lock: Mutex<()>,
+    effective_config: Mutex<Option<crate::wecom_channel_config::ConfigSnapshot>>,
     /// 业务 API（文档/日程/智能表格）的 access_token 缓存，避免每调一次都换 token
     pub api_token: Mutex<Option<(String, Instant)>>,
     /// 企微内审批：审批码 -> 待决项
@@ -106,6 +109,8 @@ impl WecomState {
             sock,
             orch,
             applied: Mutex::new(None),
+            apply_lock: Mutex::new(()),
+            effective_config: Mutex::new(None),
             api_token: Mutex::new(None),
             pending_approvals: Mutex::new(HashMap::new()),
             approval_seq: AtomicU32::new(0),
@@ -119,7 +124,7 @@ impl WecomState {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WecomApplyRequest {
     pub enabled: bool,
@@ -135,6 +140,9 @@ pub struct WecomApplyRequest {
     pub corp_secret: String,
     #[serde(default)]
     pub bot_display_name: String,
+    /// Full-sentence self-introduction returned verbatim; empty uses the built-in default.
+    #[serde(default)]
+    pub self_intro: String,
     #[serde(default)]
     pub dm_policy: String,
     #[serde(default)]
@@ -150,6 +158,11 @@ pub struct WecomApplyRequest {
     /// 绑定天玑跑回合所需的模型与权限；天玑档 enabled 时必填
     #[serde(default)]
     pub agent: Option<WecomAgentConfig>,
+    /// Independent from the Tianji model snapshot. Missing fields retain legacy agent fallback.
+    #[serde(default)]
+    pub mcp: Option<Vec<crate::mcp::McpServerSpec>>,
+    #[serde(default)]
+    pub mcp_enabled: Option<bool>,
     /// 回话引擎：`tianji`（默认）| `dsh`
     #[serde(default)]
     pub engine: String,
@@ -202,6 +215,17 @@ pub struct WecomApplyRequest {
     /// 全局并发回合上限（默认 2，范围 1–8；0/越界回落默认）。
     #[serde(default)]
     pub max_jobs: usize,
+}
+
+pub(crate) fn effective_mcp(
+    explicit: Option<Vec<crate::mcp::McpServerSpec>>,
+    enabled: Option<bool>,
+    legacy: Option<&WecomAgentConfig>,
+) -> Vec<crate::mcp::McpServerSpec> {
+    if !enabled.unwrap_or_else(|| legacy.map(|a| a.mcp_enabled).unwrap_or(true)) {
+        return Vec::new();
+    }
+    explicit.unwrap_or_else(|| legacy.map(|a| a.mcp.clone()).unwrap_or_default())
 }
 
 fn default_true() -> bool {
@@ -257,6 +281,10 @@ pub async fn wecom_dsh_models(
     state: State<'_, WecomState>,
     refresh: Option<bool>,
 ) -> Result<crate::wecom_dsh::DshModelCatalog, String> {
+    let _lifecycle = state.orch.dsh_lifecycle.lock().await;
+    if state.applied.lock().await.is_none() || *state.orch.engine.lock().await != "dsh" {
+        return Err("请先启用并保存 DSH 企微通道，再读取模型目录".into());
+    }
     state.dsh.ensure_ready().await?;
     state.dsh.models(refresh.unwrap_or(false)).await
 }
@@ -267,9 +295,19 @@ pub async fn wecom_dsh_sync(
     app: AppHandle,
     state: State<'_, WecomState>,
 ) -> Result<crate::wecom_dsh_profile::MirrorReport, String> {
-    let report = state.dsh.sync_profile().await?;
-    kick_dsh(&app, true);
-    Ok(report)
+    let _apply = state.apply_lock.lock().await;
+    let creds = state.applied.lock().await.clone().ok_or("请先启用 DSH 企微通道")?;
+    if *state.orch.engine.lock().await != "dsh" { return Err("请先切换到 DSH 引擎".into()); }
+    retire_channel(&state, "sync", "profile_sync", &[]).await;
+    let result = {
+        let _lifecycle = state.orch.dsh_lifecycle.lock().await;
+        state.dsh.stop().await;
+        state.dsh.sync_profile().await
+    };
+    // Restore the configured channel even if mirroring failed; no late destructive restart.
+    start_channel(&app, &state, &creds).await?;
+    kick_dsh(&app);
+    result
 }
 
 /// 连通自检：校验 release 分支是否存在、webhook 是否可达、SkyWalking 是否可查。
@@ -450,21 +488,67 @@ pub async fn wecom_channel_apply(
     state: State<'_, WecomState>,
     req: WecomApplyRequest,
 ) -> Result<WecomStatus, String> {
+    let _apply = state.apply_lock.lock().await;
+    let req = crate::wecom_channel_config::normalize_request(
+        req, crate::secret_protect::unprotect_secret,
+    )?;
+    let mut effective = crate::wecom_channel_config::snapshot(&req);
+    // Pairing is also changed by live chat/admin commands. Compare the effective
+    // union, not a delayed frontend mirror; preserve the existing additive merge.
+    let paired = state.orch.policy.lock().await.paired_users.clone();
+    let mut previous = state.effective_config.lock().await.clone();
+    if let Some(previous) = previous.as_mut() {
+        previous.set_paired_users(&paired);
+    }
+    let mut merged_paired = paired;
+    merged_paired.extend(req.paired_users.iter().cloned());
+    effective.set_paired_users(&merged_paired);
+    let delta = effective.delta(previous.as_ref());
     if req
         .skywalking_timezone_offset_minutes
         .is_some_and(|v| !(-720..=840).contains(&v))
     {
         return Err("OAP时区偏移须在UTC-12至UTC+14之间".into());
     }
-    // 解密 Secret（机器人长连接 + 业务 API 各一套，后者选填）
-    let secret = crate::secret_protect::unprotect_secret(req.bot_secret.trim())
-        .map_err(|e| format!("Secret 解密失败: {e}"))?;
-    let corp_secret = if req.corp_secret.trim().is_empty() {
-        String::new()
+    // normalize_request decoded secrets before comparison; never hash DPAPI ciphertext.
+    let secret = req.bot_secret.clone();
+    let corp_secret = req.corp_secret.clone();
+
+    // Validate before touching the running channel. Disabled requests do not require credentials.
+    let requested_engine = normalize_engine(&req.engine);
+    let requested_workspace = if req.workspace.trim().is_empty() {
+        req.agent.as_ref().map(|a| a.repo_path.trim()).unwrap_or("")
     } else {
-        crate::secret_protect::unprotect_secret(req.corp_secret.trim())
-            .map_err(|e| format!("应用 Secret 解密失败: {e}"))?
+        req.workspace.trim()
     };
+    if req.enabled {
+        if req.bot_id.trim().is_empty() || secret.is_empty() {
+            return Err("请填写 Bot ID 与 Secret".into());
+        }
+        if requested_engine == "dsh" {
+            if requested_workspace.is_empty() || !std::path::Path::new(requested_workspace).is_absolute() {
+                return Err("DSH 工作区必须是非空绝对路径".into());
+            }
+            if !std::path::Path::new(requested_workspace).is_dir() {
+                return Err("DSH 工作区目录不存在".into());
+            }
+            if crate::dsh_commands::dsh_installed_version().is_none() {
+                return Err("未检测到 DeepSeek Harness：请先安装后启用 DSH 引擎".into());
+            }
+        } else if req.agent.is_none() {
+            return Err("请先配置天玑模型，再启用企微通道".into());
+        }
+    }
+    if delta.changed.is_empty() {
+        record_transition(&state, "apply", "noop", &delta.changed);
+        return wecom_channel_status(app.clone(), app.state::<WecomState>()).await;
+    }
+    if delta.retire {
+        retire_channel(&state, "apply", "channel_changed", &delta.changed).await;
+    } else {
+        record_transition(&state, "apply", "hot_update", &delta.changed);
+    }
+    let _lifecycle = state.orch.dsh_lifecycle.lock().await;
 
     // 更新策略与 agent 配置
     {
@@ -495,6 +579,8 @@ pub async fn wecom_channel_apply(
     {
         *state.orch.bot_display_name.lock().await = req.bot_display_name.trim().to_string();
     }
+    // Already normalized once, including the 2000 Unicode-character budget.
+    *state.orch.self_intro.lock().await = req.self_intro.clone();
     // 引擎与档位在 agent 被 move 之前取出来：DSH 档不需要天玑的模型快照。
     let engine = normalize_engine(&req.engine);
     let tier = if req.permission.trim().is_empty() {
@@ -514,39 +600,15 @@ pub async fn wecom_channel_apply(
         req.workspace.trim().to_string()
     };
     // DSH 档随会话下发的 MCP 服务：从 agent 配置里取（总开关关掉则不带）。
-    let dsh_mcp = req
-        .agent
-        .as_ref()
-        .filter(|a| a.mcp_enabled)
-        .map(|a| a.mcp.clone())
-        .unwrap_or_default();
-    if let Some(agent) = req.agent {
-        *state.orch.agent.lock().await = Some(agent);
-    }
+    let dsh_mcp = effective_mcp(req.mcp, req.mcp_enabled, req.agent.as_ref());
+    *state.orch.agent.lock().await = req.agent;
     *state.orch.engine.lock().await = engine.clone();
     // 全局并发上限（0/越界在 set_max_jobs 内回落默认）。
     state.orch.set_max_jobs(req.max_jobs);
 
-    // Changing query namespace invalidates short-lived investigation cursors, including switching back.
-    let old_sky = state.skywalking.lock().await.clone();
-    let old_zone = *state.skywalking_timezone.lock().await;
-    let old_bot = state
-        .applied
-        .lock()
-        .await
-        .as_ref()
-        .map(|c| c.bot_id.clone())
-        .unwrap_or_default();
-    let old_workspace = state.dsh.workspace().await;
-    if old_sky
-        != (
-            req.skywalking_addr.trim().to_string(),
-            req.skywalking_header.trim().to_string(),
-        )
-        || old_zone != req.skywalking_timezone_offset_minutes
-        || old_bot != req.bot_id.trim()
-        || old_workspace != workspace
-    {
+    // Changing query namespace invalidates short-lived investigation cursors,
+    // including switching back. Tianji must not compare its path to stale DSH state.
+    if delta.changed.iter().any(|field| matches!(*field, "skywalking" | "botId" | "workspace")) {
         crate::wecom_investigation::clear_contexts();
     }
     // SkyWalking 排障地址（空 = 问答时不下发 skywalking 工具）。
@@ -571,12 +633,8 @@ pub async fn wecom_channel_apply(
         };
     }
 
-    // 逆向文档自动更新配置（webhook 可能是 enc:v1: 密文）。
-    let webhook_plain = if req.webhook_url.trim().is_empty() {
-        String::new()
-    } else {
-        crate::secret_protect::unprotect_secret(req.webhook_url.trim()).unwrap_or_default()
-    };
+    // Webhook was decoded during validation, before any retirement/mutation.
+    let webhook_plain = req.webhook_url;
     *state.docgen.lock().await = crate::wecom_docgen::DocgenConfig {
         enabled: req.auto_update_enabled,
         time: req.auto_update_time.trim().to_string(),
@@ -589,32 +647,21 @@ pub async fn wecom_channel_apply(
     };
 
     if !req.enabled {
-        state.sock.stop().await;
-        stop_dsh_async(&app);
+        if delta.retire {
+            state.dsh.stop().await;
+        }
         *state.applied.lock().await = None;
-        let st = wecom_channel_status(app.clone(), state).await?;
+        *state.api_token.lock().await = None;
+        *state.effective_config.lock().await = Some(effective);
+        let st = wecom_channel_status(app.clone(), app.state::<WecomState>()).await?;
         emit_status(&app, &st);
         return Ok(st);
     }
 
     let bot_id = req.bot_id.trim().to_string();
-    if bot_id.is_empty() || secret.is_empty() {
-        return Err("请填写 Bot ID 与 Secret".into());
-    }
     if engine == "dsh" {
-        // 这里同步校验，错误直接弹在设置页；进程启动放在后台，别卡住 UI。
-        if workspace.trim().is_empty() {
-            return Err("DSH 引擎需要工作区路径：请填「工作区路径」或先选一个 Git 仓库".into());
-        }
-        if !std::path::Path::new(&workspace).is_absolute() {
-            return Err("DSH 工作区必须是绝对路径".into());
-        }
-        if crate::dsh_commands::dsh_installed_version().is_none() {
-            return Err(
-                "未检测到 DeepSeek Harness：请先在「Harness」页安装后再启用 DSH 引擎".into(),
-            );
-        }
-        let changed = state
+        // All synchronous validation happened before retiring the previous generation.
+        let _changed = state
             .dsh
             .configure(
                 Tier::parse(&tier),
@@ -625,14 +672,11 @@ pub async fn wecom_channel_apply(
             .await;
         // MCP 服务随会话下发（ACP mcpServers）；总开关关掉时 dsh_mcp 为空。
         state.dsh.set_mcp(dsh_mcp).await;
-        // 档位/工作区变了就带 restart 标记；否则 ensure_ready 命中 Ready 会直接返回。
-        kick_dsh(&app, changed);
+        // configure/set_mcp retire only tier/workspace/MCP changes; model/effort
+        // clear selection caches for later turns without cancelling active work.
     } else {
-        // 切回天玑：DSH 进程不再需要，顺手回收（放后台，别让保存卡在启动流程上）。
-        stop_dsh_async(&app);
-        if state.orch.agent.lock().await.is_none() {
-            return Err("请先配置天玑模型，再启用企微通道".into());
-        }
+        // Retire DSH while holding the lifecycle gate, before accepting Tianji work.
+        state.dsh.stop().await;
     }
 
     let corp_id = req.corp_id.trim().to_string();
@@ -650,66 +694,79 @@ pub async fn wecom_channel_apply(
             Some(corp_secret)
         },
     };
-    let prev = state.applied.lock().await.clone();
-    let bot_same = matches!(
-        &prev,
-        Some(c) if c.bot_id == creds.bot_id && c.secret == creds.secret
-    );
-    let corp_changed = prev
-        .as_ref()
-        .map(|c| (c.corp_id.clone(), c.corp_secret.clone()))
-        != Some((creds.corp_id.clone(), creds.corp_secret.clone()));
-    if !bot_same {
-        // 换凭据：断旧连再开
-        state.sock.stop().await;
-        *state.applied.lock().await = Some(creds);
-        *state.api_token.lock().await = None;
-
-        let orch = Arc::clone(&state.orch);
-        let app_msg = app.clone();
-        let app_ev = app.clone();
-        let on_msg = Arc::new(move |msg| {
-            orch.handle_msg(app_msg.clone(), msg);
-        });
-        let orch2 = Arc::clone(&state.orch);
-        let on_event = Arc::new(move |ev| {
-            orch2.handle_event(app_ev.clone(), ev);
-        });
-        state
-            .sock
-            .start(app.clone(), bot_id, secret, on_msg, on_event);
-    } else if corp_changed {
-        // 业务凭证变化不影响长连接：只更新指纹并作废业务 token 缓存
-        *state.applied.lock().await = Some(creds);
+    let corp_changed = state.applied.lock().await.as_ref()
+        .map(|old| (&old.corp_id, &old.corp_secret) != (&creds.corp_id, &creds.corp_secret))
+        .unwrap_or(true);
+    if corp_changed {
         *state.api_token.lock().await = None;
     }
+    // Hot updates preserve the socket, active turns, approvals and generation.
+    if delta.retire {
+        start_channel(&app, &state, &creds).await?;
+    }
+    *state.applied.lock().await = Some(creds);
+    if engine == "dsh" {
+        kick_dsh(&app);
+    }
 
-    // 等一小会儿让 Connecting → Connected/Error 有机会更新
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    let st = wecom_channel_status(app.clone(), state).await?;
+    *state.effective_config.lock().await = Some(effective);
+    // Only a replacement connection needs time to publish Connecting/Connected.
+    if delta.retire {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+    let st = wecom_channel_status(app.clone(), app.state::<WecomState>()).await?;
     emit_status(&app, &st);
     Ok(st)
 }
 
-/// 后台回收 DSH 进程：`stop()` 会等启动流程释放锁，不能在 `apply` 里同步等。
-fn stop_dsh_async(app: &AppHandle) {
-    let dsh = Arc::clone(&app.state::<WecomState>().dsh);
-    tauri::async_runtime::spawn(async move {
-        dsh.stop().await;
-    });
+fn record_transition(state: &WecomState, source: &str, status: &str, changed: &[&str]) {
+    crate::wecom_diagnostics::record(
+        "wecom-channel", "channel_transition", status, None, None,
+        serde_json::json!({"source": source,
+            "channelGeneration": state.orch.current_generation(),
+            "changedFields": changed, "changedCount": changed.len()}),
+    );
 }
 
-/// 后台拉起 DSH 引擎（`restart` = 先杀掉现有进程），完成后主动推一次状态，
-/// 设置页不必等下一个 5 秒轮询。
-fn kick_dsh(app: &AppHandle, restart: bool) {
+/// Caller holds apply_lock. Finish on the old socket before closing transport.
+async fn retire_channel(state: &WecomState, source: &str, reason: &str, changed: &[&str]) {
+    state.orch.retire(reason).await;
+    record_transition(state, source, "retired", changed);
+    state.sock.stop().await;
+    state.pending_approvals.lock().await.clear();
+}
+
+async fn start_channel(app: &AppHandle, state: &WecomState, creds: &AppliedCreds) -> Result<(), String> {
+    let orch = Arc::clone(&state.orch);
+    let app_msg = app.clone();
+    let on_msg = Arc::new(move |msg| orch.handle_msg(app_msg.clone(), msg));
+    let orch = Arc::clone(&state.orch);
+    let app_ev = app.clone();
+    let on_event = Arc::new(move |ev| orch.handle_event(app_ev.clone(), ev));
+    // Publish credentials before callbacks can consume business API credentials.
+    *state.applied.lock().await = Some(creds.clone());
+    state.orch.resume_ingress();
+    if let Err(error) = state.sock.start(
+        app.clone(), creds.bot_id.clone(), creds.secret.clone(), on_msg, on_event,
+    ).await {
+        *state.applied.lock().await = None;
+        *state.effective_config.lock().await = None; // retry must not become a no-op
+        *state.api_token.lock().await = None;
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Idempotent background startup only. Destructive retirement must finish before ingress reopens.
+fn kick_dsh(app: &AppHandle) {
     let dsh = Arc::clone(&app.state::<WecomState>().dsh);
+    let orch = Arc::clone(&app.state::<WecomState>().orch);
+    let generation = orch.current_generation();
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let result = if restart {
-            dsh.restart().await
-        } else {
-            dsh.ensure_ready().await
-        };
+        let _lifecycle = orch.dsh_lifecycle.lock().await;
+        if orch.current_generation() != generation { return; }
+        let result = dsh.ensure_ready().await;
         if let Err(e) = result {
             eprintln!("[wecom] DSH 引擎启动失败：{e}");
         }
@@ -725,40 +782,29 @@ pub async fn wecom_channel_restart(
     app: AppHandle,
     state: State<'_, WecomState>,
 ) -> Result<WecomStatus, String> {
+    let _apply = state.apply_lock.lock().await;
     let creds = state
         .applied
         .lock()
         .await
         .clone()
         .ok_or_else(|| "通道未启用".to_string())?;
+    retire_channel(&state, "restart", "channel_restart", &[]).await;
     let engine = state.orch.engine.lock().await.clone();
     if engine == "dsh" {
-        kick_dsh(&app, true);
+        {
+            let _lifecycle = state.orch.dsh_lifecycle.lock().await;
+            state.dsh.stop().await;
+        }
     }
-    state.sock.stop().await;
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    let orch = Arc::clone(&state.orch);
-    let app_msg = app.clone();
-    let app_ev = app.clone();
-    let on_msg = Arc::new(move |msg| {
-        orch.handle_msg(app_msg.clone(), msg);
-    });
-    let orch2 = Arc::clone(&state.orch);
-    let on_event = Arc::new(move |ev| {
-        orch2.handle_event(app_ev.clone(), ev);
-    });
-    state.sock.start(
-        app.clone(),
-        creds.bot_id.clone(),
-        creds.secret.clone(),
-        on_msg,
-        on_event,
-    );
+    start_channel(&app, &state, &creds).await?;
+    if engine == "dsh" {
+        kick_dsh(&app);
+    }
     *state.applied.lock().await = Some(creds);
 
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    let st = wecom_channel_status(app.clone(), state).await?;
+    let st = wecom_channel_status(app.clone(), app.state::<WecomState>()).await?;
     emit_status(&app, &st);
     Ok(st)
 }
@@ -818,7 +864,7 @@ pub fn wecom_reveal_secret(stored: String) -> Result<String, String> {
 #[tauri::command]
 pub fn wecom_log_tail(lines: Option<usize>) -> Result<String, String> {
     let n = lines.unwrap_or(200).clamp(1, 2000);
-    Ok(crate::wecom_log::tail(n))
+    crate::wecom_log::tail_checked(n)
 }
 
 /// 读最近若干条企微会话旁证（设置页「会话日志」折叠区）。
@@ -844,3 +890,63 @@ pub fn init_state() -> WecomState {
 // silence unused import in some builds
 #[allow(dead_code)]
 fn _touch_policy(_: &PolicyState, _: &PendingPair) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn server(name: &str) -> crate::mcp::McpServerSpec {
+        crate::mcp::McpServerSpec {
+            name: name.into(), command: "fixture-command".into(), args: "--fixture".into(),
+        }
+    }
+
+    fn legacy(enabled: bool) -> WecomAgentConfig {
+        serde_json::from_value(json!({
+            "config": {
+                "name": "fixture", "provider": "fixture", "apiKey": "",
+                "baseUrl": "", "model": "fixture", "temperature": 0.0,
+                "maxTokens": 100, "isDefault": false
+            },
+            "mcpEnabled": enabled,
+            "mcp": [{"name": "legacy", "command": "fixture-command", "args": "--fixture"}]
+        })).unwrap()
+    }
+
+    #[test]
+    fn explicit_mcp_works_without_tianji_model_and_switch_can_disable_it() {
+        let active = effective_mcp(Some(vec![server("independent")]), Some(true), None);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].name, "independent");
+        assert_eq!(active[0].args, "--fixture");
+        assert!(effective_mcp(Some(vec![server("independent")]), Some(false), None).is_empty());
+        assert_eq!(effective_mcp(Some(vec![server("independent")]), None, None).len(), 1);
+    }
+
+    #[test]
+    fn missing_fields_fall_back_but_explicit_empty_does_not_restore_legacy() {
+        let old = legacy(true);
+        assert_eq!(effective_mcp(None, None, Some(&old))[0].name, "legacy");
+        assert!(effective_mcp(Some(Vec::new()), None, Some(&old)).is_empty());
+        assert!(effective_mcp(None, Some(false), Some(&old)).is_empty());
+        let old_disabled = legacy(false);
+        assert!(effective_mcp(None, None, Some(&old_disabled)).is_empty());
+        assert_eq!(effective_mcp(None, Some(true), Some(&old_disabled))[0].name, "legacy");
+        assert_eq!(effective_mcp(Some(vec![server("new")]), Some(true), Some(&old))[0].name, "new");
+        assert!(effective_mcp(None, None, None).is_empty());
+    }
+
+    #[test]
+    fn mcp_camel_case_request_preserves_absent_false_and_empty() {
+        let mut value = json!({"enabled": false, "botId": "", "botSecret": ""});
+        let absent: WecomApplyRequest = serde_json::from_value(value.clone()).unwrap();
+        assert!(absent.mcp.is_none());
+        assert!(absent.mcp_enabled.is_none());
+        value["mcp"] = json!([]);
+        value["mcpEnabled"] = json!(false);
+        let explicit: WecomApplyRequest = serde_json::from_value(value).unwrap();
+        assert!(explicit.mcp.unwrap().is_empty());
+        assert_eq!(explicit.mcp_enabled, Some(false));
+    }
+}

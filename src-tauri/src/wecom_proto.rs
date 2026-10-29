@@ -82,6 +82,7 @@ pub fn ping(req_id: &str) -> String {
 }
 
 pub fn respond_stream(req_id: &str, stream_id: &str, content: &str, finish: bool) -> String {
+    // Preserve reply content verbatim; JSON serialization handles transport escaping.
     json!({
         "cmd": "aibot_respond_msg",
         "headers": { "req_id": req_id },
@@ -395,6 +396,21 @@ mod tests {
         let (t, m) = strip_mention("@Bot\u{3000}hello", "");
         assert!(m);
         assert_eq!(t, "hello");
+    }
+
+    #[test]
+    fn markdown_reply_boundary_preserves_content_without_touching_protocol_ids() {
+        let content = "## 结果\n**未自动报价**\n- 项目 `fixture.parent.pom\\doc/`\n- matchId=1454805448406827008\n> WARN count=0 [L1]\nAuthorization: Bearer fixture-secret";
+        let wire: Value = serde_json::from_str(&respond_stream("transport-id", "stream-id", content, true)).unwrap();
+        let shown = wire["body"]["stream"]["content"].as_str().unwrap();
+        assert_eq!(shown, content);
+        let welcome: Value = serde_json::from_str(&respond_welcome_text("welcome-id", content)).unwrap();
+        assert_eq!(welcome["body"]["text"]["content"], content);
+        assert!(shown.starts_with("## 结果\n**未自动报价**"));
+        assert!(shown.contains("> WARN count=0 [L1]"));
+        assert_eq!(wire["headers"]["req_id"], "transport-id");
+        assert_eq!(wire["body"]["stream"]["id"], "stream-id");
+        assert_eq!(wire["body"]["msgtype"], "stream");
     }
 
     #[test]

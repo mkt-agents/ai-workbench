@@ -192,7 +192,7 @@ impl RuntimeShared {
         if line.trim().is_empty() {
             return;
         }
-        let clipped: String = line.chars().take(400).collect();
+        let clipped: String = crate::wecom_sanitize::redact_diagnostic(line).chars().take(400).collect();
         if let Ok(mut lines) = self.stderr.lock() {
             lines.push(clipped);
             let overflow = lines.len().saturating_sub(STDERR_TAIL_LINES);
@@ -506,9 +506,9 @@ impl DshEngine {
         Ok(catalog)
     }
 
-    /// 把设置页选的模型 / 思考强度应用到某个会话；值没变就跳过。
-    /// 返回 `Err` 时调用方只记日志，不让整轮失败（会话会退回默认路由）。
-    pub async fn apply_selection(&self, session_id: &str) -> Result<(), String> {
+    /// Apply the requested configuration; an RPC acknowledgement is not a model-use observation.
+    /// Any failure aborts this turn rather than silently using the previous/default route.
+    pub async fn apply_selection(&self, session_id: &str) -> Result<(String, String), String> {
         let (mut model, effort) = {
             let g = self.inner.lock().await;
             (g.model.clone(), g.effort.clone())
@@ -531,43 +531,19 @@ impl DshEngine {
                 available[0].clone()
             };
         }
-        if model.trim().is_empty() && effort.trim().is_empty() {
-            return Ok(());
-        }
         {
             let g = self.inner.lock().await;
             if let Some((m, e)) = g.applied.get(session_id) {
                 if m == &model && e == &effort {
-                    return Ok(());
+                    return Ok((model, effort));
                 }
             }
         }
         let (shared, writer) = self.parts().await?;
-        if !model.trim().is_empty() {
-            rpc_call(
-                &shared,
-                &writer,
-                "session/set_config_option",
-                json!({ "sessionId": session_id, "configId": "model", "value": model }),
-                SESSION_TIMEOUT,
-            )
-            .await
-            .map_err(|e| format!("应用模型失败（已退回 DSH 默认路由）：{e}"))?;
-        }
-        if !effort.trim().is_empty() {
-            rpc_call(
-                &shared,
-                &writer,
-                "session/set_config_option",
-                json!({ "sessionId": session_id, "configId": "reasoning_effort", "value": effort }),
-                SESSION_TIMEOUT,
-            )
-            .await
-            .map_err(|e| format!("应用思考强度失败（保留模型选择）：{e}"))?;
-        }
+        apply_selection_rpc(&shared, &writer, session_id, &model, &effort).await?;
         let mut g = self.inner.lock().await;
-        g.applied.insert(session_id.to_string(), (model, effort));
-        Ok(())
+        g.applied.insert(session_id.to_string(), (model.clone(), effort.clone()));
+        Ok((model, effort))
     }
 
     /// 立即重启（换引擎/换档位/手动重连时用）；未配置工作区时报错。
@@ -1551,6 +1527,27 @@ fn rpc_error_text(err: &Value) -> String {
     }
 }
 
+/// Public turn entry awaits these acknowledgements before submitting any prompt.
+async fn apply_selection_rpc(
+    shared: &Arc<RuntimeShared>,
+    writer: &mpsc::UnboundedSender<Value>,
+    session_id: &str,
+    model: &str,
+    effort: &str,
+) -> Result<(), String> {
+    if !model.trim().is_empty() {
+        rpc_call(shared, writer, "session/set_config_option",
+            json!({"sessionId":session_id,"configId":"model","value":model}), SESSION_TIMEOUT)
+            .await.map_err(|e| format!("应用模型失败，本轮未提交模型任务：{e}"))?;
+    }
+    if !effort.trim().is_empty() {
+        rpc_call(shared, writer, "session/set_config_option",
+            json!({"sessionId":session_id,"configId":"reasoning_effort","value":effort}), SESSION_TIMEOUT)
+            .await.map_err(|e| format!("应用思考强度失败，本轮未提交模型任务：{e}"))?;
+    }
+    Ok(())
+}
+
 async fn rpc_call(
     shared: &Arc<RuntimeShared>,
     writer: &mpsc::UnboundedSender<Value>,
@@ -1580,6 +1577,15 @@ async fn rpc_call_typed(
             .map_err(|e| RpcFailure::Transport(format!("锁失败：{e}")))?;
         map.insert(id, tx);
     }
+    // Outer turn/configuration deadlines can drop this future before its own timeout.
+    // Always remove the pending sender; a late ACP reply then has no waiter to revive.
+    struct PendingGuard<'a> { shared: &'a RuntimeShared, id: u64 }
+    impl Drop for PendingGuard<'_> {
+        fn drop(&mut self) {
+            if let Ok(mut pending) = self.shared.rpc.pending.lock() { pending.remove(&self.id); }
+        }
+    }
+    let _pending_guard = PendingGuard { shared, id };
     let frame = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
     if writer.send(frame).is_err() {
         if let Ok(mut map) = shared.rpc.pending.lock() {
@@ -1890,6 +1896,43 @@ mod tests {
         .await
         .is_err());
         assert!(shared.rpc.pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn outer_selection_timeout_clears_pending_rpc() {
+        let shared = Arc::new(RuntimeShared { rpc: Arc::new(RpcShared::new()), stderr: StdMutex::new(Vec::new()) });
+        let (writer, mut receiver) = mpsc::unbounded_channel();
+        let mut call = Box::pin(apply_selection_rpc(&shared, &writer, "history", "model", "high"));
+        tokio::select! {
+            _ = &mut call => panic!("fixture has no response"),
+            frame = receiver.recv() => assert!(frame.is_some()),
+        }
+        assert_eq!(shared.rpc.pending.lock().unwrap().len(), 1);
+        drop(call);
+        assert!(shared.rpc.pending.lock().unwrap().is_empty());
+        let result = tokio::time::timeout(Duration::from_millis(5),
+            apply_selection_rpc(&shared, &writer, "other", "model", "")).await;
+        assert!(result.is_err());
+        assert!(shared.rpc.pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn selection_error_stops_before_effort_and_success_preserves_requested_values() {
+        let (shared, writer, calls, task) = mock_rpc(vec![json!({"error":{"code":-32602,"message":"model unavailable"}})]);
+        let error = apply_selection_rpc(&shared, &writer, "history", "selected-model", "high").await.unwrap_err();
+        assert!(error.contains("本轮未提交模型任务"));
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        assert_eq!(calls.lock().unwrap()[0]["params"]["configId"], "model");
+        task.abort();
+        let (shared, writer, calls, task) = mock_rpc(vec![json!({"result":{}}), json!({"result":{}})]);
+        apply_selection_rpc(&shared, &writer, "history", "selected-model", "high").await.unwrap();
+        let observed = calls.lock().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0]["params"]["value"], "selected-model");
+        assert_eq!(observed[1]["params"]["value"], "high");
+        assert!(observed.iter().all(|c| c["method"] == "session/set_config_option"));
+        drop(observed);
+        task.abort();
     }
 
     fn engine_fixture() -> DshEngine {

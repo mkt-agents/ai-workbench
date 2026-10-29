@@ -4,6 +4,139 @@
 > 同一个企微机器人，回话的工作可以交给内置天玑，也可以交给本机安装的
 > DeepSeek Harness（`dsh --profile acp`）。
 
+## 企微回复阅读排版（2026-10-29）
+
+客户端决定字体族/字号，机器人不使用HTML/CSS指定字体。通过Markdown信息层次改善阅读：短标题“排障结论”不再塞长业务ID；结论一句置顶，业务ID保留全值并逐行列在查询对象；正文原因不整段加粗，仅摘要、状态和少量标签强调。引用块与正文分层，证据去重、6短引文/8块预算、全部校验规则不变。
+
+查询范围显示可读日期时间与UTC偏移；同日省略结束端重复日期，跨日两端保留日期。有效小数秒保留，不通过显示取整扩大或缩小范围。实际查询start/end不变。普通问答提示同样约束短段、克制粗体、无一级大标题/宽表/HTML字体；自我介绍配置正文与耗时尾注不改写、不额外调用模型润色。真实字体和终端渲染需在企微客户端人工核验。本轮Rust全量966通过、0失败、14忽略，diff检查通过；回归快照覆盖长ID分层、同日/跨日范围、时区和小数秒、原因不整段加粗及引用仍保留。本轮未改前端CSS/未重启通道；Windows并行测试临时目录时钟碰撞已改随机名称，非产品业务改动。
+
+## 明确日期与相对日期查询（2026-10-29）
+
+修复“时间是10月26号”漏识别后静默查询当前4小时的问题；18:56请求的实际OAP submittedStart/end曾错误落在10月29日14:56—18:56，非报告排版或UTC偏移问题。该次证据不能回答26日业务原因，需使用正确范围重新查询。
+
+- `10月26号/10月26日`：省略年份取查询时区当前年；落在未来则请用户补年份，不擅自取去年。无时刻时查该日00:00至次日00:00。
+- `2026年10月26日`、`2026-10-26`：明确日期全天；支持日期加`10点到11点`、`11:31:12`，单故障时刻沿用±15分钟。
+- `昨天`：前一个自然日00:00至今天00:00；`前天`：前两个自然日00:00至昨天00:00。两者也支持明确时刻。
+- `近三天/最近三天/过去三天/近3天`：从当前查询时刻往前72小时，不是三个自然日。例如29日18:56查询，范围26日18:56至29日18:56。
+- 同一查询混合冲突日期/相对窗口、非法月日、缺月的`26号`、残缺时刻等应先澄清，零HTTP，不回退默认4小时。引号关键词及业务ID先屏蔽，避免把关键词日期/订单号误当查询时间。
+
+首次采集进度显示实际查询范围。范围传给源探测、实际日志查询与补查，报告继续展示宿主范围，不仅修标题。未指定日期才允许默认4小时。跨年范围建议明确两端完整年份；暂不完整支持的中文时分秒组合明确拒绝而非丢掉秒。
+
+本轮Rust全量965通过、0失败、14忽略；包含8个公共Mock OAP回归与日期纯函数测试。最初固定时钟用例已复现错误回退29日4小时，修复后实际HTTP queryDuration与fallback报告均断言26日全天；昨天/前天/近三天分别验证自然日和滚动72h。diff检查通过，保留已有编译警告；本轮无前端代码变更，未重启真实通道、未发送真实查询。
+
+## 配置自我介绍与新对话问候（2026-10-29）
+
+回答设置的 `wecomSelfIntro` 为两档引擎共用的热更新配置。完整问候（你好/您好/hi/hello等）或身份短句（你是谁/你能做什么等）在通过访问策略后直接发送配置文本，保留换行和emoji，并沿用宿主耗时尾注，不调用模型。空配置回退内置天玑介绍；进入会话的 `enter_chat` 欢迎不变。
+
+`新对话，你好` / `新会话，你是谁` 先识别开头的新会话控制子句，再重置当前作用域的短历史、ACP映射与实际查询缓存键，最后处理剩余问候。不能只把整句话加到身份关键词表；`你好，帮我查日志`、`新对话，帮我查订单`仍处理业务正文。纯`新对话`返回新会话确认。引号、说明、否定语境不当重置。
+
+重置不跨机器人/用户/群作用域；共享任务仅创建者可重置。旧回合持有会话锁时先提示停止或等完成，不在执行过程中清历史；历史写入失败会明确报错，不谎称已重置。自我介绍输入、IPC和后端统一2000个Unicode字符（不是2000个UTF-8字节），避免中文及emoji被额外截断。
+
+验证覆盖配置正文从解析到实际final帧、问候不占模型准入、混合业务文本继续下游。本轮当前源码Rust全量955通过、0失败、14忽略（原生退出码0），前端build与diff检查通过；历史测试数不迁移。真实客户端验收需要更新运行实例，不能把源码/测试通过当作正在运行的旧程序已更新；本轮未重启或向企微发送测试消息。
+
+## 取消回复脱敏与证据去重（2026-10-29，当前增量）
+
+**用户已明确批准去掉企微回复脱敏；本轮本地回归通过，真实企微待验收，未重启、未发版。** 此要求替代上一轮回复遮盖策略。历史Rust全量 **957通过、0失败、14忽略**、`npm run build`通过（工作区TEMP）与diff检查通过仅属上一轮快照；397/0/2是其中间scope，942/911等亦为历史，不作为本轮通过结论。
+
+### 出站文本边界
+
+- 移除 `redact_reply` 及[双引擎编排](<../src-tauri/src/wecom_orchestrator.rs>)、[proto](<../src-tauri/src/wecom_proto.rs>)、[报告display](<../src-tauri/src/wecom_report.rs>)中的全部回复脱敏；保留Markdown/HTML/control转义及[内部 `redact_diagnostic`](<../src-tauri/src/wecom_sanitize.rs>)，转义不是遮盖业务值。
+- 完整业务ID、时间、地址、路径及必要字段保留，凭据/token、手机号等也不再自动遮盖。**群内回复对全群可见**；不主动搜集与任务无关的秘密，不把本地历史隔离当作群消息私密。
+- 两档引擎普通正文继续完整缓冲至Done，DSH排障正文仍须报告/引用/源码校验后发送；不恢复未经验证的token流。进度与审批持续；异常/超时/意外结束不回显未完成acc，显式取消向原stream发取消final，首次冻结后迟到Done不覆盖。DSH cancelled不展示acc；内置Done的limited不泛化为所有模型stop都丢正文。
+- `send_finish`仍冻结完整final及宿主耗时，重试与回复history复用同一份正文；不再加回复清洗。Markdown仍用原生 `msgtype=stream` 的 `stream.content`，welcome仍为 `msgtype=text`；不清理旧历史或改写DSH内部会话。
+
+### 报告展示边界
+
+[报告renderer](<../src-tauri/src/wecom_report.rs>)保留摘要先行、纵向原因层级、短核心高亮、WARN/ERROR与阻断缺口/未执行建议高亮，原文用blockquote，不用宽表、不新增polish调用。**按证据ID全局去重：每个证据块全报告只展示一次，共享6条短引文、8个证据块预算；后续claim只列refs，code核对补日志refs。** timeline仍最多32条参与校验，展示预算不削减校验范围。
+
+短引文只严格识别并去掉框架前缀、服务/环境/实例包装和excerpt元数据；保留业务topic与必要原文，未知前缀不猜删。宿主先做Markdown/HTML/control转义再加高亮；内部原始证据、解析/校验、源码核验和因果/线上版本边界不变。
+
+**本轮本地验证通过**：`cargo test wecom_` 为393通过、0失败、2忽略；最终 `cargo test` 全量954通过、0失败、14忽略，diff检查通过，保留既有unused/dead_code warnings。移除旧回复脱敏测试，因此全量不是上一轮957。本轮未改前端、未跑npm build、未重启/发版或真实企微验收；真实客户端呈现与送达仍待单独验收。
+
+## 卡住回归：退役收尾与进度查询（2026-10-29）
+
+**本次修复本地全量942通过、0失败、14忽略，前端构建通过；真实企微复测待进行。** 主代理核对真实日志：私聊`e6dad457`于16:32:10入站，16:33:42采集214 evidence、partial、18HTTP，16:34:03与群聊`238d0caa`同时`cancelled/channel_changed`；planning约19秒无输出，**不是600秒超时**。旧代际取消仅本地discard、未finish原stream，是上轮回归。16:39:21“还没好吗”`560959ac`又进入reuse会话的新模型任务，136.8秒/6工具事件/0正文后于16:41:38被用户stop。详情见 [真实事件与修复清单](<wecom-stuck-20261029.md>)。
+
+### 当前修复契约（已完成本地回归）
+
+- **退役先收尾**：[orch.retire](<../src-tauri/src/wecom_orchestrator.rs>)暂停ingress、冻结旧任务中断final，再cancel/invalidate；在旧socket上共用2秒预算尝试发送与flush，随后stop。已冻结正常final不改写；`retirement/socket_drained`仅表示writer flush完成，不是平台ACK或用户已读。失败/超时记delivery_unavailable，不保证每个final都实际送达。
+- **不再每次apply都重连**：[有效配置](<../src-tauri/src/wecom_channel_config.rs>)先解密、归一再做字段摘要比较；等效配置noop，热字段更新保留活动回合/socket，冷变更才退役。手动restart/profile sync同样受控退役；诊断记录`source=apply/restart/sync`与changedFields，不记录敏感值或配置摘要值。旧描述“先stop/每次保存产生代际”由本节更新。
+- **完整短句查状态**：“进度 / 查到哪了 / 还没好吗 / 还没好 / 好了吗 / 当前进度”经会话/策略判定后先走状态查询，不进入新模型任务和模型队列；只匹配完整短句，保留“任务状态”的共享任务管理语义。
+- **有界进度**：[progress](<../src-tauri/src/wecom_progress.rs>)只存内存结构状态，最多256条，done后2小时TTL（不是活跃任务2小时即淘汰）。独立timer在无可见正文时最多每30秒发状态，tool活动不延后节奏；正文开始后不覆盖，running优先于同会话新queued，首次terminal冻结。
+- **同Bot本机租约**：[bot_lease](<../src-tauri/src/wecom_bot_lease.rs>)按同Windows用户/Bot摘要取得share_mode(0)句柄锁；空文件存在不等于被占用，不记owner PID或凭据。**旧安装版未采用锁，仍可能与新实例冲突**，不是跨版本/跨机器的全局锁。
+- **有界发送与ACK分层**：[WS Outbox](<../src-tauri/src/wecom_ws.rs>)最多64项、同stream待发progress合并、final和flush边界不被覆盖，200ms本地pacing。enqueued、socket_written、socket_drained只描述本地不同阶段；平台回执现在记`platform_ack`并带`final_frame_unknown`，只有req关联，不把累计stream的ACK归给final。
+
+当时开发进程22584与安装进程26820共存，日志出现`6000 data conflict`；同Bot双连及它与取消的因果尚未证实。16:34:03具体由apply/restart/sync哪个入口触发，旧日志未记录，仍是unknown。真实进程未重启、用户会话未主动重发；本轮已完成Rust全量与前端构建，保留unused/dead_code及大包警告；真实修复验收另计，不声称提速或已恢复。
+
+## 请求级诊断增强（2026-10-29）
+
+**状态：新增实现与请求级事件接入已落地，最终Rust全量911通过、0失败、14忽略，前端构建通过；真实企微/OAP验收待进行。** 本节是本轮增量；后文各阶段旧测试/性能数字仍为历史快照，不因本节更新成为当前最终结果。代码审查和剩余建议见 [诊断审查](<wecom-diagnostics-review.md>)。
+
+### 已修复的生命周期与配置问题
+
+- [回复登记器](<../src-tauri/src/wecom_reply.rs>) 增加 `RegistrationGuard`：静默策略丢弃、提前返回与取消future同样释放未完成登记，不靠等待容量/过期回收来补救。
+- [通道apply](<../src-tauri/src/wecom_channel.rs>) 成为配置代际边界：先退休旧socket、作废旧队列/回合，再在生命周期锁下配置DSH。DSH关键启停共用启动锁；[WS发布](<../src-tauri/src/wecom_ws.rs>) 保护sender/state，旧代或已停止连接的迟到完成不覆盖新代状态。
+- DSH MCP通过独立顶层 `mcp/mcp_enabled` 下发；没有天玑model/agent快照也能传MCP。旧agent字段仅作兼容来源，显式顶层配置优先；有效MCP变化会退休旧ACP进程，避免活动会话继续用旧客户端集合。
+- 显式模型/effort配置失败会中止本轮模型任务，配置阶段deadline为**20秒**；超时也不提交模型任务。配置ACK仅说明ACP返回的选项值，不证明后续实际provider/model使用；不要据此推导质量或性能差异。
+- [Unicode脱敏](<../src-tauri/src/wecom_sanitize.rs>) 在原字符串上匹配，避开大小写折叠变长造成的字节偏移问题；[启动诊断](<../src-tauri/src/dsh_commands.rs>) 与 [ACP stderr](<../src-tauri/src/wecom_dsh.rs>) 先脱敏再截断，避免截断切断凭据识别模式。文本脱敏不等于业务全文匿名化，诊断事件仍使用字段白名单。
+
+### 存储与查询契约
+
+[wecom_diagnostics.rs](<../src-tauri/src/wecom_diagnostics.rs>) 单独记录typed元数据，位置为 `%APPDATA%\com.ai-workbench.app\diagnostics\wecom.jsonl` 及 `.1` 至 `.4`。它与既有会话问答旁证、DSH会话历史分开。
+
+| 项目 | 当前实现与解释 |
+| --- | --- |
+| 事件 | `schemaVersion/timestamp/requestId/phase/status/code?/durationMs?/metadata`；metadata按键和类型白名单投影，不接受任意正文、URL、路径或错误全文 |
+| 保留 | 单文件5 MiB、总5份（当前1份+归档4份），7天lazy保留；写入时轮转/清过期文件，读取排除过期文件/事件，不是后台定时清扫 |
+| requestId | `wecom-preflight-X` → `wecom-X` → `sha256:…`；普通requestId同样哈希，已有合法摘要保持幂等。可以贴旧原ID查询，不必人工计算哈希 |
+| 排序 | 追加顺序倒序（`reverseAppend`），不是按模型自报时间或另一次采样重排 |
+| 单页预算 | 扫描最多1 MiB、返回最多200事件；稀疏筛选可能返回0事件但仍有下一页 |
+| 覆盖 | `nextCursor/scannedBytes/partial/readErrors/health`；`partial`可表示尚有快照数据，也可表示读坏行/读失败等缺口。读完保留页不等于历史完整 |
+| 写入健康 | `health.status=unknown/ok/degraded`、`writeFailures/lastError/lastSuccessAt`；只描述本进程诊断写入观测，不是OAP、DSH或企微业务健康 |
+
+**游标不是持续订阅。** 它绑定筛选和文件身份/位置快照；追加、覆盖、删除、过期或进程重启等快照变化返回 `DIAGNOSTICS_CURSOR_STALE`，界面停止续页并提示刷新。仅文件rename的轮转、且原身份与内容快照仍在时可续读；若轮转同时淘汰了原文件，按失效处理。查询期间有新事件写入时，刷新重取第一页是预期操作，不是“没有更多记录”。
+
+### 三项诊断IPC与UI操作
+
+[诊断IPC](<../src-tauri/src/wecom_diagnostic_commands.rs>)、[前端封装](<../src/lib/wecomChannel.ts>) 与 [请求诊断面板](<../src/components/WecomRequestDiagnostics.tsx>) 已接通：
+
+| IPC | 用途 | 覆盖边界 |
+| --- | --- | --- |
+| `wecom_diagnostics_query` | 按requestId、phase、status、from/to及cursor查询 | 每页1 MiB/200事件上限；普通UI请求50事件一页 |
+| `wecom_diagnostic_request` | 单请求查看 | 单次有界页，最多200事件；有游标可通过query续页 |
+| `wecom_diagnostic_export` | 返回单请求脱敏JSON字符串 | 独立有界单页，不自动导出所有保留页，也不拼接UI已加载页；含`coverage.partial/hasMore/readErrors`及health |
+
+使用路径：**设置 → IM机器人 → 企业微信 → 运行诊断**。
+
+1. 粘贴原始requestId或诊断摘要ID，按需填写phase/status与起止时间；UI本地时间转ISO时间下发。
+2. 点击查询后按需加载更多。普通页50条，UI最多10页/500条；单请求入口首屏最多200条，所有入口仍受500条总上限。达到上限或游标失效都有独立提示。
+3. 点击事件的单请求按钮，或从带requestId的新会话旁证下钻。旧会话缺requestId不显示猜测关联。
+4. “复制摘要”只复制**当前已加载事件**的标识、阶段、状态、code、耗时，不复制任意metadata值；不是整条请求汇总成功证明。
+5. 单请求导出拿到JSON字符串后调用既有 `save_text_file` **原生保存对话框**；保存/取消/失败分别显示。只含结构元数据，没有业务全文；先看导出coverage再判断是否缺页。
+
+中文/英文文案均已补齐。通道日志读取错误直接显示错误；会话日志与新诊断区也分别显示error、partial和空态，不再把读取失败当成“没有记录”。
+
+### 会话旁证：有界读取不等于清理历史
+
+`wecom_session_recent_page`是额外的会话查询IPC，返回 `entries/partial/readErrors/scannedBytes`；[读取实现](<../src-tauri/src/wecom_session.rs>) 每文件只读尾部256 KiB，合计8 MiB，目录枚举最多512项（因此最多512个文件），结果限额默认30、最多200条。超过范围明确partial，不承诺覆盖目录里所有历史。
+
+旧旁证仍保留，不因查询删除；诊断7天轮转也不作用于会话历史。新写入旁证带requestId，旧记录无ID就保持无关联。**旁证可含问答正文；“metadata-only”仅指新诊断事件及其导出，不代表所有本机存储都没有正文。**
+
+### 已接入事件与结果解释
+
+主流程已实现并核对调用点：ingress、policy、admission queued、phase_ended、model selection ACK、investigation、query账本、report validated与validation failed、model completion、final delivery prepared/enqueued/retry及retry_exhausted、platform delivery_ack。实现接入不等于每条退出路径或两档引擎的真实链路已验收。
+
+- `phase_ended`是阶段guard结束，不等于success；request结束也不自动表示业务成功。统一terminal状态及取消/超时/错误/静默分支覆盖先于进一步美化。
+- `final frame enqueue`仅证明本地发送队列接收；平台ACK仅保留平台回执事实，不表示用户已读。
+- 同一累计stream多次更新若缺唯一frame对应证据，不把某条ACK标成“最终送达”；缺失对应保持未知，不由时间接近猜测。
+- 引用存在、源码行匹配、模型配置ACK、平台ACK是不同层面的事实；它们都不自动补齐源码/线上版本对应或因果语义证明。
+
+### 验证快照与下一步
+
+- **最终本地验证**：完成观测点与重启竞态收尾后，`cargo test --manifest-path src-tauri/Cargo.toml --quiet`为911通过、0失败、14忽略；`npm run build`通过，首次系统Temp锁问题通过工作区临时目录解决。编译仍有unused/dead_code及大bundle/混合import警告；未改CSS、未提交、未替换运行中的程序。手动重启/profile同步先退役再开放通道，后台仅幂等启动；模型目录探针要求已启用DSH通道。阻塞工具启动后的物理中止不作保证。
+- 第三批首批并行暂未启用。[公共入口回归](<../src-tauri/src/wecom_investigation_tests.rs#L432-L447>) 已钉住首次18预算/保留6以及低于20阈值时峰值1的串行现状；内部24预算基准不代表生产首轮已提速。
+- 尚无真实企微/OAP验收；源码/线上版本对应与因果语义仍未知。优先统一terminal状态，再补source版本快照、拆开自检、固定条件做证据质量A/B；不增加排版模型轮次。
+
 ## 怎么切
 
 设置 → IM机器人 → 企业微信 → 回答设置 → **AI 引擎**：
@@ -75,7 +208,7 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
   **多轮上下文由 DSH 自己维护**，不再把本机短历史塞进 prompt；问答旁证仍单独写入。
   新个人/共享会话从空上下文开始，不自动继承旧群历史；旧私聊没有可靠机器人归属也不自动迁入。
   同一新版逻辑会话切回天玑时可读取该作用域自己的旁证，不跨作用域复制。
-- **流式**：普通任务将 `session/update` 的 `agent_message_chunk` 累积后按 400ms 节流回写企微，首 40 字立即推。**DSH 排障的 protected 最终正文全缓冲至 `Done`**，再校验并发送；进度、排队与审批提示照常显示。`agent_thought_chunk` / `tool_call` / `usage_update` 不逐步播报。ACP 文本是「提交点」粒度，不是逐 token；非排障显式 JSON 请求保持原有输出行为。
+- **正文缓冲**：普通任务的 `agent_message_chunk` 与DSH排障protected正文均完整缓冲至 `Done`；排障再经报告/引用/源码校验发送，不恢复未经验证token流。进度、排队与审批提示照常显示，`agent_thought_chunk` / `tool_call` / `usage_update` 不逐步播报。取消回复脱敏不改变缓冲边界；非排障显式JSON保留内容格式。
 - **收尾**：`session/prompt` 的 `stopReason` 映射成一句提示（截断 / 工具步数上限 /
   拒绝 / 取消）；DSH 回合看门狗 600 秒，超时先 `session/cancel` 再收尾（日志采集与补查合计另限 120 秒累计采集耗时）。
 
@@ -139,7 +272,7 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 4. **下游伴随**：单列下游错误、伴随现象与容易误判的线索；日志级别、时间相邻、同 trace 本身不等于根因。
 5. **未完成**：保留阻断缺口、非阻断取证限制与下一步（标注未执行）。
 
-证据链恢复纵向短条目，不再用宽表。时间、服务、实例、级别及短引文取自宿主保留记录，解释与原文分开；时间按查询偏移显示，缺失就显示未记录。查询对象来自原始查询，兼容 `subject` 字符串不替换宿主查询对象。timeline 最多 **32 条参与校验、8 条展示、6 条短引文**，校验上限与展示预算分离；不再因 10 条有效引用超过展示 8 条就整份 fallback。短引文取实际 message，剥离 thread/logger 前缀及 excerpt 元数据，不把 digest/offset/full_length 等内部字段当正文，也不声称短摘录是完整线上日志。
+证据链恢复纵向短条目，不再用宽表。时间、服务、实例、级别及短引文取自宿主保留记录，解释与原文分开；时间按查询偏移显示，缺失就显示未记录。查询对象来自原始查询，兼容 `subject` 字符串不替换宿主查询对象。timeline 最多 **32 条参与校验**；按证据ID全局去重，每块全报告只展示一次，共享 **8块展示、6条短引文**预算，后续claim只列refs、code补日志refs。校验上限与展示预算分离，不因10条有效引用超过展示预算就整份fallback。短引文取实际message，仅去严格识别的框架前缀、服务/环境/实例包装及excerpt元数据，保留topic与必要原文，未知前缀不删；digest/offset/full_length不作正文，不声称短摘录是完整线上日志。
 
 **协议恢复边界**：[计划解析器](<../src-tauri/src/wecom_investigation_plan.rs>) 支持严格裸报告（strict bare）及省略 `queries` 的报告 envelope；兼容仅消除形状差异，不接收任意对象作为报告。已核对的 code claim 仅在其 L 引用与 trigger 的 L 引用有交集时，机械补齐对应 C join；不改 `level`，不重写结论 text，不绕过无效代码引用检查；旧 `final_answer` 的 summary 恢复保留。恢复范围限于已有证据与已核对关联，不从缺失证据自动猜结论。
 

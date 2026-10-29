@@ -382,9 +382,58 @@ AI 能力不再列为不做。天玑已是多模型流式对话，并带当前�
 * [x] **WARN/决策取证修正（代码落地，2026-10-28）**：按实际page_size处理30条满页，定点补查最多3页；WARN/decision与长cause优先有界摘录，元数据锚定同实例/线程±2秒上下文，无新增匹配时可至±30秒且不超原window。结论分result/direct_cause/trigger_verified，过滤0只是失败出口、normal trace不排除业务异常；累计截断/待查页限制覆盖，24HTTP/120秒不加大。前端`tsc --noEmit`与双语10次SSR分支断言通过；未全build或真实OAP/桌面端到端验收。
 * [ ] **DSH 性能同条件验收（2026-10-29，实现待测）**：同模型、原 reasoning 不变，不自动降深度，24HTTP/120秒预算不增。QueryBudget 请求内连接/成功响应cache+singleflight，全局每OAP最多2在途；无service且剩余预算≥20的独立双ID组2并发、pagination及trace/decision依赖链串行。EvidenceStore最多256KiB retained摘录、indexed/delta，不跨用户缓存；合格`diagnostic_report`直接渲染以省额外summary，旧`final_answer`引用/源码行核验后映射同renderer，未形成合格报告才走final_model。diag保留旧phase并可展开同request summary阶段表，raw标签/次数/耗时/首事件/字符/工具/校验失败/会话动作分别显示，不把父子阶段重复求和；total为执行耗时，queue单列，与聊天尾注分口径，cacheHits按lastInvestigation请求ID单列。真实优化前baseline：461.7秒/31.6秒collect与255秒/49.2秒collect，尚不作为A/B提速结论；下一轮固定问题/模型/窗口/OAP与源码版本采样，同时守住证据质量、分页/取消与预算临界。见 [性能待测口径](<docs/wecom-dsh-engine.md>)。
 * [ ] **本轮会话与性能回归（2026-10-29）**：完整「新会话」reset，active追问reuse不resume；带gaps lower-level final保留缺口直出省final_model；首轮18/reserve6而parent24/120不变，首轮低于旧并发阈值20而保守串行（尚未实现首两页新并发）；time_window_mismatch独立于empty；source_hints实际读stack源码±8且不跨用户缓存。真实对照group total355.161/acquire60.964/planning166.935+44.373/final82.538秒，dm190.361/74.074/69.207/46.493秒，差异主要在模型规划/总结，不归因群平台，不冒充本轮提速。局部前端检查与主流程fullbuild、后端和真实重放分别记录，见 [本轮验收口径](<docs/wecom-dsh-engine.md>)。
-* [ ] **同提示私群格式/内容回归与耗时验收（2026-10-29）**：旧direct的summary/claims+6k摘录与fallback自由Markdown产生两种结构；当前 [wecom_report.rs](<src-tauri/src/wecom_report.rs>) 定义DiagnosticReport version 1，新报告与旧final映射共用renderer；最新按图一采用「结果/直接原因/具体触发原因/下游伴随/未完成」纵向排障，替代宽表。timeline上限拆为32条校验、8条展示、6条短引文；宿主提供时间/服务/实际message短摘录，去thread/logger前缀与excerpt元数据，缺代码明示未核；blocking与扩展限制分别展示，不因全局trunc抹去局部事实。protected正文至Done校验，普通Markdown/无效协议转同结构部分报告，内部JSON不外露，非排障显式JSON不变；不新增polish。保持宿主timer、同stream首次final冻结、取消竞争、相同正文重试及含耗时历史；登记器4096/2048/4MiB/2小时边界不变。待验证新/旧协议、direct/final_model/partial各路径、引用与源码缺失、局部事实及真实私群回放；统一结构不承诺每次语义或逐字结果一致。旧回归已查出stock，但裸报告/wrapper、subject字符串、10条timeline超旧上限8及C未与trigger L join引发fallback；本轮兼容strict bare与省略queries的报告envelope，只对已核code claim与trigger有L交集的情况机械补C关联，不变level/结论text、不绕过无效代码检查。失败按request记稳定code；实际47/55/63形状脱敏fixture配synthetic evidence/toy source，不是完整原OAP。build标记report-v2-readable-concurrency32。本次仅增量更新文档，不执行测试、构建或源码修改；本轮结果待主流程通知，历史通过数不覆盖本轮改动。详见 [统一报告契约](<docs/wecom-dsh-engine.md>)。
+* [ ] **同提示私群格式/内容回归与耗时验收（2026-10-29）**：旧direct的summary/claims+6k摘录与fallback自由Markdown产生两种结构；当前 [wecom_report.rs](<src-tauri/src/wecom_report.rs>) 定义DiagnosticReport version 1，新报告与旧final映射共用renderer；最新按图一采用「结果/直接原因/具体触发原因/下游伴随/未完成」纵向排障，替代宽表。timeline最多32条校验；证据ID全局每块只展示一次，共享8块/6短引文预算，后续claim只列refs、code补日志refs；宿主提供时间/服务/实际message，严格识别后去框架前缀、服务/环境/实例包装及excerpt元数据，保留topic、未知不删，缺代码明示未核；blocking与扩展限制分别展示，不因全局trunc抹去局部事实。protected正文至Done校验，普通Markdown/无效协议转同结构部分报告，内部JSON不外露，非排障显式JSON不变；不新增polish。保持宿主timer、同stream首次final冻结、取消竞争、相同正文重试及含耗时历史；登记器4096/2048/4MiB/2小时边界不变。待验证新/旧协议、direct/final_model/partial各路径、引用与源码缺失、局部事实及真实私群回放；统一结构不承诺每次语义或逐字结果一致。旧回归已查出stock，但裸报告/wrapper、subject字符串、10条timeline超旧上限8及C未与trigger L join引发fallback；本轮兼容strict bare与省略queries的报告envelope，只对已核code claim与trigger有L交集的情况机械补C关联，不变level/结论text、不绕过无效代码检查。失败按request记稳定code；实际47/55/63形状脱敏fixture配synthetic evidence/toy source，不是完整原OAP。build标记report-v2-readable-concurrency32。本次仅增量更新文档，不执行测试、构建或源码修改；本轮结果待主流程通知，历史通过数不覆盖本轮改动。详见 [统一报告契约](<docs/wecom-dsh-engine.md>)。
 * [ ] **会话隔离 / 共享任务 / 32回合上限集成验收（2026-10-29）**：私聊bot+user、群聊bot+chat+user；同机器人同群显式「创建共享任务 NAME / 加入任务 CODE / 任务状态 / 退出任务 / 结束任务 CODE（owner）」共用task上下文。元数据DB、24h无活动、全库200有效任务/32成员，结束解除绑定并清上下文；旧群历史及归属未知旧DM不自动复制迁移，新session空。全局活动回合1–32默认2，UI保留3/6等任意合法值，状态直显activeJobs/waitingJobs/maxJobs/sharedTasks；同会话串行等待与活动分开，32不改变每OAP HTTP并发2。群回复均对全群可见。本轮前端局部strict TS及86次双语SSR通过，未fullbuild/cargo；待主流程集成验证跨用户/跨群/跨bot隔离、排队上限与取消、end清理/TTL/重启，详见 [会话与并发边界](<docs/wecom-dsh-engine.md>)。
 * [ ] **DSH 排障验收**：在隔离 OAP fixture 中核对解析、分页、错误分类、跨服务候选、时区、预算、取消与追问隔离；实际 OAP schema / 鉴权兼容性及端到端表现仍需验收，不将代码落地视为测试通过。
+
+### 企微 / DSH 请求级诊断增量（2026-10-29）
+
+本节单独记录本轮新增实现和待验收项；上方旧阶段数字保留为历史，不替代本轮最终结果。详细边界见 [诊断说明](<docs/wecom-dsh-engine.md#请求级诊断增强2026-10-29>)、[审查与建议](<docs/wecom-diagnostics-review.md>)。
+
+* [x] **生命周期修复落地**：静默消息 reply 登记 RAII 释放；通道配置代际变更使旧队列/旧回合失效；DSH 启动锁；WS 旧代 sender/state 发布保护。
+* [x] **模型配置与脱敏落地**：DSH MCP 独立顶层配置，无天玑 model 快照可传；显式模型/effort 失败中止本轮模型任务，配置 deadline 20 秒；Unicode 路径脱敏、启动/ACP stderr 先脱敏后截断。ACK 模型值仅表示配置回执，不证明实际 provider 使用。
+* [x] **诊断存储与接口落地**：[typed JSONL](<src-tauri/src/wecom_diagnostics.rs>) 单文件5 MiB、总5份（当前1+归档4）、7天 lazy 保留；requestId 先 `wecom-preflight` → `wecom` 再 SHA-256，可用旧原ID查询。三项 query/request/export IPC，每页扫描1 MiB、最多200事件，明确 `readErrors/health/partial`；追加/覆盖/过期等快照变化返回 `DIAGNOSTICS_CURSOR_STALE`，纯rename且身份未变可继续。
+* [x] **双语UI与历史关联落地**：按请求/phase/status/time筛选、单请求、复制已加载摘要、JSON字符串经既有 `save_text_file` 原生对话框保存；普通页50、10页/500封顶，导出是独立有界单页而非所有已加载页。会话读取 `wecom_session_recent_page` 每文件256 KiB、合计8 MiB、目录枚举最多512项（最多512个文件）；只查询、不删除旧历史，新写入记录带requestId、旧无ID不猜。日志error与空态区分。
+* [x] **请求级事件已接入**：ingress/policy/admission queued/phase_ended/model selection ACK/investigation/query账本/report validated与validation failed/model completion/final delivery prepared、enqueued、retry及retry_exhausted/platform delivery_ack。
+* [ ] **统一business terminal语义与覆盖验收**：`phase_ended`只表示阶段结束，不等于success；request ended仅生命周期结束，细分结果查看phase。ACK不表示用户已读，累计stream更新若缺唯一对应证据，不标成最终送达。
+* [ ] **source版本快照 / 自检拆分 / 证据质量A/B**：优先补源码与部署版本的可核查对应、分别报告通道/DSH/MCP/OAP自检结果，并固定模型、effort、问题、窗口、源版本采样质量与耗时；不增加排版模型轮次，引用/源码行匹配不提升为因果语义证明。
+* [ ] **第三批首批并行与真实验收**：首批并行暂未启用；生产首次18预算低于20阈值的死分支已由公共入口回归钉住，现状仍串行，不声称提速。真实企微/OAP及源码/线上版本、因果语义仍待确认。
+
+**最终本地验证**：观测点及重启竞态收尾后，Rust全量911通过、0失败、14忽略；最终 `npm run build` 通过（系统Temp文件锁经工作区临时目录解决）；差异检查通过。保留编译警告，未改版本或commit，未重启真实通道，真实企微/OAP与桌面视觉验收另计。
+
+### 企微回复排版优化（2026-10-29）
+
+* [x] 简短标题与完整业务ID分层；可读查询时间、同日压缩/跨日完整日期、UTC偏移和小数秒保真。
+* [x] 摘要重点与普通原因正文分层，保持证据去重/预算/校验；不改自我介绍原文、不增加模型调用。
+* [ ] 真实企微字体与手机端渲染人工验收；字体族和字号不由机器人控制。
+
+### 企微日志查询日期修正（2026-10-29）
+
+* [x] 月日/年月日/纯ISO日期及日期时刻解析；昨天/前天为自然日，近三天为滚动72小时。
+* [x] 明确日期冲突、非法日期与未消费时刻残片拒绝查询；保留无时间默认4小时与引号关键词隔离。
+* [x] 公共Mock OAP核对实际queryDuration与报告范围，非法日期零HTTP；真实查询复验另计，不仅修报告文案。
+
+### 企微配置自我介绍与新对话问候（2026-10-29）
+
+* [x] 问候/身份短句直接回配置介绍；新对话控制子句先重置当前作用域再处理剩余正文；业务混合句不误拦。
+* [x] 重置会话锁与shared owner边界、清历史失败显式返回、正确查询缓存键；2000 Unicode字符前后端一致。
+* [x] 配置正文至final帧发送接缝回归，包含换行/emoji及无模型准入；真实企微验收与运行实例更新另计。
+
+### 企微卡住回归与可见收尾（2026-10-29，本地回归通过）
+
+主代理已核对真实事件，详见 [卡住记录](<docs/wecom-stuck-20261029.md>)。私聊e6dad457在16:33:42已有214 evidence/partial/18HTTP，16:34:03与群聊238d0caa同时channel_changed取消，planning约19秒无输出，不是600秒超时。旧代际取消仅本地discard未finish为回归；随后“还没好吗”560959ac误进reuse会话的新模型任务，136.8秒/6tool/0正文，16:41:38被用户stop。
+
+* [ ] **受控退役收尾（实现已落地）**：暂停ingress，冻结旧final、cancel/invalidate，共用2秒旧socket发送+flush后stop；socket_drained仅writer完成，不是ACK；已冻结final不覆盖。
+* [ ] **配置语义比较（实现已落地）**：[channel_config](<src-tauri/src/wecom_channel_config.rs>)按解密归一后的字段hash区分noop/热更新/冷变更，前两者不因保存而退役；source=apply/restart/sync与changedFields只记字段名，不记敏感值。16:34:03具体触发source因旧日志缺失仍unknown。
+* [ ] **状态路由及独立心跳（实现已落地）**：[progress](<src-tauri/src/wecom_progress.rs>)完整短句“进度/还没好吗/查到哪了…”先查状态、不新建模型任务；“任务状态”保持shared语义。内存256条、done后2h TTL、活跃不TTL淘汰，running优先queued；30秒独立心跳不被tool活动延期，正文开始后不覆盖。
+* [ ] **单Bot租约与有界出站（实现已落地）**：[bot_lease](<src-tauri/src/wecom_bot_lease.rs>)同Windows用户/Bot share_mode(0)锁；旧安装版未采用锁仍可能冲突。[WS](<src-tauri/src/wecom_ws.rs>)64项Outbox、progress合并、final/flush边界、200ms本地pacing；platform_ack仅req关联，final_frame_unknown不冒充最终送达。
+* [ ] **本轮回归与真实验收**：本轮Rust全量942通过、0失败、14忽略，前端build通过；真实复测仍待进行，真实进程未重启、用户会话未主动重发。22584开发版与26820安装版共存、6000 data conflict不证明同Bot双连或取消因果。优先完成退役/配置/短句/心跳/租约/队列边界回归，再做真实复测，不声称提速。
+
+### 企微取消回复脱敏与证据去重（2026-10-29，本地通过、真实待验收）
+
+* [x] **回复边界与本地回归**：移除 `redact_reply` 及编排/proto/report display全部回复脱敏，保留Markdown/HTML/control转义和内部diagnostic脱敏。完整业务ID、时间、地址、路径及必要字段保留，凭据/token、手机号也不自动遮盖；群内全群可见，不主动搜集无关秘密。双引擎继续完整缓冲至Done，排障报告/引用/源码校验、进度/审批、异常/取消、首次final冻结、宿主耗时、重试/history保持，不恢复未经验证token流。
+* [x] **报告展示本地回归**：按证据ID全局每块只展示一次，共享6短引文/8块预算，后续claim只列refs，code补日志refs；严格识别后去框架前缀及服务/环境/实例包装，保留topic与必要原文，未知不删。纵向格式、摘要及高亮不变，不加polish；验证不改因果与源码/线上版本边界。
+* **本轮本地验证通过、真实待验收**：`cargo test wecom_` 393通过/0失败/2忽略，最终 `cargo test` 全量954通过/0失败/14忽略，diff检查通过，保留既有unused/dead_code warnings。移除旧回复脱敏测试，因此不是上一轮957；957/0/14、397/0/2及前端build、942/911等仍为历史。本轮未改前端、未跑npm build、未重启/发版或真实企微验收，见 [最新回复边界](<docs/wecom-dsh-engine.md#取消回复脱敏与证据去重2026-10-29当前增量>)。
 
 ### 阶段 28：同会话多模型 + 图文对话 + 模型类型自动识别（P1）✅ 已完成（2026-10-27）
 

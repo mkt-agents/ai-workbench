@@ -115,6 +115,13 @@ impl ReplyRegistry {
         }
     }
 
+    /// Close a silently discarded request without producing a reply or retaining text.
+    pub fn discard(&mut self, stream: &str) {
+        if matches!(self.states.get(stream), Some(State::Running { .. })) {
+            self.close(stream.to_owned(), None);
+        }
+    }
+
     pub fn is_finished(&self, stream: &str) -> bool {
         matches!(self.states.get(stream), Some(State::Finished { .. }))
     }
@@ -240,6 +247,23 @@ pub fn register(stream: &str) -> bool {
     global().register(stream)
 }
 
+/// Keeps all ingress exits bounded, including silent policy drops and cancelled futures.
+pub struct RegistrationGuard(String);
+
+impl RegistrationGuard {
+    pub fn new(stream: &str) -> Self {
+        Self(stream.to_owned())
+    }
+}
+
+impl Drop for RegistrationGuard {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = global().0.lock() {
+            registry.discard(&self.0);
+        }
+    }
+}
+
 pub fn prepare(stream: &str, body: &str) -> Option<Prepared> {
     global().prepare(stream, body)
 }
@@ -262,6 +286,37 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
     use std::thread;
+
+    #[test]
+    fn silent_ingress_discards_do_not_exhaust_active_capacity() {
+        let mut registry = ReplyRegistry::new();
+        let now = Instant::now();
+        for n in 0..MAX_STATES * 2 {
+            let stream = format!("denied-{n}");
+            assert!(registry.begin_at(&stream, now));
+            registry.discard(&stream);
+            assert!(registry.is_finished(&stream));
+            assert!(registry.final_text(&stream).is_none());
+        }
+        assert!(registry.begin_at("allowed", now));
+        assert!(registry.prepare_at("allowed", "ok", now).is_some());
+    }
+
+    #[test]
+    fn discard_preserves_first_final_and_does_not_register_unknown_ids() {
+        let mut registry = ReplyRegistry::new();
+        let now = Instant::now();
+        registry.discard("unknown");
+        assert!(registry.states.is_empty());
+        registry.begin_at("finished", now);
+        let text = registry.finish_at("finished", "ok", now).unwrap();
+        registry.discard("finished");
+        assert_eq!(registry.final_text("finished"), Some(text));
+        registry.begin_at("silent", now);
+        registry.discard("silent");
+        registry.discard("silent");
+        assert_eq!(registry.finished.len(), 2);
+    }
 
     #[test]
     fn elapsed_format_boundaries_and_maximum() {

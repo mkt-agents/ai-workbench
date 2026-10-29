@@ -1946,10 +1946,8 @@ mod tests {
             let path = std::env::temp_dir().join(format!(
                 "lookup-plan-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
+                // Windows clock resolution can collide across parallel fixture creation.
+                rand::random::<u128>()
             ));
             fs::create_dir(&path).unwrap();
             Self(path)

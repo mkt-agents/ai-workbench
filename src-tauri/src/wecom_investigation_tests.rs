@@ -430,6 +430,24 @@ fn time_guard_requires_explicit_des_and_two_known_crossing_ranges() {
 }
 
 #[tokio::test]
+async fn public_investigation_entry_preserves_reserve_and_current_serial_behavior() {
+    let oap = MockOap::start(|req| {
+        if query_name(req, "__typename") { return (200, json!({"data":{"__typename":"Query"}})); }
+        if req["variables"]["condition"]["paging"]["pageSize"] == 1 { return log_page(vec![]); }
+        let keyword = req["variables"]["condition"]["keywordsOfContent"][0].as_str().unwrap_or("unknown");
+        log_page(vec![log("svc", "", keyword, "INFO", 0)])
+    }, Duration::from_millis(20)).await;
+    let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+    let result = investigate(&oap.addr, "", "public-entry-budget-fixture",
+        "orderId=ORD123456 requestId=REQ654321 查日志", fixture_now(), "public-entry-budget-fixture", tx).await.unwrap();
+    assert!(result.evidence_count >= 2);
+    assert!(result.request_count <= 18);
+    assert!(result.budget.remaining() >= 6);
+    // Do not claim the private collect(24) benchmark measures production concurrency.
+    assert_eq!(oap.max_active.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn initial_eighteen_http_includes_probe_and_parent_supplement_stays_available() {
     let oap = MockOap::start(
         |req| {
@@ -1462,4 +1480,231 @@ fn trace_selection_preserves_earliest_skip_and_latest_info_before_errors() {
         mk("last", 4, "INFO", "last attempt"),
     ];
     assert_eq!(select_traces(&rows), vec!["entry", "skip", "last"]);
+}
+
+// Fixed-clock public-entry regressions: validate the actual GraphQL wire window,
+// not just parse_query or query_args. All responses are local, empty fixtures.
+fn calendar_fixture_now() -> DateTime<FixedOffset> {
+    DateTime::parse_from_rfc3339("2026-10-29T18:56:11+08:00").unwrap()
+}
+
+async fn assert_public_calendar_window(
+    text: &str,
+    start: &str,
+    end: &str,
+    wire_start: &str,
+    wire_end: &str,
+    entry_keywords: &[&str],
+) -> InvestigationOutcome {
+    let oap = MockOap::start(
+        |req| {
+            if query_name(req, "__typename") {
+                return (200, json!({"data":{"__typename":"Query"}}));
+            }
+            assert!(query_name(req, "queryLogs"), "unexpected query: {req}");
+            log_page(vec![])
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let id = format!("public-calendar-window-{}", oap.addr);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let out = investigate(
+        &oap.addr,
+        "",
+        &id,
+        text,
+        calendar_fixture_now(),
+        &id,
+        tx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.status, InvestigationStatus::Empty, "{text}: {out:?}");
+    assert!(out.source_ready && !out.may_analyze);
+    assert_eq!(out.evidence_count, 0);
+    let q = out.query.as_ref().expect("executed query retained");
+    assert_eq!(q.start, start, "{text}");
+    assert_eq!(q.end, end, "{text}");
+    assert_eq!(q.timezone_offset_minutes, 480);
+    assert!(q.anchor.is_none() && !q.approximate_anchor);
+    assert!(out
+        .context
+        .contains(&format!("查询时间：{start} 至 {end}；OAP偏移=480分钟")));
+    let fallback = crate::wecom_report::fallback(out.query.as_ref(), &out.context, "empty");
+    let readable_start = chrono::DateTime::parse_from_rfc3339(start).unwrap().format("%Y-%m-%d %H:%M:%S").to_string();
+    let end_dt = chrono::DateTime::parse_from_rfc3339(end).unwrap();
+    let start_dt = chrono::DateTime::parse_from_rfc3339(start).unwrap();
+    let readable_end = end_dt.format(if start_dt.date_naive() == end_dt.date_naive() { "%H:%M:%S" } else { "%Y-%m-%d %H:%M:%S" }).to_string();
+    assert!(fallback.contains(&format!("证据范围：{readable_start} — {readable_end}（UTC+08:00）")),
+        "fallback lost the executed window: {fallback}");
+
+    let requests = oap.captured();
+    assert_eq!(requests.len(), 2 + entry_keywords.len(), "{text}");
+    assert_eq!(out.request_count, requests.len());
+    assert_eq!(out.budget.used(), requests.len());
+    assert!(query_name(&requests[0], "__typename"));
+    let duration = json!({"start":wire_start,"end":wire_end,"step":"SECOND"});
+    for req in requests.iter().skip(1) {
+        assert!(query_name(req, "queryLogs"));
+        assert_eq!(req["variables"]["condition"]["queryDuration"], duration);
+    }
+    let probe = &requests[1]["variables"]["condition"];
+    assert_eq!(probe["paging"], json!({"pageNum":1,"pageSize":1}));
+    assert!(probe.get("keywordsOfContent").is_none());
+    for (req, keyword) in requests.iter().skip(2).zip(entry_keywords) {
+        let condition = &req["variables"]["condition"];
+        assert_eq!(condition["keywordsOfContent"], json!([keyword]));
+        assert_eq!(condition["paging"], json!({"pageNum":1,"pageSize":40}));
+    }
+    contexts().lock().unwrap().entries.remove(&id);
+    out
+}
+
+#[tokio::test]
+async fn public_calendar_month_day_keeps_both_ids_and_full_day_through_fallback() {
+    let out = assert_public_calendar_window(
+        "新对话 根据日志排查问题，企点电子行业，时间是10月26号，这个商机询价多个商品，商机列表匹配到三个商品，为什么只报出2个，关键信息 nlpIdOriginal:7700855226234612751，matchId:1454114372766658560",
+        "2026-10-26T00:00:00+08:00",
+        "2026-10-27T00:00:00+08:00",
+        "2026-10-26 000000",
+        "2026-10-27 000000",
+        &["7700855226234612751", "1454114372766658560"],
+    )
+    .await;
+    let q = out.query.as_ref().unwrap();
+    let identifiers: Vec<_> = q
+        .identifiers
+        .iter()
+        .map(|id| id.value.as_str())
+        .collect();
+    assert_eq!(
+        identifiers,
+        vec![
+            "7700855226234612751",
+            "1454114372766658560",
+        ]
+    );
+    // Colon-labelled fields currently use the unlabelled-ID fallback; date support
+    // must preserve both values and their separate HTTP queries, not invent field extraction.
+    assert!(out.context.contains("7700855226234612751"));
+    assert!(out.context.contains("1454114372766658560"));
+}
+
+#[tokio::test]
+async fn public_calendar_yesterday_submits_complete_previous_day() {
+    assert_public_calendar_window(
+        "查日志 昨天 keyword=calendar-fixture",
+        "2026-10-28T00:00:00+08:00",
+        "2026-10-29T00:00:00+08:00",
+        "2026-10-28 000000",
+        "2026-10-29 000000",
+        &["calendar-fixture"],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn public_calendar_day_before_yesterday_submits_complete_day() {
+    assert_public_calendar_window(
+        "查日志 前天 keyword=calendar-fixture",
+        "2026-10-27T00:00:00+08:00",
+        "2026-10-28T00:00:00+08:00",
+        "2026-10-27 000000",
+        "2026-10-28 000000",
+        &["calendar-fixture"],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn public_calendar_recent_three_days_submits_rolling_72_hours() {
+    for phrase in ["近三天", "最近三天"] {
+        assert_public_calendar_window(
+            &format!("查日志 {phrase} keyword=calendar-fixture"),
+            "2026-10-26T18:56:11+08:00",
+            "2026-10-29T18:56:11+08:00",
+            "2026-10-26 185611",
+            "2026-10-29 185611",
+            &["calendar-fixture"],
+        )
+        .await;
+    }
+}
+
+async fn assert_public_calendar_rejected(phrase: &str) {
+    // A ready source makes accidental execution visible without contacting real OAP.
+    let oap = MockOap::start(
+        |req| {
+            if query_name(req, "__typename") {
+                return (200, json!({"data":{"__typename":"Query"}}));
+            }
+            log_page(vec![])
+        },
+        Duration::ZERO,
+    )
+    .await;
+    let id = format!("public-calendar-rejected-{}", oap.addr);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let out = investigate(
+        &oap.addr,
+        "",
+        &id,
+        &format!("查日志 时间是{phrase} keyword=calendar-fixture"),
+        calendar_fixture_now(),
+        &id,
+        tx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out.status,
+        InvestigationStatus::NotExecuted,
+        "{phrase}: {out:?}"
+    );
+    assert_eq!(out.request_count, 0, "{phrase}");
+    assert_eq!(out.budget.used(), 0, "{phrase}");
+    assert!(oap.captured().is_empty(), "{phrase}: unexpected HTTP");
+    assert_eq!(out.evidence_count, 0);
+    assert!(!out.source_ready && !out.may_analyze);
+    assert!(out.query.is_none());
+    assert!(out.context.contains("查询条件待确认"));
+    assert!(contexts().lock().unwrap().get(&id).is_none());
+}
+
+#[tokio::test]
+async fn public_calendar_invalid_or_missing_month_is_not_executed_without_http() {
+    for phrase in ["2月30号", "26号"] {
+        assert_public_calendar_rejected(phrase).await;
+    }
+}
+
+#[tokio::test]
+async fn public_calendar_conflicting_dates_or_clock_are_not_executed_without_http() {
+    for phrase in ["10月26号 最近三天", "10月26号 今天10点", "10月26号 昨天10点"] {
+        assert_public_calendar_rejected(phrase).await;
+    }
+}
+
+#[tokio::test]
+async fn public_calendar_clock_fragments_are_not_executed_without_http() {
+    for phrase in ["10月26号 10:", "10月26号 10点到", "10月26号 下午", "10月26号 25:00"] {
+        assert_public_calendar_rejected(phrase).await;
+    }
+}
+
+#[tokio::test]
+async fn public_calendar_date_literal_keyword_retains_default_four_hours() {
+    let out = assert_public_calendar_window(
+        "查日志 keyword=\"10月26号\"",
+        "2026-10-29T14:56:11+08:00",
+        "2026-10-29T18:56:11+08:00",
+        "2026-10-29 145611",
+        "2026-10-29 185611",
+        &["10月26号"],
+    )
+    .await;
+    let q = out.query.unwrap();
+    assert!(q.identifiers.is_empty());
+    assert_eq!(q.keywords, vec!["10月26号"]);
 }
