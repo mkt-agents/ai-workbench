@@ -37,7 +37,7 @@
 
 产品标识：
 - **identifier**: `com.ai-workbench.app`
-- **当前版本**: `0.2.37`（以 `package.json` 为准，三处同步见 §13.1）
+- **当前版本**: `0.2.39`（以 `package.json` 为准，三处同步见 §13.1）
 - **默认 DeepSeek 端口**: `3080`
 
 ---
@@ -1369,9 +1369,9 @@ React ErrorBoundary 捕获后渲染 fallback UI，控制台可见堆栈。
 
 | 文件 | 字段 |
 |------|------|
-| `package.json` | `"version": "0.2.37"` |
-| `tauri.conf.json` | `"version": "0.2.37"` |
-| `Cargo.toml` | `version = "0.2.37"` |
+| `package.json` | `"version": "0.2.39"` |
+| `tauri.conf.json` | `"version": "0.2.39"` |
+| `Cargo.toml` | `version = "0.2.39"` |
 
 > 另需同步 `package-lock.json` 的 2 处 `"version"`（随 `npm install` 写入），见 [README.md](../README.md)「版本号同步」。
 
