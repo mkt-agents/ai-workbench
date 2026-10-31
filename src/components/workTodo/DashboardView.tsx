@@ -167,7 +167,7 @@ export default function DashboardView({
   };
 
   /** 悬停提示：标题被截断时也能看到全文，附带备注摘要与标签。 */
-  const focusTip = (task: WorkTask) => {
+  const taskTip = (task: WorkTask) => {
     const parts: string[] = [task.title.trim() || t("untitled")];
     const notes = (task.notes || "").trim();
     if (notes) parts.push(notes.length > 200 ? `${notes.slice(0, 200)}…` : notes);
@@ -305,7 +305,7 @@ export default function DashboardView({
                   <ul className="work-todo-dash-focus-list">
                     {focusTasks.map((task) => (
                       <li key={task.id}>
-                        <div className="work-todo-dash-focus-row" title={focusTip(task)}>
+                        <div className="work-todo-dash-focus-row" title={taskTip(task)}>
                           <WorkTodoDoneToggle
                             done={false}
                             title={task.title}
@@ -422,6 +422,7 @@ export default function DashboardView({
                         <button
                           type="button"
                           className="work-todo-dash-link"
+                          title={taskTip(task)}
                           onClick={() =>
                             onNavigate({
                               kind: "daily",
