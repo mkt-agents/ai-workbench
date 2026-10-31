@@ -109,7 +109,7 @@ npm run dev
 
 ## 打安装包（Windows exe）
 
-发布前先**同步版本号**（四处保持一致）：`package.json`、`package-lock.json`（2 处）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`（最容易漏，决定 exe 文件属性版本）。当前版本：`0.2.39`。
+发布前先**同步版本号**（四处保持一致）：`package.json`、`package-lock.json`（2 处）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`（最容易漏，决定 exe 文件属性版本）。当前版本：`0.2.40`。
 
 ```bash
 npm install
