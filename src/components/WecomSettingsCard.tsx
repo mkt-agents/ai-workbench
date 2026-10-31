@@ -571,6 +571,9 @@ export default function WecomSettingsCard() {
             </p>
           ) : null}
           {investigation?.detail ? <p className="setting-hint">{investigation.detail}</p> : null}
+          {investigation?.clarification ? (
+            <p className="setting-hint" role="alert">{investigation.clarification}</p>
+          ) : null}
           {investigation ? (
             <>
               <p className="setting-hint">
@@ -1141,7 +1144,12 @@ export default function WecomSettingsCard() {
                 <span className="toggle-slider" />
               </label>
             }
-            hint={<Hint summary={t("wecom.autoUpdateHintShort")} details={t("wecom.autoUpdateHint")} />}
+            hint={
+              <>
+                <Hint summary={t("wecom.autoUpdateHintShort")} details={t("wecom.autoUpdateHint")} />
+                <p className="setting-hint">{t("wecom.docgenChecklist")}</p>
+              </>
+            }
           />
 
           <Row
@@ -1444,8 +1452,10 @@ export default function WecomSettingsCard() {
           <div className="wecom-row is-wide">
             <Hint summary={t("wecom.sessionRulesShort")} details={t("wecom.sessionRulesHint")} />
             <Hint summary={t("wecom.sharedTasksShort")} details={t("wecom.sharedTasksHint")} />
+            <p className="setting-hint">{t("wecom.sessionCommandsHint")}</p>
             <p className="setting-hint">{t("wecom.groupVisibilityHint")}</p>
             <p className="setting-hint">{t("wecom.sessionMigrationHint")}</p>
+            <p className="setting-hint">{t("wecom.connectChecklistHint")}</p>
           </div>
 
           <div className="wecom-subhead">

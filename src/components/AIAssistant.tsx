@@ -18,13 +18,12 @@ import {
   AI_PROVIDERS,
   getDefaultUrl,
   getProviderMeta,
-  providerIconLabel,
   providerSupportsModelList,
   type ModelPreset,
 } from "../lib/aiProviders";
-import { aiProviderLogoSrc } from "../lib/aiProviderLogos";
 import { AI_SCENES, AI_SCENE_I18N_KEY } from "../lib/aiSceneModels";
 import { writeDshSyncMeta } from "../lib/dshSyncMeta";
+import ProviderBrandIcon from "./ProviderBrandIcon";
 
 type ProviderType = AIModelConfig["provider"];
 
@@ -59,6 +58,17 @@ const TEMPERATURE_PRESETS = [
 
 /** Every power of two from 1K to 1M — one slider stop each. */
 const MAX_TOKEN_STEPS = Array.from({ length: 11 }, (_, i) => 1024 * 2 ** i);
+
+/** Snap a model completion cap onto the slider stops (largest step ≤ maxAllowed). */
+function snapMaxTokensToStep(maxAllowed: number): number {
+  const capped = Math.max(1, Math.floor(maxAllowed));
+  let best = MAX_TOKEN_STEPS[0];
+  for (const step of MAX_TOKEN_STEPS) {
+    if (step <= capped) best = step;
+    else break;
+  }
+  return best;
+}
 
 function formatTokenCount(value: number): string {
   if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) return `${value / 1048576}M`;
@@ -336,6 +346,7 @@ function AIAssistant() {
   const invokeTestModelConnection = useGlobalStore((s) => s.invokeTestModelConnection);
   const invokeListProviderModels = useGlobalStore((s) => s.invokeListProviderModels);
   const invokeInferModelModality = useGlobalStore((s) => s.invokeInferModelModality);
+  const invokeInferModelMaxOutput = useGlobalStore((s) => s.invokeInferModelMaxOutput);
   const invokeDetectLocalAiEndpoints = useGlobalStore((s) => s.invokeDetectLocalAiEndpoints);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
   const invokeSaveTextFile = useGlobalStore((s) => s.invokeSaveTextFile);
@@ -373,6 +384,13 @@ function AIAssistant() {
   const [modalStatus, setModalStatus] = useState<ModalStatus | null>(null);
   /** User edited the name; stop auto-suggesting on create. */
   const [nameTouched, setNameTouched] = useState(false);
+  /** User dragged maxTokens; stop auto-filling from model caps. */
+  const maxTokensTouchedRef = useRef(false);
+  const markMaxTokensTouched = () => {
+    maxTokensTouchedRef.current = true;
+  };
+  /** Model id when the edit modal opened — auto maxTokens only after it changes. */
+  const modelAtEditOpenRef = useRef("");
   /** After a successful list fetch, open the picker once the trigger mounts. */
   const [openPickerAfterRefresh, setOpenPickerAfterRefresh] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -463,7 +481,41 @@ function AIAssistant() {
       });
   };
 
-  const commitModel = (id: string, modality?: string) => {
+  /**
+   * 按模型 completion 上限预填最长输出（snap 到滑块步进）。
+   * 用户手动调过、或编辑态未改模型 id 时不覆盖。
+   */
+  const applySuggestedMaxTokens = (
+    provider: string,
+    model: string,
+    knownMax?: number | null
+  ) => {
+    const value = model.trim();
+    if (!value || maxTokensTouchedRef.current) return;
+    if (editingId && value === modelAtEditOpenRef.current) return;
+    const apply = (raw: number) => {
+      const snapped = snapMaxTokensToStep(raw);
+      setFormData((cur) => {
+        if (maxTokensTouchedRef.current) return cur;
+        if (cur.model.trim() !== value || cur.provider !== provider) return cur;
+        if (cur.maxTokens === snapped) return cur;
+        return { ...cur, maxTokens: snapped };
+      });
+    };
+    if (typeof knownMax === "number" && knownMax > 0) {
+      apply(knownMax);
+      return;
+    }
+    void invokeInferModelMaxOutput({ provider, model: value })
+      .then((n) => {
+        if (typeof n === "number" && n > 0) apply(n);
+      })
+      .catch(() => {
+        /* 无规则则保持现状 */
+      });
+  };
+
+  const commitModel = (id: string, modality?: string, maxOutputTokens?: number) => {
     const value = id.trim();
     if (!value) return;
     invalidateTestResult();
@@ -475,6 +527,7 @@ function AIAssistant() {
       return next;
     });
     applyAutoVision(formData.provider, value, modality);
+    applySuggestedMaxTokens(formData.provider, value, maxOutputTokens);
     closeModelPicker();
   };
 
@@ -745,6 +798,8 @@ function AIAssistant() {
     setTestStatus({ testing: false, result: null });
     setModalStatus(null);
     setNameTouched(false);
+    maxTokensTouchedRef.current = false;
+    modelAtEditOpenRef.current = "";
     setOpenPickerAfterRefresh(false);
   };
 
@@ -757,6 +812,8 @@ function AIAssistant() {
   const openCreateModal = () => {
     resetModalState();
     setShowModal(true);
+    const form = emptyForm();
+    applySuggestedMaxTokens(form.provider, form.model);
   };
 
   const handleProviderChange = (provider: string) => {
@@ -792,6 +849,7 @@ function AIAssistant() {
     const nextModel =
       !editingId || modelMatchesPrevDefault ? next?.defaultModel ?? "" : formData.model;
     applyAutoVision(provider, nextModel);
+    applySuggestedMaxTokens(provider, nextModel);
   };
 
   const handleAuthTypeChange = (authType: AuthType) => {
@@ -813,6 +871,7 @@ function AIAssistant() {
       name: !editingId && !nameTouched ? suggestConfigName(cur.provider, model) : cur.name,
     }));
     applyAutoVision(formData.provider, model);
+    applySuggestedMaxTokens(formData.provider, model);
   };
 
   const handleRefreshModels = async () => {
@@ -850,6 +909,7 @@ function AIAssistant() {
         id: m.id,
         label: m.label || m.id,
         modality: m.modality,
+        maxOutputTokens: m.maxOutputTokens,
       }));
       setFetchedModels(fetched);
       setModalStatus({
@@ -888,6 +948,8 @@ function AIAssistant() {
     setTestStatus({ testing: false, result: null });
     setModalStatus(null);
     setNameTouched(true);
+    maxTokensTouchedRef.current = false;
+    modelAtEditOpenRef.current = config.model.trim();
     setOpenPickerAfterRefresh(false);
     setShowModal(true);
   };
@@ -1450,8 +1512,6 @@ function AIAssistant() {
   const renderConfigCard = (config: AIModelConfig, inGroup = false) => {
     const meta = getProviderMeta(config.provider);
     const providerLabel = meta?.label || config.provider;
-    const logoSrc = aiProviderLogoSrc(config.provider);
-    const iconClass = meta ? `provider-${config.provider}` : "provider-custom";
     const last = config.lastTest ?? null;
     const testState = testStateOf(config);
     const lastTestTitle = last
@@ -1475,16 +1535,7 @@ function AIAssistant() {
           />
         </label>
         <div className="ai-model-main">
-          <div
-            className={`ai-model-icon ${iconClass}${logoSrc ? " has-logo" : ""}`}
-            title={providerLabel}
-          >
-            {logoSrc ? (
-              <img src={logoSrc} alt="" draggable={false} />
-            ) : (
-              providerIconLabel(config.provider)
-            )}
-          </div>
+          <ProviderBrandIcon provider={config.provider} title={providerLabel} />
           <div className="ai-model-info">
             <div className="ai-model-name">
               <span className="ai-model-name-text" title={config.name}>
@@ -1668,7 +1719,6 @@ function AIAssistant() {
     });
 
   const shareMeta = shareConfig ? getProviderMeta(shareConfig.provider) : null;
-  const shareLogo = shareConfig ? aiProviderLogoSrc(shareConfig.provider) : null;
 
   return (
     <div className="ai-assistant">
@@ -2280,7 +2330,12 @@ function AIAssistant() {
                                       const exact = listedModels.find(
                                         (m) => m.id === customCandidate
                                       );
-                                      if (exact) commitModel(exact.id, exact.modality);
+                                      if (exact)
+                                        commitModel(
+                                          exact.id,
+                                          exact.modality,
+                                          exact.maxOutputTokens
+                                        );
                                       else if (showCustomRow) commitModel(customCandidate);
                                     }}
                                     placeholder={t("models.modelSearch")}
@@ -2303,7 +2358,9 @@ function AIAssistant() {
                                             type="button"
                                             className="ai-model-option-main"
                                             title={m.id}
-                                            onClick={() => commitModel(m.id, m.modality)}
+                                            onClick={() =>
+                                              commitModel(m.id, m.modality, m.maxOutputTokens)
+                                            }
                                           >
                                             <span className="ai-model-option-id">{m.id}</span>
                                             {m.modality === "vision" && (
@@ -2395,6 +2452,7 @@ function AIAssistant() {
                         <TokenField
                           value={formData.maxTokens}
                           onPick={(maxTokens) => {
+                            markMaxTokensTouched();
                             invalidateTestResult();
                             setFormData({ ...formData, maxTokens });
                           }}
@@ -2530,13 +2588,11 @@ function AIAssistant() {
                 />
                 <div className="ai-modal-content">
                   <div className="ai-share-head">
-                    {shareLogo ? (
-                      <img className="ai-share-logo has-logo" src={shareLogo} alt="" />
-                    ) : (
-                      <span className="ai-share-logo">
-                        {providerIconLabel(shareConfig.provider)}
-                      </span>
-                    )}
+                    <ProviderBrandIcon
+                      provider={shareConfig.provider}
+                      className="ai-share-logo"
+                      title={shareMeta?.label || shareConfig.provider}
+                    />
                     <div className="ai-share-head-text">
                       <span className="ai-share-name" title={shareConfig.name}>
                         {shareConfig.name}

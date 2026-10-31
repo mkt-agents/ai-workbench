@@ -54,6 +54,9 @@ pub struct InvestigationOutcome {
     pub cache_hits: usize,
     pub may_analyze: bool,
     pub source_ready: bool,
+    /// Host-authored, display-safe reason for `not_executed`; never OAP text.
+    #[serde(default)]
+    pub clarification: Option<String>,
     #[serde(skip)]
     pub budget: QueryBudget,
     pub collected_ms: u64,
@@ -119,7 +122,8 @@ fn finish(outcome: InvestigationOutcome, request: &str, parsed: bool) -> Investi
             "shownCount":outcome.shown_count,"warnCount":outcome.warn_count,
             "truncatedCount":outcome.truncated_count,"incompletePages":outcome.incomplete_pages,
             "decisionGaps":outcome.decision_gaps,
-            "sourceReady":outcome.source_ready,"detail":outcome.detail}),
+            "sourceReady":outcome.source_ready,"detail":outcome.detail,
+            "clarification":outcome.clarification}),
         );
     }
     diagnostic("investigation", &format!("request={request} parsed={parsed} status={} requests={} cache_hits={} evidence={} source_ready={} may_analyze={} elapsed_ms={}",
@@ -140,6 +144,7 @@ fn not_executed(
     context: String,
     query: Option<InvestigationQuery>,
     request: &str,
+    clarification: Option<&str>,
 ) -> InvestigationOutcome {
     let parsed = query.is_some();
     finish(
@@ -153,6 +158,7 @@ fn not_executed(
             .into(),
             context,
             query,
+            clarification: clarification.map(str::to_string),
             evidence_count: 0,
             shown_count: 0,
             warn_count: 0,
@@ -439,14 +445,21 @@ pub async fn investigate(
         && !explicit_query
         && !follow
     {
-        return Ok(not_executed(String::new(), None, request));
+        return Ok(not_executed(String::new(), None, request, None));
     }
     let mut query = match parse_query(text, previous.as_ref().map(|s| &s.query), now) {
         Ok(q) => q,
         Err(e) => {
-            return Ok(not_executed(format!(
-                "【查询条件待确认】{e}。尚未访问日志平台，请先明确查询条件。禁止根据常见原因泛化结论。"
-            ), None, request))
+            return Ok(not_executed(
+                format!(
+                    "【查询条件待确认】{e}。尚未访问日志平台，请先明确查询条件。禁止根据常见原因泛化结论。"
+                ),
+                None,
+                request,
+                Some(&format!(
+                    "查询条件未解析：{e} 请写成 2026-10-30 16:12:13，或 2026-10-30 10:12 至 16:12。"
+                )),
+            ))
         }
     };
     if addr.trim().is_empty() {
@@ -455,6 +468,7 @@ pub async fn investigate(
                 .into(),
             Some(query),
             request,
+            Some("尚未配置 SkyWalking OAP 地址，排障查询没有执行。请先在设置里填写 OAP 地址与请求头。"),
         ));
     }
     if query.trace_id.is_none()
@@ -462,7 +476,8 @@ pub async fn investigate(
         && query.identifiers.is_empty()
         && query.service.is_none()
     {
-        return Ok(not_executed(format!("【查询条件不足】时间范围 {} 至 {}；请补充订单号、requestId、关键词或服务名。尚未执行跨服务泛查，禁止推测业务根因。", query.start, query.end), Some(query), request));
+        return Ok(not_executed(format!("【查询条件不足】时间范围 {} 至 {}；请补充订单号、requestId、关键词或服务名。尚未执行跨服务泛查，禁止推测业务根因。", query.start, query.end), Some(query), request,
+            Some("时间窗已解析，但缺少业务标识符（订单号 / requestId / nlpIdOriginal）或关键词，未执行跨服务泛查。")));
     }
     let same_subject = previous.as_ref().is_some_and(|p| {
         p.query.keywords == query.keywords
@@ -672,6 +687,11 @@ fn report_outcome(
     if evidence_count == 0 {
         context.push_str("\n【尚无实际日志或非空调用链证据】查询失败、查空或业务未执行是不同状态。仅陈述已执行查询和覆盖缺口；禁止泛化根因、虚构调用链或输出通用故障清单。后续仅可据明确条件补查。\n");
     }
+    let clarification = if status == InvestigationStatus::Empty {
+        Some(format_empty_clarification(&query))
+    } else {
+        None
+    };
     InvestigationOutcome {
         status,
         detail: if report.source_detail.is_empty() {
@@ -695,9 +715,47 @@ fn report_outcome(
         cache_hits: budget.cache_hits(),
         may_analyze: evidence_count > 0,
         source_ready: ready,
+        clarification,
         budget: budget.clone(),
         collected_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
     }
+}
+
+/// Empty ≠ 没排查：说明已按 NL/解析条件查过，并提示可补充的字段。
+fn format_empty_clarification(q: &InvestigationQuery) -> String {
+    let mut cond = Vec::new();
+    if !q.keywords.is_empty() {
+        cond.push(format!("关键词={}", q.keywords.join("、")));
+    }
+    if !q.identifiers.is_empty() {
+        let ids: Vec<_> = q
+            .identifiers
+            .iter()
+            .map(|id| {
+                if id.field.is_empty() {
+                    id.value.clone()
+                } else {
+                    format!("{}={}", id.field, id.value)
+                }
+            })
+            .collect();
+        cond.push(format!("标识={}", ids.join("、")));
+    }
+    if let Some(t) = q.trace_id.as_deref().filter(|s| !s.is_empty()) {
+        cond.push(format!("traceId={t}"));
+    }
+    if let Some(s) = q.service.as_deref().filter(|s| !s.is_empty()) {
+        cond.push(format!("服务={s}"));
+    }
+    let window = format!("{} → {}", q.start, q.end);
+    let cond_text = if cond.is_empty() {
+        "（未抽出明确关键词，仅时间窗）".into()
+    } else {
+        cond.join("；")
+    };
+    format!(
+        "已按自然语言解析条件查询 SkyWalking，时间窗 {window}，条件：{cond_text}。当前未命中可核对日志/调用链。可补充订单号、msgId、消息原文关键词，或放宽时间窗/改用「任一」匹配后再查。"
+    )
 }
 
 /// Validated model follow-ups share the initial HTTP budget and the caller's remaining wall time.

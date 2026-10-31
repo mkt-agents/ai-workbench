@@ -24,6 +24,25 @@
 
 本轮Rust全量965通过、0失败、14忽略；包含8个公共Mock OAP回归与日期纯函数测试。最初固定时钟用例已复现错误回退29日4小时，修复后实际HTTP queryDuration与fallback报告均断言26日全天；昨天/前天/近三天分别验证自然日和滚动72h。diff检查通过，保留已有编译警告；本轮无前端代码变更，未重启真实通道、未发送真实查询。
 
+## 非标准日期字面量与未执行原因（2026-10-30）
+
+修复 `时间：2026 10-30 10:12:13- 2026 10-30 16:12:13`（空格分隔年）整条查询被拒、回复裸「查询条件未解析」的问题（msgid `f496a366b32f764be824e5909fb91ad3`）。三层修复，详见 `docs/wecom-timeliteral-20261030.md`：
+
+- **解析前归一化**：`2026 10-30`、`2026/10/30`、`2026.10.30`、无年 `10-30 16:12:13` 在 `parse_query` 入口统一归一为 `YYYY-MM-DD`；带引号字面量与 `key=value` 业务值（含 `/` `:`）不改写；无效月日（`2-30`）仍交给日历校验报错，未来无年日期仍要求补年份。
+- **残留守卫边界化**：`4745BD58-16-C7-…` 这类渠道 key 内部的 `58-16` 不再被判成未识别日期；数字日期片段仅作为独立 token 时才触发澄清。
+- **未执行原因贯穿**：`InvestigationOutcome.clarification` 承载 host 拼装的具体原因（含示例格式），经 `fallback_with_reason` 渲染进「证据范围：未执行查询。…」与未完成项首行，并通过 `last_diagnostic` 暴露给设置页诊断面板；不带澄清时旧渲染逐字节不变。
+
+同时：新起会话语义补充 `新起会话/新起对话/重新起会话/开新会话` 等；粘贴 JSON 时引号键名不再混入关键词，关键词总量封顶 8 并记录 `keywordCount` 原始数量。
+
+## 思考强度按模型降级（2026-10-30）
+
+思考强度是全局设置，但 ACP 的 `reasoning_effort` 按**模型**校验：`mimo-v2.6-flash` 这类模型不吃 `high`，`session/set_config_option` 回 `-32602 unknown reasoning effort for <model>: <value>`，整轮在提交前被 fail-closed 掐死（耗时 0 秒）。兼容策略——**思考强度是质量旋钮，不是正确性旋钮**：
+
+- `apply_selection` 里 effort RPC 失败且错误形如「应用思考强度失败…unknown reasoning effort…」时：记住 (模型, 档位) 组合到 `unsupported_efforts`，本轮回落 Provider 默认继续跑；模型 RPC 失败（路由错误）仍然 fail-closed，只有 `应用思考强度失败` 前缀的错误才参与降级判定。
+- 记忆命中后下一轮直接跳过 effort RPC（省一次注定失败的往返）；诊断日志记一行 `reasoning_effort=<档> 被模型拒绝，已回落 provider 默认`。
+- 性能面板的 effort 标签展示**实际生效值**（回落时为 unknown），不虚报用户设置。
+- 换模型/重启进程后组合表仍按模型键控有效；跨进程重启重新学习一次（代价仅一轮降级）。
+
 ## 配置自我介绍与新对话问候（2026-10-29）
 
 回答设置的 `wecomSelfIntro` 为两档引擎共用的热更新配置。完整问候（你好/您好/hi/hello等）或身份短句（你是谁/你能做什么等）在通过访问策略后直接发送配置文本，保留换行和emoji，并沿用宿主耗时尾注，不调用模型。空配置回退内置天玑介绍；进入会话的 `enter_chat` 欢迎不变。
@@ -208,7 +227,7 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
   **多轮上下文由 DSH 自己维护**，不再把本机短历史塞进 prompt；问答旁证仍单独写入。
   新个人/共享会话从空上下文开始，不自动继承旧群历史；旧私聊没有可靠机器人归属也不自动迁入。
   同一新版逻辑会话切回天玑时可读取该作用域自己的旁证，不跨作用域复制。
-- **正文缓冲**：普通任务的 `agent_message_chunk` 与DSH排障protected正文均完整缓冲至 `Done`；排障再经报告/引用/源码校验发送，不恢复未经验证token流。进度、排队与审批提示照常显示，`agent_thought_chunk` / `tool_call` / `usage_update` 不逐步播报。取消回复脱敏不改变缓冲边界；非排障显式JSON保留内容格式。
+- **正文流式（2026-10-31）**：普通（非排障）问答在 `agent_message_chunk` 到达时，按约 350ms 节流把**累计 Markdown** 写入同一 `stream`（`finish=false`）；`Done` 仍走 `send_finish`（含耗时尾注）。**排障** `protected_answer` 路径继续全缓冲至 `Done`，再经报告/引用/源码校验一次发出，不流式半成品 JSON。进度、排队、stall 与审批提示照常；`agent_thought_chunk` / `tool_call` / `usage_update` 不逐步播报。若需把本地文件发回企微，模型可写一行 `WECOM_ATTACH:<path>`（宿主剥离标记并经 `wecom_media` 上传；需已登记 `out_targets`）。
 - **收尾**：`session/prompt` 的 `stopReason` 映射成一句提示（截断 / 工具步数上限 /
   拒绝 / 取消）；DSH 回合看门狗 600 秒，超时先 `session/cancel` 再收尾（日志采集与补查合计另限 120 秒累计采集耗时）。
 
@@ -362,10 +381,11 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 
 ## 边界与已知差异
 
-- **图片/文件**：ACP 图片提示需要 attachment store + 支持图像的 route，首期降级为
-  文本线索（`（图片「名」：url）`），与「天玑非 vision 模型」同一处理。
-- **出站富媒体**：`wecom_send_image` / `wecom_send_file` 是天玑档的工具（依赖回合的
-  `last_target`），DSH 档不会下发，也不会被调用。
+- **图片/文件入站**：回调 url 或 `media_id` 经宿主落盘；ACP 宣告 `promptCapabilities.image`
+  时图片内联为 image block，否则与文件一样给路径/文本预览。
+- **出站富媒体**：天玑档用 `wecom_send_image` / `wecom_send_file` 工具；DSH 档用回复行
+  `WECOM_ATTACH:<path>`（宿主 `out_targets` + `wecom_media`）。二进制上传仍依赖业务 API
+  凭证，协议字段待真机联调。
 - **首次使用**：`~/.dsh/profiles/acp` 不存在时要初始化（可能要装依赖，几十秒到几分钟）。
   启动超过 3 秒会先单独发一条「正在启动 DeepSeek Harness…」的消息；失败原因进
   设置页的「DSH 引擎状态」。
@@ -385,8 +405,9 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 | SkyWalking 排障 | ✅ `skywalking_query` 工具（日志 / trace / 指标） | ⚠️ Rust 有限采集 → 证据注入；支持条件追问后再次采集 | 入口日志 → 最多 3 条 trace → 关联服务日志补查；不是 DSH 自主调用 SkyWalking MCP，也不是任意多轮工具执行，预算与覆盖见下节 |
 | MCP 服务 | ✅ 随 `agent_run` 下发 | ✅ 随 `session/new`\|`resume` 的 `mcpServers` 下发 | 2026-10-28 补齐：企微通道配的 MCP 两档都可用（DSH 需总开关开） |
 | 企微业务（文档/日程/智能表格 8 工具） | ✅ `wecom_*` 工具 | ❌ 不下发 | DSH 用自己的工具集，没有这组企微 Open API 工具 |
-| 出站富媒体（发图/文件回对话） | ✅ `wecom_send_image/file`（Sensitive 档） | ❌ 不下发 | 依赖回合 `last_target`，ACP 侧无对应通道 |
-| 入站图片（vision） | ✅ 内联 image 块 | ✅ ACP 宣告 `promptCapabilities.image` 时内联 | 模型不支持时都降级为文本线索 |
+| 出站富媒体（发图/文件回对话） | ✅ `wecom_send_image/file`（Sensitive 档） | ✅ `WECOM_ATTACH:path` 宿主上传（同 `wecom_media`） | 两档均登记 `out_targets`；二进制上传需业务 API 凭证，字段待真机联调 |
+| 入站图片（vision） | ✅ 落盘后内联 image 块 | ✅ ACP 宣告 `promptCapabilities.image` 时内联 | url 优先；仅 `media_id` 时走 `media/get`（需业务 API）；文件落盘可读文本或给路径 |
+| 普通问答 Markdown 流式 | ✅ 天玑 Done 前也可按需扩展 | ✅ 非排障 350ms 累计 stream | 排障仍校验后一次出报告 |
 | 审批粒度 | 一次 / 本轮同类 / 以后都允许 | 仅一次性（ACP 限制） | 企微里回「码 3」在 DSH 档会被明确告知只有一次性 |
 | 天玑专属安全（冲突仓库拒绝 / 受保护路径 / 命令黑名单 / 删除进回收站 / diff 审批卡） | ✅ | ❌（由 DSH 自己的沙箱兜底） | 见上「权限档位 → DSH 沙箱」 |
 

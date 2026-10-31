@@ -1077,6 +1077,7 @@ mod tests {
             identifiers: vec![],
             exclude_keyword: String::new(),
             match_any: false,
+            keyword_count: 0,
             service: None,
             trace_id: None,
             level: None,

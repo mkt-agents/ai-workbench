@@ -660,6 +660,7 @@ pub fn run() {
             ai_commands::test_model_connection,
             ai_commands::list_provider_models,
             ai_commands::infer_model_modality,
+            ai_commands::infer_model_max_output,
             ai_commands::generate_text,
             ai_commands::generate_text_stream,
             agent::agent_run,

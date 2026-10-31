@@ -108,7 +108,7 @@ ai-workbench/
 │   │   └── cursorMatch.ts        # Cursor 账号匹配（email+name 对比）
 │   │
 │   ├── components/               # UI 组件层（全部无类型拆分，单文件单组件）
-│   │   ├── AIAssistant.tsx       # 模型配置页（CRUD + 连接测试 + 批量操作 + 分组；图标见 public/ai-providers/）
+│   │   ├── AIAssistant.tsx       # 模型配置页（CRUD + 连接测试 + 批量操作 + 分组；图标见 src/assets/ai-providers/）
 │   │   ├── DeepSeekHarness.tsx   # DSH iframe 托管 + 启动/停止/端口配置
 │   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出 + 类型筛选
 │   │   ├── AccountQuotaPanel.tsx # 账号额度看板（多服务商；样式见同名 .css）
@@ -159,7 +159,7 @@ ai-workbench/
 │   │
 │   ├── lib/                       # 业务工具库
 │   │   ├── aiProviders.ts       # AI 厂商 provider 列表 + 显示元数据
-│   │   ├── aiProviderLogos.ts   # 模型配置页提供商品牌图（指向 public/ai-providers/）
+│   │   ├── aiProviderLogos.ts   # 模型配置页提供商品牌图（Vite import：src/assets/ai-providers/）
 │   │   ├── providerLogos.ts     # 账号额度侧栏/卡片品牌图（src/assets/providers/ + 本机图标）
 │   │   ├── quotaProviders.ts    # 额度侧栏服务商目录（数组序 = 侧栏序）+ 看板卡片偏好 + 安装检测（注册表 + 商店包）
 │   │   ├── aiText.ts             # AI 纯文本的围栏剥离 / `##` 章节切分
@@ -510,7 +510,7 @@ bootApp(): Promise<void>
 | `theme.ts` | `applyDocumentTheme(theme)` | 根据 AppTheme 设置 `data-theme`（支持 glass/ice/silver/light/dark/system） |
 | `aiHubShortcut.ts` | `registerAiHubShortcut(shortcut)` | 调用 `registerShortcut` + navigate |
 | `aiProviders.ts` | `AI_PROVIDERS: ProviderMeta[]` | provider 显示名 + 默认 baseUrl |
-| `aiProviderLogos.ts` | `aiProviderLogoUrl(id)` 等 | 模型配置页品牌图 URL（`public/ai-providers/`） |
+| `aiProviderLogos.ts` | `aiProviderLogoSrc(id)` | 模型配置页品牌图（Vite 打包 `src/assets/ai-providers/`） |
 | `providerLogos.ts` | 额度侧栏/卡片 glyph | `src/assets/providers/` + 本机安装图标优先 |
 | `snippets.ts` | `renderSnippet(template, params)` | `{{param}}` 替换引擎 |
 | `version.ts` | `compareVersions(a, b)` | 语义版本比较（含 prerelease） |
@@ -578,7 +578,7 @@ openGroups: Set<string>       // 分组展开状态
 | 组件 | 功能 | 关键交互 |
 |------|------|----------|
 | `DeepSeekHarness` | iframe 托管 DSH | 启动/停止/端口/认证补丁状态 |
-| `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `public/ai-providers/` |
+| `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `src/assets/ai-providers/` + 最长输出自动预填 |
 | `SnippetsManager` | 提示词管理 | `{{param}}` 编辑 + JSON 导入导出 + 场景标签 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`）；类型统一为 prompt |
 | `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（未安装 / 折叠时账号数胶囊、悬停换眼睛 / `+` 添加）下挂已连接账号，有账号的服务商点行可折叠（localStorage `aq-rail-folded`）；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
@@ -1013,6 +1013,7 @@ let _ = conn.execute_batch("ALTER TABLE web_plugins ADD COLUMN \"group\" TEXT NO
 | `test_model_connection` | AIModelConfig | ModelConnectionResult |
 | `list_provider_models` | provider, api_key, base_url | ListModelsResult（每条带 `modality`：vision/text/unknown） |
 | `infer_model_modality` | provider, model | String（离线名称规则推断模态，见 `model_capability.rs`） |
+| `infer_model_max_output` | provider, model | `Option<u32>`（离线推断单次 completion 上限；`list_provider_models` 亦解析厂商字段） |
 | `generate_text` | config, system, user | String |
 | `generate_text_stream` | config, system, user, request_id, history? | — (emit 事件) |
 

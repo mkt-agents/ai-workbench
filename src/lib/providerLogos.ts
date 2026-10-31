@@ -13,6 +13,7 @@ import antigravity from "../assets/providers/antigravity.png";
 import zcode from "../assets/providers/zcode.png";
 import xai from "../assets/providers/xai.png";
 import trae from "../assets/providers/trae.png";
+import mimo from "../assets/ai-providers/mimo.png";
 
 /** `QUOTA_PROVIDERS[].id` → 资源 URL */
 const BY_PROVIDER: Record<string, string> = {
@@ -27,7 +28,7 @@ const BY_PROVIDER: Record<string, string> = {
   "workbuddy-ai": workbuddyAi,
   antigravity,
   zcode,
-  mimo: "/ai-providers/mimo.png",
+  mimo,
   "grok-build": xai,
   trae,
 };
@@ -44,7 +45,7 @@ const BY_CARD_BRAND: Record<string, string> = {
   qoder,
   claude,
   zcode,
-  mimo: "/ai-providers/mimo.png",
+  mimo,
   trae,
 };
 

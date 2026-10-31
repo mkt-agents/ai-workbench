@@ -126,6 +126,9 @@ pub struct ListedModel {
     pub label: Option<String>,
     /// 离线启发式推断的模态："vision" / "text" / "unknown"，前端据此预填「支持看图」。
     pub modality: String,
+    /// 厂商 /models 声明的单次 completion 上限（非 context_length）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -246,10 +249,14 @@ fn parse_openai_models_response(text: &str, provider: &str) -> Vec<ListedModel> 
                         .as_str()
                         .to_string()
                 });
+            let max_output_tokens = max_output_tokens_from_item(&item).or_else(|| {
+                crate::model_capability::infer_max_output_tokens(provider, &id)
+            });
             Some(ListedModel {
                 id,
                 label: None,
                 modality,
+                max_output_tokens,
             })
         })
         .collect();
@@ -312,6 +319,64 @@ pub fn infer_model_modality(provider: String, model: String) -> String {
     crate::model_capability::infer_modality(&provider, &model)
         .as_str()
         .to_string()
+}
+
+/// 离线推断单次回答最长输出（供前端「最长输出」滑块预填）。无规则时返回 None。
+#[tauri::command]
+pub fn infer_model_max_output(provider: String, model: String) -> Option<u32> {
+    crate::model_capability::infer_max_output_tokens(&provider, &model)
+}
+
+/// 从 /models 单条记录读 completion 上限。**不用** context_length（那是上下文窗口）。
+fn max_output_tokens_from_item(item: &serde_json::Value) -> Option<u32> {
+    const KEYS: &[&str] = &[
+        "max_completion_tokens",
+        "max_output_tokens",
+        "max_tokens",
+        "completion_tokens",
+    ];
+    for key in KEYS {
+        if let Some(n) = json_positive_u32(item.get(key)) {
+            return Some(n);
+        }
+    }
+    if let Some(top) = item.get("top_provider") {
+        for key in KEYS {
+            if let Some(n) = json_positive_u32(top.get(key)) {
+                return Some(n);
+            }
+        }
+    }
+    if let Some(limits) = item.get("per_request_limits") {
+        for key in ["completion_tokens", "max_completion_tokens", "max_tokens"] {
+            if let Some(n) = json_positive_u32(limits.get(key)) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+fn json_positive_u32(value: Option<&serde_json::Value>) -> Option<u32> {
+    match value {
+        Some(serde_json::Value::Number(n)) => {
+            let v = n.as_u64().or_else(|| n.as_f64().map(|f| f as u64))?;
+            if v > 0 && v <= u32::MAX as u64 {
+                Some(v as u32)
+            } else {
+                None
+            }
+        }
+        Some(serde_json::Value::String(s)) => {
+            let v: u64 = s.trim().parse().ok()?;
+            if v > 0 && v <= u32::MAX as u64 {
+                Some(v as u32)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn trim_trailing_slash(s: &str) -> String {

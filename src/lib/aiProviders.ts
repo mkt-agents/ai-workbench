@@ -3,7 +3,13 @@ import type { AIModelConfig, AuthType } from "../core/types";
 export type AIProviderId = AIModelConfig["provider"];
 export type AuthMode = "bearer" | "api-key" | "anthropic";
 
-export type ModelPreset = { id: string; label?: string; modality?: string };
+export type ModelPreset = {
+  id: string;
+  label?: string;
+  modality?: string;
+  /** 单次回答最长输出（来自 /models 或离线规则）。 */
+  maxOutputTokens?: number;
+};
 
 export type AIProviderMeta = {
   value: AIProviderId;

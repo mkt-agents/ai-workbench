@@ -10,7 +10,7 @@
 //! - DSH 的 `session/request_permission` 交给编排层转成企微审批码；
 //! - 文本更新来自 ACP 的「提交点」，不是逐 token 增量，节流交给编排层。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -306,6 +306,9 @@ struct EngineInner {
     active: ActiveSessions,
     /// sessionId → 上一次成功应用的 (model, effort)，避免每轮重复下发
     applied: HashMap<String, (String, String)>,
+    /// (model value, effort) 组合被该模型以 `unknown reasoning effort` 拒绝过的记录；
+    /// 命中后不再下发该档位，按 Provider 默认跑。模型路由仍 fail-closed。
+    unsupported_efforts: HashSet<(String, String)>,
     /// 列模型用的探针会话（不带用户对话，随时可重建）
     probe: Option<String>,
     /// 探针会话对应的模型目录缓存
@@ -345,6 +348,7 @@ impl DshEngine {
                 sessions: load_sessions(),
                 active: ActiveSessions::default(),
                 applied: HashMap::new(),
+                unsupported_efforts: HashSet::new(),
                 probe: None,
                 catalog: None,
                 mirror: None,
@@ -507,9 +511,12 @@ impl DshEngine {
     }
 
     /// Apply the requested configuration; an RPC acknowledgement is not a model-use observation.
-    /// Any failure aborts this turn rather than silently using the previous/default route.
+    /// Model routing is fail-closed. A reasoning-effort value the model rejects (ACP -32602
+    /// `unknown reasoning effort`) is a quality knob, not a correctness one: remember the
+    /// (model, effort) pair, fall back to the provider default, and keep the turn running.
+    /// Returns the effort that actually took effect (empty = provider default).
     pub async fn apply_selection(&self, session_id: &str) -> Result<(String, String), String> {
-        let (mut model, effort) = {
+        let (mut model, mut effort) = {
             let g = self.inner.lock().await;
             (g.model.clone(), g.effort.clone())
         };
@@ -533,6 +540,13 @@ impl DshEngine {
         }
         {
             let g = self.inner.lock().await;
+            if g.unsupported_efforts.contains(&(model.clone(), effort.clone())) {
+                // 已知该模型不吃这一档：直接用 provider 默认，省一次注定失败的 RPC。
+                effort = String::new();
+            }
+        }
+        {
+            let g = self.inner.lock().await;
             if let Some((m, e)) = g.applied.get(session_id) {
                 if m == &model && e == &effort {
                     return Ok((model, effort));
@@ -540,7 +554,22 @@ impl DshEngine {
             }
         }
         let (shared, writer) = self.parts().await?;
-        apply_selection_rpc(&shared, &writer, session_id, &model, &effort).await?;
+        let applied = apply_selection_rpc(&shared, &writer, session_id, &model, &effort).await;
+        match applied {
+            Ok(()) => {}
+            Err(e) if effort_rejected_by_model(&e) && !effort.trim().is_empty() => {
+                let mut g = self.inner.lock().await;
+                g.unsupported_efforts.insert((model.clone(), effort.clone()));
+                g.applied.remove(session_id);
+                drop(g);
+                // 同一会话模型 RPC 已成功，只补一次「清除到默认」也不必：set 失败时
+                // DSH 保留了上一次成功值，这里按 provider 默认语义继续本轮。
+                crate::wecom_log::write("dsh",
+                    &format!("reasoning_effort={effort} 被模型拒绝，已回落 provider 默认：{e}"));
+                effort = String::new();
+            }
+            Err(e) => return Err(e),
+        }
         let mut g = self.inner.lock().await;
         g.applied.insert(session_id.to_string(), (model.clone(), effort.clone()));
         Ok((model, effort))
@@ -1284,7 +1313,7 @@ pub fn parse_config_options(options: &Value) -> DshModelCatalog {
     catalog
 }
 
-/// 把 DSH 的原始报错翻成可操作的话（缺 key / 未登录是最常见的两种）。
+/// 把 DSH 的原始报错翻成可操作的话（缺 key / 未登录 / maxTokens 过大是最常见的几类）。
 pub fn friendly_turn_error(raw: &str) -> String {
     let lower = raw.to_lowercase();
     if lower.contains("no api key")
@@ -1293,6 +1322,14 @@ pub fn friendly_turn_error(raw: &str) -> String {
     {
         return format!(
             "DSH 里这个模型没有可用的密钥或登录：请在 Harness → 模型页给对应 provider 配好 key / 登录，或在上面的「DSH 模型」里换一个有凭据的模型。（原始错误：{raw}）"
+        );
+    }
+    if lower.contains("max_completion_tokens")
+        || (lower.contains("max_tokens") && lower.contains("too large"))
+        || (lower.contains("param incorrect") && lower.contains("token"))
+    {
+        return format!(
+            "当前模型的输出上限（maxTokens）设得过大，接口已拒绝。请到 DSH → 模型页把该模型的最长输出调到 ≤131072（建议 8192–32768），再到本页点「重新同步」并重连通道；新版本镜像也会自动钳制过大值。（原始错误：{raw}）"
         );
     }
     raw.to_string()
@@ -1525,6 +1562,18 @@ fn rpc_error_text(err: &Value) -> String {
         Some(code) => format!("{message}（code {code}）"),
         None => message.to_string(),
     }
+}
+
+/// ACP validates `reasoning_effort` per model: `Invalid params: unknown reasoning effort
+/// for <model>: <value>` (-32602). Only the effort-RPC failure carrying that shape means
+/// "this model does not take this level"; the model-RPC failure with the same provider
+/// text is a routing error and stays fail-closed (distinguished by the host prefix).
+fn effort_rejected_by_model(error: &str) -> bool {
+    if !error.contains("应用思考强度失败") {
+        return false;
+    }
+    let lower = error.to_lowercase();
+    lower.contains("reasoning effort") && (lower.contains("unknown") || lower.contains("-32602"))
 }
 
 /// Public turn entry awaits these acknowledgements before submitting any prompt.
@@ -1935,6 +1984,102 @@ mod tests {
         task.abort();
     }
 
+    /// Give the fixture engine a live-enough runtime whose shared/writer are the mock's,
+    /// so `parts()` succeeds and `apply_selection` talks to `mock_rpc`. The child is a
+    /// sleeping cmd; teardown kills it at test end.
+    async fn attach_mock_runtime(engine: &DshEngine, shared: &Arc<RuntimeShared>, writer: &mpsc::UnboundedSender<Value>) {
+        let child = tokio::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "30", "127.0.0.1", ">nul"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn fixture child");
+        let mut g = engine.inner.lock().await;
+        g.runtime = Some(Runtime {
+            child,
+            writer: writer.clone(),
+            shared: Arc::new(RuntimeShared {
+                rpc: shared.rpc.clone(),
+                stderr: StdMutex::new(Vec::new()),
+            }),
+            version: "test".into(),
+            cli_version: "test".into(),
+        });
+        g.state = EngineState::Ready;
+    }
+
+    #[test]
+    fn effort_rejection_is_recognised_only_for_the_unknown_level_shape() {        assert!(effort_rejected_by_model(
+            "应用思考强度失败，本轮未提交模型任务：session/set_config_option 失败：Invalid params: unknown reasoning effort for mimo_mimo_v2_6_flash/mimo-v2.6-flash: high（code -32602）"
+        ));
+        assert!(effort_rejected_by_model("应用思考强度失败，本轮未提交模型任务：unknown reasoning effort for m: max"));
+        // 超时 / 传输失败 / 模型路由错误都不能被当成档位不支持。
+        assert!(!effort_rejected_by_model("应用思考强度失败，本轮未提交模型任务：session/set_config_option 失败：等待应答超时"));
+        assert!(!effort_rejected_by_model("应用模型失败，本轮未提交模型任务：unknown reasoning effort"));
+        assert!(!effort_rejected_by_model("应用思考强度失败，本轮未提交模型任务：reasoning effort timeout"));
+    }
+
+    #[tokio::test]
+    async fn rejected_effort_falls_back_to_provider_default_and_is_remembered() {
+        let engine = engine_fixture();
+        {
+            let mut g = engine.inner.lock().await;
+            g.model = "mimo".into();
+            g.effort = "high".into();
+        }
+        // 1) model set succeeds; effort set is rejected with the ACP unknown-level error.
+        let (shared, writer, calls, task) = mock_rpc(vec![
+            json!({"result":{}}),
+            json!({"error":{"code":-32602,"message":"Invalid params: unknown reasoning effort for mimo/mimo-v2.6-flash: high"}}),
+        ]);
+        attach_mock_runtime(&engine, &shared, &writer).await;
+        let (model, effort) = engine.apply_selection("dm").await.expect("应回落默认而不是整轮失败");
+        assert_eq!(model, "mimo");
+        assert_eq!(effort, "", "被拒档位应回落 provider 默认");
+        assert!(engine
+            .inner
+            .lock()
+            .await
+            .unsupported_efforts
+            .contains(&("mimo".into(), "high".into())));
+        assert_eq!(calls.lock().unwrap().len(), 2);
+        task.abort();
+        engine.teardown().await;
+
+        // 2) Next turn with the same model: the effort RPC is skipped entirely.
+        let (shared2, writer2, calls2, task2) = mock_rpc(vec![json!({"result":{}})]);
+        attach_mock_runtime(&engine, &shared2, &writer2).await;
+        let (_, effort2) = engine.apply_selection("dm").await.unwrap();
+        assert_eq!(effort2, "");
+        let observed = calls2.lock().unwrap();
+        assert_eq!(observed.len(), 1, "记忆命中后不再发注定失败的 effort RPC");
+        assert_eq!(observed[0]["params"]["configId"], "model");
+        drop(observed);
+        task2.abort();
+        engine.teardown().await;
+    }
+
+    #[tokio::test]
+    async fn non_level_effort_failure_still_fails_closed() {
+        let engine = engine_fixture();
+        {
+            let mut g = engine.inner.lock().await;
+            g.model = "mimo".into();
+            g.effort = "high".into();
+        }
+        let (shared, writer, _calls, task) = mock_rpc(vec![
+            json!({"result":{}}),
+            json!({"error":{"code":-32000,"message":"connection lost"}}),
+        ]);
+        attach_mock_runtime(&engine, &shared, &writer).await;
+        let error = engine.apply_selection("dm").await.unwrap_err();
+        assert!(error.contains("本轮未提交模型任务"), "{error}");
+        assert!(engine.inner.lock().await.unsupported_efforts.is_empty());
+        task.abort();
+        engine.teardown().await;
+    }
+
     fn engine_fixture() -> DshEngine {
         DshEngine {
             inner: Mutex::new(EngineInner {
@@ -1948,6 +2093,7 @@ mod tests {
                 sessions: HashMap::from([("dm".into(), "history".into())]),
                 active: ActiveSessions::default(),
                 applied: HashMap::new(),
+                unsupported_efforts: HashSet::new(),
                 probe: None,
                 catalog: None,
                 mirror: None,
@@ -2151,6 +2297,15 @@ mod tests {
         assert!(text.contains("-32603"), "原始错误要保留：{text}");
         // 其它错误原样返回
         assert_eq!(friendly_turn_error("boom"), "boom");
+    }
+
+    #[test]
+    fn max_completion_tokens_error_becomes_actionable() {
+        let raw = r#"Internal error: turn failed: 400: {"code":"400","message":"Param Incorrect","param":"max_completion_tokens is too large: 242347. This model supports at most 131072 completion tokens, whereas you provided 242347.","type":""} (code -32603)"#;
+        let text = friendly_turn_error(raw);
+        assert!(text.contains("最长输出"), "{text}");
+        assert!(text.contains("重新同步"), "{text}");
+        assert!(text.contains("131072"), "{text}");
     }
 
     /// 覆盖层必须能被 YAML 解析，且 Windows 反斜杠路径不会把文档写坏。

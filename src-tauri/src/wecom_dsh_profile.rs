@@ -9,12 +9,18 @@
 //! 这里把 `~/.dsh/profiles/acp` 做成 `web` 的镜像：
 //! - bundle 列表照抄，`dsh-web-app` 换成 `dsh-acp-app`，去掉插件市场 UI；
 //! - `node_modules` 用目录联接（junction）指向 web 的，不重装、不联网；
-//! - `cordis.patch.yml` 照抄，只滤掉 `ui-*` 与市场相关条目；
+//! - `cordis.patch.yml` 照抄，只滤掉 `ui-*` 与市场相关条目，并把过大的
+//!   `maxTokens` 钳到 ACP 可用上限（部分 OpenAI 兼容模型如 mimo 拒绝
+//!   `max_completion_tokens > 131072`，web 档里偶发写成 1M）；
 //! - `compatibility.json` 一并镜像。
 //!
 //! 只写 acp 目录，绝不改 `profiles/web` 与凭证库。
 
 use std::path::{Path, PathBuf};
+
+/// ACP 镜像时单模型 `maxTokens` 上限。超过后 provider 会以
+/// `max_completion_tokens is too large` 拒请求（实测 mimo ≤ 131072）。
+pub const MAX_SAFE_COMPLETION_TOKENS: u64 = 131_072;
 
 const SOURCE_PROFILE: &str = "web";
 const TARGET_PROFILE: &str = "acp";
@@ -149,9 +155,13 @@ pub fn mirror(source: &Path, target: &Path) -> Result<MirrorReport, String> {
         let raw = std::fs::read_to_string(&patch_src)
             .map_err(|e| format!("读取 {} 失败：{e}", patch_src.display()))?;
         let (header, kept, count) = filter_patch(&raw);
+        let kept = clamp_patch_max_tokens(&kept, MAX_SAFE_COMPLETION_TOKENS);
         let mut text = String::new();
         text.push_str("# ai-workbench 生成：镜像 DSH 的 web profile（模型 / provider 配置）。\n");
         text.push_str("# 每次启动重写；DSH 里改了插件或模型后请点设置页的「重新同步」。\n");
+        text.push_str(&format!(
+            "# maxTokens 超过 {MAX_SAFE_COMPLETION_TOKENS} 的条目已钳制（避免 max_completion_tokens 被拒）。\n"
+        ));
         if !header.is_empty() {
             text.push_str(&header);
         }
@@ -282,6 +292,37 @@ pub fn filter_patch(raw: &str) -> (String, String, usize) {
         kept.push_str("[]\n");
     }
     (header, kept, count)
+}
+
+/// 把 patch 正文里过大的 `maxTokens: N` 钳到 `cap`（保留缩进与写法）。
+pub fn clamp_patch_max_tokens(patch: &str, cap: u64) -> String {
+    let mut out = String::with_capacity(patch.len());
+    for line in patch.lines() {
+        if let Some(clamped) = clamp_max_tokens_line(line, cap) {
+            out.push_str(&clamped);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    // 原文本若不以换行结尾，去掉我们多加的最后一个。
+    if !patch.is_empty() && !patch.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+fn clamp_max_tokens_line(line: &str, cap: u64) -> Option<String> {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    let rest = trimmed.strip_prefix("maxTokens:")?;
+    let value = rest.trim();
+    // 只动纯数字；带引号 / 表达式 / 空值原样保留。
+    let n: u64 = value.parse().ok()?;
+    if n <= cap {
+        return None;
+    }
+    Some(format!("{indent}maxTokens: {cap}"))
 }
 
 fn keep_entry(block: &str) -> bool {
@@ -428,6 +469,19 @@ mod tests {
         assert!(kept.contains("llm-pi-ai"));
         assert!(kept.contains("!!js"), "自定义标签必须原样保留：{kept}");
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn clamp_patch_max_tokens_caps_oversized_values() {
+        let raw = "      mimo:\n        models:\n          - id: mimo-v2.6-flash\n            maxTokens: 1048576\n          - id: other\n            maxTokens: 32768\n            contextWindow: 200000\n";
+        let out = clamp_patch_max_tokens(raw, MAX_SAFE_COMPLETION_TOKENS);
+        assert!(out.contains("maxTokens: 131072"), "{out}");
+        assert!(!out.contains("1048576"), "{out}");
+        assert!(out.contains("maxTokens: 32768"), "{out}");
+        assert!(out.contains("contextWindow: 200000"), "{out}");
+        // 非数字不动
+        let js = "            maxTokens: !!js '1e6'\n";
+        assert_eq!(clamp_patch_max_tokens(js, 100), js);
     }
 
     #[test]

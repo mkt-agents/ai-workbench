@@ -120,3 +120,10 @@
 
 ## 仍待办（需真机/产品决策）
 - **出站富媒体字段校准**（D2）：`respond_image`/`respond_file`/`upload_media` 仍标「待联调验证」，需对照企微智能机器人官方素材接口核对后去标（唯一需真机联调、无法本地验证的一项）。
+
+## 已落地（2026-10-31 批次，DSH 为主）
+
+- **普通问答 Markdown 真流式**：DSH 非 `protected` 回合对 `agent_message_chunk` 按 350ms 节流推累计 `respond_stream`；排障仍全缓冲 + 报告校验。
+- **入站富媒体**：`MediaRef` 支持仅 `media_id`；`wecom_media::materialize_inbound` 落盘 `wecom-media/<msgid>/`（7 天回收），图片内联 / 文本附件读入 / 二进制给路径。
+- **DSH 出站**：回合登记 `out_targets`；回复中 `WECOM_ATTACH:<path>` 由宿主剥离并 `send_image`/`send_file`。
+- **设置页**：会话指令清单、连接排查清单、docgen 启用 checklist（中英 i18n）。

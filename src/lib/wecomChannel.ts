@@ -43,6 +43,8 @@ export type WecomInvestigationStatus = {
   decisionGaps?: string[] | null;
   sourceReady?: boolean | null;
   detail: string;
+  /** 本机核对的未执行原因（host 文本，非 OAP 原文）；缺字段表示后端实例未提供。 */
+  clarification?: string | null;
 };
 
 export type WecomPerformancePhase = {

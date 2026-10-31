@@ -41,6 +41,9 @@ pub struct InvestigationQuery {
     pub exclude_keyword: String,
     /// false = AND，true = OR；执行层需明确支持 OR，不应静默降为 AND。
     pub match_any: bool,
+    /// 组装出的关键词条数（封顶前），用于诊断「关键词淹没日志」。
+    #[serde(default)]
+    pub keyword_count: usize,
     pub service: Option<String>,
     pub trace_id: Option<String>,
     #[serde(default)]
@@ -57,7 +60,7 @@ fn re(pattern: &str) -> Regex {
 pub fn starts_new_investigation(text: &str) -> bool {
     let text = re(r#"(?s)```.*?```|`[^`]*`|"[^"]*"|'[^']*'|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』"#)
         .replace_all(text, "引用");
-    re(r"(?:^|[，,。；;\n])\s*(?:请|帮我)?\s*(?:新会话|新对话|起新会话|起新对话|新建会话|新建对话|开启新会话|开启新对话|开始新会话|开始新对话|新开会话|新开对话|重新开始排查|start_new)(?:\s*$|[，,。；;\n])")
+    re(r"(?:^|[，,。；;\n])\s*(?:请|帮我)?\s*(?:新会话|新对话|起新会话|起新对话|新起会话|新起对话|重新起会话|重新起对话|开新会话|开新对话|新建会话|新建对话|开启新会话|开启新对话|开始新会话|开始新对话|新开会话|新开对话|重新开始排查|start_new)(?:\s*$|[，,。；;\n])")
         .is_match(&text)
 }
 
@@ -66,7 +69,7 @@ pub fn starts_new_investigation(text: &str) -> bool {
 /// orchestrator handle `新对话，你好` without sending the control words to the model.
 pub fn new_session_remainder(text: &str) -> Option<String> {
     let source = text.trim_start();
-    let pattern = re(r"^(?:请|帮我)?\s*(?:新会话|新对话|起新会话|起新对话|新建会话|新建对话|开启新会话|开启新对话|开始新会话|开始新对话|新开会话|新开对话|重新开始排查|start_new)(?:\s*$|\s*[，,。；;\n]\s*)");
+    let pattern = re(r"^(?:请|帮我)?\s*(?:新会话|新对话|起新会话|起新对话|新起会话|新起对话|重新起会话|重新起对话|开新会话|开新对话|新建会话|新建对话|开启新会话|开启新对话|开始新会话|开始新对话|新开会话|新开对话|重新开始排查|start_new)(?:\s*$|\s*[，,。；;\n]\s*)");
     let matched = pattern.find(source)?;
     Some(source[matched.end()..].trim().to_string())
 }
@@ -102,6 +105,82 @@ fn expanding(text: &str) -> bool {
     ["扩大", "扩展", "放大"].iter().any(|s| text.contains(s))
 }
 
+/// Collapse the date spellings people actually type into the single `YYYY-MM-DD`
+/// form the calendar parser owns: `2026 10-30`, `2026/10/30`, `2026.10.30`,
+/// `2026年10月30日`, and a bare `10-30` only when a clock follows it and the day is
+/// not in the future. Quoted literals and `key=value` business values keep their
+/// original bytes, so `matchId=2026-10-28` never turns into a query window.
+/// An explicit year is always rewritten (even an impossible month/day) so
+/// `calendar_date` keeps reporting which date is wrong; a year-less day stays
+/// untouched unless it can be resolved, which keeps the "请明确查询年份" clarification.
+fn normalize_dates(text: &str, today: NaiveDate) -> String {
+    let mut skip: Vec<(usize, usize)> = Vec::new();
+    for m in re(r#""[^"]*"|'[^']*'|“[^”]*”"#).find_iter(text) {
+        skip.push((m.start(), m.end()));
+    }
+    for m in re(r#"[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_.:+-]+)"#)
+        .find_iter(text)
+    {
+        skip.push((m.start(), m.end()));
+    }
+    let blocked = |start: usize, end: usize| skip.iter().any(|(s, e)| start < *e && end > *s);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for cap in re(r"(\d{4})(?:\s*[-/.年]\s*|\s+)(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*[日号]?")
+        .captures_iter(text)
+    {
+        let m = cap.get(0).unwrap();
+        if blocked(m.start(), m.end()) {
+            continue;
+        }
+        let (Ok(year), Ok(month), Ok(day)) = (
+            cap[1].parse::<i32>(),
+            cap[2].parse::<u32>(),
+            cap[3].parse::<u32>(),
+        ) else {
+            continue;
+        };
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+            continue;
+        }
+        edits.push((m.start(), m.end(), format!("{year:04}-{month:02}-{day:02}")));
+    }
+    let clock_tail = re(r"^\s*\d{1,2}:\d{2}|^\s*[0-9零一二两三四五六七八九十]{1,3}点");
+    for cap in re(r"(\d{1,2})[-/](\d{1,2})").captures_iter(text) {
+        let m = cap.get(0).unwrap();
+        let before = text[..m.start()].chars().next_back();
+        let after = text[m.end()..].chars().next();
+        let inside_word = before
+            .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | '.'))
+            || after.is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | '.'));
+        if inside_word
+            || blocked(m.start(), m.end())
+            || edits.iter().any(|(s, e, _)| m.start() < *e && m.end() > *s)
+            || !clock_tail.is_match(&text[m.end()..])
+        {
+            continue;
+        }
+        let (Ok(month), Ok(day)) = (cap[1].parse::<u32>(), cap[2].parse::<u32>()) else {
+            continue;
+        };
+        let Some(date) = NaiveDate::from_ymd_opt(today.year(), month, day) else {
+            continue;
+        };
+        if date > today {
+            continue;
+        }
+        edits.push((m.start(), m.end(), date.format("%Y-%m-%d").to_string()));
+    }
+    if edits.is_empty() {
+        return text.to_string();
+    }
+    edits.sort_by_key(|(start, _, _)| *start);
+    let mut out = text.to_string();
+    for (start, end, replacement) in edits.into_iter().rev() {
+        out.replace_range(start..end, &replacement);
+    }
+    out
+}
+
 /// previous 仅在明确追问时继承；独立新问题默认重新取最近 4h。
 /// 无时区日期按 now 的固定偏移解释，不隐式查询主机时区。
 pub fn parse_query(
@@ -109,6 +188,8 @@ pub fn parse_query(
     previous: Option<&InvestigationQuery>,
     now: DateTime<FixedOffset>,
 ) -> Result<InvestigationQuery, String> {
+    let normalized = normalize_dates(text, now.date_naive());
+    let text = normalized.as_str();
     let previous = previous.filter(|_| !starts_new_investigation(text));
     let followup = is_followup(text) && previous.is_some();
     if previous.is_none()
@@ -133,6 +214,7 @@ pub fn parse_query(
             identifiers: Vec::new(),
             exclude_keyword: String::new(),
             match_any: false,
+            keyword_count: 0,
             service: None,
             trace_id: None,
             level: None,
@@ -234,8 +316,19 @@ pub fn parse_query(
     for (start, end) in quote_ranges.into_iter().rev() {
         remaining.replace_range(start..end, &" ".repeat(end - start));
     }
+    // 槽位/错误词扫 remaining（排除句已挖空）；旁证正文短语仍从原文 JSON content 抽。
     let analysis = crate::wecom_intent::analyze(&remaining);
+    let mut nl_phrases = Vec::new();
+    for content in crate::wecom_intent::extract_sidecar_contents(text) {
+        for phrase in crate::wecom_intent::extract_business_phrases(&content) {
+            push_unique(&mut nl_phrases, phrase);
+        }
+    }
     for value in crate::wecom_intent::extract_identifiers(&remaining, trace.as_deref()) {
+        // 账户/主体长数字不当默认检索主键（日志里通常没有 toAccountId）。
+        if crate::wecom_intent::is_likely_account_id(text, &value) {
+            continue;
+        }
         if !identifiers.iter().any(|id| id.value == value) {
             identifiers.push(BusinessIdentifier {
                 field: String::new(),
@@ -260,32 +353,66 @@ pub fn parse_query(
         query.match_any = false;
     }
     let mut keywords = explicit_keywords.unwrap_or_else(|| {
-        let mut out = quotes;
-        for id in &identifiers {
-            push_unique(&mut out, id.value.clone());
+        let mut out = Vec::new();
+        // NL 业务短语优先（旁证 content）；analyze 里只再接纳错误信号（勿把整句症状当关键词）
+        for phrase in &nl_phrases {
+            push_unique(&mut out, phrase.clone());
         }
-        for value in analysis.keywords {
-            // 旧 analyze 的兜底可能是自然语言整句或服务名；这里只接纳错误信号。
-            if is_error_keyword(&value) {
-                push_unique(&mut out, value);
+        for phrase in &analysis.keywords {
+            if nl_phrases.iter().any(|p| p == phrase) || is_error_keyword(phrase) {
+                push_unique(&mut out, phrase.clone());
             }
         }
+        // 引号字面量：跳过 JSON 键名已在 quoted_values；再滤掉账户 ID / 旁证整句 / 协议枚举
+        for q in &quotes {
+            let n = q.chars().count();
+            if n < 2 || n > 24 {
+                continue;
+            }
+            if crate::wecom_intent::is_likely_account_id(text, q) {
+                continue;
+            }
+            // 已抽出「五粮液」时，不再把「今天五粮液多少钱」整句 AND 进去
+            if nl_phrases.iter().any(|p| q != p && q.contains(p.as_str())) {
+                continue;
+            }
+            if matches!(
+                q.as_str(),
+                "text" | "image" | "voice" | "video" | "file" | "msgtype" | "content"
+            ) {
+                continue;
+            }
+            push_unique(&mut out, q.clone());
+        }
+        for id in &identifiers {
+            if crate::wecom_intent::is_likely_account_id(text, &id.value) {
+                continue;
+            }
+            push_unique(&mut out, id.value.clone());
+        }
         for token in remaining.split(|c: char| !c.is_ascii_alphanumeric()) {
-            if token.eq_ignore_ascii_case("error") {
+            if token.eq_ignore_ascii_case("error") || is_error_keyword(token) {
                 push_unique(&mut out, token.to_string());
             }
         }
         out
     });
+    // 关键词爆炸防护：贴 JSON / 长配置会把十几个字面量塞进 AND，日志一条都对不上。
+    // 超出时只保留前几个，诊断里记录原始数量，用户能看到为什么被截。
+    let raw_keyword_count = keywords.len();
+    const MAX_KEYWORDS_TOTAL: usize = 8;
+    keywords.truncate(MAX_KEYWORDS_TOTAL);
     if let Some(t) = trace.as_ref() {
         keywords.retain(|k| k != t);
     }
+    // 有自然语言业务短语时默认 OR：单一 AND 账户 ID 易查空。
+    let prefer_any = !nl_phrases.is_empty();
     if !keywords.is_empty() || fields.iter().any(|f| f.kind == "keyword") {
         if followup && trace.is_none() && query.keywords != keywords {
             query.trace_id = None;
         }
         query.keywords = keywords;
-        query.match_any = false;
+        query.match_any = prefer_any;
     }
     if !identifiers.is_empty() || fields.iter().any(|f| f.kind == "keyword") {
         query.identifiers = identifiers;
@@ -302,6 +429,7 @@ pub fn parse_query(
     if let Some(value) = trace {
         query.trace_id = if value.is_empty() { None } else { Some(value) };
     }
+    query.keyword_count = raw_keyword_count;
     if text.contains("任一") || text.contains("或者") || re(r"(?i)\bOR\b").is_match(text) {
         query.match_any = true;
     } else if text.contains("全部")
@@ -567,9 +695,15 @@ fn quoted_values(text: &str) -> Vec<String> {
     re(r#""([^"]+)"|'([^']+)'|“([^”]+)”"#)
         .captures_iter(text)
         .filter_map(|c| {
-            (1..=3)
-                .find_map(|i| c.get(i))
-                .map(|m| m.as_str().trim().to_string())
+            let whole = c.get(0)?;
+            let inner = (1..=3).find_map(|i| c.get(i))?;
+            // A pasted JSON body quotes its keys too; those are field names, never log text,
+            // and keeping them would flood the query with literals that match nothing.
+            let tail = text[whole.end()..].trim_start();
+            if tail.starts_with(':') || tail.starts_with('：') {
+                return None;
+            }
+            Some(inner.as_str().trim().to_string())
         })
         .filter(|s| !s.is_empty())
         .collect()
@@ -695,10 +829,27 @@ fn parse_window(
     for &(start, end) in result.1.iter().rev() {
         residual.replace_range(start..end, &" ".repeat(end - start));
     }
-    if re(r"\d+\s*[年月号日]|\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,2})?|今天|昨天|前天|昨晚|今晚|上午|下午|晚上|晚间|早上|\d+\s*[点分秒]|\d{1,2}\s*[:：]|最近|过去|近\s*[0-9零一二两三四五六七八九十半]+\s*(?:天|小时|分钟)").is_match(&residual) {
+    if residual_hides_time_literal(&residual) {
         return Err("时间条件未完整识别或存在冲突，请明确一个查询日期或起止范围；未执行默认时间查询。".into());
     }
     Ok(result)
+}
+
+/// Residual guard for unmasked time text. Numeric `M-D`/`Y-M-D` fragments are only time
+/// when they stand alone: channel keys such as `4745BD58-16-C7-…` contain `58-16`, which
+/// is an identifier fragment, not a hidden date.
+fn residual_hides_time_literal(residual: &str) -> bool {
+    let embedded = |c: Option<char>| {
+        c.is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | '.' | '_'))
+    };
+    for m in re(r"\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,2})?").find_iter(residual) {
+        if !embedded(residual[..m.start()].chars().next_back())
+            && !embedded(residual[m.end()..].chars().next())
+        {
+            return true;
+        }
+    }
+    re(r"\d+\s*[年月号日]|今天|昨天|前天|昨晚|今晚|上午|下午|晚上|晚间|早上|\d+\s*[点分秒]|\d{1,2}\s*[:：]|最近|过去|近\s*[0-9零一二两三四五六七八九十半]+\s*(?:天|小时|分钟)").is_match(residual)
 }
 
 fn parse_window_inner(
@@ -996,6 +1147,120 @@ fn number(text: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spaced_and_slash_dates_normalize_before_parsing() {
+        // The real 2026-10-30 report: `2026 10-30 16:12:13` used to leave `10-30`
+        // as residual text and fail the "时间条件未完整识别" guard, so no query ran.
+        let now = DateTime::parse_from_rfc3339("2026-10-30T20:00:00+08:00").unwrap();
+        for (text, start, end, kind) in [
+            (
+                "时间： 2026 10-30 16:12:13，关键信息：企业微信-重复的文本会话",
+                "2026-10-30T15:57:13+08:00",
+                "2026-10-30T16:27:13+08:00",
+                TimeKind::Anchor,
+            ),
+            (
+                "时间：2026 10-30 10:12:13- 2026 10-30 16:12:13，关键信息：重复",
+                "2026-10-30T10:12:13+08:00",
+                "2026-10-30T16:12:13+08:00",
+                TimeKind::Range,
+            ),
+            (
+                "时间是2026/10/30 16:12:13",
+                "2026-10-30T15:57:13+08:00",
+                "2026-10-30T16:27:13+08:00",
+                TimeKind::Anchor,
+            ),
+            (
+                "时间是2026.10.30 16:12:13",
+                "2026-10-30T15:57:13+08:00",
+                "2026-10-30T16:27:13+08:00",
+                TimeKind::Anchor,
+            ),
+            (
+                "时间是10-30 16:12:13",
+                "2026-10-30T15:57:13+08:00",
+                "2026-10-30T16:27:13+08:00",
+                TimeKind::Anchor,
+            ),
+            (
+                "时间是2026 10-30 10:12 至 16:12",
+                "2026-10-30T10:12:00+08:00",
+                "2026-10-30T16:12:00+08:00",
+                TimeKind::Range,
+            ),
+        ] {
+            let q = parse_query(text, None, now).unwrap_or_else(|e| panic!("{text}: {e}"));
+            assert_eq!((q.start.as_str(), q.end.as_str()), (start, end), "{text}");
+            assert_eq!(q.time_kind, kind, "{text}");
+        }
+    }
+
+    #[test]
+    fn date_normalization_keeps_values_and_guards() {
+        let now = DateTime::parse_from_rfc3339("2026-10-30T20:00:00+08:00").unwrap();
+        // Business values and quoted literals keep their own bytes.
+        let q = parse_query("查日志 matchId=2026-10-28 keyword=\"2026 10-30\"", None, now)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(q.identifiers.len(), 1);
+        assert_eq!(q.identifiers[0].value, "2026-10-28");
+        assert_eq!(q.keywords, vec!["2026 10-30"]);
+        // A future year-less day is not silently rewritten; the existing clarification stays.
+        for text in ["12-31 16:12:13", "2-30 10点"] {
+            assert!(parse_query(text, None, now).is_err(), "{text}");
+        }
+        // Impossible explicit dates still reach the calendar validator instead of being dropped.
+        assert!(parse_query("2026 2-30 10点到11点", None, now).is_err());
+        // Identifier fragments inside a channel key must not look like a date.
+        let q = parse_query("时间： 2026 10-30 16:12:13 关键信息 4745BD58-16-C7-41F7-ACD0-BBE82CBA5CCD", None, now)
+            .unwrap();
+        assert_eq!(q.time_kind, TimeKind::Anchor);
+    }
+
+    #[test]
+    fn keyword_explosion_guard_caps_and_drops_json_keys() {
+        let now = DateTime::parse_from_rfc3339("2026-10-30T20:00:00+08:00").unwrap();
+        // Pasted JSON: quoted keys are field names, not log text; only the value survives.
+        let q = parse_query(
+            "查日志 {\"orderNo\":\"A1\",\"matchId\":\"B2\",\"level\":\"ERROR\",\"keyword\":\"超时\"}",
+            None,
+            now,
+        )
+        .unwrap();
+        assert!(!q.keywords.contains(&"orderNo".to_string()), "{:?}", q.keywords);
+        assert!(!q.keywords.contains(&"matchId".to_string()));
+        assert!(!q.keywords.contains(&"keyword".to_string()));
+        // Eleven distinct literals: the AND list is capped, the raw count is kept for diagnostics.
+        let many = format!(
+            "查日志 2026-10-30 10:00 到 11:00 关键词 {}",
+            ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11"]
+                .iter()
+                .map(|k| format!("\"{k}\""))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let q = parse_query(&many, None, now).unwrap();
+        assert_eq!(q.keywords.len(), 8);
+        assert!(q.keyword_count >= 11, "raw count {}", q.keyword_count);
+    }
+
+    #[test]
+    fn new_session_variants_reset_the_query_scope() {
+        for text in [
+            "新起会话，继续查日志",
+            "新起对话，继续查日志",
+            "重新起会话，继续查日志",
+            "开新会话，继续查日志",
+        ] {
+            assert!(starts_new_investigation(text), "{text}");
+            assert!(!is_followup(text), "{text}");
+            assert!(new_session_remainder(text).is_some(), "{text}");
+        }
+        for text in ["不要新起会话", "新起会话是什么意思", "“新起会话”"] {
+            assert!(!starts_new_investigation(text), "{text}");
+        }
+    }
+
     #[test]
     fn explicit_chinese_day_never_uses_current_four_hours() {
         let now = DateTime::parse_from_rfc3339("2026-10-29T18:56:11+08:00").unwrap();
@@ -1355,5 +1620,37 @@ mod tests {
     fn time_values_are_not_business_identifiers() {
         let q = parse("2026-10-28 10:00:00至10:30:00 下单失败");
         assert!(q.keywords.is_empty());
+    }
+
+    #[test]
+    fn wecom_session_json_prefers_content_phrase_over_account_ids() {
+        let text = r#"新起会话，排查这段会话 {"msgtype":"text","msgId":"744569999","toAccountId":"1455450650727948288","from":"1688858671020835","text":{"content":"今天五粮液多少钱"}}"#;
+        let q = parse(text);
+        assert!(
+            q.keywords.iter().any(|k| k == "五粮液"),
+            "keywords={:?}",
+            q.keywords
+        );
+        assert!(
+            !q.keywords
+                .iter()
+                .any(|k| k == "1455450650727948288" || k == "1688858671020835"),
+            "keywords={:?}",
+            q.keywords
+        );
+        assert!(
+            !q.identifiers
+                .iter()
+                .any(|id| id.value == "1455450650727948288" || id.value == "1688858671020835"),
+            "identifiers={:?}",
+            q.identifiers
+        );
+        assert!(q.match_any, "NL phrase queries should OR-match");
+    }
+
+    #[test]
+    fn order_error_path_still_keeps_order_id_and_error() {
+        let q = parse("订单202610281234567890失败 error");
+        assert_eq!(q.keywords, vec!["202610281234567890", "error"]);
     }
 }

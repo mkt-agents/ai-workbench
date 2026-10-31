@@ -28,7 +28,10 @@ pub struct InboundFrame {
 #[derive(Debug, Clone)]
 pub struct MediaRef {
     pub kind: String, // "image" | "file"
+    /// 平台直接给出的可下载 URL（优先）。
     pub url: String,
+    /// 临时素材 id；无 url 时由宿主经业务 API / media/get 拉取。
+    pub media_id: Option<String>,
     pub filename: Option<String>,
 }
 
@@ -318,16 +321,32 @@ fn text_of(body: &Value) -> String {
         .to_string()
 }
 
-/// 从 image/file 子对象取可下载 url；没有 url（只有 media_id）就返回 None，由上层回退成提示。
+/// 从 image/file 子对象取可下载 url 或 media_id；两者皆空时返回 None。
 fn media_from(v: &Value, kind: &str) -> Option<MediaRef> {
-    let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string();
-    if url.trim().is_empty() {
+    let url = v
+        .get("url")
+        .or_else(|| v.get("image_url"))
+        .or_else(|| v.get("file_url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string();
+    let media_id = v
+        .get("media_id")
+        .and_then(|m| m.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if url.trim().is_empty() && media_id.is_none() {
         return None;
     }
-    let filename = v.get("filename").and_then(|f| f.as_str()).map(|s| s.to_string());
+    let filename = v
+        .get("filename")
+        .or_else(|| v.get("name"))
+        .and_then(|f| f.as_str())
+        .map(|s| s.to_string());
     Some(MediaRef {
         kind: kind.to_string(),
         url,
+        media_id,
         filename,
     })
 }
@@ -465,6 +484,25 @@ mod tests {
         assert_eq!(msg.media.len(), 1);
         assert_eq!(msg.media[0].kind, "image");
         assert_eq!(msg.media[0].url, "https://example.com/a.png");
+        assert!(msg.media[0].media_id.is_none());
+    }
+
+    #[test]
+    fn parse_image_msg_accepts_media_id_without_url() {
+        let raw = r#"{
+            "cmd":"aibot_msg_callback",
+            "headers":{"req_id":"r2b"},
+            "body":{
+                "msgid":"m2b","chattype":"single",
+                "from":{"userid":"u2"},"msgtype":"image",
+                "image":{"media_id":"MEDIA123","filename":"shot.png"}
+            }
+        }"#;
+        let msg = parse_msg_callback(&parse_inbound(raw).unwrap()).unwrap();
+        assert_eq!(msg.media.len(), 1);
+        assert_eq!(msg.media[0].media_id.as_deref(), Some("MEDIA123"));
+        assert!(msg.media[0].url.trim().is_empty());
+        assert_eq!(msg.media[0].filename.as_deref(), Some("shot.png"));
     }
 
     #[test]

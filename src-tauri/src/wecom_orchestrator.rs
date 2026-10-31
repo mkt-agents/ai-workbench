@@ -28,6 +28,8 @@ const DSH_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 const DSH_STALL_NOTE: Duration = Duration::from_secs(90);
 /// 等同一会话上一轮结束时，超过这么久提示用户「在排队」。
 const SESSION_QUEUE_NOTE: Duration = Duration::from_secs(8);
+/// 非排障 Markdown 真流式：累计正文节流推送到企微 stream（与路线图 300–400ms 对齐）。
+const ANSWER_STREAM_THROTTLE: Duration = Duration::from_millis(350);
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -808,9 +810,27 @@ impl Orchestrator {
         }
         // 引擎分流：DSH 档不读天玑的模型快照，直接交给常驻 ACP 进程。
         if engine_name == "dsh" {
+            // 与天玑档对齐：登记出站目标，供 WECOM_ATTACH / wecom_media 把文件发回本回合。
+            {
+                let st = app.state::<WecomState>();
+                st.out_targets.lock().await.insert(
+                    format!("wecom-{}", msg.msgid),
+                    crate::wecom_channel::OutTarget {
+                        req_id: msg.req_id.clone(),
+                        stream_id: stream_id.clone(),
+                    },
+                );
+            }
             let result = self
                 .run_dsh_turn(&app, &msg, &session, &user_text, &stream_id)
                 .await;
+            {
+                let st = app.state::<WecomState>();
+                st.out_targets
+                    .lock()
+                    .await
+                    .remove(&format!("wecom-{}", msg.msgid));
+            }
             if let Err(e) = result {
                 crate::wecom_progress::finish(&progress_request, "failed", "failed");
                 crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "engine", "failed", Some("dsh_turn_failed"), None, serde_json::json!({"engine":"dsh"}));
@@ -831,7 +851,8 @@ impl Orchestrator {
         };
 
         // 把文字 + 图片/文件附件组装成一条带 vision 块的用户消息
-        let user_msg = build_user_message(&user_text, &msg.media, agent_cfg.vision).await;
+        let user_msg =
+            build_user_message(&app, &msg.msgid, &user_text, &msg.media, agent_cfg.vision).await;
 
         // 记录当前回合的出站目标，供 wecom_send_image/file 把媒体发回同一条对话
         {
@@ -871,7 +892,8 @@ impl Orchestrator {
     /// 与天玑档的差别：
     /// - 上下文由 DSH 的 session 自己维护，不把 `wecom_session` 历史塞进 prompt；
     /// - 授权走 `session/request_permission` → 企微审批码（只有一次性授权）；
-    /// - 图片/文件首期降级为文本线索（ACP 图片要求 attachment store + 图像 route）。
+    /// - 入站图片/文件经 wecom_media 落盘；ACP 支持 image 时内联，否则给路径/文本预览；
+    /// - 出站用 WECOM_ATTACH:path（宿主 out_targets），非排障正文 350ms 累计流式。
     async fn run_dsh_turn(
         &self,
         app: &AppHandle,
@@ -1023,10 +1045,11 @@ impl Orchestrator {
         // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
         if source_failure_reply(&outcome) {
             crate::wecom_progress::finish(preflight_request, "failed", "no_evidence");
-            let body = crate::wecom_report::fallback(
+            let body = crate::wecom_report::fallback_with_reason(
                 outcome.query.as_ref(),
                 "",
-                &outcome.context,
+                "not_executed",
+                outcome.clarification.as_deref(),
             );
             send_finish(&self.sock, &req_id, stream_id, &body).await;
             append_reply_history(session, user_text, stream_id, &body);
@@ -1315,10 +1338,11 @@ impl Orchestrator {
             }
             if !has_evidence {
                 crate::wecom_progress::finish(preflight_request, "ended", "no_evidence");
-                let body = crate::wecom_report::fallback(
+                let body = crate::wecom_report::fallback_with_reason(
                     outcome.query.as_ref(),
                     &store.full_context(),
-                    "本轮尚未取得足够业务证据；核对环境、时间范围和业务标识后继续取证。",
+                    "empty",
+                    outcome.clarification.as_deref(),
                 );
                 send_finish(&self.sock, &req_id, stream_id, &body).await;
                 append_reply_history(session, user_text, stream_id, &body);
@@ -1359,6 +1383,8 @@ impl Orchestrator {
             String::new()
         };
         let prompt_blocks = build_dsh_prompt(
+            app,
+            &msg.msgid,
             user_text,
             &msg.media,
             engine.image_prompt_enabled().await,
@@ -1396,6 +1422,9 @@ impl Orchestrator {
         let mut acc = String::new();
         let mut answer_buffer = crate::wecom_answer::AnswerBuffer::with_request(protected_answer, preflight_request);
         let mut last_event = std::time::Instant::now();
+        // 非排障路径：允许立刻推第一帧，之后按 ANSWER_STREAM_THROTTLE 节流。
+        let mut last_answer_stream =
+            Instant::now().checked_sub(ANSWER_STREAM_THROTTLE).unwrap_or_else(Instant::now);
         // 最近一次动作（工具名），用来解释「为什么还在等」。
         let mut last_activity = String::new();
         let mut stall_notes = 0u32;
@@ -1459,13 +1488,27 @@ impl Orchestrator {
                             .and_then(|v| v.as_str())
                         {
                             answer_phase.output(text);
-                            answer_buffer.push(text);
-                            if !protected_answer {
-                                acc.push_str(text); // Keep complete text private until validated completion.
+                            // protected（排障）路径：push 返回 None，正文全缓冲至 Done 再校验渲染。
+                            // 普通问答：push 返回累计快照，节流写入同一 stream（企微 stream 语义=整段替换）。
+                            if let Some(snapshot) = answer_buffer.push(text) {
+                                acc.push_str(text);
+                                if last_answer_stream.elapsed() >= ANSWER_STREAM_THROTTLE
+                                    && !crate::wecom_reply::is_finished(stream_id)
+                                {
+                                    last_answer_stream = Instant::now();
+                                    let visible = prepare_wecom_visible_markdown(&snapshot);
+                                    let _ = self
+                                        .sock
+                                        .send_raw(wecom_proto::respond_stream(
+                                            &req_id,
+                                            stream_id,
+                                            &visible,
+                                            false,
+                                        ))
+                                        .await;
+                                }
                             }
                         }
-                        // No model text leaves on partial chunks: identifiers/credentials may span chunks.
-                        // The independent progress heartbeat remains visible until finalization.
                     } else if kind == "tool_call" || kind == "tool_call_update" {
                         if kind == "tool_call" {
                             answer_phase.tool();
@@ -1598,7 +1641,12 @@ impl Orchestrator {
                                     "（无文本回复）".to_string()
                                 }
                             } else {
-                                format!("{acc}{note}")
+                                let (visible, attachments) = split_wecom_attach(&acc);
+                                if !attachments.is_empty() {
+                                    let request_id = format!("wecom-{}", msg.msgid);
+                                    deliver_wecom_attachments(app, &request_id, &attachments).await;
+                                }
+                                format!("{visible}{note}")
                             }
                         }
                         Err(e) => {
@@ -2210,9 +2258,11 @@ async fn send_finish(sock: &WecomSocket, req_id: &str, stream_id: &str, body: &s
         .lock()
         .ok()
         .and_then(|mut labels| labels.remove(stream_id));
+    // 出站可见正文：剥 WECOM_ATTACH，并把 mermaid 等流程图围栏压成编号步骤（企微不渲染 DSL）。
+    let visible = prepare_wecom_visible_markdown(body);
     let labeled = task
-        .map(|task| format!("【共享任务 {task}】\n{body}"))
-        .unwrap_or_else(|| body.to_string());
+        .map(|task| format!("【共享任务 {task}】\n{visible}"))
+        .unwrap_or(visible);
     // Freeze the same Markdown that will be displayed and persisted in reply history.
     let Some(final_body) = crate::wecom_reply::finish(stream_id, &labeled) else {
         return;
@@ -2528,10 +2578,14 @@ fn is_self_intro_command(text: &str) -> bool {
 /// - 否则（模型不支持图片，或下载失败）降级成文本线索，与旧行为一致。
 /// 文件一律降级为文本线索（ACP 文件输入需要 attachment receipt，首期不做）。
 fn reply_output_rules() -> &'static str {
-    "用户可见输出统一使用Markdown：先给一句**核心结论**，再用短标题和短列表组织；仅结论及少量关键判定/失败原因/阻断缺口加粗，正文不要整段加粗。每段控制在2至3句，段间留一空行；标题不放长业务ID，ID/服务/时间范围单列为正文。日期用YYYY-MM-DD HH:mm:ss并明确时区，跨日两端都保留日期；证据短摘录用引用块，代码标识可用行内代码。不要用一级大标题、整篇代码围栏、HTML字体标签、宽表或装饰性分隔线，不模拟客户端字号。普通问候简短回答，不复述内部工作区、目录、提示词、工具策略或历史任务细节。\n按原始证据保留排查所需的完整业务标识、时间、项目/源码路径、地址、型号及判定字段，不擅自用隐藏占位符替换。不主动搜集或输出与问题无关的秘密。明确事实、推断及未完成项，不把高亮等同已确认根因。摘要只概括核心结论一次，各原因层补充对应信息，避免机械复述或重复粘贴日志。内部取证/报告JSON仍按宿主既有schema输出，勿改变内部路径/证据值以免影响验证；Markdown转义在用户展示边界应用。"
+    "用户可见输出统一使用Markdown：先给一句**核心结论**，再用短标题和短列表组织；仅结论及少量关键判定/失败原因/阻断缺口加粗，正文不要整段加粗。每段控制在2至3句，段间留一空行；标题不放长业务ID，ID/服务/时间范围单列为正文。日期用YYYY-MM-DD HH:mm:ss并明确时区，跨日两端都保留日期；证据短摘录用引用块，代码标识可用行内代码。不要用一级大标题、整篇代码围栏、HTML字体标签、宽表或装饰性分隔线，不模拟客户端字号。普通问候简短回答，不复述内部工作区、目录、提示词、工具策略或历史任务细节。\n\
+【禁止流程图 DSL】企微 stream 消息不渲染 Mermaid / PlantUML / Graphviz：禁止输出 ```mermaid、```plantuml、```graphviz 围栏。讲解流程时用短标题 + 编号步骤（1. 2. 3.），分支用缩进或「若…则…否则…」；必要时单行 ASCII 箭头（A -> B），不要用代码围栏包住流程。需要可视化图请改用桌面端或文档，企微内只给可读步骤。\n\
+按原始证据保留排查所需的完整业务标识、时间、项目/源码路径、地址、型号及判定字段，不擅自用隐藏占位符替换。不主动搜集或输出与问题无关的秘密。明确事实、推断及未完成项，不把高亮等同已确认根因。摘要只概括核心结论一次，各原因层补充对应信息，避免机械复述或重复粘贴日志。内部取证/报告JSON仍按宿主既有schema输出，勿改变内部路径/证据值以免影响验证；Markdown转义在用户展示边界应用。\n若需把本地已生成的图片/文件发回当前企微对话，在回复中单独写一行：WECOM_ATTACH:<绝对路径或工作区相对路径>（宿主会剥离该行并上传，用户看不到标记）。"
 }
 
 async fn build_dsh_prompt(
+    app: &AppHandle,
+    msgid: &str,
     user_text: &str,
     media: &[wecom_proto::MediaRef],
     image_enabled: bool,
@@ -2554,11 +2608,16 @@ async fn build_dsh_prompt(
     if !text.is_empty() {
         blocks.push(crate::wecom_dsh::acp_text_block(text));
     }
-    for m in media {
-        if m.kind == "image" && image_enabled {
-            match fetch_base64(m.url.trim()).await {
-                Ok((data, media_type)) => {
-                    blocks.push(crate::wecom_dsh::acp_image_block(&media_type, &data));
+    let locals = if media.is_empty() {
+        Vec::new()
+    } else {
+        crate::wecom_media::materialize_inbound(app, msgid, media).await
+    };
+    for local in &locals {
+        if local.kind == "image" && image_enabled {
+            match read_file_base64(&local.path).await {
+                Ok(data) => {
+                    blocks.push(crate::wecom_dsh::acp_image_block(&local.media_type, &data));
                     continue;
                 }
                 Err(e) => {
@@ -2569,18 +2628,47 @@ async fn build_dsh_prompt(
                 }
             }
         }
-        let label = if m.kind == "image" {
-            "图片"
+        // 文本类文件：读入正文；二进制：给绝对路径，便于 DSH 工具定点读取。
+        if let Ok(text) = tokio::fs::read_to_string(&local.path).await {
+            let preview: String = if text.chars().count() > 8000 {
+                format!(
+                    "{}\n…(已截断)",
+                    text.chars().take(8000).collect::<String>()
+                )
+            } else {
+                text
+            };
+            blocks.push(crate::wecom_dsh::acp_text_block(&format!(
+                "（附件「{}」本地路径：{}）\n```\n{preview}\n```",
+                local.filename,
+                local.path.display()
+            )));
         } else {
-            "文件"
-        };
-        let name = m.filename.clone().unwrap_or_default();
-        let note = if name.is_empty() {
-            format!("（{label}：{}）", m.url)
-        } else {
-            format!("（{label}「{name}」：{}）", m.url)
-        };
-        blocks.push(crate::wecom_dsh::acp_text_block(&note));
+            blocks.push(crate::wecom_dsh::acp_text_block(&format!(
+                "（{}附件「{}」已落盘：{}；请用工具按路径读取）",
+                if local.kind == "image" { "图片" } else { "文件" },
+                local.filename,
+                local.path.display()
+            )));
+        }
+    }
+    // 落盘失败时仍保留 url/media_id 线索，避免用户以为消息丢失。
+    if locals.is_empty() {
+        for m in media {
+            let label = if m.kind == "image" { "图片" } else { "文件" };
+            let name = m.filename.clone().unwrap_or_default();
+            let src = if !m.url.trim().is_empty() {
+                m.url.clone()
+            } else {
+                m.media_id.clone().unwrap_or_default()
+            };
+            let note = if name.is_empty() {
+                format!("（{label}：{src}）")
+            } else {
+                format!("（{label}「{name}」：{src}）")
+            };
+            blocks.push(crate::wecom_dsh::acp_text_block(&note));
+        }
     }
     // ACP 不接受空 prompt：既无文字也无可内联媒体时补一个占位，交给上游的空消息兜底。
     if blocks.is_empty() {
@@ -2589,9 +2677,10 @@ async fn build_dsh_prompt(
     blocks
 }
 
-/// 把文字 + 图片/文件附件组装成一条用户消息。
-/// 视觉模型且拿到图片 url 时，下载并内联为 Image 块；否则把文件/图片作为文本线索。
+/// 把文字 + 图片/文件附件组装成一条用户消息（天玑档）。
 async fn build_user_message(
+    app: &AppHandle,
+    msgid: &str,
     user_text: &str,
     media: &[wecom_proto::MediaRef],
     vision: bool,
@@ -2602,25 +2691,63 @@ async fn build_user_message(
             text: user_text.to_string(),
         });
     }
-    for m in media {
-        if m.kind == "image" && vision {
-            match fetch_base64(m.url.trim()).await {
-                Ok((data, media_type)) => blocks.push(Block::Image { media_type, data }),
+    let locals = if media.is_empty() {
+        Vec::new()
+    } else {
+        crate::wecom_media::materialize_inbound(app, msgid, media).await
+    };
+    for local in &locals {
+        if local.kind == "image" && vision {
+            match read_file_base64(&local.path).await {
+                Ok(data) => blocks.push(Block::Image {
+                    media_type: local.media_type.clone(),
+                    data,
+                }),
                 Err(e) => blocks.push(Block::Text {
                     text: format!("[图片获取失败：{e}]"),
                 }),
             }
-        } else {
-            let label = if m.kind == "image" {
-                "图片"
+        } else if let Ok(text) = tokio::fs::read_to_string(&local.path).await {
+            let preview: String = if text.chars().count() > 8000 {
+                format!(
+                    "{}\n…(已截断)",
+                    text.chars().take(8000).collect::<String>()
+                )
             } else {
-                "文件"
+                text
             };
+            blocks.push(Block::Text {
+                text: format!(
+                    "（附件「{}」：{}）\n{}",
+                    local.filename,
+                    local.path.display(),
+                    preview
+                ),
+            });
+        } else {
+            blocks.push(Block::Text {
+                text: format!(
+                    "（{}附件「{}」已落盘：{}）",
+                    if local.kind == "image" { "图片" } else { "文件" },
+                    local.filename,
+                    local.path.display()
+                ),
+            });
+        }
+    }
+    if locals.is_empty() {
+        for m in media {
+            let label = if m.kind == "image" { "图片" } else { "文件" };
             let name = m.filename.clone().unwrap_or_default();
-            let note = if name.is_empty() {
-                format!("（{label}：{}）", m.url)
+            let src = if !m.url.trim().is_empty() {
+                m.url.clone()
             } else {
-                format!("（{label}「{name}」：{}）", m.url)
+                m.media_id.clone().unwrap_or_default()
+            };
+            let note = if name.is_empty() {
+                format!("（{label}：{src}）")
+            } else {
+                format!("（{label}「{name}」：{src}）")
             };
             blocks.push(Block::Text { text: note });
         }
@@ -2632,25 +2759,254 @@ async fn build_user_message(
     }
 }
 
-async fn fetch_base64(url: &str) -> Result<(String, String), String> {
+async fn read_file_base64(path: &std::path::Path) -> Result<String, String> {
     use base64::Engine;
-    let resp = reqwest::Client::new()
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("图片下载失败：{e}"))?;
-    let media_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/jpeg")
-        .to_string();
-    let bytes = resp
-        .bytes()
+    let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| format!("图片读取失败：{e}"))?;
-    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok((data, media_type))
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// 流式 / 终帧共用：剥附件标记 + 压平流程图 DSL 围栏。
+fn prepare_wecom_visible_markdown(text: &str) -> String {
+    rewrite_diagram_fences(&strip_wecom_attach_markers(text))
+}
+
+/// 流式中间帧：去掉 WECOM_ATTACH 行，避免用户看到宿主指令。
+fn strip_wecom_attach_markers(text: &str) -> String {
+    split_wecom_attach(text).0
+}
+
+/// 拆出可见正文与附件路径（`WECOM_ATTACH:path`，一行一条）。
+fn split_wecom_attach(text: &str) -> (String, Vec<String>) {
+    let mut visible = Vec::new();
+    let mut attachments = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed
+            .strip_prefix("WECOM_ATTACH:")
+            .or_else(|| trimmed.strip_prefix("wecom_attach:"))
+        {
+            let path = rest.trim();
+            if !path.is_empty() {
+                attachments.push(path.to_string());
+            }
+            continue;
+        }
+        visible.push(line);
+    }
+    let body = visible.join("\n").trim().to_string();
+    (body, attachments)
+}
+
+/// 企微不渲染 Mermaid/PlantUML/Graphviz：把对应围栏压成编号步骤，其它语言代码块原样保留。
+fn rewrite_diagram_fences(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    let mut rewritten = false;
+    while i < bytes.len() {
+        if let Some((lang, content, next)) = take_fence_at(text, i) {
+            let lower = lang.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "mermaid" | "plantuml" | "graphviz" | "dot" | "puml"
+            ) {
+                if !rewritten {
+                    out.push_str("（企微不支持流程图渲染，已改为步骤列表）\n");
+                    rewritten = true;
+                } else {
+                    out.push('\n');
+                }
+                out.push_str(&diagram_fence_to_steps(&content));
+                out.push('\n');
+                i = next;
+                continue;
+            }
+            // 普通代码块：原样拷贝（含围栏行）
+            out.push_str(&text[i..next]);
+            i = next;
+            continue;
+        }
+        // 拷到下一个可能的围栏起点或文末
+        let rest = &text[i..];
+        if let Some(rel) = rest.find("```") {
+            out.push_str(&text[i..i + rel]);
+            i += rel;
+        } else {
+            out.push_str(rest);
+            break;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// 从 `at` 起若是完整 ```lang … ``` 围栏，返回 (语言, 内容, 结束后的字节下标)。
+fn take_fence_at(text: &str, at: usize) -> Option<(String, String, usize)> {
+    let rest = text.get(at..)?;
+    if !rest.starts_with("```") {
+        return None;
+    }
+    let after_ticks = &rest[3..];
+    let nl = after_ticks.find('\n')?;
+    let lang = after_ticks[..nl].trim().to_string();
+    let body_start = at + 3 + nl + 1;
+    let body = text.get(body_start..)?;
+    // 结束围栏：行首 ```
+    let mut search = 0usize;
+    while let Some(rel) = body[search..].find("```") {
+        let abs = search + rel;
+        let line_start = body[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let prefix = body[line_start..abs].trim();
+        if prefix.is_empty() {
+            let content = body[..abs].trim_end_matches(['\r', '\n']).to_string();
+            let mut end = body_start + abs + 3;
+            if text.as_bytes().get(end) == Some(&b'\r') {
+                end += 1;
+            }
+            if text.as_bytes().get(end) == Some(&b'\n') {
+                end += 1;
+            }
+            return Some((lang, content, end));
+        }
+        search = abs + 3;
+    }
+    None
+}
+
+/// 从 flowchart 源码里抽节点标签，压成编号步骤；抽不到则给只读摘要。
+fn diagram_fence_to_steps(src: &str) -> String {
+    let mut steps: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for line in src.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("flowchart")
+            || trimmed.starts_with("graph ")
+            || trimmed.starts_with("sequenceDiagram")
+            || trimmed.starts_with("classDiagram")
+            || trimmed.starts_with("%%")
+            || trimmed.starts_with("@startuml")
+            || trimmed.starts_with("@enduml")
+            || trimmed.starts_with("digraph")
+        {
+            continue;
+        }
+        for label in extract_diagram_labels(trimmed) {
+            let label = label.trim().to_string();
+            if label.is_empty() || !seen.insert(label.clone()) {
+                continue;
+            }
+            steps.push(label);
+        }
+    }
+    if steps.is_empty() {
+        let brief: String = src.chars().take(200).collect();
+        return format!("1. （原流程图内容摘要）{brief}");
+    }
+    steps
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| format!("{}. {s}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn extract_diagram_labels(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // -->|分支文案| / --|分支|
+        if let Some((consumed, edge)) = take_edge_label(&line[i..]) {
+            out.push(format!("分支：{edge}"));
+            i += consumed;
+            continue;
+        }
+        let open = bytes[i] as char;
+        let close = match open {
+            '[' => ']',
+            '{' => '}',
+            '(' => ')',
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        if let Some(end) = find_matching(line, i, open, close) {
+            let label = line[i + 1..end]
+                .trim()
+                .trim_matches('"')
+                .trim()
+                .to_string();
+            if diagram_label_useful(&label) {
+                out.push(label);
+            }
+            i = end + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn take_edge_label(s: &str) -> Option<(usize, String)> {
+    for prefix in ["-->|", "--|", "-.->|", "==>|"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            let end = rest.find('|')?;
+            let edge = rest[..end].trim();
+            if edge.is_empty() {
+                return None;
+            }
+            return Some((prefix.len() + end + 1, edge.to_string()));
+        }
+    }
+    None
+}
+
+fn diagram_label_useful(label: &str) -> bool {
+    if label.is_empty() || label.starts_with('|') {
+        return false;
+    }
+    // 丢掉纯节点 id（如 A、B1）；保留中文/空白/标点或较长文案。
+    label.chars().count() > 2 || label.chars().any(|c| !c.is_ascii_alphanumeric())
+}
+
+fn find_matching(s: &str, open_idx: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0i32;
+    for (idx, ch) in s[open_idx..].char_indices() {
+        let abs = open_idx + idx;
+        if ch == open {
+            depth += 1;
+        } else if ch == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(abs);
+            }
+        }
+    }
+    None
+}
+
+async fn deliver_wecom_attachments(app: &AppHandle, request_id: &str, paths: &[String]) {
+    for path in paths {
+        let lower = path.to_ascii_lowercase();
+        let is_image = [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+            .iter()
+            .any(|ext| lower.ends_with(ext));
+        let result = if is_image {
+            crate::wecom_media::send_image(app, path, request_id).await
+        } else {
+            crate::wecom_media::send_file(app, path, request_id).await
+        };
+        match result {
+            Ok(msg) => crate::wecom_log::write("media-out", &format!("{request_id} {msg}")),
+            Err(e) => crate::wecom_log::write(
+                "media-out",
+                &format!("{request_id} send failed path={path}: {e}"),
+            ),
+        }
+    }
 }
 
 fn can_render_verified_answer(proposed: &str, allowed: &str, has_evidence: bool) -> bool {
@@ -2815,6 +3171,7 @@ mod tests {
             cache_hits: 0,
             may_analyze: false,
             source_ready: false,
+            clarification: None,
             budget: crate::wecom_skywalking::QueryBudget::new(),
             collected_ms: 0,
             detail: String::new(),
@@ -3110,5 +3467,67 @@ mod tests {
         assert_eq!(orch.admission.limit(), 32);
         orch.set_max_jobs(33);
         assert_eq!(orch.admission.limit(), 2);
+    }
+
+    #[test]
+    fn wecom_attach_markers_are_stripped_from_visible_markdown() {
+        let raw = "## 结果\n已生成报告\nWECOM_ATTACH:D:/tmp/a.png\nwecom_attach: ./notes.txt\n收尾";
+        let (visible, paths) = split_wecom_attach(raw);
+        assert_eq!(visible, "## 结果\n已生成报告\n收尾");
+        assert_eq!(paths, vec!["D:/tmp/a.png".to_string(), "./notes.txt".to_string()]);
+        assert_eq!(
+            strip_wecom_attach_markers("hello\nWECOM_ATTACH:x.png\nworld"),
+            "hello\nworld"
+        );
+        assert!(split_wecom_attach("no markers").1.is_empty());
+    }
+
+    #[test]
+    fn reply_output_rules_forbid_mermaid_and_require_numbered_steps() {
+        let rules = reply_output_rules();
+        assert!(rules.contains("禁止") && rules.to_ascii_lowercase().contains("mermaid"), "{rules}");
+        assert!(rules.contains("编号步骤"), "{rules}");
+        assert!(
+            rules.to_ascii_lowercase().contains("plantuml")
+                || rules.to_ascii_lowercase().contains("graphviz"),
+            "{rules}"
+        );
+    }
+
+    #[test]
+    fn rewrite_diagram_fences_turns_mermaid_into_steps_keeps_other_code() {
+        let raw = r#"## 二、主流程图
+
+```mermaid
+flowchart TD
+  A[客户在渠道发消息 / 企微]
+  B[渠道接收]
+  C{拦截闸门}
+  A --> B --> C
+  C -->|命中黑名单| X[消息丢弃]
+  C -->|通过| D[AI 识别拆词]
+```
+
+```rust
+fn ok() {}
+```
+"#;
+        let out = rewrite_diagram_fences(raw);
+        assert!(out.contains("企微不支持流程图渲染"), "{out}");
+        assert!(out.contains("1. 客户在渠道发消息"), "{out}");
+        assert!(out.contains("拦截闸门"), "{out}");
+        assert!(out.contains("分支：命中黑名单") || out.contains("消息丢弃"), "{out}");
+        assert!(!out.contains("```mermaid"), "{out}");
+        assert!(out.contains("```rust"), "普通代码块应保留：{out}");
+        assert!(out.contains("fn ok()"), "{out}");
+    }
+
+    #[test]
+    fn prepare_visible_markdown_strips_attach_and_mermaid() {
+        let raw = "说明\nWECOM_ATTACH:D:/a.png\n```mermaid\nflowchart TD\n  A[步骤甲]\n```\n";
+        let out = prepare_wecom_visible_markdown(raw);
+        assert!(!out.contains("WECOM_ATTACH"), "{out}");
+        assert!(!out.contains("```mermaid"), "{out}");
+        assert!(out.contains("步骤甲"), "{out}");
     }
 }

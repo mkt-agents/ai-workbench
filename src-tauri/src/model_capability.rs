@@ -164,6 +164,71 @@ pub fn is_vision_default(provider: &str, model_id: &str) -> bool {
     infer_modality(provider, model_id) == Modality::Vision
 }
 
+/// ACP / 部分 OpenAI 兼容网关拒绝的 completion 上限（与 wecom_dsh_profile 一致）。
+pub const MAX_SAFE_COMPLETION_TOKENS: u32 = 131_072;
+
+/// 离线推断「单次回答最长输出」token 上限，供模型管理表单预填。
+/// 返回 None 时前端保持默认 4096。**不要**把上下文窗口当输出上限。
+pub fn infer_max_output_tokens(provider: &str, model_id: &str) -> Option<u32> {
+    let id = model_id.trim().to_lowercase();
+    if id.is_empty() {
+        return None;
+    }
+    let p = provider.trim().to_lowercase();
+
+    // 免费 / 路由类：保守
+    if id.contains("/free") || id.ends_with(":free") || id == "openrouter/free" || id == "auto" {
+        return Some(8_192);
+    }
+
+    // 按模型名片段（优先于厂商默认）
+    if id.contains("mimo") {
+        return Some(MAX_SAFE_COMPLETION_TOKENS);
+    }
+    if id.contains("agnes") {
+        return Some(16_384);
+    }
+    if id.contains("deepseek") {
+        return Some(8_192);
+    }
+    if id.contains("claude") {
+        return Some(64_000);
+    }
+    if id.contains("gpt-5") || id.contains("o1") || id.contains("o3") || id.contains("o4") {
+        return Some(32_768);
+    }
+    if id.contains("gpt-4o") || id.contains("gpt-4.1") || id.contains("chatgpt-4o") {
+        return Some(16_384);
+    }
+    if id.contains("gemini") {
+        return Some(8_192);
+    }
+    if id.contains("grok") {
+        return Some(32_768);
+    }
+    if id.contains("qwen") || id.contains("glm-") || id.contains("moonshot") || id.contains("kimi") {
+        return Some(8_192);
+    }
+    if id.contains("llama") || id.contains("mistral") || id.contains("mixtral") {
+        return Some(8_192);
+    }
+
+    // 厂商兜底
+    match p.as_str() {
+        "mimo" => Some(MAX_SAFE_COMPLETION_TOKENS),
+        "agnes" => Some(16_384),
+        "deepseek" => Some(8_192),
+        "anthropic" => Some(64_000),
+        "openai" => Some(16_384),
+        "google" => Some(8_192),
+        "xai" => Some(32_768),
+        "openrouter" => Some(8_192),
+        "moonshot" | "qwen" | "zhipu" | "groq" | "mistral" | "siliconflow" | "together"
+        | "longcat" | "ollama" => Some(8_192),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +301,27 @@ mod tests {
         assert_eq!(Modality::Vision.as_str(), "vision");
         assert_eq!(Modality::Text.as_str(), "text");
         assert_eq!(Modality::Unknown.as_str(), "unknown");
+    }
+
+    #[test]
+    fn max_output_mimo_and_free_routes() {
+        assert_eq!(
+            infer_max_output_tokens("mimo", "mimo-v2.6-flash"),
+            Some(MAX_SAFE_COMPLETION_TOKENS)
+        );
+        assert_eq!(
+            infer_max_output_tokens("openrouter", "openrouter/free"),
+            Some(8_192)
+        );
+        assert_eq!(
+            infer_max_output_tokens("deepseek", "deepseek-chat"),
+            Some(8_192)
+        );
+        assert_eq!(
+            infer_max_output_tokens("anthropic", "claude-sonnet-4-20250514"),
+            Some(64_000)
+        );
+        assert_eq!(infer_max_output_tokens("custom", "mystery-x"), None);
+        assert_eq!(infer_max_output_tokens("openai", ""), None);
     }
 }

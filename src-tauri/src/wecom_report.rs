@@ -478,9 +478,12 @@ fn query_subject(original: Option<&InvestigationQuery>) -> String {
     }
 }
 
-fn query_header(original: Option<&InvestigationQuery>) -> String {
+fn query_header(original: Option<&InvestigationQuery>, clarification: Option<&str>) -> String {
     let Some(q) = original else {
-        return "> 证据范围：查询条件未解析。\n".into();
+        return match clarification.map(str::trim).filter(|c| !c.is_empty()) {
+            Some(reason) => format!("> 证据范围：未执行查询。{}\n", display(reason)),
+            None => "> 证据范围：查询条件未解析。\n".into(),
+        };
     };
     let zone = q.timezone_offset_minutes.checked_mul(60).and_then(FixedOffset::east_opt);
     let dates = DateTime::parse_from_rfc3339(&q.start).ok()
@@ -755,13 +758,14 @@ impl<'a> EvidenceDisplay<'a> {
 /// Render a locally validated report, or an already-verified legacy mapping.
 /// No model-generated timestamp/content is used as an original evidence quotation.
 pub fn render(report: &DiagnosticReport, original: &InvestigationQuery, evidence: &str) -> String {
-    render_inner(report, Some(original), evidence)
+    render_inner(report, Some(original), evidence, None)
 }
 
 fn render_inner(
     report: &DiagnosticReport,
     original: Option<&InvestigationQuery>,
     evidence: &str,
+    clarification: Option<&str>,
 ) -> String {
     let mut out = format!(
         "## 排障结论\n\n{}{}\n\n{}",
@@ -772,7 +776,7 @@ fn render_inner(
         } else {
             format!("（{}）", refs(&report.summary.evidence_refs))
         },
-        query_header(original)
+        query_header(original, clarification)
     );
     if let Some(query) = original {
         if !query.identifiers.is_empty() {
@@ -962,14 +966,41 @@ pub fn from_legacy(
 
 /// Never echo unverified model prose or raw errors. Only local reason categories are displayed.
 pub fn fallback(original: Option<&InvestigationQuery>, evidence: &str, reason: &str) -> String {
+    fallback_with_reason(original, evidence, reason, None)
+}
+
+/// Same rendering, plus a host-authored clarification so an unexecuted
+/// investigation says *why* instead of only "查询条件未解析".
+pub fn fallback_with_reason(
+    original: Option<&InvestigationQuery>,
+    evidence: &str,
+    reason: &str,
+    clarification: Option<&str>,
+) -> String {
     let summary = if reason == "cancelled" {
         "本轮排查已停止，以下为已保留证据的部分报告。"
     } else if reason == "budget" {
         "本轮采集预算已用完，以下为已保留证据的部分报告。"
+    } else if reason == "empty" {
+        "已按解析出的自然语言条件执行日志查询，但未命中可核对证据；以下展示查询范围与条件（并非未排查）。"
     } else {
         "尚未形成通过本地核对的诊断结论，以下仅展示已保留的证据。"
     };
     let ids = evidence_ids(evidence);
+    let mut gaps = vec![Gap {
+        text: "原因与触发条件尚待核对；未使用未通过验证的模型文字。".into(),
+        blocking: true,
+    }];
+    // The clarification is host text, not model prose, and states why nothing was queried.
+    if let Some(reason) = clarification.map(str::trim).filter(|r| !r.is_empty()) {
+        gaps.insert(
+            0,
+            Gap {
+                text: reason.to_string(),
+                blocking: true,
+            },
+        );
+    }
     let report = DiagnosticReport {
         version: 1,
         level: "unknown".into(),
@@ -982,14 +1013,11 @@ pub fn fallback(original: Option<&InvestigationQuery>, evidence: &str, reason: &
         cause: Cause::default(),
         code_checks: vec![],
         ruled_out: vec![],
-        gaps: vec![Gap {
-            text: "原因与触发条件尚待核对；未使用未通过验证的模型文字。".into(),
-            blocking: true,
-        }],
+        gaps,
         next_actions: vec![],
         legacy_facts: None,
     };
-    render_inner(&report, original, evidence)
+    render_inner(&report, original, evidence, clarification)
 }
 
 #[cfg(test)]
@@ -1014,7 +1042,7 @@ mod tests {
         let unchanged = query.clone();
         query.start = "2026-10-26T00:00:00.123+08:00".into();
         query.end = "2026-10-26T00:00:01.456+08:00".into();
-        assert!(query_header(Some(&query)).contains("00:00:00.123 — 00:00:01.456"));
+        assert!(query_header(Some(&query), None).contains("00:00:00.123 — 00:00:01.456"));
         assert_eq!(unchanged.end, "2026-10-27T00:00:00+08:00");
     }
 
@@ -1233,6 +1261,28 @@ mod tests {
         assert!(unknown.contains("**本轮排查已停止，以下为已保留证据的部分报告。**"));
         assert!(unknown.contains("**尚未确认直接原因。**"));
         assert!(unknown.contains("**建议（未执行）**"));
+    }
+
+    #[test]
+    fn unexecuted_clarification_replaces_the_bare_unknown_header() {
+        // The real 2026-10-30 reply was "证据范围：查询条件未解析" with no reason at all.
+        let clarification = "查询条件未解析：时间条件未完整识别。请写成 2026-10-30 16:12:13。";
+        let out = fallback_with_reason(None, "", "not_executed", Some(clarification));
+        assert!(out.contains("> 证据范围：未执行查询。"), "{out}");
+        assert!(out.contains("时间条件未完整识别"), "{out}");
+        assert!(!out.contains("查询条件未解析。\n"), "{out}");
+        // The same reason also leads 未完成项, so the chat shows what to fix.
+        assert!(out.contains(&format!("**待核对**：{}。", "查询条件未解析：时间条件未完整识别。请写成 2026-10-30 16:12:13。")) || out.contains("**待核对**：查询条件未解析"), "{out}");
+        // Without a host reason the previous rendering is untouched.
+        assert!(fallback(None, "", "empty").contains("证据范围：查询条件未解析。"));
+        let empty_body = fallback(None, "", "empty");
+        assert!(
+            empty_body.contains("已按解析出的自然语言条件执行日志查询"),
+            "{empty_body}"
+        );
+        let windowed = fallback_with_reason(Some(&original()), EVIDENCE, "empty", Some("缺决策输入"));
+        assert!(windowed.contains("证据范围：2026-10-29 10:00:00 — 10:10:00"), "{windowed}");
+        assert!(windowed.contains("缺决策输入"), "{windowed}");
     }
 
     #[test]

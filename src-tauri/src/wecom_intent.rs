@@ -228,7 +228,7 @@ pub fn analyze(text: &str) -> QaAnalysis {
     }
 }
 
-/// 组关键词列表：业务标识符（订单号/用户ID/手机号/requestId…）在前，错误特征在后，去重封顶。
+/// 组关键词列表（NL 优先）：旁证正文业务短语 → 非账户类标识符 → 错误特征，去重封顶。
 /// `exclude_trace`：已识别为 traceId 的值不再当普通关键词（避免和 relatedTrace 重复）。
 fn build_keywords(text: &str, exclude_trace: Option<&str>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -246,15 +246,164 @@ fn build_keywords(text: &str, exclude_trace: Option<&str>) -> Vec<String> {
             out.push(v);
         }
     };
-    // 1) 业务标识符优先
+    // 1) 仅旁证正文的业务短语（如 content「今天五粮液多少钱」→「五粮液」）
+    //    不问句整句抽症状——「下单失败」很少原样出现在日志里。
+    for content in extract_sidecar_contents(text) {
+        for phrase in extract_business_phrases(&content) {
+            push(phrase, &mut out);
+        }
+    }
+    // 2) 业务标识符，跳过账户类长数字（toAccountId/from 等）
     for id in extract_identifiers(text, exclude_trace) {
+        if is_likely_account_id(text, &id) {
+            continue;
+        }
         push(id, &mut out);
     }
-    // 2) 错误特征补位
+    // 3) 错误特征补位（不要用 pick_keyword 整句/账户数字兜底）
     if let Some(k) = extract_error_keyword(text) {
-        push(k, &mut out);
+        if !is_likely_account_id(text, &k)
+            && (k.ends_with("Exception")
+                || k.ends_with("Error")
+                || [
+                    "500", "502", "503", "504", "429", "400", "401", "403", "404", "timeout",
+                    "超时", "OutOfMemory", "deadlock", "connection refused", "connection reset",
+                    "NullPointer", "error",
+                ]
+                .iter()
+                .any(|w| k.eq_ignore_ascii_case(w)))
+        {
+            push(k, &mut out);
+        }
     }
     out
+}
+
+/// 用户可见 NL 语料 = 原消息 + 旁证 JSON 里抽出的正文（content）。
+pub fn nl_corpus(text: &str) -> String {
+    let mut parts = vec![text.to_string()];
+    for content in extract_sidecar_contents(text) {
+        if !parts.iter().any(|p| p.contains(&content)) {
+            parts.push(content);
+        }
+    }
+    parts.join("\n")
+}
+
+/// 从粘贴的 JSON / 结构化旁证里抽出可读正文（`"content":"..."` / `text.content`）。
+pub fn extract_sidecar_contents(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    // "content": "..." 或 "content":"..."（含转义 \"）
+    let re = regex::Regex::new(r#""content"\s*:\s*"((?:\\.|[^"\\])*)""#).ok();
+    let Some(re) = re else {
+        return out;
+    };
+    for cap in re.captures_iter(text) {
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let unescaped = raw.replace("\\\"", "\"").replace("\\n", "\n");
+        let s = unescaped.trim().to_string();
+        if s.chars().count() >= 2 && !out.iter().any(|x| x == &s) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// 抽中文/业务短短语（≥2 个汉字），供日志关键词。
+/// 「今天五粮液多少钱」→「五粮液」：剥时间/疑问壳，保留中间业务名。
+pub fn extract_business_phrases(text: &str) -> Vec<String> {
+    const PREFIX: &[&str] = &[
+        "今天", "昨天", "明天", "刚才", "刚刚", "帮我", "请问", "麻烦", "查一下", "看一下",
+        "排查", "新起会话", "新会话", "新对话",
+    ];
+    const SUFFIX: &[&str] = &[
+        "多少钱", "怎么回事", "什么情况", "怎么了", "出问题了", "报错了", "失败了", "超时了",
+        "没反应", "打不开", "用不了",
+    ];
+    const STOP: &[&str] = &[
+        "今天", "昨天", "明天", "排查", "帮我", "请问", "多少钱", "怎么回事", "什么情况",
+        "继续", "日志", "调用链", "新起会话", "新会话", "新对话",
+    ];
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let flush = |buf: &mut String, out: &mut Vec<String>| {
+        let mut s = buf.trim().to_string();
+        buf.clear();
+        if s.chars().count() < 2 {
+            return;
+        }
+        for p in PREFIX {
+            if let Some(rest) = s.strip_prefix(p) {
+                s = rest.to_string();
+            }
+        }
+        for p in SUFFIX {
+            if let Some(rest) = s.strip_suffix(p) {
+                s = rest.to_string();
+            }
+        }
+        s = s.trim().to_string();
+        if s.chars().count() < 2 || STOP.iter().any(|w| s == *w) {
+            return;
+        }
+        if !out.iter().any(|x| x == &s) {
+            out.push(s);
+        }
+    };
+    for ch in text.chars() {
+        if ('\u{4e00}'..='\u{9fff}').contains(&ch) {
+            buf.push(ch);
+        } else if ch.is_ascii_alphanumeric() && !buf.is_empty() {
+            buf.push(ch);
+        } else {
+            flush(&mut buf, &mut out);
+        }
+    }
+    flush(&mut buf, &mut out);
+    // 中等长度优先：太长像整句，太短噪声多；同长度保持原序
+    out.sort_by(|a, b| {
+        let score = |s: &str| {
+            let n = s.chars().count();
+            if (2..=8).contains(&n) {
+                100 - n as i32
+            } else {
+                -(n as i32)
+            }
+        };
+        score(b).cmp(&score(a))
+    });
+    out.truncate(MAX_KEYWORDS);
+    out
+}
+
+/// 长纯数字且出现在账户/主体字段旁 → 不当作默认业务检索主键。
+pub fn is_likely_account_id(text: &str, value: &str) -> bool {
+    if value.len() < 10 || !value.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    let Some(pos) = lower.find(value) else {
+        return false;
+    };
+    // 看数字前是否挂着账户类键（JSON `"from":"…"` / `toAccountId=…`）；跳过中文前缀占的字节。
+    let mut start = pos.saturating_sub(96);
+    while start < pos && !lower.is_char_boundary(start) {
+        start += 1;
+    }
+    let ctx = &lower[start..pos];
+    [
+        "toaccountid",
+        "\"from\"",
+        "corpid",
+        "agentid",
+        "userid",
+        "accountid",
+        "toaccount",
+        "staffid",
+        "creator",
+    ]
+    .iter()
+    .any(|key| ctx.contains(key))
 }
 
 /// 从消息里抽一个疑似 traceId（32/16 位十六进制，或 SkyWalking 的点分段 id）。
@@ -931,5 +1080,35 @@ mod tests {
         assert!(mentions_code("帮我看源码"));
         assert!(!mentions_code("这个功能怎么实现"));
         assert_eq!(extract_trace_id("排查登录超时"), None);
+    }
+
+    #[test]
+    fn sidecar_content_yields_business_phrase_not_account_id() {
+        let text = r#"新起会话，排查这段会话
+{"msgId":"74456xxx","toAccountId":"1455450650727948288","from":"1688858671020835","text":{"content":"今天五粮液多少钱"}}"#;
+        let contents = extract_sidecar_contents(text);
+        assert!(
+            contents.iter().any(|c| c.contains("五粮液")),
+            "{contents:?}"
+        );
+        assert!(nl_corpus(text).contains("五粮液"));
+        assert_eq!(
+            extract_business_phrases("今天五粮液多少钱"),
+            vec!["五粮液".to_string()]
+        );
+        let a = analyze(text);
+        assert_eq!(a.intent, QaIntent::Troubleshoot);
+        assert!(
+            a.keywords.iter().any(|k| k == "五粮液"),
+            "keywords={:?}",
+            a.keywords
+        );
+        assert!(
+            !a.keywords.iter().any(|k| k == "1455450650727948288"),
+            "account id must not be primary keyword: {:?}",
+            a.keywords
+        );
+        assert!(is_likely_account_id(text, "1455450650727948288"));
+        assert!(!is_likely_account_id(text, "202610281234567890"));
     }
 }

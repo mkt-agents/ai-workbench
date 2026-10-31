@@ -67,8 +67,9 @@ export type WecomChannelStatus = {
 export interface Invocations {
   invokeTestModelConnection: (config: AIModelConfig) => Promise<{ success: boolean; message: string }>;
   invokeGenerateText: (params: { config: AIModelConfig; system: string; user: string }) => Promise<string>;
-  invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) => Promise<{ success: boolean; models: { id: string; label?: string; modality: string }[]; message?: string }>;
+  invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) => Promise<{ success: boolean; models: { id: string; label?: string; modality: string; maxOutputTokens?: number }[]; message?: string }>;
   invokeInferModelModality: (params: { provider: string; model: string }) => Promise<string>;
+  invokeInferModelMaxOutput: (params: { provider: string; model: string }) => Promise<number | null>;
   invokeDetectLocalAiEndpoints: () => Promise<
     Array<{ kind: string; baseUrl: string; label: string; reachable: boolean; models: string[] }>
   >;
@@ -297,11 +298,13 @@ export const invocations: Invocations = {
   invokeListProviderModels: (params: { provider: string; apiKey: string; baseUrl: string }) =>
     tauriInvoke<{
       success: boolean;
-      models: { id: string; label?: string; modality: string }[];
+      models: { id: string; label?: string; modality: string; maxOutputTokens?: number }[];
       message?: string;
     }>('list_provider_models', { config: params }),
   invokeInferModelModality: (params: { provider: string; model: string }) =>
     tauriInvoke<string>('infer_model_modality', params),
+  invokeInferModelMaxOutput: (params: { provider: string; model: string }) =>
+    tauriInvoke<number | null>('infer_model_max_output', params),
   invokeDetectLocalAiEndpoints: () =>
     tauriInvoke<
       Array<{ kind: string; baseUrl: string; label: string; reachable: boolean; models: string[] }>
