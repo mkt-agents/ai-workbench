@@ -78,13 +78,32 @@ function App() {
   const setSettings = useGlobalStore((s) => s.setSettings);
   const webPlugins = useGlobalStore((s) => s.webPlugins);
   const workTasks = useGlobalStore((s) => s.workTasks);
+  // 侧栏徽标按“今天”统计；应用常整夜开着，日期必须自己滚，否则要等任务变更重渲染才更新。
+  const [todayKey, setTodayKey] = useState(() => localDateKey());
+  useEffect(() => {
+    const sync = () =>
+      setTodayKey((prev) => {
+        const next = localDateKey();
+        return prev === next ? prev : next;
+      });
+    const onVis = () => {
+      if (document.visibilityState === "visible") sync();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", sync);
+    const id = window.setInterval(sync, 60_000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", sync);
+      window.clearInterval(id);
+    };
+  }, []);
   const todayOpenCount = useMemo(() => {
-    const today = localDateKey();
     return workTasks.reduce(
-      (n, task) => (task.status === "open" && task.workDate === today ? n + 1 : n),
+      (n, task) => (task.status === "open" && task.workDate === todayKey ? n + 1 : n),
       0
     );
-  }, [workTasks]);
+  }, [workTasks, todayKey]);
 
   const goTab = (tab: Tab) => {
     // 旧侧栏「提示词」已并进模型广场第三 Tab

@@ -2932,7 +2932,7 @@
 .work-todo-dash-focus-foot {
   flex-shrink: 0;
   margin-top: auto;
-  padding-top: 8px;
+  padding-top: 6px;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -3023,7 +3023,7 @@
   gap: 6px;
   margin-top: 8px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 3px 10px;
   box-sizing: border-box;
   border: 1px solid color-mix(in srgb, var(--yellow) 35%, var(--border-subtle));
   border-radius: var(--radius-md);
@@ -3398,11 +3398,12 @@
 }
 
 .work-todo-dash-cal {
+  --work-todo-cal-row: 27px;
   position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 12px 14px;
+  padding: 10px 14px;
   min-height: 0;
   overflow: visible;
 }
@@ -3418,14 +3419,19 @@
 
 .work-todo-dash-cal .work-todo-cal-foot {
   margin-top: auto;
+  padding-top: 6px;
 }
 
 .work-todo-dash-cal .work-todo-cal-head-wrap {
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+}
+
+.work-todo-dash-cal-grid .work-todo-cal-day,
+.work-todo-dash-cal-grid .work-todo-cal-pad {
+  min-height: var(--work-todo-cal-row);
 }
 
 .work-todo-dash-cal-grid .work-todo-cal-day {
-  min-height: 32px;
   padding-bottom: 4px;
 }
 
@@ -3464,9 +3470,9 @@
 .work-todo-dash-cal-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
-  margin: 8px 0 0;
-  padding-top: 8px;
+  gap: 6px 12px;
+  margin: 6px 0 0;
+  padding-top: 6px;
   border-top: 1px solid var(--border-subtle);
   font-size: 10px;
   color: var(--text-3);
