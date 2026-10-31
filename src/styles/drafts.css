@@ -754,19 +754,23 @@
   }
 }
 
-/* Month calendar popover */
+/* Month calendar popover — floating layer needs an opaque fill (see --float-bg) */
 .work-todo-cal {
   position: absolute;
   top: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  /* Anchor to the trigger's left edge: centering pushed the panel outside the page
+     container (which clips it), cutting off the first week column. */
+  left: 0;
   z-index: 40;
-  width: 248px;
+  max-width: min(252px, calc(100vw - 160px));
+  width: 252px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--bg-1);
+  background: var(--float-bg);
   box-shadow: var(--shadow-md), var(--surface-highlight);
+  backdrop-filter: blur(18px) saturate(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(1.05);
 }
 
 .work-todo-cal-head-wrap {
@@ -842,13 +846,15 @@
   padding: 8px 10px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--input-bg) 96%, var(--bg-1));
+  background: var(--float-bg);
+  backdrop-filter: blur(18px) saturate(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(1.05);
   box-shadow: var(--shadow-md), var(--surface-highlight);
   overflow: visible;
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .work-todo-cal-ym-panel {
-  background: color-mix(in srgb, var(--chrome-bg) 96%, var(--input-bg));
+  background: var(--float-bg);
   backdrop-filter: blur(20px) saturate(1.08);
 }
 
@@ -929,12 +935,14 @@
   overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--input-bg) 94%, var(--bg-1));
+  background: var(--float-bg);
+  backdrop-filter: blur(18px) saturate(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(1.05);
   box-shadow: var(--shadow-md), var(--surface-highlight);
 }
 
 :is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .work-todo-cal-year-list {
-  background: color-mix(in srgb, var(--chrome-bg) 96%, var(--input-bg));
+  background: var(--float-bg);
   backdrop-filter: blur(20px) saturate(1.08);
 }
 
@@ -1915,8 +1923,8 @@
 .work-todo-compose textarea.work-todo-compose-notes {
   display: block;
   width: 100%;
-  min-height: 82px;
-  max-height: 176px;
+  min-height: 112px;
+  max-height: 208px;
   padding: 9px 10px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -2279,91 +2287,50 @@
 
 .work-todo-kanban-board {
   display: flex;
-  gap: 12px;
+  /* All columns share the page height and stay bottom-aligned */
   align-items: stretch;
+  gap: 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
-  padding: 0 2px 6px;
+  padding: 2px 2px 6px;
   min-height: 0;
-  flex: 1;
+  flex: 1 1 auto;
 }
 
+/* Column: fills the board height, scrolls inside when its cards overflow */
 .work-todo-kanban-col {
-  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
   flex: 1 1 0;
-  min-width: 206px;
+  min-width: 132px;
   min-height: 0;
-  height: 100%;
   max-height: 100%;
   margin-bottom: 0;
-  padding: 11px 10px 12px;
-  overflow: hidden;
-  border-color: var(--border-subtle);
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
   border-radius: var(--radius-lg);
-  background: var(--bg-1);
+  background: color-mix(in srgb, var(--bg-1) 55%, transparent);
   box-shadow: var(--surface-highlight);
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-/* Column accent: thin colored strip across the top edge */
-.work-todo-kanban-col::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  background: var(--text-3);
-  opacity: 0.35;
-  pointer-events: none;
-}
-
-.work-todo-kanban-col.is-col-today::before {
-  background: var(--accent-strong);
-  opacity: 0.85;
-}
-
-.work-todo-kanban-col.is-col-scheduled::before {
-  background: var(--accent);
-  opacity: 0.55;
-}
-
-.work-todo-kanban-col.is-col-overdue::before {
-  background: var(--yellow);
-  opacity: 0.8;
-}
-
-.work-todo-kanban-col.is-col-done::before {
-  background: var(--green);
-  opacity: 0.6;
-}
-
-.work-todo-kanban-col.is-col-today {
-  flex: 1.08 1 0;
-}
-
 .work-todo-kanban-col.is-drop-target {
   border-color: var(--accent-border);
-  background: color-mix(in srgb, var(--accent) 7%, var(--bg-1));
-  box-shadow: var(--surface-highlight), var(--shadow-sm);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
-.work-todo-kanban-col.is-drop-target .work-todo-kanban-body {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+.work-todo-kanban-col.is-col-overdue {
+  border-color: color-mix(in srgb, var(--yellow) 26%, var(--border-subtle));
 }
 
 .work-todo-kanban-col-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
-  padding: 2px 2px 0;
-  border-bottom: none;
+  padding: 1px 2px 2px;
 }
 
 .work-todo-kanban-col-title {
@@ -2371,7 +2338,7 @@
   min-width: 0;
   text-transform: none;
   letter-spacing: -0.01em;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 650;
   color: var(--text-0);
 }
@@ -2381,8 +2348,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 21px;
-  height: 21px;
+  width: 20px;
+  height: 20px;
   border-radius: var(--radius-sm);
   background: var(--overlay-2);
   color: var(--text-2);
@@ -2432,62 +2399,67 @@
   opacity: 0.55;
 }
 
-/* Inner tray so the scroll area reads as a drop zone */
+/* Body shrinks (and scrolls) only when the column hits the board height */
 .work-todo-kanban-body {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 6px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--overlay-1) 42%, transparent);
-  transition: background 0.15s ease;
+  padding: 1px;
 }
 
 .work-todo-kanban-list {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 
 .work-todo-kanban-empty {
-  min-height: 64px;
+  min-height: 40px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px 8px;
-  border: 1px dashed color-mix(in srgb, var(--border-subtle) 75%, transparent);
+  padding: 8px;
+  border: 1px dashed color-mix(in srgb, var(--border-subtle) 65%, transparent);
   border-radius: var(--radius-md);
-  background: transparent;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: 11px;
   text-align: center;
 }
 
+/* Empty column: the dashed placeholder fills the shared column height */
+.work-todo-kanban-col.is-empty .work-todo-kanban-body {
+  display: flex;
+  flex: 1 1 auto;
+}
+
+.work-todo-kanban-col.is-empty .work-todo-kanban-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .work-todo-kanban-col .work-todo-row {
+  position: relative;
   cursor: grab;
-  padding: 8px 9px;
-  border-color: color-mix(in srgb, var(--border-subtle) 70%, transparent);
+  padding: 7px 8px;
+  border-color: color-mix(in srgb, var(--border-subtle) 60%, transparent);
   border-left: 2px solid transparent;
-  background: var(--bg-2);
+  background: var(--bg-3);
   box-shadow: none;
-  transition: var(--transition-colors-fast), transform 0.12s ease, box-shadow 0.12s ease;
+  transition: var(--transition-colors-fast), box-shadow 0.12s ease;
 }
 
 .work-todo-kanban-col .work-todo-row:hover,
 .work-todo-kanban-col .work-todo-row:focus-within {
   border-color: var(--border-subtle);
   border-left-color: var(--accent-border);
-  background: var(--bg-2);
   box-shadow: var(--shadow-xs);
-  transform: translateY(-1px);
 }
 
 .work-todo-kanban-col .work-todo-row:active {
   cursor: grabbing;
-  transform: none;
 }
 
 .work-todo-kanban-col .work-todo-row.is-pinned {
@@ -2499,12 +2471,102 @@
 }
 
 .work-todo-kanban-col.is-col-overdue .work-todo-row {
-  background: color-mix(in srgb, var(--yellow) 5%, var(--bg-2));
+  background: color-mix(in srgb, var(--yellow) 6%, var(--bg-3));
   border-left-color: color-mix(in srgb, var(--yellow) 45%, transparent);
 }
 
 .work-todo-kanban-col.is-col-done .work-todo-row {
-  background: color-mix(in srgb, var(--green) 4%, var(--bg-2));
+  background: color-mix(in srgb, var(--green) 5%, var(--bg-3));
+}
+
+/* Tools sit under the title (actions row), right-aligned and always clickable */
+.work-todo-kanban-col .work-todo-row.is-compact .work-todo-row-actions,
+.work-todo-kanban-col
+  .work-todo-row.is-compact
+  .work-todo-row-actions:not(:has(.work-todo-schedule-btn)) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.work-todo-kanban-col .work-todo-row.is-compact .work-todo-row-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-left: auto;
+}
+
+.work-todo-kanban-col .work-todo-row-tools .snippet-icon-btn {
+  width: 20px;
+  height: 20px;
+  color: var(--text-2);
+}
+
+.work-todo-kanban-col .work-todo-row-tools .snippet-icon-btn:hover {
+  background: var(--overlay-3);
+  color: var(--text-0);
+}
+
+.work-todo-kanban-col .work-todo-row-tools .snippet-icon-btn.danger:hover {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
+}
+
+/* Window-width adaptation: gutters and type step down before the board scrolls sideways */
+@media (max-width: 1280px) {
+  .work-todo-kanban-board {
+    gap: 8px;
+  }
+
+  .work-todo-kanban-col {
+    padding: 7px;
+  }
+
+  .work-todo-kanban-col .work-todo-row {
+    padding: 6px 7px;
+  }
+}
+
+@media (max-width: 1000px) {
+  .work-todo-kanban-board {
+    gap: 6px;
+  }
+
+  .work-todo-kanban-col {
+    gap: 4px;
+    padding: 6px;
+    border-radius: var(--radius-md);
+  }
+
+  .work-todo-kanban-col-head {
+    gap: 4px;
+  }
+
+  .work-todo-kanban-col-title {
+    font-size: 11.5px;
+  }
+
+  .work-todo-kanban-col-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .work-todo-kanban-count {
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  .work-todo-kanban-list {
+    gap: 3px;
+  }
+
+  .work-todo-kanban-col .work-todo-row.is-compact .work-todo-title {
+    font-size: 11.5px;
+    -webkit-line-clamp: 3;
+  }
 }
 
 /* Kanban cards: title on its own row; tools use display:none so they don't steal flex width */
@@ -2532,10 +2594,10 @@
 .work-todo-kanban-col .work-todo-row.is-compact .work-todo-title {
   white-space: normal;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-height: 1.4;
+  line-height: 1.38;
 }
 
 .work-todo-row.is-compact .work-todo-date-badge {
@@ -2808,8 +2870,8 @@
 
 .work-todo-dash-main .work-todo-trend-plot {
   flex: 0 0 auto;
-  height: 92px;
-  min-height: 92px;
+  height: 128px;
+  min-height: 128px;
   border: 0;
   border-radius: 0;
   background-color: transparent;

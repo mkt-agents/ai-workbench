@@ -108,7 +108,7 @@ export default function KanbanView({
           return (
             <section
               key={colId}
-              className={`card work-todo-kanban-col is-col-${colId}${
+              className={`work-todo-kanban-col is-col-${colId}${
                 dragOver === colId ? " is-drop-target" : ""
               }${list.length === 0 ? " is-empty" : ""}`}
               aria-label={columnTitle(colId)}
