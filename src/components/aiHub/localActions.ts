@@ -21,7 +21,7 @@ const PAGES: Alias[] = [
   { tab: "ai-chat", label: "Harness", names: ["harness", "deepseek", "ai 对话"] },
   { tab: "ai-models", label: "模型广场", names: ["模型广场", "模型管理", "模型配置", "模型"] },
   { tab: "snippets", label: "提示词", names: ["提示词", "模板片段", "片段页", "prompts", "snippets", "模型广场提示词", "模型管理提示词"] },
-  { tab: "drafts", label: "工作暂存", names: ["工作暂存", "暂存"] },
+  { tab: "drafts", label: "工作待办", names: ["工作待办", "待办", "工作暂存", "暂存"] },
   { tab: "cursor-accounts", label: "Cursor", names: ["cursor 账号", "cursor"] },
   { tab: "account-quota", label: "账号配额", names: ["账号配额", "账号额度", "配额", "额度", "签到"] },
   { tab: "runtime", label: "环境变量", names: ["环境变量", "runtime"] },

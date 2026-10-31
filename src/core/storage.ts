@@ -1,7 +1,7 @@
 /**
  * SQLite storage adapter — routes through typed Tauri db_load / db_save commands.
  */
-import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, ScriptTemplate, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, Draft, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher, McpServer } from './types';
+import type { GitAccount, GitRepoConfig, GitHostConfig, HostProfile, WebPlugin, UserScript, ScriptTemplate, RecentProject, CursorAccount, AIModelConfig, CloudflaredNamedProfile, GitWorkspace, Snippet, WorkTask, AiHubSession, AiHubTurn, JsonToolHistoryItem, QuickAppLauncher, McpServer } from './types';
 
 function finiteOr(value: unknown, fallback: number): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -42,6 +42,7 @@ type DbTable =
   | 'cloudflared_profiles'
   | 'snippets'
   | 'drafts'
+  | 'work_tasks'
   | 'ai_hub_sessions'
   | 'json_tool_history'
   | 'quick_app_launchers'
@@ -477,28 +478,36 @@ export const storage = {
       );
     },
   },
-  drafts: {
-    load: async (): Promise<Draft[]> => {
-      const rows = await loadRows('drafts');
+  workTasks: {
+    load: async (): Promise<WorkTask[]> => {
+      const rows = await loadRows('work_tasks');
       return rows.map((r) => ({
         id: r['id'] as string,
         title: (r['title'] as string) || '',
-        content: (r['content'] as string) || '',
+        notes: (r['notes'] as string) || '',
+        tags: (r['tags'] as string) || '',
+        status: (r['status'] as string) === 'done' ? 'done' : 'open',
+        workDate: (r['work_date'] as string | null | undefined) ?? null,
         pinned: Boolean(Number(r['pinned'] ?? 0)),
         createdAt: r['created_at'] as string,
         updatedAt: r['updated_at'] as string,
+        doneAt: (r['done_at'] as string | null | undefined) ?? null,
       }));
     },
-    save: async (items: Draft[]): Promise<void> => {
+    save: async (items: WorkTask[]): Promise<void> => {
       await saveRows(
-        'drafts',
+        'work_tasks',
         items.map((item) => ({
           id: item.id,
           title: item.title || '',
-          content: item.content,
+          notes: item.notes || '',
+          tags: item.tags || '',
+          status: item.status,
+          work_date: item.workDate ?? null,
           pinned: item.pinned ? 1 : 0,
           created_at: item.createdAt,
           updated_at: item.updatedAt,
+          done_at: item.doneAt ?? null,
         }))
       );
     },

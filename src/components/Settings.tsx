@@ -525,6 +525,37 @@ function Settings({ onNoticeUpdate }: Props = {}) {
           </div>
         </div>
 
+        <div className="card" hidden={tab !== "general"}>
+          <div className="card-title">{t("workTodo.title")}</div>
+          <div className="card-body">
+            <div className="setting-item">
+              <div className="setting-row">
+                <span className="setting-label">{t("workTodo.remindEnabled")}</span>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.workTodoRemindEnabled === true}
+                    onChange={(e) => setSettings({ workTodoRemindEnabled: e.target.checked })}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              </div>
+              <p className="setting-hint">{t("workTodo.remindHint")}</p>
+            </div>
+            <div className="setting-row">
+              <span className="setting-label">{t("workTodo.remindTime")}</span>
+              <input
+                type="time"
+                className="input-field"
+                style={{ width: 140 }}
+                value={settings.workTodoRemindTime || "09:30"}
+                disabled={settings.workTodoRemindEnabled !== true}
+                onChange={(e) => setSettings({ workTodoRemindTime: e.target.value || "09:30" })}
+              />
+            </div>
+          </div>
+        </div>
+
         {/* 桌面宠物：开关 / 形象 / 素材 / 大小 / 安静模式自成一张卡，跟"天玑怎么干活"分开 */}
         <div className="card" hidden={tab !== "general"}>
           <div className="card-title">{t("aiHub.bubble")}</div>

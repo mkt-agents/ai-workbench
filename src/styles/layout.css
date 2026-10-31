@@ -337,6 +337,7 @@
 }
 
 .nav-icon {
+  position: relative;
   display: inline-flex;
   flex-shrink: 0;
   transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease;
@@ -344,11 +345,57 @@
 
 .nav-label {
   /* 菜单管理里改成长名字时不要被硬裁，给个省略号 */
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   transition: opacity 0.14s ease;
+}
+
+.nav-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  margin-left: auto;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-subtle));
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.sidebar-nav-item.active .nav-badge {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border-color: var(--accent-border);
+}
+
+.nav-badge-dot {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 1.5px var(--bg-1);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar.collapsed .nav-badge {
+  display: none;
+}
+
+.sidebar.collapsed .nav-badge-dot {
+  opacity: 1;
 }
 
 /* 导航自身有 6px 内边距，项再留 8px，图标在 44px 轨道里已经居中
@@ -518,6 +565,10 @@
 /* Harness / 协同办公: light inset (tighter than page-wide 24px). */
 .main-body.is-flush {
   padding: 6px 8px 8px;
+}
+
+.main-body.is-work-todo {
+  padding: 8px 16px 8px;
 }
 
 .page-in {

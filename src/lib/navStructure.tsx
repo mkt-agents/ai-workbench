@@ -20,7 +20,7 @@ import {
   Puzzle,
   Sparkles,
   Rocket,
-  StickyNote,
+  ListTodo,
   Terminal,
 } from "lucide-react";
 
@@ -82,7 +82,7 @@ export const NAV_NODES: NavNode[] = [
         ),
       },
       { id: "desktop-apps", labelKey: "desktopApps", icon: <AppWindow size={16} /> },
-      { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
+      { id: "drafts", labelKey: "drafts", icon: <ListTodo size={16} /> },
       { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
     ],
   },

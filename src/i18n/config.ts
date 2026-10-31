@@ -13,7 +13,7 @@ import zhCNRuntime from '../locales/zh-CN/runtime.json';
 import zhCNCloudflared from '../locales/zh-CN/cloudflared.json';
 import zhCNAihub from '../locales/zh-CN/aihub.json';
 import zhCNSnippets from '../locales/zh-CN/snippets.json';
-import zhCNDrafts from '../locales/zh-CN/drafts.json';
+import zhCNWorkTodo from '../locales/zh-CN/workTodo.json';
 import zhCNDevtools from '../locales/zh-CN/devtools.json';
 import zhCNUpdate from '../locales/zh-CN/update.json';
 import zhCNWorkbuddy from '../locales/zh-CN/workbuddy.json';
@@ -31,7 +31,7 @@ import enUSRuntime from '../locales/en-US/runtime.json';
 import enUSCloudflared from '../locales/en-US/cloudflared.json';
 import enUSAihub from '../locales/en-US/aihub.json';
 import enUSSnippets from '../locales/en-US/snippets.json';
-import enUSDrafts from '../locales/en-US/drafts.json';
+import enUSWorkTodo from '../locales/en-US/workTodo.json';
 import enUSDevtools from '../locales/en-US/devtools.json';
 import enUSUpdate from '../locales/en-US/update.json';
 import enUSWorkbuddy from '../locales/en-US/workbuddy.json';
@@ -51,7 +51,7 @@ const resources = {
     cloudflared: zhCNCloudflared,
     aihub: zhCNAihub,
     snippets: zhCNSnippets,
-    drafts: zhCNDrafts,
+    workTodo: zhCNWorkTodo,
     devtools: zhCNDevtools,
     update: zhCNUpdate,
     workbuddy: zhCNWorkbuddy,
@@ -70,7 +70,7 @@ const resources = {
     cloudflared: enUSCloudflared,
     aihub: enUSAihub,
     snippets: enUSSnippets,
-    drafts: enUSDrafts,
+    workTodo: enUSWorkTodo,
     devtools: enUSDevtools,
     update: enUSUpdate,
     workbuddy: enUSWorkbuddy,

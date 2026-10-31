@@ -95,6 +95,8 @@ mod grok_bot_quota;
 mod mimo_quota;
 mod trae_quota;
 mod daily_schedule;
+mod work_todo_migrate;
+mod work_todo_reminder;
 mod qoder_quota;
 mod quota_accounts;
 mod zcode_quota;
@@ -400,6 +402,11 @@ pub fn run() {
             quota_accounts::ensure_kv_schema(&conn).expect("failed to init app kv schema");
             qoder_quota::ensure_schema(&conn).expect("failed to init qoder settings schema");
             trae_quota::ensure_schema(&conn).expect("failed to init trae settings schema");
+            work_todo_migrate::ensure_schema(&conn).expect("failed to init work todo schema");
+            work_todo_migrate::migrate_drafts_if_needed(&conn)
+                .expect("failed to migrate drafts to work tasks");
+            work_todo_migrate::migrate_logs_into_tasks_if_needed(&conn)
+                .expect("failed to merge work daily logs into tasks");
 
             // The automated-testing feature was removed; drop the tables it used
             // to own so a stale DB from an older build does not linger. Idempotent.

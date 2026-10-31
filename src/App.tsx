@@ -46,6 +46,7 @@ import {
   applyNavCustomization,
   normalizeNavCustomization,
 } from "./lib/navCustomize";
+import { localDateKey } from "./components/workTodo/utils";
 import "./styles/index.css";
 
 /** Persist rehydration is async even for localStorage. Cap the wait so boot cannot hang. */
@@ -76,6 +77,14 @@ function App() {
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
   const webPlugins = useGlobalStore((s) => s.webPlugins);
+  const workTasks = useGlobalStore((s) => s.workTasks);
+  const todayOpenCount = useMemo(() => {
+    const today = localDateKey();
+    return workTasks.reduce(
+      (n, task) => (task.status === "open" && task.workDate === today ? n + 1 : n),
+      0
+    );
+  }, [workTasks]);
 
   const goTab = (tab: Tab) => {
     // 旧侧栏「提示词」已并进模型广场第三 Tab
@@ -229,6 +238,25 @@ function App() {
     if (tab) goTab(tab);
   }, []);
 
+  const { t: tWorkTodo } = useTranslation("workTodo");
+  useTauriEvent<{ openCount: number; todayCount: number; backlogCount: number }>(
+    "work-todo-remind",
+    (event) => {
+      const p = event.payload;
+      if (!p) return;
+      setTrayToast(
+        tWorkTodo("remindToast", {
+          open: p.openCount,
+          today: p.todayCount,
+          backlog: p.backlogCount,
+        })
+      );
+      goTab("drafts");
+      window.setTimeout(() => setTrayToast(null), 8000);
+    },
+    [tWorkTodo]
+  );
+
   useTauriEvent<string>("navigate-git-subtab", (event) => {
     const sub = event.payload;
     if (sub !== "repos" && sub !== "commit" && sub !== "report") return;
@@ -300,17 +328,34 @@ function App() {
     for (const child of g.children) NAV_MAP[child.id] = leafLabel(child);
   }
 
-  const renderLeafButton = (leaf: { id: Tab; labelKey: string; icon: React.ReactNode }, className = "") => (
-    <button
-      key={leaf.id}
-      onClick={() => goTab(leaf.id)}
-      className={`sidebar-nav-item ${className} ${activeTab === leaf.id ? "active" : ""}`.trim()}
-      title={leafLabel(leaf)}
-    >
-      <span className="nav-icon">{leaf.icon}</span>
-      <span className="nav-label">{leafLabel(leaf)}</span>
-    </button>
-  );
+  const renderLeafButton = (leaf: { id: Tab; labelKey: string; icon: React.ReactNode }, className = "") => {
+    const showTodayBadge = leaf.id === "drafts" && todayOpenCount > 0;
+    const label = leafLabel(leaf);
+    const title = showTodayBadge
+      ? `${label} · ${tWorkTodo("navTodayOpen", { count: todayOpenCount })}`
+      : label;
+    return (
+      <button
+        key={leaf.id}
+        onClick={() => goTab(leaf.id)}
+        className={`sidebar-nav-item ${className} ${activeTab === leaf.id ? "active" : ""}`.trim()}
+        title={title}
+      >
+        <span className="nav-icon">
+          {leaf.icon}
+          {showTodayBadge && (
+            <span className="nav-badge-dot" aria-hidden />
+          )}
+        </span>
+        <span className="nav-label">{label}</span>
+        {showTodayBadge && (
+          <span className="nav-badge" aria-label={tWorkTodo("navTodayOpen", { count: todayOpenCount })}>
+            {todayOpenCount > 99 ? "99+" : todayOpenCount}
+          </span>
+        )}
+      </button>
+    );
+  };
 
   useLayoutEffect(() => {
     if (collapseMotionSkip.current) {
@@ -526,10 +571,14 @@ function App() {
         </div>
 
         <main className="main-content">
-          <div className={`main-header ${["ai-chat", "ai-models", "desktop-apps"].includes(activeTab) ? "hidden" : ""}`}>
+          <div
+            className={`main-header ${["ai-chat", "ai-models", "desktop-apps", "drafts"].includes(activeTab) ? "hidden" : ""}`}
+          >
             <h1>{NAV_MAP[activeTab]}</h1>
           </div>
-          <div className={`main-body${["ai-chat", "desktop-apps"].includes(activeTab) ? " is-flush" : ""}`}>
+          <div
+            className={`main-body${["ai-chat", "desktop-apps"].includes(activeTab) ? " is-flush" : ""}${activeTab === "drafts" ? " is-work-todo" : ""}`}
+          >
             <div className="page-in">
               {gitMounted && (
                 <div

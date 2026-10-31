@@ -104,6 +104,9 @@ pub fn spawn(app: tauri::AppHandle) {
             if let Err(e) = crate::wecom_docgen::auto_tick(&app).await {
                 eprintln!("[wecom] docgen tick failed: {e}");
             }
+            if let Err(e) = crate::work_todo_reminder::auto_tick(&app).await {
+                eprintln!("[work-todo] remind tick failed: {e}");
+            }
         }
     });
 }

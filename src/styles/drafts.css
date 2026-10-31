@@ -460,18 +460,3182 @@
   display: flex;
   flex-direction: column;
   padding-bottom: 16px;
-}
-
-.drafts-modal .drafts-editor {
-  margin-top: 4px;
-}
-
-.drafts-modal .drafts-editor-body {
-  min-height: 240px;
-  max-height: 56vh;
+  max-height: min(88vh, 640px);
 }
 
 .drafts-modal .modal-actions .drafts-modal-hint {
   align-self: center;
   margin-right: auto;
+}
+
+/* Work todo — edit task modal */
+.work-todo-task-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 2px;
+  min-height: 0;
+}
+
+.work-todo-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.work-todo-edit-field-grow {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.work-todo-edit-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.work-todo-edit-input {
+  width: 100%;
+  height: 34px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.work-todo-edit-input::placeholder {
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.work-todo-edit-textarea {
+  width: 100%;
+  min-height: 200px;
+  max-height: min(360px, 48vh);
+  padding: 10px 11px;
+  resize: none;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.work-todo-edit-textarea::placeholder {
+  color: var(--text-3);
+}
+
+.drafts-modal .work-todo-task-editor {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.drafts-modal .work-todo-edit-field-grow .work-todo-edit-textarea {
+  flex: 1 1 auto;
+  min-height: 160px;
+}
+
+/* ---- Work todo ---- */
+.drafts-page.work-todo-page {
+  gap: 8px;
+  padding: 0 0 4px;
+}
+
+.work-todo-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.work-todo-daily {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Overdue + today/backlog: claims remaining height so board is never clipped away */
+.work-todo-daily-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Top chrome: date nav + stats + search */
+.work-todo-chrome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+}
+
+.work-todo-date-nav {
+  position: relative;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.work-todo-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-nav-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--overlay-2);
+  border-color: var(--border-subtle);
+}
+
+.work-todo-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.work-todo-date-picker-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.work-todo-date-mid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  min-width: 5.25rem;
+  padding: 3px 8px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-date-mid:hover,
+.work-todo-date-mid.is-open {
+  border-color: var(--border-subtle);
+  background: var(--overlay-2);
+}
+
+.work-todo-date-mid.is-open {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.work-todo-date-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.work-todo-date-iso {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: 1.2;
+}
+
+.work-todo-date-chevron {
+  transition: transform 160ms ease;
+  opacity: 0.75;
+}
+
+.work-todo-date-mid.is-open .work-todo-date-chevron {
+  transform: rotate(180deg);
+}
+
+.work-todo-today-btn {
+  flex-shrink: 0;
+}
+
+/* Week strip: ±3 days around today */
+.work-todo-week-strip {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  margin-left: 4px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+}
+
+.work-todo-week-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  min-width: 28px;
+  padding: 3px 5px 5px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-week-chip:hover {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+.work-todo-week-chip.is-today {
+  color: var(--accent-strong);
+}
+
+.work-todo-week-chip.is-selected {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--text-0);
+}
+
+.work-todo-week-wd {
+  font-size: 9px;
+  line-height: 1.1;
+  color: var(--text-3);
+}
+
+.work-todo-week-chip.is-selected .work-todo-week-wd,
+.work-todo-week-chip.is-today .work-todo-week-wd {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.work-todo-week-num {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.work-todo-week-chip .work-todo-cal-dot {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+@media (max-width: 900px) {
+  .work-todo-week-strip {
+    display: none;
+  }
+}
+
+/* Month calendar popover */
+.work-todo-cal {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: 248px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-md), var(--surface-highlight);
+}
+
+.work-todo-cal-head-wrap {
+  position: relative;
+  z-index: 4;
+  margin-bottom: 8px;
+}
+
+.work-todo-cal-head-wrap .work-todo-cal-head {
+  margin-bottom: 0;
+}
+
+.work-todo-cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.work-todo-cal-title-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-cal-title-btn:hover {
+  background: var(--overlay-2);
+}
+
+.work-todo-cal-title-btn.is-open {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.work-todo-cal-title-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+
+.work-todo-cal-title-btn.is-open .work-todo-cal-title-chevron {
+  transform: rotate(180deg);
+  color: var(--accent-strong);
+}
+
+.work-todo-cal-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-todo-cal-ym-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 65;
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--input-bg) 96%, var(--bg-1));
+  box-shadow: var(--shadow-md), var(--surface-highlight);
+  overflow: visible;
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .work-todo-cal-ym-panel {
+  background: color-mix(in srgb, var(--chrome-bg) 96%, var(--input-bg));
+  backdrop-filter: blur(20px) saturate(1.08);
+}
+
+.work-todo-cal-year-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.work-todo-cal-year-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.work-todo-cal-year-picker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.work-todo-cal-year-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text-0);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+  box-shadow: var(--surface-highlight);
+}
+
+.work-todo-cal-year-trigger:hover,
+.work-todo-cal-year-trigger.is-open {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 8%, var(--input-bg));
+}
+
+.work-todo-cal-year-value {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.work-todo-cal-year-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+
+.work-todo-cal-year-trigger.is-open .work-todo-cal-year-chevron {
+  transform: rotate(180deg);
+  color: var(--accent-strong);
+}
+
+.work-todo-cal-year-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 70;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: calc(32px * 5 + 8px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--input-bg) 94%, var(--bg-1));
+  box-shadow: var(--shadow-md), var(--surface-highlight);
+}
+
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"]) .work-todo-cal-year-list {
+  background: color-mix(in srgb, var(--chrome-bg) 96%, var(--input-bg));
+  backdrop-filter: blur(20px) saturate(1.08);
+}
+
+.work-todo-cal-year-option {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-0);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-cal-year-option:hover {
+  background: var(--overlay-2);
+}
+
+.work-todo-cal-year-option.is-active {
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+
+.work-todo-cal-months {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.work-todo-cal-month-chip {
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-2) 80%, transparent);
+  color: var(--text-1);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-cal-month-chip:hover {
+  border-color: var(--accent-border);
+  background: var(--overlay-2);
+}
+
+.work-todo-cal-month-chip.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.work-todo-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.work-todo-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.work-todo-cal-pad {
+  min-height: 30px;
+}
+
+.work-todo-cal-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 2px 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-0);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-cal-day:hover {
+  background: var(--overlay-2);
+}
+
+.work-todo-cal-day.is-today:not(.is-selected) {
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+
+.work-todo-cal-day.is-selected {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
+}
+
+.work-todo-cal-day.is-selected .work-todo-cal-dot {
+  background: var(--on-accent);
+}
+
+.work-todo-cal-dot {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.work-todo-cal-day .work-todo-cal-dot {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.work-todo-cal-foot {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.work-todo-chrome-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 220px;
+  justify-content: flex-end;
+}
+
+.work-todo-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.work-todo-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-1);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.work-todo-stat.is-muted {
+  background: var(--overlay-2);
+  color: var(--text-2);
+}
+
+.work-todo-stat-num {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-0);
+}
+
+.work-todo-stat.is-muted .work-todo-stat-num {
+  color: var(--text-1);
+}
+
+.work-todo-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 160px;
+  max-width: 260px;
+}
+
+.work-todo-search-icon {
+  position: absolute;
+  left: 9px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.work-todo-search .input-field {
+  width: 100%;
+  padding-left: 28px;
+  padding-right: 28px;
+  height: 30px;
+}
+
+.work-todo-search .snippets-search-clear {
+  position: absolute;
+  right: 4px;
+}
+
+/* Collapsible daily log */
+.work-todo-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex-shrink: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.work-todo-log-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-log-toggle:hover {
+  background: var(--overlay-1);
+}
+
+.work-todo-log-toggle .drafts-compose-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.work-todo-log-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.work-todo-log-toggle-text strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.work-todo-log-toggle-text > span,
+.work-todo-log-preview {
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-todo-log-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.work-todo-log-status {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.work-todo-log-status.is-ok {
+  color: var(--green);
+}
+
+.work-todo-log-chevron {
+  transition: transform 160ms ease;
+}
+
+.work-todo-log.is-open .work-todo-log-chevron {
+  transform: rotate(180deg);
+}
+
+.work-todo-log-body {
+  display: block;
+  box-sizing: border-box;
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
+  min-height: 72px;
+  max-height: 160px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  color: var(--text-0);
+  resize: none;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  outline: none;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-log-body:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.work-todo-log-body::placeholder {
+  color: var(--text-3);
+}
+
+/* Board: panels share one row height; long lists scroll inside */
+.work-todo-board {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1 1 auto;
+  height: 100%;
+}
+
+@media (min-width: 960px) {
+  .work-todo-board.has-backlog {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .work-todo-board.has-backlog.has-overdue {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .work-todo-board.has-overdue:not(.has-backlog) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 959px) {
+  .work-todo-board.has-overdue .is-panel-overdue {
+    order: -1;
+  }
+
+  .work-todo-daily-main {
+    overflow: auto;
+  }
+
+  .work-todo-board > .work-todo-panel {
+    min-height: 180px;
+    height: auto;
+  }
+}
+
+.work-todo-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  padding: 12px 14px 14px;
+}
+
+.work-todo-panel-head,
+.work-todo-panel-hint,
+.work-todo-quick-row {
+  flex-shrink: 0;
+}
+
+.work-todo-panel-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+/* Local thin scrollbar (global bars are hidden in layout.css) */
+.work-todo-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.work-todo-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.work-todo-scroll::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-full);
+  background: var(--overlay-3);
+  border: 1px solid transparent;
+  background-clip: content-box;
+}
+
+.work-todo-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--overlay-4);
+  border: 1px solid transparent;
+  background-clip: content-box;
+}
+
+.work-todo-panel-scroll .work-todo-empty {
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+.work-todo-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.work-todo-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.work-todo-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-3);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.work-todo-panel-hint {
+  margin: -4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
+.work-todo-quick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-quick-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.work-todo-quick-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.work-todo-quick-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding-left: 0;
+}
+
+.work-todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.work-todo-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: var(--overlay-1);
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-row:hover,
+.work-todo-row:focus-within {
+  border-color: var(--border-subtle);
+  background: var(--bg-2);
+}
+
+.work-todo-row.is-pinned {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--overlay-1));
+}
+
+.work-todo-row.is-done {
+  opacity: 0.72;
+}
+
+.work-todo-done-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-done-toggle:hover {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.work-todo-done-toggle.is-done {
+  color: var(--green);
+}
+
+.work-todo-done-toggle.is-done:hover {
+  color: var(--text-2);
+  background: var(--overlay-2);
+}
+
+.work-todo-done-toggle:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.work-todo-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.work-todo-row-title-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.work-todo-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-0);
+  cursor: pointer;
+  flex: 1 1 150px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-todo-title.is-done {
+  text-decoration: line-through;
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.work-todo-notes-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+.work-todo-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.work-todo-schedule-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-schedule-btn:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-0);
+}
+
+.work-todo-schedule-btn span {
+  max-width: 5.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1100px) {
+  .work-todo-schedule-btn span {
+    display: none;
+  }
+}
+
+.work-todo-row-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-row:hover .work-todo-row-tools,
+.work-todo-row:focus-within .work-todo-row-tools {
+  opacity: 1;
+}
+
+.work-todo-notes-preview {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+  max-height: 140px;
+  overflow: auto;
+}
+
+.work-todo-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 28px 12px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-3);
+  text-align: center;
+}
+
+.work-todo-empty p {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.work-todo-empty span {
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.work-todo-page .setting-hint {
+  text-align: left;
+}
+
+/* ---- Shell: title + view tabs + search (replaces main-header on this page) ---- */
+.work-todo-shell-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 16px;
+  flex-shrink: 0;
+  padding-bottom: 2px;
+}
+
+.work-todo-page-title {
+  margin: 0;
+  justify-self: start;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: -0.1px;
+  line-height: 1.2;
+}
+
+.work-todo-shell-bar .work-todo-tabs {
+  justify-self: center;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.work-todo-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  border: 1px solid var(--border-subtle);
+}
+
+.work-todo-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-tab:hover {
+  color: var(--text-0);
+  background: var(--overlay-2);
+}
+
+.work-todo-tab.is-active {
+  color: var(--text-0);
+  background: var(--bg-2);
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-xs);
+}
+
+.work-todo-shell-bar .work-todo-search {
+  justify-self: end;
+  grid-column: 3;
+  grid-row: 1;
+  width: min(280px, 100%);
+  min-width: 0;
+}
+
+.work-todo-shell-bar.is-no-search .work-todo-tabs {
+  justify-self: center;
+}
+
+@media (max-width: 720px) {
+  .work-todo-shell-bar {
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+  }
+
+  .work-todo-page-title {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .work-todo-shell-bar .work-todo-search {
+    grid-column: 2;
+    grid-row: 1;
+    width: min(200px, 42vw);
+  }
+
+  .work-todo-shell-bar .work-todo-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+.work-todo-stat.is-warn {
+  background: color-mix(in srgb, var(--yellow) 16%, transparent);
+  color: var(--yellow);
+}
+
+.work-todo-stat.is-warn .work-todo-stat-num {
+  color: var(--yellow);
+}
+
+.work-todo-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12.5px;
+}
+
+.work-todo-date-badge {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+}
+
+.work-todo-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+}
+
+.work-todo-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-strong);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-todo-row.is-overdue {
+  border-color: color-mix(in srgb, var(--yellow) 35%, transparent);
+}
+
+.work-todo-row.is-dragging {
+  opacity: 0.45;
+}
+
+.work-todo-overdue-panel.is-highlight {
+  box-shadow: 0 0 0 1px var(--yellow-border), var(--shadow-sm);
+}
+
+/* ---- Daily compose: one flat input surface (no box-in-box) ---- */
+.work-todo-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-bottom: 0;
+  padding: 9px 10px 10px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-xs);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.work-todo-compose:hover {
+  border-color: var(--border);
+}
+
+.work-todo-compose:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.work-todo-compose-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.work-todo-compose-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-strong);
+  flex-shrink: 0;
+}
+
+/* 标题 / 标签是明确的输入框，避免被误认成标题栏 */
+.work-todo-compose input.work-todo-compose-title-input,
+.work-todo-compose input.work-todo-compose-tags-input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  box-shadow: none;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-compose input.work-todo-compose-title-input:hover,
+.work-todo-compose input.work-todo-compose-tags-input:hover {
+  border-color: var(--border);
+}
+
+.work-todo-compose input.work-todo-compose-title-input:focus,
+.work-todo-compose input.work-todo-compose-tags-input:focus {
+  border-color: var(--accent);
+  background: var(--bg-1);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.work-todo-compose input.work-todo-compose-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+}
+
+.work-todo-compose input.work-todo-compose-title-input::placeholder {
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.work-todo-compose input.work-todo-compose-tags-input {
+  flex: 0 1 190px;
+  min-width: 84px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.work-todo-compose-submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.work-todo-compose-notes-row {
+  margin-left: 0;
+  padding-top: 2px;
+}
+
+.work-todo-compose textarea.work-todo-compose-notes {
+  display: block;
+  width: 100%;
+  min-height: 82px;
+  max-height: 176px;
+  padding: 9px 10px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--overlay-1) 55%, transparent);
+  box-shadow: none;
+  color: var(--text-1);
+  resize: none;
+  field-sizing: content;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.work-todo-compose textarea.work-todo-compose-notes:focus {
+  border-color: var(--accent-border);
+  background: var(--bg-1);
+  box-shadow: none;
+}
+
+.work-todo-compose-notes::placeholder {
+  color: var(--text-3);
+}
+
+@media (max-width: 720px) {
+  .work-todo-compose-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .work-todo-compose input.work-todo-compose-title-input {
+    flex: 1 1 100%;
+  }
+
+  .work-todo-compose input.work-todo-compose-tags-input {
+    flex: 1 1 auto;
+    max-width: none;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .work-todo-compose-submit {
+    margin-left: auto;
+  }
+
+  .work-todo-compose-notes-row {
+    margin-left: 0;
+  }
+}
+
+/* ---- Daily view polish (light; no thick accent bars) ---- */
+.work-todo-daily .work-todo-chrome {
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border-color: var(--border-subtle);
+  box-shadow: var(--surface-highlight);
+}
+
+.work-todo-daily .work-todo-stats {
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+}
+
+.work-todo-daily .work-todo-stat.is-open {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-1);
+}
+
+.work-todo-daily .work-todo-stat.is-open .work-todo-stat-num {
+  color: var(--accent-strong);
+}
+
+.work-todo-daily .work-todo-stat.is-progress {
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  color: var(--text-1);
+}
+
+.work-todo-daily .work-todo-stat.is-progress .work-todo-stat-num {
+  color: var(--green);
+}
+
+.work-todo-daily .work-todo-stat.is-backlog {
+  background: var(--overlay-2);
+  color: var(--text-1);
+}
+
+.work-todo-daily .work-todo-stat.is-overdue {
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+  color: var(--yellow);
+}
+
+.work-todo-daily .work-todo-stat.is-overdue .work-todo-stat-num {
+  color: var(--yellow);
+}
+
+.work-todo-daily-log {
+  padding: 0;
+  overflow: hidden;
+  border-color: var(--border-subtle);
+  box-shadow: var(--surface-highlight);
+}
+
+.work-todo-daily-log .work-todo-log-toggle .drafts-compose-icon {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-strong);
+}
+
+.work-todo-daily .work-todo-panel,
+.work-todo-daily .work-todo-overdue-panel {
+  margin-bottom: 0;
+  padding: 10px 12px 12px;
+  gap: 8px;
+  overflow: hidden;
+  border-color: var(--border-subtle);
+  box-shadow: var(--surface-highlight);
+  background: var(--bg-1);
+  height: 100%;
+  align-self: stretch;
+}
+
+.work-todo-daily .work-todo-overdue-panel {
+  height: 100%;
+  min-height: 0;
+}
+
+.work-todo-daily .work-todo-panel-head {
+  padding: 0 0 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 65%, transparent);
+}
+
+.work-todo-daily .work-todo-daily-panel-title {
+  flex: 1;
+  min-width: 0;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-0);
+}
+
+.work-todo-daily-panel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+}
+
+.work-todo-daily-panel-icon.is-today {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.work-todo-daily-panel-icon.is-backlog {
+  color: var(--text-1);
+  background: var(--overlay-2);
+}
+
+.work-todo-daily-panel-icon.is-overdue {
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+}
+
+.work-todo-daily .work-todo-quick-row {
+  margin: 0;
+}
+
+.work-todo-daily .work-todo-panel-hint {
+  margin: -2px 0 0;
+  padding: 0;
+  color: var(--text-3);
+}
+
+.work-todo-daily .work-todo-panel-scroll {
+  padding: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.work-todo-daily .work-todo-overdue-panel .work-todo-list {
+  padding: 0;
+}
+
+.work-todo-daily .work-todo-list {
+  gap: 6px;
+}
+
+.work-todo-daily .work-todo-overdue-panel .work-todo-count-badge {
+  background: color-mix(in srgb, var(--yellow) 18%, transparent);
+  color: var(--yellow);
+}
+
+.work-todo-daily .work-todo-panel .work-todo-row {
+  border-color: transparent;
+  background: var(--overlay-1);
+  box-shadow: none;
+}
+
+.work-todo-daily .work-todo-panel .work-todo-row:hover,
+.work-todo-daily .work-todo-panel .work-todo-row:focus-within {
+  border-color: var(--border-subtle);
+  background: var(--bg-2);
+  box-shadow: none;
+}
+
+.work-todo-daily .work-todo-overdue-panel .work-todo-row {
+  border-color: color-mix(in srgb, var(--yellow) 18%, transparent);
+  background: color-mix(in srgb, var(--yellow) 5%, var(--overlay-1));
+  box-shadow: none;
+}
+
+/* 面板行：标题独占一行，所有行内按钮统一排到标题下方（常显、右对齐） */
+.work-todo-daily .work-todo-panel .work-todo-title,
+.work-todo-daily .work-todo-overdue-panel .work-todo-title {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.work-todo-daily .work-todo-panel .work-todo-notes-dot,
+.work-todo-daily .work-todo-overdue-panel .work-todo-notes-dot {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.work-todo-daily .work-todo-panel .work-todo-title svg {
+  vertical-align: -2px;
+}
+
+.work-todo-daily .work-todo-panel .work-todo-row-actions,
+.work-todo-daily .work-todo-overdue-panel .work-todo-row-actions {
+  flex: 1 1 100%;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-left: 0;
+  margin-top: 4px;
+}
+
+.work-todo-daily .work-todo-panel .work-todo-row-tools,
+.work-todo-daily .work-todo-overdue-panel .work-todo-row-tools {
+  opacity: 1;
+  gap: 1px;
+}
+
+.work-todo-daily .work-todo-panel .work-todo-schedule-btn,
+.work-todo-daily .work-todo-overdue-panel .work-todo-schedule-btn {
+  height: 22px;
+  font-size: 11px;
+}
+
+.work-todo-daily .work-todo-empty {
+  gap: 6px;
+  padding: 22px 14px;
+  border-color: color-mix(in srgb, var(--border-subtle) 75%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--overlay-1) 55%, transparent);
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+}
+
+.work-todo-daily .work-todo-empty::before {
+  content: "";
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  border: 1px dashed color-mix(in srgb, var(--text-3) 45%, transparent);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent) 45%, transparent) 0 2.5px,
+    transparent 2.5px
+  );
+}
+
+.work-todo-daily .work-todo-week-strip {
+  border: none;
+  background: var(--overlay-1);
+}
+
+.work-todo-daily .work-todo-week-chip.is-today:not(.is-selected) {
+  border-color: transparent;
+  color: var(--accent-strong);
+  background: transparent;
+}
+
+/* ---- Kanban ---- */
+.work-todo-kanban {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+/* Toolbar: search + counters + drag hint sharing one slim row */
+.work-todo-kanban-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--overlay-1) 80%, transparent);
+  box-shadow: var(--surface-highlight);
+}
+
+.work-todo-kanban-search {
+  flex: 0 1 240px;
+  min-width: 150px;
+  max-width: 240px;
+}
+
+.work-todo-kanban-search .input-field {
+  height: 28px;
+}
+
+.work-todo-kanban-stat {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.work-todo-kanban-hint {
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 980px) {
+  .work-todo-kanban-hint {
+    display: none;
+  }
+}
+
+.work-todo-kanban-board {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 0 2px 6px;
+  min-height: 0;
+  flex: 1;
+}
+
+.work-todo-kanban-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 0;
+  min-width: 206px;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  margin-bottom: 0;
+  padding: 11px 10px 12px;
+  overflow: hidden;
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+/* Column accent: thin colored strip across the top edge */
+.work-todo-kanban-col::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--text-3);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.work-todo-kanban-col.is-col-today::before {
+  background: var(--accent-strong);
+  opacity: 0.85;
+}
+
+.work-todo-kanban-col.is-col-scheduled::before {
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.work-todo-kanban-col.is-col-overdue::before {
+  background: var(--yellow);
+  opacity: 0.8;
+}
+
+.work-todo-kanban-col.is-col-done::before {
+  background: var(--green);
+  opacity: 0.6;
+}
+
+.work-todo-kanban-col.is-col-today {
+  flex: 1.08 1 0;
+}
+
+.work-todo-kanban-col.is-drop-target {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-1));
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
+}
+
+.work-todo-kanban-col.is-drop-target .work-todo-kanban-body {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.work-todo-kanban-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 2px 2px 0;
+  border-bottom: none;
+}
+
+.work-todo-kanban-col-title {
+  flex: 1;
+  min-width: 0;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-0);
+}
+
+.work-todo-kanban-col-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 21px;
+  height: 21px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-2);
+  color: var(--text-2);
+}
+
+.work-todo-kanban-col-icon.is-overdue {
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 15%, transparent);
+}
+
+.work-todo-kanban-col-icon.is-today {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.work-todo-kanban-col-icon.is-scheduled {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.work-todo-kanban-col-icon.is-backlog {
+  color: var(--text-1);
+  background: var(--overlay-2);
+}
+
+.work-todo-kanban-col-icon.is-done {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 13%, transparent);
+}
+
+.work-todo-kanban-col.is-col-overdue .work-todo-kanban-count {
+  background: color-mix(in srgb, var(--yellow) 18%, transparent);
+  color: var(--yellow);
+}
+
+.work-todo-kanban-col.is-col-today .work-todo-kanban-count {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+}
+
+.work-todo-kanban-col.is-col-done .work-todo-kanban-count {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
+}
+
+.work-todo-kanban-count.is-zero {
+  opacity: 0.55;
+}
+
+/* Inner tray so the scroll area reads as a drop zone */
+.work-todo-kanban-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--overlay-1) 42%, transparent);
+  transition: background 0.15s ease;
+}
+
+.work-todo-kanban-list {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.work-todo-kanban-empty {
+  min-height: 64px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  border: 1px dashed color-mix(in srgb, var(--border-subtle) 75%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+.work-todo-kanban-col .work-todo-row {
+  cursor: grab;
+  padding: 8px 9px;
+  border-color: color-mix(in srgb, var(--border-subtle) 70%, transparent);
+  border-left: 2px solid transparent;
+  background: var(--bg-2);
+  box-shadow: none;
+  transition: var(--transition-colors-fast), transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.work-todo-kanban-col .work-todo-row:hover,
+.work-todo-kanban-col .work-todo-row:focus-within {
+  border-color: var(--border-subtle);
+  border-left-color: var(--accent-border);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-xs);
+  transform: translateY(-1px);
+}
+
+.work-todo-kanban-col .work-todo-row:active {
+  cursor: grabbing;
+  transform: none;
+}
+
+.work-todo-kanban-col .work-todo-row.is-pinned {
+  border-left-color: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+.work-todo-kanban-col .work-todo-row.is-dragging {
+  opacity: 0.5;
+}
+
+.work-todo-kanban-col.is-col-overdue .work-todo-row {
+  background: color-mix(in srgb, var(--yellow) 5%, var(--bg-2));
+  border-left-color: color-mix(in srgb, var(--yellow) 45%, transparent);
+}
+
+.work-todo-kanban-col.is-col-done .work-todo-row {
+  background: color-mix(in srgb, var(--green) 4%, var(--bg-2));
+}
+
+/* Kanban cards: title on its own row; tools use display:none so they don't steal flex width */
+.work-todo-row.is-compact .work-todo-row-title-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title badge"
+    "tags tags"
+    "actions actions";
+  align-items: start;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.work-todo-row.is-compact .work-todo-title {
+  grid-area: title;
+  flex: none;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+}
+
+.work-todo-kanban-col .work-todo-row.is-compact .work-todo-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.work-todo-row.is-compact .work-todo-date-badge {
+  grid-area: badge;
+  justify-self: end;
+  margin-top: 1px;
+}
+
+.work-todo-row.is-compact .work-todo-tag-row {
+  grid-area: tags;
+}
+
+.work-todo-row.is-compact .work-todo-row-actions {
+  grid-area: actions;
+  width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: 0;
+}
+
+.work-todo-row.is-compact .work-todo-schedule-btn {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.work-todo-row.is-compact .work-todo-row-actions:not(:has(.work-todo-schedule-btn)) {
+  display: none;
+}
+
+.work-todo-row.is-compact:hover .work-todo-row-actions:not(:has(.work-todo-schedule-btn)),
+.work-todo-row.is-compact:focus-within
+  .work-todo-row-actions:not(:has(.work-todo-schedule-btn)) {
+  display: flex;
+}
+
+.work-todo-row.is-compact .work-todo-row-tools {
+  display: none;
+  margin-left: auto;
+}
+
+.work-todo-row.is-compact:hover .work-todo-row-tools,
+.work-todo-row.is-compact:focus-within .work-todo-row-tools {
+  display: inline-flex;
+}
+
+/* ---- Dashboard ---- */
+.work-todo-dash {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.work-todo-dash .card {
+  margin-bottom: 0;
+  border-color: var(--border-subtle);
+  box-shadow: var(--surface-highlight);
+}
+
+.work-todo-dash .work-todo-section-title {
+  text-transform: none;
+  letter-spacing: -0.01em;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-0);
+}
+
+.work-todo-dash-section-icon {
+  flex-shrink: 0;
+  color: var(--accent-strong);
+  opacity: 0.88;
+}
+
+.work-todo-dash-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  padding: 14px 16px;
+  flex-shrink: 0;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border-subtle));
+  background:
+    radial-gradient(
+      120% 140% at 0% 0%,
+      color-mix(in srgb, var(--accent) 16%, transparent) 0%,
+      transparent 55%
+    ),
+    linear-gradient(
+      128deg,
+      color-mix(in srgb, var(--accent) 10%, var(--bg-1)) 0%,
+      var(--bg-1) 72%
+    );
+  box-shadow: var(--surface-highlight), var(--shadow-sm);
+}
+
+.work-todo-dash-hero-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.work-todo-dash-ring {
+  position: relative;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.work-todo-dash-ring svg {
+  width: 100%;
+  height: 100%;
+}
+
+.work-todo-dash-ring-track {
+  stroke: var(--overlay-3);
+  stroke-width: 4.5;
+}
+
+.work-todo-dash-ring-fill {
+  stroke: var(--accent-strong);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.35s ease;
+}
+
+.work-todo-dash-ring-pct {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-0);
+  letter-spacing: -0.02em;
+}
+
+.work-todo-dash-hero-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.work-todo-dash-hero-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-0);
+  letter-spacing: -0.02em;
+}
+
+.work-todo-dash-hero-date {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 12%, var(--overlay-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.work-todo-dash-hero-stats {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.work-todo-dash-hero-sep {
+  margin: 0 6px;
+  color: var(--text-3);
+}
+
+.work-todo-dash-streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.work-todo-dash-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 4px 10px 0;
+}
+
+/* 主区：趋势通栏，下面一行三列 日历 - 今日焦点 - 最近完成 */
+.work-todo-dash-main {
+  display: grid;
+  grid-template-columns: minmax(0, 296px) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.work-todo-dash-main > .work-todo-trend {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.work-todo-dash-main > .work-todo-dash-cal {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.work-todo-dash-main > .work-todo-dash-focus {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.work-todo-dash-main > .work-todo-dash-list {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+@media (max-width: 1099px) {
+  .work-todo-dash-main {
+    grid-template-columns: minmax(0, 280px) minmax(0, 1fr);
+  }
+
+  .work-todo-dash-main > .work-todo-dash-list {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+}
+
+@media (max-width: 899px) {
+  .work-todo-dash-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .work-todo-dash-main > .work-todo-trend,
+  .work-todo-dash-main > .work-todo-dash-cal,
+  .work-todo-dash-main > .work-todo-dash-focus,
+  .work-todo-dash-main > .work-todo-dash-list {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
+.work-todo-dash-main .work-todo-trend {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  padding: 12px 14px 10px;
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+.work-todo-dash-main .work-todo-trend-plot {
+  flex: 0 0 auto;
+  height: 92px;
+  min-height: 92px;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  background-image:
+    linear-gradient(var(--border-subtle), var(--border-subtle)),
+    linear-gradient(var(--border-subtle), var(--border-subtle));
+  background-size: 100% 1px;
+  background-position: 0 50%, 0 100%;
+  background-repeat: no-repeat;
+}
+
+.work-todo-dash-focus {
+  --work-todo-focus-row: 32px;
+  --work-todo-focus-gap: 4px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 12px 14px;
+  margin-bottom: 0;
+}
+
+.work-todo-dash-focus-head,
+.work-todo-dash-list-head,
+.work-todo-trend-head {
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+}
+
+.work-todo-dash-focus-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.work-todo-dash-focus-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.work-todo-dash-focus.is-scrollable .work-todo-dash-focus-body {
+  flex: 0 1 auto;
+  max-height: calc(
+    var(--work-todo-focus-row) * 5 + var(--work-todo-focus-gap) * 4
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.work-todo-dash-focus-foot {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.work-todo-dash-focus-foot .work-todo-dash-focus-overdue {
+  margin-top: 0;
+}
+
+.work-todo-dash-focus-head .work-todo-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.work-todo-dash-focus-all {
+  border: none;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-dash-focus-all:hover {
+  background: var(--accent-dim);
+}
+
+.work-todo-dash-focus-empty {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.work-todo-dash-focus-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.work-todo-dash-focus-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-md);
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-dash-focus-row:hover {
+  background: var(--overlay-2);
+}
+
+.work-todo-dash-focus-row .work-todo-done-toggle {
+  margin-top: 0;
+}
+
+.work-todo-dash-focus-title {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-0);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-todo-dash-focus-pin {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 4px;
+  color: var(--accent-strong);
+}
+
+.work-todo-dash-focus-overdue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--yellow) 35%, var(--border-subtle));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
+  color: var(--yellow);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-dash-focus-overdue:hover {
+  background: color-mix(in srgb, var(--yellow) 16%, transparent);
+}
+
+.work-todo-dash-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.work-todo-dash-quick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+  box-shadow: var(--surface-highlight);
+}
+
+.work-todo-dash-quick-btn:hover {
+  border-color: var(--accent-border);
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
+}
+
+.work-todo-dash-quick-btn.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-2));
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.work-todo-dash-quick-btn.is-primary:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-2));
+  color: var(--text-0);
+}
+
+/* 统计条：一张卡内分四段，只靠细分隔线分栏，去掉四层独立边框 */
+.work-todo-dash-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  flex-shrink: 0;
+  padding: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--surface-highlight);
+}
+
+@media (min-width: 720px) {
+  .work-todo-dash-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.work-todo-dash-metrics .work-todo-metric {
+  position: relative;
+  min-height: 62px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+}
+
+.work-todo-dash-metrics .work-todo-metric:hover {
+  border: 0;
+  background: var(--overlay-1);
+  box-shadow: none;
+  transform: none;
+}
+
+.work-todo-dash-metrics .work-todo-metric + .work-todo-metric::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  background: var(--border-subtle);
+}
+
+@media (max-width: 719px) {
+  .work-todo-dash-metrics .work-todo-metric:nth-child(3)::before {
+    display: none;
+  }
+
+  .work-todo-dash-metrics .work-todo-metric:nth-child(n + 3)::after {
+    content: "";
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 0;
+    height: 1px;
+    background: var(--border-subtle);
+  }
+}
+
+.work-todo-metric {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  border: 0;
+  color: inherit;
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  transition: var(--transition-colors-fast);
+  background: transparent;
+}
+
+.work-todo-metric-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-1);
+}
+
+.work-todo-metric.is-accent .work-todo-metric-icon {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+}
+
+.work-todo-metric.is-green .work-todo-metric-icon {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
+}
+
+.work-todo-metric.is-warn .work-todo-metric-icon {
+  background: color-mix(in srgb, var(--yellow) 18%, transparent);
+  color: var(--yellow);
+}
+
+.work-todo-metric.is-warn .work-todo-metric-num {
+  color: var(--yellow);
+}
+
+.work-todo-metric-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.work-todo-metric-num {
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--text-0);
+  line-height: 1.1;
+}
+
+.work-todo-metric-slash {
+  margin: 0 1px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.work-todo-metric-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.work-todo-metric-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .work-todo-metric-hint {
+    display: none;
+  }
+}
+
+.work-todo-metric-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  opacity: 0;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-metric:hover .work-todo-metric-chevron {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.work-todo-trend {
+  padding: 12px 14px 10px;
+  flex-shrink: 0;
+}
+
+.work-todo-dash-body .work-todo-trend {
+  flex-shrink: 0;
+}
+
+.work-todo-trend-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.work-todo-trend-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.work-todo-trend-sub {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.work-todo-trend-head-meta {
+  text-align: right;
+  min-height: 1.2em;
+}
+
+.work-todo-trend-peak,
+.work-todo-trend-hover {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.work-todo-trend-hover {
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+
+.work-todo-trend-plot {
+  position: relative;
+  height: 72px;
+  padding: 4px 2px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background-image:
+    linear-gradient(var(--border-subtle), var(--border-subtle)),
+    linear-gradient(var(--border-subtle), var(--border-subtle));
+  background-size: 100% 1px;
+  background-position: 0 33%, 0 66%;
+  background-repeat: no-repeat;
+}
+
+.work-todo-trend-line {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  bottom: 0;
+  left: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  overflow: visible;
+}
+
+.work-todo-trend-fill {
+  fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  stroke: none;
+}
+
+.work-todo-trend-stroke {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.95;
+}
+
+.work-todo-trend-dot {
+  fill: var(--bg-1);
+  stroke: var(--accent-strong);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.work-todo-trend-dot.is-empty {
+  stroke: var(--text-3);
+  opacity: 0;
+}
+
+.work-todo-trend-dot.is-hover {
+  opacity: 1;
+}
+
+.work-todo-trend-dot.is-today {
+  fill: var(--accent-strong);
+  stroke: var(--accent-strong);
+}
+
+.work-todo-trend-dot.is-hover {
+  fill: var(--accent-strong);
+  stroke: var(--accent-strong);
+}
+
+.work-todo-trend-hit {
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.work-todo-trend-fallback {
+  height: 100%;
+}
+
+.work-todo-trend-days {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-3);
+}
+
+.work-todo-trend-day {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-trend-day:hover,
+.work-todo-trend-day.is-hover {
+  color: var(--accent-strong);
+  background: var(--overlay-2);
+}
+
+.work-todo-trend-day.is-today {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.work-todo-dash-cal {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 12px 14px;
+  min-height: 0;
+  overflow: visible;
+}
+
+.work-todo-dash-cal .work-todo-cal-day.is-today {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.work-todo-dash-cal.card {
+  overflow: visible;
+}
+
+.work-todo-dash-cal .work-todo-cal-foot {
+  margin-top: auto;
+}
+
+.work-todo-dash-cal .work-todo-cal-head-wrap {
+  margin-bottom: 6px;
+}
+
+.work-todo-dash-cal-grid .work-todo-cal-day {
+  min-height: 32px;
+  padding-bottom: 4px;
+}
+
+.work-todo-dash-cal-dots {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 3px;
+}
+
+.work-todo-dash-cal-dots i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--text-3);
+}
+
+.work-todo-dash-cal-dots i.is-open {
+  background: var(--accent-strong);
+}
+
+.work-todo-dash-cal-dots i.is-log {
+  background: var(--yellow);
+}
+
+.work-todo-dash-cal-dots i.is-done {
+  background: var(--green);
+}
+
+.work-todo-dash-cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.work-todo-dash-cal-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.work-todo-dash-cal-legend i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+}
+
+.work-todo-dash-cal-legend i.is-open {
+  background: var(--accent-strong);
+}
+
+.work-todo-dash-cal-legend i.is-log {
+  background: var(--yellow);
+}
+
+.work-todo-dash-cal-legend i.is-done {
+  background: var(--green);
+}
+
+.work-todo-dash-list {
+  --work-todo-list-row: 40px;
+  --work-todo-list-gap: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.work-todo-dash-list-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.work-todo-dash-list-head .work-todo-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.work-todo-dash-empty {
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 18px 14px;
+  text-align: center;
+  color: var(--text-3);
+  border: 1px dashed color-mix(in srgb, var(--border-subtle) 90%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--overlay-1) 65%, transparent);
+}
+
+.work-todo-dash-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+  color: var(--text-3);
+}
+
+.work-todo-dash-empty-icon.is-done {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+
+.work-todo-dash-empty p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.work-todo-dash-empty-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-subtle));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-dash-empty-cta:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-0);
+}
+
+.work-todo-dash-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: calc(
+    var(--work-todo-list-row) * 5 + var(--work-todo-list-gap) * 4
+  );
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.work-todo-dash-list-scroll .work-todo-panel-hint {
+  margin: 0;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.work-todo-dash-ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.work-todo-dash-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-dash-link:hover {
+  background: var(--overlay-2);
+  border-color: var(--border-subtle);
+}
+
+.work-todo-dash-link-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-3);
+}
+
+.work-todo-dash-link-icon.is-done {
+  color: var(--green);
+}
+
+.work-todo-dash-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.work-todo-dash-link-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-todo-dash-link-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-todo-dash-log {
+  padding: 10px 14px;
+  flex-shrink: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  border: 1px solid var(--border-subtle);
+  transition: var(--transition-colors-fast);
+}
+
+.work-todo-dash-log:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.work-todo-dash-log-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.work-todo-dash-log-cta {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--accent-strong);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--accent-dim);
+}
+
+.work-todo-log-preview.is-muted {
+  color: var(--text-3);
+  font-style: normal;
 }

@@ -1629,7 +1629,7 @@ function AIAssistant() {
             ) : (
               <ArrowRightCircle size={12} />
             )}
-            <span className="ai-action-label ai-action-label-wide">{t("models.syncToDsh")}</span>
+            <span className="ai-action-label">{t("models.syncToDsh")}</span>
           </button>
           <span className="ai-model-actions-tools">
             <button
@@ -1833,7 +1833,7 @@ function AIAssistant() {
                         ) : (
                           <ArrowRightCircle size={12} />
                         )}
-                        <span className="ai-action-label ai-action-label-wide">{t("models.syncToDsh")}</span>
+                        <span className="ai-action-label">{t("models.syncToDsh")}</span>
                         <span className="models-bulk-n">({selectedConfigs.length})</span>
                       </button>
                       <button

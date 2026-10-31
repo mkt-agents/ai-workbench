@@ -1,139 +1,95 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  BookmarkPlus,
-  Brush,
-  Check,
-  Copy,
-  FileText,
-  Undo2,
-  Pin,
-  PinOff,
-  Pencil,
-  PenLine,
-  Plus,
-  StickyNote,
-  Search,
-  Sparkles,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Check, LayoutDashboard, Columns3, CalendarDays, Search, Trash2, Undo2, X } from "lucide-react";
 import { useGlobalStore } from "../core/store";
-import type { Draft } from "../core/types";
+import type { WorkTask } from "../core/types";
 import { readStoredString, writeStoredString } from "../core/localState";
-import { useConfirm, useConfirmChoice } from "./ConfirmModal";
+import { useConfirm } from "./ConfirmModal";
 import ModalTitleRow from "./ModalTitleRow";
+import DailyView from "./workTodo/DailyView";
+import KanbanView from "./workTodo/KanbanView";
+import DashboardView, { type DashNavigate } from "./workTodo/DashboardView";
+import type { WorkTodoTaskActions } from "./workTodo/WorkTodoTaskRow";
+import { patchForColumnDrop } from "./workTodo/selectors";
+import {
+  localDateKey,
+  taskText,
+  UNDO_MS,
+  VIEW_STORAGE_KEY,
+  type WorkTodoView,
+} from "./workTodo/utils";
+import type { KanbanColumnId } from "./workTodo/utils";
 
-// The page unmounts when another tab is opened; keep a half-written note alive.
-const COMPOSE_TITLE_KEY = "drafts-compose-title";
-const COMPOSE_CONTENT_KEY = "drafts-compose-content";
-const UNDO_MS = 8000;
-const STALE_DAYS = 30;
-const STALE_PREVIEW_NAMES = 5;
-
-function firstLine(text: string): string {
-  const line = text.split(/\r?\n/).find((l) => l.trim())?.trim() ?? "";
-  return line;
-}
-
-function displayTitle(draft: Draft, untitled: string): string {
-  const t = draft.title.trim();
-  if (t) return t;
-  const line = firstLine(draft.content);
-  return line || untitled;
-}
-
-/** Body shown on the card; drops the first line when it already serves as the title. */
-function previewText(draft: Draft): string {
-  const body = draft.content.replace(/^\s*\n/, "").trimEnd();
-  if (draft.title.trim()) return body;
-  const lines = body.split(/\r?\n/);
-  const idx = lines.findIndex((l) => l.trim());
-  return idx < 0 ? "" : lines.slice(idx + 1).join("\n").replace(/^\s*\n/, "");
-}
-
-function isSaveShortcut(e: React.KeyboardEvent): boolean {
-  return e.key === "Enter" && (e.ctrlKey || e.metaKey);
-}
-
-function formatUpdatedAt(
-  iso: string,
-  t: (key: string, opts?: Record<string, unknown>) => string
-): string {
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return "";
-  const minutes = Math.max(0, Math.round((Date.now() - ms) / 60000));
-  if (minutes < 1) return t("justNow");
-  if (minutes < 60) return t("minutesAgo", { count: minutes });
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return t("hoursAgo", { count: hours });
-  const days = Math.round(hours / 24);
-  if (days <= 7) return t("daysAgo", { count: days });
-  return new Date(ms).toLocaleDateString();
-}
-
-function formatAbsolute(iso: string): string {
-  const ms = Date.parse(iso);
-  return Number.isFinite(ms) ? new Date(ms).toLocaleString() : "";
+function readView(): WorkTodoView {
+  const v = readStoredString(VIEW_STORAGE_KEY);
+  if (v === "kanban" || v === "dashboard" || v === "daily") return v;
+  return "dashboard";
 }
 
 export default function DraftsManager() {
-  const { t } = useTranslation("drafts");
-  const { t: tc } = useTranslation("common");
+  const { t, i18n } = useTranslation("workTodo");
+  const { t: tNav } = useTranslation("navigation");
   const confirm = useConfirm();
-  const confirmChoice = useConfirmChoice();
-  const drafts = useGlobalStore((s) => s.drafts);
-  const addDraft = useGlobalStore((s) => s.addDraft);
-  const updateDraft = useGlobalStore((s) => s.updateDraft);
-  const deleteDraft = useGlobalStore((s) => s.deleteDraft);
-  const deleteDrafts = useGlobalStore((s) => s.deleteDrafts);
-  const restoreDrafts = useGlobalStore((s) => s.restoreDrafts);
-  const addSnippet = useGlobalStore((s) => s.addSnippet);
+  const [todayKey, setTodayKey] = useState(() => localDateKey());
+  const [viewDate, setViewDate] = useState(() => localDateKey());
+  const [pageView, setPageView] = useState<WorkTodoView>(() => readView());
+  const workTasks = useGlobalStore((s) => s.workTasks);
+  const addWorkTask = useGlobalStore((s) => s.addWorkTask);
+  const updateWorkTask = useGlobalStore((s) => s.updateWorkTask);
+  const deleteWorkTask = useGlobalStore((s) => s.deleteWorkTask);
+  const restoreWorkTasks = useGlobalStore((s) => s.restoreWorkTasks);
   const invokeCopyToClipboard = useGlobalStore((s) => s.invokeCopyToClipboard);
 
-  const [composeTitle, setComposeTitle] = useState(() => readStoredString(COMPOSE_TITLE_KEY));
-  const [composeContent, setComposeContent] = useState(() =>
-    readStoredString(COMPOSE_CONTENT_KEY)
-  );
-  const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
-  const [editing, setEditing] = useState<Draft | null>(null);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(
-    null
-  );
+  const [showDone, setShowDone] = useState(false);
+  const [editing, setEditing] = useState<WorkTask | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [undo, setUndo] = useState<{ items: Draft[]; text: string } | null>(null);
-  const [, setTick] = useState(0);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const composeRef = useRef<HTMLTextAreaElement>(null);
+  const [undo, setUndo] = useState<
+    | { kind: "delete"; items: WorkTask[]; text: string }
+    | { kind: "complete"; taskId: string; text: string }
+    | null
+  >(null);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [highlightOverdue, setHighlightOverdue] = useState(false);
+  const [dashNavToken, setDashNavToken] = useState(0);
+  const [focusQuickAddToken, setFocusQuickAddToken] = useState(0);
+
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const quickRef = useRef<HTMLInputElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => writeStoredString(COMPOSE_TITLE_KEY, composeTitle), [composeTitle]);
-  useEffect(() => writeStoredString(COMPOSE_CONTENT_KEY, composeContent), [composeContent]);
+  const locale = i18n.language || "zh-CN";
 
-  // Relative times ("3 分钟前") go stale while the page stays open.
+  useEffect(() => writeStoredString(VIEW_STORAGE_KEY, pageView), [pageView]);
+
   useEffect(() => {
-    const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
+    const tick = () => setTodayKey(localDateKey());
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    const id = window.setInterval(tick, 60_000);
     return () => {
+      document.removeEventListener("visibilitychange", onVis);
       window.clearInterval(id);
+    };
+  }, []);
+
+  const onDashNavConsumed = useCallback(() => {
+    setHighlightOverdue(false);
+  }, []);
+
+  useEffect(
+    () => () => {
       if (msgTimer.current) clearTimeout(msgTimer.current);
       if (undoTimer.current) clearTimeout(undoTimer.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "f") return;
-      if (document.querySelector(".modal-overlay") || !searchRef.current) return;
-      e.preventDefault();
-      searchRef.current.focus();
-      searchRef.current.select();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    },
+    []
+  );
 
   const showMsg = (type: "success" | "error", text: string) => {
     setMessage({ type, text });
@@ -141,9 +97,17 @@ export default function DraftsManager() {
     msgTimer.current = setTimeout(() => setMessage(null), 3500);
   };
 
-  const offerUndo = (items: Draft[], text: string) => {
+  const offerUndoDelete = (items: WorkTask[], text: string) => {
     setMessage(null);
-    setUndo({ items, text });
+    setUndo({ kind: "delete", items, text });
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    undoTimer.current = setTimeout(() => setUndo(null), UNDO_MS);
+  };
+
+  const offerUndoComplete = (taskId: string, text: string) => {
+    setMessage(null);
+    setShowDone(true);
+    setUndo({ kind: "complete", taskId, text });
     if (undoTimer.current) clearTimeout(undoTimer.current);
     undoTimer.current = setTimeout(() => setUndo(null), UNDO_MS);
   };
@@ -151,98 +115,95 @@ export default function DraftsManager() {
   const handleUndo = async () => {
     if (!undo) return;
     if (undoTimer.current) clearTimeout(undoTimer.current);
-    const { items } = undo;
+    const current = undo;
     setUndo(null);
     try {
-      await restoreDrafts(items);
+      if (current.kind === "delete") await restoreWorkTasks(current.items);
+      else await updateWorkTask(current.taskId, { status: "open" });
     } catch (e) {
       showMsg("error", String(e));
     }
   };
 
-  const sorted = useMemo(() => {
-    return [...drafts].sort((a, b) => {
-      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      return b.updatedAt.localeCompare(a.updatedAt);
+  const toggleExpand = useCallback((id: string) => {
+    setExpanded((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
     });
-  }, [drafts]);
+  }, []);
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return sorted;
-    return sorted.filter(
-      (d) => d.title.toLowerCase().includes(q) || d.content.toLowerCase().includes(q)
-    );
-  }, [sorted, query]);
+  const actions: WorkTodoTaskActions = {
+    onToggleDone: (task) => {
+      const next = task.status === "done" ? "open" : "done";
+      void updateWorkTask(task.id, { status: next })
+        .then(() => {
+          if (next === "done") {
+            offerUndoComplete(task.id, t("completedToast", { name: task.title || t("untitled") }));
+          }
+        })
+        .catch((e) => showMsg("error", String(e)));
+    },
+    onScheduleToday: async (task) => {
+      try {
+        await updateWorkTask(task.id, { workDate: todayKey });
+      } catch (e) {
+        showMsg("error", String(e));
+      }
+    },
+    onMoveBacklog: async (task) => {
+      try {
+        await updateWorkTask(task.id, { workDate: null });
+      } catch (e) {
+        showMsg("error", String(e));
+      }
+    },
+    onTogglePin: (task) => {
+      void updateWorkTask(task.id, { pinned: !task.pinned }).catch((e) => showMsg("error", String(e)));
+    },
+    onEdit: (task) => setEditing({ ...task }),
+    onInsertAiHub: (task) => {
+      void invoke("open_ai_hub_with_text", { text: taskText(task) }).catch((e) =>
+        showMsg("error", String(e))
+      );
+    },
+    onCopy: (task) => {
+      void invokeCopyToClipboard(taskText(task))
+        .then(() => {
+          setCopiedId(task.id);
+          window.setTimeout(() => setCopiedId((cur) => (cur === task.id ? null : cur)), 1500);
+        })
+        .catch((e) => showMsg("error", t("copyFailed", { error: String(e) })));
+    },
+    onDelete: (task) => {
+      void deleteWorkTask(task.id)
+        .then(() => offerUndoDelete([task], t("deletedToast", { name: task.title || t("untitled") })))
+        .catch((e) => showMsg("error", String(e)));
+    },
+    onRename: (task, title) => {
+      void updateWorkTask(task.id, { title }).catch((e) => showMsg("error", String(e)));
+    },
+  };
 
-  const stale = useMemo(() => {
-    const cutoff = Date.now() - STALE_DAYS * 86_400_000;
-    return drafts.filter((d) => !d.pinned && Date.parse(d.updatedAt) < cutoff);
-  }, [drafts]);
-  const staleIds = useMemo(() => new Set(stale.map((d) => d.id)), [stale]);
-
-  const canCompose = composeContent.trim().length > 0;
-  const original = editing ? drafts.find((d) => d.id === editing.id) : undefined;
   const editDirty =
     !!editing &&
-    !!original &&
-    (editing.title !== original.title || editing.content !== original.content);
-
-  const handleComposeSave = async () => {
-    if (!canCompose || saving) return;
-    setSaving(true);
-    try {
-      await addDraft({
-        title: composeTitle.trim(),
-        content: composeContent,
-        pinned: false,
-      });
-      setComposeTitle("");
-      setComposeContent("");
-      composeRef.current?.focus();
-    } catch (e) {
-      showMsg("error", String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleCopy = async (draft: Draft) => {
-    try {
-      await invokeCopyToClipboard(draft.content);
-      setCopiedId(draft.id);
-      window.setTimeout(() => setCopiedId((cur) => (cur === draft.id ? null : cur)), 1500);
-    } catch (e) {
-      showMsg("error", t("copyFailed", { error: String(e) }));
-    }
-  };
-
-  const handleInsertAiHub = async (draft: Draft) => {
-    try {
-      await invoke("open_ai_hub_with_text", { text: draft.content });
-    } catch (e) {
-      showMsg("error", String(e));
-    }
-  };
-
-  const handleTogglePin = async (draft: Draft) => {
-    try {
-      await updateDraft(draft.id, { pinned: !draft.pinned });
-    } catch (e) {
-      showMsg("error", String(e));
-    }
-  };
+    !!workTasks.find((x) => x.id === editing.id) &&
+    (editing.title !== workTasks.find((x) => x.id === editing.id)!.title ||
+      editing.notes !== workTasks.find((x) => x.id === editing.id)!.notes ||
+      (editing.tags || "") !== (workTasks.find((x) => x.id === editing.id)!.tags || ""));
 
   const handleSaveEdit = async () => {
-    if (!editing || !editing.content.trim()) return;
+    if (!editing || !editing.title.trim()) return;
     if (!editDirty) {
       setEditing(null);
       return;
     }
     try {
-      await updateDraft(editing.id, {
+      await updateWorkTask(editing.id, {
         title: editing.title.trim(),
-        content: editing.content,
+        notes: editing.notes,
+        tags: editing.tags || "",
       });
       setEditing(null);
     } catch (e) {
@@ -263,376 +224,241 @@ export default function DraftsManager() {
     setEditing(null);
   };
 
-  const handleToSnippet = async (draft: Draft) => {
-    const name = displayTitle(draft, t("untitled")).slice(0, 80);
-    const choice = await confirmChoice({
-      title: t("toSnippetTitle"),
-      message: t("toSnippetConfirm", { name }),
-      confirmText: t("toSnippetAndDelete"),
-      altConfirmText: t("toSnippetKeep"),
-      icon: "question",
-    });
-    if (choice === "cancel") return;
-    try {
-      await addSnippet({
-        name,
-        content: draft.content,
-        tags: "",
-        params: "",
-        kind: "prompt",
-        scenario: "general",
-      });
-    } catch (e) {
-      showMsg("error", t("toSnippetFailed", { error: String(e) }));
+  const switchView = (v: WorkTodoView) => {
+    setPageView(v);
+    setHighlightOverdue(false);
+  };
+
+  const onDashNavigate = (target: DashNavigate) => {
+    if (target.kind === "kanban") {
+      setPageView("kanban");
       return;
     }
-    if (choice === "confirm") {
-      try {
-        await deleteDraft(draft.id);
-        offerUndo([draft], t("toSnippetDoneDeleted", { name }));
-      } catch (e) {
-        showMsg("error", String(e));
+    setPageView("daily");
+    if (target.date) setViewDate(target.date);
+    if (target.showDone) setShowDone(true);
+    setHighlightOverdue(!!target.highlightOverdue);
+    if (target.focusQuickAdd) setFocusQuickAddToken((n) => n + 1);
+    setDashNavToken((n) => n + 1);
+  };
+
+  const onMoveToColumn = async (task: WorkTask, column: KanbanColumnId) => {
+    try {
+      await updateWorkTask(task.id, patchForColumnDrop(column, todayKey, task));
+    } catch (e) {
+      showMsg("error", String(e));
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      const inField =
+        tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable;
+      if (document.querySelector(".modal-overlay")) return;
+
+      if (e.key === "/" && !inField) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
       }
-      return;
-    }
-    showMsg("success", t("toSnippetDone", { name }));
-  };
-
-  const handleDelete = async (draft: Draft) => {
-    const name = displayTitle(draft, t("untitled"));
-    try {
-      await deleteDraft(draft.id);
-      offerUndo([draft], t("deletedToast", { name }));
-    } catch (e) {
-      showMsg("error", String(e));
-    }
-  };
-
-  const handleCleanStale = async () => {
-    if (!stale.length) return;
-    const names = stale
-      .slice(0, STALE_PREVIEW_NAMES)
-      .map((d) => t("quotedName", { name: displayTitle(d, t("untitled")) }))
-      .join(t("nameSeparator"));
-    const ok = await confirm({
-      title: t("cleanTitle"),
-      message: t("cleanConfirm", { count: stale.length, days: STALE_DAYS }),
-      warning:
-        stale.length > STALE_PREVIEW_NAMES
-          ? t("cleanListMore", { names, count: stale.length })
-          : t("cleanList", { names }),
-      confirmText: tc("actions.delete"),
-      icon: "danger",
-    });
-    if (!ok) return;
-    const items = [...stale];
-    try {
-      await deleteDrafts(items.map((d) => d.id));
-      offerUndo(items, t("cleanedToast", { count: items.length }));
-    } catch (e) {
-      showMsg("error", String(e));
-    }
-  };
-
-  const composeKeyDown = (e: React.KeyboardEvent) => {
-    if (!isSaveShortcut(e)) return;
-    e.preventDefault();
-    void handleComposeSave();
-  };
+      if (inField) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        if (pageView !== "daily") setPageView("daily");
+        window.setTimeout(() => quickRef.current?.focus(), 0);
+        return;
+      }
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        setViewDate(todayKey);
+        setPageView("daily");
+        return;
+      }
+      if (e.key === "1") {
+        e.preventDefault();
+        switchView("dashboard");
+      } else if (e.key === "2") {
+        e.preventDefault();
+        switchView("daily");
+      } else if (e.key === "3") {
+        e.preventDefault();
+        switchView("kanban");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pageView, todayKey]);
 
   return (
-    <div className="drafts-page">
-      <section className="drafts-compose card">
-        <div className="drafts-compose-head">
-          <span className="drafts-compose-icon">
-            <PenLine size={15} />
-          </span>
-          <div className="drafts-compose-heading">
-            <strong>{t("composeHeading")}</strong>
-            <span>{t("composeSubheading")}</span>
-          </div>
+    <div className="drafts-page work-todo-page" ref={pageRef}>
+      <div
+        className={`work-todo-shell-bar${pageView !== "daily" ? " is-no-search" : ""}`}
+      >
+        <h1 className="work-todo-page-title">{tNav("drafts")}</h1>
+        <div className="work-todo-tabs" role="tablist" aria-label={t("views")}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pageView === "dashboard"}
+            className={`work-todo-tab${pageView === "dashboard" ? " is-active" : ""}`}
+            onClick={() => switchView("dashboard")}
+          >
+            <LayoutDashboard size={13} />
+            {t("viewDashboard")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pageView === "daily"}
+            className={`work-todo-tab${pageView === "daily" ? " is-active" : ""}`}
+            onClick={() => switchView("daily")}
+          >
+            <CalendarDays size={13} />
+            {t("viewDaily")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pageView === "kanban"}
+            className={`work-todo-tab${pageView === "kanban" ? " is-active" : ""}`}
+            onClick={() => switchView("kanban")}
+          >
+            <Columns3 size={13} />
+            {t("viewKanban")}
+          </button>
         </div>
-        <div className="drafts-editor">
-          <input
-            className="drafts-editor-title"
-            value={composeTitle}
-            onChange={(e) => setComposeTitle(e.target.value)}
-            onKeyDown={composeKeyDown}
-            placeholder={t("composeTitlePlaceholder")}
-            aria-label={t("composeTitle")}
-          />
-          <textarea
-            ref={composeRef}
-            className="drafts-editor-body"
-            value={composeContent}
-            onChange={(e) => setComposeContent(e.target.value)}
-            onKeyDown={composeKeyDown}
-            placeholder={t("composePlaceholder")}
-            aria-label={t("composeContent")}
-            rows={6}
-            spellCheck={false}
-          />
-        </div>
-        <div className="drafts-compose-actions">
-          <span className="drafts-kbd-hint">
-            <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
-            <span>{t("composeShortcut")}</span>
-          </span>
-          <div className="drafts-compose-buttons">
-            {(composeTitle || composeContent) && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  setComposeTitle("");
-                  setComposeContent("");
-                  composeRef.current?.focus();
-                }}
-                disabled={saving}
-              >
-                {t("clearCompose")}
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => void handleComposeSave()}
-              disabled={!canCompose || saving}
-            >
-              <Plus size={14} />
-              {t("saveDraft")}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {drafts.length > 0 && (
-        <div className="drafts-toolbar">
-          <div className="snippets-search">
-            <Search size={13} className="snippets-search-icon" />
+        {pageView === "daily" && (
+          <div className="work-todo-search">
+            <Search size={13} className="work-todo-search-icon" />
             <input
               ref={searchRef}
               className="input-field"
               placeholder={t("search")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape" && query) {
-                  e.stopPropagation();
-                  setQuery("");
-                }
-              }}
               aria-label={t("search")}
             />
             {query && (
               <button
                 type="button"
                 className="snippets-search-clear"
-                onClick={() => {
-                  setQuery("");
-                  searchRef.current?.focus();
-                }}
+                onClick={() => setQuery("")}
                 aria-label={t("clearSearch")}
-                title={t("clearSearch")}
               >
                 <X size={11} />
               </button>
             )}
           </div>
-          <div className="drafts-toolbar-actions">
-            <span className="drafts-count">
-              {query.trim()
-                ? t("countFiltered", { shown: visible.length, count: drafts.length })
-                : t("countLabel", { count: drafts.length })}
-            </span>
-            {stale.length > 0 && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                title={t("cleanHint", { days: STALE_DAYS })}
-                onClick={() => void handleCleanStale()}
-              >
-                <Brush size={12} />
-                {t("cleanButton", { count: stale.length })}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="drafts-list">
-        {drafts.length === 0 ? (
-          <div className="drafts-empty">
-            <span className="drafts-empty-icon">
-              <FileText size={22} />
-            </span>
-            <p>{t("empty")}</p>
-            <span className="setting-hint">{t("emptyHint")}</span>
-          </div>
-        ) : visible.length === 0 ? (
-          <div className="drafts-empty">
-            <span className="drafts-empty-icon">
-              <Search size={22} />
-            </span>
-            <p>{t("noMatch")}</p>
-            <button type="button" className="btn btn-secondary" onClick={() => setQuery("")}>
-              {t("clearSearch")}
-            </button>
-          </div>
-        ) : (
-          visible.map((draft) => {
-            const title = displayTitle(draft, t("untitled"));
-            const preview = previewText(draft);
-            const lineCount = draft.content.split(/\r?\n/).length;
-            return (
-              <article
-                key={draft.id}
-                className={`draft-card${draft.pinned ? " is-pinned" : ""}`}
-              >
-                <div className="draft-card-head">
-                  <span className="draft-card-icon" title={draft.pinned ? t("pinned") : undefined}>
-                    {draft.pinned ? <Pin size={14} /> : <StickyNote size={14} />}
-                  </span>
-                  <div className="draft-card-titles">
-                    <h3 className="draft-card-title" title={title}>
-                      {title}
-                    </h3>
-                    <span
-                      className={`draft-card-time${staleIds.has(draft.id) ? " is-stale" : ""}`}
-                      title={
-                        staleIds.has(draft.id)
-                          ? `${formatAbsolute(draft.updatedAt)} · ${t("staleHint", { days: STALE_DAYS })}`
-                          : formatAbsolute(draft.updatedAt)
-                      }
-                    >
-                      {formatUpdatedAt(draft.updatedAt, t)}
-                      {" · "}
-                      {t("sizeLabel", { lines: lineCount, chars: draft.content.length })}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="draft-card-preview"
-                  title={t("clickToEdit")}
-                  onClick={() => setEditing({ ...draft })}
-                >
-                  <span className="draft-card-preview-text">
-                    {preview || <span className="draft-card-preview-empty">{t("noBody")}</span>}
-                  </span>
-                </button>
-                <div className="draft-card-actions">
-                  <div className="draft-card-tools">
-                    <button
-                      type="button"
-                      className="snippet-icon-btn"
-                      title={draft.pinned ? t("unpin") : t("pin")}
-                      aria-label={draft.pinned ? t("unpin") : t("pin")}
-                      onClick={() => void handleTogglePin(draft)}
-                    >
-                      {draft.pinned ? <PinOff size={14} /> : <Pin size={14} />}
-                    </button>
-                    <button
-                      type="button"
-                      className="snippet-icon-btn"
-                      title={t("edit")}
-                      aria-label={t("edit")}
-                      onClick={() => setEditing({ ...draft })}
-                    >
-                      <Pencil size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="snippet-icon-btn"
-                      title={`${t("toSnippet")} · ${t("toSnippetHint")}`}
-                      aria-label={t("toSnippet")}
-                      onClick={() => void handleToSnippet(draft)}
-                    >
-                      <BookmarkPlus size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="snippet-icon-btn danger"
-                      title={t("delete")}
-                      aria-label={t("delete")}
-                      onClick={() => void handleDelete(draft)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    className="snippet-icon-btn draft-card-ask"
-                    title={t("insertAiHub")}
-                    aria-label={t("insertAiHub")}
-                    onClick={() => void handleInsertAiHub(draft)}
-                  >
-                    <Sparkles size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className={`snippet-use-btn${copiedId === draft.id ? " is-done" : ""}`}
-                    onClick={() => void handleCopy(draft)}
-                  >
-                    {copiedId === draft.id ? <Check size={13} /> : <Copy size={13} />}
-                    {copiedId === draft.id ? t("copied") : t("copy")}
-                  </button>
-                </div>
-              </article>
-            );
-          })
         )}
       </div>
+
+      {pageView === "daily" && (
+        <DailyView
+          todayKey={todayKey}
+          viewDate={viewDate}
+          onViewDate={setViewDate}
+          locale={locale}
+          workTasks={workTasks}
+          query={query}
+          showDone={showDone}
+          onShowDone={setShowDone}
+          copiedId={copiedId}
+          expanded={expanded}
+          onToggleExpand={toggleExpand}
+          actions={actions}
+          onAddTask={async (title, workDate, extras) => {
+            await addWorkTask({
+              title,
+              notes: extras?.notes ?? "",
+              tags: extras?.tags ?? "",
+              status: "open",
+              workDate,
+              pinned: false,
+            });
+          }}
+          onError={(msg) => showMsg("error", msg)}
+          dashNavToken={dashNavToken}
+          highlightOverdue={highlightOverdue}
+          onDashNavConsumed={onDashNavConsumed}
+          focusQuickAddToken={focusQuickAddToken}
+          quickAddRef={quickRef}
+        />
+      )}
+
+      {pageView === "kanban" && (
+        <KanbanView
+          todayKey={todayKey}
+          workTasks={workTasks}
+          query={query}
+          onQueryChange={setQuery}
+          searchRef={searchRef}
+          copiedId={copiedId}
+          expanded={expanded}
+          onToggleExpand={toggleExpand}
+          actions={actions}
+          onMoveToColumn={onMoveToColumn}
+        />
+      )}
+
+      {pageView === "dashboard" && (
+        <DashboardView
+          todayKey={todayKey}
+          locale={locale}
+          workTasks={workTasks}
+          onNavigate={onDashNavigate}
+          onToggleDone={(task) => actions.onToggleDone(task)}
+        />
+      )}
 
       {editing && (
         <div className="modal-overlay">
           <div className="modal drafts-modal">
-            <ModalTitleRow title={t("editTitle")} onClose={() => void requestCloseEdit()} />
-            <div className="drafts-editor">
-              <input
-                className="drafts-editor-title"
-                value={editing.title}
-                onChange={(e) => setEditing({ ...editing, title: e.target.value })}
-                onKeyDown={(e) => {
-                  if (!isSaveShortcut(e)) return;
-                  e.preventDefault();
-                  void handleSaveEdit();
-                }}
-                placeholder={t("composeTitlePlaceholder")}
-                aria-label={t("title")}
-              />
-              <textarea
-                className="drafts-editor-body"
-                rows={12}
-                value={editing.content}
-                onChange={(e) => setEditing({ ...editing, content: e.target.value })}
-                onKeyDown={(e) => {
-                  if (!isSaveShortcut(e)) return;
-                  e.preventDefault();
-                  void handleSaveEdit();
-                }}
-                aria-label={t("content")}
-                spellCheck={false}
-                autoFocus
-              />
+            <ModalTitleRow title={t("editTask")} onClose={() => void requestCloseEdit()} />
+            <div className="work-todo-task-editor">
+              <label className="work-todo-edit-field">
+                <span className="work-todo-edit-label">{t("title")}</span>
+                <input
+                  className="input-field work-todo-edit-input"
+                  value={editing.title}
+                  onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                  placeholder={t("title")}
+                  autoFocus
+                />
+              </label>
+              <label className="work-todo-edit-field">
+                <span className="work-todo-edit-label">{t("tags")}</span>
+                <input
+                  className="input-field work-todo-edit-input"
+                  value={editing.tags || ""}
+                  onChange={(e) => setEditing({ ...editing, tags: e.target.value })}
+                  placeholder={t("tagsPlaceholder")}
+                />
+              </label>
+              <label className="work-todo-edit-field work-todo-edit-field-grow">
+                <span className="work-todo-edit-label">{t("notes")}</span>
+                <textarea
+                  className="input-field work-todo-edit-textarea"
+                  rows={10}
+                  value={editing.notes}
+                  onChange={(e) => setEditing({ ...editing, notes: e.target.value })}
+                  placeholder={t("notesPlaceholder")}
+                  spellCheck
+                />
+              </label>
             </div>
             <div className="modal-actions">
-              <span className="drafts-kbd-hint drafts-modal-hint">
-                <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
-                <span>{t("saveShortcut")}</span>
-              </span>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => void requestCloseEdit()}
-              >
+              <button type="button" className="btn btn-secondary" onClick={() => void requestCloseEdit()}>
                 {t("cancel")}
               </button>
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => void handleSaveEdit()}
-                disabled={!editing.content.trim()}
+                disabled={!editing.title.trim()}
               >
                 {t("save")}
               </button>
@@ -642,9 +468,12 @@ export default function DraftsManager() {
       )}
 
       {undo && (
-        <div className="toast toast-warning" role="status">
+        <div
+          className={`toast ${undo.kind === "delete" ? "toast-warning" : "toast-success"}`}
+          role="status"
+        >
           <span className="toast-icon">
-            <Trash2 size={16} />
+            {undo.kind === "delete" ? <Trash2 size={16} /> : <Check size={16} />}
           </span>
           <span className="toast-text">{undo.text}</span>
           <button

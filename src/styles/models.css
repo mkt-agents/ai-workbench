@@ -1343,15 +1343,9 @@
 
 
 /* 按卡片自身宽度收文字（网格列数随窗口变，页面宽度推不出卡片宽度）：
-   先收最长的「同步到 DSH」，再窄就全部只留图标，悬停 title 仍可读。 */
+   极窄卡片才只留图标，悬停 title 仍可读。 */
 .ai-model-item {
   container: model-card / inline-size;
-}
-
-@container model-card (max-width: 420px) {
-  .ai-model-actions .ai-action-label-wide {
-    display: none;
-  }
 }
 
 @container model-card (max-width: 300px) {

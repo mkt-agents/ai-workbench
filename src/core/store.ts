@@ -4,7 +4,7 @@ import type {
   GlobalState, AppSettings, GitAccount, GitRepoConfig, GitHostConfig,
   RecentProject, WebPlugin, UserScript, ScriptTemplate, HostProfile, CursorAccount,
   AIModelConfig, CloudflaredNamedProfile, GitWorkspace,
-  Snippet, Draft, AiHubSession, CursorUpdateState, CursorCleanupResult,
+  Snippet, WorkTask, AiHubSession, CursorUpdateState, CursorCleanupResult,
   QuickAppLauncher,
   McpServer,
 } from './types';
@@ -102,6 +102,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   aiSceneModels: {},
   aiHubProfiles: [],
   aiHubProfileId: undefined,
+  workTodoRemindEnabled: false,
+  workTodoRemindTime: '09:30',
 };
 
 /** Preset web tools sites — shown as suggestions when user has no plugins yet. */
@@ -349,14 +351,13 @@ interface StoreState extends GlobalState, Invocations {
   restoreSnippet: (snippet: Snippet) => Promise<void>;
   bumpSnippetUse: (id: string) => Promise<void>;
 
-  // Drafts (mid-task scratch)
-  loadDrafts: () => Promise<void>;
-  addDraft: (draft: Omit<Draft, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
-  updateDraft: (id: string, updates: Partial<Draft>) => Promise<void>;
-  deleteDraft: (id: string) => Promise<void>;
-  deleteDrafts: (ids: string[]) => Promise<void>;
-  /** Undo: put previously deleted drafts back with their original id and timestamps. */
-  restoreDrafts: (items: Draft[]) => Promise<void>;
+  // Work todo (tasks)
+  loadWorkTodos: () => Promise<void>;
+  addWorkTask: (task: Omit<WorkTask, 'id' | 'createdAt' | 'updatedAt' | 'doneAt'>) => Promise<void>;
+  updateWorkTask: (id: string, updates: Partial<WorkTask>) => Promise<void>;
+  deleteWorkTask: (id: string) => Promise<void>;
+  deleteWorkTasks: (ids: string[]) => Promise<void>;
+  restoreWorkTasks: (items: WorkTask[]) => Promise<void>;
 
   // AI Hub sessions
   loadAiHubSessions: () => Promise<void>;
@@ -415,7 +416,7 @@ export const useGlobalStore = create<StoreState>()(
       aiModels: [],
       cloudflaredProfiles: [],
       snippets: [],
-      drafts: [],
+      workTasks: [],
       aiHubSessions: [],
       quickAppLaunchers: [],
       mcpServers: [],
@@ -1326,54 +1327,76 @@ export const useGlobalStore = create<StoreState>()(
         set({ snippets });
       }),
 
-      loadDrafts: async () => withTable("drafts", async () => {
-        const drafts = await storage.drafts.load();
-        set({ drafts });
-      }),
+      loadWorkTodos: async () =>
+        withTable("work_tasks", async () => {
+          const workTasks = await storage.workTasks.load();
+          set({ workTasks });
+        }),
 
-      addDraft: async (draft) => withTable("drafts", async () => {
-        const now = new Date().toISOString();
-        const next: Draft = {
-          ...draft,
-          id: `draft-${crypto.randomUUID()}`,
-          createdAt: now,
-          updatedAt: now,
-        };
-        const drafts = [next, ...get().drafts];
-        await storage.drafts.save(drafts);
-        set({ drafts });
-      }),
+      addWorkTask: async (task) =>
+        withTable("work_tasks", async () => {
+          const now = new Date().toISOString();
+          const next: WorkTask = {
+            ...task,
+            tags: task.tags ?? "",
+            id: `task-${crypto.randomUUID()}`,
+            createdAt: now,
+            updatedAt: now,
+            doneAt: task.status === "done" ? now : null,
+          };
+          const workTasks = [next, ...get().workTasks];
+          await storage.workTasks.save(workTasks);
+          set({ workTasks });
+        }),
 
-      updateDraft: async (id, updates) => withTable("drafts", async () => {
-        // Pinning is not an edit: bumping updatedAt would reorder the list and lie about age.
-        const touches = 'title' in updates || 'content' in updates;
-        const now = new Date().toISOString();
-        const drafts = get().drafts.map((d) =>
-          d.id === id ? { ...d, ...updates, ...(touches ? { updatedAt: now } : {}) } : d
-        );
-        await storage.drafts.save(drafts);
-        set({ drafts });
-      }),
+      updateWorkTask: async (id, updates) =>
+        withTable("work_tasks", async () => {
+          const touches =
+            "title" in updates ||
+            "notes" in updates ||
+            "tags" in updates ||
+            "status" in updates ||
+            "workDate" in updates;
+          const now = new Date().toISOString();
+          const workTasks = get().workTasks.map((t) => {
+            if (t.id !== id) return t;
+            const merged = { ...t, ...updates, ...(touches ? { updatedAt: now } : {}) };
+            if (updates.status === "done" && t.status !== "done") {
+              merged.doneAt = now;
+            } else if (updates.status === "open") {
+              merged.doneAt = null;
+            }
+            return merged;
+          });
+          await storage.workTasks.save(workTasks);
+          set({ workTasks });
+        }),
 
-      deleteDraft: async (id) => withTable("drafts", async () => {
-        const drafts = get().drafts.filter((d) => d.id !== id);
-        await storage.drafts.save(drafts);
-        set({ drafts });
-      }),
+      deleteWorkTask: async (id) =>
+        withTable("work_tasks", async () => {
+          const workTasks = get().workTasks.filter((t) => t.id !== id);
+          await storage.workTasks.save(workTasks);
+          set({ workTasks });
+        }),
 
-      deleteDrafts: async (ids) => withTable("drafts", async () => {
-        const drop = new Set(ids);
-        const drafts = get().drafts.filter((d) => !drop.has(d.id));
-        await storage.drafts.save(drafts);
-        set({ drafts });
-      }),
+      deleteWorkTasks: async (ids) =>
+        withTable("work_tasks", async () => {
+          const drop = new Set(ids);
+          const workTasks = get().workTasks.filter((t) => !drop.has(t.id));
+          await storage.workTasks.save(workTasks);
+          set({ workTasks });
+        }),
 
-      restoreDrafts: async (items) => withTable("drafts", async () => {
-        const present = new Set(get().drafts.map((d) => d.id));
-        const drafts = [...items.filter((d) => !present.has(d.id)), ...get().drafts];
-        await storage.drafts.save(drafts);
-        set({ drafts });
-      }),
+      restoreWorkTasks: async (items) =>
+        withTable("work_tasks", async () => {
+          const present = new Set(get().workTasks.map((t) => t.id));
+          const workTasks = [
+            ...items.filter((t) => !present.has(t.id)),
+            ...get().workTasks,
+          ];
+          await storage.workTasks.save(workTasks);
+          set({ workTasks });
+        }),
 
       loadAiHubSessions: async () => withTable("ai_hub_sessions", async () => {
         const sessions = await storage.aiHubSessions.load();
@@ -1561,7 +1584,7 @@ export const useGlobalStore = create<StoreState>()(
           get().loadAIModels(),
           get().loadCloudflaredProfiles(),
           get().loadSnippets(),
-          get().loadDrafts(),
+          get().loadWorkTodos(),
           get().loadAiHubSessions(),
           get().loadQuickAppLaunchers(),
           get().loadMcpServers(),

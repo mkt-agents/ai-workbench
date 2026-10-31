@@ -445,7 +445,7 @@ pub(crate) fn tool_specs() -> Value {
           "description": "Stop a background process (and its child processes).",
           "parameters": obj(json!({ "id": n("Process id from start_process") }), &["id"]) },
         { "name": "open_page",
-          "description": "Open a page in AI Workbench. tab is one of: ai-chat, ai-models, snippets, drafts, cursor-accounts, account-quota, git, runtime, plugins, cloudflared, hosts, devtools, app-launcher, settings. gitSub is optional: repos, commit, report.",
+          "description": "Open a page in AI Workbench. tab is one of: ai-chat, ai-models, snippets, drafts (work todo / daily tasks), cursor-accounts, account-quota, git, runtime, plugins, cloudflared, hosts, devtools, app-launcher, settings. gitSub is optional: repos, commit, report.",
           "parameters": obj(json!({ "tab": s("Page id"), "gitSub": s("Git sub page") }), &["tab"]) },
         { "name": "launch_app",
           "description": "Launch a quick app or a program installed on this computer (Start Menu / Desktop shortcut) by its name. If several programs match, the error lists them: call again with one exact name.",

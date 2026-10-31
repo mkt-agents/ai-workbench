@@ -19,6 +19,12 @@
     "groupWecom": "企微机器人",
     "groupTianjiApi": "天玑 API"
   },
+  "workTodo": {
+    "title": "工作待办",
+    "remindEnabled": "每日待办提醒",
+    "remindTime": "提醒时间",
+    "remindHint": "到设定时间且存在未完成待办（含积压）时，通知一次并打开工作待办页。"
+  },
   "imBot": {
     "title": "IM机器人",
     "channelWecom": "企业微信",

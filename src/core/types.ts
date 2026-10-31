@@ -182,6 +182,12 @@ export interface AppSettings {
   agentFreshContext?: boolean;
   /** 每日 token 预算（0 / 缺省 = 不限），只用于提醒，不阻断提问。 */
   aiUsageDailyBudget?: number;
+  /** 工作待办：每日到点提醒未完成项（默认关）。 */
+  workTodoRemindEnabled?: boolean;
+  /** 提醒时间 HH:mm（默认 09:30）。 */
+  workTodoRemindTime?: string;
+  /** 上次提醒日期 YYYY-MM-DD（后端 Job 写入，同步到 app_settings）。 */
+  workTodoRemindLastDate?: string;
   /** Show desktop floating bubble for ai-hub */
   aiHubBubbleEnabled?: boolean;
   /** Physical screen position of the bubble */
@@ -302,10 +308,25 @@ export interface Snippet {
   scenario?: string;
 }
 
-/** Mid-task scratch note (prompts / scripts); promote to Snippet when lasting. */
+export type WorkTaskStatus = 'open' | 'done';
+
+/** Structured todo; `workDate` null = backlog. Tags are comma-separated like Snippet.tags. */
+export interface WorkTask {
+  id: string;
+  title: string;
+  notes: string;
+  tags: string;
+  status: WorkTaskStatus;
+  workDate?: string | null;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+  doneAt?: string | null;
+}
+
+/** @deprecated Migrated to {@link WorkTask} backlog. */
 export interface Draft {
   id: string;
-  /** Optional; list falls back to first line of content when empty. */
   title: string;
   content: string;
   pinned: boolean;
@@ -489,7 +510,7 @@ export interface GlobalState {
   aiModels: AIModelConfig[];
   cloudflaredProfiles: CloudflaredNamedProfile[];
   snippets: Snippet[];
-  drafts: Draft[];
+  workTasks: WorkTask[];
   aiHubSessions: AiHubSession[];
   quickAppLaunchers: QuickAppLauncher[];
   mcpServers: McpServer[];

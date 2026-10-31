@@ -19,6 +19,12 @@
     "groupWecom": "WeCom bot",
     "groupTianjiApi": "Tianji API"
   },
+  "workTodo": {
+    "title": "Work todo",
+    "remindEnabled": "Daily todo reminder",
+    "remindTime": "Reminder time",
+    "remindHint": "Once per day at the set time, if any open tasks remain (including backlog), you get a notification and this page opens."
+  },
   "imBot": {
     "title": "IM bots",
     "channelWecom": "WeCom",

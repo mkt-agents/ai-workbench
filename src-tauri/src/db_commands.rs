@@ -25,6 +25,7 @@ pub enum DbTable {
     CloudflaredProfiles,
     Snippets,
     Drafts,
+    WorkTasks,
     WebPluginHistory,
     AiHubSessions,
     JsonToolHistory,
@@ -52,6 +53,7 @@ pub fn table_from_key(key: &str) -> Option<DbTable> {
         "cloudflared_profiles" => Some(DbTable::CloudflaredProfiles),
         "snippets" => Some(DbTable::Snippets),
         "drafts" => Some(DbTable::Drafts),
+        "work_tasks" => Some(DbTable::WorkTasks),
         "web_plugin_history" => Some(DbTable::WebPluginHistory),
         "ai_hub_sessions" => Some(DbTable::AiHubSessions),
         "json_tool_history" => Some(DbTable::JsonToolHistory),
@@ -78,6 +80,9 @@ pub(crate) fn load_sql(table: DbTable) -> &'static str {
         DbTable::CloudflaredProfiles => "SELECT * FROM cloudflared_profiles ORDER BY created_at DESC",
         DbTable::Snippets => "SELECT * FROM snippets ORDER BY use_count DESC, updated_at DESC",
         DbTable::Drafts => "SELECT * FROM drafts ORDER BY pinned DESC, updated_at DESC",
+        DbTable::WorkTasks => {
+            "SELECT * FROM work_tasks ORDER BY pinned DESC, updated_at DESC"
+        }
         DbTable::WebPluginHistory => "SELECT * FROM web_plugin_history ORDER BY opened_at DESC LIMIT 100",
         DbTable::AiHubSessions => "SELECT * FROM ai_hub_sessions ORDER BY updated_at DESC LIMIT 30",
         DbTable::JsonToolHistory => "SELECT * FROM json_tool_history ORDER BY id DESC LIMIT 20",
@@ -105,6 +110,7 @@ fn delete_sql(table: DbTable) -> &'static str {
         DbTable::CloudflaredProfiles => "DELETE FROM cloudflared_profiles",
         DbTable::Snippets => "DELETE FROM snippets",
         DbTable::Drafts => "DELETE FROM drafts",
+        DbTable::WorkTasks => "DELETE FROM work_tasks",
         DbTable::WebPluginHistory => "DELETE FROM web_plugin_history",
         DbTable::AiHubSessions => "DELETE FROM ai_hub_sessions",
         DbTable::JsonToolHistory => "DELETE FROM json_tool_history",
@@ -402,6 +408,24 @@ fn insert_row(tx: &rusqlite::Transaction<'_>, table: DbTable, obj: &serde_json::
                     json_str(obj, "updated_at")?,
                 ],
             ).map_err(|e| e.to_string())?;
+        }
+        DbTable::WorkTasks => {
+            tx.execute(
+                "INSERT INTO work_tasks (id, title, notes, tags, status, work_date, pinned, created_at, updated_at, done_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    json_str(obj, "id")?,
+                    json_opt_str(obj, "title").unwrap_or_default(),
+                    json_opt_str(obj, "notes").unwrap_or_default(),
+                    json_opt_str(obj, "tags").unwrap_or_default(),
+                    json_opt_str(obj, "status").unwrap_or_else(|| "open".to_string()),
+                    json_opt_str(obj, "work_date"),
+                    json_bool_as_i64(obj, "pinned")?,
+                    json_str(obj, "created_at")?,
+                    json_str(obj, "updated_at")?,
+                    json_opt_str(obj, "done_at"),
+                ],
+            )
+            .map_err(|e| e.to_string())?;
         }
         DbTable::WebPluginHistory => {
             tx.execute(
