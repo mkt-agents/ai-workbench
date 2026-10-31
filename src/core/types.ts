@@ -656,7 +656,7 @@ export interface UserScript {
   presetId?: string;
 }
 
-/** 用户自定义脚本模板（网页工具-脚本页「我的模板」），内置模板之外的补充 */
+/** 用户自定义脚本模板（常用站点-脚本页「我的模板」），内置模板之外的补充 */
 export interface ScriptTemplate {
   id: string;
   name: string;

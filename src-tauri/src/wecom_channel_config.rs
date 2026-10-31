@@ -328,7 +328,7 @@ mod tests {
     fn self_intro_hot_update_truncates_without_retiring() {
         let a = plain(request());
         let mut b = request();
-        b.self_intro = "你好！我是腾采通智能助手-超级玛丽 👋".into();
+        b.self_intro = "你好！我是测试助手".into();
         let b = plain(b);
         let delta = b.delta(Some(&a));
         assert_eq!(delta.changed, vec!["selfIntro"]);

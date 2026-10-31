@@ -232,7 +232,7 @@ AI 能力不再列为不做。天玑已是多模型流式对话，并带当前�
 * [x] **本机探测**：`detect_local_ai_endpoints`（Ollama `:11434` / LM Studio `:1234`）一键写入配置
 * [x] **Harness**：上次同步到 DSH 的模型/时间状态条；认证补丁失败引导外开浏览器或还原；引导清单补 Node 下载与补丁提示
 * [x] **天玑**：输入 `/` 插入片段；回答来源行展示耗时与 token（后端 usage 优先，否则估算）
-* [x] **模型对比台**：模型配置页 Tab，2–3 模型并发生成并排耗时（非对话页）
+* [x] **模型对比台**：模型广场 Tab，2–3 模型并发生成并排耗时（非对话页）
 * [x] **报告 AI 单章节重跑**：章节旁按钮 → `regenerate_test_report_ai_section` + `replaceMarkdownSection`
 * [x] **密钥 DPAPI**：`secret_protect` 在 `db_load`/`db_save` 加解密 `ai_models.api_key`（`enc:v1:`）
 
@@ -439,7 +439,7 @@ AI 能力不再列为不做。天玑已是多模型流式对话，并带当前�
 
 对标 DeepSeek Harness / Claude Code 后补齐三项用户明确需求，纯增量、不改权限模型。
 
-* [x] **模型类型自动识别**：新纯函数层 `model_capability.rs`（名称规则库 + `cargo test` 9 例），命令 `infer_model_modality`；`list_provider_models` 每条带 `modality`（优先采信厂商 `/models` 的 capabilities，回落规则库）。模型管理「添加 / 编辑」表单把旧的「支持看图」单勾改成**自动 / 文本 / 图文三态**：选模型即按规则预填、自动态下保存前再兜底重算；`/models` 列表标注「文本 / 图文」标签。存储加 `vision_mode` 列（幂等 ALTER，旧库按旧 `vision` 回填意图）
+* [x] **模型类型自动识别**：新纯函数层 `model_capability.rs`（名称规则库 + `cargo test` 9 例），命令 `infer_model_modality`；`list_provider_models` 每条带 `modality`（优先采信厂商 `/models` 的 capabilities，回落规则库）。模型广场「添加 / 编辑」表单把旧的「支持看图」单勾改成**自动 / 文本 / 图文三态**：选模型即按规则预填、自动态下保存前再兜底重算；`/models` 列表标注「文本 / 图文」标签。存储加 `vision_mode` 列（幂等 ALTER，旧库按旧 `vision` 回填意图）
 * [x] **同一会话多模型轮级切换**：`AiHubTurn` 记 `modelId` / `modelName`；composer 切模型即作用于下一轮、历史不清空；答案气泡标注「由 X 回答」；降级到 fallback 时后端 `emit_done` 带 `usedModel` 如实标注
 * [x] **图文对话打通**：放开 vision 硬门控——附图时当前模型不看图则自动切到会话里的看图模型（下一帧再发）或退化成文字占位；`turnsToMessages` 新增 `stripImages`，切到不看图模型时历史 `image` 块换成文字占位，保上下文不发无效图
 * [x] **文档附件走文本层（M5）**：docx / pdf / xlsx / xls / csv / tsv 拖放、粘贴或选择后经新命令 `read_document_file`（复用 `agent_docs::read_document`）抽取文本层，当普通文本附件注入上下文（PDF 无 OCR，扫描件明确提示）；分模型用量台账经核对**早已实现**（`aiUsage.ts` 按 modelId + 设置页逐模型明细 / 走势），本轮补上 fallback 场景按真正回答模型归账

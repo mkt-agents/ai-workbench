@@ -1,6 +1,6 @@
 # AI Workbench (AI 工作台)
 
-基于 **Tauri v2 + React + Rust/SQLite** 的 Windows 桌面应用，定位为 **AI 驱动的开发工具箱**。核心是 **DeepSeek 本地服务**，辅以模型配置、提示词、Git / Cursor 多身份与账号配额，以及内网穿透、网页工具、Hosts 管理等能力。所有数据留在本机，不上传密钥。
+基于 **Tauri v2 + React + Rust/SQLite** 的 Windows 桌面应用，定位为 **AI 驱动的开发工具箱**。核心是 **DeepSeek 本地服务**，辅以模型配置、提示词、Git / Cursor 多身份与账号配额，以及公网隧道、常用站点、Hosts 管理等能力。所有数据留在本机，不上传密钥。
 
 ## 效果图
 
@@ -14,7 +14,7 @@
   - 支持图文对话、文档附件（docx / pdf / xlsx / csv）与本机 OCR，`/` 命令面板与片段、项目级技能与记忆、MCP 服务接入
 - **企业微信机器人**：Bot ID + Secret 长连接，私聊配对与群聊 @ 触发，复用天玑的代理能力；可选文档优先问答、逆向文档每日更新与 SkyWalking 线上排障。细节见 [DSH 排障边界](docs/wecom-dsh-engine.md)。
 - **Harness**：管理并内嵌本机 DeepSeek 本地服务（DSH）的 Web UI。
-- **模型管理**：多厂商与 OpenAI 兼容接口，连接测试、按场景绑定、探测本机 Ollama / LM Studio，并带本地提示词库；API Key 经 Windows DPAPI 加密落库。
+- **模型广场**：多厂商与 OpenAI 兼容接口，连接测试、按场景绑定、探测本机 Ollama / LM Studio，并带本地提示词库；API Key 经 Windows DPAPI 加密落库。
 - **工作暂存**：临时存放提示词、脚本与备忘，可一键转为提示词。
 
 ### 账号资产
@@ -30,8 +30,8 @@
 
 ### 网络管理
 
-- **内网穿透**：基于 cloudflared 的临时 / 命名隧道（[文档](docs/cloudflared.md)）
-- **网页工具**：站点书签 + 油猴式用户脚本（内置 / 自定义模板，支持 JSON 分享导入导出）
+- **公网隧道**：基于 cloudflared 的临时 / 命名隧道（[文档](docs/cloudflared.md)）
+- **常用站点**：站点书签 + 油猴式用户脚本（内置 / 自定义模板，支持 JSON 分享导入导出）
 - **Hosts 管理**：读写系统 hosts，多套配置切换与备份恢复（需管理员）
 
 ### 系统工具
@@ -51,7 +51,7 @@ AI 工作台
 ├── Harness
 ├── 协同办公
 ├── 工作暂存
-├── 模型管理（列表 / 对比 / 提示词）
+├── 模型广场（列表 / 对比 / 提示词）
 └── 快捷应用
 
 账号资产
@@ -63,9 +63,8 @@ AI 工作台
 └── 环境变量
 
 网络管理
-├── 内网穿透
-├── 网页工具
-└── Hosts 管理
+├── 常用站点
+└── 公网隧道
 
 系统工具
 └── 工具箱
@@ -127,7 +126,7 @@ npm run tauri -- build
 
 - 需要目标机器具备 **WebView2**
 - DeepSeek 功能依赖本机 **Node.js + npm**（全局 `@deepseek-ai/dsh`）
-- 内网穿透依赖本机 `cloudflared`（应用内可安装或指定 exe）
+- 公网隧道依赖本机 `cloudflared`（应用内可安装或指定 exe）
 - 修改 Hosts 需**管理员**运行
 - **不要**把用户数据目录（`%APPDATA%\com.ai-workbench.app\`）打包进安装包；安装包不含用户的 API Key / Token
 
@@ -136,12 +135,12 @@ npm run tauri -- build
 - API Key、Tunnel Token、Cursor 密码备忘等保存在本机 SQLite：`%APPDATA%\com.ai-workbench.app\ai-workbench.db`
 - 不会上传密钥；请勿分享数据库或导出的含密钥 JSON
 - 书签图标只向**目标站点自身**请求 `/favicon.ico`，不经过第三方图标服务
-- 「网页工具 → 从网址导入」由本机直接向你填写的脚本地址发起请求（不经第三方中转）
+- 「常用站点 → 从网址导入」由本机直接向你填写的脚本地址发起请求（不经第三方中转）
 
 ## 免责声明
 
 - 本项目为个人开发的本地工具，与 DeepSeek、Cloudflare、Cursor 等厂商**无任何隶属或合作关系**；相关名称与图标仅用于描述兼容对象，版权归原作者所有
-- Hosts 修改、内网穿透等功能仅供合法用途，使用者需遵守当地法律法规
+- Hosts 修改、公网隧道等功能仅供合法用途，使用者需遵守当地法律法规
 - 使用本项目产生的任何直接或间接风险由使用者自行承担
 
 ## 项目结构（摘要）

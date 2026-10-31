@@ -1,5 +1,5 @@
 /**
- * Global shortcuts for the 网页工具 bookmarks.
+ * Global shortcuts for the 常用站点 bookmarks.
  *
  * This lives outside the page component on purpose: `PluginBrowser` is rendered
  * conditionally by `App`, so registering here (and never unregistering on unmount) is what

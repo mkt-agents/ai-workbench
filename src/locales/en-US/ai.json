@@ -1,6 +1,6 @@
 {
   "models": {
-    "title": "Model Config",
+    "title": "Model Plaza",
     "addModel": "Add Model",
     "editModel": "Edit Model",
     "deleteModel": "Delete Model",
@@ -244,10 +244,10 @@
     "onboardingTitle": "First-time setup",
     "onboardingStep1": "Install Node.js",
     "onboardingStep2": "Install and start DeepSeek Harness",
-    "onboardingStep3": "Add a model under Model Config and sync to DSH",
+    "onboardingStep3": "Add a model under Model Plaza and sync to DSH",
     "onboardingTipAuth": "0.2 and later sign in with a launch token. If the embedded page stays blank, open it in a browser",
     "onboardingDismiss": "Got it, don't show again",
-    "onboardingGoModels": "Go to Model Config",
+    "onboardingGoModels": "Go to Model Plaza",
     "detecting": "Checking...",
     "notInstalledShort": "Not installed",
     "installing": "Installing...",

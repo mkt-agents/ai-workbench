@@ -1,5 +1,5 @@
 /**
- * 模型配置页提供商品牌图标（Vite 打包自 `src/assets/ai-providers/`）。
+ * 模型广场提供商品牌图标（Vite 打包自 `src/assets/ai-providers/`）。
  * 有图用图；custom / 未知回落 shortLabel 方块。
  */
 import type { AIProviderId } from "./aiProviders";

@@ -162,7 +162,7 @@
 
 | 选项 | 实际执行者 | 依赖 |
 | --- | --- | --- |
-| 天玑（内置，默认） | 本应用 `agent_run`（四档权限、工具、审批卡） | 本应用「模型配置」里至少一个模型 |
+| 天玑（内置，默认） | 本应用 `agent_run`（四档权限、工具、审批卡） | 本应用「模型广场」里至少一个模型 |
 | DeepSeek Harness | 常驻 `dsh --profile acp` 子进程（ACP / JSON-RPC） | 已安装 `@deepseek-ai/dsh`；「工作区路径」必须是绝对路径 |
 
 切换保存即生效并自动重连，私聊与群聊统一走所选引擎。DSH 未安装 / 工作区为空时
@@ -390,7 +390,7 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
   启动超过 3 秒会先单独发一条「正在启动 DeepSeek Harness…」的消息；失败原因进
   设置页的「DSH 引擎状态」。
 - **模型与登录**：ACP 档继承 `dsh-base` 的 credentials / authorization /
-  deepseek-account，沿用 DSH GUI 里已配好的模型与账号；本应用的模型配置只对
+  deepseek-account，沿用 DSH GUI 里已配好的模型与账号；本应用的模型广场只对
   天玑档生效。
 
 ## 两档能力对照（「原版引擎 100%」的边界）

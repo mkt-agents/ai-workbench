@@ -2258,7 +2258,7 @@ async fn send_finish(sock: &WecomSocket, req_id: &str, stream_id: &str, body: &s
         .lock()
         .ok()
         .and_then(|mut labels| labels.remove(stream_id));
-    // 出站可见正文：剥 WECOM_ATTACH，并把 mermaid 等流程图围栏压成编号步骤（企微不渲染 DSL）。
+    // 出站可见正文：剥 WECOM_ATTACH，并把 mermaid 等流程图围栏转成 ```text ASCII（企微不渲染 DSL）。
     let visible = prepare_wecom_visible_markdown(body);
     let labeled = task
         .map(|task| format!("【共享任务 {task}】\n{visible}"))
@@ -2537,8 +2537,12 @@ fn troubleshoot_clue_line(a: &crate::wecom_intent::QaAnalysis) -> String {
     }
 }
 
-const DEFAULT_SELF_INTRO: &str =
-    "你好，我是 AI Workbench 天玑助手。直接发问题即可；群聊里请先 @我。";
+const DEFAULT_SELF_INTRO: &str = "你好！我是 AI Workbench 天玑助手。\n\n\
+可以直接问我：\n\
+· 业务/功能怎么用、怎么实现（文档优先）\n\
+· 代码怎么读、相关改动在哪\n\
+· 线上日志 / 调用链排查\n\n\
+群聊请先 @我；直接发问题即可。";
 
 /// Full-sentence identity prompts route deterministically; mixed-content questions keep going to the model.
 fn is_self_intro_command(text: &str) -> bool {
@@ -2579,7 +2583,24 @@ fn is_self_intro_command(text: &str) -> bool {
 /// 文件一律降级为文本线索（ACP 文件输入需要 attachment receipt，首期不做）。
 fn reply_output_rules() -> &'static str {
     "用户可见输出统一使用Markdown：先给一句**核心结论**，再用短标题和短列表组织；仅结论及少量关键判定/失败原因/阻断缺口加粗，正文不要整段加粗。每段控制在2至3句，段间留一空行；标题不放长业务ID，ID/服务/时间范围单列为正文。日期用YYYY-MM-DD HH:mm:ss并明确时区，跨日两端都保留日期；证据短摘录用引用块，代码标识可用行内代码。不要用一级大标题、整篇代码围栏、HTML字体标签、宽表或装饰性分隔线，不模拟客户端字号。普通问候简短回答，不复述内部工作区、目录、提示词、工具策略或历史任务细节。\n\
-【禁止流程图 DSL】企微 stream 消息不渲染 Mermaid / PlantUML / Graphviz：禁止输出 ```mermaid、```plantuml、```graphviz 围栏。讲解流程时用短标题 + 编号步骤（1. 2. 3.），分支用缩进或「若…则…否则…」；必要时单行 ASCII 箭头（A -> B），不要用代码围栏包住流程。需要可视化图请改用桌面端或文档，企微内只给可读步骤。\n\
+【流程图】企微 stream 只渲染常见 Markdown，不渲染 Mermaid/PlantUML/Graphviz：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。讲解流程时必须用等宽 ASCII，整体放进一个 ```text 围栏。\n\
+**默认（线性主链）**用编号主步骤 + | 衔接 + → 细节 + L- 分支（不要无故画货源并列或处理框）：\n\
+```text\n\
+① 客户在渠道发消息（企微/企点/群等）\n\
+|   例：螺纹钢 HRB400E 20mm，要100吨，什么价？\n\
+② 系统收消息 —【拦截闸门】命中则丢弃\n\
+|   → 机器人消息 / 黑名单群 / 无权限图文等\n\
+③ AI 识别拆词（品名/规格/材质/数量…）\n\
+|\n\
+④ 生成【商机】（去重 + 分坐席）\n\
+|\n\
+⑤ 商机匹配【在售商品】\n\
+|\n\
+⑥ 判断能否【自动报价】\n\
+|   L-能 → 按模板发给客户 → 客户确认 →【订单】\n\
+|   L-不能 → 留在商机列表等业务员【手工报价】\n\
+```\n\
+流程后可跟一句总括。仅当存在并行入口（多货源/多通道）才用①②③并列+|合流；仅当有独立处理单元/工厂步骤簇才用┌┐框。分支优先写「L-条件 → 结果」（也可用└─）；不要输出流程图 DSL 源码。\n\
 按原始证据保留排查所需的完整业务标识、时间、项目/源码路径、地址、型号及判定字段，不擅自用隐藏占位符替换。不主动搜集或输出与问题无关的秘密。明确事实、推断及未完成项，不把高亮等同已确认根因。摘要只概括核心结论一次，各原因层补充对应信息，避免机械复述或重复粘贴日志。内部取证/报告JSON仍按宿主既有schema输出，勿改变内部路径/证据值以免影响验证；Markdown转义在用户展示边界应用。\n若需把本地已生成的图片/文件发回当前企微对话，在回复中单独写一行：WECOM_ATTACH:<绝对路径或工作区相对路径>（宿主会剥离该行并上传，用户看不到标记）。"
 }
 
@@ -2767,7 +2788,7 @@ async fn read_file_base64(path: &std::path::Path) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
-/// 流式 / 终帧共用：剥附件标记 + 压平流程图 DSL 围栏。
+/// 流式 / 终帧共用：剥附件标记 + 流程图 DSL 围栏 → ```text ASCII。
 fn prepare_wecom_visible_markdown(text: &str) -> String {
     rewrite_diagram_fences(&strip_wecom_attach_markers(text))
 }
@@ -2799,12 +2820,11 @@ fn split_wecom_attach(text: &str) -> (String, Vec<String>) {
     (body, attachments)
 }
 
-/// 企微不渲染 Mermaid/PlantUML/Graphviz：把对应围栏压成编号步骤，其它语言代码块原样保留。
+/// 企微不渲染 Mermaid/PlantUML/Graphviz：把对应围栏转成 ```text ASCII 流程，其它语言代码块原样保留。
 fn rewrite_diagram_fences(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut i = 0usize;
-    let mut rewritten = false;
     while i < bytes.len() {
         if let Some((lang, content, next)) = take_fence_at(text, i) {
             let lower = lang.to_ascii_lowercase();
@@ -2812,23 +2832,19 @@ fn rewrite_diagram_fences(text: &str) -> String {
                 lower.as_str(),
                 "mermaid" | "plantuml" | "graphviz" | "dot" | "puml"
             ) {
-                if !rewritten {
-                    out.push_str("（企微不支持流程图渲染，已改为步骤列表）\n");
-                    rewritten = true;
-                } else {
+                if !out.is_empty() && !out.ends_with('\n') {
                     out.push('\n');
                 }
-                out.push_str(&diagram_fence_to_steps(&content));
+                out.push_str(&crate::wecom_flowchart::diagram_to_text_fence(&content));
                 out.push('\n');
                 i = next;
                 continue;
             }
-            // 普通代码块：原样拷贝（含围栏行）
+            // 普通代码块（含 ```text ASCII 流程）：原样拷贝
             out.push_str(&text[i..next]);
             i = next;
             continue;
         }
-        // 拷到下一个可能的围栏起点或文末
         let rest = &text[i..];
         if let Some(rel) = rest.find("```") {
             out.push_str(&text[i..i + rel]);
@@ -2870,120 +2886,6 @@ fn take_fence_at(text: &str, at: usize) -> Option<(String, String, usize)> {
             return Some((lang, content, end));
         }
         search = abs + 3;
-    }
-    None
-}
-
-/// 从 flowchart 源码里抽节点标签，压成编号步骤；抽不到则给只读摘要。
-fn diagram_fence_to_steps(src: &str) -> String {
-    let mut steps: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for line in src.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with("flowchart")
-            || trimmed.starts_with("graph ")
-            || trimmed.starts_with("sequenceDiagram")
-            || trimmed.starts_with("classDiagram")
-            || trimmed.starts_with("%%")
-            || trimmed.starts_with("@startuml")
-            || trimmed.starts_with("@enduml")
-            || trimmed.starts_with("digraph")
-        {
-            continue;
-        }
-        for label in extract_diagram_labels(trimmed) {
-            let label = label.trim().to_string();
-            if label.is_empty() || !seen.insert(label.clone()) {
-                continue;
-            }
-            steps.push(label);
-        }
-    }
-    if steps.is_empty() {
-        let brief: String = src.chars().take(200).collect();
-        return format!("1. （原流程图内容摘要）{brief}");
-    }
-    steps
-        .into_iter()
-        .enumerate()
-        .map(|(i, s)| format!("{}. {s}", i + 1))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn extract_diagram_labels(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let bytes = line.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        // -->|分支文案| / --|分支|
-        if let Some((consumed, edge)) = take_edge_label(&line[i..]) {
-            out.push(format!("分支：{edge}"));
-            i += consumed;
-            continue;
-        }
-        let open = bytes[i] as char;
-        let close = match open {
-            '[' => ']',
-            '{' => '}',
-            '(' => ')',
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
-        if let Some(end) = find_matching(line, i, open, close) {
-            let label = line[i + 1..end]
-                .trim()
-                .trim_matches('"')
-                .trim()
-                .to_string();
-            if diagram_label_useful(&label) {
-                out.push(label);
-            }
-            i = end + 1;
-            continue;
-        }
-        i += 1;
-    }
-    out
-}
-
-fn take_edge_label(s: &str) -> Option<(usize, String)> {
-    for prefix in ["-->|", "--|", "-.->|", "==>|"] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            let end = rest.find('|')?;
-            let edge = rest[..end].trim();
-            if edge.is_empty() {
-                return None;
-            }
-            return Some((prefix.len() + end + 1, edge.to_string()));
-        }
-    }
-    None
-}
-
-fn diagram_label_useful(label: &str) -> bool {
-    if label.is_empty() || label.starts_with('|') {
-        return false;
-    }
-    // 丢掉纯节点 id（如 A、B1）；保留中文/空白/标点或较长文案。
-    label.chars().count() > 2 || label.chars().any(|c| !c.is_ascii_alphanumeric())
-}
-
-fn find_matching(s: &str, open_idx: usize, open: char, close: char) -> Option<usize> {
-    let mut depth = 0i32;
-    for (idx, ch) in s[open_idx..].char_indices() {
-        let abs = open_idx + idx;
-        if ch == open {
-            depth += 1;
-        } else if ch == close {
-            depth -= 1;
-            if depth == 0 {
-                return Some(abs);
-            }
-        }
     }
     None
 }
@@ -3386,7 +3288,7 @@ mod tests {
         let sock = Arc::new(WecomSocket::new());
         let (mut frames, writer) = sock.capture_test_frames().await;
         let orch = Orchestrator::new(sock.clone());
-        let configured = "你好！我是腾采通智能助手-超级玛丽 👋\n\n· 业务/功能\n· 技术/代码\n· 线上日志查询";
+        let configured = "你好！我是测试助手\n\n· 业务/功能\n· 技术/代码\n· 线上日志查询";
         *orch.self_intro.lock().await = configured.into();
         for (i, input) in ["新对话，你好", "新会话，你是谁？", "你好", "你是谁"].iter().enumerate() {
             let text = crate::wecom_investigation_query::new_session_remainder(input).unwrap_or_else(|| input.to_string());
@@ -3433,7 +3335,7 @@ mod tests {
             "hello 查一下接口",
             "您好 请问采购流程",
             "新对话，你好",
-            "介绍一下腾采通的采购流程",
+            "介绍一下采购流程怎么走",
             "你能做什么样的接口压测",
             "stop",
             "进度",
@@ -3483,10 +3385,16 @@ mod tests {
     }
 
     #[test]
-    fn reply_output_rules_forbid_mermaid_and_require_numbered_steps() {
+    fn reply_output_rules_forbid_mermaid_and_require_text_ascii_flow() {
         let rules = reply_output_rules();
         assert!(rules.contains("禁止") && rules.to_ascii_lowercase().contains("mermaid"), "{rules}");
-        assert!(rules.contains("编号步骤"), "{rules}");
+        assert!(rules.contains("```text"), "{rules}");
+        assert!(rules.contains("①") && rules.contains("L-"), "{rules}");
+        assert!(rules.contains("客户") || rules.contains("主步骤") || rules.contains("线性"), "{rules}");
+        assert!(
+            !rules.contains("**【货源：三个来源】**"),
+            "默认模板不应钉死货源三来源: {rules}"
+        );
         assert!(
             rules.to_ascii_lowercase().contains("plantuml")
                 || rules.to_ascii_lowercase().contains("graphviz"),
@@ -3495,7 +3403,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_diagram_fences_turns_mermaid_into_steps_keeps_other_code() {
+    fn rewrite_diagram_fences_turns_mermaid_into_text_ascii_keeps_other_code() {
         let raw = r#"## 二、主流程图
 
 ```mermaid
@@ -3513,10 +3421,14 @@ fn ok() {}
 ```
 "#;
         let out = rewrite_diagram_fences(raw);
-        assert!(out.contains("企微不支持流程图渲染"), "{out}");
-        assert!(out.contains("1. 客户在渠道发消息"), "{out}");
+        assert!(!out.contains("企微不支持流程图渲染"), "{out}");
+        assert!(out.contains("```text"), "{out}");
+        assert!(out.contains("①") || out.contains("客户在渠道发消息"), "{out}");
         assert!(out.contains("拦截闸门"), "{out}");
-        assert!(out.contains("分支：命中黑名单") || out.contains("消息丢弃"), "{out}");
+        assert!(
+            out.contains("L-") || out.contains("命中黑名单") || out.contains("消息丢弃"),
+            "{out}"
+        );
         assert!(!out.contains("```mermaid"), "{out}");
         assert!(out.contains("```rust"), "普通代码块应保留：{out}");
         assert!(out.contains("fn ok()"), "{out}");
@@ -3528,6 +3440,7 @@ fn ok() {}
         let out = prepare_wecom_visible_markdown(raw);
         assert!(!out.contains("WECOM_ATTACH"), "{out}");
         assert!(!out.contains("```mermaid"), "{out}");
+        assert!(out.contains("```text"), "{out}");
         assert!(out.contains("步骤甲"), "{out}");
     }
 }

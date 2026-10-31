@@ -34,6 +34,7 @@ mod wecom_proto;
 mod wecom_sanitize;
 mod wecom_policy;
 mod wecom_intent;
+mod wecom_flowchart;
 mod wecom_investigation_query;
 mod wecom_investigation;
 mod wecom_investigation_plan;

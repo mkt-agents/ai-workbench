@@ -236,7 +236,7 @@ pub(crate) async fn tunnel(app: &AppHandle, args: &Value) -> Result<String, Stri
     let action = arg_str(args, "action");
     let status = cf::cloudflared_status().await?;
     if action != "status" && !status.installed {
-        return Err(format!("本机没有可用的 cloudflared：{}。请用户在内网穿透页安装。", status.message));
+        return Err(format!("本机没有可用的 cloudflared：{}。请用户在公网隧道页安装。", status.message));
     }
     match action.as_str() {
         "status" => {

@@ -29,10 +29,10 @@
 
 | 能力域 | 功能 |
 |--------|------|
-| **AI 工作台** | DeepSeek Harness 本地服务托管、多厂商模型配置、天玑（含流式 + 多轮）、代码片段与工作暂存、快捷应用（本机应用扫描 / 启动 / 运行态，2026-10-21 从系统工具移进这一组）、协同办公（接管本机应用窗口并嵌入，原名「桌面应用」）；提示词优化已整体删除 |
+| **AI 工作台** | DeepSeek Harness 本地服务托管、模型广场（多厂商）、天玑（含流式 + 多轮）、代码片段与工作暂存、快捷应用（本机应用扫描 / 启动 / 运行态，2026-10-21 从系统工具移进这一组）、协同办公（接管本机应用窗口并嵌入，原名「桌面应用」）；提示词优化已整体删除 |
 | **账号资产** | Cursor 多身份一键切换（独立 profile 目录）、账号配额看板（多服务商授权额度；WorkBuddy 独立页已下线，扫码/签到入口在额度页，代码保留） |
 | **工程管理** | Git 仓库批量管理 / 扫描 / 提交 / 静态+按需 AI 报告、Node.js / JDK / Maven / Python 运行时切换（改注册表 PATH，页面名「环境变量」） |
-| **网络管理** | 系统 Hosts 读写 + 自动备份恢复、Cloudflare Tunnel（临时 / 命名隧道）、网页工具（书签 + 用户脚本 + 独立弹窗浏览器） |
+| **网络管理** | 常用站点（书签 + 用户脚本 + 独立弹窗浏览器）、公网隧道 Cloudflare Tunnel（临时 / 命名）；Hosts 已迁到系统工具 |
 | **系统工具** | 工具箱页 10 个本地开发工具（顶部工具条，分转换/生成/解析/计算/系统五组；含「端口查杀」，HTTP 客户端已移除）；侧栏这一组 2026-10-21 起只剩它 |
 
 产品标识：
@@ -108,7 +108,7 @@ ai-workbench/
 │   │   └── cursorMatch.ts        # Cursor 账号匹配（email+name 对比）
 │   │
 │   ├── components/               # UI 组件层（全部无类型拆分，单文件单组件）
-│   │   ├── AIAssistant.tsx       # 模型配置页（CRUD + 连接测试 + 批量操作 + 分组；图标见 src/assets/ai-providers/）
+│   │   ├── AIAssistant.tsx       # 模型广场（CRUD + 连接测试 + 批量操作 + 分组；图标见 src/assets/ai-providers/）
 │   │   ├── DeepSeekHarness.tsx   # DSH iframe 托管 + 启动/停止/端口配置
 │   │   ├── SnippetsManager.tsx   # 代码片段 CRUD + JSON 导入导出 + 类型筛选
 │   │   ├── AccountQuotaPanel.tsx # 账号额度看板（多服务商；样式见同名 .css）
@@ -121,9 +121,9 @@ ai-workbench/
 │   │   ├── CommitChangelist.tsx  # 文件变更列表组件
 │   │   ├── CursorManager.tsx     # Cursor 多账号管理（切换 / 初始化 / 诊断）
 │   │   ├── VersionSwitcher.tsx   # Node.js / JDK / Maven / Python 版本切换
-│   │   ├── CloudflaredManager.tsx# 内网穿透（临时 / 命名隧道 + 日志流）
+│   │   ├── CloudflaredManager.tsx# 公网隧道（临时 / 命名隧道 + 日志流）
 │   │   ├── HostsManager.tsx      # 系统 Hosts 读写 + 备份恢复
-│   │   ├── PluginBrowser.tsx     # 网页工具（书签 + 用户脚本；脚本页含内置/自定义模板管理与分享，头部操作按容器宽度渐进收纳）
+│   │   ├── PluginBrowser.tsx     # 常用站点（书签 + 用户脚本；脚本页含内置/自定义模板管理与分享，头部操作按容器宽度渐进收纳）
 │   │   ├── WorkBuddyManager.tsx  # WorkBuddy 账号池 + 签到（侧栏已下线，恢复见 AGENTS.md）
 │   │   ├── workbuddy/            # WorkBuddy 子组件（扫码/签到等；额度页仍复用部分）
 │   │   ├── ModalTitleRow.tsx     # 弹窗标题行（Esc / 关闭）
@@ -159,7 +159,7 @@ ai-workbench/
 │   │
 │   ├── lib/                       # 业务工具库
 │   │   ├── aiProviders.ts       # AI 厂商 provider 列表 + 显示元数据
-│   │   ├── aiProviderLogos.ts   # 模型配置页提供商品牌图（Vite import：src/assets/ai-providers/）
+│   │   ├── aiProviderLogos.ts   # 模型广场提供商品牌图（Vite import：src/assets/ai-providers/）
 │   │   ├── providerLogos.ts     # 账号额度侧栏/卡片品牌图（src/assets/providers/ + 本机图标）
 │   │   ├── quotaProviders.ts    # 额度侧栏服务商目录（数组序 = 侧栏序）+ 看板卡片偏好 + 安装检测（注册表 + 商店包）
 │   │   ├── aiText.ts             # AI 纯文本的围栏剥离 / `##` 章节切分
@@ -207,7 +207,7 @@ ai-workbench/
 │   │   ├── cloudflared_commands.rs# Cloudflare Tunnel（快速 / 命名 + 日志 + config.yml）
 │   │   ├── hosts_commands.rs      # 系统 Hosts（读 / 写 / 备份 / 还原 / 原子替换）
 │   │   ├── runtime_commands.rs    # Node.js / JDK / Maven / Python 版本切换（修改注册表 PATH）
-│   │   ├── plugin_commands.rs     # 网页工具（建带浮动工具栏的弹窗 + 注入脚本 + 脚本抓取）
+│   │   ├── plugin_commands.rs     # 常用站点（建带浮动工具栏的弹窗 + 注入脚本 + 脚本抓取）
 │   │   ├── app_launcher_commands.rs # 快捷应用：开始菜单 / Program Files 扫描、.lnk 解析、图标提取
 │   │   ├── port_commands.rs      # netstat/taskkill 共享原语 + 端口查杀命令（DSH 也 use 这里）
 │   │   ├── update_commands.rs    # 应用内升级：GitHub release 详情 + 流式下载 + 看门狗装新版
@@ -241,7 +241,7 @@ ai-workbench/
 │
 ├── docs/                           # 项目文档
 │   ├── brand/                     # Logo 母版
-│   ├── cloudflared.md             # 内网穿透专题文档
+│   ├── cloudflared.md             # 公网隧道专题文档
 │   ├── git-multi-repo-scan-plan.md
 │   ├── modal-unify-plan.md
 │   ├── workbench-upgrade-plan.md
@@ -394,7 +394,7 @@ App 启动
 | `CloudflaredNamedProfile` | 命名隧道 | hostname, localUrl, authMode, token/configPath |
 | `Snippet` | 代码片段 | name, content, params, tags, useCount |
 | `HostProfile` | Hosts 配置 | name, content |
-| `WebPlugin` | 网页工具 | name, url, group, order, hotkey, isPreset |
+| `WebPlugin` | 常用站点 | name, url, group, order, hotkey, isPreset |
 
 **Provider 类型枚举**（`AIModelConfig.provider`）:
 ```typescript
@@ -510,7 +510,7 @@ bootApp(): Promise<void>
 | `theme.ts` | `applyDocumentTheme(theme)` | 根据 AppTheme 设置 `data-theme`（支持 glass/ice/silver/light/dark/system） |
 | `aiHubShortcut.ts` | `registerAiHubShortcut(shortcut)` | 调用 `registerShortcut` + navigate |
 | `aiProviders.ts` | `AI_PROVIDERS: ProviderMeta[]` | provider 显示名 + 默认 baseUrl |
-| `aiProviderLogos.ts` | `aiProviderLogoSrc(id)` | 模型配置页品牌图（Vite 打包 `src/assets/ai-providers/`） |
+| `aiProviderLogos.ts` | `aiProviderLogoSrc(id)` | 模型广场品牌图（Vite 打包 `src/assets/ai-providers/`） |
 | `providerLogos.ts` | 额度侧栏/卡片 glyph | `src/assets/providers/` + 本机安装图标优先 |
 | `snippets.ts` | `renderSnippet(template, params)` | `{{param}}` 替换引擎 |
 | `version.ts` | `compareVersions(a, b)` | 语义版本比较（含 prerelease） |
@@ -542,7 +542,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 ### 6.11 页面内容宽度与自适应（2026-09-30 统一）
 
 - **宽度单一来源**：`src/styles/tokens.css` `:root { --page-max-width: 1440px }`。引用方：`.page-scrollable`（`@media (min-width:1400px)`）、`.snippets-page` / `.runtime-page` / `.models-container` / `.git-manager-column`、工具页 `.devtools-tool`。**新增页面不要再写 `max-width` 常量**。注意 `.git-manager-column` 的声明实际被 `GitManager.tsx` 硬编码的 `.git-manager-column.is-wide{max-width:none}` 覆盖，Git 页一直是全宽。`.settings-page` 720px 是有意窄表单列；`.userscript-list`（≥1100 强制两列）尚未并入。
-- **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、提示词 `.snippets-list` 320、模型配置与环境变量（`.models-*` / `.runtime-list`）340。
+- **卡片网格一律 `repeat(auto-fill, minmax(min(100%, Npx), 1fr))`**：快捷应用 `.al-grid` 260、提示词 `.snippets-list` 320、模型广场与环境变量（`.models-*` / `.runtime-list`）340。
 - **工具箱页（`DevTools.tsx` + `src/styles/devtools.css`）**：`.dt-layout` 为上下两层——`.dt-toolbar`（工具 chip 一行 + 当前工具说明 + 搜索框，窄窗口 chip 行横向滚动并 `scrollIntoView` 当前项）+ `.dt-main`（`.dt-content`）。**原先的左侧 184px 工具栏和"当前工具"独立横条都已删除**，信息改由 chip 高亮 / chip 的 title / chip 上的数字徽标承担。
 - **纵向填满**：`.dt-content` 是 flex 列，`.devtools-tool{flex:1 0 auto}`（长高但不低于自然高，内容多时页面照常滚动），各工具主区 `flex:1 1 auto; min-height:<原 px>`；原 `max-height: 280/340/360/420px`、`60vh` 等死上限改成地板值。有意保持自然高的只有时间戳（只有单行 input）。工具内 textarea 统一 `resize: none`。
 - **吸顶 + 磨砂**（快捷应用 `.al-toolbar`）：`position:sticky; top:0` 之外，宿主 `.al-page-host` 必须 `padding-top:0`（间距挪到吸顶元素的 `margin-top`），否则内容会从宿主上内边距露在吸顶条上方；磨砂配方与侧栏一致（`--chrome-bg` + `blur(20px) saturate(1.08)`），并已登记进 `body.resizing` 关闭清单。
@@ -555,7 +555,7 @@ invoke 错误的统一处理（提取 `ErrorCode` + 显示用户友好消息）�
 
 **核心职责**:
 - 侧边栏导航渲染（分组折叠 + 折叠模式自动合并）
-- Tab 切换（Git / DeepSeek / 模型配置 / 片段 / Cursor / 账号额度 / 版本 / Hosts / Cloudflared / 插件 / 设置）
+- Tab 切换（Git / DeepSeek / 模型广场 / 片段 / Cursor / 账号额度 / 版本 / Hosts / Cloudflared / 插件 / 设置）
 - 窗口标题栏（最小化 / 最大化 / 关闭隐藏到托盘）
 - 响应式自动折叠（< 720px 自动折叠，> 900px 自动展开）
 - 两个懒加载面板（Git / DSH 首次进入后常驻 DOM）
@@ -578,7 +578,7 @@ openGroups: Set<string>       // 分组展开状态
 | 组件 | 功能 | 关键交互 |
 |------|------|----------|
 | `DeepSeekHarness` | iframe 托管 DSH | 启动/停止/端口/认证补丁状态 |
-| `AIAssistant` | AI 模型配置 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `src/assets/ai-providers/` + 最长输出自动预填 |
+| `AIAssistant` | 模型广场 | CRUD + 连接测试 + 同步 DSH + 批量操作 + 分组；`--page-max-width` + 340 网格；品牌图 `src/assets/ai-providers/` + 最长输出自动预填 |
 | `SnippetsManager` | 提示词管理 | `{{param}}` 编辑 + JSON 导入导出 + 场景标签 + 卡片拖拽排序（「手动排序」，顺序存 localStorage `snippets-order`）；类型统一为 prompt |
 | `AccountQuotaPanel` | 账号额度看板 | 多服务商授权额度；工具条固定、卡片区 `.aq-board` 独立滚动；品牌图 `providerLogos.ts`；网络失败文案走 `friendly_http_error` |
 | `QuotaProviderRail` | 额度页右侧栏 | 单一「服务商与账号」列表：服务商行（未安装 / 折叠时账号数胶囊、悬停换眼睛 / `+` 添加）下挂已连接账号，有账号的服务商点行可折叠（localStorage `aq-rail-folded`）；顺序 = `QUOTA_PROVIDERS` 数组序、有账号提前，收起态同序；安装检测 = 注册表显示名 + 商店包名（`scan_store_packages`） |
@@ -588,10 +588,10 @@ openGroups: Set<string>       // 分组展开状态
 | `WorkBuddyManager` | WorkBuddy（侧栏已下线） | 账号池 + 签到；额度页复用扫码/签到；恢复见 AGENTS.md |
 | `GitManager` | Git 管理 | 仓库总览 / 扫描 / 身份 |
 | `GitCommitPanel` | Git 提交 | 多仓 diff + AI 生成 commit message |
-| `CloudflaredManager` | 内网穿透 | 临时隧道 / 命名隧道 / 日志流 / config.yml 编辑 |
+| `CloudflaredManager` | 公网隧道 | 临时隧道 / 命名隧道 / 日志流 / config.yml 编辑 |
 | `HostsManager` | Hosts 管理 | 读写 + 原子替换 + 备份恢复 |
 | `VersionSwitcher` | 运行时切换 | Node.js / JDK / Maven / Python PATH 写入注册表 |
-| `PluginBrowser` | 网页工具 | 书签 + 用户脚本两个页签；弹窗浏览器打开 http(s)（脚本按 `@match` 注入）；脚本页含内置/自定义模板（增改删 + 存为模板 + JSON 分享导入导出），头部操作按容器宽度渐进收纳（`···` 兜底，预设模板常驻） |
+| `PluginBrowser` | 常用站点 | 书签 + 用户脚本两个页签；弹窗浏览器打开 http(s)（脚本按 `@match` 注入）；脚本页含内置/自定义模板（增改删 + 存为模板 + JSON 分享导入导出），头部操作按容器宽度渐进收纳（`···` 兜底，预设模板常驻） |
 | `Settings` | 设置 | 主题 / 语言 / 自启 / 快捷键 / 数据导出导入 |
 
 ### 7.3 弹窗组件
@@ -747,7 +747,7 @@ DshState { instances: Mutex<Vec<DshInstance>> }
 - `netstat -ano | find port` 找 PID → `taskkill /T /F /PID`
 - `wait_for_port_release` 确保端口释放
 
-### 8.7 `cloudflared_commands.rs` — 内网穿透
+### 8.7 `cloudflared_commands.rs` — 公网隧道
 
 **State**:
 ```rust
@@ -949,7 +949,7 @@ cancel_request(request_id)    // 前端调用取消
 | web_plugin_history | INTEGER AUTO | 插件打开历史（限 100） |
 | plugin_states | TEXT (plugin_id) | 插件启用/配置 |
 | user_scripts | TEXT (id) | 用户脚本：`match_patterns`(JSON) + `match_pattern`(旧版兼容) + code + enabled |
-| script_templates | TEXT (id) | 脚本自定义模板（网页工具-脚本「我的模板」）：name + description + `match_patterns`(JSON) + code；支持分享（导出 JSON / 导入合并，按名称+代码判重） |
+| script_templates | TEXT (id) | 脚本自定义模板（常用站点-脚本「我的模板」）：name + description + `match_patterns`(JSON) + code；支持分享（导出 JSON / 导入合并，按名称+代码判重） |
 
 ### 9.3 Schema 迁移
 
@@ -1304,7 +1304,7 @@ lib.rs (Builder)
 | `git` | Git 操作 | `Command::new("git").args(...)` |
 | `cmd /c npm` | DSH 安装/查询版本 | `Command::new("cmd").args(["/c", "npm", ...])` |
 | `node.exe` | DSH 服务 | 找到全局 node → `Command::new(node_path).arg(entry)` |
-| `cloudflared.exe` | 内网穿透 | `resolve_cloudflared()` 找到路径 → spawn |
+| `cloudflared.exe` | 公网隧道 | `resolve_cloudflared()` 找到路径 → spawn |
 | `cursor.exe` | Cursor IDE | `launch_cursor` / `quit_cursor` |
 | `winget` | cloudflared 安装 | `cmd /c winget install Cloudflare.cloudflared` |
 | `ipconfig /flushdns` | DNS 刷新 | hosts 写入后执行 |

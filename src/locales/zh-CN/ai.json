@@ -1,6 +1,6 @@
 {
   "models": {
-    "title": "模型管理",
+    "title": "模型广场",
     "addModel": "添加模型",
     "editModel": "编辑模型",
     "deleteModel": "删除模型",
@@ -244,10 +244,10 @@
     "onboardingTitle": "首次设置",
     "onboardingStep1": "安装 Node.js",
     "onboardingStep2": "安装并启动 DeepSeek Harness",
-    "onboardingStep3": "在「模型管理」中添加模型并同步到 DSH",
+    "onboardingStep3": "在「模型广场」中添加模型并同步到 DSH",
     "onboardingTipAuth": "0.2 及以上用启动令牌登录。若内嵌页空白，点「外开浏览器」",
     "onboardingDismiss": "知道了，不再显示",
-    "onboardingGoModels": "去模型管理",
+    "onboardingGoModels": "去模型广场",
     "detecting": "检测中...",
     "notInstalledShort": "未安装",
     "installing": "安装中...",

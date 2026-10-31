@@ -221,7 +221,7 @@ function truncateUrl(url: string, max = 42): string {
 /** List-view prefs (grouping, folds, sort, filter) survive page remounts. */
 /* v2: default flat multi-column grid (old key kept group-by-on and looked sparse). */
 const MODELS_VIEW_PREFS_KEY = "workbench-models-view-v2";
-/** Top-level page tab on 模型管理：list | compare | prompts（侧栏旧「提示词」并到此）。 */
+/** Top-level page tab on 模型广场：list | compare | prompts（侧栏旧「提示词」并到此）。 */
 export const MODELS_PAGE_VIEW_KEY = "workbench-models-page-view";
 export const MODELS_PAGE_VIEW_EVENT = "workbench-models-page-view";
 export type ModelsPageView = "list" | "compare" | "prompts";

@@ -340,7 +340,7 @@
     "displayName": "Bot display name",
     "displayNamePlaceholder": "Used to strip @name in groups",
     "selfIntro": "Self introduction",
-    "selfIntroPlaceholder": "Leave blank for the built-in default. Example: Hi, I'm your Procurement Assistant...",
+    "selfIntroPlaceholder": "Leave blank for the built-in default. Example: Hi! I'm the AI Workbench Tianji assistant.\nAsk me about product/docs, code, or online log troubleshooting…",
     "selfIntroHint": "When a message is exactly a greeting or identity prompt (\"hello / who are you / what can you do / 你好 / 介绍一下\" ...) the bot replies with this text verbatim and skips the model. \"新对话，你好\" resets the conversation first, then uses this intro. Longer sentences still go through normal Q&A. Blank uses the default intro. {{count}}/2000 characters.",
     "dmPolicy": "DM policy",
     "groupPolicy": "Group policy",

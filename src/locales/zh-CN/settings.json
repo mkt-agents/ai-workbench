@@ -35,7 +35,7 @@
       "listening": "监听中",
       "error": "出错"
     },
-    "baseUrlHint": "base_url：{{baseUrl}}　model：{{model}}（仅监听本机，外部机器访问需用内网穿透；Base URL 只填到 /v1，不要带 /chat/completions）",
+    "baseUrlHint": "base_url：{{baseUrl}}　model：{{model}}（仅监听本机，外部机器访问需用公网隧道；Base URL 只填到 /v1，不要带 /chat/completions）",
     "port": "本机端口",
     "restart": "重启服务",
     "apiKey": "API Key（选填）",
@@ -340,7 +340,7 @@
     "displayName": "机器人显示名",
     "displayNamePlaceholder": "用于去掉群聊 @名字",
     "selfIntro": "自我介绍",
-    "selfIntroPlaceholder": "留空使用默认文案。例：你好！我是腾采通智能助手-超级玛丽 👋\n有什么关于腾采通的问题都可以问我……",
+    "selfIntroPlaceholder": "留空使用默认文案。例：你好！我是 AI Workbench 天玑助手。\n可以直接问我：业务/功能、代码、线上日志排查……",
     "selfIntroHint": "用户发送「你好 / 你是谁 / 你能做什么 / 介绍一下 / hi / who are you」等完整短句时，直接按此文本回复，不走模型；「新对话，你好」会先重置会话，再回复本自我介绍。含其他内容的长句仍走正常问答。留空使用默认自我介绍。已输入 {{count}}/2000 字符。",
     "dmPolicy": "私聊策略",
     "groupPolicy": "群聊策略",

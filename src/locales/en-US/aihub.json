@@ -58,7 +58,7 @@
     "noFiles": "No files on the clipboard (text or an image?)",
     "noVision": "This model can't see images — switch to one marked vision-capable ({{name}})",
     "willSwitchVision": "This model can't see images; it will switch to \"{{model}}\" on send",
-    "noVisionModel": "No vision-capable model yet — these images become text placeholders on send. Add a vision model in model management to view them.",
+    "noVisionModel": "No vision-capable model yet — these images become text placeholders on send. Add a vision model in Model Plaza to view them.",
     "switchedVision": "Switched to vision model \"{{model}}\" for this image",
     "imageAsText": "No vision model; the image was sent as a text placeholder",
     "dropHint": "Release to attach files (text / images / docx·pdf·xlsx)"
@@ -211,7 +211,7 @@
       "find_port": "Port",
       "kill_port": "Free port",
       "hosts": "Hosts",
-      "tunnel": "Tunnel",
+      "tunnel": "Public Tunnel",
       "runtime": "Runtime",
       "screenshot": "Screenshot",
       "mouse": "Mouse",

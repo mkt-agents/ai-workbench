@@ -58,7 +58,7 @@
     "noFiles": "剪贴板里没有可附加的文件（复制的是文本或图片？）",
     "noVision": "当前模型不支持看图，换个标了「支持看图」的模型再试（{{name}}）",
     "willSwitchVision": "当前模型不看图，发送时将自动切到「{{model}}」",
-    "noVisionModel": "还没有标「支持看图」的模型，这些图发送时会转成文字占位——去模型管理加一个图文模型即可直接看图",
+    "noVisionModel": "还没有标「支持看图」的模型，这些图发送时会转成文字占位——去模型广场加一个图文模型即可直接看图",
     "switchedVision": "已切到看图模型「{{model}}」来处理这张图",
     "imageAsText": "没有看图模型，图片已转成文字占位发送",
     "dropHint": "松开即可附加文件（文本 / 图片 / docx·pdf·xlsx）"
@@ -211,7 +211,7 @@
       "find_port": "查端口",
       "kill_port": "释放端口",
       "hosts": "Hosts",
-      "tunnel": "内网穿透",
+      "tunnel": "公网隧道",
       "runtime": "运行时",
       "screenshot": "截屏",
       "mouse": "鼠标",

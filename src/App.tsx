@@ -78,7 +78,7 @@ function App() {
   const webPlugins = useGlobalStore((s) => s.webPlugins);
 
   const goTab = (tab: Tab) => {
-    // 旧侧栏「提示词」已并进模型管理第三 Tab
+    // 旧侧栏「提示词」已并进模型广场第三 Tab
     if (tab === "snippets") {
       openModelsPromptsTab();
       setActiveTab("ai-models");
@@ -126,7 +126,7 @@ function App() {
   const [trayToast, setTrayToast] = useState<string | null>(null);
   const [hotkeyToast, setHotkeyToast] = useState<string | null>(null);
 
-  // Bookmark shortcuts belong to the app, not to the 网页工具 page: that page unmounts on
+  // Bookmark shortcuts belong to the app, not to the 常用站点 page: that page unmounts on
   // every tab switch, and a page-level registration dies with it.
   useEffect(() => {
     let cancelled = false;

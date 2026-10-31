@@ -24,11 +24,11 @@
     "more": "More actions"
   },
   "hint": {
-    "idle": "This app is not running. Click “Start & embed” and it will appear right here.",
-    "running": "Its window is running but not embedded yet. Click “Re-embed” to take it over.",
-    "missing": "No executable found. Install the app first, or use “Add app” to pick an .exe by hand.",
-    "error": "Could not take over its window. The reason and the windows that process owns are below; a slow starter such as an IDE may need a minute or two the first time.",
-    "note": "Embedding takes over the app's own native window: leaving this page hides it (the app keeps running) and closing the workbench gives the window back to the desktop.",
+    "idle": "The app isn’t running. Click “Start & embed” above and its window will show up here.",
+    "running": "The app is running, but its window isn’t embedded yet. Click “Re-embed” to take it over.",
+    "missing": "No executable found. Install the app first, or use “Add app” to pick an .exe.",
+    "error": "Could not take over its window. Details and matching windows are below; a cold IDE start may need a minute or two.",
+    "note": "Leave this page to hide the window (app keeps running). Close the workbench to return it to the desktop.",
     "startingLabel": "Starting",
     "waitingLabel": "Waiting for window",
     "closingLabel": "Closing",

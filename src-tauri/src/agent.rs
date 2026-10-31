@@ -559,7 +559,7 @@ fn provider_tools(names: &[&str], anthropic: bool) -> Vec<Value> {
 fn friendly_send_error(detail: &str) -> String {
     let lower = detail.to_lowercase();
     let hint = if lower.contains("timed out") || lower.contains("timeout") {
-        "连接或读取超时：服务商没在时限内回应，稍后重试，或在模型配置里换一个服务商。"
+        "连接或读取超时：服务商没在时限内回应，稍后重试，或在模型广场里换一个服务商。"
     } else if lower.contains("dns") || lower.contains("name could not be resolved") {
         "域名解析失败：检查地址是否写对，以及本机网络 / 代理。"
     } else if lower.contains("ssl") || lower.contains("certificate") {
@@ -567,7 +567,7 @@ fn friendly_send_error(detail: &str) -> String {
     } else if lower.contains("connection refused") || lower.contains("connect error") {
         "连不上服务：本地模型（Ollama / LM Studio）是否已启动、端口是否对？"
     } else {
-        "请求没发出去：检查模型配置里的地址、密钥与本机网络。"
+        "请求没发出去：检查模型广场里的地址、密钥与本机网络。"
     };
     format!("{hint}｜原文：{detail}")
 }
@@ -575,7 +575,7 @@ fn friendly_send_error(detail: &str) -> String {
 /// HTTP status → what to do next. The provider's body stays appended, unedited.
 fn friendly_model_error(status: u16, snippet: &str) -> String {
     let head = match status {
-        401 | 403 => "密钥无效或没有这个模型的权限（HTTP {s}）。到 AI 工作台 → 模型配置 核对 API Key 与模型名。",
+        401 | 403 => "密钥无效或没有这个模型的权限（HTTP {s}）。到 AI 工作台 → 模型广场 核对 API Key 与模型名。",
         404 => "接口路径或模型名不对（HTTP {s}）。基础 URL 通常要到 /v1 为止，模型名以服务商列表里的写法为准。",
         429 => "被限流或额度用尽（HTTP {s}）。等一会儿再试，或换一个模型服务商。",
         400 if mentions_context(snippet) =>
@@ -2828,14 +2828,14 @@ fn decode_sse(text: &str) -> Result<Value, String> {
     {
         if !reasoning.trim().is_empty() {
             return Err(
-                "模型只输出了思考过程（reasoning），没有正文。多半是输出上限被思考耗尽：调大模型配置里的输出上限，或换一个非思考模型。"
+                "模型只输出了思考过程（reasoning），没有正文。多半是输出上限被思考耗尽：到模型广场调大输出上限，或换一个非思考模型。"
                     .into(),
             );
         }
         match finish_reason.as_deref() {
             Some("length") => {
                 return Err(
-                    "模型输出被输出上限（max_tokens）截断，正文为空。请调大模型配置里的输出上限后重试。".into(),
+                    "模型输出被输出上限（max_tokens）截断，正文为空。请到模型广场调大输出上限后重试。".into(),
                 );
             }
             Some("error") => {
@@ -5037,7 +5037,7 @@ mod tests {
     #[test]
     fn http_errors_map_to_the_next_action() {
         let key = friendly_model_error(401, "Invalid api key");
-        assert!(key.contains("密钥") && key.contains("模型配置") && key.contains("HTTP 401"));
+        assert!(key.contains("密钥") && key.contains("模型广场") && key.contains("HTTP 401"));
         assert!(friendly_model_error(404, "not found").contains("基础 URL"));
         assert!(friendly_model_error(429, "slow down").contains("限流"));
         assert!(friendly_model_error(503, "unavailable").contains("暂时不可用"));

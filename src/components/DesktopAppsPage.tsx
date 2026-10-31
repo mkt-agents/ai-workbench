@@ -1331,19 +1331,26 @@ export default function DesktopAppsPage() {
               </div>
             </div>
           ) : (
-          <div className="dapps-hint">
-            <AppWindow size={28} />
-            <p className="dapps-hint-title">{label(active)}</p>
-            <p className="dapps-hint-text">
-              {phase === "missing"
-                ? t("hint.missing")
-                : phase === "running"
-                  ? t("hint.running")
-                  : phase === "error"
-                    ? t("hint.error")
-                    : t("hint.idle")}
-            </p>
-            <p className="dapps-hint-note">{t("hint.note")}</p>
+          <div className="dapps-hint is-idle">
+            <div className="dapps-idle-hero" aria-hidden="true">
+              <span className="dapps-idle-glow" />
+              <div className="dapps-idle-icon">
+                <AppTabIcon app={active} installed={installed} />
+              </div>
+            </div>
+            <div className="dapps-hint-body">
+              <p className="dapps-hint-title">{label(active)}</p>
+              <p className="dapps-hint-text">
+                {phase === "missing"
+                  ? t("hint.missing")
+                  : phase === "running"
+                    ? t("hint.running")
+                    : phase === "error"
+                      ? t("hint.error")
+                      : t("hint.idle")}
+              </p>
+              <p className="dapps-hint-note">{t("hint.note")}</p>
+            </div>
 
             {/* Failure detail lives here: the app window paints over everything
                 below the toolbar, so a toast would be unreachable anyway. */}

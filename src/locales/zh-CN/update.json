@@ -19,7 +19,7 @@
   "upgrade": "立即升级",
   "upgradeConfirmTitle": "确认升级？",
   "upgradeConfirmMessage": "将下载 v{{version}} 的 {{installer}}，随后自动关闭 AI Workbench 并静默安装。",
-  "upgradeConfirmWarning": "进行中的长任务（DeepSeek 服务、内网穿透隧道、AI 生成）会被停止。",
+  "upgradeConfirmWarning": "进行中的长任务（DeepSeek 服务、公网隧道、AI 生成）会被停止。",
   "downloading": "正在下载安装包",
   "verifying": "正在校验并准备安装…",
   "restarting": "正在安装，完成后应用会自动重启…",

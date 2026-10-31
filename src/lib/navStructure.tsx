@@ -39,7 +39,7 @@ export type Tab =
   | "im-bots"
   /** 智能互联 → 天玑助手（页内 Tab：交互与权限 / 联网扩展） */
   | "tianji-assistant"
-  /** @deprecated 已并入模型管理「提示词」Tab；hash / navigate-tab 仍可认，App 会重定向。 */
+  /** @deprecated 已并入模型广场「提示词」Tab；hash / navigate-tab 仍可认，App 会重定向。 */
   | "snippets"
   | "drafts"
   | "devtools"
@@ -84,7 +84,6 @@ export const NAV_NODES: NavNode[] = [
       { id: "desktop-apps", labelKey: "desktopApps", icon: <AppWindow size={16} /> },
       { id: "drafts", labelKey: "drafts", icon: <StickyNote size={16} /> },
       { id: "ai-models", labelKey: "modelConfig", icon: <Cpu size={16} /> },
-      { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
     ],
   },
   {
@@ -112,7 +111,6 @@ export const NAV_NODES: NavNode[] = [
     children: [
       { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
       { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
-      { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
     ],
   },
   {
@@ -128,6 +126,10 @@ export const NAV_NODES: NavNode[] = [
     group: "system",
     labelKey: "systemUtils",
     defaultOpen: true,
-    children: [{ id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> }],
+    children: [
+      { id: "devtools", labelKey: "devtools", icon: <Terminal size={16} /> },
+      { id: "app-launcher", labelKey: "quickApps", icon: <Rocket size={16} /> },
+      { id: "hosts", labelKey: "hosts", icon: <Network size={16} /> },
+    ],
   },
 ];

@@ -1,6 +1,6 @@
 //! 模型模态（文本 / 多模态）的离线启发式识别。
 //!
-//! 为什么是纯函数：模型管理页「添加模型」时要在**不联网**的前提下先给出一个靠谱的
+//! 为什么是纯函数：模型广场「添加模型」时要在**不联网**的前提下先给出一个靠谱的
 //! 默认值（文本 / 图文），用户可再手动覆盖。规则全部内联在这里，便于 `cargo test`
 //! 钉住契约——新厂商上线只需在关键词表里补一行并加一条用例。
 //!
@@ -167,7 +167,7 @@ pub fn is_vision_default(provider: &str, model_id: &str) -> bool {
 /// ACP / 部分 OpenAI 兼容网关拒绝的 completion 上限（与 wecom_dsh_profile 一致）。
 pub const MAX_SAFE_COMPLETION_TOKENS: u32 = 131_072;
 
-/// 离线推断「单次回答最长输出」token 上限，供模型管理表单预填。
+/// 离线推断「单次回答最长输出」token 上限，供模型广场表单预填。
 /// 返回 None 时前端保持默认 4096。**不要**把上下文窗口当输出上限。
 pub fn infer_max_output_tokens(provider: &str, model_id: &str) -> Option<u32> {
     let id = model_id.trim().to_lowercase();

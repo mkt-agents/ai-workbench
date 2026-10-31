@@ -1,5 +1,5 @@
 /**
- * Shared URL helpers for the 网页工具 page.
+ * Shared URL helpers for the 常用站点 page.
  *
  * `matchUrlPattern` used to exist twice — once in `PluginBrowser.tsx` for the editor's
  * "does this URL match" preview and once in `lib/browser.ts` for the filter that decides
