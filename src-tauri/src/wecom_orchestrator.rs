@@ -421,7 +421,7 @@ impl Orchestrator {
                 GateDecision::Allow => SessionKey::dm_for(&bot, &msg.userid),
                 GateDecision::NeedPairing(code) => {
                     let tip = format!(
-                        "首次私聊需要配对。请在 AI Workbench → 设置 → 联网扩展 → 企业微信机器人 中批准配对码：{code}"
+                        "首次私聊需要配对。请在 AI Workbench → 设置 → IM 机器人 → 企业微信 中批准配对码：{code}"
                     );
                     send_finish(&self.sock, &msg.req_id, &stream_id, &tip).await;
                     return;
@@ -947,7 +947,7 @@ impl Orchestrator {
                 if let Some(rt) = self.running.lock().await.get(&session.as_str()) { rt.cancel(); }
                 crate::wecom_progress::finish(&request, "timeout", "timeout");
                 crate::wecom_diagnostics::record(&request, "engine", "timeout", Some("turn_deadline"), None, serde_json::json!({}));
-                send_finish(&self.sock, &msg.req_id, stream_id, "排障回合达到600秒期限，已停止；未完成项不视为查询无数据。").await;
+                send_finish(&self.sock, &msg.req_id, stream_id, "本轮达到 600 秒期限，已停止；未完成项不视为查询无数据。").await;
                 append_reply_history(session,user_text,stream_id,"");
                 Ok(())
             },

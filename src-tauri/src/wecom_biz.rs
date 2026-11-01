@@ -32,7 +32,7 @@ pub async fn run(app: AppHandle, name: &str, args: &Value) -> Result<String, Str
     let state = app.state::<WecomState>();
     let creds = state.applied.lock().await.clone();
     let creds = creds.ok_or_else(|| {
-        "企微通道未配置：请先在「设置 → 联网扩展 → 企业微信机器人」中保存 Bot ID/Secret 并启用。".to_string()
+        "企微通道未配置：请先在「设置 → IM 机器人 → 企业微信」中保存 Bot ID/Secret 并启用。".to_string()
     })?;
 
     let token = token_for(&state, &creds).await?;
@@ -103,7 +103,7 @@ async fn token_for(state: &WecomState, creds: &AppliedCreds) -> Result<String, S
         let hint = if from_corp {
             "自建应用 Corpid/Secret 被企微拒绝：请核对 Corpid 是否完整、应用 Secret 是否被重置，以及本机 IP 是否在应用的「企业可信 IP」内".to_string()
         } else {
-            "机器人 Bot ID/Secret 不能调用文档/日程/智能表格等业务接口（企微要求自建应用凭证）。请在「设置 → 联网扩展 → 企业微信机器人」中填写「业务 API Corpid / 应用 Secret」后重试".to_string()
+            "机器人 Bot ID/Secret 不能调用文档/日程/智能表格等业务接口（企微要求自建应用凭证）。请在「设置 → IM 机器人 → 企业微信」中填写「业务 API Corpid / 应用 Secret」后重试".to_string()
         };
         return Err(format!(
             "企微获取 token 失败 errcode={} errmsg={}。{}",
