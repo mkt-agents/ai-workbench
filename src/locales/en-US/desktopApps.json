@@ -42,7 +42,6 @@
     "visible": "visible",
     "hidden": "hidden",
     "owned": "owned",
-    "untitled": "(no title)",
     "refresh": "Refresh list",
     "launch": "Launch failed: {{message}}"
   },
@@ -72,6 +71,7 @@
     "hiddenNote": "Hidden now — shown once embedded",
     "recommended": "Recommended",
     "size": "about {{w}} × {{h}}",
+    "area": "about {{k}}k px²",
     "current": "Currently embedded"
   },
   "win": {

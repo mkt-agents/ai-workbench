@@ -1378,7 +1378,7 @@ export default function DesktopAppsPage() {
                           <button
                             type="button"
                             className="btn btn-secondary btn-small"
-                            disabled={busy || !c.visible}
+                            disabled={busy}
                             onClick={() => void attachPicked(c.hwnd)}
                           >
                             {t("picker.adopt")}
@@ -1456,7 +1456,7 @@ export default function DesktopAppsPage() {
                             </span>
                           ) : c.area > 0 ? (
                             <span className="dapps-error-tag">
-                              {Math.round(c.area / 1000)}k px²
+                              {t("picker.area", { k: Math.round(c.area / 1000) })}
                             </span>
                           ) : null}
                           <span className="dapps-error-tag">{c.hwnd}</span>

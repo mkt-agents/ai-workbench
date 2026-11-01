@@ -572,8 +572,9 @@ export interface DesktopWindowInfo {
   /** True when the window is currently parented into the workbench window. */
   attached: boolean;
   /**
-   * Diagnostic code when the adopted window shows nothing (empty when fine):
-   * `gone` | `not-child` | `minimized` | `invisible` | `size`.
+   * Diagnostic code when the adopted window shows nothing (empty when fine).
+   * Backend verify: `gone` | `not-child` | `minimized` | `maximized` | `invisible` | `size`.
+   * UI-only: `kill-failed` | `restore-failed`.
    */
   warning: string;
 }

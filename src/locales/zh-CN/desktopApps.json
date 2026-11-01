@@ -42,7 +42,6 @@
     "visible": "可见",
     "hidden": "隐藏",
     "owned": "有 owner",
-    "untitled": "（无标题）",
     "refresh": "刷新列表",
     "launch": "启动失败：{{message}}"
   },
@@ -71,8 +70,9 @@
       "hiddenGroup": "当前隐藏的窗口（嵌入后会显示）",
       "hiddenNote": "当前隐藏，嵌入后会显示",
       "recommended": "推荐",
-      "size": "约 {{w}} × {{h}}",
-      "current": "当前已嵌入"
+    "size": "约 {{w}} × {{h}}",
+    "area": "约 {{k}}k px²",
+    "current": "当前已嵌入"
     },
     "win": {
       "fallback": "{{class}} 窗口"
