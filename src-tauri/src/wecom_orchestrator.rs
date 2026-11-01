@@ -242,14 +242,20 @@ impl Orchestrator {
         if ev.eventtype != "enter_chat" {
             return;
         }
-        let require_mention = self.policy.lock().await.require_mention;
-        let welcome = if require_mention {
-            "你好，我是 AI Workbench 天玑助手。直接发问题即可；群聊里请先 @我。"
-        } else {
-            "你好，我是 AI Workbench 天玑助手。直接发问题即可。"
-        };
-        let payload = wecom_proto::respond_welcome_text(&ev.req_id, welcome);
+        // Same source as greeting short-circuit (`reply_self_intro`): configured or default.
+        let welcome = self.welcome_text().await;
+        let payload = wecom_proto::respond_welcome_text(&ev.req_id, &welcome);
         let _ = self.sock.send_raw(payload).await;
+    }
+
+    /// Configured self-intro, or `DEFAULT_SELF_INTRO` when blank.
+    async fn welcome_text(&self) -> String {
+        let configured = self.self_intro.lock().await.clone();
+        if configured.trim().is_empty() {
+            DEFAULT_SELF_INTRO.to_string()
+        } else {
+            configured
+        }
     }
 
     async fn on_msg(&self, app: AppHandle, msg: MsgCallback, generation: u64) {
@@ -322,7 +328,7 @@ impl Orchestrator {
         if !is_self_intro_command(text) { return false; }
         let configured = self.self_intro.lock().await.clone();
         let is_default = configured.trim().is_empty();
-        let intro = if is_default { DEFAULT_SELF_INTRO.to_string() } else { configured };
+        let intro = self.welcome_text().await;
         if let Some(id) = stream_id.strip_prefix("stream-") {
             crate::wecom_diagnostics::record(&format!("wecom-{id}"), "self_intro",
                 if is_default { "default" } else { "configured" }, None, None, serde_json::json!({}));
@@ -3281,6 +3287,25 @@ mod tests {
         assert!(crate::wecom_reply::final_text("stream-retire-done").unwrap().contains("completed first"));
         sock.stop().await;
         writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn welcome_text_uses_configured_self_intro_or_default() {
+        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
+        assert_eq!(orch.welcome_text().await, DEFAULT_SELF_INTRO);
+        *orch.self_intro.lock().await = "   ".into();
+        assert_eq!(orch.welcome_text().await, DEFAULT_SELF_INTRO);
+        let configured = "你好！我是测试助手\n\n· 业务/功能";
+        *orch.self_intro.lock().await = configured.into();
+        assert_eq!(orch.welcome_text().await, configured);
+        // Mirror on_event enter_chat: welcome frame body equals configured intro.
+        let frame: serde_json::Value = serde_json::from_str(&wecom_proto::respond_welcome_text(
+            "welcome-req",
+            &orch.welcome_text().await,
+        ))
+        .unwrap();
+        assert_eq!(frame["cmd"], "aibot_respond_welcome_msg");
+        assert_eq!(frame["body"]["text"]["content"], configured);
     }
 
     #[tokio::test]
