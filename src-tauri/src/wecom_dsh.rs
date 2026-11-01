@@ -377,14 +377,26 @@ impl DshEngine {
             g.model = model;
             g.applied.clear();
         }
+        let mut cleared_effort_to_auto = false;
         if g.effort != effort {
+            cleared_effort_to_auto = effort.trim().is_empty() && !g.effort.trim().is_empty();
             g.effort = effort;
             g.applied.clear();
+            // Empty effort skips the ACP reasoning_effort RPC, so a resumed session would
+            // keep the previous high/medium. Drop persisted mappings so the next acquire
+            // opens a fresh ACP session with the provider default.
+            if cleared_effort_to_auto {
+                g.sessions.clear();
+                g.active.clear();
+            }
         }
         if changed {
             g.active.config_changed();
         }
         drop(g);
+        if cleared_effort_to_auto {
+            self.persist_sessions().await;
+        }
         if changed {
             // Only retire here. The caller's kick/ensure_ready starts the next process.
             self.teardown().await;
@@ -2102,6 +2114,29 @@ mod tests {
             }),
             start_lock: Mutex::new(()),
         }
+    }
+
+    #[tokio::test]
+    async fn configure_clears_sessions_when_effort_returns_to_auto() {
+        let engine = engine_fixture();
+        {
+            let mut g = engine.inner.lock().await;
+            g.effort = "high".into();
+            g.sessions.insert("dm".into(), "history".into());
+            g.applied.insert("history".into(), ("model".into(), "high".into()));
+            g.active.started();
+            g.active.record("dm", "history", "resume");
+        }
+        assert!(
+            !engine
+                .configure(Tier::Read, "D:/fixture".into(), "model".into(), "".into())
+                .await
+        );
+        let g = engine.inner.lock().await;
+        assert!(g.effort.is_empty());
+        assert!(g.sessions.is_empty(), "应丢掉 ACP 会话映射以免 resume 沿用 high");
+        assert!(g.applied.is_empty());
+        assert!(g.active.validated.is_empty());
     }
 
     #[tokio::test]

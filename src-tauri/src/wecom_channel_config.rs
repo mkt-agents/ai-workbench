@@ -523,7 +523,7 @@ mod tests {
         let delta = plain(request()).delta(Some(&a));
         assert_eq!(delta.changed, vec!["effort"]);
         assert!(!delta.retire);
-        // configure clears the local selection cache; ACP currently sends no
-        // reasoning_effort RPC for empty values, so existing sessions may retain high.
+        // configure clears applied + drops session mappings when effort becomes empty,
+        // so the next acquire opens a fresh ACP session with provider default.
     }
 }

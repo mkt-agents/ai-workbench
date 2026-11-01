@@ -23,12 +23,21 @@
   animation: dd-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
   transform-origin: top right;
 }
+/* 触发器贴左缘时向右展开，避免在 overflow:hidden 容器里被裁掉左侧 */
+.dd-menu.is-start {
+  left: 0;
+  right: auto;
+  transform-origin: top left;
+}
 /* 下方放不下就朝上开（触发按钮在短窗口下半屏时，12 行的选区名单会顶出窗口） */
 .dd-menu.is-up {
   top: auto;
   bottom: calc(100% + 6px);
   transform-origin: bottom right;
   animation: dd-in-up 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dd-menu.is-up.is-start {
+  transform-origin: bottom left;
 }
 @keyframes dd-in-up {
   from { opacity: 0; transform: translateY(5px) scale(0.98); }

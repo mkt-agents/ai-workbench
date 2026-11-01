@@ -394,7 +394,7 @@
     "dshEffortDefault": "Provider 默认",
     "dshRefreshModels": "刷新模型",
     "dshLoading": "加载中…",
-    "dshModelsHint": "共 {{count}} 个模型，按 provider 分组；模型、密钥与登录都来自 DSH 自己。选「自动」时每轮会挑一个有凭据的模型。",
+    "dshModelsHint": "共 {{count}} 个模型，按 provider 分组；模型、密钥与登录都来自 DSH 自己。模型选「自动」时每轮会挑一个有凭据的模型。思考强度改回「Provider 默认」会新开 ACP 会话（避免沿用上一档 high/medium）。",
     "dshModelsEmpty": "DSH 里没有可用模型：请先在 Harness → 模型页配好模型与 key，再点「刷新模型」。",
     "dshModelsOff": "启用通道（DSH 引擎）后会自动加载模型列表。",
     "repoPath": "工作区路径",

@@ -21,6 +21,7 @@ export default function DropdownMenu({
   children,
   triggerClassName = "btn btn-secondary btn-icon",
   disabled,
+  align = "end",
   onOpenChange,
 }: {
   /** aria-label for the trigger button. */
@@ -31,6 +32,12 @@ export default function DropdownMenu({
   triggerClassName?: string;
   /** Disables the trigger (open menus stay open; the items keep their own state). */
   disabled?: boolean;
+  /**
+   * Horizontal anchor: `end` (default) grows left from the trigger's right edge;
+   * `start` grows right — use when the trigger sits on the left of an
+   * overflow-hidden shell (e.g. the repo-page selection roster).
+   */
+  align?: "end" | "start";
   /**
    * Called synchronously on every real open/close transition (including the
    * item-click close, before its action runs). Pages whose content is covered
@@ -99,7 +106,11 @@ export default function DropdownMenu({
         {children}
       </button>
       {open && (
-        <div ref={menuRef} className={`dd-menu${up ? " is-up" : ""}`} role="menu">
+        <div
+          ref={menuRef}
+          className={`dd-menu${up ? " is-up" : ""}${align === "start" ? " is-start" : ""}`}
+          role="menu"
+        >
           {items.map((item, i) =>
             "divider" in item ? (
               <div key={i} className="dd-divider" role="separator" />

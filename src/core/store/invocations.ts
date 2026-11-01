@@ -136,6 +136,8 @@ export interface Invocations {
   invokeGitCreateBranch: (path: string, name: string, base?: string | null) => Promise<string>;
   /** Refresh one tracking ref (`+refs/heads/<name>:refs/remotes/origin/<name>`); no worktree change. */
   invokeGitFetchBranch: (path: string, name: string) => Promise<string>;
+  /** `git fetch origin` — refresh tracking refs only; no worktree / merge. */
+  invokeGitFetch: (path: string) => Promise<string>;
   /** Create the branch **on origin** from a base; HEAD and the working tree stay put. */
   invokeGitPublishBranch: (path: string, name: string, base?: string | null) => Promise<string>;
   invokeGitSwitchBranch: (path: string, name: string) => Promise<string>;
@@ -481,6 +483,8 @@ export const invocations: Invocations = {
     tauriInvoke<string>('git_create_branch', { path, name, base: base ?? null }),
   invokeGitFetchBranch: (path: string, name: string) =>
     tauriInvoke<string>('git_fetch_branch', { path, name }),
+  invokeGitFetch: (path: string) =>
+    tauriInvoke<string>('git_fetch', { path }),
   invokeGitPublishBranch: (path: string, name: string, base?: string | null) =>
     tauriInvoke<string>('git_publish_branch', { path, name, base: base ?? null }),
   invokeGitSwitchBranch: (path: string, name: string) =>

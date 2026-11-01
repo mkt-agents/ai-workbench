@@ -398,12 +398,14 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 - **超时提示**：DSH 外层 600 秒超时文案为中性「本轮达到 600 秒期限…」，不再写死「排障回合」。
 - **设置入口文案**：配对 / 业务 API 提示统一为「设置 → IM 机器人 → 企业微信」（不再写「联网扩展」）。
 
-### 后续加强（P1，未做）
+### P1 已落地（2026-11-01）
 
-- **investigate 门控**：`run_dsh_turn_inner` 目前每条 DSH 消息先跑 `investigate()` 再
-  `ensure_ready()`；普通闲聊也可考虑跳过或与冷启动并行，需单测钉住排障关键词仍走调查。
-- **effort「自动」与 ACP 残留**：清空思考强度可能不重置已有 ACP 会话的高强度；可在设置页明示，
-  或在 `apply_selection` 对「改为自动」强制写回明确配置项。
+- **investigate 门控 + 并行 ready**：`needs_investigation` 判定非排障时跳过采集；排障路径与
+  `ensure_ready` 并行启动。关键词 / 意图 / follow-up 仍走调查（单测见
+  `needs_investigation_gates_chat_vs_troubleshoot`）。
+- **effort「Provider 默认」**：`configure` 从非空改为空时清空 ACP 会话映射并落盘，下一轮
+  `acquire` 新开会话，避免 resume 沿用 high/medium；设置页 `dshModelsHint` 已说明。
+- **天玑出站 stream_id**：`out_targets` 与活流统一为 `stream-{msgid}`（修发图/文件对不齐）。
 
 ## 两档能力对照（「原版引擎 100%」的边界）
 

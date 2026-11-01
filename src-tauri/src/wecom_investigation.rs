@@ -403,25 +403,25 @@ fn progress(tx: &UnboundedSender<String>, text: impl Into<String>) {
     let _ = tx.send(text.into());
 }
 
-/// Returns no context for unrelated messages. Cancellation returns Err, preventing model startup.
-pub async fn investigate(
-    addr: &str,
-    header: &str,
-    key: &str,
-    text: &str,
-    now: DateTime<FixedOffset>,
-    request: &str,
-    tx: UnboundedSender<String>,
-) -> Result<InvestigationOutcome, String> {
-    if crate::wecom_investigation_query::starts_new_investigation(text) {
-        if let Ok(mut c) = contexts().lock() {
-            c.entries.remove(key);
-        }
+/// Drop stored query/trace cursors for this channel key (e.g. after「新对话」).
+pub fn clear_context(key: &str) {
+    if let Ok(mut c) = contexts().lock() {
+        c.entries.remove(key);
     }
-    let previous = contexts().lock().ok().and_then(|mut c| c.get(key));
-    let field_query = regex::Regex::new(r"(?i)(keywords?|service|trace[_ ]?id)\s*[=:：]")
-        .expect("query trigger regex")
-        .is_match(text);
+}
+
+fn query_trigger_regex() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)(keywords?|service|trace[_ ]?id)\s*[=:：]")
+            .expect("query trigger regex")
+    })
+}
+
+/// Cheap gate: true when the message should run the SkyWalking investigation path.
+/// Shared by the orchestrator (skip / parallel ready) and `investigate` (early return).
+pub fn needs_investigation(text: &str) -> bool {
+    let field_query = query_trigger_regex().is_match(text);
     let explicit_query = field_query
         || [
             "查日志",
@@ -441,12 +441,34 @@ pub async fn investigate(
         .iter()
         .any(|w| text.contains(w));
     let follow = is_followup(text);
-    if crate::wecom_intent::analyze(text).intent != crate::wecom_intent::QaIntent::Troubleshoot
-        && !explicit_query
-        && !follow
-    {
-        return Ok(not_executed(String::new(), None, request, None));
+    crate::wecom_intent::analyze(text).intent == crate::wecom_intent::QaIntent::Troubleshoot
+        || explicit_query
+        || follow
+}
+
+/// Empty investigation outcome for non-troubleshoot turns (same shape as investigate early exit).
+pub fn skipped_investigation(request: &str) -> InvestigationOutcome {
+    not_executed(String::new(), None, request, None)
+}
+
+/// Returns no context for unrelated messages. Cancellation returns Err, preventing model startup.
+pub async fn investigate(
+    addr: &str,
+    header: &str,
+    key: &str,
+    text: &str,
+    now: DateTime<FixedOffset>,
+    request: &str,
+    tx: UnboundedSender<String>,
+) -> Result<InvestigationOutcome, String> {
+    if crate::wecom_investigation_query::starts_new_investigation(text) {
+        clear_context(key);
     }
+    let previous = contexts().lock().ok().and_then(|mut c| c.get(key));
+    if !needs_investigation(text) {
+        return Ok(skipped_investigation(request));
+    }
+    let follow = is_followup(text);
     let mut query = match parse_query(text, previous.as_ref().map(|s| &s.query), now) {
         Ok(q) => q,
         Err(e) => {
@@ -2337,5 +2359,27 @@ mod tests {
     fn server_errors_are_classified_without_copying_secrets() {
         assert_eq!(category("auth_error: token=secret"), "auth_error");
         assert!(!category("transport_error https://host?key=secret").contains("secret"));
+    }
+
+    #[test]
+    fn needs_investigation_gates_chat_vs_troubleshoot() {
+        for chat in ["你好", "今天天气怎么样", "帮我写一段周报", "介绍一下你自己"] {
+            assert!(
+                !needs_investigation(chat),
+                "普通闲聊不应进调查：{chat}"
+            );
+        }
+        for hit in [
+            "查日志 订单号 ABC",
+            "帮我查一下 traceId=abc123",
+            "关键词=timeout 查日志",
+            "service=payment 日志查询",
+            "线上报错了帮我排一下",
+        ] {
+            assert!(
+                needs_investigation(hit),
+                "排障/显式查询应进调查：{hit}"
+            );
+        }
     }
 }

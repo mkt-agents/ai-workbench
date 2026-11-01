@@ -8,6 +8,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   ClipboardList,
+  CloudDownload,
   Copy,
   FolderOpen,
   FolderPlus,
@@ -103,6 +104,7 @@ type BranchPlan = {
 
 type BatchAction =
   | { kind: "refresh" }
+  | { kind: "fetch" }
   | { kind: "pull" }
   | { kind: "push" }
   | { kind: "bind"; accountId: string }
@@ -179,6 +181,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
   const invokeGitScanRepos = useGlobalStore((s) => s.invokeGitScanRepos);
   const invokeGitPush = useGlobalStore((s) => s.invokeGitPush);
   const invokeGitPull = useGlobalStore((s) => s.invokeGitPull);
+  const invokeGitFetch = useGlobalStore((s) => s.invokeGitFetch);
   const invokeGitCreateBranch = useGlobalStore((s) => s.invokeGitCreateBranch);
   const invokeGitSwitchBranch = useGlobalStore((s) => s.invokeGitSwitchBranch);
   const invokeGitListBranches = useGlobalStore((s) => s.invokeGitListBranches);
@@ -628,6 +631,27 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
       return skip ? { path, skip } : { path };
     });
 
+  const fetchSkip = (path: string): string | undefined => {
+    const s = summaries[path];
+    if (!s?.isGit) return t("batch.skipNotGit");
+    if (!s.originUrl) return t("batch.skipNoRemoteFetch");
+    if (repoInGitOperation(s)) return t("batch.skipGitOperation");
+    return undefined;
+  };
+
+  const doBatchFetch = (paths: string[]) => {
+    const items = withSkip(paths, fetchSkip);
+    if (items.every((i) => i.skip)) {
+      showMsg("error", t("batch.noneToFetch"));
+      return;
+    }
+    void runBatch(items, t("batch.fetch"), { kind: "fetch" }, async (path) => {
+      void (await invokeGitFetch(path));
+    });
+  };
+
+  const handleBatchFetch = () => doBatchFetch([...batchPaths]);
+
   const pullSkip = (path: string): string | undefined => {
     const s = summaries[path];
     if (!s?.isGit) return t("batch.skipNotGit");
@@ -817,6 +841,9 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     switch (action.kind) {
       case "refresh":
         void doBatchRefresh(paths);
+        break;
+      case "fetch":
+        doBatchFetch(paths);
         break;
       case "pull":
         doBatchPull(paths);
@@ -1073,6 +1100,21 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
     }
   };
 
+  const handleFetch = async (path: string) => {
+    if (syncingPath) return;
+    setSyncingPath(path);
+    try {
+      await invokeGitFetch(path);
+      showMsg("success", t("workbench.fetchOk"));
+      await refreshOne(path);
+    } catch (e) {
+      showMsg("error", String(e));
+      await refreshOne(path);
+    } finally {
+      setSyncingPath(null);
+    }
+  };
+
   const handleApplyPreset = async (path: string, userName: string, email: string) => {
     if (applyingPath) return;
     setApplyingPath(path);
@@ -1304,6 +1346,16 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                   icon: <Copy size={13} />,
                   onClick: () => void handleCopyPath(p.path),
                 },
+                ...(s?.isGit && s.originUrl
+                  ? [
+                      {
+                        label: t("workbench.fetch"),
+                        icon: <CloudDownload size={13} />,
+                        disabled: !!syncingPath || batchBusy,
+                        onClick: () => void handleFetch(p.path),
+                      },
+                    ]
+                  : []),
                 ...(s?.isGit
                   ? [
                       {
@@ -1454,6 +1506,7 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
               label={t("batch.rosterTitle")}
               triggerClassName="repos-batch-count"
               disabled={batchBusy}
+              align="start"
               items={roster.map((row) => ({
                 label: `${row.label}${row.branch ? ` — ${row.branch}` : ""}${
                   row.hidden ? ` · ${t("batch.rosterHidden")}` : ""
@@ -1544,6 +1597,16 @@ function GitReposPage({ active = true, onOpenCommit, onOpenReport }: Props) {
                 >
                   <GitBranch size={14} />
                   <span>{t("batch.switchBranch")}</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn commit-icon-btn"
+                  disabled={batchBusy || batchPaths.length === 0}
+                  onClick={handleBatchFetch}
+                  title={t("batch.fetchTip")}
+                >
+                  <CloudDownload size={14} />
+                  <span>{t("batch.fetch")}</span>
                 </button>
                 <button
                   type="button"

@@ -394,7 +394,7 @@
     "dshEffortDefault": "Provider default",
     "dshRefreshModels": "Refresh models",
     "dshLoading": "Loading…",
-    "dshModelsHint": "{{count}} models grouped by provider; models, keys and sign-in all come from DSH itself. \"Auto\" picks a model that has credentials each turn.",
+    "dshModelsHint": "{{count}} models grouped by provider; models, keys and sign-in all come from DSH itself. Model \"Auto\" picks a credentialed model each turn. Switching effort back to \"Provider default\" opens a fresh ACP session so a prior high/medium is not retained.",
     "dshModelsEmpty": "No usable model in DSH: configure a model and key on the Harness → Models page, then hit \"Refresh models\".",
     "dshModelsOff": "Turn the channel on (DSH engine) to load the model list automatically.",
     "repoPath": "Workspace path",

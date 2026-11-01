@@ -867,7 +867,7 @@ impl Orchestrator {
                 format!("wecom-{}", msg.msgid),
                 crate::wecom_channel::OutTarget {
                     req_id: msg.req_id.clone(),
-                    stream_id: format!("s-{}", msg.msgid),
+                    stream_id: stream_id.clone(),
                 },
             );
         }
@@ -1010,60 +1010,16 @@ impl Orchestrator {
             &header,
             offset,
         );
+        if crate::wecom_investigation_query::starts_new_investigation(user_text) {
+            crate::wecom_investigation::clear_context(&context_key);
+        }
         let zone = chrono::FixedOffset::east_opt(
             offset.unwrap_or_else(|| chrono::Local::now().offset().local_minus_utc() / 60) * 60,
         )
         .ok_or("OAP时区配置无效")?;
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let investigation = crate::wecom_investigation::investigate(
-            &addr,
-            &header,
-            &context_key,
-            user_text,
-            chrono::Utc::now().with_timezone(&zone),
-            preflight_request,
-            progress_tx,
-        );
-        tokio::pin!(investigation);
-        let mut progress_clock = Instant::now() - Duration::from_secs(1);
-        let mut progress_open = true;
-        let collect_phase =
-            crate::wecom_performance::Phase::new(preflight_request, "acquisition", 0);
-        let mut outcome = loop {
-            tokio::select! {
-                result = &mut investigation => break result?,
-                note = progress_rx.recv(), if progress_open => {
-                    match note {
-                        Some(note) if progress_clock.elapsed() >= Duration::from_millis(800) => {
-                            let _ = self.sock.send_raw(wecom_proto::respond_stream(&req_id, stream_id, &note, false)).await;
-                            progress_clock = Instant::now();
-                        }
-                        None => progress_open = false,
-                        _ => {}
-                    }
-                }
-            }
-        };
-        drop(collect_phase);
-        if crate::cancellation::is_cancelled(preflight_request) {
-            return Ok(());
-        }
-        // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
-        if source_failure_reply(&outcome) {
-            crate::wecom_progress::finish(preflight_request, "failed", "no_evidence");
-            let body = crate::wecom_report::fallback_with_reason(
-                outcome.query.as_ref(),
-                "",
-                "not_executed",
-                outcome.clarification.as_deref(),
-            );
-            send_finish(&self.sock, &req_id, stream_id, &body).await;
-            append_reply_history(session, user_text, stream_id, &body);
-            return Ok(());
-        }
-        // 冷启动 / 首次初始化 profile 可能要几十秒：启动放在独立任务里跑（它要拿引擎的
-        // start 锁），这里只等结果；超过 3 秒就在**同一个** stream id 上更新一句进度，
-        // 不另外开消息（平台对首帧的时间窗已经用 on_msg 的占位帧满足了）。
+
+        // Kick DSH warm-up in parallel with investigation (or immediately when skipped).
+        // Cold start can take tens of seconds; do not wait for OAP collect before spawning it.
         let ready_phase =
             crate::wecom_performance::Phase::new(preflight_request, "engine_ready", 0);
         let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
@@ -1083,6 +1039,61 @@ impl Orchestrator {
             }
             let _ = ready_tx.send(result);
         });
+
+        let collect_phase =
+            crate::wecom_performance::Phase::new(preflight_request, "acquisition", 0);
+        let mut outcome = if crate::wecom_investigation::needs_investigation(user_text) {
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+            let investigation = crate::wecom_investigation::investigate(
+                &addr,
+                &header,
+                &context_key,
+                user_text,
+                chrono::Utc::now().with_timezone(&zone),
+                preflight_request,
+                progress_tx,
+            );
+            tokio::pin!(investigation);
+            let mut progress_clock = Instant::now() - Duration::from_secs(1);
+            let mut progress_open = true;
+            let collected = loop {
+                tokio::select! {
+                    result = &mut investigation => break result?,
+                    note = progress_rx.recv(), if progress_open => {
+                        match note {
+                            Some(note) if progress_clock.elapsed() >= Duration::from_millis(800) => {
+                                let _ = self.sock.send_raw(wecom_proto::respond_stream(&req_id, stream_id, &note, false)).await;
+                                progress_clock = Instant::now();
+                            }
+                            None => progress_open = false,
+                            _ => {}
+                        }
+                    }
+                }
+            };
+            drop(collect_phase);
+            collected
+        } else {
+            drop(collect_phase);
+            crate::wecom_investigation::skipped_investigation(preflight_request)
+        };
+        if crate::cancellation::is_cancelled(preflight_request) {
+            return Ok(());
+        }
+        // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
+        if source_failure_reply(&outcome) {
+            crate::wecom_progress::finish(preflight_request, "failed", "no_evidence");
+            let body = crate::wecom_report::fallback_with_reason(
+                outcome.query.as_ref(),
+                "",
+                "not_executed",
+                outcome.clarification.as_deref(),
+            );
+            send_finish(&self.sock, &req_id, stream_id, &body).await;
+            append_reply_history(session, user_text, stream_id, &body);
+            return Ok(());
+        }
+        // Await the warm-up started above; after 3s nudge on the same stream id.
         let ready = tokio::select! {
             res = &mut ready_rx => decode_ready(res),
             _ = tokio::time::sleep(Duration::from_secs(3)) => {

@@ -1689,6 +1689,43 @@ fn git_fetch_branch_sync(repo_path: String, name: String) -> Result<String, Stri
     ))
 }
 
+fn friendly_origin_fetch_error(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("authentication failed")
+        || lower.contains("permission denied")
+        || lower.contains("403")
+    {
+        return "没有权限读取远端（检查凭据或访问令牌）".into();
+    }
+    if lower.contains("could not resolve host") || lower.contains("timed out") {
+        return "连不上远端：检查网络或代理后重试".into();
+    }
+    clip_git_tail(raw, "从远端提取失败")
+}
+
+/// `git fetch origin`: refresh all origin tracking refs, never the working tree.
+/// Deliberately skips `ensure_repo_clear` — fetch does not move HEAD or the
+/// worktree, so a mid-merge repo can still update remote-tracking refs.
+fn git_fetch_sync(repo_path: String) -> Result<String, String> {
+    ensure_git_repo(&repo_path)?;
+    if !has_remote(&repo_path, "origin") {
+        return Err("这个仓库没有配置 origin，无法从远端提取".into());
+    }
+    let output = match git_network_output(&repo_path, &["fetch", "origin"]) {
+        Ok(output) => output,
+        Err(err) => return Err(friendly_origin_fetch_error(&err)),
+    };
+    if !output.status.success() {
+        let combined = format!(
+            "{} {}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return Err(friendly_origin_fetch_error(&combined));
+    }
+    Ok("已从 origin 提取".into())
+}
+
 /// Create the branch **on origin** from a base ref without touching the working
 /// tree or HEAD. Deliberately not behind `ensure_repo_clear`: nothing in the
 /// worktree moves, so a repo that is mid-merge can still publish a branch.
@@ -2766,6 +2803,13 @@ pub async fn git_create_branch(
 #[tauri::command]
 pub async fn git_fetch_branch(path: String, name: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || git_fetch_branch_sync(path, name))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_fetch(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || git_fetch_sync(path))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
 }
@@ -3883,9 +3927,9 @@ mod v2_tests {
 #[cfg(test)]
 mod branch_tests {
     use super::{
-        git_command, git_create_branch_sync, git_fetch_branch_sync, git_list_branches_sync,
-        git_publish_branch_sync, git_stdout, git_switch_branch_sync, resolve_branch_base,
-        validate_branch_name,
+        git_command, git_create_branch_sync, git_fetch_branch_sync, git_fetch_sync,
+        git_list_branches_sync, git_publish_branch_sync, git_stdout, git_switch_branch_sync,
+        resolve_branch_base, validate_branch_name,
     };
     use std::path::{Path, PathBuf};
 
@@ -4084,6 +4128,38 @@ mod branch_tests {
         )
         .unwrap();
         assert_eq!(on_origin.trim(), fresh.trim(), "远端新分支应指向刚取到的提交");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 仓库页「从远端提取」：整仓 `git fetch origin`，只推进跟踪引用。
+    #[test]
+    #[ignore = "creates throwaway git repositories and shells out to git"]
+    fn fetch_origin_advances_tracking_refs() {
+        let (root, origin, work1) = seed_remote("fetch-all").expect("seed remote");
+        git_run(&root, &["clone", "-q", &origin.to_string_lossy(), "work2"]).unwrap();
+        let work2 = root.join("work2");
+        let dir2 = work2.to_string_lossy().to_string();
+
+        std::fs::write(work1.join("file.txt"), "one\ntwo\n").unwrap();
+        git_run(&work1, &["add", "-A"]).unwrap();
+        git_run(&work1, &["commit", "-q", "-m", "second"]).unwrap();
+        git_run(&work1, &["push", "-q", "origin", "master"]).unwrap();
+
+        let stale =
+            git_stdout(&dir2, &["rev-parse", "--verify", "refs/remotes/origin/master"]).unwrap();
+        let msg = git_fetch_sync(dir2.clone()).expect("fetch origin");
+        assert!(msg.contains("已从 origin 提取"), "实际: {msg}");
+        let fresh =
+            git_stdout(&dir2, &["rev-parse", "--verify", "refs/remotes/origin/master"]).unwrap();
+        assert_ne!(fresh, stale, "跟踪引用应被推进");
+        assert_eq!(
+            git_stdout(&dir2, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .unwrap()
+                .trim(),
+            "master",
+            "HEAD 不许动"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
