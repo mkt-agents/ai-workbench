@@ -22,6 +22,8 @@ import {
   restartWecomChannel,
   revokeWecomUser,
   runWecomDocgenNow,
+  startWecomQr,
+  pollWecomQr,
   syncDshProfile,
   testWecomDocgen,
   type WecomPairing,
@@ -205,6 +207,13 @@ export default function WecomSettingsCard() {
   const [diagnosticSelection, setDiagnosticSelection] = useState<{ requestId: string; revision: number } | null>(null);
   /** 小卡片 Tab：一页只显示一组设置，别把六七块叠成一条长滚动 */
   const [section, setSection] = useState<WecomSection>("channel");
+  const [qrBusy, setQrBusy] = useState(false);
+  const [qrScode, setQrScode] = useState("");
+  const [qrAuthUrl, setQrAuthUrl] = useState("");
+  const [qrSvg, setQrSvg] = useState("");
+  const [qrPageUrl, setQrPageUrl] = useState("");
+  const [qrDetail, setQrDetail] = useState("");
+  const qrPollRef = useRef<number | null>(null);
   /** 诊断日志只在第一次切过去时拉一次（空日志也不会反复请求） */
   const diagLoaded = useRef(false);
   const mounted = useRef(false);
@@ -218,6 +227,10 @@ export default function WecomSettingsCard() {
       refreshGeneration.current += 1;
       logGeneration.current += 1;
       sessionGeneration.current += 1;
+      if (qrPollRef.current != null) {
+        window.clearInterval(qrPollRef.current);
+        qrPollRef.current = null;
+      }
     };
   }, []);
 
@@ -444,6 +457,71 @@ export default function WecomSettingsCard() {
   const modelCount =
     catalog?.groups.reduce((total, group) => total + group.options.length, 0) ?? 0;
 
+  const stopQrPoll = () => {
+    if (qrPollRef.current != null) {
+      window.clearInterval(qrPollRef.current);
+      qrPollRef.current = null;
+    }
+  };
+
+  const startQrBind = async () => {
+    setQrBusy(true);
+    setMsg("");
+    setQrDetail("");
+    stopQrPoll();
+    try {
+      const started = await startWecomQr();
+      if (!mounted.current) return;
+      setQrScode(started.scode);
+      setQrAuthUrl(started.authUrl);
+      setQrSvg(started.qrSvg || "");
+      setQrPageUrl(started.qrPageUrl);
+      setQrDetail(t("wecom.qrWaiting"));
+      const startedAt = Date.now();
+      qrPollRef.current = window.setInterval(() => {
+        void (async () => {
+          if (Date.now() - startedAt > 5 * 60 * 1000) {
+            stopQrPoll();
+            if (mounted.current) {
+              setQrDetail(t("wecom.qrExpired"));
+              setQrBusy(false);
+            }
+            return;
+          }
+          try {
+            const polled = await pollWecomQr(started.scode);
+            if (!mounted.current) return;
+            setQrDetail(polled.detail || t("wecom.qrWaiting"));
+            if (polled.status === "expired") {
+              stopQrPoll();
+              setQrBusy(false);
+              return;
+            }
+            if (polled.status === "success" && polled.botId && polled.secret) {
+              stopQrPoll();
+              setQrBusy(false);
+              setQrScode("");
+              setQrAuthUrl("");
+              setQrSvg("");
+              setBotIdValue(polled.botId);
+              await push({ wecomBotId: polled.botId, wecomEnabled: true }, polled.secret);
+              setMsg(t("wecom.qrSuccess"));
+            }
+          } catch (e) {
+            if (mounted.current) setQrDetail(String(e));
+          }
+        })();
+      }, 3000);
+    } catch (e) {
+      setMsg(String(e));
+      setQrBusy(false);
+    }
+  };
+
+  const setBotIdValue = (v: string) => {
+    botId.setValue(v);
+  };
+
   return (
     <div className="wecom-settings">
       {/* 概览条：同类信息挤一行（连接 / 引擎 / 时长 / 最近排障 / 计数），长说明收进「说明」 */}
@@ -559,6 +637,29 @@ export default function WecomSettingsCard() {
                   </span>
                 </>
               ) : null}
+            </span>
+          </div>
+          <div className="wecom-fact">
+            <span className="wecom-fact-label">{t("wecom.diag.factCrossQuery")}</span>
+            <span className="wecom-fact-items">
+              {status?.lastCrossQuery ? (
+                <>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.crossDocs", { countText: reportedCount(status.lastCrossQuery.docHits) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.crossCode", { countText: reportedCount(status.lastCrossQuery.codeHits) })}
+                  </span>
+                  <span className="wecom-chip">
+                    {t("wecom.diag.crossLogs", { countText: reportedCount(status.lastCrossQuery.logHits) })}
+                  </span>
+                  <span className="wecom-chip" title={status.lastCrossQuery.summary}>
+                    {status.lastCrossQuery.engine}
+                  </span>
+                </>
+              ) : (
+                <span className="wecom-chip">{t("wecom.diag.noCrossQuery")}</span>
+              )}
             </span>
           </div>
         </div>
@@ -753,6 +854,83 @@ export default function WecomSettingsCard() {
               </div>
             }
           />
+
+
+          <Row
+            wide
+            label={t("wecom.qrBind")}
+            control={
+              <div className="wecom-inline">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-small"
+                  disabled={busy || qrBusy}
+                  onClick={() => void startQrBind()}
+                >
+                  {qrBusy ? t("wecom.qrWaiting") : t("wecom.qrBind")}
+                </button>
+                {qrPageUrl ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      void import("@tauri-apps/api/core").then(({ invoke }) =>
+                        invoke("open_in_browser", { url: qrPageUrl }).catch(() =>
+                          window.open(qrPageUrl, "_blank"),
+                        ),
+                      );
+                    }}
+                  >
+                    {t("wecom.qrOpenPage")}
+                  </button>
+                ) : null}
+                {qrBusy ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      stopQrPoll();
+                      setQrBusy(false);
+                      setQrScode("");
+                      setQrAuthUrl("");
+                      setQrSvg("");
+                      setQrPageUrl("");
+                      setQrDetail("");
+                    }}
+                  >
+                    {t("wecom.qrCancel")}
+                  </button>
+                ) : null}
+              </div>
+            }
+            hint={
+              <>
+                <Hint summary={t("wecom.qrBindHint")} />
+                {qrAuthUrl ? (
+                  <div className="wecom-qr-box">
+                    <p className="setting-hint">{t("wecom.qrScanning")}</p>
+                    {qrSvg ? (
+                      <div
+                        className="wecom-qr-img wecom-qr-svg"
+                        role="img"
+                        aria-label="WeCom QR"
+                        dangerouslySetInnerHTML={{ __html: qrSvg }}
+                      />
+                    ) : (
+                      <p className="setting-hint">{t("wecom.qrSvgMissing")}</p>
+                    )}
+                    {qrDetail ? <p className="setting-hint">{qrDetail}</p> : null}
+                    {qrScode ? (
+                      <p className="setting-hint">
+                        <code className="tabular-nums">{qrScode.slice(0, 8)}…</code>
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </>
+            }
+          />
+
 
           <div className="wecom-subhead">{t("wecom.subCorp")}</div>
 
@@ -996,6 +1174,7 @@ export default function WecomSettingsCard() {
                 <option value="doc">{t("wecom.answerMode.doc")}</option>
                 <option value="doc_code">{t("wecom.answerMode.docCode")}</option>
                 <option value="code">{t("wecom.answerMode.code")}</option>
+                <option value="linked">{t("wecom.answerMode.linked")}</option>
               </select>
             }
             hint={<Hint summary={t("wecom.answerModeHintShort")} details={t("wecom.answerModeHint")} />}

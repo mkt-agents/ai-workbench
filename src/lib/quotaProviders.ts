@@ -4,7 +4,19 @@ import { quotaCardOrderLoad, quotaCardOrderSave } from "./quotaAccounts";
 import type { InstalledAppInfo } from "../core/types";
 
 /** 能查额度、能加到看板的服务商。 */
-export type QuotaCardId = "workbuddy" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae";
+export type QuotaCardId =
+  | "workbuddy"
+  | "cursor"
+  | "grok-bot"
+  | "codex"
+  | "deepseek"
+  | "qoder"
+  | "claude"
+  | "zcode"
+  | "mimo"
+  | "trae"
+  /** 自定义中转站（new-api / one-api / sub2api…），Key + 接口地址按账号存。 */
+  | "custom";
 
 export interface QuotaProvider {
   id: string;
@@ -32,12 +44,14 @@ export const QUOTA_PROVIDERS: QuotaProvider[] = [
   { id: "deepseek", name: "DeepSeek Harness", domain: "www.deepseek.com", url: "https://www.deepseek.com", keywords: ["deepseek"], card: "deepseek" },
   { id: "mimo", name: "小米 MiMo", domain: "platform.xiaomimimo.com", url: "https://platform.xiaomimimo.com", keywords: ["mimo", "xiaomi mimo"], card: "mimo" },
   { id: "trae", name: "Trae CN", domain: "trae.cn", url: "https://www.trae.cn", keywords: ["trae"], card: "trae" },
+  // 纯自定义：地址由用户在卡片里填，这里不给 domain（没安装检测，也没有官网）
+  { id: "custom", name: "自定义 / 中转站", domain: "", url: "", keywords: [], card: "custom" },
   { id: "workbuddy-ai", name: "WorkBuddy AI", domain: "www.workbuddy.ai", url: "https://www.workbuddy.ai", keywords: ["workbuddy ai"], card: null },
   { id: "antigravity", name: "Antigravity", domain: "antigravity.google", url: "https://antigravity.google", keywords: ["antigravity"], card: null },
   { id: "grok-build", name: "Grok Build", domain: "x.ai", url: "https://x.ai", keywords: ["grok build"], card: null },
 ];
 
-const ALL_CARDS: QuotaCardId[] = ["workbuddy", "cursor", "grok-bot", "codex", "deepseek", "qoder", "claude", "zcode", "mimo", "trae"];
+const ALL_CARDS: QuotaCardId[] = ["workbuddy", "cursor", "grok-bot", "codex", "deepseek", "qoder", "claude", "zcode", "mimo", "trae", "custom"];
 const CARDS_KEY = "aq-cards";
 
 export function loadEnabledCards(): QuotaCardId[] {

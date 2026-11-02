@@ -202,11 +202,22 @@ export type WecomPerformanceStatus = {
   firstEventMs?: number | null;
 };
 
+export type WecomCrossQueryStatus = {
+  requestId: string;
+  engine: string;
+  docHits: number;
+  codeHits: number;
+  logHits: number;
+  summary: string;
+  linked: boolean;
+};
+
 export type WecomStatus = {
   processId: number;
   buildLabel: string;
   lastInvestigation?: WecomInvestigationStatus | null;
   lastPerformance?: WecomPerformanceStatus | null;
+  lastCrossQuery?: WecomCrossQueryStatus | null;
   state: string;
   detail: string;
   enabled: boolean;
@@ -515,4 +526,29 @@ export async function fetchWecomSessionLog(
   limit = 30,
 ): Promise<WecomSessionLogEntry[]> {
   return invoke<WecomSessionLogEntry[]>("wecom_session_recent", { limit });
+}
+
+
+export type WecomQrStart = {
+  scode: string;
+  authUrl: string;
+  qrPageUrl: string;
+  qrSvg: string;
+};
+
+export type WecomQrPoll = {
+  status: string;
+  botId?: string | null;
+  secret?: string | null;
+  detail: string;
+};
+
+/** 申请企微扫码绑定会话（返回 scode + 授权 URL）。 */
+export function startWecomQr(): Promise<WecomQrStart> {
+  return invoke<WecomQrStart>("wecom_qr_start");
+}
+
+/** 轮询扫码结果；成功时带回 botId / secret（明文，调用方负责加密落盘）。 */
+export function pollWecomQr(scode: string): Promise<WecomQrPoll> {
+  return invoke<WecomQrPoll>("wecom_qr_poll", { scode });
 }

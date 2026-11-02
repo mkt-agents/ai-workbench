@@ -228,6 +228,14 @@ export interface AppSettings {
   aiHubProfiles?: AiHubProfile[];
   /** Active AI Hub profile id (builtin:* or custom). */
   aiHubProfileId?: string;
+  /** 个人微信 iLink Bot 通道 */
+  weixinEnabled?: boolean;
+  /** DPAPI enc:v1:… 密文 */
+  weixinBotToken?: string;
+  weixinBotId?: string;
+  weixinUserId?: string;
+  /** 默认 https://ilinkai.weixin.qq.com；扫码 confirmed 后可能跳转 */
+  weixinBaseUrl?: string;
   /** 企微智能机器人通道 */
   wecomEnabled?: boolean;
   wecomBotId?: string;
@@ -259,7 +267,7 @@ export interface AppSettings {
   /** DSH 引擎的思考强度；空 = provider 默认 */
   wecomDshEffort?: string;
   /** 问答模式：auto 按问题意图分流（默认）/ doc 文档优先 / doc_code 文档+代码回退 / code 仅代码 */
-  wecomAnswerMode?: "auto" | "doc" | "doc_code" | "code" | string;
+  wecomAnswerMode?: "auto" | "doc" | "doc_code" | "code" | "linked" | string;
   /** 逆向文档目录（相对工作区），默认 doc */
   wecomDocDir?: string;
   /** SkyWalking OAP 地址（空 = 不下发排障工具）；始终镜像当前环境档案 */

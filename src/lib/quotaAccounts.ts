@@ -1,10 +1,20 @@
 /**
- * 账号额度看板里授权登录得来的账号（Cursor / Grok Bot / DeepSeek / Qoder / Claude / ZCode / MiMo）— IPC 封装。
+ * 账号额度看板里授权登录得来的账号（Cursor / Grok Bot / DeepSeek / Qoder / Claude / ZCode / MiMo / 自定义中转站）— IPC 封装。
  * 令牌与 API Key 只存后端 SQLite，这里只拿到 id + 展示名。Codex 见 `codexQuota.ts`。
  */
 import { invoke } from "@tauri-apps/api/core";
 
-export type QuotaAccountProvider = "cursor" | "grok-bot" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae";
+export type QuotaAccountProvider =
+  | "cursor"
+  | "grok-bot"
+  | "deepseek"
+  | "qoder"
+  | "claude"
+  | "zcode"
+  | "mimo"
+  | "trae"
+  /** 自定义中转站（new-api / one-api / sub2api 等）：API Key + 接口地址。 */
+  | "custom";
 
 export interface QuotaAccount {
   id: number;
@@ -13,6 +23,8 @@ export interface QuotaAccount {
   label: string | null;
   /** 用户自定义短标签；看板区分多账号。 */
   tag: string | null;
+  /** 自定义中转站的接口地址；其余服务商为空串。 */
+  baseUrl: string;
   createdAt: number;
 }
 
@@ -243,3 +255,35 @@ export const traeGetSettings = () => invoke<TraeSettings>("trae_get_settings");
 export const traeUpdateSettings = (patch: TraeSettingsPatch) => invoke<TraeSettings>("trae_update_settings", { patch });
 
 export const TRAE_AUTO_CHECKIN_EVENT = "trae-auto-checkin-done";
+
+export interface CustomBalance {
+  /** 后端给的语义标签：账户余额 / 已用 / 总额度。 */
+  label: string;
+  amount: number;
+  /** `USD` / `CNY`；换算不出来时为空串。 */
+  currency: string;
+}
+
+export interface CustomQuotaDto {
+  id: number;
+  ok: boolean;
+  message: string | null;
+  label: string | null;
+  /** 归一化后的接口地址（不含 Key）。 */
+  baseUrl: string;
+  /** 命中的接口族：OpenAI 兼容计费 / new-api / one-api / OpenAI 兼容。 */
+  source: string | null;
+  balances: CustomBalance[];
+  /** 查到了但没有余额数字时的说明（站点未开放余额接口 / 额度不限）。 */
+  note: string | null;
+  needsReauth: boolean;
+  at: number;
+}
+
+/**
+ * 自定义中转站：填 API Key 与接口地址，先探测一次（地址与 Key 都对才入库）。
+ * 余额接口按 new-api / one-api / OpenAI 兼容计费依次尝试，命中哪个用哪个。
+ */
+export const customAddKey = (apiKey: string, baseUrl: string, label?: string) =>
+  invoke<QuotaAccount>("custom_add_key", { apiKey, baseUrl, label: label ?? null });
+export const customQuotaFetch = (id: number) => invoke<CustomQuotaDto>("custom_quota_fetch", { id });

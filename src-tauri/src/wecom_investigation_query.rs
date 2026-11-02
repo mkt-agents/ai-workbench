@@ -45,11 +45,64 @@ pub struct InvestigationQuery {
     #[serde(default)]
     pub keyword_count: usize,
     pub service: Option<String>,
+    /// 仅供最终回答聚焦；不会发送到 SkyWalking 关键词过滤。
+    #[serde(default)]
+    pub answer_targets: Vec<String>,
     pub trace_id: Option<String>,
     #[serde(default)]
     pub level: Option<String>,
     /// 一起始页码。
     pub page: i64,
+}
+
+/// Apply a validated model intent without turning answer targets into log filters.
+pub fn apply_natural_intent(
+    query: &mut InvestigationQuery,
+    intent: &crate::wecom_natural_query::NaturalQueryIntent,
+) {
+    if query.service.is_none() {
+        query.service = intent.service.clone();
+    }
+    for anchor in &intent.anchors {
+        if !query.keywords.iter().any(|v| v.eq_ignore_ascii_case(anchor)) {
+            query.keywords.push(anchor.clone());
+        }
+    }
+    query.keyword_count = query.keywords.len();
+    query.answer_targets = intent.answer_targets.clone();
+    // 宿主给的级别兜底只补空位，绝不覆盖用户已经明说的级别。
+    if query.level.is_none() {
+        query.level = intent.level.clone();
+    }
+}
+
+/// 服务已知、时间窗明确但一个检索锚点都没有时的有界兜底：只扫 ERROR 级别。
+///
+/// 「服务对了但没给对象」是这个通道最常见的追问形态。此前这种输入直接被判
+/// `not_executed`，等于把一个可用的窄查询（服务 + 窗口 + ERROR）丢掉，再把问题
+/// 抛回给用户。兜底只放宽「无关键词」，不放宽服务与时间窗：服务缺失、窗口超过
+/// 24 小时、或已有 traceId / 关键词 / 业务标识符时一律返回 `None`，由调用方要求澄清。
+pub fn error_scan_fallback(query: &InvestigationQuery) -> Option<InvestigationQuery> {
+    if query
+        .service
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return None;
+    }
+    if query.trace_id.is_some() || !query.keywords.is_empty() || !query.identifiers.is_empty() {
+        return None;
+    }
+    let start = DateTime::parse_from_rfc3339(&query.start).ok()?;
+    let end = DateTime::parse_from_rfc3339(&query.end).ok()?;
+    if end <= start || end - start > Duration::hours(24) {
+        return None;
+    }
+    let mut fallback = query.clone();
+    fallback.level = Some("ERROR".into());
+    Some(fallback)
 }
 
 fn re(pattern: &str) -> Regex {
@@ -216,6 +269,7 @@ pub fn parse_query(
             match_any: false,
             keyword_count: 0,
             service: None,
+            answer_targets: Vec::new(),
             trace_id: None,
             level: None,
             page: 1,
@@ -352,6 +406,7 @@ pub fn parse_query(
         query.exclude_keyword.clear();
         query.match_any = false;
     }
+    let has_explicit_keywords = explicit_keywords.is_some();
     let mut keywords = explicit_keywords.unwrap_or_else(|| {
         let mut out = Vec::new();
         // NL 业务短语优先（旁证 content）；analyze 里只再接纳错误信号（勿把整句症状当关键词）
@@ -397,6 +452,46 @@ pub fn parse_query(
         }
         out
     });
+    // 结构槽位 + 原文确定性补位：绝不在时间挖空后的 remaining 上猜实体。
+    // 即使已有 timeout 等错误词，仍要合并人名等实体（timeout 不能短路补位）。
+    if !has_explicit_keywords
+        && nl_phrases.is_empty()
+        && (service.is_some() || !identifiers.is_empty())
+    {
+        let slots = crate::wecom_natural_query::extract_structural_slots(text);
+        for anchor in &slots.anchors {
+            if keywords.len() >= 3 {
+                break;
+            }
+            if crate::wecom_natural_query::is_search_anchor(anchor) {
+                push_unique(&mut keywords, anchor.clone());
+            }
+        }
+        if query.answer_targets.is_empty() && !slots.answer_targets.is_empty() {
+            query.answer_targets = slots.answer_targets;
+        }
+        if let Some(intent) = crate::wecom_natural_query::infer_intent_from_text(text) {
+            for anchor in intent.anchors {
+                if keywords.len() >= 3 {
+                    break;
+                }
+                if crate::wecom_natural_query::is_search_anchor(&anchor) {
+                    push_unique(&mut keywords, anchor);
+                }
+            }
+            if query.answer_targets.is_empty() && !intent.answer_targets.is_empty() {
+                query.answer_targets = intent.answer_targets;
+            }
+        }
+    }
+    // Drop verb/generic debris from free-text inference; keep quoted literals + error tokens.
+    if !has_explicit_keywords {
+        keywords.retain(|k| {
+            crate::wecom_natural_query::is_search_anchor(k)
+                || is_error_keyword(k)
+                || quotes.iter().any(|q| q == k)
+        });
+    }
     // 关键词爆炸防护：贴 JSON / 长配置会把十几个字面量塞进 AND，日志一条都对不上。
     // 超出时只保留前几个，诊断里记录原始数量，用户能看到为什么被截。
     let raw_keyword_count = keywords.len();
@@ -774,6 +869,7 @@ fn extract_service_filter(text: &str) -> Option<String> {
     for pattern in [
         r"(?:只看|仅看)\s*(?:服务|应用)?\s*([A-Za-z][A-Za-z0-9_.-]*)",
         r"(?:服务|应用)\s+([A-Za-z][A-Za-z0-9_.-]*)",
+        r"([A-Za-z][A-Za-z0-9_.-]*)\s*(?:服务|应用)",
     ] {
         if let Some(c) = re(pattern).captures(text) {
             return Some(c[1].to_string());
@@ -1147,6 +1243,80 @@ fn number(text: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn natural_intent_keeps_answer_target_out_of_log_keywords() {
+        let now = DateTime::parse_from_rfc3339("2026-11-02T18:00:00+08:00").unwrap();
+        let mut q = parse_query("查今天日志 txmsg 服务", None, now).unwrap();
+        let intent = crate::wecom_natural_query::parse_high_confidence(
+            r#"{"confidence":"high","service":"txmsg","anchors":["孙武"],"answerTargets":["openId"]}"#,
+            "查今天日志 txmsg 服务，孙武的 openId 是什么",
+        )
+        .unwrap();
+        apply_natural_intent(&mut q, &intent);
+        assert_eq!(q.service.as_deref(), Some("txmsg"));
+        assert_eq!(q.keywords, vec!["孙武"]);
+        assert_eq!(q.answer_targets, vec!["openId"]);
+    }
+
+    #[test]
+    fn apply_natural_intent_fills_level_only_when_the_user_did_not_say_it() {
+        let now = DateTime::parse_from_rfc3339("2026-11-02T18:00:00+08:00").unwrap();
+        let intent = |level: &str| crate::wecom_natural_query::NaturalQueryIntent {
+            service: None,
+            anchors: Vec::new(),
+            answer_targets: Vec::new(),
+            level: Some(level.to_string()),
+        };
+
+        let mut blank = parse_query("查今天日志 txmsg 服务", None, now).unwrap();
+        assert!(blank.level.is_none());
+        apply_natural_intent(&mut blank, &intent("ERROR"));
+        assert_eq!(blank.level.as_deref(), Some("ERROR"));
+
+        let mut explicit = parse_query("查今天日志 txmsg 服务", None, now).unwrap();
+        explicit.level = Some("WARN".into());
+        apply_natural_intent(&mut explicit, &intent("ERROR"));
+        assert_eq!(
+            explicit.level.as_deref(),
+            Some("WARN"),
+            "宿主兜底不得覆盖用户明说的级别"
+        );
+    }
+
+    /// 「服务对、窗口对、就是一个对象都没给」不该直接要求澄清：
+    /// 服务 + 窗口 + ERROR 已经是一次窄查询，比把问题抛回用户有用。
+    #[test]
+    fn error_scan_fallback_applies_only_to_anchored_service_windows() {
+        let now = DateTime::parse_from_rfc3339("2026-11-02T18:00:00+08:00").unwrap();
+        let base = parse_query("查今天日志 txmsg 服务", None, now).unwrap();
+        assert!(base.keywords.is_empty(), "{:?}", base.keywords);
+        assert!(base.identifiers.is_empty());
+
+        let narrow = error_scan_fallback(&base).expect("bounded fallback");
+        assert_eq!(narrow.level.as_deref(), Some("ERROR"));
+        assert_eq!(narrow.service.as_deref(), Some("txmsg"));
+        assert_eq!((narrow.start.as_str(), narrow.end.as_str()), (base.start.as_str(), base.end.as_str()));
+
+        // 没有服务名：不是「服务对了但缺对象」，不放宽。
+        let mut no_service = base.clone();
+        no_service.service = None;
+        assert!(error_scan_fallback(&no_service).is_none());
+
+        // 窗口超过 24 小时：不收窄就变成泛查，不放宽。
+        let mut wide = base.clone();
+        wide.end = "2026-11-05T18:00:00+08:00".into();
+        assert!(error_scan_fallback(&wide).is_none());
+
+        // 已有锚点 / traceId：本来就能查，不需要兜底。
+        let mut anchored = base.clone();
+        anchored.keywords = vec!["孙武".into()];
+        assert!(error_scan_fallback(&anchored).is_none());
+
+        let mut traced = base.clone();
+        traced.trace_id = Some("4bf92f3577b34da6a3ce929d0e0e4736".into());
+        assert!(error_scan_fallback(&traced).is_none());
+    }
     #[test]
     fn spaced_and_slash_dates_normalize_before_parsing() {
         // The real 2026-10-30 report: `2026 10-30 16:12:13` used to leave `10-30`
@@ -1652,5 +1822,77 @@ mod tests {
     fn order_error_path_still_keeps_order_id_and_error() {
         let q = parse("订单202610281234567890失败 error");
         assert_eq!(q.keywords, vec!["202610281234567890", "error"]);
+    }
+
+    /// 2026-11-02：纯文本实体补位。错误词不该把 `孙武` 挤掉，但没有服务/标识符时
+    /// 也不能凭空补——那会把跨服务泛查伪装成「有锚点」。
+    #[test]
+    fn plain_text_entity_is_backfilled_only_with_a_service_or_identifier() {
+        let mixed = parse("txmsg 服务 孙武 timeout");
+        assert_eq!(mixed.service.as_deref(), Some("txmsg"));
+        assert!(
+            mixed.keywords.iter().any(|k| k == "timeout"),
+            "keywords={:?}",
+            mixed.keywords
+        );
+        assert!(
+            mixed.keywords.iter().any(|k| k == "孙武"),
+            "实体被错误词挤掉了：keywords={:?}",
+            mixed.keywords
+        );
+
+        let lonely = parse("孙武登录不上");
+        assert!(lonely.service.is_none());
+        assert!(lonely.identifiers.is_empty());
+        assert!(
+            !lonely.keywords.iter().any(|k| k == "孙武"),
+            "服务未知时不得补位：keywords={:?}",
+            lonely.keywords
+        );
+    }
+
+    /// 截图回归：挖空「今天」后不得把「找下」当查询条件，应保住「孙武」。
+    #[test]
+    fn reported_troubleshoot_sentence_keeps_sunwu_not_verb() {
+        let q = parse("新对话，排查日志，找下今天的日志，txmsg 服务，孙武的 openId 是啥？");
+        assert_eq!(q.service.as_deref(), Some("txmsg"));
+        assert!(
+            q.keywords.iter().any(|k| k == "孙武"),
+            "keywords={:?}",
+            q.keywords
+        );
+        assert!(
+            !q.keywords.iter().any(|k| k == "找下" || k.contains("找下")),
+            "keywords={:?}",
+            q.keywords
+        );
+        assert_eq!(q.answer_targets, vec!["openId"]);
+    }
+
+    #[test]
+    fn variant_look_up_phrasings_keep_entity() {
+        for text in [
+            "帮我看下 txmsg 服务里孙武的 openId",
+            "txmsg 服务，孙武的 openId是啥？",
+        ] {
+            let q = parse(text);
+            assert_eq!(q.service.as_deref(), Some("txmsg"), "{text}");
+            assert!(
+                q.keywords.iter().any(|k| k == "孙武"),
+                "{text} keywords={:?}",
+                q.keywords
+            );
+            assert!(
+                !q.keywords.iter().any(|k| {
+                    k == "找下"
+                        || k == "看下"
+                        || k == "里孙武"
+                        || k == "务里孙武"
+                        || k.ends_with("里孙武")
+                }),
+                "{text} keywords={:?}",
+                q.keywords
+            );
+        }
     }
 }

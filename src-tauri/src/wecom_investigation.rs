@@ -451,6 +451,66 @@ pub fn skipped_investigation(request: &str) -> InvestigationOutcome {
     not_executed(String::new(), None, request, None)
 }
 
+/// 从自然语言推出的锚点不能替代服务：跨服务泛查仍然禁止，只问一句「哪个服务」。
+///
+/// 只在**有自然语言意图**时生效——用户用 `keyword=timeout` 明确要求跨服务搜关键词时
+/// 不拦（那是他自己的决定），拦住的是宿主自己推出来的锚点。
+fn anchor_without_service(
+    natural_intent: Option<&crate::wecom_natural_query::NaturalQueryIntent>,
+    query: &InvestigationQuery,
+) -> bool {
+    natural_intent.is_some_and(|intent| !intent.anchors.is_empty())
+        && query.service.is_none()
+        && query.identifiers.is_empty()
+        && query.trace_id.is_none()
+}
+
+/// 缺锚点时的口语提示：只问一件事，不列字段清单——用户原话就是「必须要固定格式」。
+fn missing_anchor_hint(service: &str) -> String {
+    format!(
+        "服务 {service} 我认得，但还缺一个能出现在日志里的词：人名、单号、requestId 任给一个就行，给了我就去查。"
+    )
+}
+
+/// 连服务都不知道时的口语提示：时间用可读形态，不甩 RFC3339 原文。
+fn missing_scope_hint(start: &str, end: &str) -> String {
+    format!(
+        "我会查 {} 到 {} 的日志。还差一个能出现在日志里的词：服务名、人名、单号或 requestId 任给一个就行；暂不跨服务泛查，也不猜原因。",
+        crate::wecom_natural_query::readable_timestamp(start),
+        crate::wecom_natural_query::readable_timestamp(end)
+    )
+}
+
+/// 记录意图判定结果，便于在设置页「请求诊断」里回答「这句话为什么没被判成排障」——
+/// 词表要调时不用再靠猜。纯观察，不参与判定。
+fn record_intent_diagnostic(text: &str, request: &str) {
+    #[cfg(not(test))]
+    {
+        let analysis = crate::wecom_intent::analyze(text);
+        let status = if analysis.intent == crate::wecom_intent::QaIntent::Troubleshoot {
+            "troubleshoot"
+        } else {
+            "not_troubleshoot"
+        };
+        crate::wecom_diagnostics::record(
+            request,
+            "intent",
+            status,
+            None,
+            None,
+            json!({
+                "confidence": analysis.confidence,
+                "service": analysis.service,
+                "keywordCount": analysis.keywords.len(),
+            }),
+        );
+    }
+    #[cfg(test)]
+    {
+        let _ = (text, request);
+    }
+}
+
 /// Returns no context for unrelated messages. Cancellation returns Err, preventing model startup.
 pub async fn investigate(
     addr: &str,
@@ -461,10 +521,25 @@ pub async fn investigate(
     request: &str,
     tx: UnboundedSender<String>,
 ) -> Result<InvestigationOutcome, String> {
+    investigate_with_intent(addr, header, key, text, now, request, tx, None).await
+}
+
+/// Same bounded collector, optionally seeded by the host-validated natural-language intent.
+pub async fn investigate_with_intent(
+    addr: &str,
+    header: &str,
+    key: &str,
+    text: &str,
+    now: DateTime<FixedOffset>,
+    request: &str,
+    tx: UnboundedSender<String>,
+    natural_intent: Option<&crate::wecom_natural_query::NaturalQueryIntent>,
+) -> Result<InvestigationOutcome, String> {
     if crate::wecom_investigation_query::starts_new_investigation(text) {
         clear_context(key);
     }
     let previous = contexts().lock().ok().and_then(|mut c| c.get(key));
+    record_intent_diagnostic(text, request);
     if !needs_investigation(text) {
         return Ok(skipped_investigation(request));
     }
@@ -478,12 +553,23 @@ pub async fn investigate(
                 ),
                 None,
                 request,
-                Some(&format!(
-                    "查询条件未解析：{e} 请写成 2026-10-30 16:12:13，或 2026-10-30 10:12 至 16:12。"
-                )),
+                Some("时间或查询条件我没解析准，换个说法就行，比如「今天上午10点到11点」「昨天下午3点以后」。尚未访问日志平台，也不猜原因。"),
             ))
         }
     };
+    if let Some(intent) = natural_intent {
+        crate::wecom_investigation_query::apply_natural_intent(&mut query, intent);
+    }
+    if anchor_without_service(natural_intent, &query) {
+        let names = query.keywords.join("、");
+        let hint = missing_scope_hint(&query.start, &query.end);
+        return Ok(not_executed(
+            format!("【还差一个服务名】已识别检索词：{names}；尚未访问日志平台。"),
+            Some(query),
+            request,
+            Some(hint.as_str()),
+        ));
+    }
     if addr.trim().is_empty() {
         return Ok(not_executed(
             "【日志排障未执行：尚未配置SkyWalking OAP地址】未获得日志证据，禁止推测业务根因。"
@@ -493,13 +579,40 @@ pub async fn investigate(
             Some("尚未配置 SkyWalking OAP 地址，排障查询没有执行。请先在设置里填写 OAP 地址与请求头。"),
         ));
     }
+    // A bare natural-language service mention is not yet an executable query.
+    // Let the DSH extraction stage supply a literal anchor before touching OAP.
+    // 已经带上级别兜底（服务 + 窗口 + ERROR）时不再算泛查：它已经把范围收窄过一次。
+    if query.trace_id.is_none()
+        && query.keywords.is_empty()
+        && query.identifiers.is_empty()
+        && query.level.is_none()
+        && query.service.is_some()
+        && ["排查", "查日志", "查询日志", "日志"].iter().any(|w| text.contains(w))
+    {
+        let service_name = query.service.clone().unwrap_or_default();
+        let hint = missing_anchor_hint(&service_name);
+        return Ok(not_executed(
+            format!("【还差一个检索对象】已识别服务 {service_name}；尚未访问日志平台。"),
+            Some(query),
+            request,
+            Some(hint.as_str()),
+        ));
+    }
     if query.trace_id.is_none()
         && query.keywords.is_empty()
         && query.identifiers.is_empty()
         && query.service.is_none()
     {
-        return Ok(not_executed(format!("【查询条件不足】时间范围 {} 至 {}；请补充订单号、requestId、关键词或服务名。尚未执行跨服务泛查，禁止推测业务根因。", query.start, query.end), Some(query), request,
-            Some("时间窗已解析，但缺少业务标识符（订单号 / requestId / nlpIdOriginal）或关键词，未执行跨服务泛查。")));
+        let hint = missing_scope_hint(&query.start, &query.end);
+        return Ok(not_executed(
+            format!(
+                "【想帮你查日志，还差一点】时间范围 {} 至 {}。",
+                query.start, query.end
+            ),
+            Some(query),
+            request,
+            Some(hint.as_str()),
+        ));
     }
     let same_subject = previous.as_ref().is_some_and(|p| {
         p.query.keywords == query.keywords
@@ -508,6 +621,7 @@ pub async fn investigate(
             && p.query.start == query.start
             && p.query.end == query.end
             && p.query.service == query.service
+            && p.query.answer_targets == query.answer_targets
             && p.query.exclude_keyword == query.exclude_keyword
             && p.query.match_any == query.match_any
             && p.query.level == query.level
@@ -2381,5 +2495,48 @@ mod tests {
                 "排障/显式查询应进调查：{hit}"
             );
         }
+        // 2026-11-02：大白话症状也要进排障，否则「登录不上」直接掉进闲聊分支。
+        for plain in ["孙武登录不上", "txmsg 服务登录不上", "页面白屏了", "收不到验证码"] {
+            assert!(
+                needs_investigation(plain),
+                "大白话症状应进调查：{plain}"
+            );
+        }
+    }
+
+    /// 自然语言推出来的锚点不能顶替服务名，否则等于放行跨服务泛查。
+    #[test]
+    fn inferred_anchor_cannot_stand_in_for_a_service() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-02T19:25:26+08:00").unwrap();
+        let mut q = crate::wecom_investigation_query::parse_query("孙武登录不上", None, now).unwrap();
+        let intent = crate::wecom_natural_query::infer_intent_from_text("孙武登录不上").unwrap();
+        crate::wecom_investigation_query::apply_natural_intent(&mut q, &intent);
+
+        assert!(anchor_without_service(Some(&intent), &q), "缺服务时必须拦");
+        q.service = Some("txmsg".into());
+        assert!(!anchor_without_service(Some(&intent), &q), "有服务时放行");
+        assert!(
+            !anchor_without_service(None, &q),
+            "用户显式 keyword= 跨服务搜索不归这条管"
+        );
+    }
+
+    /// 用户原话是「必须要固定格式」，所以澄清话术不能再甩字段清单与 RFC3339 原文。
+    #[test]
+    fn clarification_hints_ask_one_question_in_plain_words() {
+        let anchored = missing_anchor_hint("txmsg");
+        assert!(anchored.contains("txmsg"), "{anchored}");
+        assert!(anchored.contains("人名"), "{anchored}");
+        for banned in ["nlpIdOriginal", "查询条件不足", "requestId、关键词或服务名"] {
+            assert!(!anchored.contains(banned), "{banned} leaked: {anchored}");
+        }
+
+        let scoped = missing_scope_hint("2026-11-02T16:03:16+08:00", "2026-11-02T20:03:16+08:00");
+        assert!(scoped.contains("2026-11-02 16:03:16"), "{scoped}");
+        assert!(scoped.contains("2026-11-02 20:03:16"), "{scoped}");
+        // 不能出现「T 分隔 + 偏移」的机器时间。
+        assert!(!scoped.contains("+08:00"), "RFC3339 leaked: {scoped}");
+        assert!(!scoped.contains('T'), "RFC3339 leaked: {scoped}");
+        assert!(scoped.contains("服务名"), "{scoped}");
     }
 }

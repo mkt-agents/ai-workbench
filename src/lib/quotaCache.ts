@@ -58,6 +58,54 @@ export function saveDsPeaks(peaks: Record<string, number>): void {
   }
 }
 
+const CUSTOM_DRAFT_KEY = "aq-custom-draft";
+
+/**
+ * 自定义中转站表单的未提交草稿。填到一半要去别的页面翻地址 / 取 Key 时，
+ * 卡片会随页面卸载，靠它把输入留在本机（成功入库后立刻删除，不长期留 Key）。
+ */
+export interface CustomDraft {
+  baseUrl: string;
+  apiKey: string;
+  label: string;
+}
+
+export function loadCustomDraft(): CustomDraft | null {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(CUSTOM_DRAFT_KEY) ?? "null");
+    if (!parsed || typeof parsed !== "object") return null;
+    const d = parsed as Partial<CustomDraft>;
+    return {
+      baseUrl: typeof d.baseUrl === "string" ? d.baseUrl : "",
+      apiKey: typeof d.apiKey === "string" ? d.apiKey : "",
+      label: typeof d.label === "string" ? d.label : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveCustomDraft(draft: CustomDraft): void {
+  try {
+    localStorage.setItem(CUSTOM_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    /* private mode / quota — 草稿只是不保留 */
+  }
+}
+
+export function clearCustomDraft(): void {
+  try {
+    localStorage.removeItem(CUSTOM_DRAFT_KEY);
+  } catch {
+    /* 同上 */
+  }
+}
+
+/** 草稿里还有内容（三个字段全空就不算，别每次进页面都弹表单）。 */
+export function hasCustomDraft(draft: CustomDraft | null): boolean {
+  return draft != null && (draft.baseUrl.trim() !== "" || draft.apiKey.trim() !== "" || draft.label.trim() !== "");
+}
+
 /** 超过该秒数的结果在进页面时自动重查（授权类逐卡查，WorkBuddy 走整池命令）。 */
 export const STALE_AFTER_SECS = 600;
 

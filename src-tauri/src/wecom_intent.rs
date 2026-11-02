@@ -104,6 +104,37 @@ const TROUBLE_SYMPTOM: &[&str] = &[
     "broken",
     "not working",
     "no response",
+    // 2026-11-02：大白话症状。缺了这些，`孙武登录不上` 的 trouble=0，
+    // 整条排障链路根本不启动——用户观感就是「它听不懂我在说什么」。
+    "登录不上",
+    "登不上",
+    "登不进去",
+    "进不去",
+    "下不了单",
+    "下不了",
+    "付不了款",
+    "付不了",
+    "支付不了",
+    "白屏",
+    "黑屏",
+    "转圈",
+    "一直转",
+    "加载不出来",
+    "加载失败",
+    "没数据",
+    "查不到",
+    "显示不出来",
+    "闪退",
+    "掉线",
+    "断连",
+    "收不到",
+    "发不出去",
+    "重复",
+    "文案错了",
+    "数据不对",
+    "特别慢",
+    "很慢",
+    "慢得很",
 ];
 /// 读代码信号词。
 const CODE_HINTS: &[&str] = &[
@@ -134,6 +165,25 @@ const DOC_HINTS: &[&str] = &[
     "模块",
 ];
 
+/// 排障/症状词表（强 + 弱 + 症状三档合并、去重）。
+///
+/// 供确定性切分（`wecom_natural_query::segment_anchor`）与查询层复用：症状词只有
+/// 一份事实来源，否则「这里认得、那里不认得」，同一句话在一层判排障、另一层仍当成实体。
+pub(crate) fn symptom_vocabulary() -> &'static [&'static str] {
+    static VOCAB: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    VOCAB.get_or_init(|| {
+        let mut out: Vec<&'static str> = Vec::new();
+        for list in [TROUBLE_STRONG, TROUBLE_WEAK, TROUBLE_SYMPTOM] {
+            for word in list {
+                if !out.contains(word) {
+                    out.push(*word);
+                }
+            }
+        }
+        out
+    })
+}
+
 /// 入口：分析一条用户消息。
 pub fn analyze(text: &str) -> QaAnalysis {
     let lower = text.to_lowercase();
@@ -154,9 +204,11 @@ pub fn analyze(text: &str) -> QaAnalysis {
             trouble += 18;
         }
     }
+    let mut symptom_hit = false;
     for h in TROUBLE_SYMPTOM {
         if lower.contains(&h.to_lowercase()) {
             trouble += 25;
+            symptom_hit = true;
         }
     }
     if has_http_error_code(&lower) {
@@ -173,6 +225,11 @@ pub fn analyze(text: &str) -> QaAnalysis {
         || extract_service(text).is_some();
     if mentions_problem && mentions_target {
         trouble += 20;
+    }
+    // 「目标 + 症状」几乎一定是在报障：`txmsg 服务登录不上`。
+    // 单看症状只有 +25，仍低于 strong 的 +40，不会把「怎么写登录日志」拉进排障。
+    if symptom_hit && mentions_target {
+        trouble += 15;
     }
 
     let mut code = 0i32;
@@ -313,7 +370,8 @@ pub fn extract_sidecar_contents(text: &str) -> Vec<String> {
 /// 「今天五粮液多少钱」→「五粮液」：剥时间/疑问壳，保留中间业务名。
 pub fn extract_business_phrases(text: &str) -> Vec<String> {
     const PREFIX: &[&str] = &[
-        "今天", "昨天", "明天", "刚才", "刚刚", "帮我", "请问", "麻烦", "查一下", "看一下",
+        "今天", "昨天", "明天", "刚才", "刚刚", "帮我", "请问", "麻烦", "查一下", "查下",
+        "看一下", "看下", "找一下", "找下", "搜一下", "搜下",
         "排查", "新起会话", "新会话", "新对话",
     ];
     const SUFFIX: &[&str] = &[
@@ -323,6 +381,7 @@ pub fn extract_business_phrases(text: &str) -> Vec<String> {
     const STOP: &[&str] = &[
         "今天", "昨天", "明天", "排查", "帮我", "请问", "多少钱", "怎么回事", "什么情况",
         "继续", "日志", "调用链", "新起会话", "新会话", "新对话",
+        "找下", "找一下", "查下", "查一下", "看下", "看一下", "搜下",
     ];
     let mut out = Vec::new();
     let mut buf = String::new();
@@ -1071,6 +1130,58 @@ mod tests {
             analyze("看OrderService报错").service.as_deref(),
             Some("OrderService")
         );
+    }
+
+    #[test]
+    fn plain_language_symptoms_are_troubleshooting() {
+        for text in [
+            "孙武登录不上",
+            "txmsg 服务登录不上",
+            "txmsg 服务 孙武登录不上",
+            "下单失败了，帮我看看",
+            "页面白屏了",
+            "登录不上，帮忙看下",
+            "收不到验证码",
+            "重复的文本会话",
+            "txmsg 服务进不去",
+        ] {
+            assert_eq!(
+                analyze(text).intent,
+                QaIntent::Troubleshoot,
+                "大白话症状必须判排障：{text}"
+            );
+        }
+    }
+
+    /// 症状词只有 +25：文档/实现语境仍要压制得住，否则普通问答会被拉进排障白花一次 OAP。
+    #[test]
+    fn expanded_symptoms_do_not_swallow_doc_questions() {
+        for text in [
+            "介绍下登录模块",
+            "写日志模块怎么实现",
+            "孙武是谁",
+            "今天几号",
+            "如何设计订单流程",
+            "接口文档在哪",
+        ] {
+            assert_ne!(
+                analyze(text).intent,
+                QaIntent::Troubleshoot,
+                "普通问答不该判排障：{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn symptom_vocabulary_is_merged_and_deduplicated() {
+        let vocab = symptom_vocabulary();
+        for word in ["报错", "排查", "登录不上", "白屏"] {
+            assert!(vocab.contains(&word), "词表缺 {word}");
+        }
+        let mut unique = vocab.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), vocab.len(), "词表有重复项");
     }
 
     #[test]

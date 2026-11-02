@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Custom relay">
+  <rect x="1" y="1" width="22" height="22" rx="6" fill="#64748B"/>
+  <path d="M6.4 9h8.4m-2.7-2.7L14.8 9l-2.7 2.7" fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M17.6 15H9.2m2.7 2.7L9.2 15l2.7-2.7" fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

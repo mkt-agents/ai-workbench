@@ -1079,6 +1079,7 @@ mod tests {
             match_any: false,
             keyword_count: 0,
             service: None,
+            answer_targets: Vec::new(),
             trace_id: None,
             level: None,
             page: 1,

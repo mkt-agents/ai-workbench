@@ -32,6 +32,7 @@ import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
 import { applyWecomChannel } from "./lib/wecomChannel";
+import { applyWeixinChannel } from "./lib/weixinChannel";
 import { applyTianjiApi } from "./lib/tianjiApi";
 import { useGlobalStore } from "./core/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -202,8 +203,15 @@ function App() {
               mcpServers: st.mcpServers,
             });
           }
+          if (st.settings.weixinEnabled) {
+            await applyWeixinChannel({
+              settings: st.settings,
+              models: st.aiModels,
+              mcpServers: st.mcpServers,
+            });
+          }
         } catch (e) {
-          console.warn("wecom channel apply failed:", e);
+          console.warn("wecom/weixin channel apply failed:", e);
         }
         // 天玑 OpenAI 兼容端点
         try {

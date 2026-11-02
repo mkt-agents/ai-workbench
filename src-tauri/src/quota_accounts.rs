@@ -56,6 +56,14 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
         conn.execute("ALTER TABLE quota_accounts ADD COLUMN tag TEXT", [])
             .map_err(|e| e.to_string())?;
     }
+    // 自定义中转站：同一个 Key 在不同站点是不同账号，接口地址必须跟着令牌一起存。
+    if !has_column(conn, "quota_accounts", "base_url")? {
+        conn.execute(
+            "ALTER TABLE quota_accounts ADD COLUMN base_url TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -85,6 +93,8 @@ pub enum Provider {
     Mimo,
     /// Trae CN（trae.cn，refreshToken 查用量 + 每日签到）。
     Trae,
+    /// 自定义中转站（new-api / one-api / sub2api 等）：API Key + 接口地址，见 `custom_quota.rs`。
+    Custom,
 }
 
 impl Provider {
@@ -98,6 +108,7 @@ impl Provider {
             Provider::Zcode => "zcode",
             Provider::Mimo => "mimo",
             Provider::Trae => "trae",
+            Provider::Custom => "custom",
         }
     }
 
@@ -111,6 +122,7 @@ impl Provider {
             "zcode" => Ok(Provider::Zcode),
             "mimo" => Ok(Provider::Mimo),
             "trae" => Ok(Provider::Trae),
+            "custom" => Ok(Provider::Custom),
             other => Err(format!("不支持的服务商: {other}")),
         }
     }
@@ -125,6 +137,8 @@ pub struct QuotaAccountDto {
     pub label: Option<String>,
     /// 用户自定义短标签（看板区分多账号）；OAuth 续期不覆盖。
     pub tag: Option<String>,
+    /// 自定义中转站的接口地址（其余服务商为空串）。
+    pub base_url: String,
     pub created_at: i64,
 }
 
@@ -135,6 +149,8 @@ pub(crate) struct StoredToken {
     pub refresh_token: String,
     /// unix 秒；0 = 未知（Cursor 系与 DeepSeek 不记录）。
     pub expires_at: i64,
+    /// 自定义中转站的接口地址（其余服务商为空）。
+    pub base_url: String,
 }
 
 /// 同一服务商下同一主体（JWT sub / API Key 掩码）重复授权只更新令牌。
@@ -145,6 +161,20 @@ pub fn upsert_account(
     label: Option<&str>,
     access_token: &str,
     refresh_token: &str,
+    now: i64,
+) -> Result<i64, String> {
+    upsert_account_at(conn, provider, subject, label, access_token, refresh_token, "", now)
+}
+
+/// 同 `upsert_account`，额外写接口地址（自定义中转站用；其余服务商传空串）。
+pub fn upsert_account_at(
+    conn: &Connection,
+    provider: Provider,
+    subject: &str,
+    label: Option<&str>,
+    access_token: &str,
+    refresh_token: &str,
+    base_url: &str,
     now: i64,
 ) -> Result<i64, String> {
     let existing: Option<i64> = if subject.is_empty() {
@@ -162,18 +192,18 @@ pub fn upsert_account(
         conn.execute(
             "UPDATE quota_accounts
                 SET access_token = ?2, refresh_token = ?3,
-                    label = COALESCE(?4, label), updated_at = ?5
+                    label = COALESCE(?4, label), base_url = ?6, updated_at = ?5
               WHERE id = ?1",
-            params![id, access_token, refresh_token, label, now],
+            params![id, access_token, refresh_token, label, now, base_url],
         )
         .map_err(|e| e.to_string())?;
         return Ok(id);
     }
     conn.execute(
         "INSERT INTO quota_accounts
-            (provider, subject, label, access_token, refresh_token, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-        params![provider.key(), subject, label, access_token, refresh_token, now],
+            (provider, subject, label, access_token, refresh_token, base_url, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![provider.key(), subject, label, access_token, refresh_token, base_url, now],
     )
     .map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
@@ -182,7 +212,7 @@ pub fn upsert_account(
 pub fn list_accounts(conn: &Connection, provider: Option<Provider>) -> Result<Vec<QuotaAccountDto>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, provider, label, tag, created_at FROM quota_accounts
+            "SELECT id, provider, label, tag, created_at, base_url FROM quota_accounts
               WHERE ?1 IS NULL OR provider = ?1
               ORDER BY id",
         )
@@ -195,6 +225,7 @@ pub fn list_accounts(conn: &Connection, provider: Option<Provider>) -> Result<Ve
                 label: r.get(2)?,
                 tag: r.get(3)?,
                 created_at: r.get(4)?,
+                base_url: r.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -216,7 +247,7 @@ pub fn set_account_tag(conn: &Connection, id: i64, tag: Option<String>) -> Resul
 
 pub(crate) fn load_token(conn: &Connection, id: i64, provider: Provider) -> Result<StoredToken, String> {
     conn.query_row(
-        "SELECT label, access_token, refresh_token, expires_at
+        "SELECT label, access_token, refresh_token, expires_at, base_url
            FROM quota_accounts WHERE id = ?1 AND provider = ?2",
         params![id, provider.key()],
         |r| {
@@ -225,6 +256,7 @@ pub(crate) fn load_token(conn: &Connection, id: i64, provider: Provider) -> Resu
                 access_token: r.get(1)?,
                 refresh_token: r.get(2)?,
                 expires_at: r.get(3)?,
+                base_url: r.get(4)?,
             })
         },
     )
@@ -608,6 +640,34 @@ mod tests {
         update_tokens(&c, id, "a2", "r2", 3600).unwrap();
         let tok = load_token(&c, id, Provider::Qoder).unwrap();
         assert_eq!((tok.access_token.as_str(), tok.refresh_token.as_str(), tok.expires_at), ("a2", "r2", 3600));
+    }
+
+    #[test]
+    fn custom_account_keeps_base_url_across_upsert() {
+        let c = mem();
+        let base = "https://relay.example.com";
+        let subject = "sk-abc…wxyz@https://relay.example.com";
+        let id = upsert_account_at(&c, Provider::Custom, subject, Some("relay"), "k1", "", base, 1).unwrap();
+        let tok = load_token(&c, id, Provider::Custom).unwrap();
+        assert_eq!(tok.base_url, base);
+
+        upsert_account_at(&c, Provider::Custom, subject, None, "k2", "", base, 2).unwrap();
+        let tok = load_token(&c, id, Provider::Custom).unwrap();
+        assert_eq!(tok.access_token, "k2");
+        assert_eq!(tok.base_url, base);
+        assert_eq!(tok.label.as_deref(), Some("relay"));
+
+        // 不同站点同 Key 是两个账号
+        let other = upsert_account_at(&c, Provider::Custom, "sk-abc…wxyz@https://other.example.com", None, "k1", "", "https://other.example.com", 3)
+            .unwrap();
+        assert_ne!(other, id);
+        let listed = list_accounts(&c, Some(Provider::Custom)).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].base_url, base);
+
+        // 其余服务商不写接口地址
+        let ds = upsert_account(&c, Provider::DeepSeek, "sk-x", Some("sk-x"), "SECRET", "", 4).unwrap();
+        assert_eq!(load_token(&c, ds, Provider::DeepSeek).unwrap().base_url, "");
     }
 
     #[test]

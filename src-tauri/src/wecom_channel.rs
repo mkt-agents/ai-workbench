@@ -248,6 +248,7 @@ pub fn normalize_answer_mode(raw: &str) -> String {
         "doc" => "doc".into(),
         "code" => "code".into(),
         "doc_code" => "doc_code".into(),
+        "linked" => "linked".into(),
         _ => "auto".into(),
     }
 }
@@ -268,6 +269,7 @@ pub struct WecomStatus {
     pub build_label: String,
     pub last_investigation: Option<serde_json::Value>,
     pub last_performance: Option<serde_json::Value>,
+    pub last_cross_query: Option<serde_json::Value>,
     pub active_jobs: usize,
     pub waiting_jobs: usize,
     pub max_jobs: usize,
@@ -475,6 +477,7 @@ pub async fn wecom_channel_status(
         ),
         last_investigation: crate::wecom_investigation::last_diagnostic(),
         last_performance: crate::wecom_performance::latest(),
+        last_cross_query: crate::wecom_cross_query::last_diagnostic(),
         active_jobs: state.orch.admission.active(),
         waiting_jobs: state.orch.admission.waiting(),
         max_jobs: state.orch.admission.limit(),

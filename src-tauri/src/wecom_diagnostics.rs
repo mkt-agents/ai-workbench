@@ -194,6 +194,9 @@ fn safe_metadata(value: &Value, depth: usize, remaining: &mut usize) -> Value {
             | "pid" | "processId" | "channelGeneration" | "page" | "rows" => {
                 value.as_u64().map(|n| Value::from(n.min(JS_SAFE_INTEGER)))
             }
+            "anchorCount" | "answerTargetCount" => {
+                value.as_u64().map(|n| Value::from(n.min(JS_SAFE_INTEGER)))
+            }
             "source" => enum_value(value, &["apply", "restart", "sync"]),
             "changedCount" => value.as_u64().map(Value::from),
             "changedFields" => value.as_array().map(|fields| Value::Array(fields.iter().take(40)
@@ -203,7 +206,7 @@ fn safe_metadata(value: &Value, depth: usize, remaining: &mut usize) -> Value {
                 .as_i64()
                 .map(|n| Value::from(n.clamp(-(JS_SAFE_INTEGER as i64), JS_SAFE_INTEGER as i64))),
             "partial" | "truncated" | "sourceReady" | "cancelled" | "timeout" | "reused"
-            | "success" | "final" => value.as_bool().map(Value::Bool),
+            | "success" | "final" | "executed" => value.as_bool().map(Value::Bool),
             "requestId" => value.as_str().map(|s| Value::String(request_identifier(s))),
             "sessionId" | "sessionKey" | "streamId" | "messageId" | "msgId" | "chatId"
             | "userId" | "botId" => value.as_str().map(|s| Value::String(identifier(s))),
@@ -226,6 +229,7 @@ fn safe_metadata(value: &Value, depth: usize, remaining: &mut usize) -> Value {
                     "not_observed",
                 ],
             ),
+            "confidence" => enum_value(value, &["high", "medium", "low", "unknown"]),
             "engine" => enum_value(value, &["dsh", "tianji"]),
             "sessionAction" => enum_value(value, &["new", "reuse", "resume", "reset", "unknown"]),
             "chatType" => enum_value(value, &["dm", "group", "shared", "unknown"]),

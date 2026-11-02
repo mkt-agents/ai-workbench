@@ -291,7 +291,8 @@
     "answerMode.doc": "文档优先（不读代码）",
     "answerMode.docCode": "文档优先，必要时读代码",
     "answerMode.code": "直接读代码",
-    "answerModeHintShort": "自动：按问题意图选口径并抽取排障线索；也可固定一种。",
+    "answerMode.linked": "全联动（文档+代码+日志）",
+    "answerModeHintShort": "自动：按意图选口径；全联动会同时预取文档/代码/日志。",
     "answerModeHint": "自动（推荐）：先判断问题意图再回答——排查线上问题时自动识别服务名/错误特征/时间窗/traceId，用这些线索直接查 SkyWalking 日志与调用链 + 代码定位根因，不先翻文档；要看源码就直接读代码；其余实现/原理问题文档优先、必要时读代码。会规避误判（如「写日志模块怎么实现」不当成排障、「500 行代码」不当成 HTTP 错误）。也可固定：文档优先（只读文档）、文档优先+代码、直接读代码；固定模式下仍会在用户说「读代码/看源码」时临时放行读代码。",
     "docDir": "文档目录",
     "skywalkingEnv": "排障环境",
@@ -338,6 +339,15 @@
     "restarted": "已请求重连",
     "saved": "已保存并同步到通道",
     "botId": "Bot ID",
+    "qrBind": "扫码绑定",
+    "qrBindHint": "用企业微信扫描二维码，一键创建并授权智能机器人；成功后自动填入 Bot ID / Secret。",
+    "qrWaiting": "等待扫码…",
+    "qrSuccess": "扫码成功，已填入凭据",
+    "qrExpired": "二维码已过期，请重试",
+    "qrOpenPage": "在浏览器打开二维码页",
+    "qrCancel": "取消扫码",
+    "qrSvgMissing": "二维码生成本地 SVG 失败，可改用「浏览器打开二维码页」。",
+    "qrScanning": "请用企业微信扫描下方二维码",
     "botSecret": "Secret",
     "secretKept": "已保存（留空不改）",
     "secretPlaceholder": "长连接专用 Secret",
@@ -446,7 +456,12 @@
       "requests": {
         "title": "请求事件诊断",
         "newestFirst": "最新在前",
-        "columns": { "time": "时间", "phase": "阶段", "status": "状态", "code": "代码" },
+        "columns": {
+          "time": "时间",
+          "phase": "阶段",
+          "status": "状态",
+          "code": "代码"
+        },
         "hint": "只读取已记录的本地事件，不触发模型、网络或连通探针。输入筛选条件后点击查询；空条件查询最近事件。可粘贴性能记录原始请求 ID，也可使用事件中的脱敏哈希 ID；两者可用于查询。",
         "hintShort": "按请求 ID、阶段、状态（三者均为精确匹配）或时间区间筛选；只读本地记录",
         "requestId": "请求 ID",
@@ -478,8 +493,14 @@
         "health": "诊断存储健康（仅已报告字段）",
         "yes": "是",
         "no": "否",
-        "healthFields": { "writeFailures": "写入失败次数" },
-        "healthStatus": { "unknown": "健康状态未知", "ok": "存储正常", "degraded": "存储降级" },
+        "healthFields": {
+          "writeFailures": "写入失败次数"
+        },
+        "healthStatus": {
+          "unknown": "健康状态未知",
+          "ok": "存储正常",
+          "degraded": "存储降级"
+        },
         "lastSuccessAt": "最近成功写入",
         "healthError": "最近存储错误代码：",
         "empty": "当前筛选和已扫描范围内暂无匹配事件；记录可能尚未生成或已轮转，部分覆盖不等于全量查空。",
@@ -499,6 +520,11 @@
       "jobsHint": "活动回合、生效上限、同会话等待和有效共享任务数均来自当前后端实例；缺字段显示「未提供」，不根据设置值或 HTTP 请求数推算。共享任务数不等于运行中回合数。",
       "investigation": "最近排障：{{status}}",
       "factTroubleshoot": "最近排障",
+      "factCrossQuery": "联动检索",
+      "crossDocs": "文档 {countText}",
+      "crossCode": "代码 {countText}",
+      "crossLogs": "日志 {countText}",
+      "noCrossQuery": "尚无联动检索",
       "noInvestigation": "暂无实例内记录",
       "actualRequests": "实际 HTTP 请求：{{countText}}",
       "performance": "最近性能记录",
@@ -587,5 +613,28 @@
       "logHint": "最近的收发 / 闸门 / 错误（来自 wecom.log），排查「Bot 不回话」时看这里。",
       "sessionHint": "最近的企微问答旁证（只读），用于回看多轮上下文；本地历史隔离不等于群消息私密，群内回复仍对群成员可见。"
     }
+  },
+  "weixin": {
+    "pluginHint": "使用前请确认手机微信已开通「我 → 设置 → 插件」中的微信机器人能力。",
+    "empty": "尚未绑定微信机器人。扫码后即可在私聊中问答。",
+    "qrBind": "扫码绑定",
+    "qrBindHint": "用手机微信扫描二维码；若提示配对数字，填入下方输入框继续。",
+    "qrStart": "生成二维码",
+    "qrWaiting": "等待扫码…",
+    "qrScanning": "请用微信扫描下方二维码",
+    "qrSuccess": "扫码成功，通道已连接",
+    "qrExpired": "二维码已过期，请重试",
+    "qrCancel": "取消扫码",
+    "verifyPlaceholder": "配对数字",
+    "enabled": "启用微信通道",
+    "botId": "Bot ID",
+    "userId": "绑定用户",
+    "restart": "重新连接",
+    "unbind": "解除绑定",
+    "answerReuseHint": "回答引擎、问答模式、工作区与文档目录与「企业微信」页共用，请在企微页配置。",
+    "stateConnected": "已连接（长轮询）",
+    "stateDegraded": "已连接但有错误",
+    "stateStopped": "已停止",
+    "stateOff": "未启用"
   }
 }

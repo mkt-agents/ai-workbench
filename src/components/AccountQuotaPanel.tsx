@@ -77,6 +77,8 @@ import {
   claudeQuotaFetch,
   cursorOauthCancel,
   cursorOauthStart,
+  customAddKey,
+  customQuotaFetch,
   deepseekAddKey,
   deepseekBalanceFetch,
   quotaAccountDelete,
@@ -103,6 +105,7 @@ import {
   type TraeQuotaDto,
   type TraeSettings,
   type ClaudeQuotaDto,
+  type CustomQuotaDto,
   type DeepSeekQuotaDto,
   type MimoLoginResult,
   type MimoQuotaDto,
@@ -125,9 +128,13 @@ import {
   type QuotaCardId,
 } from "../lib/quotaProviders";
 import {
+  clearCustomDraft,
+  hasCustomDraft,
   isStale,
+  loadCustomDraft,
   loadDsPeaks,
   loadQuotaCache,
+  saveCustomDraft,
   saveDsPeaks,
   saveQuotaCache,
   type CardStatus,
@@ -149,7 +156,18 @@ import "./AccountQuotaPanel.css";
 type Tone = "ok" | "warn" | "bad";
 
 /** 卡片键前缀；只有 WorkBuddy 的前缀（wb）和服务商 id（workbuddy）不同。 */
-type CardPrefix = "wb" | "cursor" | "grok-bot" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae";
+type CardPrefix =
+  | "wb"
+  | "cursor"
+  | "grok-bot"
+  | "codex"
+  | "deepseek"
+  | "qoder"
+  | "claude"
+  | "zcode"
+  | "mimo"
+  | "trae"
+  | "custom";
 type AuthProvider = "codex" | "cursor" | "grok-bot" | "qoder" | "trae";
 
 const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
@@ -163,6 +181,7 @@ const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
   zcode: "zcode",
   mimo: "mimo",
   trae: "trae",
+  custom: "custom",
 };
 
 const RAIL_COLLAPSED_KEY = "aq-rail-collapsed";
@@ -431,6 +450,16 @@ function deepseekRemainPct(key: string, q: DeepSeekQuotaDto, peaks: Record<strin
   return Math.min(...q.balances.map((b) => balancePct(b.total, peaks[`${key}:${b.currency}`])));
 }
 
+/**
+ * 自定义中转站只有余额没有总额：和 DeepSeek 一样以见过的最高余额为满。
+ * 第一个 balance 就是「账户余额」，其余（已用 / 总额度）不参与进度条。
+ */
+function customRemainPct(key: string, q: CustomQuotaDto, peaks: Record<string, number>): number | null {
+  const primary = q.balances?.[0];
+  if (!primary) return null;
+  return balancePct(primary.amount, peaks[`${key}:${primary.currency}:${primary.label}`]);
+}
+
 function remainPctFor(key: string, r: QuotaResultBase, peaks: Record<string, number>): number | null {
   const prefix = key.split(":")[0] as CardPrefix;
   switch (prefix) {
@@ -454,6 +483,8 @@ function remainPctFor(key: string, r: QuotaResultBase, peaks: Record<string, num
       return mimoRemainPct(key, r as MimoQuotaDto, peaks);
     case "trae":
       return traeRemainPct(r as TraeQuotaDto);
+    case "custom":
+      return customRemainPct(key, r as CustomQuotaDto, peaks);
   }
 }
 
@@ -603,6 +634,8 @@ function AccountQuotaPanel() {
   const [zcodeReplaceId, setZcodeReplaceId] = useState<number | null>(null);
   const [mimoFormOpen, setMimoFormOpen] = useState(false);
   const [mimoReplaceId, setMimoReplaceId] = useState<number | null>(null);
+  const [customFormOpen, setCustomFormOpen] = useState(false);
+  const [customReplaceId, setCustomReplaceId] = useState<number | null>(null);
   const [traeReplaceId, setTraeReplaceId] = useState<number | null>(null);
   const [wbScanOpen, setWbScanOpen] = useState(false);
   const [wbManualOpen, setWbManualOpen] = useState(false);
@@ -628,6 +661,7 @@ function AccountQuotaPanel() {
   const zcodeAccounts = authAccounts.filter((a) => a.provider === "zcode");
   const mimoAccounts = authAccounts.filter((a) => a.provider === "mimo");
   const traeAccounts = authAccounts.filter((a) => a.provider === "trae");
+  const customAccounts = authAccounts.filter((a) => a.provider === "custom");
 
   useEffect(() => saveQuotaCache(results), [results]);
 
@@ -647,6 +681,13 @@ function AccountQuotaPanel() {
           }
         } else if (key.startsWith("mimo:")) {
           for (const b of (r as MimoQuotaDto).balances ?? []) {
+            const peakKey = `${key}:${b.currency}:${b.label}`;
+            if (b.amount > (next[peakKey] ?? 0)) next = { ...next, [peakKey]: b.amount };
+          }
+        } else if (key.startsWith("custom:")) {
+          // 只有第一个 balance（账户余额）画进度条，其余是明细，不记峰值
+          const b = (r as CustomQuotaDto).balances?.[0];
+          if (b) {
             const peakKey = `${key}:${b.currency}:${b.label}`;
             if (b.amount > (next[peakKey] ?? 0)) next = { ...next, [peakKey]: b.amount };
           }
@@ -829,6 +870,19 @@ function AccountQuotaPanel() {
     };
   }, []);
 
+  /**
+   * 上次填到一半的自定义表单：切去别的页面（本页整体卸载）再回来时，
+   * 除了输入框里的草稿，卡片本身也得重新打开，否则用户看不到自己填了什么。
+   */
+  const draftRestored = useRef(false);
+  useEffect(() => {
+    if (!loaded || draftRestored.current) return;
+    draftRestored.current = true;
+    if (!hasCustomDraft(loadCustomDraft())) return;
+    setCardEnabled("custom", true);
+    setCustomFormOpen(true);
+  }, [loaded, setCardEnabled]);
+
   const markLoading = (keys: string[], on: boolean) =>
     setLoadingKeys((prev) => (on ? [...prev, ...keys.filter((k) => !prev.includes(k))] : prev.filter((k) => !keys.includes(k))));
 
@@ -927,6 +981,7 @@ function AccountQuotaPanel() {
       else if (prefix === "zcode") dto = await zcodeQuotaFetch(id).catch((e) => failedDto(e, { id, limits: [] }));
       else if (prefix === "mimo") dto = await mimoQuotaFetch(id).catch((e) => failedDto(e, { id, balances: [], windows: [] }));
       else if (prefix === "trae") dto = await traeQuotaFetch(id).catch((e) => failedDto(e, { id, windows: [] }));
+      else if (prefix === "custom") dto = await customQuotaFetch(id).catch((e) => failedDto(e, { id, balances: [] }));
       else dto = await deepseekBalanceFetch(id).catch((e) => failedDto(e, { id, balances: [] }));
       setResults((prev) => ({ ...prev, [key]: dto }));
     } finally {
@@ -1017,7 +1072,7 @@ function AccountQuotaPanel() {
       delete next[key];
       return next;
     });
-    if (key.startsWith("deepseek:") || key.startsWith("mimo:")) {
+    if (key.startsWith("deepseek:") || key.startsWith("mimo:") || key.startsWith("custom:")) {
       setDsPeaks((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith(`${key}:`))));
     }
   };
@@ -1111,6 +1166,37 @@ function AccountQuotaPanel() {
       }
       setAuthAccounts(await quotaAccountsList());
       setZcodeReplaceId(null);
+      void fetchKey(newKey);
+    },
+    [fetchKey],
+  );
+
+  const addCustomKey = useCallback(
+    async (baseUrl: string, apiKey: string, label: string) => {
+      const account = await customAddKey(apiKey, baseUrl, label);
+      setAuthAccounts(await quotaAccountsList());
+      setCustomFormOpen(false);
+      void fetchKey(`custom:${account.id}`);
+    },
+    [fetchKey],
+  );
+
+  const replaceCustomKey = useCallback(
+    async (old: QuotaAccount, baseUrl: string, apiKey: string, label: string) => {
+      const account = await customAddKey(apiKey, baseUrl, label);
+      const oldKey = `custom:${old.id}`;
+      const newKey = `custom:${account.id}`;
+      if (account.id !== old.id) {
+        await quotaAccountDelete(old.id).catch(() => undefined);
+        dropResult(oldKey);
+        setOrder((prev) => {
+          const next = prev.map((k) => (k === oldKey ? newKey : k));
+          saveCardOrder(next);
+          return next;
+        });
+      }
+      setAuthAccounts(await quotaAccountsList());
+      setCustomReplaceId(null);
       void fetchKey(newKey);
     },
     [fetchKey],
@@ -1261,6 +1347,7 @@ function AccountQuotaPanel() {
     zcode: zcodeAccounts.map((a) => `zcode:${a.id}`),
     mimo: mimoAccounts.map((a) => `mimo:${a.id}`),
     trae: traeAccounts.map((a) => `trae:${a.id}`),
+    custom: customAccounts.map((a) => `custom:${a.id}`),
   };
 
   /** 服务商关着 → 不出卡；没账号 → 授权空卡；账号全被隐藏 → 什么都不出。 */
@@ -1280,10 +1367,12 @@ function AccountQuotaPanel() {
     ...keysOf("zcode"),
     ...keysOf("mimo"),
     ...keysOf("trae"),
+    ...keysOf("custom"),
     ...(enabled.includes("deepseek") && dsFormOpen && dsAccounts.length > 0 ? ["deepseek:new"] : []),
     ...(enabled.includes("claude") && claudeFormOpen && claudeAccounts.length > 0 ? ["claude:new"] : []),
     ...(enabled.includes("zcode") && zcodeFormOpen && zcodeAccounts.length > 0 ? ["zcode:new"] : []),
     ...(enabled.includes("mimo") && mimoFormOpen && mimoAccounts.length > 0 ? ["mimo:new"] : []),
+    ...(enabled.includes("custom") && customFormOpen && customAccounts.length > 0 ? ["custom:new"] : []),
   ];
   const visibleKeys = sortByOrder(
     naturalKeys.map((key) => ({ key })),
@@ -1348,6 +1437,11 @@ function AccountQuotaPanel() {
         if (traeAccounts.length === 0) focusCard("trae:empty");
         return;
       }
+      if (card === "custom") {
+        setCustomFormOpen(true);
+        focusCard(customAccounts.length > 0 ? "custom:new" : "custom:empty");
+        return;
+      }
       void startLogin(card);
       const hasAccounts = card === "codex" ? codexAccounts.length > 0 : authAccounts.some((a) => a.provider === card);
       if (!hasAccounts) focusCard(`${card}:empty`);
@@ -1361,6 +1455,7 @@ function AccountQuotaPanel() {
       zcodeAccounts.length,
       mimoAccounts.length,
       traeAccounts.length,
+      customAccounts.length,
       codexAccounts.length,
       authAccounts,
     ],
@@ -1571,6 +1666,11 @@ function AccountQuotaPanel() {
       dailyDone:
         (results[`trae:${a.id}`] as TraeQuotaDto | undefined)?.checkedIn === true ? t("checkinDoneShort") : undefined,
     })),
+    ...customAccounts.map((a) => ({
+      key: `custom:${a.id}`,
+      card: "custom" as const,
+      name: a.label ?? a.baseUrl ?? `#${a.id}`,
+    })),
   ].map((a) => ({
     ...a,
     status: cardStatus(a.key, results[a.key], dsPeaks),
@@ -1666,6 +1766,45 @@ function AccountQuotaPanel() {
           onStartReplace={() => setDsReplaceId(account.id)}
           onCancelReplace={() => setDsReplaceId(null)}
           onAddAnother={dsFormOpen ? undefined : () => setDsFormOpen(true)}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
+          frame={frame}
+        />
+      );
+    }
+
+    if (prefix === "custom") {
+      const account = customAccounts.find((a) => a.id === id);
+      if (!account) {
+        return (
+          <QuotaCardShell
+            key={key}
+            brand="custom"
+            product={t("customProduct")}
+            onHide={rawId === "new" ? () => setCustomFormOpen(false) : hideProvider}
+            frame={frame}
+          >
+            <CustomKeyForm
+              onSubmit={addCustomKey}
+              onCancel={rawId === "new" ? () => setCustomFormOpen(false) : undefined}
+              draft
+            />
+          </QuotaCardShell>
+        );
+      }
+      return (
+        <CustomCard
+          key={key}
+          account={account}
+          quota={quota as CustomQuotaDto | undefined}
+          loading={loading}
+          peaks={dsPeaks}
+          replacing={customReplaceId === account.id}
+          onRefresh={() => void fetchKey(key)}
+          onDelete={() => void removeAuthAccount(account)}
+          onReplace={(baseUrl, apiKey, label) => replaceCustomKey(account, baseUrl, apiKey, label)}
+          onStartReplace={() => setCustomReplaceId(account.id)}
+          onCancelReplace={() => setCustomReplaceId(null)}
+          onAddAnother={customFormOpen ? undefined : () => setCustomFormOpen(true)}
           onSaveTag={(tag) => saveAuthTag(account.id, tag)}
           frame={frame}
         />
@@ -2168,7 +2307,7 @@ function QuotaCardShell({
   frame,
   children,
 }: {
-  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae";
+  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae" | "custom";
   product: string;
   tag?: ReactNode;
   /** 结果时间（unix 秒）；有值时卡片底部显示「N 分钟前」。 */
@@ -3398,6 +3537,217 @@ function DeepSeekCard({
                 ...(peak != null ? [{ label: `${t("dsPeak")}${suffix}`, value: formatMoney(peak, b.currency) }] : []),
               ];
             })}
+          />
+        </div>
+      )}
+    </QuotaCardShell>
+  );
+}
+
+/** 认识的币种给符号；空币种（额度单位换算不出来）只给数字。 */
+function formatCustomAmount(amount: number, currency: string): string {
+  return currency ? formatMoney(amount, currency) : formatCredits(amount);
+}
+
+/**
+ * 自定义中转站表单：接口地址 + API Key + 备注。
+ * 提交即探测（后端按 new-api / one-api / OpenAI 兼容计费的顺序试），走不通不落库。
+ */
+function CustomKeyForm({
+  onSubmit,
+  onCancel,
+  hint,
+  submitText,
+  defaultBaseUrl,
+  defaultLabel,
+  draft,
+}: {
+  onSubmit: (baseUrl: string, apiKey: string, label: string) => Promise<void>;
+  onCancel?: () => void;
+  hint?: string;
+  submitText?: string;
+  defaultBaseUrl?: string;
+  defaultLabel?: string;
+  /** 新增表单（不是更换）：输入实时存草稿，切页 / 关闭后回来还在。 */
+  draft?: boolean;
+}) {
+  const { t } = useTranslation("quota");
+  const [baseUrl, setBaseUrl] = useState(() => (draft ? loadCustomDraft()?.baseUrl : "") || defaultBaseUrl || "");
+  const [key, setKey] = useState(() => (draft ? loadCustomDraft()?.apiKey : "") ?? "");
+  const [label, setLabel] = useState(() => (draft ? loadCustomDraft()?.label : "") || defaultLabel || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** 入库成功后不再回写草稿（否则清空的输入框又会把草稿写成空串）。 */
+  const draftDone = useRef(false);
+
+  useEffect(() => {
+    if (!draft || draftDone.current) return;
+    saveCustomDraft({ baseUrl, apiKey: key, label });
+  }, [draft, baseUrl, key, label]);
+
+  const ready = baseUrl.trim() !== "" && key.trim() !== "";
+  const submit = async () => {
+    if (!ready || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(baseUrl.trim(), key.trim(), label.trim());
+      draftDone.current = true;
+      if (draft) clearCustomDraft();
+      setKey("");
+      setLabel("");
+      setBaseUrl("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      className="aq-auth aq-key-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <p className="aq-auth-text">{hint ?? t("authHint.custom")}</p>
+      <input
+        className="input-field aq-mono"
+        type="text"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder={t("customBaseUrlPlaceholder")}
+        value={baseUrl}
+        onChange={(e) => setBaseUrl(e.target.value)}
+        disabled={busy}
+        autoFocus={onCancel != null}
+      />
+      <input
+        className="input-field aq-mono"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="sk-…"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        disabled={busy}
+      />
+      <input
+        className="input-field"
+        type="text"
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={40}
+        placeholder={t("customLabelPlaceholder")}
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        disabled={busy}
+      />
+      {error && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
+        </div>
+      )}
+      <div className="aq-key-actions">
+        {onCancel && (
+          <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
+            {t("authCancel")}
+          </button>
+        )}
+        <button type="submit" className="btn btn-primary btn-small" disabled={busy || !ready}>
+          {busy ? <RefreshCw size={13} className="spin" /> : <KeyRound size={13} />}
+          {busy ? t("dsVerifying") : (submitText ?? t("customSaveKey"))}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CustomCard({
+  account,
+  quota,
+  loading,
+  peaks,
+  replacing,
+  onRefresh,
+  onDelete,
+  onReplace,
+  onStartReplace,
+  onCancelReplace,
+  onAddAnother,
+  onSaveTag,
+  frame,
+}: {
+  account: QuotaAccount;
+  quota: CustomQuotaDto | undefined;
+  loading: boolean;
+  /** `<卡片键>:<币种>:<标签>` → 见过的最高余额，作进度条的满额。 */
+  peaks: Record<string, number>;
+  replacing: boolean;
+  onRefresh: () => void;
+  onDelete: () => void;
+  onReplace: (baseUrl: string, apiKey: string, label: string) => Promise<void>;
+  onStartReplace: () => void;
+  onCancelReplace: () => void;
+  onAddAnother?: () => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
+  frame: CardFrame;
+}) {
+  const { t } = useTranslation("quota");
+  const ok = quota?.ok === true && !replacing;
+  const balances = ok ? (quota?.balances ?? []) : [];
+  const primary = balances[0];
+  const rest = balances.slice(1);
+  const baseUrl = quota?.baseUrl || account.baseUrl;
+  return (
+    <QuotaCardShell
+      brand="custom"
+      product={t("customProduct")}
+      at={replacing ? null : quota?.at}
+      loading={loading}
+      onRefresh={onRefresh}
+      onDelete={onDelete}
+      extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      frame={frame}
+    >
+      <IdentityRow
+        name={account.label ?? (baseUrl || null)}
+        badge={quota?.source ?? "API"}
+        mono
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
+      {replacing ? (
+        <CustomKeyForm
+          onSubmit={onReplace}
+          onCancel={onCancelReplace}
+          hint={t("customReplaceHint")}
+          submitText={t("customReplaceKey")}
+          defaultBaseUrl={baseUrl}
+          defaultLabel={account.label ?? ""}
+        />
+      ) : (
+        <CardMessage
+          quota={quota}
+          idleText={t("neverRefreshed")}
+          onReauth={onStartReplace}
+          reauthText={t("customReplaceKey")}
+        />
+      )}
+      {ok && !primary && <div className="aq-card-idle">{quota?.note ?? t("customNoBalance")}</div>}
+      {ok && primary && (
+        <div className="aq-card-body">
+          <MeterRow
+            label={primary.label}
+            value={formatCustomAmount(primary.amount, primary.currency)}
+            percent={balancePct(primary.amount, peaks[`${frame.cardKey}:${primary.currency}:${primary.label}`])}
+          />
+          <DetailGrid
+            items={[
+              ...rest.map((b) => ({ label: b.label, value: formatCustomAmount(b.amount, b.currency) })),
+              ...(baseUrl ? [{ label: t("customBaseUrl"), value: baseUrl }] : []),
+            ]}
           />
         </div>
       )}

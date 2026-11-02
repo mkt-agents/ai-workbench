@@ -35,7 +35,16 @@ mod wecom_format;
 mod wecom_sanitize;
 mod wecom_policy;
 mod wecom_intent;
+mod wecom_doc_search;
+mod wecom_cross_query;
+mod wecom_qr;
+mod weixin_ilink;
+mod weixin_qr;
+mod weixin_channel;
+mod weixin_orchestrator;
+mod im_answer;
 mod wecom_flowchart;
+mod wecom_natural_query;
 mod wecom_investigation_query;
 mod wecom_investigation;
 mod wecom_investigation_plan;
@@ -101,6 +110,7 @@ mod work_todo_reminder;
 mod qoder_quota;
 mod quota_accounts;
 mod zcode_quota;
+mod custom_quota;
 mod desktop_embed;
 
 pub use config::*;
@@ -167,6 +177,7 @@ pub fn run() {
         .manage(cloudflared_commands::CloudflaredState::default())
         .manage(tray::TrayTunnelUrls::default())
         .manage(wecom_channel::init_state())
+        .manage(weixin_channel::init_state())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("failed to get app data dir");
             fs::create_dir_all(&data_dir).expect("failed to create app data dir");
@@ -607,6 +618,8 @@ pub fn run() {
             claude_quota::claude_quota_fetch,
             zcode_quota::zcode_add_key,
             zcode_quota::zcode_quota_fetch,
+            custom_quota::custom_add_key,
+            custom_quota::custom_quota_fetch,
             mimo_quota::mimo_add_key,
             mimo_quota::mimo_quota_fetch,
             mimo_quota::mimo_set_cookie,
@@ -683,6 +696,15 @@ pub fn run() {
             wecom_channel::wecom_channel_status,
             wecom_channel::wecom_channel_apply,
             wecom_channel::wecom_channel_restart,
+            wecom_qr::wecom_qr_start,
+            wecom_qr::wecom_qr_poll,
+            weixin_qr::weixin_qr_start,
+            weixin_qr::weixin_qr_poll,
+            weixin_channel::weixin_channel_status,
+            weixin_channel::weixin_channel_apply,
+            weixin_channel::weixin_channel_restart,
+            weixin_channel::weixin_protect_secret,
+            weixin_channel::weixin_reveal_secret,
             tianji_api::tianji_api_status,
             tianji_api::tianji_api_apply,
             wecom_channel::wecom_pairing_list,
