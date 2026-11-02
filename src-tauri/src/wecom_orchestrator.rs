@@ -120,7 +120,7 @@ pub struct Orchestrator {
 
 /// 一个会话正在进行中的回合：记录出站目标 + 如何取消。
 struct RunningTurn {
-    /// 平台回帧用的 req_id 与当前正文流 id（取消后往这条补 finish 帧，收尾「正在思考…」）。
+    /// 平台回帧用的 req_id 与当前正文流 id（取消后往这条补 finish 帧，收尾占位气泡）。
     req_id: String,
     stream_id: String,
     initiator: String,
@@ -285,10 +285,23 @@ impl Orchestrator {
         }
         let _registration = crate::wecom_reply::RegistrationGuard::new(&stream_id);
         let diagnostic_request = format!("wecom-{}", msg.msgid);
+        // Register for retire snapshots immediately — before policy / admission — so a
+        // mid-flight channel change can still freeze a final for this stream_id.
+        {
+            let mut targets = self.reply_targets.lock().await;
+            if self.retiring.load(Ordering::SeqCst) || self.current_generation() != generation {
+                return;
+            }
+            targets.insert(
+                diagnostic_request.clone(),
+                (msg.req_id.clone(), stream_id.clone()),
+            );
+        }
         crate::wecom_diagnostics::bind_transport(&msg.req_id, &diagnostic_request);
         crate::wecom_diagnostics::record(&diagnostic_request, "ingress", "received", None, None,
             serde_json::json!({"msgId":msg.msgid,"streamId":stream_id,"channelGeneration":generation,"processId":std::process::id()}));
-        let processing = self.process_msg(app, &msg, &stream_id, generation);
+        let acked = Arc::new(AtomicBool::new(false));
+        let processing = self.process_msg(app, &msg, &stream_id, generation, Arc::clone(&acked));
         tokio::pin!(processing);
         let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
         loop { tokio::select! {
@@ -321,6 +334,18 @@ impl Orchestrator {
             }
         } }
         self.reply_targets.lock().await.remove(&diagnostic_request);
+        // Retire already freezes finals on the old socket; don't race a late interrupt there.
+        // Only close streams that already showed an ack — silent policy must stay silent.
+        if !self.retiring.load(Ordering::SeqCst) {
+            ensure_stream_finished(
+                &self.sock,
+                &msg.req_id,
+                &stream_id,
+                acked.load(Ordering::SeqCst),
+                "本轮已中断，请重试。",
+            )
+            .await;
+        }
     }
 
     /// Runs after access checks and optional reset, before any AI work.
@@ -337,7 +362,14 @@ impl Orchestrator {
         true
     }
 
-    async fn process_msg(&self, app: AppHandle, msg: &MsgCallback, stream_id: &String, generation: u64) {
+    async fn process_msg(
+        &self,
+        app: AppHandle,
+        msg: &MsgCallback,
+        stream_id: &String,
+        generation: u64,
+        acked: Arc<AtomicBool>,
+    ) {
         let bot_name = self.bot_display_name.lock().await.clone();
         let (text, mentioned) = wecom_proto::strip_mention(&msg.text, &bot_name);
         let mut user_text = text;
@@ -588,7 +620,7 @@ impl Orchestrator {
             return;
         }
         // 「停止」指令：在拿会话串行锁**之前**处理（上一轮没结束它拿不到锁）。
-        // 真正取消那一轮并给卡住的「正在思考…」气泡补一帧 finish，而不是当普通消息答一句。
+        // 真正取消那一轮并给卡住的占位气泡补一帧 finish，而不是当普通消息答一句。
         if is_stop_command(&user_text) {
             let key = session.as_str();
             let running = {
@@ -652,11 +684,9 @@ impl Orchestrator {
             return;
         }
         let progress_request = format!("wecom-{}", msg.msgid);
-        {
-            // Retirement sets the flag before locking/snapshotting this same map.
-            let mut targets = self.reply_targets.lock().await;
-            if self.retiring.load(Ordering::SeqCst) || self.current_generation() != generation { return; }
-            targets.insert(progress_request.clone(), (msg.req_id.clone(), stream_id.clone()));
+        // reply_targets already registered in on_msg; still bail if retire raced in.
+        if self.retiring.load(Ordering::SeqCst) || self.current_generation() != generation {
+            return;
         }
         crate::wecom_progress::begin(&session.as_str(), &progress_request);
         struct ProgressGuard(String);
@@ -687,7 +717,9 @@ impl Orchestrator {
         // 平台对「收到消息后的首次应答」有时间窗，而引擎冷启动 / 模型首 token 都可能更久；
         // 先无条件占位一条（同一个 stream id），后面的正文继续更新它，避免整轮被平台丢掉。
         // 注意：占位要在拿会话锁**之前**——同一会话上一轮如果卡住，这一条至少不会无声无息。
-        self.ack(&msg, &stream_id).await;
+        if self.ack(&msg, &stream_id).await {
+            acked.store(true, Ordering::SeqCst);
+        }
         let engine_name = self.engine.lock().await.clone();
         crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "admission", "queued", None, None,
             serde_json::json!({"engine":engine_name,"sessionKey":session.as_str(),"channelGeneration":generation}));
@@ -727,6 +759,15 @@ impl Orchestrator {
         );
         drop(queued);
         if self.current_generation() != generation {
+            // Ack may already be on screen; close before RegistrationGuard discards.
+            ensure_stream_finished(
+                &self.sock,
+                &msg.req_id,
+                stream_id,
+                acked.load(Ordering::SeqCst),
+                "本轮已中断，请重试。",
+            )
+            .await;
             return;
         }
         if let Some(task) = &task_id {
@@ -910,6 +951,7 @@ impl Orchestrator {
     ) -> Result<(), String> {
         let request = format!("wecom-preflight-{}", msg.msgid);
         if session_closed(&session.as_str()) {
+            send_finish(&self.sock, &msg.req_id, stream_id, "共享任务已结束。").await;
             return Ok(());
         }
         let _total_phase = crate::wecom_performance::Phase::new(&request, "total", 0);
@@ -1078,6 +1120,13 @@ impl Orchestrator {
             crate::wecom_investigation::skipped_investigation(preflight_request)
         };
         if crate::cancellation::is_cancelled(preflight_request) {
+            send_finish(
+                &self.sock,
+                &req_id,
+                stream_id,
+                "已停止，本轮已取消。",
+            )
+            .await;
             return Ok(());
         }
         // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
@@ -1847,31 +1896,36 @@ impl Orchestrator {
 
     /// 收到消息先占位一条，满足平台对「首次应答」的时间窗；后面的正文更新同一个 stream id。
     /// 失败只记日志——这一帧丢了也还有后续帧，但日志能说明是不是根本没发出去。
-    async fn ack(&self, msg: &MsgCallback, stream_id: &str) {
+    /// 返回是否已成功发出占位（供 on_msg 决定要不要 ensure finish）。
+    async fn ack(&self, msg: &MsgCallback, stream_id: &str) -> bool {
         match self
             .sock
             .send_raw(wecom_proto::respond_stream(
                 &msg.req_id,
                 stream_id,
-                "正在思考…",
+                "收到，正在处理…",
                 false,
             ))
             .await
         {
-            Ok(()) => crate::wecom_log::write(
-                "ack",
-                &format!(
-                    "msgid={} req_id={} stream={stream_id}",
-                    msg.msgid,
-                    if msg.req_id.is_empty() {
-                        "<empty>"
-                    } else {
-                        msg.req_id.as_str()
-                    }
-                ),
-            ),
+            Ok(()) => {
+                crate::wecom_log::write(
+                    "ack",
+                    &format!(
+                        "msgid={} req_id={} stream={stream_id}",
+                        msg.msgid,
+                        if msg.req_id.is_empty() {
+                            "<empty>"
+                        } else {
+                            msg.req_id.as_str()
+                        }
+                    ),
+                );
+                true
+            }
             Err(e) => {
-                crate::wecom_log::write("ack", &format!("msgid={} send failed: {e}", msg.msgid))
+                crate::wecom_log::write("ack", &format!("msgid={} send failed: {e}", msg.msgid));
+                false
             }
         }
     }
@@ -1889,6 +1943,7 @@ impl Orchestrator {
         crate::wecom_progress::phase(&request_id, "final_model");
         let stream_id = format!("stream-{}", msg.msgid);
         if session_closed(&session.as_str()) {
+            send_finish(&self.sock, &msg.req_id, &stream_id, "共享任务已结束。").await;
             return Ok(());
         }
         let history = wecom_session::session_history(session);
@@ -2024,7 +2079,9 @@ impl Orchestrator {
                     biased;
                     _ = channel_changes.changed() => {
                         crate::cancellation::cancel_request(&pump_request_id);
-                        break String::new();
+                        let body = "本轮已中断，请重试。".to_string();
+                        send_finish(&sock, &req_id, &stream_id_clone, &body).await;
+                        break body;
                     }
                     next = tokio::time::timeout(watchdog, rx.recv()) => next,
                 };
@@ -2087,6 +2144,22 @@ impl Orchestrator {
                         } else {
                             acc
                         };
+                        // 流式气泡不渲染 markdown：结构化答复单发一条富文本消息，
+                        // 气泡只收尾成一句标题；发送失败就退回把正文塞进气泡，不能丢内容。
+                        let visible = prepare_wecom_visible_markdown(&body);
+                        if crate::wecom_format::prefers_markdown(&visible)
+                            && sock
+                                .send_raw(wecom_proto::respond_markdown(&req_id, &visible))
+                                .await
+                                .is_ok()
+                        {
+                            let ack = format!(
+                                "✅ 已完成：{}\n完整回答见下方消息。",
+                                crate::wecom_format::headline(&visible)
+                            );
+                            send_finish(&sock, &req_id, &stream_id_clone, &ack).await;
+                            break body;
+                        }
                         send_finish(&sock, &req_id, &stream_id_clone, &body).await;
                         break body;
                     }
@@ -2269,6 +2342,22 @@ fn reply_task_labels() -> &'static std::sync::Mutex<HashMap<String, String>> {
     static LABELS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
         std::sync::OnceLock::new();
     LABELS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Close a stream that never got `finish=true`, so RegistrationGuard.discard cannot leave
+/// the WeCom bubble spinning on the ack placeholder. Only runs after a successful ack —
+/// silent policy exits must not get a fake interrupt tip.
+async fn ensure_stream_finished(
+    sock: &WecomSocket,
+    req_id: &str,
+    stream_id: &str,
+    acked: bool,
+    note: &str,
+) {
+    if !acked || crate::wecom_reply::is_finished(stream_id) {
+        return;
+    }
+    send_finish(sock, req_id, stream_id, note).await;
 }
 
 /// finish 帧必须送达：断线重连窗口里首发失败的会退避重试，避免企微端永远显示「输入中」。
@@ -3020,6 +3109,46 @@ mod tests {
         assert!(shown.contains("**未自动报价**"));
         assert!(shown.contains("WARN count=0 [L1]"));
         assert_eq!(crate::wecom_reply::final_text(stream).as_deref(), Some(shown));
+        sock.stop().await;
+        writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_stream_finished_closes_unfinished_ack_and_keeps_first_final() {
+        let sock = Arc::new(WecomSocket::new());
+        let (mut frames, writer) = sock.capture_test_frames().await;
+        let stream = "stream-ensure-finish-net";
+        assert!(crate::wecom_reply::register(stream));
+        assert!(!crate::wecom_reply::is_finished(stream));
+
+        // Silent policy path: never acked → ensure must not shout.
+        ensure_stream_finished(&sock, "ensure-req", stream, false, "本轮已中断，请重试。").await;
+        sock.flush().await.unwrap();
+        assert!(frames.try_recv().is_err());
+        assert!(!crate::wecom_reply::is_finished(stream));
+
+        ensure_stream_finished(&sock, "ensure-req", stream, true, "本轮已中断，请重试。").await;
+        sock.flush().await.unwrap();
+        let first: serde_json::Value = serde_json::from_str(&frames.try_recv().unwrap()).unwrap();
+        assert_eq!(first["body"]["stream"]["finish"], true);
+        let first_body = first["body"]["stream"]["content"].as_str().unwrap().to_string();
+        assert!(first_body.contains("本轮已中断，请重试。"));
+        assert!(crate::wecom_reply::is_finished(stream));
+        assert_eq!(
+            crate::wecom_reply::final_text(stream).as_deref(),
+            Some(first_body.as_str())
+        );
+
+        // Second ensure / late finish must not replace first-final or enqueue another frame.
+        ensure_stream_finished(&sock, "ensure-req", stream, true, "迟到覆盖").await;
+        send_finish(&sock, "ensure-req", stream, "迟到覆盖").await;
+        sock.flush().await.unwrap();
+        assert!(frames.try_recv().is_err());
+        assert_eq!(
+            crate::wecom_reply::final_text(stream).as_deref(),
+            Some(first_body.as_str())
+        );
+
         sock.stop().await;
         writer.await.unwrap();
     }

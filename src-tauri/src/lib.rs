@@ -31,6 +31,7 @@ mod agent_undo;
 mod agent_web;
 mod agent_session_log;
 mod wecom_proto;
+mod wecom_format;
 mod wecom_sanitize;
 mod wecom_policy;
 mod wecom_intent;

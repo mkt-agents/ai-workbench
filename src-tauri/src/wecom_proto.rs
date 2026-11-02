@@ -101,6 +101,20 @@ pub fn respond_stream(req_id: &str, stream_id: &str, content: &str, finish: bool
     .to_string()
 }
 
+/// 出站 Markdown（独立消息，不与流式组合）。
+/// `content` 上限 20480 字节，由 `wecom_format::prefers_markdown` 先筛过。
+pub fn respond_markdown(req_id: &str, content: &str) -> String {
+    json!({
+        "cmd": "aibot_respond_msg",
+        "headers": { "req_id": req_id },
+        "body": {
+            "msgtype": "markdown",
+            "markdown": { "content": content }
+        }
+    })
+    .to_string()
+}
+
 pub fn respond_welcome_text(req_id: &str, content: &str) -> String {
     json!({
         "cmd": "aibot_respond_welcome_msg",
@@ -137,6 +151,48 @@ pub fn respond_file(req_id: &str, stream_id: &str, media_id: &str, filename: &st
             "msgtype": "file",
             "stream_id": stream_id,
             "file": { "media_id": media_id, "filename": filename }
+        }
+    })
+    .to_string()
+}
+
+/// 出站模板卡片（按钮交互）。
+///
+/// 前置条件：平台要求机器人**配置了回调 URL** 才会下发 `button_interaction`，
+/// 纯长连接（`aibot_subscribe`）模式下平台可能直接拒发，所以调用方必须保留文本兜底。
+/// 按钮的 `key` 会作为 `event_key` 随事件回调返回；`task_id` 同一机器人内不可重复。
+#[allow(dead_code)]
+pub fn respond_template_card(
+    req_id: &str,
+    title: &str,
+    desc: &str,
+    buttons: &[(&str, &str)],
+    task_id: &str,
+) -> String {
+    let button_list: Vec<Value> = buttons
+        .iter()
+        .enumerate()
+        .map(|(index, (text, key))| {
+            json!({
+                "text": text,
+                // 1..4 为平台样式；首个按钮用 1（主按钮），其余用 2。
+                "style": if index == 0 { 1 } else { 2 },
+                "key": key,
+            })
+        })
+        .collect();
+    json!({
+        "cmd": "aibot_respond_msg",
+        "headers": { "req_id": req_id },
+        "body": {
+            "msgtype": "template_card",
+            "template_card": {
+                "card_type": "button_interaction",
+                "source": { "desc": "天玑", "desc_color": 0 },
+                "main_title": { "title": title, "desc": desc },
+                "button_list": button_list,
+                "task_id": task_id
+            }
         }
     })
     .to_string()
@@ -402,6 +458,34 @@ pub fn strip_mention(content: &str, bot_display_name: &str) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_card_carries_buttons_and_task_id() {
+        let raw = respond_template_card(
+            "transport-id",
+            "需要确认",
+            "写入 src/a.ts",
+            &[("同意", "AB12:1"), ("拒绝", "AB12:2")],
+            "AB12",
+        );
+        let wire: Value = serde_json::from_str(&raw).unwrap();
+        let card = &wire["body"]["template_card"];
+        assert_eq!(wire["body"]["msgtype"], "template_card");
+        assert_eq!(card["card_type"], "button_interaction");
+        assert_eq!(card["task_id"], "AB12");
+        assert_eq!(card["button_list"][0]["key"], "AB12:1");
+        assert_eq!(card["button_list"][0]["style"], 1);
+        assert_eq!(card["button_list"][1]["style"], 2);
+        assert!(wire["body"].get("stream").is_none(), "卡片不是流式帧");
+    }
+
+    #[test]
+    fn markdown_reply_is_its_own_message_not_a_stream_frame() {
+        let wire: Value = serde_json::from_str(&respond_markdown("r1", "## 标题\n- 条目")).unwrap();
+        assert_eq!(wire["body"]["msgtype"], "markdown");
+        assert_eq!(wire["body"]["markdown"]["content"], "## 标题\n- 条目");
+        assert_eq!(wire["headers"]["req_id"], "r1");
+    }
 
     #[test]
     fn strip_mention_with_name() {

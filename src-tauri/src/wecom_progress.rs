@@ -89,18 +89,25 @@ impl Task {
             .is_some_and(|end| now.saturating_sub(end.at) >= TTL)
     }
 
+    /// 聊天窗口里的进度气泡：分行排版，主行给状态，次行给耗时与采集量。
+    /// 只输出静态标签与计数，任何标签都必须先经 `phase_label` / `status_label` / `reason_label` 归一。
     fn summary(&self, now: Duration) -> String {
         let end = self.terminal.as_ref().map_or(now, |end| end.at);
         let elapsed = end.saturating_sub(self.started).as_secs();
         let idle = now.saturating_sub(self.last_activity).as_secs();
         match &self.terminal {
             Some(end) => format!(
-                "最近任务：{}；结束原因：{}；最后阶段：{}；耗时：{}秒；结束于{}秒前；已采集：{}条。",
-                end.status, end.reason, self.phase, elapsed,
-                now.saturating_sub(end.at).as_secs(), self.collected
+                "✅ 最近任务：{} · {}\n最后阶段：{} · 耗时：{}秒 · 结束于{}秒前\n已采集：{}条",
+                end.status,
+                end.reason,
+                self.phase,
+                elapsed,
+                now.saturating_sub(end.at).as_secs(),
+                self.collected
             ),
             None => format!(
-                "当前任务：{}；阶段：{}；已用时：{}秒；最近活动距今：{}秒；已采集：{}条。",
+                "{} 当前任务：{} · 阶段：{}\n已用时：{}秒 · 最近活动距今：{}秒 · 已采集：{}条",
+                if self.phase == phase_label("queued") { "⏳" } else { "⚙️" },
                 if self.phase == phase_label("queued") { "排队中" } else { "进行中" },
                 self.phase, elapsed, idle, self.collected
             ),
@@ -253,7 +260,7 @@ impl State {
             })
             .count();
         if waiting > 0 {
-            summary.push_str(&format!(" 同会话另有{}条任务排队等待。", waiting));
+            summary.push_str(&format!("\n⏳ 同会话另有{}条任务排队等待。", waiting));
         }
         summary
     }
