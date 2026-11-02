@@ -113,6 +113,22 @@ export interface NavCustomization {
   customGroups: string[];
 }
 
+/** 企微线上排障 SkyWalking 环境：测试 / 生产 */
+export type WecomSkywalkingEnv = "test" | "prod";
+
+/** 单套 OAP 配置（地址 / 请求头 / 时区） */
+export interface WecomSkywalkingProfile {
+  addr?: string;
+  header?: string;
+  /** UTC 偏移分钟数；undefined 跟随本机，0 表示 UTC */
+  timezoneOffsetMinutes?: number;
+}
+
+export type WecomSkywalkingProfiles = {
+  test?: WecomSkywalkingProfile;
+  prod?: WecomSkywalkingProfile;
+};
+
 export interface AppSettings {
   theme: AppTheme;
   language: 'zh-CN' | 'en-US';
@@ -246,12 +262,16 @@ export interface AppSettings {
   wecomAnswerMode?: "auto" | "doc" | "doc_code" | "code" | string;
   /** 逆向文档目录（相对工作区），默认 doc */
   wecomDocDir?: string;
-  /** SkyWalking OAP 地址（空 = 不下发排障工具） */
+  /** SkyWalking OAP 地址（空 = 不下发排障工具）；始终镜像当前环境档案 */
   wecomSkywalkingAddr?: string;
-  /** SkyWalking 可选 header（Key: Value，鉴权版 OAP 用） */
+  /** SkyWalking 可选 header（Key: Value，鉴权版 OAP 用）；始终镜像当前环境档案 */
   wecomSkywalkingHeader?: string;
-  /** OAP 时区的 UTC 偏移分钟数；undefined 跟随本机，0 表示 UTC */
+  /** OAP 时区的 UTC 偏移分钟数；undefined 跟随本机，0 表示 UTC；始终镜像当前环境档案 */
   wecomSkywalkingTimezoneOffsetMinutes?: number;
+  /** 线上排障当前 SkyWalking 环境；默认 prod */
+  wecomSkywalkingEnv?: WecomSkywalkingEnv;
+  /** 测试 / 生产各存一套 OAP 三件套；扁平字段镜像当前 env */
+  wecomSkywalkingProfiles?: WecomSkywalkingProfiles;
   /** 每日自动更新逆向文档：开关 */
   wecomAutoUpdateEnabled?: boolean;
   /** 每日自动更新时间（HH:MM），默认 23:00 */

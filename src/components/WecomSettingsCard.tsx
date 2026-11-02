@@ -5,9 +5,10 @@ import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import WecomRequestDiagnostics from "./WecomRequestDiagnostics";
 import { useGlobalStore } from "../core/store";
-import type { AppSettings, DshModelCatalog } from "../core/types";
+import type { AppSettings, DshModelCatalog, WecomSkywalkingEnv } from "../core/types";
 import {
   applyWecomChannel,
+  buildWecomSkywalkingPatch,
   protectSecret,
   revealWecomSecret,
   approveWecomPairing,
@@ -17,6 +18,7 @@ import {
   fetchWecomSessionLogPage,
   fetchWecomStatus,
   normalizeWecomMaxJobs,
+  resolveWecomSkywalking,
   restartWecomChannel,
   revokeWecomUser,
   runWecomDocgenNow,
@@ -219,6 +221,16 @@ export default function WecomSettingsCard() {
     };
   }, []);
 
+  const skywalking = resolveWecomSkywalking(settings);
+  const skywalkingEnv = skywalking.env;
+  const skywalkingProfile = skywalking.profile;
+
+  // 旧扁平配置一次性迁入 profiles.prod，避免反复推断
+  useEffect(() => {
+    const r = resolveWecomSkywalking(useGlobalStore.getState().settings);
+    if (r.needsMigrate) setSettings(r.migrated);
+  }, [setSettings]);
+
   const botId = useFieldDraft(settings.wecomBotId ?? "");
   const corpId = useFieldDraft(settings.wecomCorpId ?? "");
   const displayName = useFieldDraft(settings.wecomBotDisplayName ?? "");
@@ -227,8 +239,8 @@ export default function WecomSettingsCard() {
   const repoPath = useFieldDraft(settings.wecomRepoPath ?? "");
   const docDir = useFieldDraft(settings.wecomDocDir ?? "");
   const selfIntro = useFieldDraft(settings.wecomSelfIntro ?? "");
-  const skywalkingAddr = useFieldDraft(settings.wecomSkywalkingAddr ?? "");
-  const skywalkingHeader = useFieldDraft(settings.wecomSkywalkingHeader ?? "");
+  const skywalkingAddr = useFieldDraft(skywalkingProfile.addr ?? "");
+  const skywalkingHeader = useFieldDraft(skywalkingProfile.header ?? "");
   const releaseBranch = useFieldDraft(settings.wecomReleaseBranch ?? "");
   const autoUpdateTime = useFieldDraft(settings.wecomAutoUpdateTime ?? "");
   const [webhookDraft, setWebhookDraft] = useState("");
@@ -417,6 +429,11 @@ export default function WecomSettingsCard() {
     typeof value === "number" && Number.isFinite(value) && value >= 0
       ? `${value} ms`
       : t("wecom.diag.notReported");
+
+  // 后端把「本轮没下发 reasoning_effort」记成 default（走服务商默认档），
+  // 和真正解析不出值的情况区分开，面板上别都写成「未知」。
+  const reportedEffort = (value: string | null | undefined) =>
+    !value || value === "default" ? t("wecom.diag.effortDefault") : value;
 
   const maxJobs = normalizeWecomMaxJobs(settings.wecomMaxJobs);
   // 保留已保存的 3/6 或其它合法值，避免原生 select 无匹配项而显示错误档位。
@@ -609,7 +626,14 @@ export default function WecomSettingsCard() {
             {
               id: "trouble",
               title: t("wecom.groupTroubleshoot"),
-              summary: settings.wecomSkywalkingAddr?.trim() || t("wecom.sectionUnset"),
+              summary: (() => {
+                const addr = skywalkingProfile.addr?.trim();
+                const envLabel =
+                  skywalkingEnv === "test"
+                    ? t("wecom.skywalkingEnvTest")
+                    : t("wecom.skywalkingEnvProd");
+                return addr ? `${envLabel} · ${addr}` : t("wecom.sectionUnset");
+              })(),
             },
             {
               id: "autoupdate",
@@ -1050,10 +1074,34 @@ export default function WecomSettingsCard() {
         </div>
       </div>
 
-      {/* 3 · 线上排障：查日志与调用链的证据源 */}
+      {/* 3 · 线上排障：查日志与调用链的证据源（测试 / 生产各一套 OAP） */}
       <div className="net-panel" hidden={section !== "trouble"}>
-        <PanelHead title={t("wecom.groupTroubleshoot")} />
+        <PanelHead
+          title={t("wecom.groupTroubleshoot")}
+          aside={
+            <div className="devtools-segmented" role="group" aria-label={t("wecom.skywalkingEnv")}>
+              {(["test", "prod"] as WecomSkywalkingEnv[]).map((env) => (
+                <button
+                  key={env}
+                  type="button"
+                  className={`segmented-item${skywalkingEnv === env ? " active" : ""}`}
+                  disabled={busy || skywalkingEnv === env}
+                  aria-pressed={skywalkingEnv === env}
+                  onClick={() => {
+                    if (skywalkingEnv === env) return;
+                    void push(
+                      buildWecomSkywalkingPatch(useGlobalStore.getState().settings, { env }),
+                    );
+                  }}
+                >
+                  {env === "test" ? t("wecom.skywalkingEnvTest") : t("wecom.skywalkingEnvProd")}
+                </button>
+              ))}
+            </div>
+          }
+        />
         <div className="wecom-rows">
+          <p className="setting-hint wecom-env-hint">{t("wecom.skywalkingEnvHint")}</p>
           <Row
             label={t("wecom.skywalkingAddr")}
             control={
@@ -1068,8 +1116,12 @@ export default function WecomSettingsCard() {
                 onBlur={() => {
                   skywalkingAddr.focused.current = false;
                   const v = skywalkingAddr.value.trim();
-                  if (v !== (settings.wecomSkywalkingAddr ?? ""))
-                    void push({ wecomSkywalkingAddr: v || undefined });
+                  if (v !== (skywalkingProfile.addr ?? "").trim())
+                    void push(
+                      buildWecomSkywalkingPatch(useGlobalStore.getState().settings, {
+                        profilePatch: { addr: v || undefined },
+                      }),
+                    );
                 }}
               />
             }
@@ -1082,13 +1134,17 @@ export default function WecomSettingsCard() {
               <select
                 className="input-field"
                 aria-label={t("wecom.skywalkingTimezone")}
-                value={settings.wecomSkywalkingTimezoneOffsetMinutes ?? ""}
+                value={skywalkingProfile.timezoneOffsetMinutes ?? ""}
                 disabled={busy}
                 onChange={(e) =>
-                  void push({
-                    wecomSkywalkingTimezoneOffsetMinutes:
-                      e.target.value === "" ? undefined : Number(e.target.value),
-                  })
+                  void push(
+                    buildWecomSkywalkingPatch(useGlobalStore.getState().settings, {
+                      profilePatch: {
+                        timezoneOffsetMinutes:
+                          e.target.value === "" ? undefined : Number(e.target.value),
+                      },
+                    }),
+                  )
                 }
               >
                 <option value="">{t("wecom.skywalkingTimezoneLocal")}</option>
@@ -1118,8 +1174,12 @@ export default function WecomSettingsCard() {
                 onBlur={() => {
                   skywalkingHeader.focused.current = false;
                   const v = skywalkingHeader.value.trim();
-                  if (v !== (settings.wecomSkywalkingHeader ?? ""))
-                    void push({ wecomSkywalkingHeader: v || undefined });
+                  if (v !== (skywalkingProfile.header ?? "").trim())
+                    void push(
+                      buildWecomSkywalkingPatch(useGlobalStore.getState().settings, {
+                        profilePatch: { header: v || undefined },
+                      }),
+                    );
                 }}
               />
             }
@@ -1548,13 +1608,21 @@ export default function WecomSettingsCard() {
           <div className="wecom-diag-head">
             <span>{t("wecom.diag.performance")}</span>
           </div>
-          <p className="setting-hint">{t("wecom.diag.performanceHint")}</p>
+          {/* 口径说明收起来，块头只留一行快照摘要 */}
+          <details className="wecom-hint wecom-diag-notes">
+            <summary>
+              <span>{t("wecom.diag.performanceHintShort")}</span>
+              <span className="wecom-hint-more">{t("wecom.hintMore")}</span>
+            </summary>
+            <p className="setting-hint">{t("wecom.diag.performanceHint")}</p>
+            <p className="setting-hint">{t("wecom.diag.cacheHitsHint")}</p>
+          </details>
           {performance ? (
             <>
-              <p className="setting-hint">
-                {t("wecom.diag.performanceRequestId")} <code>{performance.requestId}</code>
-              </p>
-              <div className="wecom-inline">
+              <div className="wecom-diag-strip">
+                <span className="wecom-diag-pill">
+                  {t("wecom.diag.performanceRequestId")}<code>{performance.requestId}</code>
+                </span>
                 <span className="wecom-chip">
                   {t("wecom.diag.lastPhase", { phase: phaseLabel(performance.phase) })}
                 </span>
@@ -1577,64 +1645,68 @@ export default function WecomSettingsCard() {
                 </span>
               </div>
               {performanceSummary ? (
-                <details className="wecom-hint" key={performanceSummary.requestId}>
+                <details className="wecom-hint wecom-diag-phases" key={performanceSummary.requestId}>
                   <summary>{t("wecom.diag.phaseTable")}</summary>
-                  <p className="setting-hint">
-                    {t("wecom.diag.performanceRequestId")} <code>{performanceSummary.requestId}</code>
-                  </p>
-                  <p className="setting-hint">{t("wecom.diag.phaseTableHint")}</p>
-                  <div className="wecom-inline">
-                    <span className="wecom-chip">{t("wecom.diag.totalElapsed", { duration: reportedMs(performanceSummary.totalMs) })}</span>
-                    <span className="wecom-chip">{t("wecom.diag.queueElapsed", { duration: reportedMs(performanceSummary.queueMs) })}</span>
-                    <span className="wecom-chip">{t("wecom.diag.elapsedWithQueue", { duration: reportedMs(performanceSummary.elapsedWithQueueMs) })}</span>
-                    <span className="wecom-chip">{t("wecom.diag.sessionAction", {
-                      action: performanceSummary.sessionAction
-                        ? t(`wecom.diag.sessionActions.${performanceSummary.sessionAction}`, { defaultValue: performanceSummary.sessionAction })
-                        : t("wecom.diag.notReported"),
-                    })}</span>
-                  </div>
-                  <p className="setting-hint">{t("wecom.diag.modelReported", { model: performanceSummary.model || t("wecom.diag.notReported"), effort: performanceSummary.effort || t("wecom.diag.notReported") })}</p>
-                  {Array.isArray(performanceSummary.phases) && performanceSummary.phases.length > 0 ? (
-                    <div className="wecom-diag-log" tabIndex={0} role="region" aria-label={t("wecom.diag.phaseTable")}>
-                      <table>
-                        <thead><tr>
-                          {(["phase", "elapsed", "calls", "input", "output", "tools", "first"] as const).map((column) => (
-                            <th scope="col" key={column}>{t(`wecom.diag.columns.${column}`)}</th>
-                          ))}
-                        </tr></thead>
-                        <tbody>{performanceSummary.phases.map((row, index) => (
-                          <tr key={`${row.phase}-${index}`}>
-                            <th scope="row">{phaseLabel(row.phase)} <code>{row.phase}</code></th>
-                            <td>{reportedMs(row.elapsedMs)}</td>
-                            <td>{reportedCount(row.calls)}</td>
-                            <td>{reportedCount(row.inputChars)}</td>
-                            <td>{reportedCount(row.outputChars)}</td>
-                            <td>{reportedCount(row.toolEvents)}</td>
-                            <td>{reportedMs(row.firstEventMs)}</td>
-                          </tr>
-                        ))}</tbody>
-                      </table>
+                  {/* 展开后的明细统一缩进一次，段与段之间 8px，表格不再和文字贴在一起 */}
+                  <div className="wecom-diag-detail">
+                    <p className="setting-hint">
+                      {t("wecom.diag.performanceRequestId")} <code>{performanceSummary.requestId}</code>
+                    </p>
+                    <p className="setting-hint">{t("wecom.diag.phaseTableHint")}</p>
+                    <div className="wecom-diag-strip">
+                      <span className="wecom-chip">{t("wecom.diag.totalElapsed", { duration: reportedMs(performanceSummary.totalMs) })}</span>
+                      <span className="wecom-chip">{t("wecom.diag.queueElapsed", { duration: reportedMs(performanceSummary.queueMs) })}</span>
+                      <span className="wecom-chip">{t("wecom.diag.elapsedWithQueue", { duration: reportedMs(performanceSummary.elapsedWithQueueMs) })}</span>
+                      <span className="wecom-chip">{t("wecom.diag.sessionAction", {
+                        action: performanceSummary.sessionAction
+                          ? t(`wecom.diag.sessionActions.${performanceSummary.sessionAction}`, { defaultValue: performanceSummary.sessionAction })
+                          : t("wecom.diag.notReported"),
+                      })}</span>
                     </div>
-                  ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
-                  <p className="setting-hint">{t("wecom.diag.validationFailures", {
-                    countText: typeof performanceSummary.validationFailureCount === "number"
-                      && Number.isFinite(performanceSummary.validationFailureCount) && performanceSummary.validationFailureCount >= 0
-                      ? reportedCount(performanceSummary.validationFailureCount)
-                      : t("wecom.diag.validationNotReported"),
-                  })}</p>
-                  {performanceSummary.validationFailures?.map((failure, index) => (
-                    <p className="setting-hint" key={`${index}-${failure}`}>{failure}</p>
-                  ))}
+                    <p className="setting-hint">{t("wecom.diag.modelReported", { model: performanceSummary.model || t("wecom.diag.notReported"), effort: reportedEffort(performanceSummary.effort) })}</p>
+                    {Array.isArray(performanceSummary.phases) && performanceSummary.phases.length > 0 ? (
+                      <div className="wecom-diag-tablebox" tabIndex={0} role="region" aria-label={t("wecom.diag.phaseTable")}>
+                        <table className="wecom-diag-table">
+                          <thead><tr>
+                            {(["phase", "elapsed", "calls", "input", "output", "tools", "first"] as const).map((column) => (
+                              <th scope="col" key={column}>{t(`wecom.diag.columns.${column}`)}</th>
+                            ))}
+                          </tr></thead>
+                          <tbody>{performanceSummary.phases.map((row, index) => (
+                            <tr key={`${row.phase}-${index}`} className={row.phase === "total" ? "is-total" : undefined}>
+                              <th scope="row">{phaseLabel(row.phase)} <code>{row.phase}</code></th>
+                              <td>{reportedMs(row.elapsedMs)}</td>
+                              <td>{reportedCount(row.calls)}</td>
+                              <td>{reportedCount(row.inputChars)}</td>
+                              <td>{reportedCount(row.outputChars)}</td>
+                              <td>{reportedCount(row.toolEvents)}</td>
+                              <td>{reportedMs(row.firstEventMs)}</td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                    ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
+                    <p className="setting-hint">{t("wecom.diag.validationFailures", {
+                      countText: typeof performanceSummary.validationFailureCount === "number"
+                        && Number.isFinite(performanceSummary.validationFailureCount) && performanceSummary.validationFailureCount >= 0
+                        ? reportedCount(performanceSummary.validationFailureCount)
+                        : t("wecom.diag.validationNotReported"),
+                    })}</p>
+                    {performanceSummary.validationFailures?.map((failure, index) => (
+                      <p className="setting-hint" key={`${index}-${failure}`}>{failure}</p>
+                    ))}
+                  </div>
                 </details>
               ) : null}
             </>
           ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
-          <p className="setting-hint">
+          <p className="setting-hint wecom-diag-meta">
             {t("wecom.diag.cacheHits", { countText: reportedCount(investigation?.cacheHits) })}
             {investigation?.requestId ? <> · {t("wecom.diag.requestId")} <code>{investigation.requestId}</code></> : null}
           </p>
-          <p className="setting-hint">{t("wecom.diag.cacheHitsHint")}</p>
         </section>
+        {/* 两块日志降一层：先给分组标题，块标题再弱化，免得和上面三次诊断挤在同一层次 */}
+        <div className="wecom-subhead wecom-diag-subhead">{t("wecom.diag.rawLogs")}</div>
         <div className="wecom-diag-grid">
           <section className="wecom-diag-block">
             <div className="wecom-diag-head">
@@ -1664,39 +1736,46 @@ export default function WecomSettingsCard() {
               </button>
             </div>
             <p className="setting-hint">{t("wecom.diag.sessionHint")}</p>
-            {sessionError ? <p className="setting-hint" role="alert">{t("wecom.diag.sessionReadFailed")}</p> : null}
-            {sessionPage ? <>
-              <p className="setting-hint">{t("wecom.diag.sessionCoverage", { count: sessionPage.entries.length, bytes: sessionPage.scannedBytes })}</p>
-              {sessionPage.partial ? <p className="setting-hint" role="status">{t("wecom.diag.sessionPartial")}</p> : null}
-              {sessionPage.readErrors.length > 0 ? <details className="wecom-hint">
-                <summary>{t("wecom.diag.sessionReadErrors", { count: sessionPage.readErrors.length })}</summary>
-                {sessionPage.readErrors.map((code, index) => <p className="setting-hint" key={`${index}-${code}`}><code>{code}</code></p>)}
-              </details> : null}
-            </> : null}
-            {sessionLog.length === 0 ? (
-              !sessionError ? <p className="setting-hint">{sessionBusy ? "…" : t("wecom.diag.empty")}</p> : null
-            ) : (
-              <ul className="wecom-diag-sessions">
-                {sessionLog.map((entry, i) => (
-                  <li key={`${entry.session}-${entry.ts}-${i}`}>
-                    <details className="wecom-session">
-                      <summary>
-                        <span className="wecom-diag-ts">{fmtTs(entry.ts)}</span>
-                        <span className="wecom-diag-u">{entry.user}</span>
-                        <span className="wecom-session-peek">{peekLine(entry.assistant)}</span>
-                      </summary>
-                      <p className="wecom-session-full">{entry.assistant}</p>
-                    </details>
-                    {entry.requestId ? (
-                      <button type="button" className="btn btn-secondary btn-small"
-                        onClick={() => setDiagnosticSelection((previous) => ({ requestId: entry.requestId!, revision: (previous?.revision ?? 0) + 1 }))}>
-                        {t("wecom.diag.requests.select")} <code>{entry.requestId}</code>
-                      </button>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            )}
+            {/* 会话旁证同样套一张结果卡：和请求事件、日志块的边框对齐，不再是一列浮在底色上的行 */}
+            <div className="wecom-diag-result">
+              {sessionError ? <p className="setting-hint" role="alert">{t("wecom.diag.sessionReadFailed")}</p> : null}
+              {sessionPage ? <>
+                <div className="wecom-diag-strip">
+                  <span className="wecom-chip">{t("wecom.diag.sessionCoverage", {
+                    count: sessionPage.entries.length, bytes: sessionPage.scannedBytes.toLocaleString(),
+                  })}</span>
+                </div>
+                {sessionPage.partial ? <p className="wecom-diag-warn" role="status">{t("wecom.diag.sessionPartial")}</p> : null}
+                {sessionPage.readErrors.length > 0 ? <details className="wecom-hint">
+                  <summary>{t("wecom.diag.sessionReadErrors", { count: sessionPage.readErrors.length })}</summary>
+                  {sessionPage.readErrors.map((code, index) => <p className="setting-hint" key={`${index}-${code}`}><code>{code}</code></p>)}
+                </details> : null}
+              </> : null}
+              {sessionLog.length === 0 ? (
+                !sessionError ? <p className="setting-hint">{sessionBusy ? "…" : t("wecom.diag.empty")}</p> : null
+              ) : (
+                <ul className="wecom-diag-sessions">
+                  {sessionLog.map((entry, i) => (
+                    <li key={`${entry.session}-${entry.ts}-${i}`}>
+                      <details className="wecom-session">
+                        <summary>
+                          <span className="wecom-diag-ts">{fmtTs(entry.ts)}</span>
+                          <span className="wecom-diag-u">{entry.user}</span>
+                          <span className="wecom-session-peek">{peekLine(entry.assistant)}</span>
+                        </summary>
+                        <p className="wecom-session-full">{entry.assistant}</p>
+                      </details>
+                      {entry.requestId ? (
+                        <button type="button" className="wecom-session-action"
+                          onClick={() => setDiagnosticSelection((previous) => ({ requestId: entry.requestId!, revision: (previous?.revision ?? 0) + 1 }))}>
+                          {t("wecom.diag.requests.select")} <code>{entry.requestId}</code>
+                        </button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </section>
         </div>
       </div>

@@ -1642,8 +1642,17 @@
   padding-top: 3px;
 }
 .settings-page .wecom-rows > .wecom-subhead,
-.settings-page .wecom-rows > .wecom-diag {
+.settings-page .wecom-rows > .wecom-diag,
+.settings-page .wecom-rows > .wecom-env-hint {
   grid-column: 1 / -1;
+}
+.settings-page .wecom-rows > .wecom-env-hint {
+  margin: 6px 0 2px;
+  color: var(--text-2);
+}
+.settings-page .wecom-rows > .wecom-env-hint + .wecom-row,
+.settings-page .wecom-rows > .wecom-env-hint + .wecom-row + .wecom-row {
+  border-top-color: transparent;
 }
 /* 长字段（密钥、路径、请求头、模型、日志动作）横跨两列，别挤在半个格子里 */
 .settings-page .wecom-rows > .wecom-row.is-wide {
@@ -1964,29 +1973,360 @@
   font-size: 10.5px;
   color: var(--text-3);
 }
+/* 运行诊断分两层：上面前三块是「查」，下面两块日志是「看」。
+   两块日志共用「原始日志」分组标题，块标题再弱一档，层次才分得开 */
+/* 分组标题当小眉标用：比下面的块标题更淡、更小，层级才不倒挂 */
+.settings-page .wecom-diag-subhead {
+  margin-top: 0;
+  padding: 4px 12px 0;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
 .settings-page .wecom-diag-grid {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  /* 面板本身已经没有内边距，这里只留上下，左右和其它内容对齐 */
-  padding: 8px 0 0;
+  gap: 0;
+  padding: 0;
+}
+.settings-page .wecom-diag-grid > .wecom-diag-block {
+  padding-top: 8px;
+}
+.settings-page .wecom-diag-block {
+  min-width: 0;
+  padding: 12px;
 }
 .settings-page .wecom-diag-block + .wecom-diag-block {
-  padding-top: 14px;
   border-top: 1px solid var(--border-subtle);
 }
+/* 日志块标题：去掉竖线、缩小一号，明确是分组里的次级小节 */
+.settings-page .wecom-diag-grid .wecom-diag-head {
+  padding-left: 0;
+  border-left-color: transparent;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.settings-page .wecom-diag-grid .setting-hint {
+  font-size: 11px;
+}
+/* 块标题：左侧一道竖线当视觉锚点，右侧放「最新在前」或刷新按钮。
+   字号要比下面的字段名大，不然表单标签比标题还重，层次是反的 */
 .settings-page .wecom-diag-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11.5px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-1);
+}
+/* 块内垂直节奏统一成 8px：说明、胶囊行、折叠项、脚注之间间距一致 */
+.settings-page .wecom-diag-block .wecom-hint {
+  margin-top: 8px;
+}
+.settings-page .wecom-diag-block > .setting-hint {
+  padding-top: 8px;
+}
+/* 连着的两行提示是同一条信息的续行，只留 4px */
+.settings-page .wecom-diag-block > .setting-hint + .setting-hint {
+  padding-top: 4px;
+}
+/* 长说明（筛选口径 / 隐私 / 时间格式）默认收起，块头只留一行摘要，
+   贴着标题所以比 8px 再紧一点 */
+.settings-page .wecom-hint.wecom-diag-notes {
+  margin: 6px 0 0;
+}
+/* 排障缓存命中这类「另一个请求的统计」当块尾脚注，和上面的快照胶囊分开 */
+.settings-page .wecom-diag-meta {
+  margin-top: 8px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 50%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+/* 诊断块的报错行单独上色：灰字里一眼看不出「这次失败了」 */
+.settings-page .wecom-diag-block > .setting-hint[role="alert"],
+.settings-page .wecom-diag-result > .setting-hint[role="alert"],
+.settings-page .wecom-diag-block > .setting-hint[role="alert"] code {
+  color: var(--red);
+}
+/* 结果概览行：选中的请求 + 覆盖范围排成一行胶囊，比几行灰字好扫 */
+.settings-page .wecom-diag-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  min-width: 0;
+}
+/* 概览胶囊里的统计文案较长，窄窗允许折行，不撑破这一行 */
+.settings-page .wecom-diag-strip > .wecom-chip {
+  max-width: 100%;
+  height: auto;
+  min-height: 18px;
+  padding-block: 2px;
+  white-space: normal;
+  line-height: 1.35;
+}
+.settings-page .wecom-diag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 10.5px;
   color: var(--text-2);
+}
+.settings-page .wecom-diag-pill > code {
+  min-width: 0;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--accent);
+}
+/* 覆盖不全之类的提示：左侧竖条 + 淡黄底，够显眼但不抢成一整块黄框 */
+.settings-page .wecom-diag-warn {
+  margin: 8px 0 0;
+  padding: 4px 0 4px 9px;
+  border-left: 2px solid color-mix(in srgb, var(--yellow) 75%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--yellow) 8%, transparent);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--yellow) 60%, var(--text-2));
+}
+/* 列表底部的「加载更多」：整行幽灵按钮，比悬在左下角的小按钮更像收口 */
+.settings-page .wecom-diag-more {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 0 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-2);
+  text-align: center;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+.settings-page .wecom-diag-more:hover:not(:disabled) {
+  color: var(--accent);
+}
+.settings-page .wecom-diag-more:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+/* 会话旁证里的「查看关联请求」：文字链接式，几十条各带一个描边按钮太吵 */
+.settings-page .wecom-session-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: 1px 0 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 10.5px;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-page .wecom-session-action:hover {
+  text-decoration: underline;
+}
+.settings-page .wecom-session-action:disabled {
+  color: var(--text-3);
+  text-decoration: none;
+  cursor: default;
+}
+.settings-page .wecom-session-action > code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+/* 筛选表单和按钮合成一块：输入区在上、按钮行靠右，细线把两者分开 */
+.settings-page .wecom-diag-form {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-2);
+}
+/* 按钮行贴着最后一行筛选，只用一条细线分开，不再上下各留 9px */
+.settings-page .wecom-diag-actions {
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+}
+/* 按钮和 28px 的输入框配平，别一个高一个矮 */
+.settings-page .wecom-diag-actions .btn {
+  min-height: 26px;
+  padding-inline: 10px;
+}
+/* 结果卡：和筛选卡同一套边框与底色，「筛选 → 结果」两段对称 */
+.settings-page .wecom-diag-result {
+  margin-top: 8px;
+  padding: 10px 12px 11px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-2);
+}
+.settings-page .wecom-diag-result > .wecom-diag-strip {
+  margin-top: 0;
+}
+.settings-page .wecom-diag-result > .setting-hint {
+  padding-top: 8px;
+}
+.settings-page .wecom-diag-result > .setting-hint + .setting-hint {
+  padding-top: 4px;
+}
+/* 卡片已经给了内边距，第一行提示/列表不再自带外边距 */
+.settings-page .wecom-diag-result > .setting-hint:first-child {
+  padding-top: 0;
+}
+.settings-page .wecom-diag-result > .wecom-diag-sessions:first-child {
+  margin-top: 0;
+}
+.settings-page .wecom-diag-result > .wecom-hint {
+  margin-top: 8px;
+}
+/* 存储健康当脚注：压到结果末尾，用一条细线和大列表分开 */
+.settings-page .wecom-hint.wecom-diag-storage {
+  margin-top: 8px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 50%, transparent);
+}
+/* 事件列表按列对齐：时间 / 阶段 / 状态 / 代码，一屏几十行时按列扫 */
+.settings-page .wecom-diag-events-head,
+.settings-page .wecom-diag-sessions.is-events .wecom-session > summary {
+  display: grid;
+  grid-template-columns: 158px 132px 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.settings-page .wecom-diag-events-head {
+  margin-top: 8px;
+  padding: 0 5px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 50%, transparent);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.settings-page .wecom-diag-sessions.is-events {
+  margin-top: 2px;
+}
+/* 阶段是主信息（正文色），代码是附注（等宽小字），三列都单行省略 */
+.settings-page .wecom-event-phase,
+.settings-page .wecom-event-status,
+.settings-page .wecom-event-code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.settings-page .wecom-event-phase {
+  font-weight: 500;
+  color: var(--text-1);
+}
+.settings-page .wecom-event-code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+@media (max-width: 720px) {
+  .settings-page .wecom-diag-events-head,
+  .settings-page .wecom-diag-sessions.is-events .wecom-session > summary {
+    grid-template-columns: 128px minmax(0, 1fr) 78px;
+  }
+  .settings-page .wecom-diag-events-head > span:nth-child(4),
+  .settings-page .wecom-event-code {
+    display: none;
+  }
+}
+/* 请求事件诊断的筛选条：标签和控件同一行，三行压成三条细带，
+   比全站「标签在上」的表单矮四成，一屏能看到结果 */
+.settings-page .wecom-rows.is-diag-filter {
+  padding-top: 0;
+  /* 固定三列：请求 ID / 阶段 / 状态 一行，起止时间第二行。
+     不用 auto-fill，否则大窗会冒出第四列，把「结束」挤到第三行 */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 14px;
+}
+@media (max-width: 1000px) {
+  .settings-page .wecom-rows.is-diag-filter {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .settings-page .wecom-rows.is-diag-filter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.settings-page .wecom-rows.is-diag-filter > .wecom-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-top-color: transparent;
+}
+/* 标签固定一列宽并右对齐：长短标签都紧贴自己的输入框，
+   不会因为「阶段」比「请求 ID」短就留出一段空隙，输入框左边界仍在同一条竖线上 */
+.settings-page .wecom-rows.is-diag-filter .wecom-row-label {
+  flex: 0 0 62px;
+  width: 62px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-page .wecom-rows.is-diag-filter > .wecom-row > .wecom-row-control {
+  flex: 1 1 auto;
+  width: auto;
+}
+/* 输入框抬高到 28px：和 11.5px 标签配起来不显得像一条线 */
+.settings-page .wecom-rows.is-diag-filter .wecom-row-control > .input-field {
+  min-height: 28px;
+  padding-block: 4px;
+}
+/* 日期时间用等宽数字，起止两格的字符宽度才一致 */
+.settings-page .wecom-rows.is-diag-filter .wecom-row-control > input[type="datetime-local"] {
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .settings-page .wecom-rows.is-diag-filter > .wecom-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+  }
+  .settings-page .wecom-rows.is-diag-filter .wecom-row-label {
+    flex: 0 0 auto;
+    width: auto;
+    text-align: left;
+  }
 }
 /* 日志不折行：长 JSON / 命令行整行保留，横向滚动，读起来不像一堵墙 */
 .settings-page .wecom-diag-log {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   max-height: 240px;
   overflow: auto;
   padding: 8px 10px;
@@ -2001,6 +2341,86 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
+/* 阶段明细展开后：整块缩进一次（左侧竖线），段与段之间统一 8px */
+.settings-page .wecom-diag-detail {
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+.settings-page .wecom-diag-detail > .setting-hint {
+  margin: 0;
+  padding: 8px 0 0;
+}
+.settings-page .wecom-diag-detail > .setting-hint:first-child {
+  padding-top: 0;
+}
+.settings-page .wecom-diag-detail > .wecom-diag-strip {
+  margin-top: 8px;
+}
+/* 阶段表：单独一层滚动框，表头吸顶，数字右对齐才比得出来 */
+.settings-page .wecom-diag-tablebox {
+  margin-top: 8px;
+  max-height: 280px;
+  overflow: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.settings-page .wecom-diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  /* 覆盖 .wecom-diag-log 的 pre：表格里的换行会把行距撑开 */
+  white-space: normal;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.settings-page .wecom-diag-table th,
+.settings-page .wecom-diag-table td {
+  padding: 4px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+/* 数值列右对齐：同一列的数字个位对齐，才比得出大小 */
+.settings-page .wecom-diag-table :is(th, td):not(:first-child) {
+  text-align: right;
+}
+.settings-page .wecom-diag-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+.settings-page .wecom-diag-table tbody tr + tr {
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 40%, transparent);
+}
+.settings-page .wecom-diag-table tbody th {
+  font-weight: 500;
+  color: var(--text-1);
+}
+.settings-page .wecom-diag-table tbody th code {
+  margin-left: 2px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+.settings-page .wecom-diag-table tbody td {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+/* 合计行：比明细重一档，跟上面几行分开 */
+.settings-page .wecom-diag-table tbody tr.is-total {
+  border-top: 1px solid var(--border-subtle);
+}
+.settings-page .wecom-diag-table tbody tr.is-total th,
+.settings-page .wecom-diag-table tbody tr.is-total td {
+  color: var(--text-1);
+  font-weight: 600;
+}
 /* 会话日志：一条一行摘要，点开才铺正文，避免整页被答案文本淹没 */
 .settings-page .wecom-diag-sessions {
   margin: 4px 0 0;
@@ -2008,7 +2428,8 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  max-height: 240px;
+  /* 诊断块本身已经很窄，列表再压到 240 就只能看到五六条，放宽到 320 */
+  max-height: 320px;
   overflow: auto;
 }
 .settings-page .wecom-diag-sessions > li + li {
@@ -2018,7 +2439,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 5px 4px;
+  padding: 6px 5px;
   border-radius: var(--radius-sm);
   list-style: none;
   cursor: pointer;

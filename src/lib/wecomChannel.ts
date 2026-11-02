@@ -9,8 +9,123 @@ import type {
   DshMirrorReport,
   DshModelCatalog,
   McpServer,
+  WecomSkywalkingEnv,
+  WecomSkywalkingProfile,
+  WecomSkywalkingProfiles,
 } from "../core/types";
 import { resolveFallbackModel, resolveSceneModel } from "./aiSceneModels";
+
+export type { WecomSkywalkingEnv, WecomSkywalkingProfile, WecomSkywalkingProfiles };
+
+/** 非法 / 空值回落到生产，避免误打测试 OAP。 */
+export function normalizeWecomSkywalkingEnv(raw: unknown): WecomSkywalkingEnv {
+  return raw === "test" ? "test" : "prod";
+}
+
+export function flatFromSkywalkingProfile(profile: WecomSkywalkingProfile): Pick<
+  AppSettings,
+  "wecomSkywalkingAddr" | "wecomSkywalkingHeader" | "wecomSkywalkingTimezoneOffsetMinutes"
+> {
+  return {
+    wecomSkywalkingAddr: profile.addr?.trim() || undefined,
+    wecomSkywalkingHeader: profile.header?.trim() || undefined,
+    wecomSkywalkingTimezoneOffsetMinutes: profile.timezoneOffsetMinutes,
+  };
+}
+
+function profileFromFlatSettings(settings: AppSettings): WecomSkywalkingProfile {
+  return {
+    addr: settings.wecomSkywalkingAddr,
+    header: settings.wecomSkywalkingHeader,
+    timezoneOffsetMinutes: settings.wecomSkywalkingTimezoneOffsetMinutes,
+  };
+}
+
+function profilesHaveAny(profiles: WecomSkywalkingProfiles | undefined): boolean {
+  if (!profiles) return false;
+  return Boolean(profiles.test || profiles.prod);
+}
+
+export type ResolvedWecomSkywalking = {
+  env: WecomSkywalkingEnv;
+  profile: WecomSkywalkingProfile;
+  /** 旧扁平配置尚未写入 profiles 时为 true */
+  needsMigrate: boolean;
+  /** needsMigrate 时一次性写回的补丁 */
+  migrated: Partial<AppSettings>;
+};
+
+/**
+ * 解析当前 SkyWalking 环境与档案。
+ * 若只有旧扁平字段、尚无 profiles，则归入 prod 并给出迁移补丁（调用方写回一次即可）。
+ */
+export function resolveWecomSkywalking(settings: AppSettings): ResolvedWecomSkywalking {
+  if (!profilesHaveAny(settings.wecomSkywalkingProfiles)) {
+    const flat = profileFromFlatSettings(settings);
+    const hasFlat = Boolean(
+      flat.addr?.trim() ||
+        flat.header?.trim() ||
+        flat.timezoneOffsetMinutes !== undefined,
+    );
+    if (hasFlat) {
+      const migrated: Partial<AppSettings> = {
+        wecomSkywalkingEnv: "prod",
+        wecomSkywalkingProfiles: { prod: flat },
+        ...flatFromSkywalkingProfile(flat),
+      };
+      return { env: "prod", profile: flat, needsMigrate: true, migrated };
+    }
+    const env = normalizeWecomSkywalkingEnv(settings.wecomSkywalkingEnv);
+    return { env, profile: {}, needsMigrate: false, migrated: {} };
+  }
+
+  const env = normalizeWecomSkywalkingEnv(settings.wecomSkywalkingEnv);
+  const profile = settings.wecomSkywalkingProfiles?.[env] ?? {};
+  return { env, profile, needsMigrate: false, migrated: {} };
+}
+
+/**
+ * 切换环境或改写某环境档案；返回应 `setSettings` 的补丁（含扁平镜像）。
+ * `profilePatch` 与当前档案浅合并；切环境时不传 patch 则只换当前指针并镜像目标档案。
+ */
+export function buildWecomSkywalkingPatch(
+  settings: AppSettings,
+  next: { env?: WecomSkywalkingEnv; profilePatch?: WecomSkywalkingProfile },
+): Partial<AppSettings> {
+  const resolved = resolveWecomSkywalking(settings);
+  let profiles: WecomSkywalkingProfiles = {
+    ...(resolved.needsMigrate
+      ? ((resolved.migrated.wecomSkywalkingProfiles as WecomSkywalkingProfiles | undefined) ?? {})
+      : (settings.wecomSkywalkingProfiles ?? {})),
+  };
+  const env = next.env ?? resolved.env;
+  if (next.profilePatch) {
+    const merged: WecomSkywalkingProfile = {
+      ...(profiles[env] ?? {}),
+      ...next.profilePatch,
+    };
+    // 显式 undefined = 清除（跟随本机时区 / 清空地址或请求头）
+    if ("addr" in next.profilePatch && !next.profilePatch.addr?.trim()) {
+      delete merged.addr;
+    }
+    if ("header" in next.profilePatch && !next.profilePatch.header?.trim()) {
+      delete merged.header;
+    }
+    if (
+      "timezoneOffsetMinutes" in next.profilePatch &&
+      next.profilePatch.timezoneOffsetMinutes === undefined
+    ) {
+      delete merged.timezoneOffsetMinutes;
+    }
+    profiles = { ...profiles, [env]: merged };
+  }
+  const profile = profiles[env] ?? {};
+  return {
+    wecomSkywalkingEnv: env,
+    wecomSkywalkingProfiles: profiles,
+    ...flatFromSkywalkingProfile(profile),
+  };
+}
 
 export type WecomDshStatus = {
   /** stopped | starting | ready | error */
@@ -296,6 +411,8 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       }
     : null;
 
+  const skywalking = resolveWecomSkywalking(settings).profile;
+
   const status = await invoke<WecomStatus>("wecom_channel_apply", {
     req: {
       enabled: Boolean(settings.wecomEnabled),
@@ -317,12 +434,12 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       workspace: repoPath,
       dshModel: (settings.wecomDshModel ?? "").trim(),
       dshEffort: (settings.wecomDshEffort ?? "").trim(),
-      // 文档问答 + 排障 + 自动更新
+      // 文档问答 + 排障 + 自动更新（SkyWalking 取当前环境档案）
       answerMode: settings.wecomAnswerMode ?? "auto",
       docDir: (settings.wecomDocDir ?? "").trim(),
-      skywalkingAddr: (settings.wecomSkywalkingAddr ?? "").trim(),
-      skywalkingHeader: (settings.wecomSkywalkingHeader ?? "").trim(),
-      skywalkingTimezoneOffsetMinutes: settings.wecomSkywalkingTimezoneOffsetMinutes ?? null,
+      skywalkingAddr: (skywalking.addr ?? "").trim(),
+      skywalkingHeader: (skywalking.header ?? "").trim(),
+      skywalkingTimezoneOffsetMinutes: skywalking.timezoneOffsetMinutes ?? null,
       autoUpdateEnabled: Boolean(settings.wecomAutoUpdateEnabled),
       autoUpdateTime: (settings.wecomAutoUpdateTime ?? "").trim(),
       releaseBranch: (settings.wecomReleaseBranch ?? "").trim(),

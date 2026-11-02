@@ -102,6 +102,19 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
     void load(filter);
   };
 
+  /** 一键回到「什么都没查」的状态：筛选条件、结果、选中项全清，在途请求作废。 */
+  const resetAll = () => {
+    generation.current += 1;
+    pending.current = false;
+    cursors.current.clear();
+    setDraft(EMPTY_DRAFT);
+    setResult(null);
+    setSelected("");
+    setBusy(false);
+    setError("");
+    setNotice("");
+  };
+
   const selectRequest = (requestId: string) => void load({ requestId }, null, true);
   const runAction = async (kind: "copy" | "export") => {
     if (actionPending.current || !result || busy) return;
@@ -148,63 +161,111 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
 
   return (
     <section className="wecom-diag-block" aria-label={label("title")} aria-busy={busy}>
-      <div className="wecom-diag-head"><span>{label("title")}</span><span>{label("newestFirst")}</span></div>
-      <p className="setting-hint">{label("hint")}</p>
-      <div className="wecom-rows">
-        {(["requestId", "phase", "status", "from", "to"] as const).map((key) => (
-          <label className="wecom-row" key={key}>
-            <span className="wecom-row-label">{label(key)}</span>
-            <span className="wecom-row-control">
-              <input className="input-field" type={key === "from" || key === "to" ? "datetime-local" : "text"}
-                value={draft[key]} onChange={(event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))} />
-            </span>
-          </label>
-        ))}
+      <div className="wecom-diag-head">
+        <span>{label("title")}</span>
+        <span className="wecom-diag-hint">{label("newestFirst")}</span>
       </div>
-      <p className="setting-hint">{label("timeHint")}</p>
-      <div className="wecom-inline">
-        <button type="button" className="btn btn-secondary btn-small" disabled={busy} onClick={query}>{label("query")}</button>
-        <button type="button" className="btn btn-secondary btn-small" disabled={!result || busy} onClick={() => result && void load(result.filter, null, !!selected)}>{t("wecom.diag.refresh")}</button>
-        <button type="button" className="btn btn-secondary btn-small" disabled={!result?.events.length || busy || actionBusy} onClick={() => void runAction("copy")}>{label("copy")}</button>
-        <button type="button" className="btn btn-secondary btn-small" disabled={!selected || !result || busy || actionBusy} onClick={() => void runAction("export")}>{label("export")}</button>
+      {/* 三条长说明默认收起：筛选行和结果才是这一块的主体，说明不占版面 */}
+      <details className="wecom-hint wecom-diag-notes">
+        <summary>
+          <span>{label("hintShort")}</span>
+          <span className="wecom-hint-more">{t("wecom.hintMore")}</span>
+        </summary>
+        <p className="setting-hint">{label("hint")}</p>
+        <p className="setting-hint">{label("timeHint")}</p>
+        <p className="setting-hint">{label("privacyHint")}</p>
+      </details>
+      <div className="wecom-diag-form">
+        <div className="wecom-rows is-diag-filter">
+          {/* 五个条件共用一套网格：第一行三个精确匹配，第二行起止时间，
+              标签列宽固定，跨行跨列的输入框左边界都落在同一条竖线上 */}
+          {(["requestId", "phase", "status"] as const).map((key) => (
+            <label className="wecom-row" key={key}>
+              <span className="wecom-row-label">{label(key)}</span>
+              <span className="wecom-row-control">
+                <input className="input-field" type="text"
+                  value={draft[key]} onChange={(event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))} />
+              </span>
+            </label>
+          ))}
+          {(["from", "to"] as const).map((key) => (
+            <label className="wecom-row" key={key}>
+              <span className="wecom-row-label">{label(key)}</span>
+              <span className="wecom-row-control">
+                <input className="input-field" type="datetime-local"
+                  value={draft[key]} onChange={(event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))} />
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="wecom-inline wecom-diag-actions">
+          <button type="button" className="btn btn-secondary btn-small" disabled={!result && !selected && !draft.requestId && !draft.phase && !draft.status && !draft.from && !draft.to} onClick={resetAll}>{label("clear")}</button>
+          <button type="button" className="btn btn-secondary btn-small" disabled={!result || busy} onClick={() => result && void load(result.filter, null, !!selected)}>{t("wecom.diag.refresh")}</button>
+          <button type="button" className="btn btn-secondary btn-small" disabled={!result?.events.length || busy || actionBusy} onClick={() => void runAction("copy")}>{label("copy")}</button>
+          <button type="button" className="btn btn-secondary btn-small" disabled={!selected || !result || busy || actionBusy} onClick={() => void runAction("export")}>{label("export")}</button>
+          <button type="button" className="btn btn-primary btn-small" disabled={busy} onClick={query}>{label("query")}</button>
+        </div>
       </div>
-      <p className="setting-hint">{label("privacyHint")}</p>
-      {selected ? <p className="setting-hint">{label("selected")} <code>{selected}</code></p> : null}
       {busy ? <p className="setting-hint" role="status">{label("loading")}</p> : null}
       {error ? <p className="setting-hint" role="alert">{label(`${error}Error`)}</p> : null}
       {notice ? <p className="setting-hint" role="status">{label(notice)}</p> : null}
       {!result && !busy && !error ? <p className="setting-hint">{label("idle")}</p> : null}
-      {result ? <>
-        <p className="setting-hint">{t("wecom.diag.requests.coverage", { count: result.events.length, pages: result.pages, bytes: result.scannedBytes })}</p>
-        {result.partial ? <p className="setting-hint" role="status">{label("partial")}</p> : null}
-        {result.readErrors.length ? <details className="wecom-hint"><summary>{t("wecom.diag.requests.readErrors", { count: result.readErrors.length })}</summary>
-          {result.readErrors.map((code) => <p className="setting-hint" key={code}><code>{code}</code></p>)}
-        </details> : null}
-        <details className="wecom-hint"><summary>{label("health")}</summary>
-          <p className="setting-hint">{label(`healthStatus.${healthStatus}`)}</p>
-          <p className="setting-hint">{label("lastSuccessAt")}: <code>{lastSuccessAt ?? t("wecom.diag.notReported")}</code></p>
-          {typeof health?.lastError === "string" && health.lastError ? <p className="setting-hint">{label("healthError")} <code>{health.lastError}</code></p> : null}
-          {healthEntries.length ? healthEntries.map(({ key, value }) => <p className="setting-hint" key={key}>{label(`healthFields.${key}`)}: <code>{typeof value === "boolean" ? label(value ? "yes" : "no") : value}</code></p>) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
-        </details>
-        {result.events.length === 0 ? <p className="setting-hint">{label("empty")}</p> : (
-          <ul className="wecom-diag-sessions" aria-label={label("events")}>
-            {result.events.map((event, index) => (
-              <li key={`${event.timestamp}-${event.requestId}-${index}`}>
-                <details className="wecom-session">
-                  <summary><span className="wecom-diag-ts">{event.timestamp}</span><span className="wecom-session-peek">{event.phase} · {event.status} · {event.code ?? "—"}</span></summary>
-                  <p className="setting-hint"><code>{event.requestId}</code> · {eventDuration(event)}</p>
-                  <button type="button" className="btn btn-secondary btn-small" disabled={busy} onClick={() => selectRequest(event.requestId)}>{label("select")}</button>
-                  <p className="setting-hint">{label("metadata")}</p>
-                  <pre className="wecom-diag-log">{JSON.stringify(event.metadata, null, 2).slice(0, 4000)}</pre>
-                </details>
-              </li>
-            ))}
-          </ul>
-        )}
-        {limitReached ? <p className="setting-hint">{label("bounded")}</p> : null}
-        <button type="button" className="btn btn-secondary btn-small" disabled={busy || !result.nextCursor || limitReached || error === "cursor"} onClick={() => void load(result.filter, result)}>{label("more")}</button>
-        {!result.nextCursor && !limitReached ? <p className="setting-hint">{label("end")}</p> : null}
-      </> : null}
+      {/* 结果卡：和上面的筛选卡同款边框，块里就是「筛选 → 结果」两段，不再是一片浮着的文字 */}
+      {result || selected ? (
+        <div className="wecom-diag-result">
+          <div className="wecom-diag-strip">
+            {selected ? <span className="wecom-diag-pill">{label("selected")}<code>{selected}</code></span> : null}
+            {result ? <span className="wecom-chip">{t("wecom.diag.requests.coverage", {
+              count: result.events.length, pages: result.pages, bytes: result.scannedBytes.toLocaleString(),
+            })}</span> : null}
+          </div>
+          {result ? <>
+            {result.partial ? <p className="wecom-diag-warn" role="status">{label("partial")}</p> : null}
+            {result.readErrors.length ? <details className="wecom-hint"><summary>{t("wecom.diag.requests.readErrors", { count: result.readErrors.length })}</summary>
+              {result.readErrors.map((code) => <p className="setting-hint" key={code}><code>{code}</code></p>)}
+            </details> : null}
+            {result.events.length === 0 ? <p className="setting-hint">{label("empty")}</p> : (
+              <>
+                {/* 列头：一屏几十行时按列扫，比每行混在一句里好读 */}
+                <div className="wecom-diag-events-head" aria-hidden="true">
+                  <span>{label("columns.time")}</span>
+                  <span>{label("columns.phase")}</span>
+                  <span>{label("columns.status")}</span>
+                  <span>{label("columns.code")}</span>
+                </div>
+                <ul className="wecom-diag-sessions is-events" aria-label={label("events")}>
+                  {result.events.map((event, index) => (
+                    <li key={`${event.timestamp}-${event.requestId}-${index}`}>
+                      <details className="wecom-session">
+                        <summary>
+                          <span className="wecom-diag-ts">{event.timestamp}</span>
+                          <span className="wecom-event-phase">{event.phase}</span>
+                          <span className="wecom-event-status">{event.status}</span>
+                          <span className="wecom-event-code">{event.code ?? "—"}</span>
+                        </summary>
+                        <p className="setting-hint"><code>{event.requestId}</code> · {eventDuration(event)}</p>
+                        <button type="button" className="wecom-session-action" disabled={busy} onClick={() => selectRequest(event.requestId)}>{label("select")}</button>
+                        <p className="setting-hint">{label("metadata")}</p>
+                        <pre className="wecom-diag-log">{JSON.stringify(event.metadata, null, 2).slice(0, 4000)}</pre>
+                      </details>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {limitReached ? <p className="setting-hint">{label("bounded")}</p> : null}
+            <button type="button" className="wecom-diag-more" disabled={busy || !result.nextCursor || limitReached || error === "cursor"} onClick={() => void load(result.filter, result)}>{label("more")}</button>
+            {!result.nextCursor && !limitReached ? <p className="setting-hint">{label("end")}</p> : null}
+            {/* 存储健康属于「口径/来源」，压到结果末尾当脚注，别挡在列表前面 */}
+            <details className="wecom-hint wecom-diag-storage"><summary>{label("health")}</summary>
+              <p className="setting-hint">{label(`healthStatus.${healthStatus}`)}</p>
+              <p className="setting-hint">{label("lastSuccessAt")}: <code>{lastSuccessAt ?? t("wecom.diag.notReported")}</code></p>
+              {typeof health?.lastError === "string" && health.lastError ? <p className="setting-hint">{label("healthError")} <code>{health.lastError}</code></p> : null}
+              {healthEntries.length ? healthEntries.map(({ key, value }) => <p className="setting-hint" key={key}>{label(`healthFields.${key}`)}: <code>{typeof value === "boolean" ? label(value ? "yes" : "no") : value}</code></p>) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
+            </details>
+          </> : null}
+        </div>
+      ) : null}
     </section>
   );
 });

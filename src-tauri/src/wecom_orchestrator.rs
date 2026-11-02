@@ -1141,8 +1141,10 @@ impl Orchestrator {
         .await
         {
             Ok(Ok((model, effort))) => {
+                // 空 = 本轮没有下发 reasoning_effort（走服务商默认），不是「读不到」。
+                // 记成 default 才能在面板上和服务商默认区分开，unknown 只留给解析不了的脏值。
                 crate::wecom_performance::record_session(preflight_request, &session_action, &model,
-                    if effort.is_empty() { "unknown" } else { &effort });
+                    if effort.is_empty() { "default" } else { &effort });
                 let public_model = serde_json::from_str::<Vec<String>>(&model).ok()
                     .filter(|v| v.len() == 2).map(|v| v.join("/")).unwrap_or(model);
                 crate::wecom_diagnostics::record(preflight_request, "model_selection", "acknowledged", None, None,
