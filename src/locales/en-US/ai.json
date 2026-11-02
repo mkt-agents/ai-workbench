@@ -108,6 +108,7 @@
     "exportFailed": "Export failed: {{error}}",
     "importConfigs": "Import configs",
     "more": "More actions",
+    "moreShort": "More",
     "importDone": "Import finished: {{added}} added, {{skipped}} skipped",
     "importInvalid": "Unrecognized file: no model configs found",
     "importFailed": "Import failed: {{error}}",

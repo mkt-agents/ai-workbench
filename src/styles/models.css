@@ -1050,12 +1050,17 @@
   box-shadow: var(--surface-highlight);
   transition: var(--transition-colors);
   position: relative;
-  overflow: hidden;
 }
 
 .ai-model-item:hover {
   border-color: var(--accent-border);
   box-shadow: var(--surface-highlight), var(--shadow-sm);
+  /* 卡片内的「…」菜单要能压过下一行卡片；卡片自身不再 overflow:hidden 裁它。 */
+  z-index: 5;
+}
+
+.ai-model-item:focus-within {
+  z-index: 5;
 }
 
 .ai-model-item.is-selected {
@@ -1276,13 +1281,14 @@
   flex-shrink: 0;
 }
 
-/* 一行到底：按钮靠左、悬停工具靠右。不换行——换行时按钮数不同（默认卡片少一个「设为默认」）
-   会让有的卡片挤成两行右对齐、有的单行左对齐；窄了就按卡片自身宽度收起文字，见下方 model-card 容器查询。 */
+/* 一行到底：按钮靠左、溢出菜单靠右。正常宽度下不换行；万一（超长语言文案 /
+   超大字号）真的排不下，就整体换行兜底，绝不互相压住或裁掉。 */
 .ai-model-actions {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex-wrap: nowrap;
+  row-gap: 6px;
+  flex-wrap: wrap;
   min-width: 0;
   margin-top: auto;
   padding-top: 10px;
@@ -1303,17 +1309,12 @@
   margin-left: 2px;
 }
 
+/* 次要操作（克隆 / 分享 / 编辑 / 删除）收进一个「更多」菜单：卡片最窄只有 300px，
+   四个图标按钮和主按钮挤在同一行必定溢出被裁。菜单常驻，不靠悬停才出现。 */
 .ai-model-actions-tools {
   display: inline-flex;
-  gap: 1px;
+  flex-shrink: 0;
   margin-left: auto;
-  opacity: 0;
-  transition: var(--transition-colors-fast);
-}
-
-.ai-model-item:hover .ai-model-actions-tools,
-.ai-model-item:focus-within .ai-model-actions-tools {
-  opacity: 1;
 }
 
 .ai-model-icon-btn {
@@ -1336,20 +1337,26 @@
   color: var(--text-0);
 }
 
-.ai-model-icon-btn.danger:hover {
-  background: color-mix(in srgb, var(--red) 12%, transparent);
-  color: var(--red);
-}
-
 
 /* 按卡片自身宽度收文字（网格列数随窗口变，页面宽度推不出卡片宽度）：
-   极窄卡片才只留图标，悬停 title 仍可读。 */
+   窄卡片先缩小按钮内边距，再窄才只留图标，悬停 title 仍可读。 */
 .ai-model-item {
   container: model-card / inline-size;
 }
 
-@container model-card (max-width: 300px) {
-  .ai-model-actions .ai-action-label {
+@container model-card (max-width: 340px) {
+  .ai-model-actions {
+    gap: 4px;
+  }
+
+  .ai-model-actions .btn-small {
+    padding-inline: 8px;
+  }
+}
+
+/* 只收主操作按钮的文字；「更多」是纯文字触发器，收起就成空按钮了。 */
+@container model-card (max-width: 280px) {
+  .ai-model-actions > .btn .ai-action-label {
     display: none;
   }
 }

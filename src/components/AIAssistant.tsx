@@ -1617,57 +1617,51 @@ function AIAssistant() {
             {testingId === config.id ? <Loader2 size={12} className="spin" /> : <Zap size={12} />}
             <span className="ai-action-label">{t("models.testFromList")}</span>
           </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            onClick={() => handleSyncToDsh(config)}
-            disabled={syncingId === config.id}
-            title={t("models.syncToDsh")}
-          >
-            {syncingId === config.id ? (
-              <Loader2 size={12} className="spin" />
-            ) : (
-              <ArrowRightCircle size={12} />
-            )}
-            <span className="ai-action-label">{t("models.syncToDsh")}</span>
-          </button>
+          {/* 次要动作全部收进「更多」菜单：卡片最窄只有 300px，一行塞 4~5 个按钮必定
+              溢出被裁。底部只留同款胶囊的两个主操作 + 一个菜单按钮，行宽永远富余。 */}
           <span className="ai-model-actions-tools">
-            <button
-              type="button"
-              className="ai-model-icon-btn"
-              onClick={() => void handleClone(config)}
-              title={t("models.clone")}
-              aria-label={t("models.clone")}
+            <DropdownMenu
+              label={t("models.more")}
+              triggerClassName="btn btn-secondary btn-small"
+              items={[
+                {
+                  label: syncingId === config.id ? t("models.syncing") : t("models.syncToDsh"),
+                  icon:
+                    syncingId === config.id ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : (
+                      <ArrowRightCircle size={14} />
+                    ),
+                  disabled: syncingId === config.id,
+                  onClick: () => void handleSyncToDsh(config),
+                },
+                { divider: true },
+                {
+                  label: t("models.clone"),
+                  icon: <CopyPlus size={14} />,
+                  onClick: () => void handleClone(config),
+                },
+                {
+                  label: t("models.share"),
+                  icon: <Share2 size={14} />,
+                  onClick: () => openShare(config),
+                },
+                {
+                  label: t("models.edit"),
+                  icon: <Edit2 size={14} />,
+                  onClick: () => handleEdit(config),
+                },
+                { divider: true },
+                {
+                  label: t("models.deleteModel"),
+                  icon: <Trash2 size={14} />,
+                  danger: true,
+                  onClick: () => void handleDelete(config.id),
+                },
+              ]}
             >
-              <CopyPlus size={13} />
-            </button>
-            <button
-              type="button"
-              className="ai-model-icon-btn"
-              onClick={() => openShare(config)}
-              title={t("models.share")}
-              aria-label={t("models.share")}
-            >
-              <Share2 size={13} />
-            </button>
-            <button
-              type="button"
-              className="ai-model-icon-btn"
-              onClick={() => handleEdit(config)}
-              title={t("models.edit")}
-              aria-label={t("models.edit")}
-            >
-              <Edit2 size={13} />
-            </button>
-            <button
-              type="button"
-              className="ai-model-icon-btn danger"
-              onClick={() => handleDelete(config.id)}
-              title={t("models.deleteModel")}
-              aria-label={t("models.deleteModel")}
-            >
-              <Trash2 size={13} />
-            </button>
+              <span className="ai-action-label">{t("models.moreShort")}</span>
+            </DropdownMenu>
           </span>
         </div>
       </div>
