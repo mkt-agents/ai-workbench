@@ -2161,7 +2161,7 @@
 /* 筛选表单和按钮合成一块：输入区在上、按钮行靠右，细线把两者分开 */
 .settings-page .wecom-diag-form {
   margin-top: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
   border-radius: var(--radius-sm);
   background: var(--overlay-2);
@@ -2182,7 +2182,7 @@
 /* 结果卡：和筛选卡同一套边框与底色，「筛选 → 结果」两段对称 */
 .settings-page .wecom-diag-result {
   margin-top: 8px;
-  padding: 10px 12px 11px;
+  padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
   border-radius: var(--radius-sm);
   background: var(--overlay-2);
@@ -2329,7 +2329,7 @@
   margin: 8px 0 0;
   max-height: 240px;
   overflow: auto;
-  padding: 8px 10px;
+  padding: 10px 12px;
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.55;
@@ -2337,8 +2337,9 @@
   word-break: normal;
   tab-size: 2;
   color: var(--text-2);
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
+  /* 和结果卡用同一套表面（底色 / 边框 / 圆角 / 内边距），两类框不要一深一浅 */
+  background: var(--overlay-2);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
   border-radius: var(--radius-sm);
 }
 /* 阶段明细展开后：整块缩进一次（左侧竖线），段与段之间统一 8px */
@@ -2362,8 +2363,8 @@
   margin-top: 8px;
   max-height: 280px;
   overflow: auto;
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
+  background: var(--overlay-2);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
   border-radius: var(--radius-sm);
 }
 .settings-page .wecom-diag-table {
