@@ -371,10 +371,14 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
   if (plainCorp) corpSecret = await protectSecret(plainCorp);
 
   // webhook 当密文存：已是 enc:v1: 直接用，明文则加密后下发。
-  let webhookUrl = (settings.wecomWebhookUrl ?? "").trim();
-  if (webhookUrl && !webhookUrl.startsWith("enc:v1:")) {
-    webhookUrl = await protectSecret(webhookUrl);
-  }
+  const sealWebhook = async (raw: string | undefined) => {
+    let v = (raw ?? "").trim();
+    if (v && !v.startsWith("enc:v1:")) v = await protectSecret(v);
+    return v;
+  };
+  const webhookUrl = await sealWebhook(settings.wecomWebhookUrl);
+  const webhookFeishu = await sealWebhook(settings.wecomWebhookFeishu);
+  const webhookDingtalk = await sealWebhook(settings.wecomWebhookDingtalk);
 
   const model =
     resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
@@ -448,6 +452,10 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       // 文档问答 + 排障 + 自动更新（SkyWalking 取当前环境档案）
       answerMode: settings.wecomAnswerMode ?? "auto",
       docDir: (settings.wecomDocDir ?? "").trim(),
+      enhanceDmEnabled: Boolean(settings.wecomEnhanceDmEnabled),
+      enhanceGroupEnabled: Boolean(settings.wecomEnhanceGroupEnabled),
+      enhanceDm: Array.from((settings.wecomEnhanceDm ?? "").trim()).slice(0, 2000).join(""),
+      enhanceGroup: Array.from((settings.wecomEnhanceGroup ?? "").trim()).slice(0, 2000).join(""),
       skywalkingAddr: (skywalking.addr ?? "").trim(),
       skywalkingHeader: (skywalking.header ?? "").trim(),
       skywalkingTimezoneOffsetMinutes: skywalking.timezoneOffsetMinutes ?? null,
@@ -455,6 +463,12 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       autoUpdateTime: (settings.wecomAutoUpdateTime ?? "").trim(),
       releaseBranch: (settings.wecomReleaseBranch ?? "").trim(),
       webhookUrl,
+      webhookFeishu,
+      webhookDingtalk,
+      docgenCron: (settings.wecomDocgenCron ?? "").trim(),
+      docgenPreview: Boolean(settings.wecomDocgenPreview),
+      docgenQualityCheck: Boolean(settings.wecomDocgenQualityCheck),
+      docgenPollRelease: Boolean(settings.wecomDocgenPollRelease),
       autoCommit: settings.wecomAutoCommit !== false,
       autoPush: Boolean(settings.wecomAutoPush),
       maxJobs: normalizeWecomMaxJobs(settings.wecomMaxJobs),
@@ -514,6 +528,26 @@ export async function runWecomDocgenNow(): Promise<string> {
 /** 连通自检：校验 release 分支 / webhook / SkyWalking，返回多行结果。 */
 export async function testWecomDocgen(): Promise<string> {
   return invoke<string>("wecom_docgen_test");
+}
+
+export type WecomDocgenHistoryItem = {
+  at: string;
+  trigger: string;
+  branch: string;
+  status: string;
+  changedFiles: number;
+  updatedDocs: string;
+  commitNote?: string;
+  quality?: string;
+  pushed: boolean;
+  error?: string;
+  preview: boolean;
+  webhookErrors?: string[];
+};
+
+/** 最近 30 条逆向文档更新历史（新 → 旧）。 */
+export async function fetchWecomDocgenHistory(): Promise<WecomDocgenHistoryItem[]> {
+  return invoke<WecomDocgenHistoryItem[]>("wecom_docgen_history");
 }
 
 /** 读通道排障日志最后 N 行（设置页「通道日志」折叠区）。 */

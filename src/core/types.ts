@@ -270,6 +270,14 @@ export interface AppSettings {
   wecomAnswerMode?: "auto" | "doc" | "doc_code" | "code" | "linked" | string;
   /** 逆向文档目录（相对工作区），默认 doc */
   wecomDocDir?: string;
+  /** 私聊上下文增强提示词开关（默认关） */
+  wecomEnhanceDmEnabled?: boolean;
+  /** 群聊上下文增强提示词开关（默认关） */
+  wecomEnhanceGroupEnabled?: boolean;
+  /** 私聊增强提示词（走引擎的问答回合注入；上限 2000 字） */
+  wecomEnhanceDm?: string;
+  /** 群聊增强提示词（走引擎的问答回合注入；上限 2000 字） */
+  wecomEnhanceGroup?: string;
   /** SkyWalking OAP 地址（空 = 不下发排障工具）；始终镜像当前环境档案 */
   wecomSkywalkingAddr?: string;
   /** SkyWalking 可选 header（Key: Value，鉴权版 OAP 用）；始终镜像当前环境档案 */
@@ -288,6 +296,18 @@ export interface AppSettings {
   wecomReleaseBranch?: string;
   /** 企微群机器人 webhook（DPAPI enc:v1:… 密文或完整 URL/key） */
   wecomWebhookUrl?: string;
+  /** 飞书自定义机器人 webhook（完整 URL，enc:v1:） */
+  wecomWebhookFeishu?: string;
+  /** 钉钉自定义机器人 webhook（完整 URL，enc:v1:） */
+  wecomWebhookDingtalk?: string;
+  /** 可选 5 段 unix cron；非空则覆盖每日 HH:MM */
+  wecomDocgenCron?: string;
+  /** 预览模式：更新后不落盘并清仓 */
+  wecomDocgenPreview?: boolean;
+  /** 更新后再跑只读质量自检 */
+  wecomDocgenQualityCheck?: boolean;
+  /** 轮询 origin/release 超前后自动跑 */
+  wecomDocgenPollRelease?: boolean;
   /** 文档更新后自动 commit（默认开；关掉会导致下次因脏工作区跳过） */
   wecomAutoCommit?: boolean;
   /** commit 后 push 到远端（默认关） */

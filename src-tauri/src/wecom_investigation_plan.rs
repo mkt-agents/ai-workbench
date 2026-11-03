@@ -1060,6 +1060,83 @@ service/keywords须逐字见已返回证据；trace_id必须逐字见已返回�
     instruction
 }
 
+/// 无日志源（OAP 未配置/不可用）时的规划指令：结构同 [`planning_instruction`]，但 `queries` 必须为空。
+pub fn planning_instruction_no_logs() -> String {
+    let mut instruction = r#"每轮只输出一个严格JSON对象（或单个json代码围栏），三选一：①展开：queries=[]且read_evidence_ids非空；②最终报告：queries=[]且diagnostic_report存在；③旧版作答：queries=[]且final_answer存在。三者互斥；diagnostic_report固定此key。日志源未配置，queries必须始终为空数组，禁止编造日志查询或声称已查过日志。优先使用宿主已注入的联动上下文（文档命中/代码线索）；可用read_evidence_ids展开其中片段，或只读定点搜索工作区源码与文档后给出diagnostic_report。始终写reason、conclusion_level、gaps数组和stop_reason；缺关键信息时在gaps说明需要用户补充什么，不要为结束而清空。conclusion_level只允许result/direct_cause/trigger_verified/unknown；无日志证据时通常至多result或unknown，禁止宣称线上根因已闭合。字段统一snake_case。"#.to_string();
+    instruction.push_str("\n\n统一最终报告契约（规划结束与最终回复使用同一格式）：\n");
+    instruction.push_str(&crate::wecom_report::schema_instruction());
+    instruction
+}
+
+/// DSH 引擎优先路径：模型主动请求宿主查日志的标记前缀。
+pub const WECOM_LOG_QUERY_MARK: &str = "WECOM_LOG_QUERY:";
+
+/// 从模型自由回复中抽出 `WECOM_LOG_QUERY:{...}`。
+/// 返回 `(queries, 去掉标记后的可见正文)`；无标记或解析失败返回 `None`。
+pub fn extract_wecom_log_query(text: &str) -> Option<(Vec<Value>, String)> {
+    let idx = text.find(WECOM_LOG_QUERY_MARK)?;
+    let after = text[idx + WECOM_LOG_QUERY_MARK.len()..].trim_start();
+    // JSON object starting at first `{`
+    let brace = after.find('{')?;
+    let json_src = &after[brace..];
+    let (raw_json, rest_after_json) = split_json_object(json_src)?;
+    let v: Value = serde_json::from_str(raw_json).ok()?;
+    let queries = v.get("queries")?.as_array()?.clone();
+    if queries.is_empty() || queries.len() > 3 {
+        return None;
+    }
+    for q in &queries {
+        if !q.is_object() {
+            return None;
+        }
+    }
+    let mut visible = String::new();
+    visible.push_str(text[..idx].trim_end());
+    let trailing = rest_after_json.trim();
+    if !trailing.is_empty() {
+        if !visible.is_empty() {
+            visible.push_str("\n\n");
+        }
+        visible.push_str(trailing);
+    }
+    Some((queries, visible.trim().to_string()))
+}
+
+/// 从以 `{` 开头的文本切出第一个完整 JSON object，返回 `(object, remainder)`。
+fn split_json_object(src: &str) -> Option<(&str, &str)> {
+    let bytes = src.as_bytes();
+    if bytes.first().copied() != Some(b'{') {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escape = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_str {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&src[..=i], &src[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2315,5 +2392,25 @@ mod tests {
         )
         .is_err());
         assert!(parse(json!({"reason":"test"}), "").is_err());
+    }
+
+    #[test]
+    fn planning_instruction_no_logs_forbids_queries() {
+        let text = planning_instruction_no_logs();
+        assert!(text.contains("queries必须始终为空"));
+        assert!(text.contains("禁止编造日志查询"));
+        assert!(text.contains("diagnostic_report"));
+        assert!(!text.contains("queries非空"));
+    }
+
+    #[test]
+    fn extract_wecom_log_query_strips_marker_and_keeps_queries() {
+        let raw = "先看代码再查日志。\nWECOM_LOG_QUERY:{\"queries\":[{\"keywords\":[\"积压\"],\"reason\":\"核对挤压\"}],\"reason\":\"补查\"}\n";
+        let (queries, visible) = extract_wecom_log_query(raw).unwrap();
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0]["keywords"][0], "积压");
+        assert_eq!(visible, "先看代码再查日志。");
+        assert!(extract_wecom_log_query("没有标记").is_none());
+        assert!(extract_wecom_log_query("WECOM_LOG_QUERY:{\"queries\":[],\"reason\":\"x\"}").is_none());
     }
 }

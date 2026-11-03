@@ -79,6 +79,8 @@ struct Task {
     body_started: bool,
     phase: &'static str,
     collected: usize,
+    /// True only after `collected()` ran (log acquisition path), even when count is 0.
+    log_acquisition: bool,
     terminal: Option<Final>,
 }
 
@@ -91,26 +93,50 @@ impl Task {
 
     /// 聊天窗口里的进度气泡：分行排版，主行给状态，次行给耗时与采集量。
     /// 只输出静态标签与计数，任何标签都必须先经 `phase_label` / `status_label` / `reason_label` 归一。
+    /// 「已采集」只在走过日志采集（调用过 `collected`）时出现，避免讲解类问答把 0 读成查空。
     fn summary(&self, now: Duration) -> String {
         let end = self.terminal.as_ref().map_or(now, |end| end.at);
         let elapsed = end.saturating_sub(self.started).as_secs();
         let idle = now.saturating_sub(self.last_activity).as_secs();
+        let collected_bit = if self.log_acquisition {
+            format!("已采集：{}条", self.collected)
+        } else {
+            String::new()
+        };
         match &self.terminal {
-            Some(end) => format!(
-                "✅ 最近任务：{} · {}\n最后阶段：{} · 耗时：{}秒 · 结束于{}秒前\n已采集：{}条",
-                end.status,
-                end.reason,
-                self.phase,
-                elapsed,
-                now.saturating_sub(end.at).as_secs(),
-                self.collected
-            ),
-            None => format!(
-                "{} 当前任务：{} · 阶段：{}\n已用时：{}秒 · 最近活动距今：{}秒 · 已采集：{}条",
-                if self.phase == phase_label("queued") { "⏳" } else { "⚙️" },
-                if self.phase == phase_label("queued") { "排队中" } else { "进行中" },
-                self.phase, elapsed, idle, self.collected
-            ),
+            Some(end) => {
+                let mut lines = vec![
+                    format!("✅ 最近任务：{} · {}", end.status, end.reason),
+                    format!(
+                        "最后阶段：{} · 耗时：{}秒 · 结束于{}秒前",
+                        self.phase,
+                        elapsed,
+                        now.saturating_sub(end.at).as_secs()
+                    ),
+                ];
+                if !collected_bit.is_empty() {
+                    lines.push(collected_bit);
+                }
+                lines.join("\n")
+            }
+            None => {
+                let icon = if self.phase == phase_label("queued") {
+                    "⏳"
+                } else {
+                    "⚙️"
+                };
+                let status = if self.phase == phase_label("queued") {
+                    "排队中"
+                } else {
+                    "进行中"
+                };
+                let mut second = format!("已用时：{}秒 · 最近活动距今：{}秒", elapsed, idle);
+                if !collected_bit.is_empty() {
+                    second.push_str(" · ");
+                    second.push_str(&collected_bit);
+                }
+                format!("{icon} 当前任务：{status} · 阶段：{}\n{second}", self.phase)
+            }
         }
     }
 }
@@ -173,6 +199,7 @@ impl State {
             body_started: false,
             phase: phase_label("queued"),
             collected: 0,
+            log_acquisition: false,
             terminal: None,
         });
         true
@@ -207,6 +234,8 @@ impl State {
         let now = self.time(now);
         if let Some(task) = self.active_mut(request) {
             // The caller supplies a cumulative snapshot, not an increment.
+            // Mark log acquisition even when count is 0 so summary can show「已采集：0条」.
+            task.log_acquisition = true;
             task.collected = task.collected.max(count);
             task.last_activity = now;
         }
@@ -661,5 +690,46 @@ mod tests {
         state.finish("absent", "completed", "completed", at(4));
         assert!(state.heartbeat("absent", at(100)).is_none());
         assert!(state.tasks.is_empty());
+    }
+
+    /// 讲解类问答只到 final_model、从不调 collected：气泡不出现「已采集」。
+    #[test]
+    fn summary_omits_collected_until_log_acquisition_runs() {
+        let mut state = State::default();
+        state.begin("s", "wecom-1", at(0));
+        state.phase("wecom-1", "final_model", at(5));
+        let active = state.status_reply("s", at(30));
+        assert!(active.contains("生成最终答复"));
+        assert!(
+            !active.contains("已采集"),
+            "non-investigation turn leaked collected: {active}"
+        );
+        state.finish("wecom-1", "completed", "completed", at(40));
+        let done = state.status_reply("s", at(50));
+        assert!(done.contains("正常完成"));
+        assert!(
+            !done.contains("已采集"),
+            "finished non-investigation turn leaked collected: {done}"
+        );
+    }
+
+    /// 排障路径即使证据为 0 也会调 collected(…, 0)：仍展示「已采集：0条」。
+    #[test]
+    fn summary_keeps_zero_collected_after_log_acquisition() {
+        let mut state = State::default();
+        state.begin("s", "wecom-2", at(0));
+        state.phase("wecom-2", "acquisition", at(1));
+        state.collected("wecom-2", 0, at(2));
+        let active = state.status_reply("s", at(10));
+        assert!(
+            active.contains("已采集：0条"),
+            "zero evidence after acquisition must stay visible: {active}"
+        );
+        state.finish("wecom-2", "completed", "no_evidence", at(20));
+        let done = state.status_reply("s", at(30));
+        assert!(
+            done.contains("已采集：0条"),
+            "finished zero-evidence acquisition must stay visible: {done}"
+        );
     }
 }

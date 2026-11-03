@@ -142,11 +142,17 @@ pub enum DshEvent {
     Done(Result<Value, String>),
 }
 
+/// 一轮 `session/prompt` 的事件出口；`prompt_id` 用于 Drop 时避免误删后续续写回合。
+struct TurnSink {
+    prompt_id: u64,
+    tx: mpsc::UnboundedSender<DshEvent>,
+}
+
 /// JSON-RPC 共享状态：读线程写、回合与请求读。
 struct RpcShared {
     pending: StdMutex<HashMap<u64, oneshot::Sender<Result<Value, RpcFailure>>>>,
     /// sessionId → 当前回合的事件通道（一个会话同时只有一个 prompt）。
-    turns: StdMutex<HashMap<String, mpsc::UnboundedSender<DshEvent>>>,
+    turns: StdMutex<HashMap<String, TurnSink>>,
     /// `session/prompt` 的 rpc id → sessionId，用于把应答路由回回合。
     prompt_ids: StdMutex<HashMap<u64, String>>,
     next_id: AtomicU64,
@@ -725,11 +731,17 @@ impl DshEngine {
     ) -> Result<DshTurn, String> {
         let (shared, writer) = self.parts().await?;
         let (tx, rx) = mpsc::unbounded_channel();
+        let rpc_id = shared.rpc.next_id();
         {
             let mut turns = shared.rpc.turns.lock().map_err(|e| e.to_string())?;
-            turns.insert(session_id.to_string(), tx);
+            turns.insert(
+                session_id.to_string(),
+                TurnSink {
+                    prompt_id: rpc_id,
+                    tx,
+                },
+            );
         }
-        let rpc_id = shared.rpc.next_id();
         {
             let mut ids = shared.rpc.prompt_ids.lock().map_err(|e| e.to_string())?;
             ids.insert(rpc_id, session_id.to_string());
@@ -748,7 +760,9 @@ impl DshEngine {
                 ids.remove(&rpc_id);
             }
             if let Ok(mut turns) = shared.rpc.turns.lock() {
-                turns.remove(session_id);
+                if turns.get(session_id).map(|s| s.prompt_id) == Some(rpc_id) {
+                    turns.remove(session_id);
+                }
             }
             return Err("DSH 发送通道已关闭".into());
         }
@@ -947,8 +961,11 @@ fn acp_mcp_servers(mcp: &[crate::mcp::McpServerSpec]) -> Value {
     )
 }
 
-/// Shared production/mock seam. A resume error never invalidates history unless
-/// the peer explicitly identifies a missing/expired session using structured data.
+/// Shared production/mock seam. Resume only falls through to `session/new` when the
+/// peer marks the session missing/expired, or returns an opaque ACP Internal error
+/// (common after process restart when the on-disk id is already dead). Auth /
+/// already_active / ambiguous combo messages stay fail-closed so we do not silently
+/// drop history while another turn still owns the session.
 async fn acquire_rpc_session(
     shared: &Arc<RuntimeShared>,
     writer: &mpsc::UnboundedSender<Value>,
@@ -975,7 +992,12 @@ async fn acquire_rpc_session(
                 }
                 return Ok((id.into(), "resume"));
             }
-            Err(error) if error.session_unavailable() => {}
+            Err(error) if error.resume_can_recreate() => {
+                crate::wecom_log::write(
+                    "dsh-session-action",
+                    &format!("resume→new reason={}", error.text()),
+                );
+            }
             Err(error) => return Err(format!("session/resume 失败：{}", error.text())),
         }
     }
@@ -1023,6 +1045,43 @@ impl RpcFailure {
             }
             _ => false,
         }
+    }
+
+    /// Whether resume may discard the old mapping and open `session/new` this turn.
+    fn resume_can_recreate(&self) -> bool {
+        if self.session_unavailable() {
+            return true;
+        }
+        let Self::Remote(error) = self else {
+            return false;
+        };
+        // Structured data.code that did not qualify as session_unavailable → fail closed
+        // (already_active / auth / bare not_found without resource=session, etc.).
+        if error.pointer("/data/code").and_then(Value::as_str).is_some() {
+            return false;
+        }
+        let msg = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        // Ambiguous combo / concurrent ownership / auth — do not guess.
+        if msg.contains("already_active")
+            || msg.contains("already active")
+            || msg.contains("not found, expired or already")
+            || msg.contains("unauthenticated")
+            || msg.contains("auth failed")
+            || msg.contains("unauthorized")
+        {
+            return false;
+        }
+        // Opaque Internal error after process restart: on-disk id is typically dead.
+        // Require the ACP message (empty message alone is too weak without structure).
+        // Skip "Internal error: turn failed: …" — that belongs to prompt, not resume lifetime.
+        let code = error.get("code").and_then(Value::as_i64);
+        code == Some(-32603)
+            && msg.starts_with("internal error")
+            && !msg.contains("turn failed")
     }
 }
 
@@ -1090,8 +1149,12 @@ impl DshTurn {
         if let Ok(mut ids) = self.shared.prompt_ids.lock() {
             ids.remove(&self.prompt_id);
         }
+        // 仅摘掉本轮 sink：日志补查续写会先 insert 新 prompt，再 drop 旧 DshTurn，
+        // 无条件 remove(session_id) 会误关新回合通道 →「响应意外结束」。
         if let Ok(mut turns) = self.shared.turns.lock() {
-            turns.remove(&self.session_id);
+            if turns.get(&self.session_id).map(|s| s.prompt_id) == Some(self.prompt_id) {
+                turns.remove(&self.session_id);
+            }
         }
     }
 }
@@ -1325,7 +1388,7 @@ pub fn parse_config_options(options: &Value) -> DshModelCatalog {
     catalog
 }
 
-/// 把 DSH 的原始报错翻成可操作的话（缺 key / 未登录 / maxTokens 过大是最常见的几类）。
+/// 把 DSH 的原始报错翻成可操作的话（缺 key / 未登录 / maxTokens / 会话恢复是最常见的几类）。
 pub fn friendly_turn_error(raw: &str) -> String {
     let lower = raw.to_lowercase();
     if lower.contains("no api key")
@@ -1342,6 +1405,27 @@ pub fn friendly_turn_error(raw: &str) -> String {
     {
         return format!(
             "当前模型的输出上限（maxTokens）设得过大，接口已拒绝。请到 DSH → 模型页把该模型的最长输出调到 ≤131072（建议 8192–32768），再到本页点「重新同步」并重连通道；新版本镜像也会自动钳制过大值。（原始错误：{raw}）"
+        );
+    }
+    if lower.contains("session/resume")
+        || lower.contains("resume 失败")
+        || lower.contains("resume失败")
+    {
+        if lower.contains("already_active") || lower.contains("already active") {
+            return format!(
+                "上一轮 DSH 会话还在跑，暂时不能恢复同一会话。请等当前回合结束，或发送「停止」后再问；仍卡住就发「新对话」重置。（原始错误：{raw}）"
+            );
+        }
+        if lower.contains("unauthenticated")
+            || lower.contains("auth failed")
+            || lower.contains("unauthorized")
+        {
+            return format!(
+                "DSH 会话恢复鉴权失败：请检查 Harness 登录/密钥后，在设置页重启企微通道；或发送「新对话」开新会话再问。（原始错误：{raw}）"
+            );
+        }
+        return format!(
+            "DSH 会话恢复失败（常见于进程重启后旧会话已失效）。请发送「新对话」或「新会话」后再提问；仍不行请到设置 → IM机器人 → 企业微信重启通道。（原始错误：{raw}）"
         );
     }
     raw.to_string()
@@ -1553,13 +1637,13 @@ fn handle_frame(line: &str, shared: &Arc<RuntimeShared>, writer: &mpsc::Unbounde
 }
 
 fn route(
-    turns: &StdMutex<HashMap<String, mpsc::UnboundedSender<DshEvent>>>,
+    turns: &StdMutex<HashMap<String, TurnSink>>,
     session: &str,
     event: DshEvent,
 ) -> bool {
     if let Ok(map) = turns.lock() {
-        if let Some(tx) = map.get(session) {
-            return tx.send(event).is_ok();
+        if let Some(sink) = map.get(session) {
+            return sink.tx.send(event).is_ok();
         }
     }
     false
@@ -1821,7 +1905,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_missing_or_expired_is_the_only_resume_fallback() {
+    async fn missing_expired_or_opaque_internal_resume_falls_back_to_new() {
         for code in [
             "session_not_found",
             "session_expired",
@@ -1848,7 +1932,39 @@ mod tests {
             assert_eq!(calls.lock().unwrap().len(), 2);
             task.abort();
         }
+        // Real WeCom regression: ACP returns bare Internal error after process restart.
+        let (shared, writer, calls, task) = mock_rpc(vec![
+            json!({"error":{"code":-32603,"message":"Internal error"}}),
+            json!({"result":{"sessionId":"fresh-after-internal"}}),
+        ]);
+        assert_eq!(
+            acquire_rpc_session(
+                &shared,
+                &writer,
+                "D:/fixture",
+                json!([]),
+                Some("stale"),
+                false
+            )
+            .await
+            .unwrap(),
+            ("fresh-after-internal".into(), "new")
+        );
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|v| v["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["session/resume", "session/new"]
+        );
+        task.abort();
         assert!(!RpcFailure::Transport("not_found".into()).session_unavailable());
+        assert!(
+            !RpcFailure::Remote(json!({"code":-32603,"message":"Internal error: turn failed: x"}))
+                .resume_can_recreate()
+        );
     }
 
     #[tokio::test]
@@ -2343,6 +2459,19 @@ mod tests {
         assert!(text.contains("131072"), "{text}");
     }
 
+    #[test]
+    fn session_resume_error_becomes_actionable() {
+        let raw = "session/resume 失败：Internal error（code -32603）";
+        let text = friendly_turn_error(raw);
+        assert!(text.contains("新对话") || text.contains("新会话"), "{text}");
+        assert!(text.contains("重启通道") || text.contains("IM机器人"), "{text}");
+        assert!(text.contains(raw) || text.contains("-32603"), "{text}");
+
+        let busy = "session/resume 失败：already active（code -32603）";
+        let busy_text = friendly_turn_error(busy);
+        assert!(busy_text.contains("停止") || busy_text.contains("还在跑"), "{busy_text}");
+    }
+
     /// 覆盖层必须能被 YAML 解析，且 Windows 反斜杠路径不会把文档写坏。
     #[test]
     fn permission_patch_is_valid_yaml() {
@@ -2374,6 +2503,97 @@ mod tests {
         assert_eq!(
             rows[0].get("disabled").and_then(|v| v.as_bool()),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn dsh_turn_drop_only_removes_matching_prompt_id() {
+        let shared = Arc::new(RpcShared::new());
+        let (tx_writer, _rx_writer) = mpsc::unbounded_channel::<Value>();
+        let (tx_old, rx_old) = mpsc::unbounded_channel::<DshEvent>();
+        let (tx_new, mut rx_new) = mpsc::unbounded_channel::<DshEvent>();
+        let session = "sess-followup".to_string();
+
+        {
+            let mut turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+            turns.insert(
+                session.clone(),
+                TurnSink {
+                    prompt_id: 1,
+                    tx: tx_old,
+                },
+            );
+        }
+        {
+            let mut ids = shared.prompt_ids.lock().unwrap_or_else(|e| e.into_inner());
+            ids.insert(1, session.clone());
+        }
+
+        let old = DshTurn {
+            session_id: session.clone(),
+            events: rx_old,
+            responder: DshResponder {
+                writer: tx_writer.clone(),
+                session_id: session.clone(),
+            },
+            shared: Arc::clone(&shared),
+            prompt_id: 1,
+        };
+
+        // 续写已登记新 prompt，再 drop 旧回合（与 orchestrator `turn = next_turn` 同序）。
+        {
+            let mut turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+            turns.insert(
+                session.clone(),
+                TurnSink {
+                    prompt_id: 2,
+                    tx: tx_new,
+                },
+            );
+        }
+        {
+            let mut ids = shared.prompt_ids.lock().unwrap_or_else(|e| e.into_inner());
+            ids.insert(2, session.clone());
+        }
+
+        drop(old);
+
+        let still = shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&session)
+            .map(|s| s.prompt_id);
+        assert_eq!(still, Some(2), "旧 DshTurn Drop 不应删掉新 turn");
+        assert!(
+            shared
+                .prompt_ids
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&2)
+                .is_some(),
+            "新 prompt_id 映射应保留"
+        );
+        assert!(
+            shared
+                .prompt_ids
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&1)
+                .is_none(),
+            "旧 prompt_id 应从映射摘掉"
+        );
+        // 新通道仍存活：能发出去且接收端能收到。
+        {
+            let g = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+            let sink = g.get(&session).expect("新 sink 仍在");
+            sink.tx
+                .send(DshEvent::Done(Ok(json!({"stopReason": "end_turn"}))))
+                .expect("新通道应仍可写");
+        }
+        assert!(
+            matches!(rx_new.try_recv(), Ok(DshEvent::Done(Ok(_)))),
+            "期望收到新通道 Done"
         );
     }
 }

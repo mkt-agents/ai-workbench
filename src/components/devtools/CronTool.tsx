@@ -31,6 +31,23 @@ type ParsedCron = { fields: ParsedField[]; count: number; raw: string };
 
 const ALL_NULL: ParsedField = { type: "all", values: [] };
 
+/**
+ * 中文输入法容易打出全角空格 / 全角符号，从网页复制又常夹带零宽字符与不换行空格。
+ * 这些字符本页 `\s` 能吃掉、`parseInt` 也肯放过，但 Linux crontab / Java / Quartz
+ * 会直接判非法 —— 「这里显示正常、拿去用无法识别」多半就是它们造成的。
+ * 解析与复制前都先过一遍，输出永远是单个半角空格分隔的纯 ASCII 表达式。
+ */
+const FULLWIDTH_PUNCT: Record<string, string> = { "＊": "*", "？": "?", "，": ",", "－": "-", "／": "/" };
+
+export function normalizeCronExpr(raw: string): string {
+  return raw
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")                        // 零宽字符 / BOM
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ") // 不换行、全角等空白
+    .replace(/[＊？，－／]/g, (c) => FULLWIDTH_PUNCT[c] ?? c)      // 全角符号
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 function parseField(raw: string, min: number, max: number): { all: boolean; values: number[] } | null {
   if (raw === "*" || raw === "?") return { all: true, values: [] };
   const out = new Set<number>();
@@ -74,8 +91,10 @@ function describeField(values: number[], raw: string, min: number): ParsedField 
 }
 
 function parseCron(expr: string): ParsedCron | null {
-  const parts = expr.trim().split(/\s+/).filter(Boolean);
+  const normalized = normalizeCronExpr(expr);
+  const parts = normalized.split(" ").filter(Boolean);
   if (parts.length < 5 || parts.length > 7) return null;
+  const fieldCount = parts.length;
   while (parts.length < 7) {
     if (parts.length === 5) parts.unshift("0");
     else parts.push("*");
@@ -86,7 +105,108 @@ function parseCron(expr: string): ParsedCron | null {
   const fields = parsed.map((f, i) =>
     f!.all ? ALL_NULL : describeField(f!.values, raws[i], Object.values(RANGE)[i].min)
   );
-  return { fields, count: parts.length, raw: expr.trim() };
+  return { fields, count: fieldCount, raw: normalized };
+}
+
+/* ───────────────────────── dialect conversion ───────────────────────── */
+
+/**
+ * 复制目标格式：
+ * - unix    crontab 5 段（分 时 日 月 周）
+ * - quartz  6/7 段（秒 分 时 日 月 周 [年]），日/周必须有一个是 `?`
+ * - spring  @Scheduled 6 段（秒 分 时 日 月 周），无年份
+ * - cloud   云函数定时触发器 6 段（秒 分 时 日 月 周）
+ */
+type CronDialect = "unix" | "quartz" | "spring" | "cloud";
+type TargetWarning = "sec" | "year" | "both" | null;
+
+const DIALECT_VALUES: CronDialect[] = ["unix", "quartz", "spring", "cloud"];
+const DIALECT_STORAGE_KEY = "devtools-cron-dialect";
+
+function readDialect(): CronDialect {
+  try {
+    const stored = localStorage.getItem(DIALECT_STORAGE_KEY) as CronDialect | null;
+    return stored && DIALECT_VALUES.includes(stored) ? stored : "unix";
+  } catch {
+    return "unix";
+  }
+}
+
+function writeDialect(dialect: CronDialect) {
+  try {
+    localStorage.setItem(DIALECT_STORAGE_KEY, dialect);
+  } catch {
+    /* 存储不可用就只在本次会话生效 */
+  }
+}
+
+/** 把 5/6/7 段输入统一展开成 Quartz 的 7 个字段（秒 分 时 日 月 周 年）。 */
+function canonicalFields(c: ParsedCron) {
+  const tokens = c.raw.split(" ");
+  const [sec, min, hour, dom, month, dow, year] =
+    tokens.length === 5
+      ? ["0", tokens[0], tokens[1], tokens[2], tokens[3], tokens[4], "*"]
+      : tokens.length === 6
+        ? [...tokens, "*"]
+        : tokens;
+  return { sec, min, hour, dom, month, dow, year };
+}
+
+const isRestricted = (v: string) => v !== "*" && v !== "?";
+
+/**
+ * 换算成目标格式。三个 6 段的坑不一样：
+ * - Quartz 段数必须 6/7，且「日」「周」必须且只能有一个是 `?`，否则报
+ *   "Support for specifying both a day-of-week AND a day-of-month parameter is not implemented"。
+ * - Spring `@Scheduled` 固定 6 段、没有年份位，日/周可以同时是 `*`，`?` 兼容但没必要。
+ * - 云函数定时触发器 6 段（秒 分 时 日 月 周），同样不吃 `?`，年份不通用。
+ */
+function toTarget(c: ParsedCron, dialect: CronDialect): { expr: string; warning: TargetWarning } {
+  const f = canonicalFields(c);
+  if (dialect === "unix") {
+    // Quartz 习惯写 `0/15`，crontab 严格实现只保证 `*/15`，起点等于下界时统一改写
+    const asUnix = (v: string) => {
+      const m = /^0\/(\d+)$/.exec(v);
+      return m ? `*/${m[1]}` : v;
+    };
+    const parts = [
+      asUnix(f.min),
+      asUnix(f.hour),
+      f.dom === "?" ? "*" : f.dom,
+      f.month,
+      f.dow === "?" ? "*" : asUnix(f.dow),
+    ];
+    const warning: TargetWarning =
+      f.sec !== "0" && f.sec !== "*" ? "sec" : f.year !== "*" ? "year" : null;
+    return { expr: parts.join(" "), warning };
+  }
+  if (dialect === "spring" || dialect === "cloud") {
+    // 两者都是固定 6 段：日/周可以同时是 `*`，把 `?` 折回 `*`（老版 Spring 不认 `?`）
+    const parts = [
+      f.sec,
+      f.min,
+      f.hour,
+      f.dom === "?" ? "*" : f.dom,
+      f.month,
+      f.dow === "?" ? "*" : f.dow,
+    ];
+    return { expr: parts.join(" "), warning: f.year !== "*" ? "year" : null };
+  }
+  let dom = f.dom;
+  let dow = f.dow;
+  let warning: TargetWarning = null;
+  if (isRestricted(dom) && isRestricted(dow)) {
+    // Quartz 无法同时限定「日」和「周」：保留周（工作日这类更常见），日让位并提示
+    warning = "both";
+    dom = "?";
+  } else if (isRestricted(dow)) {
+    dom = "?";
+  } else {
+    dow = "?";
+  }
+  const parts = [f.sec, f.min, f.hour, dom, f.month, dow];
+  if (f.year !== "*") parts.push(f.year);
+  return { expr: parts.join(" "), warning };
 }
 
 /* ───────────────────────── description ───────────────────────── */
@@ -99,7 +219,7 @@ const DOW_EN = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 function describeCron(c: ParsedCron, t: (k: string) => string, lang: "zh" | "en"): string {
-  const [second, minute, hour, dom, month, dow] = c.fields;
+  const [second, minute, hour, dom, month, dow, year] = c.fields;
   const isAll = (f: ParsedField) => f.type === "all";
   const isSingle = (f: ParsedField) => f.type === "single";
   const isStepAll = (f: ParsedField) => f.type === "step-all";
@@ -138,6 +258,10 @@ function describeCron(c: ParsedCron, t: (k: string) => string, lang: "zh" | "en"
     if (isSingle(month)) segments.push(t("cron.inMonth").replace("{{n}}", MONTH_NAMES[month.values[0] - 1]));
     else segments.push(descValues(month, "month"));
   }
+  if (year && !isAll(year)) {
+    if (isSingle(year)) segments.push(t("cron.inYear").replace("{{n}}", String(year.values[0])));
+    else segments.push(`${t("cron.year")} ${descValues(year)}`);
+  }
 
   return segments.join(" · ") || t("cron.everyMinute");
 }
@@ -164,7 +288,7 @@ function findNext(sorted: number[], cur: number): number {
 }
 
 function nextRuns(c: ParsedCron, from: Date, count: number): Date[] {
-  const [, minuteF, hourF, domF, monthF, dowF] = c.fields;
+  const [, minuteF, hourF, domF, monthF, dowF, yearF] = c.fields;
 
   // Precompute Sets for O(1) lookup
   const minuteAll = minuteF.type === "all";
@@ -172,12 +296,14 @@ function nextRuns(c: ParsedCron, from: Date, count: number): Date[] {
   const domAll = domF.type === "all";
   const monthAll = monthF.type === "all";
   const dowAll = dowF.type === "all";
+  const yearAll = !yearF || yearF.type === "all";
 
   const minuteSet = minuteAll ? null : new Set(minuteF.values);
   const hourSet = hourAll ? null : new Set(hourF.values);
   const domSet = domAll ? null : new Set(domF.values);
   const monthSet = monthAll ? null : new Set(monthF.values);
   const dowSet = dowAll ? null : new Set(dowF.values);
+  const yearSet = yearAll ? null : new Set(yearF.values);
 
   const results: Date[] = [];
   const d = new Date(from);
@@ -237,6 +363,16 @@ function nextRuns(c: ParsedCron, from: Date, count: number): Date[] {
         d.setMonth(next - 1);
       }
       d.setDate(1);
+      d.setHours(0, 0);
+      continue;
+    }
+
+    // 7 段的年份字段：落在允许范围外就直接跳到下一个允许的年份
+    const y = d.getFullYear();
+    if (!yearAll && !yearSet!.has(y)) {
+      const next = findNext(yearF.values, y);
+      if (next === -1) break;
+      d.setFullYear(next, 0, 1);
       d.setHours(0, 0);
       continue;
     }
@@ -307,6 +443,7 @@ export default function CronTool() {
   const [debouncedExpr, setDebouncedExpr] = useState(expr);
   const [nextCount, setNextCount] = useState(5);
   const [showHelp, setShowHelp] = useState(false);
+  const [dialect, setDialect] = useState<CronDialect>(readDialect);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Debounce expression input to avoid expensive recompute on every keystroke
@@ -318,6 +455,9 @@ export default function CronTool() {
   const parsed = useMemo(() => parseCron(debouncedExpr), [debouncedExpr]);
   const description = useMemo(() => (parsed ? describeCron(parsed, t, lang) : null), [parsed, t, lang]);
   const runs = useMemo(() => (parsed ? nextRuns(parsed, new Date(), nextCount) : []), [parsed, nextCount]);
+  const target = useMemo(() => (parsed ? toTarget(parsed, dialect) : null), [parsed, dialect]);
+  /** 复制时给目标格式的写法：crontab 5 段 / Quartz 6·7 段 */
+  const copyExpr = target?.expr ?? normalizeCronExpr(expr);
 
   const flash = (type: "success" | "error", text: string) => {
     setMessage({ type, text });
@@ -386,6 +526,39 @@ export default function CronTool() {
             <XCircle size={12} />
             {t("cron.invalidHint")}
           </p>
+        )}
+
+        {parsed && (
+          <div className="cron-dialect-bar">
+            <div className="cron-segmented" role="group" aria-label={t("cron.dialects.copyAs")}>
+              {DIALECT_VALUES.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={`cron-seg-btn ${dialect === d ? "active" : ""}`}
+                  title={t(`cron.dialects.shape.${d}`)}
+                  onClick={() => {
+                    setDialect(d);
+                    writeDialect(d);
+                  }}
+                >
+                  {t(`cron.dialects.target.${d}`)}
+                </button>
+              ))}
+            </div>
+            <span className="cron-field-hint">
+              {t(`cron.dialects.${parsed.count === 5 ? "five" : parsed.count === 6 ? "six" : "seven"}`)}
+              {parsed.raw !== expr.trim() && (
+                <span className="cron-field-hint-norm">
+                  {t("cron.dialects.normalized", { expr: parsed.raw })}
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+
+        {parsed && target?.warning && (
+          <p className="cron-warn-hint">{t(`cron.dialects.warn.${target.warning}`)}</p>
         )}
       </div>
 
@@ -486,11 +659,17 @@ export default function CronTool() {
             <div className="cron-desc-body">
               <div className="cron-desc-label">{t("cron.meaning")}</div>
               <div className="cron-desc-text">{description}</div>
+              {target && target.expr !== parsed.raw && (
+                <div className="cron-desc-target">
+                  <span>{t("cron.dialects.copyAs")}</span>
+                  <code>{target.expr}</code>
+                </div>
+              )}
             </div>
             <button
               type="button"
               className="cron-action-btn"
-              onClick={() => handleCopy(expr)}
+              onClick={() => void handleCopy(copyExpr)}
               title={t("cron.copyExpr")}
             >
               <Copy size={13} />

@@ -185,6 +185,18 @@ pub struct WecomApplyRequest {
     /// 逆向文档目录（相对工作区），默认 `doc`。
     #[serde(default)]
     pub doc_dir: String,
+    /// 私聊增强提示词开关。
+    #[serde(default)]
+    pub enhance_dm_enabled: bool,
+    /// 群聊增强提示词开关。
+    #[serde(default)]
+    pub enhance_group_enabled: bool,
+    /// 私聊增强提示词（最多 2000 字）。
+    #[serde(default)]
+    pub enhance_dm: String,
+    /// 群聊增强提示词（最多 2000 字）。
+    #[serde(default)]
+    pub enhance_group: String,
     /// SkyWalking OAP 地址（空 = 不下发排障工具）。
     #[serde(default)]
     pub skywalking_addr: String,
@@ -206,6 +218,24 @@ pub struct WecomApplyRequest {
     /// 企微群机器人 webhook URL（或仅 key）；变动通知推到这里。可为 enc:v1: 密文。
     #[serde(default)]
     pub webhook_url: String,
+    /// 飞书自定义机器人 webhook（完整 URL，enc:v1: 密文）。
+    #[serde(default)]
+    pub webhook_feishu: String,
+    /// 钉钉自定义机器人 webhook（完整 URL，enc:v1: 密文）。
+    #[serde(default)]
+    pub webhook_dingtalk: String,
+    /// 可选 5 段 unix cron；非空则覆盖每日 HH:MM。
+    #[serde(default)]
+    pub docgen_cron: String,
+    /// 预览模式：更新后不落盘。
+    #[serde(default)]
+    pub docgen_preview: bool,
+    /// 质量自检第二轮。
+    #[serde(default)]
+    pub docgen_quality_check: bool,
+    /// 轮询 origin/release 超前后自动跑。
+    #[serde(default)]
+    pub docgen_poll_release: bool,
     /// 文档更新后自动 commit（默认开）。
     #[serde(default = "default_true")]
     pub auto_commit: bool,
@@ -354,18 +384,24 @@ pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, S
         }
     }
 
-    // 2) webhook
-    if cfg.webhook_url.trim().is_empty() {
+    // 2) webhooks（企微 / 飞书 / 钉钉）
+    let (any_ok, errs) = crate::wecom_docgen::notify_all(
+        &cfg,
+        "✅ AI Workbench 连通测试：逆向文档通道可用。",
+    )
+    .await;
+    if errs.iter().any(|e| e.contains("未配置任何")) {
         lines.push("⚠️ 群 webhook 未配置（不会推送变动通知）".into());
+    } else if errs.is_empty() && any_ok {
+        lines.push("✅ 已配置的群 webhook 均可达（已发测试消息）".into());
+    } else if any_ok {
+        lines.push("✅ 部分群 webhook 可达（已发测试消息）".into());
+        for e in errs {
+            lines.push(format!("❌ webhook：{e}"));
+        }
     } else {
-        match crate::wecom_docgen::send_webhook(
-            &cfg.webhook_url,
-            "✅ AI Workbench 连通测试：逆向文档通道可用。",
-        )
-        .await
-        {
-            Ok(()) => lines.push("✅ 群 webhook 可达（已发一条测试消息）".into()),
-            Err(e) => lines.push(format!("❌ 群 webhook 失败：{e}")),
+        for e in errs {
+            lines.push(format!("❌ webhook：{e}"));
         }
     }
 
@@ -408,21 +444,35 @@ pub async fn wecom_docgen_run_now(
     if let Some(reason) = report.skipped_reason {
         return Ok(format!("已跳过：{reason}"));
     }
-    Ok(format!(
-        "已更新：分支 {}，{} 个变更文件，群通知{}。\n{}",
+    let preview_tag = if report.preview { "（预览未落盘）" } else { "" };
+    let mut body = format!(
+        "已更新{preview_tag}：分支 {}，{} 个变更文件，群通知{}。\n{}",
         report.branch,
-        report.new_commits,
+        report.changed_files.len(),
         if report.pushed {
             "已推送"
-        } else {
+        } else if report.webhook_errors.is_empty() {
             "未推送（检查 webhook）"
+        } else {
+            "部分失败"
         },
         if report.updated_docs.is_empty() {
             "（无摘要）".to_string()
         } else {
             report.updated_docs
         }
-    ))
+    );
+    if !report.quality.trim().is_empty() {
+        body.push_str("\n\n质量自检：\n");
+        body.push_str(report.quality.trim());
+    }
+    Ok(body)
+}
+
+/// 最近 30 条逆向文档更新历史（新 → 旧）。
+#[tauri::command]
+pub async fn wecom_docgen_history() -> Result<Vec<crate::wecom_docgen::DocgenHistoryItem>, String> {
+    Ok(crate::wecom_docgen::list_history())
 }
 
 #[derive(Debug, Serialize)]
@@ -635,18 +685,44 @@ pub async fn wecom_channel_apply(
             d.to_string()
         };
     }
+    {
+        let clip = |s: &str| -> String {
+            s.chars().take(2000).collect::<String>().trim().to_string()
+        };
+        let dm_text = clip(&req.enhance_dm);
+        let group_text = clip(&req.enhance_group);
+        *state.orch.enhance_dm_enabled.lock().await = req.enhance_dm_enabled;
+        *state.orch.enhance_group_enabled.lock().await = req.enhance_group_enabled;
+        *state.orch.enhance_dm.lock().await = dm_text.clone();
+        *state.orch.enhance_group.lock().await = group_text.clone();
+        crate::wecom_log::write(
+            "enhance",
+            &format!(
+                "applied dm_enabled={} group_enabled={} dm_chars={} group_chars={}",
+                req.enhance_dm_enabled,
+                req.enhance_group_enabled,
+                dm_text.chars().count(),
+                group_text.chars().count()
+            ),
+        );
+    }
 
-    // Webhook was decoded during validation, before any retirement/mutation.
-    let webhook_plain = req.webhook_url;
+    // Webhooks were decoded during validation, before any retirement/mutation.
     *state.docgen.lock().await = crate::wecom_docgen::DocgenConfig {
         enabled: req.auto_update_enabled,
         time: req.auto_update_time.trim().to_string(),
+        cron: req.docgen_cron.trim().to_string(),
         release_branch: req.release_branch.trim().to_string(),
         workspace: workspace.clone(),
         doc_dir: req.doc_dir.trim().to_string(),
-        webhook_url: webhook_plain,
+        webhook_url: req.webhook_url,
+        webhook_feishu: req.webhook_feishu,
+        webhook_dingtalk: req.webhook_dingtalk,
         auto_commit: req.auto_commit,
         auto_push: req.auto_push,
+        preview_mode: req.docgen_preview,
+        quality_check: req.docgen_quality_check,
+        poll_release: req.docgen_poll_release,
     };
 
     if !req.enabled {

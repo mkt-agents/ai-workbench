@@ -106,6 +106,8 @@
     "day": "day",
     "inMonth": "in {{n}}",
     "month": "month",
+    "inYear": "in {{n}}",
+    "year": "year",
     "in": "in {{t}}",
     "nSeconds": "{{n}} seconds",
     "nMinutes": "{{n}} minutes",
@@ -125,6 +127,30 @@
     "formatHelp": "Format help",
     "expression": "Cron expression",
     "invalidHint": "Invalid expression — check field count and value ranges",
+    "dialects": {
+      "five": "5 fields · min hour dom month dow (crontab / GitHub Actions / K8s)",
+      "six": "6 fields · sec min hour dom month dow (Quartz / Spring @Scheduled)",
+      "seven": "7 fields · sec min hour dom month dow year (Quartz with year / cloud timers)",
+      "normalized": "Normalized to half-width: {{expr}}",
+      "copyAs": "Copy as",
+      "target": {
+        "unix": "crontab",
+        "quartz": "Quartz",
+        "spring": "Spring",
+        "cloud": "Cloud"
+      },
+      "shape": {
+        "unix": "5 fields: min hour dom month dow",
+        "quartz": "6/7 fields: sec min hour dom month dow [year], one of dom/dow must be ?",
+        "spring": "6 fields: sec min hour dom month dow",
+        "cloud": "6 fields: sec min hour dom month dow"
+      },
+      "warn": {
+        "sec": "crontab has no seconds field — the seconds value is dropped",
+        "year": "This format has no year field — the year is dropped",
+        "both": "Quartz can't restrict both day-of-month and day-of-week — kept weekday, day-of-month set to ?"
+      }
+    },
     "copyAll": "Copy all",
     "help": {
       "fields": "Fields (left → right)",

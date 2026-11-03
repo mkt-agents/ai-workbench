@@ -284,12 +284,70 @@ pub fn has_usable_search_anchors(keywords: &[String]) -> bool {
     keywords.iter().any(|k| is_search_anchor(k))
 }
 
+/// Peel question shells / leading search verbs / trailing generic nouns, then slot-normalize.
+/// Speeds local infer; failure must not force host clarify (engine fallback owns that).
+fn peel_anchor_shells(raw: &str) -> Option<String> {
+    const LEAD_CONTROLS: &[&str] = &[
+        "再排查", "再查", "再看", "请排查", "帮我排查", "排查", "查一下", "查下", "找一下", "找下",
+        "看一下", "看下", "搜一下", "搜下", "再", "请", "帮我",
+    ];
+    const LEAD_QUESTIONS: &[&str] = &["为什么会", "为啥会", "怎么会", "为什么", "为啥", "怎么", "怎样"];
+    const TRAIL_GENERICS: &[&str] = &["消息", "日志", "问题", "情况", "服务", "异常", "报错", "错误"];
+    let mut current = strip_trailing_particles(raw.trim()).to_string();
+    for _ in 0..6 {
+        let before = current.clone();
+        for p in LEAD_CONTROLS {
+            if let Some(rest) = current.strip_prefix(p) {
+                let rest = rest.trim_start();
+                if rest.chars().count() >= 2 {
+                    current = rest.to_string();
+                    break;
+                }
+            }
+        }
+        for p in LEAD_QUESTIONS {
+            if let Some(rest) = current.strip_prefix(p) {
+                let rest = rest.trim_start();
+                if rest.chars().count() >= 2 {
+                    current = rest.to_string();
+                    break;
+                }
+            }
+        }
+        if current.starts_with('会') && current.chars().count() >= 3 {
+            current = current.chars().skip(1).collect::<String>().trim_start().to_string();
+        }
+        for p in TRAIL_GENERICS {
+            if let Some(rest) = current.strip_suffix(p) {
+                let rest = rest.trim_end();
+                if rest.chars().count() >= 2 {
+                    current = rest.to_string();
+                    break;
+                }
+            }
+        }
+        if current == before {
+            break;
+        }
+    }
+    if let Some(normalized) = normalize_slot_name(&current) {
+        return Some(normalized);
+    }
+    let len = current.chars().count();
+    if (2..=CJK_ANCHOR_MAX).contains(&len) && current.chars().all(is_cjk_char) {
+        return Some(current);
+    }
+    None
+}
+
 /// Keep only anchors that pass the quality gate (order preserved).
 /// Also collapses coverb/shell supersets: `里孙武` drops when `孙武` is kept.
 pub fn sanitize_anchors(values: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
     for value in values {
-        let value = match normalize_slot_name(&value) {
+        let value = match peel_anchor_shells(&value)
+            .or_else(|| normalize_slot_name(&value))
+        {
             Some(normalized) => normalized,
             None => {
                 let trimmed = value.trim().to_string();
@@ -476,7 +534,7 @@ pub fn infer_intent_from_text(text: &str) -> Option<NaturalQueryIntent> {
             break;
         }
         let burst = raw.trim();
-        let peeled = normalize_slot_name(burst);
+        let peeled = peel_anchor_shells(burst).or_else(|| normalize_slot_name(burst));
         let candidate = if let Some(ref peeled) = peeled {
             match whole_anchor(peeled) {
                 Some(value) => value.to_string(),
@@ -987,5 +1045,38 @@ mod tests {
                 intent.anchors
             );
         }
+    }
+
+    /// Soft troubleshoot: peel question/generic shells so domain+symptom become anchors.
+    /// Host clarify must not be the only path when these succeed (engine still owns no-service).
+    #[test]
+    fn soft_troubleshoot_peels_domain_and_symptom() {
+        let text = "再排查电子行业消息，为什么会挤压？";
+        let intent = infer_intent_from_text(text).expect(text);
+        assert!(
+            intent.anchors.iter().any(|a| a == "电子行业"),
+            "expected 电子行业, got {:?}",
+            intent.anchors
+        );
+        assert!(
+            intent.anchors.iter().any(|a| a == "挤压"),
+            "expected 挤压, got {:?}",
+            intent.anchors
+        );
+        assert!(
+            !intent
+                .anchors
+                .iter()
+                .any(|a| a == "找下" || a == "消息" || a.contains("什么")),
+            "junk leaked: {:?}",
+            intent.anchors
+        );
+        assert!(has_usable_search_anchors(&intent.anchors));
+    }
+
+    #[test]
+    fn search_verb_alone_still_not_an_anchor_after_peel() {
+        assert!(infer_intent_from_text("找下今天的日志").is_none());
+        assert!(!is_search_anchor("找下"));
     }
 }

@@ -33,6 +33,9 @@ pub struct MediaRef {
     /// 临时素材 id；无 url 时由宿主经业务 API / media/get 拉取。
     pub media_id: Option<String>,
     pub filename: Option<String>,
+    /// 长连接入站媒体的独立 AES 密钥（base64）；下载后的字节需 AES-256-CBC 解密。
+    /// 与回调模式统一 EncodingAESKey 不同，每个 url 的 aeskey 唯一。
+    pub aeskey: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -399,11 +402,18 @@ fn media_from(v: &Value, kind: &str) -> Option<MediaRef> {
         .or_else(|| v.get("name"))
         .and_then(|f| f.as_str())
         .map(|s| s.to_string());
+    let aeskey = v
+        .get("aeskey")
+        .or_else(|| v.get("aes_key"))
+        .and_then(|k| k.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     Some(MediaRef {
         kind: kind.to_string(),
         url,
         media_id,
         filename,
+        aeskey,
     })
 }
 
@@ -559,7 +569,7 @@ mod tests {
             "body":{
                 "msgid":"m2","chattype":"single",
                 "from":{"userid":"u2"},"msgtype":"image",
-                "image":{"url":"https://example.com/a.png","md5":"x"}
+                "image":{"url":"https://example.com/a.png","md5":"x","aeskey":"YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY="}
             }
         }"#;
         let frame = parse_inbound(raw).unwrap();
@@ -569,6 +579,10 @@ mod tests {
         assert_eq!(msg.media[0].kind, "image");
         assert_eq!(msg.media[0].url, "https://example.com/a.png");
         assert!(msg.media[0].media_id.is_none());
+        assert_eq!(
+            msg.media[0].aeskey.as_deref(),
+            Some("YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY=")
+        );
     }
 
     #[test]

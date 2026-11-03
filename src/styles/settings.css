@@ -1642,21 +1642,240 @@
   padding-top: 3px;
 }
 .settings-page .wecom-rows > .wecom-subhead,
-.settings-page .wecom-rows > .wecom-diag,
-.settings-page .wecom-rows > .wecom-env-hint {
+.settings-page .wecom-rows > .wecom-diag {
   grid-column: 1 / -1;
 }
-.settings-page .wecom-rows > .wecom-env-hint {
-  margin: 6px 0 2px;
+/* ---------- 回答设置的分组卡片 ----------
+   原来每组是「小节标题 + 一串表单行」，四组叠成一条长滚动；现在每组一张卡片：
+   标题在头（下压一条细线），字段并排或独占一行，说明贴着内容走。
+   `.wecom-enhance-card`（上下文增强）复用同一套壳，另带启用态描边。 */
+.settings-page .wecom-rows > .wecom-enhance-card,
+.settings-page .wecom-rows > .wecom-block-card {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--overlay-1);
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+.settings-page .wecom-enhance-head,
+.settings-page .wecom-block-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+.settings-page .wecom-enhance-head-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.settings-page .wecom-enhance-title,
+.settings-page .wecom-block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+/* 短字段并排的卡片：卡片内部再分两列，开关行与卡头仍然通栏。
+   固定两列（不用 auto-fit），否则宽窗会冒出第三列，字段挤成一条 */
+.settings-page .wecom-block-card.is-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+  row-gap: 0;
+  align-items: start;
+}
+.settings-page .wecom-block-card.is-split > .wecom-block-head,
+.settings-page .wecom-block-card.is-split > .wecom-block-lead,
+.settings-page .wecom-block-card.is-split > .wecom-switch-row {
+  grid-column: 1 / -1;
+}
+/* 卡片里的字段行：不再各画一条分隔线，靠间距分层。
+   标签比卡头小半号、颜色拉回正文色；标签与控件之间留 6px 气口 */
+.settings-page .wecom-block-card .wecom-row {
+  padding: 7px 0;
+  gap: 6px;
+  border-top-color: transparent;
+}
+.settings-page .wecom-block-card .wecom-row-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: var(--text-1);
+}
+/* 输入框在卡片里抬到 28px、字号 12.5px：和 12.5px 的标签配起来不显得细弱。
+   带显隐按钮的输入框由内层 input 撑高，外层容器只负责定位——否则上下内边距会把
+   输入框往下推 4px，和同一行的普通输入框错开 */
+.settings-page .wecom-block-card .wecom-row-control > .input-field,
+.settings-page .wecom-block-card .wecom-row-control > select.input-field,
+.settings-page .wecom-block-card .wecom-row-control > .input-with-toggle .input-field {
+  min-height: 28px;
+  padding-block: 4px;
+  font-size: 12.5px;
+}
+.settings-page .wecom-block-card .wecom-row-control > .input-with-toggle {
+  min-height: 28px;
+  padding-block: 0;
+}
+.settings-page .wecom-block-card .wecom-row-hint {
+  gap: 6px;
+  margin-top: 2px;
+}
+/* 卡片里的说明小一号、行距放宽；贴着字段，不再叠加 .setting-hint 的上内边距 */
+.settings-page .wecom-block-card .wecom-row-hint .setting-hint {
+  padding-top: 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+/* 折叠说明的摘要和正文说明同一字号、同一行距，一行里不会一紧一松 */
+.settings-page .wecom-block-card .wecom-row-hint > .wecom-hint > summary {
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+/* 开关行左右两组都更容易变高，行内上下再多留一点 */
+.settings-page .wecom-block-card .wecom-switch-row {
+  padding: 9px 0;
+}
+/* 长段提示（启用前清单、按钮说明这类）：单独成注，左侧一道淡线 + 更松的行距，
+   不要和上面的字段说明糊成一片 */
+.settings-page .wecom-note {
+  margin-top: 2px;
+  padding-left: 9px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--text-2);
+  line-height: 1.7;
+}
+/* 单行下拉铺满整张卡片太笨拙，给个上限；路径类输入框仍然铺满 */
+.settings-page .wecom-block-card .wecom-row-control > select.input-field {
+  max-width: 380px;
+}
+/* 开着的一侧描边掺一点 accent：不读文字也能看出私聊 / 群聊谁启用了 */
+.settings-page .wecom-rows > .wecom-enhance-card.is-on {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 4%, var(--overlay-1));
+}
+/* 会话类型：分段控件收成与标题同高的小胶囊，选中侧才实心 */
+.settings-page .wecom-enhance-seg {
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--overlay-2);
+}
+.settings-page .wecom-enhance-seg .segmented-item {
+  padding: 2px 12px;
+  border-left: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-size: 11.5px;
+  line-height: 16px;
   color: var(--text-2);
 }
-.settings-page .wecom-rows > .wecom-env-hint + .wecom-row,
-.settings-page .wecom-rows > .wecom-env-hint + .wecom-row + .wecom-row {
-  border-top-color: transparent;
+.settings-page .wecom-enhance-seg .segmented-item:hover {
+  background: var(--overlay-2);
+  color: var(--text-1);
+}
+.settings-page .wecom-enhance-seg .segmented-item.active,
+.settings-page .wecom-enhance-seg .segmented-item.active:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+/* 卡片里的说明：贴着各自的内容，不再带 .setting-hint 的上内边距 */
+.settings-page .wecom-enhance-lead,
+.settings-page .wecom-enhance-note,
+.settings-page .wecom-block-lead,
+.settings-page .wecom-block-note {
+  padding: 0;
+  max-width: 92ch;
+}
+.settings-page .wecom-enhance-note,
+.settings-page .wecom-block-lead,
+.settings-page .wecom-block-note {
+  font-size: 11.5px;
+}
+/* 无卡头的卡片（线上排障）：说明在第一行，和字段之间留一点气口 */
+.settings-page .wecom-block-card > .wecom-block-lead {
+  line-height: 1.5;
+}
+/* 会话规则：几条说明排成两列、默认收起，比一整面文字墙好扫 */
+.settings-page .wecom-rules-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+  row-gap: 4px;
+  align-items: start;
+}
+.settings-page .wecom-rules-grid > .wecom-hint {
+  margin: 0;
+  padding: 2px 0;
+}
+/* 长文本编辑器（自我介绍 / 增强提示词共用）：正文 + 底部动作与字数 */
+.settings-page .wecom-editor-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 嵌在控件行里的编辑器要占满整行：控件行是 wrap 的 flex 容器，
+   不指定宽度时这一块按 textarea 的默认 cols 收窄，比上下文增强那块短一截 */
+.settings-page .wecom-row-control > .wecom-editor-stack {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+}
+/* 两个长文本框（自我介绍 / 上下文增强）等高：固定 200px，内容多了框内滚动，
+   不再一边跟着内容长、一边缩成 6 行 */
+.settings-page .wecom-editor-stack > textarea.input-field {
+  height: 200px;
+  min-height: 140px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.settings-page .wecom-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settings-page .wecom-enhance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* 字数贴右下角，等宽数字，写的时候不跳动 */
+.settings-page .wecom-char-count {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 /* 长字段（密钥、路径、请求头、模型、日志动作）横跨两列，别挤在半个格子里 */
 .settings-page .wecom-rows > .wecom-row.is-wide {
   grid-column: 1 / -1;
+}
+/* 两个字段并排一行：整块横跨两列、内部再分两列；
+   只剩一个字段（天玑引擎没有镜像行）时 auto-fit 收起空轨道，自动铺满整行 */
+.settings-page .wecom-rows > .wecom-pair,
+.settings-page .wecom-block-card > .wecom-pair {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  column-gap: 16px;
+}
+/* 这一块紧跟小节标题，两列都不再画上边线，免得只有右列拖着一条半截的线 */
+.settings-page .wecom-pair > .wecom-row {
+  border-top-color: transparent;
 }
 /* 面板内整块的列表（配对码 / 已批准用户）同样横跨两列 */
 .settings-page .wecom-rows > .setting-item {
@@ -1739,7 +1958,7 @@
 .settings-page .wecom-switch-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 6px;
   min-width: 0;
 }
 .settings-page .wecom-switch-control {
@@ -1764,11 +1983,19 @@
   width: 100%;
   min-width: 0;
 }
-/* 控件铺满所在列：两列各占一半、同一行左右两端对齐，才不会一边长一边短 */
+/* 控件铺满所在列：两列各占一半、同一行左右两端对齐，才不会一边长一边短。
+   `.input-with-toggle` 是定位容器，上下内边距要留给内层 input，否则它会比同排的
+   普通输入框低几像素（Bot ID 与 Secret 并排时最明显） */
 .settings-page .wecom-row-control > .input-field,
-.settings-page .wecom-row-control > select.input-field,
+.settings-page .wecom-row-control > select.input-field {
+  width: 100%;
+  min-height: 26px;
+  padding-block: 3px;
+}
 .settings-page .wecom-row-control > .input-with-toggle {
   width: 100%;
+}
+.settings-page .wecom-row-control > .input-with-toggle .input-field {
   min-height: 26px;
   padding-block: 3px;
 }
@@ -1807,6 +2034,15 @@
 }
 @media (max-width: 720px) {
   .settings-page .wecom-rows {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-page .wecom-rows > .wecom-pair,
+  .settings-page .wecom-block-card > .wecom-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* 卡片内两列在窄窗回落单列 */
+  .settings-page .wecom-block-card.is-split,
+  .settings-page .wecom-rules-grid {
     grid-template-columns: minmax(0, 1fr);
   }
   .settings-page .wecom-rows > .wecom-row:nth-child(2) {
@@ -1968,36 +2204,80 @@
 .settings-page .wecom-diag-panel[open] > summary::after {
   transform: rotate(180deg);
 }
+/* 「最新在前」「连不上时看这里」这类附注收成小胶囊，和状态/版本胶囊同一视觉重量 */
 .settings-page .wecom-diag-hint {
   flex: none;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--overlay-1);
   font-size: 10.5px;
+  line-height: 16px;
   color: var(--text-3);
+  white-space: nowrap;
 }
 /* 运行诊断分两层：上面前三块是「查」，下面两块日志是「看」。
    两块日志共用「原始日志」分组标题，块标题再弱一档，层次才分得开 */
 /* 分组标题当小眉标用：比下面的块标题更淡、更小，层级才不倒挂 */
 .settings-page .wecom-diag-subhead {
-  margin-top: 0;
-  padding: 4px 12px 0;
+  margin-top: 2px;
+  padding: 0 2px 6px;
   font-size: 10.5px;
   letter-spacing: 0.04em;
   color: var(--text-3);
 }
+/* 两块日志并排：宽窗一屏同时看通道与会话，窄窗自动落成一列 */
 .settings-page .wecom-diag-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: 10px;
   padding: 0;
 }
-.settings-page .wecom-diag-grid > .wecom-diag-block {
-  padding-top: 8px;
+/* 两块日志卡等高：卡片拉成 flex 列，左侧日志框与右侧旁证卡固定同一高度，
+   内容超出在框内上下滚动，整页不再被日志撑长 */
+.settings-page .wecom-diag-grid {
+  align-items: stretch;
 }
+.settings-page .wecom-diag-grid > .wecom-diag-block {
+  display: flex;
+  flex-direction: column;
+}
+.settings-page .wecom-diag-grid .wecom-diag-log {
+  flex: 0 0 auto;
+  height: 400px;
+  min-height: 0;
+  max-height: 400px;
+}
+.settings-page .wecom-diag-grid .wecom-diag-result {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  height: 400px;
+  min-height: 0;
+  max-height: 400px;
+}
+/* 旁证列表自己滚：胶囊与告警占掉的高度之后，剩下的都给列表 */
+.settings-page .wecom-diag-grid .wecom-diag-result > .wecom-diag-sessions {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+/* 诊断的四块统一成卡片壳，和其余 tab 的分组卡片同一套视觉 */
 .settings-page .wecom-diag-block {
   min-width: 0;
-  padding: 12px;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--overlay-1);
 }
-.settings-page .wecom-diag-block + .wecom-diag-block {
-  border-top: 1px solid var(--border-subtle);
+.settings-page .wecom-diag-block:last-child {
+  margin-bottom: 0;
+}
+/* 日志卡之间的间距交给网格的 gap，别再叠一层外边距 */
+.settings-page .wecom-diag-grid > .wecom-diag-block {
+  margin-bottom: 0;
 }
 /* 日志块标题：去掉竖线、缩小一号，明确是分组里的次级小节 */
 .settings-page .wecom-diag-grid .wecom-diag-head {
@@ -2163,28 +2443,88 @@
   margin-top: 8px;
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--overlay-2);
 }
-/* 按钮行贴着最后一行筛选，只用一条细线分开，不再上下各留 9px */
+/* 按钮行贴着最后一行筛选，只用一条细线分开，不再上下各留 9px。
+   左侧给快捷时间，按钮靠右，中间留白由 auto 边距吃掉 */
 .settings-page .wecom-diag-actions {
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 6px;
   margin-top: 6px;
   padding-top: 7px;
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+}
+.settings-page .wecom-diag-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 /* 按钮和 28px 的输入框配平，别一个高一个矮 */
 .settings-page .wecom-diag-actions .btn {
   min-height: 26px;
   padding-inline: 10px;
 }
+/* 快捷时间：标签 + 一排胶囊，窄窗允许折行，不把右侧按钮挤出去 */
+.settings-page .wecom-diag-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-right: auto;
+}
+.settings-page .wecom-diag-quick-label {
+  margin-right: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+/* 胶囊一律从主题 token 混色：浅色 / 深色 / 磨砂几套主题下都不需要单独覆盖 */
+.settings-page .wecom-diag-quick-chip {
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border-subtle));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 7%, var(--overlay-2));
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-1));
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+.settings-page .wecom-diag-quick-chip:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 14%, var(--overlay-2));
+  color: var(--accent);
+}
+.settings-page .wecom-diag-quick-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+/* 当前生效的那一档实心一点：查询结果对应的区间一眼可辨 */
+.settings-page .wecom-diag-quick-chip.is-active {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  font-weight: 600;
+  color: var(--accent);
+}
+.settings-page .wecom-diag-quick-chip:disabled {
+  border-color: var(--border-subtle);
+  background: var(--overlay-2);
+  color: var(--text-3);
+  cursor: default;
+}
 /* 结果卡：和筛选卡同一套边框与底色，「筛选 → 结果」两段对称 */
 .settings-page .wecom-diag-result {
   margin-top: 8px;
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--overlay-2);
 }
 .settings-page .wecom-diag-result > .wecom-diag-strip {

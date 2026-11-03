@@ -12,6 +12,34 @@ const MAX_PAGES = 10;
 const MAX_EVENTS = 500;
 const EMPTY_DRAFT = { requestId: "", phase: "", status: "", from: "", to: "" };
 const HEALTH_FIELDS = ["writeFailures"] as const;
+
+const QUICK_PRESETS = ["m5", "m15", "m30", "h1", "h6", "h24", "d3", "today", "yesterday"] as const;
+type QuickPreset = (typeof QUICK_PRESETS)[number];
+const QUICK_MINUTES: Record<Exclude<QuickPreset, "today" | "yesterday">, number> = {
+  m5: 5, m15: 15, m30: 30, h1: 60, h6: 360, h24: 1440, d3: 4320,
+};
+
+const pad2 = (value: number) => String(value).padStart(2, "0");
+
+/** datetime-local 只认「本地时间、不带时区」的字符串，和手填进输入框的格式一致。 */
+function toLocalInput(date: Date): string {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+    + `T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+/** 快捷时间只换算起止两个边界，口径与手填完全相同（仍按本机时区提交）。 */
+function quickRange(preset: QuickPreset, now = new Date()): { from: string; to: string } {
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (preset === "today") return { from: toLocalInput(midnight), to: toLocalInput(now) };
+  if (preset === "yesterday") {
+    const start = new Date(midnight);
+    start.setDate(start.getDate() - 1);
+    // 结束边界取「今天 00:00 之前一分钟」，把昨天整天圈进来又不蹭到今天
+    return { from: toLocalInput(start), to: toLocalInput(new Date(midnight.getTime() - 60_000)) };
+  }
+  const minutes = QUICK_MINUTES[preset];
+  return { from: toLocalInput(new Date(now.getTime() - minutes * 60_000)), to: toLocalInput(now) };
+}
 type Result = WecomDiagnosticPage & { filter: WecomDiagnosticFilter; pages: number; bounded: boolean };
 type Props = { selection: { requestId: string; revision: number } | null };
 
@@ -24,6 +52,7 @@ function isStaleCursor(error: unknown): boolean {
 export default memo(function WecomRequestDiagnostics({ selection }: Props) {
   const { t } = useTranslation("settings");
   const [draft, setDraft] = useState(EMPTY_DRAFT);
+  const [preset, setPreset] = useState<QuickPreset | "">("");
   const [result, setResult] = useState<Result | null>(null);
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false);
@@ -87,19 +116,27 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
     if (selection) void load({ requestId: selection.requestId }, null, true);
   }, [selection, load]);
 
-  const query = () => {
+  const query = (source: typeof EMPTY_DRAFT = draft) => {
     const filter: WecomDiagnosticFilter = {};
     for (const key of ["requestId", "phase", "status"] as const) {
-      if (draft[key].trim()) filter[key] = draft[key].trim();
+      if (source[key].trim()) filter[key] = source[key].trim();
     }
     for (const key of ["from", "to"] as const) {
-      if (!draft[key]) continue;
-      const time = new Date(draft[key]);
+      if (!source[key]) continue;
+      const time = new Date(source[key]);
       if (!Number.isFinite(time.getTime())) { setError("time"); return; }
       filter[key] = time.toISOString();
     }
     if (filter.from && filter.to && filter.from > filter.to) { setError("time"); return; }
     void load(filter);
+  };
+
+  /** 点一下快捷时间就落到起止输入框并立即查询：字段同步更新，用户仍能看清实际区间。 */
+  const applyQuick = (key: QuickPreset) => {
+    const next = { ...draft, ...quickRange(key) };
+    setDraft(next);
+    setPreset(key);
+    query(next);
   };
 
   /** 一键回到「什么都没查」的状态：筛选条件、结果、选中项全清，在途请求作废。 */
@@ -108,6 +145,7 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
     pending.current = false;
     cursors.current.clear();
     setDraft(EMPTY_DRAFT);
+    setPreset("");
     setResult(null);
     setSelected("");
     setBusy(false);
@@ -193,17 +231,30 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
               <span className="wecom-row-label">{label(key)}</span>
               <span className="wecom-row-control">
                 <input className="input-field" type="datetime-local"
-                  value={draft[key]} onChange={(event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))} />
+                  value={draft[key]}
+                  // 手改了区间就不再是某个快捷档，选中态跟着取消
+                  onChange={(event) => { setPreset(""); setDraft((prev) => ({ ...prev, [key]: event.target.value })); }} />
               </span>
             </label>
           ))}
         </div>
         <div className="wecom-inline wecom-diag-actions">
-          <button type="button" className="btn btn-secondary btn-small" disabled={!result && !selected && !draft.requestId && !draft.phase && !draft.status && !draft.from && !draft.to} onClick={resetAll}>{label("clear")}</button>
-          <button type="button" className="btn btn-secondary btn-small" disabled={!result || busy} onClick={() => result && void load(result.filter, null, !!selected)}>{t("wecom.diag.refresh")}</button>
-          <button type="button" className="btn btn-secondary btn-small" disabled={!result?.events.length || busy || actionBusy} onClick={() => void runAction("copy")}>{label("copy")}</button>
-          <button type="button" className="btn btn-secondary btn-small" disabled={!selected || !result || busy || actionBusy} onClick={() => void runAction("export")}>{label("export")}</button>
-          <button type="button" className="btn btn-primary btn-small" disabled={busy} onClick={query}>{label("query")}</button>
+          <div className="wecom-diag-quick" role="group" aria-label={label("quickLabel")}>
+            <span className="wecom-diag-quick-label">{label("quickLabel")}</span>
+            {QUICK_PRESETS.map((key) => (
+              <button key={key} type="button" disabled={busy}
+                className={`wecom-diag-quick-chip${preset === key ? " is-active" : ""}`}
+                aria-pressed={preset === key}
+                onClick={() => applyQuick(key)}>{label(`quick.${key}`)}</button>
+            ))}
+          </div>
+          <div className="wecom-diag-buttons">
+            <button type="button" className="btn btn-secondary btn-small" disabled={!result && !selected && !draft.requestId && !draft.phase && !draft.status && !draft.from && !draft.to} onClick={resetAll}>{label("clear")}</button>
+            <button type="button" className="btn btn-secondary btn-small" disabled={!result || busy} onClick={() => result && void load(result.filter, null, !!selected)}>{t("wecom.diag.refresh")}</button>
+            <button type="button" className="btn btn-secondary btn-small" disabled={!result?.events.length || busy || actionBusy} onClick={() => void runAction("copy")}>{label("copy")}</button>
+            <button type="button" className="btn btn-secondary btn-small" disabled={!selected || !result || busy || actionBusy} onClick={() => void runAction("export")}>{label("export")}</button>
+            <button type="button" className="btn btn-primary btn-small" disabled={busy} onClick={() => query()}>{label("query")}</button>
+          </div>
         </div>
       </div>
       {busy ? <p className="setting-hint" role="status">{label("loading")}</p> : null}

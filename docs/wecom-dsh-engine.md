@@ -4,11 +4,9 @@
 > 同一个企微机器人，回话的工作可以交给内置天玑，也可以交给本机安装的
 > DeepSeek Harness（`dsh --profile acp`）。
 
-## 企微回复阅读排版（2026-10-29）
+## 企微回复阅读排版（2026-11-03 短约束）
 
-客户端决定字体族/字号，机器人不使用HTML/CSS指定字体。通过Markdown信息层次改善阅读：短标题“排障结论”不再塞长业务ID；结论一句置顶，业务ID保留全值并逐行列在查询对象；正文原因不整段加粗，仅摘要、状态和少量标签强调。引用块与正文分层，证据去重、6短引文/8块预算、全部校验规则不变。
-
-查询范围显示可读日期时间与UTC偏移；同日省略结束端重复日期，跨日两端保留日期。有效小数秒保留，不通过显示取整扩大或缩小范围。实际查询start/end不变。普通问答提示同样约束短段、克制粗体、无一级大标题/宽表/HTML字体；自我介绍配置正文与耗时尾注不改写、不额外调用模型润色。真实字体和终端渲染需在企微客户端人工核验。本轮Rust全量966通过、0失败、14忽略，diff检查通过；回归快照覆盖长ID分层、同日/跨日范围、时区和小数秒、原因不整段加粗及引用仍保留。本轮未改前端CSS/未重启通道；Windows并行测试临时目录时钟碰撞已改随机名称，非产品业务改动。
+官方 `stream.content` 仅「常见 Markdown」，**不渲染 Mermaid/PlantUML 等流程图 DSL**。每轮 `reply_output_rules()` 压成极短 IM 约束（禁 DSL、```text 等宽步骤、无业务示例）；出站由 `prepare_wecom_visible_markdown` / `rewrite_diagram_fences` 兜底把漏网 mermaid 转成 ASCII。说话风格交给设置页「上下文增强」。客户端字体/字号仍由企微决定。排障报告侧：结论置顶、证据去重与短引文预算等既有渲染规则不变；自我介绍与耗时尾注不改写。
 
 ## 明确日期与相对日期查询（2026-10-29）
 
@@ -223,7 +221,7 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 - **会话**：企微逻辑会话键映射到一个 ACP `sessionId`，映射落盘于应用数据目录下的
   `wecom-dsh/sessions.json`。新版会话作用域为私聊 `bot + user`、普通群聊
   `bot + chat + user`、显式共享任务 `bot + chat + task`；键使用版本化元组摘要，不直接拼接用户标识。
-  已在当前 ACP 进程内活动的会话，下一条普通消息直接 `reuse`；只有落盘映射尚未恢复到当前进程时才 `session/resume`；只有结构化 session-expired 错误才自动 `session/new`，普通上游错误文本保持原映射并提示显式「新会话」，避免静默丢历史。完整指令「新会话」显式重置当前作用域，不把普通追问当作重置。重置、队列与共享任务边界待本轮主流程集成验证。
+  已在当前 ACP 进程内活动的会话，下一条普通消息直接 `reuse`；只有落盘映射尚未恢复到当前进程时才 `session/resume`；结构化 session-expired / session_not_found，以及进程重启后常见的裸 `-32603 Internal error`，会自动 `session/new`（记 `resume→new` 日志）；`already_active` / 鉴权失败 / 「not found, expired or already_active」等含糊文案仍 fail-closed 并提示「新对话」或等待当前回合，避免在别人还占着会话时静默丢历史。完整指令「新会话」显式重置当前作用域，不把普通追问当作重置。重置、队列与共享任务边界待本轮主流程集成验证。
   **多轮上下文由 DSH 自己维护**，不再把本机短历史塞进 prompt；问答旁证仍单独写入。
   新个人/共享会话从空上下文开始，不自动继承旧群历史；旧私聊没有可靠机器人归属也不自动迁入。
   同一新版逻辑会话切回天玑时可读取该作用域自己的旁证，不跨作用域复制。
@@ -407,6 +405,20 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
   `acquire` 新开会话，避免 resume 沿用 high/medium；设置页 `dshModelsHint` 已说明。
 - **天玑出站 stream_id**：`out_targets` 与活流统一为 `stream-{msgid}`（修发图/文件对不齐）。
 
+## 引擎优先问答（2026-11-03）
+
+企微问答默认把**用户原文 + 入站图片**交给所选引擎的多模态入口（天玑 vision / DSH image block），**不做宿主 OCR**。长连接回调的 `image.url` / `file.url` 下载体是密文，必须用同条消息的 `aeskey`（AES-256-CBC，IV=密钥前 16 字节）解密后再落盘；漏解密会把乱码当 `.jpg` 喂模型，表现为「图片没有识别到」。宿主只做：
+
+- 访问策略 / 排队 / 停止与状态 / 出站媒体
+- **能力卡**（文档目录、代码工具、日志是否可用及如何请求）
+- 工具与 OAP 的真正执行与预算上限
+- 入站图片落盘后以内联 image 块直传引擎（无 vision 能力时降级为路径提示）
+
+宿主**不再**默认：自然语言抽锚点后澄清收口、先打 OAP 再让模型填空壳报告、用「优先使用预取」压迫模型。
+
+- 天玑：用 skywalking_query / 读文件等工具自行决定查什么
+- DSH：自由 ACP 回合；需要日志时输出 WECOM_LOG_QUERY:{...}，宿主执行后回灌（最多 2 轮）
+
 ## 两档能力对照（「原版引擎 100%」的边界）
 
 天玑档走本应用 `agent_run`，能力取决于我们的工具注册表；DSH 档走外部 ACP 进程，
@@ -415,12 +427,12 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 | 能力 | 天玑档 | DSH 档 | 说明 |
 | --- | --- | --- | --- |
 | 读代码 / 改文件 / 跑命令 | ✅ 四档权限 + 审批卡 | ✅ 沙箱 + ACP 审批码 | 档位映射见上表 |
-| 文档问答模式（auto/doc/doc_code/code） | ✅ 注入系统提示 | ✅ 注入 ACP prompt 首个 text block | `answer_mode_rules` 两档共用；`auto`（默认）按本条消息意图分流 |
-| SkyWalking 排障 | ✅ `skywalking_query` 工具（日志 / trace / 指标） | ⚠️ Rust 有限采集 → 证据注入；支持条件追问后再次采集 | 入口日志 → 最多 3 条 trace → 关联服务日志补查；不是 DSH 自主调用 SkyWalking MCP，也不是任意多轮工具执行，预算与覆盖见下节 |
+| 文档问答模式（auto/doc/doc_code/code） | ✅ 能力卡偏好提示 | ✅ 能力卡偏好提示 | `capability_card` 两档共用；只声明能力与模式偏好，不指挥「必须先查日志」工序；原文直达引擎 |
+| SkyWalking 排障 | ✅ `skywalking_query` 工具（日志 / trace / 指标） | ✅ 模型主动 `WECOM_LOG_QUERY:` → 宿主执行 OAP（最多 2 轮） | **引擎优先（2026-11-03）**：宿主不再默认 `investigate`/抽词澄清/空壳报告；天玑自行调工具，DSH 用标记协议请宿主查日志后回灌 |
 | MCP 服务 | ✅ 随 `agent_run` 下发 | ✅ 随 `session/new`\|`resume` 的 `mcpServers` 下发 | 2026-10-28 补齐：企微通道配的 MCP 两档都可用（DSH 需总开关开） |
 | 企微业务（文档/日程/智能表格 8 工具） | ✅ `wecom_*` 工具 | ❌ 不下发 | DSH 用自己的工具集，没有这组企微 Open API 工具 |
 | 出站富媒体（发图/文件回对话） | ✅ `wecom_send_image/file`（Sensitive 档） | ✅ `WECOM_ATTACH:path` 宿主上传（同 `wecom_media`） | 两档均登记 `out_targets`；二进制上传需业务 API 凭证，字段待真机联调 |
-| 入站图片（vision） | ✅ 落盘后内联 image 块 | ✅ ACP 宣告 `promptCapabilities.image` 时内联 | url 优先；仅 `media_id` 时走 `media/get`（需业务 API）；文件落盘可读文本或给路径 |
+| 入站图片（vision） | ✅ 落盘后内联 image 块 | ✅ ACP 宣告 `promptCapabilities.image` 时内联 | 多模态直传，宿主不做 OCR；长连接 `url` 下载后须用消息内 `aeskey` 做 AES-256-CBC 解密再落盘（缺密钥且无图片魔数则失败）；仅 `media_id` 时走 `media/get`（明文，需业务 API）；无 vision 时降级路径提示 |
 | 普通问答 Markdown 流式 | ✅ 天玑 Done 前也可按需扩展 | ✅ 非排障 350ms 累计 stream | 排障仍校验后一次出报告 |
 | 审批粒度 | 一次 / 本轮同类 / 以后都允许 | 仅一次性（ACP 限制） | 企微里回「码 3」在 DSH 档会被明确告知只有一次性 |
 | 天玑专属安全（冲突仓库拒绝 / 受保护路径 / 命令黑名单 / 删除进回收站 / diff 审批卡） | ✅ | ❌（由 DSH 自己的沙箱兜底） | 见上「权限档位 → DSH 沙箱」 |

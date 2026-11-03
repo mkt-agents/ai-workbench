@@ -104,6 +104,17 @@ pub(crate) fn normalize_request(
     } else {
         decrypt(req.webhook_url.trim()).map_err(|_| "Webhook 解密失败".to_string())?
     };
+    req.webhook_feishu = if req.webhook_feishu.trim().is_empty() {
+        String::new()
+    } else {
+        decrypt(req.webhook_feishu.trim()).map_err(|_| "飞书 Webhook 解密失败".to_string())?
+    };
+    req.webhook_dingtalk = if req.webhook_dingtalk.trim().is_empty() {
+        String::new()
+    } else {
+        decrypt(req.webhook_dingtalk.trim()).map_err(|_| "钉钉 Webhook 解密失败".to_string())?
+    };
+    req.docgen_cron = req.docgen_cron.trim().into();
     req.bot_display_name = req.bot_display_name.trim().into();
     // UI and backend share a Unicode-character budget, not a UTF-8 byte budget.
     req.self_intro = req.self_intro.trim().chars().take(2000).collect();
@@ -246,9 +257,21 @@ pub(crate) fn snapshot(req: &WecomApplyRequest) -> ConfigSnapshot {
     out.put("answerMode", json!(req.answer_mode));
     out.put(
         "docgen",
-        json!({"enabled":req.auto_update_enabled, "time":req.auto_update_time,
-        "branch":req.release_branch, "docDir":req.doc_dir, "webhook":req.webhook_url,
-        "autoCommit":req.auto_commit, "autoPush":req.auto_push}),
+        json!({
+            "enabled": req.auto_update_enabled,
+            "time": req.auto_update_time,
+            "cron": req.docgen_cron,
+            "branch": req.release_branch,
+            "docDir": req.doc_dir,
+            "webhook": req.webhook_url,
+            "webhookFeishu": req.webhook_feishu,
+            "webhookDingtalk": req.webhook_dingtalk,
+            "autoCommit": req.auto_commit,
+            "autoPush": req.auto_push,
+            "preview": req.docgen_preview,
+            "qualityCheck": req.docgen_quality_check,
+            "pollRelease": req.docgen_poll_release,
+        }),
     );
     if req.engine == "dsh" {
         out.put("model", json!(req.dsh_model));

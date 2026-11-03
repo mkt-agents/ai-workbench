@@ -717,6 +717,7 @@ pub fn run() {
             wecom_channel::wecom_dsh_sync,
             wecom_channel::wecom_docgen_run_now,
             wecom_channel::wecom_docgen_test,
+            wecom_channel::wecom_docgen_history,
             wecom_channel::wecom_log_tail,
             wecom_diagnostic_commands::wecom_diagnostics_query,
             wecom_diagnostic_commands::wecom_diagnostic_request,

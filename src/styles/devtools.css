@@ -4313,6 +4313,53 @@
   color: var(--red);
 }
 
+.cron-dialect-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: -4px 14px 12px;
+}
+
+.cron-field-hint {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.cron-field-hint-norm {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.cron-warn-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -6px 14px 12px;
+  font-size: 11.5px;
+  color: var(--yellow);
+}
+
+.cron-desc-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.cron-desc-target code {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
 /* ── Help / format reference ── */
 
 .cron-help {

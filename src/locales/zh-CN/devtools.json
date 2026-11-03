@@ -106,6 +106,8 @@
     "day": "日期",
     "inMonth": "在 {{n}}",
     "month": "月",
+    "inYear": "{{n}} 年",
+    "year": "年份",
     "in": "{{t}}后",
     "nSeconds": "{{n}} 秒",
     "nMinutes": "{{n}} 分钟",
@@ -125,6 +127,30 @@
     "formatHelp": "格式说明",
     "expression": "Cron 表达式",
     "invalidHint": "表达式格式不正确，请检查字段数量与取值范围",
+    "dialects": {
+      "five": "5 段 · 分 时 日 月 周（标准 crontab / GitHub Actions / K8s）",
+      "six": "6 段 · 秒 分 时 日 月 周（Quartz / Spring @Scheduled）",
+      "seven": "7 段 · 秒 分 时 日 月 周 年（Quartz 带年份 / 云函数定时触发器）",
+      "normalized": "已按半角规范化：{{expr}}",
+      "copyAs": "复制为",
+      "target": {
+        "unix": "crontab",
+        "quartz": "Quartz",
+        "spring": "Spring",
+        "cloud": "云函数"
+      },
+      "shape": {
+        "unix": "5 段：分 时 日 月 周",
+        "quartz": "6/7 段：秒 分 时 日 月 周 [年]，日/周其一为 ?",
+        "spring": "6 段：秒 分 时 日 月 周",
+        "cloud": "6 段：秒 分 时 日 月 周"
+      },
+      "warn": {
+        "sec": "crontab 没有秒位，复制时会丢掉秒值",
+        "year": "该格式没有年份位，复制时会丢掉年份",
+        "both": "Quartz 不能同时限定「日」和「周」，已保留周、日改为 ?"
+      }
+    },
     "copyAll": "复制全部",
     "help": {
       "fields": "字段（从左到右）",

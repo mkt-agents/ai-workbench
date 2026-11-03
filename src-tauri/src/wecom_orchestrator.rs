@@ -102,6 +102,11 @@ pub struct Orchestrator {
     pub answer_mode: Arc<Mutex<String>>,
     /// 逆向文档目录（相对工作区），默认 `doc`。
     pub doc_dir: Arc<Mutex<String>>,
+    /// 私聊 / 群聊上下文增强提示词（用户可调；启用后注入引擎 prompt）。
+    pub enhance_dm_enabled: Arc<Mutex<bool>>,
+    pub enhance_group_enabled: Arc<Mutex<bool>>,
+    pub enhance_dm: Arc<Mutex<String>>,
+    pub enhance_group: Arc<Mutex<String>>,
     deduper: Arc<Mutex<MsgDeduper>>,
     /// 同会话串行
     session_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -163,6 +168,10 @@ impl Orchestrator {
             engine: Arc::new(Mutex::new("tianji".to_string())),
             answer_mode: Arc::new(Mutex::new("auto".to_string())),
             doc_dir: Arc::new(Mutex::new("doc".to_string())),
+            enhance_dm_enabled: Arc::new(Mutex::new(false)),
+            enhance_group_enabled: Arc::new(Mutex::new(false)),
+            enhance_dm: Arc::new(Mutex::new(String::new())),
+            enhance_group: Arc::new(Mutex::new(String::new())),
             deduper: Arc::new(Mutex::new(MsgDeduper::new(2048))),
             session_locks: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashMap::new())),
@@ -177,6 +186,32 @@ impl Orchestrator {
     /// 设置全局并发上限（设置页下发）；越界回落默认值。
     pub fn set_max_jobs(&self, n: usize) {
         self.admission.set_limit(n);
+    }
+
+    /// 按私聊/群聊取增强块，并写一条 `[enhance]` 诊断（injected / skipped_disabled / skipped_empty）。
+    async fn take_enhance_block(&self, engine: &str, msg: &MsgCallback) -> String {
+        let is_group = msg.chattype.eq_ignore_ascii_case("group");
+        let (enabled, text) = if is_group {
+            (
+                *self.enhance_group_enabled.lock().await,
+                self.enhance_group.lock().await.clone(),
+            )
+        } else {
+            (
+                *self.enhance_dm_enabled.lock().await,
+                self.enhance_dm.lock().await.clone(),
+            )
+        };
+        let block = build_enhance_block(
+            &msg.chattype,
+            enabled,
+            &text,
+            &msg.userid,
+            msg.chatid.as_deref(),
+            &msg.msgid,
+        );
+        log_enhance_injection(engine, &msg.msgid, &msg.chattype, enabled, &text, &block);
+        block
     }
 
     pub fn handle_msg(self: &Arc<Self>, app: AppHandle, msg: MsgCallback) {
@@ -394,7 +429,7 @@ impl Orchestrator {
             return;
         }
 
-        let is_group = msg.chattype == "group";
+        let is_group = msg.chattype.eq_ignore_ascii_case("group");
         let bot = app
             .state::<WecomState>()
             .applied
@@ -594,7 +629,13 @@ impl Orchestrator {
                 .or_insert_with(|| Arc::new(Mutex::new(()))).clone();
             // Never clear history while an older turn can still append to it.
             let Ok(_reset_guard) = lock.try_lock_owned() else {
-                send_finish(&self.sock, &msg.req_id, stream_id, "当前会话仍有任务运行，请先停止或等待完成，再开启新会话。").await;
+                send_finish(
+                    &self.sock,
+                    &msg.req_id,
+                    stream_id,
+                    new_session_busy_message(is_group),
+                )
+                .await;
                 return;
             };
             let cleanup = session.clone();
@@ -670,7 +711,7 @@ impl Orchestrator {
                         &self.sock,
                         &msg.req_id,
                         &stream_id,
-                        "当前没有正在进行的任务。",
+                        &stop_idle_message(self.admission.active() > 0),
                     )
                     .await;
                 }
@@ -855,6 +896,7 @@ impl Orchestrator {
             }
             user_text = format!("【共享任务 {task}；发起用户 {}】\n{user_text}", msg.userid);
         }
+        // 入站图片不做宿主 OCR：原文 + media 一并交给引擎多模态入口（天玑 vision / DSH image block）。
         // 引擎分流：DSH 档不读天玑的模型快照，直接交给常驻 ACP 进程。
         if engine_name == "dsh" {
             // 与天玑档对齐：登记出站目标，供 WECOM_ATTACH / wecom_media 把文件发回本回合。
@@ -1031,11 +1073,16 @@ impl Orchestrator {
                 d
             }
         };
-        let mode_rules = answer_mode_rules(&answer_mode, &doc_dir, user_text, true);
-        // 排障类消息 + 已配 SkyWalking 时，Rust 先预取日志/调用链，作为上下文注入 prompt，
-        // 让 DSH 结合代码排查——这是 dsh 档的「排障能力」等价实现。
+        // 引擎优先：原文直达 DSH；宿主不默认 investigate / 抽词澄清 / 空壳报告。
         let (addr, header) = state.skywalking.lock().await.clone();
         let offset = *state.skywalking_timezone.lock().await;
+        let oap_ready = !addr.trim().is_empty();
+        let enhance = self.take_enhance_block("dsh", msg).await;
+        let mode_rules = format!(
+            "{}{}",
+            capability_card("dsh", &answer_mode, &doc_dir, oap_ready),
+            enhance
+        );
         let bot = state
             .applied
             .lock()
@@ -1060,8 +1107,7 @@ impl Orchestrator {
         )
         .ok_or("OAP时区配置无效")?;
 
-        // Kick DSH warm-up in parallel with investigation (or immediately when skipped).
-        // Cold start can take tens of seconds; do not wait for OAP collect before spawning it.
+        // Kick DSH warm-up immediately (no host OAP collect ahead of the free turn).
         let ready_phase =
             crate::wecom_performance::Phase::new(preflight_request, "engine_ready", 0);
         let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
@@ -1075,57 +1121,23 @@ impl Orchestrator {
                 return;
             }
             let result = dsh.ensure_ready().await;
-            // A detached startup must not resurrect a disabled/reconfigured channel.
             if *generations.borrow() != generation {
                 dsh.stop().await;
             }
             let _ = ready_tx.send(result);
         });
 
-        let collect_phase =
-            crate::wecom_performance::Phase::new(preflight_request, "acquisition", 0);
-        let mut outcome = if crate::wecom_investigation::needs_investigation(user_text) {
-            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-            let investigation = crate::wecom_investigation::investigate(
-                &addr,
-                &header,
-                &context_key,
+        let mut outcome = crate::wecom_investigation::skipped_investigation(preflight_request);
+        // Soft time window for model-initiated WECOM_LOG_QUERY supplemental only.
+        if oap_ready {
+            if let Ok(q) = crate::wecom_investigation_query::parse_query(
                 user_text,
+                None,
                 chrono::Utc::now().with_timezone(&zone),
-                preflight_request,
-                progress_tx,
-            );
-            tokio::pin!(investigation);
-            let mut progress_clock = Instant::now() - Duration::from_secs(1);
-            let mut progress_open = true;
-            let collected = loop {
-                tokio::select! {
-                    result = &mut investigation => break result?,
-                    note = progress_rx.recv(), if progress_open => {
-                        match note {
-                            Some(note) if progress_clock.elapsed() >= Duration::from_millis(800) => {
-                                let _ = self.sock.send_raw(wecom_proto::respond_stream(&req_id, stream_id, &note, false)).await;
-                                progress_clock = Instant::now();
-                            }
-                            None => progress_open = false,
-                            _ => {}
-                        }
-                    }
-                }
-            };
-            drop(collect_phase);
-            collected
-        } else {
-            drop(collect_phase);
-            crate::wecom_investigation::skipped_investigation(preflight_request)
-        };
-        let natural_needed = !addr.trim().is_empty()
-            && crate::wecom_investigation::needs_investigation(user_text)
-            && outcome.query.as_ref().is_some_and(|q| {
-                q.trace_id.is_none()
-                    && q.identifiers.is_empty()
-                    && !crate::wecom_natural_query::has_usable_search_anchors(&q.keywords)
-            });
+            ) {
+                outcome.query = Some(q);
+            }
+        }
         if crate::cancellation::is_cancelled(preflight_request) {
             send_finish(
                 &self.sock,
@@ -1134,19 +1146,6 @@ impl Orchestrator {
                 "已停止，本轮已取消。",
             )
             .await;
-            return Ok(());
-        }
-        // Source/parse failures are deterministic replies, never model-rewritten as empty logs.
-        if source_failure_reply(&outcome) && !natural_needed {
-            crate::wecom_progress::finish(preflight_request, "failed", "no_evidence");
-            let body = crate::wecom_report::fallback_with_reason(
-                outcome.query.as_ref(),
-                "",
-                "not_executed",
-                outcome.clarification.as_deref(),
-            );
-            send_finish(&self.sock, &req_id, stream_id, &body).await;
-            append_reply_history(session, user_text, stream_id, &body);
             return Ok(());
         }
         // Await the warm-up started above; after 3s nudge on the same stream id.
@@ -1216,395 +1215,37 @@ impl Orchestrator {
             },
         }
         drop(session_phase);
-        if natural_needed {
-            // 确定性兜底优先：能从句子里直接取到锚点就不花这次 ACP 往返。
-            // 失败也不中止整轮——已经解析出的 service / 时间窗必须保留。
-            let disposition = match crate::wecom_natural_query::infer_intent_from_text(user_text) {
-                Some(intent) => {
-                    crate::wecom_diagnostics::record(
-                        preflight_request,
-                        "query_extraction",
-                        "skipped_local",
-                        Some("local_anchor"),
-                        None,
-                        serde_json::json!({"anchorCount": intent.anchors.len(),
-                            "answerTargetCount": intent.answer_targets.len(),
-                            "executed": true}),
-                    );
-                    crate::wecom_natural_query::QueryDisposition::Merge(intent)
-                }
-                None => {
-                    // Use a disposable ACP session so the hidden extractor prompt/results never
-                    // become part of the user's conversational history.
-                    let extraction_key = format!("{key}::query-extraction");
-                    let (extraction_session, _) =
-                        engine.acquire_session_with_action(&extraction_key).await?;
-                    engine.apply_selection(&extraction_session).await?;
-                    let extraction = self
-                        .dsh_extract_query_intent(
-                            &engine,
-                            &extraction_session,
-                            user_text,
-                            preflight_request,
-                            turn_deadline,
-                        )
-                        .await;
-                    engine.reset_channel_session(&extraction_key).await;
-                    crate::wecom_natural_query::decide(extraction)
-                }
-            };
-            let intent = match disposition {
-                crate::wecom_natural_query::QueryDisposition::Merge(intent) => intent,
-                crate::wecom_natural_query::QueryDisposition::Clarify { reason } => {
-                    // 澄清之前先看能不能收窄成一次有界查询：服务 + 窗口 + ERROR。
-                    match outcome
-                        .query
-                        .as_ref()
-                        .and_then(crate::wecom_investigation_query::error_scan_fallback)
-                    {
-                        Some(narrow) => {
-                            crate::wecom_diagnostics::record(
-                                preflight_request,
-                                "query_extraction",
-                                "error_scan",
-                                Some(reason.diagnostic()),
-                                None,
-                                serde_json::json!({"level": "ERROR",
-                                    "service": narrow.service.clone(),
-                                    "executed": true}),
-                            );
-                            crate::wecom_natural_query::NaturalQueryIntent {
-                                service: narrow.service,
-                                anchors: Vec::new(),
-                                answer_targets: narrow.answer_targets,
-                                level: Some("ERROR".into()),
-                            }
-                        }
-                        None => {
-                            // 抽取侧的失败原因只进诊断库；用户侧只看到「已识别什么、还缺什么」。
-                            let body = crate::wecom_natural_query::clarification_text(
-                                &reason,
-                                outcome.query.as_ref().and_then(|q| q.service.as_deref()),
-                                outcome
-                                    .query
-                                    .as_ref()
-                                    .map(|q| (q.start.as_str(), q.end.as_str())),
-                            );
-                            crate::wecom_progress::finish(preflight_request, "failed", "query_clarify");
-                            send_finish(&self.sock, &req_id, stream_id, &body).await;
-                            append_reply_history(session, user_text, stream_id, &body);
-                            return Ok(());
-                        }
-                    }
-                }
-            };
-            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-            let investigation = crate::wecom_investigation::investigate_with_intent(
-                &addr, &header, &context_key, user_text,
-                chrono::Utc::now().with_timezone(&zone), preflight_request, progress_tx, Some(&intent),
-            );
-            tokio::pin!(investigation);
-            outcome = loop {
-                tokio::select! {
-                    result = &mut investigation => break result?,
-                    note = progress_rx.recv() => {
-                        if let Some(note) = note {
-                            let _ = self.sock.send_raw(wecom_proto::respond_stream(&req_id, stream_id, &note, false)).await;
-                        }
-                    }
-                }
-            };
-        }
+        // 引擎优先：不做宿主抽词/预查/规划循环/核验报告短路；日志仅在模型主动 WECOM_LOG_QUERY 时执行。
+        let mut log_evidence = String::new();
+        let mut log_query_round = 0usize;
+        let budget = crate::wecom_skywalking::QueryBudget::new();
+        outcome.budget = budget;
+        outcome.source_ready = oap_ready;
+        crate::wecom_diagnostics::record(
+            preflight_request,
+            "engine_first",
+            "ok",
+            None,
+            None,
+            serde_json::json!({
+                "oapReady": oap_ready,
+                "answerMode": answer_mode,
+                "hasQueryWindow": outcome.query.is_some(),
+            }),
+        );
+
+        let protected_answer = false;
+        let answer_level = "unknown".to_string();
+        let mut has_evidence = false;
         let mut store = crate::wecom_evidence_store::EvidenceStore::new();
-        store.insert(&outcome.context);
-        let mut evidence = store.full_context();
-        let mut next_payload = store.bounded_prompt(16_000);
-        // 联动预取：文档检索 + 日志对应代码线索（替代原先仅 source_hints）。
-        {
-            let plan = crate::wecom_cross_query::plan_for(user_text, &answer_mode);
-            let log_ctx = if outcome.may_analyze {
-                evidence.clone()
-            } else {
-                String::new()
-            };
-            let log_count = outcome.evidence_count;
-            let source_repo = repo.clone();
-            let dd = doc_dir.clone();
-            let ask = user_text.to_string();
-            let bundle = tokio::task::spawn_blocking(move || {
-                crate::wecom_cross_query::build_bundle(
-                    &plan,
-                    &source_repo,
-                    &dd,
-                    &ask,
-                    &log_ctx,
-                    log_count,
-                )
-            })
-            .await
-            .unwrap_or_default();
-            let cross = bundle.format_context();
-            if !cross.is_empty() {
-                let clipped: String = cross.chars().take(12_000).collect();
-                next_payload.push_str("\n");
-                next_payload.push_str(&clipped);
-                if cross.chars().count() > 12_000 {
-                    next_payload.push_str("
-（联动上下文已截断）
-");
-                }
-                crate::wecom_log::write(
-                    "cross-query",
-                    &format!(
-                        "dsh {}",
-                        bundle.source_summary_line()
-                    ),
-                );
-            }
-            let snap = bundle.to_snapshot(preflight_request, "dsh");
-            crate::wecom_diagnostics::record(
-                preflight_request,
-                "cross_query",
-                "ok",
-                None,
-                None,
-                serde_json::json!({
-                    "docHits": snap.doc_hits,
-                    "codeHits": snap.code_hits,
-                    "logHits": snap.log_hits,
-                    "summary": snap.summary,
-                    "linked": snap.linked,
-                }),
-            );
-            crate::wecom_cross_query::note_latest(snap);
-        }
-        let mut final_report: Option<crate::wecom_report::DiagnosticReport> = None;
-        let mut has_evidence = outcome.may_analyze;
-        let mut assessed_level = "unknown".to_string();
-        let mut assessed_gaps = outcome.decision_gaps.clone();
-        let mut last_stop_reason = String::new();
-        let mut forced_context_used = false;
-        if outcome.source_ready {
-            if let Some(original) = outcome.query.clone() {
-                let mut query_round = 0usize;
-                let mut expansion_round = 0usize;
-                for _analysis_pass in 0..4 {
-                    if tokio::time::Instant::now() >= turn_deadline {
-                        break;
-                    }
-                    let note = if has_evidence {
-                        "已取得日志，正在按日志定点核对代码并制定补查…"
-                    } else {
-                        "日志源正常但业务未命中，正在核对日志字段与服务映射，不生成业务根因结论…"
-                    };
-                    let _ = self
-                        .sock
-                        .send_raw(wecom_proto::respond_stream(&req_id, stream_id, note, false))
-                        .await;
-                    let budget_hint = format!("宿主剩余HTTP={}，剩余采集={}ms，已补查={}轮。余额不足时不要再生成查询计划，直接输出当前已验证的result/direct_cause层级diagnostic_report并将影响当前结论与扩展取证的缺口分开列出。",outcome.budget.remaining(),120_000u64.saturating_sub(outcome.collected_ms),query_round);
-                    let instruction = format!("{budget_hint}\n{}\n原问题：{}\n固定查询范围：{} 至 {}\n已有证据：{}\n本次只输出协议JSON：需要查日志给queries，需要展开已采集摘录给read_evidence_ids，已有证据则直接给diagnostic_report，用summary/时间线/分层原因/代码核对/误判线索/缺口构成完整报告，禁止只给机器式claims清单，不要先输出停止计划再重复总结。以下仅为本轮新增证据/索引，之前证据在同会话内沿用；已核验且未改变的代码不要重复读。没有日志时只查项目日志配置、服务标识、字段别名和日志模板；不要搜索本地.log，不要把业务ID在源码无命中当故障证据。",
-                        crate::wecom_investigation_plan::planning_instruction(), user_text, original.start, original.end, next_payload);
-                    let mut draft = self
-                        .dsh_plan_text(
-                            app,
-                            &engine,
-                            &acp_session,
-                            &instruction,
-                            preflight_request,
-                            &req_id,
-                            stream_id,
-                            turn_deadline,
-                            if _analysis_pass == 0 {
-                                "planning_initial"
-                            } else if expansion_round > 0 && query_round == 0 {
-                                "evidence_expand"
-                            } else {
-                                "planning_followup"
-                            },
-                        )
-                        .await?;
-                    let mut parsed = crate::wecom_investigation_plan::parse_plan(
-                        &draft, &original, &evidence, &repo,
-                    );
-                    if let Err(error) = &parsed {
-                        crate::wecom_performance::note_validation(
-                            preflight_request,
-                            crate::wecom_investigation_plan::validation_error_code(error),
-                        );
-                        draft = self.dsh_plan_text(app, &engine, &acp_session, &format!("补查计划未通过本地校验：{error}。请修正一次，仅输出符合schema的JSON；不要执行计划。{}", crate::wecom_investigation_plan::planning_instruction()), preflight_request, &req_id, stream_id, turn_deadline, "planning_repair").await?;
-                        parsed = crate::wecom_investigation_plan::parse_plan(
-                            &draft, &original, &evidence, &repo,
-                        );
-                    }
-                    let mut plan = match parsed {
-                        Ok(plan) => plan,
-                        Err(error) => {
-                            crate::wecom_performance::note_validation(preflight_request,
-                                crate::wecom_investigation_plan::validation_error_code(&error));
-                            evidence.push_str(
-                                "\n补查计划两次未通过校验，未执行；当前结论仅限已有证据。\n",
-                            );
-                            break;
-                        }
-                    };
-                    assessed_level = plan.conclusion_level.clone();
-                    assessed_gaps = plan.gaps.clone();
-                    last_stop_reason = plan.stop_reason.clone();
-                    let candidate = plan.diagnostic_report.clone().or_else(|| {
-                        plan.final_answer.as_ref().map(|a| {
-                            crate::wecom_report::from_legacy(
-                                a,
-                                &assessed_level,
-                                &assessed_gaps,
-                                &last_stop_reason,
-                            )
-                        })
-                    });
-                    if let Some(report) = candidate {
-                        let allowed = if plan.diagnostic_report.is_some()
-                            && !report.gaps.iter().any(|g| g.blocking)
-                            && outcome.may_analyze
-                        {
-                            report.level.as_str()
-                        } else {
-                            permitted_conclusion_level(&assessed_level, &assessed_gaps, &outcome)
-                        };
-                        if can_render_verified_answer(&assessed_level, allowed, has_evidence) {
-                            // Direct rendering avoids a second model summary without bypassing coverage limits.
-                            final_report = Some(report);
-                            break;
-                        }
-                        assessed_gaps
-                            .push("结构化结论超过当前证据覆盖允许层级，需要保留未完成项".into());
-                    }
-                    if !plan.read_evidence_ids.is_empty() {
-                        if expansion_round >= 1 {
-                            last_stop_reason = "已达本轮摘录展开次数上限".into();
-                            break;
-                        }
-                        next_payload = store.expand(&plan.read_evidence_ids, 12_000)?;
-                        expansion_round += 1;
-                        continue;
-                    }
-                    let missing_decision = !assessed_gaps.is_empty()
-                        || !outcome.decision_gaps.is_empty()
-                        || outcome.incomplete_pages > 0
-                        || outcome.truncated_count > 0;
-                    if plan.queries.is_empty() && missing_decision && !forced_context_used {
-                        forced_context_used = true;
-                        let mandatory = crate::wecom_investigation_plan::decision_context_plan(
-                            &evidence, &original,
-                        )?;
-                        if !mandatory.queries.is_empty() {
-                            evidence.push_str("\n【结束检查】当前仅定位结果/失败出口，仍有WARN或决策上下文缺口，先执行证据锚定回溯。\n");
-                            plan = mandatory;
-                        }
-                    }
-                    if plan.queries.is_empty() {
-                        break;
-                    }
-                    if query_round >= 2
-                        || outcome.budget.remaining() == 0
-                        || outcome.collected_ms >= 120_000
-                    {
-                        last_stop_reason = "日志补查已达次数/预算上限，保留当前证据".into();
-                        break;
-                    }
-                    query_round += 1;
-                    let _ = self
-                        .sock
-                        .send_raw(wecom_proto::respond_stream(
-                            &req_id,
-                            stream_id,
-                            &format!("正在执行第{}轮代码线索补查…", query_round),
-                            false,
-                        ))
-                        .await;
-                    crate::wecom_progress::phase(preflight_request, "supplemental");
-                    let extra = crate::wecom_investigation::supplemental(
-                        &addr,
-                        &header,
-                        &original,
-                        &plan.queries,
-                        preflight_request,
-                        &outcome.budget,
-                        120_000u64.saturating_sub(outcome.collected_ms),
-                    )
-                    .await?;
-                    merge_investigation_coverage(&mut outcome, &extra);
-                    crate::wecom_investigation::record_cumulative(&outcome, preflight_request);
-                    has_evidence |= extra.may_analyze;
-                    let extra_context = extra
-                        .context
-                        .replace("[L", &format!("[R{}L", query_round))
-                        .replace("[T", &format!("[R{}T", query_round));
-                    next_payload = store.insert(&format!(
-                        "【补查轮次{}；来源候选：{}】\n{}",
-                        query_round, plan.reason, extra_context
-                    ));
-                    evidence = store.full_context();
-                    if next_payload.chars().count() > 20_000 {
-                        next_payload = format!("本轮新增证据较多，先看优先摘录及索引，缺少记录可read_evidence_ids展开。\n{}", store.bounded_prompt(20_000));
-                    }
-                    if !extra.source_ready {
-                        break;
-                    }
-                }
-            }
-            if !has_evidence {
-                crate::wecom_progress::finish(preflight_request, "ended", "no_evidence");
-                let body = crate::wecom_report::fallback_with_reason(
-                    outcome.query.as_ref(),
-                    &store.full_context(),
-                    "empty",
-                    outcome.clarification.as_deref(),
-                );
-                send_finish(&self.sock, &req_id, stream_id, &body).await;
-                append_reply_history(session, user_text, stream_id, &body);
-                return Ok(());
-            }
-        }
-        for gap in &assessed_gaps {
-            if !outcome.decision_gaps.contains(gap) {
-                outcome.decision_gaps.push(gap.clone());
-            }
-        }
-        crate::wecom_investigation::record_cumulative(&outcome, preflight_request);
-        if has_evidence {
-            if let (Some(report), Some(original)) = (final_report, outcome.query.as_ref()) {
-                let rendered =
-                    crate::wecom_report::render(&report, original, &store.full_context());
-                let body = rendered;
-                let mut phase = crate::wecom_performance::Phase::new(
-                    preflight_request,
-                    "render_verified_answer",
-                    0,
-                );
-                phase.output(&body);
-                crate::wecom_progress::finish(preflight_request, "completed", "completed");
-                crate::wecom_diagnostics::record(preflight_request, "report", "validated", None, None, serde_json::json!({}));
-                send_finish(&self.sock, &req_id, stream_id, &body).await;
-                append_reply_history(session, user_text, stream_id, &body);
-                return Ok(());
-            }
-        }
-        let protected_answer = !outcome.context.is_empty();
-        let answer_level =
-            permitted_conclusion_level(&assessed_level, &assessed_gaps, &outcome).to_string();
-        let evidence_rules = if has_evidence {
-            let level = if has_evidence { "trigger_verified（仅限真实规则/判定值/代码引用齐备且无阻断性缺口的局部结论；否则direct_cause或result）" } else { "unknown" };
-            format!("\n结论分层评审：允许最高层级={level}；模型停止理由={last_stop_reason}；尚未解释的决策={:?}；未完成页={}；截断记录={}。必须依次列出结果、直接原因、具体触发原因。过滤为0/STATUS_FILTERED_EMPTY仅是失败出口，不等于已定位具体过滤器。未取得实际规则、判定值及WARN/异常证据时，写‘已确认失败出口，具体触发原因尚未确认’，禁止‘证据链已闭合/根因直接命中’。正常span仅表示没有APM技术错误，不能据此排除业务警告、被捕获异常或降级。先引用日志和时间，再用代码解释分支，再用补查验证。共用兜底文案不唯一指向去重/库存/价格；缺日志不等于分支未执行；说明分页、采样、异步与版本覆盖。", assessed_gaps, outcome.incomplete_pages, outcome.truncated_count)
-        } else {
-            String::new()
-        };
         let prompt_blocks = build_dsh_prompt(
             app,
             &msg.msgid,
             user_text,
             &msg.media,
             engine.image_prompt_enabled().await,
-            &format!("{mode_rules}{} {evidence_rules}{}", outcome.query.as_ref().map(|q| if q.answer_targets.is_empty() { String::new() } else { format!("\n用户回答目标：{}。这些字段仅用于从已验证证据中定位答案，不是日志过滤关键词。", q.answer_targets.join(", ")) }).unwrap_or_default(), if protected_answer { format!("\n最终输出只用于内部验证和统一渲染，用户不会看到JSON。输出{{\"queries\":[],\"reason\":\"简短停止理由\",\"conclusion_level\":\"与报告相同\",\"gaps\":[],\"diagnostic_report\":<下列契约>}}；完整报告的时间/原文由宿主证据提供，勿发自由Markdown或旧claims代替。耗时由宿主追加。\n{}",crate::wecom_report::schema_instruction()) } else { String::new() }),
-            &if has_evidence { format!("沿用同会话已返回的证据与核验源码，不要重复全库检索。按最新补查结果直接回答；需要的证据编号如下：\n{}", store.render_index()) } else { evidence.clone() },
+            &mode_rules,
+            &log_evidence,
         )
         .await;
         let mut answer_phase = crate::wecom_performance::Phase::new(
@@ -1711,16 +1352,18 @@ impl Orchestrator {
                                     && !crate::wecom_reply::is_finished(stream_id)
                                 {
                                     last_answer_stream = Instant::now();
-                                    let visible = prepare_wecom_visible_markdown(&snapshot);
-                                    let _ = self
-                                        .sock
-                                        .send_raw(wecom_proto::respond_stream(
-                                            &req_id,
-                                            stream_id,
-                                            &visible,
-                                            false,
-                                        ))
-                                        .await;
+                                    let visible = stream_visible_answer(&snapshot);
+                                    if !visible.trim().is_empty() {
+                                        let _ = self
+                                            .sock
+                                            .send_raw(wecom_proto::respond_stream(
+                                                &req_id,
+                                                stream_id,
+                                                &visible,
+                                                false,
+                                            ))
+                                            .await;
+                                    }
                                 }
                             }
                         }
@@ -1809,17 +1452,189 @@ impl Orchestrator {
                         Ok(_) => "completed",
                         Err(_) => "failed",
                     };
-                    crate::wecom_progress::finish(preflight_request, status,
-                        match status { "cancelled" => "user_cancelled", "failed" => "failed", _ => "completed" });
-                    crate::wecom_diagnostics::record(preflight_request, "model", status, None, None, serde_json::json!({}));
                     crate::wecom_log::write(
                         "dsh",
                         &format!(
-                            "msgid={} done ok={} acc_len={}",
+                            "msgid={} done ok={} acc_len={} log_round={}",
                             msg.msgid,
                             result.is_ok(),
-                            acc.chars().count()
+                            acc.chars().count(),
+                            log_query_round
                         ),
+                    );
+                    // 引擎主动要日志：先执行 OAP 再开下一轮自由作答（最多 2 轮），不提前 finish 进度。
+                    if status == "completed" {
+                        if let Some((queries, visible_so_far)) =
+                            crate::wecom_investigation_plan::extract_wecom_log_query(&acc)
+                        {
+                            if oap_ready && log_query_round < 2 {
+                                let original = outcome.query.clone().or_else(|| {
+                                    query_window_for_model_log_requests(&queries, zone)
+                                });
+                                if let Some(original) = original {
+                                    if outcome.query.is_none() {
+                                        outcome.query = Some(original.clone());
+                                    }
+                                    log_query_round += 1;
+                                    let _ = self
+                                        .sock
+                                        .send_raw(wecom_proto::respond_stream(
+                                            &req_id,
+                                            stream_id,
+                                            &format!(
+                                                "正在按模型请求执行第{}轮日志查询…",
+                                                log_query_round
+                                            ),
+                                            false,
+                                        ))
+                                        .await;
+                                    crate::wecom_progress::phase(preflight_request, "supplemental");
+                                    match crate::wecom_investigation::supplemental(
+                                        &addr,
+                                        &header,
+                                        &original,
+                                        &queries,
+                                        preflight_request,
+                                        &outcome.budget,
+                                        120_000u64.saturating_sub(outcome.collected_ms),
+                                    )
+                                    .await
+                                    {
+                                        Ok(extra) => {
+                                            merge_investigation_coverage(&mut outcome, &extra);
+                                            has_evidence |= extra.may_analyze;
+                                            let extra_context = extra.context.replace(
+                                                "[L",
+                                                &format!("[R{}L", log_query_round),
+                                            );
+                                            let inserted = store.insert(&format!(
+                                                "【引擎请求的日志查询·轮次{}】\n{}",
+                                                log_query_round, extra_context
+                                            ));
+                                            if !log_evidence.is_empty() {
+                                                log_evidence.push_str("\n\n");
+                                            }
+                                            log_evidence.push_str(&inserted);
+                                            if !visible_so_far.trim().is_empty() {
+                                                log_evidence.push_str("\n\n【模型上一轮可见分析】\n");
+                                                log_evidence.push_str(visible_so_far.trim());
+                                            }
+                                            let follow_blocks = build_dsh_prompt(
+                                                app,
+                                                &msg.msgid,
+                                                user_text,
+                                                &[],
+                                                false,
+                                                &mode_rules,
+                                                &log_evidence,
+                                            )
+                                            .await;
+                                            match engine.prompt(&acp_session, follow_blocks).await {
+                                                Ok(next_turn) => {
+                                                    // 先结算上一轮挂起的审批，再换 turn，避免跨轮 permission id。
+                                                    if !open_approvals.is_empty() {
+                                                        let old = turn.responder();
+                                                        for rpc_id in open_approvals.drain(..) {
+                                                            old.answer_permission(rpc_id, None);
+                                                        }
+                                                    }
+                                                    turn = next_turn;
+                                                    {
+                                                        let mut map = self.running.lock().await;
+                                                        map.insert(
+                                                            session.as_str(),
+                                                            RunningTurn {
+                                                                req_id: req_id.clone(),
+                                                                stream_id: stream_id.to_string(),
+                                                                initiator: msg.userid.clone(),
+                                                                cancel: CancelHandle::Dsh {
+                                                                    responder: turn.responder(),
+                                                                },
+                                                            },
+                                                        );
+                                                    }
+                                                    acc.clear();
+                                                    answer_buffer =
+                                                        crate::wecom_answer::AnswerBuffer::with_request(
+                                                            false,
+                                                            preflight_request,
+                                                        );
+                                                    last_activity.clear();
+                                                    last_event = std::time::Instant::now();
+                                                    stall_notes = 0;
+                                                    continue;
+                                                }
+                                                Err(e) => {
+                                                    let tip = format!(
+                                                        "{}\n\n（日志已查回，但续写失败：{}）",
+                                                        visible_so_far.trim(),
+                                                        crate::wecom_dsh::friendly_turn_error(&e)
+                                                    );
+                                                    crate::wecom_progress::finish(
+                                                        preflight_request,
+                                                        "failed",
+                                                        "failed",
+                                                    );
+                                                    send_finish(
+                                                        &self.sock,
+                                                        &req_id,
+                                                        stream_id,
+                                                        &tip,
+                                                    )
+                                                    .await;
+                                                    break tip;
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let tip = format!(
+                                                "{}\n\n（日志查询失败：{e}）",
+                                                visible_so_far.trim()
+                                            );
+                                            crate::wecom_progress::finish(
+                                                preflight_request,
+                                                "failed",
+                                                "failed",
+                                            );
+                                            send_finish(&self.sock, &req_id, stream_id, &tip)
+                                                .await;
+                                            break tip;
+                                        }
+                                    }
+                                } else {
+                                    crate::wecom_log::write(
+                                        "dsh",
+                                        &format!(
+                                            "msgid={} WECOM_LOG_QUERY 无可用查询窗，跳过补查",
+                                            msg.msgid
+                                        ),
+                                    );
+                                    let tip = format!(
+                                        "{}\n\n（已识别日志补查请求，但缺少可用时间窗，未执行查询。请补充明确时间后再试。）",
+                                        visible_so_far.trim()
+                                    );
+                                    // 落到下方 Done 收尾：先把可见正文写回 acc，避免丢分析。
+                                    acc = tip;
+                                }
+                            }
+                        }
+                    }
+                    crate::wecom_progress::finish(
+                        preflight_request,
+                        status,
+                        match status {
+                            "cancelled" => "user_cancelled",
+                            "failed" => "failed",
+                            _ => "completed",
+                        },
+                    );
+                    crate::wecom_diagnostics::record(
+                        preflight_request,
+                        "model",
+                        status,
+                        None,
+                        None,
+                        serde_json::json!({}),
                     );
                     let body = match result {
                         Ok(value) => {
@@ -1856,10 +1671,16 @@ impl Orchestrator {
                                     "（无文本回复）".to_string()
                                 }
                             } else {
-                                let (visible, attachments) = split_wecom_attach(&acc);
+                                let raw = crate::wecom_investigation_plan::extract_wecom_log_query(
+                                    &acc,
+                                )
+                                .map(|(_, visible)| visible)
+                                .unwrap_or_else(|| acc.clone());
+                                let (visible, attachments) = split_wecom_attach(&raw);
                                 if !attachments.is_empty() {
                                     let request_id = format!("wecom-{}", msg.msgid);
-                                    deliver_wecom_attachments(app, &request_id, &attachments).await;
+                                    deliver_wecom_attachments(app, &request_id, &attachments)
+                                        .await;
                                 }
                                 format!("{visible}{note}")
                             }
@@ -1873,7 +1694,7 @@ impl Orchestrator {
                     break body;
                 }
                 None => {
-                    let body = "**响应意外结束**，未完成的模型正文不展示。".to_string();
+                    let body = "**响应意外结束**：会话事件通道已关闭（常见于进程重启或续写冲突）。未完成的模型正文不展示；请发送「新对话」后重试。".to_string();
                     send_finish(&self.sock, &req_id, stream_id, &body).await;
                     break body;
                 }
@@ -2189,70 +2010,21 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
                 d
             }
         };
-        let mode_rules = answer_mode_rules(&answer_mode, &doc_dir, user_text, false);
         let skywalking_ready = {
             let st = app.state::<WecomState>();
             let empty = st.skywalking.lock().await.0.trim().is_empty();
             !empty
         };
-        // 已配 SkyWalking 且本条是排障意图：把抽到的线索直接喂进 system，让模型第一刀就带参数查。
-        let sky_rule = if skywalking_ready {
-            let a = crate::wecom_intent::analyze(user_text);
-            if a.intent == crate::wecom_intent::QaIntent::Troubleshoot {
-                let clues = troubleshoot_clue_line(&a);
-                format!(
-                    "\n排查线上问题时：{clues}用 `skywalking_query` 按这些线索查日志（服务名/关键词/时间窗），看 [ERROR] 行的 traceId 再查调用链定位根因，必要时 `kind=metrics` 看趋势，最后结合代码确认。线索是推测，以实际查询为准。"
-                )
-            } else {
-                "\n若要排查线上问题，用 `skywalking_query` 查日志/调用链（给服务名或关键词；有 traceId 就查调用链），再结合代码定位根因。".to_string()
-            }
-        } else {
-            String::new()
-        };
-        // 宿主侧预取文档/代码（日志仍交给模型的 skywalking_query，避免与工具重复打 OAP）。
-        let cross_block = {
-            let plan = crate::wecom_cross_query::plan_for(user_text, &answer_mode);
-            let repo = agent_cfg.repo_path.clone();
-            let dd = doc_dir.clone();
-            let ask = user_text.to_string();
-            let bundle = tokio::task::spawn_blocking(move || {
-                crate::wecom_cross_query::build_bundle(&plan, &repo, &dd, &ask, "", 0)
-            })
-            .await
-            .unwrap_or_default();
-            if !bundle.docs.is_empty() || !bundle.code_hints.trim().is_empty() {
-                crate::wecom_log::write(
-                    "cross-query",
-                    &format!("tianji {}", bundle.source_summary_line()),
-                );
-            }
-            let snap = bundle.to_snapshot(&request_id, "tianji");
-            crate::wecom_diagnostics::record(
-                &request_id,
-                "cross_query",
-                "ok",
-                None,
-                None,
-                serde_json::json!({
-                    "docHits": snap.doc_hits,
-                    "codeHits": snap.code_hits,
-                    "logHits": snap.log_hits,
-                    "summary": snap.summary,
-                    "linked": snap.linked,
-                }),
-            );
-            crate::wecom_cross_query::note_latest(snap);
-            let text = bundle.format_context();
-            if text.is_empty() {
-                String::new()
-            } else {
-                let clipped: String = text.chars().take(10_000).collect();
-                format!("\n宿主已预取的联动上下文（优先使用，不足再查工具）：\n{clipped}\n")
-            }
-        };
+        // 引擎优先：能力卡 + 可选用户增强提示 + 原文。
+        let enhance = self.take_enhance_block("tianji", msg).await;
+        let mode_rules = format!(
+            "{}{}",
+            capability_card("tianji", &answer_mode, &doc_dir, skywalking_ready),
+            enhance
+        );
         let system = format!(
             "你是 AI Workbench 的天玑助手，正在通过{where_from}回答。回复简洁、适合即时通讯；少用大段代码围栏。\n\
-{reply_rules}\n{mode_rules}{sky_rule}{cross_block}\n{}",
+{reply_rules}\n{mode_rules}\n{}",
             agent_cfg.system_extra,
             reply_rules = reply_output_rules()
         );
@@ -2413,7 +2185,7 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
                     }
                     None => {
                         // 通道关闭但没 Done：补 finish
-                        let body = "**响应意外结束**，未完成的模型正文不展示。".to_string();
+                        let body = "**响应意外结束**：会话事件通道已关闭。未完成的模型正文不展示；请发送「新对话」后重试。".to_string();
                         send_finish(&sock, &req_id, &stream_id_clone, &body).await;
                         break body;
                     }
@@ -2750,75 +2522,121 @@ fn decode_ready(
     }
 }
 
-/// 按问答模式 + 文档目录生成一段系统提示规则。
-/// `auto`（默认）：用 `wecom_intent::analyze` 做意图分类 + 槽位抽取，排障时把识别到的
-/// 服务/错误特征/时间窗/traceId 直接写进 SOP，让模型第一刀就带着具体参数查。
-/// `is_dsh`：DSH 档模型拿不到 `skywalking_query` 工具（日志已由 Rust 预取注入在上文），
-/// 排障 SOP 要改成「据上文已附的跨服务日志/调用链定位」，不让它去调拿不到的工具。
-/// 固定模式（doc/doc_code/code）保留钉住语义；doc/doc_code 仍在用户要读代码时临时放行。
-fn answer_mode_rules(mode: &str, doc_dir: &str, user_text: &str, is_dsh: bool) -> String {
-    use crate::wecom_intent::{analyze, QaIntent};
-    let wants_code = crate::wecom_intent::mentions_code(user_text);
-    match mode {
-        "auto" => {
-            let a = analyze(user_text);
-            match a.intent {
-                QaIntent::Troubleshoot => {
-                    let clues = troubleshoot_clue_line(&a);
-                    let hedge = if a.confidence < 40 { "疑似" } else { "" };
-                    if is_dsh {
-                        format!(
-                            "回答规则（自动判定：{hedge}排查线上问题）。{clues}上文已附**跨服务**的 SkyWalking 日志/调用链（若查到）。步骤：① 先看这些日志里的 [ERROR] 行与调用链中报错的 span，判断是哪个上游/下游服务出问题；② 结合 `{doc_dir}/` 文档与各服务代码定位根因；③ 若上文没有日志或信息不足，直接说明还需要哪个 traceId / 订单号 / 用户ID / 关键词 / 时间窗，让用户补充再查。不要先翻文档而耽误排障。"
-                        )
-                    } else {
-                        format!(
-                            "回答规则（自动判定：{hedge}排查线上问题）。{clues}步骤：① 用 `skywalking_query` 查日志（默认**不限定服务、跨全部服务查**，只有明确指向某服务时才传 service；问题里带订单号/用户ID/手机号/requestId 等关键信息时，优先把它们作为 keyword 精确匹配，可逗号分隔传多个联合收窄；带时间窗）；② 日志结果带 [ERROR] 行与 traceId 摘要，挑错误行的 traceId 用 `trace_id` 查调用链（跨服务，看哪个服务的 span 报错）定位根因；③ 必要时 `kind=metrics` 看端点/实例趋势；④ 结合 `{doc_dir}/` 文档与工作区代码确认。线索是推测，以实际查询为准；不要先翻文档而耽误排障。"
-                        )
-                    }
-                }
-                QaIntent::ReadCode => format!(
-                    "回答规则（自动判定：用户要看代码）：直接阅读工作区相关源码核对后回答（`read_file`/`grep`/`symbols`）。`{doc_dir}/` 下有逆向文档可作参考。"
-                ),
-                QaIntent::DocLookup => format!(
-                    "回答规则（自动判定：实现/原理类问题，文档优先，必要时读代码）：先用 `grep`/`read_file` 查 `{doc_dir}/` 下的逆向文档；文档能答就基于文档回答。文档答不了时再阅读工作区相关源码来回答。"
-                ),
-            }
-        }
-        "code" => format!(
-            "回答规则：直接阅读工作区代码来回答（`read_file`/`grep`/`symbols`）。`{doc_dir}/` 下有逆向文档可作参考。"
+/// 引擎优先：只声明可用能力与模式偏好，不指挥「必须先查日志/不要先翻文档」工序。
+/// `engine`：`dsh` | `tianji`；`oap_ready`：SkyWalking 地址已配置。
+fn capability_card(engine: &str, mode: &str, doc_dir: &str, oap_ready: bool) -> String {
+    let mode = mode.trim().to_ascii_lowercase();
+    let preference = match mode.as_str() {
+        "doc" => "模式偏好：文档优先；文档不足再读代码。",
+        "code" => "模式偏好：直接读工作区代码；文档可作参考。",
+        "linked" => "模式偏好：综合文档、代码与日志，结论标明依据来源。",
+        "doc_code" => "模式偏好：文档优先，必要时读代码。",
+        _ => "模式偏好：自动；按用户原话自行决定查文档、代码或日志。",
+    };
+    let logs = if !oap_ready {
+        "日志：未配置 SkyWalking OAP，日志查询不可用；不要声称已查过日志。".to_string()
+    } else if engine == "dsh" {
+        format!(
+            "日志：已配置 SkyWalking。需要查日志时，在回复末尾单独一行输出 `{mark}{{\"queries\":[{{\"keywords\":[\"…\"],\"service\":\"可省略\",\"start\":\"可省略RFC3339\",\"end\":\"可省略\",\"reason\":\"必填\"}}],\"reason\":\"必填\"}}`（最多3条）；宿主执行后回灌结果。用户可见正文不要包含该标记行；禁止假装已经查过日志。",
+            mark = crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK
+        )
+    } else {
+        "日志：用工具 `skywalking_query` 查日志/调用链/metrics（可按服务、关键词、时间窗、traceId）；以实际查询为准。".to_string()
+    };
+    format!(
+        "【可用能力】\n\
+- 文档：工作区 `{doc_dir}/`（grep / read_file）\n\
+- 代码：工作区源码（read_file / grep / symbols）\n\
+- {logs}\n\
+{preference}\n\
+把用户原话当作唯一需求；自行决定查什么、查几次；缺关键信息时向用户追问，不要空壳结论。"
+    )
+}
+
+/// 诊断用：本轮增强注入结果（不写正文，只写状态 token）。
+fn enhance_injection_status(enabled: bool, prompt: &str, block: &str) -> &'static str {
+    if !block.is_empty() {
+        "injected"
+    } else if !enabled {
+        "skipped_disabled"
+    } else if prompt.trim().is_empty() {
+        "skipped_empty"
+    } else {
+        // 理论上 enabled+非空 ⇒ block 非空；兜底避免误报 injected。
+        "skipped_empty"
+    }
+}
+
+fn log_enhance_injection(
+    engine: &str,
+    msgid: &str,
+    chattype: &str,
+    enabled: bool,
+    prompt: &str,
+    block: &str,
+) {
+    let scope = if chattype.eq_ignore_ascii_case("group") {
+        "group"
+    } else {
+        "dm"
+    };
+    let status = enhance_injection_status(enabled, prompt, block);
+    crate::wecom_log::write(
+        "enhance",
+        &format!(
+            "engine={engine} msgid={msgid} scope={scope} enabled={enabled} prompt_chars={} block_chars={} status={status}",
+            prompt.trim().chars().count(),
+            block.chars().count()
         ),
-        "doc" => {
-            if wants_code {
-                format!(
-                    "回答规则（文档优先，但用户这次要求看代码）：先用 `grep`/`read_file` 查 `{doc_dir}/` 下的逆向文档；用户已明确要从代码读，可直接阅读相关源码核对后回答。"
-                )
-            } else {
-                format!(
-                    "回答规则（文档优先）：先用 `grep`/`read_file` 在 `{doc_dir}/` 下的逆向文档里找答案；能答就基于文档回答，不要去读业务代码。只有文档确实没有时，才说明「文档未覆盖」并可读代码补充。"
-                )
-            }
+    );
+}
+
+/// 用户可调的上下文增强：启用且文案非空时，附带增强提示 + 真实来源元数据块。
+/// 关闭或空文案返回空串。来源字段只写回调里已有的值，不臆造。
+fn build_enhance_block(
+    chattype: &str,
+    enabled: bool,
+    prompt: &str,
+    sender_id: &str,
+    chat_id: Option<&str>,
+    msgid: &str,
+) -> String {
+    let prompt = prompt.trim();
+    if !enabled || prompt.is_empty() {
+        return String::new();
+    }
+    let is_group = chattype.eq_ignore_ascii_case("group");
+    let conv = if is_group { "group" } else { "dm" };
+    let mut source = format!(
+        "<wecom_im_source>\nchannel=wecom\nconversationType={conv}\nsenderId={sender}\nmsgid={msgid}",
+        sender = sender_id.trim(),
+        msgid = msgid.trim(),
+    );
+    if is_group {
+        if let Some(cid) = chat_id.map(str::trim).filter(|s| !s.is_empty()) {
+            source.push_str(&format!("\nchatId={cid}"));
         }
-        "linked" => {
-            let a = analyze(user_text);
-            let clues = if a.intent == QaIntent::Troubleshoot {
-                troubleshoot_clue_line(&a)
-            } else {
-                String::new()
-            };
-            if is_dsh {
-                format!(
-                    "回答规则（全联动）：综合文档、代码与日志回答。{clues}上文若已附联动上下文，优先使用；文档在 `{doc_dir}/`，代码在工作区，日志/调用链以上文证据为准。给出结论时标明依据来自文档/代码/日志中的哪一类。"
-                )
-            } else {
-                format!(
-                    "回答规则（全联动）：综合文档、代码与日志回答。{clues}优先使用宿主预取的联动上下文；不足时再用 `grep`/`read_file`/`symbols` 查 `{doc_dir}/` 与代码，用 `skywalking_query` 查日志。结论标明依据来源（文档/代码/日志）。"
-                )
-            }
-        }
-        // doc_code
-        _ => format!(
-            "回答规则（文档优先，必要时读代码）：先用 `grep`/`read_file` 查 `{doc_dir}/` 下的逆向文档；文档能答就基于文档回答。文档答不了、或用户要求从代码读时，再阅读工作区相关源码来回答。"
-        ),
+    }
+    source.push_str("\n</wecom_im_source>");
+    format!("\n\n【增强提示】\n{prompt}\n\n{source}")
+}
+
+/// 「新会话」抢不到本会话串行锁时的提示（群/私聊键隔离，勿让用户以为串台）。
+fn new_session_busy_message(is_group: bool) -> &'static str {
+    if is_group {
+        "本群聊仍有任务在跑，请先在本群发送「停止」或等完成后再「新会话」。私聊是另一路会话，互不影响。"
+    } else {
+        "本私聊仍有任务在跑，请先在本私聊发送「停止」或等完成后再「新会话」。群聊是另一路会话，互不影响。"
+    }
+}
+
+/// 「停止」时本会话无 running 登记的提示；全局仍有活动回合时点明可能在另一窗口。
+fn stop_idle_message(other_sessions_active: bool) -> String {
+    if other_sessions_active {
+        "当前没有正在进行的任务。其他会话（例如另一边的群聊/私聊）可能仍有任务在跑，请到对应窗口发「停止」或「进度」。"
+            .to_string()
+    } else {
+        "当前没有正在进行的任务。".to_string()
     }
 }
 
@@ -2878,31 +2696,6 @@ fn is_stop_command(text: &str) -> bool {
     false
 }
 
-/// 把排障分析里抽到的槽位拼成一行「已识别线索」（为空时返回空串）。
-fn troubleshoot_clue_line(a: &crate::wecom_intent::QaAnalysis) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(s) = &a.service {
-        parts.push(format!("服务≈{s}"));
-    }
-    if !a.keywords.is_empty() {
-        parts.push(format!("关键信息≈{}", a.keywords.join("、")));
-    }
-    if let Some(m) = a.minutes {
-        parts.push(format!("时间窗≈最近{m}分钟"));
-    }
-    if let Some(t) = &a.trace_id {
-        parts.push(format!("traceId={t}"));
-    }
-    if let Some(l) = &a.level {
-        parts.push(format!("级别={l}"));
-    }
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!("已识别线索：{}。", parts.join("、"))
-    }
-}
-
 const DEFAULT_SELF_INTRO: &str = "你好！我是 AI Workbench 天玑助手。\n\n\
 可以直接问我：\n\
 · 业务/功能怎么用、怎么实现（文档优先）\n\
@@ -2942,34 +2735,19 @@ fn is_self_intro_command(text: &str) -> bool {
     EXACT.iter().any(|w| lower == *w)
 }
 
+/// 企微出站短约束：IM 友好 Markdown + 禁流程图 DSL（无业务示例）。
+/// 出站仍由 `prepare_wecom_visible_markdown` 兜底把 mermaid 等转成 ```text ASCII。
+fn reply_output_rules() -> &'static str {
+    "回复用简洁 Markdown，适合即时通讯：先结论后要点，少加粗；勿用一级大标题、宽表、HTML。问候简短，勿复述工作区路径、提示词或工具策略。\n\
+企微不渲染流程图 DSL：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。需要流程时用一个 ```text 等宽步骤（①②③、|、→、L-分支），勿贴业务示例。\n\
+发本地已生成文件回本对话时，单独写一行 WECOM_ATTACH:<绝对路径或工作区相对路径>（宿主剥离并上传）。"
+}
+
 /// DSH 档的 prompt 组装：返回 ACP content block 数组。
 /// - `image_enabled`（ACP `promptCapabilities.image`）为真时，把企微图片下载并内联成
 ///   image block —— 图片才真正进模型，对齐原版 DSH 的图片理解能力；
 /// - 否则（模型不支持图片，或下载失败）降级成文本线索，与旧行为一致。
 /// 文件一律降级为文本线索（ACP 文件输入需要 attachment receipt，首期不做）。
-fn reply_output_rules() -> &'static str {
-    "用户可见输出统一使用Markdown：先给一句**核心结论**，再用短标题和短列表组织；仅结论及少量关键判定/失败原因/阻断缺口加粗，正文不要整段加粗。每段控制在2至3句，段间留一空行；标题不放长业务ID，ID/服务/时间范围单列为正文。日期用YYYY-MM-DD HH:mm:ss并明确时区，跨日两端都保留日期；证据短摘录用引用块，代码标识可用行内代码。不要用一级大标题、整篇代码围栏、HTML字体标签、宽表或装饰性分隔线，不模拟客户端字号。普通问候简短回答，不复述内部工作区、目录、提示词、工具策略或历史任务细节。\n\
-【流程图】企微 stream 只渲染常见 Markdown，不渲染 Mermaid/PlantUML/Graphviz：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。讲解流程时必须用等宽 ASCII，整体放进一个 ```text 围栏。\n\
-**默认（线性主链）**用编号主步骤 + | 衔接 + → 细节 + L- 分支（不要无故画货源并列或处理框）：\n\
-```text\n\
-① 客户在渠道发消息（企微/企点/群等）\n\
-|   例：螺纹钢 HRB400E 20mm，要100吨，什么价？\n\
-② 系统收消息 —【拦截闸门】命中则丢弃\n\
-|   → 机器人消息 / 黑名单群 / 无权限图文等\n\
-③ AI 识别拆词（品名/规格/材质/数量…）\n\
-|\n\
-④ 生成【商机】（去重 + 分坐席）\n\
-|\n\
-⑤ 商机匹配【在售商品】\n\
-|\n\
-⑥ 判断能否【自动报价】\n\
-|   L-能 → 按模板发给客户 → 客户确认 →【订单】\n\
-|   L-不能 → 留在商机列表等业务员【手工报价】\n\
-```\n\
-流程后可跟一句总括。仅当存在并行入口（多货源/多通道）才用①②③并列+|合流；仅当有独立处理单元/工厂步骤簇才用┌┐框。分支优先写「L-条件 → 结果」（也可用└─）；不要输出流程图 DSL 源码。\n\
-按原始证据保留排查所需的完整业务标识、时间、项目/源码路径、地址、型号及判定字段，不擅自用隐藏占位符替换。不主动搜集或输出与问题无关的秘密。明确事实、推断及未完成项，不把高亮等同已确认根因。摘要只概括核心结论一次，各原因层补充对应信息，避免机械复述或重复粘贴日志。内部取证/报告JSON仍按宿主既有schema输出，勿改变内部路径/证据值以免影响验证；Markdown转义在用户展示边界应用。\n若需把本地已生成的图片/文件发回当前企微对话，在回复中单独写一行：WECOM_ATTACH:<绝对路径或工作区相对路径>（宿主会剥离该行并上传，用户看不到标记）。"
-}
-
 async fn build_dsh_prompt(
     app: &AppHandle,
     msgid: &str,
@@ -3152,6 +2930,104 @@ async fn read_file_base64(path: &std::path::Path) -> Result<String, String> {
         .await
         .map_err(|e| format!("图片读取失败：{e}"))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// 流式中间帧：未完成的 `WECOM_LOG_QUERY` JSON 不推给用户（Done 再完整剥离）。
+fn stream_visible_answer(snapshot: &str) -> String {
+    let cut = snapshot
+        .find(crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK)
+        .map(|i| snapshot[..i].trim_end())
+        .unwrap_or(snapshot);
+    prepare_wecom_visible_markdown(cut)
+}
+
+/// 宿主 `parse_query` 失败时，用模型补查请求里的时间/关键词拼一个可执行窗口。
+fn query_window_for_model_log_requests(
+    queries: &[serde_json::Value],
+    zone: chrono::FixedOffset,
+) -> Option<crate::wecom_investigation_query::InvestigationQuery> {
+    use chrono::{Duration, Utc};
+    use crate::wecom_investigation_query::{InvestigationQuery, TimeKind};
+
+    let mut start = None;
+    let mut end = None;
+    let mut keywords = Vec::new();
+    let mut service = None;
+    let mut trace_id = None;
+    for q in queries.iter().take(3) {
+        if start.is_none() {
+            start = q.get("start").and_then(|v| v.as_str()).map(str::to_string);
+        }
+        if end.is_none() {
+            end = q.get("end").and_then(|v| v.as_str()).map(str::to_string);
+        }
+        if service.is_none() {
+            service = q
+                .get("service")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
+        if trace_id.is_none() {
+            trace_id = q
+                .get("trace_id")
+                .or_else(|| q.get("traceId"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
+        if let Some(arr) = q.get("keywords").and_then(|v| v.as_array()) {
+            for k in arr {
+                if let Some(s) = k.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    if !keywords.iter().any(|e: &String| e.eq_ignore_ascii_case(s)) {
+                        keywords.push(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let offset_min = zone.local_minus_utc() / 60;
+    let (start, end, time_kind) = match (start.as_deref(), end.as_deref()) {
+        (Some(s), Some(e))
+            if chrono::DateTime::parse_from_rfc3339(s).is_ok()
+                && chrono::DateTime::parse_from_rfc3339(e).is_ok() =>
+        {
+            (s.to_string(), e.to_string(), TimeKind::Range)
+        }
+        _ => {
+            let now = Utc::now().with_timezone(&zone);
+            let begin = now - Duration::hours(4);
+            (
+                begin.to_rfc3339(),
+                now.to_rfc3339(),
+                TimeKind::Relative,
+            )
+        }
+    };
+    if keywords.is_empty() && service.is_none() && trace_id.is_none() {
+        return None;
+    }
+    let keyword_count = keywords.len();
+    Some(InvestigationQuery {
+        time_kind,
+        approximate_anchor: false,
+        anchor: None,
+        start,
+        end,
+        timezone_offset_minutes: offset_min,
+        keywords,
+        identifiers: Vec::new(),
+        exclude_keyword: String::new(),
+        match_any: true,
+        keyword_count,
+        service,
+        answer_targets: Vec::new(),
+        trace_id,
+        level: None,
+        page: 1,
+    })
 }
 
 /// 流式 / 终帧共用：剥附件标记 + 流程图 DSL 围栏 → ```text ASCII。
@@ -3339,6 +3215,49 @@ fn permitted_conclusion_level<'a>(
     }
 }
 
+/// Soft troubleshoot handoff: keep the parsed window, clear host clarify copy, and open the
+/// planning loop when OAP is configured so the selected engine can emit queries. Without OAP,
+/// planning may still run against workspace/docs (`can_plan_investigation`).
+fn prepare_engine_fallback_outcome(
+    outcome: &mut crate::wecom_investigation::InvestigationOutcome,
+    oap_configured: bool,
+) {
+    outcome.clarification = None;
+    let window = outcome
+        .query
+        .as_ref()
+        .map(|q| (q.start.clone(), q.end.clone()));
+    if oap_configured {
+        if let Some((start, end)) = window {
+            let start = crate::wecom_natural_query::readable_timestamp(&start);
+            let end = crate::wecom_natural_query::readable_timestamp(&end);
+            outcome.context = format!(
+                "【宿主未抽出可执行硬锚点，已交给所选引擎规划】时间范围 {start} 至 {end}。尚未访问日志平台。\
+请根据用户原话自行推断服务名与检索词并给出 queries，或向用户追问还缺什么；禁止声称已经查过日志。"
+            );
+        } else {
+            outcome.context = "【宿主未抽出可执行硬锚点，已交给所选引擎规划】尚未访问日志平台。\
+请根据用户原话规划查询或追问缺什么；禁止声称已经查过日志。".into();
+        }
+    } else if let Some((start, end)) = window {
+        let start = crate::wecom_natural_query::readable_timestamp(&start);
+        let end = crate::wecom_natural_query::readable_timestamp(&end);
+        outcome.context = format!(
+            "【日志源未配置，已交给所选引擎做文档/代码联动分析】时间范围 {start} 至 {end}。尚未访问日志平台。\
+请结合联动上下文与工作区文档/代码作答；禁止输出日志 queries，禁止声称已经查过日志。"
+        );
+    } else {
+        outcome.context = "【日志源未配置，已交给所选引擎做文档/代码联动分析】尚未访问日志平台。\
+请结合联动上下文与工作区文档/代码作答；禁止输出日志 queries，禁止声称已经查过日志。".into();
+    }
+    outcome.source_ready = oap_configured;
+}
+
+/// Planning may run when OAP is ready, or when workspace/docs alone can support joint analysis.
+fn can_plan_investigation(source_ready: bool, workspace: &str, doc_dir: &str) -> bool {
+    source_ready || !workspace.trim().is_empty() || !doc_dir.trim().is_empty()
+}
+
 fn source_failure_reply(outcome: &crate::wecom_investigation::InvestigationOutcome) -> bool {
     !outcome.context.is_empty()
         && (!outcome.source_ready
@@ -3501,6 +3420,101 @@ mod tests {
     }
 
     #[test]
+    fn engine_fallback_keeps_window_and_opens_planning_when_oap_configured() {
+        use crate::wecom_investigation::{InvestigationOutcome, InvestigationStatus};
+        use crate::wecom_investigation_query::{InvestigationQuery, TimeKind};
+        let mut o = InvestigationOutcome {
+            status: InvestigationStatus::NotExecuted,
+            context: "【想帮你查日志，还差一点】".into(),
+            query: Some(InvestigationQuery {
+                time_kind: TimeKind::Relative,
+                approximate_anchor: false,
+                anchor: None,
+                start: "2026-11-03T06:27:10+08:00".into(),
+                end: "2026-11-03T10:27:10+08:00".into(),
+                timezone_offset_minutes: 480,
+                keywords: Vec::new(),
+                identifiers: Vec::new(),
+                exclude_keyword: String::new(),
+                match_any: false,
+                keyword_count: 0,
+                service: None,
+                answer_targets: Vec::new(),
+                level: None,
+                trace_id: None,
+                page: 0,
+            }),
+            evidence_count: 0,
+            request_count: 0,
+            cache_hits: 0,
+            may_analyze: false,
+            source_ready: false,
+            clarification: Some("请补充检索对象".into()),
+            budget: crate::wecom_skywalking::QueryBudget::new(),
+            collected_ms: 0,
+            detail: String::new(),
+            shown_count: 0,
+            warn_count: 0,
+            truncated_count: 0,
+            incomplete_pages: 0,
+            decision_gaps: Vec::new(),
+        };
+        prepare_engine_fallback_outcome(&mut o, true);
+        assert!(o.source_ready, "OAP configured → planning allowed");
+        assert!(o.clarification.is_none());
+        assert!(o.context.contains("交给所选引擎规划"));
+        assert!(!o.context.contains("想帮你查日志，还差一点"));
+        assert!(o.context.contains("2026-11-03 06:27:10"));
+        assert!(!o.context.contains("+08:00"), "RFC3339 must not leak");
+        prepare_engine_fallback_outcome(&mut o, false);
+        assert!(!o.source_ready, "no OAP → source_ready stays closed");
+        assert!(
+            o.context.contains("文档/代码联动分析"),
+            "no OAP should hand off to doc/code planning: {}",
+            o.context
+        );
+        assert!(!o.context.contains("给出 queries"));
+    }
+
+    #[test]
+    fn can_plan_without_oap_when_workspace_or_docs_present() {
+        assert!(can_plan_investigation(true, "", ""));
+        assert!(can_plan_investigation(false, "D:/repo", ""));
+        assert!(can_plan_investigation(false, "", "doc"));
+        assert!(can_plan_investigation(false, "D:/repo", "doc"));
+        assert!(!can_plan_investigation(false, "", ""));
+        assert!(!can_plan_investigation(false, "  ", " \t "));
+    }
+
+    #[test]
+    fn source_failure_does_not_block_when_can_plan_with_workspace() {
+        use crate::wecom_investigation::{InvestigationOutcome, InvestigationStatus};
+        let o = InvestigationOutcome {
+            status: InvestigationStatus::NotExecuted,
+            context: "【日志排障未执行：尚未配置SkyWalking OAP地址】".into(),
+            query: None,
+            evidence_count: 0,
+            request_count: 0,
+            cache_hits: 0,
+            may_analyze: false,
+            source_ready: false,
+            clarification: Some("尚未配置 SkyWalking OAP 地址".into()),
+            budget: crate::wecom_skywalking::QueryBudget::new(),
+            collected_ms: 0,
+            detail: String::new(),
+            shown_count: 0,
+            warn_count: 0,
+            truncated_count: 0,
+            incomplete_pages: 0,
+            decision_gaps: Vec::new(),
+        };
+        assert!(source_failure_reply(&o));
+        // Host early-return is skipped when workspace/docs can still drive planning.
+        assert!(can_plan_investigation(o.source_ready, "D:/repo", "doc"));
+        assert!(!can_plan_investigation(o.source_ready, "", ""));
+    }
+
+    #[test]
     fn unexecuted_or_failed_source_never_enters_business_model() {
         use crate::wecom_investigation::{InvestigationOutcome, InvestigationStatus};
         let mut o = InvestigationOutcome {
@@ -3555,61 +3569,147 @@ mod tests {
     }
 
     #[test]
-    fn answer_mode_doc_blocks_code_unless_asked() {
-        let r = answer_mode_rules("doc", "doc", "这个功能怎么实现的", false);
-        assert!(r.contains("文档优先"));
-        assert!(r.contains("不要去读业务代码"));
-        // 用户说读代码 → doc 模式也放行
-        let r2 = answer_mode_rules("doc", "doc", "帮我看源码里怎么写的", false);
-        assert!(r2.contains("可直接阅读相关源码"));
-    }
-
-    #[test]
-    fn answer_mode_code_always_reads_source() {
-        let r = answer_mode_rules("code", "doc", "随便问", false);
-        assert!(r.contains("直接阅读工作区代码"));
-    }
-
-    #[test]
-    fn answer_mode_auto_routes_by_intent() {
-        // 排障 → SkyWalking + 代码，不被文档优先挡住（tianji 档用工具）
-        let r = answer_mode_rules("auto", "doc", "帮我排查下线上 500 报错", false);
-        assert!(r.contains("skywalking_query"), "{r}");
-        assert!(r.contains("排查线上问题"), "{r}");
+    fn capability_card_doc_preference_without_sop_steps() {
+        let r = capability_card("tianji", "doc", "doc", true);
+        assert!(r.contains("文档优先"), "{r}");
+        assert!(r.contains("【可用能力】"), "{r}");
         assert!(!r.contains("不要去读业务代码"), "{r}");
-        // 要看代码 → 直接读源码
-        let r2 = answer_mode_rules("auto", "doc", "看下源码里是怎么写的", false);
-        assert!(r2.contains("直接阅读工作区相关源码"), "{r2}");
-        // 实现/原理 → 文档优先、必要时读代码
-        let r3 = answer_mode_rules("auto", "doc", "登录模块怎么实现的", false);
-        assert!(r3.contains("文档优先"), "{r3}");
-        assert!(r3.contains("文档答不了"), "{r3}");
+        assert!(!r.contains("步骤：①"), "{r}");
     }
 
     #[test]
-    fn auto_troubleshoot_dsh_vs_tianji_sop_differs() {
-        // DSH 档：日志已注入在上文，不让它调 skywalking_query 工具
-        let dsh = answer_mode_rules("auto", "doc", "帮我排查下线上 500 报错", true);
-        assert!(dsh.contains("上文已附"), "{dsh}");
-        assert!(!dsh.contains("skywalking_query"), "DSH 档不该提工具：{dsh}");
-        // tianji 档：用工具查
-        let tj = answer_mode_rules("auto", "doc", "帮我排查下线上 500 报错", false);
-        assert!(tj.contains("skywalking_query"), "{tj}");
-        assert!(tj.contains("跨全部服务"), "{tj}");
+    fn capability_card_code_preference() {
+        let r = capability_card("tianji", "code", "doc", true);
+        assert!(r.contains("直接读工作区代码"), "{r}");
+        assert!(r.contains("skywalking_query"), "{r}");
     }
 
     #[test]
-    fn auto_troubleshoot_embeds_clues() {
-        // 抽到的服务/错误特征应出现在排障 SOP 的「已识别线索」里
-        let r = answer_mode_rules(
-            "auto",
-            "doc",
-            "排查 OrderService 的 NullPointerException",
-            false,
+    fn capability_card_advertises_logs_by_engine() {
+        let dsh = capability_card("dsh", "auto", "doc", true);
+        assert!(
+            dsh.contains(crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK),
+            "{dsh}"
         );
-        assert!(r.contains("已识别线索"), "{r}");
-        assert!(r.contains("OrderService"), "{r}");
-        assert!(r.contains("NullPointerException"), "{r}");
+        assert!(!dsh.contains("skywalking_query"), "DSH 用标记协议：{dsh}");
+        let tj = capability_card("tianji", "auto", "doc", true);
+        assert!(tj.contains("skywalking_query"), "{tj}");
+        assert!(!tj.contains("步骤：①"), "{tj}");
+        let no_oap = capability_card("tianji", "auto", "doc", false);
+        assert!(no_oap.contains("日志查询不可用"), "{no_oap}");
+    }
+
+    #[test]
+    fn capability_card_leaves_entity_extraction_to_engine() {
+        // 引擎优先：能力卡不再嵌入宿主抽到的 OrderService 等线索工序。
+        let r = capability_card("tianji", "auto", "doc", true);
+        assert!(r.contains("自行决定查什么"), "{r}");
+        assert!(!r.contains("已识别线索"), "{r}");
+        assert!(!r.contains("OrderService"), "{r}");
+    }
+
+    #[test]
+    fn enhance_injection_status_tokens() {
+        assert_eq!(
+            enhance_injection_status(false, "有文案", ""),
+            "skipped_disabled"
+        );
+        assert_eq!(
+            enhance_injection_status(true, "  ", ""),
+            "skipped_empty"
+        );
+        assert_eq!(
+            enhance_injection_status(true, "规则", "【增强提示】\n规则"),
+            "injected"
+        );
+    }
+
+    #[test]
+    fn build_enhance_block_uses_group_or_dm_and_skips_when_off() {
+        assert_eq!(
+            build_enhance_block("single", false, "私聊提示", "u1", None, "m1"),
+            ""
+        );
+        assert_eq!(
+            build_enhance_block("group", true, "   ", "u1", Some("c1"), "m1"),
+            ""
+        );
+        let dm = build_enhance_block("single", true, "私聊口语", "user-a", None, "msg-1");
+        assert!(dm.contains("【增强提示】\n私聊口语"), "{dm}");
+        assert!(dm.contains("<wecom_im_source>"), "{dm}");
+        assert!(dm.contains("conversationType=dm"), "{dm}");
+        assert!(dm.contains("senderId=user-a"), "{dm}");
+        assert!(dm.contains("msgid=msg-1"), "{dm}");
+        assert!(!dm.contains("chatId="), "私聊不写 chatId：{dm}");
+
+        let group = build_enhance_block(
+            "group",
+            true,
+            "群聊简洁",
+            "user-b",
+            Some("chat-9"),
+            "msg-2",
+        );
+        assert!(group.contains("【增强提示】\n群聊简洁"), "{group}");
+        assert!(group.contains("conversationType=group"), "{group}");
+        assert!(group.contains("chatId=chat-9"), "{group}");
+        assert!(group.contains("senderId=user-b"), "{group}");
+
+        let group_no_chat = build_enhance_block("GROUP", true, "x", "u", None, "m");
+        assert!(group_no_chat.contains("conversationType=group"), "{group_no_chat}");
+        assert!(
+            !group_no_chat.contains("chatId="),
+            "缺 chatid 不臆造：{group_no_chat}"
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_stores_enhance_prompts_after_apply_fields() {
+        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
+        *orch.enhance_dm_enabled.lock().await = true;
+        *orch.enhance_group_enabled.lock().await = false;
+        *orch.enhance_dm.lock().await = "dm-rule".into();
+        *orch.enhance_group.lock().await = "group-rule".into();
+        assert!(*orch.enhance_dm_enabled.lock().await);
+        assert!(!*orch.enhance_group_enabled.lock().await);
+        assert_eq!(orch.enhance_dm.lock().await.as_str(), "dm-rule");
+        assert_eq!(orch.enhance_group.lock().await.as_str(), "group-rule");
+        let dm_block = build_enhance_block(
+            "single",
+            *orch.enhance_dm_enabled.lock().await,
+            &orch.enhance_dm.lock().await,
+            "u",
+            None,
+            "m",
+        );
+        assert!(dm_block.contains("dm-rule"), "{dm_block}");
+        let group_block = build_enhance_block(
+            "group",
+            *orch.enhance_group_enabled.lock().await,
+            &orch.enhance_group.lock().await,
+            "u",
+            Some("c"),
+            "m",
+        );
+        assert!(group_block.is_empty(), "群聊开关关时应为空：{group_block}");
+    }
+
+    #[test]
+    fn new_session_busy_and_stop_idle_copy_names_scope() {
+        let group = new_session_busy_message(true);
+        assert!(group.contains("本群聊"), "{group}");
+        assert!(group.contains("私聊是另一路会话"), "{group}");
+        assert!(group.contains("停止"), "{group}");
+        let dm = new_session_busy_message(false);
+        assert!(dm.contains("本私聊"), "{dm}");
+        assert!(dm.contains("群聊是另一路会话"), "{dm}");
+
+        let idle = stop_idle_message(false);
+        assert_eq!(idle, "当前没有正在进行的任务。");
+        let other = stop_idle_message(true);
+        assert!(other.contains("当前没有正在进行的任务"), "{other}");
+        assert!(other.contains("其他会话"), "{other}");
+        assert!(other.contains("停止") && other.contains("进度"), "{other}");
     }
 
     #[test]
@@ -3845,19 +3945,18 @@ mod tests {
     #[test]
     fn reply_output_rules_forbid_mermaid_and_require_text_ascii_flow() {
         let rules = reply_output_rules();
+        assert!(rules.len() < 800, "短约束不应再塞长说明书: len={}", rules.len());
         assert!(rules.contains("禁止") && rules.to_ascii_lowercase().contains("mermaid"), "{rules}");
         assert!(rules.contains("```text"), "{rules}");
         assert!(rules.contains("①") && rules.contains("L-"), "{rules}");
-        assert!(rules.contains("客户") || rules.contains("主步骤") || rules.contains("线性"), "{rules}");
-        assert!(
-            !rules.contains("**【货源：三个来源】**"),
-            "默认模板不应钉死货源三来源: {rules}"
-        );
         assert!(
             rules.to_ascii_lowercase().contains("plantuml")
                 || rules.to_ascii_lowercase().contains("graphviz"),
             "{rules}"
         );
+        for leaked in ["在售商品", "自动报价", "螺纹钢", "手工报价", "货源：三个来源"] {
+            assert!(!rules.contains(leaked), "不应再内嵌商机示例 {leaked}: {rules}");
+        }
     }
 
     #[test]
@@ -3900,5 +3999,40 @@ fn ok() {}
         assert!(!out.contains("```mermaid"), "{out}");
         assert!(out.contains("```text"), "{out}");
         assert!(out.contains("步骤甲"), "{out}");
+    }
+
+    #[test]
+    fn stream_visible_answer_hides_incomplete_log_query_mark() {
+        let snap = format!(
+            "初步结论：少报了一个商品\n{}{{\"queries\":[{{\"keywords\":[\"1457\"]}}]}}",
+            crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK
+        );
+        let out = stream_visible_answer(&snap);
+        assert!(out.contains("初步结论"), "{out}");
+        assert!(
+            !out.contains(crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK),
+            "{out}"
+        );
+        assert!(!out.contains("queries"), "{out}");
+    }
+
+    #[test]
+    fn query_window_falls_back_to_model_request_fields() {
+        let zone = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let q = query_window_for_model_log_requests(
+            &[serde_json::json!({
+                "keywords": ["1457030839301648384"],
+                "start": "2026-11-03T15:00:00+08:00",
+                "end": "2026-11-03T16:00:00+08:00",
+                "service": "quote"
+            })],
+            zone,
+        )
+        .expect("应能从模型 queries 拼出窗口");
+        assert_eq!(q.start, "2026-11-03T15:00:00+08:00");
+        assert_eq!(q.end, "2026-11-03T16:00:00+08:00");
+        assert_eq!(q.service.as_deref(), Some("quote"));
+        assert!(q.keywords.iter().any(|k| k.contains("1457030839301648384")));
+        assert!(query_window_for_model_log_requests(&[], zone).is_none());
     }
 }

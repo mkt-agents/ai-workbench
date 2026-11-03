@@ -2,10 +2,14 @@
 //!
 //! 出站：图片走 inline base64（`aibot_respond_msg` 的 image.base64）；
 //! 文本文件直接贴回，二进制经 media/upload 拿 media_id（需业务 API 凭证）。
-//! 入站：回调 url 优先下载；仅 media_id 时走 qyapi media/get（同样需要业务 API）。
+//! 入站：回调 url 优先下载；长连接 `image/file.url` 返回密文，须用同条消息的
+//! `aeskey`（AES-256-CBC，IV=密钥前 16 字节，PKCS#7 按至多 32 字节去填充）解密后再落盘；
+//! 仅 media_id 时走 qyapi media/get（明文，需业务 API）。
 //! 素材落盘 `%APPDATA%\com.ai-workbench.app\wecom-media\<msgid>\`，mtime 超过 7 天回收。
 
+use aes::Aes256;
 use base64::Engine;
+use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -218,7 +222,23 @@ async fn fetch_inbound_bytes(
     m: &MediaRef,
 ) -> Result<(Vec<u8>, String), String> {
     if !m.url.trim().is_empty() {
-        return download_url(m.url.trim()).await;
+        let (raw, hinted) = download_url(m.url.trim()).await?;
+        let bytes = match m.aeskey.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(key) => decrypt_wecom_media(&raw, key)?,
+            None => {
+                // 长连接图片几乎总带 aeskey；没有密钥却像密文时明确失败，避免把乱码当图喂模型。
+                if looks_like_image_magic(&raw) || m.kind != "image" {
+                    raw
+                } else {
+                    return Err(
+                        "入站图片缺少 aeskey，且下载内容不是可识别图片（长连接媒体需 AES 解密）"
+                            .into(),
+                    );
+                }
+            }
+        };
+        let media_type = sniff_media_type(&bytes).unwrap_or(hinted);
+        return Ok((bytes, media_type));
     }
     let media_id = m
         .media_id
@@ -254,6 +274,77 @@ async fn download_url(url: &str) -> Result<(Vec<u8>, String), String> {
         return Err(format!("媒体超过 {}MB 上限", MAX_INBOUND_BYTES / (1024 * 1024)));
     }
     Ok((bytes.to_vec(), media_type))
+}
+
+type Aes256CbcDec = cbc::Decryptor<Aes256>;
+
+/// 企微智能机器人长连接媒体：AES-256-CBC，密钥为 aeskey 的 base64 解码（32 字节），
+/// IV 取密钥前 16 字节；填充为 PKCS#7，文档要求填充到 32 字节倍数（去填充上限 32）。
+pub fn decrypt_wecom_media(encrypted: &[u8], aeskey_b64: &str) -> Result<Vec<u8>, String> {
+    if encrypted.is_empty() {
+        return Err("加密媒体为空".into());
+    }
+    if encrypted.len() % 16 != 0 {
+        return Err(format!(
+            "加密媒体长度 {} 不是 16 的倍数，无法 AES-CBC 解密",
+            encrypted.len()
+        ));
+    }
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(aeskey_b64.trim())
+        .map_err(|e| format!("aeskey base64 无效：{e}"))?;
+    if key.len() != 32 {
+        return Err(format!(
+            "aeskey 解码后应为 32 字节（AES-256），实际 {}",
+            key.len()
+        ));
+    }
+    let mut buf = encrypted.to_vec();
+    let plain = Aes256CbcDec::new_from_slices(&key, &key[..16])
+        .map_err(|e| format!("AES 初始化失败：{e}"))?
+        .decrypt_padded_mut::<NoPadding>(&mut buf)
+        .map_err(|e| format!("AES 解密失败：{e}"))?;
+    strip_pkcs7(plain, 32)
+}
+
+fn strip_pkcs7(data: &[u8], max_pad: u8) -> Result<Vec<u8>, String> {
+    if data.is_empty() {
+        return Err("解密结果为空".into());
+    }
+    let pad = *data.last().unwrap();
+    if pad < 1 || pad > max_pad || pad as usize > data.len() {
+        return Err(format!("PKCS#7 填充非法：pad={pad}"));
+    }
+    let cut = data.len() - pad as usize;
+    if data[cut..].iter().any(|&b| b != pad) {
+        return Err("PKCS#7 填充字节不一致".into());
+    }
+    Ok(data[..cut].to_vec())
+}
+
+fn looks_like_image_magic(bytes: &[u8]) -> bool {
+    sniff_media_type(bytes).is_some_and(|m| m.starts_with("image/"))
+}
+
+fn sniff_media_type(bytes: &[u8]) -> Option<String> {
+    if bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff {
+        return Some("image/jpeg".into());
+    }
+    if bytes.len() >= 8 && bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("image/png".into());
+    }
+    if bytes.len() >= 6
+        && (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"))
+    {
+        return Some("image/gif".into());
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp".into());
+    }
+    if bytes.len() >= 5 && bytes.starts_with(b"%PDF-") {
+        return Some("application/pdf".into());
+    }
+    None
 }
 
 /// 经自建应用凭证拉取临时素材；机器人 Bot Secret 不能换 token。
@@ -475,5 +566,65 @@ mod tests {
         assert_eq!(file_name(""), "file");
         #[cfg(windows)]
         assert_eq!(file_name(r"C:\private\workspace\report.csv"), "report.csv");
+    }
+
+    fn pkcs7_pad_32(data: &[u8]) -> Vec<u8> {
+        let rem = data.len() % 32;
+        let pad = if rem == 0 { 32 } else { 32 - rem };
+        let mut out = data.to_vec();
+        out.extend(std::iter::repeat(pad as u8).take(pad));
+        out
+    }
+
+    fn encrypt_wecom_media_fixture(plain: &[u8], key32: &[u8; 32]) -> Vec<u8> {
+        use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+        type Aes256CbcEnc = cbc::Encryptor<Aes256>;
+        let mut buf = pkcs7_pad_32(plain);
+        let len = buf.len();
+        Aes256CbcEnc::new_from_slices(key32, &key32[..16])
+            .unwrap()
+            .encrypt_padded_mut::<NoPadding>(&mut buf, len)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn decrypt_wecom_media_roundtrips_jpeg_fixture() {
+        let key = *b"0123456789abcdef0123456789abcdef";
+        let aeskey = base64::engine::general_purpose::STANDARD.encode(key);
+        // Minimal JPEG SOI + filler so magic sniff works after decrypt.
+        let mut plain = vec![0xff, 0xd8, 0xff, 0xe0];
+        plain.extend_from_slice(b"JFIF-fixture-body");
+        let cipher = encrypt_wecom_media_fixture(&plain, &key);
+        assert_ne!(&cipher[..3], &[0xff, 0xd8, 0xff], "密文不应再带 JPEG 头");
+        assert_eq!(cipher.len() % 16, 0);
+        let out = decrypt_wecom_media(&cipher, &aeskey).unwrap();
+        assert_eq!(out, plain);
+        assert_eq!(sniff_media_type(&out).as_deref(), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn decrypt_wecom_media_rejects_bad_key_and_padding() {
+        let key = *b"0123456789abcdef0123456789abcdef";
+        let aeskey = base64::engine::general_purpose::STANDARD.encode(key);
+        let cipher = encrypt_wecom_media_fixture(b"hello-wecom-media", &key);
+        assert!(decrypt_wecom_media(&cipher, "not-base64!!!").is_err());
+        let short = base64::engine::general_purpose::STANDARD.encode(b"too-short");
+        assert!(decrypt_wecom_media(&cipher, &short).is_err());
+        assert!(decrypt_wecom_media(&cipher[..15], &aeskey).is_err());
+        assert!(decrypt_wecom_media(&[], &aeskey).is_err());
+    }
+
+    #[test]
+    fn sniff_media_type_recognizes_common_headers() {
+        assert_eq!(
+            sniff_media_type(&[0xff, 0xd8, 0xff, 0xe0]).as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            sniff_media_type(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]).as_deref(),
+            Some("image/png")
+        );
+        assert!(sniff_media_type(&[0xf8, 0xdc, 0x65, 0x8c]).is_none());
     }
 }
