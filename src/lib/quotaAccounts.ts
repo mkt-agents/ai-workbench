@@ -271,8 +271,10 @@ export interface CustomQuotaDto {
   label: string | null;
   /** 归一化后的接口地址（不含 Key）。 */
   baseUrl: string;
-  /** 命中的接口族：OpenAI 兼容计费 / new-api / one-api / OpenAI 兼容。 */
+  /** 命中的接口族：Sub2API / OpenAI 兼容计费 / new-api / one-api / OpenAI 兼容。 */
   source: string | null;
+  /** 站点报的套餐 / 分组名（sub2api 订阅模式的 `planName`），余额模式为 null。 */
+  plan: string | null;
   balances: CustomBalance[];
   /** 查到了但没有余额数字时的说明（站点未开放余额接口 / 额度不限）。 */
   note: string | null;

@@ -113,6 +113,7 @@
   "zcodeUsage": "已用 {{usage}} / {{limit}}",
   "customProduct": "自定义",
   "customBaseUrl": "接口地址",
+  "customPlan": "套餐",
   "customBaseUrlPlaceholder": "https://api.example.com（站点根地址）",
   "customLabelPlaceholder": "账号 / 备注（可选，默认用域名）",
   "customSaveKey": "验证并保存",

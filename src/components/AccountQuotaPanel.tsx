@@ -3551,7 +3551,8 @@ function formatCustomAmount(amount: number, currency: string): string {
 
 /**
  * 自定义中转站表单：接口地址 + API Key + 备注。
- * 提交即探测（后端按 new-api / one-api / OpenAI 兼容计费的顺序试），走不通不落库。
+ * 提交即探测（后端按 sub2api / OpenAI 兼容 credit_grants / 计费 / new-api / one-api 的顺序试），
+ * 走不通不落库。
  */
 function CustomKeyForm({
   onSubmit,
@@ -3746,6 +3747,7 @@ function CustomCard({
           <DetailGrid
             items={[
               ...rest.map((b) => ({ label: b.label, value: formatCustomAmount(b.amount, b.currency) })),
+              ...(quota?.plan ? [{ label: t("customPlan"), value: quota.plan }] : []),
               ...(baseUrl ? [{ label: t("customBaseUrl"), value: baseUrl }] : []),
             ]}
           />

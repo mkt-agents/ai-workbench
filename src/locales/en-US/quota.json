@@ -113,6 +113,7 @@
   "zcodeUsage": "Used {{usage}} / {{limit}}",
   "customProduct": "Custom",
   "customBaseUrl": "Base URL",
+  "customPlan": "Plan",
   "customBaseUrlPlaceholder": "https://api.example.com (site root)",
   "customLabelPlaceholder": "Account / note (optional, defaults to the host)",
   "customSaveKey": "Verify & save",
