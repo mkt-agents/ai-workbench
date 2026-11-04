@@ -227,6 +227,18 @@ pub struct WecomApplyRequest {
     /// 可选 5 段 unix cron；非空则覆盖每日 HH:MM。
     #[serde(default)]
     pub docgen_cron: String,
+    /// 文档补跑回溯天数（0=不限制，默认 7，上限 30）。
+    #[serde(default = "default_lookback_days")]
+    pub docgen_lookback_days: u32,
+    /// 变更来源子仓白名单（绝对路径）；空=仅文档目录所在仓。
+    #[serde(default)]
+    pub docgen_repo_allowlist: Vec<String>,
+    /// 更新 system 提示词模板；空=内置默认。
+    #[serde(default)]
+    pub docgen_system_prompt: String,
+    /// 质检 system 提示词模板；空=内置默认。
+    #[serde(default)]
+    pub docgen_quality_prompt: String,
     /// 预览模式：更新后不落盘。
     #[serde(default)]
     pub docgen_preview: bool,
@@ -260,6 +272,51 @@ pub(crate) fn effective_mcp(
 
 fn default_true() -> bool {
     true
+}
+
+fn default_lookback_days() -> u32 {
+    7
+}
+
+fn normalize_lookback_days(n: u32) -> u32 {
+    n.min(30)
+}
+
+fn normalize_repo_allowlist(list: &[String], workspace: &str) -> Vec<String> {
+    use std::path::Path;
+    let ws = Path::new(workspace.trim());
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for raw in list {
+        let p = raw.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let path = Path::new(p);
+        if !path.is_dir() {
+            continue;
+        }
+        let key = p.replace('/', "\\").to_ascii_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        // 有 workspace 时要求落在其下（或等于）；空 workspace 仍收下有效目录。
+        if !workspace.trim().is_empty() {
+            let under = match (path.canonicalize(), ws.canonicalize()) {
+                (Ok(c), Ok(a)) => c.starts_with(&a) || c == a,
+                _ => {
+                    let c = p.replace('/', "\\").to_ascii_lowercase();
+                    let a = workspace.replace('/', "\\").to_ascii_lowercase();
+                    c == a || c.starts_with(&(a + "\\"))
+                }
+            };
+            if !under {
+                continue;
+            }
+        }
+        out.push(p.to_string());
+    }
+    out
 }
 
 /// 引擎名归一化：只认 `dsh`，其余一律天玑（旧配置缺省不会漂移）。
@@ -353,34 +410,83 @@ pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, S
     };
     let mut lines: Vec<String> = Vec::new();
 
-    // 1) 工作区 + release 分支
-    let workspace = cfg.workspace.trim().to_string();
-    if workspace.is_empty() {
+    // 1) 工作区 + release 分支（父目录可解析到含文档的子仓）
+    let workspace_cfg = cfg.workspace.trim().to_string();
+    if workspace_cfg.is_empty() {
         lines.push("⚠️ 工作区未配置（自动更新依赖它）".into());
-    } else if crate::git_commands::ensure_git_repo(&workspace).is_err() {
-        lines.push(format!("❌ 工作区不是 Git 仓库：{workspace}"));
     } else {
-        let branch = cfg.branch_or_default();
-        let ws = workspace.clone();
-        let br = branch.clone();
-        let exists = tokio::task::spawn_blocking(move || {
-            // 本地或远端跟踪分支任一存在即可
-            let local = crate::git_commands::git_output(&ws, &["rev-parse", "--verify", "-q", &br]);
-            let remote = crate::git_commands::git_output(
-                &ws,
-                &["rev-parse", "--verify", "-q", &format!("origin/{br}")],
-            );
-            local.map(|o| o.status.success()).unwrap_or(false)
-                || remote.map(|o| o.status.success()).unwrap_or(false)
-        })
-        .await
-        .unwrap_or(false);
-        if exists {
-            lines.push(format!("✅ release 分支「{branch}」存在"));
-        } else {
-            lines.push(format!(
-                "⚠️ 未找到分支「{branch}」（本地与 origin 都没有，自动更新会失败）"
-            ));
+        match crate::git_commands::resolve_git_workspace(&workspace_cfg, &cfg.doc_dir_or_default())
+        {
+            Err(e) => {
+                lines.push(format!(
+                    "❌ {}",
+                    crate::git_commands::path_for_markdown(&e)
+                ));
+            }
+            Ok(workspace) => {
+                let shown = crate::git_commands::path_for_markdown(&workspace);
+                if workspace != workspace_cfg {
+                    lines.push(format!(
+                        "✅ 工作区已解析到文档仓：{shown}（配置为 {}）",
+                        crate::git_commands::path_for_markdown(&workspace_cfg)
+                    ));
+                }
+                let sources =
+                    crate::wecom_docgen::resolve_change_sources(&cfg.repo_allowlist, &workspace);
+                if cfg.repo_allowlist.is_empty() {
+                    lines.push("✅ 变更来源：文档仓（未配置子仓白名单）".into());
+                } else {
+                    let mut ok = 0usize;
+                    let mut bad = Vec::new();
+                    for s in &cfg.repo_allowlist {
+                        if crate::git_commands::ensure_git_repo(s).is_ok() {
+                            ok += 1;
+                        } else {
+                            bad.push(crate::git_commands::path_for_markdown(s));
+                        }
+                    }
+                    lines.push(format!(
+                        "✅ 变更来源白名单：{ok}/{} 有效（实际采集 {} 个）",
+                        cfg.repo_allowlist.len(),
+                        sources.len()
+                    ));
+                    if !bad.is_empty() {
+                        lines.push(format!(
+                            "⚠️ 白名单无效路径：{}",
+                            bad.into_iter().take(5).collect::<Vec<_>>().join("、")
+                        ));
+                    }
+                }
+                if let Err(e) = crate::git_commands::ensure_git_repo(&workspace) {
+                    lines.push(format!(
+                        "❌ {}",
+                        crate::git_commands::path_for_markdown(&e)
+                    ));
+                } else {
+                    let branch = cfg.branch_or_default();
+                    let ws = workspace.clone();
+                    let br = branch.clone();
+                    let exists = tokio::task::spawn_blocking(move || {
+                        let local =
+                            crate::git_commands::git_output(&ws, &["rev-parse", "--verify", "-q", &br]);
+                        let remote = crate::git_commands::git_output(
+                            &ws,
+                            &["rev-parse", "--verify", "-q", &format!("origin/{br}")],
+                        );
+                        local.map(|o| o.status.success()).unwrap_or(false)
+                            || remote.map(|o| o.status.success()).unwrap_or(false)
+                    })
+                    .await
+                    .unwrap_or(false);
+                    if exists {
+                        lines.push(format!("✅ release 分支「{branch}」存在"));
+                    } else {
+                        lines.push(format!(
+                            "⚠️ 未找到分支「{branch}」（本地与 origin 都没有，自动更新会失败）"
+                        ));
+                    }
+                }
+            }
         }
     }
 
@@ -723,6 +829,10 @@ pub async fn wecom_channel_apply(
         preview_mode: req.docgen_preview,
         quality_check: req.docgen_quality_check,
         poll_release: req.docgen_poll_release,
+        lookback_days: normalize_lookback_days(req.docgen_lookback_days),
+        repo_allowlist: normalize_repo_allowlist(&req.docgen_repo_allowlist, &workspace),
+        system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_system_prompt),
+        quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_quality_prompt),
     };
 
     if !req.enabled {

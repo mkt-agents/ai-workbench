@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { QrCode, ShieldCheck } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import {
   applyWeixinChannel,
@@ -11,24 +12,12 @@ import {
   type WeixinStatus,
 } from "../lib/weixinChannel";
 
-function Row(props: {
-  label: string;
-  control: ReactNode;
-  hint?: ReactNode;
-}) {
-  return (
-    <div className="setting-item">
-      <div className="setting-row">
-        <span className="setting-label">{props.label}</span>
-        <div className="setting-control">{props.control}</div>
-      </div>
-      {props.hint ? <div className="setting-hint-block">{props.hint}</div> : null}
-    </div>
-  );
-}
-
-function Hint({ summary }: { summary: string }) {
-  return <p className="setting-hint">{summary}</p>;
+/** 通道状态 → 胶囊配色（与企微页共用一套 token）。 */
+function statusTone(state: string | undefined): string {
+  if (state === "connected") return "is-connected";
+  if (state === "degraded") return "is-error";
+  if (state === "stopped") return "is-pending";
+  return "";
 }
 
 /**
@@ -160,7 +149,11 @@ export default function WeixinSettingsCard() {
             } else if (polled.status === "expired") {
               stopQrPoll();
               setQrBusy(false);
+              setQrSvg("");
+              setQrcode("");
               setQrDetail(t("weixin.qrExpired"));
+              // 二维码撤掉后就没有展示位了，过期原因改由底部提醒条说明
+              setError(t("weixin.qrExpired"));
             }
           } catch (e) {
             setQrDetail(String(e));
@@ -182,6 +175,17 @@ export default function WeixinSettingsCard() {
     pollBaseRef.current = pollBase;
   }, [pollBase]);
 
+  /** 取消扫码：停轮询、清掉二维码与提示，回到待绑定态。 */
+  const cancelQr = () => {
+    stopQrPoll();
+    setQrBusy(false);
+    setQrcode("");
+    setQrSvg("");
+    setQrDetail("");
+    setNeedVerify(false);
+    setVerifyCode("");
+  };
+
   const bound = Boolean((settings.weixinBotToken ?? "").trim());
   const stateLabel =
     status?.state === "connected"
@@ -193,54 +197,83 @@ export default function WeixinSettingsCard() {
           : t("weixin.stateOff");
 
   return (
-    <div className="wecom-settings">
-      <p className="setting-hint">{t("weixin.pluginHint")}</p>
-
-      {!bound && !qrBusy ? (
-        <div className="wecom-empty">
-          <p>{t("weixin.empty")}</p>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void beginQr()}>
-            {t("weixin.qrStart")}
-          </button>
+    <div className="wecom-settings weixin-settings">
+      {/* 概览条：状态胶囊 / 通道 / 绑定态在左，重连与总开关在右，说明折叠进「说明」 */}
+      <div className="wecom-hero">
+        <div className="wecom-hero-main">
+          <span
+            className={`wecom-status-pill ${statusTone(status?.state)}`}
+            title={status?.detail || undefined}
+          >
+            <i className="wecom-status-dot" aria-hidden />
+            {stateLabel}
+          </span>
+          <span className="wecom-hero-tag">{t("weixin.channelTag")}</span>
+          <span className={`weixin-flag${bound ? " is-bound" : ""}`}>
+            {bound ? t("weixin.boundChip") : t("weixin.unboundChip")}
+          </span>
         </div>
-      ) : null}
+        <div className="wecom-hero-actions">
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={busy || !settings.weixinEnabled}
+            onClick={() =>
+              void restartWeixinChannel().then(setStatus).catch((e) => setError(String(e)))
+            }
+          >
+            {t("weixin.restart")}
+          </button>
+          <label className="toggle" title={t("weixin.enabled")}>
+            <input
+              type="checkbox"
+              checked={Boolean(settings.weixinEnabled)}
+              disabled={busy || !bound}
+              onChange={(e) => void push({ weixinEnabled: e.target.checked })}
+            />
+            <span className="toggle-slider" />
+          </label>
+        </div>
+        <details className="wecom-hint wecom-hero-hint">
+          <summary>
+            <span>{t("weixin.pluginHintShort")}</span>
+            <span className="wecom-hint-more">{t("wecom.hintMore")}</span>
+          </summary>
+          <p className="setting-hint">{t("weixin.pluginHint")}</p>
+          <p className="setting-hint">{t("weixin.answerReuseHint")}</p>
+          {status?.detail ? <p className="setting-hint">{status.detail}</p> : null}
+        </details>
+      </div>
 
-      <Row
-        label={t("weixin.qrBind")}
-        control={
-          <div className="btn-row">
-            <button
-              type="button"
-              className="btn btn-secondary btn-small"
-              disabled={busy || qrBusy}
-              onClick={() => void beginQr()}
-            >
-              {qrBusy ? t("weixin.qrWaiting") : t("weixin.qrStart")}
-            </button>
+      <div className="wecom-rows">
+        {/* 1 · 扫码绑定：未绑定是引导态，扫码中是二维码 + 配对输入 */}
+        <div className="wecom-block-card">
+          <div className="wecom-block-head">
+            <div className="wecom-block-head-main">
+              <span className="wecom-block-icon" aria-hidden>
+                <QrCode size={14} />
+              </span>
+              <span className="wecom-block-title">{t("weixin.qrBind")}</span>
+            </div>
             {qrBusy ? (
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={() => {
-                  stopQrPoll();
-                  setQrBusy(false);
-                  setQrcode("");
-                  setQrSvg("");
-                  setQrDetail("");
-                  setNeedVerify(false);
-                }}
-              >
+              <button type="button" className="btn btn-secondary btn-small" onClick={cancelQr}>
                 {t("weixin.qrCancel")}
               </button>
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary btn-small"
+                disabled={busy}
+                onClick={() => void beginQr()}
+              >
+                {bound ? t("weixin.rebind") : t("weixin.qrStart")}
+              </button>
+            )}
           </div>
-        }
-        hint={
-          <>
-            <Hint summary={t("weixin.qrBindHint")} />
-            {qrSvg || qrBusy ? (
-              <div className="wecom-qr-box">
-                <p className="setting-hint">{t("weixin.qrScanning")}</p>
+
+          {qrBusy ? (
+            <div className="wecom-qr-stage">
+              <div className="wecom-qr-frame">
                 {qrSvg ? (
                   <div
                     className="wecom-qr-img wecom-qr-svg"
@@ -248,98 +281,99 @@ export default function WeixinSettingsCard() {
                     aria-label="WeChat QR"
                     dangerouslySetInnerHTML={{ __html: qrSvg }}
                   />
-                ) : null}
-                {needVerify ? (
-                  <div className="btn-row" style={{ gap: 8 }}>
-                    <input
-                      className="input-field"
-                      value={verifyCode}
-                      placeholder={t("weixin.verifyPlaceholder")}
-                      onChange={(e) => setVerifyCode(e.target.value.trim())}
-                    />
+                ) : (
+                  <div className="wecom-qr-skeleton" aria-hidden>
+                    <QrCode size={30} />
                   </div>
+                )}
+              </div>
+              <div className="wecom-qr-side">
+                <p className="wecom-qr-title">{t("weixin.qrScanning")}</p>
+                <p className="setting-hint">{qrDetail || t("weixin.qrWaiting")}</p>
+                {needVerify ? (
+                  <input
+                    className="input-field wecom-qr-verify"
+                    value={verifyCode}
+                    placeholder={t("weixin.verifyPlaceholder")}
+                    onChange={(e) => setVerifyCode(e.target.value.trim())}
+                  />
                 ) : null}
-                {qrDetail ? <p className="setting-hint">{qrDetail}</p> : null}
                 {qrcode ? (
                   <p className="setting-hint">
                     <code className="tabular-nums">{qrcode.slice(0, 10)}…</code>
                   </p>
                 ) : null}
               </div>
+            </div>
+          ) : (
+            <div className={`weixin-empty${bound ? " is-bound" : ""}`}>
+              <span className="weixin-empty-icon" aria-hidden>
+                {bound ? <ShieldCheck size={20} /> : <QrCode size={20} />}
+              </span>
+              <div className="weixin-empty-text">
+                <p className="weixin-empty-title">
+                  {bound ? t("weixin.bindTitle") : t("weixin.empty")}
+                </p>
+                <p className="setting-hint">
+                  {bound ? t("weixin.qrRebindHint") : t("weixin.qrBindHint")}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 2 · 机器人信息：只读凭证归到一张卡，值用胶囊展示而不是空输入框 */}
+        <div className="wecom-block-card is-split">
+          <div className="wecom-block-head">
+            <div className="wecom-block-head-main">
+              <span className="wecom-block-icon" aria-hidden>
+                <ShieldCheck size={14} />
+              </span>
+              <span className="wecom-block-title">{t("weixin.metaTitle")}</span>
+            </div>
+            {bound ? (
+              <button
+                type="button"
+                className="btn btn-danger btn-small"
+                disabled={busy}
+                onClick={() => {
+                  void push({
+                    weixinEnabled: false,
+                    weixinBotToken: "",
+                    weixinBotId: "",
+                    weixinUserId: "",
+                  });
+                }}
+              >
+                {t("weixin.unbind")}
+              </button>
             ) : null}
-          </>
-        }
-      />
-
-      <Row
-        label={t("weixin.enabled")}
-        control={
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={Boolean(settings.weixinEnabled)}
-              disabled={busy || !bound}
-              onChange={(e) => void push({ weixinEnabled: e.target.checked })}
-            />
-            <span className="switch-slider" />
-          </label>
-        }
-        hint={<Hint summary={stateLabel} />}
-      />
-
-      <Row
-        label={t("weixin.botId")}
-        control={
-          <input
-            className="input-field"
-            value={settings.weixinBotId ?? ""}
-            readOnly
-            placeholder="—"
-          />
-        }
-      />
-
-      <Row
-        label={t("weixin.userId")}
-        control={
-          <input
-            className="input-field"
-            value={settings.weixinUserId ?? ""}
-            readOnly
-            placeholder="—"
-          />
-        }
-      />
-
-      <div className="btn-row" style={{ marginTop: 8 }}>
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          disabled={busy || !settings.weixinEnabled}
-          onClick={() => void restartWeixinChannel().then(setStatus).catch((e) => setError(String(e)))}
-        >
-          {t("weixin.restart")}
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary btn-small"
-          disabled={busy}
-          onClick={() => {
-            void push({
-              weixinEnabled: false,
-              weixinBotToken: "",
-              weixinBotId: "",
-              weixinUserId: "",
-            });
-          }}
-        >
-          {t("weixin.unbind")}
-        </button>
+          </div>
+          <div className="weixin-meta">
+            <span className="weixin-meta-label">{t("weixin.botId")}</span>
+            <span className={`weixin-meta-value${settings.weixinBotId ? "" : " is-empty"}`}>
+              {settings.weixinBotId || "—"}
+            </span>
+          </div>
+          <div className="weixin-meta">
+            <span className="weixin-meta-label">{t("weixin.userId")}</span>
+            <span className={`weixin-meta-value${settings.weixinUserId ? "" : " is-empty"}`}>
+              {settings.weixinUserId || "—"}
+            </span>
+          </div>
+        </div>
       </div>
 
-      <p className="setting-hint">{t("weixin.answerReuseHint")}</p>
-      {status?.lastError ? <p className="setting-hint is-error">{status.lastError}</p> : null}
-      {error ? <p className="setting-hint is-error">{error}</p> : null}
+      {status?.lastError ? (
+        <p className="weixin-alert" role="alert">
+          {status.lastError}
+        </p>
+      ) : null}
+      {error ? (
+        <p className="weixin-alert" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

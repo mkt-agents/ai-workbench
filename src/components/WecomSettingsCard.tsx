@@ -1,11 +1,39 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Eye, EyeOff } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Bot,
+  QrCode,
+  ShieldCheck,
+  FolderGit2,
+  Clock,
+  Check,
+  Send,
+  Play,
+  MessageSquare,
+  Users,
+  ListChecks,
+  UserCheck,
+  Cpu,
+  Sparkles,
+  RefreshCw,
+  Gauge,
+  Terminal,
+  MessagesSquare,
+  Activity,
+} from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import WecomRequestDiagnostics from "./WecomRequestDiagnostics";
 import { useGlobalStore } from "../core/store";
-import type { AppSettings, DshModelCatalog, WecomSkywalkingEnv } from "../core/types";
+import type {
+  AppSettings,
+  DshModelCatalog,
+  GitScannedRepo,
+  WecomSkywalkingEnv,
+} from "../core/types";
+import { invocations } from "../core/store/invocations";
 import {
   applyWecomChannel,
   buildWecomSkywalkingPatch,
@@ -17,6 +45,11 @@ import {
   fetchWecomPairings,
   fetchWecomSessionLogPage,
   fetchWecomStatus,
+  DEFAULT_DOCGEN_QUALITY_PROMPT,
+  DEFAULT_DOCGEN_SYSTEM_PROMPT,
+  DOCGEN_PROMPT_CHAR_CAP,
+  normalizeDocgenPrompt,
+  normalizeDocgenRepoAllowlist,
   normalizeWecomMaxJobs,
   resolveWecomSkywalking,
   restartWecomChannel,
@@ -32,6 +65,10 @@ import {
   type WecomSessionLogPage,
   type WecomStatus,
 } from "../lib/wecomChannel";
+
+function pathKey(p: string): string {
+  return p.trim().replace(/\//g, "\\").toLowerCase();
+}
 
 const MAX_JOBS_CHOICES = [1, 2, 4, 8, 12, 16, 24, 32];
 
@@ -197,8 +234,15 @@ export default function WecomSettingsCard() {
   const [docgenBusy, setDocgenBusy] = useState(false);
   const [docgenHistory, setDocgenHistory] = useState<WecomDocgenHistoryItem[]>([]);
   const [docgenHistoryBusy, setDocgenHistoryBusy] = useState(false);
-  const [webhookFeishuDraft, setWebhookFeishuDraft] = useState("");
-  const [webhookDingtalkDraft, setWebhookDingtalkDraft] = useState("");
+  const [docgenScanBusy, setDocgenScanBusy] = useState(false);
+  const [docgenScanned, setDocgenScanned] = useState<GitScannedRepo[]>([]);
+  // 三个 Webhook 直接显示已保存的地址（可查看、可改），眼睛按钮可临时隐藏
+  const webhookFeishuDraft = useFieldDraft(settings.wecomWebhookFeishu ?? "");
+  const webhookDingtalkDraft = useFieldDraft(settings.wecomWebhookDingtalk ?? "");
+  // 默认隐藏（地址里带 access token），点眼睛按需查看；状态只存活在本次打开
+  const [showWebhook, setShowWebhook] = useState(false);
+  const [showWebhookFeishu, setShowWebhookFeishu] = useState(false);
+  const [showWebhookDingtalk, setShowWebhookDingtalk] = useState(false);
   // DSH 引擎的模型目录（ACP configOptions），按引擎就绪懒加载
   const [catalog, setCatalog] = useState<DshModelCatalog | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
@@ -262,12 +306,23 @@ export default function WecomSettingsCard() {
   const enhanceDm = useFieldDraft(settings.wecomEnhanceDm ?? "");
   const enhanceGroup = useFieldDraft(settings.wecomEnhanceGroup ?? "");
   const [enhanceTab, setEnhanceTab] = useState<"dm" | "group">("dm");
+  const [docgenPromptTab, setDocgenPromptTab] = useState<"system" | "quality">("system");
   const skywalkingAddr = useFieldDraft(skywalkingProfile.addr ?? "");
   const skywalkingHeader = useFieldDraft(skywalkingProfile.header ?? "");
   const releaseBranch = useFieldDraft(settings.wecomReleaseBranch ?? "");
   const autoUpdateTime = useFieldDraft(settings.wecomAutoUpdateTime ?? "");
   const docgenCron = useFieldDraft(settings.wecomDocgenCron ?? "");
-  const [webhookDraft, setWebhookDraft] = useState("");
+  const docgenSystemPrompt = useFieldDraft(
+    settings.wecomDocgenSystemPrompt?.trim()
+      ? settings.wecomDocgenSystemPrompt
+      : DEFAULT_DOCGEN_SYSTEM_PROMPT,
+  );
+  const docgenQualityPrompt = useFieldDraft(
+    settings.wecomDocgenQualityPrompt?.trim()
+      ? settings.wecomDocgenQualityPrompt
+      : DEFAULT_DOCGEN_QUALITY_PROMPT,
+  );
+  const webhookDraft = useFieldDraft(settings.wecomWebhookUrl ?? "");
 
   const refresh = useCallback(async () => {
     const version = ++refreshGeneration.current;
@@ -801,7 +856,19 @@ export default function WecomSettingsCard() {
         <div className="wecom-rows">
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subBot")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Bot size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subBot")}</span>
+              </div>
+              <span
+                className={`wecom-status-pill ${statusClass(status?.state)}`}
+                title={status?.detail || undefined}
+              >
+                <i className="wecom-status-dot" aria-hidden />
+                {stateLabel}
+              </span>
             </div>
 
             <Row
@@ -885,84 +952,99 @@ export default function WecomSettingsCard() {
               />
             </div>
 
-            <Row
-              label={t("wecom.qrBind")}
-              control={
-                <div className="wecom-inline">
+            {/* 扫码绑定：左图文案 + 右按钮的操作条，二维码单独展开成舞台 */}
+            <div className="wecom-bind">
+              <div className="wecom-bind-main">
+                <span className="wecom-bind-icon" aria-hidden>
+                  <QrCode size={16} />
+                </span>
+                <div className="wecom-bind-text">
+                  <span className="wecom-bind-title">{t("wecom.qrBind")}</span>
+                  <p className="setting-hint">{t("wecom.qrBindHint")}</p>
+                </div>
+              </div>
+              <div className="wecom-bind-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-small"
+                  disabled={busy || qrBusy}
+                  onClick={() => void startQrBind()}
+                >
+                  {qrBusy ? t("wecom.qrWaiting") : t("wecom.qrBind")}
+                </button>
+                {qrPageUrl ? (
                   <button
                     type="button"
-                    className="btn btn-primary btn-small"
-                    disabled={busy || qrBusy}
-                    onClick={() => void startQrBind()}
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      void import("@tauri-apps/api/core").then(({ invoke }) =>
+                        invoke("open_in_browser", { url: qrPageUrl }).catch(() =>
+                          window.open(qrPageUrl, "_blank"),
+                        ),
+                      );
+                    }}
                   >
-                    {qrBusy ? t("wecom.qrWaiting") : t("wecom.qrBind")}
+                    {t("wecom.qrOpenPage")}
                   </button>
-                  {qrPageUrl ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      onClick={() => {
-                        void import("@tauri-apps/api/core").then(({ invoke }) =>
-                          invoke("open_in_browser", { url: qrPageUrl }).catch(() =>
-                            window.open(qrPageUrl, "_blank"),
-                          ),
-                        );
-                      }}
-                    >
-                      {t("wecom.qrOpenPage")}
-                    </button>
-                  ) : null}
-                  {qrBusy ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      onClick={() => {
-                        stopQrPoll();
-                        setQrBusy(false);
-                        setQrScode("");
-                        setQrAuthUrl("");
-                        setQrSvg("");
-                        setQrPageUrl("");
-                        setQrDetail("");
-                      }}
-                    >
-                      {t("wecom.qrCancel")}
-                    </button>
+                ) : null}
+                {qrBusy ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      stopQrPoll();
+                      setQrBusy(false);
+                      setQrScode("");
+                      setQrAuthUrl("");
+                      setQrSvg("");
+                      setQrPageUrl("");
+                      setQrDetail("");
+                    }}
+                  >
+                    {t("wecom.qrCancel")}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {qrAuthUrl ? (
+              <div className="wecom-qr-stage">
+                <div className="wecom-qr-frame">
+                  {qrSvg ? (
+                    <div
+                      className="wecom-qr-img wecom-qr-svg"
+                      role="img"
+                      aria-label="WeCom QR"
+                      dangerouslySetInnerHTML={{ __html: qrSvg }}
+                    />
+                  ) : (
+                    <div className="wecom-qr-skeleton" aria-hidden>
+                      <QrCode size={28} />
+                    </div>
+                  )}
+                </div>
+                <div className="wecom-qr-side">
+                  <p className="wecom-qr-title">{t("wecom.qrScanning")}</p>
+                  {!qrSvg ? <p className="setting-hint">{t("wecom.qrSvgMissing")}</p> : null}
+                  {qrDetail ? <p className="setting-hint">{qrDetail}</p> : null}
+                  {qrScode ? (
+                    <p className="setting-hint">
+                      <code className="tabular-nums">{qrScode.slice(0, 8)}…</code>
+                    </p>
                   ) : null}
                 </div>
-              }
-              hint={
-                <>
-                  <Hint summary={t("wecom.qrBindHint")} />
-                  {qrAuthUrl ? (
-                    <div className="wecom-qr-box">
-                      <p className="setting-hint">{t("wecom.qrScanning")}</p>
-                      {qrSvg ? (
-                        <div
-                          className="wecom-qr-img wecom-qr-svg"
-                          role="img"
-                          aria-label="WeCom QR"
-                          dangerouslySetInnerHTML={{ __html: qrSvg }}
-                        />
-                      ) : (
-                        <p className="setting-hint">{t("wecom.qrSvgMissing")}</p>
-                      )}
-                      {qrDetail ? <p className="setting-hint">{qrDetail}</p> : null}
-                      {qrScode ? (
-                        <p className="setting-hint">
-                          <code className="tabular-nums">{qrScode.slice(0, 8)}…</code>
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </>
-              }
-            />
+              </div>
+            ) : null}
           </div>
 
           <div className="wecom-block-card is-split">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subCorp")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <ShieldCheck size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subCorp")}</span>
+              </div>
             </div>
 
             <Row
@@ -1020,7 +1102,12 @@ export default function WecomSettingsCard() {
         <div className="wecom-rows">
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subEngine")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Cpu size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subEngine")}</span>
+              </div>
             </div>
 
             {/* 引擎选择与配置镜像并排一行：两个字段各占一列（天玑没有镜像行时自动铺满整行），
@@ -1202,14 +1289,19 @@ export default function WecomSettingsCard() {
 
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subAnswer")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <MessageSquare size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subAnswer")}</span>
+              </div>
             </div>
 
             <Row
               label={t("wecom.answerMode")}
               control={
                 <select
-                  className="input-field"
+                  className="input-field wecom-split"
                   value={settings.wecomAnswerMode ?? "auto"}
                   onChange={(e) => void push({ wecomAnswerMode: e.target.value })}
                 >
@@ -1263,6 +1355,9 @@ export default function WecomSettingsCard() {
           <div className={`wecom-enhance-card${enhanceEnabled ? " is-on" : ""}`}>
             <div className="wecom-enhance-head">
               <div className="wecom-enhance-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Sparkles size={14} />
+                </span>
                 <span className="wecom-enhance-title">{t("wecom.enhanceTitle")}</span>
                 <div
                   className="devtools-segmented wecom-enhance-seg"
@@ -1388,7 +1483,12 @@ export default function WecomSettingsCard() {
           {/* 工作区与文档：和上面的增强卡片同一套壳，两个字段并排、说明落到卡片底部 */}
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subDocWorkspace")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <FolderGit2 size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subDocWorkspace")}</span>
+              </div>
             </div>
 
             <div className="wecom-pair">
@@ -1446,90 +1546,103 @@ export default function WecomSettingsCard() {
 
       {/* 3 · 线上排障：查日志与调用链的证据源（测试 / 生产各一套 OAP） */}
       <div className="net-panel" hidden={section !== "trouble"}>
-        <PanelHead
-          title={t("wecom.groupTroubleshoot")}
-          aside={
-            <div className="devtools-segmented" role="group" aria-label={t("wecom.skywalkingEnv")}>
-              {(["test", "prod"] as WecomSkywalkingEnv[]).map((env) => (
-                <button
-                  key={env}
-                  type="button"
-                  className={`segmented-item${skywalkingEnv === env ? " active" : ""}`}
-                  disabled={busy || skywalkingEnv === env}
-                  aria-pressed={skywalkingEnv === env}
-                  onClick={() => {
-                    if (skywalkingEnv === env) return;
-                    void push(
-                      buildWecomSkywalkingPatch(useGlobalStore.getState().settings, { env }),
-                    );
-                  }}
-                >
-                  {env === "test" ? t("wecom.skywalkingEnvTest") : t("wecom.skywalkingEnvProd")}
-                </button>
-              ))}
-            </div>
-          }
-        />
+        <PanelHead title={t("wecom.groupTroubleshoot")} />
         <div className="wecom-rows">
           <div className="wecom-block-card">
+            <div className="wecom-block-head">
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Activity size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subTroubleshoot")}</span>
+              </div>
+              {/* 测试 / 生产切换贴着字段放：换环境就是换这一组地址 */}
+              <div
+                className="devtools-segmented wecom-head-seg"
+                role="group"
+                aria-label={t("wecom.skywalkingEnv")}
+              >
+                {(["test", "prod"] as WecomSkywalkingEnv[]).map((env) => (
+                  <button
+                    key={env}
+                    type="button"
+                    className={`segmented-item${skywalkingEnv === env ? " active" : ""}`}
+                    disabled={busy || skywalkingEnv === env}
+                    aria-pressed={skywalkingEnv === env}
+                    onClick={() => {
+                      if (skywalkingEnv === env) return;
+                      void push(
+                        buildWecomSkywalkingPatch(useGlobalStore.getState().settings, { env }),
+                      );
+                    }}
+                  >
+                    {env === "test" ? t("wecom.skywalkingEnvTest") : t("wecom.skywalkingEnvProd")}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <p className="setting-hint wecom-block-lead">{t("wecom.skywalkingEnvHint")}</p>
 
-            <Row
-              label={t("wecom.skywalkingAddr")}
-              control={
-                <input
-                  className="input-field"
-                  value={skywalkingAddr.value}
-                  placeholder="http://skywalking-oap:12800"
-                  onFocus={() => {
-                    skywalkingAddr.focused.current = true;
-                  }}
-                  onChange={(e) => skywalkingAddr.setValue(e.target.value)}
-                  onBlur={() => {
-                    skywalkingAddr.focused.current = false;
-                    const v = skywalkingAddr.value.trim();
-                    if (v !== (skywalkingProfile.addr ?? "").trim())
+            {/* 地址与时区并排一行：地址长、时区只是短下拉，按 2:1 分列 */}
+            <div className="wecom-pair is-addr">
+              <Row
+                label={t("wecom.skywalkingAddr")}
+                control={
+                  <input
+                    className="input-field"
+                    value={skywalkingAddr.value}
+                    placeholder="http://skywalking-oap:12800"
+                    onFocus={() => {
+                      skywalkingAddr.focused.current = true;
+                    }}
+                    onChange={(e) => skywalkingAddr.setValue(e.target.value)}
+                    onBlur={() => {
+                      skywalkingAddr.focused.current = false;
+                      const v = skywalkingAddr.value.trim();
+                      if (v !== (skywalkingProfile.addr ?? "").trim())
+                        void push(
+                          buildWecomSkywalkingPatch(useGlobalStore.getState().settings, {
+                            profilePatch: { addr: v || undefined },
+                          }),
+                        );
+                    }}
+                  />
+                }
+                hint={<Hint summary={t("wecom.skywalkingHintShort")} details={t("wecom.skywalkingHint")} />}
+              />
+
+              <Row
+                label={t("wecom.skywalkingTimezone")}
+                control={
+                  <select
+                    className="input-field"
+                    aria-label={t("wecom.skywalkingTimezone")}
+                    value={skywalkingProfile.timezoneOffsetMinutes ?? ""}
+                    disabled={busy}
+                    onChange={(e) =>
                       void push(
                         buildWecomSkywalkingPatch(useGlobalStore.getState().settings, {
-                          profilePatch: { addr: v || undefined },
+                          profilePatch: {
+                            timezoneOffsetMinutes:
+                              e.target.value === "" ? undefined : Number(e.target.value),
+                          },
                         }),
-                      );
-                  }}
-                />
-              }
-              hint={<Hint summary={t("wecom.skywalkingHintShort")} details={t("wecom.skywalkingHint")} />}
-            />
-
-            <Row
-              label={t("wecom.skywalkingTimezone")}
-              control={
-                <select
-                  className="input-field"
-                  aria-label={t("wecom.skywalkingTimezone")}
-                  value={skywalkingProfile.timezoneOffsetMinutes ?? ""}
-                  disabled={busy}
-                  onChange={(e) =>
-                    void push(
-                      buildWecomSkywalkingPatch(useGlobalStore.getState().settings, {
-                        profilePatch: {
-                          timezoneOffsetMinutes:
-                            e.target.value === "" ? undefined : Number(e.target.value),
-                        },
-                      }),
-                    )
-                  }
-                >
-                  <option value="">{t("wecom.skywalkingTimezoneLocal")}</option>
-                  <option value={0}>UTC</option>
-                  <option value={480}>UTC+8</option>
-                  <option value={540}>UTC+9</option>
-                  <option value={330}>UTC+5:30</option>
-                  <option value={-300}>UTC-5</option>
-                  <option value={-480}>UTC-8</option>
-                </select>
-              }
-              hint={<p className="setting-hint">{t("wecom.skywalkingTimezoneHint")}</p>}
-            />
+                      )
+                    }
+                  >
+                    <option value="">{t("wecom.skywalkingTimezoneLocal")}</option>
+                    <option value={0}>UTC</option>
+                    <option value={480}>UTC+8</option>
+                    <option value={540}>UTC+9</option>
+                    <option value={330}>UTC+5:30</option>
+                    <option value={-300}>UTC-5</option>
+                    <option value={-480}>UTC-8</option>
+                  </select>
+                }
+                hint={<p className="setting-hint">{t("wecom.skywalkingTimezoneHint")}</p>}
+              />
+            </div>
 
             <Row
               label={t("wecom.skywalkingHeader")}
@@ -1563,9 +1676,15 @@ export default function WecomSettingsCard() {
       <div className="net-panel" hidden={section !== "autoupdate"}>
         <PanelHead title={t("wecom.groupAutoupdate")} />
         <div className="wecom-rows">
+          {/* 1. 调度与触发 */}
           <div className="wecom-block-card is-split">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subAutoUpdate")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <RefreshCw size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subDocgenSchedule")}</span>
+              </div>
             </div>
 
             <Row
@@ -1633,6 +1752,31 @@ export default function WecomSettingsCard() {
             />
 
             <Row
+              label={t("wecom.docgenLookbackDays")}
+              control={
+                <input
+                  className="input-field"
+                  type="number"
+                  min={0}
+                  max={30}
+                  step={1}
+                  value={
+                    typeof settings.wecomDocgenLookbackDays === "number"
+                      ? settings.wecomDocgenLookbackDays
+                      : 7
+                  }
+                  onChange={(e) => {
+                    const raw = Number(e.target.value);
+                    const n = Number.isFinite(raw) ? Math.trunc(raw) : 7;
+                    const clamped = Math.max(0, Math.min(30, n));
+                    void push({ wecomDocgenLookbackDays: clamped });
+                  }}
+                />
+              }
+              hint={<p className="setting-hint">{t("wecom.docgenLookbackDaysHint")}</p>}
+            />
+
+            <Row
               label={t("wecom.releaseBranch")}
               control={
                 <input
@@ -1668,22 +1812,230 @@ export default function WecomSettingsCard() {
               }
               hint={<p className="setting-hint">{t("wecom.docgenPollReleaseHint")}</p>}
             />
+          </div>
 
-            <Row
-              asSwitch
-              label={t("wecom.docgenPreview")}
-              control={
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(settings.wecomDocgenPreview)}
-                    onChange={(e) => void push({ wecomDocgenPreview: e.target.checked })}
-                  />
-                  <span className="toggle-slider" />
-                </label>
-              }
-              hint={<p className="setting-hint">{t("wecom.docgenPreviewHint")}</p>}
-            />
+          {/* 2. 变更来源 */}
+          <div className="wecom-block-card">
+            <div className="wecom-block-head">
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <FolderGit2 size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subDocgenSources")}</span>
+              </div>
+              <div className="wecom-allowlist-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy || docgenScanBusy}
+                  onClick={() => {
+                    const root =
+                      (repoPath.value || settings.wecomRepoPath || settings.currentGitRepo || "").trim();
+                    if (!root) return;
+                    setDocgenScanBusy(true);
+                    void invocations
+                      .invokeGitScanRepos(root, 1)
+                      .then((rows) => setDocgenScanned(rows ?? []))
+                      .catch(() => setDocgenScanned([]))
+                      .finally(() => setDocgenScanBusy(false));
+                  }}
+                >
+                  {docgenScanBusy ? t("wecom.docgenRepoScanning") : t("wecom.docgenRepoScan")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy || docgenScanned.length === 0}
+                  onClick={() => {
+                    const paths = normalizeDocgenRepoAllowlist(docgenScanned.map((r) => r.path));
+                    void push({ wecomDocgenRepoAllowlist: paths.length ? paths : undefined });
+                  }}
+                >
+                  {t("wecom.docgenRepoSelectAll")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy || !(settings.wecomDocgenRepoAllowlist?.length)}
+                  onClick={() => void push({ wecomDocgenRepoAllowlist: undefined })}
+                >
+                  {t("wecom.docgenRepoClear")}
+                </button>
+              </div>
+            </div>
+            <p className="setting-hint wecom-block-lead">{t("wecom.docgenRepoAllowlistHint")}</p>
+            <div className="wecom-allowlist">
+              {(() => {
+                const selected = normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist);
+                const selectedKeys = new Set(selected.map(pathKey));
+                const byKey = new Map(docgenScanned.map((r) => [pathKey(r.path), r]));
+                const orphan = selected.filter((p) => !byKey.has(pathKey(p)));
+                const rows: { path: string; name: string; missing: boolean }[] = [
+                  ...docgenScanned.map((r) => ({
+                    path: r.path,
+                    name: r.name,
+                    missing: false,
+                  })),
+                  ...orphan.map((p) => ({
+                    path: p,
+                    name: p.replace(/\\/g, "/").split("/").pop() || p,
+                    missing: true,
+                  })),
+                ];
+                if (rows.length === 0) {
+                  return <p className="setting-hint">{t("wecom.docgenRepoEmpty")}</p>;
+                }
+                return (
+                  <ul className="wecom-allowlist-list">
+                    {rows.map((row) => {
+                      const checked = selectedKeys.has(pathKey(row.path));
+                      return (
+                        <li
+                          key={pathKey(row.path)}
+                          className={`wecom-allowlist-item${row.missing ? " is-missing" : ""}`}
+                        >
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={busy}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? normalizeDocgenRepoAllowlist([...selected, row.path])
+                                  : selected.filter((p) => pathKey(p) !== pathKey(row.path));
+                                void push({
+                                  wecomDocgenRepoAllowlist: next.length ? next : undefined,
+                                });
+                              }}
+                            />
+                            <span className="wecom-allowlist-name">{row.name}</span>
+                            {row.missing ? (
+                              <span className="wecom-allowlist-badge">
+                                {t("wecom.docgenRepoMissing")}
+                              </span>
+                            ) : null}
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* 3. 提示词：更新 | 质检 分段单编辑器 */}
+          <div className="wecom-block-card wecom-docgen-prompt-card">
+            <div className="wecom-block-head">
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Sparkles size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subDocgenPrompts")}</span>
+                <div
+                  className="devtools-segmented wecom-head-seg"
+                  role="group"
+                  aria-label={t("wecom.subDocgenPrompts")}
+                >
+                  {(["system", "quality"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      className={`segmented-item${docgenPromptTab === tab ? " active" : ""}`}
+                      aria-pressed={docgenPromptTab === tab}
+                      onClick={() => setDocgenPromptTab(tab)}
+                    >
+                      {tab === "system"
+                        ? t("wecom.docgenSystemPrompt")
+                        : t("wecom.docgenQualityPrompt")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <p className="setting-hint wecom-block-lead">
+              {docgenPromptTab === "system"
+                ? t("wecom.docgenSystemPromptHint")
+                : t("wecom.docgenQualityPromptHint")}
+            </p>
+
+            <div className="wecom-editor-stack">
+              <textarea
+                className="input-field"
+                rows={12}
+                value={
+                  docgenPromptTab === "system"
+                    ? docgenSystemPrompt.value
+                    : docgenQualityPrompt.value
+                }
+                disabled={busy}
+                onFocus={() => {
+                  if (docgenPromptTab === "system") docgenSystemPrompt.focused.current = true;
+                  else docgenQualityPrompt.focused.current = true;
+                }}
+                onChange={(e) => {
+                  const next = Array.from(e.target.value)
+                    .slice(0, DOCGEN_PROMPT_CHAR_CAP)
+                    .join("");
+                  if (docgenPromptTab === "system") docgenSystemPrompt.setValue(next);
+                  else docgenQualityPrompt.setValue(next);
+                }}
+                onBlur={() => {
+                  if (docgenPromptTab === "system") {
+                    docgenSystemPrompt.focused.current = false;
+                    const v = normalizeDocgenPrompt(docgenSystemPrompt.value);
+                    const saved = normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt);
+                    if (v === saved) return;
+                    void push({
+                      wecomDocgenSystemPrompt:
+                        v && v !== normalizeDocgenPrompt(DEFAULT_DOCGEN_SYSTEM_PROMPT)
+                          ? v
+                          : undefined,
+                    });
+                  } else {
+                    docgenQualityPrompt.focused.current = false;
+                    const v = normalizeDocgenPrompt(docgenQualityPrompt.value);
+                    const saved = normalizeDocgenPrompt(settings.wecomDocgenQualityPrompt);
+                    if (v === saved) return;
+                    void push({
+                      wecomDocgenQualityPrompt:
+                        v && v !== normalizeDocgenPrompt(DEFAULT_DOCGEN_QUALITY_PROMPT)
+                          ? v
+                          : undefined,
+                    });
+                  }
+                }}
+              />
+              <div className="wecom-editor-foot">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={busy}
+                  onClick={() => {
+                    if (docgenPromptTab === "system") {
+                      docgenSystemPrompt.setValue(DEFAULT_DOCGEN_SYSTEM_PROMPT);
+                      void push({ wecomDocgenSystemPrompt: undefined });
+                    } else {
+                      docgenQualityPrompt.setValue(DEFAULT_DOCGEN_QUALITY_PROMPT);
+                      void push({ wecomDocgenQualityPrompt: undefined });
+                    }
+                  }}
+                >
+                  {t("wecom.docgenPromptReset")}
+                </button>
+                <span className="wecom-char-count">
+                  {t("wecom.docgenPromptCharCount", {
+                    count: Array.from(
+                      docgenPromptTab === "system"
+                        ? docgenSystemPrompt.value
+                        : docgenQualityPrompt.value,
+                    ).length,
+                    cap: DOCGEN_PROMPT_CHAR_CAP,
+                  })}
+                </span>
+              </div>
+            </div>
 
             <Row
               asSwitch
@@ -1702,33 +2054,52 @@ export default function WecomSettingsCard() {
             />
           </div>
 
+          {/* 4. 提交与推送（含预览） */}
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subDocPublish")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Send size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subDocPublish")}</span>
+              </div>
             </div>
 
+            <div className="wecom-subhead">{t("wecom.subPublishChannels")}</div>
             <Row
               label={t("wecom.webhookUrl")}
               control={
-                <input
-                  className="input-field"
-                  type="password"
-                  value={webhookDraft}
-                  placeholder={
-                    settings.wecomWebhookUrl
-                      ? `••••••••  ${t("wecom.secretKept")}`
-                      : t("wecom.webhookPlaceholder")
-                  }
-                  onChange={(e) => setWebhookDraft(e.target.value)}
-                  onBlur={() => {
-                    const v = webhookDraft.trim();
-                    if (!v) {
-                      setWebhookDraft("");
-                      return;
-                    }
-                    void push({ wecomWebhookUrl: v }).then(() => setWebhookDraft(""));
-                  }}
-                />
+                <div className="input-with-toggle">
+                  <input
+                    className="input-field wecom-webhook-input"
+                    type={showWebhook ? "text" : "password"}
+                    value={webhookDraft.value}
+                    title={showWebhook ? webhookDraft.value || undefined : undefined}
+                    spellCheck={false}
+                    placeholder={t("wecom.webhookPlaceholder")}
+                    onFocus={() => {
+                      webhookDraft.focused.current = true;
+                    }}
+                    onChange={(e) => webhookDraft.setValue(e.target.value)}
+                    onBlur={() => {
+                      webhookDraft.focused.current = false;
+                      const v = webhookDraft.value.trim();
+                      if (v !== (settings.wecomWebhookUrl ?? "").trim()) {
+                        void push({ wecomWebhookUrl: v });
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="input-toggle-btn"
+                    title={showWebhook ? t("wecom.hideWebhook") : t("wecom.showWebhook")}
+                    aria-pressed={showWebhook}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setShowWebhook((v) => !v)}
+                  >
+                    {showWebhook ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
               }
               hint={<Hint summary={t("wecom.webhookHintShort")} details={t("wecom.webhookHint")} />}
             />
@@ -1736,51 +2107,93 @@ export default function WecomSettingsCard() {
             <Row
               label={t("wecom.webhookFeishu")}
               control={
-                <input
-                  className="input-field"
-                  type="password"
-                  value={webhookFeishuDraft}
-                  placeholder={
-                    settings.wecomWebhookFeishu
-                      ? `••••••••  ${t("wecom.secretKept")}`
-                      : t("wecom.webhookFeishuPlaceholder")
-                  }
-                  onChange={(e) => setWebhookFeishuDraft(e.target.value)}
-                  onBlur={() => {
-                    const v = webhookFeishuDraft.trim();
-                    if (!v) {
-                      setWebhookFeishuDraft("");
-                      return;
-                    }
-                    void push({ wecomWebhookFeishu: v }).then(() => setWebhookFeishuDraft(""));
-                  }}
-                />
+                <div className="input-with-toggle">
+                  <input
+                    className="input-field wecom-webhook-input"
+                    type={showWebhookFeishu ? "text" : "password"}
+                    value={webhookFeishuDraft.value}
+                    title={showWebhookFeishu ? webhookFeishuDraft.value || undefined : undefined}
+                    spellCheck={false}
+                    placeholder={t("wecom.webhookFeishuPlaceholder")}
+                    onFocus={() => {
+                      webhookFeishuDraft.focused.current = true;
+                    }}
+                    onChange={(e) => webhookFeishuDraft.setValue(e.target.value)}
+                    onBlur={() => {
+                      webhookFeishuDraft.focused.current = false;
+                      const v = webhookFeishuDraft.value.trim();
+                      if (v !== (settings.wecomWebhookFeishu ?? "").trim()) {
+                        void push({ wecomWebhookFeishu: v });
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="input-toggle-btn"
+                    title={showWebhookFeishu ? t("wecom.hideWebhook") : t("wecom.showWebhook")}
+                    aria-pressed={showWebhookFeishu}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setShowWebhookFeishu((v) => !v)}
+                  >
+                    {showWebhookFeishu ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
               }
             />
 
             <Row
               label={t("wecom.webhookDingtalk")}
               control={
-                <input
-                  className="input-field"
-                  type="password"
-                  value={webhookDingtalkDraft}
-                  placeholder={
-                    settings.wecomWebhookDingtalk
-                      ? `••••••••  ${t("wecom.secretKept")}`
-                      : t("wecom.webhookDingtalkPlaceholder")
-                  }
-                  onChange={(e) => setWebhookDingtalkDraft(e.target.value)}
-                  onBlur={() => {
-                    const v = webhookDingtalkDraft.trim();
-                    if (!v) {
-                      setWebhookDingtalkDraft("");
-                      return;
-                    }
-                    void push({ wecomWebhookDingtalk: v }).then(() => setWebhookDingtalkDraft(""));
-                  }}
-                />
+                <div className="input-with-toggle">
+                  <input
+                    className="input-field wecom-webhook-input"
+                    type={showWebhookDingtalk ? "text" : "password"}
+                    value={webhookDingtalkDraft.value}
+                    title={showWebhookDingtalk ? webhookDingtalkDraft.value || undefined : undefined}
+                    spellCheck={false}
+                    placeholder={t("wecom.webhookDingtalkPlaceholder")}
+                    onFocus={() => {
+                      webhookDingtalkDraft.focused.current = true;
+                    }}
+                    onChange={(e) => webhookDingtalkDraft.setValue(e.target.value)}
+                    onBlur={() => {
+                      webhookDingtalkDraft.focused.current = false;
+                      const v = webhookDingtalkDraft.value.trim();
+                      if (v !== (settings.wecomWebhookDingtalk ?? "").trim()) {
+                        void push({ wecomWebhookDingtalk: v });
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="input-toggle-btn"
+                    title={showWebhookDingtalk ? t("wecom.hideWebhook") : t("wecom.showWebhook")}
+                    aria-pressed={showWebhookDingtalk}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setShowWebhookDingtalk((v) => !v)}
+                  >
+                    {showWebhookDingtalk ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
               }
+            />
+
+            <div className="wecom-subhead">{t("wecom.subPublishAction")}</div>
+
+            <Row
+              asSwitch
+              label={t("wecom.docgenPreview")}
+              control={
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings.wecomDocgenPreview)}
+                    onChange={(e) => void push({ wecomDocgenPreview: e.target.checked })}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              }
+              hint={<p className="setting-hint">{t("wecom.docgenPreviewHint")}</p>}
             />
 
             <Row
@@ -1817,54 +2230,65 @@ export default function WecomSettingsCard() {
               hint={<p className="setting-hint">{t("wecom.autoPushHint")}</p>}
             />
 
-            <Row
-              label={t("wecom.docgenRunNow")}
-              control={
-                <div className="wecom-inline">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    disabled={docgenBusy}
-                    onClick={() => {
-                      setDocgenBusy(true);
-                      setMsg("");
-                      void testWecomDocgen()
-                        .then((r) => setMsg(r))
-                        .catch((e) => setMsg(String(e)))
-                        .finally(() => setDocgenBusy(false));
-                    }}
-                  >
-                    {t("wecom.docgenTestBtn")}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    disabled={docgenBusy}
-                    onClick={() => {
-                      setDocgenBusy(true);
-                      setMsg("");
-                      void runWecomDocgenNow()
-                        .then((r) => {
-                          setMsg(r);
-                          void fetchWecomDocgenHistory()
-                            .then(setDocgenHistory)
-                            .catch(() => {});
-                        })
-                        .catch((e) => setMsg(String(e)))
-                        .finally(() => setDocgenBusy(false));
-                    }}
-                  >
-                    {docgenBusy ? t("wecom.docgenRunning") : t("wecom.docgenRunNowBtn")}
-                  </button>
+            {/* 动作条：左边说明、右边两个按钮，和扫码绑定同一套壳 */}
+            <div className="wecom-bind">
+              <div className="wecom-bind-main">
+                <span className="wecom-bind-icon" aria-hidden>
+                  <Play size={16} />
+                </span>
+                <div className="wecom-bind-text">
+                  <span className="wecom-bind-title">{t("wecom.docgenRunNow")}</span>
+                  <p className="setting-hint">{t("wecom.docgenRunNowHint")}</p>
                 </div>
-              }
-              hint={<p className="setting-hint wecom-note">{t("wecom.docgenRunNowHint")}</p>}
-            />
+              </div>
+              <div className="wecom-bind-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={docgenBusy}
+                  onClick={() => {
+                    setDocgenBusy(true);
+                    setMsg("");
+                    void testWecomDocgen()
+                      .then((r) => setMsg(r))
+                      .catch((e) => setMsg(String(e)))
+                      .finally(() => setDocgenBusy(false));
+                  }}
+                >
+                  {t("wecom.docgenTestBtn")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-small"
+                  disabled={docgenBusy}
+                  onClick={() => {
+                    setDocgenBusy(true);
+                    setMsg("");
+                    void runWecomDocgenNow()
+                      .then((r) => {
+                        setMsg(r);
+                        void fetchWecomDocgenHistory()
+                          .then(setDocgenHistory)
+                          .catch(() => {});
+                      })
+                      .catch((e) => setMsg(String(e)))
+                      .finally(() => setDocgenBusy(false));
+                  }}
+                >
+                  {docgenBusy ? t("wecom.docgenRunning") : t("wecom.docgenRunNowBtn")}
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.docgenHistory")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Clock size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.docgenHistory")}</span>
+              </div>
               <button
                 type="button"
                 className="btn btn-secondary btn-small"
@@ -1884,28 +2308,65 @@ export default function WecomSettingsCard() {
               <p className="setting-hint wecom-note">{t("wecom.docgenHistoryEmpty")}</p>
             ) : (
               <div className="wecom-diag-table-wrap">
-                <table className="wecom-diag-table">
+                <table className="wecom-docgen-table">
                   <thead>
                     <tr>
-                      <th>{t("wecom.docgenHistoryColAt")}</th>
-                      <th>{t("wecom.docgenHistoryColTrigger")}</th>
-                      <th>{t("wecom.docgenHistoryColStatus")}</th>
-                      <th>{t("wecom.docgenHistoryColFiles")}</th>
-                      <th>{t("wecom.docgenHistoryColPush")}</th>
+                      <th className="is-time">{t("wecom.docgenHistoryColAt")}</th>
+                      <th className="is-trigger">{t("wecom.docgenHistoryColTrigger")}</th>
+                      <th className="is-state">{t("wecom.docgenHistoryColStatus")}</th>
+                      <th className="is-num">{t("wecom.docgenHistoryColFiles")}</th>
+                      <th className="is-num">{t("wecom.docgenHistoryColPush")}</th>
                       <th>{t("wecom.docgenHistoryColSummary")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {docgenHistory.map((row) => (
-                      <tr key={`${row.at}-${row.trigger}-${row.branch}`}>
-                        <td className="mono">{row.at}</td>
-                        <td>{row.trigger}</td>
-                        <td>{row.status}</td>
-                        <td className="mono">{row.changedFiles}</td>
-                        <td>{row.pushed ? "✓" : "—"}</td>
-                        <td>{(row.updatedDocs || row.error || "").slice(0, 120)}</td>
-                      </tr>
-                    ))}
+                    {docgenHistory.map((row) => {
+                      const summary = row.updatedDocs || row.error || "";
+                      const ok = row.status === "ok";
+                      const failed = row.status === "fail";
+                      return (
+                        <tr key={`${row.at}-${row.trigger}-${row.branch}`}>
+                          <td className="is-time mono">{row.at}</td>
+                          <td className="is-trigger">
+                            {t(`wecom.docgenTrigger.${row.trigger}`, {
+                              defaultValue: row.trigger,
+                            })}
+                          </td>
+                          <td className="is-state">
+                            <span
+                              className={`wecom-docgen-state${ok ? " is-ok" : failed ? " is-fail" : ""}`}
+                            >
+                              {ok
+                                ? t("wecom.docgenStateOk")
+                                : failed
+                                  ? t("wecom.docgenStateFail")
+                                  : row.status}
+                            </span>
+                          </td>
+                          <td className="is-num mono">{row.changedFiles}</td>
+                          <td className="is-num">
+                            {row.pushed ? (
+                              <Check size={12} className="wecom-docgen-check" aria-label="pushed" />
+                            ) : (
+                              <span className="wecom-docgen-dash" aria-hidden>
+                                —
+                              </span>
+                            )}
+                          </td>
+                          <td className="wecom-docgen-summary">
+                            {summary ? (
+                              <span className="wecom-docgen-summary-text" title={summary}>
+                                {summary}
+                              </span>
+                            ) : (
+                              <span className="wecom-docgen-dash" aria-hidden>
+                                —
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1921,7 +2382,12 @@ export default function WecomSettingsCard() {
           {/* 私聊：谁能私聊 + 私聊白名单 */}
           <div className="wecom-block-card is-split">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subDmAccess")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <MessageSquare size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subDmAccess")}</span>
+              </div>
             </div>
 
             <Row
@@ -1965,7 +2431,12 @@ export default function WecomSettingsCard() {
           {/* 群聊：谁能进群 + 群白名单 + 是否必须 @ */}
           <div className="wecom-block-card is-split">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subGroupAccess")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <Users size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subGroupAccess")}</span>
+              </div>
             </div>
 
             <Row
@@ -2023,7 +2494,12 @@ export default function WecomSettingsCard() {
 
           <div className="wecom-block-card is-split">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.subWhat")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <ShieldCheck size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subWhat")}</span>
+              </div>
             </div>
 
             <Row
@@ -2084,7 +2560,12 @@ export default function WecomSettingsCard() {
 
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.sessionRules")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <ListChecks size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.sessionRules")}</span>
+              </div>
             </div>
 
             <div className="wecom-rules-grid">
@@ -2099,7 +2580,12 @@ export default function WecomSettingsCard() {
 
           <div className="wecom-block-card">
             <div className="wecom-block-head">
-              <span className="wecom-block-title">{t("wecom.groupPairing")}</span>
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <UserCheck size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.groupPairing")}</span>
+              </div>
               {(settings.wecomPairedUsers ?? []).length > 0 ? (
                 <span className="wecom-count-badge">
                   {(settings.wecomPairedUsers ?? []).length}
@@ -2110,7 +2596,12 @@ export default function WecomSettingsCard() {
             </div>
 
             {pairings.length === 0 ? (
-              <p className="setting-hint">{t("wecom.pairingEmpty")}</p>
+              <div className="wecom-empty-state">
+                <span className="wecom-empty-state-icon" aria-hidden>
+                  <UserCheck size={18} />
+                </span>
+                <p>{t("wecom.pairingEmpty")}</p>
+              </div>
             ) : (
               <>
                 <p className="setting-hint">{t("wecom.pairingRestartHint")}</p>
@@ -2186,7 +2677,12 @@ export default function WecomSettingsCard() {
         <WecomRequestDiagnostics selection={diagnosticSelection} />
         <section className="wecom-diag-block">
           <div className="wecom-diag-head">
-            <span>{t("wecom.diag.performance")}</span>
+            <div className="wecom-diag-head-main">
+              <span className="wecom-diag-icon" aria-hidden>
+                <Gauge size={13} />
+              </span>
+              <span>{t("wecom.diag.performance")}</span>
+            </div>
           </div>
           {/* 口径说明收起来，块头只留一行快照摘要 */}
           <details className="wecom-hint wecom-diag-notes">
@@ -2290,7 +2786,12 @@ export default function WecomSettingsCard() {
         <div className="wecom-diag-grid">
           <section className="wecom-diag-block">
             <div className="wecom-diag-head">
-              <span>{t("wecom.diag.channelLog")}</span>
+              <div className="wecom-diag-head-main">
+                <span className="wecom-diag-icon" aria-hidden>
+                  <Terminal size={13} />
+                </span>
+                <span>{t("wecom.diag.channelLog")}</span>
+              </div>
               <button
                 type="button"
                 className="btn btn-secondary btn-small"
@@ -2305,7 +2806,12 @@ export default function WecomSettingsCard() {
           </section>
           <section className="wecom-diag-block">
             <div className="wecom-diag-head">
-              <span>{t("wecom.diag.sessionLog")}</span>
+              <div className="wecom-diag-head-main">
+                <span className="wecom-diag-icon" aria-hidden>
+                  <MessagesSquare size={13} />
+                </span>
+                <span>{t("wecom.diag.sessionLog")}</span>
+              </div>
               <button
                 type="button"
                 className="btn btn-secondary btn-small"

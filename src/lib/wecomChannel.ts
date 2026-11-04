@@ -345,6 +345,80 @@ export function normalizeWecomMaxJobs(value: number | undefined): number {
     : 2;
 }
 
+/** 文档回溯天数：0=不限制，默认 7，上限 30。 */
+export function normalizeDocgenLookbackDays(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 7;
+  const n = Math.trunc(value);
+  if (n < 0) return 7;
+  return Math.min(30, n);
+}
+
+/** 子仓白名单：去重、trim；相对路径保留（后端再校验落在 workspace 下）。 */
+export function normalizeDocgenRepoAllowlist(list: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list ?? []) {
+    const p = raw.trim();
+    if (!p) continue;
+    const key = p.replace(/\//g, "\\").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
+}
+
+/** 与后端 `PROMPT_CHAR_CAP` 一致。 */
+export const DOCGEN_PROMPT_CHAR_CAP = 12_000;
+
+/**
+ * 内置更新 system 模板（与 Rust `default_docgen_system_prompt` 保持一致）。
+ * 占位符：{doc_dir} {branch} {commits} {files} {diff}
+ */
+export const DEFAULT_DOCGEN_SYSTEM_PROMPT = `你是代码逆向文档维护助手。工作区是一个代码仓库，\`{doc_dir}/\` 下是基于代码的逆向工程文档。
+当前在 release 分支「{branch}」。
+
+## 提交摘要
+{commits}
+
+## 变更文件
+{files}
+
+## 变更 diff 摘录（定向线索；完整内容请用工具读文件）
+{diff}
+
+任务：阅读这些变更涉及的代码，更新 \`{doc_dir}/\` 下**对应**的逆向文档，使其与最新代码一致。
+如何找对应文档（按顺序尝试）：
+- 先在 \`{doc_dir}/\` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；
+- 文件名/模块名找不到时，按业务功能关键词再搜一次；
+- 仍找不到且该变更重要时，才在 \`{doc_dir}/\` 下新建一篇，文件名贴合模块。
+硬规则：
+1. **只允许修改/新建 \`{doc_dir}/\` 目录内的文件**；绝对不要改任何业务代码、配置或其它目录（目录外的改动会被自动丢弃并记为违规）。
+2. 变更很小 / 与文档无关时可以不改，并在摘要里说明原因。
+3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。
+4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」，这段会推送到群里。`;
+
+/**
+ * 内置质检 system 模板（与 Rust `default_docgen_quality_prompt` 保持一致）。
+ * 占位符：{doc_dir} {branch} {files} {summary}
+ */
+export const DEFAULT_DOCGEN_QUALITY_PROMPT = `你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 \`{doc_dir}/\`。
+上一轮更新摘要：
+{summary}
+
+本次代码变更文件：
+{files}
+
+任务：对照变更与 \`{doc_dir}/\` 现有文档，用 3–8 条中文检查结论指出：是否缺更、是否过时、是否矛盾。
+硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。`;
+
+/** trim + 字符上限；空串表示走后端默认。 */
+export function normalizeDocgenPrompt(value: string | undefined): string {
+  const t = (value ?? "").trim();
+  if (!t) return "";
+  return Array.from(t).slice(0, DOCGEN_PROMPT_CHAR_CAP).join("");
+}
+
 function splitCsv(list: string[] | undefined): string[] {
   return (list ?? []).map((s) => s.trim()).filter(Boolean);
 }
@@ -466,6 +540,10 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       webhookFeishu,
       webhookDingtalk,
       docgenCron: (settings.wecomDocgenCron ?? "").trim(),
+      docgenLookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),
+      docgenRepoAllowlist: normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist),
+      docgenSystemPrompt: normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt),
+      docgenQualityPrompt: normalizeDocgenPrompt(settings.wecomDocgenQualityPrompt),
       docgenPreview: Boolean(settings.wecomDocgenPreview),
       docgenQualityCheck: Boolean(settings.wecomDocgenQualityCheck),
       docgenPollRelease: Boolean(settings.wecomDocgenPollRelease),

@@ -119,15 +119,137 @@ fn is_git_work_tree(repo_path: &Path) -> Result<bool, String> {
 pub(crate) fn ensure_git_repo(repo_path: &str) -> Result<(), String> {
     let path = Path::new(repo_path);
     if !path.exists() {
-        return Err(format!("路径不存在: {}", repo_path));
+        return Err(format!("路径不存在: {}", path_for_markdown(repo_path)));
     }
     if !path.is_dir() {
-        return Err(format!("路径不是目录: {}", repo_path));
+        return Err(format!("路径不是目录: {}", path_for_markdown(repo_path)));
     }
     if !is_git_work_tree(path)? {
-        return Err(format!("不是 Git 仓库: {}", repo_path));
+        return Err(format!("不是 Git 仓库: {}", path_for_markdown(repo_path)));
     }
     Ok(())
+}
+
+/// 企微 / Markdown 通知里反斜杠会被当转义吃掉；统一改成正斜杠展示。
+pub(crate) fn path_for_markdown(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn paths_equal_norm(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => {
+            let ax = a.to_string_lossy().replace('/', "\\").to_lowercase();
+            let bx = b.to_string_lossy().replace('/', "\\").to_lowercase();
+            ax == bx
+        }
+    }
+}
+
+fn path_is_under(child: &Path, ancestor: &Path) -> bool {
+    match (child.canonicalize(), ancestor.canonicalize()) {
+        (Ok(c), Ok(a)) => c.starts_with(&a),
+        _ => {
+            let c = child.to_string_lossy().replace('/', "\\").to_lowercase();
+            let a = ancestor.to_string_lossy().replace('/', "\\").to_lowercase();
+            c == a || c.starts_with(&(a.clone() + "\\"))
+        }
+    }
+}
+
+fn doc_path_under_repo(repo: &str, doc_dir: &str) -> bool {
+    if doc_dir.trim().is_empty() {
+        return false;
+    }
+    let doc = Path::new(doc_dir.trim());
+    let repo_path = Path::new(repo);
+    let start = if doc.is_absolute() {
+        doc.to_path_buf()
+    } else {
+        repo_path.join(doc)
+    };
+    path_is_under(&start, repo_path)
+        || start
+            .parent()
+            .map(|p| path_is_under(p, repo_path))
+            .unwrap_or(false)
+}
+
+/// 从 `doc_dir` 向上找仍位于 `workspace` 下、且不等于 workspace 本身的 Git 根。
+fn git_root_under_workspace(workspace: &Path, doc_dir: &str) -> Option<String> {
+    if doc_dir.trim().is_empty() {
+        return None;
+    }
+    let doc = Path::new(doc_dir.trim());
+    let start = if doc.is_absolute() {
+        doc.to_path_buf()
+    } else {
+        workspace.join(doc)
+    };
+    let mut cur = if start.is_dir() {
+        start
+    } else {
+        start.parent()?.to_path_buf()
+    };
+    loop {
+        if !(path_is_under(&cur, workspace) || paths_equal_norm(&cur, workspace)) {
+            break;
+        }
+        // workspace 本身入口已判过非仓；这里只认子路径上的仓。
+        if !paths_equal_norm(&cur, workspace) {
+            let is_repo = is_git_work_tree(&cur).unwrap_or(false) || is_git_dir_entry(&cur);
+            if is_repo {
+                return Some(cur.to_string_lossy().into_owned());
+            }
+        }
+        if !cur.pop() {
+            break;
+        }
+    }
+    None
+}
+
+/// 文档自动更新用：把「多仓父目录」解析成真正的单一 Git 工作树。
+///
+/// 顺序：workspace 已是仓 → 从 doc_dir 上溯 → 深度 1 扫子仓（仅 1 个则用之；多个则按 doc 归属挑选，否则报错列名）。
+pub(crate) fn resolve_git_workspace(workspace: &str, doc_dir: &str) -> Result<String, String> {
+    let ws = workspace.trim();
+    if ws.is_empty() {
+        return Err("工作区未配置".into());
+    }
+    let ws_path = Path::new(ws);
+    if !ws_path.exists() {
+        return Err(format!("路径不存在: {}", path_for_markdown(ws)));
+    }
+    if !ws_path.is_dir() {
+        return Err(format!("路径不是目录: {}", path_for_markdown(ws)));
+    }
+    // rev-parse 优先；仅有 .git 目录时与扫描语义对齐。
+    if is_git_work_tree(ws_path)? || is_git_dir_entry(ws_path) {
+        return Ok(ws.to_string());
+    }
+
+    if let Some(root) = git_root_under_workspace(ws_path, doc_dir) {
+        return Ok(root);
+    }
+
+    let mut found = Vec::new();
+    scan_git_repos_recursive(ws_path, 0, 1, &mut found)?;
+    match found.len() {
+        0 => Err(format!("不是 Git 仓库: {}", path_for_markdown(ws))),
+        1 => Ok(found[0].path.clone()),
+        _ => {
+            if let Some(hit) = found.iter().find(|r| doc_path_under_repo(&r.path, doc_dir)) {
+                return Ok(hit.path.clone());
+            }
+            let names: Vec<&str> = found.iter().map(|r| r.name.as_str()).collect();
+            Err(format!(
+                "工作区「{}」下有多个 Git 子仓（{}），请把「工作区路径」改成含文档的那一个",
+                path_for_markdown(ws),
+                names.join("、")
+            ))
+        }
+    }
 }
 
 pub(crate) fn git_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
@@ -3256,6 +3378,97 @@ pub async fn git_scan_repos(
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[cfg(test)]
+mod resolve_workspace_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn mk_git(p: &Path) {
+        std::fs::create_dir_all(p.join(".git")).unwrap();
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "resolve_ws_{}_{}",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn resolve_single_child_repo_under_parent() {
+        let root = tmp("single");
+        let child = root.join("pmys");
+        mk_git(&child);
+        std::fs::create_dir_all(child.join("doc")).unwrap();
+        let got = resolve_git_workspace(
+            root.to_str().unwrap(),
+            child.join("doc").to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Path::new(&got).ends_with("pmys") || got.contains("pmys"),
+            "expected child repo, got {got}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_picks_doc_owning_child_among_many() {
+        let root = tmp("multi");
+        let a = root.join("repoA");
+        let b = root.join("repoB");
+        mk_git(&a);
+        mk_git(&b);
+        std::fs::create_dir_all(b.join("doc")).unwrap();
+        let got = resolve_git_workspace(
+            root.to_str().unwrap(),
+            b.join("doc").to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Path::new(&got).ends_with("repoB") || got.replace('\\', "/").ends_with("repoB"),
+            "expected repoB, got {got}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_multi_without_doc_lists_names() {
+        let root = tmp("multi_nodoc");
+        mk_git(&root.join("alpha"));
+        mk_git(&root.join("beta"));
+        let err = resolve_git_workspace(root.to_str().unwrap(), "")
+            .unwrap_err();
+        assert!(err.contains("多个 Git 子仓"), "{err}");
+        assert!(err.contains("alpha") && err.contains("beta"), "{err}");
+        assert!(!err.contains('\\'), "通知友好路径不应含反斜杠: {err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_no_child_keeps_not_git_message() {
+        let root = tmp("empty");
+        std::fs::create_dir_all(root.join("plain")).unwrap();
+        let err = resolve_git_workspace(root.to_str().unwrap(), "")
+            .unwrap_err();
+        assert!(err.contains("不是 Git 仓库"), "{err}");
+        assert!(!err.contains('\\'), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn path_for_markdown_flips_backslashes() {
+        assert_eq!(
+            path_for_markdown(r"D:\d_project\tc\release"),
+            "D:/d_project/tc/release"
+        );
+    }
 }
 
 #[cfg(test)]

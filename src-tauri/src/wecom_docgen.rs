@@ -76,10 +76,26 @@ pub struct DocgenConfig {
     /// 轮询 origin/release HEAD，超前则自动跑（不装 git hook）。
     #[serde(default)]
     pub poll_release: bool,
+    /// 补跑时变更回溯天数（0=不限制；默认 7，上限 30）。
+    #[serde(default = "default_lookback_days")]
+    pub lookback_days: u32,
+    /// 变更来源子仓白名单；空=仅文档目录所在仓。
+    #[serde(default)]
+    pub repo_allowlist: Vec<String>,
+    /// 更新 system 提示词模板；空=内置默认。
+    #[serde(default)]
+    pub system_prompt: String,
+    /// 质检 system 提示词模板；空=内置默认。
+    #[serde(default)]
+    pub quality_prompt: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_lookback_days() -> u32 {
+    7
 }
 
 impl Default for DocgenConfig {
@@ -99,8 +115,65 @@ impl Default for DocgenConfig {
             preview_mode: false,
             quality_check: false,
             poll_release: false,
+            lookback_days: 7,
+            repo_allowlist: Vec::new(),
+            system_prompt: String::new(),
+            quality_prompt: String::new(),
         }
     }
+}
+
+/// 与前端 `DOCGEN_PROMPT_CHAR_CAP` 一致。
+pub const PROMPT_CHAR_CAP: usize = 12_000;
+
+/// trim + 字符上限；空串表示走默认模板。
+pub fn normalize_prompt_template(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    t.chars().take(PROMPT_CHAR_CAP).collect()
+}
+
+pub fn default_docgen_system_prompt() -> &'static str {
+    "你是代码逆向文档维护助手。工作区是一个代码仓库，`{doc_dir}/` 下是基于代码的逆向工程文档。\n\
+当前在 release 分支「{branch}」。\n\n\
+## 提交摘要\n\
+{commits}\n\n\
+## 变更文件\n\
+{files}\n\n\
+## 变更 diff 摘录（定向线索；完整内容请用工具读文件）\n\
+{diff}\n\n\
+任务：阅读这些变更涉及的代码，更新 `{doc_dir}/` 下**对应**的逆向文档，使其与最新代码一致。\n\
+如何找对应文档（按顺序尝试）：\n\
+- 先在 `{doc_dir}/` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；\n\
+- 文件名/模块名找不到时，按业务功能关键词再搜一次；\n\
+- 仍找不到且该变更重要时，才在 `{doc_dir}/` 下新建一篇，文件名贴合模块。\n\
+硬规则：\n\
+1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**；绝对不要改任何业务代码、配置或其它目录（目录外的改动会被自动丢弃并记为违规）。\n\
+2. 变更很小 / 与文档无关时可以不改，并在摘要里说明原因。\n\
+3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。\n\
+4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」，这段会推送到群里。"
+}
+
+pub fn default_docgen_quality_prompt() -> &'static str {
+    "你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 `{doc_dir}/`。\n\
+上一轮更新摘要：\n\
+{summary}\n\n\
+本次代码变更文件：\n\
+{files}\n\n\
+任务：对照变更与 `{doc_dir}/` 现有文档，用 3–8 条中文检查结论指出：是否缺更、是否过时、是否矛盾。\n\
+硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。"
+}
+
+/// 简单占位符替换：`{key}` → value（按出现顺序，不做嵌套展开）。
+pub fn fill_docgen_template(template: &str, vars: &[(&str, &str)]) -> String {
+    let mut out = template.to_string();
+    for (k, v) in vars {
+        let needle = format!("{{{k}}}");
+        out = out.replace(&needle, v);
+    }
+    out
 }
 
 impl DocgenConfig {
@@ -133,10 +206,44 @@ impl DocgenConfig {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RunState {
     last_run_date: Option<String>,
+    /// 旧单仓 cursor；迁移到 `last_commits` 后仍可读。
     last_commit: Option<String>,
-    /// 轮询防抖：上次已观察过的 origin/{branch}。
+    /// 各变更来源仓的 HEAD cursor（key=规范化路径）。
+    #[serde(default)]
+    last_commits: std::collections::HashMap<String, String>,
+    /// 轮询防抖：上次已观察过的 origin/{branch}（文档仓）。
     #[serde(default)]
     last_poll_head: Option<String>,
+}
+
+fn norm_repo_key(path: &str) -> String {
+    path.trim().replace('/', "\\").to_ascii_lowercase()
+}
+
+fn cursor_for(st: &RunState, repo: &str) -> Option<String> {
+    let key = norm_repo_key(repo);
+    if let Some(h) = st.last_commits.get(&key) {
+        let t = h.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    // 兼容：仅当查询的是「唯一旧 cursor」且 map 为空时退回 last_commit
+    if st.last_commits.is_empty() {
+        return st
+            .last_commit
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    None
+}
+
+fn set_cursor(st: &mut RunState, repo: &str, head: &str) {
+    let key = norm_repo_key(repo);
+    st.last_commits.insert(key, head.trim().to_string());
+    st.last_commit = Some(head.trim().to_string());
 }
 
 fn state_path() -> Option<PathBuf> {
@@ -378,7 +485,20 @@ fn schedule_due_today(
 }
 
 async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), String> {
-    let workspace = cfg.workspace.trim().to_string();
+    let workspace = crate::git_commands::resolve_git_workspace(
+        cfg.workspace.trim(),
+        &cfg.doc_dir_or_default(),
+    )?;
+    if workspace != cfg.workspace.trim() {
+        crate::wecom_log::write(
+            "docgen",
+            &format!(
+                "resolved workspace={} (from {})",
+                crate::git_commands::path_for_markdown(&workspace),
+                crate::git_commands::path_for_markdown(cfg.workspace.trim())
+            ),
+        );
+    }
     let branch = cfg.branch_or_default();
     crate::git_commands::ensure_git_repo(&workspace)?;
 
@@ -390,41 +510,65 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
         .await
         .map_err(|e| e.to_string())??
     };
+    // 脏仓只看文档仓，避免服务仓本地改动挡住轮询。
     if !String::from_utf8_lossy(&dirty.stdout).trim().is_empty() {
         return Ok(());
     }
 
-    let remote_head = {
-        let ws = workspace.clone();
-        let br = branch.clone();
-        tokio::task::spawn_blocking(move || {
-            let _ = crate::git_commands::git_output(&ws, &["fetch", "origin", &br]);
-            crate::git_commands::git_stdout(&ws, &["rev-parse", &format!("origin/{br}")])
+    let sources = resolve_change_sources(&cfg.repo_allowlist, &workspace);
+    let st = load_state();
+    let br = branch.clone();
+    let ahead = {
+        tokio::task::spawn_blocking(move || -> Result<(bool, String), String> {
+            let mut any = false;
+            let mut tip = String::new();
+            for repo in &sources {
+                if crate::git_commands::ensure_git_repo(repo).is_err() {
+                    continue;
+                }
+                let _ = fetch_origin_branch(repo, &br);
+                let remote = crate::git_commands::git_stdout(
+                    repo,
+                    &["rev-parse", &format!("origin/{br}")],
+                )
+                .unwrap_or_default();
+                let remote = remote.trim().to_string();
+                if remote.is_empty() {
+                    continue;
+                }
+                tip = remote.clone();
+                let cur = cursor_for(&st, repo);
+                if cur.as_deref() != Some(remote.as_str()) {
+                    any = true;
+                    break;
+                }
+            }
+            Ok((any, tip))
         })
         .await
         .map_err(|e| e.to_string())??
     };
-    let remote_head = remote_head.trim().to_string();
-    if remote_head.is_empty() {
+    let (need_run, remote_tip) = ahead;
+    if !need_run {
         return Ok(());
     }
 
     let mut st = load_state();
-    if st.last_poll_head.as_deref() == Some(remote_head.as_str()) {
-        return Ok(());
-    }
-    if st.last_commit.as_deref() == Some(remote_head.as_str()) {
-        st.last_poll_head = Some(remote_head);
+    if !remote_tip.is_empty() {
+        if st.last_poll_head.as_deref() == Some(remote_tip.as_str()) {
+            // 同一 tip 已触发过一轮仍失败时，等 cursor 推进或 tip 再变。
+            return Ok(());
+        }
+        st.last_poll_head = Some(remote_tip.clone());
         save_state(&st);
-        return Ok(());
     }
-
-    st.last_poll_head = Some(remote_head.clone());
-    save_state(&st);
 
     crate::wecom_log::write(
         "docgen",
-        &format!("auto poll start remote_head={}", &remote_head[..8.min(remote_head.len())]),
+        &format!(
+            "auto poll start tip={}",
+            &remote_tip[..8.min(remote_tip.len())]
+        ),
     );
     match run_update_with_trigger(app, cfg, RunTrigger::Poll).await {
         Ok(report) => {
@@ -500,9 +644,19 @@ pub async fn run_update_with_trigger(
     let Some(_guard) = RunGuard::acquire() else {
         return Err("已有一个文档更新流程在跑，请稍后再试".into());
     };
-    let workspace = cfg.workspace.trim().to_string();
-    let branch = cfg.branch_or_default();
     let doc_dir = cfg.doc_dir_or_default();
+    let workspace = crate::git_commands::resolve_git_workspace(cfg.workspace.trim(), &doc_dir)?;
+    if workspace != cfg.workspace.trim() {
+        crate::wecom_log::write(
+            "docgen",
+            &format!(
+                "resolved workspace={} (from {})",
+                crate::git_commands::path_for_markdown(&workspace),
+                crate::git_commands::path_for_markdown(cfg.workspace.trim())
+            ),
+        );
+    }
+    let branch = cfg.branch_or_default();
     let preview = cfg.preview_mode || trigger == RunTrigger::Preview;
 
     crate::git_commands::ensure_git_repo(&workspace)?;
@@ -546,18 +700,52 @@ pub async fn run_update_with_trigger(
             .map_err(|e| e.to_string())??;
     }
 
-    let prev = load_state().last_commit;
-    let delta = {
-        let ws = workspace.clone();
-        let prev2 = prev.clone();
-        tokio::task::spawn_blocking(move || collect_delta(&ws, prev2.as_deref()))
-            .await
-            .map_err(|e| e.to_string())??
+    let sources = resolve_change_sources(&cfg.repo_allowlist, &workspace);
+    let lookback_days = cfg.lookback_days.min(30);
+    let st_snap = load_state();
+    let source_prev: Vec<(String, Option<String>)> = sources
+        .iter()
+        .map(|s| (s.clone(), cursor_for(&st_snap, s)))
+        .collect();
+    let br_fetch = branch.clone();
+    let doc_repo_key = workspace.clone();
+    let parts = {
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, ChangeDelta)>, String> {
+            let mut out = Vec::new();
+            for (repo, prev) in source_prev {
+                crate::git_commands::ensure_git_repo(&repo)?;
+                // 文档仓已在上面 ff；其它来源仓只 fetch，不改工作区。
+                if norm_repo_key(&repo) != norm_repo_key(&doc_repo_key) {
+                    let _ = fetch_origin_branch(&repo, &br_fetch);
+                }
+                let d = collect_delta(&repo, prev.as_deref(), lookback_days)?;
+                out.push((repo, d));
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| e.to_string())??
     };
+    let heads: Vec<(String, String)> = parts
+        .iter()
+        .map(|(r, d)| (r.clone(), d.head.clone()))
+        .collect();
+    let delta = merge_change_deltas(&parts, DIFF_CHAR_CAP);
+    crate::wecom_log::write(
+        "docgen",
+        &format!(
+            "collect_delta sources={} lookback={lookback_days}d files={} commits={}",
+            sources.len(),
+            delta.files.len(),
+            delta.commits.len()
+        ),
+    );
 
     if delta.files.is_empty() {
         let mut st = load_state();
-        st.last_commit = Some(delta.head.clone());
+        for (repo, head) in &heads {
+            set_cursor(&mut st, repo, head);
+        }
         save_state(&st);
         let report = UpdateReport {
             branch,
@@ -575,14 +763,23 @@ pub async fn run_update_with_trigger(
         return Ok(report);
     }
 
-    let updated_docs = update_docs_with_agent(app, &workspace, &doc_dir, &branch, &delta)
-        .await
-        .unwrap_or_else(|e| format!("（文档更新步骤出错：{e}）"));
+    let updated_docs =
+        update_docs_with_agent(app, &workspace, &doc_dir, &branch, &delta, &cfg.system_prompt)
+            .await
+            .unwrap_or_else(|e| format!("（文档更新步骤出错：{e}）"));
 
     let quality = if cfg.quality_check {
-        quality_check_with_agent(app, &workspace, &doc_dir, &branch, &delta.files)
-            .await
-            .unwrap_or_else(|e| format!("（质量自检失败：{e}）"))
+        quality_check_with_agent(
+            app,
+            &workspace,
+            &doc_dir,
+            &branch,
+            &delta.files,
+            &updated_docs,
+            &cfg.quality_prompt,
+        )
+        .await
+        .unwrap_or_else(|e| format!("（质量自检失败：{e}）"))
     } else {
         String::new()
     };
@@ -618,7 +815,9 @@ pub async fn run_update_with_trigger(
     let (pushed, webhook_errors) = notify_all(cfg, &body).await;
 
     let mut st = load_state();
-    st.last_commit = Some(delta.head);
+    for (repo, head) in &heads {
+        set_cursor(&mut st, repo, head);
+    }
     save_state(&st);
 
     let report = UpdateReport {
@@ -749,10 +948,154 @@ pub struct ChangeDelta {
     pub diff_truncated: bool,
 }
 
-fn collect_delta(workspace: &str, prev: Option<&str>) -> Result<ChangeDelta, String> {
+/// 变更来源列表：白名单非空用白名单，否则仅文档仓。
+pub(crate) fn resolve_change_sources(allowlist: &[String], doc_repo: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let push = |out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, p: &str| {
+        let t = p.trim();
+        if t.is_empty() {
+            return;
+        }
+        if !seen.insert(norm_repo_key(t)) {
+            return;
+        }
+        out.push(t.to_string());
+    };
+    if allowlist.iter().any(|s| !s.trim().is_empty()) {
+        for s in allowlist {
+            push(&mut out, &mut seen, s);
+        }
+    } else {
+        push(&mut out, &mut seen, doc_repo);
+    }
+    out
+}
+
+fn repo_short_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// 合并多仓 delta；files/commits 加 `仓名:` 前缀；diff 按仓拼接并截断。
+pub(crate) fn merge_change_deltas(
+    parts: &[(String, ChangeDelta)],
+    diff_cap: usize,
+) -> ChangeDelta {
+    let mut files = Vec::new();
+    let mut commits = Vec::new();
+    let mut diff = String::new();
+    let mut truncated = false;
+    // 用「最后一仓」的 head 仅作占位；多仓 cursor 另存。
+    let mut head = String::new();
+    for (repo, d) in parts {
+        let label = repo_short_name(repo);
+        head = d.head.clone();
+        for f in &d.files {
+            files.push(format!("{label}:{f}"));
+        }
+        for c in &d.commits {
+            commits.push(format!("{label}:{c}"));
+        }
+        if !d.diff_excerpt.trim().is_empty() {
+            let block = format!("### {label}\n{}\n", d.diff_excerpt.trim_end());
+            if diff.chars().count() + block.chars().count() > diff_cap {
+                truncated = true;
+                let remain = diff_cap.saturating_sub(diff.chars().count());
+                if remain > 0 {
+                    diff.push_str(&block.chars().take(remain).collect::<String>());
+                }
+                break;
+            }
+            diff.push_str(&block);
+            truncated |= d.diff_truncated;
+        } else {
+            truncated |= d.diff_truncated;
+        }
+    }
+    ChangeDelta {
+        head,
+        files,
+        commits,
+        diff_excerpt: diff,
+        diff_truncated: truncated,
+    }
+}
+
+fn fetch_origin_branch(workspace: &str, branch: &str) -> Result<(), String> {
+    use crate::git_commands::git_output;
+    let fetch = git_output(workspace, &["fetch", "origin", branch])?;
+    if !fetch.status.success() {
+        return Err(format!(
+            "fetch origin {branch} 失败（{}）：{}",
+            repo_short_name(workspace),
+            String::from_utf8_lossy(&fetch.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// 纯函数：在已知边界 B 与「B 是否为 prev 祖先」时选出有效 prev。
+/// - lookback=0 或无边界 → 保留 prev
+/// - prev 在窗口内（B 是 prev 祖先）→ 保留 prev
+/// - 否则用边界 B（截断超长缺口）
+pub(crate) fn pick_clamped_prev(
+    prev: Option<&str>,
+    boundary: Option<&str>,
+    boundary_is_ancestor_of_prev: bool,
+) -> Option<String> {
+    let prev = prev.map(str::trim).filter(|p| !p.is_empty());
+    let boundary = boundary.map(str::trim).filter(|b| !b.is_empty());
+    match (prev, boundary) {
+        (p, None) => p.map(str::to_string),
+        (Some(p), Some(b)) if boundary_is_ancestor_of_prev && p != b => Some(p.to_string()),
+        (_, Some(b)) => Some(b.to_string()),
+    }
+}
+
+/// 按回溯天数收紧 `prev..HEAD` 的起点。
+pub(crate) fn clamp_delta_prev(
+    workspace: &str,
+    prev: Option<&str>,
+    lookback_days: u32,
+) -> Result<Option<String>, String> {
+    use crate::git_commands::{git_output, git_stdout};
+    if lookback_days == 0 {
+        return Ok(prev.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string));
+    }
+    let before = format!("{lookback_days} days ago");
+    let boundary = git_stdout(
+        workspace,
+        &["log", "-1", "--before", &before, "--format=%H", "HEAD"],
+    )
+    .unwrap_or_default();
+    let boundary = boundary.trim();
+    if boundary.is_empty() {
+        return Ok(prev.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string));
+    }
+    let prev_clean = prev.map(str::trim).filter(|p| !p.is_empty());
+    let ancestor = match prev_clean {
+        Some(p) => {
+            let out = git_output(workspace, &["merge-base", "--is-ancestor", boundary, p])?;
+            out.status.success()
+        }
+        None => false,
+    };
+    Ok(pick_clamped_prev(prev, Some(boundary), ancestor))
+}
+
+fn collect_delta(
+    workspace: &str,
+    prev: Option<&str>,
+    lookback_days: u32,
+) -> Result<ChangeDelta, String> {
     use crate::git_commands::{git_output, git_stdout};
     let head = git_stdout(workspace, &["rev-parse", "HEAD"])?;
-    let range = match prev {
+    let prev = clamp_delta_prev(workspace, prev, lookback_days)?;
+    let range = match prev.as_deref() {
         Some(p) if !p.trim().is_empty() => format!("{}..HEAD", p.trim()),
         _ => "HEAD~1..HEAD".to_string(),
     };
@@ -824,92 +1167,34 @@ pub fn bound_diff(raw: &str, cap: usize) -> (String, bool) {
     (format!("{cut}\n…（diff 已截断，共超 {cap} 字符上限）"), true)
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ChangeBuckets {
-    pub api: bool,
-    pub module: bool,
-    pub arch: bool,
-}
-
-pub fn classify_changes(paths: &[String]) -> ChangeBuckets {
-    let mut b = ChangeBuckets::default();
-    for p in paths {
-        let lower = p.replace('\\', "/").to_ascii_lowercase();
-        let name = lower.rsplit('/').next().unwrap_or(&lower);
-        if name.contains("controller")
-            || name.contains("api")
-            || lower.contains("/routes/")
-            || lower.contains("openapi")
-            || lower.contains("swagger")
-        {
-            b.api = true;
-        }
-        if lower.starts_with("src/") || lower.contains("/src/") {
-            b.module = true;
-        }
-        if name == "cargo.toml"
-            || name == "package.json"
-            || name == "agents.md"
-            || name == "readme.md"
-            || lower.starts_with("docs/")
-            || lower == "agents.md"
-        {
-            b.arch = true;
-        }
-    }
-    b
-}
-
-pub fn strategy_block(buckets: &ChangeBuckets) -> String {
-    let mut parts = Vec::new();
-    if buckets.api {
-        parts.push(
-            "【API 变更策略】优先更新接口入参/出参、错误码、鉴权与调用链相关文档；核对路径与方法是否仍一致。",
-        );
-    }
-    if buckets.module {
-        parts.push(
-            "【模块变更策略】更新模块职责、关键类型/函数、依赖关系；文档结构对齐源码目录。",
-        );
-    }
-    if buckets.arch {
-        parts.push(
-            "【架构变更策略】更新目录约定、分层、构建/依赖与顶层说明；避免与 AGENTS/README 冲突。",
-        );
-    }
-    if parts.is_empty() {
-        parts.push("【通用策略】按文件名/模块名定位对应逆向文档并增量修订。");
-    }
-    parts.join("\n")
-}
-
-/// 拼装 system 提示（纯函数，便于单测）。
-pub fn build_docgen_prompt(
-    doc_dir: &str,
-    branch: &str,
-    delta: &ChangeDelta,
-) -> String {
-    let buckets = classify_changes(&delta.files);
-    let strategy = strategy_block(&buckets);
-    let file_list = delta
-        .files
-        .iter()
-        .take(FILE_LIST_CAP)
-        .map(|f| format!("- {f}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let commit_list = if delta.commits.is_empty() {
-        "（无提交摘要）".to_string()
+fn format_file_list(files: &[String]) -> String {
+    if files.is_empty() {
+        "（无变更文件）".into()
     } else {
-        delta
-            .commits
+        files
+            .iter()
+            .take(FILE_LIST_CAP)
+            .map(|f| format!("- {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn format_commit_list(commits: &[String]) -> String {
+    if commits.is_empty() {
+        "（无提交摘要）".into()
+    } else {
+        commits
             .iter()
             .map(|c| format!("- {c}"))
             .collect::<Vec<_>>()
             .join("\n")
-    };
-    let diff_section = if delta.diff_excerpt.trim().is_empty() {
-        "（无 diff 摘录）".to_string()
+    }
+}
+
+fn format_diff_section(delta: &ChangeDelta) -> String {
+    if delta.diff_excerpt.trim().is_empty() {
+        "（无 diff 摘录）".into()
     } else {
         let mark = if delta.diff_truncated {
             "\n（已截断）"
@@ -917,24 +1202,68 @@ pub fn build_docgen_prompt(
             ""
         };
         format!("```\n{}{}\n```", delta.diff_excerpt.trim_end(), mark)
+    }
+}
+
+/// 拼装更新 system 提示：配置模板非空则用之，否则内置默认；再填占位符。
+pub fn build_docgen_prompt(
+    template: &str,
+    doc_dir: &str,
+    branch: &str,
+    delta: &ChangeDelta,
+) -> String {
+    let tpl = normalize_prompt_template(template);
+    let body = if tpl.is_empty() {
+        default_docgen_system_prompt().to_string()
+    } else {
+        tpl
     };
-    format!(
-        "你是代码逆向文档维护助手。工作区是一个代码仓库，`{doc_dir}/` 下是基于代码的逆向工程文档。\n\
-当前在 release 分支「{branch}」。\n\n\
-## 提交摘要\n{commit_list}\n\n\
-## 变更文件\n{file_list}\n\n\
-## 变更 diff 摘录（定向线索；完整内容请用工具读文件）\n{diff_section}\n\n\
-## 更新策略\n{strategy}\n\n\
-任务：阅读这些变更涉及的代码，更新 `{doc_dir}/` 下**对应**的逆向文档，使其与最新代码一致。\n\
-如何找对应文档（按顺序尝试）：\n\
-- 先在 `{doc_dir}/` 下 `grep` 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；\n\
-- 文件名/模块名找不到时，按业务功能关键词再搜一次；\n\
-- 仍找不到且该变更重要时，才在 `{doc_dir}/` 下新建一篇，文件名贴合模块。\n\
-硬规则：\n\
-1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**；绝对不要改任何业务代码、配置或其它目录（目录外的改动会被自动丢弃并记为违规）。\n\
-2. 变更很小 / 与文档无关时可以不改，并在摘要里说明原因。\n\
-3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。\n\
-4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」，这段会推送到群里。"
+    let commits = format_commit_list(&delta.commits);
+    let files = format_file_list(&delta.files);
+    let diff = format_diff_section(delta);
+    fill_docgen_template(
+        &body,
+        &[
+            ("doc_dir", doc_dir),
+            ("branch", branch),
+            ("commits", &commits),
+            ("files", &files),
+            ("diff", &diff),
+        ],
+    )
+}
+
+/// 拼装质检 system 提示。
+pub fn build_quality_prompt(
+    template: &str,
+    doc_dir: &str,
+    branch: &str,
+    files: &[String],
+    summary: &str,
+) -> String {
+    let tpl = normalize_prompt_template(template);
+    let body = if tpl.is_empty() {
+        default_docgen_quality_prompt().to_string()
+    } else {
+        tpl
+    };
+    let file_list = format_file_list(files);
+    let summary_text = {
+        let t = summary.trim();
+        if t.is_empty() {
+            "（无）"
+        } else {
+            t
+        }
+    };
+    fill_docgen_template(
+        &body,
+        &[
+            ("doc_dir", doc_dir),
+            ("branch", branch),
+            ("files", &file_list),
+            ("summary", summary_text),
+        ],
     )
 }
 
@@ -944,6 +1273,7 @@ async fn update_docs_with_agent(
     doc_dir: &str,
     branch: &str,
     delta: &ChangeDelta,
+    system_template: &str,
 ) -> Result<String, String> {
     let agent_cfg = {
         let st = app.state::<WecomState>();
@@ -955,7 +1285,7 @@ async fn update_docs_with_agent(
     };
 
     let request_id = format!("wecom-docgen-{}", chrono::Utc::now().timestamp_millis());
-    let system = build_docgen_prompt(doc_dir, branch, delta);
+    let system = build_docgen_prompt(system_template, doc_dir, branch, delta);
 
     let req = crate::agent::AgentRunRequest {
         config: cfg.config,
@@ -1020,6 +1350,8 @@ async fn quality_check_with_agent(
     doc_dir: &str,
     branch: &str,
     changed: &[String],
+    summary: &str,
+    quality_template: &str,
 ) -> Result<String, String> {
     let agent_cfg = {
         let st = app.state::<WecomState>();
@@ -1029,19 +1361,8 @@ async fn quality_check_with_agent(
     let Some(cfg) = agent_cfg else {
         return Err("企微通道未绑定模型，无法质量自检".into());
     };
-    let file_list = changed
-        .iter()
-        .take(FILE_LIST_CAP)
-        .map(|f| format!("- {f}"))
-        .collect::<Vec<_>>()
-        .join("\n");
     let request_id = format!("wecom-docgen-qc-{}", chrono::Utc::now().timestamp_millis());
-    let system = format!(
-        "你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 `{doc_dir}/`。\n\
-本次代码变更文件：\n{file_list}\n\n\
-任务：对照变更与 `{doc_dir}/` 现有文档，用 3–8 条中文检查结论指出：是否缺更、是否过时、是否矛盾。\n\
-硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。"
-    );
+    let system = build_quality_prompt(quality_template, doc_dir, branch, changed, summary);
     let req = crate::agent::AgentRunRequest {
         config: cfg.config,
         fallback_config: cfg.fallback_config,
@@ -1213,6 +1534,8 @@ enum WebhookKind {
 
 /// 对所有已配置 webhook 发通知。返回 `(任一成功, 失败列表)`。
 pub async fn notify_all(cfg: &DocgenConfig, markdown: &str) -> (bool, Vec<String>) {
+    // 企微 markdown 会把 `\` 当转义吃掉（D:\a\b → D:ab）；统一换成正斜杠。
+    let markdown = crate::git_commands::path_for_markdown(markdown);
     let mut errors = Vec::new();
     let targets = [
         (WebhookKind::Wecom, cfg.webhook_url.as_str()),
@@ -1226,7 +1549,7 @@ pub async fn notify_all(cfg: &DocgenConfig, markdown: &str) -> (bool, Vec<String
             continue;
         }
         any = true;
-        match send_webhook_kind(kind, url, markdown).await {
+        match send_webhook_kind(kind, url, &markdown).await {
             Ok(()) => any_ok = true,
             Err(e) => errors.push(e),
         }
@@ -1443,6 +1766,120 @@ mod tests {
         assert_eq!(c.time_or_default(), "23:00");
         assert_eq!(c.branch_or_default(), "release");
         assert_eq!(c.doc_dir_or_default(), "doc");
+        assert_eq!(c.lookback_days, 7);
+    }
+
+    #[test]
+    fn pick_clamped_prev_keeps_prev_when_no_boundary() {
+        assert_eq!(
+            pick_clamped_prev(Some("aaa"), None, false).as_deref(),
+            Some("aaa")
+        );
+        assert_eq!(pick_clamped_prev(None, None, false), None);
+    }
+
+    #[test]
+    fn pick_clamped_prev_keeps_newer_prev_inside_window() {
+        // B 是 prev 祖先 → prev 在窗口内，保留 prev
+        assert_eq!(
+            pick_clamped_prev(Some("prev111"), Some("bound000"), true).as_deref(),
+            Some("prev111")
+        );
+    }
+
+    #[test]
+    fn pick_clamped_prev_uses_boundary_when_gap_exceeds_window() {
+        // prev 不在窗口内（B 不是其祖先）→ 截到 B
+        assert_eq!(
+            pick_clamped_prev(Some("old999"), Some("bound000"), false).as_deref(),
+            Some("bound000")
+        );
+        assert_eq!(
+            pick_clamped_prev(None, Some("bound000"), false).as_deref(),
+            Some("bound000")
+        );
+    }
+
+    #[test]
+    fn resolve_change_sources_falls_back_to_doc_repo_when_allowlist_empty() {
+        let s = resolve_change_sources(&[], r"D:\doc\repo");
+        assert_eq!(s, vec![r"D:\doc\repo".to_string()]);
+        let s2 = resolve_change_sources(&["".into(), "  ".into()], r"D:\doc\repo");
+        assert_eq!(s2, vec![r"D:\doc\repo".to_string()]);
+    }
+
+    #[test]
+    fn resolve_change_sources_uses_allowlist_and_dedupes() {
+        let s = resolve_change_sources(
+            &[
+                r"D:\release\a".into(),
+                r"D:/release/a".into(),
+                r"D:\release\b".into(),
+            ],
+            r"D:\doc\repo",
+        );
+        assert_eq!(s.len(), 2);
+        assert!(s.iter().any(|p| p.ends_with('a') || p.ends_with("a")));
+        assert!(s.iter().any(|p| p.contains('b') || p.ends_with("b")));
+    }
+
+    #[test]
+    fn cursor_for_falls_back_to_legacy_last_commit_when_map_empty() {
+        let st = RunState {
+            last_commit: Some("abc123".into()),
+            last_commits: std::collections::HashMap::new(),
+            ..Default::default()
+        };
+        assert_eq!(
+            cursor_for(&st, r"D:\release\svc").as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn cursor_for_prefers_per_repo_map_over_legacy() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(norm_repo_key(r"D:\release\a"), "head-a".into());
+        map.insert(norm_repo_key(r"D:\release\b"), "head-b".into());
+        let st = RunState {
+            last_commit: Some("legacy".into()),
+            last_commits: map,
+            ..Default::default()
+        };
+        assert_eq!(cursor_for(&st, r"D:\release\a").as_deref(), Some("head-a"));
+        assert_eq!(cursor_for(&st, r"D:\release\b").as_deref(), Some("head-b"));
+        assert_eq!(cursor_for(&st, r"D:\release\c"), None);
+    }
+
+    #[test]
+    fn merge_change_deltas_prefixes_repo_names() {
+        let a = ChangeDelta {
+            head: "aaa".into(),
+            files: vec!["src/A.java".into()],
+            commits: vec!["aaaa feat a".into()],
+            diff_excerpt: "diff a".into(),
+            diff_truncated: false,
+        };
+        let b = ChangeDelta {
+            head: "bbb".into(),
+            files: vec!["src/B.java".into()],
+            commits: vec!["bbbb feat b".into()],
+            diff_excerpt: "diff b".into(),
+            diff_truncated: false,
+        };
+        let m = merge_change_deltas(
+            &[
+                (r"D:\x\match.service".into(), a),
+                (r"D:\x\quote.service".into(), b),
+            ],
+            24_000,
+        );
+        assert!(m.files.iter().any(|f| f.starts_with("match.service:")));
+        assert!(m.files.iter().any(|f| f.starts_with("quote.service:")));
+        assert!(m.commits.iter().any(|c| c.contains("match.service:")));
+        assert!(m.diff_excerpt.contains("### match.service"));
+        assert!(m.diff_excerpt.contains("### quote.service"));
+        assert_eq!(m.head, "bbb");
     }
 
     #[test]
@@ -1495,20 +1932,25 @@ mod tests {
     }
 
     #[test]
-    fn classify_and_strategy() {
-        let b = classify_changes(&[
-            "src/foo/UserController.rs".into(),
-            "Cargo.toml".into(),
-        ]);
-        assert!(b.api && b.module && b.arch);
-        let s = strategy_block(&b);
-        assert!(s.contains("API"));
-        assert!(s.contains("模块"));
-        assert!(s.contains("架构"));
+    fn normalize_prompt_template_trims_and_caps() {
+        assert_eq!(normalize_prompt_template("  "), "");
+        assert_eq!(normalize_prompt_template("  hi  "), "hi");
+        let long: String = "字".repeat(PROMPT_CHAR_CAP + 50);
+        let n = normalize_prompt_template(&long);
+        assert_eq!(n.chars().count(), PROMPT_CHAR_CAP);
     }
 
     #[test]
-    fn build_docgen_prompt_includes_log_and_diff() {
+    fn fill_docgen_template_replaces_placeholders() {
+        let out = fill_docgen_template(
+            "dir={doc_dir} br={branch} x={files}",
+            &[("doc_dir", "doc"), ("branch", "release"), ("files", "- a.rs")],
+        );
+        assert_eq!(out, "dir=doc br=release x=- a.rs");
+    }
+
+    #[test]
+    fn build_docgen_prompt_empty_template_uses_default_without_strategy() {
         let delta = ChangeDelta {
             head: "abc".into(),
             files: vec!["src/a.rs".into()],
@@ -1516,12 +1958,44 @@ mod tests {
             diff_excerpt: "@@ -1 +1 @@\n-old\n+new".into(),
             diff_truncated: true,
         };
-        let p = build_docgen_prompt("doc", "release", &delta);
+        let p = build_docgen_prompt("", "doc", "release", &delta);
         assert!(p.contains("提交摘要"));
         assert!(p.contains("deadbeef fix login"));
-        assert!(p.contains("变更 diff 摘录"));
+        assert!(p.contains("变更 diff 摘录") || p.contains("diff"));
         assert!(p.contains("已截断"));
-        assert!(p.contains("模块变更策略") || p.contains("通用策略") || p.contains("更新策略"));
+        assert!(p.contains("`doc/`") || p.contains("doc/"));
+        assert!(!p.contains("更新策略"));
+        assert!(!p.contains("模块变更策略"));
+        assert!(!p.contains("【API 变更策略】"));
+    }
+
+    #[test]
+    fn build_docgen_prompt_custom_template() {
+        let delta = ChangeDelta {
+            head: "abc".into(),
+            files: vec!["x.rs".into()],
+            commits: vec!["c1".into()],
+            diff_excerpt: "d".into(),
+            diff_truncated: false,
+        };
+        let p = build_docgen_prompt(
+            "只看 {files} 改 {doc_dir} @ {branch}",
+            "docs",
+            "main",
+            &delta,
+        );
+        assert!(p.contains("- x.rs"));
+        assert!(p.contains("docs"));
+        assert!(p.contains("main"));
+        assert!(!p.contains("{files}"));
+    }
+
+    #[test]
+    fn build_quality_prompt_injects_summary() {
+        let p = build_quality_prompt("", "doc", "release", &["a.rs".into()], "已更新 a");
+        assert!(p.contains("已更新 a"));
+        assert!(p.contains("- a.rs"));
+        assert!(!p.contains("{summary}"));
     }
 
     #[test]

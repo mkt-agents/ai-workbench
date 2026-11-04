@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { SlidersHorizontal } from "lucide-react";
 import { useGlobalStore } from "../core/store";
 import {
   exportWecomDiagnosticRequest, fetchWecomDiagnosticRequest, fetchWecomDiagnostics,
@@ -200,7 +201,12 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
   return (
     <section className="wecom-diag-block" aria-label={label("title")} aria-busy={busy}>
       <div className="wecom-diag-head">
-        <span>{label("title")}</span>
+        <div className="wecom-diag-head-main">
+          <span className="wecom-diag-icon" aria-hidden>
+            <SlidersHorizontal size={13} />
+          </span>
+          <span>{label("title")}</span>
+        </div>
         <span className="wecom-diag-hint">{label("newestFirst")}</span>
       </div>
       {/* 三条长说明默认收起：筛选行和结果才是这一块的主体，说明不占版面 */}
