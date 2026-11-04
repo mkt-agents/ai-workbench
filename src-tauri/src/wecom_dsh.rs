@@ -1432,6 +1432,24 @@ pub fn friendly_turn_error(raw: &str) -> String {
             "当前模型的输出上限（maxTokens）设得过大，接口已拒绝。请到 DSH → 模型页把该模型的最长输出调到 ≤131072（建议 8192–32768），再到本页点「重新同步」并重连通道；新版本镜像也会自动钳制过大值。（原始错误：{raw}）"
         );
     }
+    // 上游（模型服务商 / 中转站）连不上：DSH 只会回一句 Connection error
+    if lower.contains("connection error")
+        || lower.contains("connection reset")
+        || lower.contains("econnreset")
+        || lower.contains("econnrefused")
+        || lower.contains("etimedout")
+        || lower.contains("socket hang up")
+        || lower.contains("network error")
+    {
+        return format!(
+            "模型服务连接中断（DSH 报 Connection error）：多半是中转站/代理断流或网络超时，不是本地配置问题。先去「回答设置」换一个模型或 provider 试同样的问题，能通就说明原来那条通道有问题。本轮采集点没有推进，修好后点「立即更新」或等下一次定时，会把同一批变更重新跑一遍。（原始错误：{raw}）"
+        );
+    }
+    if lower.contains("429") && (lower.contains("rate") || lower.contains("too many")) {
+        return format!(
+            "模型服务限流（429）：这一轮调用被拒。等几分钟再试，或换一个 provider / 调低并发。（原始错误：{raw}）"
+        );
+    }
     if lower.contains("session/resume")
         || lower.contains("resume 失败")
         || lower.contains("resume失败")

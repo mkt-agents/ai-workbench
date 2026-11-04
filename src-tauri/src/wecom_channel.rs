@@ -252,6 +252,9 @@ pub struct WecomApplyRequest {
     /// 轮询 origin/release 超前后自动跑。
     #[serde(default)]
     pub docgen_poll_release: bool,
+    /// 采集前先同步来源仓（fetch + 仅快进）。
+    #[serde(default)]
+    pub docgen_sync_sources: bool,
     /// 文档自动更新用哪个引擎：`inherit`（跟随回答设置，默认）| `tianji` | `dsh`。
     #[serde(default)]
     pub docgen_engine: String,
@@ -605,6 +608,10 @@ pub async fn wecom_docgen_run_now(
     if let Some(reason) = report.skipped_reason {
         return Ok(format!("已跳过：{reason}"));
     }
+    if report.failed() {
+        // 采集点没推进：同一批变更下一轮还会重跑
+        return Err(format!("{}（采集点未推进，下次仍会重跑这批变更）", report.error));
+    }
     let preview_tag = if report.preview { "（预览未落盘）" } else { "" };
     let mut body = format!(
         "已更新{preview_tag}：分支 {}，{} 个变更文件，群通知{}。\n{}",
@@ -634,6 +641,28 @@ pub async fn wecom_docgen_run_now(
 #[tauri::command]
 pub async fn wecom_docgen_history() -> Result<Vec<crate::wecom_docgen::DocgenHistoryItem>, String> {
     Ok(crate::wecom_docgen::list_history())
+}
+
+/// 最近一次文档更新进度快照（页面重新挂载时恢复进度卡用）。
+#[tauri::command]
+pub async fn wecom_docgen_progress(
+) -> Result<crate::wecom_docgen::DocgenProgressSnapshot, String> {
+    Ok(crate::wecom_docgen::progress_snapshot())
+}
+
+/// 重置采集点：`repos` 为空 = 全部仓；否则只清这几个（按规范化路径匹配）。
+/// 清完顺带清轮询去重，下次运行 / 下一次 tick 会从回溯窗口重新采集。
+#[tauri::command]
+pub async fn wecom_docgen_reset_cursor(
+    repos: Option<Vec<String>>,
+) -> Result<String, String> {
+    let removed = crate::wecom_docgen::reset_cursors(repos.as_deref());
+    if removed == 0 {
+        return Ok("没有可重置的采集点（这些仓本来就没记录）".into());
+    }
+    Ok(format!(
+        "已重置 {removed} 个仓的采集点；下次运行会从「回溯天数」窗口重新采集这些仓的变更"
+    ))
 }
 
 #[derive(Debug, Serialize)]
@@ -884,6 +913,7 @@ pub async fn wecom_channel_apply(
         preview_mode: req.docgen_preview,
         quality_check: req.docgen_quality_check,
         poll_release: req.docgen_poll_release,
+        sync_sources: req.docgen_sync_sources,
         lookback_days: normalize_lookback_days(req.docgen_lookback_days),
         repo_allowlist: normalize_repo_allowlist(&req.docgen_repo_allowlist, &workspace),
         system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_system_prompt),

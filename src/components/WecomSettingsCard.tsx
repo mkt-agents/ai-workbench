@@ -57,6 +57,8 @@ import {
   restartWecomChannel,
   revokeWecomUser,
   fetchWecomDocgenHistory,
+  fetchWecomDocgenProgress,
+  resetWecomDocgenCursor,
   runWecomDocgenNow,
   startWecomQr,
   pollWecomQr,
@@ -74,6 +76,27 @@ function pathKey(p: string): string {
 }
 
 const MAX_JOBS_CHOICES = [1, 2, 4, 8, 12, 16, 24, 32];
+
+/** 文档更新的进度分段：与后端 `progress.stage(...)` 的阶段名对齐 */
+const DOCGEN_STEPS = ["collect", "write", "quality", "commit", "notify"] as const;
+const DOCGEN_PHASE_STEP: Record<string, number> = {
+  workspace: 0,
+  status: 0,
+  branch: 0,
+  sync: 0,
+  collect: 0,
+  agent: 1,
+  quality: 2,
+  preview: 3,
+  commit: 3,
+  publish: 3,
+  notify: 4,
+  cursor: 4,
+  done: DOCGEN_STEPS.length,
+};
+function docgenStepIndex(phase: string): number {
+  return DOCGEN_PHASE_STEP[phase] ?? -1;
+}
 
 /** Controlled text that follows persisted settings unless the field is focused. */
 function useFieldDraft(saved: string) {
@@ -418,6 +441,7 @@ export default function WecomSettingsCard() {
   const [docgenHistoryBusy, setDocgenHistoryBusy] = useState(false);
   const [docgenProgress, setDocgenProgress] = useState<WecomDocgenProgress | null>(null);
   const [docgenScanBusy, setDocgenScanBusy] = useState(false);
+  const [docgenResetBusy, setDocgenResetBusy] = useState(false);
   // null = 尚未成功扫描；[] = 扫描成功但没有子仓。两者不能混为一谈。
   const [docgenScanned, setDocgenScanned] = useState<GitScannedRepo[] | null>(null);
   const [docgenScanRoot, setDocgenScanRoot] = useState("");
@@ -503,9 +527,6 @@ export default function WecomSettingsCard() {
   const releaseBranch = useFieldDraft(settings.wecomReleaseBranch ?? "");
   const autoUpdateTime = useFieldDraft(settings.wecomAutoUpdateTime ?? "");
   const docgenCron = useFieldDraft(settings.wecomDocgenCron ?? "");
-  // 回溯天数是数字框：原先每敲一个字符就 push 一次（每次都走一遍通道 apply + busy），
-  // 改成和别的文本框一样，失焦才落盘。
-  const docgenLookback = useFieldDraft(String(settings.wecomDocgenLookbackDays ?? 7));
   const webhookDraft = useFieldDraft(settings.wecomWebhookUrl ?? "");
 
   const refresh = useCallback(async () => {
@@ -604,6 +625,19 @@ export default function WecomSettingsCard() {
       : "inherit";
   /** 文档更新实际跑哪个引擎（`inherit` 时跟回话引擎一致）。 */
   const docgenEngineResolved = docgenEngine === "inherit" ? engine : docgenEngine;
+  /** 回溯天数：预设档位足够，别让人手输 0–30 的任意数字（也免得出现 31、-1 这种值） */
+  const lookbackValue = (() => {
+    const n = settings.wecomDocgenLookbackDays;
+    return typeof n === "number" && Number.isFinite(n)
+      ? Math.max(0, Math.min(30, Math.trunc(n)))
+      : 7;
+  })();
+  const lookbackChoices = useMemo(() => {
+    const base = [0, 3, 7, 14, 30];
+    return base.includes(lookbackValue)
+      ? base
+      : [...base, lookbackValue].sort((a, b) => a - b);
+  }, [lookbackValue]);
   /** 文档更新留空时实际沿用的 DSH 模型名（下拉里直接写出来，省得猜）。 */
   const inheritedDshModel = (() => {
     const v = (settings.wecomDshModel ?? "").trim();
@@ -664,6 +698,18 @@ export default function WecomSettingsCard() {
       .then(setDocgenHistory)
       .catch(() => {});
   }, [section]);
+
+  // 切到别的侧栏页会卸载整个 IM 机器人卡片：进度卡从后端快照恢复
+  // （后端那一轮还在跑，或者已经有结果），不然回来只剩一张空壳。
+  useEffect(() => {
+    void fetchWecomDocgenProgress()
+      .then(({ progress, running }) => {
+        // 按钮锁只看后端真实状态，别被一份过期的 "running" 事件永久禁掉
+        setDocgenBusy(running);
+        if (progress) setDocgenProgress((prev) => prev ?? progress);
+      })
+      .catch(() => {});
+  }, []);
 
   useTauriEvent<WecomDocgenProgress>(WECOM_DOCGEN_PROGRESS_EVENT, (event) => {
     const progress = event.payload;
@@ -2234,36 +2280,90 @@ export default function WecomSettingsCard() {
                 >
                   {t("wecom.docgenRepoClear")}
                 </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy || docgenResetBusy}
+                  onClick={() => {
+                    const selected = normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist);
+                    const days = settings.wecomDocgenLookbackDays ?? 7;
+                    void (async () => {
+                      const ok = await confirm({
+                        title: t("wecom.docgenResetCursor"),
+                        message:
+                          selected.length > 0
+                            ? t("wecom.docgenResetCursorConfirm", {
+                                count: selected.length,
+                                days,
+                              })
+                            : t("wecom.docgenResetCursorConfirmAll", { days }),
+                      });
+                      if (!ok) return;
+                      setMsg("");
+                      setDocgenResetBusy(true);
+                      try {
+                        setMsg(await resetWecomDocgenCursor(selected.length ? selected : undefined));
+                      } catch (e) {
+                        setMsg(String(e));
+                      } finally {
+                        setDocgenResetBusy(false);
+                      }
+                    })();
+                  }}
+                >
+                  {t("wecom.docgenResetCursor")}
+                </button>
               </div>
             </div>
             <p className="setting-hint wecom-block-lead">{t("wecom.docgenRepoAllowlistHint")}</p>
-            {/* 补跑时往前看多少天：这是「采集范围」，放在内容这页，别占调度的位置 */}
+            {/* 采集前同步：只 fetch + 快进，不改本地提交 */}
+            <Row
+              asSwitch
+              label={t("wecom.docgenSyncSources")}
+              control={
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings.wecomDocgenSyncSources)}
+                    onChange={(e) => void push({ wecomDocgenSyncSources: e.target.checked })}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              }
+              hint={
+                <Hint
+                  summary={t("wecom.docgenSyncSourcesHintShort")}
+                  details={t("wecom.docgenSyncSourcesHint")}
+                />
+              }
+            />
+            {/* 补跑上限：只在「新加的仓」或「停跑超过 N 天」时才参与计算，日常按采集点走 */}
             <Row
               label={t("wecom.docgenLookbackDays")}
               control={
-                <input
-                  className="input-field"
-                  type="number"
-                  min={0}
-                  max={30}
-                  step={1}
-                  value={docgenLookback.value}
-                  onFocus={() => {
-                    docgenLookback.focused.current = true;
-                  }}
-                  onChange={(e) => docgenLookback.setValue(e.target.value)}
-                  onBlur={() => {
-                    docgenLookback.focused.current = false;
-                    const raw = Number(docgenLookback.value);
-                    const n = Number.isFinite(raw) ? Math.max(0, Math.min(30, Math.trunc(raw))) : 7;
-                    docgenLookback.setValue(String(n));
-                    if (n !== (settings.wecomDocgenLookbackDays ?? 7)) {
-                      void push({ wecomDocgenLookbackDays: n });
-                    }
-                  }}
+                <select
+                  className="input-field wecom-split"
+                  value={String(lookbackValue)}
+                  disabled={busy}
+                  onChange={(e) =>
+                    void push({ wecomDocgenLookbackDays: Number(e.target.value) })
+                  }
+                >
+                  {lookbackChoices.map((n) => (
+                    <option key={n} value={n}>
+                      {n === 0
+                        ? t("wecom.docgenLookbackUnlimited")
+                        : t("wecom.docgenLookbackDaysValue", { count: n })}
+                    </option>
+                  ))}
+                </select>
+              }
+              hint={
+                <Hint
+                  summary={t("wecom.docgenLookbackDaysHintShort")}
+                  details={t("wecom.docgenLookbackDaysHint")}
                 />
               }
-              hint={<p className="setting-hint">{t("wecom.docgenLookbackDaysHint")}</p>}
             />
             <div className="wecom-allowlist">
               {(() => {
@@ -2615,48 +2715,69 @@ export default function WecomSettingsCard() {
               </div>
             </div>
 
-            {docgenProgress ? (
-              <div
-                className={`wecom-docgen-progress is-${docgenProgress.status}`}
-                role="status"
-                aria-live="polite"
-              >
-                <div className="wecom-docgen-progress-head">
-                  <span className="wecom-docgen-progress-label">
-                    {t(`wecom.docgenPhase.${docgenProgress.phase}`, {
-                      defaultValue: docgenProgress.phase,
-                    })}
-                  </span>
-                  <span className="wecom-docgen-progress-meta">
-                    {t(`wecom.docgenTrigger.${docgenProgress.trigger}`, {
-                      defaultValue: docgenProgress.trigger,
-                    })}
-                    {" · "}
-                    {Math.max(0, Math.min(100, Math.round(docgenProgress.percent)))}%
-                  </span>
-                </div>
-                {docgenProgress.detail ? (
-                  <p className="wecom-docgen-progress-detail">{docgenProgress.detail}</p>
-                ) : null}
-                <div
-                  className="wecom-docgen-progress-track"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.max(
-                    0,
-                    Math.min(100, Math.round(docgenProgress.percent)),
-                  )}
-                >
-                  <div
-                    className="wecom-docgen-progress-fill"
-                    style={{
-                      width: `${Math.max(0, Math.min(100, docgenProgress.percent))}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            ) : null}
+            {docgenProgress && docgenProgress.status && docgenProgress.phase
+              ? (() => {
+                  const progress = docgenProgress;
+                  const pct = Math.max(0, Math.min(100, Math.round(progress.percent)));
+                  const running = progress.status === "running";
+                  const step = docgenStepIndex(progress.phase);
+                  return (
+                    <div
+                      className={`wecom-docgen-progress is-${progress.status}`}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <div className="wecom-docgen-progress-head">
+                        <span className="wecom-docgen-progress-pulse" aria-hidden />
+                        <span className="wecom-docgen-progress-label">
+                          {t(`wecom.docgenPhase.${progress.phase}`, {
+                            defaultValue: progress.phase,
+                          })}
+                        </span>
+                        <span className="wecom-docgen-progress-meta">
+                          <span>
+                            {t(`wecom.docgenTrigger.${progress.trigger}`, {
+                              defaultValue: progress.trigger,
+                            })}
+                          </span>
+                          <b>{pct}%</b>
+                        </span>
+                      </div>
+                      <div
+                        className="wecom-docgen-progress-track"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={pct}
+                      >
+                        <div
+                          className="wecom-docgen-progress-fill"
+                          style={{ width: `${pct}%` }}
+                        />
+                        {running ? (
+                          <span className="wecom-docgen-progress-beam" aria-hidden />
+                        ) : null}
+                      </div>
+                      <ol className="wecom-docgen-steps">
+                        {DOCGEN_STEPS.map((key, index) => (
+                          <li
+                            key={key}
+                            className={
+                              step > index ? "is-done" : step === index ? "is-current" : ""
+                            }
+                          >
+                            <i className="wecom-docgen-step-dot" aria-hidden />
+                            <span>{t(`wecom.docgenStep.${key}`)}</span>
+                          </li>
+                        ))}
+                      </ol>
+                      {progress.detail ? (
+                        <p className="wecom-docgen-progress-detail">{progress.detail}</p>
+                      ) : null}
+                    </div>
+                  );
+                })()
+              : null}
           </div>
 
           <div className="wecom-block-card" hidden={docgenView !== "publish"}>

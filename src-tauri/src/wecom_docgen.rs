@@ -82,6 +82,9 @@ pub struct DocgenConfig {
     /// 轮询各来源仓本地 HEAD，前进则自动跑（不装 git hook）。
     #[serde(default)]
     pub poll_release: bool,
+    /// 采集前先同步来源仓（fetch + 仅快进，不 rebase/reset）。默认关。
+    #[serde(default)]
+    pub sync_sources: bool,
     /// 补跑时变更回溯天数（0=不限制；默认 7，上限 30）。
     #[serde(default = "default_lookback_days")]
     pub lookback_days: u32,
@@ -124,6 +127,7 @@ impl Default for DocgenConfig {
             preview_mode: false,
             quality_check: false,
             poll_release: false,
+            sync_sources: false,
             lookback_days: 7,
             repo_allowlist: Vec::new(),
             system_prompt: String::new(),
@@ -265,6 +269,34 @@ fn set_cursor(st: &mut RunState, repo: &str, head: &str) {
     st.last_commit = Some(head.trim().to_string());
 }
 
+/// 清掉采集点（设置页「重置采集点」）：`None` = 全部，`Some(list)` = 指定仓。
+///
+/// 同时清掉轮询去重键，否则重置了也不会立刻触发（去重记的是「HEAD + 旧游标」）。
+/// 返回实际清掉的仓数。
+pub fn reset_cursors(repos: Option<&[String]>) -> usize {
+    let mut st = load_state();
+    let removed = match repos {
+        None => {
+            let n = st.last_commits.len();
+            st.last_commits.clear();
+            n
+        }
+        Some(list) => {
+            let keys: Vec<String> = list.iter().map(|p| norm_repo_key(p)).collect();
+            let before = st.last_commits.len();
+            st.last_commits.retain(|key, _| !keys.contains(key));
+            before - st.last_commits.len()
+        }
+    };
+    // 旧字段只在 last_commits 为空时兜底，一起清掉，别让它把游标“还回来”。
+    if st.last_commits.is_empty() {
+        st.last_commit = None;
+    }
+    st.last_poll_head = None;
+    save_state(&st);
+    removed
+}
+
 fn state_path() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA").map(PathBuf::from)?;
     let dir = base.join("com.ai-workbench.app").join("wecom-dsh");
@@ -390,6 +422,8 @@ fn history_from_report(
     let preview = trigger == RunTrigger::Preview || report.preview;
     let status = if report.skipped_reason.is_some() {
         "skip"
+    } else if report.failed() {
+        "fail"
     } else {
         "ok"
     };
@@ -403,7 +437,12 @@ fn history_from_report(
         commit_note: report.commit_note.clone(),
         quality: truncate_chars(quality, 800),
         pushed: report.pushed,
-        error: report.skipped_reason.clone().unwrap_or_default(),
+        // 失败原因优先于跳过原因：这两者不会同时出现
+        error: if report.failed() {
+            report.error.clone()
+        } else {
+            report.skipped_reason.clone().unwrap_or_default()
+        },
         preview,
         webhook_errors: webhook_errors.to_vec(),
     }
@@ -555,10 +594,10 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
 
     let sources = resolve_change_sources(&cfg.repo_allowlist, &workspace);
     let st = load_state();
+    // 返回「第一个落后的仓」及其 (HEAD, 旧游标)，去重键要带上游标：
+    // 只按 HEAD 去重时，改白名单 / 重新勾上某个仓会被上一次的 tip 直接挡掉，等不到新提交。
     let ahead = {
-        tokio::task::spawn_blocking(move || -> Result<(bool, String), String> {
-            let mut any = false;
-            let mut tip = String::new();
+        tokio::task::spawn_blocking(move || -> Result<Option<(String, String, String)>, String> {
             for repo in &sources {
                 if crate::git_commands::ensure_git_repo(repo).is_err() {
                     continue;
@@ -569,38 +608,41 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
                 if local.is_empty() {
                     continue;
                 }
-                tip = local.clone();
                 let cur = cursor_for(&st, repo);
                 if cur.as_deref() != Some(local.as_str()) {
-                    any = true;
-                    break;
+                    return Ok(Some((repo.clone(), local, cur.unwrap_or_default())));
                 }
             }
-            Ok((any, tip))
+            Ok(None)
         })
         .await
-        .map_err(|e| e.to_string())??
+        .map_err(|e| e.to_string())?
     };
-    let (need_run, local_tip) = ahead;
-    if !need_run {
+    let Some((ahead_repo, local_tip, ahead_cursor)) = ahead? else {
+        return Ok(());
+    };
+
+    let poll_key = format!("{local_tip}|{ahead_cursor}");
+    let mut st = load_state();
+    if st.last_poll_head.as_deref() == Some(poll_key.as_str()) {
+        // 同一 tip + 同一游标已触发过一轮仍没推进（例如那次跑失败）时，
+        // 等游标或 tip 再变，别每分钟重试。
         return Ok(());
     }
-
-    let mut st = load_state();
-    if !local_tip.is_empty() {
-        if st.last_poll_head.as_deref() == Some(local_tip.as_str()) {
-            // 同一 tip 已触发过一轮仍失败时，等 cursor 推进或 tip 再变。
-            return Ok(());
-        }
-        st.last_poll_head = Some(local_tip.clone());
-        save_state(&st);
-    }
+    st.last_poll_head = Some(poll_key);
+    save_state(&st);
 
     crate::wecom_log::write(
         "docgen",
         &format!(
-            "auto poll start local_head={}",
-            &local_tip[..8.min(local_tip.len())]
+            "auto poll start repo={} local_head={} cursor={}",
+            repo_short_name(&ahead_repo),
+            &local_tip[..8.min(local_tip.len())],
+            if ahead_cursor.is_empty() {
+                "-".to_string()
+            } else {
+                ahead_cursor[..8.min(ahead_cursor.len())].to_string()
+            }
         ),
     );
     match run_update_with_trigger(app, cfg, RunTrigger::Poll).await {
@@ -641,17 +683,50 @@ pub struct UpdateReport {
     pub preview: bool,
     pub quality: String,
     pub webhook_errors: Vec<String>,
+    /// 更新 / 质检步骤的失败原因（空 = 成功）。有值时：算失败、不提交、不推进游标。
+    pub error: String,
+}
+
+impl UpdateReport {
+    pub fn failed(&self) -> bool {
+        !self.error.trim().is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DocgenProgressEvent {
+pub struct DocgenProgressEvent {
     run_id: String,
     trigger: String,
     phase: String,
     percent: u8,
     status: String,
     detail: String,
+}
+
+/// 最近一次进度事件。页面切走再回来（组件重新挂载）时用它把进度卡恢复出来，
+/// 否则只能显示一张空壳。
+static LAST_PROGRESS: std::sync::Mutex<Option<DocgenProgressEvent>> = std::sync::Mutex::new(None);
+
+/// 读最近一次进度快照；从没跑过时是 None。
+pub fn last_progress() -> Option<DocgenProgressEvent> {
+    LAST_PROGRESS.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// 进度卡恢复用：最近一次事件 + 「现在是否真的在跑」。
+/// 页面卸载期间的收尾事件收不到，光看事件状态会把按钮永久锁成「运行中」。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocgenProgressSnapshot {
+    pub progress: Option<DocgenProgressEvent>,
+    pub running: bool,
+}
+
+pub fn progress_snapshot() -> DocgenProgressSnapshot {
+    DocgenProgressSnapshot {
+        progress: last_progress(),
+        running: is_running(),
+    }
 }
 
 struct RunProgress<'a> {
@@ -670,17 +745,18 @@ impl<'a> RunProgress<'a> {
     }
 
     fn emit(&self, phase: &str, percent: u8, status: &str, detail: &str) {
-        let _ = self.app.emit(
-            "wecom-docgen-progress",
-            DocgenProgressEvent {
-                run_id: self.run_id.clone(),
-                trigger: self.trigger.as_str().into(),
-                phase: phase.into(),
-                percent: percent.min(100),
-                status: status.into(),
-                detail: detail.trim().to_string(),
-            },
-        );
+        let event = DocgenProgressEvent {
+            run_id: self.run_id.clone(),
+            trigger: self.trigger.as_str().into(),
+            phase: phase.into(),
+            percent: percent.min(100),
+            status: status.into(),
+            detail: detail.trim().to_string(),
+        };
+        if let Ok(mut slot) = LAST_PROGRESS.lock() {
+            *slot = Some(event.clone());
+        }
+        let _ = self.app.emit("wecom-docgen-progress", event);
     }
 
     fn stage(&self, phase: &str, percent: u8) {
@@ -737,6 +813,11 @@ pub async fn run_update_with_trigger(
     let progress = RunProgress::new(app, trigger);
     let result = run_update_inner(app, cfg, trigger, &progress).await;
     match result {
+        // 流程走完但 AI 步骤失败：进度要显示失败，不能亮绿灯
+        Ok(report) if report.failed() => {
+            progress.finish_err(&report.error);
+            Ok(report)
+        }
         Ok(report) => {
             progress.finish_ok(&report);
             Ok(report)
@@ -800,6 +881,7 @@ async fn run_update_inner(
             preview,
             quality: String::new(),
             webhook_errors: errs,
+            error: String::new(),
         };
         append_history(&history_from_report(trigger, &report, "", &report.webhook_errors));
         return Ok(report);
@@ -812,6 +894,22 @@ async fn run_update_inner(
         tokio::task::spawn_blocking(move || update_release_branch(&ws, &br))
             .await
             .map_err(|e| e.to_string())??;
+    }
+
+    // 可选的「先同步来源仓」：只 fetch + 快进，绝不 rebase/reset/强推。
+    let mut sync_note = String::new();
+    if cfg.sync_sources {
+        progress.stage("sync", 28);
+        let repos = resolve_change_sources(&cfg.repo_allowlist, &workspace);
+        let ws = workspace.clone();
+        let br = branch.clone();
+        let notes = tokio::task::spawn_blocking(move || sync_source_repos(&ws, &repos, &br))
+            .await
+            .map_err(|e| e.to_string())?;
+        if !notes.is_empty() {
+            crate::wecom_log::write("docgen", &format!("sync sources: {}", notes.join("；")));
+            sync_note = notes.join("；");
+        }
     }
 
     progress.stage("collect", 35);
@@ -864,17 +962,23 @@ async fn run_update_inner(
             updated_docs: String::new(),
             commit_note: String::new(),
             pushed: false,
-            skipped_reason: Some("自上次更新以来无代码变更".into()),
+            skipped_reason: Some(format!(
+                "自上次更新以来无代码变更（本次监视 {} 个仓；未勾选的子仓不会被采集）",
+                sources.len()
+            )),
             preview,
             quality: String::new(),
             webhook_errors: Vec::new(),
+            error: String::new(),
         };
         append_history(&history_from_report(trigger, &report, "", &[]));
         return Ok(report);
     }
 
     progress.stage("agent", 55);
-    let updated_docs = update_docs_with_agent(
+    // 失败要留痕：这一轮算失败（不提交、不推进游标），下一轮还能重跑同一批变更。
+    let mut step_error = String::new();
+    let updated_docs = match update_docs_with_agent(
         app,
         &workspace,
         &doc_dir,
@@ -884,11 +988,17 @@ async fn run_update_inner(
         &cfg.engine,
     )
     .await
-    .unwrap_or_else(|e| format!("（文档更新步骤出错：{e}）"));
+    {
+        Ok(v) => v,
+        Err(e) => {
+            step_error = format!("文档更新失败：{e}");
+            format!("（{step_error}）")
+        }
+    };
 
     let quality = if cfg.quality_check {
         progress.stage("quality", 72);
-        quality_check_with_agent(
+        match quality_check_with_agent(
             app,
             &workspace,
             &doc_dir,
@@ -899,10 +1009,19 @@ async fn run_update_inner(
             &cfg.engine,
         )
         .await
-        .unwrap_or_else(|e| format!("（质量自检失败：{e}）"))
+        {
+            Ok(v) => v,
+            Err(e) => {
+                if step_error.is_empty() {
+                    step_error = format!("质量自检失败：{e}");
+                }
+                format!("（质量自检失败：{e}）")
+            }
+        }
     } else {
         String::new()
     };
+    let failed = !step_error.is_empty();
 
     progress.stage(
         if preview {
@@ -922,6 +1041,9 @@ async fn run_update_inner(
             .await
             .map_err(|e| e.to_string())?;
         commit_note = "预览模式：文档改动已丢弃，未提交".into();
+    } else if failed {
+        // 更新没成功就别把半成品提交进去（下一轮还要重跑这批变更）。
+        commit_note = "（本次更新失败，未提交）".into();
     } else if cfg.auto_commit {
         let ws = workspace.clone();
         let dd = doc_dir.clone();
@@ -941,16 +1063,25 @@ async fn run_update_inner(
         &commit_note,
         &quality,
         preview,
+        &sync_note,
     );
     progress.stage("notify", 92);
     let (pushed, webhook_errors) = notify_all(cfg, &body).await;
 
     progress.stage("cursor", 98);
-    let mut st = load_state();
-    for (repo, head) in &heads {
-        set_cursor(&mut st, repo, head);
+    // 失败时不推进游标：否则这批变更被永久跳过，下一轮也补不回来。
+    if !failed {
+        let mut st = load_state();
+        for (repo, head) in &heads {
+            set_cursor(&mut st, repo, head);
+        }
+        save_state(&st);
+    } else {
+        crate::wecom_log::write(
+            "docgen",
+            &format!("保留游标不推进（本轮失败）：{}", step_error),
+        );
     }
-    save_state(&st);
 
     let report = UpdateReport {
         branch,
@@ -963,6 +1094,7 @@ async fn run_update_inner(
         preview,
         quality: quality.clone(),
         webhook_errors: webhook_errors.clone(),
+        error: step_error,
     };
     let hist_trigger = if preview {
         RunTrigger::Preview
@@ -1068,6 +1200,80 @@ fn update_release_branch(workspace: &str, branch: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 采集前同步来源仓：`fetch` + **仅快进**。
+///
+/// 保守到底：脏工作区、本地领先/分叉、fetch 失败、快进失败 —— 一律跳过并记一句，
+/// 不 rebase、不 reset、不强推，用户的本地提交原样保留。
+fn sync_source_repos(workspace: &str, repos: &[String], branch: &str) -> Vec<String> {
+    use crate::git_commands::{ensure_git_repo, git_output, git_stdout};
+    let doc_key = norm_repo_key(workspace);
+    let track = format!("origin/{branch}");
+    let mut notes = Vec::new();
+    for repo in repos {
+        // 文档仓上面已经 fetch + ff 过了，别重复
+        if norm_repo_key(repo) == doc_key {
+            continue;
+        }
+        let name = repo_short_name(repo);
+        if ensure_git_repo(repo).is_err() {
+            notes.push(format!("{name}：不是 Git 仓库，跳过"));
+            continue;
+        }
+        let dirty = git_output(repo, &["status", "--porcelain"])
+            .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+            .unwrap_or(false);
+        if dirty {
+            notes.push(format!("{name}：有未提交改动，跳过同步"));
+            continue;
+        }
+        match git_output(repo, &["fetch", "origin", branch]) {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                notes.push(format!(
+                    "{name}：fetch 失败（{}）",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ));
+                continue;
+            }
+            Err(e) => {
+                notes.push(format!("{name}：fetch 失败（{e}）"));
+                continue;
+            }
+        }
+        let local = git_stdout(repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let local = local.trim().to_string();
+        let remote = git_stdout(repo, &["rev-parse", "--verify", "-q", &track]).unwrap_or_default();
+        let remote = remote.trim().to_string();
+        if local.is_empty() || remote.is_empty() {
+            notes.push(format!("{name}：缺少本地 HEAD 或 {track}"));
+            continue;
+        }
+        if local == remote {
+            continue;
+        }
+        let fast_forwardable = git_output(repo, &["merge-base", "--is-ancestor", &local, &remote])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !fast_forwardable {
+            notes.push(format!("{name}：本地领先或已分叉，跳过（不自动 rebase）"));
+            continue;
+        }
+        match git_output(repo, &["merge", "--ff-only", &track]) {
+            Ok(o) if o.status.success() => {
+                let count = git_stdout(repo, &["rev-list", "--count", &format!("{local}..{remote}")])
+                    .unwrap_or_default();
+                notes.push(format!("{name}：快进 {} 个提交", count.trim()));
+            }
+            Ok(o) => notes.push(format!(
+                "{name}：快进失败（{}）",
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => notes.push(format!("{name}：快进失败（{e}）")),
+        }
+    }
+    notes
 }
 
 /// 增量：文件列表 + commit 摘要 + 有界 diff。
@@ -1203,7 +1409,22 @@ pub(crate) fn clamp_delta_prev(
         }
         None => false,
     };
-    Ok(pick_clamped_prev(prev, Some(boundary), ancestor))
+    let chosen = pick_clamped_prev(prev, Some(boundary), ancestor);
+    // 新仓（还没有游标）恰好落在「窗口内没有提交」这一档：HEAD 本身就是 N 天前那条，
+    // 截出来的区间是空的 —— 仓刚加进来却采不到任何东西，游标还会被直接推到 HEAD。
+    // 退一步用最近一次提交，保证新增的仓至少能采到一次改动。
+    if prev_clean.is_none() && chosen.as_deref() == Some(boundary) {
+        let head = git_stdout(workspace, &["rev-parse", "HEAD"]).unwrap_or_default();
+        if head.trim() == boundary {
+            let parent = git_stdout(workspace, &["rev-parse", "--verify", "-q", "HEAD~1"])
+                .unwrap_or_default();
+            let parent = parent.trim();
+            if !parent.is_empty() {
+                return Ok(Some(parent.to_string()));
+            }
+        }
+    }
+    Ok(chosen)
 }
 
 fn collect_delta(
@@ -1760,6 +1981,7 @@ fn compose_notice(
     commit_note: &str,
     quality: &str,
     preview: bool,
+    sync_note: &str,
 ) -> String {
     let shown: Vec<String> = changed.iter().take(15).map(|f| format!("> {f}")).collect();
     let more = if changed.len() > 15 {
@@ -1787,17 +2009,23 @@ fn compose_notice(
     } else {
         "## 📘 逆向文档已更新"
     };
+    let sync_line = if sync_note.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\n**来源仓同步：**{}", sync_note.trim())
+    };
     format!(
         "{title}\n\
 **分支**：`{branch}`　**变更文件**：{} 个\n\n\
 **本次代码变更：**\n{}{}\n\n\
-**文档更新摘要：**\n{}{}{}",
+**文档更新摘要：**\n{}{}{}{}",
         changed.len(),
         shown.join("\n"),
         more,
         docs,
         commit_line,
-        quality_line
+        quality_line,
+        sync_line
     )
 }
 
@@ -2167,6 +2395,7 @@ mod tests {
             "已提交 1 篇文档（未推送）",
             "",
             false,
+            "account.sdk：快进 2 个提交",
         );
         assert!(n.contains("`release`"));
         assert!(n.contains("2 个"));
@@ -2177,7 +2406,7 @@ mod tests {
 
     #[test]
     fn notice_preview_title() {
-        let n = compose_notice("release", &["a.rs".into()], "摘要", "", "检查1", true);
+        let n = compose_notice("release", &["a.rs".into()], "摘要", "", "检查1", true, "");
         assert!(n.contains("预览"));
         assert!(n.contains("质量自检"));
         assert!(n.contains("检查1"));

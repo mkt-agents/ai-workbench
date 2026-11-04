@@ -551,6 +551,7 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       docgenDshModel: (settings.wecomDocgenDshModel ?? "").trim(),
       docgenDshEffort: (settings.wecomDocgenDshEffort ?? "").trim(),
       docgenLookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),
+      docgenSyncSources: Boolean(settings.wecomDocgenSyncSources),
       docgenRepoAllowlist: normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist),
       docgenSystemPrompt: normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt),
       docgenQualityPrompt: normalizeDocgenPrompt(settings.wecomDocgenQualityPrompt),
@@ -622,6 +623,16 @@ export async function testWecomDocgen(): Promise<string> {
   return invoke<string>("wecom_docgen_test");
 }
 
+/**
+ * 重置采集点：不传 `repos` 就清全部仓。
+ * 清完下次运行会从「回溯天数」窗口重新采集（已采集过的提交会再跑一遍）。
+ */
+export async function resetWecomDocgenCursor(repos?: string[]): Promise<string> {
+  return invoke<string>("wecom_docgen_reset_cursor", {
+    repos: repos && repos.length ? repos : null,
+  });
+}
+
 export type WecomDocgenHistoryItem = {
   at: string;
   trigger: string;
@@ -640,6 +651,18 @@ export type WecomDocgenHistoryItem = {
 /** 最近 30 条逆向文档更新历史（新 → 旧）。 */
 export async function fetchWecomDocgenHistory(): Promise<WecomDocgenHistoryItem[]> {
   return invoke<WecomDocgenHistoryItem[]>("wecom_docgen_history");
+}
+
+/**
+ * 最近一次文档更新进度快照 + 「现在是否真的在跑」。
+ * 页面切走再回来组件会重新挂载，靠它把进度卡恢复出来。
+ */
+export type WecomDocgenProgressSnapshot = {
+  progress: WecomDocgenProgress | null;
+  running: boolean;
+};
+export async function fetchWecomDocgenProgress(): Promise<WecomDocgenProgressSnapshot> {
+  return invoke<WecomDocgenProgressSnapshot>("wecom_docgen_progress");
 }
 
 export const WECOM_DOCGEN_PROGRESS_EVENT = "wecom-docgen-progress";

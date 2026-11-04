@@ -3319,22 +3319,75 @@
   align-items: center;
   gap: 8px;
 }
+/* —— 文档更新进度：状态点 + 流光进度条 + 分段步骤 ——
+   运行中靠动画表达「还在动」，结束（成功/跳过/失败）靠颜色，不靠动画 */
 .settings-page .wecom-docgen-progress {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin-top: var(--space-2);
   padding: var(--space-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--overlay-1);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 5%, var(--overlay-1)),
+    var(--overlay-1)
+  );
+  overflow: hidden;
+}
+/* 顶边一道状态线：运行中流光、成功绿、跳过黄、失败红 */
+.settings-page .wecom-docgen-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 75%, transparent),
+    transparent
+  );
+  animation: wecom-docgen-sweep 2.4s ease-in-out infinite;
+}
+.settings-page .wecom-docgen-progress.is-ok::before {
+  background: linear-gradient(90deg, transparent, var(--green), transparent);
+  animation: none;
+}
+.settings-page .wecom-docgen-progress.is-skip::before {
+  background: linear-gradient(90deg, transparent, var(--yellow), transparent);
+  animation: none;
+}
+.settings-page .wecom-docgen-progress.is-fail::before {
+  background: linear-gradient(90deg, transparent, var(--red), transparent);
+  animation: none;
 }
 .settings-page .wecom-docgen-progress-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px 12px;
+  gap: 4px 8px;
+}
+.settings-page .wecom-docgen-progress-pulse {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  animation: wecom-docgen-pulse 1.6s ease-out infinite;
+}
+.settings-page .wecom-docgen-progress.is-ok .wecom-docgen-progress-pulse {
+  background: var(--green);
+  animation: none;
+}
+.settings-page .wecom-docgen-progress.is-skip .wecom-docgen-progress-pulse {
+  background: var(--yellow);
+  animation: none;
+}
+.settings-page .wecom-docgen-progress.is-fail .wecom-docgen-progress-pulse {
+  background: var(--red);
+  animation: none;
 }
 .settings-page .wecom-docgen-progress-label {
   min-width: 0;
@@ -3343,10 +3396,20 @@
   font-weight: 600;
 }
 .settings-page .wecom-docgen-progress-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: auto;
   flex: none;
-  color: var(--text-2);
-  font-size: 11.5px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.settings-page .wecom-docgen-progress-meta b {
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
 }
 .settings-page .wecom-docgen-progress-detail {
   margin: 0;
@@ -3356,7 +3419,8 @@
   overflow-wrap: anywhere;
 }
 .settings-page .wecom-docgen-progress-track {
-  height: 5px;
+  position: relative;
+  height: 6px;
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--overlay-3);
@@ -3364,17 +3428,151 @@
 .settings-page .wecom-docgen-progress-fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
-  transition: width 0.25s ease;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 55%, transparent),
+    var(--accent)
+  );
+  transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* 运行中：填充本身做流动渐变，再叠一道高光扫过 */
+.settings-page .wecom-docgen-progress.is-running .wecom-docgen-progress-fill {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 45%, transparent),
+    var(--accent),
+    color-mix(in srgb, var(--accent) 45%, transparent)
+  );
+  background-size: 220% 100%;
+  animation: wecom-docgen-flow 2.4s linear infinite;
+}
+.settings-page .wecom-docgen-progress-beam {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--on-accent) 55%, transparent),
+    transparent
+  );
+  animation: wecom-docgen-beam 1.9s ease-in-out infinite;
 }
 .settings-page .wecom-docgen-progress.is-ok .wecom-docgen-progress-fill {
-  background: var(--green);
+  background: linear-gradient(90deg, var(--green), color-mix(in srgb, var(--green) 55%, var(--accent)));
 }
 .settings-page .wecom-docgen-progress.is-skip .wecom-docgen-progress-fill {
   background: var(--yellow);
 }
 .settings-page .wecom-docgen-progress.is-fail .wecom-docgen-progress-fill {
-  background: var(--red);
+  background: linear-gradient(90deg, var(--red), color-mix(in srgb, var(--red) 60%, var(--accent)));
+}
+/* 分段步骤：已过 / 当前 / 未到 */
+.settings-page .wecom-docgen-steps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.settings-page .wecom-docgen-steps > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: color var(--transition-fast);
+}
+.settings-page .wecom-docgen-step-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--overlay-3);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  transition: background-color var(--transition-fast);
+}
+.settings-page .wecom-docgen-steps > li.is-done {
+  color: var(--text-2);
+}
+.settings-page .wecom-docgen-steps > li.is-done .wecom-docgen-step-dot {
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: none;
+}
+.settings-page .wecom-docgen-steps > li.is-current {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.settings-page .wecom-docgen-steps > li.is-current .wecom-docgen-step-dot {
+  background: var(--accent);
+  box-shadow: none;
+  animation: wecom-docgen-pulse 1.6s ease-out infinite;
+}
+.settings-page .wecom-docgen-progress.is-ok .wecom-docgen-steps > li.is-current .wecom-docgen-step-dot,
+.settings-page .wecom-docgen-progress.is-ok .wecom-docgen-steps > li.is-done .wecom-docgen-step-dot {
+  background: var(--green);
+  animation: none;
+}
+.settings-page .wecom-docgen-progress.is-fail .wecom-docgen-step-dot {
+  animation: none;
+}
+@keyframes wecom-docgen-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@keyframes wecom-docgen-flow {
+  0% {
+    background-position: 0% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+@keyframes wecom-docgen-beam {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+@keyframes wecom-docgen-sweep {
+  0% {
+    opacity: 0.35;
+    transform: translateX(-30%);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateX(30%);
+  }
+  100% {
+    opacity: 0.35;
+    transform: translateX(-30%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-page .wecom-docgen-progress::before,
+  .settings-page .wecom-docgen-progress-pulse,
+  .settings-page .wecom-docgen-progress-beam,
+  .settings-page .wecom-docgen-progress-fill,
+  .settings-page .wecom-docgen-step-dot {
+    animation: none;
+  }
+  .settings-page .wecom-docgen-progress-beam {
+    display: none;
+  }
 }
 
 /* 扫码中：左侧二维码停在白底框里，右侧放提示、配对数字与码值（企微 / 微信共用） */
