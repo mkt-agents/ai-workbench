@@ -302,6 +302,12 @@ export interface AppSettings {
   wecomWebhookDingtalk?: string;
   /** 可选 5 段 unix cron；非空则覆盖每日 HH:MM */
   wecomDocgenCron?: string;
+  /** 文档更新引擎：inherit（跟随「回答设置」的引擎，默认）| tianji | dsh */
+  wecomDocgenEngine?: "inherit" | "tianji" | "dsh" | string;
+  /** 文档更新（DSH 档）的模型；空 = 沿用「回答设置」的 DSH 模型 */
+  wecomDocgenDshModel?: string;
+  /** 文档更新（DSH 档）的思考强度；空 = 沿用「回答设置」的 DSH 思考强度 */
+  wecomDocgenDshEffort?: string;
   /** 文档自动更新回溯天数（0=不限制，默认 7，上限 30） */
   wecomDocgenLookbackDays?: number;
   /** 文档自动更新：变更来源子仓白名单（绝对路径）；空=仅文档目录所在仓 */

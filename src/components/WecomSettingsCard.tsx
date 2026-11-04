@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Eye,
@@ -26,6 +26,7 @@ import {
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import WecomRequestDiagnostics from "./WecomRequestDiagnostics";
+import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useGlobalStore } from "../core/store";
 import type {
   AppSettings,
@@ -48,6 +49,7 @@ import {
   DEFAULT_DOCGEN_QUALITY_PROMPT,
   DEFAULT_DOCGEN_SYSTEM_PROMPT,
   DOCGEN_PROMPT_CHAR_CAP,
+  WECOM_DOCGEN_PROGRESS_EVENT,
   normalizeDocgenPrompt,
   normalizeDocgenRepoAllowlist,
   normalizeWecomMaxJobs,
@@ -61,6 +63,7 @@ import {
   syncDshProfile,
   testWecomDocgen,
   type WecomDocgenHistoryItem,
+  type WecomDocgenProgress,
   type WecomPairing,
   type WecomSessionLogPage,
   type WecomStatus,
@@ -205,11 +208,190 @@ function Row({
 /** 页面内部的小卡片 Tab：点谁只看谁，一屏放得下。 */
 type WecomSection = "channel" | "answer" | "trouble" | "autoupdate" | "access" | "diag";
 
-/** 扁平分区标题：与参考图一致，不使用图标卡片；右侧可挂开关 / 计数。 */
-function PanelHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
+/** 按码点截断（不切坏 emoji）；UTF-16 长度没超就当没超，省掉逐字符遍历。 */
+function clampPrompt(value: string): string {
+  if (value.length <= DOCGEN_PROMPT_CHAR_CAP) return value;
+  let i = 0;
+  let n = 0;
+  while (i < value.length && n < DOCGEN_PROMPT_CHAR_CAP) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length) {
+      const next = value.charCodeAt(i + 1);
+      i += next >= 0xdc00 && next <= 0xdfff ? 2 : 1;
+    } else {
+      i += 1;
+    }
+    n += 1;
+  }
+  return value.slice(0, i);
+}
+
+/** 码点计数：不建临时数组，提示词上万字符时也别在每次击键上分配。 */
+function promptCharCount(value: string): number {
+  let n = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length) {
+      const next = value.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) i += 1;
+    }
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * 提示词卡（更新 / 质检两个模板共用一个编辑器）。
+ *
+ * 草稿状态留在卡片内部：打字时只有这张卡重渲染，不会把整页（六个面板、十几张卡）
+ * 一起带着重算——那正是原来「提示词框里打字有点卡」的来源。
+ */
+function DocgenPromptCard({
+  hidden,
+  tab,
+  onTabChange,
+  system,
+  quality,
+  savedSystem,
+  savedQuality,
+  busy,
+  qualityCheck,
+  onToggleQualityCheck,
+  onSavePrompt,
+}: {
+  /** 二级页签切换时整卡隐藏（组件仍挂载，草稿切回来还在） */
+  hidden?: boolean;
+  tab: "system" | "quality";
+  onTabChange: (tab: "system" | "quality") => void;
+  /** 已生效的模板（未自定义时就是内置默认） */
+  system: string;
+  quality: string;
+  /** 已保存的原始值（空串 = 用默认） */
+  savedSystem: string;
+  savedQuality: string;
+  busy: boolean;
+  qualityCheck: boolean;
+  onToggleQualityCheck: (next: boolean) => void;
+  /** 传 undefined 表示回到内置默认 */
+  onSavePrompt: (which: "system" | "quality", value: string | undefined) => void;
+}) {
+  const { t } = useTranslation("settings");
+  const isSystem = tab === "system";
+  const systemDraft = useFieldDraft(system);
+  const qualityDraft = useFieldDraft(quality);
+  const draft = isSystem ? systemDraft : qualityDraft;
+  const count = useMemo(() => promptCharCount(draft.value), [draft.value]);
+  const defaultPrompt = isSystem ? DEFAULT_DOCGEN_SYSTEM_PROMPT : DEFAULT_DOCGEN_QUALITY_PROMPT;
+  const saved = isSystem ? savedSystem : savedQuality;
+
+  const commit = () => {
+    draft.focused.current = false;
+    const v = normalizeDocgenPrompt(draft.value);
+    if (v === normalizeDocgenPrompt(saved)) return;
+    onSavePrompt(tab, v && v !== normalizeDocgenPrompt(defaultPrompt) ? v : undefined);
+  };
+
   return (
-    <div className="wecom-panel-head">
-      <div className="hub-group-title">{title}</div>
+    <div className="wecom-block-card wecom-docgen-prompt-card" hidden={hidden}>
+      <div className="wecom-block-head">
+        <div className="wecom-block-head-main">
+          <span className="wecom-block-icon" aria-hidden>
+            <Sparkles size={14} />
+          </span>
+          <span className="wecom-block-title">{t("wecom.subDocgenPrompts")}</span>
+          <div
+            className="devtools-segmented wecom-head-seg"
+            role="group"
+            aria-label={t("wecom.subDocgenPrompts")}
+          >
+            {(["system", "quality"] as const).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`segmented-item${tab === item ? " active" : ""}`}
+                aria-pressed={tab === item}
+                onClick={() => onTabChange(item)}
+              >
+                {item === "system"
+                  ? t("wecom.docgenSystemPrompt")
+                  : t("wecom.docgenQualityPrompt")}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <p className="setting-hint wecom-block-lead">
+        {isSystem ? t("wecom.docgenSystemPromptHint") : t("wecom.docgenQualityPromptHint")}
+      </p>
+
+      <div className="wecom-editor-stack">
+        <textarea
+          className="input-field"
+          rows={12}
+          value={draft.value}
+          disabled={busy}
+          onFocus={() => {
+            draft.focused.current = true;
+          }}
+          onChange={(e) => draft.setValue(clampPrompt(e.target.value))}
+          onBlur={commit}
+        />
+        <div className="wecom-editor-foot">
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={busy}
+            onClick={() => {
+              draft.setValue(defaultPrompt);
+              onSavePrompt(tab, undefined);
+            }}
+          >
+            {t("wecom.docgenPromptReset")}
+          </button>
+          <span className="wecom-char-count">
+            {t("wecom.docgenPromptCharCount", { count, cap: DOCGEN_PROMPT_CHAR_CAP })}
+          </span>
+        </div>
+      </div>
+
+      <Row
+        asSwitch
+        label={t("wecom.docgenQualityCheck")}
+        control={
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={qualityCheck}
+              onChange={(e) => onToggleQualityCheck(e.target.checked)}
+            />
+            <span className="toggle-slider" />
+          </label>
+        }
+        hint={<p className="setting-hint">{t("wecom.docgenQualityCheckHint")}</p>}
+      />
+    </div>
+  );
+}
+
+/**
+ * 扁平分区标题：与参考图一致，不使用图标卡片；右侧可挂开关 / 计数。
+ *
+ * `bare` 用于「上面的 tab 已经写明这页叫什么」的场景：不再重复画标题，
+ * 把右挂件（二级页签）直接放到左边当这一页的主控件。
+ */
+function PanelHead({
+  title,
+  aside,
+  bare = false,
+}: {
+  title?: string;
+  aside?: React.ReactNode;
+  bare?: boolean;
+}) {
+  return (
+    <div className={`wecom-panel-head${bare ? " is-bare" : ""}`}>
+      {bare ? null : <div className="hub-group-title">{title}</div>}
       {aside ? <div className="wecom-panel-aside">{aside}</div> : null}
     </div>
   );
@@ -234,8 +416,11 @@ export default function WecomSettingsCard() {
   const [docgenBusy, setDocgenBusy] = useState(false);
   const [docgenHistory, setDocgenHistory] = useState<WecomDocgenHistoryItem[]>([]);
   const [docgenHistoryBusy, setDocgenHistoryBusy] = useState(false);
+  const [docgenProgress, setDocgenProgress] = useState<WecomDocgenProgress | null>(null);
   const [docgenScanBusy, setDocgenScanBusy] = useState(false);
-  const [docgenScanned, setDocgenScanned] = useState<GitScannedRepo[]>([]);
+  // null = 尚未成功扫描；[] = 扫描成功但没有子仓。两者不能混为一谈。
+  const [docgenScanned, setDocgenScanned] = useState<GitScannedRepo[] | null>(null);
+  const [docgenScanRoot, setDocgenScanRoot] = useState("");
   // 三个 Webhook 直接显示已保存的地址（可查看、可改），眼睛按钮可临时隐藏
   const webhookFeishuDraft = useFieldDraft(settings.wecomWebhookFeishu ?? "");
   const webhookDingtalkDraft = useFieldDraft(settings.wecomWebhookDingtalk ?? "");
@@ -307,21 +492,20 @@ export default function WecomSettingsCard() {
   const enhanceGroup = useFieldDraft(settings.wecomEnhanceGroup ?? "");
   const [enhanceTab, setEnhanceTab] = useState<"dm" | "group">("dm");
   const [docgenPromptTab, setDocgenPromptTab] = useState<"system" | "quality">("system");
+  /** 文档自动更新页的二级页签：调度 / 更新内容 / 执行与推送 */
+  const [docgenView, setDocgenView] = useState<"schedule" | "content" | "publish">("schedule");
+  /** 回答设置页的二级页签：引擎与工作区 / 回答与上下文 */
+  const [answerView, setAnswerView] = useState<"engine" | "answer">("engine");
+  /** 访问策略页的二级页签：谁能用 / 能用什么 */
+  const [accessView, setAccessView] = useState<"who" | "what">("who");
   const skywalkingAddr = useFieldDraft(skywalkingProfile.addr ?? "");
   const skywalkingHeader = useFieldDraft(skywalkingProfile.header ?? "");
   const releaseBranch = useFieldDraft(settings.wecomReleaseBranch ?? "");
   const autoUpdateTime = useFieldDraft(settings.wecomAutoUpdateTime ?? "");
   const docgenCron = useFieldDraft(settings.wecomDocgenCron ?? "");
-  const docgenSystemPrompt = useFieldDraft(
-    settings.wecomDocgenSystemPrompt?.trim()
-      ? settings.wecomDocgenSystemPrompt
-      : DEFAULT_DOCGEN_SYSTEM_PROMPT,
-  );
-  const docgenQualityPrompt = useFieldDraft(
-    settings.wecomDocgenQualityPrompt?.trim()
-      ? settings.wecomDocgenQualityPrompt
-      : DEFAULT_DOCGEN_QUALITY_PROMPT,
-  );
+  // 回溯天数是数字框：原先每敲一个字符就 push 一次（每次都走一遍通道 apply + busy），
+  // 改成和别的文本框一样，失焦才落盘。
+  const docgenLookback = useFieldDraft(String(settings.wecomDocgenLookbackDays ?? 7));
   const webhookDraft = useFieldDraft(settings.wecomWebhookUrl ?? "");
 
   const refresh = useCallback(async () => {
@@ -413,6 +597,30 @@ export default function WecomSettingsCard() {
   const dshState = status?.dsh?.state ?? "stopped";
   const dshLabel = t(`wecom.dsh.state.${dshState}`, { defaultValue: dshState });
   const dshReady = dshState === "ready";
+  // 文档自动更新可以单独选引擎：默认跟随上面的回话引擎。
+  const docgenEngine =
+    settings.wecomDocgenEngine === "dsh" || settings.wecomDocgenEngine === "tianji"
+      ? settings.wecomDocgenEngine
+      : "inherit";
+  /** 文档更新实际跑哪个引擎（`inherit` 时跟回话引擎一致）。 */
+  const docgenEngineResolved = docgenEngine === "inherit" ? engine : docgenEngine;
+  /** 文档更新留空时实际沿用的 DSH 模型名（下拉里直接写出来，省得猜）。 */
+  const inheritedDshModel = (() => {
+    const v = (settings.wecomDshModel ?? "").trim();
+    if (!v) return t("wecom.dshModelDefault");
+    const hit = (catalog?.groups ?? [])
+      .flatMap((group) => group.options)
+      .find((option) => option.value === v);
+    return hit?.name || v;
+  })();
+  const docgenEngineHint =
+    docgenEngine === "inherit"
+      ? t("wecom.docgenEngineInheritHint", {
+          engine: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
+        })
+      : docgenEngine === "dsh"
+        ? t("wecom.docgenEngineDshHint")
+        : t("wecom.docgenEngineTianjiHint");
 
   const loadLog = useCallback(async () => {
     const version = ++logGeneration.current;
@@ -457,13 +665,36 @@ export default function WecomSettingsCard() {
       .catch(() => {});
   }, [section]);
 
+  useTauriEvent<WecomDocgenProgress>(WECOM_DOCGEN_PROGRESS_EVENT, (event) => {
+    const progress = event.payload;
+    // 同内容不重渲染（进度事件可能连发几条）
+    setDocgenProgress((prev) =>
+      prev &&
+      prev.runId === progress.runId &&
+      prev.status === progress.status &&
+      prev.phase === progress.phase &&
+      prev.percent === progress.percent &&
+      prev.detail === progress.detail
+        ? prev
+        : progress,
+    );
+    if (progress.status === "running") {
+      setDocgenBusy(true);
+      return;
+    }
+    setDocgenBusy(false);
+    void fetchWecomDocgenHistory()
+      .then(setDocgenHistory)
+      .catch(() => {});
+  });
+
   const mirror = status?.dsh?.mirror ?? null;
 
-  const loadModels = useCallback(async (refresh: boolean) => {
+  const loadModels = useCallback(async (refresh: boolean, scope?: "channel" | "docgen") => {
     setCatalogBusy(true);
     setCatalogError("");
     try {
-      setCatalog(await fetchDshModels(refresh));
+      setCatalog(await fetchDshModels(refresh, scope));
     } catch (e) {
       setCatalogError(String(e));
     } finally {
@@ -472,9 +703,14 @@ export default function WecomSettingsCard() {
   }, []);
 
   // 引擎就绪后再拉模型目录；DSH 没起来时不主动去启进程。
+  // 两页共用同一份目录：回话引擎在 DSH 档且就绪时优先用它的；
+  // 否则文档更新单独选了 DSH（回话还留在天玑）时，从文档更新那套引擎读。
   useEffect(() => {
-    if (engine !== "dsh" || !dshReady || catalog) return;
-    void loadModels(false);
+    if (catalog) return;
+    // 只在回话引擎本来就在跑 DSH 时自动拉一次（同一份 DSH 安装，目录通用）。
+    // 文档更新那套引擎是懒起的：进页面就去 spawn 一个 node 只会让人以为界面卡住，
+    // 所以那边交给「刷新模型」按钮按需拉。
+    if (engine === "dsh" && dshReady) void loadModels(false, "channel");
   }, [engine, dshReady, catalog, loadModels]);
 
   const resyncProfile = async () => {
@@ -793,6 +1029,14 @@ export default function WecomSettingsCard() {
 
       {/* 小卡片 Tab：一屏只看一组设置，不再把六七块叠成一条长滚动 */}
       <div className="wecom-sections" role="tablist" aria-label={t("wecom.title")}>
+        {/*
+          顺序 = 「接入 → 行为 → 权限 → 能力 → 诊断」：
+          先连上（通道），再定怎么答（回答设置），紧接着收紧谁能用（访问策略），
+          然后是两块 AI 能力（线上排障 / 文档自动更新），最后才是排障入口（运行诊断）。
+          访问策略原来夹在「文档更新」和「诊断」之间，把能力区和诊断区切开了。
+          面板本身仍按原来的顺序挂在下面——隐藏面板用的是 `hidden`，不进焦点与无障碍树，
+          所以调整顺序只动这张表即可。
+        */}
         {(
           [
             {
@@ -804,6 +1048,11 @@ export default function WecomSettingsCard() {
               id: "answer",
               title: t("wecom.groupAnswer"),
               summary: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
+            },
+            {
+              id: "access",
+              title: t("wecom.groupAccess"),
+              summary: t("wecom.sectionPaired", { count: (settings.wecomPairedUsers ?? []).length }),
             },
             {
               id: "trouble",
@@ -821,13 +1070,12 @@ export default function WecomSettingsCard() {
               id: "autoupdate",
               title: t("wecom.groupAutoupdate"),
               summary: settings.wecomAutoUpdateEnabled
-                ? t("wecom.sectionDailyAt", { time: settings.wecomAutoUpdateTime || "23:00" })
+                ? settings.wecomDocgenCron?.trim()
+                  ? t("wecom.docgenCronSummary", {
+                      cron: settings.wecomDocgenCron.trim(),
+                    })
+                  : t("wecom.sectionDailyAt", { time: settings.wecomAutoUpdateTime || "23:00" })
                 : t("wecom.sectionOff"),
-            },
-            {
-              id: "access",
-              title: t("wecom.groupAccess"),
-              summary: t("wecom.sectionPaired", { count: (settings.wecomPairedUsers ?? []).length }),
             },
             {
               id: "diag",
@@ -1098,9 +1346,32 @@ export default function WecomSettingsCard() {
 
       {/* 2 · 回答设置：谁来回答、按什么口径回答、在哪个工作区回答 */}
       <div className="net-panel" hidden={section !== "answer"}>
-        <PanelHead title={t("wecom.groupAnswer")} />
+        {/* 四张卡按「谁来答 / 在哪答」与「怎么答 / 补什么料」分两页：
+            前者是配置（引擎、模型、工作区），后者是措辞（问答模式、自我介绍、上下文增强）。 */}
+        <PanelHead
+          bare
+          aside={
+            <div
+              className="devtools-segmented wecom-head-seg"
+              role="group"
+              aria-label={t("wecom.groupAnswer")}
+            >
+              {(["engine", "answer"] as const).map((view) => (
+                <button
+                  key={view}
+                  type="button"
+                  className={`segmented-item${answerView === view ? " active" : ""}`}
+                  aria-pressed={answerView === view}
+                  onClick={() => setAnswerView(view)}
+                >
+                  {t(`wecom.answerView.${view}`)}
+                </button>
+              ))}
+            </div>
+          }
+        />
         <div className="wecom-rows">
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={answerView !== "engine"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1287,7 +1558,7 @@ export default function WecomSettingsCard() {
             ) : null}
           </div>
 
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={answerView !== "answer"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1352,7 +1623,10 @@ export default function WecomSettingsCard() {
           </div>
 
           {/* 上下文增强：独立小卡片——标题 / 会话类型 / 总开关在头，正文、字数与动作在底部 */}
-          <div className={`wecom-enhance-card${enhanceEnabled ? " is-on" : ""}`}>
+          <div
+            className={`wecom-enhance-card${enhanceEnabled ? " is-on" : ""}`}
+            hidden={answerView !== "answer"}
+          >
             <div className="wecom-enhance-head">
               <div className="wecom-enhance-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1481,7 +1755,7 @@ export default function WecomSettingsCard() {
           </div>
 
           {/* 工作区与文档：和上面的增强卡片同一套壳，两个字段并排、说明落到卡片底部 */}
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={answerView !== "engine"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1674,10 +1948,34 @@ export default function WecomSettingsCard() {
 
       {/* 4 · 逆向文档自动更新：到点拉分支、改文档、提交、推群 */}
       <div className="net-panel" hidden={section !== "autoupdate"}>
-        <PanelHead title={t("wecom.groupAutoupdate")} />
+        {/* 这一页字段太多（调度 / 来源 / 提示词 / 推送 / 记录），按三段收成二级页签：
+            调度 = 多久跑一次、用什么跑；更新内容 = 读哪些仓、怎么写；
+            执行与推送 = 跑完怎么提交与通知。默认停在「调度」。 */}
+        <PanelHead
+          bare
+          aside={
+            <div
+              className="devtools-segmented wecom-head-seg"
+              role="group"
+              aria-label={t("wecom.groupAutoupdate")}
+            >
+              {(["schedule", "content", "publish"] as const).map((view) => (
+                <button
+                  key={view}
+                  type="button"
+                  className={`segmented-item${docgenView === view ? " active" : ""}`}
+                  aria-pressed={docgenView === view}
+                  onClick={() => setDocgenView(view)}
+                >
+                  {t(`wecom.docgenView.${view}`)}
+                </button>
+              ))}
+            </div>
+          }
+        />
         <div className="wecom-rows">
           {/* 1. 调度与触发 */}
-          <div className="wecom-block-card is-split">
+          <div className="wecom-block-card is-split" hidden={docgenView !== "schedule"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1707,6 +2005,93 @@ export default function WecomSettingsCard() {
                 </>
               }
             />
+
+            <Row
+              label={t("wecom.docgenEngineLabel")}
+              control={
+                <select
+                  className="input-field wecom-split"
+                  value={docgenEngine}
+                  disabled={busy}
+                  onChange={(e) => void push({ wecomDocgenEngine: e.target.value })}
+                >
+                  <option value="inherit">
+                    {t("wecom.docgenEngineInherit", {
+                      engine: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
+                    })}
+                  </option>
+                  <option value="tianji">{t("wecom.engineTianji")}</option>
+                  <option value="dsh">{t("wecom.engineDsh")}</option>
+                </select>
+              }
+              hint={<p className="setting-hint">{docgenEngineHint}</p>}
+            />
+
+            {/* DSH 档才有模型/思考强度：留空沿用「回答设置」的 DSH 选择 */}
+            {docgenEngineResolved === "dsh" ? (
+              <Row
+                label={t("wecom.dshModelRow")}
+                control={
+                  <>
+                    <GroupedSelect
+                      className="wecom-split"
+                      value={settings.wecomDocgenDshModel ?? ""}
+                      disabled={busy || catalogBusy}
+                      fallbackLabel={t("wecom.docgenDshInheritValue", {
+                        model: inheritedDshModel,
+                      })}
+                      staleLabel={t("wecom.dshModelMissing")}
+                      searchPlaceholder={t("wecom.dshModelSearch")}
+                      emptyLabel={t("wecom.dshModelNoMatch")}
+                      groups={(catalog?.groups ?? []).map((group) => ({
+                        key: group.group || group.name,
+                        label: group.name || group.group,
+                        options: group.options.map((option) => ({
+                          value: option.value,
+                          label: option.name || option.value,
+                          hint: option.description,
+                        })),
+                      }))}
+                      onChange={(next) => void push({ wecomDocgenDshModel: next })}
+                    />
+                    <select
+                      className="input-field wecom-split-effort"
+                      value={settings.wecomDocgenDshEffort ?? ""}
+                      disabled={busy || catalogBusy || !catalog?.effort}
+                      onChange={(e) => void push({ wecomDocgenDshEffort: e.target.value })}
+                    >
+                      <option value="">{t("wecom.docgenDshInherit")}</option>
+                      {(catalog?.effort?.options ?? [])
+                        .filter((option) => Boolean(option.value))
+                        .map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.name || option.value}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small wecom-split-refresh"
+                      disabled={busy || catalogBusy}
+                      onClick={() =>
+                        void loadModels(true, engine === "dsh" && dshReady ? "channel" : "docgen")
+                      }
+                    >
+                      {catalogBusy ? t("wecom.dshLoading") : t("wecom.dshRefreshModels")}
+                    </button>
+                  </>
+                }
+                hint={
+                  <p className="setting-hint">
+                    {catalogError
+                      ? catalogError
+                      : catalog
+                        ? t("wecom.docgenDshModelHint")
+                        : t("wecom.docgenDshModelNeedReady")}
+                  </p>
+                }
+              />
+            ) : null}
 
             <Row
               label={t("wecom.autoUpdateTime")}
@@ -1752,31 +2137,6 @@ export default function WecomSettingsCard() {
             />
 
             <Row
-              label={t("wecom.docgenLookbackDays")}
-              control={
-                <input
-                  className="input-field"
-                  type="number"
-                  min={0}
-                  max={30}
-                  step={1}
-                  value={
-                    typeof settings.wecomDocgenLookbackDays === "number"
-                      ? settings.wecomDocgenLookbackDays
-                      : 7
-                  }
-                  onChange={(e) => {
-                    const raw = Number(e.target.value);
-                    const n = Number.isFinite(raw) ? Math.trunc(raw) : 7;
-                    const clamped = Math.max(0, Math.min(30, n));
-                    void push({ wecomDocgenLookbackDays: clamped });
-                  }}
-                />
-              }
-              hint={<p className="setting-hint">{t("wecom.docgenLookbackDaysHint")}</p>}
-            />
-
-            <Row
               label={t("wecom.releaseBranch")}
               control={
                 <input
@@ -1815,7 +2175,7 @@ export default function WecomSettingsCard() {
           </div>
 
           {/* 2. 变更来源 */}
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={docgenView !== "content"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1831,12 +2191,23 @@ export default function WecomSettingsCard() {
                   onClick={() => {
                     const root =
                       (repoPath.value || settings.wecomRepoPath || settings.currentGitRepo || "").trim();
-                    if (!root) return;
+                    if (!root) {
+                      setDocgenScanned(null);
+                      setMsg(t("wecom.docgenRepoRootMissing"));
+                      return;
+                    }
+                    setMsg("");
                     setDocgenScanBusy(true);
                     void invocations
                       .invokeGitScanRepos(root, 1)
-                      .then((rows) => setDocgenScanned(rows ?? []))
-                      .catch(() => setDocgenScanned([]))
+                      .then((rows) => {
+                        setDocgenScanned(rows ?? []);
+                        setDocgenScanRoot(root);
+                      })
+                      .catch((e) => {
+                        setDocgenScanned(null);
+                        setMsg(String(e));
+                      })
                       .finally(() => setDocgenScanBusy(false));
                   }}
                 >
@@ -1845,9 +2216,11 @@ export default function WecomSettingsCard() {
                 <button
                   type="button"
                   className="btn btn-sm"
-                  disabled={busy || docgenScanned.length === 0}
+                  disabled={busy || (docgenScanned?.length ?? 0) === 0}
                   onClick={() => {
-                    const paths = normalizeDocgenRepoAllowlist(docgenScanned.map((r) => r.path));
+                    const paths = normalizeDocgenRepoAllowlist(
+                      (docgenScanned ?? []).map((r) => r.path),
+                    );
                     void push({ wecomDocgenRepoAllowlist: paths.length ? paths : undefined });
                   }}
                 >
@@ -1864,22 +2237,62 @@ export default function WecomSettingsCard() {
               </div>
             </div>
             <p className="setting-hint wecom-block-lead">{t("wecom.docgenRepoAllowlistHint")}</p>
+            {/* 补跑时往前看多少天：这是「采集范围」，放在内容这页，别占调度的位置 */}
+            <Row
+              label={t("wecom.docgenLookbackDays")}
+              control={
+                <input
+                  className="input-field"
+                  type="number"
+                  min={0}
+                  max={30}
+                  step={1}
+                  value={docgenLookback.value}
+                  onFocus={() => {
+                    docgenLookback.focused.current = true;
+                  }}
+                  onChange={(e) => docgenLookback.setValue(e.target.value)}
+                  onBlur={() => {
+                    docgenLookback.focused.current = false;
+                    const raw = Number(docgenLookback.value);
+                    const n = Number.isFinite(raw) ? Math.max(0, Math.min(30, Math.trunc(raw))) : 7;
+                    docgenLookback.setValue(String(n));
+                    if (n !== (settings.wecomDocgenLookbackDays ?? 7)) {
+                      void push({ wecomDocgenLookbackDays: n });
+                    }
+                  }}
+                />
+              }
+              hint={<p className="setting-hint">{t("wecom.docgenLookbackDaysHint")}</p>}
+            />
             <div className="wecom-allowlist">
               {(() => {
                 const selected = normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist);
                 const selectedKeys = new Set(selected.map(pathKey));
-                const byKey = new Map(docgenScanned.map((r) => [pathKey(r.path), r]));
+                const root =
+                  (repoPath.value || settings.wecomRepoPath || settings.currentGitRepo || "").trim();
+                const scanVerified =
+                  docgenScanned !== null && Boolean(root) && pathKey(docgenScanRoot) === pathKey(root);
+                const scanned = scanVerified ? (docgenScanned ?? []) : [];
+                const byKey = new Map(scanned.map((r) => [pathKey(r.path), r]));
                 const orphan = selected.filter((p) => !byKey.has(pathKey(p)));
-                const rows: { path: string; name: string; missing: boolean }[] = [
-                  ...docgenScanned.map((r) => ({
+                const rows: {
+                  path: string;
+                  name: string;
+                  missing: boolean;
+                  unverified: boolean;
+                }[] = [
+                  ...scanned.map((r) => ({
                     path: r.path,
                     name: r.name,
                     missing: false,
+                    unverified: false,
                   })),
                   ...orphan.map((p) => ({
                     path: p,
                     name: p.replace(/\\/g, "/").split("/").pop() || p,
-                    missing: true,
+                    missing: scanVerified,
+                    unverified: !scanVerified,
                   })),
                 ];
                 if (rows.length === 0) {
@@ -1892,7 +2305,9 @@ export default function WecomSettingsCard() {
                       return (
                         <li
                           key={pathKey(row.path)}
-                          className={`wecom-allowlist-item${row.missing ? " is-missing" : ""}`}
+                          className={`wecom-allowlist-item${
+                            row.missing ? " is-missing" : row.unverified ? " is-unverified" : ""
+                          }`}
                         >
                           <label>
                             <input
@@ -1909,9 +2324,11 @@ export default function WecomSettingsCard() {
                               }}
                             />
                             <span className="wecom-allowlist-name">{row.name}</span>
-                            {row.missing ? (
+                            {row.missing || row.unverified ? (
                               <span className="wecom-allowlist-badge">
-                                {t("wecom.docgenRepoMissing")}
+                                {row.missing
+                                  ? t("wecom.docgenRepoMissing")
+                                  : t("wecom.docgenRepoUnverified")}
                               </span>
                             ) : null}
                           </label>
@@ -1924,138 +2341,37 @@ export default function WecomSettingsCard() {
             </div>
           </div>
 
-          {/* 3. 提示词：更新 | 质检 分段单编辑器 */}
-          <div className="wecom-block-card wecom-docgen-prompt-card">
-            <div className="wecom-block-head">
-              <div className="wecom-block-head-main">
-                <span className="wecom-block-icon" aria-hidden>
-                  <Sparkles size={14} />
-                </span>
-                <span className="wecom-block-title">{t("wecom.subDocgenPrompts")}</span>
-                <div
-                  className="devtools-segmented wecom-head-seg"
-                  role="group"
-                  aria-label={t("wecom.subDocgenPrompts")}
-                >
-                  {(["system", "quality"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      className={`segmented-item${docgenPromptTab === tab ? " active" : ""}`}
-                      aria-pressed={docgenPromptTab === tab}
-                      onClick={() => setDocgenPromptTab(tab)}
-                    >
-                      {tab === "system"
-                        ? t("wecom.docgenSystemPrompt")
-                        : t("wecom.docgenQualityPrompt")}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <p className="setting-hint wecom-block-lead">
-              {docgenPromptTab === "system"
-                ? t("wecom.docgenSystemPromptHint")
-                : t("wecom.docgenQualityPromptHint")}
-            </p>
-
-            <div className="wecom-editor-stack">
-              <textarea
-                className="input-field"
-                rows={12}
-                value={
-                  docgenPromptTab === "system"
-                    ? docgenSystemPrompt.value
-                    : docgenQualityPrompt.value
-                }
-                disabled={busy}
-                onFocus={() => {
-                  if (docgenPromptTab === "system") docgenSystemPrompt.focused.current = true;
-                  else docgenQualityPrompt.focused.current = true;
-                }}
-                onChange={(e) => {
-                  const next = Array.from(e.target.value)
-                    .slice(0, DOCGEN_PROMPT_CHAR_CAP)
-                    .join("");
-                  if (docgenPromptTab === "system") docgenSystemPrompt.setValue(next);
-                  else docgenQualityPrompt.setValue(next);
-                }}
-                onBlur={() => {
-                  if (docgenPromptTab === "system") {
-                    docgenSystemPrompt.focused.current = false;
-                    const v = normalizeDocgenPrompt(docgenSystemPrompt.value);
-                    const saved = normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt);
-                    if (v === saved) return;
-                    void push({
-                      wecomDocgenSystemPrompt:
-                        v && v !== normalizeDocgenPrompt(DEFAULT_DOCGEN_SYSTEM_PROMPT)
-                          ? v
-                          : undefined,
-                    });
-                  } else {
-                    docgenQualityPrompt.focused.current = false;
-                    const v = normalizeDocgenPrompt(docgenQualityPrompt.value);
-                    const saved = normalizeDocgenPrompt(settings.wecomDocgenQualityPrompt);
-                    if (v === saved) return;
-                    void push({
-                      wecomDocgenQualityPrompt:
-                        v && v !== normalizeDocgenPrompt(DEFAULT_DOCGEN_QUALITY_PROMPT)
-                          ? v
-                          : undefined,
-                    });
-                  }
-                }}
-              />
-              <div className="wecom-editor-foot">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-small"
-                  disabled={busy}
-                  onClick={() => {
-                    if (docgenPromptTab === "system") {
-                      docgenSystemPrompt.setValue(DEFAULT_DOCGEN_SYSTEM_PROMPT);
-                      void push({ wecomDocgenSystemPrompt: undefined });
-                    } else {
-                      docgenQualityPrompt.setValue(DEFAULT_DOCGEN_QUALITY_PROMPT);
-                      void push({ wecomDocgenQualityPrompt: undefined });
-                    }
-                  }}
-                >
-                  {t("wecom.docgenPromptReset")}
-                </button>
-                <span className="wecom-char-count">
-                  {t("wecom.docgenPromptCharCount", {
-                    count: Array.from(
-                      docgenPromptTab === "system"
-                        ? docgenSystemPrompt.value
-                        : docgenQualityPrompt.value,
-                    ).length,
-                    cap: DOCGEN_PROMPT_CHAR_CAP,
-                  })}
-                </span>
-              </div>
-            </div>
-
-            <Row
-              asSwitch
-              label={t("wecom.docgenQualityCheck")}
-              control={
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(settings.wecomDocgenQualityCheck)}
-                    onChange={(e) => void push({ wecomDocgenQualityCheck: e.target.checked })}
-                  />
-                  <span className="toggle-slider" />
-                </label>
-              }
-              hint={<p className="setting-hint">{t("wecom.docgenQualityCheckHint")}</p>}
-            />
-          </div>
+          {/* 3. 提示词：更新 | 质检 分段单编辑器（草稿状态收在卡片内部，打字不牵动整页） */}
+          <DocgenPromptCard
+            hidden={docgenView !== "content"}
+            tab={docgenPromptTab}
+            onTabChange={setDocgenPromptTab}
+            system={
+              settings.wecomDocgenSystemPrompt?.trim()
+                ? settings.wecomDocgenSystemPrompt
+                : DEFAULT_DOCGEN_SYSTEM_PROMPT
+            }
+            quality={
+              settings.wecomDocgenQualityPrompt?.trim()
+                ? settings.wecomDocgenQualityPrompt
+                : DEFAULT_DOCGEN_QUALITY_PROMPT
+            }
+            savedSystem={settings.wecomDocgenSystemPrompt ?? ""}
+            savedQuality={settings.wecomDocgenQualityPrompt ?? ""}
+            busy={busy}
+            qualityCheck={Boolean(settings.wecomDocgenQualityCheck)}
+            onToggleQualityCheck={(next) => void push({ wecomDocgenQualityCheck: next })}
+            onSavePrompt={(which, value) =>
+              void push(
+                which === "system"
+                  ? { wecomDocgenSystemPrompt: value }
+                  : { wecomDocgenQualityPrompt: value },
+              )
+            }
+          />
 
           {/* 4. 提交与推送（含预览） */}
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={docgenView !== "publish"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -2264,6 +2580,14 @@ export default function WecomSettingsCard() {
                   onClick={() => {
                     setDocgenBusy(true);
                     setMsg("");
+                    setDocgenProgress({
+                      runId: "pending",
+                      trigger: settings.wecomDocgenPreview ? "preview" : "manual",
+                      phase: "workspace",
+                      percent: 1,
+                      status: "running",
+                      detail: "",
+                    });
                     void runWecomDocgenNow()
                       .then((r) => {
                         setMsg(r);
@@ -2271,7 +2595,18 @@ export default function WecomSettingsCard() {
                           .then(setDocgenHistory)
                           .catch(() => {});
                       })
-                      .catch((e) => setMsg(String(e)))
+                      .catch((e) => {
+                        const detail = String(e);
+                        setMsg(detail);
+                        setDocgenProgress((prev) => ({
+                          runId: prev?.runId ?? "manual-error",
+                          trigger: prev?.trigger ?? "manual",
+                          phase: "fail",
+                          percent: 100,
+                          status: "fail",
+                          detail,
+                        }));
+                      })
                       .finally(() => setDocgenBusy(false));
                   }}
                 >
@@ -2279,9 +2614,52 @@ export default function WecomSettingsCard() {
                 </button>
               </div>
             </div>
+
+            {docgenProgress ? (
+              <div
+                className={`wecom-docgen-progress is-${docgenProgress.status}`}
+                role="status"
+                aria-live="polite"
+              >
+                <div className="wecom-docgen-progress-head">
+                  <span className="wecom-docgen-progress-label">
+                    {t(`wecom.docgenPhase.${docgenProgress.phase}`, {
+                      defaultValue: docgenProgress.phase,
+                    })}
+                  </span>
+                  <span className="wecom-docgen-progress-meta">
+                    {t(`wecom.docgenTrigger.${docgenProgress.trigger}`, {
+                      defaultValue: docgenProgress.trigger,
+                    })}
+                    {" · "}
+                    {Math.max(0, Math.min(100, Math.round(docgenProgress.percent)))}%
+                  </span>
+                </div>
+                {docgenProgress.detail ? (
+                  <p className="wecom-docgen-progress-detail">{docgenProgress.detail}</p>
+                ) : null}
+                <div
+                  className="wecom-docgen-progress-track"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.max(
+                    0,
+                    Math.min(100, Math.round(docgenProgress.percent)),
+                  )}
+                >
+                  <div
+                    className="wecom-docgen-progress-fill"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, docgenProgress.percent))}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
 
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={docgenView !== "publish"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -2377,10 +2755,33 @@ export default function WecomSettingsCard() {
 
       {/* 5 · 访问控制：谁能用 + 能用什么 + 配对授权 */}
       <div className="net-panel" hidden={section !== "access"}>
-        <PanelHead title={t("wecom.groupAccess")} />
+        {/* 五张卡分两页：谁能用（私聊 / 群聊 / 配对审批）与能用什么（权限档位、并发、会话规则）。
+            配对是「谁能用」的落地动作，跟着白名单放；会话规则是纯说明，跟着权限放。 */}
+        <PanelHead
+          bare
+          aside={
+            <div
+              className="devtools-segmented wecom-head-seg"
+              role="group"
+              aria-label={t("wecom.groupAccess")}
+            >
+              {(["who", "what"] as const).map((view) => (
+                <button
+                  key={view}
+                  type="button"
+                  className={`segmented-item${accessView === view ? " active" : ""}`}
+                  aria-pressed={accessView === view}
+                  onClick={() => setAccessView(view)}
+                >
+                  {t(`wecom.accessView.${view}`)}
+                </button>
+              ))}
+            </div>
+          }
+        />
         <div className="wecom-rows">
           {/* 私聊：谁能私聊 + 私聊白名单 */}
-          <div className="wecom-block-card is-split">
+          <div className="wecom-block-card is-split" hidden={accessView !== "who"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -2429,7 +2830,7 @@ export default function WecomSettingsCard() {
           </div>
 
           {/* 群聊：谁能进群 + 群白名单 + 是否必须 @ */}
-          <div className="wecom-block-card is-split">
+          <div className="wecom-block-card is-split" hidden={accessView !== "who"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -2492,7 +2893,7 @@ export default function WecomSettingsCard() {
             />
           </div>
 
-          <div className="wecom-block-card is-split">
+          <div className="wecom-block-card is-split" hidden={accessView !== "what"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -2558,7 +2959,7 @@ export default function WecomSettingsCard() {
             />
           </div>
 
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={accessView !== "what"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -2578,7 +2979,7 @@ export default function WecomSettingsCard() {
             </div>
           </div>
 
-          <div className="wecom-block-card">
+          <div className="wecom-block-card" hidden={accessView !== "who"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>

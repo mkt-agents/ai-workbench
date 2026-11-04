@@ -540,6 +540,16 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       webhookFeishu,
       webhookDingtalk,
       docgenCron: (settings.wecomDocgenCron ?? "").trim(),
+      // 文档更新引擎与回话引擎分开：`inherit` 让后端跟随上面的 engine 解析。
+      docgenEngine:
+        settings.wecomDocgenEngine === "dsh"
+          ? "dsh"
+          : settings.wecomDocgenEngine === "tianji"
+            ? "tianji"
+            : "inherit",
+      // 文档更新（DSH 档）的模型/思考强度；空 = 后端沿用上面的 dshModel / dshEffort。
+      docgenDshModel: (settings.wecomDocgenDshModel ?? "").trim(),
+      docgenDshEffort: (settings.wecomDocgenDshEffort ?? "").trim(),
       docgenLookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),
       docgenRepoAllowlist: normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist),
       docgenSystemPrompt: normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt),
@@ -572,9 +582,13 @@ export async function fetchWecomStatus(): Promise<WecomStatus> {
   return invoke<WecomStatus>("wecom_channel_status");
 }
 
-/** 读 DSH 引擎可用的模型目录（ACP configOptions）。`refresh` 会丢掉缓存重拉。 */
-export async function fetchDshModels(refresh = false): Promise<DshModelCatalog> {
-  return invoke<DshModelCatalog>("wecom_dsh_models", { refresh });
+/** 读 DSH 引擎可用的模型目录（ACP configOptions）。`refresh` 会丢掉缓存重拉。
+ * `scope = "docgen"` 时读文档自动更新那套引擎（通道可能还在天玑档）。 */
+export async function fetchDshModels(
+  refresh = false,
+  scope?: "channel" | "docgen"
+): Promise<DshModelCatalog> {
+  return invoke<DshModelCatalog>("wecom_dsh_models", { refresh, scope: scope ?? null });
 }
 
 /** 重新把 DSH 的 web 配置镜像到 acp profile（引擎随后自动重启）。 */
@@ -627,6 +641,17 @@ export type WecomDocgenHistoryItem = {
 export async function fetchWecomDocgenHistory(): Promise<WecomDocgenHistoryItem[]> {
   return invoke<WecomDocgenHistoryItem[]>("wecom_docgen_history");
 }
+
+export const WECOM_DOCGEN_PROGRESS_EVENT = "wecom-docgen-progress";
+
+export type WecomDocgenProgress = {
+  runId: string;
+  trigger: string;
+  phase: string;
+  percent: number;
+  status: "running" | "ok" | "skip" | "fail";
+  detail?: string;
+};
 
 /** 读通道排障日志最后 N 行（设置页「通道日志」折叠区）。 */
 export async function fetchWecomLog(lines = 200): Promise<string> {

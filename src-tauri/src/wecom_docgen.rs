@@ -1,9 +1,10 @@
 //! 逆向文档的每日自动更新 + 多通道群通知。
 //!
-//! 到点 / cron / 远端轮询 / 手动：
+//! 到点 / cron / 本地 HEAD 轮询 / 手动：
 //! 1. fetch 最新 release 分支（脏工作区则跳过，不强制 reset）；
 //! 2. 取自上次更新以来的提交摘要 + 文件列表 + 有界 diff；
-//! 3. 用 `agent_run`（编辑档）按变更类型策略更新 `doc/`；
+//! 3. 按「更新引擎」跑一轮 AI 更新 `doc/`：天玑走 `agent_run`（编辑档），
+//!    DSH 另起一个编辑档进程（跑完即停）；
 //! 4. 可选质量自检（只读第二轮）；预览模式不落盘并清仓；
 //! 5. 多通道 webhook 通知；历史写入 `docgen-history.jsonl`（30 条）。
 //!
@@ -15,7 +16,7 @@ use std::time::Duration;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::wecom_channel::WecomState;
 
@@ -27,6 +28,11 @@ const LOG_LINE_CAP: usize = 30;
 const FILE_LIST_CAP: usize = 80;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// 是否有更新流程在跑（设置页据此决定要不要顺手关掉临时拉起的 DSH 进程）。
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::SeqCst)
+}
 
 struct RunGuard;
 impl RunGuard {
@@ -73,7 +79,7 @@ pub struct DocgenConfig {
     /// 更新后再跑一轮只读质量自检。
     #[serde(default)]
     pub quality_check: bool,
-    /// 轮询 origin/release HEAD，超前则自动跑（不装 git hook）。
+    /// 轮询各来源仓本地 HEAD，前进则自动跑（不装 git hook）。
     #[serde(default)]
     pub poll_release: bool,
     /// 补跑时变更回溯天数（0=不限制；默认 7，上限 30）。
@@ -88,6 +94,9 @@ pub struct DocgenConfig {
     /// 质检 system 提示词模板；空=内置默认。
     #[serde(default)]
     pub quality_prompt: String,
+    /// 跑更新用哪个引擎：`tianji` | `dsh`（apply 时已把 `inherit` 解析成具体值）。
+    #[serde(default)]
+    pub engine: String,
 }
 
 fn default_true() -> bool {
@@ -119,6 +128,7 @@ impl Default for DocgenConfig {
             repo_allowlist: Vec::new(),
             system_prompt: String::new(),
             quality_prompt: String::new(),
+            engine: "tianji".into(),
         }
     }
 }
@@ -177,6 +187,10 @@ pub fn fill_docgen_template(template: &str, vars: &[(&str, &str)]) -> String {
 }
 
 impl DocgenConfig {
+    /// 本轮是否交给 DeepSeek Harness 跑。
+    pub(crate) fn uses_dsh(&self) -> bool {
+        self.engine.trim().eq_ignore_ascii_case("dsh")
+    }
     pub fn time_or_default(&self) -> String {
         let t = self.time.trim();
         if t.is_empty() {
@@ -205,13 +219,18 @@ impl DocgenConfig {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RunState {
-    last_run_date: Option<String>,
+    /// 每日计划已占用的槽位（`YYYY-MM-DD HH:MM`）；修改计划时间后按新槽位重新判断。
+    #[serde(default)]
+    last_daily_slot: Option<String>,
+    /// Cron 已占用的分钟（`YYYY-MM-DD HH:MM`），用于允许一天多次触发并避免同分钟重复。
+    #[serde(default)]
+    last_cron_minute: Option<String>,
     /// 旧单仓 cursor；迁移到 `last_commits` 后仍可读。
     last_commit: Option<String>,
     /// 各变更来源仓的 HEAD cursor（key=规范化路径）。
     #[serde(default)]
     last_commits: std::collections::HashMap<String, String>,
-    /// 轮询防抖：上次已观察过的 origin/{branch}（文档仓）。
+    /// 轮询防抖：上次已观察过的本地 HEAD。
     #[serde(default)]
     last_poll_head: Option<String>,
 }
@@ -283,6 +302,12 @@ pub enum RunTrigger {
     Poll,
     Manual,
     Preview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScheduleSlot {
+    Daily(String),
+    Cron(String),
 }
 
 impl RunTrigger {
@@ -407,16 +432,24 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
     let state = load_state();
 
     // 1) 定点 / cron
-    let schedule_due = match schedule_due_today(&cfg, state.last_run_date.as_deref(), now) {
+    let schedule_due = match schedule_due_today(
+        &cfg,
+        state.last_daily_slot.as_deref(),
+        state.last_cron_minute.as_deref(),
+        now,
+    ) {
         Ok(v) => v,
         Err(e) => {
             crate::wecom_log::write("docgen", &format!("schedule parse fail-closed: {e}"));
             None
         }
     };
-    if let Some(today) = schedule_due {
+    if let Some(slot) = schedule_due {
         let mut st = load_state();
-        st.last_run_date = Some(today);
+        match &slot {
+            ScheduleSlot::Daily(minute) => st.last_daily_slot = Some(minute.clone()),
+            ScheduleSlot::Cron(minute) => st.last_cron_minute = Some(minute.clone()),
+        }
         save_state(&st);
         crate::wecom_log::write(
             "docgen",
@@ -452,7 +485,7 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    // 2) 远端轮询（不挡定点；成功只推进 last_commit）
+    // 2) 本地 HEAD 轮询（不挡定点；成功只推进 last_commit）
     if cfg.poll_release {
         if let Err(e) = maybe_poll_release(app, &cfg).await {
             crate::wecom_log::write("docgen", &format!("poll skip/fail: {e}"));
@@ -463,25 +496,30 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
 
 fn schedule_due_today(
     cfg: &DocgenConfig,
-    last_run_date: Option<&str>,
+    last_daily_slot: Option<&str>,
+    last_cron_minute: Option<&str>,
     now: chrono::DateTime<chrono::Local>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<ScheduleSlot>, String> {
     let cron = cfg.cron.trim();
     if !cron.is_empty() {
-        let today = now.format("%Y-%m-%d").to_string();
-        if last_run_date == Some(today.as_str()) {
+        let minute = now.format("%Y-%m-%d %H:%M").to_string();
+        if last_cron_minute == Some(minute.as_str()) {
             return Ok(None);
         }
         if cron_matches(cron, now)? {
-            return Ok(Some(today));
+            return Ok(Some(ScheduleSlot::Cron(minute)));
         }
         return Ok(None);
     }
-    Ok(crate::daily_schedule::due_today(
-        &cfg.time_or_default(),
-        last_run_date,
-        now,
-    ))
+    let time = cfg.time_or_default();
+    let Some(day) = crate::daily_schedule::due_today(&time, None, now) else {
+        return Ok(None);
+    };
+    let slot = format!("{day} {time}");
+    if last_daily_slot == Some(slot.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some(ScheduleSlot::Daily(slot)))
 }
 
 async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), String> {
@@ -517,7 +555,6 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
 
     let sources = resolve_change_sources(&cfg.repo_allowlist, &workspace);
     let st = load_state();
-    let br = branch.clone();
     let ahead = {
         tokio::task::spawn_blocking(move || -> Result<(bool, String), String> {
             let mut any = false;
@@ -526,19 +563,15 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
                 if crate::git_commands::ensure_git_repo(repo).is_err() {
                     continue;
                 }
-                let _ = fetch_origin_branch(repo, &br);
-                let remote = crate::git_commands::git_stdout(
-                    repo,
-                    &["rev-parse", &format!("origin/{br}")],
-                )
-                .unwrap_or_default();
-                let remote = remote.trim().to_string();
-                if remote.is_empty() {
+                let local = crate::git_commands::git_stdout(repo, &["rev-parse", "HEAD"])
+                    .unwrap_or_default();
+                let local = local.trim().to_string();
+                if local.is_empty() {
                     continue;
                 }
-                tip = remote.clone();
+                tip = local.clone();
                 let cur = cursor_for(&st, repo);
-                if cur.as_deref() != Some(remote.as_str()) {
+                if cur.as_deref() != Some(local.as_str()) {
                     any = true;
                     break;
                 }
@@ -548,26 +581,26 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
         .await
         .map_err(|e| e.to_string())??
     };
-    let (need_run, remote_tip) = ahead;
+    let (need_run, local_tip) = ahead;
     if !need_run {
         return Ok(());
     }
 
     let mut st = load_state();
-    if !remote_tip.is_empty() {
-        if st.last_poll_head.as_deref() == Some(remote_tip.as_str()) {
+    if !local_tip.is_empty() {
+        if st.last_poll_head.as_deref() == Some(local_tip.as_str()) {
             // 同一 tip 已触发过一轮仍失败时，等 cursor 推进或 tip 再变。
             return Ok(());
         }
-        st.last_poll_head = Some(remote_tip.clone());
+        st.last_poll_head = Some(local_tip.clone());
         save_state(&st);
     }
 
     crate::wecom_log::write(
         "docgen",
         &format!(
-            "auto poll start tip={}",
-            &remote_tip[..8.min(remote_tip.len())]
+            "auto poll start local_head={}",
+            &local_tip[..8.min(local_tip.len())]
         ),
     );
     match run_update_with_trigger(app, cfg, RunTrigger::Poll).await {
@@ -610,6 +643,63 @@ pub struct UpdateReport {
     pub webhook_errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocgenProgressEvent {
+    run_id: String,
+    trigger: String,
+    phase: String,
+    percent: u8,
+    status: String,
+    detail: String,
+}
+
+struct RunProgress<'a> {
+    app: &'a AppHandle,
+    run_id: String,
+    trigger: RunTrigger,
+}
+
+impl<'a> RunProgress<'a> {
+    fn new(app: &'a AppHandle, trigger: RunTrigger) -> Self {
+        Self {
+            app,
+            run_id: format!("docgen-{}", chrono::Utc::now().timestamp_millis()),
+            trigger,
+        }
+    }
+
+    fn emit(&self, phase: &str, percent: u8, status: &str, detail: &str) {
+        let _ = self.app.emit(
+            "wecom-docgen-progress",
+            DocgenProgressEvent {
+                run_id: self.run_id.clone(),
+                trigger: self.trigger.as_str().into(),
+                phase: phase.into(),
+                percent: percent.min(100),
+                status: status.into(),
+                detail: detail.trim().to_string(),
+            },
+        );
+    }
+
+    fn stage(&self, phase: &str, percent: u8) {
+        self.emit(phase, percent, "running", "");
+    }
+
+    fn finish_ok(&self, report: &UpdateReport) {
+        if let Some(reason) = report.skipped_reason.as_deref() {
+            self.emit("skipped", 100, "skip", reason);
+        } else {
+            self.emit("done", 100, "ok", "");
+        }
+    }
+
+    fn finish_err(&self, error: &str) {
+        self.emit("fail", 100, "fail", error);
+    }
+}
+
 impl UpdateReport {
     fn summary_line(&self) -> String {
         if let Some(r) = &self.skipped_reason {
@@ -644,6 +734,27 @@ pub async fn run_update_with_trigger(
     let Some(_guard) = RunGuard::acquire() else {
         return Err("已有一个文档更新流程在跑，请稍后再试".into());
     };
+    let progress = RunProgress::new(app, trigger);
+    let result = run_update_inner(app, cfg, trigger, &progress).await;
+    match result {
+        Ok(report) => {
+            progress.finish_ok(&report);
+            Ok(report)
+        }
+        Err(e) => {
+            progress.finish_err(&e);
+            Err(e)
+        }
+    }
+}
+
+async fn run_update_inner(
+    app: &AppHandle,
+    cfg: &DocgenConfig,
+    trigger: RunTrigger,
+    progress: &RunProgress<'_>,
+) -> Result<UpdateReport, String> {
+    progress.stage("workspace", 5);
     let doc_dir = cfg.doc_dir_or_default();
     let workspace = crate::git_commands::resolve_git_workspace(cfg.workspace.trim(), &doc_dir)?;
     if workspace != cfg.workspace.trim() {
@@ -660,6 +771,7 @@ pub async fn run_update_with_trigger(
     let preview = cfg.preview_mode || trigger == RunTrigger::Preview;
 
     crate::git_commands::ensure_git_repo(&workspace)?;
+    progress.stage("status", 12);
 
     let dirty = {
         let ws = workspace.clone();
@@ -674,6 +786,7 @@ pub async fn run_update_with_trigger(
     }
     if !String::from_utf8_lossy(&dirty.stdout).trim().is_empty() {
         let reason = "工作区有未提交改动，已跳过自动更新（请先提交或暂存）".to_string();
+        progress.stage("notify", 90);
         let (pushed, errs) =
             notify_all(cfg, &format!("⚠️ 逆向文档自动更新已跳过：{reason}")).await;
         let report = UpdateReport {
@@ -692,6 +805,7 @@ pub async fn run_update_with_trigger(
         return Ok(report);
     }
 
+    progress.stage("branch", 20);
     {
         let ws = workspace.clone();
         let br = branch.clone();
@@ -700,6 +814,7 @@ pub async fn run_update_with_trigger(
             .map_err(|e| e.to_string())??;
     }
 
+    progress.stage("collect", 35);
     let sources = resolve_change_sources(&cfg.repo_allowlist, &workspace);
     let lookback_days = cfg.lookback_days.min(30);
     let st_snap = load_state();
@@ -707,17 +822,12 @@ pub async fn run_update_with_trigger(
         .iter()
         .map(|s| (s.clone(), cursor_for(&st_snap, s)))
         .collect();
-    let br_fetch = branch.clone();
-    let doc_repo_key = workspace.clone();
     let parts = {
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, ChangeDelta)>, String> {
             let mut out = Vec::new();
             for (repo, prev) in source_prev {
                 crate::git_commands::ensure_git_repo(&repo)?;
-                // 文档仓已在上面 ff；其它来源仓只 fetch，不改工作区。
-                if norm_repo_key(&repo) != norm_repo_key(&doc_repo_key) {
-                    let _ = fetch_origin_branch(&repo, &br_fetch);
-                }
+                // 文档仓已在上面 ff；其它来源仓一律读取本地 HEAD，不替用户切分支或拉远端。
                 let d = collect_delta(&repo, prev.as_deref(), lookback_days)?;
                 out.push((repo, d));
             }
@@ -763,12 +873,21 @@ pub async fn run_update_with_trigger(
         return Ok(report);
     }
 
-    let updated_docs =
-        update_docs_with_agent(app, &workspace, &doc_dir, &branch, &delta, &cfg.system_prompt)
-            .await
-            .unwrap_or_else(|e| format!("（文档更新步骤出错：{e}）"));
+    progress.stage("agent", 55);
+    let updated_docs = update_docs_with_agent(
+        app,
+        &workspace,
+        &doc_dir,
+        &branch,
+        &delta,
+        &cfg.system_prompt,
+        &cfg.engine,
+    )
+    .await
+    .unwrap_or_else(|e| format!("（文档更新步骤出错：{e}）"));
 
     let quality = if cfg.quality_check {
+        progress.stage("quality", 72);
         quality_check_with_agent(
             app,
             &workspace,
@@ -777,6 +896,7 @@ pub async fn run_update_with_trigger(
             &delta.files,
             &updated_docs,
             &cfg.quality_prompt,
+            &cfg.engine,
         )
         .await
         .unwrap_or_else(|e| format!("（质量自检失败：{e}）"))
@@ -784,6 +904,16 @@ pub async fn run_update_with_trigger(
         String::new()
     };
 
+    progress.stage(
+        if preview {
+            "preview"
+        } else if cfg.auto_commit {
+            "commit"
+        } else {
+            "publish"
+        },
+        82,
+    );
     let mut commit_note = String::new();
     if preview {
         let ws = workspace.clone();
@@ -812,8 +942,10 @@ pub async fn run_update_with_trigger(
         &quality,
         preview,
     );
+    progress.stage("notify", 92);
     let (pushed, webhook_errors) = notify_all(cfg, &body).await;
 
+    progress.stage("cursor", 98);
     let mut st = load_state();
     for (repo, head) in &heads {
         set_cursor(&mut st, repo, head);
@@ -1023,19 +1155,6 @@ pub(crate) fn merge_change_deltas(
         diff_excerpt: diff,
         diff_truncated: truncated,
     }
-}
-
-fn fetch_origin_branch(workspace: &str, branch: &str) -> Result<(), String> {
-    use crate::git_commands::git_output;
-    let fetch = git_output(workspace, &["fetch", "origin", branch])?;
-    if !fetch.status.success() {
-        return Err(format!(
-            "fetch origin {branch} 失败（{}）：{}",
-            repo_short_name(workspace),
-            String::from_utf8_lossy(&fetch.stderr).trim()
-        ));
-    }
-    Ok(())
 }
 
 /// 纯函数：在已知边界 B 与「B 是否为 prev 祖先」时选出有效 prev。
@@ -1274,54 +1393,61 @@ async fn update_docs_with_agent(
     branch: &str,
     delta: &ChangeDelta,
     system_template: &str,
+    engine: &str,
 ) -> Result<String, String> {
-    let agent_cfg = {
-        let st = app.state::<WecomState>();
-        let g = st.orch.agent.lock().await;
-        g.clone()
-    };
-    let Some(cfg) = agent_cfg else {
-        return Err("企微通道未绑定模型，无法自动更新文档".into());
-    };
-
-    let request_id = format!("wecom-docgen-{}", chrono::Utc::now().timestamp_millis());
     let system = build_docgen_prompt(system_template, doc_dir, branch, delta);
+    let user = "请根据本次代码变更更新对应的逆向文档，并给出更新摘要。";
 
-    let req = crate::agent::AgentRunRequest {
-        config: cfg.config,
-        fallback_config: cfg.fallback_config,
-        system,
-        user: "请根据本次代码变更更新对应的逆向文档，并给出更新摘要。".into(),
-        request_id: request_id.clone(),
-        repo_path: workspace.to_string(),
-        services: cfg.services,
-        history: Vec::new(),
-        messages: Vec::new(),
-        mode: "doc".into(),
-        apps: Vec::new(),
-        permission: "workspace".into(),
-        tools: true,
-        vision: false,
-        diff_confirm: false,
-        always_allow: Vec::new(),
-        web_allow: cfg.web_allow,
-        web_tier: cfg.web_tier,
-        web_search_provider: cfg.web_search_provider,
-        web_search_key: cfg.web_search_key,
-        subagents: false,
-        subagent_write: false,
-        mcp: Vec::new(),
-        parallel_reads: cfg.parallel_reads,
-        retries: cfg.retries,
-        grep_ignore: cfg.grep_ignore,
-        plan_first: false,
-        context_tokens: cfg.context_tokens,
-        result_cap: cfg.result_cap,
-        anthropic_stream: cfg.anthropic_stream,
-        mcp_enabled: false,
+    let summary = if engine.trim().eq_ignore_ascii_case("dsh") {
+        dsh_turn(app, workspace, DOCGEN_SESSION, &system, user).await?
+    } else {
+        let agent_cfg = {
+            let st = app.state::<WecomState>();
+            let g = st.orch.agent.lock().await;
+            g.clone()
+        };
+        let Some(cfg) = agent_cfg else {
+            return Err("企微通道未绑定模型，无法自动更新文档".into());
+        };
+
+        let request_id = format!("wecom-docgen-{}", chrono::Utc::now().timestamp_millis());
+
+        let req = crate::agent::AgentRunRequest {
+            config: cfg.config,
+            fallback_config: cfg.fallback_config,
+            system,
+            user: user.into(),
+            request_id: request_id.clone(),
+            repo_path: workspace.to_string(),
+            services: cfg.services,
+            history: Vec::new(),
+            messages: Vec::new(),
+            mode: "doc".into(),
+            apps: Vec::new(),
+            permission: "workspace".into(),
+            tools: true,
+            vision: false,
+            diff_confirm: false,
+            always_allow: Vec::new(),
+            web_allow: cfg.web_allow,
+            web_tier: cfg.web_tier,
+            web_search_provider: cfg.web_search_provider,
+            web_search_key: cfg.web_search_key,
+            subagents: false,
+            subagent_write: false,
+            mcp: Vec::new(),
+            parallel_reads: cfg.parallel_reads,
+            retries: cfg.retries,
+            grep_ignore: cfg.grep_ignore,
+            plan_first: false,
+            context_tokens: cfg.context_tokens,
+            result_cap: cfg.result_cap,
+            anthropic_stream: cfg.anthropic_stream,
+            mcp_enabled: false,
+        };
+
+        run_agent_collect(app, request_id, req).await?
     };
-
-    let summary = run_agent_collect(app, request_id, req).await?;
 
     let reverted = {
         let ws = workspace.to_string();
@@ -1352,7 +1478,36 @@ async fn quality_check_with_agent(
     changed: &[String],
     summary: &str,
     quality_template: &str,
+    engine: &str,
 ) -> Result<String, String> {
+    let user = "请输出质量自检结论列表。";
+    let system = build_quality_prompt(quality_template, doc_dir, branch, changed, summary);
+
+    if engine.trim().eq_ignore_ascii_case("dsh") {
+        // DSH 一套进程只有一个档位（编辑档，要写文档），没有「只读第二轮」；
+        // 这一轮靠提示词钉死只读语义，改动仍会被 revert_outside 兜住文档目录以外。
+        let readonly = format!(
+            "{system}\n\n# 本轮约束\n这是只读自检：不要修改、创建或删除任何文件，也不要执行会改变工作区的命令；只输出结论列表。"
+        );
+        let text = dsh_turn(app, workspace, DOCGEN_QC_SESSION, &readonly, user).await?;
+        let ws = workspace.to_string();
+        let dd = doc_dir.to_string();
+        let reverted = tokio::task::spawn_blocking(move || revert_outside(&ws, &dd))
+            .await
+            .map_err(|e| e.to_string())?;
+        if !reverted.is_empty() {
+            crate::wecom_log::write(
+                "docgen",
+                &format!(
+                    "质检轮丢弃 {} 处超出文档目录的改动：{:?}",
+                    reverted.len(),
+                    reverted
+                ),
+            );
+        }
+        return Ok(text);
+    }
+
     let agent_cfg = {
         let st = app.state::<WecomState>();
         let g = st.orch.agent.lock().await;
@@ -1362,12 +1517,11 @@ async fn quality_check_with_agent(
         return Err("企微通道未绑定模型，无法质量自检".into());
     };
     let request_id = format!("wecom-docgen-qc-{}", chrono::Utc::now().timestamp_millis());
-    let system = build_quality_prompt(quality_template, doc_dir, branch, changed, summary);
     let req = crate::agent::AgentRunRequest {
         config: cfg.config,
         fallback_config: cfg.fallback_config,
         system,
-        user: "请输出质量自检结论列表。".into(),
+        user: user.into(),
         request_id: request_id.clone(),
         repo_path: workspace.to_string(),
         services: cfg.services,
@@ -1397,6 +1551,128 @@ async fn quality_check_with_agent(
         mcp_enabled: false,
     };
     run_agent_collect(app, request_id, req).await
+}
+
+/// DSH 档的会话键：每轮开始都重置，别让上下文一直滚。
+const DOCGEN_SESSION: &str = "docgen";
+const DOCGEN_QC_SESSION: &str = "docgen-qc";
+
+/// 跑一轮 DSH 回合并把正文收成字符串，跑完就关进程（不常驻）。
+///
+/// 这是无人值守任务：审批按「允许一次」自动应答并写进通道日志（沙箱是编辑档 +
+/// 工作区范围，文档目录以外的改动仍会被 `revert_outside` 丢弃）。
+async fn dsh_turn(
+    app: &AppHandle,
+    workspace: &str,
+    session_key: &str,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    let dsh = {
+        let st = app.state::<WecomState>();
+        std::sync::Arc::clone(&st.docgen_dsh)
+    };
+    // 工作区用这一轮解析出来的仓库路径（设置页填的可能是父目录）。
+    dsh.configure_docgen(workspace.to_string()).await;
+    let result = dsh_turn_inner(&dsh, session_key, system, user).await;
+    dsh.stop().await;
+    result
+}
+
+async fn dsh_turn_inner(
+    dsh: &crate::wecom_dsh::DshEngine,
+    session_key: &str,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    dsh.reset_channel_session(session_key).await;
+    dsh.ensure_ready().await?;
+    let session = dsh.acquire_session(session_key).await?;
+    if let Err(e) = dsh.apply_selection(&session).await {
+        // 选模型失败不是致命问题（会按 provider 默认继续），但要留在日志里。
+        crate::wecom_log::write(
+            "docgen",
+            &format!("dsh 下发模型/思考强度失败，按默认继续：{e}"),
+        );
+    }
+    let prompt = format!("{system}\n\n---\n\n{user}");
+    let mut turn = dsh
+        .prompt(&session, vec![crate::wecom_dsh::acp_text_block(&prompt)])
+        .await?;
+
+    let mut acc = String::new();
+    let mut approvals = 0usize;
+    // 整轮共享一个期限（不是每个事件各 600 秒），和天玑档的收流语义对齐。
+    let deadline = tokio::time::Instant::now() + UPDATE_TURN_TIMEOUT;
+    loop {
+        let event = match tokio::time::timeout_at(deadline, turn.next()).await {
+            Ok(ev) => ev,
+            Err(_) => {
+                turn.cancel();
+                crate::wecom_log::write("docgen", "dsh 回合超过 600 秒，已取消");
+                acc.push_str("\n（超时，已收尾）");
+                break;
+            }
+        };
+        match event {
+            Some(crate::wecom_dsh::DshEvent::Update(update)) => {
+                let kind = update
+                    .get("sessionUpdate")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                match kind {
+                    "agent_message_chunk" => {
+                        if let Some(text) = update
+                            .get("content")
+                            .and_then(|c| c.get("text"))
+                            .and_then(|v| v.as_str())
+                        {
+                            acc.push_str(text);
+                        }
+                    }
+                    "tool_call" => {
+                        if let Some(title) = update
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            crate::wecom_log::write("docgen", &format!("dsh 工具：{title}"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Some(crate::wecom_dsh::DshEvent::Permission { rpc_id, params }) => {
+                let (allow, reject) = crate::wecom_dsh::permission_options(&params);
+                let summary = crate::wecom_dsh::permission_summary(&params);
+                approvals += 1;
+                crate::wecom_log::write(
+                    "docgen",
+                    &format!(
+                        "dsh 审批 #{approvals}：{summary} → {}",
+                        if allow.is_some() { "自动允许一次" } else { "无允许项，拒绝" }
+                    ),
+                );
+                if let Some(id) = allow.as_deref() {
+                    turn.answer_permission(rpc_id, Some(id));
+                } else {
+                    turn.answer_permission(rpc_id, reject.as_deref());
+                }
+            }
+            Some(crate::wecom_dsh::DshEvent::Done(Err(e))) => {
+                return Err(crate::wecom_dsh::friendly_turn_error(&e));
+            }
+            Some(crate::wecom_dsh::DshEvent::Done(Ok(_))) | None => break,
+        }
+    }
+    if approvals > 0 {
+        crate::wecom_log::write(
+            "docgen",
+            &format!("dsh 本轮自动应答 {approvals} 次审批（均为允许一次）"),
+        );
+    }
+    Ok(acc.trim().to_string())
 }
 
 async fn run_agent_collect(
@@ -2008,5 +2284,69 @@ mod tests {
         assert!(!cron_matches("0 22 * * *", now).unwrap());
         assert!(cron_matches("*/1 * * * *", now).unwrap());
         assert!(cron_matches("bad", now).is_err());
+    }
+
+    #[test]
+    fn cron_slots_allow_multiple_runs_per_day_and_dedupe_same_minute() {
+        use chrono::TimeZone;
+        let mut cfg = DocgenConfig::default();
+        cfg.cron = "0 9,17 * * *".into();
+        let morning = chrono::Local
+            .with_ymd_and_hms(2026, 11, 3, 9, 0, 0)
+            .unwrap();
+        let evening = chrono::Local
+            .with_ymd_and_hms(2026, 11, 3, 17, 0, 0)
+            .unwrap();
+
+        assert_eq!(
+            schedule_due_today(&cfg, None, None, morning).unwrap(),
+            Some(ScheduleSlot::Cron("2026-11-03 09:00".into()))
+        );
+        assert_eq!(
+            schedule_due_today(&cfg, None, Some("2026-11-03 09:00"), morning).unwrap(),
+            None
+        );
+        assert_eq!(
+            schedule_due_today(&cfg, None, Some("2026-11-03 09:00"), evening).unwrap(),
+            Some(ScheduleSlot::Cron("2026-11-03 17:00".into()))
+        );
+    }
+
+    #[test]
+    fn daily_slot_remains_once_per_day() {
+        use chrono::TimeZone;
+        let mut cfg = DocgenConfig::default();
+        cfg.time = "09:00".into();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 11, 3, 10, 0, 0)
+            .unwrap();
+
+        assert_eq!(
+            schedule_due_today(&cfg, None, None, now).unwrap(),
+            Some(ScheduleSlot::Daily("2026-11-03 09:00".into()))
+        );
+        assert_eq!(
+            schedule_due_today(&cfg, Some("2026-11-03 09:00"), None, now).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn changing_daily_time_creates_a_new_slot_on_the_same_day() {
+        use chrono::TimeZone;
+        let mut cfg = DocgenConfig::default();
+        cfg.time = "17:29".into();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 11, 3, 17, 35, 0)
+            .unwrap();
+
+        assert_eq!(
+            schedule_due_today(&cfg, Some("2026-11-03 09:00"), None, now).unwrap(),
+            Some(ScheduleSlot::Daily("2026-11-03 17:29".into()))
+        );
+        assert_eq!(
+            schedule_due_today(&cfg, Some("2026-11-03 17:29"), None, now).unwrap(),
+            None
+        );
     }
 }

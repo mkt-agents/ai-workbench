@@ -82,6 +82,9 @@ pub struct WecomState {
     pub approval_owners: Mutex<HashMap<String, ApprovalOwner>>,
     /// DSH 引擎（常驻 `dsh --profile acp` 子进程）；天玑档时保持 Stopped。
     pub dsh: Arc<DshEngine>,
+    /// 文档自动更新专用的 DSH 引擎：独立进程 + 独立会话文件，固定编辑档，
+    /// 与通道问答的引擎/档位互不影响；每轮跑完即停。
+    pub docgen_dsh: Arc<DshEngine>,
     /// SkyWalking 排障：`(OAP 地址, 可选 "Key: Value" header)`，空地址 = 不下发 skywalking 工具。
     pub skywalking: Mutex<(String, String)>,
     pub skywalking_timezone: Mutex<Option<i32>>,
@@ -117,6 +120,7 @@ impl WecomState {
             out_targets: Mutex::new(HashMap::new()),
             approval_owners: Mutex::new(HashMap::new()),
             dsh: Arc::new(DshEngine::new()),
+            docgen_dsh: Arc::new(DshEngine::with_tag("docgen")),
             skywalking: Mutex::new((String::new(), String::new())),
             skywalking_timezone: Mutex::new(None),
             docgen: Mutex::new(crate::wecom_docgen::DocgenConfig::default()),
@@ -248,6 +252,15 @@ pub struct WecomApplyRequest {
     /// 轮询 origin/release 超前后自动跑。
     #[serde(default)]
     pub docgen_poll_release: bool,
+    /// 文档自动更新用哪个引擎：`inherit`（跟随回答设置，默认）| `tianji` | `dsh`。
+    #[serde(default)]
+    pub docgen_engine: String,
+    /// 文档更新（DSH 档）用的模型；空 = 沿用「回答设置」里的 DSH 模型。
+    #[serde(default)]
+    pub docgen_dsh_model: String,
+    /// 文档更新（DSH 档）用的思考强度；空 = 沿用「回答设置」里的 DSH 思考强度。
+    #[serde(default)]
+    pub docgen_dsh_effort: String,
     /// 文档更新后自动 commit（默认开）。
     #[serde(default = "default_true")]
     pub auto_commit: bool,
@@ -328,6 +341,15 @@ pub fn normalize_engine(raw: &str) -> String {
     }
 }
 
+/// 文档更新引擎归一化：`inherit`（或空）= 跟随通道引擎；其余只认 `dsh`，其它一律天玑。
+pub fn normalize_docgen_engine(raw: &str, channel_engine: &str) -> String {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "inherit" | "" => normalize_engine(channel_engine),
+        "dsh" => "dsh".into(),
+        _ => "tianji".into(),
+    }
+}
+
 /// 问答模式归一化：`doc` / `code` / `doc_code` / `auto` 原样；空或未知回落 `auto`
 /// （auto = 按本条消息意图分流：排障走监控+代码、要代码走代码、其余文档优先）。
 pub fn normalize_answer_mode(raw: &str) -> String {
@@ -365,17 +387,35 @@ pub struct WecomStatus {
 
 /// 列 DSH 引擎可用模型（ACP `configOptions`）：设置页「DSH 模型」下拉用。
 /// `refresh = true` 时丢掉缓存与旧探针会话重新拉一遍。
+///
+/// `scope = "docgen"` 读的是文档自动更新那套引擎：它有自己的模型/思考强度，
+/// 且通道本身可能还在天玑档，不能拿通道引擎去列。
 #[tauri::command]
 pub async fn wecom_dsh_models(
     state: State<'_, WecomState>,
     refresh: Option<bool>,
+    scope: Option<String>,
 ) -> Result<crate::wecom_dsh::DshModelCatalog, String> {
     let _lifecycle = state.orch.dsh_lifecycle.lock().await;
-    if state.applied.lock().await.is_none() || *state.orch.engine.lock().await != "dsh" {
-        return Err("请先启用并保存 DSH 企微通道，再读取模型目录".into());
+    let engine = if scope.as_deref() == Some("docgen") {
+        if state.applied.lock().await.is_none() {
+            return Err("请先启用并保存企微通道，再读取模型目录".into());
+        }
+        Arc::clone(&state.docgen_dsh)
+    } else {
+        if state.applied.lock().await.is_none() || *state.orch.engine.lock().await != "dsh" {
+            return Err("请先启用并保存 DSH 企微通道，再读取模型目录".into());
+        }
+        Arc::clone(&state.dsh)
+    };
+    engine.ensure_ready().await?;
+    let catalog = engine.models(refresh.unwrap_or(false)).await;
+    // 文档更新那套引擎平时不常驻：只是设置页要看列表，列完就关，别留一个 node 吃内存。
+    // 正在跑更新时不能关（会把那一轮掐掉）。
+    if scope.as_deref() == Some("docgen") && !crate::wecom_docgen::is_running() {
+        engine.stop().await;
     }
-    state.dsh.ensure_ready().await?;
-    state.dsh.models(refresh.unwrap_or(false)).await
+    catalog
 }
 
 /// 重新镜像 DSH 的 profile（把 web 的组合带到 acp），然后重连引擎让新配置生效。
@@ -530,6 +570,21 @@ pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, S
             Ok(Err(e)) => lines.push(format!("❌ SkyWalking 查询失败：{e}")),
             Err(_) => lines.push("❌ SkyWalking 查询超时（检查地址/网络）".into()),
         }
+    }
+
+    // 4) 更新引擎（与「回答设置」的引擎相互独立）
+    if cfg.uses_dsh() {
+        match crate::dsh_commands::dsh_installed_version() {
+            Some(v) => lines.push(format!(
+                "✅ 文档更新引擎：DeepSeek Harness v{v}（独立进程、编辑档，跑完即停；模型/思考强度在该页单独指定，留空沿用回答设置）"
+            )),
+            None => lines.push(
+                "❌ 文档更新引擎选了 DeepSeek Harness，但本机没装 DSH（先到 Harness 页安装）"
+                    .into(),
+            ),
+        }
+    } else {
+        lines.push("✅ 文档更新引擎：天玑（模型广场 → 场景模型 aiHub）".into());
     }
 
     Ok(lines.join("\n"))
@@ -833,11 +888,43 @@ pub async fn wecom_channel_apply(
         repo_allowlist: normalize_repo_allowlist(&req.docgen_repo_allowlist, &workspace),
         system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_system_prompt),
         quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_quality_prompt),
+        engine: normalize_docgen_engine(&req.docgen_engine, &engine),
     };
+
+    // 文档更新用的 DSH 引擎与通道引擎分开：固定编辑档（要写文档）。模型/思考强度可以
+    // 单独指定，留空才沿用「回答设置」里的 DSH 选择。这样定时任务既不会被问答的只读档
+    // 卡住，也不会反过来抬高问答权限，两边的会话文件也各写各的。
+    let docgen_dsh_model = {
+        let v = req.docgen_dsh_model.trim();
+        if v.is_empty() {
+            req.dsh_model.trim().to_string()
+        } else {
+            v.to_string()
+        }
+    };
+    let docgen_dsh_effort = {
+        let v = req.docgen_dsh_effort.trim();
+        if v.is_empty() {
+            req.dsh_effort.trim().to_string()
+        } else {
+            v.to_string()
+        }
+    };
+    let _ = state
+        .docgen_dsh
+        .configure(
+            crate::wecom_dsh::Tier::Workspace,
+            workspace.clone(),
+            docgen_dsh_model,
+            docgen_dsh_effort,
+        )
+        .await;
+    state.docgen_dsh.set_mcp(Vec::new()).await;
 
     if !req.enabled {
         if delta.retire {
             state.dsh.stop().await;
+            state.docgen_dsh.stop().await;
         }
         *state.applied.lock().await = None;
         *state.api_token.lock().await = None;

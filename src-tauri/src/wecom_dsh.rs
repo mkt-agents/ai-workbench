@@ -332,6 +332,10 @@ pub struct DshEngine {
     inner: Mutex<EngineInner>,
     /// 同一时刻只允许一个启动流程，避免两条消息各起一个 node。
     start_lock: Mutex<()>,
+    /// 落盘命名空间：通道用空串（`sessions.json`），文档自动更新用 `docgen`
+    /// （`sessions-docgen.json` / `permission-docgen.patch.yml`）。两套引擎各自起进程，
+    /// 会话映射与权限覆盖层必须分开，否则后启动的那个会覆盖前者的档位。
+    tag: &'static str,
 }
 
 impl Default for DshEngine {
@@ -342,7 +346,13 @@ impl Default for DshEngine {
 
 impl DshEngine {
     pub fn new() -> Self {
+        Self::with_tag("")
+    }
+
+    /// 独立命名空间的引擎（目前只有文档自动更新用 `docgen`）。
+    pub fn with_tag(tag: &'static str) -> Self {
         Self {
+            tag,
             inner: Mutex::new(EngineInner {
                 state: EngineState::Stopped,
                 detail: String::new(),
@@ -351,7 +361,7 @@ impl DshEngine {
                 model: String::new(),
                 effort: String::new(),
                 runtime: None,
-                sessions: load_sessions(),
+                sessions: load_sessions(tag),
                 active: ActiveSessions::default(),
                 applied: HashMap::new(),
                 unsupported_efforts: HashSet::new(),
@@ -408,6 +418,19 @@ impl DshEngine {
             self.teardown().await;
         }
         changed
+    }
+
+    /// 文档自动更新用：换工作区并钉死编辑档（要写文档），模型/思考强度保持不变。
+    ///
+    /// 定时任务解析出的工作区可能是设置页里那个父目录下的子仓，与问答会话不同；
+    /// 这档引擎每轮跑完就停，所以这里改档位不会给问答提权。
+    pub async fn configure_docgen(&self, workspace: String) -> bool {
+        let (model, effort) = {
+            let g = self.inner.lock().await;
+            (g.model.clone(), g.effort.clone())
+        };
+        self.configure(Tier::Workspace, workspace, model, effort)
+            .await
     }
 
     /// ACP binds MCP at new/resume time. Retire the old process on effective config
@@ -827,7 +850,8 @@ impl DshEngine {
     /// 生成 patch、起进程、接上三条管道、握手。
     async fn start(&self, tier: Tier, workspace: &str) -> Result<String, String> {
         let workspace = workspace.to_string();
-        let prepared = tokio::task::spawn_blocking(move || prepare_launch(tier, &workspace))
+        let tag = self.tag;
+        let prepared = tokio::task::spawn_blocking(move || prepare_launch(tag, tier, &workspace))
             .await
             .map_err(|e| format!("启动准备失败：{e}"))??;
 
@@ -943,7 +967,8 @@ impl DshEngine {
             let g = self.inner.lock().await;
             g.sessions.clone()
         };
-        let _ = tokio::task::spawn_blocking(move || write_sessions(&map)).await;
+        let tag = self.tag;
+        let _ = tokio::task::spawn_blocking(move || write_sessions(tag, &map)).await;
     }
 }
 
@@ -1239,7 +1264,7 @@ struct PreparedLaunch {
 }
 
 /// 阻塞部分：解析 CLI、清陈旧凭证锁、写 patch、校验工作区。
-fn prepare_launch(tier: Tier, workspace: &str) -> Result<PreparedLaunch, String> {
+fn prepare_launch(tag: &str, tier: Tier, workspace: &str) -> Result<PreparedLaunch, String> {
     let workspace = PathBuf::from(workspace.trim());
     if !workspace.is_absolute() {
         return Err("DSH 工作区必须是绝对路径".into());
@@ -1263,7 +1288,7 @@ fn prepare_launch(tier: Tier, workspace: &str) -> Result<PreparedLaunch, String>
         eprintln!("[wecom-dsh] profile 镜像提示：{warn}");
     }
     let cli = dsh_commands::dsh_cli(&path_value)?;
-    let patch = write_permission_patch(tier, &workspace)?;
+    let patch = write_permission_patch(tag, tier, &workspace)?;
 
     let mut args = cli.args;
     args.push("--profile".into());
@@ -1441,9 +1466,13 @@ fn engine_dir() -> Option<PathBuf> {
 /// 每次启动重写：`--patch` 是「追加覆盖」，但单个条目是整体赋值（config 不深合并），
 /// 所以这里把该写的 config 写全。`permission` 预设整行关掉：ACP 面没有模式切换，
 /// 留着只会让 `settings.permission.defaultPreset` 反过来覆盖我们钉死的档位。
-fn write_permission_patch(tier: Tier, workspace: &std::path::Path) -> Result<PathBuf, String> {
+fn write_permission_patch(
+    tag: &str,
+    tier: Tier,
+    workspace: &std::path::Path,
+) -> Result<PathBuf, String> {
     let dir = engine_dir().ok_or_else(|| "找不到应用数据目录".to_string())?;
-    let path = dir.join("permission.patch.yml");
+    let path = dir.join(patch_file_name(tag));
     let body = permission_patch_yaml(tier, &workspace.to_string_lossy());
     std::fs::write(&path, body).map_err(|e| format!("写入 DSH 覆盖层失败：{e}"))?;
     Ok(path)
@@ -1464,12 +1493,29 @@ fn permission_patch_yaml(tier: Tier, workspace: &str) -> String {
     )
 }
 
-fn sessions_path() -> Option<PathBuf> {
-    engine_dir().map(|dir| dir.join("sessions.json"))
+/// 会话映射与权限覆盖层的落盘文件名：`tag` 为空时保持旧名字（通道引擎）。
+fn patch_file_name(tag: &str) -> String {
+    if tag.is_empty() {
+        "permission.patch.yml".into()
+    } else {
+        format!("permission-{tag}.patch.yml")
+    }
 }
 
-fn load_sessions() -> HashMap<String, String> {
-    let Some(path) = sessions_path() else {
+fn sessions_file_name(tag: &str) -> String {
+    if tag.is_empty() {
+        "sessions.json".into()
+    } else {
+        format!("sessions-{tag}.json")
+    }
+}
+
+fn sessions_path(tag: &str) -> Option<PathBuf> {
+    engine_dir().map(|dir| dir.join(sessions_file_name(tag)))
+}
+
+fn load_sessions(tag: &str) -> HashMap<String, String> {
+    let Some(path) = sessions_path(tag) else {
         return HashMap::new();
     };
     let Ok(raw) = std::fs::read_to_string(path) else {
@@ -1478,8 +1524,8 @@ fn load_sessions() -> HashMap<String, String> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
-fn write_sessions(map: &HashMap<String, String>) {
-    let Some(path) = sessions_path() else {
+fn write_sessions(tag: &str, map: &HashMap<String, String>) {
+    let Some(path) = sessions_path(tag) else {
         return;
     };
     if let Ok(text) = serde_json::to_string_pretty(map) {
@@ -2229,6 +2275,7 @@ mod tests {
                 image_prompt: false,
             }),
             start_lock: Mutex::new(()),
+            tag: "",
         }
     }
 

@@ -1933,6 +1933,13 @@
 .settings-page .wecom-docgen-prompt-card > .wecom-editor-stack {
   margin-bottom: var(--space-2);
 }
+/* 回答设置 / 文档自动更新两页的二级页签：卡片自带 display（flex / grid），
+   hidden 属性的 UA 规则压不住，这里显式收掉；隐藏期间组件仍挂载，
+   草稿、已扫描的子仓列表切回来都还在 */
+.settings-page .wecom-rows > .wecom-block-card[hidden],
+.settings-page .wecom-rows > .wecom-enhance-card[hidden] {
+  display: none;
+}
 .settings-page .wecom-docgen-prompt-card > .wecom-editor-stack > .input-field {
   min-height: 220px;
   resize: vertical;
@@ -1957,6 +1964,12 @@
 }
 .settings-page .wecom-allowlist-item.is-missing > label {
   color: var(--text-3);
+}
+.settings-page .wecom-allowlist-item.is-unverified > label {
+  color: var(--text-2);
+}
+.settings-page .wecom-allowlist-item.is-unverified .wecom-allowlist-badge {
+  color: var(--text-2);
 }
 .settings-page .wecom-allowlist-name {
   font-family: var(--font-mono);
@@ -2035,6 +2048,11 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+/* 无标题的面板头：页面名上面的 tab 已经写过，这里只留一排二级页签胶囊，贴左站 */
+.settings-page .wecom-panel-head.is-bare {
+  justify-content: flex-start;
+  padding-bottom: 6px;
 }
 /* 面板头部右侧的计数徽标（已批准 / 待批准数量，只读展示） */
 .settings-page .wecom-count-badge {
@@ -2950,6 +2968,10 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--overlay-1) 70%, transparent);
 }
+/* 文档更新记录最多 30 条：给个高度上限，让「执行与推送」这页不至于被表格拉成一长条 */
+.settings-page .wecom-diag-table-wrap:has(> .wecom-docgen-table) {
+  max-height: 300px;
+}
 .settings-page .wecom-docgen-table {
   width: 100%;
   min-width: 640px;
@@ -3296,6 +3318,63 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+.settings-page .wecom-docgen-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+}
+.settings-page .wecom-docgen-progress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.settings-page .wecom-docgen-progress-label {
+  min-width: 0;
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+.settings-page .wecom-docgen-progress-meta {
+  flex: none;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.settings-page .wecom-docgen-progress-detail {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.settings-page .wecom-docgen-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--overlay-3);
+}
+.settings-page .wecom-docgen-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+.settings-page .wecom-docgen-progress.is-ok .wecom-docgen-progress-fill {
+  background: var(--green);
+}
+.settings-page .wecom-docgen-progress.is-skip .wecom-docgen-progress-fill {
+  background: var(--yellow);
+}
+.settings-page .wecom-docgen-progress.is-fail .wecom-docgen-progress-fill {
+  background: var(--red);
 }
 
 /* 扫码中：左侧二维码停在白底框里，右侧放提示、配对数字与码值（企微 / 微信共用） */
