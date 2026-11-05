@@ -406,21 +406,36 @@ pub async fn wecom_dsh_models(
     scope: Option<String>,
 ) -> Result<crate::wecom_dsh::DshModelCatalog, String> {
     let _lifecycle = state.orch.dsh_lifecycle.lock().await;
-    let engine = if scope.as_deref() == Some("docgen") {
+    let (engine, stop_after) = if scope.as_deref() == Some("docgen") {
         // 逆向工程页与通道解耦：docgen 配置走 wecom_docgen_apply 独立保存，
         // 不要求企微通道启用过；没配工作区时 ensure_ready 自会给出可操作文案。
-        Arc::clone(&state.docgen_dsh)
+        let docgen_engine = Arc::clone(&state.docgen_dsh);
+        match docgen_engine.ensure_ready().await {
+            Ok(()) => (docgen_engine, true),
+            Err(err) => {
+                // docgen 工作区没配好 / 路径不存在时拉不起进程。列模型本身不依赖工作区
+                // （目录来自 DSH 的配置文件），回落到通道实例取同一份目录——但只在通道
+                // 已经就绪时借道，绝不替用户把通道 DSH 拉起来。
+                let channel_engine = Arc::clone(&state.dsh);
+                let st = channel_engine.status().await;
+                if st.state == "ready" {
+                    (channel_engine, false)
+                } else {
+                    // 通道没就绪就把 docgen 的原始错误透出（指引去配工作区）
+                    return Err(err);
+                }
+            }
+        }
     } else {
         if state.applied.lock().await.is_none() || *state.orch.engine.lock().await != "dsh" {
             return Err("请先启用并保存 DSH 企微通道，再读取模型目录".into());
         }
-        Arc::clone(&state.dsh)
+        (Arc::clone(&state.dsh), false)
     };
-    engine.ensure_ready().await?;
     let catalog = engine.models(refresh.unwrap_or(false)).await;
     // 文档更新那套引擎平时不常驻：只是设置页要看列表，列完就关，别留一个 node 吃内存。
     // 正在跑更新时不能关（会把那一轮掐掉）。
-    if scope.as_deref() == Some("docgen") && !crate::wecom_docgen::is_running() {
+    if stop_after && !crate::wecom_docgen::is_running() {
         engine.stop().await;
     }
     catalog
