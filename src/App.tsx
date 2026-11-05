@@ -28,10 +28,11 @@ import DevTools from "./components/DevTools";
 import DesktopAppsPage from "./components/DesktopAppsPage";
 import ImBotPage from "./components/ImBotPage";
 import TianjiAssistantPage from "./components/TianjiAssistantPage";
+import ReverseDocPage from "./components/ReverseDocPage";
 import AppLauncherTool from "./components/devtools/AppLauncherTool";
 import AppLogoMark from "./components/AppLogoMark";
 import { bootApp } from "./core/boot";
-import { applyWecomChannel } from "./lib/wecomChannel";
+import { applyWecomChannel, applyWecomDocgen } from "./lib/wecomChannel";
 import { applyWeixinChannel } from "./lib/weixinChannel";
 import { applyTianjiApi } from "./lib/tianjiApi";
 import { useGlobalStore } from "./core/store";
@@ -124,7 +125,7 @@ function App() {
       openModelsPromptsTab();
       return "ai-models";
     }
-    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "drafts", "devtools", "app-launcher", "desktop-apps", "im-bots", "tianji-assistant"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
+    return (["git", "hosts", "settings", "plugins", "cursor-accounts", "account-quota", "ai-chat", "ai-models", "runtime", "cloudflared", "drafts", "devtools", "app-launcher", "desktop-apps", "im-bots", "tianji-assistant", "reverse-docs"] as Tab[]).includes(h as Tab) ? (h as Tab) : "ai-chat";
   });
   const [gitMounted, setGitMounted] = useState(false);
   const [dshMounted, setDshMounted] = useState(true);
@@ -202,6 +203,10 @@ function App() {
               models: st.aiModels,
               mcpServers: st.mcpServers,
             });
+          } else {
+            // 「逆向工程」是独立页，不依赖 IM 通道：通道关着也要把文档配置
+            // （工作区 / 定时 / webhook）下发下去，否则定时更新永远起不来。
+            await applyWecomDocgen(st.settings);
           }
           if (st.settings.weixinEnabled) {
             await applyWeixinChannel({
@@ -648,6 +653,7 @@ function App() {
               )}
               {activeTab === "tianji-assistant" && <TianjiAssistantPage />}
               {activeTab === "im-bots" && <ImBotPage />}
+              {activeTab === "reverse-docs" && <ReverseDocPage />}
               {activeTab === "settings" && (
                 <SettingsPage onNoticeUpdate={setUpdateNotice} />
               )}

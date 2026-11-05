@@ -550,6 +550,10 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       // 文档更新（DSH 档）的模型/思考强度；空 = 后端沿用上面的 dshModel / dshEffort。
       docgenDshModel: (settings.wecomDocgenDshModel ?? "").trim(),
       docgenDshEffort: (settings.wecomDocgenDshEffort ?? "").trim(),
+      // 文档自动更新自己的工作区 / 文档目录：留空才回落到上面「回答设置」的同名字段。
+      docgenRepoPath: (settings.wecomDocgenRepoPath ?? "").trim(),
+      docgenDocDir:
+        (settings.wecomDocgenDocDir ?? "").trim() || (settings.wecomDocDir ?? "").trim(),
       docgenLookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),
       docgenSyncSources: Boolean(settings.wecomDocgenSyncSources),
       docgenRepoAllowlist: normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist),
@@ -577,6 +581,62 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
     }).catch(() => {});
   }
   return status;
+}
+
+/**
+ * 「逆向工程」页专用：只下发文档自动更新 / 群通知的配置。
+ *
+ * 与 `applyWecomChannel` 分家的理由：那是通道级 apply，会连带校验 bot 凭据、
+ * 重启长连接；文档更新页每改一个字段就重启一次 IM 通道，既慢又会踢掉正在聊的会话。
+ * 后端 `wecom_docgen_apply` 只写 `state.docgen`，两条路径收敛到同一份配置。
+ */
+export async function applyWecomDocgen(settings: AppSettings): Promise<void> {
+  const seal = async (raw: string | undefined) => {
+    let v = (raw ?? "").trim();
+    if (v && !v.startsWith("enc:v1:")) v = await protectSecret(v);
+    return v;
+  };
+  // 工作区留空 = 跟随「回答设置」：这里解析成具体路径再下发（与通道 apply 同一套回落）。
+  const repoPath =
+    (settings.wecomDocgenRepoPath ?? "").trim() ||
+    (settings.wecomRepoPath ?? "").trim() ||
+    (settings.currentGitRepo ?? "").trim();
+  const dshModel = (settings.wecomDocgenDshModel ?? "").trim() || (settings.wecomDshModel ?? "").trim();
+  const dshEffort =
+    (settings.wecomDocgenDshEffort ?? "").trim() || (settings.wecomDshEffort ?? "").trim();
+  // 文档目录同样留空跟随「回答设置」，两处各自一套。
+  const docDir = (settings.wecomDocgenDocDir ?? "").trim() || (settings.wecomDocDir ?? "").trim();
+  await invoke("wecom_docgen_apply", {
+    req: {
+      repoPath,
+      docDir,
+      releaseBranch: (settings.wecomReleaseBranch ?? "").trim(),
+      autoUpdateEnabled: Boolean(settings.wecomAutoUpdateEnabled),
+      autoUpdateTime: (settings.wecomAutoUpdateTime ?? "").trim(),
+      cron: (settings.wecomDocgenCron ?? "").trim(),
+      webhookUrl: await seal(settings.wecomWebhookUrl),
+      webhookFeishu: await seal(settings.wecomWebhookFeishu),
+      webhookDingtalk: await seal(settings.wecomWebhookDingtalk),
+      preview: Boolean(settings.wecomDocgenPreview),
+      qualityCheck: Boolean(settings.wecomDocgenQualityCheck),
+      pollRelease: Boolean(settings.wecomDocgenPollRelease),
+      syncSources: Boolean(settings.wecomDocgenSyncSources),
+      lookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),
+      repoAllowlist: normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist),
+      systemPrompt: normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt),
+      qualityPrompt: normalizeDocgenPrompt(settings.wecomDocgenQualityPrompt),
+      engine:
+        settings.wecomDocgenEngine === "dsh"
+          ? "dsh"
+          : settings.wecomDocgenEngine === "tianji"
+            ? "tianji"
+            : "inherit",
+      dshModel,
+      dshEffort,
+      autoCommit: settings.wecomAutoCommit !== false,
+      autoPush: Boolean(settings.wecomAutoPush),
+    },
+  });
 }
 
 export async function fetchWecomStatus(): Promise<WecomStatus> {
@@ -646,6 +706,8 @@ export type WecomDocgenHistoryItem = {
   error?: string;
   preview: boolean;
   webhookErrors?: string[];
+  /** 整轮耗时（毫秒）；老记录没有，0 = 未知。 */
+  durationMs?: number;
 };
 
 /** 最近 30 条逆向文档更新历史（新 → 旧）。 */
@@ -674,6 +736,10 @@ export type WecomDocgenProgress = {
   percent: number;
   status: "running" | "ok" | "skip" | "fail";
   detail?: string;
+  /** 本轮开始时间（毫秒时间戳）：运行中拿它做实时计时；旧快照没有。 */
+  startedAtMs?: number | null;
+  /** 结束事件才有：整轮耗时（毫秒）。 */
+  durationMs?: number | null;
 };
 
 /** 读通道排障日志最后 N 行（设置页「通道日志」折叠区）。 */

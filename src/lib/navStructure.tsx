@@ -12,6 +12,7 @@ import {
   Bot,
   Cloud,
   Cpu,
+  FileText,
   Gauge,
   GitBranch,
   KeyRound,
@@ -44,7 +45,9 @@ export type Tab =
   | "drafts"
   | "devtools"
   | "app-launcher"
-  | "desktop-apps";
+  | "desktop-apps"
+  /** 工程管理 → 逆向工程（原「IM 机器人 → 文档自动更新与推送」，已独立成页） */
+  | "reverse-docs";
 
 export interface NavLeaf {
   id: Tab;
@@ -102,6 +105,7 @@ export const NAV_NODES: NavNode[] = [
     children: [
       { id: "git", labelKey: "gitManagement", icon: <GitBranch size={16} /> },
       { id: "runtime", labelKey: "runtimeVersion", icon: <Layers size={16} /> },
+      { id: "reverse-docs", labelKey: "reverseDocs", icon: <FileText size={16} /> },
     ],
   },
   {

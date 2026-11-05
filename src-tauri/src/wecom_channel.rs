@@ -219,6 +219,12 @@ pub struct WecomApplyRequest {
     /// 要跟踪的 release 分支名，默认 `release`。
     #[serde(default)]
     pub release_branch: String,
+    /// 文档自动更新自己的工作区；空 = 沿用 `workspace`（与问答工作区隔离）。
+    #[serde(default)]
+    pub docgen_repo_path: String,
+    /// 文档自动更新自己的文档目录；空 = 沿用 `doc_dir`（与问答的文档目录隔离）。
+    #[serde(default)]
+    pub docgen_doc_dir: String,
     /// 企微群机器人 webhook URL（或仅 key）；变动通知推到这里。可为 enc:v1: 密文。
     #[serde(default)]
     pub webhook_url: String,
@@ -401,9 +407,8 @@ pub async fn wecom_dsh_models(
 ) -> Result<crate::wecom_dsh::DshModelCatalog, String> {
     let _lifecycle = state.orch.dsh_lifecycle.lock().await;
     let engine = if scope.as_deref() == Some("docgen") {
-        if state.applied.lock().await.is_none() {
-            return Err("请先启用并保存企微通道，再读取模型目录".into());
-        }
+        // 逆向工程页与通道解耦：docgen 配置走 wecom_docgen_apply 独立保存，
+        // 不要求企微通道启用过；没配工作区时 ensure_ready 自会给出可操作文案。
         Arc::clone(&state.docgen_dsh)
     } else {
         if state.applied.lock().await.is_none() || *state.orch.engine.lock().await != "dsh" {
@@ -602,7 +607,9 @@ pub async fn wecom_docgen_run_now(
 ) -> Result<String, String> {
     let cfg = state.docgen.lock().await.clone();
     if cfg.workspace.trim().is_empty() {
-        return Err("请先填写工作区路径（即逆向文档所在的 Git 仓库）".into());
+        return Err(
+            "请先在「逆向工程 → 更新内容」里填写更新工作区（即逆向文档所在的 Git 仓库）".into(),
+        );
     }
     let report = crate::wecom_docgen::run_update(&app, &cfg).await?;
     if let Some(reason) = report.skipped_reason {
@@ -637,6 +644,126 @@ pub async fn wecom_docgen_run_now(
     Ok(body)
 }
 
+/// 「逆向工程」页下发的配置（与 IM 机器人页的 apply 分开）。
+///
+/// 关键是**只写 `state.docgen`**：这条路径不碰企微通道，保存时不会重启长连接，
+/// 也不会因为 IM 那一侧没填 bot 凭据就失败。两边都从同一份设置读值，
+/// 收敛到同一个 `DocgenConfig`，所以谁先保存都不会互相覆盖成旧值。
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocgenApplyRequest {
+    /// 文档更新自己的工作区（前端已把「留空跟随回答设置」解析成具体路径）。
+    #[serde(default)]
+    pub repo_path: String,
+    #[serde(default)]
+    pub doc_dir: String,
+    #[serde(default)]
+    pub release_branch: String,
+    #[serde(default)]
+    pub auto_update_enabled: bool,
+    #[serde(default)]
+    pub auto_update_time: String,
+    #[serde(default)]
+    pub cron: String,
+    /// 可为 enc:v1: 密文或明文。
+    #[serde(default)]
+    pub webhook_url: String,
+    #[serde(default)]
+    pub webhook_feishu: String,
+    #[serde(default)]
+    pub webhook_dingtalk: String,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub quality_check: bool,
+    #[serde(default)]
+    pub poll_release: bool,
+    #[serde(default)]
+    pub sync_sources: bool,
+    #[serde(default = "default_lookback_days")]
+    pub lookback_days: u32,
+    #[serde(default)]
+    pub repo_allowlist: Vec<String>,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
+    pub quality_prompt: String,
+    /// `inherit` | `tianji` | `dsh`；`inherit` 跟随回话引擎。
+    #[serde(default)]
+    pub engine: String,
+    /// 前端已把空值解析成「回答设置」里的 DSH 模型 / 思考强度。
+    #[serde(default)]
+    pub dsh_model: String,
+    #[serde(default)]
+    pub dsh_effort: String,
+    #[serde(default = "default_true")]
+    pub auto_commit: bool,
+    #[serde(default)]
+    pub auto_push: bool,
+}
+
+#[tauri::command]
+pub async fn wecom_docgen_apply(
+    state: State<'_, WecomState>,
+    req: DocgenApplyRequest,
+) -> Result<(), String> {
+    let decode = |raw: &str, label: &str| -> Result<String, String> {
+        let t = raw.trim();
+        if t.is_empty() {
+            return Ok(String::new());
+        }
+        crate::secret_protect::unprotect_secret(t).map_err(|_| format!("{label}解密失败"))
+    };
+    let channel_engine = state.orch.engine.lock().await.clone();
+    // 工作区留空时不动已有的（前端已经解析过「跟随回答设置」，这里空只可能是都没配）。
+    let workspace = {
+        let raw = req.repo_path.trim();
+        if raw.is_empty() {
+            state.docgen.lock().await.workspace.clone()
+        } else {
+            raw.to_string()
+        }
+    };
+    let docgen = crate::wecom_docgen::DocgenConfig {
+        enabled: req.auto_update_enabled,
+        time: req.auto_update_time.trim().to_string(),
+        cron: req.cron.trim().to_string(),
+        release_branch: req.release_branch.trim().to_string(),
+        doc_dir: req.doc_dir.trim().to_string(),
+        webhook_url: decode(&req.webhook_url, "企微 Webhook ")?,
+        webhook_feishu: decode(&req.webhook_feishu, "飞书 Webhook ")?,
+        webhook_dingtalk: decode(&req.webhook_dingtalk, "钉钉 Webhook ")?,
+        auto_commit: req.auto_commit,
+        auto_push: req.auto_push,
+        preview_mode: req.preview,
+        quality_check: req.quality_check,
+        poll_release: req.poll_release,
+        sync_sources: req.sync_sources,
+        lookback_days: normalize_lookback_days(req.lookback_days),
+        repo_allowlist: normalize_repo_allowlist(&req.repo_allowlist, &workspace),
+        system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.system_prompt),
+        quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.quality_prompt),
+        engine: normalize_docgen_engine(&req.engine, &channel_engine),
+        workspace,
+    };
+    // 文档更新那套 DSH 引擎也在这里对齐（模型/思考强度留空表示沿用，前端已解析）。
+    if docgen.uses_dsh() && !docgen.workspace.trim().is_empty() {
+        let _ = state
+            .docgen_dsh
+            .configure(
+                crate::wecom_dsh::Tier::Workspace,
+                docgen.workspace.clone(),
+                req.dsh_model.trim().to_string(),
+                req.dsh_effort.trim().to_string(),
+            )
+            .await;
+        state.docgen_dsh.set_mcp(Vec::new()).await;
+    }
+    *state.docgen.lock().await = docgen;
+    crate::wecom_log::write("docgen", "config applied from reverse-doc page");
+    Ok(())
+}
+
 /// 最近 30 条逆向文档更新历史（新 → 旧）。
 #[tauri::command]
 pub async fn wecom_docgen_history() -> Result<Vec<crate::wecom_docgen::DocgenHistoryItem>, String> {
@@ -657,8 +784,25 @@ pub async fn wecom_docgen_reset_cursor(
     repos: Option<Vec<String>>,
 ) -> Result<String, String> {
     let removed = crate::wecom_docgen::reset_cursors(repos.as_deref());
+    // 连进度卡一起清掉：否则页面重新挂载时会把上一轮（重置前）的「已跳过」补回来。
+    crate::wecom_docgen::clear_last_progress();
     if removed == 0 {
-        return Ok("没有可重置的采集点（这些仓本来就没记录）".into());
+        let known = crate::wecom_docgen::cursor_repos();
+        if known.is_empty() {
+            return Ok(
+                "当前没有任何采集点：下次运行会直接按「回溯天数」窗口重新采集，不需要重置".into(),
+            );
+        }
+        let shown: Vec<String> = known
+            .iter()
+            .take(5)
+            .map(|p| crate::git_commands::path_for_markdown(p))
+            .collect();
+        return Ok(format!(
+            "没有匹配到这些仓的采集点（后端记的是：{}{}）。先确认工作区 / 白名单是否改过，改完会随保存下发",
+            shown.join("、"),
+            if known.len() > shown.len() { " 等" } else { "" }
+        ));
     }
     Ok(format!(
         "已重置 {removed} 个仓的采集点；下次运行会从「回溯天数」窗口重新采集这些仓的变更"
@@ -842,6 +986,16 @@ pub async fn wecom_channel_apply(
     } else {
         req.workspace.trim().to_string()
     };
+    // 文档自动更新有独立的工作区（与「回答设置」的工作区隔离）：留空才回落共享值。
+    // 两个工作区各跑各的仓，改一边不会把另一边指向别处。
+    let docgen_workspace = {
+        let raw = req.docgen_repo_path.trim();
+        if raw.is_empty() {
+            workspace.clone()
+        } else {
+            raw.to_string()
+        }
+    };
     // DSH 档随会话下发的 MCP 服务：从 agent 配置里取（总开关关掉则不带）。
     let dsh_mcp = effective_mcp(req.mcp, req.mcp_enabled, req.agent.as_ref());
     *state.orch.agent.lock().await = req.agent;
@@ -903,8 +1057,15 @@ pub async fn wecom_channel_apply(
         time: req.auto_update_time.trim().to_string(),
         cron: req.docgen_cron.trim().to_string(),
         release_branch: req.release_branch.trim().to_string(),
-        workspace: workspace.clone(),
-        doc_dir: req.doc_dir.trim().to_string(),
+        workspace: docgen_workspace.clone(),
+        doc_dir: {
+            let d = req.docgen_doc_dir.trim();
+            if d.is_empty() {
+                req.doc_dir.trim().to_string()
+            } else {
+                d.to_string()
+            }
+        },
         webhook_url: req.webhook_url,
         webhook_feishu: req.webhook_feishu,
         webhook_dingtalk: req.webhook_dingtalk,
@@ -915,7 +1076,7 @@ pub async fn wecom_channel_apply(
         poll_release: req.docgen_poll_release,
         sync_sources: req.docgen_sync_sources,
         lookback_days: normalize_lookback_days(req.docgen_lookback_days),
-        repo_allowlist: normalize_repo_allowlist(&req.docgen_repo_allowlist, &workspace),
+        repo_allowlist: normalize_repo_allowlist(&req.docgen_repo_allowlist, &docgen_workspace),
         system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_system_prompt),
         quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_quality_prompt),
         engine: normalize_docgen_engine(&req.docgen_engine, &engine),
@@ -944,7 +1105,7 @@ pub async fn wecom_channel_apply(
         .docgen_dsh
         .configure(
             crate::wecom_dsh::Tier::Workspace,
-            workspace.clone(),
+            docgen_workspace.clone(),
             docgen_dsh_model,
             docgen_dsh_effort,
         )

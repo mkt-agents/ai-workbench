@@ -308,6 +308,10 @@ export interface AppSettings {
   wecomDocgenDshModel?: string;
   /** 文档更新（DSH 档）的思考强度；空 = 沿用「回答设置」的 DSH 思考强度 */
   wecomDocgenDshEffort?: string;
+  /** 文档自动更新自己的工作区（绝对路径）；空 = 沿用「回答设置」的工作区（与问答隔离，互不影响） */
+  wecomDocgenRepoPath?: string;
+  /** 文档自动更新自己的文档目录（相对工作区，默认 doc）；空 = 沿用「回答设置」的文档目录 */
+  wecomDocgenDocDir?: string;
   /** 文档自动更新回溯天数（0=不限制，默认 7，上限 30） */
   wecomDocgenLookbackDays?: number;
   /** 采集前先同步来源仓（fetch + 仅快进）；默认关 */

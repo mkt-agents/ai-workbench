@@ -12,6 +12,7 @@
   "versionManagement": "Engineering",
   "gitManagement": "Git Management",
   "runtimeVersion": "Environment",
+  "reverseDocs": "Reverse Engineering",
   "networkManagement": "Network Management",
   "hosts": "Hosts Manager",
   "cloudflared": "Public Tunnel",

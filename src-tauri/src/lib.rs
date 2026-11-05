@@ -719,6 +719,7 @@ pub fn run() {
             wecom_channel::wecom_docgen_test,
             wecom_channel::wecom_docgen_history,
             wecom_channel::wecom_docgen_reset_cursor,
+            wecom_channel::wecom_docgen_apply,
             wecom_channel::wecom_docgen_progress,
             wecom_channel::wecom_log_tail,
             wecom_diagnostic_commands::wecom_diagnostics_query,

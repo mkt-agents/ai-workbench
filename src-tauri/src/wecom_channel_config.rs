@@ -115,6 +115,9 @@ pub(crate) fn normalize_request(
         decrypt(req.webhook_dingtalk.trim()).map_err(|_| "钉钉 Webhook 解密失败".to_string())?
     };
     req.docgen_cron = req.docgen_cron.trim().into();
+    // 文档自动更新自己的工作区；空 = 沿用上面解析后的 workspace。
+    req.docgen_repo_path = req.docgen_repo_path.trim().into();
+    req.docgen_doc_dir = req.docgen_doc_dir.trim().into();
     req.bot_display_name = req.bot_display_name.trim().into();
     // UI and backend share a Unicode-character budget, not a UTF-8 byte budget.
     req.self_intro = req.self_intro.trim().chars().take(2000).collect();
@@ -262,7 +265,9 @@ pub(crate) fn snapshot(req: &WecomApplyRequest) -> ConfigSnapshot {
             "time": req.auto_update_time,
             "cron": req.docgen_cron,
             "branch": req.release_branch,
+            "repoPath": req.docgen_repo_path,
             "docDir": req.doc_dir,
+            "docgenDocDir": req.docgen_doc_dir,
             "webhook": req.webhook_url,
             "webhookFeishu": req.webhook_feishu,
             "webhookDingtalk": req.webhook_dingtalk,

@@ -373,6 +373,9 @@ pub struct DocgenHistoryItem {
     pub preview: bool,
     #[serde(default)]
     pub webhook_errors: Vec<String>,
+    /// 整轮耗时（毫秒）；老记录没有这个字段，读到 0 就显示「—」。
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 pub fn list_history() -> Vec<DocgenHistoryItem> {
@@ -418,6 +421,7 @@ fn history_from_report(
     report: &UpdateReport,
     quality: &str,
     webhook_errors: &[String],
+    duration_ms: u64,
 ) -> DocgenHistoryItem {
     let preview = trigger == RunTrigger::Preview || report.preview;
     let status = if report.skipped_reason.is_some() {
@@ -445,6 +449,7 @@ fn history_from_report(
         },
         preview,
         webhook_errors: webhook_errors.to_vec(),
+        duration_ms,
     }
 }
 
@@ -494,6 +499,7 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
             "docgen",
             &format!("auto schedule start branch={}", cfg.branch_or_default()),
         );
+        let run_started = std::time::Instant::now();
         match run_update_with_trigger(app, &cfg, RunTrigger::Schedule).await {
             Ok(report) => {
                 crate::wecom_log::write("docgen", &format!("auto schedule done: {}", report.summary_line()));
@@ -518,6 +524,7 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
                     error: e.clone(),
                     preview: false,
                     webhook_errors: errs,
+                    duration_ms: run_started.elapsed().as_millis() as u64,
                 });
                 return Err(e);
             }
@@ -645,6 +652,7 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
             }
         ),
     );
+    let run_started = std::time::Instant::now();
     match run_update_with_trigger(app, cfg, RunTrigger::Poll).await {
         Ok(report) => {
             crate::wecom_log::write("docgen", &format!("auto poll done: {}", report.summary_line()));
@@ -665,6 +673,7 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
                 error: e.clone(),
                 preview: false,
                 webhook_errors: errs,
+                duration_ms: run_started.elapsed().as_millis() as u64,
             });
             Err(e)
         }
@@ -702,6 +711,12 @@ pub struct DocgenProgressEvent {
     percent: u8,
     status: String,
     detail: String,
+    /// 本轮开始时间（毫秒时间戳）：前端运行中拿它做实时计时。
+    #[serde(default)]
+    started_at_ms: Option<i64>,
+    /// 结束事件才有：整轮耗时（毫秒）。
+    #[serde(default)]
+    duration_ms: Option<u64>,
 }
 
 /// 最近一次进度事件。页面切走再回来（组件重新挂载）时用它把进度卡恢复出来，
@@ -711,6 +726,22 @@ static LAST_PROGRESS: std::sync::Mutex<Option<DocgenProgressEvent>> = std::sync:
 /// 读最近一次进度快照；从没跑过时是 None。
 pub fn last_progress() -> Option<DocgenProgressEvent> {
     LAST_PROGRESS.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// 丢掉最近一次进度快照（设置页「重置采集点」后调用）。
+/// 否则页面重新挂载时会把上一轮的「已跳过」补回进度卡，看着像重置没生效。
+pub fn clear_last_progress() {
+    if let Ok(mut slot) = LAST_PROGRESS.lock() {
+        *slot = None;
+    }
+}
+
+/// 当前有采集点的仓（诊断用：重置时没匹配上要知道后端记的是哪些路径）。
+pub fn cursor_repos() -> Vec<String> {
+    let st = load_state();
+    let mut out: Vec<String> = st.last_commits.keys().cloned().collect();
+    out.sort();
+    out
 }
 
 /// 进度卡恢复用：最近一次事件 + 「现在是否真的在跑」。
@@ -733,6 +764,7 @@ struct RunProgress<'a> {
     app: &'a AppHandle,
     run_id: String,
     trigger: RunTrigger,
+    started_ms: i64,
 }
 
 impl<'a> RunProgress<'a> {
@@ -741,10 +773,22 @@ impl<'a> RunProgress<'a> {
             app,
             run_id: format!("docgen-{}", chrono::Utc::now().timestamp_millis()),
             trigger,
+            started_ms: chrono::Utc::now().timestamp_millis(),
         }
     }
 
+    /// 整轮耗时（毫秒），写历史用。
+    fn elapsed_ms(&self) -> u64 {
+        (chrono::Utc::now().timestamp_millis() - self.started_ms).max(0) as u64
+    }
+
     fn emit(&self, phase: &str, percent: u8, status: &str, detail: &str) {
+        // 结束事件（ok / skip / fail）顺手把整轮耗时带上，前端直接展示。
+        let duration_ms = if status == "running" {
+            None
+        } else {
+            Some(self.elapsed_ms())
+        };
         let event = DocgenProgressEvent {
             run_id: self.run_id.clone(),
             trigger: self.trigger.as_str().into(),
@@ -752,6 +796,8 @@ impl<'a> RunProgress<'a> {
             percent: percent.min(100),
             status: status.into(),
             detail: detail.trim().to_string(),
+            started_at_ms: Some(self.started_ms),
+            duration_ms,
         };
         if let Ok(mut slot) = LAST_PROGRESS.lock() {
             *slot = Some(event.clone());
@@ -766,6 +812,13 @@ impl<'a> RunProgress<'a> {
     fn finish_ok(&self, report: &UpdateReport) {
         if let Some(reason) = report.skipped_reason.as_deref() {
             self.emit("skipped", 100, "skip", reason);
+        } else if !report.pushed {
+            // 更新成功了但群里没消息：把原因写进卡片，别让人以为是「通过了却静悄悄」。
+            let detail = match report.webhook_errors.first() {
+                Some(e) => format!("群通知未送达：{e}"),
+                None => "群通知未发送（未配置任何群 webhook）".to_string(),
+            };
+            self.emit("done", 100, "ok", &detail);
         } else {
             self.emit("done", 100, "ok", "");
         }
@@ -824,6 +877,11 @@ pub async fn run_update_with_trigger(
         }
         Err(e) => {
             progress.finish_err(&e);
+            // 定时任务在 auto_tick 里统一发失败通知；手动 / 预览是用户点的，这里补一条，
+            // 否则切分支 / 采集失败这种早退会一声不响（看着像「跑完了没通知」）。
+            if matches!(trigger, RunTrigger::Manual | RunTrigger::Preview) {
+                let _ = notify_all(cfg, &format!("⚠️ 逆向文档自动更新失败：{e}")).await;
+            }
             Err(e)
         }
     }
@@ -865,7 +923,8 @@ async fn run_update_inner(
     if !dirty.status.success() {
         return Err("读取工作区状态失败".into());
     }
-    if !String::from_utf8_lossy(&dirty.stdout).trim().is_empty() {
+    // 脏仓跳过只拦正式轮；预览轮的产物本来就留在工作区待核对，放行才能重跑预览。
+    if !String::from_utf8_lossy(&dirty.stdout).trim().is_empty() && !preview {
         let reason = "工作区有未提交改动，已跳过自动更新（请先提交或暂存）".to_string();
         progress.stage("notify", 90);
         let (pushed, errs) =
@@ -883,7 +942,13 @@ async fn run_update_inner(
             webhook_errors: errs,
             error: String::new(),
         };
-        append_history(&history_from_report(trigger, &report, "", &report.webhook_errors));
+        append_history(&history_from_report(
+            trigger,
+            &report,
+            "",
+            &report.webhook_errors,
+            progress.elapsed_ms(),
+        ));
         return Ok(report);
     }
 
@@ -920,6 +985,12 @@ async fn run_update_inner(
         .iter()
         .map(|s| (s.clone(), cursor_for(&st_snap, s)))
         .collect();
+    // 本轮开始时还没有采集点的仓（新加 / 刚重置）：空采集时不能给它们落游标。
+    let fresh_repos: Vec<String> = source_prev
+        .iter()
+        .filter(|(_, prev)| prev.is_none())
+        .map(|(repo, _)| repo.clone())
+        .collect();
     let parts = {
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, ChangeDelta)>, String> {
             let mut out = Vec::new();
@@ -952,26 +1023,48 @@ async fn run_update_inner(
     if delta.files.is_empty() {
         let mut st = load_state();
         for (repo, head) in &heads {
+            // 本来就没采集点的仓（新加进白名单 / 刚点过「重置采集点」）这里不落游标：
+            // 一旦落上，「空采集」就把刚空的采集点顶回 HEAD，之后每轮都判成无变更。
+            if fresh_repos
+                .iter()
+                .any(|r| norm_repo_key(r) == norm_repo_key(repo))
+            {
+                continue;
+            }
             set_cursor(&mut st, repo, head);
         }
         save_state(&st);
+        let reason = format!(
+            "自上次更新以来无代码变更（本次监视 {} 个仓；未勾选的子仓不会被采集）",
+            sources.len()
+        );
+        // 手动 / 预览是用户自己点的：跳过也给个回执，否则群里一片安静，像没跑过。
+        let (pushed, webhook_errors) =
+            if matches!(trigger, RunTrigger::Manual | RunTrigger::Preview) {
+                notify_all(cfg, &format!("ℹ️ 逆向文档无需更新：{reason}")).await
+            } else {
+                (false, Vec::new())
+            };
         let report = UpdateReport {
             branch,
             new_commits: 0,
             changed_files: Vec::new(),
             updated_docs: String::new(),
             commit_note: String::new(),
-            pushed: false,
-            skipped_reason: Some(format!(
-                "自上次更新以来无代码变更（本次监视 {} 个仓；未勾选的子仓不会被采集）",
-                sources.len()
-            )),
+            pushed,
+            skipped_reason: Some(reason),
             preview,
             quality: String::new(),
-            webhook_errors: Vec::new(),
+            webhook_errors: webhook_errors.clone(),
             error: String::new(),
         };
-        append_history(&history_from_report(trigger, &report, "", &[]));
+        append_history(&history_from_report(
+            trigger,
+            &report,
+            "",
+            &webhook_errors,
+            progress.elapsed_ms(),
+        ));
         return Ok(report);
     }
 
@@ -1035,12 +1128,10 @@ async fn run_update_inner(
     );
     let mut commit_note = String::new();
     if preview {
-        let ws = workspace.clone();
-        let dd = doc_dir.clone();
-        let _ = tokio::task::spawn_blocking(move || revert_doc_dir(&ws, &dd))
-            .await
-            .map_err(|e| e.to_string())?;
-        commit_note = "预览模式：文档改动已丢弃，未提交".into();
+        // 预览落盘：改动留在工作区供核对，不 commit / push。
+        // 下一轮定时任务看到脏仓会自动跳过（不会盖掉待核对的产物）；
+        // 核完手动提交（或自行撤销）后自动跑即恢复。
+        commit_note = "预览模式：文档改动已写入工作区，未提交；核对后请手动提交或撤销".into();
     } else if failed {
         // 更新没成功就别把半成品提交进去（下一轮还要重跑这批变更）。
         commit_note = "（本次更新失败，未提交）".into();
@@ -1070,7 +1161,9 @@ async fn run_update_inner(
 
     progress.stage("cursor", 98);
     // 失败时不推进游标：否则这批变更被永久跳过，下一轮也补不回来。
-    if !failed {
+    // 预览同样不推进：落盘的改动还没核对，这批来源变更要留给正式轮处理
+    //（核完用户手动提交；撤销了就由下一轮重新生成）。
+    if !failed && !preview {
         let mut st = load_state();
         for (repo, head) in &heads {
             set_cursor(&mut st, repo, head);
@@ -1106,6 +1199,7 @@ async fn run_update_inner(
         &report,
         &quality,
         &webhook_errors,
+        progress.elapsed_ms(),
     ));
     Ok(report)
 }
@@ -1158,15 +1252,6 @@ fn commit_docs(
         return Ok(format!("已提交并推送 {} 篇文档", changed_docs.len()));
     }
     Ok(format!("已提交 {} 篇文档（未推送）", changed_docs.len()))
-}
-
-/// 预览清仓：还原已跟踪 + 删除 doc_dir 下未跟踪新建。
-fn revert_doc_dir(workspace: &str, doc_dir: &str) -> Result<(), String> {
-    use crate::git_commands::git_output;
-    let dir = doc_dir.trim_end_matches('/');
-    let _ = git_output(workspace, &["checkout", "--", dir]);
-    let _ = git_output(workspace, &["clean", "-fd", "--", dir]);
-    Ok(())
 }
 
 fn update_release_branch(workspace: &str, branch: &str) -> Result<(), String> {
@@ -1683,8 +1768,18 @@ async fn update_docs_with_agent(
             "docgen",
             &format!("reverted {} out-of-doc changes: {:?}", reverted.len(), reverted),
         );
+        // 把越界路径直接列出来：光报数量得翻日志才知道 AI 想动什么。
+        let mut listed: Vec<String> = reverted.iter().take(5).cloned().collect();
+        if reverted.len() > 5 {
+            listed.push(format!("…等共 {} 处", reverted.len()));
+        }
+        let lines = listed
+            .iter()
+            .map(|p| format!("> {p}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         summary.push_str(&format!(
-            "\n\n⚠️ 已自动丢弃 {} 处超出文档目录的改动（只允许改 {doc_dir}/）。",
+            "\n\n⚠️ AI 试图改动文档目录以外的 {} 个文件，已自动还原（只允许改 {doc_dir}/）：\n{lines}",
             reverted.len()
         ));
     }
@@ -2005,7 +2100,7 @@ fn compose_notice(
         format!("\n\n**质量自检：**\n{}", quality.trim())
     };
     let title = if preview {
-        "## 👀 逆向文档预览（未落盘）"
+        "## 👀 逆向文档预览（已落盘待核对）"
     } else {
         "## 📘 逆向文档已更新"
     };
@@ -2069,7 +2164,27 @@ pub async fn send_webhook(url: &str, markdown: &str) -> Result<(), String> {
     send_webhook_kind(WebhookKind::Wecom, url, markdown).await
 }
 
+/// 企微 / 钉钉的 markdown 都按字节算长度、上限 4096：超了不是截断而是整条拒收
+/// （企微 errcode=40055 「markdown.content exceed max length」）。
+/// 发送前按 UTF-8 字符边界裁一刀、尾部补截断说明；飞书 text 上限宽得多，不用裁。
+fn clamp_markdown(kind: WebhookKind, markdown: &str) -> String {
+    const NOTE: &str = "\n\n> （通知过长，已截断）";
+    match kind {
+        WebhookKind::Feishu => return markdown.to_string(),
+        WebhookKind::Wecom | WebhookKind::DingTalk => {}
+    }
+    if markdown.len() <= 4096 {
+        return markdown.to_string();
+    }
+    let mut end = 4096 - NOTE.len();
+    while end > 0 && !markdown.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &markdown[..end], NOTE)
+}
+
 async fn send_webhook_kind(kind: WebhookKind, url: &str, markdown: &str) -> Result<(), String> {
+    let markdown = clamp_markdown(kind, markdown);
     let url = match kind {
         WebhookKind::Wecom => normalize_webhook_url(url)?,
         WebhookKind::Feishu | WebhookKind::DingTalk => {

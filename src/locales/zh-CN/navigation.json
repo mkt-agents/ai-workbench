@@ -12,6 +12,7 @@
   "versionManagement": "工程管理",
   "gitManagement": "Git 管理",
   "runtimeVersion": "环境变量",
+  "reverseDocs": "逆向工程",
   "networkManagement": "网络管理",
   "hosts": "Hosts 管理",
   "cloudflared": "公网隧道",
