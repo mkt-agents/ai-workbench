@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, Clock, Eye, EyeOff, FolderGit2, Play, RefreshCw, Send, Sparkles } from "lucide-react";
+import { Check, Clock, Eye, EyeOff, FolderGit2, FolderOpen, Play, RefreshCw, Send, Sparkles } from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import { useTauriEvent } from "../hooks/useTauriEvent";
@@ -328,6 +328,8 @@ export default function ReverseDocPage() {
   // 运行中的实时计时：每秒更新一次「当前时间」，渲染时拿它减开始时间；结束后用 durationMs
   const [nowMs, setNowMs] = useState(0);
 
+  const invokePickDirectory = useGlobalStore((s) => s.invokePickDirectory);
+
   const docgenRepoPath = useFieldDraft(settings.wecomDocgenRepoPath ?? "");
   const docgenDocDir = useFieldDraft(settings.wecomDocgenDocDir ?? "");
   const docgenCron = useFieldDraft(settings.wecomDocgenCron ?? "");
@@ -351,6 +353,20 @@ export default function ReverseDocPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  /** 原生目录选择框：选完即落盘，和手输走同一条 push 路径。 */
+  const pickDir = async (
+    draft: ReturnType<typeof useFieldDraft>,
+    key: "wecomDocgenRepoPath" | "wecomDocgenDocDir",
+    afterPick?: () => void,
+  ) => {
+    const dir = await invokePickDirectory();
+    if (!dir) return;
+    draft.focused.current = false;
+    draft.setValue(dir);
+    afterPick?.();
+    void push({ [key]: dir } as Partial<AppSettings>);
   };
 
   /** 回话引擎（`inherit` 时文档更新跟着它走）。 */
@@ -954,23 +970,38 @@ export default function ReverseDocPage() {
               <Row
                 label={t("wecom.docgenRepoPath")}
                 control={
-                  <input
-                    className="input-field"
-                    value={docgenRepoPath.value}
-                    placeholder={docgenInheritedWorkspace || t("wecom.repoPlaceholder")}
-                    onFocus={() => {
-                      docgenRepoPath.focused.current = true;
-                    }}
-                    onChange={(e) => docgenRepoPath.setValue(e.target.value)}
-                    onBlur={() => {
-                      docgenRepoPath.focused.current = false;
-                      const v = docgenRepoPath.value.trim();
-                      if (v === (settings.wecomDocgenRepoPath ?? "")) return;
-                      // 换了工作区，之前扫出来的子仓就不再可信
-                      setDocgenScanned(null);
-                      void push({ wecomDocgenRepoPath: v || undefined });
-                    }}
-                  />
+                  <div className="input-with-toggle">
+                    <input
+                      className="input-field"
+                      value={docgenRepoPath.value}
+                      placeholder={docgenInheritedWorkspace || t("wecom.repoPlaceholder")}
+                      onFocus={() => {
+                        docgenRepoPath.focused.current = true;
+                      }}
+                      onChange={(e) => docgenRepoPath.setValue(e.target.value)}
+                      onBlur={() => {
+                        docgenRepoPath.focused.current = false;
+                        const v = docgenRepoPath.value.trim();
+                        if (v === (settings.wecomDocgenRepoPath ?? "")) return;
+                        // 换了工作区，之前扫出来的子仓就不再可信
+                        setDocgenScanned(null);
+                        void push({ wecomDocgenRepoPath: v || undefined });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="input-toggle-btn"
+                      title={t("wecom.pickDirectory")}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() =>
+                        void pickDir(docgenRepoPath, "wecomDocgenRepoPath", () =>
+                          setDocgenScanned(null),
+                        )
+                      }
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
                 }
                 hint={<p className="setting-hint">{t("wecom.docgenRepoPathHint")}</p>}
               />
@@ -979,21 +1010,32 @@ export default function ReverseDocPage() {
               <Row
                 label={t("wecom.docgenDocDir")}
                 control={
-                  <input
-                    className="input-field"
-                    value={docgenDocDir.value}
-                    placeholder={docgenInheritedDocDir || t("wecom.docgenDocDirDefault")}
-                    onFocus={() => {
-                      docgenDocDir.focused.current = true;
-                    }}
-                    onChange={(e) => docgenDocDir.setValue(e.target.value)}
-                    onBlur={() => {
-                      docgenDocDir.focused.current = false;
-                      const v = docgenDocDir.value.trim();
-                      if (v === (settings.wecomDocgenDocDir ?? "")) return;
-                      void push({ wecomDocgenDocDir: v || undefined });
-                    }}
-                  />
+                  <div className="input-with-toggle">
+                    <input
+                      className="input-field"
+                      value={docgenDocDir.value}
+                      placeholder={docgenInheritedDocDir || t("wecom.docgenDocDirDefault")}
+                      onFocus={() => {
+                        docgenDocDir.focused.current = true;
+                      }}
+                      onChange={(e) => docgenDocDir.setValue(e.target.value)}
+                      onBlur={() => {
+                        docgenDocDir.focused.current = false;
+                        const v = docgenDocDir.value.trim();
+                        if (v === (settings.wecomDocgenDocDir ?? "")) return;
+                        void push({ wecomDocgenDocDir: v || undefined });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="input-toggle-btn"
+                      title={t("wecom.pickDirectory")}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => void pickDir(docgenDocDir, "wecomDocgenDocDir")}
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
                 }
                 hint={<p className="setting-hint">{t("wecom.docgenDocDirHint")}</p>}
               />

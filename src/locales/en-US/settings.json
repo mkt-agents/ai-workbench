@@ -560,6 +560,7 @@
     "dshModelsOff": "Turn the channel on (DSH engine) to load the model list automatically.",
     "repoPath": "Workspace path",
     "repoPlaceholder": "Defaults to current Git workspace",
+    "pickDirectory": "Browse…",
     "pairingTitle": "Pending pairings",
     "pairingEmpty": "No pending pairing requests",
     "pairedList": "Paired users",

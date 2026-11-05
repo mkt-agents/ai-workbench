@@ -560,6 +560,7 @@
     "dshModelsOff": "启用通道（DSH 引擎）后会自动加载模型列表。",
     "repoPath": "工作区路径",
     "repoPlaceholder": "默认当前 Git 工作区",
+    "pickDirectory": "浏览目录…",
     "pairingTitle": "待配对",
     "pairingEmpty": "没有待批准的配对请求",
     "pairedList": "已配对用户",

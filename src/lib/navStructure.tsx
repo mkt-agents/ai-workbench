@@ -109,21 +109,21 @@ export const NAV_NODES: NavNode[] = [
     ],
   },
   {
-    group: "network",
-    labelKey: "networkManagement",
-    defaultOpen: true,
-    children: [
-      { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
-      { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
-    ],
-  },
-  {
     group: "smart",
     labelKey: "smartConnect",
     defaultOpen: true,
     children: [
       { id: "tianji-assistant", labelKey: "tianjiAssistant", icon: <Sparkles size={16} /> },
       { id: "im-bots", labelKey: "imBots", icon: <Bot size={16} /> },
+    ],
+  },
+  {
+    group: "network",
+    labelKey: "networkManagement",
+    defaultOpen: true,
+    children: [
+      { id: "plugins", labelKey: "plugins", icon: <Puzzle size={16} /> },
+      { id: "cloudflared", labelKey: "cloudflared", icon: <Cloud size={16} /> },
     ],
   },
   {
