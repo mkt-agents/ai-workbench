@@ -615,6 +615,17 @@
 .settings-page .card-title.is-tabs .hub-tabs {
   margin-bottom: 0;
 }
+/* 逆向工程页签：间距放宽、页头压一条分隔线，把页签区和运行条分开 */
+.settings-page .card-title.is-tabs.docgen-tabs {
+  padding: 10px 18px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-page .card-title.is-tabs.docgen-tabs .hub-tabs {
+  gap: 8px;
+}
+.settings-page .card-title.is-tabs.docgen-tabs .hub-tab {
+  padding: 6px 18px;
+}
 
 /* 非卡片形态的分类内容（如菜单配置：组件自带分组卡与吸顶工具条） */
 .settings-pane[hidden] {
@@ -1013,6 +1024,18 @@
 
 .toggle input:checked + .toggle-slider {
   background: var(--accent);
+}
+
+/* 禁用态：整体压暗 + 禁点光标；只在确实被 disabled 的开关上生效 */
+.toggle input:disabled + .toggle-slider {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.toggle input:disabled + .toggle-slider::before {
+  box-shadow: none;
+}
+.toggle input:disabled:hover + .toggle-slider {
+  background: var(--bg-3);
 }
 
 .toggle input:checked + .toggle-slider::before {
@@ -2027,6 +2050,23 @@
 /* 地址 + 时区这类「长输入 + 短下拉」：按 2:1 分列，下拉不用撑满半屏 */
 .settings-page .wecom-block-card > .wecom-pair.is-addr {
   grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr);
+}
+/* 逆向工程页「回溯天数 + 同步开关」：字段都短，固定两列不塌单列 */
+.settings-page .wecom-block-card > .wecom-pair.is-strategy {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+}
+/* 「更新工作区 + 文档目录」：两个带浏览按钮的路径输入，固定等宽两列 */
+.settings-page .wecom-block-card > .wecom-pair.is-paths {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+/* 「更新引擎 + 模型/思考强度」：引擎列窄、模型组列宽；组内模型框改弹性不占死 340px */
+.settings-page .wecom-block-card > .wecom-pair.is-engine {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr);
+}
+.settings-page .wecom-pair.is-engine .wecom-row-control > .wecom-split {
+  width: auto;
+  max-width: none;
+  flex: 1 1 200px;
 }
 /* 面板内整块的列表（配对码 / 已批准用户）同样横跨两列 */
 .settings-page .wecom-rows > .setting-item {
@@ -3452,6 +3492,10 @@
   font-size: 12px;
   font-weight: 600;
 }
+/* 运行中：阶段名跟着主题色走，和能量条、百分比呼应 */
+.settings-page .wecom-docgen-progress.is-running .wecom-docgen-progress-label {
+  color: var(--accent);
+}
 /* 触发方式 / 耗时：统一做成小胶囊，和左边的阶段名、右边的大百分比拉开层次 */
 .settings-page .wecom-docgen-progress-meta,
 .settings-page .wecom-docgen-progress-elapsed {
@@ -3470,7 +3514,7 @@
 .settings-page .wecom-docgen-progress-elapsed {
   font-variant-numeric: tabular-nums;
 }
-/* 大号百分比：渐变数字，整张进度卡的视觉锚点 */
+/* 大号百分比：亮渐变 + 柔光，整张进度卡的视觉锚点 */
 .settings-page .wecom-docgen-progress-pct {
   flex: none;
   margin-left: auto;
@@ -3482,11 +3526,12 @@
   letter-spacing: 0.02em;
   background: linear-gradient(
     160deg,
-    color-mix(in srgb, var(--accent) 62%, var(--on-accent)),
-    var(--accent)
+    color-mix(in srgb, var(--accent) 30%, var(--on-accent)),
+    var(--accent) 65%
   );
   -webkit-background-clip: text;
   background-clip: text;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 40%, transparent));
 }
 .settings-page .wecom-docgen-progress-pct i {
   font-style: normal;
@@ -3523,6 +3568,10 @@
   border-radius: var(--radius-full);
   background: var(--overlay-3);
   box-shadow: inset 0 1px 2px rgb(0 0 0 / 15%);
+}
+/* 当前段的空槽也淡染主题色：没充能的部分也知道「活动区」在哪 */
+.settings-page .wecom-docgen-seg.is-current .wecom-docgen-seg-track {
+  background: color-mix(in srgb, var(--accent) 14%, var(--overlay-3));
 }
 .settings-page .wecom-docgen-seg-fill {
   position: relative;
@@ -3562,11 +3611,11 @@
   background-image:
     repeating-linear-gradient(
       45deg,
-      color-mix(in srgb, var(--on-accent) 26%, transparent) 0 5px,
+      color-mix(in srgb, var(--on-accent) 38%, transparent) 0 5px,
       transparent 5px 11px
     ),
-    linear-gradient(90deg, color-mix(in srgb, var(--accent) 60%, transparent), var(--accent));
-  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 52%, transparent);
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, transparent), var(--accent));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 62%, transparent);
 }
 .settings-page .wecom-docgen-progress.is-running .wecom-docgen-seg.is-current .wecom-docgen-seg-fill {
   animation: wecom-docgen-stripes 0.8s linear infinite;

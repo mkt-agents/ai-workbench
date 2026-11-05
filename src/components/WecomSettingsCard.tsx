@@ -7,6 +7,7 @@ import {
   QrCode,
   ShieldCheck,
   FolderGit2,
+  FolderOpen,
   MessageSquare,
   Users,
   ListChecks,
@@ -208,6 +209,7 @@ export default function WecomSettingsCard() {
   const confirm = useConfirm();
   const settings = useGlobalStore((s) => s.settings);
   const setSettings = useGlobalStore((s) => s.setSettings);
+  const invokePickDirectory = useGlobalStore((s) => s.invokePickDirectory);
   const aiModels = useGlobalStore((s) => s.aiModels);
   const mcpServers = useGlobalStore((s) => s.mcpServers);
 
@@ -369,6 +371,37 @@ export default function WecomSettingsCard() {
       }
     }
     setShowSecret(true);
+  };
+
+  /** 原生目录选择框。工作区直接用绝对路径；文档目录约定相对工作区，
+   *  选中的目录若在工作区之下就折算成相对路径（正斜杠），否则原样存。 */
+  const pickAnswerDir = async (key: "wecomRepoPath" | "wecomDocDir") => {
+    const dir = await invokePickDirectory();
+    if (!dir) return;
+    if (key === "wecomRepoPath") {
+      repoPath.focused.current = false;
+      repoPath.setValue(dir);
+      void push({ wecomRepoPath: dir });
+      return;
+    }
+    const rawWs = (
+      repoPath.value.trim() ||
+      settings.wecomRepoPath ||
+      settings.currentGitRepo ||
+      ""
+    ).trim();
+    const wsSeg = rawWs.replace(/\//g, "\\").replace(/\\+$/, "");
+    let value = dir;
+    if (wsSeg && dir.toLowerCase().startsWith(wsSeg.toLowerCase())) {
+      value = dir
+        .slice(wsSeg.length)
+        .replace(/\\/g, "/")
+        .replace(/^\/+/, "");
+    }
+    if (!value) value = "doc";
+    docDir.focused.current = false;
+    docDir.setValue(value);
+    void push({ wecomDocDir: value || undefined });
   };
 
   const stateKey = status?.state ?? "disconnected";
@@ -1481,44 +1514,66 @@ export default function WecomSettingsCard() {
               <Row
                 label={t("wecom.repoPath")}
                 control={
-                  <input
-                    className="input-field"
-                    value={repoPath.value}
-                    placeholder={settings.currentGitRepo || t("wecom.repoPlaceholder")}
-                    onFocus={() => {
-                      repoPath.focused.current = true;
-                    }}
-                    onChange={(e) => repoPath.setValue(e.target.value)}
-                    onBlur={() => {
-                      repoPath.focused.current = false;
-                      const v = repoPath.value.trim();
-                      if (v !== (settings.wecomRepoPath ?? "")) {
-                        void push({ wecomRepoPath: v || undefined });
-                      }
-                    }}
-                  />
+                  <div className="input-with-toggle">
+                    <input
+                      className="input-field"
+                      value={repoPath.value}
+                      placeholder={settings.currentGitRepo || t("wecom.repoPlaceholder")}
+                      onFocus={() => {
+                        repoPath.focused.current = true;
+                      }}
+                      onChange={(e) => repoPath.setValue(e.target.value)}
+                      onBlur={() => {
+                        repoPath.focused.current = false;
+                        const v = repoPath.value.trim();
+                        if (v !== (settings.wecomRepoPath ?? "")) {
+                          void push({ wecomRepoPath: v || undefined });
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="input-toggle-btn"
+                      title={t("wecom.pickDirectory")}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => void pickAnswerDir("wecomRepoPath")}
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
                 }
               />
 
               <Row
                 label={t("wecom.docDir")}
                 control={
-                  <input
-                    className="input-field"
-                    value={docDir.value}
-                    placeholder="doc"
-                    onFocus={() => {
-                      docDir.focused.current = true;
-                    }}
-                    onChange={(e) => docDir.setValue(e.target.value)}
-                    onBlur={() => {
-                      docDir.focused.current = false;
-                      const v = docDir.value.trim();
-                      if (v !== (settings.wecomDocDir ?? "")) {
-                        void push({ wecomDocDir: v || undefined });
-                      }
-                    }}
-                  />
+                  <div className="input-with-toggle">
+                    <input
+                      className="input-field"
+                      value={docDir.value}
+                      placeholder="doc"
+                      onFocus={() => {
+                        docDir.focused.current = true;
+                      }}
+                      onChange={(e) => docDir.setValue(e.target.value)}
+                      onBlur={() => {
+                        docDir.focused.current = false;
+                        const v = docDir.value.trim();
+                        if (v !== (settings.wecomDocDir ?? "")) {
+                          void push({ wecomDocDir: v || undefined });
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="input-toggle-btn"
+                      title={t("wecom.pickDirectory")}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => void pickAnswerDir("wecomDocDir")}
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
                 }
                 hint={<p className="setting-hint">{t("wecom.docDirHint")}</p>}
               />

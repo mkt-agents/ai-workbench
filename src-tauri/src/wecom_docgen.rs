@@ -221,6 +221,43 @@ impl DocgenConfig {
     }
 }
 
+/// 把「文档目录」归一成相对 workspace 的正斜杠相对路径。
+///
+/// 目录浏览框 / 手输都可能给出绝对路径（`D:\repo\doc`）甚至反斜杠相对路径（`doc\sub`）；
+/// 而 `git status` 给出的是正斜杠相对路径，越界保护（is_outside_doc_dir）按字符串前缀比对，
+/// 不归一就会把整轮改动全部误判为越界并还原。
+fn normalize_doc_dir(workspace: &str, doc_dir: &str) -> Result<String, String> {
+    let raw = doc_dir.trim().replace('\\', "/");
+    let raw = raw.trim_matches('/').to_string();
+    if raw.is_empty() {
+        return Ok("doc".into());
+    }
+    if !std::path::Path::new(&raw).is_absolute() {
+        return Ok(raw);
+    }
+    // 绝对路径：去掉 workspace 前缀（Windows 大小写不敏感，前缀比对用小写、截取用原文）。
+    let ws = workspace
+        .trim()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase();
+    let raw_lower = raw.to_lowercase();
+    let rel = raw_lower
+        .strip_prefix(&ws)
+        .map(|rest| rest.trim_start_matches('/'))
+        .ok_or_else(|| {
+            format!(
+                "文档目录必须位于工作区内：{}（工作区 {}）",
+                crate::git_commands::path_for_markdown(&raw),
+                crate::git_commands::path_for_markdown(workspace)
+            )
+        })?;
+    if rel.is_empty() {
+        return Ok("doc".into());
+    }
+    Ok(raw[(raw.len() - rel.len())..].to_string())
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RunState {
     /// 每日计划已占用的槽位（`YYYY-MM-DD HH:MM`）；修改计划时间后按新槽位重新判断。
@@ -894,8 +931,8 @@ async fn run_update_inner(
     progress: &RunProgress<'_>,
 ) -> Result<UpdateReport, String> {
     progress.stage("workspace", 5);
-    let doc_dir = cfg.doc_dir_or_default();
-    let workspace = crate::git_commands::resolve_git_workspace(cfg.workspace.trim(), &doc_dir)?;
+    let doc_dir_raw = cfg.doc_dir_or_default();
+    let workspace = crate::git_commands::resolve_git_workspace(cfg.workspace.trim(), &doc_dir_raw)?;
     if workspace != cfg.workspace.trim() {
         crate::wecom_log::write(
             "docgen",
@@ -908,6 +945,9 @@ async fn run_update_inner(
     }
     let branch = cfg.branch_or_default();
     let preview = cfg.preview_mode || trigger == RunTrigger::Preview;
+    // 落盘 / 越界保护 / 提交全都按「相对 workspace 的正斜杠路径」比对 doc_dir，
+    // 绝对路径或反斜杠写法在这里统一归一（浏览框 / 手输都可能给出）。
+    let doc_dir = normalize_doc_dir(&workspace, &doc_dir_raw)?;
 
     crate::git_commands::ensure_git_repo(&workspace)?;
     progress.stage("status", 12);
@@ -2558,6 +2598,23 @@ mod tests {
         let long: String = "字".repeat(PROMPT_CHAR_CAP + 50);
         let n = normalize_prompt_template(&long);
         assert_eq!(n.chars().count(), PROMPT_CHAR_CAP);
+    }
+
+    #[test]
+    fn normalize_doc_dir_handles_absolute_and_backslash() {
+        let ws = r"D:\repo";
+        // 绝对路径 + 反斜杠：剥掉 workspace 前缀、统一正斜杠
+        assert_eq!(normalize_doc_dir(ws, r"D:\repo\doc").unwrap(), "doc");
+        assert_eq!(normalize_doc_dir(ws, "D:/repo/doc/sub").unwrap(), "doc/sub");
+        assert_eq!(normalize_doc_dir(ws, "d:/REPO/Doc").unwrap(), "Doc");
+        // 相对路径反斜杠 → 正斜杠；正斜杠原样
+        assert_eq!(normalize_doc_dir(ws, r"doc\sub").unwrap(), "doc/sub");
+        assert_eq!(normalize_doc_dir(ws, "doc/sub/").unwrap(), "doc/sub");
+        // 空值回落默认；指向 workspace 本身视为 doc
+        assert_eq!(normalize_doc_dir(ws, "  ").unwrap(), "doc");
+        assert_eq!(normalize_doc_dir(ws, r"D:\repo").unwrap(), "doc");
+        // 工作区之外的绝对路径直接报错
+        assert!(normalize_doc_dir(ws, r"E:\elsewhere\doc").is_err());
     }
 
     #[test]

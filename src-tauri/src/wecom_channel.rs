@@ -608,7 +608,7 @@ pub async fn wecom_docgen_run_now(
     let cfg = state.docgen.lock().await.clone();
     if cfg.workspace.trim().is_empty() {
         return Err(
-            "请先在「逆向工程 → 更新内容」里填写更新工作区（即逆向文档所在的 Git 仓库）".into(),
+            "请先在「逆向工程 → 内容来源 · 仓库与目录」里填写更新工作区（即逆向文档所在的 Git 仓库）".into(),
         );
     }
     let report = crate::wecom_docgen::run_update(&app, &cfg).await?;

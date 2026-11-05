@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, Clock, Eye, EyeOff, FolderGit2, FolderOpen, Play, RefreshCw, Send, Sparkles } from "lucide-react";
+import { Check, Clock, Cpu, Eye, EyeOff, FolderGit2, FolderOpen, Play, RefreshCw, Save, Send, Sparkles } from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import { useTauriEvent } from "../hooks/useTauriEvent";
@@ -303,10 +303,10 @@ export default function ReverseDocPage() {
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  /** 二级页签：调度 / 更新内容 / 执行与推送 */
-  const [docgenView, setDocgenView] = useState<"schedule" | "content" | "publish" | "record">(
-    "schedule",
-  );
+  /** 二级页签：调度打头（进页面先看运行节奏），配置页签随后，运行记录在尾 */
+  const [docgenView, setDocgenView] = useState<
+    "schedule" | "content" | "engine" | "publish" | "record"
+  >("schedule");
   const [docgenPromptTab, setDocgenPromptTab] = useState<"system" | "quality">("system");
   const [docgenBusy, setDocgenBusy] = useState(false);
   const [docgenHistory, setDocgenHistory] = useState<WecomDocgenHistoryItem[]>([]);
@@ -392,10 +392,13 @@ export default function ReverseDocPage() {
   const inheritedDshModel = (() => {
     const v = (settings.wecomDshModel ?? "").trim();
     if (!v) return t("wecom.dshModelDefault");
+    // 渠道侧存的是 ("provider","model") 组合串：没目录可查时把最后的引号段抠出来当模型名
+    const quoted = [...v.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    const shown = quoted.length ? quoted[quoted.length - 1] : v;
     const hit = (catalog?.groups ?? [])
       .flatMap((group) => group.options)
       .find((option) => option.value === v);
-    return hit?.name || v;
+    return hit?.name || shown;
   })();
   const docgenEngineHint =
     docgenEngine === "inherit"
@@ -429,13 +432,12 @@ export default function ReverseDocPage() {
     }
   }, []);
 
-  // 联动：更新引擎（显式选的或沿用的）落到 DSH 时自动拉一次模型目录。
-  // 失败不自动重试——未配工作区时后端会给出可操作文案，显示在下拉提示里即可；
-  // 想再试可以点「刷新模型」，那条路径每次都会清掉旧错误。
+  // 联动：更新引擎（显式选的或沿用的）落到 DSH 且工作区已配置时，自动拉一次模型目录。
+  // 拉取失败不无限重试；但一旦工作区改好了（docgenScanBase 变化），清掉旧错误自动再试一次。
   useEffect(() => {
-    if (catalog || catalogError) return;
+    if (catalog || catalogError || !docgenScanBase) return;
     if (docgenEngineResolved === "dsh") void loadModels(false, "docgen");
-  }, [docgenEngineResolved, catalog, catalogError, loadModels]);
+  }, [docgenEngineResolved, docgenScanBase, catalog, catalogError, loadModels]);
 
   // 进页面：补一次更新记录 + 从后端快照恢复进度卡（那一轮可能还在跑）
   useEffect(() => {
@@ -485,14 +487,14 @@ export default function ReverseDocPage() {
   return (
     <div className="settings-page is-solo">
       <div className="card">
-        {/* 四段页签占卡片标题位：配置（调度 / 内容 / 提交推送）与结果（运行记录）分开 */}
-        <div className="card-title is-tabs">
+        {/* 页签占卡片标题位：配置按动线排（内容 → 引擎 → 提交通知 → 调度），结果（运行记录）在尾 */}
+        <div className="card-title is-tabs docgen-tabs">
           <div
             className="hub-tabs is-channel"
             role="tablist"
             aria-label={t("wecom.groupAutoupdate")}
           >
-            {(["schedule", "content", "publish", "record"] as const).map((view) => (
+            {(["schedule", "content", "engine", "publish", "record"] as const).map((view) => (
               <button
                 key={view}
                 type="button"
@@ -698,91 +700,6 @@ export default function ReverseDocPage() {
               <p className="setting-hint">{t("wecom.docgenChecklist")}</p>
 
               <Row
-                label={t("wecom.docgenEngineLabel")}
-                control={
-                  <select
-                    className="input-field wecom-split"
-                    value={docgenEngine}
-                    disabled={busy}
-                    onChange={(e) => void push({ wecomDocgenEngine: e.target.value })}
-                  >
-                    <option value="inherit">
-                      {t("wecom.docgenEngineInherit", {
-                        engine: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
-                      })}
-                    </option>
-                    <option value="tianji">{t("wecom.engineTianji")}</option>
-                    <option value="dsh">{t("wecom.engineDsh")}</option>
-                  </select>
-                }
-                hint={<p className="setting-hint">{docgenEngineHint}</p>}
-              />
-
-              {/* DSH 档才有模型/思考强度：留空沿用「回答设置」的 DSH 选择 */}
-              {docgenEngineResolved === "dsh" ? (
-                <Row
-                  label={t("wecom.dshModelRow")}
-                  control={
-                    <>
-                      <GroupedSelect
-                        className="wecom-split"
-                        value={settings.wecomDocgenDshModel ?? ""}
-                        disabled={busy || catalogBusy}
-                        fallbackLabel={t("wecom.docgenDshInheritValue", {
-                          model: inheritedDshModel,
-                        })}
-                        staleLabel={t("wecom.dshModelMissing")}
-                        searchPlaceholder={t("wecom.dshModelSearch")}
-                        emptyLabel={t("wecom.dshModelNoMatch")}
-                        groups={(catalog?.groups ?? []).map((group) => ({
-                          key: group.group || group.name,
-                          label: group.name || group.group,
-                          options: group.options.map((option) => ({
-                            value: option.value,
-                            label: option.name || option.value,
-                            hint: option.description,
-                          })),
-                        }))}
-                        onChange={(next) => void push({ wecomDocgenDshModel: next })}
-                      />
-                      <select
-                        className="input-field wecom-split-effort"
-                        value={settings.wecomDocgenDshEffort ?? ""}
-                        disabled={busy || catalogBusy || !catalog?.effort}
-                        onChange={(e) => void push({ wecomDocgenDshEffort: e.target.value })}
-                      >
-                        <option value="">{t("wecom.docgenDshInherit")}</option>
-                        {(catalog?.effort?.options ?? [])
-                          .filter((option) => Boolean(option.value))
-                          .map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.name || option.value}
-                            </option>
-                          ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small wecom-split-refresh"
-                        disabled={busy || catalogBusy}
-                        onClick={() => void loadModels(true, "docgen")}
-                      >
-                        {catalogBusy ? t("wecom.dshLoading") : t("wecom.dshRefreshModels")}
-                      </button>
-                    </>
-                  }
-                  hint={
-                    <p className="setting-hint">
-                      {catalogError
-                        ? catalogError
-                        : catalog
-                          ? t("wecom.docgenDshModelHint")
-                          : t("wecom.docgenDshModelNeedReady")}
-                    </p>
-                  }
-                />
-              ) : null}
-
-              <Row
                 label={t("wecom.autoUpdateTime")}
                 control={
                   <input
@@ -826,6 +743,119 @@ export default function ReverseDocPage() {
               />
 
               <Row
+                asSwitch
+                label={t("wecom.docgenPollRelease")}
+                control={
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settings.wecomDocgenPollRelease)}
+                      // 总闸关闭时这只是个摆设：auto_tick 第一行就把整轮 tick 拦下了
+                      disabled={!settings.wecomAutoUpdateEnabled}
+                      onChange={(e) => void push({ wecomDocgenPollRelease: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                }
+                hint={
+                  <p className="setting-hint">
+                    {settings.wecomAutoUpdateEnabled
+                      ? t("wecom.docgenPollReleaseHint")
+                      : t("wecom.docgenPollReleaseDisabledHint")}
+                  </p>
+                }
+              />
+            </div>
+
+            {/* 2a. 仓库与目录：文档更新的工作区与写入位置（与「回答设置」各配一套） */}
+            <div className="wecom-block-card" hidden={docgenView !== "content"}>
+              <div className="wecom-block-head">
+                <div className="wecom-block-head-main">
+                  <span className="wecom-block-icon" aria-hidden>
+                    <FolderOpen size={14} />
+                  </span>
+                  <span className="wecom-block-title">{t("wecom.subDocgenPaths")}</span>
+                </div>
+              </div>
+              {/* 工作区与文档目录并排一行：都是路径类字段，配对呈现 */}
+              <div className="wecom-pair is-paths">
+              {/* 文档更新自己的工作区：与「回答设置」的工作区互相独立，改一边不影响另一边 */}
+              <Row
+                label={t("wecom.docgenRepoPath")}
+                control={
+                  <div className="input-with-toggle">
+                    <input
+                      className="input-field"
+                      value={docgenRepoPath.value}
+                      placeholder={docgenInheritedWorkspace || t("wecom.repoPlaceholder")}
+                      onFocus={() => {
+                        docgenRepoPath.focused.current = true;
+                      }}
+                      onChange={(e) => docgenRepoPath.setValue(e.target.value)}
+                      onBlur={() => {
+                        docgenRepoPath.focused.current = false;
+                        const v = docgenRepoPath.value.trim();
+                        if (v === (settings.wecomDocgenRepoPath ?? "")) return;
+                        // 换了工作区，之前扫出来的子仓就不再可信
+                        setDocgenScanned(null);
+                        void push({ wecomDocgenRepoPath: v || undefined });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="input-toggle-btn"
+                      title={t("wecom.pickDirectory")}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() =>
+                        void pickDir(docgenRepoPath, "wecomDocgenRepoPath", () =>
+                          setDocgenScanned(null),
+                        )
+                      }
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
+                }
+                hint={<p className="setting-hint">{t("wecom.docgenRepoPathHint")}</p>}
+              />
+
+              {/* 文档目录同样各配一套：改问答那边不会把定时任务的写入位置带走 */}
+              <Row
+                label={t("wecom.docgenDocDir")}
+                control={
+                  <div className="input-with-toggle">
+                    <input
+                      className="input-field"
+                      value={docgenDocDir.value}
+                      placeholder={docgenInheritedDocDir || t("wecom.docgenDocDirDefault")}
+                      onFocus={() => {
+                        docgenDocDir.focused.current = true;
+                      }}
+                      onChange={(e) => docgenDocDir.setValue(e.target.value)}
+                      onBlur={() => {
+                        docgenDocDir.focused.current = false;
+                        const v = docgenDocDir.value.trim();
+                        if (v === (settings.wecomDocgenDocDir ?? "")) return;
+                        void push({ wecomDocgenDocDir: v || undefined });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="input-toggle-btn"
+                      title={t("wecom.pickDirectory")}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => void pickDir(docgenDocDir, "wecomDocgenDocDir")}
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
+                }
+                hint={<p className="setting-hint">{t("wecom.docgenDocDirHint")}</p>}
+              />
+              </div>
+
+              {/* 文档仓的发布分支：与工作区 / 文档目录同属「往哪写」三件套 */}
+              <Row
                 label={t("wecom.releaseBranch")}
                 control={
                   <input
@@ -844,26 +874,11 @@ export default function ReverseDocPage() {
                     }}
                   />
                 }
-              />
-
-              <Row
-                asSwitch
-                label={t("wecom.docgenPollRelease")}
-                control={
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(settings.wecomDocgenPollRelease)}
-                      onChange={(e) => void push({ wecomDocgenPollRelease: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                }
-                hint={<p className="setting-hint">{t("wecom.docgenPollReleaseHint")}</p>}
+                hint={<p className="setting-hint">{t("wecom.releaseBranchHint")}</p>}
               />
             </div>
 
-            {/* 2. 变更来源 */}
+            {/* 2b. 变更来源：从哪些仓读变更（子仓白名单就在下面勾） */}
             <div className="wecom-block-card" hidden={docgenView !== "content"}>
               <div className="wecom-block-head">
                 <div className="wecom-block-head-main">
@@ -966,130 +981,58 @@ export default function ReverseDocPage() {
                   </button>
                 </div>
               </div>
-              {/* 文档更新自己的工作区：与「回答设置」的工作区互相独立，改一边不影响另一边 */}
-              <Row
-                label={t("wecom.docgenRepoPath")}
-                control={
-                  <div className="input-with-toggle">
-                    <input
+              <p className="setting-hint wecom-block-lead">{t("wecom.docgenRepoAllowlistHint")}</p>
+              {/* 采集策略并排一行：回溯天数在前，同步开关在后（只 fetch + 快进，不改本地提交） */}
+              <div className="wecom-pair is-strategy">
+                {/* 补跑上限：只在「新加的仓」或「停跑超过 N 天」时才参与计算，日常按采集点走 */}
+                <Row
+                  label={t("wecom.docgenLookbackDays")}
+                  control={
+                    <select
                       className="input-field"
-                      value={docgenRepoPath.value}
-                      placeholder={docgenInheritedWorkspace || t("wecom.repoPlaceholder")}
-                      onFocus={() => {
-                        docgenRepoPath.focused.current = true;
-                      }}
-                      onChange={(e) => docgenRepoPath.setValue(e.target.value)}
-                      onBlur={() => {
-                        docgenRepoPath.focused.current = false;
-                        const v = docgenRepoPath.value.trim();
-                        if (v === (settings.wecomDocgenRepoPath ?? "")) return;
-                        // 换了工作区，之前扫出来的子仓就不再可信
-                        setDocgenScanned(null);
-                        void push({ wecomDocgenRepoPath: v || undefined });
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="input-toggle-btn"
-                      title={t("wecom.pickDirectory")}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() =>
-                        void pickDir(docgenRepoPath, "wecomDocgenRepoPath", () =>
-                          setDocgenScanned(null),
-                        )
+                      value={String(lookbackValue)}
+                      disabled={busy}
+                      onChange={(e) =>
+                        void push({ wecomDocgenLookbackDays: Number(e.target.value) })
                       }
                     >
-                      <FolderOpen size={14} />
-                    </button>
-                  </div>
-                }
-                hint={<p className="setting-hint">{t("wecom.docgenRepoPathHint")}</p>}
-              />
-
-              {/* 文档目录同样各配一套：改问答那边不会把定时任务的写入位置带走 */}
-              <Row
-                label={t("wecom.docgenDocDir")}
-                control={
-                  <div className="input-with-toggle">
-                    <input
-                      className="input-field"
-                      value={docgenDocDir.value}
-                      placeholder={docgenInheritedDocDir || t("wecom.docgenDocDirDefault")}
-                      onFocus={() => {
-                        docgenDocDir.focused.current = true;
-                      }}
-                      onChange={(e) => docgenDocDir.setValue(e.target.value)}
-                      onBlur={() => {
-                        docgenDocDir.focused.current = false;
-                        const v = docgenDocDir.value.trim();
-                        if (v === (settings.wecomDocgenDocDir ?? "")) return;
-                        void push({ wecomDocgenDocDir: v || undefined });
-                      }}
+                      {lookbackChoices.map((n) => (
+                        <option key={n} value={n}>
+                          {n === 0
+                            ? t("wecom.docgenLookbackUnlimited")
+                            : t("wecom.docgenLookbackDaysValue", { count: n })}
+                        </option>
+                      ))}
+                    </select>
+                  }
+                  hint={
+                    <Hint
+                      summary={t("wecom.docgenLookbackDaysHintShort")}
+                      details={t("wecom.docgenLookbackDaysHint")}
                     />
-                    <button
-                      type="button"
-                      className="input-toggle-btn"
-                      title={t("wecom.pickDirectory")}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => void pickDir(docgenDocDir, "wecomDocgenDocDir")}
-                    >
-                      <FolderOpen size={14} />
-                    </button>
-                  </div>
-                }
-                hint={<p className="setting-hint">{t("wecom.docgenDocDirHint")}</p>}
-              />
-
-              <p className="setting-hint wecom-block-lead">{t("wecom.docgenRepoAllowlistHint")}</p>
-              {/* 采集前同步：只 fetch + 快进，不改本地提交 */}
-              <Row
-                asSwitch
-                label={t("wecom.docgenSyncSources")}
-                control={
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(settings.wecomDocgenSyncSources)}
-                      onChange={(e) => void push({ wecomDocgenSyncSources: e.target.checked })}
+                  }
+                />
+                <Row
+                  asSwitch
+                  label={t("wecom.docgenSyncSources")}
+                  control={
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settings.wecomDocgenSyncSources)}
+                        onChange={(e) => void push({ wecomDocgenSyncSources: e.target.checked })}
+                      />
+                      <span className="toggle-slider" />
+                    </label>
+                  }
+                  hint={
+                    <Hint
+                      summary={t("wecom.docgenSyncSourcesHintShort")}
+                      details={t("wecom.docgenSyncSourcesHint")}
                     />
-                    <span className="toggle-slider" />
-                  </label>
-                }
-                hint={
-                  <Hint
-                    summary={t("wecom.docgenSyncSourcesHintShort")}
-                    details={t("wecom.docgenSyncSourcesHint")}
-                  />
-                }
-              />
-              {/* 补跑上限：只在「新加的仓」或「停跑超过 N 天」时才参与计算，日常按采集点走 */}
-              <Row
-                label={t("wecom.docgenLookbackDays")}
-                control={
-                  <select
-                    className="input-field wecom-split"
-                    value={String(lookbackValue)}
-                    disabled={busy}
-                    onChange={(e) =>
-                      void push({ wecomDocgenLookbackDays: Number(e.target.value) })
-                    }
-                  >
-                    {lookbackChoices.map((n) => (
-                      <option key={n} value={n}>
-                        {n === 0
-                          ? t("wecom.docgenLookbackUnlimited")
-                          : t("wecom.docgenLookbackDaysValue", { count: n })}
-                      </option>
-                    ))}
-                  </select>
-                }
-                hint={
-                  <Hint
-                    summary={t("wecom.docgenLookbackDaysHintShort")}
-                    details={t("wecom.docgenLookbackDaysHint")}
-                  />
-                }
-              />
+                  }
+                />
+              </div>
               <div className="wecom-allowlist">
                 {(() => {
                   const selected = normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist);
@@ -1165,9 +1108,112 @@ export default function ReverseDocPage() {
               </div>
             </div>
 
-            {/* 3. 提示词：更新 | 质检 分段单编辑器（草稿状态收在卡片内部，打字不牵动整页） */}
+            {/* 3a. 更新引擎：用什么引擎与模型来写（从「调度」页挪来，与提示词同主题） */}
+            <div className="wecom-block-card" hidden={docgenView !== "engine"}>
+              <div className="wecom-block-head">
+                <div className="wecom-block-head-main">
+                  <span className="wecom-block-icon" aria-hidden>
+                    <Cpu size={14} />
+                  </span>
+                  <span className="wecom-block-title">{t("wecom.subDocgenEngine")}</span>
+                </div>
+              </div>
+
+              {/* 引擎与模型并排一行：引擎列窄、模型组列宽 */}
+              <div className="wecom-pair is-engine">
+              <Row
+                label={t("wecom.docgenEngineLabel")}
+                control={
+                  <select
+                    className="input-field wecom-split"
+                    value={docgenEngine}
+                    disabled={busy}
+                    onChange={(e) => void push({ wecomDocgenEngine: e.target.value })}
+                  >
+                    <option value="inherit">
+                      {t("wecom.docgenEngineInherit", {
+                        engine: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
+                      })}
+                    </option>
+                    <option value="tianji">{t("wecom.engineTianji")}</option>
+                    <option value="dsh">{t("wecom.engineDsh")}</option>
+                  </select>
+                }
+                hint={<p className="setting-hint">{docgenEngineHint}</p>}
+              />
+
+              {/* DSH 档才有模型/思考强度：留空沿用「回答设置」的 DSH 选择 */}
+              {docgenEngineResolved === "dsh" ? (
+                <Row
+                  label={t("wecom.dshModelRow")}
+                  control={
+                    <>
+                      <GroupedSelect
+                        className="wecom-split"
+                        value={settings.wecomDocgenDshModel ?? ""}
+                        disabled={busy || catalogBusy}
+                        fallbackLabel={t("wecom.docgenDshInheritValue", {
+                          model: inheritedDshModel,
+                        })}
+                        staleLabel={t("wecom.dshModelMissing")}
+                        searchPlaceholder={t("wecom.dshModelSearch")}
+                        emptyLabel={t("wecom.dshModelNoMatch")}
+                        groups={(catalog?.groups ?? []).map((group) => ({
+                          key: group.group || group.name,
+                          label: group.name || group.group,
+                          options: group.options.map((option) => ({
+                            value: option.value,
+                            label: option.name || option.value,
+                            hint: option.description,
+                          })),
+                        }))}
+                        onChange={(next) => void push({ wecomDocgenDshModel: next })}
+                      />
+                      <select
+                        className="input-field wecom-split-effort"
+                        value={settings.wecomDocgenDshEffort ?? ""}
+                        disabled={busy || catalogBusy || !catalog?.effort}
+                        onChange={(e) => void push({ wecomDocgenDshEffort: e.target.value })}
+                      >
+                        <option value="">{t("wecom.docgenDshInherit")}</option>
+                        {(catalog?.effort?.options ?? [])
+                          .filter((option) => Boolean(option.value))
+                          .map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.name || option.value}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small wecom-split-refresh"
+                        disabled={busy || catalogBusy}
+                        onClick={() => void loadModels(true, "docgen")}
+                      >
+                        {catalogBusy ? t("wecom.dshLoading") : t("wecom.dshRefreshModels")}
+                      </button>
+                    </>
+                  }
+                  hint={
+                    <p className="setting-hint">
+                      {catalogError
+                        ? // 后端的「工作区路径」报错指向 DSH 页的访问策略，在本页语境下指错地方，换成自己的指引
+                          catalogError.includes("工作区路径")
+                          ? t("wecom.docgenDshNeedWorkspace")
+                          : catalogError
+                        : catalog
+                          ? t("wecom.docgenDshModelHint")
+                          : t("wecom.docgenDshModelNeedReady")}
+                    </p>
+                  }
+                />
+              ) : null}
+              </div>
+            </div>
+
+            {/* 3b. 提示词：更新 | 质检 分段单编辑器（草稿状态收在卡片内部，打字不牵动整页） */}
             <DocgenPromptCard
-              hidden={docgenView !== "content"}
+              hidden={docgenView !== "engine"}
               tab={docgenPromptTab}
               onTabChange={setDocgenPromptTab}
               system={
@@ -1194,18 +1240,17 @@ export default function ReverseDocPage() {
               }
             />
 
-            {/* 4. 提交与推送（含预览） */}
+            {/* 4a. 群通知：跑完往哪发（企微 / 飞书 / 钉钉 webhook） */}
             <div className="wecom-block-card" hidden={docgenView !== "publish"}>
               <div className="wecom-block-head">
                 <div className="wecom-block-head-main">
                   <span className="wecom-block-icon" aria-hidden>
                     <Send size={14} />
                   </span>
-                  <span className="wecom-block-title">{t("wecom.subDocPublish")}</span>
+                  <span className="wecom-block-title">{t("wecom.subPublishChannels")}</span>
                 </div>
               </div>
 
-              <div className="wecom-subhead">{t("wecom.subPublishChannels")}</div>
               <Row
                 label={t("wecom.webhookUrl")}
                 control={
@@ -1318,7 +1363,18 @@ export default function ReverseDocPage() {
                 }
               />
 
-              <div className="wecom-subhead">{t("wecom.subPublishAction")}</div>
+            </div>
+
+            {/* 4b. 落盘动作：预览 / 自动提交 / 自动推送（不碰通知渠道） */}
+            <div className="wecom-block-card" hidden={docgenView !== "publish"}>
+              <div className="wecom-block-head">
+                <div className="wecom-block-head-main">
+                  <span className="wecom-block-icon" aria-hidden>
+                    <Save size={14} />
+                  </span>
+                  <span className="wecom-block-title">{t("wecom.subPublishAction")}</span>
+                </div>
+              </div>
 
               <Row
                 asSwitch
