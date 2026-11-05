@@ -2956,7 +2956,10 @@
 }
 .settings-page .wecom-diag-table {
   width: 100%;
-  border-collapse: collapse;
+  /* separate + 零间距：collapse 模式下 Chromium 不给单元格应用 backdrop-filter，
+     吸顶表头的磨砂会整个失效；边框都是单侧定义，separate 视觉不变 */
+  border-collapse: separate;
+  border-spacing: 0;
   /* 覆盖 .wecom-diag-log 的 pre：表格里的换行会把行距撑开 */
   white-space: normal;
   font-size: 11.5px;
@@ -2976,7 +2979,10 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--bg-2);
+  /* 叠三层 --bg-2 提高不透明度（玻璃主题下单层只有 0.42 甚至 0.025） */
+  background-color: var(--bg-2);
+  background-image: linear-gradient(var(--bg-2), var(--bg-2)),
+    linear-gradient(var(--bg-2), var(--bg-2));
   border-bottom: 1px solid var(--border-subtle);
   font-size: 10.5px;
   font-weight: 600;
@@ -3026,7 +3032,9 @@
 .settings-page .wecom-docgen-table {
   width: 100%;
   min-width: 640px;
-  border-collapse: collapse;
+  /* 同 diag 表：collapse 会禁掉单元格的 backdrop-filter，吸顶表头磨砂失效 */
+  border-collapse: separate;
+  border-spacing: 0;
   table-layout: fixed;
   font-size: 11.5px;
   line-height: 1.5;
@@ -3037,7 +3045,10 @@
   z-index: 1;
   padding: 7px 10px;
   border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-2);
+  /* 叠三层 --bg-2 提高不透明度（玻璃主题下单层只有 0.42 甚至 0.025） */
+  background-color: var(--bg-2);
+  background-image: linear-gradient(var(--bg-2), var(--bg-2)),
+    linear-gradient(var(--bg-2), var(--bg-2));
   color: var(--text-3);
   font-size: 10.5px;
   font-weight: 600;
@@ -3055,6 +3066,14 @@
 }
 .settings-page .wecom-docgen-table tbody tr:hover td {
   background: var(--bg-hover);
+}
+/* 磨砂主题下再垫 backdrop blur：行从表头下滚过时只剩模糊轮廓，不再透字；
+   light/dark 主题 --bg-2 本就接近实色，保持原样不加模糊 */
+:is([data-theme="glass"], [data-theme="ice"], [data-theme="silver"])
+  .settings-page
+  :is(.wecom-docgen-table th, .wecom-diag-table thead th) {
+  backdrop-filter: blur(16px) saturate(1.05);
+  -webkit-backdrop-filter: blur(16px) saturate(1.05);
 }
 .settings-page .wecom-docgen-table .is-time {
   width: 154px;
