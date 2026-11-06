@@ -634,7 +634,7 @@ pub async fn wecom_docgen_run_now(
         // 采集点没推进：同一批变更下一轮还会重跑
         return Err(format!("{}（采集点未推进，下次仍会重跑这批变更）", report.error));
     }
-    let preview_tag = if report.preview { "（预览未落盘）" } else { "" };
+    let preview_tag = if report.preview { "（隔离预览，原工作区不变）" } else { "" };
     let mut body = format!(
         "已更新{preview_tag}：分支 {}，{} 个变更文件，群通知{}。\n{}",
         report.branch,
@@ -798,7 +798,10 @@ pub async fn wecom_docgen_progress(
 pub async fn wecom_docgen_reset_cursor(
     repos: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let removed = crate::wecom_docgen::reset_cursors(repos.as_deref());
+    if crate::wecom_docgen::is_running() {
+        return Err("文档任务运行中，不能重置采集点".into());
+    }
+    let removed = crate::wecom_docgen::reset_cursors(repos.as_deref())?;
     // 连进度卡一起清掉：否则页面重新挂载时会把上一轮（重置前）的「已跳过」补回来。
     crate::wecom_docgen::clear_last_progress();
     if removed == 0 {

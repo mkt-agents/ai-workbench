@@ -606,6 +606,105 @@
   row-gap: 0;
 }
 
+/* —— 逆向工程页（单卡片、页签切换）——
+   整页只有一张卡：让它铺满可视高度，内容矮的页签（调度 / 运行记录）下面不再空一大块。
+   行写 minmax(min-content, 1fr)：内容高过窗口时退回 min-content、整页照常滚动，
+   内容矮时才由 1fr 补到窗口高度。 */
+.settings-page.is-docgen {
+  grid-template-rows: minmax(min-content, 1fr);
+}
+/* 卡片内部要能把高度传下去（卡头 → 正文 → 页签区 → 块卡），否则 1fr 到卡片就断了 */
+.settings-page.is-docgen > .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.settings-page.is-docgen > .card > .card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 页签内容区改单列 flex：所有块卡本来都是整行宽（`grid-column: 1 / -1`），
+   换成 flex 才能让「该长高的那张卡」吃掉剩余高度，其余按内容高度贴在顶部。
+   隐藏的卡是 display:none，不参与分配。 */
+.settings-page.is-docgen .wecom-rows {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.settings-page.is-docgen .wecom-rows > .wecom-block-card {
+  flex: 0 0 auto;
+}
+/* 页签里的「最后一张可见块卡」吃掉剩余高度（它后面没有可见同级卡，说明由它收尾）：
+   卡边框一直画到卡片底部，整页是一整块填满的卡，而不是「几张卡 + 底下一大片空」。
+   中间那些卡按内容高度排，不会被拉成等分——否则两张卡各分一半、各留一半空，更难收拾。 */
+.settings-page.is-docgen
+  .wecom-rows
+  > .wecom-block-card:not([hidden]):not(:has(~ .wecom-block-card:not([hidden]))) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 卡被拉高后，is-split 里那些 auto 行会被 align-content 的默认 stretch 撑成等分，
+   字段之间拉出一大片空白；改成 start，内容整体靠上、空白收在卡底部一块。 */
+.settings-page.is-docgen .wecom-rows > .wecom-block-card.is-split {
+  align-content: start;
+}
+/* 卡被拉高时，卡里的内容要「吃掉」多出来的高度，否则空白只是从页面挪进卡里。
+   三类卡各有自己的伸缩件：清单 / 编辑器 / 表格。其余卡（纯开关行、路径输入框）
+   没有可伸缩的东西，空白留在卡底部——比页面底下一大块空更像「一张卡」。 */
+/* ① 子仓白名单：卡拉高，列表吃掉高度（滚动仍在列表自己身上） */
+.settings-page.is-docgen .wecom-block-card:has(> .wecom-allowlist) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.settings-page.is-docgen .wecom-block-card > .wecom-allowlist {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.settings-page.is-docgen .wecom-block-card > .wecom-allowlist > .wecom-allowlist-list {
+  flex: 1 1 auto;
+  min-height: 96px;
+  max-height: none;
+}
+/* ② 提示词编辑器：卡拉高，textarea 吃掉高度（保留 220px 地板） */
+.settings-page.is-docgen .wecom-block-card:has(> .wecom-editor-stack) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.settings-page.is-docgen .wecom-block-card > .wecom-editor-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.settings-page.is-docgen .wecom-block-card > .wecom-editor-stack > textarea.input-field {
+  flex: 1 1 auto;
+  min-height: 200px;
+  height: auto;
+}
+/* ③ 运行记录：表格自己滚，整页高度锁在视口内。
+   关键在页面的行轨道：默认是 minmax(min-content, 1fr)，表格自然高度会成为地板，
+   30 条记录就能把整页顶成一条长滚动（卡里给了 flex 也压不住）。有记录表时改成
+   minmax(0, 1fr)，行才真的能被压到视口高度，再由下面的 flex 链把剩余高度交给表框。
+   选择器必须带上「未隐藏的卡」：切到别的页签时记录卡只是 hidden 仍留在 DOM 里，
+   否则 minmax(0,1fr) 会一直生效，那些页签内容超高时会被裁掉而不是整页滚动。 */
+.settings-page.is-docgen:has(
+    > .card .wecom-rows > .wecom-block-card:not([hidden]) > .wecom-diag-table-wrap
+  ) {
+  grid-template-rows: minmax(0, 1fr);
+}
+/* ③ 运行记录：表格框定高，超出的记录在框内上下滚，不铺满整屏。
+   上限 = min(58vh, 580px)：1600×1000 → 580px（约 11~12 行），1440p/4K 封顶 580px，
+   矮窗跟着缩（1366×768 → 445px/9 行，1024×600 → 242px/5 行，都受卡高限制）。
+   之前用 calc(100vh - 300px) 是错方向：它算漏页面标题与卡头，表格底连同末行
+   伸出窗口被切掉，看着就是「太高 + 最后一行看不全」。现在卡由页面的
+   minmax(0,1fr) 锁在视口内，表框在卡内定高，滚动条归表框自己，页面不再滚动。 */
+.settings-page.is-docgen .wecom-block-card > .wecom-diag-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(58vh, 580px);
+}
+
 /* 卡片标题位放一级 Tab（天玑助手页）：不再重复页面名，Tab 顶到卡片头上 */
 .settings-page .card-title.is-tabs {
   display: flex;
@@ -3408,6 +3507,16 @@
 }
 .settings-page .wecom-docgen-runbar .wecom-bind-text {
   flex: 1 1 auto;
+}
+/* 运行条里的折叠说明：.wecom-bind-text .setting-hint 的 padding:0 会盖掉
+   .wecom-hint > .setting-hint 的缩进，这里补回来，展开后仍是一条带竖线的注释 */
+.settings-page .wecom-docgen-runbar .wecom-bind-text .wecom-hint > .setting-hint {
+  margin: 4px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+.settings-page .wecom-docgen-runbar .wecom-bind-text .wecom-hint > summary {
+  font-size: 11.5px;
 }
 .settings-page .wecom-docgen-runbar .toggle {
   flex: none;

@@ -3547,6 +3547,29 @@ async fn prefetch_tasks(
 
 #[tauri::command]
 pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), String> {
+    agent_run_inner(app, req, None).await
+}
+
+/// 内部文档任务入口；范围由宿主传入，不接受前端的权限扩展字段。
+pub(crate) async fn agent_run_document(app: AppHandle, req: AgentRunRequest, doc_dir: String) -> Result<(), String> {
+    agent_run_inner(app, req, Some(doc_dir)).await
+}
+
+fn document_tool_allowed(scope: &Scope, doc_dir: &str, name: &str, args: &Value) -> bool {
+    let raw = arg_str(args, "path");
+    if raw.replace('\\', "/").split('/').any(|p| p == ".." || p.eq_ignore_ascii_case(".git")) { return false; }
+    match name {
+        "read_file" | "list_dir" | "find_files" | "grep" | "symbols" | "update_plan" => true,
+        "write_file" | "edit_file" => {
+            let Some(root) = scope.root.as_ref() else { return false; };
+            let Ok(doc) = crate::agent_fs::resolve_in_repo(root, doc_dir) else { return false; };
+            scope.resolve(&arg_str(args, "path")).map(|p| p.starts_with(doc)).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Option<String>) -> Result<(), String> {
     let request_id = req.request_id.clone();
     let _guard = CancelGuard::new(&request_id);
     let _approvals = ApprovalCleanup { request_id: request_id.clone() };
@@ -3601,7 +3624,11 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     let mut tools_enabled = req.tools;
     let services = root.as_deref().map(|r| workspace_services(r, &req.services)).unwrap_or_default();
     // 项目/全局 harness 配置：上下文注入、技能正文与 hooks 都从这里来。
-    let harness_config = crate::harness_config::load(root.as_deref());
+    let mut harness_config = crate::harness_config::load(root.as_deref());
+    if document_dir.is_some() {
+        // 无人值守文档任务不能通过项目 hooks 执行任意脚本。
+        harness_config.hooks.clear();
+    }
     let hide_abs = req.request_id.starts_with("wecom-");
     let mut system = format!("{}{}", req.system, policy_text(permission, root.as_deref(), &services, reach, hide_abs));
     // 上下文管道：项目文档 / 长期记忆 / 技能索引 / `@` 引用，全部只读且不越出工作区。
@@ -3674,6 +3701,10 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             tool_names.retain(|n| *n != "skywalking_query");
         }
     }
+    if document_dir.is_some() {
+        tool_names.retain(|n| matches!(*n, "read_file" | "list_dir" | "find_files" | "grep" | "symbols" | "update_plan")
+            || (permission != Permission::Read && matches!(*n, "write_file" | "edit_file")));
+    }
     // 计划闸门解锁后要恢复的完整名单（含模式 / 技能 / 搜索过滤）。
     let full_tool_names = tool_names.clone();
     if plan_locked {
@@ -3683,7 +3714,7 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
     // MCP：工具名是运行时的，不在这张静态表里；列一次、追加进 tools，然后按名字查找
     // 总开关关掉时连进程都不起：这一轮就是没有 mcp_* 工具
     // 计划锁定期间仍列服务（ctx 要能解析），但不把 mcp_* 塞进模型可见的 tools。
-    let mcp_servers = if req.mcp_enabled && !req.mcp.is_empty() {
+    let mcp_servers = if document_dir.is_none() && req.mcp_enabled && !req.mcp.is_empty() {
         if plan_locked {
             let mut hidden = Vec::new();
             attach_mcp_tools(&app, &request_id, &req.mcp, &mut hidden, anthropic, false).await
@@ -3915,6 +3946,17 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
         } else {
             messages.push(turn.assistant.clone());
         }
+        if let Some(dir) = document_dir.as_deref() {
+            // 预取也会派发 task：必须在任何预取之前执行宿主限制。
+            for call in &turn.calls {
+                let args = parse_args(&call.arguments)?;
+                if !tool_names.contains(&call.name.as_str()) || !document_tool_allowed(&scope, dir, &call.name, &args) {
+                    let error = format!("文档任务拒绝越界或非文档操作：{}；未继续生成或发布", call.name);
+                    emit_err(&app, &request_id, &error);
+                    return Err(error);
+                }
+            }
+        }
         let mut tool_results: Vec<(String, ToolOutput)> = Vec::new();
         // 只读调用先并发跑掉（`plan_batches` 只取开头连续的合格调用）；写类与要审批的仍串行
         let mut prefetched = match prefetch_readonly(&ctx, &turn.calls, permission).await {
@@ -3994,6 +4036,13 @@ pub async fn agent_run(app: AppHandle, req: AgentRunRequest) -> Result<(), Strin
             p.summary = call_summary(&call.name, &args);
             p.arg_text = step_arg(&args);
             p.args = args;
+            if let Some(dir) = document_dir.as_deref() {
+                if !document_tool_allowed(&scope, dir, &call.name, &p.args) {
+                    p.skip = Some("文档任务只允许读文件、搜索与文档目录内的写入；命令及其它副作用均不执行".into());
+                    prepared.push(p);
+                    continue;
+                }
+            }
             p.arg = gate_arg(&call.name, &p.args);
             p.command = if call.name == "run_command" { p.arg.clone() } else { String::new() };
             let mut gate = tool_gate(permission, &call.name, &p.arg);
@@ -4434,6 +4483,18 @@ mod tests {
     use std::fs;
     use std::process::Command;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn document_tasks_reject_commands_and_outside_writes() {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let scope = crate::agent_fs::Scope::new(Some(root.clone()), false);
+        assert!(super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "doc/a.md"})));
+        assert!(!super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "code.rs"})));
+        assert!(!super::document_tool_allowed(&scope, "doc", "write_file", &json!({"path": "doc/../code.rs"})));
+        assert!(!super::document_tool_allowed(&scope, "doc", "run_command", &json!({"command": "git status"})));
+        assert!(!super::document_tool_allowed(&scope, "doc", "remember", &json!({})));
+        assert!(super::document_tool_allowed(&scope, "doc", "read_file", &json!({"path": "code.rs"})));
+    }
 
     #[test]
     fn nested_agents_cannot_spawn_agents() {

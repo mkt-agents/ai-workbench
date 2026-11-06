@@ -419,6 +419,19 @@ export default function ReverseDocPage() {
   const docgenScheduleLabel = settings.wecomDocgenCron?.trim()
     ? t("wecom.docgenCronSummary", { cron: settings.wecomDocgenCron.trim() })
     : t("wecom.sectionDailyAt", { time: settings.wecomAutoUpdateTime || "23:00" });
+  /**
+   * 调度草稿与已保存值不一致：表单里改完还没失焦落盘的 cron / 时刻，
+   * 运行条仍按旧值算「下次运行」，必须标出来，否则看着像说明写错了。
+   * 只比「真正驱动标签的那个值」——cron 已保存时改时刻不影响标签，不该报未保存。
+   */
+  const docgenScheduleDirty = (() => {
+    const savedCron = (settings.wecomDocgenCron ?? "").trim();
+    const savedTime = settings.wecomAutoUpdateTime || "23:00";
+    const draftCron = docgenCron.value.trim();
+    const draftTime = autoUpdateTime.value || "23:00";
+    if (savedCron) return draftCron !== savedCron;
+    return draftCron !== "" || draftTime !== savedTime;
+  })();
 
   const loadModels = useCallback(async (refresh: boolean, scope?: "channel" | "docgen") => {
     setCatalogBusy(true);
@@ -485,7 +498,7 @@ export default function ReverseDocPage() {
   }, [docgenProgress?.status, docgenProgress?.startedAtMs]);
 
   return (
-    <div className="settings-page is-solo">
+    <div className="settings-page is-solo is-docgen">
       <div className="card">
         {/* 页签占卡片标题位：配置按动线排（内容 → 引擎 → 提交通知 → 调度），结果（运行记录）在尾 */}
         <div className="card-title is-tabs docgen-tabs">
@@ -522,12 +535,21 @@ export default function ReverseDocPage() {
                 <div className="wecom-bind-text">
                   <span className="wecom-bind-title">
                     {settings.wecomAutoUpdateEnabled
-                      ? t("wecom.docgenNextRun", { schedule: docgenScheduleLabel })
+                      ? docgenScheduleDirty
+                        ? t("wecom.docgenNextRunDirty", { schedule: docgenScheduleLabel })
+                        : t("wecom.docgenNextRun", { schedule: docgenScheduleLabel })
                       : t("wecom.docgenRunbarOff")}
                   </span>
-                  <p className="setting-hint">
-                    {docgenScanBase ? t("wecom.docgenRunNowHint") : t("wecom.docgenRunNeedWorkspace")}
-                  </p>
+                  {docgenScanBase ? (
+                    // 说明按「摘要 + 说明 ⌄」折叠：完整流程有一整段（fetch/快进 → 隔离生成 →
+                    // 校验 → 提交或保留 → 推群），平铺会把运行条撑成两块。
+                    <Hint
+                      summary={t("wecom.docgenRunNowHintShort")}
+                      details={t("wecom.docgenRunNowHint")}
+                    />
+                  ) : (
+                    <p className="setting-hint">{t("wecom.docgenRunNeedWorkspace")}</p>
+                  )}
                 </div>
                 <label className="toggle" title={t("wecom.autoUpdateEnabled")}>
                   <input
@@ -543,6 +565,7 @@ export default function ReverseDocPage() {
                   type="button"
                   className="btn btn-secondary btn-small"
                   disabled={docgenBusy}
+                  title={t("wecom.docgenTestHint")}
                   onClick={() => {
                     setDocgenBusy(true);
                     setMsg("");

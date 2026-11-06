@@ -302,6 +302,7 @@ struct EngineInner {
     detail: String,
     tier: Tier,
     workspace: String,
+    docgen_policy: Option<(String, bool)>,
     /// 用户在设置页选的模型（ACP 的不透明 value，空 = 用 DSH 的默认路由）
     model: String,
     /// 思考强度（空 = provider 默认）
@@ -358,6 +359,7 @@ impl DshEngine {
                 detail: String::new(),
                 tier: Tier::Read,
                 workspace: String::new(),
+                docgen_policy: None,
                 model: String::new(),
                 effort: String::new(),
                 runtime: None,
@@ -420,17 +422,28 @@ impl DshEngine {
         changed
     }
 
-    /// 文档自动更新用：换工作区并钉死编辑档（要写文档），模型/思考强度保持不变。
-    ///
-    /// 定时任务解析出的工作区可能是设置页里那个父目录下的子仓，与问答会话不同；
-    /// 这档引擎每轮跑完就停，所以这里改档位不会给问答提权。
-    pub async fn configure_docgen(&self, workspace: String) -> bool {
+    /// 文档任务在独立 worktree 中启动：更新用编辑档、质检用只读档，均加宿主工具闸门。
+    /// 模型/思考强度保持不变；这一实例与问答通道分开，不给问答提权。
+    pub async fn configure_docgen(&self, workspace: String, doc_dir: String, readonly: bool) {
+        self.stop().await;
         let (model, effort) = {
             let g = self.inner.lock().await;
             (g.model.clone(), g.effort.clone())
         };
-        self.configure(Tier::Workspace, workspace, model, effort)
-            .await
+        self.configure(if readonly { Tier::Read } else { Tier::Workspace }, workspace, model, effort).await;
+        self.inner.lock().await.docgen_policy = Some((doc_dir, readonly));
+    }
+
+    pub async fn verify_docgen_guard(&self) -> Result<(), String> {
+        let g = self.inner.lock().await;
+        let (doc_dir, readonly) = g.docgen_policy.as_ref().ok_or("文档工具闸门未配置")?;
+        let ready = engine_dir().ok_or("应用数据目录不可用")?.join("docgen-guard-ready.json");
+        let text = std::fs::read_to_string(ready).map_err(|_| "DSH 文档工具闸门未就绪，本轮不调用模型")?;
+        let receipt: Value = serde_json::from_str(&text).map_err(|_| "文档工具闸门回执无效")?;
+        if receipt != json!({"workspace": g.workspace, "docDir": doc_dir, "readonly": readonly}) {
+            return Err("文档工具闸门回执与本轮配置不一致".into());
+        }
+        Ok(())
     }
 
     /// ACP binds MCP at new/resume time. Retire the old process on effective config
@@ -851,7 +864,8 @@ impl DshEngine {
     async fn start(&self, tier: Tier, workspace: &str) -> Result<String, String> {
         let workspace = workspace.to_string();
         let tag = self.tag;
-        let prepared = tokio::task::spawn_blocking(move || prepare_launch(tag, tier, &workspace))
+        let policy = self.inner.lock().await.docgen_policy.clone();
+        let prepared = tokio::task::spawn_blocking(move || prepare_launch(tag, tier, &workspace, policy.as_ref()))
             .await
             .map_err(|e| format!("启动准备失败：{e}"))??;
 
@@ -1264,7 +1278,7 @@ struct PreparedLaunch {
 }
 
 /// 阻塞部分：解析 CLI、清陈旧凭证锁、写 patch、校验工作区。
-fn prepare_launch(tag: &str, tier: Tier, workspace: &str) -> Result<PreparedLaunch, String> {
+fn prepare_launch(tag: &str, tier: Tier, workspace: &str, docgen: Option<&(String, bool)>) -> Result<PreparedLaunch, String> {
     let workspace = PathBuf::from(workspace.trim());
     if !workspace.is_absolute() {
         return Err("DSH 工作区必须是绝对路径".into());
@@ -1289,6 +1303,16 @@ fn prepare_launch(tag: &str, tier: Tier, workspace: &str) -> Result<PreparedLaun
     }
     let cli = dsh_commands::dsh_cli(&path_value)?;
     let patch = write_permission_patch(tag, tier, &workspace)?;
+    if let Some((doc_dir, readonly)) = docgen {
+        let ready = patch.with_file_name("docgen-guard-ready.json");
+        if ready.exists() { std::fs::remove_file(&ready).map_err(|e| e.to_string())?; }
+        let guard = patch.with_file_name("docgen-guard.mjs");
+        std::fs::write(&guard, include_str!("docgen_guard.mjs")).map_err(|e| e.to_string())?;
+        let extra = docgen_patch_yaml(&guard, &workspace, doc_dir, *readonly)?;
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&patch)
+            .and_then(|mut f| f.write_all(extra.as_bytes())).map_err(|e| e.to_string())?;
+    }
 
     let mut args = cli.args;
     args.push("--profile".into());
@@ -1509,6 +1533,21 @@ fn permission_patch_yaml(tier: Tier, workspace: &str) -> String {
         mode = tier.sandbox_mode(),
         policy = tier.approval_policy(),
     )
+}
+
+fn docgen_patch_yaml(guard: &std::path::Path, workspace: &std::path::Path, doc_dir: &str, readonly: bool) -> Result<String, String> {
+    // 取消命令/子代理/工作流等入口；guard 对实际派发再次按白名单拒绝。
+    let mut rows: Vec<serde_json::Value> = [
+        "tool-bash", "tool-pwsh", "tool-jobs", "tool-subagent", "tool-subagent-fork",
+        "tool-subagent-control", "tool-workflow", "tool-skill", "tool-web", "tool-working-directory",
+    ].iter().map(|id| json!({"id": id, "disabled": true})).collect();
+    rows.push(json!({"insert": [{
+        "id": "ai-workbench-docgen-guard",
+        "name": guard.to_string_lossy(),
+        "config": {"workspace": workspace.to_string_lossy(), "docDir": doc_dir, "readonly": readonly,
+            "readyFile": guard.with_file_name("docgen-guard-ready.json").to_string_lossy()}
+    }]}));
+    serde_yaml::to_string(&rows).map(|s| format!("\n{}", s.trim_start_matches("---\n"))).map_err(|e| e.to_string())
 }
 
 /// 会话映射与权限覆盖层的落盘文件名：`tag` 为空时保持旧名字（通道引擎）。
@@ -2279,6 +2318,7 @@ mod tests {
                 detail: String::new(),
                 tier: Tier::Read,
                 workspace: "D:/fixture".into(),
+                docgen_policy: None,
                 model: String::new(),
                 effort: String::new(),
                 runtime: None,
@@ -2535,6 +2575,18 @@ mod tests {
         let busy = "session/resume 失败：already active（code -32603）";
         let busy_text = friendly_turn_error(busy);
         assert!(busy_text.contains("停止") || busy_text.contains("还在跑"), "{busy_text}");
+    }
+
+    #[test]
+    fn docgen_patch_installs_mandatory_guard_and_disables_command_tools() {
+        let patch = docgen_patch_yaml(std::path::Path::new("C:/guard.mjs"), std::path::Path::new("D:/isolated"), "doc", true).unwrap();
+        let rows: serde_yaml::Value = serde_yaml::from_str(&patch).unwrap();
+        let rows = rows.as_sequence().unwrap();
+        assert!(rows.iter().any(|r| r["id"].as_str() == Some("tool-pwsh") && r["disabled"].as_bool() == Some(true)));
+        let guard = &rows.last().unwrap()["insert"][0];
+        assert_eq!(guard["name"].as_str(), Some("C:/guard.mjs"));
+        assert_eq!(guard["config"]["readonly"].as_bool(), Some(true));
+        assert_eq!(guard["config"]["docDir"].as_str(), Some("doc"));
     }
 
     /// 覆盖层必须能被 YAML 解析，且 Windows 反斜杠路径不会把文档写坏。
