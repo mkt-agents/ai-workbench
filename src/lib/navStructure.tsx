@@ -103,8 +103,8 @@ export const NAV_NODES: NavNode[] = [
     labelKey: "versionManagement",
     defaultOpen: true,
     children: [
-      { id: "git", labelKey: "gitManagement", icon: <GitBranch size={16} /> },
       { id: "runtime", labelKey: "runtimeVersion", icon: <Layers size={16} /> },
+      { id: "git", labelKey: "gitManagement", icon: <GitBranch size={16} /> },
       { id: "reverse-docs", labelKey: "reverseDocs", icon: <FileText size={16} /> },
     ],
   },
