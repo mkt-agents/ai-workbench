@@ -53,6 +53,8 @@ import {
 const CLICK_MOVE_PX = 5;
 /** Logical margin from work-area edges (matches tray/bubble.rs BUBBLE_MARGIN). */
 const EDGE_MARGIN_LOGICAL = 24;
+/** 距屏幕左 / 右缘这么近（逻辑 px，按角色边算）松手才吸附；桌面中间松手原地站住。 */
+const SNAP_EDGE_LOGICAL = 72;
 /** Logical top band reserved for main titlebar (matches BUBBLE_TOP_SAFE_LOGICAL). */
 const TOP_SAFE_LOGICAL = 96;
 /** 气泡语最短 / 最长停留（按字数伸缩）。 */
@@ -982,7 +984,10 @@ export default function AiHubBubble() {
   );
 
   /**
-   * 吸附到最近的左/右屏幕边缘，并把 Y 夹在标题栏安全带之下。
+   * 贴边吸附 + 夹进工作区，然后持久化。
+   *
+   * 只有松手时角色的左 / 右缘距屏幕对应边缘不足 `SNAP_EDGE_LOGICAL` 才吸附到那条边；
+   * 桌面中间松手就停在原地（夹进工作区），不再"过中线就被拉到屏幕边"。
    *
    * `from` = 拖动结束时已知的最终物理坐标：JS 拖动的最后一帧 setPosition 可能还在路上，
    * 直接拿它算，避免读到上一帧的位置。
@@ -1017,9 +1022,16 @@ export default function AiHubBubble() {
       const maxX = work.position.x + work.size.width - size.width - margin + inRight;
       const minY = work.position.y + Math.max(margin, topSafe) - inTop;
       const maxY = work.position.y + work.size.height - size.height - margin + inBottom;
-      const centerX = pos.x + size.width / 2;
-      const midX = work.position.x + work.size.width / 2;
-      const x = centerX < midX ? minX : Math.max(minX, maxX);
+      // 角色左 / 右缘距屏幕左 / 右缘的物理距离：阈值内才吸附，中间松手不挪窝。
+      const snapDist = Math.round(SNAP_EDGE_LOGICAL * scale);
+      const distLeft = pos.x + inLeft - work.position.x;
+      const distRight = work.position.x + work.size.width - (pos.x + size.width - inRight);
+      const x =
+        distLeft <= snapDist
+          ? minX
+          : distRight <= snapDist
+            ? Math.max(minX, maxX)
+            : Math.min(Math.max(pos.x, minX), Math.max(minX, maxX));
       const y = Math.min(Math.max(pos.y, minY), Math.max(minY, maxY));
       await win.setPosition(new PhysicalPosition(x, y));
       await persistPosition(x, y);

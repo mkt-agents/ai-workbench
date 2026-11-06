@@ -408,6 +408,12 @@ pub(crate) fn clamp_bubble_position<R: Runtime>(app: &AppHandle<R>, x: i32, y: i
 }
 
 /// True when a persisted point sits in the top chrome band (legacy HiDPI clamp damage).
+///
+/// 危险带按「角色上沿」判定，而不是窗顶：窗顶有 `PET_SPEECH_HEADROOM` 的常驻说话
+/// 留白，clamp 允许窗顶贴 0（角色上沿正好压在安全带下缘）——这是合法位置。按窗顶判
+/// 会把用户拖到上半屏的每一次落点都打成 legacy 停靠位，`set_ai_hub_bubble_position`
+/// 随即把它拉回右下角（表现就是"往上拖自己跑回右侧"）。命中矩形未同步时 insets
+/// 为 0，退化为按窗顶判，行为与旧版一致。
 pub(crate) fn is_titlebar_danger_zone<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) -> bool {
     let Ok(Some(monitor)) = app.primary_monitor() else {
         return false;
@@ -418,7 +424,8 @@ pub(crate) fn is_titlebar_danger_zone<R: Runtime>(app: &AppHandle<R>, x: i32, y:
     let margin = (BUBBLE_MARGIN * scale).round() as i32;
     let top_safe = (BUBBLE_TOP_SAFE_LOGICAL * scale).round() as i32;
     let max_x = work.position.x + work.size.width as i32 - bw - margin;
-    let in_top = y < work.position.y + top_safe;
+    let (_il, it, _ir, _ib) = current_hit_insets(scale);
+    let in_top = y + it < work.position.y + top_safe;
     // Old bug parked the window at the top-right corner of the work area.
     let near_right = x >= max_x - margin;
     let right_half =
