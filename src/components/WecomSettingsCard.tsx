@@ -179,7 +179,7 @@ function Row({
 }
 
 /** 页面内部的小卡片 Tab：点谁只看谁，一屏放得下。 */
-type WecomSection = "channel" | "answer" | "trouble" | "access" | "diag";
+type WecomSection = "channel" | "answer" | "access" | "diag";
 
 /**
  * 扁平分区标题：与参考图一致，不使用图标卡片；右侧可挂开关 / 计数。
@@ -283,10 +283,8 @@ export default function WecomSettingsCard() {
   const enhanceDm = useFieldDraft(settings.wecomEnhanceDm ?? "");
   const enhanceGroup = useFieldDraft(settings.wecomEnhanceGroup ?? "");
   const [enhanceTab, setEnhanceTab] = useState<"dm" | "group">("dm");
-  /** 回答设置页的二级页签：引擎与工作区 / 回答与上下文 */
-  const [answerView, setAnswerView] = useState<"engine" | "answer">("engine");
-  /** 访问策略页的二级页签：谁能用 / 能用什么 */
-  const [accessView, setAccessView] = useState<"who" | "what">("who");
+  /** 回答设置页的二级页签：引擎与工作区 / 回答与上下文 / 线上排障 */
+  const [answerView, setAnswerView] = useState<"engine" | "answer" | "trouble">("engine");
   const skywalkingAddr = useFieldDraft(skywalkingProfile.addr ?? "");
   const skywalkingHeader = useFieldDraft(skywalkingProfile.header ?? "");
 
@@ -784,12 +782,17 @@ export default function WecomSettingsCard() {
       {/* 小卡片 Tab：一屏只看一组设置，不再把六七块叠成一条长滚动 */}
       <div className="wecom-sections" role="tablist" aria-label={t("wecom.title")}>
         {/*
-          顺序 = 「接入 → 行为 → 权限 → 能力 → 诊断」：
-          先连上（通道），再定怎么答（回答设置），紧接着收紧谁能用（访问策略），
-          然后是 AI 能力（线上排障），最后才是排障入口（运行诊断）。
-          原来这里的「文档自动更新与推送」已经独立成侧栏页「逆向工程」
-          （工程管理 → 逆向工程，`src/components/ReverseDocPage.tsx`），
-          与通道配置彻底解耦：改文档配置不再重启企微长连接。
+          顺序 = 「接入 → 行为 → 准入 → 诊断」，且一个一级 Tab 只装一种性质的内容：
+          通道 = 连接（凭据 / 扫码 / 业务 API）；回答设置 = AI 行为（引擎、模型、工作区、
+          权限档位、回答模式、上下文增强、SkyWalking 证据源）；访问策略 = 准入（会话准入）；
+          运行诊断 = 排障（诊断查询 + 日志）。
+          2026-11-06 按性质归堆：并发上限、权限档位与「会话与共享任务」说明从访问策略迁入回答设置，
+          连通检查清单拆去运行诊断页顶——访问策略只剩会话准入，通道不再混 AI 行为。
+          更早的两次拆分：原「线上排障」并入「回答设置」第三个二级页签（本质是回答问题
+          所用的证据源）；原「文档自动更新与推送」独立成侧栏页「逆向工程」
+          （工程管理 → 逆向工程，`src/components/ReverseDocPage.tsx`），改文档配置不再重启长连接。
+          摘要行 = 每个 Tab 的关键状态一眼可读：通道看连接状态、回答设置看当前引擎、
+          访问策略看配对/待审批（有待审时 `is-pending` 高亮）、运行诊断提示日志入口。
           面板本身仍按原来的顺序挂在下面——隐藏面板用的是 `hidden`，不进焦点与无障碍树，
           所以调整顺序只动这张表即可。
         */}
@@ -808,19 +811,14 @@ export default function WecomSettingsCard() {
             {
               id: "access",
               title: t("wecom.groupAccess"),
-              summary: t("wecom.sectionPaired", { count: (settings.wecomPairedUsers ?? []).length }),
-            },
-            {
-              id: "trouble",
-              title: t("wecom.groupTroubleshoot"),
-              summary: (() => {
-                const addr = skywalkingProfile.addr?.trim();
-                const envLabel =
-                  skywalkingEnv === "test"
-                    ? t("wecom.skywalkingEnvTest")
-                    : t("wecom.skywalkingEnvProd");
-                return addr ? `${envLabel} · ${addr}` : t("wecom.sectionUnset");
-              })(),
+              summary:
+                pairings.length > 0
+                  ? t("wecom.sectionPairedPending", {
+                      count: (settings.wecomPairedUsers ?? []).length,
+                      pending: pairings.length,
+                    })
+                  : t("wecom.sectionPaired", { count: (settings.wecomPairedUsers ?? []).length }),
+              attention: pairings.length > 0,
             },
             {
               id: "diag",
@@ -838,7 +836,11 @@ export default function WecomSettingsCard() {
             onClick={() => setSection(item.id)}
           >
             <span className="wecom-section-title">{item.title}</span>
-            <span className="wecom-section-summary">{item.summary}</span>
+            <span
+              className={`wecom-section-summary${"attention" in item && item.attention ? " is-pending" : ""}`}
+            >
+              {item.summary}
+            </span>
           </button>
         ))}
       </div>
@@ -1091,8 +1093,9 @@ export default function WecomSettingsCard() {
 
       {/* 2 · 回答设置：谁来回答、按什么口径回答、在哪个工作区回答 */}
       <div className="net-panel" hidden={section !== "answer"}>
-        {/* 四张卡按「谁来答 / 在哪答」与「怎么答 / 补什么料」分两页：
-            前者是配置（引擎、模型、工作区），后者是措辞（问答模式、自我介绍、上下文增强）。 */}
+        {/* 五张卡分三页：「谁来答 / 在哪答」（引擎、模型、工作区）、
+            「怎么答 / 补什么料」（问答模式、自我介绍、上下文增强）、
+            「拿什么当证据」（线上排障：SkyWalking OAP，回答时补查的日志与调用链源）。 */}
         <PanelHead
           bare
           aside={
@@ -1101,7 +1104,7 @@ export default function WecomSettingsCard() {
               role="group"
               aria-label={t("wecom.groupAnswer")}
             >
-              {(["engine", "answer"] as const).map((view) => (
+              {(["engine", "answer", "trouble"] as const).map((view) => (
                 <button
                   key={view}
                   type="button"
@@ -1499,6 +1502,101 @@ export default function WecomSettingsCard() {
             <p className="setting-hint wecom-enhance-note">{t("wecom.enhanceHint")}</p>
           </div>
 
+          {/* 会话与共享任务：纯行为说明（会话怎么建立 / 命令怎么发 / 群里谁能看到 / 会话怎么迁移），
+              原在访问策略，2026-11-06 按性质归堆迁到「回答与上下文」尾部——
+              连通检查清单一条拆去运行诊断页顶 */}
+          <div className="wecom-block-card" hidden={answerView !== "answer"}>
+            <div className="wecom-block-head">
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <ListChecks size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.sessionRules")}</span>
+              </div>
+            </div>
+
+            <div className="wecom-rules-grid">
+              <Hint summary={t("wecom.sessionRulesShort")} details={t("wecom.sessionRulesHint")} />
+              <Hint summary={t("wecom.sharedTasksShort")} details={t("wecom.sharedTasksHint")} />
+              <Hint summary={t("wecom.sessionCommandsShort")} details={t("wecom.sessionCommandsHint")} />
+              <Hint summary={t("wecom.groupVisibilityShort")} details={t("wecom.groupVisibilityHint")} />
+              <Hint summary={t("wecom.sessionMigrationShort")} details={t("wecom.sessionMigrationHint")} />
+            </div>
+          </div>
+
+          {/* 权限档位：这条通道回答时用天玑的哪一档权限（只读 / 工作区 / 审查 / 完全），
+              并发上限（全局活动回合上限）也归这卡——两行都管「引擎拿多少能力、
+              同时干多少活」。原在「访问策略」，2026-11-06 按性质归堆迁入引擎视图，
+              排在引擎与模型之后、工作区之前：先定能力边界，再定在哪干 */}
+          <div className="wecom-block-card" hidden={answerView !== "engine"}>
+            <div className="wecom-block-head">
+              <div className="wecom-block-head-main">
+                <span className="wecom-block-icon" aria-hidden>
+                  <ShieldCheck size={14} />
+                </span>
+                <span className="wecom-block-title">{t("wecom.subWhat")}</span>
+              </div>
+            </div>
+
+            {/* 渠道权限与并发上限并排一行（同 wecom-pair 双列，对齐工作区与文档卡） */}
+            <div className="wecom-pair">
+              <Row
+                label={t("wecom.permission")}
+                control={
+                  <select
+                    className="input-field"
+                    value={settings.wecomPermission ?? "read"}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "full") {
+                        void (async () => {
+                          const ok = await confirm({
+                            title: t("wecom.permission"),
+                            message: t("wecom.fullConfirm"),
+                          });
+                          if (!ok) return;
+                          await push({ wecomPermission: v });
+                        })();
+                        return;
+                      }
+                      void push({ wecomPermission: v });
+                    }}
+                  >
+                    <option value="read">{t("wecom.perm.read")}</option>
+                    <option value="workspace">{t("wecom.perm.workspace")}</option>
+                    <option value="review">{t("wecom.perm.review")}</option>
+                    <option value="full">{t("wecom.perm.full")}</option>
+                  </select>
+                }
+                hint={
+                  engine === "dsh" ? (
+                    <Hint summary={t("wecom.dshPermHintShort")} details={t("wecom.dshPermNote")} />
+                  ) : undefined
+                }
+              />
+
+              <Row
+                label={t("wecom.maxJobs")}
+                control={
+                  <select
+                    className="input-field"
+                    aria-label={t("wecom.maxJobs")}
+                    value={maxJobs}
+                    disabled={busy}
+                    onChange={(e) => void push({ wecomMaxJobs: Number(e.target.value) })}
+                  >
+                    {maxJobsChoices.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                }
+                hint={<Hint summary={t("wecom.maxJobsHintShort")} details={t("wecom.maxJobsHint")} />}
+              />
+            </div>
+          </div>
+
           {/* 工作区与文档：和上面的增强卡片同一套壳，两个字段并排、说明落到卡片底部 */}
           <div className="wecom-block-card" hidden={answerView !== "engine"}>
             <div className="wecom-block-head">
@@ -1583,14 +1681,11 @@ export default function WecomSettingsCard() {
               <p className="setting-hint wecom-block-note">{t("wecom.dshWorkspaceHint")}</p>
             ) : null}
           </div>
-        </div>
-      </div>
 
-      {/* 3 · 线上排障：查日志与调用链的证据源（测试 / 生产各一套 OAP） */}
-      <div className="net-panel" hidden={section !== "trouble"}>
-        <PanelHead title={t("wecom.groupTroubleshoot")} />
-        <div className="wecom-rows">
-          <div className="wecom-block-card">
+          {/* 线上排障：查日志与调用链的证据源（测试 / 生产各一套 OAP）。
+              它决定回答时去哪个 OAP 补查证据，是「怎么答」的一部分，
+              所以并入回答设置的第三个二级页签，不再单独占一级页签。 */}
+          <div className="wecom-block-card" hidden={answerView !== "trouble"}>
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1715,35 +1810,14 @@ export default function WecomSettingsCard() {
       </div>
 
 
-      {/* 5 · 访问控制：谁能用 + 能用什么 + 配对授权 */}
+      {/* 5 · 访问控制：会话准入（私聊 / 群聊 / 配对授权）。
+          2026-11-06 权限档位也迁「回答设置 → 引擎与模型」后，本页只剩准入一页，
+          不再需要 who/what 二级页签；配对是准入的落地动作，跟着白名单放。 */}
       <div className="net-panel" hidden={section !== "access"}>
-        {/* 五张卡分两页：谁能用（私聊 / 群聊 / 配对审批）与能用什么（权限档位、并发、会话规则）。
-            配对是「谁能用」的落地动作，跟着白名单放；会话规则是纯说明，跟着权限放。 */}
-        <PanelHead
-          bare
-          aside={
-            <div
-              className="devtools-segmented wecom-head-seg"
-              role="group"
-              aria-label={t("wecom.groupAccess")}
-            >
-              {(["who", "what"] as const).map((view) => (
-                <button
-                  key={view}
-                  type="button"
-                  className={`segmented-item${accessView === view ? " active" : ""}`}
-                  aria-pressed={accessView === view}
-                  onClick={() => setAccessView(view)}
-                >
-                  {t(`wecom.accessView.${view}`)}
-                </button>
-              ))}
-            </div>
-          }
-        />
+        <PanelHead title={t("wecom.groupAccess")} />
         <div className="wecom-rows">
           {/* 私聊：谁能私聊 + 私聊白名单 */}
-          <div className="wecom-block-card is-split" hidden={accessView !== "who"}>
+          <div className="wecom-block-card is-split">
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1792,7 +1866,7 @@ export default function WecomSettingsCard() {
           </div>
 
           {/* 群聊：谁能进群 + 群白名单 + 是否必须 @ */}
-          <div className="wecom-block-card is-split" hidden={accessView !== "who"}>
+          <div className="wecom-block-card is-split">
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -1855,93 +1929,11 @@ export default function WecomSettingsCard() {
             />
           </div>
 
-          <div className="wecom-block-card is-split" hidden={accessView !== "what"}>
-            <div className="wecom-block-head">
-              <div className="wecom-block-head-main">
-                <span className="wecom-block-icon" aria-hidden>
-                  <ShieldCheck size={14} />
-                </span>
-                <span className="wecom-block-title">{t("wecom.subWhat")}</span>
-              </div>
-            </div>
+          {/* 权限档位卡已迁「回答设置 → 引擎与模型」（2026-11-06）；
+              会话与共享任务说明卡迁「回答与上下文」，连通检查清单迁「运行诊断」页顶。
+              本页现在只剩会话准入三张卡。 */}
 
-            <Row
-              label={t("wecom.permission")}
-              control={
-                <select
-                  className="input-field"
-                  value={settings.wecomPermission ?? "read"}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === "full") {
-                      void (async () => {
-                        const ok = await confirm({
-                          title: t("wecom.permission"),
-                          message: t("wecom.fullConfirm"),
-                        });
-                        if (!ok) return;
-                        await push({ wecomPermission: v });
-                      })();
-                      return;
-                    }
-                    void push({ wecomPermission: v });
-                  }}
-                >
-                  <option value="read">{t("wecom.perm.read")}</option>
-                  <option value="workspace">{t("wecom.perm.workspace")}</option>
-                  <option value="review">{t("wecom.perm.review")}</option>
-                  <option value="full">{t("wecom.perm.full")}</option>
-                </select>
-              }
-              hint={
-                engine === "dsh" ? (
-                  <Hint summary={t("wecom.dshPermHintShort")} details={t("wecom.dshPermNote")} />
-                ) : undefined
-              }
-            />
-
-            <Row
-              label={t("wecom.maxJobs")}
-              control={
-                <select
-                  className="input-field"
-                  aria-label={t("wecom.maxJobs")}
-                  value={maxJobs}
-                  disabled={busy}
-                  onChange={(e) => void push({ wecomMaxJobs: Number(e.target.value) })}
-                >
-                  {maxJobsChoices.map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              }
-              hint={<Hint summary={t("wecom.maxJobsHintShort")} details={t("wecom.maxJobsHint")} />}
-            />
-          </div>
-
-          <div className="wecom-block-card" hidden={accessView !== "what"}>
-            <div className="wecom-block-head">
-              <div className="wecom-block-head-main">
-                <span className="wecom-block-icon" aria-hidden>
-                  <ListChecks size={14} />
-                </span>
-                <span className="wecom-block-title">{t("wecom.sessionRules")}</span>
-              </div>
-            </div>
-
-            <div className="wecom-rules-grid">
-              <Hint summary={t("wecom.sessionRulesShort")} details={t("wecom.sessionRulesHint")} />
-              <Hint summary={t("wecom.sharedTasksShort")} details={t("wecom.sharedTasksHint")} />
-              <Hint summary={t("wecom.sessionCommandsShort")} details={t("wecom.sessionCommandsHint")} />
-              <Hint summary={t("wecom.groupVisibilityShort")} details={t("wecom.groupVisibilityHint")} />
-              <Hint summary={t("wecom.sessionMigrationShort")} details={t("wecom.sessionMigrationHint")} />
-              <Hint summary={t("wecom.connectChecklistShort")} details={t("wecom.connectChecklistHint")} />
-            </div>
-          </div>
-
-          <div className="wecom-block-card" hidden={accessView !== "who"}>
+          <div className="wecom-block-card">
             <div className="wecom-block-head">
               <div className="wecom-block-head-main">
                 <span className="wecom-block-icon" aria-hidden>
@@ -2037,6 +2029,11 @@ export default function WecomSettingsCard() {
           title={t("wecom.groupDiag")}
           aside={<span className="wecom-diag-hint">{t("wecom.groupDiagHint")}</span>}
         />
+        {/* 连通检查清单：原在访问策略的会话规则卡里，2026-11-06 按性质拆到诊断页顶——
+            「连不上时按清单自查」正是本页的入口动作 */}
+        <div className="wecom-diag-block wecom-diag-checklist">
+          <Hint summary={t("wecom.connectChecklistShort")} details={t("wecom.connectChecklistHint")} />
+        </div>
         <WecomRequestDiagnostics selection={diagnosticSelection} />
         <section className="wecom-diag-block">
           <div className="wecom-diag-head">

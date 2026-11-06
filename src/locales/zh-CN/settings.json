@@ -269,10 +269,6 @@
     "groupEngine": "AI 引擎",
     "groupCredentials": "机器人凭据",
     "groupAccess": "访问策略",
-    "accessView": {
-      "who": "谁能用",
-      "what": "能用什么"
-    },
     "groupPairing": "配对",
     "groupDocqa": "文档与线上排障",
     "groupAnswer": "回答设置",
@@ -284,6 +280,7 @@
     "sectionUnset": "未配置",
     "sectionDailyAt": "每天 {{time}}",
     "sectionPaired": "已配对 {{count}} 人",
+    "sectionPairedPending": "已配对 {{count}} 人 · {{pending}} 条待审批",
     "sectionLogs": "通道 / 会话日志",
     "groupAutoupdate": "文档自动更新与推送",
     "groupDiag": "运行诊断",
@@ -460,7 +457,7 @@
     "subCorp": "业务 API（可选）",
     "subDmAccess": "私聊",
     "subGroupAccess": "群聊",
-    "subWhat": "能用什么",
+    "subWhat": "权限档位",
     "hintMore": "说明",
     "hint": "接入企微「智能机器人」API 长连接（Bot ID + Secret）。本机出站即可，无需公网回调。私聊默认配对；群聊默认白名单。企微侧群聊一般只有 @ 才会推送。",
     "hintShort": "接入说明：企微「智能机器人」长连接，本机出站即可",
@@ -516,7 +513,7 @@
     "maxJobsHint": "私聊与群聊合计的活动回合上限，支持整数 1–32，默认 2；已有合法值（如 3、6）会保留。同一会话依次处理，等待上一轮的消息单独计数。这不是 HTTP 并发；SkyWalking 每个 OAP 最多 2 个在途请求。调高会增加本机与模型额度消耗。",
     "sessionRules": "会话与共享任务",
     "sessionRulesShort": "私聊按机器人+用户隔离；群聊默认按机器人+群+用户隔离。",
-    "sessionRulesHint": "DM 会话键由 bot + user 组成；普通群聊由 bot + chat + user 组成。同一会话串行处理，不同会话可在全局回合上限内并行（见上方「全局活动回合上限」，多人同时 @ 时建议调到 4–8）。完整指令「新会话 / 新对话」显式重置当前作用域（短历史、DSH ACP 映射、排障缓存）；「停止」取消在跑回合；「进度 / 还没好吗」查状态。活动 ACP 会话的普通追问直接 reuse。加入共享任务后，同一机器人、同一群内的成员共用该任务的上下文。",
+    "sessionRulesHint": "DM 会话键由 bot + user 组成；普通群聊由 bot + chat + user 组成。同一会话串行处理，不同会话可在全局回合上限内并行（见「回答设置 → 引擎与模型」的「全局活动回合上限」，多人同时 @ 时建议调到 4–8）。完整指令「新会话 / 新对话」显式重置当前作用域（短历史、DSH ACP 映射、排障缓存）；「停止」取消在跑回合；「进度 / 还没好吗」查状态。活动 ACP 会话的普通追问直接 reuse。加入共享任务后，同一机器人、同一群内的成员共用该任务的上下文。",
     "sharedTasksShort": "在同一群中显式创建或加入共享任务。",
     "sharedTasksHint": "群中发送「创建共享任务 NAME」「加入任务 CODE」「任务状态」「退出任务」；只有创建者可发送「结束任务 CODE」。共享任务元数据保存在本机数据库，24 小时无活动后过期，最多 200 个有效任务、每任务最多 32 名成员。结束会清除任务绑定和上下文；退出只退出自己的共享会话。",
     "sessionCommandsShort": "常用指令（新会话 / 停止 / 进度 / 共享任务…）",
@@ -534,7 +531,8 @@
     "engine": "AI 引擎",
     "answerView": {
       "engine": "引擎与工作区",
-      "answer": "回答与上下文"
+      "answer": "回答与上下文",
+      "trouble": "线上排障"
     },
     "engineLabel": "引擎选择",
     "engineTianji": "天玑（内置）",

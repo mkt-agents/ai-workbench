@@ -114,7 +114,7 @@
 - **auto 模式重写为意图分类 + 槽位抽取（2026-10-28，新模块 `wecom_intent.rs`）**：`analyze(text)` 打分分类（Troubleshoot/ReadCode/DocLookup）+ 抽排障槽位（service / keyword 错误特征优先 / minutes 时间窗 / level / traceId）。排障口径把线索写进 SOP、DSH 预取与 tianji system 都用这份槽位组精准查询；规避「日志/模块/500 行」等误判（`has_http_error_code` 计量词不计 + doc 语境压制弱信号）。旧扁平子串判定 `wants_troubleshooting`/`user_text_mentions_code`/`pick_log_keyword`/`extract_trace_id` 收敛进新模块。
 - **跨服务排障强化（2026-10-28）**：① 意图识别增 `TROUBLE_SYMPTOM` 业务症状词（慢/卡/失败/没反应/用不了…）+「问题/故障×服务/接口/线上」组合提权，让大白话症状也触发排障；② 预取默认**不限定服务、跨全部服务按错误特征查**（只有问句点名服务才传 service），窗口 30→240 分钟，顺 traceId 拉跨服务调用链看哪个 span 报错；③ 查空不静默（注入「已跨服务查无匹配，建议换词/放宽窗/给 traceId」），④ DSH 档 SOP 改「据上文已附的跨服务日志/调用链定位，不调拿不到的工具」，tianji 档维持用工具；⑤ `maybe_prefetch_skywalking` 全程写 `wecom.log` 的 `prefetch` 行（触发/跳过/命中N条/查空/失败），设置页「排障→通道日志」可查「为什么没去调日志」。
 - **按关键信息搜日志（2026-10-28）**：① `wecom_intent::extract_identifiers` 不依赖空格按字符类抽业务标识符——手机号 `1\d{10}`、长数字串（订单号/用户ID，≥6 位）、字母数字混合码（ORD20241028）、带连字符/下划线 ID（req-123-abc）、长 hex；排除 HTTP 状态码与已识别 traceId。② `QaAnalysis.keywords`（有序：标识符在前、错误特征在后，封顶 3）替换旧单 `keyword`。③ `wecom_skywalking::build_log_condition` 的 `keywordsOfContent` 填整个数组（AND 收窄「订单号+error」），`parse_keywords` 兼容 `keywords` 数组与 `keyword` 逗号串。④ 预取用多关键词查；AND 查空自动退化为单（首个）关键词再查一次。⑤ `skywalking_query` 工具描述与两档 SOP 都提示「优先用订单号/用户ID/手机号/requestId 等关键信息搜日志」。
-- **全局并发可配**：`Orchestrator.max_jobs`（原子量，`set_max_jobs` 1–8、越界回落默认 2），设置页「谁能用」区下拉；`settings.wecomMaxJobs` → apply 的 `maxJobs`。
+- **全局并发可配**：`Orchestrator.max_jobs`（原子量，`set_max_jobs` 1–8、越界回落默认 2），设置页「谁能用」区下拉（2026-11-06 迁至「回答设置 → 引擎与模型」）；`settings.wecomMaxJobs` → apply 的 `maxJobs`。
 - **配对码重启提示**：有待配对项时设置页「配对」区显示「重启失效、需重新发消息」提示（`pairingRestartHint`）。
 - **「停止」指令真取消（2026-10-28）**：此前「停止」只被当普通消息答一句话，上一轮仍在跑、气泡一直「正在思考…」。现在 `Orchestrator.running` 按会话登记在跑回合的取消句柄（`CancelHandle::Tianji{request_id}` / `Dsh{responder}`），`on_msg` 在拿会话锁**之前**用 `is_stop_command` 识别纯停止指令（停/停止/别查了/取消/stop/cancel…，含实质内容的排障问句如「停止服务一直报错」不拦），命中即真正取消（天玑 `cancel_request` / DSH `session/cancel`）并给卡住的 stream 补一帧 finish 收尾气泡；无在跑任务回「当前没有正在进行的任务」。回合结束 `unregister_running`（仅当 stream_id 一致才移除）。
 
@@ -127,3 +127,14 @@
 - **入站富媒体**：`MediaRef` 支持仅 `media_id`；`wecom_media::materialize_inbound` 落盘 `wecom-media/<msgid>/`（7 天回收），图片内联 / 文本附件读入 / 二进制给路径。
 - **DSH 出站**：回合登记 `out_targets`；回复中 `WECOM_ATTACH:<path>` 由宿主剥离并 `send_image`/`send_file`。
 - **设置页**：会话指令清单、连接排查清单、docgen 启用 checklist（中英 i18n）。
+
+## 已落地（2026-11-06 批次，页面归类重排）
+
+原则：**一个一级 Tab = 一种性质**，四段骨架「通道 → 回答设置 → 访问策略 → 运行诊断」不变。
+
+- **maxJobs 并发上限迁址**：从「访问策略 → 权限档位」（时称「能用什么」）迁至「回答设置 → 引擎与模型」视图——并发与引擎同属「算力怎么花」。状态字段 `activeJobs`/`waitingJobs`/`maxJobs` 展示逻辑不变。
+- **权限档位卡二次迁址（同日追加）**：渠道权限（`wecomPermission`，只读/工作区/审查/完全）从「访问策略」整卡迁至「回答设置 → 引擎与模型」视图，并按用户指定排序微调：**权限档位卡位于引擎与模型之后、工作区与文档之前，maxJobs 并发行并入权限档位卡**（渠道权限在上、全局活动回合上限在下）——先定能力边界，再定在哪干。访问策略因此只剩会话准入三张卡（私聊/群聊/配对），who/what 二级页签与 `accessView` state、`wecom.accessView.*` i18n 键一并移除。
+- **「会话与共享任务」说明卡拆分**：5 条会话行为说明（会话隔离/共享任务/指令/群可见性/迁移）迁至「回答设置 → 回答与上下文」尾部（增强卡之后）；「连通检查清单」1 条独立成卡置于「运行诊断」页顶（`wecom-diag-block` 卡壳）。
+- **一级 Tab 摘要升级**：访问策略摘要三态——无待审「已配对 N 人」；有待审「已配对 N 人 · M 条待审批」加 `is-pending` 黄色警示（新增 `.wecom-section-summary.is-pending`，复用 `wecom-count-badge.is-pending` 配色）。通道=连接状态、回答设置=当前引擎、运行诊断=日志入口提示。
+- **i18n**：新增 `wecom.sectionPairedPending`（中英）；zh-CN `sessionRulesHint` 的「见上方『全局活动回合上限』」改为指向「回答设置 → 引擎与模型」。弃用口语化的「谁能用 / 能用什么」：卡片标题 `subWhat` 改「权限档位」（英文 `Permission level`），二级页签键 `accessView.*` 先改「会话准入 / 权限档位」后随页签整体移除。
+- **不改动**：后端命令、`settings.wecom*` 键、微信 Tab（仅复用 settings 键，无组件引用）、侧栏导航归属、Hero 常驻区。验证：`npm run build` 通过。

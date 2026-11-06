@@ -269,10 +269,6 @@
     "groupEngine": "AI engine",
     "groupCredentials": "Bot credentials",
     "groupAccess": "Access policy",
-    "accessView": {
-      "who": "Who can use",
-      "what": "What it can do"
-    },
     "groupPairing": "Pairing",
     "groupDocqa": "Docs & live troubleshooting",
     "groupAnswer": "Answers",
@@ -284,6 +280,7 @@
     "sectionUnset": "Not set",
     "sectionDailyAt": "Daily {{time}}",
     "sectionPaired": "{{count}} paired",
+    "sectionPairedPending": "{{count}} paired · {{pending}} pending",
     "sectionLogs": "Channel & session logs",
     "groupAutoupdate": "Doc auto-update & push",
     "groupDiag": "Diagnostics",
@@ -460,7 +457,7 @@
     "subCorp": "Business API (optional)",
     "subDmAccess": "Direct messages",
     "subGroupAccess": "Group chats",
-    "subWhat": "What it can do",
+    "subWhat": "Permission level",
     "hintMore": "Details",
     "hint": "Connect via WeCom intelligent-bot long connection (Bot ID + Secret). Outbound only — no public callback URL. DM defaults to pairing; groups default to allowlist. WeCom usually only delivers group messages that @ the bot.",
     "hintShort": "Setup: WeCom intelligent-bot long connection, outbound only",
@@ -534,7 +531,8 @@
     "engine": "AI engine",
     "answerView": {
       "engine": "Engine & workspace",
-      "answer": "Answers & context"
+      "answer": "Answers & context",
+      "trouble": "Live troubleshooting"
     },
     "engineLabel": "Engine",
     "engineTianji": "Tianji (built-in)",

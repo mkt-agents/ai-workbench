@@ -1550,6 +1550,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 访问策略 Tab 摘要的待审批高亮：有待审批配对时用警示色，和计数徽标同一套 */
+.settings-page .wecom-section-summary.is-pending {
+  color: var(--yellow);
+}
 /* 「联网扩展」各 Tab 顶部那句总说明（天玑 API 等仍在用） */
 .settings-page .wecom-lead {
   margin: 0;
@@ -1743,7 +1747,7 @@
   color: var(--text-3);
   line-height: 1.5;
 }
-/* 面板内的子分组小标题：左侧文字 + 右侧细线，把一块拆成「谁能用 / 能用什么」这种小节 */
+/* 面板内的子分组小标题：左侧文字 + 右侧细线，把一块拆成「引擎与模型 / 工作区与文档」这种小节 */
 .settings-page .net-subhead,
 .settings-page .wecom-subhead {
   display: flex;
