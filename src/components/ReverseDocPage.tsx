@@ -909,6 +909,30 @@ export default function ReverseDocPage() {
                     <FolderGit2 size={14} />
                   </span>
                   <span className="wecom-block-title">{t("wecom.subDocgenSources")}</span>
+                  {/* 仓库计数徽标紧跟标题：共 N（扫描到的 + 白名单孤立项）/ 已选 N */}
+                  {(() => {
+                    const selected = normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist);
+                    const root = docgenScanBase;
+                    const scanOk =
+                      docgenScanned !== null && Boolean(root) && pathKey(docgenScanRoot) === pathKey(root);
+                    const scannedRows = scanOk ? (docgenScanned ?? []) : [];
+                    const orphan = selected.filter(
+                      (p) => !scannedRows.some((r) => pathKey(r.path) === pathKey(p)),
+                    );
+                    const total = scannedRows.length + orphan.length;
+                    if (total === 0) return null;
+                    return (
+                      <span
+                        className="wecom-count-badge"
+                        title={t("wecom.docgenRepoCount", {
+                          selected: selected.length,
+                          total,
+                        })}
+                      >
+                        {t("wecom.docgenRepoCount", { selected: selected.length, total })}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div className="wecom-allowlist-actions">
                   <button

@@ -349,6 +349,7 @@
     "docgenRepoClear": "清空",
     "docgenRepoScanning": "扫描中…",
     "docgenRepoEmpty": "尚未扫描或父目录下没有子仓。",
+    "docgenRepoCount": "已选 {{selected}} / 共 {{total}}",
     "docgenRepoUnverified": "待验证",
     "docgenRepoMissing": "路径已失效",
     "docgenRepoRootMissing": "请先填写工作区路径，再扫描子仓。",

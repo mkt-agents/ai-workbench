@@ -637,10 +637,13 @@
 }
 /* 页签里的「最后一张可见块卡」吃掉剩余高度（它后面没有可见同级卡，说明由它收尾）：
    卡边框一直画到卡片底部，整页是一整块填满的卡，而不是「几张卡 + 底下一大片空」。
-   中间那些卡按内容高度排，不会被拉成等分——否则两张卡各分一半、各留一半空，更难收拾。 */
+   中间那些卡按内容高度排，不会被拉成等分——否则两张卡各分一半、各留一半空，更难收拾。
+   子仓白名单卡例外（:has(> .wecom-allowlist)）：列表高有上限，卡拉高只会变成卡内大块空白 */
 .settings-page.is-docgen
   .wecom-rows
-  > .wecom-block-card:not([hidden]):not(:has(~ .wecom-block-card:not([hidden]))) {
+  > .wecom-block-card:not([hidden]):not(:has(~ .wecom-block-card:not([hidden]))):not(
+    :has(> .wecom-allowlist)
+  ) {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -652,21 +655,14 @@
 /* 卡被拉高时，卡里的内容要「吃掉」多出来的高度，否则空白只是从页面挪进卡里。
    三类卡各有自己的伸缩件：清单 / 编辑器 / 表格。其余卡（纯开关行、路径输入框）
    没有可伸缩的东西，空白留在卡底部——比页面底下一大块空更像「一张卡」。 */
-/* ① 子仓白名单：卡拉高，列表吃掉高度（滚动仍在列表自己身上） */
-.settings-page.is-docgen .wecom-block-card:has(> .wecom-allowlist) {
-  flex: 1 1 auto;
-  min-height: 0;
-}
+/* ① 子仓白名单：卡按内容高度排（不再当「收尾卡」被拉高，见上面的例外），
+    列表固定上限 280px 内部滚动——仓库多时也不会把页面撑得老长（2026-11-06 按用户要求调矮） */
 .settings-page.is-docgen .wecom-block-card > .wecom-allowlist {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
 }
 .settings-page.is-docgen .wecom-block-card > .wecom-allowlist > .wecom-allowlist-list {
-  flex: 1 1 auto;
-  min-height: 96px;
-  max-height: none;
+  max-height: 280px;
 }
 /* ② 提示词编辑器：卡拉高，textarea 吃掉高度（保留 220px 地板） */
 .settings-page.is-docgen .wecom-block-card:has(> .wecom-editor-stack) {
@@ -2157,6 +2153,11 @@
 /* 逆向工程页「回溯天数 + 同步开关」：字段都短，固定两列不塌单列 */
 .settings-page .wecom-block-card > .wecom-pair.is-strategy {
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+}
+/* 开关行默认横跨全部列（1 / -1），放进 pair 会把双列拆成上下两行——
+   pair 内的开关行退回普通网格项，乖乖待在右列（如回溯天数 + 采集开关同行） */
+.settings-page .wecom-pair > .wecom-switch-row {
+  grid-column: auto;
 }
 /* 「更新工作区 + 文档目录」：两个带浏览按钮的路径输入，固定等宽两列 */
 .settings-page .wecom-block-card > .wecom-pair.is-paths {

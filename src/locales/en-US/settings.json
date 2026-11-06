@@ -349,6 +349,7 @@
     "docgenRepoClear": "Clear",
     "docgenRepoScanning": "Scanning…",
     "docgenRepoEmpty": "No scan yet, or no child repos under the parent folder.",
+    "docgenRepoCount": "Selected {{selected}} of {{total}}",
     "docgenRepoUnverified": "Not verified",
     "docgenRepoMissing": "Path missing",
     "docgenRepoRootMissing": "Set the workspace path before scanning child repositories.",
