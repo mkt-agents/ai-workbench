@@ -74,9 +74,31 @@ pub struct DesktopWindowCandidate {
     pub current: bool,
 }
 
+/// One desktop app that is running right now and could be hosted here.
+///
+/// Deliberately one row per *process*, not per window: the app library offers
+/// "everything that is running", and a multi-window Electron app must not fill
+/// that list with its helper frames.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRunningApp {
+    /// Image name without `.exe` — the key every other command matches on.
+    pub process_name: String,
+    pub pid: u32,
+    /// Representative window handle as hex, for the "open it now" path.
+    pub hwnd: String,
+    pub title: String,
+    pub class: String,
+    /// Absolute executable path, so "add from running" keeps a launch target.
+    pub exe_path: Option<String>,
+    pub visible: bool,
+}
+
 #[cfg(windows)]
 mod imp {
-    use super::{DesktopRelayoutResult, DesktopWindowCandidate, DesktopWindowInfo};
+    use super::{
+        DesktopRelayoutResult, DesktopRunningApp, DesktopWindowCandidate, DesktopWindowInfo,
+    };
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tauri::Manager;
@@ -99,8 +121,9 @@ mod imp {
         GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextW,
         GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
         SetForegroundWindow, SetParent, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-        ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP, SWP_FRAMECHANGED,
-        SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP,
+        SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
         SW_HIDE, SW_RESTORE, SW_SHOWNA, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT,
         WINDOW_LONG_PTR_INDEX, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
         WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX,
@@ -256,6 +279,11 @@ mod imp {
         process.trim().to_ascii_lowercase()
     }
 
+    /// Last "everything running" scan. Shared by the page's status dots and the
+    /// app library so a poll burst costs one `EnumWindows`, not one per caller.
+    static RUNNING_APPS: Mutex<Option<(std::time::Instant, Vec<DesktopRunningApp>)>> =
+        Mutex::new(None);
+
     fn with_map<R>(f: impl FnOnce(&mut HashMap<String, Embedded>) -> R) -> R {
         let mut guard = EMBEDDED.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
@@ -295,8 +323,12 @@ mod imp {
         Ok((HWND(raw.0 as *mut _), scale))
     }
 
-    /// Image name (without extension) of a running process, or `None` if gone.
-    fn image_stem(pid: u32) -> Option<String> {
+    /// Full executable path of a running process, or `None` if it is gone.
+    ///
+    /// The path (not just the image name) is what the app library needs: an
+    /// app added while it is running must still have something to launch next
+    /// time, and `matchExe` on the page prefers an explicit path.
+    fn image_path(pid: u32) -> Option<String> {
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
@@ -310,9 +342,25 @@ mod imp {
         };
         let _ = unsafe { CloseHandle(handle) };
         ok.ok()?;
-        let path = String::from_utf16_lossy(&buf[..len as usize]);
-        let file = path.rsplit(['\\', '/']).next().unwrap_or(&path);
-        Some(file.strip_suffix(".exe").unwrap_or(file).to_string())
+        if len == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
+
+    /// `D:\apps\Foo Bar\foo.exe` → `foo`. Case-insensitive on the extension:
+    /// shortcuts and some installers ship `.EXE`.
+    fn stem_of_path(path: &str) -> String {
+        let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
+        match file.strip_suffix(".exe").or_else(|| file.strip_suffix(".EXE")) {
+            Some(stem) => stem.to_string(),
+            None => file.to_string(),
+        }
+    }
+
+    /// Image name (without extension) of a running process, or `None` if gone.
+    fn image_stem(pid: u32) -> Option<String> {
+        image_path(pid).map(|path| stem_of_path(&path))
     }
 
     fn window_area(hwnd: HWND) -> i64 {
@@ -391,6 +439,9 @@ mod imp {
         hwnd: HWND,
         pid: u32,
         stem: String,
+        /// Executable path resolved during the scan, reused when the window is
+        /// offered as an "add from running" entry (one `OpenProcess` per pid).
+        exe_path: Option<String>,
         class: String,
         title: String,
         visible: bool,
@@ -421,9 +472,12 @@ mod imp {
     }
 
     struct Ctx {
-        /// Lowercased image-name needle.
+        /// Lowercased image-name needle. Empty = every process (full scan).
         needle: String,
         out: Vec<Candidate>,
+        /// pid → executable path, filled lazily. A full desktop scan walks
+        /// dozens of windows per process; `OpenProcess` is not free.
+        paths: HashMap<u32, Option<String>>,
     }
 
     unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -433,9 +487,15 @@ mod imp {
         if pid == 0 {
             return BOOL(1);
         }
-        let Some(stem) = image_stem(pid) else {
+        let path = ctx
+            .paths
+            .entry(pid)
+            .or_insert_with(|| image_path(pid))
+            .clone();
+        let Some(path) = path else {
             return BOOL(1);
         };
+        let stem = stem_of_path(&path);
         // Substring, not equality: the launcher may be `idea64.exe` while the
         // user (or a shortcut) calls it "idea".
         if !stem.to_ascii_lowercase().contains(&ctx.needle) {
@@ -448,6 +508,7 @@ mod imp {
             hwnd,
             pid,
             stem,
+            exe_path: Some(path),
             class: String::from_utf16_lossy(&buf[..len.clamp(0, buf.len() as i32) as usize]),
             title: window_text(hwnd),
             visible: IsWindowVisible(hwnd).as_bool(),
@@ -546,6 +607,13 @@ mod imp {
             || class.contains("SoPY")
             || class.contains("IME")
             || class.ends_with("HintWnd")
+        // tao (Tauri's windowing layer) keeps one event-pump window per thread:
+        // `Tao Thread Event Target`, WS_POPUP|WS_VISIBLE, empty title. It is
+        // enumerable BEFORE the app's real frame exists, so launch-time picks
+        // latched onto it and the real window stayed on the desktop ("did not
+        // embed"). It never renders app content, so no rule may adopt it.
+        || class == "Tao Thread Event Target"
+        || class.starts_with("Tao ")
     }
 
     /// A window that can never render the app's UI, so it must not be offered
@@ -581,6 +649,53 @@ mod imp {
 
     /// Ranked best-first, for the diagnostics list only: exact image name,
     /// unowned, not a tool window, titled, visible, then largest.
+    /// Normalise an executable path for comparison (case and separator only).
+    fn normalize_exe_key(path: &str) -> String {
+        path.trim().replace('/', "\\").to_ascii_lowercase()
+    }
+
+    /// Image name (stem) of the process that actually owns a visible window for
+    /// `exe_path`, or `None` when nothing owns one.
+    ///
+    /// The library derives an app's process name from its `.exe` file name,
+    /// which is not always the image name that owns the window: vendor renames,
+    /// launchers that hand off to a differently-named binary, and repackaged
+    /// Electron builds all break that assumption. Resolving the real owner from
+    /// the path the user picked is what lets "start" still find the window.
+    pub fn process_for_exe(exe_path: &str) -> Option<String> {
+        let target = normalize_exe_key(exe_path);
+        if target.is_empty() {
+            return None;
+        }
+        let all = all_candidates();
+        let score = |c: &Candidate| (title_is_workspace(&c.title, &c.stem) as u8, c.area);
+        let mut best: Option<&Candidate> = None;
+        for c in &all {
+            let Some(path) = c.exe_path.as_deref() else {
+                continue;
+            };
+            if normalize_exe_key(path) != target {
+                continue;
+            }
+            // Only a frame the user could actually mean: same rules the
+            // running-apps list uses, so a helper window cannot win here.
+            if !c.visible || c.area <= 0 || c.iconic || c.toolwindow || c.owned {
+                continue;
+            }
+            if c.title.trim().is_empty() || is_shell_window(c) || is_non_ui_window(c) {
+                continue;
+            }
+            let better = match best {
+                None => true,
+                Some(b) => score(c) > score(b),
+            };
+            if better {
+                best = Some(c);
+            }
+        }
+        best.map(|c| c.stem.clone())
+    }
+
     fn candidates(process: &str) -> Vec<Candidate> {
         let needle = process.trim().to_ascii_lowercase();
         if needle.is_empty() {
@@ -589,6 +704,7 @@ mod imp {
         let mut ctx = Ctx {
             needle,
             out: Vec::new(),
+            paths: HashMap::new(),
         };
         unsafe {
             let _ = EnumWindows(Some(collect), LPARAM(&mut ctx as *mut Ctx as isize));
@@ -608,6 +724,140 @@ mod imp {
             rank(b).cmp(&rank(a))
         });
         ctx.out
+    }
+
+    /// Every top-level window on the desktop, unfiltered by process.
+    ///
+    /// `candidates` deliberately refuses an empty needle (an empty substring
+    /// matches everything and the diagnostic list must stay scoped), so the
+    /// "what is running" scan builds its own context with `needle = ""`.
+    fn all_candidates() -> Vec<Candidate> {
+        let mut ctx = Ctx {
+            needle: String::new(),
+            out: Vec::new(),
+            paths: HashMap::new(),
+        };
+        unsafe {
+            let _ = EnumWindows(Some(collect), LPARAM(&mut ctx as *mut Ctx as isize));
+        }
+        ctx.out
+    }
+
+    /// Shell/OS windows that look like app frames (visible, unowned, big) but
+    /// are never something the user means to host.
+    fn is_shell_window(c: &Candidate) -> bool {
+        matches!(
+            c.class.as_str(),
+            "Progman"
+                | "WorkerW"
+                | "Shell_TrayWnd"
+                | "Shell_SecondaryTrayWnd"
+                | "ApplicationFrameWindow"
+                | "Windows.UI.Core.CoreWindow"
+        )
+    }
+
+    /// Would this window be worth offering in the "running now" list?
+    ///
+    /// Slightly looser than `looks_like_main_frame` (an app with an odd frame
+    /// style still deserves a row) but strict about the things that only
+    /// produce a blank slot: helper classes, crash dialogs, tray hosts, our own
+    /// already-parented children, minimised windows and untitled stubs.
+    fn is_offerable(c: &Candidate) -> bool {
+        !is_non_ui_window(c)
+            && !is_shell_window(c)
+            && !c.iconic
+            && !c.title.trim().is_empty()
+            // Already one of ours (parented into the workbench) or a control.
+            && c.style & (WS_CHILD.0 as isize) == 0
+            && (looks_like_main_frame(c)
+                || (c.visible
+                    && !c.owned
+                    && !c.toolwindow
+                    // Same untitled-borderless guard as find_window's fallbacks:
+                    // a helper popup must not show up as a blank-named app row.
+                    && (!c.title.trim().is_empty()
+                        || (c.style & (WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize)) != 0)))
+            }
+
+    /// Which of two windows of the same process better represents the app:
+    /// a workspace-titled frame beats the bare-name welcome window, the window
+    /// the user is looking at beats a background helper, and larger beats
+    /// smaller. Mirrors the ranking `find_window` uses.
+    fn better_frame(candidate: &Candidate, current: &Candidate) -> bool {
+        let key = |c: &Candidate| {
+            (
+                title_is_workspace(&c.title, &c.stem) as u8,
+                c.foreground as u8,
+                c.area,
+            )
+        };
+        key(candidate) > key(current)
+    }
+
+    /// Every running app that could be hosted here, one row per process.
+    ///
+    /// Memoised for 1.5s: the page polls it for its status dots and the app
+    /// library asks again the moment it opens, so one burst of IPC must not
+    /// turn into one `EnumWindows` each.
+    pub fn all_running_apps() -> Vec<DesktopRunningApp> {
+        const TTL: std::time::Duration = std::time::Duration::from_millis(1500);
+        let now = std::time::Instant::now();
+        {
+            let guard = RUNNING_APPS.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, cached)) = guard.as_ref() {
+                if now.saturating_duration_since(*at) < TTL {
+                    return cached.clone();
+                }
+            }
+        }
+
+        let self_pid = std::process::id();
+        let mut best: HashMap<String, Candidate> = HashMap::new();
+        for c in all_candidates() {
+            // Never offer ourselves: the workbench window is not an app to host.
+            if c.pid == self_pid || !is_offerable(&c) {
+                continue;
+            }
+            match best.get(&c.stem.to_ascii_lowercase()) {
+                Some(current) if !better_frame(&c, current) => {}
+                _ => {
+                    best.insert(c.stem.to_ascii_lowercase(), c);
+                }
+            }
+        }
+
+        let mut picked: Vec<(bool, DesktopRunningApp)> = best
+            .into_values()
+            .map(|c| {
+                (
+                    c.foreground,
+                    DesktopRunningApp {
+                        process_name: c.stem,
+                        pid: c.pid,
+                        hwnd: format!("0x{:X}", c.hwnd.0 as usize),
+                        title: c.title,
+                        class: c.class,
+                        exe_path: c.exe_path,
+                        visible: c.visible,
+                    },
+                )
+            })
+            .collect();
+        // Foreground first, then a stable name order: the list is re-read every
+        // few seconds and must not reshuffle under the pointer.
+        picked.sort_by(|a, b| {
+            b.0.cmp(&a.0).then_with(|| {
+                a.1.process_name
+                    .to_ascii_lowercase()
+                    .cmp(&b.1.process_name.to_ascii_lowercase())
+            })
+        });
+        picked.truncate(40);
+
+        let apps: Vec<DesktopRunningApp> = picked.into_iter().map(|(_, app)| app).collect();
+        *RUNNING_APPS.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, apps.clone()));
+        apps
     }
 
     /// Why no window could be adopted — spelled out for the page to show.
@@ -636,6 +886,17 @@ mod imp {
             "有 {} 个匹配窗口，但没有可用的可见窗口（隐藏 {hidden} 个）：{sample}",
             all.len()
         )
+    }
+
+    /// Would a window without the full main-frame shape still be worth
+    /// adopting as a fallback? It needs *some* proof of being a real frame: a
+    /// title or a border. WS_EX_TOOLWINDOW is the shared fingerprint of helper
+    /// windows — tao's event pump AND EchoBird's titled `com.echobird.ai-siw`
+    /// window both carry it — so titled or not, a tool window never counts.
+    fn stray_frame_ok(c: &Candidate) -> bool {
+        !c.toolwindow
+            && (!c.title.trim().is_empty()
+                || (c.style & (WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize)) != 0)
     }
 
     /// The window worth adopting.
@@ -669,11 +930,15 @@ mod imp {
                 })
                 .cloned()
         };
+        // Fallback rules still need *some* proof of a real frame (see
+        // `stray_frame_ok`): an untitled borderless popup used to win rule 3
+        // while the genuine frame was still initializing.
+        let stray_ok = |c: &Candidate| stray_frame_ok(c);
         pick(&|c| is_exact(c) && looks_like_main_frame(c))
             .or_else(|| pick(&|c| looks_like_main_frame(c)))
-            .or_else(|| pick(&|c| is_exact(c) && c.visible && !c.owned && !c.iconic))
-            .or_else(|| pick(&|c| c.visible && !c.owned && !c.iconic))
-            .or_else(|| pick(&|c| c.visible && !c.iconic))
+            .or_else(|| pick(&|c| is_exact(c) && c.visible && !c.owned && !c.iconic && stray_ok(c)))
+            .or_else(|| pick(&|c| c.visible && !c.owned && !c.iconic && stray_ok(c)))
+            .or_else(|| pick(&|c| c.visible && !c.iconic && stray_ok(c)))
             // Last resort: the app hid its own workspace frame (closed to tray,
             // or the picker hid it). Adopting reveals it again.
             .or_else(|| pick(&|c| is_exact(c) && looks_like_main_frame_hidden(c, &exact)))
@@ -805,13 +1070,45 @@ mod imp {
         unsafe {
             // A hung (not-responding) foreign window would stall the whole
             // backend: SetWindowPos synchronously sends it messages that will
-            // never be processed while it is busy shutting down. Skip this
-            // tick instead of freezing the workbench alongside it.
+            // never be processed while it is busy shutting down. Do not block
+            // on it — but do not skip the move either: an app that is still
+            // starting is exactly the moment it re-applies its own size, and
+            // skipping every tick left the slot half filled until it answered.
+            // SWP_ASYNCWINDOWPOS hands the request to the window's own queue.
             if IsHungAppWindow(hwnd).as_bool() {
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    px,
+                    py,
+                    pw,
+                    ph,
+                    SWP_NOACTIVATE
+                        | SWP_NOSENDCHANGING
+                        | SWP_ASYNCWINDOWPOS
+                        | visibility,
+                );
                 return;
             }
             let key = (hwnd.0 as isize, px, py, pw, ph);
-            let _ = SetWindowPos(hwnd, Some(HWND_TOP), px, py, pw, ph, SWP_NOACTIVATE | visibility);
+            // `SWP_NOSENDCHANGING` is what actually keeps a hosted window at the
+            // slot size: a Tauri/Electron shell re-asserting its own frame edits
+            // WINDOWPOS inside its `WM_WINDOWPOSCHANGING` handler, silently
+            // undoing the size we just set. The window stayed parented but
+            // visibly too small — the "it is in the page but not really
+            // embedded" symptom.
+            let flags = SWP_NOACTIVATE | SWP_NOSENDCHANGING | visibility;
+            let _ = SetWindowPos(hwnd, Some(HWND_TOP), px, py, pw, ph, flags);
+            // Confirm the write landed: some shells clamp the size once while
+            // starting up even with the message suppressed. One retry wins that
+            // race; the 400ms heartbeat repairs anything that happens later.
+            let mut check = RECT::default();
+            if GetWindowRect(hwnd, &mut check).is_ok()
+                && ((check.right - check.left - pw).abs() > 2
+                    || (check.bottom - check.top - ph).abs() > 2)
+            {
+                let _ = SetWindowPos(hwnd, Some(HWND_TOP), px, py, pw, ph, flags);
+            }
             // A window adopted while maximized (Chromium re-asserts its own
             // maximized placement from inside the WM_WINDOWPOSCHANGING sync of
             // our SetWindowPos above) keeps fighting every subsequent place:
@@ -1055,6 +1352,23 @@ mod imp {
             // tab switch): the show below would paint it over the webview.
             if !IsWindowVisible(hwnd).as_bool() || IsHungAppWindow(hwnd).as_bool() {
                 return false;
+            }
+            // Already holding focus: the cycle below is pure flicker — hide,
+            // show, no state changed. That was the double blink on every tab
+            // switch (show → focus cycle → the page's second show → cycle).
+            if GetFocus() == hwnd {
+                return true;
+            }
+            // Flicker-free path: with the input queues shared (the steady
+            // state of a hosted window), a direct SetFocus on the visible
+            // window delivers WM_SETFOCUS without touching visibility at
+            // all. Verify it landed; only fall back to the hide → focus →
+            // show cycle when it did not (busy app, attach still failing).
+            if attached {
+                let _ = SetFocus(Some(hwnd));
+                if GetFocus() == hwnd {
+                    return true;
+                }
             }
             let _ = SetWindowPos(
                 hwnd,
@@ -1416,6 +1730,24 @@ mod imp {
                     return Err(format!("无法更新工作台窗口样式（{error}）"));
                 }
             }
+            // Force a non-client recalculation while the window is still hidden:
+            // the style write alone does not stop a shell from PAINTING the
+            // caption strip it had before. A stale title bar inside the slot
+            // pushes the app's own content down by ~30px and clips its bottom.
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOACTIVATE
+                    | SWP_HIDEWINDOW,
+            );
             if let Err(error) = SetParent(hwnd, Some(parent)) {
                 restore_taken_state(
                     hwnd,
@@ -1878,12 +2210,64 @@ mod imp {
             });
         }
 
+        // A shell can put its own frame back while staying our child: Tauri
+        // re-applies `decorations` on theme/DPI changes, so WS_CAPTION returns
+        // and the slot grows a title bar — the app's content is pushed down and
+        // its bottom clipped. The parent link still looks healthy, so this is
+        // the one repair that has to be checked separately.
+        let live_style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) };
+        if live_style & (WS_CAPTION.0 as isize | WS_POPUP.0 as isize) != 0 {
+            if take_over(window, parent).is_err() {
+                debug_log(&format!("relayout {key} re-takeover (frame returned) failed"));
+                return Ok(lost());
+            }
+            place(window, x, y, width, height, scale, entry_shown != 0);
+            if entry_shown != 0 {
+                focus_hosted(app, parent, window, old_attached_thread);
+                refocus(app, parent, window, old_attached_thread);
+            }
+            let warning = if entry_shown != 0 {
+                verify(window, parent)
+            } else {
+                ""
+            };
+            debug_log(&format!(
+                "relayout {key} frame returned, re-taken (class={class} warning={warning:?})"
+            ));
+            return Ok(DesktopRelayoutResult {
+                state: "reparented".into(),
+                title,
+                class,
+                warning: warning.to_string(),
+            });
+        }
+
         place(window, x, y, width, height, scale, entry_shown != 0);
-        let warning = if entry_shown != 0 {
+        let mut warning = if entry_shown != 0 {
             verify(window, parent)
         } else {
             ""
         };
+        // A parented window that is visibly smaller than the slot reads as "the
+        // app did not embed at all". Say it out loud instead of leaving the user
+        // with a window that only fills part of the area.
+        if warning.is_empty() && entry_shown != 0 {
+            let expected_w = ((width * scale).round() as i32).max(1);
+            let expected_h = ((height * scale).round() as i32).max(1);
+            let mut rect = RECT::default();
+            if unsafe { GetWindowRect(window, &mut rect) }.is_ok() {
+                let dw = (rect.right - rect.left - expected_w).abs();
+                let dh = (rect.bottom - rect.top - expected_h).abs();
+                if dw > 8 || dh > 8 {
+                    warning = "size-mismatch";
+                    debug_log(&format!(
+                        "relayout {key} size mismatch actual=({},{}) expected=({expected_w},{expected_h})",
+                        rect.right - rect.left,
+                        rect.bottom - rect.top
+                    ));
+                }
+            }
+        }
         // Diagnostic (temp): log a verify() conclusion only when it flips, so
         // the 400ms heartbeat stays quiet but any drift into a broken display
         // state (minimized/maximized/invisible/…) hits the trace once.
@@ -2244,6 +2628,7 @@ mod imp {
                 hwnd: as_hwnd(0x1000),
                 pid: 42,
                 stem: "deepseek harness".into(),
+                exe_path: None,
                 class: class.into(),
                 title: title.into(),
                 visible,
@@ -2301,6 +2686,105 @@ mod imp {
             assert!(is_crash_or_dialog_window(&hung));
             assert!(!looks_like_main_frame(&hung));
         }
+
+        #[test]
+        fn tao_event_target_is_never_adopted() {
+            // tao (Tauri) per-thread event pump: WS_POPUP|WS_VISIBLE, untitled,
+            // enumerable before the real frame exists. Adopting it used to make
+            // the launch look like "did not embed" while the real window sat on
+            // the desktop.
+            let tao_style = (WS_POPUP.0 as isize) | (WS_VISIBLE.0 as isize);
+            let decoy = cand("Tao Thread Event Target", "", true, tao_style, 4_000_000);
+            assert!(is_helper_class(&decoy.class));
+            assert!(is_non_ui_window(&decoy));
+            assert!(!looks_like_main_frame(&decoy));
+            assert!(!is_offerable(&decoy));
+            // The untitled-borderless shape is rejected even under another name.
+            let stray = cand("SomeApp Helper", "", true, tao_style, 4_000_000);
+            assert!(!is_non_ui_window(&stray));
+            assert!(!looks_like_main_frame(&stray));
+            assert!(!is_offerable(&stray));
+            // EchoBird's single-instance helper: TITLED but still borderless and
+            // WS_EX_TOOLWINDOW. A title alone must not make it adoptable.
+            let helper = cand(
+                "com.echobird.ai-sic",
+                "com.echobird.ai-siw",
+                true,
+                tao_style,
+                4_000_000,
+            );
+            let mut helper = helper;
+            helper.toolwindow = true;
+            assert!(!is_non_ui_window(&helper));
+            assert!(!looks_like_main_frame(&helper));
+            assert!(!is_offerable(&helper));
+            // …and it must not win any find_window fallback rule either.
+            assert!(!stray_frame_ok(&helper));
+        }
+
+        #[test]
+        fn stem_of_path_drops_the_extension_in_any_case() {
+            assert_eq!(stem_of_path(r"D:\apps\Foo Bar\foo.exe"), "foo");
+            assert_eq!(stem_of_path(r"C:\TOOLS\GIT.EXE"), "GIT");
+            assert_eq!(stem_of_path("cursor"), "cursor");
+            assert_eq!(stem_of_path(r"C:\x.tool\thing"), "thing");
+        }
+
+        #[test]
+        fn running_list_offers_app_frames_only() {
+            let frame = cand("Chrome_WidgetWin_1", "notes - Cursor", true, FRAME_STYLE, 900_000);
+            assert!(is_offerable(&frame));
+
+            // Shell surfaces look like frames but are never hostable apps.
+            let desktop = cand("Progman", "Program Manager", true, FRAME_STYLE, 2_000_000);
+            assert!(!is_offerable(&desktop));
+            let uwp = cand("ApplicationFrameWindow", "Calculator", true, FRAME_STYLE, 600_000);
+            assert!(!is_offerable(&uwp));
+
+            // Already parented into us, or a minimised/untitled stub.
+            let hosted = cand(
+                "Chrome_WidgetWin_1",
+                "notes - Cursor",
+                true,
+                FRAME_STYLE | WS_CHILD.0 as isize,
+                900_000,
+            );
+            assert!(!is_offerable(&hosted));
+            let minimized = Candidate {
+                iconic: true,
+                ..cand("Chrome_WidgetWin_1", "notes - Cursor", true, FRAME_STYLE, 900_000)
+            };
+            assert!(!is_offerable(&minimized));
+            let untitled = cand("Chrome_WidgetWin_1", "  ", true, FRAME_STYLE, 900_000);
+            assert!(!is_offerable(&untitled));
+        }
+
+        #[test]
+        fn normalize_exe_key_ignores_case_and_separators() {
+            assert_eq!(
+                normalize_exe_key(r"C:\Program Files\App\App.EXE"),
+                r"c:\program files\app\app.exe"
+            );
+            assert_eq!(
+                normalize_exe_key("C:/Program Files/App/App.exe"),
+                r"c:\program files\app\app.exe"
+            );
+            assert_eq!(normalize_exe_key("   "), "");
+        }
+
+        #[test]
+        fn workspace_frame_wins_over_welcome_window() {
+            let welcome = cand("Chrome_WidgetWin_1", "Cursor", true, FRAME_STYLE, 1_500_000);
+            let workspace = cand(
+                "Chrome_WidgetWin_1",
+                "ai-workbench - Cursor",
+                true,
+                FRAME_STYLE,
+                900_000,
+            );
+            assert!(better_frame(&workspace, &welcome));
+            assert!(!better_frame(&welcome, &workspace));
+        }
     }
 }
 
@@ -2339,6 +2823,48 @@ pub async fn desktop_embed_candidates(
     {
         let _ = process_name;
         Err("当前系统不支持嵌入桌面应用".into())
+    }
+}
+
+/// Every running app that could be hosted here — one row per process.
+///
+/// Powers the app library's "running now" list and the page's status dots.
+/// A failure is not fatal for either caller: the page degrades to "no status
+/// dots" and the library to "nothing running".
+#[tauri::command]
+pub async fn desktop_embed_running_apps() -> Result<Vec<DesktopRunningApp>, String> {
+    #[cfg(windows)]
+    {
+        // EnumWindows plus one OpenProcess per unseen pid is tens of ms of
+        // blocking work: keep it off the async runtime's worker threads.
+        tokio::task::spawn_blocking(imp::all_running_apps)
+            .await
+            .map_err(|e| format!("扫描运行中的应用失败: {e}"))
+    }
+    #[cfg(not(windows))]
+    {
+        Err("当前系统不支持嵌入桌面应用".into())
+    }
+}
+
+/// Resolve the process that actually owns a window for `exe_path`.
+///
+/// Used when the name derived from the file name finds nothing: an app that
+/// was added from the library or by picking an `.exe` may run under a different
+/// image name (launcher, renamed vendor binary). `None` simply means "no window
+/// for this path yet" — the caller keeps waiting for the launch.
+#[tauri::command]
+pub async fn desktop_embed_process_for_exe(exe_path: String) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        tokio::task::spawn_blocking(move || imp::process_for_exe(&exe_path))
+            .await
+            .map_err(|e| format!("解析进程名失败: {e}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exe_path;
+        Ok(None)
     }
 }
 

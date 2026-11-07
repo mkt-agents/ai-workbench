@@ -2,43 +2,81 @@
   "title": "Collaboration",
   "addApp": "Add app",
   "providers": {
-    "dsh": "DeepSeek Harness",
-    "cursor": "Cursor"
+    "dsh": "DeepSeek Harness"
+  },
+  "tab": {
+    "running": "{{name}} · running"
   },
   "status": {
-    "idle": "Not running",
-    "running": "Running, not embedded",
-    "attached": "Embedded",
+    "idle": "Not started",
+    "running": "Running in background",
+    "attached": "In use",
     "launching": "Starting…",
     "polling": "Waiting for its window…",
     "closing": "Closing…",
-    "missing": "Executable not found",
-    "error": "Embedding failed"
+    "missing": "App not found",
+    "error": "Could not open",
+    "locating": "Locating its window…"
   },
   "actions": {
-    "launch": "Start & embed",
-    "reattach": "Re-embed",
-    "detach": "Release window",
+    "start": "Start",
+    "open": "Open",
+    "cancel": "Cancel wait",
+    "cancelHint": "Stop waiting; the app keeps running in the background",
+    "chooseExe": "Choose app",
+    "reattach": "Re-attach window",
+    "picker": "Pick window…",
+    "detach": "Send to desktop",
     "kill": "Close app",
-    "remove": "Remove",
+    "remove": "Remove from list",
     "more": "More actions"
   },
   "hint": {
-    "idle": "The app isn’t running. Click “Start & embed” above and its window will show up here.",
-    "running": "The app is running, but its window isn’t embedded yet. Click “Re-embed” to take it over.",
-    "missing": "No executable found. Install the app first, or use “Add app” to pick an .exe.",
-    "error": "Could not take over its window. Details and matching windows are below; a cold IDE start may need a minute or two.",
-    "note": "Leave this page to hide the window (app keeps running). Close the workbench to return it to the desktop.",
+    "idle": "Not started yet. Click “Start” and its window shows up here.",
+    "running": "It is already running in the background. Click “Open” to bring its window here.",
+    "missing": "No executable found. Choose an .exe, or remove it from the list.",
+    "error": "Could not bring its window in. Details below; a cold IDE start can take a minute or two.",
+    "note": "Leaving this page tucks the window away (the app keeps running). Closing the workbench returns it to the desktop.",
+    "pickAnother": "Pick another app",
     "startingLabel": "Starting",
     "waitingLabel": "Waiting for window",
     "closingLabel": "Closing",
     "starting": "Launching the app — a cold start can take up to a minute",
-    "waiting": "The app is up; waiting for a window we can embed",
+    "waiting": "The app is up; waiting for its window to appear (click “Cancel wait” to stop)",
     "closing": "Ending the process and releasing its window"
   },
+  "library": {
+    "title": "App library",
+    "search": "Search apps, windows or process names…",
+    "tabs": {
+      "installed": "Installed",
+      "running": "Running",
+      "file": "Choose file"
+    },
+    "showAll": "All programs",
+    "rescan": "Rescan",
+    "refresh": "Refresh",
+    "add": "Add",
+    "switch": "Switch",
+    "added": "Added",
+    "hidden": "background",
+    "loading": "Scanning…",
+    "empty": "No matching apps.",
+    "emptyInstalled": "Nothing found. Switch to “Choose file” and pick an .exe.",
+    "scanFailed": "The scan failed (the system may have refused access). Try “Rescan”, or switch to “Choose file” and pick an .exe.",
+    "runningEmpty": "No app windows are open right now.",
+    "runningHint": "Windows that are open right now and can move into the workbench.",
+    "more": "{{total}} more — type to narrow it down",
+    "fileTitle": "Choose an app manually",
+    "fileHint": "Pick an .exe to open, for apps the library could not find.",
+    "fileButton": "Browse .exe…",
+    "footer": "One click adds it and opens it right away"
+  },
   "error": {
-    "title": "Why it failed",
-    "candidates": "Windows that process currently owns:",
+    "title": "Could not bring its window in",
+    "plain": "It may still be starting, or its window sits in the system tray. Point at the window to embed manually, or try again later.",
+    "details": "Details",
+    "candidates": "Windows it currently has open:",
     "visible": "visible",
     "hidden": "hidden",
     "owned": "owned",
@@ -52,8 +90,10 @@
     "maximized": "The app maximized itself again — forcing a restore…",
     "invisible": "The app hid its own window, hence the blank area",
     "size": "The window has a zero width/height, hence the blank area",
+    "size-mismatch": "The window did not fill the area (the app clamped its own size) — click “Restore window” to retry.",
     "restore": "Restore window",
-    "restore-failed": "Could not restore the window — re-embed it.",
+    "reattach": "Re-attach",
+    "restore-failed": "Could not restore the window — attach it again.",
     "kill-failed": "The kill was refused by the OS; the app stays embedded."
   },
   "picker": {
@@ -73,6 +113,17 @@
     "size": "about {{w}} × {{h}}",
     "area": "about {{k}}k px²",
     "current": "Currently embedded"
+  },
+  "slot": {
+    "split": "Show two apps side by side",
+    "single": "Back to a single pane",
+    "bEmpty": "Pick an app for this pane",
+    "bNotRunning": "No embeddable window right now. Make it primary, start it there, and its window lands here automatically.",
+    "makePrimary": "Make primary",
+    "bClear": "Clear this pane"
+  },
+  "storage": {
+    "warn": "Settings could not be saved (storage full or blocked) — they will be lost on restart"
   },
   "win": {
     "fallback": "{{class}} window"

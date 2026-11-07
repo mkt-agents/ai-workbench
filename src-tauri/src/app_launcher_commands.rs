@@ -94,6 +94,20 @@ pub(crate) fn launch_app_inner(path: String, args: Option<String>) -> Result<Str
         let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
         let args_str = args.as_deref().unwrap_or("");
         let args_wide: Vec<u16> = args_str.encode_utf16().chain(std::iter::once(0)).collect();
+        // Run from the executable's own folder. Launch helpers and repackaged
+        // Electron apps resolve resources, plugins and updaters relative to the
+        // working directory; inheriting the workbench's cwd makes some of them
+        // start into an error dialog instead of their main window — and the app
+        // then never appears for the embed step to find.
+        let dir_wide: Vec<u16> = path_obj
+            .parent()
+            .map(|dir| {
+                dir.to_string_lossy()
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![0]);
 
         let result = unsafe {
             ShellExecuteW(
@@ -101,7 +115,7 @@ pub(crate) fn launch_app_inner(path: String, args: Option<String>) -> Result<Str
                 w!("open"),
                 PCWSTR(path_wide.as_ptr()),
                 PCWSTR(args_wide.as_ptr()),
-                PCWSTR::null(),
+                PCWSTR(dir_wide.as_ptr()),
                 SW_SHOWNORMAL,
             )
         };

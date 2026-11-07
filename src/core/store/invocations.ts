@@ -6,7 +6,7 @@
  * separate from the store's business logic makes both easier to read.
  */
 import { tauriInvoke } from './helpers';
-import type { AIModelConfig, AgentUndoFile, DshInstance, DshMirrorReport, DshModelCatalog, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult } from '../types';
+import type { AIModelConfig, AgentUndoFile, DshInstance, DshMirrorReport, DshModelCatalog, GitBranchList, GitPendingCommits, GitConflictFile, GitMergeState, GitRepoSummary, GitScannedRepo, GitStatusEntry, InstallableVersion, RuntimeKind, RuntimeSwitchPlan, RuntimeSwitchResult, RuntimeVersion, InstalledAppInfo, PortListener, PortKillResult, ReleaseInfo, DownloadedInstaller, DesktopWindowInfo, DesktopWindowCandidate, DesktopRelayoutResult, DesktopRunningApp } from '../types';
 import type {
   AiResult,
   FolderReportBundle,
@@ -260,7 +260,10 @@ export interface Invocations {
   invokeDesktopEmbedRestore: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetach: (processName: string) => Promise<void>;
   invokeDesktopEmbedDetachAll: () => Promise<void>;
+  invokeDesktopEmbedList: () => Promise<DesktopWindowInfo[]>;
   invokeDesktopEmbedCandidates: (processName: string) => Promise<DesktopWindowCandidate[]>;
+  invokeDesktopEmbedRunningApps: () => Promise<DesktopRunningApp[]>;
+  invokeDesktopEmbedProcessForExe: (exePath: string) => Promise<string | null>;
   invokeDesktopEmbedAttachWindow: (params: {
     processName: string;
     hwnd: string;
@@ -671,8 +674,14 @@ export const invocations: Invocations = {
     tauriInvoke<void>('desktop_embed_detach', { processName }),
   invokeDesktopEmbedDetachAll: () =>
     tauriInvoke<void>('desktop_embed_detach_all'),
+  invokeDesktopEmbedList: () =>
+    tauriInvoke<DesktopWindowInfo[]>('desktop_embed_list'),
   invokeDesktopEmbedCandidates: (processName: string) =>
     tauriInvoke<DesktopWindowCandidate[]>('desktop_embed_candidates', { processName }),
+  invokeDesktopEmbedRunningApps: () =>
+    tauriInvoke<DesktopRunningApp[]>('desktop_embed_running_apps'),
+  invokeDesktopEmbedProcessForExe: (exePath: string) =>
+    tauriInvoke<string | null>('desktop_embed_process_for_exe', { exePath }),
   invokeDesktopEmbedAttachWindow: (params: {
     processName: string;
     hwnd: string;

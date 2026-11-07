@@ -687,6 +687,24 @@ export interface DesktopWindowCandidate {
   current: boolean;
 }
 
+/**
+ * A desktop app that is running right now and could be hosted here — one row
+ * per process. Rust: `desktop_embed::DesktopRunningApp`. Powers the library's
+ * "running now" list and the status dots in the app bar.
+ */
+export interface DesktopRunningApp {
+  /** Image name, without the `.exe` suffix. */
+  processName: string;
+  pid: number;
+  /** Representative window handle as hex. */
+  hwnd: string;
+  title: string;
+  class: string;
+  /** Absolute executable path, when Windows let us read it. */
+  exePath: string | null;
+  visible: boolean;
+}
+
 /** One process holding a queried port. Rust: `port_commands::PortListener` (camelCase). */
 export interface PortListener {
   queriedPort: number;

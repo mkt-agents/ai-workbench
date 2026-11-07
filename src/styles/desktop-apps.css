@@ -111,12 +111,6 @@
   color: var(--text-0);
 }
 
-/* Icon-only tab: the name lives in the hover title. */
-.dapps-tab.is-icon {
-  gap: 0;
-  padding: 3px 6px;
-}
-
 .dapps-tab-icon {
   display: block;
   width: 16px;
@@ -185,15 +179,8 @@
   margin-left: auto;
 }
 
-.dapps-actions-wide,
-.dapps-actions-narrow {
-  display: flex;
-  align-items: center;
+.dapps-actions {
   gap: 6px;
-}
-
-.dapps-actions-narrow {
-  display: none;
 }
 
 /* Same button scale as the Harness toolbar (22px tall, 11px label, 12px icon,
@@ -223,25 +210,109 @@
   overflow: hidden;
 }
 
-/* Narrow pages: drop the status label (keep its dot) and collapse the action
-   row to a single contextual primary button plus a "⋯" overflow menu. */
+/* Narrow pages: drop the status label, keep its dot. */
 @container dapps-page (max-width: 760px) {
   .dapps-status-text {
     display: none;
-  }
-
-  .dapps-actions-wide {
-    display: none;
-  }
-
-  .dapps-actions-narrow {
-    display: flex;
   }
 }
 
 .dapps-slot {
   position: absolute;
   inset: 0;
+}
+
+/* Slot layout: single pane (identical geometry to the old single slot) or two
+   side-by-side panes. Each pane measures its own rect, so the backend keeps
+   one hosted window glued per pane. */
+.dapps-slot-area {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  transition: grid-template-columns 200ms ease;
+}
+
+.dapps-slot-area.is-split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dapps-slot-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dapps-slot-area.is-split .dapps-slot-wrap {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.dapps-slot-b-choices {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 420px;
+  pointer-events: auto;
+}
+
+.dapps-slot-b-choices .btn {
+  gap: 6px;
+}
+
+.dapps-slot-b-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: var(--transition-colors);
+}
+
+.dapps-slot-b-close:hover {
+  color: var(--text-1);
+  border-color: var(--border-subtle);
+  background: var(--bg-2);
+}
+
+.dapps-split-btn.is-on {
+  color: var(--text-0);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+/* Drag-to-reorder tabs: the dragged one fades while its slot previews. */
+.dapps-tab.is-dragging {
+  opacity: 0.35;
+}
+
+/* "Settings could not be saved" chip: rare, self-clearing, must be readable. */
+.dapps-storage-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 380px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--yellow-border);
+  background: var(--yellow-dim);
+  color: var(--text-2);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dapps-hint {
@@ -349,6 +420,27 @@
   color: var(--text-2);
   user-select: text;
   overflow-wrap: anywhere;
+}
+
+/* Collapsed verbatim backend message: diagnosis on demand, not in the face. */
+.dapps-error-details {
+  margin: 0 0 8px;
+}
+
+.dapps-error-details summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text-3);
+  user-select: none;
+  width: fit-content;
+}
+
+.dapps-error-details summary:hover {
+  color: var(--text-2);
+}
+
+.dapps-error-details[open] summary {
+  margin-bottom: 6px;
 }
 
 .dapps-error-list {
@@ -871,4 +963,568 @@
   display: flex;
   justify-content: flex-end;
   margin-top: 10px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   App bar: named tabs with a state dot, one primary action plus "⋯".
+   The dot is the only place the page says "this app is running / in use"
+   without costing a click.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.dapps-tab {
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+}
+
+.dapps-tab-label {
+  max-width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dapps-tab.is-active .dapps-tab-label {
+  font-weight: 500;
+}
+
+.dapps-tab-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--text-3);
+  opacity: 0.55;
+  transition: var(--transition-colors);
+}
+
+.dapps-tab-dot.is-running {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.dapps-tab-dot.is-attached {
+  background: var(--green);
+  opacity: 1;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 22%, transparent);
+}
+
+.dapps-tab-add {
+  gap: 5px;
+}
+
+.dapps-primary-label {
+  white-space: nowrap;
+}
+
+/* Empty state: a real button, so `.dapps-hint`'s pointer-events:none has to be
+   lifted for the action row only. */
+.dapps-hint-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  pointer-events: auto;
+}
+
+.dapps-hint-primary {
+  height: 34px;
+  padding: 0 20px;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.dapps-hint-primary svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dapps-hint-link {
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.dapps-hint-link:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+/* Narrow page: tabs collapse to icons (name stays in the title), the primary
+   label keeps its text as long as it fits. */
+@container dapps-page (max-width: 780px) {
+  .dapps-tab {
+    position: relative;
+    gap: 0;
+    padding: 3px 6px;
+  }
+
+  .dapps-tab-label {
+    display: none;
+  }
+
+  .dapps-tab-dot {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 4px;
+    height: 4px;
+  }
+}
+
+@container dapps-page (max-width: 620px) {
+  .dapps-primary-label {
+    display: none;
+  }
+
+  .dapps-primary {
+    padding: 0 6px;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   App library dialog — the add-app entry point (installed / running / file).
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Percentages, not vw/vh: `.dapps-page` is a container-query root, which makes
+   it the containing block of this fixed overlay — a vh-sized dialog could be
+   taller than the page area and get clipped by its `overflow: hidden`. */
+.dapps-lib {
+  display: flex;
+  flex-direction: column;
+  width: min(780px, 100%);
+  height: min(566px, 100%);
+  max-width: none;
+  max-height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.dapps-lib .modal-title-row {
+  flex: none;
+  padding: 12px 14px;
+}
+
+.dapps-lib-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.dapps-lib-sources {
+  flex: none;
+  width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-2) 40%, transparent);
+}
+
+.dapps-lib-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.dapps-lib-source:hover {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.dapps-lib-source.is-active {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--text-0);
+}
+
+.dapps-lib-count {
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dapps-lib-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dapps-lib-searchbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-3);
+}
+
+.dapps-lib-searchbar input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.dapps-lib-searchbar input:focus {
+  border-color: var(--accent-border);
+}
+
+.dapps-lib-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.dapps-lib-toggle:hover:not(:disabled) {
+  color: var(--text-1);
+  border-color: var(--accent-border);
+}
+
+.dapps-lib-toggle.is-on {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--text-0);
+}
+
+.dapps-lib-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dapps-lib-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 14px 16px;
+  overflow-y: auto;
+}
+
+.dapps-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.dapps-lib-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-height: 78px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-2) 55%, transparent);
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-colors), transform 120ms ease;
+}
+
+.dapps-lib-card:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-2);
+  transform: translateY(-1px);
+}
+
+.dapps-lib-card.is-added {
+  opacity: 0.62;
+}
+
+.dapps-lib-card-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.dapps-lib-card-sub {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dapps-lib-icon {
+  flex: none;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.dapps-lib-icon.is-empty {
+  display: grid;
+  place-items: center;
+  background: var(--overlay-2);
+  color: var(--text-3);
+}
+
+.dapps-lib-badge {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--green);
+  color: var(--bg-0);
+}
+
+.dapps-lib-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.dapps-lib-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dapps-lib-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.dapps-lib-row:hover {
+  background: var(--bg-2);
+  border-color: var(--border-subtle);
+}
+
+.dapps-lib-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dapps-lib-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dapps-lib-row-title {
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dapps-lib-row-sub {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dapps-lib-row-action {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--accent-strong);
+}
+
+.dapps-lib-row-action.is-added {
+  color: var(--text-3);
+}
+
+.dapps-lib-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 16px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.dapps-lib-empty p {
+  margin: 0;
+  max-width: 34ch;
+  line-height: 1.6;
+}
+
+.dapps-lib-more {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.dapps-lib-file {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.dapps-lib-file-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.dapps-lib-file-hint {
+  margin: 0;
+  max-width: 36ch;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.dapps-lib-footer {
+  flex: none;
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-2) 35%, transparent);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* Unified library: one search, stacked groups instead of a three-tab split. */
+.dapps-lib-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dapps-lib-group + .dapps-lib-group {
+  margin-top: 18px;
+}
+
+.dapps-lib-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.dapps-lib-refresh {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: var(--transition-colors);
+}
+
+.dapps-lib-refresh:hover:not(:disabled) {
+  color: var(--text-1);
+  border-color: var(--border-subtle);
+  background: var(--bg-2);
+}
+
+.dapps-lib-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Manual .exe pick as an inline row, not a third tab. */
+.dapps-lib-file-inline {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-3);
+}
+
+.dapps-lib-file-inline .dapps-lib-file-hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  max-width: none;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container dapps-page (max-width: 660px) {
+  .dapps-lib-grid {
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  }
 }
