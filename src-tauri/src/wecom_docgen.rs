@@ -1,14 +1,15 @@
 //! 逆向文档的每日自动更新 + 多通道群通知。
 //!
 //! 到点 / cron / 本地 HEAD 轮询 / 手动：
-//! 1. 在隔离 worktree fetch + 快进 release，不切换或清理用户工作区；
+//! 1. 在原仓目标分支上 fetch + 仅快进（不造隔离 worktree）；
 //! 2. 取自上次更新以来的提交摘要 + 完整文件列表 + 按仓有界 diff；
-//! 3. 天玑与 DSH 仅允许文档目录内写入，不开放命令或自动批准权限升级；
-//! 4. 可选只读质量自检；预览/失败产物保留隔离目录，正式完成才发布；
+//! 3. 天玑与 DSH 直接写入原仓文档目录，不开放命令或自动批准权限升级；
+//! 4. 清单超预算时按仓/文件自动分批；可选只读质量自检；正式轮再提交；
 //! 5. 多通道 webhook 通知；历史写入 `docgen-history.jsonl`（30 条）。
 //!
 //! 游标：`%APPDATA%\com.ai-workbench.app\wecom-dsh\docgen.json`。
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -21,7 +22,6 @@ use crate::wecom_channel::WecomState;
 
 #[path = "docgen_workspace.rs"]
 mod workspace;
-use workspace::DocgenWorkspace;
 
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(15);
 const UPDATE_TURN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -30,10 +30,27 @@ const HISTORY_CAP: usize = 30;
 const LOG_LINE_CAP: usize = 30;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+static RUN_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// 是否有更新流程在跑（设置页据此决定要不要顺手关掉临时拉起的 DSH 进程）。
 pub fn is_running() -> bool {
     RUNNING.load(Ordering::SeqCst)
+}
+
+fn cancel_requested() -> bool {
+    RUN_CANCEL.load(Ordering::SeqCst)
+}
+
+fn require_running() -> Result<(), String> {
+    if cancel_requested() {
+        return Err("文档任务已请求停止".into());
+    }
+    Ok(())
+}
+
+/// 停止当前文档任务；下一次 tick / 立即更新会收到明确错误，不会留下半发布状态。
+pub fn cancel_running() {
+    RUN_CANCEL.store(true, Ordering::SeqCst);
 }
 
 struct RunGuard;
@@ -73,11 +90,15 @@ pub struct DocgenConfig {
     pub webhook_dingtalk: String,
     #[serde(default = "default_true")]
     pub auto_commit: bool,
+    pub quality_gate: bool,
     #[serde(default)]
     pub auto_push: bool,
-    /// 预览：产物保留独立 worktree，不提交、不发布、不推进游标。
+    /// 预览：仍直写原仓文档目录，但不提交、不推送、不推进游标。
     #[serde(default)]
     pub preview_mode: bool,
+    /// 全量建档：忽略采集点，把当前 HEAD 作为初始文档范围（默认关）。
+    #[serde(default)]
+    pub full_init: bool,
     /// 更新后再跑一轮只读质量自检。
     #[serde(default)]
     pub quality_check: bool,
@@ -102,6 +123,9 @@ pub struct DocgenConfig {
     /// 跑更新用哪个引擎：`tianji` | `dsh`（apply 时已把 `inherit` 解析成具体值）。
     #[serde(default)]
     pub engine: String,
+    /// 天玑档独立模型快照；空 = 配置错误，不允许启动。
+    #[serde(default)]
+    pub tianji_agent: Option<crate::wecom_orchestrator::WecomAgentConfig>,
 }
 
 fn default_true() -> bool {
@@ -125,8 +149,10 @@ impl Default for DocgenConfig {
             webhook_feishu: String::new(),
             webhook_dingtalk: String::new(),
             auto_commit: true,
+            quality_gate: true,
             auto_push: false,
             preview_mode: false,
+            full_init: false,
             quality_check: false,
             poll_release: false,
             sync_sources: false,
@@ -135,6 +161,7 @@ impl Default for DocgenConfig {
             system_prompt: String::new(),
             quality_prompt: String::new(),
             engine: "tianji".into(),
+            tianji_agent: None,
         }
     }
 }
@@ -152,34 +179,141 @@ pub fn normalize_prompt_template(raw: &str) -> String {
 }
 
 pub fn default_docgen_system_prompt() -> &'static str {
-    "你是代码逆向文档维护助手。工作区是一个代码仓库，`{doc_dir}/` 下是基于代码的逆向工程文档。\n\
-当前在 release 分支「{branch}」。\n\n\
+    "你是代码逆向文档维护助手。工作区是一个代码仓库，有两类文档产物：\n\
+- `{doc_dir}/`：按模块沉淀的逆向工程说明书（长期知识）\n\
+- `{updates_dir}/{date}.md`：按日沉淀的「今天改了哪些功能」（面向人读的变更日志）\n\
+当前在 release 分支「{branch}」，今日日期 `{date}`。\n\n\
 ## 提交摘要\n\
 {commits}\n\n\
 ## 变更文件\n\
 {files}\n\n\
 ## 变更 diff 摘录（定向线索；完整内容请用工具读文件）\n\
-{diff}\n\n\
-任务：阅读这些变更涉及的代码，更新 `{doc_dir}/` 下**对应**的逆向文档，使其与最新代码一致。\n\
+{diff}\n{mapping}\n\n\
+任务：阅读这些变更涉及的代码，完成两类产物。\n\
+一、更新 `{doc_dir}/` 下**对应**的逆向文档，使其与最新代码一致。\n\
 如何找对应文档（按顺序尝试）：\n\
 - 先在 `{doc_dir}/` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；\n\
 - 文件名/模块名找不到时，按业务功能关键词再搜一次；\n\
-- 仍找不到且该变更重要时，才在 `{doc_dir}/` 下新建一篇，文件名贴合模块。\n\
+- 仍找不到且该变更重要时，才在 `{doc_dir}/` 下新建一篇，文件名贴合模块（不要建在 updates/ 下）。\n\
+二、追加当日功能更新：打开或新建 `{updates_dir}/{date}.md`，在文末追加一节（不要整文件覆盖）。\n\
+节标题示例：`## HH:MM · {branch}`；正文用条目列出本批涉及的功能点、触及的模块文档路径、关键源码符号。只写本批出现的变更，禁止编造未出现的模块。\n\
 硬规则：\n\
-1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。\n\
-2. 变更很小 / 与文档无关时可以不改，并在摘要里说明原因。\n\
-3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。\n\
-4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」，这段会推送到群里。"
+1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**（含 `{updates_dir}/`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。\n\
+2. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。\n\
+3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。\n\
+4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」；另起「## 代码引用」列出实际修改文档对应的 `源码路径:符号`（每行一条），这段会推送到群里。"
 }
 
 pub fn default_docgen_quality_prompt() -> &'static str {
-    "你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 `{doc_dir}/`。\n\
+    "你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 `{doc_dir}/`，今日 `{date}`。\n\
 上一轮更新摘要：\n\
 {summary}\n\n\
 本次代码变更文件：\n\
 {files}\n\n\
-任务：对照变更与 `{doc_dir}/` 现有文档，用 3–8 条中文检查结论指出：是否缺更、是否过时、是否矛盾。\n\
+任务：对照变更与现有文档，用 3–8 条中文检查结论指出：\n\
+- 模块逆向文档是否缺更、过时、矛盾；\n\
+- `{updates_dir}/{date}.md` 是否已覆盖本批主要功能点（缺失、过空、或把未出现模块写进去都算问题）。\n\
 硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。"
+}
+
+/// `{doc_dir}/updates`（正斜杠相对路径）。
+pub fn updates_dir_rel(doc_dir: &str) -> String {
+    let d = doc_dir.trim().trim_end_matches(['/', '\\']);
+    if d.is_empty() {
+        "doc/updates".into()
+    } else {
+        format!("{d}/updates")
+    }
+}
+
+fn local_date_ymd() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn summary_fingerprint(summary: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let key: String = summary
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take(400)
+        .collect();
+    let mut h = DefaultHasher::new();
+    key.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// 代理已写过本轮内容，或系统补记标记已在文件中 → 不再追加。
+fn daily_update_already_covered(existing: &str, summaries: &str) -> bool {
+    if existing.is_empty() {
+        return false;
+    }
+    let fp = summary_fingerprint(summaries);
+    if existing.contains(&format!("docgen-ensure:{fp}")) {
+        return true;
+    }
+    for line in summaries.lines() {
+        let t = line.trim();
+        if t.chars().count() < 24 {
+            continue;
+        }
+        if t.starts_with('#') || t.starts_with("### 第") {
+            continue;
+        }
+        if existing.contains(t) {
+            return true;
+        }
+        break;
+    }
+    false
+}
+
+/// 全批成功后兜底：保证 `{doc_dir}/updates/{date}.md` 至少有本轮条目。
+pub fn ensure_daily_update(
+    workspace: &str,
+    doc_dir: &str,
+    date: &str,
+    run_meta: &str,
+    summaries: &str,
+) -> Result<PathBuf, String> {
+    let date = date.trim();
+    if date.is_empty() {
+        return Err("每日更新日期为空".into());
+    }
+    let path = Path::new(workspace)
+        .join(doc_dir.trim())
+        .join("updates")
+        .join(format!("{date}.md"));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建 updates 目录失败：{e}"))?;
+    }
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if daily_update_already_covered(&existing, summaries) {
+        return Ok(path);
+    }
+    let fp = summary_fingerprint(summaries);
+    let body = truncate_chars(summaries.trim(), 2_000);
+    let section = if body.is_empty() {
+        format!("## {run_meta}\n\n<!-- docgen-ensure:{fp} -->\n\n- （本轮无摘要；仅占位）\n")
+    } else {
+        format!(
+            "## {run_meta}\n\n<!-- docgen-ensure:{fp} -->\n\n\
+（系统补记：代理未写入或未完整覆盖当日功能更新，以下摘自本轮摘要）\n\n{body}\n"
+        )
+    };
+    let new_content = if existing.trim().is_empty() {
+        format!("# {date} 功能更新\n\n{section}")
+    } else {
+        let mut s = existing;
+        if !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s.push('\n');
+        s.push_str(&section);
+        s
+    };
+    std::fs::write(&path, new_content).map_err(|e| format!("写入每日更新失败：{e}"))?;
+    Ok(path)
 }
 
 /// 简单占位符替换：`{key}` → value（按出现顺序，不做嵌套展开）。
@@ -229,7 +363,13 @@ impl DocgenConfig {
 /// 而 `git status` 给出的是正斜杠相对路径，越界保护（is_outside_doc_dir）按字符串前缀比对，
 /// 不归一就会把整轮改动全部误判为越界并还原。
 fn normalize_doc_dir(workspace: &str, doc_dir: &str) -> Result<String, String> {
-    let raw = doc_dir.trim().replace('\\', "/");
+    use crate::git_commands::strip_verbatim_prefix;
+    // 先剥 `\\?\`，再统一正斜杠，避免 canonicalize 工作区与手填绝对路径对不上。
+    let workspace = strip_verbatim_prefix(Path::new(workspace));
+    let workspace = workspace.to_string_lossy();
+    let raw = strip_verbatim_prefix(Path::new(doc_dir.trim()))
+        .to_string_lossy()
+        .replace('\\', "/");
     if raw.starts_with("//") || raw.split('/').any(|p| p == ".." || p.eq_ignore_ascii_case(".git") || p.ends_with('.') || p.ends_with(' ')) {
         return Err("文档目录不能包含 ..、.git 或网络共享路径".into());
     }
@@ -243,28 +383,35 @@ fn normalize_doc_dir(workspace: &str, doc_dir: &str) -> Result<String, String> {
     if !std::path::Path::new(&raw).is_absolute() {
         return Ok(raw);
     }
-    // 绝对路径：去掉 workspace 前缀（Windows 大小写不敏感，前缀比对用小写、截取用原文）。
-    let ws = workspace
-        .trim()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_lowercase();
-    let raw_lower = raw.to_lowercase();
-    let rel = raw_lower
-        .strip_prefix(&ws)
-        .filter(|rest| rest.is_empty() || rest.starts_with('/'))
-        .map(|rest| rest.trim_start_matches('/'))
-        .ok_or_else(|| {
-            format!(
-                "文档目录必须位于工作区内：{}（工作区 {}）",
-                crate::git_commands::path_for_markdown(&raw),
-                crate::git_commands::path_for_markdown(workspace)
-            )
-        })?;
+    // 绝对路径：按路径组件剥掉 workspace 前缀，避免大小写、斜杠和末尾前缀误匹配。
+    let ws_components: Vec<String> = Path::new(workspace.as_ref())
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect();
+    let raw_components: Vec<String> = Path::new(&raw)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    let is_same = raw_components.len() == ws_components.len()
+        && raw_components.iter().zip(&ws_components).all(|(a, b)| a.to_lowercase() == *b);
+    if is_same {
+        return Ok("doc".into());
+    }
+    if raw_components.len() <= ws_components.len()
+        || raw_components.iter().zip(&ws_components).any(|(a, b)| a.to_lowercase() != *b)
+    {
+        return Err(format!(
+            "文档目录必须位于工作区内：{}（工作区 {}）",
+            crate::git_commands::path_for_markdown(&raw),
+            crate::git_commands::path_for_markdown(workspace.as_ref())
+        ));
+    }
+    let rel_components = &raw_components[ws_components.len().min(raw_components.len())..];
+    let rel = rel_components.join("/");
     if rel.is_empty() {
         return Ok("doc".into());
     }
-    Ok(raw[(raw.len() - rel.len())..].to_string())
+    Ok(rel)
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -280,9 +427,12 @@ struct RunState {
     /// 各变更来源仓的 HEAD cursor（key=规范化路径）。
     #[serde(default)]
     last_commits: std::collections::HashMap<String, String>,
-    /// 轮询防抖：上次已观察过的本地 HEAD。
+    /// 上一次已观察过的本地 HEAD。
     #[serde(default)]
     last_poll_head: Option<String>,
+    /// 定点任务待补跑到哪一分钟（应用重启后仍尝试补跑）。
+    #[serde(default)]
+    pending_daily_slot: Option<String>,
     #[serde(default)]
     pending_publication: Option<PendingPublication>,
 }
@@ -369,6 +519,74 @@ fn history_path() -> Option<PathBuf> {
     Some(dir.join("docgen-history.jsonl"))
 }
 
+fn mapping_path() -> Option<PathBuf> {
+    let base = std::env::var_os("APPDATA").map(PathBuf::from)?;
+    let dir = base.join("com.ai-workbench.app").join("wecom-dsh");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("docgen-mapping.json"))
+}
+
+/// 代码事实 → 文档章节的最小映射；只存可追溯引用，不推断调用关系。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocgenReference {
+    pub repo: String,
+    pub sha: String,
+    pub source_path: String,
+    pub symbol: String,
+    pub doc_path: String,
+    pub section: String,
+}
+
+fn load_references() -> Vec<DocgenReference> {
+    mapping_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_references(refs: &[DocgenReference]) -> Result<(), String> {
+    let p = mapping_path().ok_or("无法解析文档映射目录")?;
+    let text = serde_json::to_string_pretty(refs).map_err(|e| e.to_string())?;
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("写入文档映射失败：{e}"))?;
+    std::fs::rename(&tmp, &p).map_err(|e| format!("替换文档映射失败：{e}"))
+}
+
+fn upsert_references(new: Vec<DocgenReference>) -> Result<(), String> {
+    let mut all = load_references();
+    for r in new {
+        all.retain(|old| !(old.repo == r.repo && old.source_path == r.source_path && old.symbol == r.symbol));
+        all.push(r);
+    }
+    // 上限避免历史映射无限增长；保留最近 2000 条。
+    if all.len() > 2000 { all.drain(0..all.len() - 2000); }
+    save_references(&all)
+}
+
+fn extract_summary_references(summary: &str, repo: &str, sha: &str, doc_dir: &str) -> Vec<DocgenReference> {
+    let mut out = Vec::new();
+    for line in summary.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        // 只识别显式格式 `path:symbol` / `path#section`，不把自由文本全量当事实。
+        let source = if let Some((left, right)) = line.split_once("→") {
+            let doc = right.trim().trim_matches(|c: char| c == '`' || c == '-').trim().to_string();
+            (left.trim().trim_matches(|c: char| c == '`' || c == '-').trim(), doc)
+        } else {
+            (line.trim().trim_matches(|c: char| c == '`' || c == '-').trim(), format!("{}/{}", doc_dir.trim_matches('/'), line.trim().trim_matches(|c: char| c == '`' || c == '-').trim()))
+        };
+        let (path, doc_path) = source;
+        let Some((path, symbol)) = path.split_once(':').or_else(|| path.split_once('#')) else { continue; };
+        let path = path.trim().trim_matches('`');
+        if path.contains(' ') || path.is_empty() || !path.contains(['/', '.']) { continue; }
+        let symbol = symbol.trim().trim_matches('`').split_whitespace().next().unwrap_or("").to_string();
+        if symbol.is_empty() || symbol.len() > 200 || symbol.contains(':') { continue; }
+        let doc_path = doc_path.trim();
+        if doc_path.is_empty() || !doc_path.starts_with(doc_dir.trim_matches('/')) { continue; }
+        out.push(DocgenReference { repo: repo.into(), sha: sha.into(), source_path: path.into(), symbol, doc_path: doc_path.to_string(), section: String::new() });
+    }
+    out
+}
+
 fn load_state() -> RunState {
     state_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -422,10 +640,21 @@ pub struct DocgenHistoryItem {
     pub changed_files: usize,
     pub updated_docs: String,
     #[serde(default)]
+    pub references: Vec<DocgenReference>,
+    #[serde(default)]
     pub commit_note: String,
     #[serde(default)]
     pub quality: String,
+    #[serde(default)]
+    pub quality_blocking: usize,
     pub pushed: bool,
+    /// Git 本地提交 / 远端推送 / 群通知分别成功与否；`None` = 未执行。
+    #[serde(default)]
+    pub commit_status: Option<String>,
+    #[serde(default)]
+    pub push_status: Option<String>,
+    #[serde(default)]
+    pub notify_status: Option<String>,
     #[serde(default)]
     pub error: String,
     pub preview: bool,
@@ -496,10 +725,14 @@ fn history_from_report(
         status: status.into(),
         changed_files: report.changed_files.len(),
         updated_docs: truncate_chars(&report.updated_docs, 800),
+        references: report.references.clone(),
         commit_note: report.commit_note.clone(),
         quality: truncate_chars(quality, 800),
+        quality_blocking: report.quality_blocking,
         pushed: report.pushed,
-        // 失败原因优先于跳过原因：这两者不会同时出现
+        commit_status: Some(report.commit_status.clone()),
+        push_status: Some(report.push_status.clone()),
+        notify_status: Some(if report.pushed { "sent".into() } else { "not-sent".into() }),
         error: if report.failed() {
             report.error.clone()
         } else {
@@ -519,8 +752,8 @@ fn truncate_chars(s: &str, max: usize) -> String {
     format!("{}…", t.chars().take(max).collect::<String>())
 }
 
-/// 由 `daily_schedule::spawn` 每分钟调用。
-pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
+/// 由独立调度任务每分钟调用，不与其它每日 Job 串行等待。
+pub async fn auto_tick(app: AppHandle) -> Result<(), String> {
     let cfg = {
         let st = app.state::<WecomState>();
         let g = st.docgen.lock().await;
@@ -546,6 +779,23 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
             None
         }
     };
+    if let Some(pending) = state.pending_daily_slot.clone() {
+        let _slot = ScheduleSlot::Daily(pending.clone());
+        let mut st = load_state();
+        st.last_daily_slot = Some(pending.clone());
+        st.pending_daily_slot = None;
+        save_state(&st)?;
+        match run_update_with_trigger(&app, &cfg, RunTrigger::Schedule).await {
+            Ok(report) => crate::wecom_log::write("docgen", &format!("补跑完成：{}", report.summary_line())),
+            Err(e) => {
+                crate::wecom_log::write("docgen", &format!("补跑失败：{e}"));
+                let mut st = load_state();
+                st.pending_daily_slot = Some(pending);
+                save_state(&st)?;
+                return Err(e);
+            }
+        }
+    }
     if let Some(slot) = schedule_due {
         let mut st = load_state();
         match &slot {
@@ -558,12 +808,17 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
             &format!("auto schedule start branch={}", cfg.branch_or_default()),
         );
         let run_started = std::time::Instant::now();
-        match run_update_with_trigger(app, &cfg, RunTrigger::Schedule).await {
+        match run_update_with_trigger(&app, &cfg, RunTrigger::Schedule).await {
             Ok(report) => {
                 crate::wecom_log::write("docgen", &format!("auto schedule done: {}", report.summary_line()));
             }
             Err(e) => {
                 crate::wecom_log::write("docgen", &format!("auto schedule failed: {e}"));
+                if let ScheduleSlot::Daily(minute) = &slot {
+                    let mut st = load_state();
+                    st.pending_daily_slot = Some(minute.clone());
+                    save_state(&st)?;
+                }
                 let (pushed, errs) = notify_all(
                     &cfg,
                     &format!("⚠️ 逆向文档自动更新失败：{e}"),
@@ -576,9 +831,14 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
                     status: "fail".into(),
                     changed_files: 0,
                     updated_docs: String::new(),
+                    references: Vec::new(),
                     commit_note: String::new(),
                     quality: String::new(),
+                    quality_blocking: 0,
                     pushed,
+                    commit_status: Some("not-run".into()),
+                    push_status: Some("not-run".into()),
+                    notify_status: Some(if pushed { "sent".into() } else { "not-sent".into() }),
                     error: e.clone(),
                     preview: false,
                     webhook_errors: errs,
@@ -591,7 +851,7 @@ pub async fn auto_tick(app: &AppHandle) -> Result<(), String> {
 
     // 2) 本地 HEAD 轮询（不挡定点；成功只推进 last_commit）
     if cfg.poll_release {
-        if let Err(e) = maybe_poll_release(app, &cfg).await {
+        if let Err(e) = maybe_poll_release(&app, &cfg).await {
             crate::wecom_log::write("docgen", &format!("poll skip/fail: {e}"));
         }
     }
@@ -613,6 +873,10 @@ fn schedule_due_today(
         if cron_matches(cron, now)? {
             return Ok(Some(ScheduleSlot::Cron(minute)));
         }
+        // 进程错过的 cron 分钟在本小时内补跑一次；跨小时不追历史。
+        if let Some(missed) = missed_cron_minute(cfg, last_cron_minute, now)? {
+            return Ok(Some(ScheduleSlot::Cron(missed)));
+        }
         return Ok(None);
     }
     let time = cfg.time_or_default();
@@ -624,6 +888,48 @@ fn schedule_due_today(
         return Ok(None);
     }
     Ok(Some(ScheduleSlot::Daily(slot)))
+}
+
+fn missed_cron_minute(
+    cfg: &DocgenConfig,
+    last_cron_minute: Option<&str>,
+    now: chrono::DateTime<chrono::Local>,
+) -> Result<Option<String>, String> {
+    let reference = last_cron_minute
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").ok())
+        .unwrap_or_else(|| now.date_naive().and_hms_opt(0, 0, 0).unwrap());
+    let mut candidate = reference;
+    // 从上一次记录的下分钟开始，避免把「刚成功执行的那一分钟」当成漏跑。
+    candidate += chrono::Duration::minutes(1);
+    while candidate < now.naive_local() {
+        candidate += chrono::Duration::minutes(1);
+        let stamp = candidate.format("%Y-%m-%d %H:%M").to_string();
+        let naive = candidate;
+        if cron_matches(cfg.cron.trim(), chrono::TimeZone::from_local_datetime(&chrono::Local, &naive).single().unwrap())? {
+            return Ok(Some(stamp));
+        }
+    }
+    Ok(None)
+}
+
+/// 下次计划时间（配置值或可计算的下一次 cron 分钟）；UI 直接显示后端结果。
+pub fn next_run_at(cfg: &DocgenConfig, now: chrono::DateTime<chrono::Local>) -> Result<Option<String>, String> {
+    if !cfg.enabled || cfg.workspace.trim().is_empty() { return Ok(None); }
+    if !cfg.cron.trim().is_empty() {
+        let mut candidate = now;
+        for _ in 0..(24 * 60) {
+            candidate += chrono::Duration::minutes(1);
+            if cron_matches(cfg.cron.trim(), candidate)? {
+                return Ok(Some(candidate.format("%Y-%m-%d %H:%M").to_string()));
+            }
+        }
+        return Ok(None);
+    }
+    let time = cfg.time_or_default();
+    let Some(minutes) = crate::daily_schedule::parse_hhmm(&time) else { return Ok(None); };
+    let mut candidate = now.date_naive().and_hms_opt(minutes / 60, minutes % 60, 0).unwrap();
+    if candidate <= now.naive_local() { candidate += chrono::Duration::days(1); }
+    Ok(Some(candidate.format("%Y-%m-%d %H:%M").to_string()))
 }
 
 async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), String> {
@@ -711,7 +1017,7 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
         ),
     );
     let run_started = std::time::Instant::now();
-    match run_update_with_trigger(app, cfg, RunTrigger::Poll).await {
+    match run_update_with_trigger(&app, cfg, RunTrigger::Poll).await {
         Ok(report) => {
             crate::wecom_log::write("docgen", &format!("auto poll done: {}", report.summary_line()));
             Ok(())
@@ -725,9 +1031,14 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
                 status: "fail".into(),
                 changed_files: 0,
                 updated_docs: String::new(),
+                references: Vec::new(),
                 commit_note: String::new(),
                 quality: String::new(),
+                    quality_blocking: 0,
                 pushed,
+                commit_status: Some("not-run".into()),
+                push_status: Some("not-run".into()),
+                notify_status: Some(if pushed { "sent".into() } else { "not-sent".into() }),
                 error: e.clone(),
                 preview: false,
                 webhook_errors: errs,
@@ -744,11 +1055,15 @@ pub struct UpdateReport {
     pub new_commits: usize,
     pub changed_files: Vec<String>,
     pub updated_docs: String,
+    pub references: Vec<DocgenReference>,
     pub commit_note: String,
     pub pushed: bool,
+    pub commit_status: String,
+    pub push_status: String,
     pub skipped_reason: Option<String>,
     pub preview: bool,
     pub quality: String,
+    pub quality_blocking: usize,
     pub webhook_errors: Vec<String>,
     /// 更新 / 质检步骤的失败原因（空 = 成功）。有值时：算失败、不提交、不推进游标。
     pub error: String,
@@ -809,12 +1124,17 @@ pub fn cursor_repos() -> Vec<String> {
 pub struct DocgenProgressSnapshot {
     pub progress: Option<DocgenProgressEvent>,
     pub running: bool,
+    pub next_run_at: Option<String>,
+    pub pending_daily_slot: Option<String>,
 }
 
-pub fn progress_snapshot() -> DocgenProgressSnapshot {
+pub async fn progress_snapshot(app: &AppHandle) -> DocgenProgressSnapshot {
+    let cfg = app.state::<WecomState>().docgen.lock().await.clone();
     DocgenProgressSnapshot {
         progress: last_progress(),
         running: is_running(),
+        next_run_at: next_run_at(&cfg, chrono::Local::now()).ok().flatten(),
+        pending_daily_slot: load_state().pending_daily_slot,
     }
 }
 
@@ -910,7 +1230,7 @@ pub async fn run_update(app: &AppHandle, cfg: &DocgenConfig) -> Result<UpdateRep
     } else {
         RunTrigger::Manual
     };
-    run_update_with_trigger(app, cfg, trigger).await
+    run_update_with_trigger(&app, cfg, trigger).await
 }
 
 pub async fn run_update_with_trigger(
@@ -921,6 +1241,7 @@ pub async fn run_update_with_trigger(
     let Some(_guard) = RunGuard::acquire() else {
         return Err("已有一个文档更新流程在跑，请稍后再试".into());
     };
+    RUN_CANCEL.store(false, Ordering::SeqCst);
     let progress = RunProgress::new(app, trigger);
     let result = run_update_inner(app, cfg, trigger, &progress).await;
     match result {
@@ -935,6 +1256,7 @@ pub async fn run_update_with_trigger(
         }
         Err(e) => {
             progress.finish_err(&e);
+            crate::wecom_log::write("docgen", &format!("{} failed: {e}", trigger.as_str()));
             // 定时任务在 auto_tick 里统一发失败通知；手动 / 预览是用户点的，这里补一条，
             // 否则切分支 / 采集失败这种早退会一声不响（看着像「跑完了没通知」）。
             if matches!(trigger, RunTrigger::Manual | RunTrigger::Preview) {
@@ -953,16 +1275,25 @@ async fn run_update_inner(
 ) -> Result<UpdateReport, String> {
     progress.stage("workspace", 5);
     let doc_dir_raw = cfg.doc_dir_or_default();
-    let workspace = crate::git_commands::resolve_git_workspace(cfg.workspace.trim(), &doc_dir_raw)?;
-    if workspace != cfg.workspace.trim() {
+    let workspace = workspace::resolve_doc_repo(cfg.workspace.trim(), &doc_dir_raw)?;
+    let configured_workspace = cfg.workspace.trim().to_string();
+    if workspace != configured_workspace {
         crate::wecom_log::write(
             "docgen",
             &format!(
                 "resolved workspace={} (from {})",
                 crate::git_commands::path_for_markdown(&workspace),
-                crate::git_commands::path_for_markdown(cfg.workspace.trim())
+                crate::git_commands::path_for_markdown(&configured_workspace)
             ),
         );
+    }
+    // 父目录可能只是多仓容器；文档目录必须解析到真实 Git 工作树后才继续。
+    if !crate::git_commands::ensure_git_repo(&workspace).is_ok() {
+        return Err(format!(
+            "文档目录 {} 未解析到 Git 仓库；请检查工作区/文档目录配置（父目录 {} 不是仓库）",
+            crate::git_commands::path_for_markdown(&doc_dir_raw),
+            crate::git_commands::path_for_markdown(&configured_workspace)
+        ));
     }
     let branch = cfg.branch_or_default();
     let preview = cfg.preview_mode || trigger == RunTrigger::Preview;
@@ -984,7 +1315,7 @@ async fn run_update_inner(
     if !dirty.status.success() {
         return Err("读取工作区状态失败".into());
     }
-    // 正式发布要求原仓干净；预览只写隔离目录，不接触已有用户改动。
+    // 正式轮要求原仓干净（直写文档目录）；预览允许在脏仓上改 doc，由用户自行核对。
     if !String::from_utf8_lossy(&dirty.stdout).trim().is_empty() && !preview {
         let reason = "工作区有未提交改动，已跳过自动更新（请先提交或暂存）".to_string();
         progress.stage("notify", 90);
@@ -995,11 +1326,15 @@ async fn run_update_inner(
             new_commits: 0,
             changed_files: Vec::new(),
             updated_docs: String::new(),
+            references: Vec::new(),
             commit_note: String::new(),
             pushed,
+            commit_status: "not-run".into(),
+            push_status: "not-run".into(),
             skipped_reason: Some(reason),
             preview,
             quality: String::new(),
+                    quality_blocking: 0,
             webhook_errors: errs,
             error: String::new(),
         };
@@ -1033,8 +1368,9 @@ async fn run_update_inner(
                 let (pushed, webhook_errors) = notify_all(cfg, &summary).await;
                 let report = UpdateReport {
                     branch, new_commits: 0, changed_files: pending.changed_files,
-                    updated_docs: pending.summary, commit_note: summary, pushed,
-                    skipped_reason: None, preview: false, quality: String::new(), webhook_errors, error,
+                    updated_docs: pending.summary, references: Vec::new(), commit_note: summary, pushed,
+                    commit_status: "reused".into(), push_status: if error.is_empty() { "ok".into() } else { "fail".into() },
+                    skipped_reason: None, preview: false, quality: String::new(), quality_blocking: 0, webhook_errors, error,
                 };
                 append_history(&history_from_report(trigger, &report, "", &report.webhook_errors, progress.elapsed_ms()));
                 return Ok(report);
@@ -1042,14 +1378,15 @@ async fn run_update_inner(
             return Err("另一个文档目标有待发布提交，请先恢复原目标并重试，避免覆盖待发布状态".into());
         }
     }
-    let isolated = {
+    // 正式轮：原仓必须已在目标分支，fetch 后仅快进。预览同样要求分支正确，避免写错分支文档。
+    {
         let ws = workspace.clone();
         let br = branch.clone();
-        tokio::task::spawn_blocking(move || DocgenWorkspace::prepare(&ws, &br))
+        tokio::task::spawn_blocking(move || prepare_workspace_branch(&ws, &br))
             .await
-            .map_err(|e| e.to_string())??
-    };
-    let execution_workspace = isolated.path.clone();
+            .map_err(|e| e.to_string())??;
+    }
+    let execution_workspace = workspace.clone();
 
     // 可选的「先同步来源仓」：只 fetch + 快进，绝不 rebase/reset/强推。
     let mut sync_note = String::new();
@@ -1067,14 +1404,19 @@ async fn run_update_inner(
         }
     }
 
+    require_running()?;
     progress.stage("collect", 35);
     let sources = resolve_change_sources(&cfg.repo_allowlist, &workspace);
     let lookback_days = cfg.lookback_days.min(30);
     let st_snap = load_state();
-    let source_prev: Vec<(String, Option<String>)> = sources
+    let mut source_prev: Vec<(String, Option<String>)> = sources
         .iter()
         .map(|s| (s.clone(), cursor_for(&st_snap, s)))
         .collect();
+    if cfg.full_init {
+        // 全量建档只对「当前没有采集点」的仓生效；已有游标的仓仍按增量，避免重复覆盖。
+        source_prev.iter_mut().for_each(|(_, prev)| *prev = None);
+    }
     // 本轮开始时还没有采集点的仓（新加 / 刚重置）：空采集时不能给它们落游标。
     let fresh_repos: Vec<String> = source_prev
         .iter()
@@ -1086,15 +1428,24 @@ async fn run_update_inner(
     let parts = {
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, ChangeDelta)>, String> {
             let mut out = Vec::new();
+            // 快照必须活到本轮采集结束。若只 `.path.clone()` 就丢临时值，Drop 会立刻
+            // `worktree remove`，随后 collect_delta 的 cwd 已不存在 → Windows os error 267。
+            let mut snapshots = Vec::new();
             for (repo, prev) in source_prev {
                 crate::git_commands::ensure_git_repo(&repo)?;
-                // 文档仓读取已快进的隔离版本，游标仍以原仓路径为键。
+                let head = crate::git_commands::git_stdout(&repo, &["rev-parse", "HEAD"])?;
                 let read_repo = if norm_repo_key(&repo) == norm_repo_key(&doc_workspace) {
-                    &execution_repo
-                } else { &repo };
-                let d = collect_delta(read_repo, prev.as_deref(), lookback_days)?;
+                    execution_repo.clone()
+                } else {
+                    let snap = workspace::snapshot_source(&repo, head.trim())?;
+                    let path = snap.path.clone();
+                    snapshots.push(snap);
+                    path
+                };
+                let d = collect_delta(&read_repo, prev.as_deref(), lookback_days)?;
                 out.push((repo, d));
             }
+            drop(snapshots);
             Ok(out)
         })
         .await
@@ -1104,14 +1455,16 @@ async fn run_update_inner(
         .iter()
         .map(|(r, d)| (r.clone(), d.head.clone()))
         .collect();
+    let batches = split_deltas_for_budget(&parts, 24_000, DIFF_CHAR_CAP);
     let delta = merge_change_deltas(&parts, DIFF_CHAR_CAP);
     crate::wecom_log::write(
         "docgen",
         &format!(
-            "collect_delta sources={} lookback={lookback_days}d files={} commits={}",
+            "collect_delta sources={} lookback={lookback_days}d files={} commits={} batches={}",
             sources.len(),
             delta.files.len(),
-            delta.commits.len()
+            delta.commits.len(),
+            batches.len()
         ),
     );
 
@@ -1128,7 +1481,9 @@ async fn run_update_inner(
             }
             set_cursor(&mut st, repo, head);
         }
-        if !preview { save_state(&st)?; }
+        if !preview && !cancel_requested() {
+            save_state(&st)?;
+        }
         let reason = format!(
             "自上次更新以来无代码变更（本次监视 {} 个仓；未勾选的子仓不会被采集）",
             sources.len()
@@ -1145,11 +1500,15 @@ async fn run_update_inner(
             new_commits: 0,
             changed_files: Vec::new(),
             updated_docs: String::new(),
+            references: Vec::new(),
             commit_note: String::new(),
             pushed,
+            commit_status: "not-run".into(),
+            push_status: "not-run".into(),
             skipped_reason: Some(reason),
             preview,
             quality: String::new(),
+                    quality_blocking: 0,
             webhook_errors: webhook_errors.clone(),
             error: String::new(),
         };
@@ -1160,60 +1519,110 @@ async fn run_update_inner(
             &webhook_errors,
             progress.elapsed_ms(),
         ));
-        let _ = isolated.remove();
         return Ok(report);
     }
 
-    // 超长清单不能被上下文裁剪后仍消游标；先明确拒绝，让用户缩小来源/回溯窗口。
-    if format_file_list(&delta.files).chars().count() > 24_000 {
-        return Err(format!("本次 {} 个变更文件超过单轮清单预算，未运行、未推进采集点；请缩小来源仓或回溯窗口。隔离目录：{}", delta.files.len(), execution_workspace));
-    }
-    progress.stage("agent", 55);
-    // 失败要留痕：这一轮算失败（不提交、不推进游标），下一轮还能重跑同一批变更。
+    require_running()?;
+    let batch_total = batches.len().max(1);
     let mut step_error = String::new();
-    let updated_docs = match update_docs_with_agent(
-        app,
-        &execution_workspace,
-        &doc_dir,
-        &branch,
-        &delta,
-        &cfg.system_prompt,
-        &cfg.engine,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            step_error = format!("文档更新失败：{e}");
-            format!("（{step_error}）")
-        }
-    };
-
-    let quality = if cfg.quality_check && step_error.is_empty() {
-        progress.stage("quality", 72);
-        match quality_check_with_agent(
+    let mut updated_docs = String::new();
+    let mut quality = String::new();
+    let mut quality_blocking = 0usize;
+    for (idx, batch) in batches.iter().enumerate() {
+        require_running()?;
+        let batch_no = idx + 1;
+        let pct = 55 + ((idx as u8).saturating_mul(15) / batch_total as u8);
+        progress.emit(
+            "agent",
+            pct.min(70),
+            "running",
+            &format!("第 {batch_no}/{batch_total} 批（{} 个文件）", batch.files.len()),
+        );
+        let batch_summary = match update_docs_with_agent(
             app,
             &execution_workspace,
             &doc_dir,
             &branch,
-            &delta.files,
-            &updated_docs,
-            &cfg.quality_prompt,
+            batch,
+            &cfg.system_prompt,
             &cfg.engine,
+            &cfg.tianji_agent,
+            cancel_requested,
         )
         .await
         {
             Ok(v) => v,
             Err(e) => {
-                if step_error.is_empty() {
-                    step_error = format!("质量自检失败：{e}");
+                step_error = format!("文档更新失败（第 {batch_no}/{batch_total} 批）：{e}");
+                break;
+            }
+        };
+        if !updated_docs.is_empty() {
+            updated_docs.push_str("\n\n");
+        }
+        if batch_total > 1 {
+            updated_docs.push_str(&format!("### 第 {batch_no}/{batch_total} 批\n"));
+        }
+        updated_docs.push_str(&batch_summary);
+
+        if cfg.quality_check {
+            require_running()?;
+            progress.emit(
+                "quality",
+                (72 + idx as u8).min(80),
+                "running",
+                &format!("质量自检第 {batch_no}/{batch_total} 批"),
+            );
+            match quality_check_with_agent(
+                app,
+                &execution_workspace,
+                &doc_dir,
+                &branch,
+                &batch.files,
+                &batch_summary,
+                &cfg.quality_prompt,
+                &cfg.engine,
+                &cfg.tianji_agent,
+                cancel_requested,
+            )
+            .await
+            {
+                Ok(v) => {
+                    if cfg.quality_gate {
+                        let verdict = parse_quality_verdict(&v);
+                        quality_blocking += verdict.blocking.len();
+                        if !verdict.blocking.is_empty() {
+                            step_error = format!(
+                                "质量门禁阻断（第 {batch_no}/{batch_total} 批）：{}",
+                                verdict.blocking.join("；")
+                            );
+                            if !quality.is_empty() {
+                                quality.push_str("\n\n");
+                            }
+                            quality.push_str(&v);
+                            break;
+                        }
+                    }
+                    if !quality.is_empty() {
+                        quality.push_str("\n\n");
+                    }
+                    if batch_total > 1 {
+                        quality.push_str(&format!("### 第 {batch_no}/{batch_total} 批\n"));
+                    }
+                    quality.push_str(&v);
                 }
-                format!("（质量自检失败：{e}）")
+                Err(e) => {
+                    step_error = format!("质量自检失败（第 {batch_no}/{batch_total} 批）：{e}");
+                    quality = format!("（{step_error}）");
+                    break;
+                }
             }
         }
-    } else {
-        String::new()
-    };
+    }
+    if updated_docs.is_empty() && !step_error.is_empty() {
+        updated_docs = format!("（{step_error}）");
+    }
+
     progress.stage(
         if preview {
             "preview"
@@ -1229,15 +1638,45 @@ async fn run_update_inner(
     }
     let mut commit_note = String::new();
     let mut published = false;
+    let mut commit_status = "not-run".to_string();
+    let mut push_status = "not-run".to_string();
     if step_error.is_empty() {
+        require_running()?;
+        let date = local_date_ymd();
+        let time = chrono::Local::now().format("%H:%M").to_string();
+        let run_meta = if batch_total > 1 {
+            format!("{time} · {branch} · 共 {batch_total} 批")
+        } else {
+            format!("{time} · {branch}")
+        };
+        if let Err(e) = ensure_daily_update(
+            &execution_workspace,
+            &doc_dir,
+            &date,
+            &run_meta,
+            &updated_docs,
+        ) {
+            step_error = e;
+        }
+    }
+    if step_error.is_empty() {
+        require_running()?;
         if let Err(e) = workspace::validate_changes(&execution_workspace, &doc_dir) {
             step_error = e;
         }
     }
     if !step_error.is_empty() {
-        commit_note = format!("本次失败，未发布；隔离产物保留在 {execution_workspace}");
+        commit_note = format!(
+            "本次失败，未提交；文档目录改动仍留在工作区（共 {batch_total} 批，已写入部分可能需人工核对）"
+        );
     } else if preview || !cfg.auto_commit {
-        commit_note = format!("文档产物保留在隔离目录 {execution_workspace}，未提交、未推送；原工作区不变，采集点未推进");
+        commit_status = "not-run".into();
+        push_status = "not-run".into();
+        commit_note = if preview {
+            format!("预览模式：已直写文档目录（{batch_total} 批），未提交、未推送，采集点未推进")
+        } else {
+            format!("已直写文档目录（{batch_total} 批），自动提交已关闭，未推送，采集点未推进")
+        };
     } else {
         let ws = execution_workspace.clone();
         let dd = doc_dir.clone();
@@ -1246,33 +1685,47 @@ async fn run_update_inner(
         match tokio::task::spawn_blocking(move || commit_docs(&ws, &dd, &br, n))
             .await.map_err(|e| e.to_string())?
         {
-            Err(e) => step_error = format!("文档提交失败：{e}"),
+            Err(e) => {
+                commit_status = "fail".into();
+                push_status = "not-run".into();
+                step_error = format!("文档提交失败：{e}")
+            }
             Ok(note) => {
-                commit_note = note;
-                match isolated.publish(&branch) {
-                    Ok(()) => {
-                        published = true;
-                        if cfg.auto_push {
-                            let pending = PendingPublication {
-                                workspace: workspace.clone(), branch: branch.clone(),
-                                head: crate::git_commands::git_stdout(&workspace, &["rev-parse", "HEAD"])?,
-                                sources: heads.clone(), changed_files: delta.files.clone(), summary: updated_docs.clone(),
-                            };
-                            let mut st = load_state();
-                            st.pending_publication = Some(pending.clone());
-                            save_state(&st)?;
-                            match retry_publication(&pending) {
-                                Ok(()) => commit_note.push_str("；远端推送成功"),
-                                Err(e) => step_error = format!("已提交并发布到本地，但远端推送失败：{e}；下次仅重试发布"),
-                            }
+                commit_status = "ok".into();
+                commit_note = if batch_total > 1 {
+                    format!("{note}（分 {batch_total} 批生成）")
+                } else {
+                    note
+                };
+                published = true;
+                if cfg.auto_push {
+                    let pending = PendingPublication {
+                        workspace: workspace.clone(),
+                        branch: branch.clone(),
+                        head: crate::git_commands::git_stdout(&workspace, &["rev-parse", "HEAD"])?,
+                        sources: heads.clone(),
+                        changed_files: delta.files.clone(),
+                        summary: updated_docs.clone(),
+                    };
+                    let mut st = load_state();
+                    st.pending_publication = Some(pending.clone());
+                    save_state(&st)?;
+                    match retry_publication(&pending) {
+                        Ok(()) => {
+                            commit_note.push_str("；远端推送成功");
+                            push_status = "ok".into();
+                        }
+                        Err(e) => {
+                            step_error =
+                                format!("已提交到本地，但远端推送失败：{e}；下次仅重试推送");
+                            push_status = "fail".into();
                         }
                     }
-                    Err(e) => step_error = format!("文档未发布：{e}"),
                 }
             }
         }
         if !step_error.is_empty() {
-            commit_note.push_str(&format!("；{step_error}；隔离产物：{execution_workspace}"));
+            commit_note.push_str(&format!("；{step_error}"));
         }
     }
     let failed = !step_error.is_empty();
@@ -1295,9 +1748,7 @@ async fn run_update_inner(
     let (pushed, webhook_errors) = notify_all(cfg, &body).await;
 
     progress.stage("cursor", 98);
-    // 失败时不推进游标：否则这批变更被永久跳过，下一轮也补不回来。
-    // 预览同样不推进：落盘的改动还没核对，这批来源变更要留给正式轮处理
-    //（核完用户手动提交；撤销了就由下一轮重新生成）。
+    // 失败 / 预览 / 未提交：不推进游标，已写入的文档改动留在工作区。
     if should_advance_cursor(published, failed) {
         let mut st = load_state();
         for (repo, head) in &heads {
@@ -1308,26 +1759,34 @@ async fn run_update_inner(
     } else {
         crate::wecom_log::write(
             "docgen",
-            &format!("保留游标不推进（预览 / 未发布 / 失败）：{}", step_error),
+            &format!("保留游标不推进（预览 / 未提交 / 失败）：{}", step_error),
         );
     }
 
-    if should_advance_cursor(published, failed) {
-        if let Err(e) = isolated.remove() {
-            crate::wecom_log::write("docgen", &format!("隔离目录未清理：{e}"));
+    let updated_docs = format!("{commit_note}\n\n{updated_docs}");
+    let mut references = Vec::new();
+    for (repo, head) in &heads {
+        references.extend(extract_summary_references(&updated_docs, repo, &head, &doc_dir));
+    }
+    if !references.is_empty() && step_error.is_empty() {
+        if let Err(e) = upsert_references(references.clone()) {
+            crate::wecom_log::write("docgen", &format!("文档映射写入失败：{e}"));
         }
     }
-    let updated_docs = format!("{commit_note}\n\n{updated_docs}");
     let report = UpdateReport {
         branch,
         new_commits: delta.commits.len(),
         changed_files: delta.files,
         updated_docs,
+        references,
         commit_note,
+        commit_status,
+        push_status,
         pushed,
         skipped_reason: None,
         preview,
         quality: quality.clone(),
+        quality_blocking,
         webhook_errors: webhook_errors.clone(),
         error: step_error,
     };
@@ -1516,6 +1975,165 @@ fn repo_short_name(path: &str) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| path.to_string())
+}
+
+/// 原仓准备：必须在目标分支上，fetch 后仅快进，失败明确报错（不造临时树）。
+fn prepare_workspace_branch(repo: &str, branch: &str) -> Result<(), String> {
+    use crate::git_commands::{git_output, git_stdout};
+    git_stdout(repo, &["check-ref-format", "--branch", branch])?;
+    let current = git_stdout(repo, &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
+    if current.trim() != branch {
+        return Err(format!(
+            "工作区当前分支是「{}」，请先切到「{branch}」再跑文档更新",
+            if current.trim().is_empty() {
+                "（游离 HEAD）"
+            } else {
+                current.trim()
+            }
+        ));
+    }
+    match git_output(repo, &["fetch", "origin", branch]) {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            return Err(format!(
+                "fetch origin/{branch} 失败：{}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ));
+        }
+        Err(e) => return Err(format!("fetch origin/{branch} 失败：{e}")),
+    }
+    let track = format!("origin/{branch}");
+    let remote = git_stdout(repo, &["rev-parse", "--verify", "-q", &track]).unwrap_or_default();
+    if remote.trim().is_empty() {
+        return Ok(());
+    }
+    match git_output(repo, &["merge", "--ff-only", &track]) {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(format!(
+            "无法快进到 {track}：{}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(format!("无法快进到 {track}：{e}")),
+    }
+}
+
+/// 把多仓增量切成「文件清单字符数 ≤ file_list_cap」的若干批；优先整仓同批，单仓仍超再按文件切。
+pub(crate) fn split_deltas_for_budget(
+    parts: &[(String, ChangeDelta)],
+    file_list_cap: usize,
+    diff_cap: usize,
+) -> Vec<ChangeDelta> {
+    let full = merge_change_deltas(parts, diff_cap);
+    if full.files.is_empty()
+        || format_file_list(&full.files).chars().count() <= file_list_cap
+    {
+        return vec![full];
+    }
+
+    let mut batches: Vec<ChangeDelta> = Vec::new();
+    let mut current: Vec<(String, ChangeDelta)> = Vec::new();
+
+    let packed_chars = |batch: &[(String, ChangeDelta)]| -> usize {
+        format_file_list(&merge_change_deltas(batch, diff_cap).files)
+            .chars()
+            .count()
+    };
+
+    for (repo, delta) in parts {
+        if delta.files.is_empty() && delta.commits.is_empty() && delta.diff_excerpt.is_empty() {
+            continue;
+        }
+        let unit = (repo.clone(), delta.clone());
+        let solo_chars = packed_chars(&[unit.clone()]);
+        if solo_chars > file_list_cap {
+            if !current.is_empty() {
+                batches.push(merge_change_deltas(&current, diff_cap));
+                current.clear();
+            }
+            for chunk in chunk_repo_delta(delta, file_list_cap, repo, diff_cap) {
+                batches.push(merge_change_deltas(&[(repo.clone(), chunk)], diff_cap));
+            }
+            continue;
+        }
+        let mut trial = current.clone();
+        trial.push(unit.clone());
+        if current.is_empty() || packed_chars(&trial) <= file_list_cap {
+            current.push(unit);
+        } else {
+            batches.push(merge_change_deltas(&current, diff_cap));
+            current.clear();
+            current.push(unit);
+        }
+    }
+    if !current.is_empty() {
+        batches.push(merge_change_deltas(&current, diff_cap));
+    }
+    if batches.is_empty() {
+        vec![full]
+    } else {
+        batches
+    }
+}
+
+fn chunk_repo_delta(
+    delta: &ChangeDelta,
+    file_list_cap: usize,
+    repo: &str,
+    diff_cap: usize,
+) -> Vec<ChangeDelta> {
+    if delta.files.is_empty() {
+        return vec![delta.clone()];
+    }
+    let mut out = Vec::new();
+    let mut buf: Vec<String> = Vec::new();
+    let mut first = true;
+    let flush = |buf: &mut Vec<String>, out: &mut Vec<ChangeDelta>, first: &mut bool| {
+        if buf.is_empty() {
+            return;
+        }
+        out.push(ChangeDelta {
+            head: delta.head.clone(),
+            files: std::mem::take(buf),
+            commits: if *first {
+                delta.commits.clone()
+            } else {
+                Vec::new()
+            },
+            diff_excerpt: if *first {
+                delta.diff_excerpt.clone()
+            } else {
+                String::new()
+            },
+            diff_truncated: delta.diff_truncated && *first,
+        });
+        *first = false;
+    };
+    for f in &delta.files {
+        let mut trial = buf.clone();
+        trial.push(f.clone());
+        let trial_delta = ChangeDelta {
+            head: delta.head.clone(),
+            files: trial,
+            commits: Vec::new(),
+            diff_excerpt: String::new(),
+            diff_truncated: false,
+        };
+        let n = format_file_list(
+            &merge_change_deltas(&[(repo.to_string(), trial_delta)], diff_cap).files,
+        )
+        .chars()
+        .count();
+        if !buf.is_empty() && n > file_list_cap {
+            flush(&mut buf, &mut out, &mut first);
+        }
+        buf.push(f.clone());
+    }
+    flush(&mut buf, &mut out, &mut first);
+    if out.is_empty() {
+        vec![delta.clone()]
+    } else {
+        out
+    }
 }
 
 /// 合并多仓 delta；files/commits 加 `仓名:` 前缀；diff 按仓拼接并截断。
@@ -1742,12 +2360,42 @@ fn format_diff_section(delta: &ChangeDelta) -> String {
     }
 }
 
+/// 质量自检结论；仅把明确、可归类的阻断项当作阻断，模糊措辞不自动放行或误杀。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QualityVerdict {
+    pub blocking: Vec<String>,
+    pub findings: Vec<String>,
+}
+
+pub fn parse_quality_verdict(raw: &str) -> QualityVerdict {
+    let mut blocking = Vec::new();
+    let mut findings = Vec::new();
+    for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let text = line.trim_start_matches(['-', '*', '#', '>', '·']).trim();
+        if text.is_empty() { continue; }
+        findings.push(text.to_string());
+        let lower = text.to_lowercase();
+        let is_clear_block = lower.contains("错误") || lower.contains("矛盾") || lower.contains("失效")
+            || lower.contains("过时") || lower.contains("stale") || lower.contains("contradict")
+            || lower.contains("invalid reference") || lower.contains("broken link");
+        let is_critical_missing = lower.contains("关键遗漏") || lower.contains("重要遗漏") || lower.contains("critical missing")
+            || lower.contains("blocking") || lower.contains("blocker");
+        let not_ok = lower.contains("不合格") || lower.contains("不通过") || lower.contains("fail") || lower.contains("not pass");
+        let merely_suggests = lower.contains("建议") || lower.contains("可选") || lower.contains("可考虑") || lower.contains("suggest");
+        if (is_clear_block || is_critical_missing || not_ok) && !merely_suggests && !lower.contains("未发现") {
+            blocking.push(text.to_string());
+        }
+    }
+    QualityVerdict { blocking, findings }
+}
+
 /// 拼装更新 system 提示：配置模板非空则用之，否则内置默认；再填占位符。
 pub fn build_docgen_prompt(
     template: &str,
     doc_dir: &str,
     branch: &str,
     delta: &ChangeDelta,
+    repo: &str,
 ) -> String {
     let tpl = normalize_prompt_template(template);
     let body = if tpl.is_empty() {
@@ -1755,9 +2403,18 @@ pub fn build_docgen_prompt(
     } else {
         tpl
     };
+    let mapped = load_references().into_iter()
+        .filter(|r| r.repo == *repo)
+        .map(|r| format!("- `{}:{}` → `{}`（{}）", r.source_path, r.symbol, r.doc_path, &r.sha[..r.sha.len().min(8)]))
+        .take(120)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mapping_section = if mapped.is_empty() { String::new() } else { format!("\n## 已有代码—文档映射（优先复用，仍须核对当前代码）\n{mapped}\n") };
     let commits = format_commit_list(&delta.commits);
     let files = format_file_list(&delta.files);
     let diff = format_diff_section(delta);
+    let updates_dir = updates_dir_rel(doc_dir);
+    let date = local_date_ymd();
     fill_docgen_template(
         &body,
         &[
@@ -1766,6 +2423,9 @@ pub fn build_docgen_prompt(
             ("commits", &commits),
             ("files", &files),
             ("diff", &diff),
+            ("mapping", &mapping_section),
+            ("date", &date),
+            ("updates_dir", &updates_dir),
         ],
     )
 }
@@ -1793,6 +2453,8 @@ pub fn build_quality_prompt(
             t
         }
     };
+    let updates_dir = updates_dir_rel(doc_dir);
+    let date = local_date_ymd();
     fill_docgen_template(
         &body,
         &[
@@ -1800,6 +2462,8 @@ pub fn build_quality_prompt(
             ("branch", branch),
             ("files", &file_list),
             ("summary", summary_text),
+            ("date", &date),
+            ("updates_dir", &updates_dir),
         ],
     )
 }
@@ -1812,32 +2476,29 @@ async fn update_docs_with_agent(
     delta: &ChangeDelta,
     system_template: &str,
     engine: &str,
+    tianji_agent: &Option<crate::wecom_orchestrator::WecomAgentConfig>,
+    cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
-    let system = build_docgen_prompt(system_template, doc_dir, branch, delta);
-    let user = "请根据本次代码变更更新对应的逆向文档，并给出更新摘要。";
+    let system = build_docgen_prompt(system_template, doc_dir, branch, delta, workspace);
+    let user = "请根据本次代码变更更新对应的逆向文档，追加当日功能更新，并给出更新摘要。";
 
     let summary = if engine.trim().eq_ignore_ascii_case("dsh") {
-        dsh_turn(app, workspace, doc_dir, DOCGEN_SESSION, &system, user).await?
+        dsh_turn(app, workspace, doc_dir, DOCGEN_SESSION, &system, user, cancel_requested).await?
     } else {
-        let agent_cfg = {
-            let st = app.state::<WecomState>();
-            let g = st.orch.agent.lock().await;
-            g.clone()
-        };
-        let Some(cfg) = agent_cfg else {
-            return Err("企微通道未绑定模型，无法自动更新文档".into());
+        let Some(agent_cfg) = tianji_agent.as_ref() else {
+            return Err("文档任务未绑定独立天玑模型；请在「逆向工程 → 引擎提示词」选择模型后再运行".into());
         };
 
         let request_id = format!("wecom-docgen-{}", chrono::Utc::now().timestamp_millis());
 
         let req = crate::agent::AgentRunRequest {
-            config: cfg.config,
-            fallback_config: cfg.fallback_config,
+            config: agent_cfg.config.clone(),
+            fallback_config: agent_cfg.fallback_config.clone(),
             system,
             user: user.into(),
             request_id: request_id.clone(),
             repo_path: workspace.to_string(),
-            services: cfg.services,
+            services: agent_cfg.services.clone(),
             history: Vec::new(),
             messages: Vec::new(),
             mode: "doc".into(),
@@ -1847,24 +2508,24 @@ async fn update_docs_with_agent(
             vision: false,
             diff_confirm: false,
             always_allow: Vec::new(),
-            web_allow: cfg.web_allow,
-            web_tier: cfg.web_tier,
-            web_search_provider: cfg.web_search_provider,
-            web_search_key: cfg.web_search_key,
+            web_allow: agent_cfg.web_allow.clone(),
+            web_tier: agent_cfg.web_tier.clone(),
+            web_search_provider: agent_cfg.web_search_provider.clone(),
+            web_search_key: agent_cfg.web_search_key.clone(),
             subagents: false,
             subagent_write: false,
             mcp: Vec::new(),
-            parallel_reads: cfg.parallel_reads,
-            retries: cfg.retries,
-            grep_ignore: cfg.grep_ignore,
+            parallel_reads: agent_cfg.parallel_reads,
+            retries: agent_cfg.retries,
+            grep_ignore: agent_cfg.grep_ignore,
             plan_first: false,
-            context_tokens: cfg.context_tokens,
-            result_cap: cfg.result_cap,
-            anthropic_stream: cfg.anthropic_stream,
+            context_tokens: agent_cfg.context_tokens,
+            result_cap: agent_cfg.result_cap,
+            anthropic_stream: agent_cfg.anthropic_stream,
             mcp_enabled: false,
         };
 
-        run_agent_collect(app, request_id, req, doc_dir).await?
+        run_agent_collect(app, request_id, req, doc_dir, cancel).await?
     };
 
     workspace::validate_changes(workspace, doc_dir)?;
@@ -1880,31 +2541,28 @@ async fn quality_check_with_agent(
     summary: &str,
     quality_template: &str,
     engine: &str,
+    tianji_agent: &Option<crate::wecom_orchestrator::WecomAgentConfig>,
+    cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
     let user = "请输出质量自检结论列表。";
     let system = build_quality_prompt(quality_template, doc_dir, branch, changed, summary);
 
     if engine.trim().eq_ignore_ascii_case("dsh") {
-        return dsh_turn(app, workspace, doc_dir, DOCGEN_QC_SESSION, &system, user).await;
+        return dsh_turn(app, workspace, doc_dir, DOCGEN_QC_SESSION, &system, user, cancel_requested).await;
     }
 
-    let agent_cfg = {
-        let st = app.state::<WecomState>();
-        let g = st.orch.agent.lock().await;
-        g.clone()
-    };
-    let Some(cfg) = agent_cfg else {
-        return Err("企微通道未绑定模型，无法质量自检".into());
+    let Some(agent_cfg) = tianji_agent.as_ref() else {
+        return Err("文档任务未绑定独立天玑模型；请在「逆向工程 → 引擎提示词」选择模型后再运行".into());
     };
     let request_id = format!("wecom-docgen-qc-{}", chrono::Utc::now().timestamp_millis());
     let req = crate::agent::AgentRunRequest {
-        config: cfg.config,
-        fallback_config: cfg.fallback_config,
+        config: agent_cfg.config.clone(),
+        fallback_config: agent_cfg.fallback_config.clone(),
         system,
         user: user.into(),
         request_id: request_id.clone(),
         repo_path: workspace.to_string(),
-        services: cfg.services,
+        services: agent_cfg.services.clone(),
         history: Vec::new(),
         messages: Vec::new(),
         mode: "doc".into(),
@@ -1914,23 +2572,23 @@ async fn quality_check_with_agent(
         vision: false,
         diff_confirm: false,
         always_allow: Vec::new(),
-        web_allow: cfg.web_allow,
-        web_tier: cfg.web_tier,
-        web_search_provider: cfg.web_search_provider,
-        web_search_key: cfg.web_search_key,
+        web_allow: agent_cfg.web_allow.clone(),
+        web_tier: agent_cfg.web_tier.clone(),
+        web_search_provider: agent_cfg.web_search_provider.clone(),
+        web_search_key: agent_cfg.web_search_key.clone(),
         subagents: false,
         subagent_write: false,
         mcp: Vec::new(),
-        parallel_reads: cfg.parallel_reads,
-        retries: cfg.retries,
-        grep_ignore: cfg.grep_ignore,
+        parallel_reads: agent_cfg.parallel_reads,
+        retries: agent_cfg.retries,
+        grep_ignore: agent_cfg.grep_ignore,
         plan_first: false,
-        context_tokens: cfg.context_tokens,
-        result_cap: cfg.result_cap,
-        anthropic_stream: cfg.anthropic_stream,
+        context_tokens: agent_cfg.context_tokens,
+        result_cap: agent_cfg.result_cap,
+        anthropic_stream: agent_cfg.anthropic_stream,
         mcp_enabled: false,
     };
-    run_agent_collect(app, request_id, req, doc_dir).await
+    run_agent_collect(app, request_id, req, doc_dir, cancel).await
 }
 
 /// DSH 档的会话键：每轮开始都重置，别让上下文一直滚。
@@ -1939,7 +2597,7 @@ const DOCGEN_QC_SESSION: &str = "docgen-qc";
 
 /// 跑一轮 DSH 回合并把正文收成字符串，跑完就关进程（不常驻）。
 ///
-/// 独立隔离目录 + 宿主工具闸门；只读质检降到 Read，任何权限升级请求均拒绝。
+    /// 原仓文档目录 + 宿主工具闸门；只读质检降到 Read，任何权限升级请求均拒绝。
 async fn dsh_turn(
     app: &AppHandle,
     workspace: &str,
@@ -1947,6 +2605,7 @@ async fn dsh_turn(
     session_key: &str,
     system: &str,
     user: &str,
+    cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
     let dsh = {
         let st = app.state::<WecomState>();
@@ -1954,7 +2613,7 @@ async fn dsh_turn(
     };
     // 工作区用这一轮解析出来的仓库路径（设置页填的可能是父目录）。
     dsh.configure_docgen(workspace.to_string(), doc_dir.to_string(), session_key == DOCGEN_QC_SESSION).await;
-    let result = match tokio::time::timeout(UPDATE_TURN_TIMEOUT, dsh_turn_inner(&dsh, session_key, system, user)).await {
+    let result = match tokio::time::timeout(UPDATE_TURN_TIMEOUT, dsh_turn_inner(&dsh, session_key, system, user, cancel)).await {
         Ok(result) => result,
         Err(_) => Err("DSH 文档任务超过整轮 600 秒期限，未确认完成".into()),
     };
@@ -1967,6 +2626,7 @@ async fn dsh_turn_inner(
     session_key: &str,
     system: &str,
     user: &str,
+    cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
     dsh.reset_channel_session(session_key).await;
     dsh.ensure_ready().await?;
@@ -1992,6 +2652,10 @@ async fn dsh_turn_inner(
             }
         };
         match event {
+            _ if cancel() => {
+                turn.cancel();
+                return Err("DSH 文档回合已请求停止".into());
+            }
             Some(crate::wecom_dsh::DshEvent::Update(update)) => {
                 let kind = update
                     .get("sessionUpdate")
@@ -2047,9 +2711,11 @@ async fn run_agent_collect(
     request_id: String,
     req: crate::agent::AgentRunRequest,
     doc_dir: &str,
+    cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
     let mut rx = crate::agent::subscribe_agent_bridge(&request_id);
     let deadline = tokio::time::Instant::now() + UPDATE_TURN_TIMEOUT;
+    let cancel_id = request_id.clone();
     let collector = tauri::async_runtime::spawn(async move {
         let mut acc = String::new();
         loop {
@@ -2059,7 +2725,12 @@ async fn run_agent_collect(
                     return completed_summary(acc, limited);
                 }
                 Some(crate::agent::AgentBridgeEvent::Err(e)) => return Err(e),
-                Some(_) => {}
+                Some(_) => {
+                    if cancel() {
+                        crate::cancellation::cancel_request(&cancel_id);
+                        return Err("天玑文档回合已请求停止".into());
+                    }
+                }
                 None => return Err("天玑事件流提前关闭，未收到完成确认".into()),
             }
         }
@@ -2131,7 +2802,7 @@ fn compose_notice(
         format!("\n\n**质量自检：**\n{}", quality.trim())
     };
     let title = if preview {
-        "## 👀 逆向文档预览（隔离目录待核对）"
+        "## 👀 逆向文档预览（已写本地文档，未提交）"
     } else {
         "## 📘 逆向文档已更新"
     };
@@ -2396,6 +3067,7 @@ fn field_matches(field: &str, value: u32, min: u32, max: u32) -> Result<bool, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn merge_keeps_later_repo_metadata_when_diff_budget_is_exhausted() {
@@ -2437,6 +3109,53 @@ mod tests {
         assert!(!should_advance_cursor(true, true)); // 已提交但推送失败
         assert!(!should_advance_cursor(false, true));
         assert!(should_advance_cursor(true, false));
+    }
+
+    #[test]
+    fn missed_cron_minute_is_retried_within_the_hour() {
+        let cfg = DocgenConfig { cron: "*/15 * * * *".into(), enabled: true, workspace: "D:/repo".into(), ..Default::default() };
+        let now = chrono::Local.with_ymd_and_hms(2026, 11, 7, 10, 22, 0).single().unwrap();
+        let last = "2026-11-07 10:00";
+        let missed = missed_cron_minute(&cfg, Some(last), now).unwrap();
+        assert_eq!(missed.as_deref(), Some("2026-11-07 10:15"));
+        let next = next_run_at(&cfg, now).unwrap();
+        assert_eq!(next.as_deref(), Some("2026-11-07 10:30"));
+    }
+
+    #[test]
+    fn next_run_uses_real_daily_slot_after_the_time_passes() {
+        let cfg = DocgenConfig { time: "09:30".into(), enabled: true, workspace: "D:/repo".into(), ..Default::default() };
+        let now = chrono::Local.with_ymd_and_hms(2026, 11, 7, 10, 0, 0).single().unwrap();
+        assert_eq!(next_run_at(&cfg, now).unwrap().as_deref(), Some("2026-11-08 09:30"));
+    }
+
+    #[test]
+    fn summary_references_only_accept_explicit_source_lines() {
+        let refs = extract_summary_references("- `src/a.rs:LoginService` → `doc/login.md`\n- 自由文本不算引用\n- `docs/a.md:概述`", "D:/repo", "abcdef1234", "doc");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].source_path, "src/a.rs");
+        assert_eq!(refs[0].symbol, "LoginService");
+        assert_eq!(refs[0].doc_path, "doc/login.md");
+        assert!(!refs.iter().any(|r| r.source_path == "自由文本不算引用"));
+    }
+
+    #[test]
+    fn docgen_config_keeps_its_own_tianji_model() {
+        let cfg = DocgenConfig {
+            engine: "tianji".into(),
+            ..Default::default()
+        };
+        assert!(cfg.tianji_agent.is_none());
+        assert_eq!(cfg.engine, "tianji");
+    }
+
+    #[test]
+    fn quality_gate_blocks_explicit_defects_but_not_suggestions() {
+        let bad = parse_quality_verdict("- 服务调用关系与代码矛盾\n- 引用失效：错误码 404\n- 建议再补一个示例\n- 未发现阻塞项");
+        assert_eq!(bad.blocking.len(), 2);
+        assert!(!bad.blocking.iter().any(|s| s.contains("建议")));
+        let good = parse_quality_verdict("- 未发现过时或矛盾\n- 文档与代码一致\n- 可选：增加部署说明");
+        assert!(good.blocking.is_empty());
     }
 
     #[test]
@@ -2575,6 +3294,71 @@ mod tests {
     }
 
     #[test]
+    fn split_deltas_keeps_single_batch_under_budget() {
+        let a = ChangeDelta {
+            head: "a".into(),
+            files: vec!["one.rs".into()],
+            commits: vec!["c1".into()],
+            diff_excerpt: "d".into(),
+            diff_truncated: false,
+        };
+        let batches = split_deltas_for_budget(&[(r"D:\x\svc".into(), a)], 24_000, 24_000);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].files.len(), 1);
+    }
+
+    #[test]
+    fn split_deltas_splits_by_repo_when_over_budget() {
+        let mk = |name: &str, n: usize| ChangeDelta {
+            head: name.into(),
+            files: (0..n).map(|i| format!("{name}/f{i}.rs")).collect(),
+            commits: vec![format!("{name} commit")],
+            diff_excerpt: format!("diff {name}"),
+            diff_truncated: false,
+        };
+        // 每仓约 40 个带前缀文件行，合并后远超 400 字符预算 → 至少 2 批
+        let parts = [
+            (r"D:\x\repo_a".into(), mk("a", 40)),
+            (r"D:\x\repo_b".into(), mk("b", 40)),
+        ];
+        let batches = split_deltas_for_budget(&parts, 400, 24_000);
+        assert!(batches.len() >= 2, "got {} batches", batches.len());
+        for b in &batches {
+            assert!(
+                format_file_list(&b.files).chars().count() <= 400
+                    || b.files.len() == 1,
+                "batch list too long: {} chars / {} files",
+                format_file_list(&b.files).chars().count(),
+                b.files.len()
+            );
+        }
+        let total_files: usize = batches.iter().map(|b| b.files.len()).sum();
+        assert_eq!(total_files, 80);
+    }
+
+    #[test]
+    fn split_deltas_chunks_single_repo_oversized_list() {
+        let files: Vec<String> = (0..80).map(|i| format!("path/to/quite/long/file_name_{i}.rs")).collect();
+        let d = ChangeDelta {
+            head: "h".into(),
+            files,
+            commits: vec!["only once".into()],
+            diff_excerpt: "big".into(),
+            diff_truncated: false,
+        };
+        let batches = split_deltas_for_budget(&[(r"D:\x\big".into(), d)], 500, 24_000);
+        assert!(batches.len() > 1, "expected file chunks, got {}", batches.len());
+        assert!(batches[0].commits.iter().any(|c| c.contains("only once")));
+        for b in batches.iter().skip(1) {
+            assert!(b.commits.is_empty());
+        }
+        for b in &batches {
+            let n = format_file_list(&b.files).chars().count();
+            assert!(n <= 500 || b.files.len() == 1, "chars={n} files={}", b.files.len());
+        }
+    }
+
+    #[test]
     fn notice_lists_files_and_summary() {
         let n = compose_notice(
             "release",
@@ -2638,6 +3422,10 @@ mod tests {
         let ws = r"D:\repo";
         // 绝对路径 + 反斜杠：剥掉 workspace 前缀、统一正斜杠
         assert_eq!(normalize_doc_dir(ws, r"D:\repo\doc").unwrap(), "doc");
+        assert_eq!(
+            normalize_doc_dir(r"D:\d_project\tc\prod", r"D:\d_project\tc\prod\pmys.saas.parent.pom\doc").unwrap(),
+            "pmys.saas.parent.pom/doc"
+        );
         assert_eq!(normalize_doc_dir(ws, "D:/repo/doc/sub").unwrap(), "doc/sub");
         assert_eq!(normalize_doc_dir(ws, "d:/REPO/Doc").unwrap(), "Doc");
         // 相对路径反斜杠 → 正斜杠；正斜杠原样
@@ -2646,6 +3434,15 @@ mod tests {
         // 空值回落默认；指向 workspace 本身视为 doc
         assert_eq!(normalize_doc_dir(ws, "  ").unwrap(), "doc");
         assert_eq!(normalize_doc_dir(ws, r"D:\repo").unwrap(), "doc");
+        // canonicalize 后的 `\\?\` 工作区也能剥前缀对齐手填绝对路径
+        assert_eq!(
+            normalize_doc_dir(r"\\?\D:\repo", r"D:\repo\doc").unwrap(),
+            "doc"
+        );
+        assert_eq!(
+            normalize_doc_dir(r"\\?\D:\d_project\tc\prod\pmys.saas.parent.pom", r"D:/d_project/tc/prod/pmys.saas.parent.pom/doc").unwrap(),
+            "doc"
+        );
         // 工作区之外的绝对路径直接报错
         assert!(normalize_doc_dir(ws, r"E:\elsewhere\doc").is_err());
         assert!(normalize_doc_dir(ws, "../outside").is_err());
@@ -2656,10 +3453,24 @@ mod tests {
     #[test]
     fn fill_docgen_template_replaces_placeholders() {
         let out = fill_docgen_template(
-            "dir={doc_dir} br={branch} x={files}",
-            &[("doc_dir", "doc"), ("branch", "release"), ("files", "- a.rs")],
+            "dir={doc_dir} br={branch} x={files} d={date} u={updates_dir}",
+            &[
+                ("doc_dir", "doc"),
+                ("branch", "release"),
+                ("files", "- a.rs"),
+                ("date", "2026-11-08"),
+                ("updates_dir", "doc/updates"),
+            ],
         );
-        assert_eq!(out, "dir=doc br=release x=- a.rs");
+        assert_eq!(out, "dir=doc br=release x=- a.rs d=2026-11-08 u=doc/updates");
+    }
+
+    #[test]
+    fn updates_dir_rel_joins_doc_dir() {
+        assert_eq!(updates_dir_rel("doc"), "doc/updates");
+        assert_eq!(updates_dir_rel("doc/"), "doc/updates");
+        assert_eq!(updates_dir_rel("reverse"), "reverse/updates");
+        assert_eq!(updates_dir_rel(""), "doc/updates");
     }
 
     #[test]
@@ -2671,12 +3482,16 @@ mod tests {
             diff_excerpt: "@@ -1 +1 @@\n-old\n+new".into(),
             diff_truncated: true,
         };
-        let p = build_docgen_prompt("", "doc", "release", &delta);
+        let p = build_docgen_prompt("", "doc", "release", &delta, "D:/repo");
         assert!(p.contains("提交摘要"));
         assert!(p.contains("deadbeef fix login"));
         assert!(p.contains("变更 diff 摘录") || p.contains("diff"));
         assert!(p.contains("已截断"));
         assert!(p.contains("`doc/`") || p.contains("doc/"));
+        assert!(p.contains("doc/updates"));
+        assert!(p.contains("功能更新") || p.contains("当日功能更新"));
+        assert!(!p.contains("{date}"));
+        assert!(!p.contains("{updates_dir}"));
         assert!(!p.contains("更新策略"));
         assert!(!p.contains("模块变更策略"));
         assert!(!p.contains("【API 变更策略】"));
@@ -2692,15 +3507,19 @@ mod tests {
             diff_truncated: false,
         };
         let p = build_docgen_prompt(
-            "只看 {files} 改 {doc_dir} @ {branch}",
+            "只看 {files} 改 {doc_dir} @ {branch} day={date} upd={updates_dir}",
             "docs",
             "main",
             &delta,
+            "D:/repo",
         );
         assert!(p.contains("- x.rs"));
         assert!(p.contains("docs"));
         assert!(p.contains("main"));
+        assert!(p.contains("docs/updates"));
         assert!(!p.contains("{files}"));
+        assert!(!p.contains("{date}"));
+        assert!(!p.contains("{updates_dir}"));
     }
 
     #[test]
@@ -2708,7 +3527,64 @@ mod tests {
         let p = build_quality_prompt("", "doc", "release", &["a.rs".into()], "已更新 a");
         assert!(p.contains("已更新 a"));
         assert!(p.contains("- a.rs"));
+        assert!(p.contains("doc/updates"));
         assert!(!p.contains("{summary}"));
+        assert!(!p.contains("{date}"));
+        assert!(!p.contains("{updates_dir}"));
+    }
+
+    #[test]
+    fn ensure_daily_update_creates_and_dedups() {
+        let root = std::env::temp_dir().join(format!(
+            "docgen-daily-{}",
+            chrono::Utc::now().timestamp_millis()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = root.to_string_lossy().to_string();
+        let summary = "更新了登录模块文档，对应本次鉴权改动。\n## 代码引用\n`auth/login.rs:LoginService`";
+        let path = ensure_daily_update(
+            &ws,
+            "doc",
+            "2026-11-08",
+            "12:00 · release",
+            summary,
+        )
+        .expect("create daily");
+        assert!(path.exists());
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.contains("# 2026-11-08 功能更新"));
+        assert!(first.contains("系统补记"));
+        assert!(first.contains("登录模块"));
+
+        ensure_daily_update(&ws, "doc", "2026-11-08", "12:01 · release", summary)
+            .expect("dedup");
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            second.matches("系统补记").count(),
+            1,
+            "same summary must not append twice"
+        );
+
+        let other = "另一批：支付回调文档已同步。\n## 代码引用\n`pay/cb.rs:onPay`";
+        ensure_daily_update(&ws, "doc", "2026-11-08", "13:00 · release", other)
+            .expect("append other");
+        let third = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(third.matches("系统补记").count(), 2);
+        assert!(third.contains("支付回调"));
+
+        // 代理已写入实质内容时，不再系统补记
+        let agent_line = "功能点：新增发票导出；涉及模块文档：`doc/invoice.md`";
+        let mut agent_file = format!("# 2026-11-09 功能更新\n\n## 09:00 · release\n\n- {agent_line}\n");
+        let agent_path = Path::new(&ws).join("doc").join("updates").join("2026-11-09.md");
+        std::fs::write(&agent_path, &agent_file).unwrap();
+        ensure_daily_update(&ws, "doc", "2026-11-09", "09:05 · release", &agent_line)
+            .expect("agent covered");
+        agent_file = std::fs::read_to_string(&agent_path).unwrap();
+        assert!(!agent_file.contains("系统补记"));
+        assert_eq!(agent_file.matches("发票导出").count(), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

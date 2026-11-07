@@ -716,6 +716,7 @@ pub fn run() {
             wecom_channel::wecom_dsh_models,
             wecom_channel::wecom_dsh_sync,
             wecom_channel::wecom_docgen_run_now,
+            wecom_channel::wecom_docgen_cancel,
             wecom_channel::wecom_docgen_test,
             wecom_channel::wecom_docgen_history,
             wecom_channel::wecom_docgen_reset_cursor,

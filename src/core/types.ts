@@ -322,10 +322,14 @@ export interface AppSettings {
   wecomDocgenSystemPrompt?: string;
   /** 质量自检 system 提示词模板（占位符 {doc_dir}/{branch}/{files}/{summary}）；空=内置默认 */
   wecomDocgenQualityPrompt?: string;
-  /** 预览模式：更新后不落盘并清仓 */
+  /** 预览模式：产物保留独立 worktree */
   wecomDocgenPreview?: boolean;
+  /** 全量建档：忽略采集点，从当前 HEAD 建初始文档（一次性动作） */
+  wecomDocgenFullInit?: boolean;
   /** 更新后再跑只读质量自检 */
   wecomDocgenQualityCheck?: boolean;
+  /** 质量自检发现阻断项时停止提交与发布（默认开） */
+  wecomDocgenQualityGate?: boolean;
   /** 轮询 origin/release 超前后自动跑 */
   wecomDocgenPollRelease?: boolean;
   /** 文档更新后自动 commit（默认开；关掉会导致下次因脏工作区跳过） */

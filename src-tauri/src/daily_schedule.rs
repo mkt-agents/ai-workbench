@@ -101,11 +101,14 @@ pub fn spawn(app: tauri::AppHandle) {
             if let Err(e) = crate::trae_quota::auto_tick(&app).await {
                 eprintln!("[trae] auto-checkin tick failed: {e}");
             }
-            if let Err(e) = crate::wecom_docgen::auto_tick(&app).await {
-                eprintln!("[wecom] docgen tick failed: {e}");
-            }
+            // 文档任务可能跑十分钟：独立并发，避免阻塞签到与提醒。
+            let docgen = tauri::async_runtime::spawn(crate::wecom_docgen::auto_tick(app.clone()));
+            // `auto_tick` 只借 AppHandle；spawn 需要 'static，clone 一份交给独立任务。
             if let Err(e) = crate::work_todo_reminder::auto_tick(&app).await {
                 eprintln!("[work-todo] remind tick failed: {e}");
+            }
+            if let Err(e) = docgen.await.unwrap_or_else(|e| Err(e.to_string())) {
+                eprintln!("[wecom] docgen tick failed: {e}");
             }
         }
     });

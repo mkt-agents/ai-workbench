@@ -249,12 +249,18 @@ pub struct WecomApplyRequest {
     /// 质检 system 提示词模板；空=内置默认。
     #[serde(default)]
     pub docgen_quality_prompt: String,
-    /// 预览模式：更新后不落盘。
+    /// 预览模式：产物保留独立 worktree。
     #[serde(default)]
     pub docgen_preview: bool,
+    /// 全量建档：忽略采集点，从当前 HEAD 建初始文档。
+    #[serde(default)]
+    pub docgen_full_init: bool,
     /// 质量自检第二轮。
     #[serde(default)]
     pub docgen_quality_check: bool,
+    /// 质检阻断项默认停止提交与发布。
+    #[serde(default = "default_true")]
+    pub docgen_quality_gate: bool,
     /// 轮询 origin/release 超前后自动跑。
     #[serde(default)]
     pub docgen_poll_release: bool,
@@ -264,6 +270,9 @@ pub struct WecomApplyRequest {
     /// 文档自动更新用哪个引擎：`inherit`（跟随回答设置，默认）| `tianji` | `dsh`。
     #[serde(default)]
     pub docgen_engine: String,
+    /// 天玑档独立模型快照；不依赖企微通道是否启用。
+    #[serde(default)]
+    pub docgen_agent: Option<WecomAgentConfig>,
     /// 文档更新（DSH 档）用的模型；空 = 沿用「回答设置」里的 DSH 模型。
     #[serde(default)]
     pub docgen_dsh_model: String,
@@ -689,8 +698,14 @@ pub struct DocgenApplyRequest {
     pub webhook_dingtalk: String,
     #[serde(default)]
     pub preview: bool,
+    /// 全量建档：忽略采集点，从当前 HEAD 建初始文档。
+    #[serde(default)]
+    pub full_init: bool,
     #[serde(default)]
     pub quality_check: bool,
+    /// 质检发现阻断项时停止提交与发布（默认开）。
+    #[serde(default = "default_true")]
+    pub quality_gate: bool,
     #[serde(default)]
     pub poll_release: bool,
     #[serde(default)]
@@ -706,6 +721,9 @@ pub struct DocgenApplyRequest {
     /// `inherit` | `tianji` | `dsh`；`inherit` 跟随回话引擎。
     #[serde(default)]
     pub engine: String,
+    /// 天玑档文档任务的独立模型快照（不依赖企微是否启用）。
+    #[serde(default)]
+    pub agent: Option<WecomAgentConfig>,
     /// 前端已把空值解析成「回答设置」里的 DSH 模型 / 思考强度。
     #[serde(default)]
     pub dsh_model: String,
@@ -751,7 +769,9 @@ pub async fn wecom_docgen_apply(
         auto_commit: req.auto_commit,
         auto_push: req.auto_push,
         preview_mode: req.preview,
+        full_init: req.full_init,
         quality_check: req.quality_check,
+        quality_gate: req.quality_gate,
         poll_release: req.poll_release,
         sync_sources: req.sync_sources,
         lookback_days: normalize_lookback_days(req.lookback_days),
@@ -759,6 +779,7 @@ pub async fn wecom_docgen_apply(
         system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.system_prompt),
         quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.quality_prompt),
         engine: normalize_docgen_engine(&req.engine, &channel_engine),
+        tianji_agent: req.agent,
         workspace,
     };
     // 文档更新那套 DSH 引擎也在这里对齐（模型/思考强度留空表示沿用，前端已解析）。
@@ -779,6 +800,17 @@ pub async fn wecom_docgen_apply(
     Ok(())
 }
 
+/// 停止当前文档任务；运行中的下一阶段会返回失败，已写入的文档改动留在工作区。
+#[tauri::command]
+pub async fn wecom_docgen_cancel() -> Result<(), String> {
+    if crate::wecom_docgen::is_running() {
+        crate::wecom_docgen::cancel_running();
+        Ok(())
+    } else {
+        Err("当前没有文档任务在运行".into())
+    }
+}
+
 /// 最近 30 条逆向文档更新历史（新 → 旧）。
 #[tauri::command]
 pub async fn wecom_docgen_history() -> Result<Vec<crate::wecom_docgen::DocgenHistoryItem>, String> {
@@ -788,8 +820,9 @@ pub async fn wecom_docgen_history() -> Result<Vec<crate::wecom_docgen::DocgenHis
 /// 最近一次文档更新进度快照（页面重新挂载时恢复进度卡用）。
 #[tauri::command]
 pub async fn wecom_docgen_progress(
+    app: AppHandle,
 ) -> Result<crate::wecom_docgen::DocgenProgressSnapshot, String> {
-    Ok(crate::wecom_docgen::progress_snapshot())
+    Ok(crate::wecom_docgen::progress_snapshot(&app).await)
 }
 
 /// 重置采集点：`repos` 为空 = 全部仓；否则只清这几个（按规范化路径匹配）。
@@ -1088,8 +1121,10 @@ pub async fn wecom_channel_apply(
         webhook_feishu: req.webhook_feishu,
         webhook_dingtalk: req.webhook_dingtalk,
         auto_commit: req.auto_commit,
+        quality_gate: req.docgen_quality_gate,
         auto_push: req.auto_push,
         preview_mode: req.docgen_preview,
+        full_init: req.docgen_full_init,
         quality_check: req.docgen_quality_check,
         poll_release: req.docgen_poll_release,
         sync_sources: req.docgen_sync_sources,
@@ -1098,6 +1133,7 @@ pub async fn wecom_channel_apply(
         system_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_system_prompt),
         quality_prompt: crate::wecom_docgen::normalize_prompt_template(&req.docgen_quality_prompt),
         engine: normalize_docgen_engine(&req.docgen_engine, &engine),
+        tianji_agent: req.docgen_agent,
     };
 
     // 文档更新用的 DSH 引擎与通道引擎分开：固定编辑档（要写文档）。模型/思考强度可以

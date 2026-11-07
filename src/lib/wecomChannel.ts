@@ -373,10 +373,12 @@ export const DOCGEN_PROMPT_CHAR_CAP = 12_000;
 
 /**
  * 内置更新 system 模板（与 Rust `default_docgen_system_prompt` 保持一致）。
- * 占位符：{doc_dir} {branch} {commits} {files} {diff}
+ * 占位符：{doc_dir} {branch} {commits} {files} {diff} {date} {updates_dir}
  */
-export const DEFAULT_DOCGEN_SYSTEM_PROMPT = `你是代码逆向文档维护助手。工作区是一个代码仓库，\`{doc_dir}/\` 下是基于代码的逆向工程文档。
-当前在 release 分支「{branch}」。
+export const DEFAULT_DOCGEN_SYSTEM_PROMPT = `你是代码逆向文档维护助手。工作区是一个代码仓库，有两类文档产物：
+- \`{doc_dir}/\`：按模块沉淀的逆向工程说明书（长期知识）
+- \`{updates_dir}/{date}.md\`：按日沉淀的「今天改了哪些功能」（面向人读的变更日志）
+当前在 release 分支「{branch}」，今日日期 \`{date}\`。
 
 ## 提交摘要
 {commits}
@@ -387,29 +389,34 @@ export const DEFAULT_DOCGEN_SYSTEM_PROMPT = `你是代码逆向文档维护助�
 ## 变更 diff 摘录（定向线索；完整内容请用工具读文件）
 {diff}
 
-任务：阅读这些变更涉及的代码，更新 \`{doc_dir}/\` 下**对应**的逆向文档，使其与最新代码一致。
+任务：阅读这些变更涉及的代码，完成两类产物。
+一、更新 \`{doc_dir}/\` 下**对应**的逆向文档，使其与最新代码一致。
 如何找对应文档（按顺序尝试）：
 - 先在 \`{doc_dir}/\` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；
 - 文件名/模块名找不到时，按业务功能关键词再搜一次；
-- 仍找不到且该变更重要时，才在 \`{doc_dir}/\` 下新建一篇，文件名贴合模块。
+- 仍找不到且该变更重要时，才在 \`{doc_dir}/\` 下新建一篇，文件名贴合模块（不要建在 updates/ 下）。
+二、追加当日功能更新：打开或新建 \`{updates_dir}/{date}.md\`，在文末追加一节（不要整文件覆盖）。
+节标题示例：\`## HH:MM · {branch}\`；正文用条目列出本批涉及的功能点、触及的模块文档路径、关键源码符号。只写本批出现的变更，禁止编造未出现的模块。
 硬规则：
-1. **只允许修改/新建 \`{doc_dir}/\` 目录内的文件**；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。
-2. 变更很小 / 与文档无关时可以不改，并在摘要里说明原因。
-3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。
-4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」，这段会推送到群里。`;
+1. **只允许修改/新建 \`{doc_dir}/\` 目录内的文件**（含 \`{updates_dir}/\`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。
+2. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。
+3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。
+4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」；另起「## 代码引用」列出实际修改文档对应的 \`源码路径:符号\`（每行一条），这段会推送到群里。`;
 
 /**
  * 内置质检 system 模板（与 Rust `default_docgen_quality_prompt` 保持一致）。
- * 占位符：{doc_dir} {branch} {files} {summary}
+ * 占位符：{doc_dir} {branch} {files} {summary} {date} {updates_dir}
  */
-export const DEFAULT_DOCGEN_QUALITY_PROMPT = `你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 \`{doc_dir}/\`。
+export const DEFAULT_DOCGEN_QUALITY_PROMPT = `你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 \`{doc_dir}/\`，今日 \`{date}\`。
 上一轮更新摘要：
 {summary}
 
 本次代码变更文件：
 {files}
 
-任务：对照变更与 \`{doc_dir}/\` 现有文档，用 3–8 条中文检查结论指出：是否缺更、是否过时、是否矛盾。
+任务：对照变更与现有文档，用 3–8 条中文检查结论指出：
+- 模块逆向文档是否缺更、过时、矛盾；
+- \`{updates_dir}/{date}.md\` 是否已覆盖本批主要功能点（缺失、过空、或把未出现模块写进去都算问题）。
 硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。`;
 
 /** trim + 字符上限；空串表示走后端默认。 */
@@ -590,7 +597,10 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
  * 重启长连接；文档更新页每改一个字段就重启一次 IM 通道，既慢又会踢掉正在聊的会话。
  * 后端 `wecom_docgen_apply` 只写 `state.docgen`，两条路径收敛到同一份配置。
  */
-export async function applyWecomDocgen(settings: AppSettings): Promise<void> {
+export async function applyWecomDocgen(
+  settings: AppSettings,
+  models: AIModelConfig[]
+): Promise<void> {
   const seal = async (raw: string | undefined) => {
     let v = (raw ?? "").trim();
     if (v && !v.startsWith("enc:v1:")) v = await protectSecret(v);
@@ -606,6 +616,41 @@ export async function applyWecomDocgen(settings: AppSettings): Promise<void> {
     (settings.wecomDocgenDshEffort ?? "").trim() || (settings.wecomDshEffort ?? "").trim();
   // 文档目录同样留空跟随「回答设置」，两处各自一套。
   const docDir = (settings.wecomDocgenDocDir ?? "").trim() || (settings.wecomDocDir ?? "").trim();
+  const docgenModel =
+    resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
+    models.find((m) => m.isDefault) ??
+    models[0];
+  const docgenFallback = resolveFallbackModel(docgenModel ?? undefined, models);
+  const docgenAgent = docgenModel
+    ? {
+        config: docgenModel,
+        fallbackConfig: docgenFallback,
+        repoPath,
+        services: [] as string[],
+        permission: "workspace",
+        tools: true,
+        mode: "doc",
+        vision: Boolean(docgenModel.vision),
+        diffConfirm: false,
+        alwaysAllow: [],
+        webAllow: settings.agentWebAllow ?? [],
+        webTier: settings.agentWebTier || "allowlist",
+        webSearchProvider: settings.agentWebSearchProvider || "",
+        webSearchKey: settings.agentWebSearchKey || "",
+        subagents: false,
+        parallelReads: settings.agentParallelReads !== false,
+        retries: settings.agentRetries !== false,
+        grepIgnore: settings.agentGrepIgnore !== false,
+        planFirst: false,
+        contextTokens: settings.agentContextTokens ?? 0,
+        resultCap: settings.agentResultCap ?? 0,
+        anthropicStream: settings.agentAnthropicStream !== false,
+        mcpEnabled: false,
+        mcp: [],
+        systemExtra: "",
+      }
+    : null;
+
   await invoke("wecom_docgen_apply", {
     req: {
       repoPath,
@@ -618,7 +663,9 @@ export async function applyWecomDocgen(settings: AppSettings): Promise<void> {
       webhookFeishu: await seal(settings.wecomWebhookFeishu),
       webhookDingtalk: await seal(settings.wecomWebhookDingtalk),
       preview: Boolean(settings.wecomDocgenPreview),
+      fullInit: Boolean(settings.wecomDocgenFullInit),
       qualityCheck: Boolean(settings.wecomDocgenQualityCheck),
+      qualityGate: settings.wecomDocgenQualityGate !== false,
       pollRelease: Boolean(settings.wecomDocgenPollRelease),
       syncSources: Boolean(settings.wecomDocgenSyncSources),
       lookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),
@@ -631,6 +678,7 @@ export async function applyWecomDocgen(settings: AppSettings): Promise<void> {
           : settings.wecomDocgenEngine === "tianji"
             ? "tianji"
             : "inherit",
+      agent: docgenAgent,
       dshModel,
       dshEffort,
       autoCommit: settings.wecomAutoCommit !== false,
@@ -678,6 +726,11 @@ export async function runWecomDocgenNow(): Promise<string> {
   return invoke<string>("wecom_docgen_run_now");
 }
 
+/** 停止当前文档任务；返回失败表示没有运行中的任务。 */
+export async function cancelWecomDocgen(): Promise<void> {
+  return invoke("wecom_docgen_cancel");
+}
+
 /** 连通自检：校验 release 分支 / webhook / SkyWalking，返回多行结果。 */
 export async function testWecomDocgen(): Promise<string> {
   return invoke<string>("wecom_docgen_test");
@@ -700,9 +753,26 @@ export type WecomDocgenHistoryItem = {
   status: string;
   changedFiles: number;
   updatedDocs: string;
+  /** 本轮记录或复用的代码—文档引用；用于追溯，不证明调用关系。 */
+  references?: Array<{
+    repo: string;
+    sha: string;
+    sourcePath: string;
+    symbol: string;
+    docPath: string;
+    section: string;
+  }>;
   commitNote?: string;
   quality?: string;
+  /** 质检识别出的明确阻断项数量。 */
+  qualityBlocking?: number;
   pushed: boolean;
+  /** ok | fail | not-run | reused；旧记录为 undefined。 */
+  commitStatus?: string;
+  /** ok | fail | not-run；旧记录为 undefined。 */
+  pushStatus?: string;
+  /** sent | not-sent；旧记录为 undefined。 */
+  notifyStatus?: string;
   error?: string;
   preview: boolean;
   webhookErrors?: string[];
@@ -722,6 +792,9 @@ export async function fetchWecomDocgenHistory(): Promise<WecomDocgenHistoryItem[
 export type WecomDocgenProgressSnapshot = {
   progress: WecomDocgenProgress | null;
   running: boolean;
+  /** 后端计算的下一计划时间；cron 是实际下一次命中。 */
+  nextRunAt?: string | null;
+  pendingDailySlot?: string | null;
 };
 export async function fetchWecomDocgenProgress(): Promise<WecomDocgenProgressSnapshot> {
   return invoke<WecomDocgenProgressSnapshot>("wecom_docgen_progress");

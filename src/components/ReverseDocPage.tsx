@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, Clock, Cpu, Eye, EyeOff, FolderGit2, FolderOpen, Play, RefreshCw, Save, Send, Sparkles } from "lucide-react";
+import { Clock, Cpu, Eye, EyeOff, FolderGit2, FolderOpen, Play, RefreshCw, Save, Send, Sparkles, Square } from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import { useTauriEvent } from "../hooks/useTauriEvent";
@@ -23,6 +23,7 @@ import {
   DOCGEN_PROMPT_CHAR_CAP,
   WECOM_DOCGEN_PROGRESS_EVENT,
   applyWecomDocgen,
+  cancelWecomDocgen,
   fetchDshModels,
   fetchWecomDocgenHistory,
   fetchWecomDocgenProgress,
@@ -177,7 +178,9 @@ function DocgenPromptCard({
   savedQuality,
   busy,
   qualityCheck,
+  qualityGate,
   onToggleQualityCheck,
+  onToggleQualityGate,
   onSavePrompt,
 }: {
   /** 二级页签切换时整卡隐藏（组件仍挂载，草稿切回来还在） */
@@ -192,7 +195,9 @@ function DocgenPromptCard({
   savedQuality: string;
   busy: boolean;
   qualityCheck: boolean;
+  qualityGate: boolean;
   onToggleQualityCheck: (next: boolean) => void;
+  onToggleQualityGate: (next: boolean) => void;
   /** 传 undefined 表示回到内置默认 */
   onSavePrompt: (which: "system" | "quality", value: string | undefined) => void;
 }) {
@@ -291,6 +296,23 @@ function DocgenPromptCard({
         }
         hint={<p className="setting-hint">{t("wecom.docgenQualityCheckHint")}</p>}
       />
+
+      <Row
+        asSwitch
+        label={t("wecom.docgenQualityGate")}
+        control={
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={qualityGate}
+              disabled={!qualityCheck}
+              onChange={(e) => onToggleQualityGate(e.target.checked)}
+            />
+            <span className="toggle-slider" />
+          </label>
+        }
+        hint={<p className="setting-hint">{t("wecom.docgenQualityGateHint")}</p>}
+      />
     </div>
   );
 }
@@ -312,6 +334,8 @@ export default function ReverseDocPage() {
   const [docgenHistory, setDocgenHistory] = useState<WecomDocgenHistoryItem[]>([]);
   const [docgenHistoryBusy, setDocgenHistoryBusy] = useState(false);
   const [docgenProgress, setDocgenProgress] = useState<WecomDocgenProgress | null>(null);
+  const [docgenNextRunAt, setDocgenNextRunAt] = useState<string | null>(null);
+  const [docgenPendingSlot, setDocgenPendingSlot] = useState<string | null>(null);
   const [docgenScanBusy, setDocgenScanBusy] = useState(false);
   const [docgenResetBusy, setDocgenResetBusy] = useState(false);
   // null = 尚未成功扫描；[] = 扫描成功但没有子仓。两者不能混为一谈。
@@ -346,8 +370,9 @@ export default function ReverseDocPage() {
     try {
       if (Object.keys(next).length) setSettings(next);
       const merged = { ...useGlobalStore.getState().settings, ...next };
-      await applyWecomDocgen(merged);
+      await applyWecomDocgen(merged, useGlobalStore.getState().aiModels);
       setMsg(t("wecom.saved"));
+      void refreshSchedule();
     } catch (e) {
       setMsg(String(e));
     } finally {
@@ -416,9 +441,11 @@ export default function ReverseDocPage() {
   /** 扫描子仓的根目录（白名单本来就是在它下面勾）。 */
   const docgenScanBase = (docgenWorkspace || docgenInheritedWorkspace).trim();
   /** 运行条上的「下次运行」：cron 优先，其次每日时刻。 */
-  const docgenScheduleLabel = settings.wecomDocgenCron?.trim()
-    ? t("wecom.docgenCronSummary", { cron: settings.wecomDocgenCron.trim() })
-    : t("wecom.sectionDailyAt", { time: settings.wecomAutoUpdateTime || "23:00" });
+  const docgenScheduleLabel = docgenNextRunAt
+    ? t("wecom.docgenNextRunAt", { time: docgenNextRunAt })
+    : settings.wecomDocgenCron?.trim()
+      ? t("wecom.docgenCronSummary", { cron: settings.wecomDocgenCron.trim() })
+      : t("wecom.sectionDailyAt", { time: settings.wecomAutoUpdateTime || "23:00" });
   /**
    * 调度草稿与已保存值不一致：表单里改完还没失焦落盘的 cron / 时刻，
    * 运行条仍按旧值算「下次运行」，必须标出来，否则看着像说明写错了。
@@ -452,15 +479,27 @@ export default function ReverseDocPage() {
     if (docgenEngineResolved === "dsh") void loadModels(false, "docgen");
   }, [docgenEngineResolved, docgenScanBase, catalog, catalogError, loadModels]);
 
+  const refreshSchedule = useCallback(() => {
+    void fetchWecomDocgenProgress()
+      .then(({ running, nextRunAt, pendingDailySlot }) => {
+        setDocgenBusy(running);
+        setDocgenNextRunAt(nextRunAt ?? null);
+        setDocgenPendingSlot(pendingDailySlot ?? null);
+      })
+      .catch(() => {});
+  }, []);
+
   // 进页面：补一次更新记录 + 从后端快照恢复进度卡（那一轮可能还在跑）
   useEffect(() => {
     void fetchWecomDocgenHistory()
       .then(setDocgenHistory)
       .catch(() => {});
     void fetchWecomDocgenProgress()
-      .then(({ progress, running }) => {
+      .then(({ progress, running, nextRunAt, pendingDailySlot }) => {
         // 按钮锁只看后端真实状态，别被一份过期的 "running" 事件永久禁掉
         setDocgenBusy(running);
+        setDocgenNextRunAt(nextRunAt ?? null);
+        setDocgenPendingSlot(pendingDailySlot ?? null);
         if (progress) setDocgenProgress((prev) => prev ?? progress);
       })
       .catch(() => {});
@@ -534,7 +573,9 @@ export default function ReverseDocPage() {
                 </span>
                 <div className="wecom-bind-text">
                   <span className="wecom-bind-title">
-                    {settings.wecomAutoUpdateEnabled
+                    {docgenPendingSlot
+                      ? t("wecom.docgenPendingSlot", { time: docgenPendingSlot })
+                      : settings.wecomAutoUpdateEnabled
                       ? docgenScheduleDirty
                         ? t("wecom.docgenNextRunDirty", { schedule: docgenScheduleLabel })
                         : t("wecom.docgenNextRun", { schedule: docgenScheduleLabel })
@@ -579,6 +620,35 @@ export default function ReverseDocPage() {
                 </button>
                 <button
                   type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={docgenBusy || !docgenScanBase}
+                  onClick={() => {
+                    const ok = window.confirm(t("wecom.docgenFullInitConfirm"));
+                    if (!ok) return;
+                    setMsg("");
+                    void push({ wecomDocgenFullInit: true })
+                      .then(() => runWecomDocgenNow())
+                      .then(() => push({ wecomDocgenFullInit: false }))
+                      .catch((e) => setMsg(String(e)));
+                  }}
+                >
+                  {t("wecom.docgenFullInitBtn")}
+                </button>
+                {docgenBusy ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      void cancelWecomDocgen()
+                        .then(() => setMsg(t("wecom.docgenCancelRequested")))
+                        .catch((e) => setMsg(String(e)));
+                    }}
+                  >
+                    <Square size={13} /> {t("wecom.docgenCancelBtn")}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
                   className="btn btn-primary btn-small"
                   disabled={docgenBusy || !docgenScanBase}
                   onClick={() => {
@@ -598,6 +668,7 @@ export default function ReverseDocPage() {
                         void fetchWecomDocgenHistory()
                           .then(setDocgenHistory)
                           .catch(() => {});
+                        refreshSchedule();
                       })
                       .catch((e) => {
                         const detail = String(e);
@@ -1277,7 +1348,9 @@ export default function ReverseDocPage() {
               savedQuality={settings.wecomDocgenQualityPrompt ?? ""}
               busy={busy}
               qualityCheck={Boolean(settings.wecomDocgenQualityCheck)}
+              qualityGate={settings.wecomDocgenQualityGate !== false}
               onToggleQualityCheck={(next) => void push({ wecomDocgenQualityCheck: next })}
+              onToggleQualityGate={(next) => void push({ wecomDocgenQualityGate: next })}
               onSavePrompt={(which, value) =>
                 void push(
                   which === "system"
@@ -1511,7 +1584,9 @@ export default function ReverseDocPage() {
                         <th className="is-state">{t("wecom.docgenHistoryColStatus")}</th>
                         <th className="is-num">{t("wecom.docgenHistoryColDuration")}</th>
                         <th className="is-num">{t("wecom.docgenHistoryColFiles")}</th>
+                        <th className="is-num">{t("wecom.docgenHistoryColCommit")}</th>
                         <th className="is-num">{t("wecom.docgenHistoryColPush")}</th>
+                        <th className="is-num">{t("wecom.docgenHistoryColNotify")}</th>
                         <th>{t("wecom.docgenHistoryColSummary")}</th>
                       </tr>
                     </thead>
@@ -1520,6 +1595,18 @@ export default function ReverseDocPage() {
                         const summary = row.updatedDocs || row.error || "";
                         const ok = row.status === "ok";
                         const failed = row.status === "fail";
+                        const skipped = row.status === "skip";
+                        const blocking = row.qualityBlocking ?? 0;
+                        const stage = (value?: string) => {
+                          if (!value) return <span className="wecom-docgen-dash" aria-hidden>—</span>;
+                          const ok = value === "ok" || value === "reused" || value === "sent";
+                          const fail = value === "fail";
+                          return (
+                            <span className={`wecom-docgen-stage${ok ? " is-ok" : fail ? " is-fail" : ""}`}>
+                              {ok ? t("wecom.docgenStageOk") : fail ? t("wecom.docgenStageFail") : t("wecom.docgenStageNotRun")}
+                            </span>
+                          );
+                        };
                         return (
                           <tr key={`${row.at}-${row.trigger}-${row.branch}`}>
                             <td className="is-time mono">{row.at}</td>
@@ -1536,7 +1623,14 @@ export default function ReverseDocPage() {
                                   ? t("wecom.docgenStateOk")
                                   : failed
                                     ? t("wecom.docgenStateFail")
-                                    : row.status}
+                                    : skipped
+                                      ? t("wecom.docgenStateSkip")
+                                      : row.status}
+                                {blocking > 0 ? (
+                                  <span className="wecom-docgen-blocking">
+                                    {t("wecom.docgenQualityBlocking", { count: blocking })}
+                                  </span>
+                                ) : null}
                               </span>
                             </td>
                             <td className="is-num">
@@ -1549,15 +1643,9 @@ export default function ReverseDocPage() {
                               )}
                             </td>
                             <td className="is-num mono">{row.changedFiles}</td>
-                            <td className="is-num">
-                              {row.pushed ? (
-                                <Check size={12} className="wecom-docgen-check" aria-label="pushed" />
-                              ) : (
-                                <span className="wecom-docgen-dash" aria-hidden>
-                                  —
-                                </span>
-                              )}
-                            </td>
+                            <td className="is-num">{stage(row.commitStatus)}</td>
+                            <td className="is-num">{stage(row.pushStatus)}</td>
+                            <td className="is-num">{stage(row.notifyStatus)}</td>
                             <td className="wecom-docgen-summary">
                               {summary ? (
                                 <span className="wecom-docgen-summary-text" title={summary}>

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -96,19 +96,30 @@ fn git_command() -> Command {
 }
 
 fn map_git_spawn_err(e: std::io::Error) -> String {
+    map_git_spawn_err_at(e, None)
+}
+
+fn map_git_spawn_err_at(e: std::io::Error, cwd: Option<&Path>) -> String {
     if e.kind() == std::io::ErrorKind::NotFound {
-        "未检测到 Git，请安装并加入 PATH".to_string()
-    } else {
-        format!("执行 git 失败: {}", e)
+        return "未检测到 Git，请安装并加入 PATH".to_string();
+    }
+    match cwd {
+        Some(dir) => format!(
+            "执行 git 失败（目录 {}）: {}",
+            path_for_markdown(&dir.to_string_lossy()),
+            e
+        ),
+        None => format!("执行 git 失败: {}", e),
     }
 }
 
 fn is_git_work_tree(repo_path: &Path) -> Result<bool, String> {
+    let cwd = strip_verbatim_prefix(repo_path);
     let output = git_command()
         .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(repo_path)
+        .current_dir(&cwd)
         .output()
-        .map_err(map_git_spawn_err)?;
+        .map_err(|e| map_git_spawn_err_at(e, Some(&cwd)))?;
     if !output.status.success() {
         return Ok(false);
     }
@@ -133,6 +144,32 @@ pub(crate) fn ensure_git_repo(repo_path: &str) -> Result<(), String> {
 /// 企微 / Markdown 通知里反斜杠会被当转义吃掉；统一改成正斜杠展示。
 pub(crate) fn path_for_markdown(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+/// 剥掉 Windows `\\?\` / `\\.\` 设备前缀。
+///
+/// `canonicalize` 常返回 `\\?\D:\...`；Win32 `CreateProcess` 的
+/// `lpCurrentDirectory` 不认这个前缀（os error 267），路径组件比对也会
+/// 和用户手填的 `D:\...` 对不上。
+pub(crate) fn strip_verbatim_prefix(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    let mut s = path.to_string_lossy().replace('/', "\\");
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        s = format!(r"\\{rest}");
+    } else if let Some(rest) = s
+        .strip_prefix(r"\\?\")
+        .or_else(|| s.strip_prefix(r"\\.\"))
+    {
+        s = rest.to_string();
+    }
+    PathBuf::from(s)
+}
+
+/// `canonicalize` 后再剥设备前缀，供进程 cwd / 对外路径字符串使用。
+pub(crate) fn canonicalize_for_process(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    path.as_ref()
+        .canonicalize()
+        .map(strip_verbatim_prefix)
 }
 
 fn paths_equal_norm(a: &Path, b: &Path) -> bool {
@@ -253,11 +290,12 @@ pub(crate) fn resolve_git_workspace(workspace: &str, doc_dir: &str) -> Result<St
 }
 
 pub(crate) fn git_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    let cwd = strip_verbatim_prefix(Path::new(repo_path));
     git_command()
         .args(args)
-        .current_dir(repo_path)
+        .current_dir(&cwd)
         .output()
-        .map_err(map_git_spawn_err)
+        .map_err(|e| map_git_spawn_err_at(e, Some(&cwd)))
 }
 
 pub(crate) fn git_stdout(repo_path: &str, args: &[&str]) -> Result<String, String> {
@@ -307,13 +345,14 @@ fn git_output_timed(
     args: &[&str],
     timeout: Duration,
 ) -> Result<std::process::Output, String> {
+    let cwd = strip_verbatim_prefix(Path::new(repo_path));
     let child = git_command()
         .args(args)
-        .current_dir(repo_path)
+        .current_dir(&cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(map_git_spawn_err)?;
+        .map_err(|e| map_git_spawn_err_at(e, Some(&cwd)))?;
     finish_git_child(child, args.first().copied().unwrap_or(""), timeout, false)
 }
 
@@ -459,6 +498,7 @@ fn windows_system_proxy() -> Option<(String, String)> {
 /// lets Git Credential Manager ask. A transfer that never finishes is stopped
 /// at the hard deadline so the button cannot spin forever.
 fn git_network_output(repo_path: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    let cwd = strip_verbatim_prefix(Path::new(repo_path));
     let mut cmd = git_command();
     if let Some((http_proxy, https_proxy)) = system_proxy_for_git(repo_path) {
         cmd.env("http_proxy", &http_proxy);
@@ -469,11 +509,11 @@ fn git_network_output(repo_path: &str, args: &[&str]) -> Result<std::process::Ou
     cmd.env("LC_ALL", "C").env("LANGUAGE", "C");
     let child = cmd
         .args(args)
-        .current_dir(repo_path)
+        .current_dir(&cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(map_git_spawn_err)?;
+        .map_err(|e| map_git_spawn_err_at(e, Some(&cwd)))?;
     finish_git_child(
         child,
         args.first().copied().unwrap_or(""),
@@ -3760,8 +3800,34 @@ fn pick_directory_sync(window: &tauri::WebviewWindow) -> Result<Option<String>, 
 mod tests {
     use super::{
         counts_as_published, friendly_push_error, parse_porcelain_line, parse_proxy_server,
-        patch_stays_in_repo, validate_email, validate_name,
+        patch_stays_in_repo, strip_verbatim_prefix, validate_email, validate_name,
     };
+    use std::path::PathBuf;
+
+    #[test]
+    fn strip_verbatim_prefix_drops_device_namespace() {
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(r"\\?\D:\repo\doc")),
+            PathBuf::from(r"D:\repo\doc")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(r"\\.\D:\repo")),
+            PathBuf::from(r"D:\repo")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\path")),
+            PathBuf::from(r"\\server\share\path")
+        );
+        // 普通路径保持可进程 cwd 的形态
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(r"D:\repo")),
+            PathBuf::from(r"D:\repo")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from("D:/repo/doc")),
+            PathBuf::from(r"D:\repo\doc")
+        );
+    }
 
     #[test]
     fn amend_of_a_published_tip_is_the_same_rule_as_undo() {

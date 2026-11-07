@@ -3223,6 +3223,19 @@
   background: color-mix(in srgb, var(--red) 12%, transparent);
   color: var(--red);
 }
+.settings-page .wecom-docgen-stage {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.settings-page .wecom-docgen-stage.is-ok { color: var(--green); }
+.settings-page .wecom-docgen-stage.is-fail { color: var(--red); }
+.settings-page .wecom-docgen-blocking {
+  margin-left: 6px;
+  color: var(--yellow);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
 /* 摘要：两行截断，全文放 title 里悬浮查看 */
 .settings-page .wecom-docgen-summary {
   min-width: 0;

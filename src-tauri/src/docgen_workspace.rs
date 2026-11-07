@@ -1,4 +1,5 @@
-//! 文档任务专用工作树。AI 只写隔离目录，不回退或删除用户工作区文件。
+//! 文档任务工作区辅助：解析文档仓、来源仓只读快照、变更越界校验。
+//! 文档生成直接写入原仓 doc 目录；此处不再创建「写隔离」worktree。
 
 use std::path::Path;
 #[cfg(test)]
@@ -9,68 +10,79 @@ use crate::git_commands::{git_output, git_stdout};
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 
-pub(super) struct DocgenWorkspace {
-    pub path: String,
-    repo: String,
-    original_head: String,
-    original_branch: String,
-}
-
 fn git(repo: &str, args: &[&str]) -> Result<String, String> {
     git_stdout(repo, args)
 }
 
-impl DocgenWorkspace {
-    pub fn prepare(repo: &str, branch: &str) -> Result<Self, String> {
-        git(repo, &["check-ref-format", "--branch", branch])?;
-        git(repo, &["fetch", "origin", branch])?;
-        let local = format!("refs/heads/{branch}");
-        let remote = format!("refs/remotes/origin/{branch}");
-        let base = git(repo, &["rev-parse", "--verify", &local])
-            .or_else(|_| git(repo, &["rev-parse", "--verify", &remote]))?;
-        let work = Self::create(repo, base.trim())?;
-        if let Err(e) = git(&work.path, &["merge", "--ff-only", &remote]) {
-            return Err(format!("文档分支无法快进：{e}；隔离目录保留在 {}", work.path));
-        }
-        Ok(work)
+/// 父目录可能是多仓容器：优先按文档目录定位真实仓库，再退回父目录本身。
+/// 不把“父目录有多个子仓”误判成文档仓库。
+pub(super) fn resolve_doc_repo(workspace: &str, doc_dir: &str) -> Result<String, String> {
+    use crate::git_commands::{canonicalize_for_process, strip_verbatim_prefix};
+    if crate::git_commands::ensure_git_repo(workspace).is_ok() {
+        return Ok(strip_verbatim_prefix(Path::new(workspace))
+            .to_string_lossy()
+            .into_owned());
     }
+    let base = if doc_dir.contains(':') && std::path::Path::new(doc_dir).is_absolute() {
+        std::path::Path::new(doc_dir).to_path_buf()
+    } else {
+        std::path::Path::new(workspace).join(doc_dir)
+    };
+    let base = canonicalize_for_process(&base).unwrap_or_else(|_| strip_verbatim_prefix(&base));
+    let workspace = Path::new(workspace);
+    let workspace = canonicalize_for_process(workspace)
+        .unwrap_or_else(|_| strip_verbatim_prefix(workspace));
+    let mut current = if base.is_dir() { base } else {
+        let Some(parent) = base.parent() else { return Err(format!("文档目录无效：{doc_dir}")); };
+        parent.to_path_buf()
+    };
+    loop {
+        // `rev-parse` 会向上找到父仓，所以必须从文档目录逐级回退，不能直接
+        // 对 doc 路径调用 ensure_git_repo——那会把“文档目录本身”当成仓库根。
+        if current.join(".git").exists()
+            || crate::git_commands::git_stdout(current.to_string_lossy().as_ref(), &["rev-parse", "--show-toplevel"])
+                .map(|root| Path::new(&root) == current.as_path())
+                .unwrap_or(false)
+        {
+            let current_canon = canonicalize_for_process(&current)
+                .unwrap_or_else(|_| current.clone());
+            if current_canon == workspace || current_canon.starts_with(&workspace) {
+                return Ok(strip_verbatim_prefix(&current)
+                    .to_string_lossy()
+                    .into_owned());
+            }
+        }
+        if current == workspace { break; }
+        if !current.pop() { break; }
+    }
+    Err(format!(
+        "工作区 {} 下未找到包含文档目录 {} 的 Git 仓库；父目录本身不是仓库时也会跳过未勾选子仓",
+        workspace.display(), doc_dir
+    ))
+}
 
-    fn create(repo: &str, base: &str) -> Result<Self, String> {
-        let original_head = git(repo, &["rev-parse", "HEAD"])?;
-        let original_branch = git(repo, &["symbolic-ref", "--short", "-q", "HEAD"])
-            .unwrap_or_default();
-        let id = NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "ai-workbench-docgen-{}-{}-{id}",
-            std::process::id(), chrono::Utc::now().timestamp_millis(),
-        ));
-        let path = dir.to_string_lossy().to_string();
-        git(repo, &["worktree", "add", "--detach", &path, base])?;
-        Ok(Self { path, repo: repo.into(), original_head, original_branch })
-    }
+pub(super) struct SourceSnapshot { pub(super) path: String, repo: String }
 
-    /// 发布前重新核对原工作区。不同分支、用户保存文件或切 HEAD 都不覆盖。
-    pub fn publish(&self, branch: &str) -> Result<(), String> {
-        let current = git(&self.repo, &["symbolic-ref", "--short", "-q", "HEAD"])?;
-        if current != branch || current != self.original_branch {
-            return Err("原工作区不在目标分支，未发布；请切换到目标分支后重跑".into());
-        }
-        if git(&self.repo, &["rev-parse", "HEAD"])? != self.original_head {
-            return Err("原工作区 HEAD 已改变，未发布".into());
-        }
-        if !git(&self.repo, &["status", "--porcelain", "--untracked-files=all"])?.is_empty() {
-            return Err("原工作区出现用户改动，未发布；隔离产物已保留".into());
-        }
-        let head = git(&self.path, &["rev-parse", "HEAD"])?;
-        git(&self.repo, &["merge", "--ff-only", head.trim()])?;
-        Ok(())
+impl Drop for SourceSnapshot {
+    fn drop(&mut self) {
+        let _ = git(&self.repo, &["worktree", "remove", "--force", &self.path]);
     }
+}
 
-    pub fn remove(self) -> Result<(), String> {
-        // 仅移除本任务自己创建的 worktree；不强制删除脏产物。
-        git(&self.repo, &["worktree", "remove", &self.path])?;
-        Ok(())
-    }
+impl std::ops::Deref for SourceSnapshot {
+    type Target = str;
+    fn deref(&self) -> &str { &self.path }
+}
+
+pub(super) fn snapshot_source(repo: &str, head: &str) -> Result<SourceSnapshot, String> {
+    let id = NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "ai-workbench-docgen-source-{}-{}-{id}",
+        std::process::id(), chrono::Utc::now().timestamp_millis(),
+    ));
+    let path = dir.to_string_lossy().to_string();
+    git(repo, &["worktree", "add", "--detach", &path, head])?;
+    Ok(SourceSnapshot { path, repo: repo.into() })
 }
 
 /// 不解析 porcelain rename 的多字段形式；用 -z 的逐路径 diff + 未跟踪清单。
@@ -93,15 +105,19 @@ pub(super) fn changed_paths(repo: &str) -> Result<Vec<String>, String> {
 }
 
 pub(super) fn validate_changes(repo: &str, doc_dir: &str) -> Result<(), String> {
+    use crate::git_commands::strip_verbatim_prefix;
+    // root 保持 canonicalize 原样喂给 resolve_in_repo（两边同带/同不带 `\\?\`）；
+    // 越界比对再剥前缀，避免和手填 doc_dir 混用时 starts_with 误伤。
     let root = Path::new(repo).canonicalize().map_err(|e| e.to_string())?;
+    let root_plain = strip_verbatim_prefix(&root);
     for path in changed_paths(repo)? {
         if super::is_outside_doc_dir(&path, doc_dir) {
-            return Err(format!("AI 改动超出文档目录：{path}（隔离产物保留，不发布）"));
+            return Err(format!("AI 改动超出文档目录：{path}（未提交，请人工核对工作区）"));
         }
         let full = root.join(&path);
         // 新文档不能借 symlink / junction 跳到用户目录。
         let resolved = crate::agent_fs::resolve_in_repo(&root, &path)?;
-        if !resolved.starts_with(root.join(doc_dir)) {
+        if !strip_verbatim_prefix(&resolved).starts_with(root_plain.join(doc_dir)) {
             return Err(format!("文档路径越界：{path}"));
         }
         if full.exists() && !full.is_file() {
@@ -183,41 +199,72 @@ mod tests {
     }
 
     #[test]
-    fn isolated_failure_never_reverts_user_files() {
-        let f = Fixture::new();
-        std::fs::write(f.0.join("code.rs"), "user edit").unwrap();
-        std::fs::write(f.0.join("user.txt"), "user untracked").unwrap();
-        let work = DocgenWorkspace::create(f.repo(), "HEAD").unwrap();
-        std::fs::write(Path::new(&work.path).join("code.rs"), "AI outside doc").unwrap();
-        assert!(validate_changes(&work.path, "doc").is_err());
-        assert!(work.publish("release").is_err());
-        assert_eq!(std::fs::read_to_string(f.0.join("code.rs")).unwrap(), "user edit");
-        assert_eq!(std::fs::read_to_string(f.0.join("user.txt")).unwrap(), "user untracked");
-        // 测试仅清理自己创建的隔离夹具。
-        git(f.repo(), &["worktree", "remove", "--force", &work.path]).unwrap();
+    fn parent_directory_resolves_to_repo_containing_doc_dir() {
+        let root = std::env::temp_dir().join(format!("docgen-parent-{}-{}", std::process::id(), NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed)));
+        let repo = root.join("pmys.saas.parent.pom");
+        let doc = repo.join("doc");
+        // 父目录不是仓库；文档目录位于子仓中。
+        std::fs::create_dir_all(&doc).unwrap();
+        git(&repo.to_str().unwrap(), &["init", "-b", "release"]).unwrap();
+        std::fs::write(repo.join("README.md"), "x").unwrap();
+        git(&repo.to_str().unwrap(), &["add", "."]).unwrap();
+        git(&repo.to_str().unwrap(), &["commit", "-m", "init"]).unwrap();
+        let resolved = super::resolve_doc_repo(root.to_str().unwrap(), "pmys.saas.parent.pom/doc").unwrap();
+        // 返回值必须可直接当 CreateProcess cwd：不能带 `\\?\`
+        assert!(
+            !resolved.contains(r"\\?\"),
+            "resolve_doc_repo returned verbatim path: {resolved}"
+        );
+        let resolved_canon = crate::git_commands::canonicalize_for_process(&resolved).unwrap_or_default();
+        let repo_canon = crate::git_commands::canonicalize_for_process(&repo).unwrap_or_default();
+        assert_eq!(resolved_canon, repo_canon);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn publish_only_fast_forwards_unchanged_clean_target_branch() {
+    fn source_snapshot_uses_exact_sha_and_is_removed_on_drop() {
         let f = Fixture::new();
-        let work = DocgenWorkspace::create(f.repo(), "HEAD").unwrap();
-        std::fs::write(Path::new(&work.path).join("doc/a.md"), "generated").unwrap();
-        validate_changes(&work.path, "doc").unwrap();
-        git(&work.path, &["add", "doc"]).unwrap();
-        git(&work.path, &["commit", "-m", "docs"]).unwrap();
-        work.publish("release").unwrap();
-        assert_eq!(std::fs::read_to_string(f.0.join("doc/a.md")).unwrap(), "generated");
-        work.remove().unwrap();
+        let head = git(f.repo(), &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(f.0.join("doc/later.md"), "user later").unwrap();
+        git(f.repo(), &["add", "doc"]).unwrap();
+        git(f.repo(), &["commit", "-m", "later"]).unwrap();
+        let snap = super::snapshot_source(f.repo(), &head).unwrap();
+        assert_eq!(git(&snap.path, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert!(!std::path::Path::new(&snap.path).join("doc/later.md").exists());
+        let path = snap.path.clone();
+        drop(snap);
+        assert!(!std::path::Path::new(&path).exists());
+        assert!(!git(f.repo(), &["worktree", "list"]).unwrap().contains(&path));
     }
 
     #[test]
-    fn publish_refuses_concurrent_edits_and_branch_switch() {
+    fn source_snapshot_must_stay_alive_for_collect() {
         let f = Fixture::new();
-        let work = DocgenWorkspace::create(f.repo(), "HEAD").unwrap();
-        std::fs::write(f.0.join("doc/a.md"), "new user edit").unwrap();
-        assert!(work.publish("release").is_err());
-        git(f.repo(), &["switch", "-c", "other"]).unwrap();
-        assert!(work.publish("release").is_err());
-        work.remove().unwrap();
+        let head = git(f.repo(), &["rev-parse", "HEAD"]).unwrap();
+        // 复现旧 bug：只 clone path 就丢临时值 → Drop 删掉 worktree → 采集 cwd 失效
+        let dangling = {
+            let snap = super::snapshot_source(f.repo(), &head).unwrap();
+            snap.path.clone()
+        };
+        assert!(
+            super::super::collect_delta(&dangling, None, 0).is_err(),
+            "dangling snapshot path should not be usable after Drop"
+        );
+        // 正确用法：持有快照直到采集结束
+        let snap = super::snapshot_source(f.repo(), &head).unwrap();
+        let delta = super::super::collect_delta(&snap.path, None, 0).unwrap();
+        assert!(!delta.head.is_empty());
+    }
+
+    #[test]
+    fn validate_changes_rejects_writes_outside_doc_dir() {
+        let f = Fixture::new();
+        std::fs::write(f.0.join("code.rs"), "AI outside doc").unwrap();
+        assert!(validate_changes(f.repo(), "doc").is_err());
+        std::fs::write(f.0.join("doc/a.md"), "generated").unwrap();
+        // 同时有越界改动时仍失败
+        assert!(validate_changes(f.repo(), "doc").is_err());
+        git(f.repo(), &["checkout", "--", "code.rs"]).unwrap();
+        assert!(validate_changes(f.repo(), "doc").is_ok());
     }
 }

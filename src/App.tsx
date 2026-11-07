@@ -206,7 +206,7 @@ function App() {
           } else {
             // 「逆向工程」是独立页，不依赖 IM 通道：通道关着也要把文档配置
             // （工作区 / 定时 / webhook）下发下去，否则定时更新永远起不来。
-            await applyWecomDocgen(st.settings);
+            await applyWecomDocgen(st.settings, st.aiModels);
           }
           if (st.settings.weixinEnabled) {
             await applyWeixinChannel({
