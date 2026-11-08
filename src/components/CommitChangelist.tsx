@@ -934,6 +934,7 @@ function CommitChangelist({
       warning: t("commit.abortMergeWarn"),
       confirmText: t("commit.abortMerge"),
       icon: "danger",
+      size: "lg",
     });
     if (!ok) return;
     setBusyAction("merge");
@@ -1360,6 +1361,7 @@ function CommitChangelist({
       warning: t("commit.rollbackCheckedWarn"),
       confirmText: t("commit.rollbackChecked"),
       icon: "danger",
+      size: "lg",
     });
     if (!ok) return;
 

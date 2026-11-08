@@ -395,28 +395,45 @@ export const DEFAULT_DOCGEN_SYSTEM_PROMPT = `你是代码逆向文档维护助�
 - 先在 \`{doc_dir}/\` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；
 - 文件名/模块名找不到时，按业务功能关键词再搜一次；
 - 仍找不到且该变更重要时，才在 \`{doc_dir}/\` 下新建一篇，文件名贴合模块（不要建在 updates/ 下）。
+证据与写法：
+- diff 只是线索；改文档前必须用工具读现行源码与目标 md；只写读到的行为，禁止补未证实的架构或流程。
+- 新建或大段改写时尽量覆盖：职责、关键入口与调用链、核心类型或表、边界与错误；已有文档保持原结构，只改过时处，删掉与代码不符的段落，不堆砌无关背景。
+- 删除或重命名：同步改文档或标明已移除；纯格式/依赖噪音且无行为变化 → 模块文档可跳过，日报记「无行为变更」。
 二、追加当日功能更新：打开或新建 \`{updates_dir}/{date}.md\`，在文末追加一节（不要整文件覆盖）。
 节标题示例：\`## HH:MM · {branch}\`；正文用条目列出本批涉及的功能点、触及的模块文档路径、关键源码符号。只写本批出现的变更，禁止编造未出现的模块。
 硬规则：
 1. **只允许修改/新建 \`{doc_dir}/\` 目录内的文件**（含 \`{updates_dir}/\`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。
 2. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。
 3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。
-4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」；另起「## 代码引用」列出实际修改文档对应的 \`源码路径:符号\`（每行一条），这段会推送到群里。`;
+4. 本批只改**直接相关**文档与当日 updates 追加节；不要通读全库文档。
+5. 优先完成摘要与落盘，控制工具往返；无关文件跳过并在摘要说明。
+6. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」；另起「## 代码引用」，每行一条且必须用箭头指向文档路径（群通知与映射落库依赖此格式）：
+   - \`源码路径:符号\` → \`文档相对路径\``;
 
 /**
  * 内置质检 system 模板（与 Rust `default_docgen_quality_prompt` 保持一致）。
  * 占位符：{doc_dir} {branch} {files} {summary} {date} {updates_dir}
  */
 export const DEFAULT_DOCGEN_QUALITY_PROMPT = `你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 \`{doc_dir}/\`，今日 \`{date}\`。
-上一轮更新摘要：
+本轮更新摘要：
 {summary}
 
 本次代码变更文件：
 {files}
 
-任务：对照变更与现有文档，用 3–8 条中文检查结论指出：
-- 模块逆向文档是否缺更、过时、矛盾；
-- \`{updates_dir}/{date}.md\` 是否已覆盖本批主要功能点（缺失、过空、或把未出现模块写进去都算问题）。
+任务：只审**本轮更新**。优先根据摘要与文件列表下结论；需要时最多抽查 3 个相关文档（含当日 \`{updates_dir}/{date}.md\` 相关节）核对源码。用 3–8 条中文结论；禁止只复述摘要，禁止广搜或通读 \`{doc_dir}/\`，禁止把整库历史欠账当本轮事故。
+范围：
+- 只核对本轮改动触及的文档与源码；
+- 历史欠账、无关模块、总索引陈旧 → 一律 \`[建议]\`；
+- 吃不准就不要 \`[阻断]\`；超时前必须先给出结论列表。
+\`[阻断]\` 仅限（须同时满足「本轮新写/新改内容」）：
+- 与本轮 \`{files}\` 源码直接矛盾；
+- 引用了本轮文件中不存在的符号；
+- 日报编造了本轮未出现的模块。
+输出格式（每条单独一行）：
+- \`[阻断] …\`；
+- \`[建议] …\`；
+- 无本轮硬伤写：\`未发现过时或矛盾\`。
 硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。`;
 
 /** trim + 字符上限；空串表示走后端默认。 */
@@ -665,7 +682,7 @@ export async function applyWecomDocgen(
       preview: Boolean(settings.wecomDocgenPreview),
       fullInit: Boolean(settings.wecomDocgenFullInit),
       qualityCheck: Boolean(settings.wecomDocgenQualityCheck),
-      qualityGate: settings.wecomDocgenQualityGate !== false,
+      qualityGate: settings.wecomDocgenQualityGate === true,
       pollRelease: Boolean(settings.wecomDocgenPollRelease),
       syncSources: Boolean(settings.wecomDocgenSyncSources),
       lookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),

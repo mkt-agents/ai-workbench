@@ -200,9 +200,8 @@
   flex-shrink: 0;
 }
 
-/* Confirm Modal */
+/* Confirm Modal：默认跟 .modal 的 sm；列路径时调用方挂 modal-md / modal-lg */
 .confirm-modal {
-  max-width: min(var(--modal-sm), calc(100vw - 32px));
   padding: 22px 22px 18px;
 }
 

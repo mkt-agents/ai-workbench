@@ -15,6 +15,8 @@ interface ConfirmOptions {
   altConfirmText?: string;
   cancelText?: string;
   icon?: ConfirmIcon;
+  /** 宽度档：默认 sm（400）；列长路径用 md/lg。 */
+  size?: "sm" | "md" | "lg";
 }
 
 interface ConfirmState extends ConfirmOptions {
@@ -98,7 +100,13 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
     <>
       {children}
       <div className="modal-overlay">
-        <div className="modal confirm-modal" role="alertdialog" aria-modal="true">
+        <div
+          className={`modal confirm-modal${
+            state.size === "md" ? " modal-md" : state.size === "lg" ? " modal-lg" : ""
+          }`}
+          role="alertdialog"
+          aria-modal="true"
+        >
           <div className="confirm-modal-header">
             <div className={`confirm-modal-icon confirm-modal-icon-${state.icon || "danger"}`}>
               {iconMap[state.icon || "danger"]}

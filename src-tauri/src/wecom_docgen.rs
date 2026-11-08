@@ -24,10 +24,57 @@ use crate::wecom_channel::WecomState;
 mod workspace;
 
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(15);
-const UPDATE_TURN_TIMEOUT: Duration = Duration::from_secs(600);
+/// 每个文档更新回合（一批）的墙钟上限；短路径多时一批文件数另受 `MAX_FILES_PER_BATCH` 约束。
+/// 模型（尤其 High）偶发很慢，给足 60 分钟。
+const UPDATE_TURN_TIMEOUT_SECS: u64 = 3_600;
+const UPDATE_TURN_TIMEOUT: Duration = Duration::from_secs(UPDATE_TURN_TIMEOUT_SECS);
+/// 整轮质检专用超时（仍短于更新回合；质检只跑一次）。
+const QUALITY_TURN_TIMEOUT_SECS: u64 = 900;
+const QUALITY_TURN_TIMEOUT: Duration = Duration::from_secs(QUALITY_TURN_TIMEOUT_SECS);
+/// 单批最多文件数：仅按字符预算会把 200+ 短路径塞进一批，易撞回合超时。
+const MAX_FILES_PER_BATCH: usize = 100;
+/// 超时批拆半重试的下限：文件数不大于此则不再拆。
+const RESPLIT_MIN_FILES: usize = 20;
+/// 质检提示里变更文件列表上限，避免把整仓清单塞进上下文。
+const QUALITY_FILE_LIST_CAP: usize = 200;
 const DIFF_CHAR_CAP: usize = 24_000;
 const HISTORY_CAP: usize = 30;
 const LOG_LINE_CAP: usize = 30;
+
+fn timeout_label(secs: u64) -> String {
+    if secs % 60 == 0 {
+        format!("{} 分钟", secs / 60)
+    } else {
+        format!("{secs} 秒")
+    }
+}
+
+fn turn_timeout_label() -> String {
+    timeout_label(UPDATE_TURN_TIMEOUT_SECS)
+}
+
+fn quality_timeout_label() -> String {
+    timeout_label(QUALITY_TURN_TIMEOUT_SECS)
+}
+
+/// 质检用的变更文件列表：去重顺序保留，超长截断并留提示行。
+pub(crate) fn cap_quality_files(files: &[String], cap: usize) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut uniq = Vec::new();
+    for f in files {
+        let key = f.replace('\\', "/");
+        if seen.insert(key) {
+            uniq.push(f.clone());
+        }
+    }
+    if uniq.len() <= cap {
+        return uniq;
+    }
+    let total = uniq.len();
+    let mut out: Vec<String> = uniq.into_iter().take(cap).collect();
+    out.push(format!("…（已截断，共 {total} 个变更文件，仅列前 {cap}）"));
+    out
+}
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static RUN_CANCEL: AtomicBool = AtomicBool::new(false);
@@ -149,7 +196,7 @@ impl Default for DocgenConfig {
             webhook_feishu: String::new(),
             webhook_dingtalk: String::new(),
             auto_commit: true,
-            quality_gate: true,
+            quality_gate: false,
             auto_push: false,
             preview_mode: false,
             full_init: false,
@@ -195,24 +242,41 @@ pub fn default_docgen_system_prompt() -> &'static str {
 - 先在 `{doc_dir}/` 下 grep 变更文件名、所在模块名、关键函数/类名，命中的文档就是要更新的；\n\
 - 文件名/模块名找不到时，按业务功能关键词再搜一次；\n\
 - 仍找不到且该变更重要时，才在 `{doc_dir}/` 下新建一篇，文件名贴合模块（不要建在 updates/ 下）。\n\
+证据与写法：\n\
+- diff 只是线索；改文档前必须用工具读现行源码与目标 md；只写读到的行为，禁止补未证实的架构或流程。\n\
+- 新建或大段改写时尽量覆盖：职责、关键入口与调用链、核心类型或表、边界与错误；已有文档保持原结构，只改过时处，删掉与代码不符的段落，不堆砌无关背景。\n\
+- 删除或重命名：同步改文档或标明已移除；纯格式/依赖噪音且无行为变化 → 模块文档可跳过，日报记「无行为变更」。\n\
 二、追加当日功能更新：打开或新建 `{updates_dir}/{date}.md`，在文末追加一节（不要整文件覆盖）。\n\
 节标题示例：`## HH:MM · {branch}`；正文用条目列出本批涉及的功能点、触及的模块文档路径、关键源码符号。只写本批出现的变更，禁止编造未出现的模块。\n\
 硬规则：\n\
 1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**（含 `{updates_dir}/`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。\n\
 2. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。\n\
 3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。\n\
-4. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」；另起「## 代码引用」列出实际修改文档对应的 `源码路径:符号`（每行一条），这段会推送到群里。"
+4. 本批只改**直接相关**文档与当日 updates 追加节；不要通读全库文档。\n\
+5. 优先完成摘要与落盘，控制工具往返；无关文件跳过并在摘要说明。\n\
+6. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」；另起「## 代码引用」，每行一条且必须用箭头指向文档路径（群通知与映射落库依赖此格式）：\n\
+   - `源码路径:符号` → `文档相对路径`"
 }
 
 pub fn default_docgen_quality_prompt() -> &'static str {
     "你是逆向文档质量审查员（只读）。工作区分支「{branch}」，文档目录 `{doc_dir}/`，今日 `{date}`。\n\
-上一轮更新摘要：\n\
+本轮更新摘要：\n\
 {summary}\n\n\
 本次代码变更文件：\n\
 {files}\n\n\
-任务：对照变更与现有文档，用 3–8 条中文检查结论指出：\n\
-- 模块逆向文档是否缺更、过时、矛盾；\n\
-- `{updates_dir}/{date}.md` 是否已覆盖本批主要功能点（缺失、过空、或把未出现模块写进去都算问题）。\n\
+任务：只审**本轮更新**。优先根据摘要与文件列表下结论；需要时最多抽查 3 个相关文档（含当日 `{updates_dir}/{date}.md` 相关节）核对源码。用 3–8 条中文结论；禁止只复述摘要，禁止广搜或通读 `{doc_dir}/`，禁止把整库历史欠账当本轮事故。\n\
+范围：\n\
+- 只核对本轮改动触及的文档与源码；\n\
+- 历史欠账、无关模块、总索引陈旧 → 一律 `[建议]`；\n\
+- 吃不准就不要 `[阻断]`；超时前必须先给出结论列表。\n\
+`[阻断]` 仅限（须同时满足「本轮新写/新改内容」）：\n\
+- 与本轮 `{files}` 源码直接矛盾；\n\
+- 引用了本轮文件中不存在的符号；\n\
+- 日报编造了本轮未出现的模块。\n\
+输出格式（每条单独一行）：\n\
+- `[阻断] …`；\n\
+- `[建议] …`；\n\
+- 无本轮硬伤写：`未发现过时或矛盾`。\n\
 硬规则：只读文件/搜索，禁止写文件、改文件、跑命令、删除。"
 }
 
@@ -1143,6 +1207,10 @@ struct RunProgress<'a> {
     run_id: String,
     trigger: RunTrigger,
     started_ms: i64,
+    /// 失败时进度条停在哪一档（0 = 用默认 55）。
+    fail_at: std::sync::atomic::AtomicU8,
+    /// 失败时前端步骤灯点亮的阶段（如 agent / quality），避免只发 phase=fail 误亮质检。
+    fail_phase: std::sync::Mutex<String>,
 }
 
 impl<'a> RunProgress<'a> {
@@ -1152,6 +1220,18 @@ impl<'a> RunProgress<'a> {
             run_id: format!("docgen-{}", chrono::Utc::now().timestamp_millis()),
             trigger,
             started_ms: chrono::Utc::now().timestamp_millis(),
+            fail_at: std::sync::atomic::AtomicU8::new(0),
+            fail_phase: std::sync::Mutex::new(String::new()),
+        }
+    }
+
+    fn mark_fail_at(&self, phase: &str, percent: u8) {
+        self.fail_at
+            .store(percent.min(95).max(1), Ordering::Relaxed);
+        if let Ok(mut slot) = self.fail_phase.lock() {
+            if !phase.trim().is_empty() {
+                *slot = phase.trim().to_string();
+            }
         }
     }
 
@@ -1203,7 +1283,16 @@ impl<'a> RunProgress<'a> {
     }
 
     fn finish_err(&self, error: &str) {
-        self.emit("fail", 100, "fail", error);
+        let pct = self.fail_at.load(Ordering::Relaxed);
+        let pct = if pct == 0 { 55 } else { pct };
+        let phase = self
+            .fail_phase
+            .lock()
+            .ok()
+            .map(|p| p.clone())
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| "fail".into());
+        self.emit(&phase, pct, "fail", error);
     }
 }
 
@@ -1525,20 +1614,32 @@ async fn run_update_inner(
     require_running()?;
     let batch_total = batches.len().max(1);
     let mut step_error = String::new();
+    let mut batch_errors: Vec<String> = Vec::new();
     let mut updated_docs = String::new();
     let mut quality = String::new();
     let mut quality_blocking = 0usize;
+    let mut qc_files: Vec<String> = Vec::new();
     for (idx, batch) in batches.iter().enumerate() {
         require_running()?;
         let batch_no = idx + 1;
         let pct = 55 + ((idx as u8).saturating_mul(15) / batch_total as u8);
+        let agent_pct = pct.min(70);
         progress.emit(
             "agent",
-            pct.min(70),
+            agent_pct,
             "running",
             &format!("第 {batch_no}/{batch_total} 批（{} 个文件）", batch.files.len()),
         );
-        let batch_summary = match update_docs_with_agent(
+        let append_batch = |updated_docs: &mut String, summary: &str| {
+            if !updated_docs.is_empty() {
+                updated_docs.push_str("\n\n");
+            }
+            if batch_total > 1 {
+                updated_docs.push_str(&format!("### 第 {batch_no}/{batch_total} 批\n"));
+            }
+            updated_docs.push_str(summary);
+        };
+        match update_docs_with_agent(
             app,
             &execution_workspace,
             &doc_dir,
@@ -1551,96 +1652,141 @@ async fn run_update_inner(
         )
         .await
         {
-            Ok(v) => v,
+            Ok(v) => {
+                append_batch(&mut updated_docs, &v);
+                qc_files.extend(batch.files.iter().cloned());
+            }
             Err(e) => {
-                step_error = format!("文档更新失败（第 {batch_no}/{batch_total} 批）：{e}");
-                break;
-            }
-        };
-        if !updated_docs.is_empty() {
-            updated_docs.push_str("\n\n");
-        }
-        if batch_total > 1 {
-            updated_docs.push_str(&format!("### 第 {batch_no}/{batch_total} 批\n"));
-        }
-        updated_docs.push_str(&batch_summary);
-
-        if cfg.quality_check {
-            require_running()?;
-            progress.emit(
-                "quality",
-                (72 + idx as u8).min(80),
-                "running",
-                &format!("质量自检第 {batch_no}/{batch_total} 批"),
-            );
-            match quality_check_with_agent(
-                app,
-                &execution_workspace,
-                &doc_dir,
-                &branch,
-                &batch.files,
-                &batch_summary,
-                &cfg.quality_prompt,
-                &cfg.engine,
-                &cfg.tianji_agent,
-                cancel_requested,
-            )
-            .await
-            {
-                Ok(v) => {
-                    if cfg.quality_gate {
-                        let verdict = parse_quality_verdict(&v);
-                        quality_blocking += verdict.blocking.len();
-                        if !verdict.blocking.is_empty() {
-                            step_error = format!(
-                                "质量门禁阻断（第 {batch_no}/{batch_total} 批）：{}",
-                                verdict.blocking.join("；")
-                            );
-                            if !quality.is_empty() {
-                                quality.push_str("\n\n");
+                progress.mark_fail_at("agent", agent_pct);
+                // 超时且文件够多：拆半各重试一次；仍失败则记错并继续后续批。
+                let mut rescued = false;
+                let mut attempted_resplit = false;
+                if is_turn_timeout_error(&e) {
+                    if let Some((left, right)) = split_delta_half(batch) {
+                        attempted_resplit = true;
+                        progress.emit(
+                            "agent",
+                            agent_pct,
+                            "running",
+                            &format!(
+                                "第 {batch_no}/{batch_total} 批超时，拆半重试（{}+{} 文件）",
+                                left.files.len(),
+                                right.files.len()
+                            ),
+                        );
+                        let mut halves_ok = true;
+                        for (hi, half) in [&left, &right].into_iter().enumerate() {
+                            require_running()?;
+                            match update_docs_with_agent(
+                                app,
+                                &execution_workspace,
+                                &doc_dir,
+                                &branch,
+                                half,
+                                &cfg.system_prompt,
+                                &cfg.engine,
+                                &cfg.tianji_agent,
+                                cancel_requested,
+                            )
+                            .await
+                            {
+                                Ok(v) => {
+                                    if !updated_docs.is_empty() {
+                                        updated_docs.push_str("\n\n");
+                                    }
+                                    updated_docs.push_str(&format!(
+                                        "### 第 {batch_no}/{batch_total} 批·拆半 {}\n",
+                                        hi + 1
+                                    ));
+                                    updated_docs.push_str(&v);
+                                    qc_files.extend(half.files.iter().cloned());
+                                }
+                                Err(e2) => {
+                                    halves_ok = false;
+                                    batch_errors.push(format!(
+                                        "文档更新失败（第 {batch_no}/{batch_total} 批拆半 {}）：{e2}",
+                                        hi + 1
+                                    ));
+                                }
                             }
-                            quality.push_str(&v);
-                            break;
                         }
+                        rescued = halves_ok;
                     }
-                    if !quality.is_empty() {
-                        quality.push_str("\n\n");
-                    }
-                    if batch_total > 1 {
-                        quality.push_str(&format!("### 第 {batch_no}/{batch_total} 批\n"));
-                    }
-                    quality.push_str(&v);
                 }
-                Err(e) => {
-                    step_error = format!("质量自检失败（第 {batch_no}/{batch_total} 批）：{e}");
-                    quality = format!("（{step_error}）");
-                    break;
+                if !rescued && !attempted_resplit {
+                    batch_errors.push(format!(
+                        "文档更新失败（第 {batch_no}/{batch_total} 批）：{e}"
+                    ));
                 }
             }
         }
+    }
+    if !batch_errors.is_empty() {
+        step_error = batch_errors.join("；");
     }
     if updated_docs.is_empty() && !step_error.is_empty() {
         updated_docs = format!("（{step_error}）");
     }
 
-    progress.stage(
-        if preview {
-            "preview"
-        } else if cfg.auto_commit {
-            "commit"
-        } else {
-            "publish"
-        },
-        82,
-    );
-    if preview {
-        progress.stage("preview", 82);
+    // 整轮只跑一次质检（不再按批各跑一轮）。
+    if step_error.is_empty() && cfg.quality_check {
+        require_running()?;
+        progress.emit("quality", 75, "running", "整轮质量自检");
+        let files_for_qc = cap_quality_files(&qc_files, QUALITY_FILE_LIST_CAP);
+        match quality_check_with_agent(
+            app,
+            &execution_workspace,
+            &doc_dir,
+            &branch,
+            &files_for_qc,
+            &updated_docs,
+            &cfg.quality_prompt,
+            &cfg.engine,
+            &cfg.tianji_agent,
+            cancel_requested,
+        )
+        .await
+        {
+            Ok(v) => {
+                quality = v.clone();
+                if cfg.quality_gate {
+                    let verdict = parse_quality_verdict(&v);
+                    quality_blocking = verdict.blocking.len();
+                    if !verdict.blocking.is_empty() {
+                        progress.mark_fail_at("quality", 75);
+                        step_error = format_quality_gate_error("整轮质检", &verdict.blocking);
+                    }
+                }
+            }
+            Err(e) => {
+                let warn = format!("质量自检未完成：{e}");
+                quality = format!("（{warn}）");
+                if cfg.quality_gate {
+                    progress.mark_fail_at("quality", 75);
+                    step_error = warn;
+                }
+                // 门禁关：质检失败只记警告，不挡后续提交。
+            }
+        }
     }
+
     let mut commit_note = String::new();
     let mut published = false;
     let mut commit_status = "not-run".to_string();
     let mut push_status = "not-run".to_string();
+    // 已经失败时不要再把进度推到「提交」档（否则前端五段会被画满）。
+    let publish_phase = if preview {
+        "preview"
+    } else if cfg.auto_commit {
+        "commit"
+    } else {
+        "publish"
+    };
     if step_error.is_empty() {
+        progress.stage(publish_phase, 82);
+        if preview {
+            progress.stage("preview", 82);
+        }
         require_running()?;
         let date = local_date_ymd();
         let time = chrono::Local::now().format("%H:%M").to_string();
@@ -1656,12 +1802,14 @@ async fn run_update_inner(
             &run_meta,
             &updated_docs,
         ) {
+            progress.mark_fail_at(publish_phase, 82);
             step_error = e;
         }
     }
     if step_error.is_empty() {
         require_running()?;
         if let Err(e) = workspace::validate_changes(&execution_workspace, &doc_dir) {
+            progress.mark_fail_at(publish_phase, 82);
             step_error = e;
         }
     }
@@ -1686,6 +1834,7 @@ async fn run_update_inner(
             .await.map_err(|e| e.to_string())?
         {
             Err(e) => {
+                progress.mark_fail_at("commit", 82);
                 commit_status = "fail".into();
                 push_status = "not-run".into();
                 step_error = format!("文档提交失败：{e}")
@@ -1716,6 +1865,7 @@ async fn run_update_inner(
                             push_status = "ok".into();
                         }
                         Err(e) => {
+                            progress.mark_fail_at("commit", 85);
                             step_error =
                                 format!("已提交到本地，但远端推送失败：{e}；下次仅重试推送");
                             push_status = "fail".into();
@@ -1744,10 +1894,14 @@ async fn run_update_inner(
     let body = if failed {
         format!("## ⚠️ 逆向文档更新失败\n{}", body.lines().skip(1).collect::<Vec<_>>().join("\n"))
     } else { body };
-    progress.stage("notify", 92);
+    if !failed {
+        progress.stage("notify", 92);
+    }
     let (pushed, webhook_errors) = notify_all(cfg, &body).await;
 
-    progress.stage("cursor", 98);
+    if !failed {
+        progress.stage("cursor", 98);
+    }
     // 失败 / 预览 / 未提交：不推进游标，已写入的文档改动留在工作区。
     if should_advance_cursor(published, failed) {
         let mut st = load_state();
@@ -2017,16 +2171,49 @@ fn prepare_workspace_branch(repo: &str, branch: &str) -> Result<(), String> {
     }
 }
 
-/// 把多仓增量切成「文件清单字符数 ≤ file_list_cap」的若干批；优先整仓同批，单仓仍超再按文件切。
+fn is_turn_timeout_error(err: &str) -> bool {
+    err.contains("期限") || err.contains("超时")
+}
+
+/// 超时批拆成两半（只拆一层）。文件数 ≤ `RESPLIT_MIN_FILES` 时返回 None。
+pub(crate) fn split_delta_half(delta: &ChangeDelta) -> Option<(ChangeDelta, ChangeDelta)> {
+    if delta.files.len() <= RESPLIT_MIN_FILES {
+        return None;
+    }
+    let mid = delta.files.len() / 2;
+    if mid == 0 || mid >= delta.files.len() {
+        return None;
+    }
+    let left = ChangeDelta {
+        head: delta.head.clone(),
+        files: delta.files[..mid].to_vec(),
+        commits: delta.commits.clone(),
+        diff_excerpt: delta.diff_excerpt.clone(),
+        diff_truncated: delta.diff_truncated,
+    };
+    let right = ChangeDelta {
+        head: delta.head.clone(),
+        files: delta.files[mid..].to_vec(),
+        commits: Vec::new(),
+        diff_excerpt: String::new(),
+        diff_truncated: false,
+    };
+    Some((left, right))
+}
+
+/// 把多仓增量切成「文件清单字符数 ≤ file_list_cap 且文件数 ≤ MAX_FILES_PER_BATCH」的若干批；
+/// 优先整仓同批，单仓仍超再按文件切。
 pub(crate) fn split_deltas_for_budget(
     parts: &[(String, ChangeDelta)],
     file_list_cap: usize,
     diff_cap: usize,
 ) -> Vec<ChangeDelta> {
     let full = merge_change_deltas(parts, diff_cap);
-    if full.files.is_empty()
-        || format_file_list(&full.files).chars().count() <= file_list_cap
-    {
+    if full.files.is_empty() {
+        return vec![full];
+    }
+    let under_chars = format_file_list(&full.files).chars().count() <= file_list_cap;
+    if under_chars && full.files.len() <= MAX_FILES_PER_BATCH {
         return vec![full];
     }
 
@@ -2038,14 +2225,21 @@ pub(crate) fn split_deltas_for_budget(
             .chars()
             .count()
     };
+    let packed_files = |batch: &[(String, ChangeDelta)]| -> usize {
+        merge_change_deltas(batch, diff_cap).files.len()
+    };
+    let fits = |batch: &[(String, ChangeDelta)]| -> bool {
+        packed_chars(batch) <= file_list_cap && packed_files(batch) <= MAX_FILES_PER_BATCH
+    };
 
     for (repo, delta) in parts {
         if delta.files.is_empty() && delta.commits.is_empty() && delta.diff_excerpt.is_empty() {
             continue;
         }
         let unit = (repo.clone(), delta.clone());
-        let solo_chars = packed_chars(&[unit.clone()]);
-        if solo_chars > file_list_cap {
+        let needs_chunk = packed_chars(&[unit.clone()]) > file_list_cap
+            || delta.files.len() > MAX_FILES_PER_BATCH;
+        if needs_chunk {
             if !current.is_empty() {
                 batches.push(merge_change_deltas(&current, diff_cap));
                 current.clear();
@@ -2057,7 +2251,7 @@ pub(crate) fn split_deltas_for_budget(
         }
         let mut trial = current.clone();
         trial.push(unit.clone());
-        if current.is_empty() || packed_chars(&trial) <= file_list_cap {
+        if current.is_empty() || fits(&trial) {
             current.push(unit);
         } else {
             batches.push(merge_change_deltas(&current, diff_cap));
@@ -2113,7 +2307,7 @@ fn chunk_repo_delta(
         trial.push(f.clone());
         let trial_delta = ChangeDelta {
             head: delta.head.clone(),
-            files: trial,
+            files: trial.clone(),
             commits: Vec::new(),
             diff_excerpt: String::new(),
             diff_truncated: false,
@@ -2123,7 +2317,8 @@ fn chunk_repo_delta(
         )
         .chars()
         .count();
-        if !buf.is_empty() && n > file_list_cap {
+        let over_files = trial.len() > MAX_FILES_PER_BATCH;
+        if !buf.is_empty() && (n > file_list_cap || over_files) {
             flush(&mut buf, &mut out, &mut first);
         }
         buf.push(f.clone());
@@ -2360,7 +2555,7 @@ fn format_diff_section(delta: &ChangeDelta) -> String {
     }
 }
 
-/// 质量自检结论；仅把明确、可归类的阻断项当作阻断，模糊措辞不自动放行或误杀。
+/// 质量自检结论；只有显式 `[阻断]`（或英文等价标签）才进门禁，避免「过时」随口一词掐死整轮。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualityVerdict {
     pub blocking: Vec<String>,
@@ -2372,21 +2567,52 @@ pub fn parse_quality_verdict(raw: &str) -> QualityVerdict {
     let mut findings = Vec::new();
     for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let text = line.trim_start_matches(['-', '*', '#', '>', '·']).trim();
-        if text.is_empty() { continue; }
+        if text.is_empty() {
+            continue;
+        }
         findings.push(text.to_string());
         let lower = text.to_lowercase();
-        let is_clear_block = lower.contains("错误") || lower.contains("矛盾") || lower.contains("失效")
-            || lower.contains("过时") || lower.contains("stale") || lower.contains("contradict")
-            || lower.contains("invalid reference") || lower.contains("broken link");
-        let is_critical_missing = lower.contains("关键遗漏") || lower.contains("重要遗漏") || lower.contains("critical missing")
-            || lower.contains("blocking") || lower.contains("blocker");
-        let not_ok = lower.contains("不合格") || lower.contains("不通过") || lower.contains("fail") || lower.contains("not pass");
-        let merely_suggests = lower.contains("建议") || lower.contains("可选") || lower.contains("可考虑") || lower.contains("suggest");
-        if (is_clear_block || is_critical_missing || not_ok) && !merely_suggests && !lower.contains("未发现") {
+        if lower.contains("未发现") {
+            continue;
+        }
+        let is_suggest = lower.contains("[建议]")
+            || lower.contains("[suggest]")
+            || (lower.contains("建议") && !lower.contains("[阻断]"));
+        if is_suggest {
+            continue;
+        }
+        let tagged_block = lower.contains("[阻断]")
+            || lower.contains("[block]")
+            || lower.contains("blocking:");
+        if tagged_block {
             blocking.push(text.to_string());
         }
     }
     QualityVerdict { blocking, findings }
+}
+
+/// 门禁错误里只留前几条阻断，避免把整篇质检贴进进度卡。
+fn format_quality_gate_error(scope: &str, blocking: &[String]) -> String {
+    const MAX_ITEMS: usize = 5;
+    const MAX_CHARS: usize = 160;
+    let items: Vec<String> = blocking
+        .iter()
+        .take(MAX_ITEMS)
+        .map(|s| {
+            let t = s.trim();
+            if t.chars().count() <= MAX_CHARS {
+                t.to_string()
+            } else {
+                format!("{}…", t.chars().take(MAX_CHARS).collect::<String>())
+            }
+        })
+        .collect();
+    let more = blocking.len().saturating_sub(items.len());
+    let mut body = items.join("；");
+    if more > 0 {
+        body.push_str(&format!("；另有 {more} 条…"));
+    }
+    format!("质量门禁阻断（{scope}）：{body}")
 }
 
 /// 拼装更新 system 提示：配置模板非空则用之，否则内置默认；再填占位符。
@@ -2483,7 +2709,18 @@ async fn update_docs_with_agent(
     let user = "请根据本次代码变更更新对应的逆向文档，追加当日功能更新，并给出更新摘要。";
 
     let summary = if engine.trim().eq_ignore_ascii_case("dsh") {
-        dsh_turn(app, workspace, doc_dir, DOCGEN_SESSION, &system, user, cancel_requested).await?
+        dsh_turn(
+            app,
+            workspace,
+            doc_dir,
+            DOCGEN_SESSION,
+            &system,
+            user,
+            cancel_requested,
+            UPDATE_TURN_TIMEOUT,
+            &turn_timeout_label(),
+        )
+        .await?
     } else {
         let Some(agent_cfg) = tianji_agent.as_ref() else {
             return Err("文档任务未绑定独立天玑模型；请在「逆向工程 → 引擎提示词」选择模型后再运行".into());
@@ -2525,7 +2762,16 @@ async fn update_docs_with_agent(
             mcp_enabled: false,
         };
 
-        run_agent_collect(app, request_id, req, doc_dir, cancel).await?
+        run_agent_collect(
+            app,
+            request_id,
+            req,
+            doc_dir,
+            cancel,
+            UPDATE_TURN_TIMEOUT,
+            &turn_timeout_label(),
+        )
+        .await?
     };
 
     workspace::validate_changes(workspace, doc_dir)?;
@@ -2544,11 +2790,23 @@ async fn quality_check_with_agent(
     tianji_agent: &Option<crate::wecom_orchestrator::WecomAgentConfig>,
     cancel: impl Fn() -> bool + Send + 'static,
 ) -> Result<String, String> {
-    let user = "请输出质量自检结论列表。";
+    let user = "请尽快输出质量自检结论列表（优先摘要；最多抽查 3 个文件）。";
     let system = build_quality_prompt(quality_template, doc_dir, branch, changed, summary);
+    let qc_label = quality_timeout_label();
 
     if engine.trim().eq_ignore_ascii_case("dsh") {
-        return dsh_turn(app, workspace, doc_dir, DOCGEN_QC_SESSION, &system, user, cancel_requested).await;
+        return dsh_turn(
+            app,
+            workspace,
+            doc_dir,
+            DOCGEN_QC_SESSION,
+            &system,
+            user,
+            cancel_requested,
+            QUALITY_TURN_TIMEOUT,
+            &qc_label,
+        )
+        .await;
     }
 
     let Some(agent_cfg) = tianji_agent.as_ref() else {
@@ -2588,7 +2846,16 @@ async fn quality_check_with_agent(
         anthropic_stream: agent_cfg.anthropic_stream,
         mcp_enabled: false,
     };
-    run_agent_collect(app, request_id, req, doc_dir, cancel).await
+    run_agent_collect(
+        app,
+        request_id,
+        req,
+        doc_dir,
+        cancel,
+        QUALITY_TURN_TIMEOUT,
+        &qc_label,
+    )
+    .await
 }
 
 /// DSH 档的会话键：每轮开始都重置，别让上下文一直滚。
@@ -2597,7 +2864,8 @@ const DOCGEN_QC_SESSION: &str = "docgen-qc";
 
 /// 跑一轮 DSH 回合并把正文收成字符串，跑完就关进程（不常驻）。
 ///
-    /// 原仓文档目录 + 宿主工具闸门；只读质检降到 Read，任何权限升级请求均拒绝。
+/// 原仓文档目录 + 宿主工具闸门；只读质检降到 Read，任何权限升级请求均拒绝。
+/// `timeout` / `timeout_label`：更新与质检用不同墙钟。
 async fn dsh_turn(
     app: &AppHandle,
     workspace: &str,
@@ -2606,6 +2874,8 @@ async fn dsh_turn(
     system: &str,
     user: &str,
     cancel: impl Fn() -> bool + Send + 'static,
+    timeout: Duration,
+    timeout_label: &str,
 ) -> Result<String, String> {
     let dsh = {
         let st = app.state::<WecomState>();
@@ -2613,9 +2883,15 @@ async fn dsh_turn(
     };
     // 工作区用这一轮解析出来的仓库路径（设置页填的可能是父目录）。
     dsh.configure_docgen(workspace.to_string(), doc_dir.to_string(), session_key == DOCGEN_QC_SESSION).await;
-    let result = match tokio::time::timeout(UPDATE_TURN_TIMEOUT, dsh_turn_inner(&dsh, session_key, system, user, cancel)).await {
+    let label = timeout_label.to_string();
+    let result = match tokio::time::timeout(
+        timeout,
+        dsh_turn_inner(&dsh, session_key, system, user, cancel, timeout, timeout_label),
+    )
+    .await
+    {
         Ok(result) => result,
-        Err(_) => Err("DSH 文档任务超过整轮 600 秒期限，未确认完成".into()),
+        Err(_) => Err(format!("DSH 文档任务超过整轮 {label} 期限，未确认完成")),
     };
     dsh.stop().await;
     result
@@ -2627,6 +2903,8 @@ async fn dsh_turn_inner(
     system: &str,
     user: &str,
     cancel: impl Fn() -> bool + Send + 'static,
+    timeout: Duration,
+    timeout_label: &str,
 ) -> Result<String, String> {
     dsh.reset_channel_session(session_key).await;
     dsh.ensure_ready().await?;
@@ -2640,15 +2918,20 @@ async fn dsh_turn_inner(
 
     // 审批请求代表需要超出当前沙箱；无人值守任务不自动升级权限。
     let mut acc = String::new();
-    // 整轮共享一个期限（不是每个事件各 600 秒），和天玑档的收流语义对齐。
-    let deadline = tokio::time::Instant::now() + UPDATE_TURN_TIMEOUT;
+    // 整轮共享一个期限（不是每个事件各刷一次），和天玑档的收流语义对齐。
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let event = match tokio::time::timeout_at(deadline, turn.next()).await {
             Ok(ev) => ev,
             Err(_) => {
                 turn.cancel();
-                crate::wecom_log::write("docgen", "dsh 回合超过 600 秒，已取消");
-                return Err("DSH 文档回合超时，产物未确认完成，未提交、未推进采集点".into());
+                crate::wecom_log::write(
+                    "docgen",
+                    &format!("dsh 回合超过 {timeout_label}，已取消"),
+                );
+                return Err(format!(
+                    "DSH 文档回合超过 {timeout_label} 超时，产物未确认完成，未提交、未推进采集点"
+                ));
             }
         };
         match event {
@@ -2712,9 +2995,11 @@ async fn run_agent_collect(
     req: crate::agent::AgentRunRequest,
     doc_dir: &str,
     cancel: impl Fn() -> bool + Send + 'static,
+    timeout: Duration,
+    timeout_label: &str,
 ) -> Result<String, String> {
     let mut rx = crate::agent::subscribe_agent_bridge(&request_id);
-    let deadline = tokio::time::Instant::now() + UPDATE_TURN_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + timeout;
     let cancel_id = request_id.clone();
     let collector = tauri::async_runtime::spawn(async move {
         let mut acc = String::new();
@@ -2735,11 +3020,17 @@ async fn run_agent_collect(
             }
         }
     });
-    let run = match tokio::time::timeout_at(deadline, crate::agent::agent_run_document(app.clone(), req, doc_dir.to_string())).await {
+    let label = timeout_label.to_string();
+    let run = match tokio::time::timeout_at(
+        deadline,
+        crate::agent::agent_run_document(app.clone(), req, doc_dir.to_string()),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_) => {
             crate::cancellation::cancel_request(&request_id);
-            Err("天玑文档回合超过整轮 600 秒期限，未确认完成".into())
+            Err(format!("天玑文档回合超过整轮 {label} 期限，未确认完成"))
         }
     };
     crate::agent::unsubscribe_agent_bridge(&request_id);
@@ -3150,12 +3441,87 @@ mod tests {
     }
 
     #[test]
-    fn quality_gate_blocks_explicit_defects_but_not_suggestions() {
-        let bad = parse_quality_verdict("- 服务调用关系与代码矛盾\n- 引用失效：错误码 404\n- 建议再补一个示例\n- 未发现阻塞项");
-        assert_eq!(bad.blocking.len(), 2);
-        assert!(!bad.blocking.iter().any(|s| s.contains("建议")));
-        let good = parse_quality_verdict("- 未发现过时或矛盾\n- 文档与代码一致\n- 可选：增加部署说明");
-        assert!(good.blocking.is_empty());
+    fn quality_gate_blocks_only_explicit_block_tags() {
+        let untagged = parse_quality_verdict(
+            "- 服务调用关系与代码矛盾\n- 引用失效：错误码 404\n- 文档过时：index\n- 建议再补一个示例",
+        );
+        assert!(
+            untagged.blocking.is_empty(),
+            "untagged 过时/矛盾 must not block: {:?}",
+            untagged.blocking
+        );
+        assert!(untagged.findings.len() >= 3);
+
+        let tagged = parse_quality_verdict(
+            "- [阻断] 本批登录文档与代码矛盾\n- [建议] 文档过时：总索引\n- 未发现阻塞项",
+        );
+        assert_eq!(tagged.blocking.len(), 1);
+        assert!(tagged.blocking[0].contains("[阻断]"));
+        assert!(!tagged.blocking.iter().any(|s| s.contains("[建议]")));
+
+        let clean = parse_quality_verdict("- 未发现过时或矛盾\n- [建议] 可选：增加部署说明");
+        assert!(clean.blocking.is_empty());
+    }
+
+    #[test]
+    fn format_quality_gate_error_trims_long_lists() {
+        let many: Vec<String> = (0..8).map(|i| format!("[阻断] 问题{i} {}", "x".repeat(200))).collect();
+        let err = format_quality_gate_error("整轮质检", &many);
+        assert!(err.contains("整轮质检"));
+        assert!(err.contains("另有 3 条"));
+        assert!(err.chars().count() < many.join("；").chars().count());
+    }
+
+    #[test]
+    fn cap_quality_files_dedups_and_truncates() {
+        let files: Vec<String> = (0..10)
+            .flat_map(|i| [format!("a/{i}.rs"), format!("a\\{i}.rs")])
+            .collect();
+        let capped = cap_quality_files(&files, 5);
+        assert_eq!(capped.len(), 6); // 5 + truncation note
+        assert!(capped.last().unwrap().contains("已截断"));
+        assert!(capped.iter().filter(|f| !f.starts_with('…')).count() <= 5);
+    }
+
+    #[test]
+    fn quality_timeout_is_shorter_than_update() {
+        assert!(QUALITY_TURN_TIMEOUT_SECS < UPDATE_TURN_TIMEOUT_SECS);
+        assert_eq!(UPDATE_TURN_TIMEOUT_SECS, 3_600);
+        assert_eq!(QUALITY_TURN_TIMEOUT_SECS, 900);
+        assert_eq!(MAX_FILES_PER_BATCH, 100);
+        assert_eq!(turn_timeout_label(), "60 分钟");
+        assert_eq!(quality_timeout_label(), "15 分钟");
+    }
+
+    #[test]
+    fn split_delta_half_splits_large_batches() {
+        let files: Vec<String> = (0..41).map(|i| format!("f{i}.rs")).collect();
+        let d = ChangeDelta {
+            head: "abc".into(),
+            files: files.clone(),
+            commits: vec!["c1".into()],
+            diff_excerpt: "diff".into(),
+            diff_truncated: true,
+        };
+        let (left, right) = split_delta_half(&d).expect("should split");
+        assert_eq!(left.files.len() + right.files.len(), files.len());
+        assert_eq!(left.files.len(), 20);
+        assert_eq!(right.files.len(), 21);
+        assert_eq!(left.commits, vec!["c1".to_string()]);
+        assert!(right.commits.is_empty());
+        assert!(left.diff_excerpt.contains("diff"));
+        assert!(right.diff_excerpt.is_empty());
+        let small = ChangeDelta {
+            head: "abc".into(),
+            files: (0..RESPLIT_MIN_FILES).map(|i| format!("s{i}.rs")).collect(),
+            commits: Vec::new(),
+            diff_excerpt: String::new(),
+            diff_truncated: false,
+        };
+        assert!(split_delta_half(&small).is_none());
+        assert!(is_turn_timeout_error("DSH 文档任务超过整轮 60 分钟期限，未确认完成"));
+        assert!(is_turn_timeout_error("天玑文档回合超过整轮 60 分钟超时"));
+        assert!(!is_turn_timeout_error("权限被拒绝"));
     }
 
     #[test]
@@ -3355,7 +3721,52 @@ mod tests {
         for b in &batches {
             let n = format_file_list(&b.files).chars().count();
             assert!(n <= 500 || b.files.len() == 1, "chars={n} files={}", b.files.len());
+            assert!(
+                b.files.len() <= MAX_FILES_PER_BATCH,
+                "files={} > {}",
+                b.files.len(),
+                MAX_FILES_PER_BATCH
+            );
         }
+    }
+
+    #[test]
+    fn split_deltas_caps_file_count_even_under_char_budget() {
+        // 短路径总字符远低于 24k，但超过 MAX_FILES_PER_BATCH 必须切开。
+        let n_files = MAX_FILES_PER_BATCH * 2 + 10;
+        let files: Vec<String> = (0..n_files).map(|i| format!("f{i}.rs")).collect();
+        let d = ChangeDelta {
+            head: "h".into(),
+            files,
+            commits: vec!["c".into()],
+            diff_excerpt: "d".into(),
+            diff_truncated: false,
+        };
+        let list_chars = format_file_list(&d.files).chars().count();
+        assert!(list_chars < 24_000, "precondition: under char budget ({list_chars})");
+        let batches = split_deltas_for_budget(&[(r"D:\x\many".into(), d)], 24_000, 24_000);
+        assert!(batches.len() >= 3, "got {} batches", batches.len());
+        let total: usize = batches.iter().map(|b| b.files.len()).sum();
+        assert_eq!(total, n_files);
+        for b in &batches {
+            assert!(
+                b.files.len() <= MAX_FILES_PER_BATCH,
+                "batch has {} files",
+                b.files.len()
+            );
+        }
+        assert!(
+            batches[0].commits.iter().any(|c| c.contains('c')),
+            "commits={:?}",
+            batches[0].commits
+        );
+    }
+
+    #[test]
+    fn turn_timeout_label_tracks_constant() {
+        let label = turn_timeout_label();
+        assert!(label.contains("分钟") || label.contains("秒"), "{label}");
+        assert!(!label.contains("600"));
     }
 
     #[test]
@@ -3531,6 +3942,33 @@ mod tests {
         assert!(!p.contains("{summary}"));
         assert!(!p.contains("{date}"));
         assert!(!p.contains("{updates_dir}"));
+    }
+
+    #[test]
+    fn default_update_prompt_pins_reference_arrow_contract() {
+        let p = default_docgen_system_prompt();
+        assert!(p.contains("→"), "code refs must use arrow for extract_summary_references");
+        assert!(p.contains("`源码路径:符号` → `文档相对路径`") || p.contains("源码路径:符号"));
+        assert!(p.contains("证据与写法"));
+        assert!(p.contains("无行为变更"));
+        assert!(p.contains("不要通读全库"));
+        assert!(p.contains("优先完成摘要与落盘"));
+    }
+
+    #[test]
+    fn default_quality_prompt_pins_batch_scope() {
+        let p = default_docgen_quality_prompt();
+        assert!(p.contains("本轮"));
+        assert!(p.contains("抽查 3"));
+        assert!(p.contains("吃不准"));
+        assert!(p.contains("[阻断]"));
+        assert!(p.contains("[建议]"));
+        assert!(p.contains("未发现过时或矛盾"));
+        let blocked = parse_quality_verdict("- [阻断] 模块文档与代码矛盾\n- [建议] 可补部署说明");
+        assert_eq!(blocked.blocking.len(), 1);
+        assert!(blocked.blocking[0].contains("矛盾"));
+        let clean = parse_quality_verdict("- 未发现过时或矛盾\n- [建议] 可选：加示例");
+        assert!(clean.blocking.is_empty());
     }
 
     #[test]

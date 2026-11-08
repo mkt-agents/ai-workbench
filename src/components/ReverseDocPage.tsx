@@ -1,7 +1,7 @@
 /**
  * 逆向工程（从「IM 机器人 → 文档自动更新与推送」整块拎出来的独立页）。
  *
- * 三条主线：多久跑一次（调度）→ 读哪些仓、怎么写（更新内容）→ 跑完怎么提交与通知（执行与推送）。
+ * 主线：运行配置（路径 / 来源 / 调度）→ 引擎提示词 → 提交与通知 → 运行记录。
  *
  * 配置仍存在 settings（`wecomDocgen*` / `wecomWebhook*`），下发走 `wecom_docgen_apply`：
  * 这条路径只写后端的文档配置快照，不校验 bot 凭据、不重启企微长连接，
@@ -325,10 +325,8 @@ export default function ReverseDocPage() {
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  /** 二级页签：调度打头（进页面先看运行节奏），配置页签随后，运行记录在尾 */
-  const [docgenView, setDocgenView] = useState<
-    "schedule" | "content" | "engine" | "publish" | "record"
-  >("schedule");
+  /** 二级页签：运行配置打头（路径/来源/调度同屏），引擎与提交通知随后，运行记录在尾 */
+  const [docgenView, setDocgenView] = useState<"run" | "engine" | "publish" | "record">("run");
   const [docgenPromptTab, setDocgenPromptTab] = useState<"system" | "quality">("system");
   const [docgenBusy, setDocgenBusy] = useState(false);
   const [docgenHistory, setDocgenHistory] = useState<WecomDocgenHistoryItem[]>([]);
@@ -539,14 +537,14 @@ export default function ReverseDocPage() {
   return (
     <div className="settings-page is-solo is-docgen">
       <div className="card">
-        {/* 页签占卡片标题位：配置按动线排（内容 → 引擎 → 提交通知 → 调度），结果（运行记录）在尾 */}
+        {/* 页签占卡片标题位：运行配置 → 引擎 → 提交通知 → 运行记录 */}
         <div className="card-title is-tabs docgen-tabs">
           <div
             className="hub-tabs is-channel"
             role="tablist"
             aria-label={t("wecom.groupAutoupdate")}
           >
-            {(["schedule", "content", "engine", "publish", "record"] as const).map((view) => (
+            {(["run", "engine", "publish", "record"] as const).map((view) => (
               <button
                 key={view}
                 type="button"
@@ -672,14 +670,29 @@ export default function ReverseDocPage() {
                       })
                       .catch((e) => {
                         const detail = String(e);
-                        setMsg(detail);
+                        // 错误只放进度卡：后端 finish_err 已写过 detail 时这里合并完整句，避免 toast 再刷一行
+                        setMsg("");
                         setDocgenProgress((prev) => ({
                           runId: prev?.runId ?? "manual-error",
                           trigger: prev?.trigger ?? "manual",
-                          phase: "fail",
-                          percent: 100,
+                          // 保留后端 finish_err 写入的真实阶段（agent/quality…），避免一律 "fail" 误亮质检
+                          phase:
+                            prev?.status === "fail" && prev.phase && prev.phase !== "fail"
+                              ? prev.phase
+                              : prev?.phase &&
+                                  prev.phase !== "fail" &&
+                                  prev.phase !== "done" &&
+                                  prev.phase !== "skipped"
+                                ? prev.phase
+                                : "fail",
+                          percent:
+                            prev?.status === "fail" && typeof prev.percent === "number"
+                              ? prev.percent
+                              : 55,
                           status: "fail",
                           detail,
+                          startedAtMs: prev?.startedAtMs,
+                          durationMs: prev?.durationMs,
                         }));
                       })
                       .finally(() => setDocgenBusy(false));
@@ -693,7 +706,18 @@ export default function ReverseDocPage() {
               ? (() => {
                   const progress = docgenProgress;
                   const pct = Math.max(0, Math.min(100, Math.round(progress.percent)));
-                  const step = docgenStepIndex(progress.phase);
+                  const failed = progress.status === "fail";
+                  const step = (() => {
+                    const fromPhase = docgenStepIndex(progress.phase);
+                    if (fromPhase >= 0) return fromPhase;
+                    if (failed) {
+                      return Math.min(
+                        DOCGEN_STEPS.length - 1,
+                        Math.max(0, Math.floor(pct / 20)),
+                      );
+                    }
+                    return -1;
+                  })();
                   return (
                     <div
                       className={`wecom-docgen-progress is-${progress.status}`}
@@ -734,7 +758,7 @@ export default function ReverseDocPage() {
                           <i>%</i>
                         </span>
                       </div>
-                      {/* 五段能量条：一段一个阶段；已过的段点亮，正在跑的段流斜纹 */}
+                      {/* 五段能量条：一段一个阶段；失败时只点亮到失败步，后面留空 */}
                       <div
                         className="wecom-docgen-segbar"
                         role="progressbar"
@@ -743,12 +767,30 @@ export default function ReverseDocPage() {
                         aria-valuenow={pct}
                       >
                         {DOCGEN_STEPS.map((key, index) => {
-                          const segPct = Math.max(
-                            0,
-                            Math.min(100, Math.round((pct - index * 20) * 5)),
-                          );
-                          const state =
-                            step > index ? "is-done" : step === index ? "is-current" : "";
+                          let segPct: number;
+                          let state: string;
+                          if (failed) {
+                            if (index < step) {
+                              segPct = 100;
+                              state = "is-done";
+                            } else if (index === step) {
+                              segPct = Math.max(
+                                12,
+                                Math.min(100, Math.round((pct - index * 20) * 5)),
+                              );
+                              state = "is-current";
+                            } else {
+                              segPct = 0;
+                              state = "";
+                            }
+                          } else {
+                            segPct = Math.max(
+                              0,
+                              Math.min(100, Math.round((pct - index * 20) * 5)),
+                            );
+                            state =
+                              step > index ? "is-done" : step === index ? "is-current" : "";
+                          }
                           return (
                             <div
                               key={key}
@@ -778,91 +820,8 @@ export default function ReverseDocPage() {
           {/* 动作反馈紧跟运行条：点「测试 / 立即更新」时眼睛就在第一屏，别让结果滚到卡底 */}
           {msg ? <p className="setting-hint wecom-toast">{msg}</p> : null}
           <div className="wecom-rows">
-            {/* 1. 调度与触发 */}
-            <div className="wecom-block-card is-split" hidden={docgenView !== "schedule"}>
-              <div className="wecom-block-head">
-                <div className="wecom-block-head-main">
-                  <span className="wecom-block-icon" aria-hidden>
-                    <RefreshCw size={14} />
-                  </span>
-                  <span className="wecom-block-title">{t("wecom.subDocgenSchedule")}</span>
-                </div>
-              </div>
-
-              {/* 开关在页头常驻运行条上，这里只留说明与启用前检查清单 */}
-              <Hint summary={t("wecom.autoUpdateHintShort")} details={t("wecom.autoUpdateHint")} />
-              <p className="setting-hint">{t("wecom.docgenChecklist")}</p>
-
-              <Row
-                label={t("wecom.autoUpdateTime")}
-                control={
-                  <input
-                    className="input-field"
-                    type="time"
-                    value={autoUpdateTime.value || "23:00"}
-                    onFocus={() => {
-                      autoUpdateTime.focused.current = true;
-                    }}
-                    onChange={(e) => autoUpdateTime.setValue(e.target.value)}
-                    onBlur={() => {
-                      autoUpdateTime.focused.current = false;
-                      const v = autoUpdateTime.value.trim();
-                      if (v !== (settings.wecomAutoUpdateTime ?? ""))
-                        void push({ wecomAutoUpdateTime: v || undefined });
-                    }}
-                  />
-                }
-              />
-
-              <Row
-                label={t("wecom.docgenCron")}
-                control={
-                  <input
-                    className="input-field"
-                    value={docgenCron.value}
-                    placeholder={t("wecom.docgenCronPlaceholder")}
-                    onFocus={() => {
-                      docgenCron.focused.current = true;
-                    }}
-                    onChange={(e) => docgenCron.setValue(e.target.value)}
-                    onBlur={() => {
-                      docgenCron.focused.current = false;
-                      const v = docgenCron.value.trim();
-                      if (v !== (settings.wecomDocgenCron ?? ""))
-                        void push({ wecomDocgenCron: v || undefined });
-                    }}
-                  />
-                }
-                hint={<p className="setting-hint">{t("wecom.docgenCronHint")}</p>}
-              />
-
-              <Row
-                asSwitch
-                label={t("wecom.docgenPollRelease")}
-                control={
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(settings.wecomDocgenPollRelease)}
-                      // 总闸关闭时这只是个摆设：auto_tick 第一行就把整轮 tick 拦下了
-                      disabled={!settings.wecomAutoUpdateEnabled}
-                      onChange={(e) => void push({ wecomDocgenPollRelease: e.target.checked })}
-                    />
-                    <span className="toggle-slider" />
-                  </label>
-                }
-                hint={
-                  <p className="setting-hint">
-                    {settings.wecomAutoUpdateEnabled
-                      ? t("wecom.docgenPollReleaseHint")
-                      : t("wecom.docgenPollReleaseDisabledHint")}
-                  </p>
-                }
-              />
-            </div>
-
-            {/* 2a. 仓库与目录：文档更新的工作区与写入位置（与「回答设置」各配一套） */}
-            <div className="wecom-block-card" hidden={docgenView !== "content"}>
+            {/* 1a. 仓库与目录：文档更新的工作区与写入位置（与「回答设置」各配一套） */}
+            <div className="wecom-block-card" hidden={docgenView !== "run"}>
               <div className="wecom-block-head">
                 <div className="wecom-block-head-main">
                   <span className="wecom-block-icon" aria-hidden>
@@ -972,8 +931,8 @@ export default function ReverseDocPage() {
               />
             </div>
 
-            {/* 2b. 变更来源：从哪些仓读变更（子仓白名单就在下面勾） */}
-            <div className="wecom-block-card" hidden={docgenView !== "content"}>
+            {/* 1b. 变更来源：从哪些仓读变更（子仓白名单就在下面勾） */}
+            <div className="wecom-block-card" hidden={docgenView !== "run"}>
               <div className="wecom-block-head">
                 <div className="wecom-block-head-main">
                   <span className="wecom-block-icon" aria-hidden>
@@ -1226,6 +1185,89 @@ export default function ReverseDocPage() {
               </div>
             </div>
 
+            {/* 1c. 调度与触发 */}
+            <div className="wecom-block-card is-split" hidden={docgenView !== "run"}>
+              <div className="wecom-block-head">
+                <div className="wecom-block-head-main">
+                  <span className="wecom-block-icon" aria-hidden>
+                    <RefreshCw size={14} />
+                  </span>
+                  <span className="wecom-block-title">{t("wecom.subDocgenSchedule")}</span>
+                </div>
+              </div>
+
+              {/* 开关在页头常驻运行条上，这里只留说明与启用前检查清单 */}
+              <Hint summary={t("wecom.autoUpdateHintShort")} details={t("wecom.autoUpdateHint")} />
+              <p className="setting-hint">{t("wecom.docgenChecklist")}</p>
+
+              <Row
+                label={t("wecom.autoUpdateTime")}
+                control={
+                  <input
+                    className="input-field"
+                    type="time"
+                    value={autoUpdateTime.value || "23:00"}
+                    onFocus={() => {
+                      autoUpdateTime.focused.current = true;
+                    }}
+                    onChange={(e) => autoUpdateTime.setValue(e.target.value)}
+                    onBlur={() => {
+                      autoUpdateTime.focused.current = false;
+                      const v = autoUpdateTime.value.trim();
+                      if (v !== (settings.wecomAutoUpdateTime ?? ""))
+                        void push({ wecomAutoUpdateTime: v || undefined });
+                    }}
+                  />
+                }
+              />
+
+              <Row
+                label={t("wecom.docgenCron")}
+                control={
+                  <input
+                    className="input-field"
+                    value={docgenCron.value}
+                    placeholder={t("wecom.docgenCronPlaceholder")}
+                    onFocus={() => {
+                      docgenCron.focused.current = true;
+                    }}
+                    onChange={(e) => docgenCron.setValue(e.target.value)}
+                    onBlur={() => {
+                      docgenCron.focused.current = false;
+                      const v = docgenCron.value.trim();
+                      if (v !== (settings.wecomDocgenCron ?? ""))
+                        void push({ wecomDocgenCron: v || undefined });
+                    }}
+                  />
+                }
+                hint={<p className="setting-hint">{t("wecom.docgenCronHint")}</p>}
+              />
+
+              <Row
+                asSwitch
+                label={t("wecom.docgenPollRelease")}
+                control={
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settings.wecomDocgenPollRelease)}
+                      // 总闸关闭时这只是个摆设：auto_tick 第一行就把整轮 tick 拦下了
+                      disabled={!settings.wecomAutoUpdateEnabled}
+                      onChange={(e) => void push({ wecomDocgenPollRelease: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                }
+                hint={
+                  <p className="setting-hint">
+                    {settings.wecomAutoUpdateEnabled
+                      ? t("wecom.docgenPollReleaseHint")
+                      : t("wecom.docgenPollReleaseDisabledHint")}
+                  </p>
+                }
+              />
+            </div>
+
             {/* 3a. 更新引擎：用什么引擎与模型来写（从「调度」页挪来，与提示词同主题） */}
             <div className="wecom-block-card" hidden={docgenView !== "engine"}>
               <div className="wecom-block-head">
@@ -1348,7 +1390,7 @@ export default function ReverseDocPage() {
               savedQuality={settings.wecomDocgenQualityPrompt ?? ""}
               busy={busy}
               qualityCheck={Boolean(settings.wecomDocgenQualityCheck)}
-              qualityGate={settings.wecomDocgenQualityGate !== false}
+              qualityGate={settings.wecomDocgenQualityGate === true}
               onToggleQualityCheck={(next) => void push({ wecomDocgenQualityCheck: next })}
               onToggleQualityGate={(next) => void push({ wecomDocgenQualityGate: next })}
               onSavePrompt={(which, value) =>
