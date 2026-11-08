@@ -12,7 +12,7 @@ pub mod gaze;
 pub use bubble::set_ai_hub_bubble_visible_inner;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use tauri::{
@@ -26,6 +26,28 @@ use crate::cloudflared_commands::CloudflaredState;
 
 #[derive(Default)]
 pub struct TrayTunnelUrls(pub Mutex<HashMap<String, String>>);
+
+/// 托盘菜单内容指纹：5s 轮询里内容没变就别 `set_menu`。
+/// Windows 上替换 HMENU 会拆掉正在打开的右键菜单，点「显示主窗口」等于点空气。
+static LAST_TRAY_MENU_FP: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+
+fn tray_menu_fingerprint(dsh_ports: &[u16], tunnels: &[(String, Option<String>)]) -> String {
+    let mut fp = String::new();
+    if dsh_ports.is_empty() {
+        fp.push_str("dsh:off;");
+    } else {
+        fp.push_str(&format!("dsh:{};", dsh_ports[0]));
+    }
+    for (name, url) in tunnels.iter().take(6) {
+        fp.push_str(name);
+        fp.push('|');
+        if let Some(u) = url {
+            fp.push_str(u);
+        }
+        fp.push(';');
+    }
+    fp
+}
 
 fn build_tooltip(dsh_ports: &[u16], tunnel_count: usize) -> String {
     let dsh = if dsh_ports.is_empty() {
@@ -49,6 +71,15 @@ fn apply_tray_menu<R: Runtime>(
     dsh_ports: &[u16],
     tunnels: &[(String, Option<String>)],
 ) -> Result<(), String> {
+    let fp = tray_menu_fingerprint(dsh_ports, tunnels);
+    if LAST_TRAY_MENU_FP
+        .lock()
+        .map(|last| *last == fp)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
     let show_main = MenuItem::with_id(app, "show_main", "显示主窗口", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let ai_hub = MenuItem::with_id(app, "ai_hub", "打开天玑", true, None::<&str>)
@@ -104,7 +135,10 @@ fn apply_tray_menu<R: Runtime>(
 
     let menu = Menu::with_items(app, &refs).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id("main_tray") {
-        let _ = tray.set_menu(Some(menu));
+        tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+        if let Ok(mut last) = LAST_TRAY_MENU_FP.lock() {
+            *last = fp;
+        }
     }
     Ok(())
 }
@@ -183,17 +217,29 @@ pub fn init_tray(app: &AppHandle) -> Result<(), String> {
             }
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
+            // 左键抬起唤出主窗（Windows 托盘溢出区经常只可靠地给 UP，
+            // DOWN/双击会被 shell 吃掉做拖拽，所以不能只认 DoubleClick）。
+            // show_main_window 幂等：双击序列里的第二次 UP 再进一次也无害。
+            // 右键仍走菜单；「显示主窗口」是同一条 show_main_window。
+            let left_up = matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            );
+            if left_up {
                 bubble::show_main_window(tray.app_handle());
             }
         })
         .build(app)
         .map_err(|e| e.to_string())?;
+
+    // 与上面初始菜单对齐，避免首轮 5s 轮询无意义地拆掉 HMENU。
+    if let Ok(mut last) = LAST_TRAY_MENU_FP.lock() {
+        *last = tray_menu_fingerprint(&[], &[]);
+    }
 
     if let Some(main) = app.get_webview_window(bubble::MAIN_LABEL) {
         bubble::attach_main_close_handler(app, &main);
@@ -396,4 +442,21 @@ pub fn set_ai_hub_bubble_position(app: AppHandle, x: i32, y: i32) -> Result<(), 
         let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tray_menu_fingerprint;
+
+    #[test]
+    fn tray_menu_fingerprint_stable_for_same_content() {
+        let a = tray_menu_fingerprint(&[3080], &[("t1".into(), Some("https://x".into()))]);
+        let b = tray_menu_fingerprint(&[3080], &[("t1".into(), Some("https://x".into()))]);
+        assert_eq!(a, b);
+        assert_ne!(a, tray_menu_fingerprint(&[], &[]));
+        assert_ne!(
+            a,
+            tray_menu_fingerprint(&[3080], &[("t1".into(), None)])
+        );
+    }
 }

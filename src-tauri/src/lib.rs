@@ -159,12 +159,9 @@ pub fn run() {
     // make them mutually exclusive.
     #[cfg(all(desktop, not(debug_assertions)))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-        use tauri::Manager;
-        if let Some(win) = app.get_webview_window("main") {
-            let _ = win.show();
-            let _ = win.unminimize();
-            let _ = win.set_focus();
-        }
+        // 与托盘「显示主窗口」同一条路径：plain show/focus 在被其它应用抢走
+        // 前台时会静默失败（见 tray::bubble::vis）。
+        tray::bubble::show_main_window(app);
     }));
     builder
         .plugin(tauri_plugin_shell::init())

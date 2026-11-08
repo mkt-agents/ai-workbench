@@ -637,6 +637,9 @@ pub(crate) fn attach_main_close_handler<R: Runtime>(app: &AppHandle<R>, win: &We
             api.prevent_close();
             if let Some(w) = handle.get_webview_window(MAIN_LABEL) {
                 let _ = w.hide();
+                // 与天玑 hide 同款：tao 的 hide 可能被系统吞掉，不强制的话
+                // 缓存以为藏了、窗口其实还在，之后 show()/hide() 全变 no-op。
+                let _ = vis::force_visible(&w, false);
             }
             let _ = handle.emit("tray-minimized", ());
         }
