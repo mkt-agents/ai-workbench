@@ -218,6 +218,8 @@
     "refresh": "Refresh",
     "running": "Running",
     "loadingUi": "Loading UI…",
+    "loadingUiLabel": "Loading UI",
+    "loadingUiHint": "The local Harness page will be ready shortly",
     "notRunning": "Not running",
     "starting": "Starting...",
     "startingLabel": "Starting",

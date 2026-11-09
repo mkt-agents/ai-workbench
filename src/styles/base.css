@@ -46,7 +46,8 @@ body:is(.resizing, .sidebar-collapsing) :is(
   .qa-bubble-orb,
   .qa-bubble-aura,
   .qa-pet-speech,
-  .dapps-slot
+  .dapps-slot,
+  .dapps-start-orbit-track
 ) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -176,7 +177,7 @@ input, select, textarea { font-family: inherit; }
 ::selection { background: var(--accent-dim); color: var(--text-0); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-sm); }
 
-/* ─── Loading Screen ─── */
+/* ─── Loading Screen (in-app fallback; boot splash lives in index.html) ─── */
 
 .loading-screen {
   width: 100vw;
@@ -185,24 +186,28 @@ input, select, textarea { font-family: inherit; }
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 100%);
+  gap: 22px;
+  background:
+    radial-gradient(ellipse 70% 48% at 50% 42%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 58%),
+    var(--bg-0);
   font-family: var(--font-sans);
-  gap: 20px;
 }
 
 .loading-logo-mark {
   border-radius: var(--radius-lg);
   display: block;
+  animation: loading-breathe 2.6s ease-in-out infinite;
 }
 
 .loading-logo {
-  font-size: 28px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  letter-spacing: -0.02em;
 }
 
 .nav-brand-icon {
@@ -214,18 +219,31 @@ input, select, textarea { font-family: inherit; }
 }
 
 .loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--accent-dim);
+  width: 36px;
+  height: 36px;
+  border: 2px solid color-mix(in srgb, var(--accent) 18%, transparent);
   border-top-color: var(--accent);
+  border-right-color: color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin 1.2s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
 }
 
 .loading-text {
-  font-size: 13px;
-  color: var(--text-2);
-  margin-top: 8px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+@keyframes loading-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-logo-mark,
+  .loading-spinner {
+    animation: none;
+  }
 }
 
 /* ─── Scrollable Page Container ─── */

@@ -539,11 +539,12 @@
   text-wrap: balance;
 }
 
-/* Launch / wait / close: same visual language as Harness startup. */
+/* Launch / wait / close: glass stage + orbital hero. */
 .dapps-hint.is-starting,
 .dapps-hint.is-stopping {
-  gap: 22px;
-  animation: dapps-start-enter 420ms ease-out both;
+  gap: 26px;
+  isolation: isolate;
+  animation: dapps-start-enter 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .dapps-hint.is-stopping .dapps-start-status {
@@ -558,7 +559,12 @@
   animation-direction: normal;
 }
 
-.dapps-hint.is-stopping .dapps-start-glow {
+.dapps-hint.is-stopping .dapps-start-spark {
+  animation-direction: reverse;
+}
+
+.dapps-hint.is-stopping .dapps-start-glow,
+.dapps-hint.is-stopping .dapps-start-aurora {
   background: radial-gradient(
     circle at 50% 45%,
     color-mix(in srgb, var(--text-2) 18%, transparent) 0%,
@@ -567,34 +573,111 @@
   );
 }
 
+.dapps-start-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.dapps-start-aurora {
+  position: absolute;
+  width: min(420px, 70%);
+  height: min(420px, 70%);
+  left: 50%;
+  top: 42%;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 40% 35%,
+    color-mix(in srgb, var(--accent) 26%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 8%, transparent) 42%,
+    transparent 70%
+  );
+  filter: blur(28px);
+  opacity: 0.85;
+  animation: dapps-start-aurora 5.5s ease-in-out infinite;
+}
+
+.dapps-start-aurora.is-alt {
+  width: min(320px, 55%);
+  height: min(320px, 55%);
+  top: 58%;
+  left: 58%;
+  background: radial-gradient(
+    circle at 60% 60%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 0%,
+    transparent 68%
+  );
+  animation-duration: 7s;
+  animation-direction: reverse;
+  opacity: 0.55;
+}
+
+.dapps-start-grid {
+  position: absolute;
+  inset: -20%;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border-subtle) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border-subtle) 55%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(circle at 50% 45%, black 0%, transparent 62%);
+  opacity: 0.35;
+  animation: dapps-start-grid 12s linear infinite;
+}
+
 .dapps-start-hero {
   position: relative;
-  width: 132px;
-  height: 132px;
+  z-index: 1;
+  width: 168px;
+  height: 168px;
   display: grid;
   place-items: center;
 }
 
 .dapps-start-glow {
   position: absolute;
-  inset: 8%;
+  inset: 12%;
   border-radius: 50%;
   background: radial-gradient(
     circle at 50% 45%,
-    color-mix(in srgb, var(--accent) 28%, transparent) 0%,
-    color-mix(in srgb, var(--accent) 8%, transparent) 42%,
+    color-mix(in srgb, var(--accent) 34%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 10%, transparent) 44%,
     transparent 72%
   );
-  filter: blur(2px);
+  filter: blur(4px);
   animation: dapps-start-glow 2.8s ease-in-out infinite;
   pointer-events: none;
+}
+
+.dapps-start-ring {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.dapps-start-ring.is-halo {
+  inset: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
+  box-shadow:
+    var(--surface-highlight),
+    0 0 24px color-mix(in srgb, var(--accent) 18%, transparent);
+  animation: dapps-start-halo 3.2s ease-in-out infinite;
+}
+
+.dapps-start-ring.is-dashed {
+  inset: 14px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 28%, transparent);
+  animation: dapps-start-spin 18s linear infinite;
+  opacity: 0.7;
 }
 
 .dapps-start-orbit {
   position: relative;
   z-index: 1;
-  width: 108px;
-  height: 108px;
+  width: 118px;
+  height: 118px;
   display: grid;
   place-items: center;
 }
@@ -603,8 +686,11 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border-subtle));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-subtle));
+  background: color-mix(in srgb, var(--float-bg) 35%, transparent);
   box-shadow: var(--surface-highlight);
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
 }
 
 .dapps-start-orbit-arc {
@@ -613,60 +699,132 @@
   border-radius: 50%;
   border: 2px solid transparent;
   border-top-color: var(--accent);
-  border-right-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  animation: dapps-start-spin 1.35s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  border-right-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 45%, transparent));
+  animation: dapps-start-spin 1.25s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
 }
 
 .dapps-start-orbit-arc.is-secondary {
-  inset: 7px;
+  inset: 8px;
   border-width: 1.5px;
-  border-top-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-top-color: color-mix(in srgb, var(--accent) 60%, transparent);
   border-right-color: transparent;
-  border-bottom-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  animation-duration: 2.1s;
+  border-bottom-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  animation-duration: 2s;
   animation-direction: reverse;
-  opacity: 0.85;
+  opacity: 0.9;
+  filter: none;
+}
+
+.dapps-start-spark {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  animation: dapps-start-spin 1.25s linear infinite;
+  pointer-events: none;
+}
+
+.dapps-start-spark::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow:
+    0 0 10px color-mix(in srgb, var(--accent) 70%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.dapps-start-spark.is-lag {
+  animation-duration: 2s;
+  animation-direction: reverse;
+  opacity: 0.65;
+}
+
+.dapps-start-spark.is-lag::before {
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  top: 6px;
 }
 
 .dapps-start-icon {
   position: relative;
   z-index: 1;
-  width: 68px;
-  height: 68px;
+  width: 72px;
+  height: 72px;
   display: grid;
   place-items: center;
+  overflow: hidden;
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-2) 72%, transparent);
-  box-shadow: var(--shadow-sm), var(--surface-highlight);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--overlay-3) 80%, transparent),
+      transparent 42%
+    ),
+    color-mix(in srgb, var(--float-bg) 88%, var(--bg-2));
+  box-shadow:
+    var(--shadow-md),
+    var(--surface-highlight),
+    0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
   animation: dapps-start-breathe 2.6s ease-in-out infinite;
   color: var(--text-1);
 }
 
-.dapps-start-icon .dapps-tab-icon {
-  width: 40px;
-  height: 40px;
+.dapps-start-sheen {
+  position: absolute;
+  inset: -40% -60%;
+  background: linear-gradient(
+    115deg,
+    transparent 35%,
+    color-mix(in srgb, var(--on-accent, #fff) 18%, transparent) 48%,
+    transparent 62%
+  );
+  animation: dapps-start-sheen 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.dapps-start-icon .dapps-tab-icon,
+.dapps-start-icon img {
+  position: relative;
+  z-index: 1;
+  width: 42px;
+  height: 42px;
   border-radius: var(--radius-md);
+  object-fit: contain;
 }
 
 .dapps-start-icon svg {
+  position: relative;
+  z-index: 1;
   width: 28px;
   height: 28px;
 }
 
 .dapps-start-copy {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  max-width: 320px;
+  gap: 10px;
+  max-width: 340px;
 }
 
 .dapps-hint.is-starting .dapps-hint-title,
 .dapps-hint.is-stopping .dapps-hint-title {
   margin: 0;
-  font-size: 15px;
-  letter-spacing: 0.01em;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--text-0);
+  text-shadow: 0 1px 18px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .dapps-start-status {
@@ -674,17 +832,21 @@
   align-items: center;
   gap: 2px;
   min-height: 18px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-dim) 55%, var(--float-bg));
   color: var(--accent);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
 }
 
 .dapps-start-dots {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  margin-left: 2px;
+  margin-left: 4px;
   width: 18px;
 }
 
@@ -706,43 +868,47 @@
 }
 
 .dapps-start-bar {
-  width: min(200px, 56vw);
-  height: 2px;
-  margin-top: 4px;
+  width: min(220px, 58vw);
+  height: 3px;
+  margin-top: 2px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 14%, var(--overlay-2));
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .dapps-start-bar > span {
   display: block;
-  width: 42%;
+  width: 38%;
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(
     90deg,
     transparent,
+    color-mix(in srgb, var(--accent) 55%, transparent),
     var(--accent),
-    color-mix(in srgb, var(--accent) 55%, transparent)
+    color-mix(in srgb, var(--accent) 55%, transparent),
+    transparent
   );
-  animation: dapps-start-bar 1.6s ease-in-out infinite;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent);
+  animation: dapps-start-bar 1.55s ease-in-out infinite;
 }
 
 .dapps-hint.is-starting .dapps-hint-text,
 .dapps-hint.is-stopping .dapps-hint-text {
   margin-top: 2px;
-  max-width: 280px;
+  max-width: 300px;
   color: var(--text-3);
 }
 
 @keyframes dapps-start-enter {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(10px) scale(0.985);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -758,19 +924,65 @@
     transform: scale(1);
   }
   50% {
-    transform: scale(1.035);
+    transform: scale(1.04);
   }
 }
 
 @keyframes dapps-start-glow {
   0%,
   100% {
-    opacity: 0.7;
-    transform: scale(0.96);
+    opacity: 0.65;
+    transform: scale(0.94);
   }
   50% {
     opacity: 1;
-    transform: scale(1.04);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes dapps-start-halo {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.985);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
+@keyframes dapps-start-aurora {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(0.92);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.08);
+    opacity: 0.95;
+  }
+}
+
+@keyframes dapps-start-grid {
+  to {
+    transform: translate3d(0, 28px, 0);
+  }
+}
+
+@keyframes dapps-start-sheen {
+  0%,
+  35% {
+    transform: translateX(-30%) rotate(8deg);
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  65%,
+  100% {
+    transform: translateX(30%) rotate(8deg);
+    opacity: 0;
   }
 }
 
@@ -789,10 +1001,10 @@
 
 @keyframes dapps-start-bar {
   0% {
-    transform: translateX(-120%);
+    transform: translateX(-130%);
   }
   100% {
-    transform: translateX(280%);
+    transform: translateX(300%);
   }
 }
 
@@ -800,7 +1012,12 @@
   .dapps-hint.is-starting,
   .dapps-hint.is-stopping,
   .dapps-start-glow,
+  .dapps-start-aurora,
+  .dapps-start-grid,
+  .dapps-start-ring,
   .dapps-start-orbit-arc,
+  .dapps-start-spark,
+  .dapps-start-sheen,
   .dapps-start-icon,
   .dapps-start-dots i,
   .dapps-start-bar > span,
@@ -816,6 +1033,10 @@
 
   .dapps-start-dots i {
     opacity: 0.55;
+  }
+
+  .dapps-start-sheen {
+    opacity: 0;
   }
 }
 

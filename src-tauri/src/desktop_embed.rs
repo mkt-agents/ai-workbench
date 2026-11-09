@@ -102,17 +102,13 @@ mod imp {
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tauri::Manager;
-    use windows::core::{w, BOOL, PCWSTR, PWSTR};
+    use windows::core::{BOOL, PWSTR};
     use windows::Win32::Foundation::{
-        CloseHandle, GetLastError, SetLastError, COLORREF, ERROR_SUCCESS, HINSTANCE, HWND, LPARAM,
-        POINT, RECT, WPARAM,
+        CloseHandle, GetLastError, SetLastError, ERROR_SUCCESS, HWND, LPARAM, POINT, RECT,
     };
     use windows::Win32::Graphics::Gdi::{
-        ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
-        DeleteObject, FillRect, GetDC, RedrawWindow, ReleaseDC, ScreenToClient, SelectObject,
-        RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
+        ClientToScreen, RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
     };
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::{
         AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -121,19 +117,17 @@ mod imp {
         GetFocus, keybd_event, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP, VK_MENU,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, EnumWindows, GetClassNameW, GetClientRect,
-        GetForegroundWindow, GetParent, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
-        GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsHungAppWindow, IsIconic,
-        IsWindow, IsWindowVisible, IsZoomed, SendMessageW, SetForegroundWindow, SetParent,
-        SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, GWLP_HWNDPARENT,
-        GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP, IMAGE_BITMAP, STM_SETIMAGE,
+        EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetParent, GetWindow,
+        GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextW,
+        GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+        SetForegroundWindow, SetParent, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+        ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP,
         SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
         SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE,
-        SW_SHOWNA, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_EX_STYLE,
-        WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-        WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP,
-        WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+        SW_SHOWNA, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_LONG_PTR_INDEX,
+        WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+        WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+        WS_THICKFRAME, WS_VISIBLE,
     };
 
     /// Below this (physical px²) a window is a helper, not an application frame.
@@ -190,6 +184,10 @@ mod imp {
         /// `reactivate` runs after the host returns — HWND focus alone does
         /// not re-activate Chromium's document (see `reactivate`).
         host_was_background: bool,
+        /// When this entry was adopted. Startup / launch-embed briefly loses
+        /// host FG to the guest; treating that as "was background" would
+        /// reactivate (hide) a brand-new embed and race into a black slot.
+        attached_at: std::time::Instant,
     }
 
     /// Append one line to `%TEMP%\ai-workbench-desktop-embed.log` (debug builds
@@ -288,17 +286,12 @@ mod imp {
         Mutex::new(None);
     const REACTIVATE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
 
-    /// Solid veil COLORREF (`0x00BBGGRR`) painted over the slot while
-    /// reactivate hides/shows the hosted Chromium window. Default is glass
-    /// `--float-bar-bg` `#2b2a27`; the frontend refreshes this from the live
-    /// theme token so light/dark/ice/silver match.
-    static VEIL_BGR: std::sync::atomic::AtomicU32 =
-        std::sync::atomic::AtomicU32::new(0x0027_2A_2B);
+    /// Kept for the existing IPC; the solid Win32 veil was removed after it
+    /// could stick on top of the hosted window and leave a permanent black
+    /// slot. Slot underlay is CSS `--float-bg` instead.
+    pub fn set_veil_bgr(_bgr: u32) {}
 
-    pub fn set_veil_bgr(bgr: u32) {
-        // Keep the COLORREF alpha byte clear.
-        VEIL_BGR.store(bgr & 0x00FF_FFFF, std::sync::atomic::Ordering::Relaxed);
-    }
+    const REACTIVATE_ATTACH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
     /// Update the sticky "host was background" flag for one heartbeat tick.
     /// Returns whether this tick should kick off `reactivate`.
@@ -1991,6 +1984,7 @@ mod imp {
                     attached_thread,
                     placement,
                     host_was_background: false,
+                    attached_at: std::time::Instant::now(),
                 },
             )
         });
@@ -2116,6 +2110,7 @@ mod imp {
                     attached_thread,
                     placement,
                     host_was_background: false,
+                    attached_at: std::time::Instant::now(),
                 },
             );
         });
@@ -2420,6 +2415,7 @@ mod imp {
                                 attached_thread: old_attached_thread,
                                 placement: old_placement,
                                 host_was_background: false,
+                                attached_at: std::time::Instant::now(),
                             });
                             with_map(|m| {
                                 m.insert(
@@ -2437,6 +2433,7 @@ mod imp {
                                         attached_thread,
                                         placement,
                                         host_was_background: false,
+                                        attached_at: std::time::Instant::now(),
                                     },
                                 );
                             });
@@ -2469,6 +2466,12 @@ mod imp {
             let Some(entry) = m.get_mut(&key) else {
                 return false;
             };
+            // Launch-embed steals FG for a moment; do not treat that as a real
+            // leave/return or we hide a fresh embed and race into a black slot.
+            if entry.attached_at.elapsed() < REACTIVATE_ATTACH_GRACE {
+                entry.host_was_background = false;
+                return false;
+            }
             note_host_foreground(host_fg, entry.shown != 0, &mut entry.host_was_background)
         });
         if should_reactivate {
@@ -2609,121 +2612,6 @@ mod imp {
         focus_hosted(app, as_hwnd(parent), as_hwnd(hwnd), child_thread);
     }
 
-    /// SS_BITMAP for the solid veil STATIC.
-    const SS_BITMAP: WINDOW_STYLE = WINDOW_STYLE(0x0000_000E);
-
-    struct ReactivateCover {
-        hwnd: isize,
-        bitmap: isize,
-    }
-
-    /// Solid theme-colored bitmap — Win32 cannot do CSS backdrop blur, so the
-    /// veil matches `--float-bar-bg` (synced from the frontend) instead of
-    /// flashing the bare white webview or Chromium's clear-to-white on show.
-    unsafe fn solid_veil_bitmap(width: i32, height: i32, bgr: u32) -> Option<isize> {
-        if width <= 0 || height <= 0 {
-            return None;
-        }
-        let screen = GetDC(None);
-        if screen.0.is_null() {
-            return None;
-        }
-        let mem = CreateCompatibleDC(Some(screen));
-        let bmp = CreateCompatibleBitmap(screen, width, height);
-        if bmp.0.is_null() {
-            let _ = DeleteDC(mem);
-            ReleaseDC(None, screen);
-            return None;
-        }
-        let old = SelectObject(mem, bmp.into());
-        let brush = CreateSolidBrush(COLORREF(bgr));
-        let fill = RECT {
-            left: 0,
-            top: 0,
-            right: width,
-            bottom: height,
-        };
-        let _ = FillRect(mem, &fill, brush);
-        let _ = DeleteObject(brush.into());
-        SelectObject(mem, old);
-        let _ = DeleteDC(mem);
-        ReleaseDC(None, screen);
-        Some(bmp.0 as isize)
-    }
-
-    unsafe fn place_veil_cover(parent: HWND, hosted: HWND) -> Option<ReactivateCover> {
-        let mut wr = RECT::default();
-        GetWindowRect(hosted, &mut wr).ok()?;
-        let width = wr.right - wr.left;
-        let height = wr.bottom - wr.top;
-        if width <= 0 || height <= 0 {
-            return None;
-        }
-        let mut origin = POINT {
-            x: wr.left,
-            y: wr.top,
-        };
-        if !ScreenToClient(parent, &mut origin).as_bool() {
-            return None;
-        }
-        let bgr = VEIL_BGR.load(std::sync::atomic::Ordering::Relaxed);
-        let bitmap = solid_veil_bitmap(width, height, bgr)?;
-        let instance: HINSTANCE = GetModuleHandleW(PCWSTR::null()).ok()?.into();
-        // NOACTIVATE + TRANSPARENT: cover must not steal focus/clicks while
-        // Chromium settles underneath after show.
-        let cover = CreateWindowExW(
-            WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-            w!("STATIC"),
-            w!(""),
-            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_BITMAP,
-            origin.x,
-            origin.y,
-            width,
-            height,
-            Some(parent),
-            None,
-            Some(instance),
-            None,
-        )
-        .ok()?;
-        SendMessageW(
-            cover,
-            STM_SETIMAGE,
-            Some(WPARAM(IMAGE_BITMAP.0 as usize)),
-            Some(LPARAM(bitmap)),
-        );
-        let _ = SetWindowPos(
-            cover,
-            Some(HWND_TOP),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
-        Some(ReactivateCover {
-            hwnd: cover.0 as isize,
-            bitmap,
-        })
-    }
-
-    unsafe fn drop_veil_cover(cover: ReactivateCover) {
-        let hwnd = as_hwnd(cover.hwnd);
-        if IsWindow(Some(hwnd)).as_bool() {
-            SendMessageW(
-                hwnd,
-                STM_SETIMAGE,
-                Some(WPARAM(IMAGE_BITMAP.0 as usize)),
-                Some(LPARAM(0)),
-            );
-            let _ = DestroyWindow(hwnd);
-        }
-        if cover.bitmap != 0 {
-            let bmp = windows::Win32::Graphics::Gdi::HBITMAP(cover.bitmap as *mut _);
-            let _ = DeleteObject(bmp.into());
-        }
-    }
-
     /// Force the hosted Chromium/Electron document to re-activate, the way a
     /// tab switch does, WITHOUT the user leaving the page.
     ///
@@ -2740,21 +2628,26 @@ mod imp {
     /// keyboard-focused-but-not-document-active window silently drops an image
     /// Ctrl+V while a plain text paste (lower bar) sometimes slips through.
     ///
-    /// This reproduces the tab-switch occlusion deterministically: hide the
-    /// window, let the host queue drain one pump turn so the renderer actually
-    /// processes WasHidden, then show + focus so it processes WasShown and
-    /// re-activates the document. A solid theme veil (COLORREF from
-    /// `--float-bar-bg`) sits above the slot for the whole hide→show settle so
-    /// neither the white webview nor Chromium's clear-to-white first frame is
-    /// visible. Guarded on the host being foreground; skipped while the entry
-    /// is deliberately hidden (picker/menu up).
+    /// Hide completion is waited on a channel before the 48ms occlusion gap:
+    /// posting hide and show asynchronously let hide land *after* show and
+    /// leave the slot black (hosted HWND stuck hidden while UI says attached).
+    /// The brief gap shows CSS `--float-bg` on `.dapps-slot`, not a Win32
+    /// veil (a stuck STATIC cover was itself a permanent black screen).
     pub fn reactivate(app: &tauri::AppHandle, process: &str) {
         let key = map_key(process);
         let live = with_map(|m| {
-            m.get(&key)
-                .map(|e| (e.hwnd, e.parent, e.pid, e.attached_thread, e.shown))
+            m.get(&key).map(|e| {
+                (
+                    e.hwnd,
+                    e.parent,
+                    e.pid,
+                    e.attached_thread,
+                    e.shown,
+                    e.attached_at,
+                )
+            })
         });
-        let Some((hwnd, parent, pid, child_thread, shown)) = live else {
+        let Some((hwnd, parent, pid, child_thread, shown, attached_at)) = live else {
             return;
         };
         if shown == 0 || !entry_live(hwnd, pid) {
@@ -2763,6 +2656,14 @@ mod imp {
                     m.remove(&key);
                 });
             }
+            return;
+        }
+        if attached_at.elapsed() < REACTIVATE_ATTACH_GRACE {
+            with_map(|m| {
+                if let Some(entry) = m.get_mut(&key) {
+                    entry.host_was_background = false;
+                }
+            });
             return;
         }
         let now = std::time::Instant::now();
@@ -2786,40 +2687,8 @@ mod imp {
             });
             return;
         }
-        let parent_raw = parent;
-        let hwnd_raw = hwnd;
-        let cover_slot = std::sync::Arc::new(std::sync::Mutex::new(None::<ReactivateCover>));
-        let cover_for_hide = cover_slot.clone();
-        let proceed = app
-            .run_on_main_thread(move || unsafe {
-                let hosted = as_hwnd(hwnd_raw);
-                let host = as_hwnd(parent_raw);
-                if GetForegroundWindow() != host
-                    || IsHungAppWindow(hosted).as_bool()
-                    || !IsWindowVisible(hosted).as_bool()
-                {
-                    return;
-                }
-                // Veil first, then hide — reverse order still flashes white.
-                if let Some(cover) = place_veil_cover(host, hosted) {
-                    if let Ok(mut slot) = cover_for_hide.lock() {
-                        *slot = Some(cover);
-                    }
-                }
-                let _ = SetWindowPos(
-                    hosted,
-                    None,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW,
-                );
-            })
-            .is_ok();
-        if !proceed {
-            return;
-        }
+        // Stamp debounce up front so concurrent heartbeat/focus paths do not
+        // start a second hide while this one is in flight.
         if let Ok(mut g) = LAST_REACTIVATE_AT.lock() {
             g.get_or_insert_with(HashMap::new).insert(key.clone(), now);
         }
@@ -2828,73 +2697,96 @@ mod imp {
                 entry.host_was_background = false;
             }
         });
+        let parent_raw = parent;
+        let hwnd_raw = hwnd;
         let app2 = app.clone();
-        let cover_for_show = cover_slot;
+        let key_for_log = key;
+        // Whole cycle on a worker thread so we never recv on the UI thread
+        // (that would deadlock if run_on_main_thread only posts).
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(48));
-            let cover_after_show = std::sync::Arc::new(std::sync::Mutex::new(None::<ReactivateCover>));
-            let cover_store = cover_after_show.clone();
-            let showed = app2
-                .run_on_main_thread(move || unsafe {
-                    let hosted = as_hwnd(hwnd_raw);
-                    let host = as_hwnd(parent_raw);
-                    let cover = cover_for_show.lock().ok().and_then(|mut g| g.take());
-                    if GetForegroundWindow() != host || IsHungAppWindow(hosted).as_bool() {
-                        if IsWindow(Some(hosted)).as_bool() {
-                            let _ = ShowWindow(hosted, SW_SHOWNA);
+            let (hid_tx, hid_rx) = std::sync::mpsc::channel::<bool>();
+            let posted = app2
+                .run_on_main_thread(move || {
+                    let hid = unsafe {
+                        let hosted = as_hwnd(hwnd_raw);
+                        let host = as_hwnd(parent_raw);
+                        if GetForegroundWindow() != host
+                            || IsHungAppWindow(hosted).as_bool()
+                            || !IsWindowVisible(hosted).as_bool()
+                        {
+                            false
+                        } else {
+                            let _ = SetWindowPos(
+                                hosted,
+                                None,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOACTIVATE
+                                    | SWP_NOMOVE
+                                    | SWP_NOSIZE
+                                    | SWP_NOZORDER
+                                    | SWP_HIDEWINDOW,
+                            );
+                            true
                         }
-                        if let Some(cover) = cover {
-                            drop_veil_cover(cover);
-                        }
-                        return;
-                    }
-                    let attached = ensure_queue_shared(host, hosted, child_thread);
-                    let _ = SetWindowPos(
-                        hosted,
-                        Some(HWND_TOP),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-                    );
-                    // Keep the veil above Chromium's first (often white) frame.
-                    if let Some(ref cover) = cover {
-                        let _ = SetWindowPos(
-                            as_hwnd(cover.hwnd),
-                            Some(HWND_TOP),
-                            0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                        );
-                    }
-                    let _ = SetFocus(Some(hosted));
-                    let nudged = sync_hosted_focus(hosted, attached);
-                    if let Ok(mut slot) = cover_store.lock() {
-                        *slot = cover;
-                    }
-                    debug_log(&format!(
-                        "reactivate 0x{:X} focused={} nudged={nudged}",
-                        hosted.0 as usize,
-                        GetFocus() == hosted
-                    ));
+                    };
+                    let _ = hid_tx.send(hid);
                 })
                 .is_ok();
-            if !showed {
-                return;
-            }
-            // Let Chromium paint one compositor frame under the veil.
-            std::thread::sleep(std::time::Duration::from_millis(64));
-            let app3 = app2.clone();
-            let _ = app3.run_on_main_thread(move || unsafe {
-                if let Ok(mut slot) = cover_after_show.lock() {
-                    if let Some(cover) = slot.take() {
-                        drop_veil_cover(cover);
+            if !posted
+                || !hid_rx
+                    .recv_timeout(std::time::Duration::from_millis(500))
+                    .unwrap_or(false)
+            {
+                debug_log(&format!("reactivate {key_for_log} hide skipped"));
+                // Hide never landed: restore sticky and drop debounce so the
+                // next heartbeat can retry once the host is foreground.
+                with_map(|m| {
+                    if let Some(entry) = m.get_mut(&key_for_log) {
+                        entry.host_was_background = true;
+                    }
+                });
+                if let Ok(mut g) = LAST_REACTIVATE_AT.lock() {
+                    if let Some(map) = g.as_mut() {
+                        map.remove(&key_for_log);
                     }
                 }
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(48));
+            let (shown_tx, shown_rx) = std::sync::mpsc::channel::<()>();
+            let _ = app2.run_on_main_thread(move || unsafe {
+                let hosted = as_hwnd(hwnd_raw);
+                let host = as_hwnd(parent_raw);
+                if GetForegroundWindow() != host || IsHungAppWindow(hosted).as_bool() {
+                    if IsWindow(Some(hosted)).as_bool() {
+                        let _ = ShowWindow(hosted, SW_SHOWNA);
+                    }
+                    let _ = shown_tx.send(());
+                    return;
+                }
+                let attached = ensure_queue_shared(host, hosted, child_thread);
+                let _ = SetWindowPos(
+                    hosted,
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+                let _ = SetFocus(Some(hosted));
+                let nudged = sync_hosted_focus(hosted, attached);
+                debug_log(&format!(
+                    "reactivate 0x{:X} focused={} nudged={nudged}",
+                    hosted.0 as usize,
+                    GetFocus() == hosted
+                ));
+                let _ = shown_tx.send(());
             });
+            let _ = shown_rx.recv_timeout(std::time::Duration::from_millis(500));
         });
     }
 

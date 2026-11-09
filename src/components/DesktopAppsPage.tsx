@@ -31,6 +31,7 @@ import ModalTitleRow from "./ModalTitleRow";
 import DropdownMenu from "./DropdownMenu";
 import AppLibraryDialog from "./desktopApps/AppLibraryDialog";
 import { useRunningApps } from "./desktopApps/useRunningApps";
+import { OrbitalLoadingStage } from "./OrbitalLoadingStage";
 import type {
   DesktopRelayoutResult,
   DesktopWindowCandidate,
@@ -2371,50 +2372,25 @@ export default function DesktopAppsPage() {
             <div className="dapps-slot" ref={slotRef} />
             {phase !== "attached" && (
           phase === "launching" || phase === "polling" || phase === "closing" ? (
-            <div
-              className={`dapps-hint ${phase === "closing" ? "is-stopping" : "is-starting"}`}
-              role="status"
-              aria-busy="true"
-            >
-              <div className="dapps-start-hero" aria-hidden="true">
-                <span className="dapps-start-glow" />
-                <div className="dapps-start-orbit">
-                  <span className="dapps-start-orbit-track" />
-                  <span className="dapps-start-orbit-arc" />
-                  <span className="dapps-start-orbit-arc is-secondary" />
-                  <div className="dapps-start-icon">
-                    <AppTabIcon app={active} installed={installed} />
-                  </div>
-                </div>
-              </div>
-              <div className="dapps-start-copy">
-                <p className="dapps-hint-title">{label(active)}</p>
-                <div className="dapps-start-status">
-                  <span>
-                    {phase === "closing"
-                      ? t("hint.closingLabel")
-                      : phase === "launching"
-                        ? t("hint.startingLabel")
-                        : t("hint.waitingLabel")}
-                  </span>
-                  <span className="dapps-start-dots">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                </div>
-                <div className="dapps-start-bar">
-                  <span />
-                </div>
-                <p className="dapps-hint-text">
-                  {phase === "closing"
-                    ? t("hint.closing")
-                    : phase === "launching"
-                      ? t("hint.starting")
-                      : t("hint.waiting")}
-                </p>
-              </div>
-            </div>
+            <OrbitalLoadingStage
+              variant={phase === "closing" ? "stopping" : "starting"}
+              icon={<AppTabIcon app={active} installed={installed} />}
+              title={label(active)}
+              status={
+                phase === "closing"
+                  ? t("hint.closingLabel")
+                  : phase === "launching"
+                    ? t("hint.startingLabel")
+                    : t("hint.waitingLabel")
+              }
+              hint={
+                phase === "closing"
+                  ? t("hint.closing")
+                  : phase === "launching"
+                    ? t("hint.starting")
+                    : t("hint.waiting")
+              }
+            />
           ) : (
           <div className="dapps-hint is-idle">
             <div className="dapps-idle-hero" aria-hidden="true">

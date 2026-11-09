@@ -218,6 +218,8 @@
     "refresh": "刷新",
     "running": "运行中",
     "loadingUi": "正在加载界面…",
+    "loadingUiLabel": "正在加载界面",
+    "loadingUiHint": "本地 Harness 页面即将就绪，请稍候",
     "notRunning": "服务未运行",
     "starting": "启动中...",
     "startingLabel": "启动中",

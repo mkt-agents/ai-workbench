@@ -27,6 +27,7 @@ import {
   type DshSyncMeta,
 } from "../lib/dshSyncMeta";
 import { useConfirm } from "./ConfirmModal";
+import { OrbitalLoadingStage } from "./OrbitalLoadingStage";
 
 const DSH_HOST = "127.0.0.1";
 const DEFAULT_PORT = 3080;
@@ -1163,42 +1164,13 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
 
         <div className="dsh-iframe-container" ref={containerRef}>
           {stopping || starting ? (
-            <div
-              className={`dsh-empty-state ${stopping ? "is-stopping" : "is-starting"}`}
-              role="status"
-              aria-busy="true"
-            >
-              <div className="dsh-start-hero" aria-hidden="true">
-                <span className="dsh-start-glow" />
-                <div className="dsh-start-orbit">
-                  <span className="dsh-start-orbit-track" />
-                  <span className="dsh-start-orbit-arc" />
-                  <span className="dsh-start-orbit-arc is-secondary" />
-                  <div className="dsh-empty-state-icon">
-                    <img src="/deepseek-logo.png" alt="" />
-                  </div>
-                </div>
-              </div>
-              <div className="dsh-start-copy">
-                <div className="dsh-empty-state-title">{t("dsh.serviceTitle")}</div>
-                <div className="dsh-start-status">
-                  <span className="dsh-start-status-label">
-                    {stopping ? t("dsh.stoppingLabel") : t("dsh.startingLabel")}
-                  </span>
-                  <span className="dsh-start-dots">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                </div>
-                <div className="dsh-start-bar">
-                  <span />
-                </div>
-                <div className="dsh-empty-state-hint">
-                  {stopping ? t("dsh.stoppingHint") : t("dsh.startingHint")}
-                </div>
-              </div>
-            </div>
+            <OrbitalLoadingStage
+              variant={stopping ? "stopping" : "starting"}
+              icon={<img src="/deepseek-logo.png" alt="" />}
+              title={t("dsh.serviceTitle")}
+              status={stopping ? t("dsh.stoppingLabel") : t("dsh.startingLabel")}
+              hint={stopping ? t("dsh.stoppingHint") : t("dsh.startingHint")}
+            />
           ) : isRunning ? (
             authUrl ? null : (
             <>
@@ -1211,10 +1183,13 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
                 allow="clipboard-write; clipboard-read"
               />
               {iframeLoading && (
-                <div className="dsh-iframe-loading" aria-busy="true">
-                  <Loader2 size={24} className="spin" />
-                  <span className="dsh-iframe-loading-text">{t("dsh.loadingUi")}</span>
-                </div>
+                <OrbitalLoadingStage
+                  className="dsh-iframe-loading"
+                  icon={<img src="/deepseek-logo.png" alt="" />}
+                  title={t("dsh.serviceTitle")}
+                  status={t("dsh.loadingUiLabel")}
+                  hint={t("dsh.loadingUiHint")}
+                />
               )}
             </>
             )
