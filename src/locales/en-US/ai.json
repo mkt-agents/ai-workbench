@@ -252,6 +252,7 @@
     "onboardingDismiss": "Got it, don't show again",
     "onboardingGoModels": "Go to Model Plaza",
     "detecting": "Checking...",
+    "detectingHint": "Checking whether DeepSeek Harness is installed locally",
     "notInstalledShort": "Not installed",
     "installing": "Installing...",
     "installingProgress": "Installing...",

@@ -1199,7 +1199,12 @@ function DeepSeekHarness({ active = true }: { active?: boolean }) {
                 <img src="/deepseek-logo.png" alt="DeepSeek" />
               </div>
               <div className="dsh-empty-state-title">{t("dsh.serviceTitle")}</div>
-              {dshNodejsInstalled === false ? (
+              {detecting ? (
+                <>
+                  <div className="dsh-empty-state-desc">{t("dsh.detecting")}</div>
+                  <div className="dsh-empty-state-hint">{t("dsh.detectingHint")}</div>
+                </>
+              ) : dshNodejsInstalled === false ? (
                 <>
                   <div className="dsh-empty-state-desc">{t("dsh.nodejsRequired")}</div>
                   <div className="dsh-empty-state-hint">{t("dsh.nodejsHint")}</div>

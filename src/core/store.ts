@@ -1523,34 +1523,47 @@ export const useGlobalStore = create<StoreState>()(
 
       loadDshStatus: async () => {
         if (get().dshStatusChecked) return;
-        if (get()._dshStatusPromise) return;
+        const inflight = get()._dshStatusPromise;
+        if (inflight) {
+          await inflight;
+          return;
+        }
 
         const promise = (async () => {
-          // Fast check — resolves immediately, update UI without waiting
+          // Node + local install resolve off disk / PATH — clear "检测中" from
+          // these alone. Never gate them on `npm view` (registry can hang).
           get()
             .invokeCheckNodejs()
             .then((installed) => set({ dshNodejsInstalled: installed }))
             .catch(() => set({ dshNodejsInstalled: false }));
 
-          // Slow checks run in parallel (npm list + npm view)
-          const [versionRes, latestRes] = await Promise.allSettled([
-            get().invokeGetDshVersion(),
-            get().invokeGetDshLatestVersion(),
-          ]);
-
+          const versionRes = await Promise.allSettled([get().invokeGetDshVersion()]);
           const version =
-            versionRes.status === "fulfilled" ? versionRes.value || "" : "";
-          const latestVersion =
-            latestRes.status === "fulfilled" ? latestRes.value || "" : "";
-          const hasUpdate =
-            version && latestVersion ? isOlderVersion(version, latestVersion) : false;
+            versionRes[0].status === "fulfilled" ? versionRes[0].value || "" : "";
 
           set({
             dshVersion: version,
-            dshLatestVersion: latestVersion,
-            dshHasUpdate: hasUpdate,
             dshStatusChecked: true,
           });
+
+          // Update badge is fire-and-forget: keep it off this promise so a
+          // hung registry cannot block refresh / remount callers.
+          void get()
+            .invokeGetDshLatestVersion()
+            .then((latest) => {
+              const latestVersion = latest || "";
+              const hasUpdate =
+                version && latestVersion
+                  ? isOlderVersion(version, latestVersion)
+                  : false;
+              set({
+                dshLatestVersion: latestVersion,
+                dshHasUpdate: hasUpdate,
+              });
+            })
+            .catch(() => {
+              set({ dshLatestVersion: "", dshHasUpdate: false });
+            });
         })();
 
         set((state) => ({ ...state, _dshStatusPromise: promise }));
@@ -1562,7 +1575,7 @@ export const useGlobalStore = create<StoreState>()(
       },
 
       refreshDshStatus: async () => {
-        set((state) => ({ ...state, dshStatusChecked: false }));
+        set({ dshStatusChecked: false });
         await get().loadDshStatus();
       },
 

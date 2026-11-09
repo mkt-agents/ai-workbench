@@ -252,6 +252,7 @@
     "onboardingDismiss": "知道了，不再显示",
     "onboardingGoModels": "去模型广场",
     "detecting": "检测中...",
+    "detectingHint": "正在确认本机是否已安装 DeepSeek Harness",
     "notInstalledShort": "未安装",
     "installing": "安装中...",
     "installingProgress": "正在安装...",

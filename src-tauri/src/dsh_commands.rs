@@ -1706,25 +1706,32 @@ pub async fn get_dsh_version() -> Result<String, String> {
 /// upgrade fails with ETARGET) is handled downstream: `update_dsh` installs the
 /// pinned version and surfaces npm's real error lines instead of a generic
 /// network hint. The alpha channel stays excluded, matching `get_dsh_versions`.
+/// npm registry probes must not hang the Harness toolbar on "检测中".
+const DSH_NPM_VIEW_TIMEOUT: Duration = Duration::from_secs(12);
+
 #[tauri::command]
 pub async fn get_dsh_latest_version() -> Result<String, String> {
-    let output = tokio::task::spawn_blocking(|| {
-        let mut cmd = Command::new("cmd");
-        cmd.args([
-            "/c",
-            "npm",
-            "view",
-            "@deepseek-ai/dsh",
-            "dist-tags",
-            "--json",
-        ]);
+    let output = tokio::time::timeout(
+        DSH_NPM_VIEW_TIMEOUT,
+        tokio::task::spawn_blocking(|| {
+            let mut cmd = Command::new("cmd");
+            cmd.args([
+                "/c",
+                "npm",
+                "view",
+                "@deepseek-ai/dsh",
+                "dist-tags",
+                "--json",
+            ]);
 
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(CREATE_NO_WINDOW);
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NO_WINDOW);
 
-        cmd.output()
-    })
+            cmd.output()
+        }),
+    )
     .await
+    .map_err(|_| "Timed out querying npm for latest version".to_string())?
     .map_err(|e| format!("Task failed: {}", e))?
     .map_err(|e| format!("Failed to get latest version: {}", e))?;
 
@@ -1759,23 +1766,27 @@ pub async fn get_dsh_latest_version() -> Result<String, String> {
 /// Get all available dsh versions from npm.
 #[tauri::command]
 pub async fn get_dsh_versions() -> Result<Vec<String>, String> {
-    let output = tokio::task::spawn_blocking(|| {
-        let mut cmd = Command::new("cmd");
-        cmd.args([
-            "/c",
-            "npm",
-            "view",
-            "@deepseek-ai/dsh",
-            "versions",
-            "--json",
-        ]);
+    let output = tokio::time::timeout(
+        DSH_NPM_VIEW_TIMEOUT,
+        tokio::task::spawn_blocking(|| {
+            let mut cmd = Command::new("cmd");
+            cmd.args([
+                "/c",
+                "npm",
+                "view",
+                "@deepseek-ai/dsh",
+                "versions",
+                "--json",
+            ]);
 
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(CREATE_NO_WINDOW);
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NO_WINDOW);
 
-        cmd.output()
-    })
+            cmd.output()
+        }),
+    )
     .await
+    .map_err(|_| "Timed out querying npm versions".to_string())?
     .map_err(|e| format!("Task failed: {}", e))?
     .map_err(|e| format!("Failed to get versions: {}", e))?;
 
