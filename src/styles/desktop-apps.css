@@ -220,6 +220,14 @@
 .dapps-slot {
   position: absolute;
   inset: 0;
+  /* Underlay while reactivate briefly hides the native hosted window.
+     --chrome-bg is translucent and still reads as white over the webview;
+     --float-bg is the solid float surface (same as modals). Blur keeps the
+     glass feel without flashing bare white. */
+  background: var(--float-bg);
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+  box-shadow: var(--surface-highlight);
 }
 
 /* Slot layout: single pane (identical geometry to the old single slot) or two

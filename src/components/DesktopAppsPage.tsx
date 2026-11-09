@@ -43,6 +43,7 @@ import {
   appFromRunningApp,
   appIdForProcess,
   dedupeApps,
+  floatBarVeilBgr,
   loadActiveId,
   loadCustomApps,
   loadExePath,
@@ -240,6 +241,7 @@ export default function DesktopAppsPage() {
   const invokeDesktopEmbedRelayout = useGlobalStore((s) => s.invokeDesktopEmbedRelayout);
   const invokeDesktopEmbedShow = useGlobalStore((s) => s.invokeDesktopEmbedShow);
   const invokeDesktopEmbedFocus = useGlobalStore((s) => s.invokeDesktopEmbedFocus);
+  const invokeDesktopEmbedSetVeilBgr = useGlobalStore((s) => s.invokeDesktopEmbedSetVeilBgr);
   const invokeDesktopEmbedReactivate = useGlobalStore((s) => s.invokeDesktopEmbedReactivate);
   const invokeDesktopEmbedRestore = useGlobalStore((s) => s.invokeDesktopEmbedRestore);
   const invokeDesktopEmbedDetach = useGlobalStore((s) => s.invokeDesktopEmbedDetach);
@@ -1316,31 +1318,42 @@ export default function DesktopAppsPage() {
       observer.disconnect();
       window.removeEventListener("resize", sync);
       // Hide, do not detach: the app keeps its window and its state.
-      if (attachedRef.current) {
-        attachedRef.current = false;
-        const genAtCleanup = gen;
-        const previousActiveId = active.id;
-        const hide = () => {
-          // But if this app became the active tab again, its effect has
-          // already shown the window — hiding here would tuck away a live
-          // pane (and the heartbeat would keep it hidden, shown=0).
-          if (aliveRef.current && activeIdRef.current === previousActiveId) return;
-          if (generationRef.current === genAtCleanup && aliveRef.current) return;
-          void enqueueShow(processName, () =>
-            invokeDesktopEmbedShow(processName, false).catch(() => undefined)
-          );
-        };
-        // Park the hide instead of firing it on a guessed delay: it now runs
-        // the moment ANY visibility op settles (the incoming window is on
-        // screen and covers this one), or after the safety timeout if no show
-        // ever lands. Either way the slot never flashes the background.
+      if (!attachedRef.current) return;
+      attachedRef.current = false;
+      const genAtCleanup = gen;
+      const previousActiveId = active.id;
+      const processToHide = processName;
+      const hide = () => {
+        // But if this app became the active tab again, its effect has
+        // already shown the window — hiding here would tuck away a live
+        // pane (and the heartbeat would keep it hidden, shown=0).
+        if (aliveRef.current && activeIdRef.current === previousActiveId) return;
+        if (generationRef.current === genAtCleanup && aliveRef.current) return;
+        void enqueueShow(processToHide, () =>
+          invokeDesktopEmbedShow(processToHide, false).catch(() => undefined)
+        );
+      };
+      // Decide after React runs the next effect in this commit:
+      // - Still on 协同办公 (switched apps): park for the show handoff so
+      //   the slot does not flash empty between hide and show.
+      // - Left the page for another menu: hide NOW. The parked 250ms path
+      //   was for in-page tab switches; with no incoming show to flush it,
+      //   the native child floated over 工作待办 / Git / … for a quarter
+      //   second — that is the flash when switching the sidebar.
+      queueMicrotask(() => {
+        if (!aliveRef.current) {
+          cancelPendingHostedHide(processToHide);
+          hide();
+          flushPendingHostedHides();
+          return;
+        }
         const timer = window.setTimeout(() => {
-          pendingHostedHides.delete(processName);
+          pendingHostedHides.delete(processToHide);
           hide();
         }, PENDING_HIDE_TIMEOUT_MS);
-        cancelPendingHostedHide(processName);
-        pendingHostedHides.set(processName, { hide, timer });
-      }
+        cancelPendingHostedHide(processToHide);
+        pendingHostedHides.set(processToHide, { hide, timer });
+      });
     };
   }, [
     active.id,
@@ -1354,6 +1367,17 @@ export default function DesktopAppsPage() {
     processName,
     slotRect,
   ]);
+
+  // Keep the native reactivate veil in sync with `--float-bar-bg` so hide/show
+  // flashes the theme's solid float surface instead of bare webview white.
+  useEffect(() => {
+    const sync = () => {
+      void invokeDesktopEmbedSetVeilBgr(floatBarVeilBgr()).catch(() => undefined);
+    };
+    sync();
+    window.addEventListener("app-theme-changed", sync);
+    return () => window.removeEventListener("app-theme-changed", sync);
+  }, [invokeDesktopEmbedSetVeilBgr]);
 
   // Re-activate the hosted window whenever the workbench regains the
   // foreground, so an image paste (and typing) works without switching tabs.
@@ -1372,6 +1396,11 @@ export default function DesktopAppsPage() {
   // reproduces that occlusion deterministically (hide → one pump turn → show),
   // and is a no-op unless the host is foreground and the window is shown, so it
   // is safe to fire on every foreground gain.
+  //
+  // This onFocusChanged path is the fast path when activation goes through the
+  // Tauri chrome. Clicking straight into the foreign child often skips it —
+  // reliable fallback is `relayout`'s host_was_background detection in
+  // desktop_embed.rs (same reactivate, debounced so the two do not double-blink).
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let dead = false;

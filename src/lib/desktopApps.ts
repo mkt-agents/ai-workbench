@@ -306,3 +306,28 @@ export function appFromRunningApp(running: DesktopRunningApp): DesktopAppDef {
     custom: true,
   };
 }
+
+/**
+ * Win32 COLORREF (`0x00BBGGRR`) for the reactivate veil, from the live
+ * `--float-bar-bg` token. Falls back to glass warm charcoal `#2b2a27`.
+ */
+export function floatBarVeilBgr(): number {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--float-bar-bg")
+    .trim();
+  const hex = raw.startsWith("#") ? raw.slice(1) : "";
+  const full =
+    hex.length === 3
+      ? hex
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : hex.length >= 6
+        ? hex.slice(0, 6)
+        : "2b2a27";
+  const r = Number.parseInt(full.slice(0, 2), 16);
+  const g = Number.parseInt(full.slice(2, 4), 16);
+  const b = Number.parseInt(full.slice(4, 6), 16);
+  if ([r, g, b].some((n) => Number.isNaN(n))) return 0x0027_2a_2b;
+  return r | (g << 8) | (b << 16);
+}
