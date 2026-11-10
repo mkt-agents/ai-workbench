@@ -448,13 +448,38 @@ pub(crate) fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
-/// Open a public tunnel URL in the default browser. http(s)-only so the IPC
-/// entry point can never be used to launch arbitrary programs.
+/// Local `file://` only — empty/localhost host, non-empty path. Blocks UNC
+/// `file://server/share` so this IPC cannot be used to open network paths.
+fn is_local_file_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url.trim()) else {
+        return false;
+    };
+    if parsed.scheme() != "file" {
+        return false;
+    }
+    let host_ok = match parsed.host_str() {
+        None => true,
+        Some(h) => h.is_empty() || h.eq_ignore_ascii_case("localhost"),
+    };
+    if !host_ok {
+        return false;
+    }
+    let path = parsed.path().trim();
+    !path.is_empty() && path != "/"
+}
+
+/// Open a URL in the default browser. Allows http(s) and local `file://`
+/// (for 常用站点 local HTML tools). Other schemes stay blocked so the IPC
+/// entry point cannot launch arbitrary programs.
 #[tauri::command]
 pub fn open_in_browser(url: String) -> Result<(), String> {
     let trimmed = url.trim();
-    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-        return Err("仅支持打开 http(s) 链接".to_string());
+    let lower = trimmed.to_lowercase();
+    let ok = lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || is_local_file_url(trimmed);
+    if !ok {
+        return Err("仅支持打开 http(s) 或本地 file:// 链接".to_string());
     }
     open_url(trimmed)
 }
@@ -1421,9 +1446,19 @@ fn replace_file(dest: &Path, replacement: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        browser_command_args, explain_cloudflared_line, normalize_local_url,
+        browser_command_args, explain_cloudflared_line, is_local_file_url, normalize_local_url,
         route_dns_target_exists,
     };
+
+    #[test]
+    fn local_file_url_gate() {
+        assert!(is_local_file_url("file:///D:/w_app/querySQL.html"));
+        assert!(is_local_file_url("file://localhost/D:/w_app/querySQL.html"));
+        assert!(!is_local_file_url("file://server/share/a.html"));
+        assert!(!is_local_file_url("file:///"));
+        assert!(!is_local_file_url("https://example.com"));
+        assert!(!is_local_file_url("javascript:alert(1)"));
+    }
 
     #[test]
     fn local_url_trailing_slash_is_stripped() {

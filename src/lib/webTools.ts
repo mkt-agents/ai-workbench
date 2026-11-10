@@ -7,19 +7,84 @@
  * there is now exactly one, and the injected in-page guard is generated from it.
  */
 
-/** `example.com` → `https://example.com/`. Returns null for anything not http(s). */
-export function normalizeHttpUrl(raw: string): URL | null {
+/** Windows `D:\path\to\file.html` → `file:///D:/path/to/file.html`. */
+function windowsPathToFileUrl(raw: string): string | null {
+  const m = /^([A-Za-z]):([\\/].*)$/.exec(raw);
+  if (!m) return null;
+  const drive = m[1].toUpperCase();
+  // Collapse `\\` / doubled separators from pasted Explorer paths.
+  const rest = m[2].replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+  return `file:///${drive}:${rest}`;
+}
+
+/**
+ * Normalize a 常用站点 address.
+ * - `example.com` → `https://example.com/`
+ * - `file:///D:/w_app/querySQL.html` kept as file
+ * - `D:\w_app\querySQL.html` → `file:///D:/w_app/querySQL.html`
+ * Returns null for other schemes (javascript:, data:, UNC file hosts, …).
+ */
+export function normalizeSiteUrl(raw: string): URL | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  const withProtocol = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  const fromWin = windowsPathToFileUrl(trimmed);
+  const withProtocol = fromWin
+    ? fromWin
+    : /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+
   try {
     const u = new URL(withProtocol);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    if (!u.hostname) return null;
-    return u;
+    if (u.protocol === "http:" || u.protocol === "https:") {
+      if (!u.hostname) return null;
+      return u;
+    }
+    if (u.protocol === "file:") {
+      // Local only: `file:///D:/...` has empty host. Reject UNC `file://server/share`.
+      if (u.hostname && u.hostname.toLowerCase() !== "localhost") return null;
+      const path = decodeURIComponent(u.pathname || "").replace(/\\/g, "/");
+      if (!path || path === "/") return null;
+      // Canonicalize drive letter case for stable keys: /d:/x → /D:/x
+      const drive = path.match(/^\/([a-zA-Z]):(\/.*)?$/);
+      if (drive) {
+        const canon = `/${drive[1].toUpperCase()}:${drive[2] || ""}`;
+        return new URL(`file://${canon}`);
+      }
+      return u;
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+/** @deprecated Prefer `normalizeSiteUrl` — kept as alias for the same site rules. */
+export function normalizeHttpUrl(raw: string): URL | null {
+  return normalizeSiteUrl(raw);
+}
+
+/** Card / filter label: hostname for http(s), file basename (or short path) for file://. */
+export function siteLabel(url: URL): string {
+  if (url.protocol === "file:") {
+    const path = decodeURIComponent(url.pathname || "").replace(/\\/g, "/");
+    const parts = path.split("/").filter(Boolean);
+    const base = parts[parts.length - 1] || path;
+    if (base) return base;
+    return path || "file";
+  }
+  return url.hostname || "—";
+}
+
+/** Default bookmark name from an address (strip www. / use file stem). */
+export function siteDefaultName(url: URL): string {
+  if (url.protocol === "file:") {
+    const label = siteLabel(url);
+    const stem = label.replace(/\.[^.]+$/, "");
+    return stem || label;
+  }
+  return url.hostname.replace(/^www\./, "") || "site";
 }
 
 /**

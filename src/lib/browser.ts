@@ -66,9 +66,21 @@ function notifyClosed(key: string) {
   });
 }
 
+function pathBasename(pathname: string): string {
+  const parts = decodeURIComponent(pathname || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+  const base = parts[parts.length - 1] || "";
+  return base.replace(/\.[^.]+$/, "") || base || "file";
+}
+
 function titleFromUrl(url: string): string {
   try {
-    return new URL(url).hostname || "Browser";
+    const u = new URL(url);
+    if (u.hostname) return u.hostname;
+    if (u.protocol === "file:") return pathBasename(u.pathname);
+    return "Browser";
   } catch {
     return "Browser";
   }
@@ -78,8 +90,14 @@ function titleFromUrl(url: string): string {
 export function browserMapKey(url: string): string {
   try {
     const u = new URL(url);
+    // file:// has empty host; keep pathname so D:/a and D:/b stay distinct.
     const path = u.pathname.replace(/\/+$/, "") || "/";
-    return `${u.protocol}//${u.host}${path}${u.search}${u.hash}`;
+    // Canonical drive letter for Windows file URLs.
+    const canonPath =
+      u.protocol === "file:"
+        ? path.replace(/^\/([a-z]):/i, (_, d: string) => `/${d.toUpperCase()}:`)
+        : path;
+    return `${u.protocol}//${u.host}${canonPath}${u.search}${u.hash}`;
   } catch {
     return url;
   }
@@ -99,7 +117,9 @@ function toWindowLabel(mapKey: string): string {
   let host = "site";
   try {
     const raw = mapKey.includes("://") ? mapKey : `https://${mapKey}`;
-    host = new URL(raw).hostname.replace(/[^a-zA-Z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 32) || "site";
+    const u = new URL(raw);
+    const labelSrc = u.hostname || (u.protocol === "file:" ? pathBasename(u.pathname) : "site");
+    host = labelSrc.replace(/[^a-zA-Z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 32) || "site";
   } catch {
     /* keep default */
   }
@@ -250,8 +270,30 @@ async function showUrl(url: string, width = 900, height = 700, key?: string) {
   return createBrowserWindow(url, width, height, mapKey);
 }
 
-export async function openBrowser(url: string, width: number = 900, height: number = 700, key?: string) {
+/**
+ * Open a site URL. http(s) → in-app WebView2 popup.
+ * Local `file://` → system browser: WebView2's `file://` origin is `null`, so
+ * pages that `fetch` remote APIs (like local SQL tools) fail CORS there even
+ * though the same file works when opened in Chrome/Edge.
+ * Returns `null` when the system browser was used.
+ */
+export async function openBrowser(
+  url: string,
+  width: number = 900,
+  height: number = 700,
+  key?: string
+): Promise<WebviewWindow | null> {
   try {
+    let protocol = "";
+    try {
+      protocol = new URL(url).protocol;
+    } catch {
+      /* fall through to webview path */
+    }
+    if (protocol === "file:") {
+      await invoke("open_in_browser", { url });
+      return null;
+    }
     return await showUrl(url, width, height, key);
   } catch (e) {
     console.error("Failed to open browser window:", e);

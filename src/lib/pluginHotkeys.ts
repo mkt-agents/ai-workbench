@@ -7,7 +7,7 @@
  */
 import { register, unregister, isRegistered } from "@tauri-apps/plugin-global-shortcut";
 import { openBrowser } from "./browser";
-import { normalizeHttpUrl } from "./webTools";
+import { normalizeSiteUrl } from "./webTools";
 import { useGlobalStore } from "../core/store";
 import type { WebPlugin } from "../core/types";
 
@@ -30,7 +30,7 @@ async function openOnHotkey(id: string, shortcut: string): Promise<void> {
     owned.delete(shortcut);
     return;
   }
-  const parsed = normalizeHttpUrl(plugin.url);
+  const parsed = normalizeSiteUrl(plugin.url);
   if (!parsed) return;
   try {
     // No explicit key: `browserMapKey(url)` is the same identity the list page uses for

@@ -2,7 +2,15 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { openBrowser, closeBrowser, onBrowserClosed, browserMapKey, getOpenBrowserKeys } from "../lib/browser";
-import { findHotkeyConflict, matchUrlPattern, newId, normalizeHttpUrl, validateHotkey } from "../lib/webTools";
+import {
+  findHotkeyConflict,
+  matchUrlPattern,
+  newId,
+  normalizeSiteUrl,
+  siteDefaultName,
+  siteLabel,
+  validateHotkey,
+} from "../lib/webTools";
 import skywalkingPresetCode from "../../scripts/skywalking-log-query.user.js?raw";
 import nexusPresetCode from "../../scripts/nexus-batch-query.user.js?raw";
 import { useGlobalStore } from "../core/store";
@@ -494,11 +502,11 @@ function PluginBrowser() {
     });
   }, []);
 
-  const addressParsed = useMemo(() => normalizeHttpUrl(address), [address]);
+  const addressParsed = useMemo(() => normalizeSiteUrl(address), [address]);
 
   const openPlugin = useCallback(
     async (pluginUrl: string, pluginId?: string) => {
-      const parsed = normalizeHttpUrl(pluginUrl);
+      const parsed = normalizeSiteUrl(pluginUrl);
       if (!parsed) {
         showMsg("error", t("invalidUrlOpen"));
         return;
@@ -510,11 +518,16 @@ function PluginBrowser() {
       setLoading(true);
       try {
         const key = urlKey(parsed);
-        await openBrowser(parsed.href, 900, 700, key);
-        setActiveKeys((prev) => new Set(prev).add(key));
+        const win = await openBrowser(parsed.href, 900, 700, key);
         setAddress(parsed.href);
         if (pluginId) void recordPluginOpen(pluginId);
-        showMsg("success", t("openedInPopup"));
+        if (win) {
+          setActiveKeys((prev) => new Set(prev).add(key));
+          showMsg("success", t("openedInPopup"));
+        } else {
+          // file:// → system browser (no in-app window to badge as active)
+          showMsg("success", t("openedInSystemBrowser"));
+        }
       } catch (e) {
         showMsg("error", t("openFailed", { error: formatInvokeError(e) }));
       } finally {
@@ -566,7 +579,7 @@ function PluginBrowser() {
     if (!addressParsed) return false;
     const key = urlKey(addressParsed);
     return webPlugins.some((p) => {
-      const parsed = normalizeHttpUrl(p.url);
+      const parsed = normalizeSiteUrl(p.url);
       return parsed ? urlKey(parsed) === key : false;
     });
   }, [addressParsed, webPlugins]);
@@ -619,8 +632,8 @@ function PluginBrowser() {
     }
     if (q) {
       list = list.filter((p) => {
-        const parsed = normalizeHttpUrl(p.url);
-        const host = parsed?.hostname.toLowerCase() ?? "";
+        const parsed = normalizeSiteUrl(p.url);
+        const host = parsed ? siteLabel(parsed).toLowerCase() : "";
         return (
           p.name.toLowerCase().includes(q) ||
           host.includes(q) ||
@@ -731,7 +744,7 @@ function PluginBrowser() {
       showMsg("error", t("nameUrlRequired"));
       return;
     }
-    const parsed = normalizeHttpUrl(formUrl);
+    const parsed = normalizeSiteUrl(formUrl);
     if (!parsed) {
       showMsg("error", t("invalidUrl"));
       return;
@@ -801,7 +814,7 @@ function PluginBrowser() {
       return;
     }
     openFormAdd({
-      name: addressParsed.hostname.replace(/^www\./, ""),
+      name: siteDefaultName(addressParsed),
       url: addressParsed.href,
     });
   };
@@ -1488,13 +1501,13 @@ function PluginBrowser() {
       let imported = 0;
       const existingUrls = new Set(
         webPlugins
-          .map((p) => normalizeHttpUrl(p.url))
+          .map((p) => normalizeSiteUrl(p.url))
           .filter((u): u is URL => !!u)
           .map((u) => u.href)
       );
       for (const s of sites) {
         if (!s.url || !s.name) continue;
-        const parsed = normalizeHttpUrl(s.url);
+        const parsed = normalizeSiteUrl(s.url);
         if (!parsed) continue;
         if (existingUrls.has(parsed.href)) continue;
         existingUrls.add(parsed.href);
@@ -1549,8 +1562,8 @@ function PluginBrowser() {
   };
 
   const renderPluginItem = (p: WebPlugin) => {
-    const parsed = normalizeHttpUrl(p.url);
-    const host = parsed?.hostname || "—";
+    const parsed = normalizeSiteUrl(p.url);
+    const host = parsed ? siteLabel(parsed) : "—";
     const key = parsed ? urlKey(parsed) : p.id;
     const isActive = activeKeys.has(key);
     return (
@@ -1581,7 +1594,7 @@ function PluginBrowser() {
         )}
         <div className="plugin-item-icon">
           {parsed ? (
-            <SiteIcon url={parsed.href} name={p.name} host={parsed.hostname} size={14} />
+            <SiteIcon url={parsed.href} name={p.name} host={host} size={14} />
           ) : (
             <span className="plugin-fallback-wrapper">
               <Globe size={14} />
@@ -1651,8 +1664,8 @@ function PluginBrowser() {
   };
 
   const renderCardItem = (p: WebPlugin) => {
-    const parsed = normalizeHttpUrl(p.url);
-    const host = parsed?.hostname || "—";
+    const parsed = normalizeSiteUrl(p.url);
+    const host = parsed ? siteLabel(parsed) : "—";
     const key = parsed ? urlKey(parsed) : p.id;
     const isActive = activeKeys.has(key);
     return (
@@ -1675,7 +1688,7 @@ function PluginBrowser() {
         <div className="plugin-card-header">
           <div className="plugin-card-icon">
             {parsed ? (
-              <SiteIcon url={parsed.href} name={p.name} host={parsed.hostname} size={20} />
+              <SiteIcon url={parsed.href} name={p.name} host={host} size={20} />
             ) : (
               <span className="plugin-fallback-wrapper">
                 <Globe size={20} />
@@ -2626,7 +2639,7 @@ function PluginBrowser() {
                   value={formUrl}
                   onChange={(e) => setFormUrl(e.target.value)}
                   onKeyDown={handleFormKeyDown}
-                  placeholder="example.com"
+                  placeholder="example.com 或 file:///D:/app/index.html"
                 />
               </div>
               <div className="input-group">

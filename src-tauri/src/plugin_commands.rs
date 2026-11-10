@@ -60,9 +60,49 @@ fn persist_toolbar_collapsed(app: &tauri::AppHandle, collapsed: bool) {
     }
 }
 
-fn is_safe_url(url: &str) -> bool {
+fn is_http_url(url: &str) -> bool {
     let lower = url.to_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// Browser popup entry: http(s) or a local `file://` path.
+/// Rejects UNC / remote file hosts (`file://server/share`); `localhost` is ok.
+fn is_safe_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url.trim()) else {
+        return false;
+    };
+    match parsed.scheme() {
+        "http" | "https" => parsed.host_str().is_some_and(|h| !h.is_empty()),
+        "file" => {
+            let host_ok = match parsed.host_str() {
+                None => true,
+                Some(h) => h.is_empty() || h.eq_ignore_ascii_case("localhost"),
+            };
+            if !host_ok {
+                return false;
+            }
+            let path = parsed.path().trim();
+            !path.is_empty() && path != "/"
+        }
+        _ => false,
+    }
+}
+
+fn window_title_for_url(parsed: &Url) -> String {
+    if let Some(host) = parsed.host_str().filter(|h| !h.is_empty()) {
+        return host.to_string();
+    }
+    if parsed.scheme() == "file" {
+        let path = parsed.path().trim_end_matches('/');
+        if let Some(name) = path.rsplit('/').next().filter(|s| !s.is_empty()) {
+            let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+            if !stem.is_empty() {
+                return stem.to_string();
+            }
+            return name.to_string();
+        }
+    }
+    "Browser".to_string()
 }
 
 #[derive(Deserialize)]
@@ -82,7 +122,7 @@ pub struct UserscriptInit {
 #[tauri::command]
 pub fn navigate_browser_window(app: tauri::AppHandle, url: String) -> Result<bool, String> {
     if !is_safe_url(&url) {
-        return Err("仅允许 http/https 地址".to_string());
+        return Err("仅允许 http/https/file 地址".to_string());
     }
     let parsed: Url = url
         .parse()
@@ -802,7 +842,7 @@ pub async fn open_browser_window_with_toolbar(
     theme: Option<String>,
 ) -> Result<String, String> {
     if !is_safe_url(&url) {
-        return Err("仅允许 http/https 地址".to_string());
+        return Err("仅允许 http/https/file 地址".to_string());
     }
     let parsed: Url = url.parse().map_err(|e| format!("无效 URL: {}", e))?;
     let label = label.unwrap_or_else(|| "browser".to_string());
@@ -818,10 +858,7 @@ pub async fn open_browser_window_with_toolbar(
 
     let w = width.unwrap_or(900.0);
     let h = height.unwrap_or(700.0);
-    let title = parsed
-        .host_str()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "Browser".to_string());
+    let title = window_title_for_url(&parsed);
 
     // The on_navigation handler intercepts clicks on the toolbar's
     // "external browser" button. The toolbar sets an <a> href to
@@ -942,7 +979,8 @@ const MAX_FETCH_BYTES: u64 = 2 * 1024 * 1024;
 /// request is blocked by CORS and the feature could never work for its main use case.
 #[tauri::command]
 pub async fn fetch_userscript_source(url: String) -> Result<String, String> {
-    if !is_safe_url(&url) {
+    // Keep file:// out of this IPC — it would let callers read arbitrary local files.
+    if !is_http_url(&url) {
         return Err("仅支持 http/https 地址".to_string());
     }
     let client = reqwest::Client::builder()
@@ -974,4 +1012,43 @@ pub async fn fetch_userscript_source(url: String) -> Result<String, String> {
         return Err("返回内容为空".to_string());
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_http_url, is_safe_url, window_title_for_url};
+    use url::Url;
+
+    #[test]
+    fn safe_url_allows_http_https() {
+        assert!(is_safe_url("https://example.com/a"));
+        assert!(is_safe_url("http://localhost:3000"));
+        assert!(!is_safe_url("https://"));
+        assert!(!is_safe_url("javascript:alert(1)"));
+        assert!(!is_safe_url("data:text/html,hi"));
+    }
+
+    #[test]
+    fn safe_url_allows_local_file() {
+        assert!(is_safe_url("file:///D:/w_app/querySQL.html"));
+        assert!(is_safe_url("file:///C:/Users/test/page.html"));
+        assert!(is_safe_url("file://localhost/D:/w_app/querySQL.html"));
+        assert!(!is_safe_url("file://server/share/a.html"));
+        assert!(!is_safe_url("file:///"));
+        assert!(!is_safe_url("file://"));
+    }
+
+    #[test]
+    fn userscript_fetch_stays_http_only() {
+        assert!(is_http_url("https://greasyfork.org/scripts/1.user.js"));
+        assert!(!is_http_url("file:///D:/w_app/script.user.js"));
+    }
+
+    #[test]
+    fn window_title_uses_file_stem() {
+        let u = Url::parse("file:///D:/w_app/querySQL.html").unwrap();
+        assert_eq!(window_title_for_url(&u), "querySQL");
+        let h = Url::parse("https://chatgpt.com/c/1").unwrap();
+        assert_eq!(window_title_for_url(&h), "chatgpt.com");
+    }
 }
