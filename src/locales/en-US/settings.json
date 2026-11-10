@@ -355,7 +355,7 @@
     "docgenRepoRootMissing": "Set the workspace path before scanning child repositories.",
     "docgenRunNeedWorkspace": "No workspace configured yet — set it on the Run setup → Repo & doc dir card to enable runs.",
     "docgenSystemPrompt": "Update prompt",
-    "docgenSystemPromptHint": "Editable system template. Placeholders: {doc_dir} {branch} {commits} {files} {diff} {date} {updates_dir}. Empty = built-in default. Code refs must be `path:symbol` → `doc/rel/path`; module docs under {doc_dir}/, daily log at {updates_dir}/{date}.md.",
+    "docgenSystemPromptHint": "Editable system template. Placeholders: {doc_dir} {branch} {commits} {files} {diff} {date} {updates_dir}. Empty = built-in default. Business summary for readers; code refs must be `path:symbol` → `doc/rel/path` (mapping only, omitted from group notice). Module docs under {doc_dir}/, daily log at {updates_dir}/{date}.md.",
     "docgenQualityPrompt": "Quality-check prompt",
     "docgenQualityPromptHint": "Quality-check system template. Placeholders: {doc_dir} {branch} {files} {summary} {date} {updates_dir}. Empty = built-in default. Scope = this batch only; use [阻断]/[建议]; the gate only honors [阻断].",
     "docgenPromptReset": "Reset to default",

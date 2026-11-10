@@ -355,7 +355,7 @@
     "docgenRepoRootMissing": "请先填写工作区路径，再扫描子仓。",
     "docgenRunNeedWorkspace": "尚未配置更新工作区：到「运行配置 · 仓库与目录」卡填写后才能运行。",
     "docgenSystemPrompt": "更新提示词",
-    "docgenSystemPromptHint": "可编辑 system 模板。占位符：{doc_dir} {branch} {commits} {files} {diff} {date} {updates_dir}。留空用内置默认。代码引用须为 `源码路径:符号` → `文档相对路径`；模块文档在 {doc_dir}/，每日更新在 {updates_dir}/{date}.md。",
+    "docgenSystemPromptHint": "可编辑 system 模板。占位符：{doc_dir} {branch} {commits} {files} {diff} {date} {updates_dir}。留空用内置默认。业务摘要给人读；代码引用须为 `源码路径:符号` → `文档相对路径`（仅映射落库，群通知不展示）。模块文档在 {doc_dir}/，每日更新在 {updates_dir}/{date}.md。",
     "docgenQualityPrompt": "质检提示词",
     "docgenQualityPromptHint": "质量自检 system 模板。占位符：{doc_dir} {branch} {files} {summary} {date} {updates_dir}。留空用内置默认。只审本批；结论用 [阻断]/[建议]，门禁只认 [阻断]。",
     "docgenPromptReset": "恢复默认",

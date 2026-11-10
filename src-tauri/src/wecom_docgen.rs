@@ -247,14 +247,14 @@ pub fn default_docgen_system_prompt() -> &'static str {
 - 新建或大段改写时尽量覆盖：职责、关键入口与调用链、核心类型或表、边界与错误；已有文档保持原结构，只改过时处，删掉与代码不符的段落，不堆砌无关背景。\n\
 - 删除或重命名：同步改文档或标明已移除；纯格式/依赖噪音且无行为变化 → 模块文档可跳过，日报记「无行为变更」。\n\
 二、追加当日功能更新：打开或新建 `{updates_dir}/{date}.md`，在文末追加一节（不要整文件覆盖）。\n\
-节标题示例：`## HH:MM · {branch}`；正文用条目列出本批涉及的功能点、触及的模块文档路径、关键源码符号。只写本批出现的变更，禁止编造未出现的模块。\n\
+节标题示例：`## HH:MM · {branch}`；正文用条目列出本批涉及的功能点与触及的文档名（用人话，如「订单结算」「文档中心门户」）。只写本批出现的变更，禁止编造未出现的模块。\n\
 硬规则：\n\
 1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**（含 `{updates_dir}/`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。\n\
 2. 变更很小 / 与文档无关时可以不改模块文档，但须在当日更新文件记一笔或写明跳过原因。\n\
 3. 不要运行命令、不要删除或移动文件，只用读文件 / 搜索 / 写文件 / 改文件。写当日更新前先读已有文件再追加。\n\
 4. 本批只改**直接相关**文档与当日 updates 追加节；不要通读全库文档。\n\
 5. 优先完成摘要与落盘，控制工具往返；无关文件跳过并在摘要说明。\n\
-6. 最后用 3-6 行中文总结「更新了哪些文档、对应哪些变更」；另起「## 代码引用」，每行一条且必须用箭头指向文档路径（群通知与映射落库依赖此格式）：\n\
+6. 收尾先写 3–6 条**面向业务**的中文要点（改了什么能力、对谁有影响、更新了哪几篇文档）；禁止行号、函数/符号名、JSON 字段、commit hash、工具过程（grep/读文件等）。另起「## 代码引用」，每行一条且必须用箭头（**仅供系统映射落库，不要写进业务摘要正文**；群通知会自动省略该节）：\n\
    - `源码路径:符号` → `文档相对路径`"
 }
 
@@ -3062,6 +3062,59 @@ fn is_outside_doc_dir(path: &str, doc_dir: &str) -> bool {
     path != dir && !path.starts_with(&format!("{dir}/"))
 }
 
+fn is_code_reference_heading(line: &str) -> bool {
+    let t = line.trim().to_lowercase();
+    t.starts_with("## 代码引用")
+        || t.starts_with("## 代码映射")
+        || t.starts_with("## code reference")
+        || t.starts_with("## code refs")
+}
+
+/// 群通知只给人读：丢掉各段 `## 代码引用` 正文，但保留后续批次摘要
+///（多批时原文是「批1摘要 + 引用 + 批2摘要 + 引用」，不能一刀切到文末）。
+fn strip_code_reference_section(text: &str) -> String {
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if is_code_reference_heading(trimmed) {
+            skipping = true;
+            continue;
+        }
+        if skipping
+            && (trimmed.starts_with("### ")
+                || (trimmed.starts_with("## ") && !is_code_reference_heading(trimmed)))
+        {
+            skipping = false;
+        }
+        if skipping {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    out.trim_end().to_string()
+}
+
+/// 质量全文压成一行：有阻断数 / 通过；空串表示不展示。
+fn summarize_quality(quality: &str) -> String {
+    let q = quality.trim();
+    if q.is_empty() {
+        return String::new();
+    }
+    let blocking = q
+        .lines()
+        .filter(|l| l.contains("[阻断]"))
+        .count();
+    if blocking > 0 {
+        format!("有 {blocking} 条阻断")
+    } else {
+        "通过".into()
+    }
+}
+
 fn compose_notice(
     branch: &str,
     changed: &[String],
@@ -3071,26 +3124,26 @@ fn compose_notice(
     preview: bool,
     sync_note: &str,
 ) -> String {
-    let shown: Vec<String> = changed.iter().take(15).map(|f| format!("> {f}")).collect();
-    let more = if changed.len() > 15 {
-        format!("\n> …等共 {} 个文件", changed.len())
-    } else {
-        String::new()
-    };
-    let docs = if updated_docs.trim().is_empty() {
-        "（无文档更新摘要）".to_string()
-    } else {
-        updated_docs.trim().to_string()
+    let docs = {
+        let stripped = strip_code_reference_section(updated_docs);
+        if stripped.trim().is_empty() {
+            "（无更新摘要）".to_string()
+        } else {
+            stripped.trim().to_string()
+        }
     };
     let commit_line = if commit_note.trim().is_empty() {
         String::new()
     } else {
         format!("\n\n**提交：**{}", commit_note.trim())
     };
-    let quality_line = if quality.trim().is_empty() {
-        String::new()
-    } else {
-        format!("\n\n**质量自检：**\n{}", quality.trim())
+    let quality_line = {
+        let s = summarize_quality(quality);
+        if s.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n**质量：**{s}")
+        }
     };
     let title = if preview {
         "## 👀 逆向文档预览（已写本地文档，未提交）"
@@ -3105,11 +3158,8 @@ fn compose_notice(
     format!(
         "{title}\n\
 **分支**：`{branch}`　**变更文件**：{} 个\n\n\
-**本次代码变更：**\n{}{}\n\n\
-**文档更新摘要：**\n{}{}{}{}",
+**本次更新：**\n{}{}{}{}",
         changed.len(),
-        shown.join("\n"),
-        more,
         docs,
         commit_line,
         quality_line,
@@ -3782,17 +3832,93 @@ mod tests {
         );
         assert!(n.contains("`release`"));
         assert!(n.contains("2 个"));
-        assert!(n.contains("> a.rs"));
+        assert!(n.contains("本次更新"));
+        assert!(!n.contains("> a.rs"), "群通知不再罗列源码路径");
+        assert!(!n.contains("本次代码变更"));
         assert!(n.contains("更新了 a 文档"));
         assert!(n.contains("已提交 1 篇文档"));
+        assert!(n.contains("来源仓同步"));
     }
 
     #[test]
     fn notice_preview_title() {
-        let n = compose_notice("release", &["a.rs".into()], "摘要", "", "检查1", true, "");
+        let n = compose_notice(
+            "release",
+            &["a.rs".into()],
+            "摘要",
+            "",
+            "- [建议] 可补示例\n未发现过时或矛盾",
+            true,
+            "",
+        );
         assert!(n.contains("预览"));
-        assert!(n.contains("质量自检"));
-        assert!(n.contains("检查1"));
+        assert!(n.contains("**质量：**通过"));
+        assert!(!n.contains("可补示例"));
+        assert!(!n.contains("质量自检"));
+    }
+
+    #[test]
+    fn notice_strips_code_refs_but_mapping_keeps_them() {
+        let full = "\
+- 门户支持按模块打开文档\n\
+- 触及文档：文档中心门户\n\
+\n\
+## 代码引用\n\
+- `doc/index.html:docs-data` → `doc/文档中心门户.md`\n\
+- `doc/index.html:mdRender` → `doc/文档中心门户.md`\n";
+        let n = compose_notice(
+            "release",
+            &["doc/index.html".into()],
+            full,
+            "",
+            "- [阻断] 模块文档与代码矛盾\n- [阻断] 日报编造了未出现模块",
+            false,
+            "",
+        );
+        assert!(n.contains("门户支持按模块打开文档"));
+        assert!(n.contains("触及文档：文档中心门户"));
+        assert!(!n.contains("## 代码引用"));
+        assert!(!n.contains("docs-data"));
+        assert!(!n.contains("mdRender"));
+        assert!(n.contains("**质量：**有 2 条阻断"));
+        let refs = extract_summary_references(full, "demo", "abc", "doc");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].symbol, "docs-data");
+    }
+
+    #[test]
+    fn strip_code_reference_section_cuts_at_heading() {
+        let s = strip_code_reference_section("业务要点\n\n## 代码引用\n- a:b → doc/x.md");
+        assert_eq!(s, "业务要点");
+        assert_eq!(strip_code_reference_section("只有摘要"), "只有摘要");
+    }
+
+    #[test]
+    fn strip_code_reference_keeps_later_batches() {
+        let full = "\
+### 第 1/2 批\n\
+- 第一批业务要点\n\
+\n\
+## 代码引用\n\
+- `a.rs:Foo` → `doc/a.md`\n\
+\n\
+### 第 2/2 批\n\
+- 第二批业务要点\n\
+\n\
+## 代码引用\n\
+- `b.rs:Bar` → `doc/b.md`\n";
+        let s = strip_code_reference_section(full);
+        assert!(s.contains("### 第 1/2 批"));
+        assert!(s.contains("第一批业务要点"));
+        assert!(s.contains("### 第 2/2 批"));
+        assert!(s.contains("第二批业务要点"));
+        assert!(!s.contains("## 代码引用"));
+        assert!(!s.contains("a.rs:Foo"));
+        assert!(!s.contains("b.rs:Bar"));
+        let n = compose_notice("release", &["a.rs".into(), "b.rs".into()], full, "预览模式：已直写文档目录（2 批）", "", true, "");
+        assert!(n.contains("第二批业务要点"));
+        assert!(n.contains("第 2/2 批"));
+        assert_eq!(extract_summary_references(full, "demo", "abc", "doc").len(), 2);
     }
 
     #[test]
@@ -3949,6 +4075,8 @@ mod tests {
         let p = default_docgen_system_prompt();
         assert!(p.contains("→"), "code refs must use arrow for extract_summary_references");
         assert!(p.contains("`源码路径:符号` → `文档相对路径`") || p.contains("源码路径:符号"));
+        assert!(p.contains("面向业务"));
+        assert!(p.contains("仅供系统映射落库"));
         assert!(p.contains("证据与写法"));
         assert!(p.contains("无行为变更"));
         assert!(p.contains("不要通读全库"));
