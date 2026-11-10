@@ -117,10 +117,26 @@ pub use config::*;
 
 use std::collections::HashMap;
 use std::process::Child;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::fs;
+use std::time::Duration;
 use rusqlite::Connection;
 use tauri::Manager;
+use tauri::webview::PageLoadEvent;
+
+/// Main window starts `visible: false` so WebView2 never flashes an empty
+/// dark frame before `#boot-splash` paints. Revealed once on first page load
+/// (with a timeout fallback so a hung navigate cannot leave the process
+/// running with no window).
+static MAIN_WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
+
+fn reveal_main_window_once(window: &tauri::Window) {
+    if !MAIN_WINDOW_REVEALED.swap(true, Ordering::SeqCst) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
 
 pub struct DbState {
     // Arc so commands can hand the lock itself to spawn_blocking (rusqlite's
@@ -147,7 +163,18 @@ pub struct DshState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        // Show the main window only after index.html (inline boot splash) has
+        // loaded — avoids the empty WebView2 black frame before React mounts.
+        .on_page_load(|webview, payload| {
+            if webview.label() != "main" {
+                return;
+            }
+            if !matches!(payload.event(), PageLoadEvent::Finished) {
+                return;
+            }
+            reveal_main_window_once(&webview.window());
+        });
     // Must be the FIRST plugin. A second instance would otherwise create a
     // second WebView2 environment on the same user-data-dir and deadlock its
     // UI thread (window shows "(Not Responding)" while the first instance
@@ -189,6 +216,26 @@ pub fn run() {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.set_title("AI Workbench [DEV]");
                 }
+            }
+
+            // Safety net: if page-load never finishes (bad Vite URL, hung
+            // navigate), still reveal the main window so the process is not
+            // invisible with only a tray icon.
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(3000));
+                    if MAIN_WINDOW_REVEALED.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if let Some(main) = handle.get_webview_window("main") {
+                        if !MAIN_WINDOW_REVEALED.swap(true, Ordering::SeqCst) {
+                            eprintln!("[boot] main window reveal timed out; forcing show");
+                            let _ = main.show();
+                            let _ = main.set_focus();
+                        }
+                    }
+                });
             }
 
             let conn = Connection::open(&db_path).expect("failed to open sqlite db");

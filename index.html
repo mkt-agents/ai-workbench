@@ -316,10 +316,13 @@
         color: rgba(246, 244, 241, 0.42);
       }
 
+      /* Keep opacity at 1: the window stays hidden until this splash paints
+         (see tauri.conf visible:false + lib.rs on_page_load). Fading from 0
+         made the first visible frame look like another black screen. */
       @keyframes boot-enter {
         from {
-          opacity: 0;
-          transform: translateY(10px) scale(0.96);
+          opacity: 1;
+          transform: translateY(8px) scale(0.98);
         }
         to {
           opacity: 1;

@@ -21,10 +21,11 @@
         "resizable": true,
         "decorations": false,
         "shadow": true,
+        "visible": false,
         "backgroundColor": [
-          15,
-          17,
-          19,
+          12,
+          12,
+          11,
           255
         ],
         "dragDropEnabled": false
