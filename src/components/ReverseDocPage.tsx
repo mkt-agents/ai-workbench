@@ -1624,7 +1624,7 @@ export default function ReverseDocPage() {
                         <th className="is-time">{t("wecom.docgenHistoryColAt")}</th>
                         <th className="is-trigger">{t("wecom.docgenHistoryColTrigger")}</th>
                         <th className="is-state">{t("wecom.docgenHistoryColStatus")}</th>
-                        <th className="is-num">{t("wecom.docgenHistoryColDuration")}</th>
+                        <th className="is-duration">{t("wecom.docgenHistoryColDuration")}</th>
                         <th className="is-num">{t("wecom.docgenHistoryColFiles")}</th>
                         <th className="is-num">{t("wecom.docgenHistoryColCommit")}</th>
                         <th className="is-num">{t("wecom.docgenHistoryColPush")}</th>
@@ -1658,24 +1658,26 @@ export default function ReverseDocPage() {
                               })}
                             </td>
                             <td className="is-state">
-                              <span
-                                className={`wecom-docgen-state${ok ? " is-ok" : failed ? " is-fail" : ""}`}
-                              >
-                                {ok
-                                  ? t("wecom.docgenStateOk")
-                                  : failed
-                                    ? t("wecom.docgenStateFail")
-                                    : skipped
-                                      ? t("wecom.docgenStateSkip")
-                                      : row.status}
+                              <div className="wecom-docgen-state-cell">
+                                <span
+                                  className={`wecom-docgen-state${ok ? " is-ok" : failed ? " is-fail" : ""}`}
+                                >
+                                  {ok
+                                    ? t("wecom.docgenStateOk")
+                                    : failed
+                                      ? t("wecom.docgenStateFail")
+                                      : skipped
+                                        ? t("wecom.docgenStateSkip")
+                                        : row.status}
+                                </span>
                                 {blocking > 0 ? (
                                   <span className="wecom-docgen-blocking">
                                     {t("wecom.docgenQualityBlocking", { count: blocking })}
                                   </span>
                                 ) : null}
-                              </span>
+                              </div>
                             </td>
-                            <td className="is-num">
+                            <td className="is-duration mono">
                               {row.durationMs ? (
                                 formatDuration(t, row.durationMs)
                               ) : (

@@ -3135,7 +3135,8 @@
 }
 .settings-page .wecom-docgen-table {
   width: 100%;
-  min-width: 640px;
+  /* 状态 / 耗时独立加宽后，少于 ~860 会出现横向滚动而不是把「耗时」挤成三行 */
+  min-width: 860px;
   /* 同 diag 表：collapse 会禁掉单元格的 backdrop-filter，吸顶表头磨砂失效 */
   border-collapse: separate;
   border-spacing: 0;
@@ -3147,7 +3148,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border-subtle);
   /* 叠三层 --bg-2 提高不透明度（玻璃主题下单层只有 0.42 甚至 0.025） */
   background-color: var(--bg-2);
@@ -3161,9 +3162,10 @@
   white-space: nowrap;
 }
 .settings-page .wecom-docgen-table td {
-  padding: 7px 10px;
+  padding: 8px 10px;
   color: var(--text-2);
-  vertical-align: top;
+  /* 耗时曾换行把行撑高时，顶对齐会让状态胶囊悬在左上角；居中与邻列对齐 */
+  vertical-align: middle;
 }
 .settings-page .wecom-docgen-table tbody tr + tr td {
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 45%, transparent);
@@ -3185,16 +3187,35 @@
   font-variant-numeric: tabular-nums;
 }
 .settings-page .wecom-docgen-table .is-trigger {
-  width: 92px;
+  width: 72px;
   white-space: nowrap;
 }
+/* 状态列：胶囊 + 可选阻断徽标纵向叠放，避免挤进耗时列 */
 .settings-page .wecom-docgen-table .is-state {
-  width: 76px;
+  width: 100px;
+}
+.settings-page .wecom-docgen-state-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+/* 耗时独立列：容纳「1 时 59 分 45 秒」，禁止换行，不再共用窄的 .is-num */
+.settings-page .wecom-docgen-table .is-duration {
+  width: 118px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+.settings-page .wecom-docgen-table th.is-duration {
+  text-align: right;
 }
 .settings-page .wecom-docgen-table .is-num {
-  width: 62px;
+  width: 64px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .settings-page .wecom-docgen-table th.is-num {
   text-align: right;
@@ -3230,10 +3251,18 @@
 }
 .settings-page .wecom-docgen-stage.is-ok { color: var(--green); }
 .settings-page .wecom-docgen-stage.is-fail { color: var(--red); }
+/* 阻断项：独立小胶囊叠在状态下方，不再塞进成功/失败 pill 里撑破列宽 */
 .settings-page .wecom-docgen-blocking {
-  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 28%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--yellow) 12%, transparent);
   color: var(--yellow);
-  font-size: 10.5px;
+  font-size: 10px;
+  font-weight: 600;
   white-space: nowrap;
 }
 /* 摘要：两行截断，全文放 title 里悬浮查看 */
