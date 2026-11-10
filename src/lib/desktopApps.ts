@@ -247,6 +247,71 @@ export function saveSlotBId(id: string): void {
   writeStorage(SLOT_B_KEY, id);
 }
 
+/** Cached Start Menu / Desktop shortcuts so the library opens instantly. */
+const INSTALLED_SHORTCUTS_CACHE_KEY = "desktop-embed-installed-shortcuts";
+/** Cached full registry scan — only filled after the user asks for “all programs”. */
+const INSTALLED_ALL_CACHE_KEY = "desktop-embed-installed-all";
+/** Recently opened / added app ids (tab strip order of use). */
+const RECENT_APPS_KEY = "desktop-embed-recent";
+const RECENT_APPS_MAX = 8;
+
+function readInstalledList(key: string): InstalledAppInfo[] {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is InstalledAppInfo =>
+        !!item &&
+        typeof item === "object" &&
+        typeof (item as InstalledAppInfo).exe_path === "string" &&
+        typeof (item as InstalledAppInfo).display_name === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function loadInstalledShortcutsCache(): InstalledAppInfo[] {
+  return readInstalledList(INSTALLED_SHORTCUTS_CACHE_KEY);
+}
+
+export function saveInstalledShortcutsCache(list: InstalledAppInfo[]): void {
+  writeStorage(INSTALLED_SHORTCUTS_CACHE_KEY, JSON.stringify(list));
+}
+
+export function loadInstalledAllCache(): InstalledAppInfo[] {
+  return readInstalledList(INSTALLED_ALL_CACHE_KEY);
+}
+
+export function saveInstalledAllCache(list: InstalledAppInfo[]): void {
+  writeStorage(INSTALLED_ALL_CACHE_KEY, JSON.stringify(list));
+}
+
+export function loadRecentAppIds(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_APPS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Remember an app as recently used; newest first, capped. */
+export function pushRecentAppId(id: string): string[] {
+  const clean = id.trim();
+  if (!clean) return loadRecentAppIds();
+  const next = [clean, ...loadRecentAppIds().filter((item) => item !== clean)].slice(
+    0,
+    RECENT_APPS_MAX
+  );
+  writeStorage(RECENT_APPS_KEY, JSON.stringify(next));
+  return next;
+}
+
 /**
  * Stable id for an app derived from its process name, so the same app added
  * twice (from the installed list, then from the running list) is one entry.

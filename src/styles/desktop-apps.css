@@ -80,6 +80,15 @@
   cursor: pointer;
 }
 
+.dapps-warn-fix.is-emphasis {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
 .dapps-warn-fix:disabled {
   opacity: 0.5;
   cursor: default;
@@ -474,6 +483,13 @@
 .dapps-error-list li .btn {
   flex: none;
   margin-left: auto;
+}
+
+.dapps-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .dapps-error-tag {
@@ -1496,6 +1512,11 @@
   opacity: 0.62;
 }
 
+.dapps-lib-card.is-active {
+  border-color: var(--accent-border);
+  background: var(--bg-2);
+}
+
 .dapps-lib-card-name {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1571,9 +1592,14 @@
   transition: var(--transition-colors);
 }
 
-.dapps-lib-row:hover {
+.dapps-lib-row:hover,
+.dapps-lib-row.is-active {
   background: var(--bg-2);
   border-color: var(--border-subtle);
+}
+
+.dapps-lib-row.is-active {
+  border-color: var(--accent-border);
 }
 
 .dapps-lib-avatar {

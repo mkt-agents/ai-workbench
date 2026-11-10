@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AppWindow,
@@ -20,10 +20,14 @@ const MAX_TILES = 120;
 export interface AppLibraryDialogProps {
   /** Apps already in the bar — shown with an "added" badge, click = switch. */
   apps: DesktopAppDef[];
+  /** Recently used app ids (newest first) — resolved against `apps`. */
+  recentIds: string[];
   /** Start Menu / Desktop shortcuts (what a user calls "my apps"). */
   installed: InstalledAppInfo[];
   /** Registry + Program Files scan, only listed when the user asks for it. */
   installedAll: InstalledAppInfo[];
+  /** True while the deferred full scan is in flight. */
+  fullScanLoading?: boolean;
   running: DesktopRunningApp[];
   runningLoading: boolean;
   /** The running-scan IPC died: say so instead of implying "nothing is open". */
@@ -32,6 +36,8 @@ export interface AppLibraryDialogProps {
   installedScanFailed: boolean;
   onRefreshRunning: () => void;
   onRescanInstalled: () => void;
+  /** User toggled “all programs” or typed a query that needs the full pool. */
+  onNeedFullScan: () => void;
   /** Add a scanned app (and open it). */
   onPickInstalled: (info: InstalledAppInfo) => void;
   /** Add a running window's app (and open it). */
@@ -97,26 +103,31 @@ function IconTile({
   );
 }
 
+type Selectable =
+  | { kind: "app"; key: string; app: DesktopAppDef }
+  | { kind: "running"; key: string; item: DesktopRunningApp }
+  | { kind: "installed"; key: string; info: InstalledAppInfo };
+
 /**
  * One place to find an app.
  *
- * The three-way tab split (installed / running / file) made "add an app" a
- * route-planning exercise: the wanted app might sit behind any tab, and the
- * same search had to be retyped per tab. One search box now filters ONE list
- * with two groups — what is running right now first (it can move in
- * instantly), then what is installed — and picking an .exe stays one click
- * away at the bottom for anything the scans missed.
+ * Opens from cache, keeps running windows first, then installed shortcuts.
+ * Full registry scan stays behind “全部程序” / a search that needs more hits.
+ * Arrow keys + Enter pick from a flat selectable list without leaving search.
  */
 export default function AppLibraryDialog({
   apps,
+  recentIds,
   installed,
   installedAll,
+  fullScanLoading = false,
   running,
   runningLoading,
   runningScanFailed,
   installedScanFailed,
   onRefreshRunning,
   onRescanInstalled,
+  onNeedFullScan,
   onPickInstalled,
   onPickRunning,
   onPickFile,
@@ -126,18 +137,26 @@ export default function AppLibraryDialog({
   const { t } = useTranslation("desktopApps");
   const [query, setQuery] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     searchRef.current?.focus();
   }, []);
 
   const needle = query.trim().toLowerCase();
+  const wantsFullPool = showAll || needle.length > 0;
+
+  useEffect(() => {
+    if (wantsFullPool) onNeedFullScan();
+  }, [wantsFullPool, onNeedFullScan]);
+
   const matches = (fields: Array<string | null | undefined>) =>
     !needle || fields.some((field) => (field ?? "").toLowerCase().includes(needle));
 
   const installedRows = useMemo(() => {
-    const pool = showAll ? [...installed, ...installedAll] : installed;
+    const pool = wantsFullPool ? [...installed, ...installedAll] : installed;
     const seen = new Set<string>();
     const rows = pool.filter((item) => {
       if (!item.exe_path) return false;
@@ -147,15 +166,23 @@ export default function AppLibraryDialog({
       return matches([item.display_name, item.publisher, processNameFromExe(item.exe_path)]);
     });
     return rows.sort((a, b) => a.display_name.localeCompare(b.display_name));
-  }, [installed, installedAll, showAll, needle]);
+  }, [installed, installedAll, wantsFullPool, needle]);
 
   const runningRows = useMemo(
     () =>
-      running.filter((item) =>
-        matches([item.title, item.processName, item.class])
-      ),
+      running.filter((item) => matches([item.title, item.processName, item.class])),
     [running, needle]
   );
+
+  const recentApps = useMemo(() => {
+    const byId = new Map(apps.map((app) => [app.id, app]));
+    return recentIds
+      .map((id) => byId.get(id))
+      .filter((app): app is DesktopAppDef => !!app)
+      .filter((app) =>
+        matches([app.label, app.labelKey, app.processName, app.exePath ?? ""])
+      );
+  }, [apps, recentIds, needle]);
 
   /** Existing entry for this process name, if the bar already has it. */
   const existing = (processName: string) =>
@@ -177,7 +204,75 @@ export default function AppLibraryDialog({
 
   const shownTiles = installedRows.slice(0, MAX_TILES);
   const hiddenTiles = installedRows.length - shownTiles.length;
-  const bothEmpty = runningRows.length === 0 && installedRows.length === 0;
+
+  const selectables = useMemo((): Selectable[] => {
+    const items: Selectable[] = [];
+    const seenProcess = new Set<string>();
+    const mark = (processName: string) => {
+      const key = processName.trim().toLowerCase();
+      if (!key || seenProcess.has(key)) return false;
+      seenProcess.add(key);
+      return true;
+    };
+    for (const app of recentApps) {
+      if (!mark(app.processName)) continue;
+      items.push({ kind: "app", key: `recent:${app.id}`, app });
+    }
+    for (const item of runningRows) {
+      if (!mark(item.processName)) continue;
+      items.push({
+        kind: "running",
+        key: `run:${item.processName}-${item.pid}`,
+        item,
+      });
+    }
+    for (const info of shownTiles) {
+      const processName = processNameFromExe(info.exe_path);
+      if (!mark(processName)) continue;
+      items.push({ kind: "installed", key: `inst:${info.exe_path}`, info });
+    }
+    return items;
+  }, [recentApps, runningRows, shownTiles]);
+
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [query, showAll, runningRows.length, installedRows.length, recentApps.length]);
+
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    const rows = listRef.current?.querySelectorAll<HTMLElement>("[data-lib-index]");
+    rows?.[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
+  const activate = (item: Selectable) => {
+    if (item.kind === "app") onSwitch(item.app);
+    else if (item.kind === "running") addRunning(item.item);
+    else addInstalled(item.info);
+  };
+
+  const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+    if (selectables.length === 0) return;
+    if (event.key === "Enter") {
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+      if (activeIndex < 0 || activeIndex >= selectables.length) return;
+      event.preventDefault();
+      activate(selectables[activeIndex]);
+      return;
+    }
+    event.preventDefault();
+    setActiveIndex((prev) => {
+      if (event.key === "ArrowDown") {
+        return prev < 0 ? 0 : Math.min(prev + 1, selectables.length - 1);
+      }
+      return prev < 0 ? selectables.length - 1 : Math.max(prev - 1, 0);
+    });
+  };
+
+  const selectableIndex = (key: string) => selectables.findIndex((item) => item.key === key);
+
+  const bothEmpty =
+    recentApps.length === 0 && runningRows.length === 0 && installedRows.length === 0;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -200,25 +295,31 @@ export default function AppLibraryDialog({
                 value={query}
                 placeholder={t("library.search")}
                 onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={onSearchKeyDown}
               />
               <button
                 type="button"
                 className={`dapps-lib-toggle${showAll ? " is-on" : ""}`}
                 title={t("library.showAll")}
+                disabled={fullScanLoading && !showAll}
                 onClick={() => setShowAll((value) => !value)}
               >
-                <SlidersHorizontal size={13} />
+                {fullScanLoading && showAll ? (
+                  <Loader2 size={13} className="dapps-spin" />
+                ) : (
+                  <SlidersHorizontal size={13} />
+                )}
                 {t("library.showAll")}
               </button>
             </div>
 
-            <div className="dapps-lib-scroll">
+            <div className="dapps-lib-scroll" ref={listRef}>
               {bothEmpty ? (
                 <div className="dapps-lib-empty">
                   <p>
                     {needle
                       ? t("library.empty")
-                      : runningLoading
+                      : runningLoading || fullScanLoading
                         ? t("library.loading")
                         : installedScanFailed || runningScanFailed
                           ? t("library.scanFailed")
@@ -235,6 +336,46 @@ export default function AppLibraryDialog({
                     </button>
                   )}
                 </div>
+              ) : null}
+
+              {recentApps.length > 0 ? (
+                <section className="dapps-lib-group">
+                  <p className="dapps-lib-group-head">
+                    <span>{t("library.recent")}</span>
+                    <span className="dapps-lib-count">{recentApps.length}</span>
+                  </p>
+                  <ul className="dapps-lib-rows">
+                    {recentApps.map((app) => {
+                      const key = `recent:${app.id}`;
+                      const index = selectableIndex(key);
+                      const title =
+                        app.label ??
+                        (app.labelKey ? t(app.labelKey) : app.processName);
+                      return (
+                        <li key={key}>
+                          <button
+                            type="button"
+                            data-lib-index={index}
+                            className={`dapps-lib-row${
+                              index === activeIndex ? " is-active" : ""
+                            }`}
+                            onMouseEnter={() => setActiveIndex(index)}
+                            onClick={() => onSwitch(app)}
+                          >
+                            <IconTile path={app.exePath} size={26} />
+                            <span className="dapps-lib-row-main">
+                              <span className="dapps-lib-row-title">{title}</span>
+                              <span className="dapps-lib-row-sub">{app.processName}</span>
+                            </span>
+                            <span className="dapps-lib-row-action is-added">
+                              {t("library.switch")}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
               ) : null}
 
               {runningRows.length > 0 ? (
@@ -259,12 +400,18 @@ export default function AppLibraryDialog({
                   <p className="dapps-lib-note">{t("library.runningHint")}</p>
                   <ul className="dapps-lib-rows">
                     {runningRows.map((item) => {
+                      const key = `run:${item.processName}-${item.pid}`;
+                      const index = selectableIndex(key);
                       const added = hasProcess(apps, item.processName);
                       return (
-                        <li key={`${item.processName}-${item.pid}`}>
+                        <li key={key}>
                           <button
                             type="button"
-                            className="dapps-lib-row"
+                            data-lib-index={index}
+                            className={`dapps-lib-row${
+                              index === activeIndex ? " is-active" : ""
+                            }`}
+                            onMouseEnter={() => setActiveIndex(index)}
                             onClick={() => addRunning(item)}
                           >
                             <IconTile path={item.exePath} size={26} />
@@ -300,12 +447,18 @@ export default function AppLibraryDialog({
                     {shownTiles.map((info) => {
                       const processName = processNameFromExe(info.exe_path);
                       const added = hasProcess(apps, processName);
+                      const key = `inst:${info.exe_path}`;
+                      const index = selectableIndex(key);
                       return (
                         <button
                           key={info.exe_path}
                           type="button"
-                          className={`dapps-lib-card${added ? " is-added" : ""}`}
+                          data-lib-index={index}
+                          className={`dapps-lib-card${added ? " is-added" : ""}${
+                            index === activeIndex ? " is-active" : ""
+                          }`}
                           title={`${info.display_name} · ${processName}`}
+                          onMouseEnter={() => setActiveIndex(index)}
                           onClick={() => addInstalled(info)}
                         >
                           <IconTile path={info.exe_path} icon={info.icon} />

@@ -48,16 +48,22 @@ import {
   loadActiveId,
   loadCustomApps,
   loadExePath,
+  loadInstalledAllCache,
+  loadInstalledShortcutsCache,
   loadProcessNames,
+  loadRecentAppIds,
   loadSlotBId,
   loadSplitView,
   loadTabOrder,
   matchExe,
   onStorageFailure,
   processNameFromExe,
+  pushRecentAppId,
   saveActiveId,
   saveCustomApps,
   saveExePath,
+  saveInstalledAllCache,
+  saveInstalledShortcutsCache,
   saveProcessName,
   saveSlotBId,
   saveSplitView,
@@ -264,11 +270,25 @@ export default function DesktopAppsPage() {
     );
     return known ? remembered : BUILTIN_DESKTOP_APPS[0].id;
   });
-  const [installed, setInstalled] = useState<InstalledAppInfo[]>([]);
+  /** Merged shortcuts + full scan — used by matchExe when starting an app. */
+  const [installed, setInstalled] = useState<InstalledAppInfo[]>(() => {
+    const shortcuts = loadInstalledShortcutsCache();
+    const all = loadInstalledAllCache();
+    return [...shortcuts, ...all];
+  });
   /** Start-Menu/Desktop shortcuts — what the library shows by default. */
-  const [installedShortcuts, setInstalledShortcuts] = useState<InstalledAppInfo[]>([]);
+  const [installedShortcuts, setInstalledShortcuts] = useState<InstalledAppInfo[]>(() =>
+    loadInstalledShortcutsCache()
+  );
   /** Registry + Program Files scan — only listed on request (runtimes, SDKs). */
-  const [installedAll, setInstalledAll] = useState<InstalledAppInfo[]>([]);
+  const [installedAll, setInstalledAll] = useState<InstalledAppInfo[]>(() =>
+    loadInstalledAllCache()
+  );
+  /** Recently used app ids for the library “最近使用” group. */
+  const [recentIds, setRecentIds] = useState<string[]>(() => loadRecentAppIds());
+  /** Full registry scan is deferred until the user asks for it. */
+  const [fullScanLoading, setFullScanLoading] = useState(false);
+  const fullScanStartedRef = useRef(false);
   /**
    * App id → the image name that really owns its window. Filled the first time
    * a name derived from the file name fails to find anything (launchers,
@@ -323,7 +343,11 @@ export default function DesktopAppsPage() {
   const [warning, setWarning] = useState<string>("");
   /** Why the last adopt attempt failed, verbatim from the backend. */
   const [errorText, setErrorText] = useState<string>("");
-  const [candidates, setCandidates] = useState<DesktopWindowCandidate[]>([]);
+  /**
+   * Auto-open the window-rescue picker once per error episode. Closing the
+   * picker while still in error must not loop it open again.
+   */
+  const autoRescueDoneRef = useRef(false);
   /** Window picker: open state plus the list it was opened with. */
   const [picking, setPicking] = useState(false);
   const [pickerList, setPickerList] = useState<DesktopWindowCandidate[]>([]);
@@ -523,33 +547,39 @@ export default function DesktopAppsPage() {
     rows?.[pickerActive]?.scrollIntoView({ block: "nearest" });
   }, [pickerActive, picking]);
 
-  // Executables are only needed to *start* an app, and the scan is slow, so it
-  // runs once per visit in the background. Shortcuts and the registry scan are
-  // kept apart as well: the app library shows shortcuts by default (they are
-  // what a user calls "my apps") and hides runtimes/SDKs behind a toggle.
+  // Shortcuts seed the library (and matchExe). The full registry scan is
+  // deferred until the user toggles “全部程序” or types a search that needs it.
+  // Cache paints the first frame; this quietly refreshes in the background.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [registry, shortcuts] = await Promise.all([
-          invokeScanInstalledApps(),
-          invokeScanDesktopApps(),
-        ]);
+        const shortcuts = await invokeScanDesktopApps();
         if (cancelled) return;
         setInstalledShortcuts(shortcuts);
-        setInstalledAll(registry);
-        setInstalled([...shortcuts, ...registry]);
+        saveInstalledShortcutsCache(shortcuts);
+        setInstalled((prevAll) => {
+          const allOnly = prevAll.filter(
+            (item) =>
+              !shortcuts.some(
+                (shortcut) =>
+                  shortcut.exe_path.toLowerCase() === item.exe_path.toLowerCase()
+              )
+          );
+          return [...shortcuts, ...allOnly];
+        });
         setInstalledScanFailed(false);
       } catch {
-        /* no scan: the user can still pick an .exe by hand — but say why the
-           library is empty instead of leaving it silently blank */
-        setInstalledScanFailed(true);
+        /* keep the cached list: a failed refresh must not empty the library */
+        if (!cancelled && loadInstalledShortcutsCache().length === 0) {
+          setInstalledScanFailed(true);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [invokeScanInstalledApps, invokeScanDesktopApps]);
+  }, [invokeScanDesktopApps]);
 
   // Seed "what we already host" once: a tab whose window is still parented in
   // can be shown immediately instead of going through `find` first.
@@ -607,6 +637,7 @@ export default function DesktopAppsPage() {
   const switchApp = useCallback(
     (id: string) => {
       if (id === activeIdRef.current) return;
+      setRecentIds(pushRecentAppId(id));
       phaseCacheRef.current.set(activeIdRef.current, phase);
       saveActiveId(id);
       // In split view, clicking the secondary pane's tab swaps the panes: the
@@ -623,7 +654,6 @@ export default function DesktopAppsPage() {
       setPhase(phaseCacheRef.current.get(id) ?? "idle");
       setWarning("");
       setErrorText("");
-      setCandidates([]);
     },
     [phase, slotBId, splitView]
   );
@@ -788,13 +818,6 @@ export default function DesktopAppsPage() {
     slotBAppId,
   ]);
 
-  /** The windows the process owns — what "no usable window" actually saw. */
-  const diagnose = useCallback(async () => {
-    const gen = generationRef.current;
-    const list = await invokeDesktopEmbedCandidates(processName).catch(() => []);
-    if (aliveRef.current && generationRef.current === gen) setCandidates(list);
-  }, [invokeDesktopEmbedCandidates, processName]);
-
   /** Open the picker: the candidates at this moment, adoptable by handle. */
   const openPicker = useCallback(async () => {
     // The picker outlives a tab switch unless every step is pinned to the
@@ -831,6 +854,18 @@ export default function DesktopAppsPage() {
       if (isCurrent()) setBusy(false);
     }
   }, [invokeDesktopEmbedCandidates, picking, processName, setOverlay]);
+
+  // Failure recovery: open the window picker once so the user lands on the
+  // friendly rescue path instead of a technical candidate list under the hero.
+  useEffect(() => {
+    if (phase !== "error") {
+      autoRescueDoneRef.current = false;
+      return;
+    }
+    if (picking || libraryOpen || autoRescueDoneRef.current) return;
+    autoRescueDoneRef.current = true;
+    void openPicker();
+  }, [phase, picking, libraryOpen, openPicker]);
 
   /** Close the picker, bringing the adopted window back if it is still ours. */
   const closePicker = useCallback(() => {
@@ -885,7 +920,6 @@ export default function DesktopAppsPage() {
         attachedRef.current = true;
         lastActiveHostedRef.current = process;
         setErrorText("");
-        setCandidates([]);
         setWindowTitle(info.title);
         setWindowClass(info.class);
         setWarning(info.warning);
@@ -896,8 +930,10 @@ export default function DesktopAppsPage() {
         if (isCurrent()) {
           setErrorText(err instanceof Error ? err.message : String(err));
           setPhase("error");
-          closePicker();
-          await diagnose();
+          // Stay in the picker and refresh the list — closing then reopening
+          // is a worse recovery loop than correcting the pick in place.
+          const list = await invokeDesktopEmbedCandidates(process).catch(() => []);
+          if (isCurrent()) setPickerList(list);
         }
       } finally {
         if (isCurrent()) setBusy(false);
@@ -906,8 +942,8 @@ export default function DesktopAppsPage() {
     [
       active.id,
       closePicker,
-      diagnose,
       invokeDesktopEmbedAttachWindow,
+      invokeDesktopEmbedCandidates,
       invokeDesktopEmbedShow,
       nudgeGeometry,
       processName,
@@ -968,7 +1004,6 @@ export default function DesktopAppsPage() {
         attachedRef.current = true;
         lastActiveHostedRef.current = processName;
         setErrorText("");
-        setCandidates([]);
         setWindowTitle(info.title);
         setWindowClass(info.class);
         setWarning(info.warning);
@@ -1035,7 +1070,6 @@ export default function DesktopAppsPage() {
     setWindowClass("");
     setWarning("");
     setErrorText("");
-    setCandidates([]);
     setLocating(false);
     // A picker opened for the previous app must not survive the switch: its
     // list carries old HWNDs and would be adopted under the new process name.
@@ -1292,7 +1326,6 @@ export default function DesktopAppsPage() {
         // Not running yet is the normal case here: stay quiet about it.
         setPhase("running");
         setErrorText("");
-        setCandidates([]);
         maybeAutoStart();
       } finally {
         if (isCurrent()) setBusy(false);
@@ -1423,7 +1456,6 @@ export default function DesktopAppsPage() {
   const startAndAttach = useCallback(async () => {
     setBusy(true);
     setErrorText("");
-    setCandidates([]);
     // Token-scoped: "取消" bumps the ref and this run unwinds silently.
     const cancelToken = ++cancelLaunchRef.current;
     const cancelled = () => cancelLaunchRef.current !== cancelToken;
@@ -1525,7 +1557,6 @@ export default function DesktopAppsPage() {
           lastActiveHostedRef.current = processName;
           hostedRef.current.add(processName.trim().toLowerCase());
           setErrorText("");
-          setCandidates([]);
           setWindowTitle(info.title);
           setWindowClass(info.class);
           setWarning(info.warning);
@@ -1575,13 +1606,11 @@ export default function DesktopAppsPage() {
       if (aliveRef.current && activeIdRef.current === active.id && !cancelled()) {
         setErrorText(lastError);
         setPhase("error");
-        await diagnose();
       }
     } catch (err) {
       if (aliveRef.current && activeIdRef.current === active.id && !cancelled()) {
         setErrorText(err instanceof Error ? err.message : String(err));
         setPhase("error");
-        await diagnose();
       }
     } finally {
       if (aliveRef.current && activeIdRef.current === active.id) setBusy(false);
@@ -1590,7 +1619,6 @@ export default function DesktopAppsPage() {
     active,
     anyOverlayOpen,
     attach,
-    diagnose,
     installed,
     invokeDesktopEmbedFind,
     invokeDesktopEmbedFocus,
@@ -1628,6 +1656,8 @@ export default function DesktopAppsPage() {
 
   /** Re-run the installed-app scan (the library's empty state offers this). */
   const rescanInstalled = useCallback(async () => {
+    fullScanStartedRef.current = true;
+    setFullScanLoading(true);
     try {
       const [registry, shortcuts] = await Promise.all([
         invokeScanInstalledApps(),
@@ -1636,20 +1666,52 @@ export default function DesktopAppsPage() {
       setInstalledShortcuts(shortcuts);
       setInstalledAll(registry);
       setInstalled([...shortcuts, ...registry]);
+      saveInstalledShortcutsCache(shortcuts);
+      saveInstalledAllCache(registry);
       setInstalledScanFailed(false);
     } catch {
       /* keep the previous list: a failed rescan must not empty the library,
          but flag it so the empty state can offer the retry again */
       setInstalledScanFailed(true);
+    } finally {
+      setFullScanLoading(false);
     }
   }, [invokeScanInstalledApps, invokeScanDesktopApps]);
+
+  /** Pull the full registry scan once — used when the library needs “all programs”. */
+  const ensureFullScan = useCallback(() => {
+    if (fullScanStartedRef.current) return;
+    fullScanStartedRef.current = true;
+    setFullScanLoading(true);
+    void (async () => {
+      try {
+        const registry = await invokeScanInstalledApps();
+        setInstalledAll(registry);
+        saveInstalledAllCache(registry);
+        setInstalled((prev) => {
+          const shortcutOnly = prev.filter(
+            (item) =>
+              !registry.some(
+                (entry) => entry.exe_path.toLowerCase() === item.exe_path.toLowerCase()
+              )
+          );
+          return [...shortcutOnly, ...registry];
+        });
+        setInstalledScanFailed(false);
+      } catch {
+        setInstalledScanFailed(true);
+        fullScanStartedRef.current = false;
+      } finally {
+        setFullScanLoading(false);
+      }
+    })();
+  }, [invokeScanInstalledApps]);
 
   const reattach = useCallback(async () => {
     const gen = generationRef.current;
     setBusy(true);
     try {
       if (await attach()) return;
-      await diagnose();
       const found = await invokeDesktopEmbedFind(processName).catch(() => null);
       if (aliveRef.current && generationRef.current === gen && activeIdRef.current === active.id) {
         setPhase(found ? "error" : "idle");
@@ -1657,7 +1719,7 @@ export default function DesktopAppsPage() {
     } finally {
       if (aliveRef.current && generationRef.current === gen) setBusy(false);
     }
-  }, [active.id, attach, diagnose, invokeDesktopEmbedFind, processName]);
+  }, [active.id, attach, invokeDesktopEmbedFind, processName]);
 
   const detach = useCallback(async () => {
     setBusy(true);
@@ -1825,6 +1887,7 @@ export default function DesktopAppsPage() {
         saveCustomApps(next);
         phaseCacheRef.current.delete(target.id);
       }
+      setRecentIds(pushRecentAppId(target.id));
 
       // The library closes without a visibility sync: a tab switch (or an
       // immediate start) follows, and the per-app effect manages visibility
@@ -1834,7 +1897,6 @@ export default function DesktopAppsPage() {
       setLibraryOpen(false);
       setWarning("");
       setErrorText("");
-      setCandidates([]);
 
       if (target.id === activeIdRef.current) {
         // Already the current tab: nothing switches, so open it right here.
@@ -1986,7 +2048,6 @@ export default function DesktopAppsPage() {
     if (aliveRef.current && activeIdRef.current === active.id) {
       setPhase("idle");
       setErrorText("");
-      setCandidates([]);
       setBusy(false);
       setLocating(false);
     }
@@ -1998,8 +2059,38 @@ export default function DesktopAppsPage() {
    */
   const primaryAction: TbarAction | null = (() => {
     switch (phase) {
-      case "attached":
+      case "attached": {
+        // Blank slot while the native window is minimized / clamped / hidden:
+        // surface restore as the everyday primary action, not a chip link.
+        if (
+          warning === "minimized" ||
+          warning === "maximized" ||
+          warning === "size-mismatch" ||
+          warning === "invisible" ||
+          warning === "size" ||
+          warning === "restore-failed"
+        ) {
+          return {
+            key: "restore",
+            label: t("warn.restore"),
+            icon: <RefreshCw size={13} />,
+            variant: "primary",
+            disabled: busy,
+            onClick: () => void restoreWindow(),
+          };
+        }
+        if (warning === "not-child") {
+          return {
+            key: "reattach",
+            label: t("warn.reattach"),
+            icon: <RefreshCw size={13} />,
+            variant: "primary",
+            disabled: busy,
+            onClick: () => void reattach(),
+          };
+        }
         return null;
+      }
       // Waiting up to 150s with only a disabled spinner used to trap the user
       // (a tab switch was the only way out): launching/polling now offer the
       // everyday escape — cancel the wait, keep the app running.
@@ -2288,7 +2379,7 @@ export default function DesktopAppsPage() {
             warning === "restore-failed" ? (
               <button
                 type="button"
-                className="dapps-warn-fix"
+                className="dapps-warn-fix is-emphasis"
                 disabled={busy}
                 onClick={() => void restoreWindow()}
               >
@@ -2444,8 +2535,8 @@ export default function DesktopAppsPage() {
               <p className="dapps-hint-note">{t("hint.note")}</p>
             </div>
 
-            {/* Failure detail lives here: the app window paints over everything
-                below the toolbar, so a toast would be unreachable anyway. */}
+            {/* Failure detail lives here when the rescue picker was closed.
+                The window list itself lives in the picker — not duplicated. */}
             {errorText ? (
               <div className="dapps-error">
                 <p className="dapps-error-head">
@@ -2459,41 +2550,26 @@ export default function DesktopAppsPage() {
                   <summary>{t("error.details")}</summary>
                   <p className="dapps-error-text">{errorText}</p>
                 </details>
-                {candidates.length > 0 ? (
-                  <>
-                    <p className="dapps-error-head">{t("error.candidates")}</p>
-                    <ul className="dapps-error-list">
-                      {candidates.map((c, index) => (
-                        <li key={`${c.pid}-${index}`}>
-                          <span className="dapps-error-tag">{c.class}</span>
-                          <span className="dapps-error-tag">
-                            {c.visible ? t("error.visible") : t("error.hidden")}
-                          </span>
-                          {c.owned ? (
-                            <span className="dapps-error-tag">{t("error.owned")}</span>
-                          ) : null}
-                          <span className="dapps-error-win">{winName(c)}</span>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-small"
-                            disabled={busy}
-                            onClick={() => void attachPicked(c.hwnd)}
-                          >
-                            {t("picker.adopt")}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-small"
-                  onClick={() => void diagnose()}
-                >
-                  <RefreshCw size={12} />
-                  {t("error.refresh")}
-                </button>
+                <div className="dapps-error-actions">
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-small"
+                    disabled={busy}
+                    onClick={() => void openPicker()}
+                  >
+                    <MousePointerClick size={12} />
+                    {t("picker.action")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    disabled={busy}
+                    onClick={() => void reattach()}
+                  >
+                    <RefreshCw size={12} />
+                    {t("actions.open")}
+                  </button>
+                </div>
               </div>
             ) : null}
           </div>
@@ -2526,7 +2602,9 @@ export default function DesktopAppsPage() {
                 </span>
               }
             />
-            <p className="dapps-picker-hint">{t("picker.hint")}</p>
+            <p className="dapps-picker-hint">
+              {phase === "error" ? t("picker.rescueHint") : t("picker.hint")}
+            </p>
             {pickerList.length === 0 ? (
               <p className="dapps-picker-empty">{t("picker.empty", { process: processName })}</p>
             ) : (
@@ -2555,7 +2633,6 @@ export default function DesktopAppsPage() {
                           ) : null}
                         </span>
                         <span className="dapps-picker-meta">
-                          <span className="dapps-error-tag">{c.class}</span>
                           {c.width > 0 && c.height > 0 ? (
                             <span className="dapps-error-tag">
                               {t("picker.size", { w: c.width, h: c.height })}
@@ -2565,7 +2642,9 @@ export default function DesktopAppsPage() {
                               {t("picker.area", { k: Math.round(c.area / 1000) })}
                             </span>
                           ) : null}
-                          <span className="dapps-error-tag">{c.hwnd}</span>
+                          <span className="dapps-error-tag" title={c.hwnd}>
+                            {c.class}
+                          </span>
                         </span>
                       </div>
                       {c.current ? (
@@ -2640,18 +2719,22 @@ export default function DesktopAppsPage() {
       {libraryOpen ? (
         <AppLibraryDialog
           apps={apps}
+          recentIds={recentIds}
           installed={installedShortcuts}
           installedAll={installedAll}
+          fullScanLoading={fullScanLoading}
           running={running.apps}
           runningLoading={running.loading}
           runningScanFailed={running.error}
           installedScanFailed={installedScanFailed}
           onRefreshRunning={() => void running.refresh()}
           onRescanInstalled={() => void rescanInstalled()}
+          onNeedFullScan={ensureFullScan}
           onPickInstalled={(info) => adoptApp(appFromInstalled(info))}
           onPickRunning={(item) => adoptApp(appFromRunningApp(item))}
           onPickFile={() => void addAppFromFile()}
           onSwitch={(app) => {
+            setRecentIds(pushRecentAppId(app.id));
             // Picking the app we are already on still has to restore its window:
             // opening the library hid it.
             if (app.id === activeIdRef.current) {
