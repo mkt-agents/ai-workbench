@@ -3779,8 +3779,12 @@ pub async fn get_git_config(scope: Option<String>) -> Result<(String, String), S
 }
 
 /// Native folder picker. Returns None if the user cancels.
+///
+/// Takes `Window` (not `WebviewWindow`): after DSH `add_child` the main window hosts
+/// multiple webviews, so injecting `WebviewWindow` fails with
+/// "current webview is not a WebviewWindow".
 #[tauri::command]
-pub async fn pick_directory(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+pub async fn pick_directory(window: tauri::Window) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || pick_directory_sync(&window))
         .await
         .map_err(|e| format!("Task failed: {}", e))?
@@ -3788,7 +3792,7 @@ pub async fn pick_directory(window: tauri::WebviewWindow) -> Result<Option<Strin
 
 /// Owned by the calling window so the dialog stays above it even when that window is
 /// always-on-top (the pinned ai-hub window would otherwise cover it).
-fn pick_directory_sync(window: &tauri::WebviewWindow) -> Result<Option<String>, String> {
+fn pick_directory_sync(window: &tauri::Window) -> Result<Option<String>, String> {
     let folder = rfd::FileDialog::new()
         .set_title("选择 Git 仓库目录")
         .set_parent(window)
