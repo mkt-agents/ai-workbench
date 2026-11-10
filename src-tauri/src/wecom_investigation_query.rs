@@ -1560,7 +1560,7 @@ mod tests {
         .unwrap();
         assert_eq!(q.start, "2026-10-28T13:30:00+08:00");
         assert_eq!(q.service.as_deref(), Some("new-api"));
-        assert!(q.keywords.is_empty());
+        assert!(q.keywords.is_empty(), "keywords={:?}", q.keywords);
         assert!(q.identifiers.is_empty());
         assert!(q.trace_id.is_none());
         assert!(q.level.is_none());
