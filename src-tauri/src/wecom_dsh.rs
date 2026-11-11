@@ -388,7 +388,8 @@ impl DshEngine {
     ) -> bool {
         let _guard = self.start_lock.lock().await;
         let mut g = self.inner.lock().await;
-        let changed = g.tier != tier || g.workspace != workspace;
+        let workspace_changed = g.workspace != workspace;
+        let changed = g.tier != tier || workspace_changed;
         g.tier = tier;
         g.workspace = workspace;
         if g.model != model {
@@ -408,11 +409,16 @@ impl DshEngine {
                 g.active.clear();
             }
         }
-        if changed {
+        // Workspace change would make session/resume fail with cwd mismatch; drop mappings
+        // so the next acquire opens session/new under the new cwd without a failed resume.
+        if workspace_changed {
+            g.sessions.clear();
+            g.active.clear();
+        } else if changed {
             g.active.config_changed();
         }
         drop(g);
-        if cleared_effort_to_auto {
+        if cleared_effort_to_auto || workspace_changed {
             self.persist_sessions().await;
         }
         if changed {
@@ -1114,10 +1120,15 @@ impl RpcFailure {
         {
             return false;
         }
+        let code = error.get("code").and_then(Value::as_i64);
+        // Workspace changed while sessions.json still points at an old ACP session.
+        // Old history is for the wrong tree — safe to open session/new with current cwd.
+        if code == Some(-32602) && msg.contains("cwd does not match") {
+            return true;
+        }
         // Opaque Internal error after process restart: on-disk id is typically dead.
         // Require the ACP message (empty message alone is too weak without structure).
         // Skip "Internal error: turn failed: …" — that belongs to prompt, not resume lifetime.
-        let code = error.get("code").and_then(Value::as_i64);
         code == Some(-32603)
             && msg.starts_with("internal error")
             && !msg.contains("turn failed")
@@ -1480,7 +1491,7 @@ pub fn friendly_turn_error(raw: &str) -> String {
     {
         if lower.contains("already_active") || lower.contains("already active") {
             return format!(
-                "上一轮 DSH 会话还在跑，暂时不能恢复同一会话。请等当前回合结束，或发送「停止」后再问；仍卡住就发「新对话」重置。（原始错误：{raw}）"
+                "上一轮还在处理，请稍后再问，或发「停止」后重试；仍卡住可发「新对话」。"
             );
         }
         if lower.contains("unauthenticated")
@@ -1488,11 +1499,11 @@ pub fn friendly_turn_error(raw: &str) -> String {
             || lower.contains("unauthorized")
         {
             return format!(
-                "DSH 会话恢复鉴权失败：请检查 Harness 登录/密钥后，在设置页重启企微通道；或发送「新对话」开新会话再问。（原始错误：{raw}）"
+                "DSH 会话鉴权失败：请检查 Harness 登录/密钥，或在设置里重启企微通道；也可发「新对话」再试。"
             );
         }
         return format!(
-            "DSH 会话恢复失败（常见于进程重启后旧会话已失效）。请发送「新对话」或「新会话」后再提问；仍不行请到设置 → IM机器人 → 企业微信重启通道。（原始错误：{raw}）"
+            "DSH 会话已失效。请发「新对话」后再问；仍不行请到设置 → IM机器人 → 企业微信重启通道。"
         );
     }
     raw.to_string()
@@ -2071,6 +2082,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cwd_mismatch_resume_falls_back_to_new() {
+        let (shared, writer, calls, task) = mock_rpc(vec![
+            json!({"error":{"code":-32602,"message":"Invalid params: session cwd does not match: D:\\code"}}),
+            json!({"result":{"sessionId":"fresh-after-cwd"}}),
+        ]);
+        assert_eq!(
+            acquire_rpc_session(
+                &shared,
+                &writer,
+                "D:/other",
+                json!([]),
+                Some("stale-cwd"),
+                false
+            )
+            .await
+            .unwrap(),
+            ("fresh-after-cwd".into(), "new")
+        );
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|v| v["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["session/resume", "session/new"]
+        );
+        assert!(RpcFailure::Remote(json!({
+            "code": -32602,
+            "message": "Invalid params: session cwd does not match: D:\\code"
+        }))
+        .resume_can_recreate());
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn reset_is_key_local_and_next_acquisition_is_new() {
         let (shared, writer, calls, task) = mock_rpc(vec![json!({"result":{"sessionId":"fresh"}})]);
         let mut active = ActiveSessions::default();
@@ -2570,11 +2617,14 @@ mod tests {
         let text = friendly_turn_error(raw);
         assert!(text.contains("新对话") || text.contains("新会话"), "{text}");
         assert!(text.contains("重启通道") || text.contains("IM机器人"), "{text}");
-        assert!(text.contains(raw) || text.contains("-32603"), "{text}");
+        assert!(!text.contains("原始错误"), "resume 文案不再贴完整原始错误：{text}");
 
         let busy = "session/resume 失败：already active（code -32603）";
         let busy_text = friendly_turn_error(busy);
-        assert!(busy_text.contains("停止") || busy_text.contains("还在跑"), "{busy_text}");
+        assert!(
+            busy_text.contains("停止") || busy_text.contains("还在处理"),
+            "{busy_text}"
+        );
     }
 
     #[test]

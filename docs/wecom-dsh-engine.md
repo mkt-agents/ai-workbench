@@ -221,7 +221,7 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
 - **会话**：企微逻辑会话键映射到一个 ACP `sessionId`，映射落盘于应用数据目录下的
   `wecom-dsh/sessions.json`。新版会话作用域为私聊 `bot + user`、普通群聊
   `bot + chat + user`、显式共享任务 `bot + chat + task`；键使用版本化元组摘要，不直接拼接用户标识。
-  已在当前 ACP 进程内活动的会话，下一条普通消息直接 `reuse`；只有落盘映射尚未恢复到当前进程时才 `session/resume`；结构化 session-expired / session_not_found，以及进程重启后常见的裸 `-32603 Internal error`，会自动 `session/new`（记 `resume→new` 日志）；`already_active` / 鉴权失败 / 「not found, expired or already_active」等含糊文案仍 fail-closed 并提示「新对话」或等待当前回合，避免在别人还占着会话时静默丢历史。完整指令「新会话」显式重置当前作用域，不把普通追问当作重置。重置、队列与共享任务边界待本轮主流程集成验证。
+  已在当前 ACP 进程内活动的会话，下一条普通消息直接 `reuse`；只有落盘映射尚未恢复到当前进程时才 `session/resume`；结构化 session-expired / session_not_found、进程重启后常见的裸 `-32603 Internal error`，以及 `-32602 session cwd does not match`（工作区已改、落盘映射仍指向旧 cwd 会话），会自动 `session/new`（记 `resume→new` 日志）；配置里变更 workspace 时也会清空 `sessions.json` 映射，下一问直接 new。`already_active` / 鉴权失败 / 「not found, expired or already_active」等含糊文案仍 fail-closed 并提示「新对话」或等待当前回合，避免在别人还占着会话时静默丢历史。完整指令「新会话」显式重置当前作用域，不把普通追问当作重置。重置、队列与共享任务边界待本轮主流程集成验证。
   **多轮上下文由 DSH 自己维护**，不再把本机短历史塞进 prompt；问答旁证仍单独写入。
   新个人/共享会话从空上下文开始，不自动继承旧群历史；旧私聊没有可靠机器人归属也不自动迁入。
   同一新版逻辑会话切回天玑时可读取该作用域自己的旁证，不跨作用域复制。

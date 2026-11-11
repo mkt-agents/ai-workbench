@@ -761,6 +761,19 @@ impl Orchestrator {
         if self.ack(&msg, &stream_id).await {
             acked.store(true, Ordering::SeqCst);
         }
+
+        // COS 临时链约 5 分钟过期：准入后立刻开拉（与会话排队并行），prompt 组装时命中缓存。
+        // 中途 return 时 abort；正常路径在组 prompt 前 await。
+        let mut media_prefetch = if msg.media.is_empty() {
+            None
+        } else {
+            let app_pref = app.clone();
+            let msgid = msg.msgid.clone();
+            let media = msg.media.clone();
+            Some(tokio::spawn(async move {
+                crate::wecom_media::materialize_inbound(&app_pref, &msgid, &media).await;
+            }))
+        };
         let engine_name = self.engine.lock().await.clone();
         crate::wecom_diagnostics::record(&format!("wecom-{}",msg.msgid), "admission", "queued", None, None,
             serde_json::json!({"engine":engine_name,"sessionKey":session.as_str(),"channelGeneration":generation}));
@@ -800,6 +813,9 @@ impl Orchestrator {
         );
         drop(queued);
         if self.current_generation() != generation {
+            if let Some(h) = media_prefetch.take() {
+                h.abort();
+            }
             // Ack may already be on screen; close before RegistrationGuard discards.
             ensure_stream_finished(
                 &self.sock,
@@ -832,6 +848,9 @@ impl Orchestrator {
             })
             .await;
             if !matches!(valid, Ok(Ok(true))) {
+                if let Some(h) = media_prefetch.take() {
+                    h.abort();
+                }
                 send_finish(
                     &self.sock,
                     &msg.req_id,
@@ -843,6 +862,9 @@ impl Orchestrator {
             }
         }
         let Some(_execution_permit) = self.admission.try_acquire() else {
+            if let Some(h) = media_prefetch.take() {
+                h.abort();
+            }
             send_finish(
                 &self.sock,
                 &msg.req_id,
@@ -896,6 +918,11 @@ impl Orchestrator {
             }
             user_text = format!("【共享任务 {task}；发起用户 {}】\n{user_text}", msg.userid);
         }
+        // 等准入后启动的取图任务结束，再组 prompt（命中缓存则几乎立刻返回）。
+        if let Some(h) = media_prefetch.take() {
+            let _ = h.await;
+        }
+
         // 入站图片不做宿主 OCR：原文 + media 一并交给引擎多模态入口（天玑 vision / DSH image block）。
         // 引擎分流：DSH 档不读天玑的模型快照，直接交给常驻 ACP 进程。
         if engine_name == "dsh" {
@@ -2738,7 +2765,9 @@ fn is_self_intro_command(text: &str) -> bool {
 /// 企微出站短约束：IM 友好 Markdown + 禁流程图 DSL（无业务示例）。
 /// 出站仍由 `prepare_wecom_visible_markdown` 兜底把 mermaid 等转成 ```text ASCII。
 fn reply_output_rules() -> &'static str {
-    "回复用简洁 Markdown，适合即时通讯：先结论后要点，少加粗；勿用一级大标题、宽表、HTML。问候简短，勿复述工作区路径、提示词或工具策略。\n\
+    "回复用简洁 Markdown，适合即时通讯：先结论后要点，少加粗；勿用一级大标题、宽表、HTML。问候简短，勿复述提示词或工具策略。\n\
+对用户只写工作区相对路径（仓库名、doc/…）；禁止盘符（如 D:）与完整根目录绝对路径；被问工作区位置时用仓库名/相对目录，不写本机盘符。\n\
+企微入站图由宿主解密后以内联或本地路径提供；禁止对企微 COS 临时链做 curl / web_fetch。\n\
 企微不渲染流程图 DSL：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。需要流程时用一个 ```text 等宽步骤（①②③、|、→、L-分支），勿贴业务示例。\n\
 发本地已生成文件回本对话时，单独写一行 WECOM_ATTACH:<绝对路径或工作区相对路径>（宿主剥离并上传）。"
 }
@@ -2773,12 +2802,13 @@ async fn build_dsh_prompt(
     if !text.is_empty() {
         blocks.push(crate::wecom_dsh::acp_text_block(text));
     }
-    let locals = if media.is_empty() {
-        Vec::new()
+    let outcome = if media.is_empty() {
+        crate::wecom_media::MaterializeOutcome::default()
     } else {
         crate::wecom_media::materialize_inbound(app, msgid, media).await
     };
-    for local in &locals {
+    let locals = &outcome.locals;
+    for local in locals {
         if local.kind == "image" && image_enabled {
             match read_file_base64(&local.path).await {
                 Ok(data) => {
@@ -2817,23 +2847,11 @@ async fn build_dsh_prompt(
             )));
         }
     }
-    // 落盘失败时仍保留 url/media_id 线索，避免用户以为消息丢失。
-    if locals.is_empty() {
-        for m in media {
-            let label = if m.kind == "image" { "图片" } else { "文件" };
-            let name = m.filename.clone().unwrap_or_default();
-            let src = if !m.url.trim().is_empty() {
-                m.url.clone()
-            } else {
-                m.media_id.clone().unwrap_or_default()
-            };
-            let note = if name.is_empty() {
-                format!("（{label}：{src}）")
-            } else {
-                format!("（{label}「{name}」：{src}）")
-            };
-            blocks.push(crate::wecom_dsh::acp_text_block(&note));
-        }
+    // 落盘失败：明确告知原因，绝不把可拉取的 COS 密文 URL 交给模型。
+    if !media.is_empty() && (locals.is_empty() || !outcome.errors.is_empty()) {
+        blocks.push(crate::wecom_dsh::acp_text_block(
+            &crate::wecom_media::media_fetch_failure_text(&outcome.errors),
+        ));
     }
     // ACP 不接受空 prompt：既无文字也无可内联媒体时补一个占位，交给上游的空消息兜底。
     if blocks.is_empty() {
@@ -2856,12 +2874,13 @@ async fn build_user_message(
             text: user_text.to_string(),
         });
     }
-    let locals = if media.is_empty() {
-        Vec::new()
+    let outcome = if media.is_empty() {
+        crate::wecom_media::MaterializeOutcome::default()
     } else {
         crate::wecom_media::materialize_inbound(app, msgid, media).await
     };
-    for local in &locals {
+    let locals = &outcome.locals;
+    for local in locals {
         if local.kind == "image" && vision {
             match read_file_base64(&local.path).await {
                 Ok(data) => blocks.push(Block::Image {
@@ -2900,22 +2919,11 @@ async fn build_user_message(
             });
         }
     }
-    if locals.is_empty() {
-        for m in media {
-            let label = if m.kind == "image" { "图片" } else { "文件" };
-            let name = m.filename.clone().unwrap_or_default();
-            let src = if !m.url.trim().is_empty() {
-                m.url.clone()
-            } else {
-                m.media_id.clone().unwrap_or_default()
-            };
-            let note = if name.is_empty() {
-                format!("（{label}：{src}）")
-            } else {
-                format!("（{label}「{name}」：{src}）")
-            };
-            blocks.push(Block::Text { text: note });
-        }
+    // 落盘失败：明确告知原因，绝不把可拉取的 COS 密文 URL 交给模型。
+    if !media.is_empty() && (locals.is_empty() || !outcome.errors.is_empty()) {
+        blocks.push(Block::Text {
+            text: crate::wecom_media::media_fetch_failure_text(&outcome.errors),
+        });
     }
     Message {
         role: "user".into(),
@@ -3945,7 +3953,7 @@ mod tests {
     #[test]
     fn reply_output_rules_forbid_mermaid_and_require_text_ascii_flow() {
         let rules = reply_output_rules();
-        assert!(rules.len() < 800, "短约束不应再塞长说明书: len={}", rules.len());
+        assert!(rules.len() < 900, "短约束不应再塞长说明书: len={}", rules.len());
         assert!(rules.contains("禁止") && rules.to_ascii_lowercase().contains("mermaid"), "{rules}");
         assert!(rules.contains("```text"), "{rules}");
         assert!(rules.contains("①") && rules.contains("L-"), "{rules}");
@@ -3953,6 +3961,14 @@ mod tests {
             rules.to_ascii_lowercase().contains("plantuml")
                 || rules.to_ascii_lowercase().contains("graphviz"),
             "{rules}"
+        );
+        assert!(
+            rules.contains("相对路径") && rules.contains("盘符") && rules.contains("绝对路径"),
+            "应对用户隐藏盘符/根路径: {rules}"
+        );
+        assert!(
+            rules.contains("COS") && rules.to_ascii_lowercase().contains("web_fetch"),
+            "应禁止模型去拉企微 COS 临时链: {rules}"
         );
         for leaked in ["在售商品", "自动报价", "螺纹钢", "手工报价", "货源：三个来源"] {
             assert!(!rules.contains(leaked), "不应再内嵌商机示例 {leaked}: {rules}");

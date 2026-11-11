@@ -30,7 +30,7 @@ zip = "=2.2.0"
 calamine = "0.26"
 # PDF 文本层（扫描件不做 OCR）；与 zip 2.2 无冲突。
 lopdf = "0.34"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }

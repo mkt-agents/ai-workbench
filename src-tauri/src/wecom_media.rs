@@ -2,10 +2,12 @@
 //!
 //! 出站：图片走 inline base64（`aibot_respond_msg` 的 image.base64）；
 //! 文本文件直接贴回，二进制经 media/upload 拿 media_id（需业务 API 凭证）。
-//! 入站：回调 url 优先下载；长连接 `image/file.url` 返回密文，须用同条消息的
-//! `aeskey`（AES-256-CBC，IV=密钥前 16 字节，PKCS#7 按至多 32 字节去填充）解密后再落盘；
-//! 仅 media_id 时走 qyapi media/get（明文，需业务 API）。
-//! 素材落盘 `%APPDATA%\com.ai-workbench.app\wecom-media\<msgid>\`，mtime 超过 7 天回收。
+//! 入站：回调 url 优先经 rustls 下载（避开部分 Windows Schannel `SEC_E_NO_CREDENTIALS`）；
+//! 长连接 `image/file.url` 返回密文，须用同条消息的 `aeskey`（AES-256-CBC，IV=密钥前 16 字节，
+//! PKCS#7 按至多 32 字节去填充）解密后再落盘；URL 失败且已配业务 API 时可选回退
+//! `media/get`；仅 media_id 时走 qyapi media/get（明文，需业务 API）。
+//! 素材落盘 `%APPDATA%\com.ai-workbench.app\wecom-media\<msgid>\`，mtime 超过 7 天回收；
+//! 同一 msgid 短时缓存，供准入后预取与组 prompt 复用。
 
 use aes::Aes256;
 use base64::Engine;
@@ -13,15 +15,76 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Manager};
 
-use crate::wecom_channel::{OutTarget, WecomState};
+use crate::wecom_channel::{AppliedCreds, OutTarget, WecomState};
 use crate::wecom_proto::{self, MediaRef};
 
 const QYAPI: &str = "https://qyapi.weixin.qq.com/cgi-bin";
 const MEDIA_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const MAX_INBOUND_BYTES: usize = 12 * 1024 * 1024;
+
+/// 入站 COS 临时链走 rustls，避开部分 Windows Schannel 上的 SEC_E_NO_CREDENTIALS。
+fn rustls_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .use_rustls_tls()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// 同一 msgid 的落盘结果短时复用，避免排队后再下一次撞上 COS 过期。
+fn inbound_cache() -> &'static Mutex<HashMap<String, Vec<LocalMedia>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Vec<LocalMedia>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn biz_api_configured(creds: &AppliedCreds) -> bool {
+    matches!(
+        (creds.corp_id.as_deref(), creds.corp_secret.as_deref()),
+        (Some(id), Some(sec)) if !id.trim().is_empty() && !sec.trim().is_empty()
+    )
+}
+
+/// 把下载/TLS/过期错误收成可操作的中文提示（不逼用户必须配业务 API）。
+pub fn friendly_media_fetch_error(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("sec_e_no_credentials")
+        || lower.contains("schannel")
+        || (lower.contains("certificate") && lower.contains("tls"))
+        || lower.contains("native-tls")
+        || (lower.contains("tls")
+            && (lower.contains("handshake") || lower.contains("connector")))
+    {
+        return format!(
+            "{raw}。本机 TLS/代理可能拦截了企微图片下载；请检查系统时间、公司 HTTPS 代理，或稍后重发图片。"
+        );
+    }
+    if lower.contains("403")
+        || lower.contains("401")
+        || lower.contains("410")
+        || lower.contains("过期")
+        || lower.contains("expired")
+        || lower.contains("signature")
+    {
+        return format!("{raw}。临时下载链接可能已过期，请重新发送图片后再试。");
+    }
+    raw.to_string()
+}
+
+fn http_status_error(status: reqwest::StatusCode, body_hint: &str) -> String {
+    let code = status.as_u16();
+    if matches!(code, 401 | 403 | 410) {
+        format!("下载失败：HTTP {code}（临时链接可能已过期或无权限）{body_hint}")
+    } else {
+        format!("下载失败：HTTP {code}{body_hint}")
+    }
+}
 
 /// 入站媒体落盘后的本地引用。
 #[derive(Debug, Clone)]
@@ -179,14 +242,43 @@ async fn upload_media(app: &AppHandle, bytes: &[u8], media_type: &str) -> Result
         .ok_or_else(|| "media_id 缺失".into())
 }
 
-/// 把入站 MediaRef 拉到本地；url 优先，其次 media_id（需业务 API）。失败项跳过并记日志。
+/// 入站落盘结果：成功项 + 失败摘要（给模型/用户看，不含 COS URL）。
+#[derive(Debug, Clone, Default)]
+pub struct MaterializeOutcome {
+    pub locals: Vec<LocalMedia>,
+    pub errors: Vec<String>,
+}
+
+/// 模型可见的失败文案；永不嵌入 http(s) URL。
+pub fn media_fetch_failure_text(errors: &[String]) -> String {
+    if errors.is_empty() {
+        "[图片获取失败：下载或解密失败，请重发图片或粘贴文字]".into()
+    } else {
+        format!("[图片获取失败：{}]", errors.join("；"))
+    }
+}
+
+/// 把入站 MediaRef 拉到本地；url 优先（rustls），失败且已配业务 API 时可选 media/get。
+/// 同一 msgid 命中短时缓存则直接复用，避免二次下载。
 pub async fn materialize_inbound(
     app: &AppHandle,
     msgid: &str,
     media: &[MediaRef],
-) -> Vec<LocalMedia> {
+) -> MaterializeOutcome {
+    if media.is_empty() {
+        return MaterializeOutcome::default();
+    }
+    if let Ok(guard) = inbound_cache().lock() {
+        if let Some(cached) = guard.get(msgid) {
+            return MaterializeOutcome {
+                locals: cached.clone(),
+                errors: Vec::new(),
+            };
+        }
+    }
     let _ = cleanup_old_media();
     let mut out = Vec::new();
+    let mut errors = Vec::new();
     for (i, m) in media.iter().enumerate() {
         match fetch_inbound_bytes(app, m).await {
             Ok((bytes, media_type)) => {
@@ -202,19 +294,39 @@ pub async fn materialize_inbound(
                         filename: name,
                         media_type,
                     }),
-                    Err(e) => crate::wecom_log::write(
-                        "media-in",
-                        &format!("msgid={msgid} write failed: {e}"),
-                    ),
+                    Err(e) => {
+                        let tip = format!("写入失败：{e}");
+                        crate::wecom_log::write(
+                            "media-in",
+                            &format!("msgid={msgid} write failed: {tip}"),
+                        );
+                        errors.push(tip);
+                    }
                 }
             }
-            Err(e) => crate::wecom_log::write(
-                "media-in",
-                &format!("msgid={msgid} fetch failed: {e}"),
-            ),
+            Err(e) => {
+                let tip = friendly_media_fetch_error(&e);
+                crate::wecom_log::write(
+                    "media-in",
+                    &format!("msgid={msgid} fetch failed: {tip}"),
+                );
+                errors.push(tip);
+            }
         }
     }
-    out
+    if !out.is_empty() {
+        if let Ok(mut guard) = inbound_cache().lock() {
+            // 简单上限：超过 32 条按插入序不保证，清空再放本条，避免无限涨。
+            if guard.len() >= 32 {
+                guard.clear();
+            }
+            guard.insert(msgid.to_string(), out.clone());
+        }
+    }
+    MaterializeOutcome {
+        locals: out,
+        errors,
+    }
 }
 
 async fn fetch_inbound_bytes(
@@ -222,23 +334,40 @@ async fn fetch_inbound_bytes(
     m: &MediaRef,
 ) -> Result<(Vec<u8>, String), String> {
     if !m.url.trim().is_empty() {
-        let (raw, hinted) = download_url(m.url.trim()).await?;
-        let bytes = match m.aeskey.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            Some(key) => decrypt_wecom_media(&raw, key)?,
-            None => {
-                // 长连接图片几乎总带 aeskey；没有密钥却像密文时明确失败，避免把乱码当图喂模型。
-                if looks_like_image_magic(&raw) || m.kind != "image" {
-                    raw
-                } else {
-                    return Err(
-                        "入站图片缺少 aeskey，且下载内容不是可识别图片（长连接媒体需 AES 解密）"
-                            .into(),
-                    );
+        match download_and_decrypt_url(m).await {
+            Ok(v) => return Ok(v),
+            Err(url_err) => {
+                if let Some(id) = m
+                    .media_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    if biz_api_ready(app).await {
+                        match download_media_id(app, id).await {
+                            Ok(v) => {
+                                crate::wecom_log::write(
+                                    "media-in",
+                                    &format!(
+                                        "url failed ({}); fell back to media/get",
+                                        friendly_media_fetch_error(&url_err)
+                                    ),
+                                );
+                                return Ok(v);
+                            }
+                            Err(e) => {
+                                return Err(format!(
+                                    "{}；业务 API 回退也失败：{}",
+                                    friendly_media_fetch_error(&url_err),
+                                    friendly_media_fetch_error(&e)
+                                ));
+                            }
+                        }
+                    }
                 }
+                return Err(friendly_media_fetch_error(&url_err));
             }
-        };
-        let media_type = sniff_media_type(&bytes).unwrap_or(hinted);
-        return Ok((bytes, media_type));
+        }
     }
     let media_id = m
         .media_id
@@ -246,16 +375,46 @@ async fn fetch_inbound_bytes(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "媒体缺少 url 与 media_id".to_string())?;
-    download_media_id(app, media_id).await
+    download_media_id(app, media_id)
+        .await
+        .map_err(|e| friendly_media_fetch_error(&e))
+}
+
+async fn biz_api_ready(app: &AppHandle) -> bool {
+    let st = app.state::<WecomState>();
+    let Some(creds) = st.applied.lock().await.clone() else {
+        return false;
+    };
+    biz_api_configured(&creds)
+}
+
+async fn download_and_decrypt_url(m: &MediaRef) -> Result<(Vec<u8>, String), String> {
+    let (raw, hinted) = download_url(m.url.trim()).await?;
+    let bytes = match m.aeskey.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(key) => decrypt_wecom_media(&raw, key)?,
+        None => {
+            // 长连接图片几乎总带 aeskey；没有密钥却像密文时明确失败，避免把乱码当图喂模型。
+            if looks_like_image_magic(&raw) || m.kind != "image" {
+                raw
+            } else {
+                return Err(
+                    "入站图片缺少 aeskey，且下载内容不是可识别图片（长连接媒体需 AES 解密）"
+                        .into(),
+                );
+            }
+        }
+    };
+    let media_type = sniff_media_type(&bytes).unwrap_or(hinted);
+    Ok((bytes, media_type))
 }
 
 async fn download_url(url: &str) -> Result<(Vec<u8>, String), String> {
-    let resp = reqwest::Client::new()
+    let resp = rustls_client()
         .get(url)
-        .timeout(Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("下载失败：{e}"))?;
+    let status = resp.status();
     let media_type = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -266,6 +425,17 @@ async fn download_url(url: &str) -> Result<(Vec<u8>, String), String> {
         .unwrap_or("application/octet-stream")
         .trim()
         .to_string();
+    if !status.is_success() {
+        let body = resp.bytes().await.unwrap_or_default();
+        let hint = if body.is_empty() {
+            String::new()
+        } else {
+            let preview = String::from_utf8_lossy(&body);
+            let short: String = preview.chars().take(120).collect();
+            format!("：{short}")
+        };
+        return Err(http_status_error(status, &hint));
+    }
     let bytes = resp
         .bytes()
         .await
@@ -353,9 +523,8 @@ async fn download_media_id(app: &AppHandle, media_id: &str) -> Result<(Vec<u8>, 
     let creds = st.applied.lock().await.clone().ok_or("企微未连接")?;
     let token = crate::wecom_biz::access_token(&st, &creds).await?;
     let url = format!("{QYAPI}/media/get?access_token={token}&media_id={media_id}");
-    let resp = reqwest::Client::new()
+    let resp = rustls_client()
         .get(&url)
-        .timeout(Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("media/get 失败：{e}"))?;
@@ -626,5 +795,73 @@ mod tests {
             Some("image/png")
         );
         assert!(sniff_media_type(&[0xf8, 0xdc, 0x65, 0x8c]).is_none());
+    }
+
+    #[test]
+    fn media_fetch_failure_text_never_embeds_url() {
+        let empty = media_fetch_failure_text(&[]);
+        assert!(empty.contains("图片获取失败"), "{empty}");
+        assert!(!empty.to_ascii_lowercase().contains("http"), "{empty}");
+
+        let with_err = media_fetch_failure_text(&[
+            "下载失败：HTTP 403（临时链接可能已过期或无权限）".into(),
+        ]);
+        assert!(with_err.contains("图片获取失败"), "{with_err}");
+        assert!(with_err.contains("403"), "{with_err}");
+        assert!(
+            !with_err.contains("https://") && !with_err.contains("myqcloud"),
+            "不得把 COS URL 塞进失败提示: {with_err}"
+        );
+    }
+
+    #[test]
+    fn friendly_media_fetch_error_maps_tls_and_expiry() {
+        let tls = friendly_media_fetch_error(
+            "下载失败：error sending request for url: error trying to connect: SEC_E_NO_CREDENTIALS",
+        );
+        assert!(tls.contains("代理") || tls.contains("TLS"), "{tls}");
+        assert!(tls.contains("SEC_E_NO_CREDENTIALS"), "{tls}");
+
+        let expired = friendly_media_fetch_error("下载失败：HTTP 403（临时链接可能已过期或无权限）");
+        assert!(expired.contains("重新发送"), "{expired}");
+
+        assert_eq!(
+            friendly_media_fetch_error("媒体超过 12MB 上限"),
+            "媒体超过 12MB 上限"
+        );
+    }
+
+    #[test]
+    fn http_status_error_marks_auth_and_gone() {
+        let e = http_status_error(reqwest::StatusCode::FORBIDDEN, "");
+        assert!(e.contains("403"), "{e}");
+        assert!(e.contains("过期") || e.contains("无权限"), "{e}");
+        let e2 = http_status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "：oops");
+        assert!(e2.contains("500") && e2.contains("oops"), "{e2}");
+    }
+
+    #[test]
+    fn biz_api_configured_requires_both_fields() {
+        let empty = AppliedCreds {
+            bot_id: "b".into(),
+            secret: "s".into(),
+            corp_id: None,
+            corp_secret: None,
+        };
+        assert!(!biz_api_configured(&empty));
+        let partial = AppliedCreds {
+            bot_id: "b".into(),
+            secret: "s".into(),
+            corp_id: Some("ww".into()),
+            corp_secret: None,
+        };
+        assert!(!biz_api_configured(&partial));
+        let ok = AppliedCreds {
+            bot_id: "b".into(),
+            secret: "s".into(),
+            corp_id: Some("ww".into()),
+            corp_secret: Some("sec".into()),
+        };
+        assert!(biz_api_configured(&ok));
     }
 }
