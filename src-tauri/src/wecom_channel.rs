@@ -59,20 +59,30 @@ pub struct PendingApproval {
 
 /// 当前回合的企微出站目标（用于把媒体发回同一条对话流）。
 pub struct OutTarget {
+    pub bot_id: String,
     pub req_id: String,
     pub stream_id: String,
 }
 
-pub struct WecomState {
+/// 单个企微 bot 的运行时：独立长连接、编排器、DSH 与文档更新配置。
+pub struct BotRuntime {
     pub sock: Arc<WecomSocket>,
     pub orch: Arc<Orchestrator>,
-    /// 上次成功 apply 的 bot 凭据指纹，避免无变化反复踢线
     pub applied: Mutex<Option<AppliedCreds>>,
+    pub effective_config: Mutex<Option<crate::wecom_channel_config::ConfigSnapshot>>,
+    pub api_token: Mutex<Option<(String, Instant)>>,
+    pub dsh: Arc<DshEngine>,
+    pub docgen_dsh: Arc<DshEngine>,
+    pub skywalking: Arc<Mutex<(String, String)>>,
+    pub skywalking_timezone: Arc<Mutex<Option<i32>>>,
+    pub docgen: Mutex<crate::wecom_docgen::DocgenConfig>,
+}
+
+/// bot id → 运行时（仅 enabled 且 apply 成功的实例）。
+pub struct WecomState {
+  pub bots: Mutex<HashMap<String, Arc<BotRuntime>>>,
     /// Serializes validation + commit of channel configuration.
     pub apply_lock: Mutex<()>,
-    effective_config: Mutex<Option<crate::wecom_channel_config::ConfigSnapshot>>,
-    /// 业务 API（文档/日程/智能表格）的 access_token 缓存，避免每调一次都换 token
-    pub api_token: Mutex<Option<(String, Instant)>>,
     /// 企微内审批：审批码 -> 待决项
     pub pending_approvals: Mutex<HashMap<String, PendingApproval>>,
     /// 自增审批码序号
@@ -80,16 +90,6 @@ pub struct WecomState {
     /// 当前回合的出站目标（wecom_send_image/file 工具用）
     pub out_targets: Mutex<HashMap<String, OutTarget>>,
     pub approval_owners: Mutex<HashMap<String, ApprovalOwner>>,
-    /// DSH 引擎（常驻 `dsh --profile acp` 子进程）；天玑档时保持 Stopped。
-    pub dsh: Arc<DshEngine>,
-    /// 文档自动更新专用的 DSH 引擎：独立进程 + 独立会话文件，固定编辑档，
-    /// 与通道问答的引擎/档位互不影响；每轮跑完即停。
-    pub docgen_dsh: Arc<DshEngine>,
-    /// SkyWalking 排障：`(OAP 地址, 可选 "Key: Value" header)`，空地址 = 不下发 skywalking 工具。
-    pub skywalking: Mutex<(String, String)>,
-    pub skywalking_timezone: Mutex<Option<i32>>,
-    /// 逆向文档自动更新 + 群通知的配置快照（设置页下发）。
-    pub docgen: Mutex<crate::wecom_docgen::DocgenConfig>,
 }
 
 /// 审批码有效期（与 harness 的 APPROVAL_WAIT 对齐）
@@ -104,26 +104,118 @@ pub struct AppliedCreds {
     pub corp_secret: Option<String>,
 }
 
-impl WecomState {
-    pub fn new() -> Self {
+/// 将 bot id 消毒为文件系统安全片段（用于 DSH sessions / patch 文件名）。
+pub fn sanitize_bot_tag(bot_id: &str) -> String {
+    let s: String = bot_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() {
+        "default".into()
+    } else {
+        s
+    }
+}
+
+fn dsh_tags(bot_id: &str) -> (String, String) {
+    let slug = sanitize_bot_tag(bot_id);
+    (
+        format!("bot-{slug}"),
+        format!("docgen-{slug}"),
+    )
+}
+
+impl BotRuntime {
+    pub fn new(bot_id: &str) -> Self {
         let sock = Arc::new(WecomSocket::new());
-        let orch = Arc::new(Orchestrator::new(Arc::clone(&sock)));
+        let (channel_tag, docgen_tag) = dsh_tags(bot_id);
+        let dsh = Arc::new(DshEngine::with_tag(channel_tag));
+        let docgen_dsh = Arc::new(DshEngine::with_tag(docgen_tag));
+        let skywalking = Arc::new(Mutex::new((String::new(), String::new())));
+        let skywalking_timezone = Arc::new(Mutex::new(None));
+        let orch = Arc::new(Orchestrator::new(
+            Arc::clone(&sock),
+            Arc::clone(&dsh),
+            bot_id.to_string(),
+            Arc::clone(&skywalking),
+            Arc::clone(&skywalking_timezone),
+        ));
         Self {
             sock,
             orch,
             applied: Mutex::new(None),
-            apply_lock: Mutex::new(()),
             effective_config: Mutex::new(None),
             api_token: Mutex::new(None),
+            dsh,
+            docgen_dsh,
+            skywalking,
+            skywalking_timezone,
+            docgen: Mutex::new(crate::wecom_docgen::DocgenConfig::default()),
+        }
+    }
+}
+
+impl WecomState {
+    pub fn new() -> Self {
+        Self {
+            bots: Mutex::new(HashMap::new()),
+            apply_lock: Mutex::new(()),
             pending_approvals: Mutex::new(HashMap::new()),
             approval_seq: AtomicU32::new(0),
             out_targets: Mutex::new(HashMap::new()),
             approval_owners: Mutex::new(HashMap::new()),
-            dsh: Arc::new(DshEngine::new()),
-            docgen_dsh: Arc::new(DshEngine::with_tag("docgen")),
-            skywalking: Mutex::new((String::new(), String::new())),
-            skywalking_timezone: Mutex::new(None),
-            docgen: Mutex::new(crate::wecom_docgen::DocgenConfig::default()),
+        }
+    }
+
+    pub async fn bot(&self, bot_id: &str) -> Option<Arc<BotRuntime>> {
+        self.bots.lock().await.get(bot_id).cloned()
+    }
+
+    pub async fn bots_snapshot(&self) -> Vec<Arc<BotRuntime>> {
+        self.bots.lock().await.values().cloned().collect()
+    }
+
+    /// 任意已启用 bot（稳定顺序：按 id 排序）。
+    pub async fn first_bot(&self) -> Option<Arc<BotRuntime>> {
+        let mut ids: Vec<_> = self.bots.lock().await.keys().cloned().collect();
+        ids.sort();
+        for id in ids {
+            if let Some(b) = self.bot(&id).await {
+                if b.applied.lock().await.is_some() {
+                    return Some(b);
+                }
+            }
+        }
+        None
+    }
+
+    pub async fn resolve_bot_for_request(&self, request_id: &str) -> Option<Arc<BotRuntime>> {
+        let owner = self.approval_owners.lock().await.get(request_id).cloned()?;
+        self.bot(&owner.bot).await
+    }
+
+    pub fn any_skywalking_ready(bots: &[Arc<BotRuntime>]) -> bool {
+        bots.iter().any(|b| {
+            b.skywalking
+                .try_lock()
+                .map(|g| !g.0.trim().is_empty())
+                .unwrap_or(false)
+        })
+    }
+
+    /// 退出时杀掉所有 bot 的 DSH 子进程。
+    pub fn kill_all_dsh(&self) {
+        if let Ok(guard) = self.bots.try_lock() {
+            for bot in guard.values() {
+                bot.dsh.kill_now();
+                bot.docgen_dsh.kill_now();
+            }
         }
     }
 }
@@ -401,6 +493,25 @@ pub struct WecomStatus {
     pub waiting_jobs: usize,
     pub max_jobs: usize,
     pub shared_tasks: usize,
+    /// 在线 bot 数 / 已配置启用的 bot 总数（多实例聚合）。
+    pub bots_online: usize,
+    pub bots_total: usize,
+    /// 各 bot 运行态（设置页列表用）。
+    #[serde(default)]
+    pub bots: Vec<WecomBotRuntimeStatus>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WecomBotRuntimeStatus {
+    pub bot_id: String,
+    pub display_name: String,
+    pub state: String,
+    pub detail: String,
+    pub enabled: bool,
+    pub engine: String,
+    pub connected_ms: Option<u64>,
+    pub last_error: String,
 }
 
 /// 列 DSH 引擎可用模型（ACP `configOptions`）：设置页「DSH 模型」下拉用。
@@ -413,33 +524,38 @@ pub async fn wecom_dsh_models(
     state: State<'_, WecomState>,
     refresh: Option<bool>,
     scope: Option<String>,
+    bot_id: Option<String>,
 ) -> Result<crate::wecom_dsh::DshModelCatalog, String> {
-    let _lifecycle = state.orch.dsh_lifecycle.lock().await;
+    let bot = match bot_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(id) => state
+            .bot(id)
+            .await
+            .ok_or_else(|| format!("机器人 {id} 未配置"))?,
+        None => state
+            .first_bot()
+            .await
+            .ok_or_else(|| "请先启用并保存企微通道".to_string())?,
+    };
+    let _lifecycle = bot.orch.dsh_lifecycle.lock().await;
     let (engine, stop_after) = if scope.as_deref() == Some("docgen") {
-        // 逆向工程页与通道解耦：docgen 配置走 wecom_docgen_apply 独立保存，
-        // 不要求企微通道启用过；没配工作区时 ensure_ready 自会给出可操作文案。
-        let docgen_engine = Arc::clone(&state.docgen_dsh);
+        let docgen_engine = Arc::clone(&bot.docgen_dsh);
         match docgen_engine.ensure_ready().await {
             Ok(()) => (docgen_engine, true),
             Err(err) => {
-                // docgen 工作区没配好 / 路径不存在时拉不起进程。列模型本身不依赖工作区
-                // （目录来自 DSH 的配置文件），回落到通道实例取同一份目录——但只在通道
-                // 已经就绪时借道，绝不替用户把通道 DSH 拉起来。
-                let channel_engine = Arc::clone(&state.dsh);
+                let channel_engine = Arc::clone(&bot.dsh);
                 let st = channel_engine.status().await;
                 if st.state == "ready" {
                     (channel_engine, false)
                 } else {
-                    // 通道没就绪就把 docgen 的原始错误透出（指引去配工作区）
                     return Err(err);
                 }
             }
         }
     } else {
-        if state.applied.lock().await.is_none() || *state.orch.engine.lock().await != "dsh" {
+        if bot.applied.lock().await.is_none() || *bot.orch.engine.lock().await != "dsh" {
             return Err("请先启用并保存 DSH 企微通道，再读取模型目录".into());
         }
-        (Arc::clone(&state.dsh), false)
+        (Arc::clone(&bot.dsh), false)
     };
     let catalog = engine.models(refresh.unwrap_or(false)).await;
     // 文档更新那套引擎平时不常驻：只是设置页要看列表，列完就关，别留一个 node 吃内存。
@@ -455,29 +571,42 @@ pub async fn wecom_dsh_models(
 pub async fn wecom_dsh_sync(
     app: AppHandle,
     state: State<'_, WecomState>,
+    bot_id: Option<String>,
 ) -> Result<crate::wecom_dsh_profile::MirrorReport, String> {
     let _apply = state.apply_lock.lock().await;
-    let creds = state.applied.lock().await.clone().ok_or("请先启用 DSH 企微通道")?;
-    if *state.orch.engine.lock().await != "dsh" { return Err("请先切换到 DSH 引擎".into()); }
-    retire_channel(&state, "sync", "profile_sync", &[]).await;
-    let result = {
-        let _lifecycle = state.orch.dsh_lifecycle.lock().await;
-        state.dsh.stop().await;
-        state.dsh.sync_profile().await
+    let runtime = match bot_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(id) => state.bot(id).await.ok_or_else(|| format!("机器人 {id} 未配置"))?,
+        None => state.first_bot().await.ok_or("请先启用 DSH 企微通道")?,
     };
-    // Restore the configured channel even if mirroring failed; no late destructive restart.
-    start_channel(&app, &state, &creds).await?;
-    kick_dsh(&app);
+    let creds = runtime.applied.lock().await.clone().ok_or("请先启用 DSH 企微通道")?;
+    if *runtime.orch.engine.lock().await != "dsh" {
+        return Err("请先切换到 DSH 引擎".into());
+    }
+    retire_channel(&state, &runtime, "sync", "profile_sync", &[]).await;
+    let result = {
+        let _lifecycle = runtime.orch.dsh_lifecycle.lock().await;
+        runtime.dsh.stop().await;
+        runtime.dsh.sync_profile().await
+    };
+    start_channel(&app, &runtime, &creds).await?;
+    kick_dsh(&app, &runtime);
     result
 }
 
 /// 连通自检：校验 release 分支是否存在、webhook 是否可达、SkyWalking 是否可查。
 /// 返回一段人类可读的多行结果（每项一行，✅/⚠️/❌）。设置页「测试连通」按钮用。
 #[tauri::command]
-pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, String> {
+pub async fn wecom_docgen_test(
+    state: State<'_, WecomState>,
+    bot_id: Option<String>,
+) -> Result<String, String> {
+    let runtime = match bot_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(id) => state.bot(id).await.ok_or_else(|| format!("机器人 {id} 未配置"))?,
+        None => state.first_bot().await.ok_or("请先配置企微通道")?,
+    };
     let (cfg, sky) = {
-        let docgen = state.docgen.lock().await.clone();
-        let sky = state.skywalking.lock().await.clone();
+        let docgen = runtime.docgen.lock().await.clone();
+        let sky = runtime.skywalking.lock().await.clone();
         (docgen, sky)
     };
     let mut lines: Vec<String> = Vec::new();
@@ -587,7 +716,7 @@ pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, S
     if sky.0.trim().is_empty() {
         lines.push("ℹ️ 未配置 SkyWalking（线上排障不启用）".into());
     } else {
-        let offset = *state.skywalking_timezone.lock().await;
+        let offset = *runtime.skywalking_timezone.lock().await;
         let mut probe = serde_json::json!({ "keyword": "", "minutes": 5 });
         if let Some(offset) = offset {
             probe["timezone_offset_minutes"] = serde_json::json!(offset);
@@ -628,14 +757,19 @@ pub async fn wecom_docgen_test(state: State<'_, WecomState>) -> Result<String, S
 pub async fn wecom_docgen_run_now(
     app: AppHandle,
     state: State<'_, WecomState>,
+    bot_id: Option<String>,
 ) -> Result<String, String> {
-    let cfg = state.docgen.lock().await.clone();
+    let runtime = match bot_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(id) => state.bot(id).await.ok_or_else(|| format!("机器人 {id} 未配置"))?,
+        None => state.first_bot().await.ok_or("请先配置企微通道")?,
+    };
+    let cfg = runtime.docgen.lock().await.clone();
     if cfg.workspace.trim().is_empty() {
         return Err(
             "请先在「逆向工程 → 内容来源 · 仓库与目录」里填写更新工作区（即逆向文档所在的 Git 仓库）".into(),
         );
     }
-    let report = crate::wecom_docgen::run_update(&app, &cfg).await?;
+    let report = crate::wecom_docgen::run_update(&app, &cfg, Some(&runtime)).await?;
     if let Some(reason) = report.skipped_reason {
         return Ok(format!("已跳过：{reason}"));
     }
@@ -739,6 +873,7 @@ pub struct DocgenApplyRequest {
 pub async fn wecom_docgen_apply(
     state: State<'_, WecomState>,
     req: DocgenApplyRequest,
+    bot_id: Option<String>,
 ) -> Result<(), String> {
     let decode = |raw: &str, label: &str| -> Result<String, String> {
         let t = raw.trim();
@@ -747,12 +882,16 @@ pub async fn wecom_docgen_apply(
         }
         crate::secret_protect::unprotect_secret(t).map_err(|_| format!("{label}解密失败"))
     };
-    let channel_engine = state.orch.engine.lock().await.clone();
+    let runtime = match bot_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(id) => state.bot(id).await.ok_or_else(|| format!("机器人 {id} 未配置"))?,
+        None => state.first_bot().await.ok_or("请先配置企微通道")?,
+    };
+    let channel_engine = runtime.orch.engine.lock().await.clone();
     // 工作区留空时不动已有的（前端已经解析过「跟随回答设置」，这里空只可能是都没配）。
     let workspace = {
         let raw = req.repo_path.trim();
         if raw.is_empty() {
-            state.docgen.lock().await.workspace.clone()
+            runtime.docgen.lock().await.workspace.clone()
         } else {
             raw.to_string()
         }
@@ -784,7 +923,7 @@ pub async fn wecom_docgen_apply(
     };
     // 文档更新那套 DSH 引擎也在这里对齐（模型/思考强度留空表示沿用，前端已解析）。
     if docgen.uses_dsh() && !docgen.workspace.trim().is_empty() {
-        let _ = state
+        let _ = runtime
             .docgen_dsh
             .configure(
                 crate::wecom_dsh::Tier::Workspace,
@@ -793,9 +932,9 @@ pub async fn wecom_docgen_apply(
                 req.dsh_effort.trim().to_string(),
             )
             .await;
-        state.docgen_dsh.set_mcp(Vec::new()).await;
+        runtime.docgen_dsh.set_mcp(Vec::new()).await;
     }
-    *state.docgen.lock().await = docgen;
+    *runtime.docgen.lock().await = docgen;
     crate::wecom_log::write("docgen", "config applied from reverse-doc page");
     Ok(())
 }
@@ -873,25 +1012,96 @@ pub async fn wecom_channel_status(
     app: AppHandle,
     state: State<'_, WecomState>,
 ) -> Result<WecomStatus, String> {
-    let bot = state
-        .applied
-        .lock()
-        .await
-        .as_ref()
-        .map(|c| c.bot_id.clone())
-        .unwrap_or_default();
+    let bots = state.bots_snapshot().await;
+    let online: Vec<_> = {
+        let mut out = Vec::new();
+        for b in &bots {
+            if b.applied.lock().await.is_some() {
+                let (s, _) = b.sock.status().await;
+                if s == "connected" || s == "connecting" {
+                    out.push(b.clone());
+                }
+            }
+        }
+        out
+    };
+    let mut bots_total = 0usize;
+    let mut bot_ids: Vec<String> = Vec::new();
+    for b in &bots {
+        if let Some(creds) = b.applied.lock().await.as_ref() {
+            bots_total += 1;
+            bot_ids.push(creds.bot_id.clone());
+        }
+    }
+    let bots_online = online.len();
+    let primary = online.first().or(bots.first());
+    let (s, mut detail) = if let Some(b) = primary {
+        b.sock.status().await
+    } else {
+        ("stopped".into(), "未启用任何机器人".into())
+    };
+    if bots_total > 1 {
+        detail = format!("{detail}（在线 {bots_online}/{bots_total}）");
+    }
+    let (last_error, connected_ms) = if let Some(b) = primary {
+        b.sock.detail().await
+    } else {
+        (String::new(), None)
+    };
+    let enabled = bots_total > 0;
+    let engine = if let Some(b) = primary {
+        b.orch.engine.lock().await.clone()
+    } else {
+        "tianji".into()
+    };
+    let dsh = if let Some(b) = primary {
+        b.dsh.status().await
+    } else {
+        DshEngine::new().status().await
+    };
+    let mut active_jobs = 0usize;
+    let mut waiting_jobs = 0usize;
+    let mut max_jobs = 0usize;
+    let mut bot_statuses: Vec<WecomBotRuntimeStatus> = Vec::new();
+    for b in &bots {
+        active_jobs += b.orch.admission.active();
+        waiting_jobs += b.orch.admission.waiting();
+        max_jobs = max_jobs.max(b.orch.admission.limit());
+        let enabled_bot = b.applied.lock().await.is_some();
+        let bot_id = b
+            .applied
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.bot_id.clone())
+            .unwrap_or_default();
+        let (st, det) = b.sock.status().await;
+        let (err, cms) = b.sock.detail().await;
+        let eng = b.orch.engine.lock().await.clone();
+        let name = b.orch.bot_display_name.lock().await.clone();
+        bot_statuses.push(WecomBotRuntimeStatus {
+            bot_id,
+            display_name: name,
+            state: st,
+            detail: det,
+            enabled: enabled_bot,
+            engine: eng,
+            connected_ms: cms,
+            last_error: err,
+        });
+    }
     let db = app.state::<crate::DbState>().conn.clone();
     let shared_tasks = tokio::task::spawn_blocking(move || {
         let c = db.lock().map_err(|_| "task db lock".to_string())?;
-        crate::wecom_tasks::active_count(&c, &bot, chrono::Utc::now().timestamp_millis())
+        let ts = chrono::Utc::now().timestamp_millis();
+        let mut total = 0usize;
+        for id in &bot_ids {
+            total += crate::wecom_tasks::active_count(&c, id, ts)?;
+        }
+        Ok::<usize, String>(total)
     })
     .await
     .map_err(|e| e.to_string())??;
-    let (s, detail) = state.sock.status().await;
-    let (last_error, connected_ms) = state.sock.detail().await;
-    let enabled = state.applied.lock().await.is_some();
-    let engine = state.orch.engine.lock().await.clone();
-    let dsh = state.dsh.status().await;
     Ok(WecomStatus {
         state: s,
         detail,
@@ -913,28 +1123,91 @@ pub async fn wecom_channel_status(
         last_investigation: crate::wecom_investigation::last_diagnostic(),
         last_performance: crate::wecom_performance::latest(),
         last_cross_query: crate::wecom_cross_query::last_diagnostic(),
-        active_jobs: state.orch.admission.active(),
-        waiting_jobs: state.orch.admission.waiting(),
-        max_jobs: state.orch.admission.limit(),
+        active_jobs,
+        waiting_jobs,
+        max_jobs,
         shared_tasks,
+        bots_online,
+        bots_total,
+        bots: bot_statuses,
     })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WecomApplyBotsRequest {
+    #[serde(default)]
+    pub bots: Vec<WecomApplyRequest>,
 }
 
 #[tauri::command]
 pub async fn wecom_channel_apply(
     app: AppHandle,
     state: State<'_, WecomState>,
-    req: WecomApplyRequest,
+    bots: Option<Vec<WecomApplyRequest>>,
+    req: Option<WecomApplyRequest>,
 ) -> Result<WecomStatus, String> {
     let _apply = state.apply_lock.lock().await;
+    let mut requests: Vec<WecomApplyRequest> = bots.unwrap_or_default();
+    if requests.is_empty() {
+        if let Some(r) = req {
+            requests.push(r);
+        }
+    }
+    if requests.is_empty() {
+        return Err("请提供 bots 配置".into());
+    }
+    let enabled_ids: std::collections::HashSet<String> = requests
+        .iter()
+        .filter(|r| r.enabled)
+        .map(|r| r.bot_id.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let to_stop: Vec<String> = state
+        .bots
+        .lock()
+        .await
+        .keys()
+        .filter(|id| !enabled_ids.contains(*id))
+        .cloned()
+        .collect();
+    for id in to_stop {
+        if let Some(rt) = state.bot(&id).await {
+            retire_channel(&state, &rt, "apply", "bot_removed", &[]).await;
+            rt.dsh.stop().await;
+            rt.docgen_dsh.stop().await;
+            *rt.applied.lock().await = None;
+        }
+        state.bots.lock().await.remove(&id);
+    }
+    for raw in requests {
+        apply_one_bot(&app, &state, raw).await?;
+    }
+    let st = wecom_channel_status(app.clone(), app.state::<WecomState>()).await?;
+    emit_status(&app, &st);
+    Ok(st)
+}
+
+async fn apply_one_bot(
+    app: &AppHandle,
+    state: &WecomState,
+    raw_req: WecomApplyRequest,
+) -> Result<(), String> {
     let req = crate::wecom_channel_config::normalize_request(
-        req, crate::secret_protect::unprotect_secret,
+        raw_req, crate::secret_protect::unprotect_secret,
     )?;
+    let bot_id = req.bot_id.trim().to_string();
+    let runtime = {
+        let mut map = state.bots.lock().await;
+        map.entry(bot_id.clone())
+            .or_insert_with(|| Arc::new(BotRuntime::new(&bot_id)))
+            .clone()
+    };
     let mut effective = crate::wecom_channel_config::snapshot(&req);
     // Pairing is also changed by live chat/admin commands. Compare the effective
     // union, not a delayed frontend mirror; preserve the existing additive merge.
-    let paired = state.orch.policy.lock().await.paired_users.clone();
-    let mut previous = state.effective_config.lock().await.clone();
+    let paired = runtime.orch.policy.lock().await.paired_users.clone();
+    let mut previous = runtime.effective_config.lock().await.clone();
     if let Some(previous) = previous.as_mut() {
         previous.set_paired_users(&paired);
     }
@@ -978,19 +1251,19 @@ pub async fn wecom_channel_apply(
         }
     }
     if delta.changed.is_empty() {
-        record_transition(&state, "apply", "noop", &delta.changed);
-        return wecom_channel_status(app.clone(), app.state::<WecomState>()).await;
+        record_transition(&runtime, "apply", "noop", &delta.changed);
+        return Ok(());
     }
     if delta.retire {
-        retire_channel(&state, "apply", "channel_changed", &delta.changed).await;
+        retire_channel(state, &runtime, "apply", "channel_changed", &delta.changed).await;
     } else {
-        record_transition(&state, "apply", "hot_update", &delta.changed);
+        record_transition(&runtime, "apply", "hot_update", &delta.changed);
     }
-    let _lifecycle = state.orch.dsh_lifecycle.lock().await;
+    let _lifecycle = runtime.orch.dsh_lifecycle.lock().await;
 
     // 更新策略与 agent 配置
     {
-        let mut policy = state.orch.policy.lock().await;
+        let mut policy = runtime.orch.policy.lock().await;
         policy.dm_policy = DmPolicy::parse(&req.dm_policy);
         policy.group_policy = GroupPolicy::parse(&req.group_policy);
         policy.require_mention = req.require_mention;
@@ -1015,10 +1288,10 @@ pub async fn wecom_channel_apply(
         }
     }
     {
-        *state.orch.bot_display_name.lock().await = req.bot_display_name.trim().to_string();
+        *runtime.orch.bot_display_name.lock().await = req.bot_display_name.trim().to_string();
     }
     // Already normalized once, including the 2000 Unicode-character budget.
-    *state.orch.self_intro.lock().await = req.self_intro.clone();
+    *runtime.orch.self_intro.lock().await = req.self_intro.clone();
     // 引擎与档位在 agent 被 move 之前取出来：DSH 档不需要天玑的模型快照。
     let engine = normalize_engine(&req.engine);
     let tier = if req.permission.trim().is_empty() {
@@ -1049,10 +1322,10 @@ pub async fn wecom_channel_apply(
     };
     // DSH 档随会话下发的 MCP 服务：从 agent 配置里取（总开关关掉则不带）。
     let dsh_mcp = effective_mcp(req.mcp, req.mcp_enabled, req.agent.as_ref());
-    *state.orch.agent.lock().await = req.agent;
-    *state.orch.engine.lock().await = engine.clone();
+    *runtime.orch.agent.lock().await = req.agent;
+    *runtime.orch.engine.lock().await = engine.clone();
     // 全局并发上限（0/越界在 set_max_jobs 内回落默认）。
-    state.orch.set_max_jobs(req.max_jobs);
+    runtime.orch.set_max_jobs(req.max_jobs);
 
     // Changing query namespace invalidates short-lived investigation cursors,
     // including switching back. Tianji must not compare its path to stale DSH state.
@@ -1060,21 +1333,21 @@ pub async fn wecom_channel_apply(
         crate::wecom_investigation::clear_contexts();
     }
     // SkyWalking 排障地址（空 = 问答时不下发 skywalking 工具）。
-    *state.skywalking.lock().await = (
+    *runtime.skywalking.lock().await = (
         req.skywalking_addr.trim().to_string(),
         req.skywalking_header.trim().to_string(),
     );
 
-    *state.skywalking_timezone.lock().await = req.skywalking_timezone_offset_minutes;
+    *runtime.skywalking_timezone.lock().await = req.skywalking_timezone_offset_minutes;
 
     // 问答模式写进 orchestrator 的 agent 配置副本里（供 run_agent_and_stream 读）。
     {
-        let mut g = state.orch.answer_mode.lock().await;
+        let mut g = runtime.orch.answer_mode.lock().await;
         *g = normalize_answer_mode(&req.answer_mode);
     }
     {
         let d = req.doc_dir.trim();
-        *state.orch.doc_dir.lock().await = if d.is_empty() {
+        *runtime.orch.doc_dir.lock().await = if d.is_empty() {
             "doc".into()
         } else {
             d.to_string()
@@ -1086,10 +1359,10 @@ pub async fn wecom_channel_apply(
         };
         let dm_text = clip(&req.enhance_dm);
         let group_text = clip(&req.enhance_group);
-        *state.orch.enhance_dm_enabled.lock().await = req.enhance_dm_enabled;
-        *state.orch.enhance_group_enabled.lock().await = req.enhance_group_enabled;
-        *state.orch.enhance_dm.lock().await = dm_text.clone();
-        *state.orch.enhance_group.lock().await = group_text.clone();
+        *runtime.orch.enhance_dm_enabled.lock().await = req.enhance_dm_enabled;
+        *runtime.orch.enhance_group_enabled.lock().await = req.enhance_group_enabled;
+        *runtime.orch.enhance_dm.lock().await = dm_text.clone();
+        *runtime.orch.enhance_group.lock().await = group_text.clone();
         crate::wecom_log::write(
             "enhance",
             &format!(
@@ -1103,7 +1376,7 @@ pub async fn wecom_channel_apply(
     }
 
     // Webhooks were decoded during validation, before any retirement/mutation.
-    *state.docgen.lock().await = crate::wecom_docgen::DocgenConfig {
+    *runtime.docgen.lock().await = crate::wecom_docgen::DocgenConfig {
         enabled: req.auto_update_enabled,
         time: req.auto_update_time.trim().to_string(),
         cron: req.docgen_cron.trim().to_string(),
@@ -1155,7 +1428,7 @@ pub async fn wecom_channel_apply(
             v.to_string()
         }
     };
-    let _ = state
+    let _ = runtime
         .docgen_dsh
         .configure(
             crate::wecom_dsh::Tier::Workspace,
@@ -1164,25 +1437,22 @@ pub async fn wecom_channel_apply(
             docgen_dsh_effort,
         )
         .await;
-    state.docgen_dsh.set_mcp(Vec::new()).await;
+    runtime.docgen_dsh.set_mcp(Vec::new()).await;
 
     if !req.enabled {
         if delta.retire {
-            state.dsh.stop().await;
-            state.docgen_dsh.stop().await;
+            runtime.dsh.stop().await;
+            runtime.docgen_dsh.stop().await;
         }
-        *state.applied.lock().await = None;
-        *state.api_token.lock().await = None;
-        *state.effective_config.lock().await = Some(effective);
-        let st = wecom_channel_status(app.clone(), app.state::<WecomState>()).await?;
-        emit_status(&app, &st);
-        return Ok(st);
+        *runtime.applied.lock().await = None;
+        *runtime.api_token.lock().await = None;
+        *runtime.effective_config.lock().await = Some(effective);
+        return Ok(());
     }
 
-    let bot_id = req.bot_id.trim().to_string();
     if engine == "dsh" {
         // All synchronous validation happened before retiring the previous generation.
-        let _changed = state
+        let _changed = runtime
             .dsh
             .configure(
                 Tier::parse(&tier),
@@ -1192,12 +1462,12 @@ pub async fn wecom_channel_apply(
             )
             .await;
         // MCP 服务随会话下发（ACP mcpServers）；总开关关掉时 dsh_mcp 为空。
-        state.dsh.set_mcp(dsh_mcp).await;
+        runtime.dsh.set_mcp(dsh_mcp).await;
         // configure/set_mcp retire only tier/workspace/MCP changes; model/effort
         // clear selection caches for later turns without cancelling active work.
     } else {
         // Retire DSH while holding the lifecycle gate, before accepting Tianji work.
-        state.dsh.stop().await;
+        runtime.dsh.stop().await;
     }
 
     let corp_id = req.corp_id.trim().to_string();
@@ -1215,73 +1485,88 @@ pub async fn wecom_channel_apply(
             Some(corp_secret)
         },
     };
-    let corp_changed = state.applied.lock().await.as_ref()
+    let corp_changed = runtime.applied.lock().await.as_ref()
         .map(|old| (&old.corp_id, &old.corp_secret) != (&creds.corp_id, &creds.corp_secret))
         .unwrap_or(true);
     if corp_changed {
-        *state.api_token.lock().await = None;
+        *runtime.api_token.lock().await = None;
     }
     // Hot updates preserve the socket, active turns, approvals and generation.
     if delta.retire {
-        start_channel(&app, &state, &creds).await?;
+        start_channel(app, &runtime, &creds).await?;
     }
-    *state.applied.lock().await = Some(creds);
+    *runtime.applied.lock().await = Some(creds);
     if engine == "dsh" {
-        kick_dsh(&app);
+        kick_dsh(app, &runtime);
     }
 
-    *state.effective_config.lock().await = Some(effective);
-    // Only a replacement connection needs time to publish Connecting/Connected.
-    if delta.retire {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    }
-    let st = wecom_channel_status(app.clone(), app.state::<WecomState>()).await?;
-    emit_status(&app, &st);
-    Ok(st)
+    *runtime.effective_config.lock().await = Some(effective);
+    Ok(())
 }
 
-fn record_transition(state: &WecomState, source: &str, status: &str, changed: &[&str]) {
+fn record_transition(runtime: &BotRuntime, source: &str, status: &str, changed: &[&str]) {
     crate::wecom_diagnostics::record(
         "wecom-channel", "channel_transition", status, None, None,
         serde_json::json!({"source": source,
-            "channelGeneration": state.orch.current_generation(),
+            "channelGeneration": runtime.orch.current_generation(),
             "changedFields": changed, "changedCount": changed.len()}),
     );
 }
 
 /// Caller holds apply_lock. Finish on the old socket before closing transport.
-async fn retire_channel(state: &WecomState, source: &str, reason: &str, changed: &[&str]) {
-    state.orch.retire(reason).await;
-    record_transition(state, source, "retired", changed);
-    state.sock.stop().await;
-    state.pending_approvals.lock().await.clear();
+async fn retire_channel(
+    state: &WecomState,
+    runtime: &Arc<BotRuntime>,
+    source: &str,
+    reason: &str,
+    changed: &[&str],
+) {
+    runtime.orch.retire(reason).await;
+    record_transition(runtime, source, "retired", changed);
+    runtime.sock.stop().await;
+    let bot_id = runtime
+        .applied
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.bot_id.clone())
+        .unwrap_or_default();
+    state
+        .pending_approvals
+        .lock()
+        .await
+        .retain(|_, p| p.owner.bot != bot_id);
 }
 
-async fn start_channel(app: &AppHandle, state: &WecomState, creds: &AppliedCreds) -> Result<(), String> {
-    let orch = Arc::clone(&state.orch);
+async fn start_channel(
+    app: &AppHandle,
+    runtime: &Arc<BotRuntime>,
+    creds: &AppliedCreds,
+) -> Result<(), String> {
+    let orch = Arc::clone(&runtime.orch);
     let app_msg = app.clone();
     let on_msg = Arc::new(move |msg| orch.handle_msg(app_msg.clone(), msg));
-    let orch = Arc::clone(&state.orch);
+    let orch = Arc::clone(&runtime.orch);
     let app_ev = app.clone();
     let on_event = Arc::new(move |ev| orch.handle_event(app_ev.clone(), ev));
     // Publish credentials before callbacks can consume business API credentials.
-    *state.applied.lock().await = Some(creds.clone());
-    state.orch.resume_ingress();
-    if let Err(error) = state.sock.start(
+    *runtime.applied.lock().await = Some(creds.clone());
+    runtime.orch.resume_ingress();
+    if let Err(error) = runtime.sock.start(
         app.clone(), creds.bot_id.clone(), creds.secret.clone(), on_msg, on_event,
     ).await {
-        *state.applied.lock().await = None;
-        *state.effective_config.lock().await = None; // retry must not become a no-op
-        *state.api_token.lock().await = None;
+        *runtime.applied.lock().await = None;
+        *runtime.effective_config.lock().await = None; // retry must not become a no-op
+        *runtime.api_token.lock().await = None;
         return Err(error);
     }
     Ok(())
 }
 
 /// Idempotent background startup only. Destructive retirement must finish before ingress reopens.
-fn kick_dsh(app: &AppHandle) {
-    let dsh = Arc::clone(&app.state::<WecomState>().dsh);
-    let orch = Arc::clone(&app.state::<WecomState>().orch);
+fn kick_dsh(app: &AppHandle, runtime: &Arc<BotRuntime>) {
+    let dsh = Arc::clone(&runtime.dsh);
+    let orch = Arc::clone(&runtime.orch);
     let generation = orch.current_generation();
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1304,26 +1589,29 @@ pub async fn wecom_channel_restart(
     state: State<'_, WecomState>,
 ) -> Result<WecomStatus, String> {
     let _apply = state.apply_lock.lock().await;
-    let creds = state
-        .applied
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "通道未启用".to_string())?;
-    retire_channel(&state, "restart", "channel_restart", &[]).await;
-    let engine = state.orch.engine.lock().await.clone();
-    if engine == "dsh" {
-        {
-            let _lifecycle = state.orch.dsh_lifecycle.lock().await;
-            state.dsh.stop().await;
+    let bots = state.bots_snapshot().await;
+    let mut any = false;
+    for runtime in bots {
+        let creds = match runtime.applied.lock().await.clone() {
+            Some(c) => c,
+            None => continue,
+        };
+        any = true;
+        retire_channel(&state, &runtime, "restart", "channel_restart", &[]).await;
+        let engine = runtime.orch.engine.lock().await.clone();
+        if engine == "dsh" {
+            let _lifecycle = runtime.orch.dsh_lifecycle.lock().await;
+            runtime.dsh.stop().await;
         }
+        start_channel(&app, &runtime, &creds).await?;
+        if engine == "dsh" {
+            kick_dsh(&app, &runtime);
+        }
+        *runtime.applied.lock().await = Some(creds);
     }
-    start_channel(&app, &state, &creds).await?;
-    if engine == "dsh" {
-        kick_dsh(&app);
+    if !any {
+        return Err("通道未启用".into());
     }
-    *state.applied.lock().await = Some(creds);
-
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     let st = wecom_channel_status(app.clone(), app.state::<WecomState>()).await?;
     emit_status(&app, &st);
@@ -1333,17 +1621,17 @@ pub async fn wecom_channel_restart(
 pub async fn wecom_pairing_list(
     state: State<'_, WecomState>,
 ) -> Result<Vec<WecomPairingView>, String> {
-    let mut policy = state.orch.policy.lock().await;
-    policy.prune_pending();
-    Ok(policy
-        .pending
-        .iter()
-        .map(|p| WecomPairingView {
+    let mut out = Vec::new();
+    for b in state.bots_snapshot().await {
+        let mut policy = b.orch.policy.lock().await;
+        policy.prune_pending();
+        out.extend(policy.pending.iter().map(|p| WecomPairingView {
             userid: p.userid.clone(),
             code: p.code.clone(),
             created_ms: p.created_ms,
-        })
-        .collect())
+        }));
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -1351,8 +1639,13 @@ pub async fn wecom_pairing_approve(
     state: State<'_, WecomState>,
     code: String,
 ) -> Result<String, String> {
-    let mut policy = state.orch.policy.lock().await;
-    policy.approve_pair(&code)
+    for b in state.bots_snapshot().await {
+        let mut policy = b.orch.policy.lock().await;
+        if let Ok(msg) = policy.approve_pair(&code) {
+            return Ok(msg);
+        }
+    }
+    Err("未找到该配对码".into())
 }
 
 #[tauri::command]
@@ -1360,15 +1653,23 @@ pub async fn wecom_pairing_revoke(
     state: State<'_, WecomState>,
     userid: String,
 ) -> Result<(), String> {
-    let mut policy = state.orch.policy.lock().await;
-    policy.revoke_user(userid.trim());
+    for b in state.bots_snapshot().await {
+        let mut policy = b.orch.policy.lock().await;
+        policy.revoke_user(userid.trim());
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn wecom_paired_users(state: State<'_, WecomState>) -> Result<Vec<String>, String> {
-    let policy = state.orch.policy.lock().await;
-    Ok(policy.paired_users.clone())
+    let mut seen = std::collections::BTreeSet::new();
+    for b in state.bots_snapshot().await {
+        let policy = b.orch.policy.lock().await;
+        for u in &policy.paired_users {
+            seen.insert(u.clone());
+        }
+    }
+    Ok(seen.into_iter().collect())
 }
 
 #[tauri::command]

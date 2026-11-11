@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import {
   Eye,
@@ -18,9 +19,13 @@ import {
   Terminal,
   MessagesSquare,
   Activity,
+  Pencil,
+  Trash2,
+  Info,
 } from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
+import ModalTitleRow from "./ModalTitleRow";
 import WecomRequestDiagnostics from "./WecomRequestDiagnostics";
 import { useGlobalStore } from "../core/store";
 import type { AppSettings, DshModelCatalog, WecomSkywalkingEnv } from "../core/types";
@@ -46,6 +51,17 @@ import {
   type WecomSessionLogPage,
   type WecomStatus,
 } from "../lib/wecomChannel";
+import {
+  buildAddWecomBotPatch,
+  buildPurgeIncompleteWecomBotsPatch,
+  buildRemoveWecomBotPatch,
+  buildSelectWecomBotPatch,
+  clampWecomBotRemark,
+  createEmptyWecomBot,
+  foldWecomFlatPatch,
+  listBoundWecomBots,
+  wecomBotLabel,
+} from "../lib/wecomBots";
 
 const MAX_JOBS_CHOICES = [1, 2, 4, 8, 12, 16, 24, 32];
 /** Controlled text that follows persisted settings unless the field is focused. */
@@ -215,10 +231,8 @@ export default function WecomSettingsCard() {
 
   const [status, setStatus] = useState<WecomStatus | null>(null);
   const [pairings, setPairings] = useState<WecomPairing[]>([]);
-  const [secretDraft, setSecretDraft] = useState("");
   const [revealedSecret, setRevealedSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
-  const [corpSecretDraft, setCorpSecretDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   // DSH 引擎的模型目录（ACP configOptions），按引擎就绪懒加载
@@ -241,6 +255,18 @@ export default function WecomSettingsCard() {
   const [qrSvg, setQrSvg] = useState("");
   const [qrPageUrl, setQrPageUrl] = useState("");
   const [qrDetail, setQrDetail] = useState("");
+  /** 通道：编辑弹框。create 草稿不进 wecomBots，有 Bot ID 点完成才入库。 */
+  const [botEditOpen, setBotEditOpen] = useState(false);
+  const [botEditMode, setBotEditMode] = useState<"create" | "edit">("edit");
+  const [botEditLocalId, setBotEditLocalId] = useState("");
+  const [botEditForm, setBotEditForm] = useState({
+    remark: "",
+    displayName: "",
+    botId: "",
+    secret: "",
+    corpId: "",
+    corpSecret: "",
+  });
   const qrPollRef = useRef<number | null>(null);
   /** 诊断日志只在第一次切过去时拉一次（空日志也不会反复请求） */
   const diagLoaded = useRef(false);
@@ -272,9 +298,6 @@ export default function WecomSettingsCard() {
     if (r.needsMigrate) setSettings(r.migrated);
   }, [setSettings]);
 
-  const botId = useFieldDraft(settings.wecomBotId ?? "");
-  const corpId = useFieldDraft(settings.wecomCorpId ?? "");
-  const displayName = useFieldDraft(settings.wecomBotDisplayName ?? "");
   const allowUsers = useFieldDraft((settings.wecomAllowUsers ?? []).join(", "));
   const allowGroups = useFieldDraft((settings.wecomAllowGroups ?? []).join(", "));
   const repoPath = useFieldDraft(settings.wecomRepoPath ?? "");
@@ -324,6 +347,8 @@ export default function WecomSettingsCard() {
       if (plainCorp) {
         patch = { ...patch, wecomCorpSecret: await protectSecret(plainCorp) };
       }
+      const current = useGlobalStore.getState().settings;
+      patch = foldWecomFlatPatch(current, patch);
       if (Object.keys(patch).length) setSettings(patch);
       const merged = { ...useGlobalStore.getState().settings, ...patch };
       const st = await applyWecomChannel({
@@ -335,15 +360,13 @@ export default function WecomSettingsCard() {
       });
       setStatus(st);
       if (plain) {
-        setSecretDraft("");
         setRevealedSecret("");
         setShowSecret(false);
       }
-      if (plainCorp) setCorpSecretDraft("");
       await refresh();
       setMsg(t("wecom.saved"));
     } catch (e) {
-      if (enabling) setSettings({ wecomEnabled: false });
+      if (enabling) setSettings(foldWecomFlatPatch(useGlobalStore.getState().settings, { wecomEnabled: false }));
       setMsg(String(e));
     } finally {
       setBusy(false);
@@ -353,16 +376,18 @@ export default function WecomSettingsCard() {
   const toggleSecret = async () => {
     if (showSecret) {
       setShowSecret(false);
-      if (secretDraft.trim() && secretDraft.trim() === revealedSecret.trim()) {
-        setSecretDraft("");
-      }
       return;
     }
-    if (!secretDraft.trim() && settings.wecomBotSecret) {
+    if (
+      botEditOpen &&
+      botEditMode === "edit" &&
+      !botEditForm.secret.trim() &&
+      settings.wecomBotSecret
+    ) {
       try {
         const plain = await revealWecomSecret(settings.wecomBotSecret);
         setRevealedSecret(plain);
-        setSecretDraft(plain);
+        setBotEditForm((prev) => ({ ...prev, secret: plain }));
       } catch (e) {
         setMsg(String(e));
         return;
@@ -450,13 +475,13 @@ export default function WecomSettingsCard() {
     setCatalogBusy(true);
     setCatalogError("");
     try {
-      setCatalog(await fetchDshModels(refresh, scope));
+      setCatalog(await fetchDshModels(refresh, scope, settings.wecomBotId));
     } catch (e) {
       setCatalogError(String(e));
     } finally {
       setCatalogBusy(false);
     }
-  }, []);
+  }, [settings.wecomBotId]);
 
   // 引擎就绪后再拉模型目录；DSH 没起来时不主动去启进程
   // （进页面就去 spawn 一个 node 只会让人以为界面卡住）。
@@ -533,6 +558,132 @@ export default function WecomSettingsCard() {
     }
   };
 
+  const resetQrUi = () => {
+    stopQrPoll();
+    setQrBusy(false);
+    setQrScode("");
+    setQrAuthUrl("");
+    setQrSvg("");
+    setQrPageUrl("");
+    setQrDetail("");
+  };
+
+  /** 关掉编辑弹框；create 草稿未入库，直接丢。扫码中关闭=取消扫码。 */
+  const closeBotEdit = useCallback(() => {
+    if (busy) return;
+    resetQrUi();
+    setBotEditOpen(false);
+    setBotEditLocalId("");
+    setBotEditForm({
+      remark: "",
+      displayName: "",
+      botId: "",
+      secret: "",
+      corpId: "",
+      corpSecret: "",
+    });
+    const purge = buildPurgeIncompleteWecomBotsPatch(useGlobalStore.getState().settings);
+    if (purge) setSettings(purge);
+  }, [busy, setSettings]);
+
+  const openCreateBot = (startQr: boolean) => {
+    const bot = createEmptyWecomBot();
+    setBotEditMode("create");
+    setBotEditLocalId(bot.id);
+    setBotEditForm({
+      remark: "",
+      displayName: "",
+      botId: "",
+      secret: "",
+      corpId: "",
+      corpSecret: "",
+    });
+    setRevealedSecret("");
+    setShowSecret(false);
+    setBotEditOpen(true);
+    if (startQr) void startQrBind();
+  };
+
+  const openEditBot = (bot: { id: string; remark?: string; botDisplayName?: string; botId?: string; corpId?: string }) => {
+    setSettings(buildSelectWecomBotPatch(settings, bot.id));
+    setBotEditMode("edit");
+    setBotEditLocalId(bot.id);
+    setBotEditForm({
+      remark: bot.remark ?? "",
+      displayName: bot.botDisplayName ?? "",
+      botId: bot.botId ?? "",
+      secret: "",
+      corpId: bot.corpId ?? "",
+      corpSecret: "",
+    });
+    setRevealedSecret("");
+    setShowSecret(false);
+    setBotEditOpen(true);
+  };
+
+  /** 完成：create 要有 Bot ID 才入库；edit 写回当前 bot。 */
+  const commitBotEdit = async () => {
+    if (busy) return;
+    const form = botEditForm;
+    const id = botEditLocalId;
+    const nextBotId = form.botId.trim();
+    if (botEditMode === "create" && !nextBotId) {
+      closeBotEdit();
+      return;
+    }
+    const remark = clampWecomBotRemark(form.remark);
+    const display = form.displayName.trim();
+    const nextCorpId = form.corpId.trim();
+    const plainSecret = form.secret.trim();
+    const plainCorp = form.corpSecret.trim();
+
+    if (botEditMode === "create") {
+      const bot = createEmptyWecomBot({
+        id,
+        botId: nextBotId,
+        botDisplayName: display || undefined,
+        remark: remark || undefined,
+        corpId: nextCorpId || undefined,
+        enabled: true,
+      });
+      const addPatch = buildAddWecomBotPatch(useGlobalStore.getState().settings, bot);
+      setSettings(addPatch);
+      await push(
+        {
+          wecomBotId: nextBotId,
+          wecomEnabled: true,
+          wecomBotDisplayName: display,
+          wecomBotRemark: remark,
+          wecomCorpId: nextCorpId,
+        },
+        plainSecret || undefined,
+        plainCorp || undefined,
+      );
+    } else {
+      await push(
+        {
+          wecomBotId: nextBotId,
+          wecomBotDisplayName: display,
+          wecomBotRemark: remark,
+          wecomCorpId: nextCorpId,
+        },
+        plainSecret || undefined,
+        plainCorp || undefined,
+      );
+    }
+    resetQrUi();
+    setBotEditOpen(false);
+    setBotEditLocalId("");
+  };
+
+  // 进页时清掉历史遗留的空壳（未完成扫码/手动接入的条目）
+  useEffect(() => {
+    const purge = buildPurgeIncompleteWecomBotsPatch(useGlobalStore.getState().settings);
+    if (purge) setSettings(purge);
+    // 只在挂载时扫一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const startQrBind = async () => {
     setQrBusy(true);
     setMsg("");
@@ -572,8 +723,12 @@ export default function WecomSettingsCard() {
               setQrScode("");
               setQrAuthUrl("");
               setQrSvg("");
-              setBotIdValue(polled.botId);
-              await push({ wecomBotId: polled.botId, wecomEnabled: true }, polled.secret);
+              setQrPageUrl("");
+              setBotEditForm((prev) => ({
+                ...prev,
+                botId: polled.botId ?? prev.botId,
+                secret: polled.secret ?? prev.secret,
+              }));
               setMsg(t("wecom.qrSuccess"));
             }
           } catch (e) {
@@ -587,12 +742,8 @@ export default function WecomSettingsCard() {
     }
   };
 
-  const setBotIdValue = (v: string) => {
-    botId.setValue(v);
-  };
-
   return (
-    <div className="wecom-settings">
+    <div className={`wecom-settings${section === "channel" ? " is-channel" : ""}`}>
       {/* 概览条：同类信息挤一行（连接 / 引擎 / 时长 / 最近排障 / 计数），长说明收进「说明」 */}
       <div className="wecom-hero">
         <div className="wecom-hero-main">
@@ -845,250 +996,410 @@ export default function WecomSettingsCard() {
         ))}
       </div>
 
-      {/* 1 · 通道与凭据：开了没、连上没、用哪个机器人 */}
+      {/* 1 · 通道：列表 + 编辑同一张卡（主从） */}
       <div className="net-panel" hidden={section !== "channel"}>
         <PanelHead title={t("wecom.groupChannel")} />
         <div className="wecom-rows">
-          <div className="wecom-block-card">
-            <div className="wecom-block-head">
-              <div className="wecom-block-head-main">
-                <span className="wecom-block-icon" aria-hidden>
-                  <Bot size={14} />
-                </span>
-                <span className="wecom-block-title">{t("wecom.subBot")}</span>
-              </div>
-              <span
-                className={`wecom-status-pill ${statusClass(status?.state)}`}
-                title={status?.detail || undefined}
-              >
-                <i className="wecom-status-dot" aria-hidden />
-                {stateLabel}
-              </span>
-            </div>
-
-            <Row
-              label={t("wecom.displayName")}
-              control={
-                <input
-                  className="input-field"
-                  value={displayName.value}
-                  placeholder={t("wecom.displayNamePlaceholder")}
-                  onFocus={() => {
-                    displayName.focused.current = true;
-                  }}
-                  onChange={(e) => displayName.setValue(e.target.value)}
-                  onBlur={() => {
-                    displayName.focused.current = false;
-                    const v = displayName.value.trim();
-                    if (v !== (settings.wecomBotDisplayName ?? "")) void push({ wecomBotDisplayName: v });
-                  }}
-                />
-              }
-            />
-
-            <div className="wecom-pair">
-              <Row
-                label={t("wecom.botId")}
-                control={
-                  <input
-                    className="input-field"
-                    value={botId.value}
-                    placeholder="botId"
-                    onFocus={() => {
-                      botId.focused.current = true;
-                    }}
-                    onChange={(e) => botId.setValue(e.target.value)}
-                    onBlur={() => {
-                      botId.focused.current = false;
-                      const v = botId.value.trim();
-                      if (v !== (settings.wecomBotId ?? "")) void push({ wecomBotId: v });
-                    }}
-                  />
-                }
-              />
-
-              <Row
-                label={t("wecom.botSecret")}
-                control={
-                  <div className="input-with-toggle">
-                    <input
-                      className="input-field"
-                      type={showSecret ? "text" : "password"}
-                      value={showSecret ? secretDraft || revealedSecret : secretDraft}
-                      placeholder={
-                        settings.wecomBotSecret
-                          ? showSecret
-                            ? ""
-                            : `••••••••  ${t("wecom.secretKept")}`
-                          : t("wecom.secretPlaceholder")
-                      }
-                      onChange={(e) => setSecretDraft(e.target.value)}
-                      onBlur={() => {
-                        const v = secretDraft.trim();
-                        if (!v || v === revealedSecret.trim()) {
-                          if (!showSecret || v === revealedSecret.trim()) setSecretDraft("");
-                          return;
-                        }
-                        void push({}, v);
-                      }}
-                    />
+          {(() => {
+            const bots = listBoundWecomBots(settings);
+            const untitled = t("wecom.botUntitled");
+            return (
+              <div className="wecom-block-card wecom-channel-shell">
+                <div className="wecom-block-head">
+                  <div className="wecom-block-head-main">
+                    <span className="wecom-block-icon" aria-hidden>
+                      <Bot size={14} />
+                    </span>
+                    <span className="wecom-block-title">{t("wecom.botsBound")}</span>
+                  </div>
+                  <div className="wecom-bot-actions">
+                    <span className="wecom-chip">
+                      {t("wecom.botsOnline", {
+                        online: status?.botsOnline ?? (status?.state === "connected" ? 1 : 0),
+                        total:
+                          status?.botsTotal ?? bots.filter((b) => b.enabled).length,
+                      })}
+                    </span>
                     <button
                       type="button"
-                      className="input-toggle-btn"
-                      title={showSecret ? t("wecom.hideSecret") : t("wecom.showSecret")}
-                      aria-pressed={showSecret}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => void toggleSecret()}
+                      className="btn btn-primary btn-small"
+                      disabled={busy || qrBusy}
+                      onClick={() => openCreateBot(true)}
                     >
-                      {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                      <QrCode size={14} />
+                      {t("wecom.botsScanAdd")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      disabled={busy}
+                      onClick={() => {
+                        openCreateBot(false);
+                        setMsg(t("wecom.botsManualHint"));
+                      }}
+                    >
+                      {t("wecom.botsManualAdd")}
                     </button>
                   </div>
-                }
-              />
-            </div>
-
-            {/* 扫码绑定：左图文案 + 右按钮的操作条，二维码单独展开成舞台 */}
-            <div className="wecom-bind">
-              <div className="wecom-bind-main">
-                <span className="wecom-bind-icon" aria-hidden>
-                  <QrCode size={16} />
-                </span>
-                <div className="wecom-bind-text">
-                  <span className="wecom-bind-title">{t("wecom.qrBind")}</span>
-                  <p className="setting-hint">{t("wecom.qrBindHint")}</p>
                 </div>
-              </div>
-              <div className="wecom-bind-actions">
-                <button
-                  type="button"
-                  className="btn btn-primary btn-small"
-                  disabled={busy || qrBusy}
-                  onClick={() => void startQrBind()}
-                >
-                  {qrBusy ? t("wecom.qrWaiting") : t("wecom.qrBind")}
-                </button>
-                {qrPageUrl ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={() => {
-                      void import("@tauri-apps/api/core").then(({ invoke }) =>
-                        invoke("open_in_browser", { url: qrPageUrl }).catch(() =>
-                          window.open(qrPageUrl, "_blank"),
-                        ),
-                      );
-                    }}
-                  >
-                    {t("wecom.qrOpenPage")}
-                  </button>
-                ) : null}
-                {qrBusy ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={() => {
-                      stopQrPoll();
-                      setQrBusy(false);
-                      setQrScode("");
-                      setQrAuthUrl("");
-                      setQrSvg("");
-                      setQrPageUrl("");
-                      setQrDetail("");
-                    }}
-                  >
-                    {t("wecom.qrCancel")}
-                  </button>
-                ) : null}
-              </div>
-            </div>
 
-            {qrAuthUrl ? (
-              <div className="wecom-qr-stage">
-                <div className="wecom-qr-frame">
-                  {qrSvg ? (
-                    <div
-                      className="wecom-qr-img wecom-qr-svg"
-                      role="img"
-                      aria-label="WeCom QR"
-                      dangerouslySetInnerHTML={{ __html: qrSvg }}
-                    />
+                <div className="wecom-bot-list">
+                  {bots.length === 0 ? (
+                    <p className="setting-hint wecom-bot-list-empty">{t("wecom.botsEmpty")}</p>
                   ) : (
-                    <div className="wecom-qr-skeleton" aria-hidden>
-                      <QrCode size={28} />
-                    </div>
+                    bots.map((bot) => {
+                      const runtime = status?.bots?.find((b) => b.botId === bot.botId);
+                      const selected = settings.wecomActiveBotId === bot.id;
+                      const label = wecomBotLabel(bot, untitled);
+                      const masked =
+                        (bot.botId ?? "").length > 10
+                          ? `${(bot.botId ?? "").slice(0, 4)}****${(bot.botId ?? "").slice(-4)}`
+                          : bot.botId || "—";
+                      return (
+                        <div
+                          key={bot.id}
+                          role="button"
+                          tabIndex={0}
+                          className={`wecom-bot-card${selected ? " is-selected" : ""}`}
+                          onClick={() => {
+                            setSettings(buildSelectWecomBotPatch(settings, bot.id));
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              (e.currentTarget as HTMLElement).click();
+                            }
+                          }}
+                        >
+                          <span className="wecom-bot-card-main">
+                            <span className="wecom-bot-card-name">{label}</span>
+                            <span className="wecom-bot-card-id mono">{masked}</span>
+                          </span>
+                          <span
+                            className={`wecom-status-pill ${statusClass(
+                              runtime?.state ?? (bot.enabled ? status?.state : undefined),
+                            )}`}
+                          >
+                            <i className="wecom-status-dot" aria-hidden />
+                            {bot.enabled
+                              ? runtime?.state === "connected" ||
+                                (!runtime && status?.state === "connected" && selected)
+                                ? t("wecom.botRunning")
+                                : t("wecom.sectionOn")
+                              : t("wecom.sectionOff")}
+                          </span>
+                          <span className="wecom-bot-card-actions">
+                            <button
+                              type="button"
+                              className="wecom-bot-card-edit"
+                              title={t("wecom.botsEdit")}
+                              aria-label={t("wecom.botsEdit")}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditBot(bot);
+                              }}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="wecom-bot-card-del"
+                              title={t("wecom.botsRemove")}
+                              aria-label={t("wecom.botsRemove")}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void (async () => {
+                                  const ok = await confirm({
+                                    title: t("wecom.botsRemove"),
+                                    message: t("wecom.botsRemoveConfirm", { name: label }),
+                                  });
+                                  if (!ok) return;
+                                  const patch = buildRemoveWecomBotPatch(settings, bot.id);
+                                  setSettings(patch);
+                                  if (settings.wecomActiveBotId === bot.id) setBotEditOpen(false);
+                                  void push(patch);
+                                })();
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </span>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
-                <div className="wecom-qr-side">
-                  <p className="wecom-qr-title">{t("wecom.qrScanning")}</p>
-                  {!qrSvg ? <p className="setting-hint">{t("wecom.qrSvgMissing")}</p> : null}
-                  {qrDetail ? <p className="setting-hint">{qrDetail}</p> : null}
-                  {qrScode ? (
-                    <p className="setting-hint">
-                      <code className="tabular-nums">{qrScode.slice(0, 8)}…</code>
-                    </p>
-                  ) : null}
-                </div>
               </div>
-            ) : null}
-          </div>
-
-          <div className="wecom-block-card is-split">
-            <div className="wecom-block-head">
-              <div className="wecom-block-head-main">
-                <span className="wecom-block-icon" aria-hidden>
-                  <ShieldCheck size={14} />
-                </span>
-                <span className="wecom-block-title">{t("wecom.subCorp")}</span>
-              </div>
-            </div>
-
-            <Row
-              label={t("wecom.corpId")}
-              control={
-                <input
-                  className="input-field"
-                  value={corpId.value}
-                  placeholder={t("wecom.corpIdPlaceholder")}
-                  onFocus={() => {
-                    corpId.focused.current = true;
-                  }}
-                  onChange={(e) => corpId.setValue(e.target.value)}
-                  onBlur={() => {
-                    corpId.focused.current = false;
-                    const v = corpId.value.trim();
-                    if (v !== (settings.wecomCorpId ?? "")) void push({ wecomCorpId: v });
-                  }}
-                />
-              }
-            />
-
-            <Row
-              label={t("wecom.corpSecret")}
-              control={
-                <input
-                  className="input-field"
-                  type="password"
-                  value={corpSecretDraft}
-                  placeholder={
-                    settings.wecomCorpSecret
-                      ? `••••••••  ${t("wecom.secretKept")}`
-                      : t("wecom.corpSecretPlaceholder")
-                  }
-                  onChange={(e) => setCorpSecretDraft(e.target.value)}
-                  onBlur={() => {
-                    const v = corpSecretDraft.trim();
-                    if (!v) {
-                      setCorpSecretDraft("");
-                      return;
-                    }
-                    void push({}, undefined, v);
-                  }}
-                />
-              }
-              hint={<Hint summary={t("wecom.corpHintShort")} details={t("wecom.corpHint")} />}
-            />
-          </div>
+            );
+          })()}
         </div>
+
+        {botEditOpen
+          ? createPortal(
+              <div
+                className="modal-overlay"
+                onMouseDown={(e) => {
+                  if (e.target === e.currentTarget) closeBotEdit();
+                }}
+              >
+                <div
+                  className="modal modal-lg wecom-bot-edit-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={t("wecom.botsEditing", {
+                    name: wecomBotLabel(
+                      {
+                        id: botEditLocalId,
+                        remark: botEditForm.remark,
+                        botDisplayName: botEditForm.displayName,
+                        botId: botEditForm.botId,
+                      },
+                      t("wecom.botUntitled"),
+                    ),
+                  })}
+                >
+                  <ModalTitleRow
+                    title={t("wecom.botsEditing", {
+                      name: wecomBotLabel(
+                        {
+                          id: botEditLocalId,
+                          remark: botEditForm.remark,
+                          botDisplayName: botEditForm.displayName,
+                          botId: botEditForm.botId,
+                        },
+                        t("wecom.botUntitled"),
+                      ),
+                    })}
+                    onClose={closeBotEdit}
+                    disabled={busy}
+                    badge={
+                      <span className="card-title-badge">
+                        <span
+                          className={`wecom-status-pill ${
+                            botEditMode === "create"
+                              ? qrBusy
+                                ? "is-pending"
+                                : ""
+                              : statusClass(
+                                  status?.bots?.find((b) => b.botId === botEditForm.botId)?.state ??
+                                    (settings.wecomBotId === botEditForm.botId
+                                      ? status?.state
+                                      : undefined),
+                                )
+                          }`}
+                        >
+                          <i className="wecom-status-dot" aria-hidden />
+                          {botEditMode === "create"
+                            ? qrBusy
+                              ? t("wecom.qrWaiting")
+                              : botEditForm.botId.trim()
+                                ? t("wecom.sectionOn")
+                                : t("wecom.sectionOff")
+                            : stateLabel}
+                        </span>
+                      </span>
+                    }
+                  />
+                  <div className="wecom-bot-edit-body">
+                    <div className="wecom-bot-edit-row">
+                      <div className="input-group">
+                        <label className="input-label">{t("wecom.botRemark")}</label>
+                        <input
+                          className="input-field"
+                          value={botEditForm.remark}
+                          placeholder={t("wecom.botRemarkPlaceholder")}
+                          maxLength={40}
+                          onChange={(e) =>
+                            setBotEditForm((prev) => ({ ...prev, remark: e.target.value }))
+                          }
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">{t("wecom.displayName")}</label>
+                        <input
+                          className="input-field"
+                          value={botEditForm.displayName}
+                          placeholder={t("wecom.displayNamePlaceholder")}
+                          onChange={(e) =>
+                            setBotEditForm((prev) => ({ ...prev, displayName: e.target.value }))
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="wecom-bot-edit-head">
+                      <p className="wecom-bot-edit-section">{t("wecom.subBot")}</p>
+                      <div className="wecom-bot-rebind">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          disabled={busy || qrBusy}
+                          onClick={() => void startQrBind()}
+                        >
+                          {qrBusy ? t("wecom.qrWaiting") : t("wecom.botsRebind")}
+                        </button>
+                        {qrPageUrl ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            onClick={() => {
+                              void import("@tauri-apps/api/core").then(({ invoke }) =>
+                                invoke("open_in_browser", { url: qrPageUrl }).catch(() =>
+                                  window.open(qrPageUrl, "_blank"),
+                                ),
+                              );
+                            }}
+                          >
+                            {t("wecom.qrOpenPage")}
+                          </button>
+                        ) : null}
+                        {qrBusy ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            onClick={() => resetQrUi()}
+                          >
+                            {t("wecom.qrCancel")}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="wecom-bot-edit-row">
+                      <div className="input-group">
+                        <label className="input-label">{t("wecom.botId")}</label>
+                        <input
+                          className="input-field"
+                          value={botEditForm.botId}
+                          placeholder="botId"
+                          onChange={(e) =>
+                            setBotEditForm((prev) => ({ ...prev, botId: e.target.value }))
+                          }
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">{t("wecom.botSecret")}</label>
+                        <div className="input-with-toggle">
+                          <input
+                            className="input-field"
+                            type={showSecret ? "text" : "password"}
+                            value={
+                              showSecret
+                                ? botEditForm.secret || revealedSecret
+                                : botEditForm.secret
+                            }
+                            placeholder={
+                              botEditMode === "edit" && settings.wecomBotSecret && !botEditForm.secret
+                                ? showSecret
+                                  ? ""
+                                  : `••••••••  ${t("wecom.secretKept")}`
+                                : t("wecom.secretPlaceholder")
+                            }
+                            onChange={(e) =>
+                              setBotEditForm((prev) => ({ ...prev, secret: e.target.value }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="input-toggle-btn"
+                            title={showSecret ? t("wecom.hideSecret") : t("wecom.showSecret")}
+                            aria-pressed={showSecret}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => void toggleSecret()}
+                          >
+                            {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    {qrAuthUrl ? (
+                      <div className="wecom-qr-stage">
+                        <div className="wecom-qr-frame">
+                          {qrSvg ? (
+                            <div
+                              className="wecom-qr-img wecom-qr-svg"
+                              role="img"
+                              aria-label="WeCom QR"
+                              dangerouslySetInnerHTML={{ __html: qrSvg }}
+                            />
+                          ) : (
+                            <div className="wecom-qr-skeleton" aria-hidden>
+                              <QrCode size={28} />
+                            </div>
+                          )}
+                        </div>
+                        <div className="wecom-qr-side">
+                          <p className="wecom-qr-title">{t("wecom.qrScanning")}</p>
+                          {!qrSvg ? (
+                            <p className="setting-hint">{t("wecom.qrSvgMissing")}</p>
+                          ) : null}
+                          {qrDetail ? <p className="setting-hint">{qrDetail}</p> : null}
+                          {qrScode ? (
+                            <p className="setting-hint">
+                              <code className="tabular-nums">{qrScode.slice(0, 8)}…</code>
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                    <p className="wecom-bot-edit-section">{t("wecom.subCorp")}</p>
+                    <div className="wecom-bot-edit-row">
+                      <div className="input-group">
+                        <label className="input-label">{t("wecom.corpId")}</label>
+                        <input
+                          className="input-field"
+                          value={botEditForm.corpId}
+                          placeholder={t("wecom.corpIdPlaceholder")}
+                          onChange={(e) =>
+                            setBotEditForm((prev) => ({ ...prev, corpId: e.target.value }))
+                          }
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">{t("wecom.corpSecret")}</label>
+                        <input
+                          className="input-field"
+                          type="password"
+                          value={botEditForm.corpSecret}
+                          placeholder={
+                            botEditMode === "edit" &&
+                            settings.wecomCorpSecret &&
+                            !botEditForm.corpSecret
+                              ? `••••••••  ${t("wecom.secretKept")}`
+                              : t("wecom.corpSecretPlaceholder")
+                          }
+                          onChange={(e) =>
+                            setBotEditForm((prev) => ({ ...prev, corpSecret: e.target.value }))
+                          }
+                        />
+                        <p className="wecom-tip" title={t("wecom.corpHint")}>
+                          <Info size={12} aria-hidden />
+                          {t("wecom.corpTip")}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={busy}
+                      onClick={closeBotEdit}
+                    >
+                      {t("wecom.botsEditCancel")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy || qrBusy}
+                      onClick={() => void commitBotEdit()}
+                    >
+                      {t("wecom.botsEditDone")}
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )
+          : null}
       </div>
 
       {/* 2 · 回答设置：谁来回答、按什么口径回答、在哪个工作区回答 */}

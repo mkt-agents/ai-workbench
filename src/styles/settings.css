@@ -606,6 +606,51 @@
   row-gap: 0;
 }
 
+/* IM 机器人 · 通道：绑定列表卡铺满剩余高度，底下不再空一大片。 */
+.settings-page.is-im-bot {
+  grid-template-rows: minmax(min-content, 1fr);
+}
+.settings-page.is-im-bot > .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.settings-page.is-im-bot > .card > .card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-page.is-im-bot .card-body > .hub-group:not([hidden]) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-page.is-im-bot .wecom-settings {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-page.is-im-bot .wecom-settings.is-channel > .net-panel:not([hidden]) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-page.is-im-bot .wecom-settings.is-channel > .net-panel:not([hidden]) > .wecom-rows {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.settings-page.is-im-bot .wecom-settings.is-channel .wecom-channel-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+
 /* —— 逆向工程页（单卡片、页签切换）——
    整页只有一张卡：让它铺满可视高度，内容矮的页签（调度 / 运行记录）下面不再空一大块。
    行写 minmax(min-content, 1fr)：内容高过窗口时退回 min-content、整页照常滚动，
@@ -1701,11 +1746,27 @@
   color: var(--red);
 }
 /* 字段说明折叠：默认只露一句摘要，长文案收进「说明 ⌄」 */
-.settings-page .wecom-hint {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint {
   margin: 1px 0 0;
   min-width: 0;
 }
-.settings-page .wecom-hint > summary {
+/* 字段 tips：一行「图标 + 短语」，长说明收进悬停提示，不占两行 */
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+  cursor: help;
+}
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-tip svg {
+  flex: none;
+  color: var(--accent);
+  opacity: 0.75;
+}
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint > summary {
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -1715,28 +1776,28 @@
   line-height: 1.45;
   color: var(--text-3);
 }
-.settings-page .wecom-hint > summary::-webkit-details-marker {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint > summary::-webkit-details-marker {
   display: none;
 }
-.settings-page .wecom-hint > summary:hover {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint > summary:hover {
   color: var(--text-2);
 }
-.settings-page .wecom-hint-more {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint-more {
   flex: none;
   font-size: 10.5px;
   color: var(--accent);
   white-space: nowrap;
 }
-.settings-page .wecom-hint-more::after {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint-more::after {
   content: "⌄";
   display: inline-block;
   margin-left: 2px;
   transition: transform 0.15s ease;
 }
-.settings-page .wecom-hint[open] .wecom-hint-more::after {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint[open] .wecom-hint-more::after {
   transform: rotate(180deg);
 }
-.settings-page .wecom-hint > .setting-hint {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-hint > .setting-hint {
   margin: 4px 0 0;
   padding-left: 8px;
   border-left: 2px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
@@ -1826,6 +1887,209 @@
   font-weight: 600;
   color: var(--text-1);
   white-space: nowrap;
+}
+.settings-page .wecom-channel-shell {
+  gap: 10px;
+}
+.settings-page .wecom-channel-shell > .wecom-block-head {
+  flex: 0 0 auto;
+}
+.settings-page .wecom-bot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.settings-page .wecom-bot-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  flex: 1 1 auto;
+  align-content: start;
+  min-height: 160px;
+}
+.settings-page .wecom-bot-list-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+@media (max-width: 720px) {
+  .settings-page .wecom-bot-list {
+    grid-template-columns: 1fr;
+  }
+}
+.settings-page .wecom-bot-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-colors-fast), background var(--transition-colors-fast);
+}
+.settings-page .wecom-bot-card:hover {
+  background: var(--overlay-2);
+}
+.settings-page .wecom-bot-card.is-selected {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.settings-page .wecom-bot-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.settings-page .wecom-bot-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.settings-page .wecom-bot-card-name {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.settings-page .wecom-bot-card-id {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.settings-page .wecom-bot-card-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.settings-page .wecom-bot-card-edit,
+.settings-page .wecom-bot-card-del {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color var(--transition-colors-fast), background var(--transition-colors-fast);
+}
+.settings-page .wecom-bot-card-edit:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.settings-page .wecom-bot-card-del:hover {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.settings-page .wecom-bot-rebind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.settings-page .wecom-bot-detail-corp {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+}
+.settings-page .wecom-bot-detail-corp > .settings-group {
+  margin: 0;
+}
+/* 企微机器人编辑弹框：portal 到 body；标题 / 可滚正文 / 底栏三分，底栏不再盖住字段。
+   正文用纵向 flex + gap 统一分组节奏，字段间距不再依赖 .input-group 的全局 margin。 */
+.wecom-bot-edit-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: min(var(--modal-max-vh), 720px);
+  overflow: hidden;
+  padding-bottom: 14px;
+}
+.wecom-bot-edit-modal > .modal-title-row {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+}
+.wecom-bot-edit-modal .wecom-bot-edit-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  padding-bottom: 4px;
+}
+.wecom-bot-edit-modal .wecom-bot-edit-body .input-group {
+  margin-bottom: 0;
+}
+.wecom-bot-edit-modal .wecom-bot-edit-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.wecom-bot-edit-modal .wecom-bot-edit-row > .input-group {
+  min-width: 0;
+}
+.wecom-bot-edit-modal .wecom-bot-edit-section {
+  display: block;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-3);
+}
+.wecom-bot-edit-modal .wecom-bot-edit-body > .wecom-bot-edit-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+/* 分组头：左标题右动作（扫码按钮收纳在这里），顶部发丝线与上一组分隔 */
+.wecom-bot-edit-modal .wecom-bot-edit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.wecom-bot-edit-modal .wecom-bot-edit-head .wecom-bot-edit-section {
+  margin: 0;
+}
+.wecom-bot-edit-modal .wecom-bot-rebind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.wecom-bot-edit-modal .wecom-qr-stage {
+  margin: 0;
+  min-width: 0;
+}
+.wecom-bot-edit-modal .wecom-qr-frame {
+  flex: 0 0 auto;
+  width: 176px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.wecom-bot-edit-modal > .modal-actions {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+@media (max-width: 640px) {
+  .wecom-bot-edit-modal .wecom-bot-edit-row {
+    grid-template-columns: 1fr;
+  }
 }
 /* 短字段并排的卡片：卡片内部再分两列，开关行与卡头仍然通栏。
    固定两列（不用 auto-fit），否则宽窗会冒出第三列，字段挤成一条 */
@@ -2391,7 +2655,8 @@
   align-items: center;
   gap: 8px;
 }
-.settings-page .wecom-status-pill {
+/* 状态胶囊：页面内 + 编辑弹框（portal 到 body）共用 */
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -2409,35 +2674,35 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.settings-page .wecom-status-dot {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-dot {
   flex: none;
   width: 5px;
   height: 5px;
   border-radius: var(--radius-full);
   background: var(--text-3);
 }
-.settings-page .wecom-status-pill.is-connected {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-pill.is-connected {
   color: var(--green);
   background: color-mix(in srgb, var(--green) 12%, transparent);
   border-color: color-mix(in srgb, var(--green) 28%, transparent);
 }
-.settings-page .wecom-status-pill.is-connected .wecom-status-dot {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-pill.is-connected .wecom-status-dot {
   background: var(--green);
 }
-.settings-page .wecom-status-pill.is-pending {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-pill.is-pending {
   color: var(--yellow);
   background: color-mix(in srgb, var(--yellow) 12%, transparent);
   border-color: color-mix(in srgb, var(--yellow) 28%, transparent);
 }
-.settings-page .wecom-status-pill.is-pending .wecom-status-dot {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-pill.is-pending .wecom-status-dot {
   background: var(--yellow);
 }
-.settings-page .wecom-status-pill.is-error {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-pill.is-error {
   color: var(--red);
   background: color-mix(in srgb, var(--red) 12%, transparent);
   border-color: color-mix(in srgb, var(--red) 28%, transparent);
 }
-.settings-page .wecom-status-pill.is-error .wecom-status-dot {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-status-pill.is-error .wecom-status-dot {
   background: var(--red);
 }
 .settings-page .wecom-pairing-list {
@@ -3341,15 +3606,15 @@
 }
 
 
-/* 企微扫码绑定 */
-.settings-page .wecom-qr-img {
-  width: 200px;
-  height: 200px;
+/* 企微扫码绑定（页面 + 编辑弹框共用；弹框缺这一段时 SVG 会按原始尺寸撑破布局） */
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-img {
+  width: 176px;
+  height: 176px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: #fff; /* token-ok: QR needs opaque white for scan contrast */
 }
-.settings-page .wecom-qr-svg {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-svg {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3357,7 +3622,7 @@
   padding: var(--space-2);
   box-sizing: border-box;
 }
-.settings-page .wecom-qr-svg svg {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-svg svg {
   width: 100%;
   height: 100%;
   display: block;
@@ -3871,7 +4136,7 @@
 }
 
 /* 扫码中：左侧二维码停在白底框里，右侧放提示、配对数字与码值（企微 / 微信共用） */
-.settings-page .wecom-qr-stage {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-stage {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -3881,16 +4146,14 @@
   border-radius: var(--radius-md);
   background: var(--overlay-1);
 }
-.settings-page .wecom-qr-frame {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-frame {
   flex: none;
 }
-.settings-page .wecom-qr-frame .wecom-qr-img {
-  width: 176px;
-  height: 176px;
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-frame .wecom-qr-img {
   box-shadow: var(--shadow-xs);
 }
 /* 二维码还没回来时占住同样的位置，避免面板高度跳一下 */
-.settings-page .wecom-qr-skeleton {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-skeleton {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3901,28 +4164,28 @@
   background: var(--overlay-2);
   color: var(--text-3);
 }
-.settings-page .wecom-qr-side {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-side {
   display: flex;
   flex: 1 1 200px;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
 }
-.settings-page .wecom-qr-title {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-title {
   margin: 0;
   font-size: 12.5px;
   font-weight: 600;
   line-height: 1.4;
   color: var(--text-1);
 }
-.settings-page .wecom-qr-side .setting-hint {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-side .setting-hint {
   padding: 0;
   overflow-wrap: anywhere;
 }
-.settings-page .wecom-qr-side .setting-hint + .setting-hint {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-side .setting-hint + .setting-hint {
   padding-top: 2px;
 }
-.settings-page .wecom-qr-verify {
+:is(.settings-page, .wecom-bot-edit-modal) .wecom-qr-verify {
   max-width: 180px;
   min-height: 28px;
   padding-block: 4px;

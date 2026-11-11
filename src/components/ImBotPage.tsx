@@ -12,7 +12,7 @@ export default function ImBotPage() {
   const [channel, setChannel] = useState<"wecom" | "weixin">("wecom");
 
   return (
-    <div className="settings-page is-solo">
+    <div className="settings-page is-solo is-im-bot">
       <div className="card">
         <div className="card-title is-tabs">
           <div className="hub-tabs is-channel" role="tablist" aria-label={t("imBot.title")}>

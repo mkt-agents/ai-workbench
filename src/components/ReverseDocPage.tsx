@@ -462,13 +462,13 @@ export default function ReverseDocPage() {
     setCatalogBusy(true);
     setCatalogError("");
     try {
-      setCatalog(await fetchDshModels(refresh, scope));
+      setCatalog(await fetchDshModels(refresh, scope, settings.wecomBotId));
     } catch (e) {
       setCatalogError(String(e));
     } finally {
       setCatalogBusy(false);
     }
-  }, []);
+  }, [settings.wecomBotId]);
 
   // 联动：更新引擎（显式选的或沿用的）落到 DSH 且工作区已配置时，自动拉一次模型目录。
   // 拉取失败不无限重试；但一旦工作区改好了（docgenScanBase 变化），清掉旧错误自动再试一次。

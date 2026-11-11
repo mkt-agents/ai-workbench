@@ -24,6 +24,7 @@ import {
 import { invocations, type Invocations } from './store/invocations';
 import { readStoredString, writeStoredString } from './localState';
 import { markSettingsSynced, mergingSettingsStorage } from './settingsStorage';
+import { migrateWecomBotsSettings } from '../lib/wecomBots';
 
 /** True when `v1` is older than `v2`; prerelease-aware (see `compareVersions`). */
 const isOlderVersion = (v1: string, v2: string): boolean =>
@@ -104,6 +105,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   aiHubProfileId: undefined,
   workTodoRemindEnabled: false,
   workTodoRemindTime: '09:30',
+  wecomBots: [],
+  wecomActiveBotId: undefined,
 };
 
 /** Preset web tools sites — shown as suggestions when user has no plugins yet. */
@@ -160,7 +163,7 @@ function migrateSettings(
   ) {
     theme = 'silver';
   }
-  return {
+  const base: AppSettings = {
     ...DEFAULT_SETTINGS,
     ...rest,
     theme,
@@ -169,6 +172,7 @@ function migrateSettings(
       ...(rest.aiHubChips ?? {}),
     },
   };
+  return migrateWecomBotsSettings(base);
 }
 
 interface StoreState extends GlobalState, Invocations {

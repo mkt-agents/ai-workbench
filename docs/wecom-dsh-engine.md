@@ -4,6 +4,10 @@
 > 同一个企微机器人，回话的工作可以交给内置天玑，也可以交给本机安装的
 > DeepSeek Harness（`dsh --profile acp`）。
 
+## 多 bot 运行实例（2026-11-11）
+
+IM 机器人支持同一进程内挂多个企微 bot：每个 bot 独立长连接、`Orchestrator`、问答 DSH 与文档 DSH 子进程。DSH 落盘命名空间为 `bot-{sanitizedBotId}` / `docgen-{sanitizedBotId}`（`sessions-*.json`、`permission-*.patch.yml`），与旧版单实例空 tag 并存迁移。设置页 apply 下发 `{ bots: [...] }` 时后端按 bot 增删改 reconcile；通道状态聚合在线数 `botsOnline/botsTotal`。
+
 ## 企微回复阅读排版（2026-11-03 短约束）
 
 官方 `stream.content` 仅「常见 Markdown」，**不渲染 Mermaid/PlantUML 等流程图 DSL**。每轮 `reply_output_rules()` 压成极短 IM 约束（禁 DSL、```text 等宽步骤、无业务示例）；出站由 `prepare_wecom_visible_markdown` / `rewrite_diagram_fences` 兜底把漏网 mermaid 转成 ASCII。说话风格交给设置页「上下文增强」。客户端字体/字号仍由企微决定。排障报告侧：结论置顶、证据去重与短引文预算等既有渲染规则不变；自我介绍与耗时尾注不改写。
@@ -84,6 +88,37 @@
 - **有界发送与ACK分层**：[WS Outbox](<../src-tauri/src/wecom_ws.rs>)最多64项、同stream待发progress合并、final和flush边界不被覆盖，200ms本地pacing。enqueued、socket_written、socket_drained只描述本地不同阶段；平台回执现在记`platform_ack`并带`final_frame_unknown`，只有req关联，不把累计stream的ACK归给final。
 
 当时开发进程22584与安装进程26820共存，日志出现`6000 data conflict`；同Bot双连及它与取消的因果尚未证实。16:34:03具体由apply/restart/sync哪个入口触发，旧日志未记录，仍是unknown。真实进程未重启、用户会话未主动重发；本轮已完成Rust全量与前端构建，保留unused/dead_code及大包警告；真实修复验收另计，不声称提速或已恢复。
+
+### 半天思考中：操作员三步（2026-11-11）
+
+终稿模式（见下文「出站终稿」）下，准入后立刻发非结束帧「正在思考中…」，**工具进度 / stall / 30s 心跳不再改企微气泡**；气泡要等到 `send_finish`（或审批 / 冷启动等少数提示）才会变。长时间停在思考中 = **早 ack 成功，终稿没落地**（引擎还在跑、卡在某层、或 finish 发出失败），不是缺占位文案。
+
+在**卡住的同一会话**发整句指令（不要夹其它字）：
+
+1. **`进度`**（同义：`查到哪了` / `还没好吗` / `好了吗` / `当前进度`）——完整短句走 [`wecom_progress`](../src-tauri/src/wecom_progress.rs) 状态查询，不启新模型任务。看 phase、已耗时、空闲秒数；若写「已完成 / 失败 / 超时」但气泡仍是思考中 → **finish 未送达**（outbox / 通道退役）。
+2. **`停止`**（同义：`停` / `取消` / `别查了` / `stop`…）——真取消在跑回合并给原 stream 补 finish。若回「当前没有正在进行的任务」但气泡仍卡着 → 进程侧回合已没了，问题在**投递或历史僵尸气泡**。
+3. **应用内：IM 机器人 → 企业微信 → 运行诊断**——通道日志搜该轮 `ack` / `turn` / `dsh` / `cancelled` / `timeout`；请求诊断用 `wecom-<msgid>` 或 `wecom-preflight-<msgid>`；记下页顶 **PID / buildLabel / activeJobs**，确认不是双开旧进程。
+
+本机旁证（`%APPDATA%\com.ai-workbench.app\`）：
+
+| 路径 | 看什么 |
+| --- | --- |
+| `wecom.log`（及 `.1`） | 回合生命周期、stall、工具标题（终稿后仍写日志） |
+| `diagnostics\` 下 `wecom.jsonl*` | 请求级事件（无正文）：admission / engine / timeout / channel_changed |
+| `agent-sessions\wecom-<msgid>.jsonl` | **天玑档**工具与模型旁证 |
+| `wecom-media\<msgid>\` | 入站图/文件是否落盘（怀疑卡在 materialize 时） |
+
+按卡住时长对号入座：
+
+| 卡住时长大致 | 优先怀疑 | 锚点 |
+| --- | --- | --- |
+| 数秒～几十秒，偶有「正在启动 DeepSeek Harness…」 | DSH 冷启动 / `ensure_ready` | `run_dsh_turn` 约 3s 提示 |
+| 接近 **7 分钟**仍无终稿 | 天玑泵看门狗 **420s** 空闲超时未到或未触发 | `run_agent_and_stream` |
+| 接近 **10 分钟** | DSH 整轮 **600s**（`DSH_TURN_TIMEOUT`） | `run_dsh_turn` 外层 |
+| 出现过审批码后沉默 | 审批 **5 分钟** 自动拒绝 | `APPROVAL_TTL` / `APPROVAL_WAIT` |
+| **半天**仍是思考中、从未超时收尾 | 看门狗前死锁、通道已换代未 `ensure_stream_finished`、或 finish 写出失败 | 对照 [wecom-stuck-20261029](<wecom-stuck-20261029.md>)；查 `channel_changed` / retire |
+
+排障类问句在终稿模式下**中间不会出现工具标题**；引擎若仍在查日志 / 读仓，聊天侧也会停在思考中——先用 `进度` 区分「还在跑」还是「已死」。未拿到进度 / 诊断证据前，不要假定是模型 TTFT 问题；也不要为此回退 350ms 正文流式或把内部 stall 默认推回气泡。
 
 ## 请求级诊断增强（2026-10-29）
 
@@ -225,7 +260,7 @@ DSH 的每个 profile 是**独立组合**：`~/.dsh/profiles/<name>/package.json
   **多轮上下文由 DSH 自己维护**，不再把本机短历史塞进 prompt；问答旁证仍单独写入。
   新个人/共享会话从空上下文开始，不自动继承旧群历史；旧私聊没有可靠机器人归属也不自动迁入。
   同一新版逻辑会话切回天玑时可读取该作用域自己的旁证，不跨作用域复制。
-- **正文流式（2026-10-31）**：普通（非排障）问答在 `agent_message_chunk` 到达时，按约 350ms 节流把**累计 Markdown** 写入同一 `stream`（`finish=false`）；`Done` 仍走 `send_finish`（含耗时尾注）。**排障** `protected_answer` 路径继续全缓冲至 `Done`，再经报告/引用/源码校验一次发出，不流式半成品 JSON。进度、排队、stall 与审批提示照常；`agent_thought_chunk` / `tool_call` / `usage_update` 不逐步播报。若需把本地文件发回企微，模型可写一行 `WECOM_ATTACH:<path>`（宿主剥离标记并经 `wecom_media` 上传；需已登记 `out_targets`）。
+- **出站终稿（2026-11-11，对齐 dsh-im）**：企微侧可见动态默认是 **「正在思考中…」占位 + 最终全文**（另可保留排队/冷启动一句、审批提示）。引擎内部仍可流式累计；**不再**按 350ms 把正文/`正在执行`/思考进度刷进企微气泡，stall 与 30s 进度心跳只进内部状态/排障日志，不改气泡。**排障** `protected_answer` 仍全缓冲至 `Done`，校验后再一次发出。桌面天玑窗本地流式不受影响。若需把本地文件发回企微，模型可写一行 `WECOM_ATTACH:<path>`（宿主剥离标记并经 `wecom_media` 上传；需已登记 `out_targets`）。长时间停在思考中的操作员路径见上文「半天思考中：操作员三步」。
 - **收尾**：`session/prompt` 的 `stopReason` 映射成一句提示（截断 / 工具步数上限 /
   拒绝 / 取消）；DSH 回合看门狗 600 秒，超时先 `session/cancel` 再收尾（日志采集与补查合计另限 120 秒累计采集耗时）。
 
@@ -407,7 +442,7 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 
 ## 引擎优先问答（2026-11-03）
 
-企微问答默认把**用户原文 + 入站图片**交给所选引擎的多模态入口（天玑 vision / DSH image block），**不做宿主 OCR**。长连接回调的 `image.url` / `file.url` 下载体是密文，必须用同条消息的 `aeskey`（AES-256-CBC，IV=密钥前 16 字节）解密后再落盘；漏解密会把乱码当 `.jpg` 喂模型，表现为「图片没有识别到」。宿主只做：
+企微问答默认把**用户原文 + 入站图片**交给所选引擎的多模态入口（天玑 vision / DSH image block），**不做宿主 OCR**。长连接回调的 `image.url` / `file.url` 下载体是密文，必须用同条消息的 `aeskey`（AES-256-CBC，IV=密钥前 16 字节）解密后再落盘；漏解密会把乱码当 `.jpg` 喂模型，表现为「图片没有识别到」。解密语义对齐 `@wecom/aibot-node-sdk` 的 `decryptFile` / dsh-im-connect（Base64 容忍无 `=` 填充，CBC + 手动 PKCS#7≤32）。宿主只做：
 
 - 访问策略 / 排队 / 停止与状态 / 出站媒体
 - **能力卡**（文档目录、代码工具、日志是否可用及如何请求）
@@ -433,7 +468,7 @@ DSH 请求授权时发 `session/request_permission`（选项固定为 `allow-onc
 | 企微业务（文档/日程/智能表格 8 工具） | ✅ `wecom_*` 工具 | ❌ 不下发 | DSH 用自己的工具集，没有这组企微 Open API 工具 |
 | 出站富媒体（发图/文件回对话） | ✅ `wecom_send_image/file`（Sensitive 档） | ✅ `WECOM_ATTACH:path` 宿主上传（同 `wecom_media`） | 两档均登记 `out_targets`；二进制上传需业务 API 凭证，字段待真机联调 |
 | 入站图片（vision） | ✅ 落盘后内联 image 块 | ✅ ACP 宣告 `promptCapabilities.image` 时内联 | 多模态直传，宿主不做 OCR；长连接 `url` 下载后须用消息内 `aeskey` 做 AES-256-CBC 解密再落盘（缺密钥且无图片魔数则失败）；仅 `media_id` 时走 `media/get`（明文，需业务 API）；无 vision 时降级路径提示 |
-| 普通问答 Markdown 流式 | ✅ 天玑 Done 前也可按需扩展 | ✅ 非排障 350ms 累计 stream | 排障仍校验后一次出报告 |
+| 企微出站动态 | ✅ 思考占位 + Done 终稿（窗内桌面仍可本地流式） | ✅ 同左（对齐 dsh-im；非排障也不中间刷正文） | 排障仍校验后一次出报告；审批/冷启动提示可单独出现 |
 | 审批粒度 | 一次 / 本轮同类 / 以后都允许 | 仅一次性（ACP 限制） | 企微里回「码 3」在 DSH 档会被明确告知只有一次性 |
 | 天玑专属安全（冲突仓库拒绝 / 受保护路径 / 命令黑名单 / 删除进回收站 / diff 审批卡） | ✅ | ❌（由 DSH 自己的沙箱兜底） | 见上「权限档位 → DSH 沙箱」 |
 

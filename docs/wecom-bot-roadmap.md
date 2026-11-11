@@ -1,7 +1,9 @@
 # 企微机器人对接 — 开发计划
 
-> 目标：补齐企微通道与桌面端天玑体验的差距。当前已实现「文本/语音(转写)入站 → 策略闸门 → 天玑 agent → 纯文本流式出站 + 配对/白名单/脱敏/并发」。
+> 目标：补齐企微通道与桌面端天玑体验的差距。当前已实现「文本/语音(转写)入站 → 策略闸门 → 天玑/DSH agent → 思考占位 + 终稿出站（对齐 dsh-im）+ 配对/白名单/脱敏/并发」；桌面天玑窗仍可本地流式。
 > 本计划按用户价值与实现成本排序，分四期。每期末尾给验收口径。
+
+**2026-11-11**：多机器人已落地——`settings.wecomBots[]` 每 bot 独立凭据/工作区/引擎/准入；后端 `BotRuntime` 多 WS + 双 DSH；设置页通道 Tab 列表扫码/手动接入。流畅度：早 ack「正在思考中…」、工具/思考进度帧、排队即时回执、按 bot `kick_dsh`。详见 `docs/wecom-dsh-engine.md`「多 bot 运行实例」。
 
 ---
 
@@ -123,7 +125,7 @@
 
 ## 已落地（2026-10-31 批次，DSH 为主）
 
-- **普通问答 Markdown 真流式**：DSH 非 `protected` 回合对 `agent_message_chunk` 按 350ms 节流推累计 `respond_stream`；排障仍全缓冲 + 报告校验。
+- **普通问答 Markdown 真流式（已由终稿模式取代，2026-11-11）**：原 DSH 非 `protected` 350ms 累计 `respond_stream` 已关掉；企微默认「思考占位 + 终稿」，工具/stall/心跳不刷气泡；排障仍全缓冲 + 报告校验；桌面天玑本地流式不变。
 - **入站富媒体**：`MediaRef` 支持仅 `media_id`；`wecom_media::materialize_inbound` 落盘 `wecom-media/<msgid>/`（7 天回收），图片内联 / 文本附件读入 / 二进制给路径。
 - **DSH 出站**：回合登记 `out_targets`；回复中 `WECOM_ATTACH:<path>` 由宿主剥离并 `send_image`/`send_file`。
 - **设置页**：会话指令清单、连接排查清单、docgen 启用 checklist（中英 i18n）。

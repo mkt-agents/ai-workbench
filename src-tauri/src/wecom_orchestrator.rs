@@ -1,4 +1,4 @@
-//! 企微入站 → 策略 → agent_run → 流式回写。
+//! 企微入站 → 策略 → agent_run → 终稿回写（对齐 dsh-im：思考占位 + 最终全文）。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,12 +24,8 @@ use crate::wecom_ws::WecomSocket;
 
 /// DSH 单回合上限：比天玑的 420s 看门狗宽，因为 ACP 侧可能连着跑很久的工具。
 const DSH_TURN_TIMEOUT: Duration = Duration::from_secs(600);
-/// 回合里超过这么久没有任何事件，就给聊天里补一句「还在处理」，别让人对着「思考中」干等。
+/// 回合里超过这么久没有任何事件，只写排障日志（终稿模式不往企微刷 stall 句）。
 const DSH_STALL_NOTE: Duration = Duration::from_secs(90);
-/// 等同一会话上一轮结束时，超过这么久提示用户「在排队」。
-const SESSION_QUEUE_NOTE: Duration = Duration::from_secs(8);
-/// 非排障 Markdown 真流式：累计正文节流推送到企微 stream（与路线图 300–400ms 对齐）。
-const ANSWER_STREAM_THROTTLE: Duration = Duration::from_millis(350);
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +87,10 @@ fn default_true() -> bool {
 
 pub struct Orchestrator {
     pub sock: Arc<WecomSocket>,
+    pub bot_id: Arc<Mutex<String>>,
+    pub dsh: Arc<crate::wecom_dsh::DshEngine>,
+    pub skywalking: Arc<Mutex<(String, String)>>,
+    pub skywalking_timezone: Arc<Mutex<Option<i32>>>,
     pub policy: Arc<Mutex<PolicyState>>,
     pub agent: Arc<Mutex<Option<WecomAgentConfig>>>,
     pub bot_display_name: Arc<Mutex<String>>,
@@ -155,9 +155,19 @@ impl RunningTurn {
 }
 
 impl Orchestrator {
-    pub fn new(sock: Arc<WecomSocket>) -> Self {
+    pub fn new(
+        sock: Arc<WecomSocket>,
+        dsh: Arc<crate::wecom_dsh::DshEngine>,
+        bot_id: String,
+        skywalking: Arc<Mutex<(String, String)>>,
+        skywalking_timezone: Arc<Mutex<Option<i32>>>,
+    ) -> Self {
         Self {
             sock,
+            bot_id: Arc::new(Mutex::new(bot_id)),
+            dsh,
+            skywalking,
+            skywalking_timezone,
             policy: Arc::new(Mutex::new(PolicyState {
                 require_mention: true,
                 ..Default::default()
@@ -359,12 +369,9 @@ impl Orchestrator {
                 break;
             }
             _ = heartbeat.tick() => {
+                // 终稿模式：心跳只推进 progress 内部状态（供「状态」指令），不往企微改气泡。
                 if !self.retiring.load(Ordering::SeqCst) && !crate::wecom_reply::is_finished(&stream_id) {
-                    if let Some(note) = crate::wecom_progress::heartbeat(&diagnostic_request) {
-                        // A slow/closed socket must not block the cancellation or work future.
-                        let _ = tokio::time::timeout(Duration::from_millis(200), self.sock.send_raw(
-                            wecom_proto::respond_stream(&msg.req_id, &stream_id, &note, false))).await;
-                    }
+                    let _ = crate::wecom_progress::heartbeat(&diagnostic_request);
                 }
             }
         } }
@@ -430,14 +437,7 @@ impl Orchestrator {
         }
 
         let is_group = msg.chattype.eq_ignore_ascii_case("group");
-        let bot = app
-            .state::<WecomState>()
-            .applied
-            .lock()
-            .await
-            .as_ref()
-            .map(|c| c.bot_id.clone())
-            .unwrap_or_default();
+        let bot = self.bot_id.lock().await.clone();
         if bot.is_empty()
             || msg.userid.trim().is_empty()
             || (is_group && msg.chatid.as_deref().unwrap_or("").trim().is_empty())
@@ -499,6 +499,12 @@ impl Orchestrator {
                 },
             }
         };
+
+        // 准入通过后立刻占位（对齐 dsh-im「正在思考中…」），不等任务路由 / 会话锁。
+        // 静默拒绝路径上面已 return，不会到这里。
+        if self.ack(&msg, &stream_id).await {
+            acked.store(true, Ordering::SeqCst);
+        }
 
         let mut task_id: Option<String> = None;
         let mut task_owner: Option<String> = None;
@@ -568,10 +574,7 @@ impl Orchestrator {
                     .lock()
                     .await
                     .retain(|_, p| p.owner.session != ended_key);
-                app.state::<WecomState>()
-                    .dsh
-                    .reset_channel_session(&ended_key)
-                    .await;
+                self.dsh.reset_channel_session(&ended_key).await;
                 // Task identity is never reused; preserve archived reply history, remove live metadata after the current turn settles.
                 let cleanup_session = ended_session.clone();
                 match tokio::task::spawn_blocking(move || {
@@ -643,13 +646,12 @@ impl Orchestrator {
                 send_finish(&self.sock, &msg.req_id, stream_id, "会话历史重置失败，未开始新会话；请查看本机日志后重试。").await;
                 return;
             }
-            let state = app.state::<WecomState>();
-            let repo = state.dsh.workspace().await;
-            let (addr, header) = state.skywalking.lock().await.clone();
-            let offset = *state.skywalking_timezone.lock().await;
+            let repo = self.dsh.workspace().await;
+            let (addr, header) = self.skywalking.lock().await.clone();
+            let offset = *self.skywalking_timezone.lock().await;
             let query_key = crate::wecom_investigation::context_key(&bot, &key, &key, &repo, &addr, &header, offset);
             crate::wecom_investigation::clear_context_for(&query_key);
-            state.dsh.reset_channel_session(&key).await;
+            self.dsh.reset_channel_session(&key).await;
             crate::wecom_diagnostics::record(&format!("wecom-{}", msg.msgid), "session", "reset", None, None,
                 serde_json::json!({"sessionKey":key}));
             if user_text.trim().is_empty() {
@@ -755,11 +757,11 @@ impl Orchestrator {
                 .clone()
         };
 
-        // 平台对「收到消息后的首次应答」有时间窗，而引擎冷启动 / 模型首 token 都可能更久；
-        // 先无条件占位一条（同一个 stream id），后面的正文继续更新它，避免整轮被平台丢掉。
-        // 注意：占位要在拿会话锁**之前**——同一会话上一轮如果卡住，这一条至少不会无声无息。
-        if self.ack(&msg, &stream_id).await {
-            acked.store(true, Ordering::SeqCst);
+        // 占位已在策略通过后发出；此处仅兜底（例如未来路径跳过早 ack）。
+        if !acked.load(Ordering::SeqCst) {
+            if self.ack(&msg, &stream_id).await {
+                acked.store(true, Ordering::SeqCst);
+            }
         }
 
         // COS 临时链约 5 分钟过期：准入后立刻开拉（与会话排队并行），prompt 组装时命中缓存。
@@ -770,8 +772,9 @@ impl Orchestrator {
             let app_pref = app.clone();
             let msgid = msg.msgid.clone();
             let media = msg.media.clone();
+            let bot_pref = bot.clone();
             Some(tokio::spawn(async move {
-                crate::wecom_media::materialize_inbound(&app_pref, &msgid, &media).await;
+                crate::wecom_media::materialize_inbound(&app_pref, &bot_pref, &msgid, &media).await;
             }))
         };
         let engine_name = self.engine.lock().await.clone();
@@ -789,9 +792,9 @@ impl Orchestrator {
             ),
         );
 
-        // 同会话串行：上一轮如果卡住，这里先说明在排队，别让用户以为消息丢了。
+        // 同会话串行：锁被占用时立刻回执「已排队」。
         let queue_started = Instant::now();
-        let _session_guard = match tokio::time::timeout(SESSION_QUEUE_NOTE, lock.lock()).await {
+        let _session_guard = match lock.try_lock() {
             Ok(guard) => guard,
             Err(_) => {
                 let _ = self
@@ -932,6 +935,7 @@ impl Orchestrator {
                 st.out_targets.lock().await.insert(
                     format!("wecom-{}", msg.msgid),
                     crate::wecom_channel::OutTarget {
+                        bot_id: bot.clone(),
                         req_id: msg.req_id.clone(),
                         stream_id: stream_id.clone(),
                     },
@@ -968,7 +972,7 @@ impl Orchestrator {
 
         // 把文字 + 图片/文件附件组装成一条带 vision 块的用户消息
         let user_msg =
-            build_user_message(&app, &msg.msgid, &user_text, &msg.media, agent_cfg.vision).await;
+            build_user_message(&app, &bot, &msg.msgid, &user_text, &msg.media, agent_cfg.vision).await;
 
         // 记录当前回合的出站目标，供 wecom_send_image/file 把媒体发回同一条对话
         {
@@ -976,6 +980,7 @@ impl Orchestrator {
             st.out_targets.lock().await.insert(
                 format!("wecom-{}", msg.msgid),
                 crate::wecom_channel::OutTarget {
+                    bot_id: bot.clone(),
                     req_id: msg.req_id.clone(),
                     stream_id: stream_id.clone(),
                 },
@@ -1003,13 +1008,13 @@ impl Orchestrator {
         }
     }
 
-    /// DSH（DeepSeek Harness）档的一轮：常驻 ACP 进程跑完 prompt，提交点节流回写。
+    /// DSH（DeepSeek Harness）档的一轮：常驻 ACP 进程跑完 prompt，终稿一次回写。
     ///
     /// 与天玑档的差别：
     /// - 上下文由 DSH 的 session 自己维护，不把 `wecom_session` 历史塞进 prompt；
     /// - 授权走 `session/request_permission` → 企微审批码（只有一次性授权）；
     /// - 入站图片/文件经 wecom_media 落盘；ACP 支持 image 时内联，否则给路径/文本预览；
-    /// - 出站用 WECOM_ATTACH:path（宿主 out_targets），非排障正文 350ms 累计流式。
+    /// - 出站用 WECOM_ATTACH:path（宿主 out_targets）；企微可见动态对齐 dsh-im（思考占位 + 终稿，不节流刷正文/工具标题）。
     async fn run_dsh_turn(
         &self,
         app: &AppHandle,
@@ -1066,10 +1071,7 @@ impl Orchestrator {
         };
         self.unregister_running(session, stream_id).await;
         if session_closed(&session.as_str()) {
-            app.state::<WecomState>()
-                .dsh
-                .reset_channel_session(&session.as_str())
-                .await;
+            self.dsh.reset_channel_session(&session.as_str()).await;
         }
         result
     }
@@ -1083,8 +1085,7 @@ impl Orchestrator {
         stream_id: &str,
         preflight_request: &str,
     ) -> Result<(), String> {
-        let state = app.state::<WecomState>();
-        let engine = Arc::clone(&state.dsh);
+        let engine = Arc::clone(&self.dsh);
         let req_id = msg.req_id.clone();
         let turn_deadline = tokio::time::Instant::now() + DSH_TURN_TIMEOUT;
 
@@ -1101,8 +1102,8 @@ impl Orchestrator {
             }
         };
         // 引擎优先：原文直达 DSH；宿主不默认 investigate / 抽词澄清 / 空壳报告。
-        let (addr, header) = state.skywalking.lock().await.clone();
-        let offset = *state.skywalking_timezone.lock().await;
+        let (addr, header) = self.skywalking.lock().await.clone();
+        let offset = *self.skywalking_timezone.lock().await;
         let oap_ready = !addr.trim().is_empty();
         let enhance = self.take_enhance_block("dsh", msg).await;
         let mode_rules = format!(
@@ -1110,13 +1111,7 @@ impl Orchestrator {
             capability_card("dsh", &answer_mode, &doc_dir, oap_ready),
             enhance
         );
-        let bot = state
-            .applied
-            .lock()
-            .await
-            .as_ref()
-            .map(|c| c.bot_id.clone())
-            .unwrap_or_default();
+        let bot = self.bot_id.lock().await.clone();
         let context_key = crate::wecom_investigation::context_key(
             &bot,
             &session.as_str(),
@@ -1265,8 +1260,10 @@ impl Orchestrator {
         let answer_level = "unknown".to_string();
         let mut has_evidence = false;
         let mut store = crate::wecom_evidence_store::EvidenceStore::new();
+        let bot = self.bot_id.lock().await.clone();
         let prompt_blocks = build_dsh_prompt(
             app,
+            &bot,
             &msg.msgid,
             user_text,
             &msg.media,
@@ -1305,10 +1302,7 @@ impl Orchestrator {
         let mut acc = String::new();
         let mut answer_buffer = crate::wecom_answer::AnswerBuffer::with_request(protected_answer, preflight_request);
         let mut last_event = std::time::Instant::now();
-        // 非排障路径：允许立刻推第一帧，之后按 ANSWER_STREAM_THROTTLE 节流。
-        let mut last_answer_stream =
-            Instant::now().checked_sub(ANSWER_STREAM_THROTTLE).unwrap_or_else(Instant::now);
-        // 最近一次动作（工具名），用来解释「为什么还在等」。
+        // 最近一次动作（工具名），只进排障日志；终稿模式不往企微刷工具/思考进度。
         let mut last_activity = String::new();
         let mut stall_notes = 0u32;
         let mut open_approvals: Vec<u64> = Vec::new();
@@ -1319,8 +1313,7 @@ impl Orchestrator {
         let final_text = loop {
             let event = tokio::select! {
                 ev = turn.next() => ev,
-                // 长时间没有任何事件：往同一个气泡里补一句「还在处理」，别让人对着「思考中」干等。
-                // 提示按 90s / 180s / 270s… 递增间隔，最多 5 次，不刷屏。
+                // 长时间无事件：只记 stall 日志，不改企微气泡（对齐 dsh-im 终稿体感）。
                 _ = tick.tick() => {
                     let due = DSH_STALL_NOTE + Duration::from_secs(90 * stall_notes as u64);
                     if last_event.elapsed() >= due && stall_notes < 5 && !crate::wecom_reply::is_finished(stream_id) {
@@ -1330,20 +1323,10 @@ impl Orchestrator {
                         } else {
                             format!("最近一步：{last_activity}")
                         };
-                        let note = format!("**仍在处理**：已 {} 秒没有新事件，正在等待模型或工具返回。", last_event.elapsed().as_secs());
                         crate::wecom_log::write(
                             "stall",
                             &format!("msgid={} {:?} {}", msg.msgid, last_event.elapsed(), what),
                         );
-                        let _ = self
-                            .sock
-                            .send_raw(wecom_proto::respond_stream(
-                                &req_id,
-                                stream_id,
-                                &note,
-                                false,
-                            ))
-                            .await;
                     }
                     continue;
                 }
@@ -1362,8 +1345,7 @@ impl Orchestrator {
                         .get("sessionUpdate")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    // 只播报正文；thought / tool_call / usage 不逐步刷屏，但要留进排障日志：
-                    // 「卡住时最后在做什么」只能从这里看出来。
+                    // 终稿模式：正文/思考/工具只缓冲与记日志，Done 时一次发出。
                     if kind == "agent_message_chunk" {
                         if let Some(text) = update
                             .get("content")
@@ -1371,27 +1353,10 @@ impl Orchestrator {
                             .and_then(|v| v.as_str())
                         {
                             answer_phase.output(text);
-                            // protected（排障）路径：push 返回 None，正文全缓冲至 Done 再校验渲染。
-                            // 普通问答：push 返回累计快照，节流写入同一 stream（企微 stream 语义=整段替换）。
-                            if let Some(snapshot) = answer_buffer.push(text) {
+                            // protected：push 返回 None，正文全缓冲至 Done 再校验渲染。
+                            // 普通问答：仍累计到 acc，但不中间推企微 stream。
+                            if answer_buffer.push(text).is_some() {
                                 acc.push_str(text);
-                                if last_answer_stream.elapsed() >= ANSWER_STREAM_THROTTLE
-                                    && !crate::wecom_reply::is_finished(stream_id)
-                                {
-                                    last_answer_stream = Instant::now();
-                                    let visible = stream_visible_answer(&snapshot);
-                                    if !visible.trim().is_empty() {
-                                        let _ = self
-                                            .sock
-                                            .send_raw(wecom_proto::respond_stream(
-                                                &req_id,
-                                                stream_id,
-                                                &visible,
-                                                false,
-                                            ))
-                                            .await;
-                                    }
-                                }
                             }
                         }
                     } else if kind == "tool_call" || kind == "tool_call_update" {
@@ -1413,8 +1378,6 @@ impl Orchestrator {
                             }
                         }
                     } else if kind == "agent_thought_chunk" {
-                        // 思考链不逐步刷屏（聊天里一堆「思考中」反而吵），但要进排障日志，
-                        // 并更新「最近一步」——卡住时 stall 提示能说清是在想还是在等工具。
                         if let Some(text) = update
                             .get("content")
                             .and_then(|c| c.get("text"))
@@ -1503,18 +1466,13 @@ impl Orchestrator {
                                         outcome.query = Some(original.clone());
                                     }
                                     log_query_round += 1;
-                                    let _ = self
-                                        .sock
-                                        .send_raw(wecom_proto::respond_stream(
-                                            &req_id,
-                                            stream_id,
-                                            &format!(
-                                                "正在按模型请求执行第{}轮日志查询…",
-                                                log_query_round
-                                            ),
-                                            false,
-                                        ))
-                                        .await;
+                                    crate::wecom_log::write(
+                                        "dsh",
+                                        &format!(
+                                            "msgid={} supplemental log query round {}",
+                                            msg.msgid, log_query_round
+                                        ),
+                                    );
                                     crate::wecom_progress::phase(preflight_request, "supplemental");
                                     match crate::wecom_investigation::supplemental(
                                         &addr,
@@ -1546,8 +1504,10 @@ impl Orchestrator {
                                                 log_evidence.push_str("\n\n【模型上一轮可见分析】\n");
                                                 log_evidence.push_str(visible_so_far.trim());
                                             }
+                                            let follow_bot = self.bot_id.lock().await.clone();
                                             let follow_blocks = build_dsh_prompt(
                                                 app,
+                                                &follow_bot,
                                                 &msg.msgid,
                                                 user_text,
                                                 &[],
@@ -1702,7 +1662,12 @@ impl Orchestrator {
                                     &acc,
                                 )
                                 .map(|(_, visible)| visible)
-                                .unwrap_or_else(|| acc.clone());
+                                .unwrap_or_else(|| {
+                                    // extract 未命中时仍截掉未完成补查标记，但保留 WECOM_ATTACH 给下方投递。
+                                    acc.find(crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK)
+                                        .map(|i| acc[..i].trim_end().to_string())
+                                        .unwrap_or_else(|| acc.clone())
+                                });
                                 let (visible, attachments) = split_wecom_attach(&raw);
                                 if !attachments.is_empty() {
                                     let request_id = format!("wecom-{}", msg.msgid);
@@ -1952,7 +1917,7 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
             .send_raw(wecom_proto::respond_stream(
                 &msg.req_id,
                 stream_id,
-                "收到，正在处理…",
+                "正在思考中…",
                 false,
             ))
             .await
@@ -2037,11 +2002,7 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
                 d
             }
         };
-        let skywalking_ready = {
-            let st = app.state::<WecomState>();
-            let empty = st.skywalking.lock().await.0.trim().is_empty();
-            !empty
-        };
+        let skywalking_ready = !self.skywalking.lock().await.0.trim().is_empty();
         // 引擎优先：能力卡 + 可选用户增强提示 + 原文。
         let enhance = self.take_enhance_block("tianji", msg).await;
         let mode_rules = format!(
@@ -2779,6 +2740,7 @@ fn reply_output_rules() -> &'static str {
 /// 文件一律降级为文本线索（ACP 文件输入需要 attachment receipt，首期不做）。
 async fn build_dsh_prompt(
     app: &AppHandle,
+    bot_id: &str,
     msgid: &str,
     user_text: &str,
     media: &[wecom_proto::MediaRef],
@@ -2805,7 +2767,7 @@ async fn build_dsh_prompt(
     let outcome = if media.is_empty() {
         crate::wecom_media::MaterializeOutcome::default()
     } else {
-        crate::wecom_media::materialize_inbound(app, msgid, media).await
+        crate::wecom_media::materialize_inbound(app, bot_id, msgid, media).await
     };
     let locals = &outcome.locals;
     for local in locals {
@@ -2863,6 +2825,7 @@ async fn build_dsh_prompt(
 /// 把文字 + 图片/文件附件组装成一条用户消息（天玑档）。
 async fn build_user_message(
     app: &AppHandle,
+    bot_id: &str,
     msgid: &str,
     user_text: &str,
     media: &[wecom_proto::MediaRef],
@@ -2877,7 +2840,7 @@ async fn build_user_message(
     let outcome = if media.is_empty() {
         crate::wecom_media::MaterializeOutcome::default()
     } else {
-        crate::wecom_media::materialize_inbound(app, msgid, media).await
+        crate::wecom_media::materialize_inbound(app, bot_id, msgid, media).await
     };
     let locals = &outcome.locals;
     for local in locals {
@@ -2940,7 +2903,8 @@ async fn read_file_base64(path: &std::path::Path) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
-/// 流式中间帧：未完成的 `WECOM_LOG_QUERY` JSON 不推给用户（Done 再完整剥离）。
+/// 截掉未完成的 `WECOM_LOG_QUERY` 再做可见 Markdown（单测与历史中间帧语义；终稿主路径用 extract + attach 拆分）。
+#[cfg_attr(not(test), allow(dead_code))]
 fn stream_visible_answer(snapshot: &str) -> String {
     let cut = snapshot
         .find(crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK)
@@ -3671,9 +3635,16 @@ mod tests {
         );
     }
 
+    fn orch_test(sock: Arc<WecomSocket>) -> Orchestrator {
+        let dsh = Arc::new(crate::wecom_dsh::DshEngine::new());
+        let sky = Arc::new(Mutex::new((String::new(), String::new())));
+        let tz = Arc::new(Mutex::new(None));
+        Orchestrator::new(sock, dsh, "test".into(), sky, tz)
+    }
+
     #[tokio::test]
     async fn orchestrator_stores_enhance_prompts_after_apply_fields() {
-        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
+        let orch = orch_test(Arc::new(WecomSocket::new()));
         *orch.enhance_dm_enabled.lock().await = true;
         *orch.enhance_group_enabled.lock().await = false;
         *orch.enhance_dm.lock().await = "dm-rule".into();
@@ -3787,7 +3758,7 @@ mod tests {
     async fn retirement_after_planning_closes_original_stream_before_socket_stop() {
         let sock = Arc::new(WecomSocket::new());
         let (mut frames, writer) = sock.capture_test_frames().await;
-        let orch = Orchestrator::new(sock.clone());
+        let orch = orch_test(sock.clone());
         let request = "wecom-retire-real-pattern";
         let stream = "stream-retire-real-pattern";
         crate::wecom_reply::register(stream);
@@ -3814,7 +3785,7 @@ mod tests {
     async fn retirement_preserves_already_frozen_completion_and_closes_queued_reply() {
         let sock = Arc::new(WecomSocket::new());
         let (mut frames, writer) = sock.capture_test_frames().await;
-        let orch = Orchestrator::new(sock.clone());
+        let orch = orch_test(sock.clone());
         crate::wecom_reply::register("stream-retire-done");
         crate::wecom_reply::finish("stream-retire-done", "completed first");
         crate::wecom_reply::register("stream-retire-queued");
@@ -3832,7 +3803,7 @@ mod tests {
 
     #[tokio::test]
     async fn welcome_text_uses_configured_self_intro_or_default() {
-        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
+        let orch = orch_test(Arc::new(WecomSocket::new()));
         assert_eq!(orch.welcome_text().await, DEFAULT_SELF_INTRO);
         *orch.self_intro.lock().await = "   ".into();
         assert_eq!(orch.welcome_text().await, DEFAULT_SELF_INTRO);
@@ -3853,7 +3824,7 @@ mod tests {
     async fn configured_intro_replies_to_new_conversation_greeting_without_ai() {
         let sock = Arc::new(WecomSocket::new());
         let (mut frames, writer) = sock.capture_test_frames().await;
-        let orch = Orchestrator::new(sock.clone());
+        let orch = orch_test(sock.clone());
         let configured = "你好！我是测试助手\n\n· 业务/功能\n· 技术/代码\n· 线上日志查询";
         *orch.self_intro.lock().await = configured.into();
         for (i, input) in ["新对话，你好", "新会话，你是谁？", "你好", "你是谁"].iter().enumerate() {
@@ -3917,7 +3888,7 @@ mod tests {
 
     #[test]
     fn set_max_jobs_clamps_out_of_range() {
-        let orch = Orchestrator::new(Arc::new(WecomSocket::new()));
+        let orch = orch_test(Arc::new(WecomSocket::new()));
         orch.set_max_jobs(4);
         assert_eq!(orch.admission.limit(), 4);
         // 0 / 越界回落默认

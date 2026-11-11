@@ -5,7 +5,7 @@ const MAX_ANSWER_BYTES: usize = 64 * 1024;
 
 /// `protected` is only for investigation turns. Keep the progress placeholder visible,
 /// not model tokens: even a Markdown prefix can be followed by internal JSON later.
-/// Unprotected turns retain ordinary cumulative streaming, including user-requested JSON.
+/// Unprotected turns still accumulate chunks in-process; WeCom only sees the final body.
 pub struct AnswerBuffer {
     protected: bool,
     text: String,

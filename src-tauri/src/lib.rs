@@ -897,7 +897,7 @@ desktop_embed::desktop_embed_relayout,
                 agent_proc::kill_all();
                 desktop_embed::release_all();
                 // 企微 DSH 引擎：常驻 node 子进程同样不能活过应用。
-                app.state::<wecom_channel::WecomState>().dsh.kill_now();
+                app.state::<wecom_channel::WecomState>().kill_all_dsh();
             }
         });
 }

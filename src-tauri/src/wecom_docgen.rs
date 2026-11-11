@@ -18,7 +18,7 @@ use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::wecom_channel::WecomState;
+use crate::wecom_channel::{BotRuntime, WecomState};
 
 #[path = "docgen_workspace.rs"]
 mod workspace;
@@ -818,14 +818,21 @@ fn truncate_chars(s: &str, max: usize) -> String {
 
 /// 由独立调度任务每分钟调用，不与其它每日 Job 串行等待。
 pub async fn auto_tick(app: AppHandle) -> Result<(), String> {
-    let cfg = {
-        let st = app.state::<WecomState>();
-        let g = st.docgen.lock().await;
-        g.clone()
-    };
-    if !cfg.enabled || cfg.workspace.trim().is_empty() {
-        return Ok(());
+    let st = app.state::<WecomState>();
+    let bots = st.bots_snapshot().await;
+    for bot in bots {
+        let cfg = bot.docgen.lock().await.clone();
+        if !cfg.enabled || cfg.workspace.trim().is_empty() {
+            continue;
+        }
+        if let Err(e) = auto_tick_one(&app, &bot, &cfg).await {
+            crate::wecom_log::write("docgen", &format!("auto tick bot={}: {e}", bot.applied.lock().await.as_ref().map(|c| c.bot_id.as_str()).unwrap_or("?")));
+        }
     }
+    Ok(())
+}
+
+async fn auto_tick_one(app: &AppHandle, bot: &BotRuntime, cfg: &DocgenConfig) -> Result<(), String> {
 
     let now = chrono::Local::now();
     let state = load_state();
@@ -849,7 +856,7 @@ pub async fn auto_tick(app: AppHandle) -> Result<(), String> {
         st.last_daily_slot = Some(pending.clone());
         st.pending_daily_slot = None;
         save_state(&st)?;
-        match run_update_with_trigger(&app, &cfg, RunTrigger::Schedule).await {
+        match run_update_with_trigger(&app, &cfg, RunTrigger::Schedule, Some(bot)).await {
             Ok(report) => crate::wecom_log::write("docgen", &format!("补跑完成：{}", report.summary_line())),
             Err(e) => {
                 crate::wecom_log::write("docgen", &format!("补跑失败：{e}"));
@@ -872,7 +879,7 @@ pub async fn auto_tick(app: AppHandle) -> Result<(), String> {
             &format!("auto schedule start branch={}", cfg.branch_or_default()),
         );
         let run_started = std::time::Instant::now();
-        match run_update_with_trigger(&app, &cfg, RunTrigger::Schedule).await {
+        match run_update_with_trigger(&app, &cfg, RunTrigger::Schedule, Some(bot)).await {
             Ok(report) => {
                 crate::wecom_log::write("docgen", &format!("auto schedule done: {}", report.summary_line()));
             }
@@ -915,7 +922,7 @@ pub async fn auto_tick(app: AppHandle) -> Result<(), String> {
 
     // 2) 本地 HEAD 轮询（不挡定点；成功只推进 last_commit）
     if cfg.poll_release {
-        if let Err(e) = maybe_poll_release(&app, &cfg).await {
+        if let Err(e) = maybe_poll_release(&app, bot, &cfg).await {
             crate::wecom_log::write("docgen", &format!("poll skip/fail: {e}"));
         }
     }
@@ -996,7 +1003,11 @@ pub fn next_run_at(cfg: &DocgenConfig, now: chrono::DateTime<chrono::Local>) -> 
     Ok(Some(candidate.format("%Y-%m-%d %H:%M").to_string()))
 }
 
-async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), String> {
+async fn maybe_poll_release(
+    app: &AppHandle,
+    bot: &BotRuntime,
+    cfg: &DocgenConfig,
+) -> Result<(), String> {
     let workspace = crate::git_commands::resolve_git_workspace(
         cfg.workspace.trim(),
         &cfg.doc_dir_or_default(),
@@ -1081,7 +1092,7 @@ async fn maybe_poll_release(app: &AppHandle, cfg: &DocgenConfig) -> Result<(), S
         ),
     );
     let run_started = std::time::Instant::now();
-    match run_update_with_trigger(&app, cfg, RunTrigger::Poll).await {
+    match run_update_with_trigger(app, cfg, RunTrigger::Poll, Some(bot)).await {
         Ok(report) => {
             crate::wecom_log::write("docgen", &format!("auto poll done: {}", report.summary_line()));
             Ok(())
@@ -1193,7 +1204,10 @@ pub struct DocgenProgressSnapshot {
 }
 
 pub async fn progress_snapshot(app: &AppHandle) -> DocgenProgressSnapshot {
-    let cfg = app.state::<WecomState>().docgen.lock().await.clone();
+    let cfg = match app.state::<WecomState>().first_bot().await {
+        Some(b) => b.docgen.lock().await.clone(),
+        None => DocgenConfig::default(),
+    };
     DocgenProgressSnapshot {
         progress: last_progress(),
         running: is_running(),
@@ -1313,26 +1327,31 @@ impl UpdateReport {
 }
 
 /// 手动「立即更新」。
-pub async fn run_update(app: &AppHandle, cfg: &DocgenConfig) -> Result<UpdateReport, String> {
+pub async fn run_update(
+    app: &AppHandle,
+    cfg: &DocgenConfig,
+    bot: Option<&BotRuntime>,
+) -> Result<UpdateReport, String> {
     let trigger = if cfg.preview_mode {
         RunTrigger::Preview
     } else {
         RunTrigger::Manual
     };
-    run_update_with_trigger(&app, cfg, trigger).await
+    run_update_with_trigger(app, cfg, trigger, bot).await
 }
 
 pub async fn run_update_with_trigger(
     app: &AppHandle,
     cfg: &DocgenConfig,
     trigger: RunTrigger,
+    bot: Option<&BotRuntime>,
 ) -> Result<UpdateReport, String> {
     let Some(_guard) = RunGuard::acquire() else {
         return Err("已有一个文档更新流程在跑，请稍后再试".into());
     };
     RUN_CANCEL.store(false, Ordering::SeqCst);
     let progress = RunProgress::new(app, trigger);
-    let result = run_update_inner(app, cfg, trigger, &progress).await;
+    let result = run_update_inner(app, cfg, trigger, &progress, bot).await;
     match result {
         // 流程走完但 AI 步骤失败：进度要显示失败，不能亮绿灯
         Ok(report) if report.failed() => {
@@ -1361,6 +1380,7 @@ async fn run_update_inner(
     cfg: &DocgenConfig,
     trigger: RunTrigger,
     progress: &RunProgress<'_>,
+    bot: Option<&BotRuntime>,
 ) -> Result<UpdateReport, String> {
     progress.stage("workspace", 5);
     let doc_dir_raw = cfg.doc_dir_or_default();
@@ -1641,6 +1661,7 @@ async fn run_update_inner(
         };
         match update_docs_with_agent(
             app,
+            bot,
             &execution_workspace,
             &doc_dir,
             &branch,
@@ -1679,6 +1700,7 @@ async fn run_update_inner(
                             require_running()?;
                             match update_docs_with_agent(
                                 app,
+                                bot,
                                 &execution_workspace,
                                 &doc_dir,
                                 &branch,
@@ -1735,6 +1757,7 @@ async fn run_update_inner(
         let files_for_qc = cap_quality_files(&qc_files, QUALITY_FILE_LIST_CAP);
         match quality_check_with_agent(
             app,
+            bot,
             &execution_workspace,
             &doc_dir,
             &branch,
@@ -2751,6 +2774,7 @@ pub fn build_quality_prompt(
 
 async fn update_docs_with_agent(
     app: &AppHandle,
+    bot: Option<&BotRuntime>,
     workspace: &str,
     doc_dir: &str,
     branch: &str,
@@ -2766,6 +2790,7 @@ async fn update_docs_with_agent(
     let summary = if engine.trim().eq_ignore_ascii_case("dsh") {
         dsh_turn(
             app,
+            bot,
             workspace,
             doc_dir,
             DOCGEN_SESSION,
@@ -2835,6 +2860,7 @@ async fn update_docs_with_agent(
 
 async fn quality_check_with_agent(
     app: &AppHandle,
+    bot: Option<&BotRuntime>,
     workspace: &str,
     doc_dir: &str,
     branch: &str,
@@ -2852,6 +2878,7 @@ async fn quality_check_with_agent(
     if engine.trim().eq_ignore_ascii_case("dsh") {
         return dsh_turn(
             app,
+            bot,
             workspace,
             doc_dir,
             DOCGEN_QC_SESSION,
@@ -2921,8 +2948,24 @@ const DOCGEN_QC_SESSION: &str = "docgen-qc";
 ///
 /// 原仓文档目录 + 宿主工具闸门；只读质检降到 Read，任何权限升级请求均拒绝。
 /// `timeout` / `timeout_label`：更新与质检用不同墙钟。
+async fn docgen_dsh_engine(
+    app: &AppHandle,
+    bot: Option<&BotRuntime>,
+) -> Result<std::sync::Arc<crate::wecom_dsh::DshEngine>, String> {
+    if let Some(b) = bot {
+        return Ok(std::sync::Arc::clone(&b.docgen_dsh));
+    }
+    let st = app.state::<WecomState>();
+    let b = st
+        .first_bot()
+        .await
+        .ok_or("未配置企微通道，无法启动文档 DSH 引擎")?;
+    Ok(std::sync::Arc::clone(&b.docgen_dsh))
+}
+
 async fn dsh_turn(
     app: &AppHandle,
+    bot: Option<&BotRuntime>,
     workspace: &str,
     doc_dir: &str,
     session_key: &str,
@@ -2932,10 +2975,7 @@ async fn dsh_turn(
     timeout: Duration,
     timeout_label: &str,
 ) -> Result<String, String> {
-    let dsh = {
-        let st = app.state::<WecomState>();
-        std::sync::Arc::clone(&st.docgen_dsh)
-    };
+    let dsh = docgen_dsh_engine(app, bot).await?;
     // 工作区用这一轮解析出来的仓库路径（设置页填的可能是父目录）。
     dsh.configure_docgen(workspace.to_string(), doc_dir.to_string(), session_key == DOCGEN_QC_SESSION).await;
     let label = timeout_label.to_string();

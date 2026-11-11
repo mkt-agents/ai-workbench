@@ -3,9 +3,10 @@
 //! 出站：图片走 inline base64（`aibot_respond_msg` 的 image.base64）；
 //! 文本文件直接贴回，二进制经 media/upload 拿 media_id（需业务 API 凭证）。
 //! 入站：回调 url 优先经 rustls 下载（避开部分 Windows Schannel `SEC_E_NO_CREDENTIALS`）；
-//! 长连接 `image/file.url` 返回密文，须用同条消息的 `aeskey`（AES-256-CBC，IV=密钥前 16 字节，
-//! PKCS#7 按至多 32 字节去填充）解密后再落盘；URL 失败且已配业务 API 时可选回退
-//! `media/get`；仅 media_id 时走 qyapi media/get（明文，需业务 API）。
+//! 长连接 `image/file.url` 返回密文，解密语义对齐 `@wecom/aibot-node-sdk` 的 `decryptFile`
+//! 与 dsh-im-connect（AES-256-CBC，IV=密钥前 16 字节，PKCS#7 至多 32；aeskey Base64
+//! 按 Node `Buffer.from(..., 'base64')` 容忍缺 `=`）；URL 失败且已配业务 API 时可选回退
+//! `media/get`；仅 media_id 时走 qyapi media/get（明文，需业务 API）。宿主不做 OCR。
 //! 素材落盘 `%APPDATA%\com.ai-workbench.app\wecom-media\<msgid>\`，mtime 超过 7 天回收；
 //! 同一 msgid 短时缓存，供准入后预取与组 prompt 复用。
 
@@ -15,7 +16,7 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Manager};
 
@@ -99,18 +100,30 @@ pub struct LocalMedia {
 fn lookup_target(
     targets: &HashMap<String, OutTarget>,
     request_id: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, String), String> {
     targets
         .get(request_id)
-        .map(|t| (t.req_id.clone(), t.stream_id.clone()))
+        .map(|t| (t.bot_id.clone(), t.req_id.clone(), t.stream_id.clone()))
         .ok_or_else(|| "当前请求没有进行中的企微对话，发送目标已失效".into())
 }
 
 /// 当前回合的企微出站目标（由 orchestrator 按 agent request_id 登记）。
-async fn target(app: &AppHandle, request_id: &str) -> Result<(String, String), String> {
+async fn target_sock(
+    app: &AppHandle,
+    request_id: &str,
+) -> Result<(Arc<crate::wecom_ws::WecomSocket>, String, String), String> {
     let st = app.state::<WecomState>();
-    let targets = st.out_targets.lock().await;
-    lookup_target(&targets, request_id)
+    let (bot_id, req_id, stream_id) = {
+        let targets = st.out_targets.lock().await;
+        lookup_target(&targets, request_id)?
+    };
+    let sock = st
+        .bot(&bot_id)
+        .await
+        .ok_or_else(|| format!("机器人 {bot_id} 未连接"))?
+        .sock
+        .clone();
+    Ok((sock, req_id, stream_id))
 }
 
 /// 把本地图片作为 inline base64 发回当前企微对话。
@@ -119,14 +132,13 @@ pub async fn send_image(
     path: &str,
     request_id: &str,
 ) -> Result<String, String> {
-    let (req_id, stream_id) = target(app, request_id).await?;
+    let (sock, req_id, stream_id) = target_sock(app, request_id).await?;
     let name = file_name(path);
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| format!("读取图片失败：{e}"))?;
     let media_type = mime_of(path);
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    let sock = app.state::<WecomState>().sock.clone();
     sock.send_raw(wecom_proto::respond_image(
         &req_id, &stream_id, &media_type, &data,
     ))
@@ -141,12 +153,11 @@ pub async fn send_file(
     path: &str,
     request_id: &str,
 ) -> Result<String, String> {
-    let (req_id, stream_id) = target(app, request_id).await?;
+    let (sock, req_id, stream_id) = target_sock(app, request_id).await?;
     let name = file_name(path);
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| format!("读取文件失败：{e}"))?;
-    let sock = app.state::<WecomState>().sock.clone();
 
     if let Ok(text) = std::str::from_utf8(&bytes) {
         let preview: String = if text.chars().count() > 4000 {
@@ -165,7 +176,7 @@ pub async fn send_file(
         return Ok(format!("已发送文件内容：{name}"));
     }
 
-    match upload_media(app, &bytes, &mime_of(path)).await {
+    match upload_media(app, request_id, &bytes, &mime_of(path)).await {
         Ok(media_id) => {
             sock.send_raw(wecom_proto::respond_file(
                 &req_id,
@@ -197,12 +208,28 @@ pub async fn send_file(
 /// 复用 `wecom_biz::access_token`（自建应用 Corpid/Secret 优先、带缓存与 40013 可操作提示）；
 /// 机器人 Bot ID/Secret 当 corpid 用会被企微拒（40013），所以绝不能直接拿它换 token。
 /// 端点/字段以线上协议为准；失败由调用方兜底。
-async fn upload_media(app: &AppHandle, bytes: &[u8], media_type: &str) -> Result<String, String> {
+async fn upload_media(
+    app: &AppHandle,
+    request_id: &str,
+    bytes: &[u8],
+    media_type: &str,
+) -> Result<String, String> {
     let st = app.state::<WecomState>();
-    let creds = st.applied.lock().await.clone().ok_or("企微未连接")?;
+    let bot_id = st
+        .out_targets
+        .lock()
+        .await
+        .get(request_id)
+        .map(|t| t.bot_id.clone())
+        .ok_or("企微未连接")?;
+    let bot = st
+        .bot(&bot_id)
+        .await
+        .ok_or_else(|| format!("机器人 {bot_id} 未连接"))?;
+    let creds = bot.applied.lock().await.clone().ok_or("企微未连接")?;
     let client = reqwest::Client::new();
 
-    let token = crate::wecom_biz::access_token(&st, &creds).await?;
+    let token = crate::wecom_biz::access_token(&bot, &creds).await?;
     let up = format!("{QYAPI}/media/upload?access_token={token}&type=file");
     let boundary = "----wecomrustbnd";
     let mut body: Vec<u8> = Vec::new();
@@ -262,6 +289,7 @@ pub fn media_fetch_failure_text(errors: &[String]) -> String {
 /// 同一 msgid 命中短时缓存则直接复用，避免二次下载。
 pub async fn materialize_inbound(
     app: &AppHandle,
+    bot_id: &str,
     msgid: &str,
     media: &[MediaRef],
 ) -> MaterializeOutcome {
@@ -280,7 +308,7 @@ pub async fn materialize_inbound(
     let mut out = Vec::new();
     let mut errors = Vec::new();
     for (i, m) in media.iter().enumerate() {
-        match fetch_inbound_bytes(app, m).await {
+        match fetch_inbound_bytes(app, bot_id, m).await {
             Ok((bytes, media_type)) => {
                 let name = m
                     .filename
@@ -331,6 +359,7 @@ pub async fn materialize_inbound(
 
 async fn fetch_inbound_bytes(
     app: &AppHandle,
+    bot_id: &str,
     m: &MediaRef,
 ) -> Result<(Vec<u8>, String), String> {
     if !m.url.trim().is_empty() {
@@ -343,8 +372,8 @@ async fn fetch_inbound_bytes(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                 {
-                    if biz_api_ready(app).await {
-                        match download_media_id(app, id).await {
+                    if biz_api_ready(app, bot_id).await {
+                        match download_media_id(app, bot_id, id).await {
                             Ok(v) => {
                                 crate::wecom_log::write(
                                     "media-in",
@@ -375,14 +404,17 @@ async fn fetch_inbound_bytes(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "媒体缺少 url 与 media_id".to_string())?;
-    download_media_id(app, media_id)
+    download_media_id(app, bot_id, media_id)
         .await
         .map_err(|e| friendly_media_fetch_error(&e))
 }
 
-async fn biz_api_ready(app: &AppHandle) -> bool {
+async fn biz_api_ready(app: &AppHandle, bot_id: &str) -> bool {
     let st = app.state::<WecomState>();
-    let Some(creds) = st.applied.lock().await.clone() else {
+    let Some(bot) = st.bot(bot_id).await else {
+        return false;
+    };
+    let Some(creds) = bot.applied.lock().await.clone() else {
         return false;
     };
     biz_api_configured(&creds)
@@ -448,8 +480,43 @@ async fn download_url(url: &str) -> Result<(Vec<u8>, String), String> {
 
 type Aes256CbcDec = cbc::Decryptor<Aes256>;
 
-/// 企微智能机器人长连接媒体：AES-256-CBC，密钥为 aeskey 的 base64 解码（32 字节），
-/// IV 取密钥前 16 字节；填充为 PKCS#7，文档要求填充到 32 字节倍数（去填充上限 32）。
+/// 对齐 Node `Buffer.from(aesKey, 'base64')` / SDK `decryptFile`：企微常下发无 `=` 的
+/// 32 字节密钥 Base64；Rust `STANDARD` 会报 Invalid padding，需补齐后再解。
+pub fn decode_wecom_media_aeskey(raw: &str) -> Result<[u8; 32], String> {
+    let mut s: String = raw
+        .trim()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if s.is_empty() {
+        return Err("aeskey 为空".into());
+    }
+    // URL-safe 偶发出现；SDK 主路径是标准字母表，这里顺手归一。
+    s = s.replace('-', "+").replace('_', "/");
+    let rem = s.len() % 4;
+    if rem != 0 {
+        s.extend(std::iter::repeat('=').take(4 - rem));
+    }
+    let decoded = match base64::engine::general_purpose::STANDARD.decode(&s) {
+        Ok(v) => v,
+        Err(e_std) => base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(s.trim_end_matches('='))
+            .map_err(|e_np| format!("aeskey base64 无效：{e_std} / no-pad: {e_np}"))?,
+    };
+    if decoded.len() != 32 {
+        return Err(format!(
+            "aeskey 解码后应为 32 字节（AES-256），实际 {}",
+            decoded.len()
+        ));
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&decoded);
+    Ok(key)
+}
+
+/// 企微智能机器人长连接媒体解密，语义对齐 `@wecom/aibot-node-sdk` `decryptFile`
+/// 与 dsh-im-connect：AES-256-CBC，密钥为 aeskey 的 Base64（32 字节），IV=密钥前 16 字节，
+/// `setAutoPadding(false)` 后手动去 PKCS#7（pad ∈ [1, 32]）。
 pub fn decrypt_wecom_media(encrypted: &[u8], aeskey_b64: &str) -> Result<Vec<u8>, String> {
     if encrypted.is_empty() {
         return Err("加密媒体为空".into());
@@ -460,15 +527,7 @@ pub fn decrypt_wecom_media(encrypted: &[u8], aeskey_b64: &str) -> Result<Vec<u8>
             encrypted.len()
         ));
     }
-    let key = base64::engine::general_purpose::STANDARD
-        .decode(aeskey_b64.trim())
-        .map_err(|e| format!("aeskey base64 无效：{e}"))?;
-    if key.len() != 32 {
-        return Err(format!(
-            "aeskey 解码后应为 32 字节（AES-256），实际 {}",
-            key.len()
-        ));
-    }
+    let key = decode_wecom_media_aeskey(aeskey_b64)?;
     let mut buf = encrypted.to_vec();
     let plain = Aes256CbcDec::new_from_slices(&key, &key[..16])
         .map_err(|e| format!("AES 初始化失败：{e}"))?
@@ -518,10 +577,18 @@ fn sniff_media_type(bytes: &[u8]) -> Option<String> {
 }
 
 /// 经自建应用凭证拉取临时素材；机器人 Bot Secret 不能换 token。
-async fn download_media_id(app: &AppHandle, media_id: &str) -> Result<(Vec<u8>, String), String> {
+async fn download_media_id(
+    app: &AppHandle,
+    bot_id: &str,
+    media_id: &str,
+) -> Result<(Vec<u8>, String), String> {
     let st = app.state::<WecomState>();
-    let creds = st.applied.lock().await.clone().ok_or("企微未连接")?;
-    let token = crate::wecom_biz::access_token(&st, &creds).await?;
+    let bot = st
+        .bot(bot_id)
+        .await
+        .ok_or_else(|| format!("机器人 {bot_id} 未连接"))?;
+    let creds = bot.applied.lock().await.clone().ok_or("企微未连接")?;
+    let token = crate::wecom_biz::access_token(&bot, &creds).await?;
     let url = format!("{QYAPI}/media/get?access_token={token}&media_id={media_id}");
     let resp = rustls_client()
         .get(&url)
@@ -681,6 +748,7 @@ mod tests {
             (
                 "agent-a".into(),
                 OutTarget {
+                    bot_id: "bot-a".into(),
                     req_id: "callback-a".into(),
                     stream_id: "stream-a".into(),
                 },
@@ -688,6 +756,7 @@ mod tests {
             (
                 "agent-b".into(),
                 OutTarget {
+                    bot_id: "bot-b".into(),
                     req_id: "callback-b".into(),
                     stream_id: "stream-b".into(),
                 },
@@ -700,11 +769,11 @@ mod tests {
         let targets = targets();
         assert_eq!(
             lookup_target(&targets, "agent-a").unwrap(),
-            ("callback-a".into(), "stream-a".into())
+            ("bot-a".into(), "callback-a".into(), "stream-a".into())
         );
         assert_eq!(
             lookup_target(&targets, "agent-b").unwrap(),
-            ("callback-b".into(), "stream-b".into())
+            ("bot-b".into(), "callback-b".into(), "stream-b".into())
         );
     }
 
@@ -715,7 +784,7 @@ mod tests {
         assert!(lookup_target(&targets, "agent-a").is_err());
         assert_eq!(
             lookup_target(&targets, "agent-b").unwrap(),
-            ("callback-b".into(), "stream-b".into())
+            ("bot-b".into(), "callback-b".into(), "stream-b".into())
         );
     }
 
@@ -773,15 +842,47 @@ mod tests {
     }
 
     #[test]
+    fn decrypt_wecom_media_accepts_unpadded_aeskey_like_node_sdk() {
+        // 线上 Invalid padding：企微常下发无 trailing '=' 的 32 字节 key Base64。
+        let key = *b"0123456789abcdef0123456789abcdef";
+        let padded = base64::engine::general_purpose::STANDARD.encode(key);
+        let unpadded = padded.trim_end_matches('=').to_string();
+        assert!(
+            !unpadded.ends_with('='),
+            "fixture 应去掉填充：{unpadded}"
+        );
+        assert_ne!(unpadded.len() % 4, 0, "无填充长度通常非 4 倍数");
+        let mut plain = vec![0xff, 0xd8, 0xff, 0xe0];
+        plain.extend_from_slice(b"unpadded-aeskey");
+        let cipher = encrypt_wecom_media_fixture(&plain, &key);
+        let out = decrypt_wecom_media(&cipher, &unpadded).expect("应对齐 Node Buffer.from base64");
+        assert_eq!(out, plain);
+        // 中间空白也应可解（消息帧偶发换行）。
+        let spaced = format!("{} {}", &unpadded[..16], &unpadded[16..]);
+        assert_eq!(decrypt_wecom_media(&cipher, &spaced).unwrap(), plain);
+        assert_eq!(decode_wecom_media_aeskey(&padded).unwrap(), key);
+        assert_eq!(decode_wecom_media_aeskey(&unpadded).unwrap(), key);
+    }
+
+    #[test]
     fn decrypt_wecom_media_rejects_bad_key_and_padding() {
         let key = *b"0123456789abcdef0123456789abcdef";
         let aeskey = base64::engine::general_purpose::STANDARD.encode(key);
         let cipher = encrypt_wecom_media_fixture(b"hello-wecom-media", &key);
         assert!(decrypt_wecom_media(&cipher, "not-base64!!!").is_err());
+        assert!(decode_wecom_media_aeskey("").is_err());
         let short = base64::engine::general_purpose::STANDARD.encode(b"too-short");
         assert!(decrypt_wecom_media(&cipher, &short).is_err());
         assert!(decrypt_wecom_media(&cipher[..15], &aeskey).is_err());
         assert!(decrypt_wecom_media(&[], &aeskey).is_err());
+        // 错误密钥：CBC 能出字节，PKCS#7 校验应失败。
+        let wrong = *b"ffffffffffffffffffffffffffffffff";
+        let wrong_b64 = base64::engine::general_purpose::STANDARD.encode(wrong);
+        let err = decrypt_wecom_media(&cipher, &wrong_b64).unwrap_err();
+        assert!(
+            err.contains("PKCS#7") || err.contains("填充"),
+            "错 key 应落在 PKCS#7：{err}"
+        );
     }
 
     #[test]

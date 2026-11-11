@@ -9,11 +9,17 @@ import type {
   DshMirrorReport,
   DshModelCatalog,
   McpServer,
+  WecomBotProfile,
   WecomSkywalkingEnv,
   WecomSkywalkingProfile,
   WecomSkywalkingProfiles,
 } from "../core/types";
 import { resolveFallbackModel, resolveSceneModel } from "./aiSceneModels";
+import {
+  getActiveWecomBot,
+  listWecomBots,
+  migrateWecomBotsSettings,
+} from "./wecomBots";
 
 export type { WecomSkywalkingEnv, WecomSkywalkingProfile, WecomSkywalkingProfiles };
 
@@ -212,6 +218,17 @@ export type WecomCrossQueryStatus = {
   linked: boolean;
 };
 
+export type WecomBotRuntimeStatus = {
+  botId: string;
+  displayName?: string;
+  state: string;
+  detail?: string;
+  enabled: boolean;
+  engine?: string;
+  connectedMs?: number | null;
+  lastError?: string;
+}; // 与后端 WecomBotRuntimeStatus camelCase 对齐
+
 export type WecomStatus = {
   processId: number;
   buildLabel: string;
@@ -236,6 +253,10 @@ export type WecomStatus = {
   lastError?: string;
   /** 已连接时长（毫秒）；未连上为 null */
   connectedMs?: number | null;
+  /** 多 bot：在线数 / 已启用数（后端 bots_online / bots_total） */
+  botsOnline?: number;
+  botsTotal?: number;
+  bots?: WecomBotRuntimeStatus[];
 };
 
 export type WecomDiagnosticEvent = {
@@ -459,25 +480,32 @@ export async function revealWecomSecret(stored: string): Promise<string> {
   return invoke<string>("wecom_reveal_secret", { stored });
 }
 
-export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
-  const { settings, models, mcpServers } = args;
-  let botSecret = (settings.wecomBotSecret ?? "").trim();
-  // undefined = leave stored secret; empty string must not wipe it
+async function sealWebhook(raw: string | undefined): Promise<string> {
+  let v = (raw ?? "").trim();
+  if (v && !v.startsWith("enc:v1:")) v = await protectSecret(v);
+  return v;
+}
+
+/** 单 bot 的 apply 载荷（与后端 WecomApplyRequest 对齐）。 */
+async function buildBotApplyPayload(args: {
+  bot: WecomBotProfile;
+  settings: AppSettings;
+  models: AIModelConfig[];
+  mcpServers: McpServer[];
+  plainSecret?: string;
+  plainCorpSecret?: string;
+}): Promise<Record<string, unknown>> {
+  const { bot, settings, models, mcpServers } = args;
+  let botSecret = (bot.botSecret ?? "").trim();
   const plain = args.plainSecret?.trim() ?? "";
   if (plain) botSecret = await protectSecret(plain);
-  let corpSecret = (settings.wecomCorpSecret ?? "").trim();
+  let corpSecret = (bot.corpSecret ?? "").trim();
   const plainCorp = args.plainCorpSecret?.trim() ?? "";
   if (plainCorp) corpSecret = await protectSecret(plainCorp);
 
-  // webhook 当密文存：已是 enc:v1: 直接用，明文则加密后下发。
-  const sealWebhook = async (raw: string | undefined) => {
-    let v = (raw ?? "").trim();
-    if (v && !v.startsWith("enc:v1:")) v = await protectSecret(v);
-    return v;
-  };
-  const webhookUrl = await sealWebhook(settings.wecomWebhookUrl);
-  const webhookFeishu = await sealWebhook(settings.wecomWebhookFeishu);
-  const webhookDingtalk = await sealWebhook(settings.wecomWebhookDingtalk);
+  const webhookUrl = await sealWebhook(bot.webhookUrl);
+  const webhookFeishu = await sealWebhook(bot.webhookFeishu);
+  const webhookDingtalk = await sealWebhook(bot.webhookDingtalk);
 
   const model =
     resolveSceneModel("aiHub", models, settings.aiSceneModels) ??
@@ -485,9 +513,9 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
     models[0];
   const fallback = resolveFallbackModel(model ?? undefined, models);
 
-  const permission = (settings.wecomPermission ?? "read").trim() || "read";
+  const permission = (bot.permission ?? "read").trim() || "read";
   const repoPath =
-    (settings.wecomRepoPath ?? "").trim() || (settings.currentGitRepo ?? "").trim();
+    (bot.repoPath ?? "").trim() || (settings.currentGitRepo ?? "").trim();
 
   const mcp = mcpServers
     .filter((s) => s.enabled && s.name.trim() && s.command.trim())
@@ -500,8 +528,6 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
         repoPath,
         services: [] as string[],
         permission,
-        // 「有没有工具」与「能做什么」是两件事：只读档也要读写文件/搜索，
-        // 真正的边界由 permission 在闸门里决定（这里本来就是恒 true）。
         tools: true,
         mode: "",
         vision: Boolean(model.vision),
@@ -525,80 +551,106 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
       }
     : null;
 
-  const skywalking = resolveWecomSkywalking(settings).profile;
+  const skyEnv = bot.skywalkingEnv === "test" ? "test" : "prod";
+  const skywalking =
+    bot.skywalkingProfiles?.[skyEnv] ??
+    ({
+      addr: bot.skywalkingAddr,
+      header: bot.skywalkingHeader,
+      timezoneOffsetMinutes: bot.skywalkingTimezoneOffsetMinutes,
+    } satisfies WecomSkywalkingProfile);
+
+  return {
+    localId: bot.id,
+    enabled: Boolean(bot.enabled),
+    botId: (bot.botId ?? "").trim(),
+    botSecret,
+    corpId: (bot.corpId ?? "").trim(),
+    corpSecret,
+    botDisplayName: (bot.botDisplayName ?? "").trim(),
+    selfIntro: Array.from((bot.selfIntro ?? "").trim()).slice(0, 2000).join(""),
+    dmPolicy: bot.dmPolicy ?? "pairing",
+    groupPolicy: bot.groupPolicy ?? "allowlist",
+    requireMention: bot.requireMention !== false,
+    allowUsers: splitCsv(bot.allowUsers),
+    allowGroups: splitCsv(bot.allowGroups),
+    pairedUsers: splitCsv(bot.pairedUsers),
+    engine: bot.engine === "dsh" ? "dsh" : "tianji",
+    permission,
+    workspace: repoPath,
+    dshModel: (bot.dshModel ?? "").trim(),
+    dshEffort: (bot.dshEffort ?? "").trim(),
+    answerMode: bot.answerMode ?? "auto",
+    docDir: (bot.docDir ?? "").trim(),
+    enhanceDmEnabled: Boolean(bot.enhanceDmEnabled),
+    enhanceGroupEnabled: Boolean(bot.enhanceGroupEnabled),
+    enhanceDm: Array.from((bot.enhanceDm ?? "").trim()).slice(0, 2000).join(""),
+    enhanceGroup: Array.from((bot.enhanceGroup ?? "").trim()).slice(0, 2000).join(""),
+    skywalkingAddr: (skywalking.addr ?? "").trim(),
+    skywalkingHeader: (skywalking.header ?? "").trim(),
+    skywalkingTimezoneOffsetMinutes: skywalking.timezoneOffsetMinutes ?? null,
+    autoUpdateEnabled: Boolean(bot.autoUpdateEnabled),
+    autoUpdateTime: (bot.autoUpdateTime ?? "").trim(),
+    releaseBranch: (bot.releaseBranch ?? "").trim(),
+    webhookUrl,
+    webhookFeishu,
+    webhookDingtalk,
+    docgenCron: (bot.docgenCron ?? "").trim(),
+    docgenEngine:
+      bot.docgenEngine === "dsh"
+        ? "dsh"
+        : bot.docgenEngine === "tianji"
+          ? "tianji"
+          : "inherit",
+    docgenDshModel: (bot.docgenDshModel ?? "").trim(),
+    docgenDshEffort: (bot.docgenDshEffort ?? "").trim(),
+    docgenRepoPath: (bot.docgenRepoPath ?? "").trim(),
+    docgenDocDir: (bot.docgenDocDir ?? "").trim() || (bot.docDir ?? "").trim(),
+    docgenLookbackDays: normalizeDocgenLookbackDays(bot.docgenLookbackDays),
+    docgenSyncSources: Boolean(bot.docgenSyncSources),
+    docgenRepoAllowlist: normalizeDocgenRepoAllowlist(bot.docgenRepoAllowlist),
+    docgenSystemPrompt: normalizeDocgenPrompt(bot.docgenSystemPrompt),
+    docgenQualityPrompt: normalizeDocgenPrompt(bot.docgenQualityPrompt),
+    docgenPreview: Boolean(bot.docgenPreview),
+    docgenQualityCheck: Boolean(bot.docgenQualityCheck),
+    docgenPollRelease: Boolean(bot.docgenPollRelease),
+    autoCommit: bot.autoCommit !== false,
+    autoPush: Boolean(bot.autoPush),
+    maxJobs: normalizeWecomMaxJobs(bot.maxJobs),
+    mcpEnabled: settings.agentMcpEnabled !== false,
+    mcp,
+    agent,
+  };
+}
+
+export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
+  const migrated = migrateWecomBotsSettings(args.settings);
+  const bots = listWecomBots(migrated);
+  const active = getActiveWecomBot(migrated);
+  const plain = args.plainSecret?.trim() ?? "";
+  const plainCorp = args.plainCorpSecret?.trim() ?? "";
+
+  const payloads = await Promise.all(
+    bots.map((bot) =>
+      buildBotApplyPayload({
+        bot,
+        settings: migrated,
+        models: args.models,
+        mcpServers: args.mcpServers,
+        plainSecret: active?.id === bot.id ? plain || undefined : undefined,
+        plainCorpSecret: active?.id === bot.id ? plainCorp || undefined : undefined,
+      }),
+    ),
+  );
 
   const status = await invoke<WecomStatus>("wecom_channel_apply", {
-    req: {
-      enabled: Boolean(settings.wecomEnabled),
-      botId: (settings.wecomBotId ?? "").trim(),
-      botSecret,
-      corpId: (settings.wecomCorpId ?? "").trim(),
-      corpSecret,
-      botDisplayName: (settings.wecomBotDisplayName ?? "").trim(),
-      selfIntro: Array.from((settings.wecomSelfIntro ?? "").trim()).slice(0, 2000).join(""),
-      dmPolicy: settings.wecomDmPolicy ?? "pairing",
-      groupPolicy: settings.wecomGroupPolicy ?? "allowlist",
-      requireMention: settings.wecomRequireMention !== false,
-      allowUsers: splitCsv(settings.wecomAllowUsers),
-      allowGroups: splitCsv(settings.wecomAllowGroups),
-      pairedUsers: splitCsv(settings.wecomPairedUsers),
-      // 引擎与档位另带一份：DSH 档不需要天玑的模型快照，但要工作区、档位与模型选择。
-      engine: settings.wecomEngine === "dsh" ? "dsh" : "tianji",
-      permission,
-      workspace: repoPath,
-      dshModel: (settings.wecomDshModel ?? "").trim(),
-      dshEffort: (settings.wecomDshEffort ?? "").trim(),
-      // 文档问答 + 排障 + 自动更新（SkyWalking 取当前环境档案）
-      answerMode: settings.wecomAnswerMode ?? "auto",
-      docDir: (settings.wecomDocDir ?? "").trim(),
-      enhanceDmEnabled: Boolean(settings.wecomEnhanceDmEnabled),
-      enhanceGroupEnabled: Boolean(settings.wecomEnhanceGroupEnabled),
-      enhanceDm: Array.from((settings.wecomEnhanceDm ?? "").trim()).slice(0, 2000).join(""),
-      enhanceGroup: Array.from((settings.wecomEnhanceGroup ?? "").trim()).slice(0, 2000).join(""),
-      skywalkingAddr: (skywalking.addr ?? "").trim(),
-      skywalkingHeader: (skywalking.header ?? "").trim(),
-      skywalkingTimezoneOffsetMinutes: skywalking.timezoneOffsetMinutes ?? null,
-      autoUpdateEnabled: Boolean(settings.wecomAutoUpdateEnabled),
-      autoUpdateTime: (settings.wecomAutoUpdateTime ?? "").trim(),
-      releaseBranch: (settings.wecomReleaseBranch ?? "").trim(),
-      webhookUrl,
-      webhookFeishu,
-      webhookDingtalk,
-      docgenCron: (settings.wecomDocgenCron ?? "").trim(),
-      // 文档更新引擎与回话引擎分开：`inherit` 让后端跟随上面的 engine 解析。
-      docgenEngine:
-        settings.wecomDocgenEngine === "dsh"
-          ? "dsh"
-          : settings.wecomDocgenEngine === "tianji"
-            ? "tianji"
-            : "inherit",
-      // 文档更新（DSH 档）的模型/思考强度；空 = 后端沿用上面的 dshModel / dshEffort。
-      docgenDshModel: (settings.wecomDocgenDshModel ?? "").trim(),
-      docgenDshEffort: (settings.wecomDocgenDshEffort ?? "").trim(),
-      // 文档自动更新自己的工作区 / 文档目录：留空才回落到上面「回答设置」的同名字段。
-      docgenRepoPath: (settings.wecomDocgenRepoPath ?? "").trim(),
-      docgenDocDir:
-        (settings.wecomDocgenDocDir ?? "").trim() || (settings.wecomDocDir ?? "").trim(),
-      docgenLookbackDays: normalizeDocgenLookbackDays(settings.wecomDocgenLookbackDays),
-      docgenSyncSources: Boolean(settings.wecomDocgenSyncSources),
-      docgenRepoAllowlist: normalizeDocgenRepoAllowlist(settings.wecomDocgenRepoAllowlist),
-      docgenSystemPrompt: normalizeDocgenPrompt(settings.wecomDocgenSystemPrompt),
-      docgenQualityPrompt: normalizeDocgenPrompt(settings.wecomDocgenQualityPrompt),
-      docgenPreview: Boolean(settings.wecomDocgenPreview),
-      docgenQualityCheck: Boolean(settings.wecomDocgenQualityCheck),
-      docgenPollRelease: Boolean(settings.wecomDocgenPollRelease),
-      autoCommit: settings.wecomAutoCommit !== false,
-      autoPush: Boolean(settings.wecomAutoPush),
-      maxJobs: normalizeWecomMaxJobs(settings.wecomMaxJobs),
-      // DSH still needs MCP settings when no AI Hub model is configured.
-      mcpEnabled: settings.agentMcpEnabled !== false,
-      mcp,
-      agent,
-    },
+    bots: payloads,
+    req: null,
   });
-  // Ensure the desktop pet window is up so it can react to wecom- agent broadcasts.
-  if (settings.wecomEnabled && settings.aiHubBubbleEnabled !== false) {
-    const pos = settings.aiHubBubblePos;
+
+  const anyEnabled = bots.some((b) => b.enabled);
+  if (anyEnabled && migrated.aiHubBubbleEnabled !== false) {
+    const pos = migrated.aiHubBubblePos;
     await invoke("set_ai_hub_bubble_visible", {
       visible: true,
       x: pos?.x ?? null,
@@ -617,8 +669,15 @@ export async function applyWecomChannel(args: ApplyArgs): Promise<WecomStatus> {
  */
 export async function applyWecomDocgen(
   settings: AppSettings,
-  models: AIModelConfig[]
+  models: AIModelConfig[],
+  botId?: string,
 ): Promise<void> {
+  const migrated = migrateWecomBotsSettings(settings);
+  const active = getActiveWecomBot(migrated);
+  const targetBotId =
+    (botId ?? "").trim() ||
+    (active?.botId ?? "").trim() ||
+    (migrated.wecomBotId ?? "").trim();
   const seal = async (raw: string | undefined) => {
     let v = (raw ?? "").trim();
     if (v && !v.startsWith("enc:v1:")) v = await protectSecret(v);
@@ -671,6 +730,7 @@ export async function applyWecomDocgen(
 
   await invoke("wecom_docgen_apply", {
     req: {
+      botId: targetBotId,
       repoPath,
       docDir,
       releaseBranch: (settings.wecomReleaseBranch ?? "").trim(),
@@ -713,9 +773,14 @@ export async function fetchWecomStatus(): Promise<WecomStatus> {
  * `scope = "docgen"` 时读文档自动更新那套引擎（通道可能还在天玑档）。 */
 export async function fetchDshModels(
   refresh = false,
-  scope?: "channel" | "docgen"
+  scope?: "channel" | "docgen",
+  botId?: string,
 ): Promise<DshModelCatalog> {
-  return invoke<DshModelCatalog>("wecom_dsh_models", { refresh, scope: scope ?? null });
+  return invoke<DshModelCatalog>("wecom_dsh_models", {
+    refresh,
+    scope: scope ?? null,
+    botId: (botId ?? "").trim() || null,
+  });
 }
 
 /** 重新把 DSH 的 web 配置镜像到 acp profile（引擎随后自动重启）。 */

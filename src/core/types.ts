@@ -129,6 +129,74 @@ export type WecomSkywalkingProfiles = {
   prod?: WecomSkywalkingProfile;
 };
 
+/**
+ * 单个企微机器人完整配置（凭据 + 回答 + 准入 + 排障/文档）。
+ * 本地 `id` 稳定；企微侧 `botId` 可在扫码后写入。
+ */
+export interface WecomBotProfile {
+  /** 本地稳定 UUID */
+  id: string;
+  /** 企微 Bot ID；未绑定时可空 */
+  botId?: string;
+  /** DPAPI enc:v1:… 密文 */
+  botSecret?: string;
+  botDisplayName?: string;
+  /** 本机备注（区分用途，如下「生产排障」）；不下发企微/引擎 */
+  remark?: string;
+  enabled?: boolean;
+  corpId?: string;
+  corpSecret?: string;
+  selfIntro?: string;
+  dmPolicy?: string;
+  groupPolicy?: string;
+  requireMention?: boolean;
+  allowUsers?: string[];
+  allowGroups?: string[];
+  pairedUsers?: string[];
+  permission?: string;
+  repoPath?: string;
+  engine?: "tianji" | "dsh" | string;
+  dshModel?: string;
+  dshEffort?: string;
+  answerMode?: "auto" | "doc" | "doc_code" | "code" | "linked" | string;
+  docDir?: string;
+  enhanceDmEnabled?: boolean;
+  enhanceGroupEnabled?: boolean;
+  enhanceDm?: string;
+  enhanceGroup?: string;
+  skywalkingAddr?: string;
+  skywalkingHeader?: string;
+  skywalkingTimezoneOffsetMinutes?: number;
+  skywalkingEnv?: WecomSkywalkingEnv;
+  skywalkingProfiles?: WecomSkywalkingProfiles;
+  autoUpdateEnabled?: boolean;
+  autoUpdateTime?: string;
+  releaseBranch?: string;
+  webhookUrl?: string;
+  webhookFeishu?: string;
+  webhookDingtalk?: string;
+  docgenCron?: string;
+  docgenEngine?: "inherit" | "tianji" | "dsh" | string;
+  docgenDshModel?: string;
+  docgenDshEffort?: string;
+  docgenRepoPath?: string;
+  docgenDocDir?: string;
+  docgenLookbackDays?: number;
+  docgenSyncSources?: boolean;
+  docgenRepoAllowlist?: string[];
+  docgenSystemPrompt?: string;
+  docgenQualityPrompt?: string;
+  docgenPreview?: boolean;
+  docgenFullInit?: boolean;
+  docgenQualityCheck?: boolean;
+  docgenQualityGate?: boolean;
+  docgenPollRelease?: boolean;
+  autoCommit?: boolean;
+  autoPush?: boolean;
+  maxJobs?: number;
+  createdAt?: number;
+}
+
 export interface AppSettings {
   theme: AppTheme;
   language: 'zh-CN' | 'en-US';
@@ -236,16 +304,25 @@ export interface AppSettings {
   weixinUserId?: string;
   /** 默认 https://ilinkai.weixin.qq.com；扫码 confirmed 后可能跳转 */
   weixinBaseUrl?: string;
-  /** 企微智能机器人通道 */
+  /** 企微智能机器人通道（多 bot：每 bot 独立配置；扁平 wecom* 仅作迁移源） */
+  /** 已绑定机器人列表（每项独立凭据 / 工作区 / 引擎 / 准入 / 文档） */
+  wecomBots?: WecomBotProfile[];
+  /** 设置页 / 逆向文档页当前编辑的本地 profile id */
+  wecomActiveBotId?: string;
+  /** @deprecated 迁入 wecomBots 后只读 */
   wecomEnabled?: boolean;
+  /** @deprecated 迁入 wecomBots 后只读 */
   wecomBotId?: string;
   /** DPAPI enc:v1:… 密文 */
+  /** @deprecated 迁入 wecomBots 后只读 */
   wecomBotSecret?: string;
   /** 自建应用 Corpid：文档/日程/智能表格等业务 Open API 用（选填） */
   wecomCorpId?: string;
   /** DPAPI enc:v1:… 密文 */
   wecomCorpSecret?: string;
   wecomBotDisplayName?: string;
+  /** 当前 active bot 的本地备注镜像（来自 wecomBots[].remark） */
+  wecomBotRemark?: string;
   /** Full-sentence identity answer; empty uses the built-in default. */
   wecomSelfIntro?: string;
   /** pairing | allowlist | open | disabled */

@@ -2494,13 +2494,20 @@ async fn execute_tool(
         "skywalking_query" => {
             use tauri::Manager;
             let st = ctx.app.state::<crate::wecom_channel::WecomState>();
-            let (addr, header) = {
-                let g = st.skywalking.lock().await;
-                (g.0.clone(), g.1.clone())
+            let bot = st
+                .resolve_bot_for_request(ctx.request_id)
+                .await
+                .or(st.first_bot().await);
+            let (addr, header, offset) = if let Some(b) = bot {
+                let g = b.skywalking.lock().await;
+                let off = *b.skywalking_timezone.lock().await;
+                (g.0.clone(), g.1.clone(), off)
+            } else {
+                (String::new(), String::new(), None)
             };
             let mut query_args = args.clone();
             if query_args.get("timezone_offset_minutes").is_none() {
-                if let Some(offset) = *st.skywalking_timezone.lock().await {
+                if let Some(offset) = offset {
                     query_args["timezone_offset_minutes"] = json!(offset);
                 }
             }
@@ -3691,9 +3698,11 @@ async fn agent_run_inner(app: AppHandle, req: AgentRunRequest, document_dir: Opt
         let sky_ready = app
             .try_state::<crate::wecom_channel::WecomState>()
             .map(|st| {
-                st.skywalking
+                st.bots
                     .try_lock()
-                    .map(|g| !g.0.trim().is_empty())
+                    .map(|g| crate::wecom_channel::WecomState::any_skywalking_ready(
+                        &g.values().cloned().collect::<Vec<_>>(),
+                    ))
                     .unwrap_or(false)
             })
             .unwrap_or(false);

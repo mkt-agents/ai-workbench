@@ -62,6 +62,18 @@ export type WecomChannelStatus = {
     version: string | null;
     mirror: DshMirrorReport | null;
   };
+  botsOnline?: number;
+  botsTotal?: number;
+  bots?: Array<{
+    botId: string;
+    displayName?: string;
+    state: string;
+    detail?: string;
+    enabled: boolean;
+    engine?: string;
+    connectedMs?: number | null;
+    lastError?: string;
+  }>;
 };
 
 export interface Invocations {
@@ -283,9 +295,17 @@ export interface Invocations {
   invokeUpdateLatestTag: () => Promise<string>;
   invokeFetchSiteIcon: (url: string) => Promise<string | null>;
   invokeWecomChannelStatus: () => Promise<WecomChannelStatus>;
-  invokeWecomChannelApply: (req: Record<string, unknown>) => Promise<WecomChannelStatus>;
+  /** 多 bot：优先传 `bots`；单 bot 兼容仍可传 `req`。 */
+  invokeWecomChannelApply: (args: {
+    bots?: Record<string, unknown>[];
+    req?: Record<string, unknown> | null;
+  }) => Promise<WecomChannelStatus>;
   invokeWecomChannelRestart: () => Promise<WecomChannelStatus>;
-  invokeWecomDshModels: (refresh?: boolean) => Promise<DshModelCatalog>;
+  invokeWecomDshModels: (args?: {
+    refresh?: boolean;
+    scope?: string | null;
+    botId?: string | null;
+  }) => Promise<DshModelCatalog>;
   invokeWecomDshSync: () => Promise<DshMirrorReport>;
   invokeWecomPairingList: () => Promise<{ userid: string; code: string; createdMs: number }[]>;
   invokeWecomPairingApprove: (code: string) => Promise<string>;
@@ -707,11 +727,18 @@ export const invocations: Invocations = {
   invokeCancelRequest: (id: string) => tauriInvoke<void>('cancel_request', { id }),
   invokeFetchSiteIcon: (url: string) => tauriInvoke<string | null>('fetch_site_icon', { url }),
   invokeWecomChannelStatus: () => tauriInvoke<WecomChannelStatus>('wecom_channel_status'),
-  invokeWecomChannelApply: (req: Record<string, unknown>) =>
-    tauriInvoke<WecomChannelStatus>('wecom_channel_apply', { req }),
+  invokeWecomChannelApply: (args) =>
+    tauriInvoke<WecomChannelStatus>('wecom_channel_apply', {
+      bots: args.bots ?? null,
+      req: args.req ?? null,
+    }),
   invokeWecomChannelRestart: () => tauriInvoke<WecomChannelStatus>('wecom_channel_restart'),
-  invokeWecomDshModels: (refresh = false) =>
-    tauriInvoke<DshModelCatalog>('wecom_dsh_models', { refresh }),
+  invokeWecomDshModels: (args = {}) =>
+    tauriInvoke<DshModelCatalog>('wecom_dsh_models', {
+      refresh: args.refresh ?? false,
+      scope: args.scope ?? null,
+      botId: args.botId ?? null,
+    }),
   invokeWecomDshSync: () => tauriInvoke<DshMirrorReport>('wecom_dsh_sync'),
   invokeWecomPairingList: () =>
     tauriInvoke<{ userid: string; code: string; createdMs: number }[]>('wecom_pairing_list'),

@@ -333,10 +333,8 @@ pub struct DshEngine {
     inner: Mutex<EngineInner>,
     /// 同一时刻只允许一个启动流程，避免两条消息各起一个 node。
     start_lock: Mutex<()>,
-    /// 落盘命名空间：通道用空串（`sessions.json`），文档自动更新用 `docgen`
-    /// （`sessions-docgen.json` / `permission-docgen.patch.yml`）。两套引擎各自起进程，
-    /// 会话映射与权限覆盖层必须分开，否则后启动的那个会覆盖前者的档位。
-    tag: &'static str,
+    /// 落盘命名空间：通道用空串（`sessions.json`）；多 bot 时为 `bot-{id}` / `docgen-{id}`。
+    tag: String,
 }
 
 impl Default for DshEngine {
@@ -350,10 +348,11 @@ impl DshEngine {
         Self::with_tag("")
     }
 
-    /// 独立命名空间的引擎（目前只有文档自动更新用 `docgen`）。
-    pub fn with_tag(tag: &'static str) -> Self {
+    /// 独立命名空间的引擎（`bot-{id}` / `docgen-{id}` 或旧版 `docgen`）。
+    pub fn with_tag(tag: impl Into<String>) -> Self {
+        let tag = tag.into();
         Self {
-            tag,
+            tag: tag.clone(),
             inner: Mutex::new(EngineInner {
                 state: EngineState::Stopped,
                 detail: String::new(),
@@ -363,7 +362,7 @@ impl DshEngine {
                 model: String::new(),
                 effort: String::new(),
                 runtime: None,
-                sessions: load_sessions(tag),
+                sessions: load_sessions(&tag),
                 active: ActiveSessions::default(),
                 applied: HashMap::new(),
                 unsupported_efforts: HashSet::new(),
@@ -869,9 +868,9 @@ impl DshEngine {
     /// 生成 patch、起进程、接上三条管道、握手。
     async fn start(&self, tier: Tier, workspace: &str) -> Result<String, String> {
         let workspace = workspace.to_string();
-        let tag = self.tag;
+        let tag = self.tag.clone();
         let policy = self.inner.lock().await.docgen_policy.clone();
-        let prepared = tokio::task::spawn_blocking(move || prepare_launch(tag, tier, &workspace, policy.as_ref()))
+        let prepared = tokio::task::spawn_blocking(move || prepare_launch(&tag, tier, &workspace, policy.as_ref()))
             .await
             .map_err(|e| format!("启动准备失败：{e}"))??;
 
@@ -987,8 +986,8 @@ impl DshEngine {
             let g = self.inner.lock().await;
             g.sessions.clone()
         };
-        let tag = self.tag;
-        let _ = tokio::task::spawn_blocking(move || write_sessions(tag, &map)).await;
+        let tag = self.tag.clone();
+        let _ = tokio::task::spawn_blocking(move || write_sessions(&tag, &map)).await;
     }
 }
 
@@ -2380,7 +2379,7 @@ mod tests {
                 image_prompt: false,
             }),
             start_lock: Mutex::new(()),
-            tag: "",
+            tag: String::new(),
         }
     }
 

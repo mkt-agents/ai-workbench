@@ -16,7 +16,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::wecom_channel::{AppliedCreds, WecomState};
+use crate::wecom_channel::{AppliedCreds, BotRuntime, WecomState};
 
 const QYAPI: &str = "https://qyapi.weixin.qq.com/cgi-bin";
 /// token 有效期 7200s，缓存 7000s 提前刷新
@@ -30,12 +30,9 @@ fn client() -> &'static reqwest::Client {
 /// 入口：被 `agent.rs::execute_tool` 按工具名分发到这里。
 pub async fn run(app: AppHandle, name: &str, args: &Value) -> Result<String, String> {
     let state = app.state::<WecomState>();
-    let creds = state.applied.lock().await.clone();
-    let creds = creds.ok_or_else(|| {
-        "企微通道未配置：请先在「设置 → IM 机器人 → 企业微信」中保存 Bot ID/Secret 并启用。".to_string()
-    })?;
+    let (bot, creds) = resolve_bot_and_creds(&state, None).await?;
 
-    let token = token_for(&state, &creds).await?;
+    let token = token_for(&bot, &creds).await?;
     let (path, body) = build(name, args)?;
     let url = format!("{QYAPI}/{path}?access_token={token}");
 
@@ -69,11 +66,38 @@ pub async fn run(app: AppHandle, name: &str, args: &Value) -> Result<String, Str
 ///
 /// 出站媒体上传（`wecom_media`）与业务 CLI 共用这套取 token 逻辑：两者都走企微
 /// Open API（`qyapi`），都要求自建应用凭证，机器人 Bot ID/Secret 当 corpid 用会 40013。
-pub async fn access_token(state: &WecomState, creds: &AppliedCreds) -> Result<String, String> {
-    token_for(state, creds).await
+pub async fn access_token(bot: &BotRuntime, creds: &AppliedCreds) -> Result<String, String> {
+    token_for(bot, creds).await
 }
 
-async fn token_for(state: &WecomState, creds: &AppliedCreds) -> Result<String, String> {
+async fn resolve_bot_and_creds(
+    state: &WecomState,
+    request_id: Option<&str>,
+) -> Result<(std::sync::Arc<BotRuntime>, AppliedCreds), String> {
+    if let Some(rid) = request_id {
+        if let Some(bot) = state.resolve_bot_for_request(rid).await {
+            let creds = bot.applied.lock().await.clone();
+            if let Some(creds) = creds {
+                return Ok((bot, creds));
+            }
+        }
+    }
+    let bot = state
+        .first_bot()
+        .await
+        .ok_or_else(|| {
+            "企微通道未配置：请先在「设置 → IM 机器人 → 企业微信」中保存 Bot ID/Secret 并启用。".to_string()
+        })?;
+    let creds = bot
+        .applied
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "企微通道未启用".to_string())?;
+    Ok((bot, creds))
+}
+
+async fn token_for(bot: &BotRuntime, creds: &AppliedCreds) -> Result<String, String> {
     let (corpid, secret, from_corp) = match (
         creds.corp_id.as_deref(),
         creds.corp_secret.as_deref(),
@@ -82,7 +106,7 @@ async fn token_for(state: &WecomState, creds: &AppliedCreds) -> Result<String, S
         _ => (creds.bot_id.as_str(), creds.secret.as_str(), false),
     };
     {
-        if let Some((t, at)) = &*state.api_token.lock().await {
+        if let Some((t, at)) = &*bot.api_token.lock().await {
             if at.elapsed() < TOKEN_TTL {
                 return Ok(t.clone());
             }
@@ -117,7 +141,7 @@ async fn token_for(state: &WecomState, creds: &AppliedCreds) -> Result<String, S
         .and_then(|t| t.as_str())
         .ok_or("企微未返回 access_token")?
         .to_string();
-    *state.api_token.lock().await = Some((token.clone(), std::time::Instant::now()));
+    *bot.api_token.lock().await = Some((token.clone(), std::time::Instant::now()));
     Ok(token)
 }
 

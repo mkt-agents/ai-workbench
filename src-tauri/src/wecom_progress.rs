@@ -411,7 +411,7 @@ pub fn visible_output(request: &str) {
 
 /// Poll from an independent timer. Only active tasks without visible answer text emit,
 /// at most once every 30s. Tool activity and status inquiries never postpone this cadence.
-/// No IO is performed.
+/// No IO is performed. Orchestrator 终稿模式会调用以推进内部状态，但不再把文案推到企微气泡。
 pub fn heartbeat(request: &str) -> Option<String> {
     with_state(|state, now| state.heartbeat(request, now))
 }
