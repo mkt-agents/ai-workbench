@@ -103,6 +103,7 @@ mod cursor_quota;
 mod deepseek_quota;
 mod grok_bot_quota;
 mod mimo_quota;
+mod longcat_quota;
 mod trae_quota;
 mod daily_schedule;
 mod work_todo_migrate;
@@ -671,6 +672,13 @@ pub fn run() {
             mimo_quota::mimo_close_login_window,
             mimo_quota::mimo_capture_login_cookies,
             mimo_quota::mimo_poll_login,
+            longcat_quota::longcat_add_cookie,
+            longcat_quota::longcat_set_cookie,
+            longcat_quota::longcat_quota_fetch,
+            longcat_quota::longcat_open_login_window,
+            longcat_quota::longcat_close_login_window,
+            longcat_quota::longcat_capture_login_cookies,
+            longcat_quota::longcat_poll_login,
             trae_quota::trae_add_refresh_token,
             trae_quota::trae_oauth_start,
             trae_quota::trae_device_identity,

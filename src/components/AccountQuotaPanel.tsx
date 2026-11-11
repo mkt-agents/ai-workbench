@@ -91,6 +91,12 @@ import {
   mimoPollLogin,
   mimoQuotaFetch,
   mimoSetCookie,
+  longcatAddCookie,
+  longcatCloseLoginWindow,
+  longcatOpenLoginWindow,
+  longcatPollLogin,
+  longcatQuotaFetch,
+  longcatSetCookie,
   zcodeAddKey,
   zcodeQuotaFetch,
   traeAddRefreshToken,
@@ -109,6 +115,8 @@ import {
   type DeepSeekQuotaDto,
   type MimoLoginResult,
   type MimoQuotaDto,
+  type LongcatLoginResult,
+  type LongcatQuotaDto,
   type QuotaAccount,
   type ZcodeQuotaDto,
 } from "../lib/quotaAccounts";
@@ -166,6 +174,7 @@ type CardPrefix =
   | "claude"
   | "zcode"
   | "mimo"
+  | "longcat"
   | "trae"
   | "custom";
 type AuthProvider = "codex" | "cursor" | "grok-bot" | "qoder" | "trae";
@@ -180,6 +189,7 @@ const PREFIX_CARD: Record<CardPrefix, QuotaCardId> = {
   claude: "claude",
   zcode: "zcode",
   mimo: "mimo",
+  longcat: "longcat",
   trae: "trae",
   custom: "custom",
 };
@@ -481,11 +491,25 @@ function remainPctFor(key: string, r: QuotaResultBase, peaks: Record<string, num
       return zcodeRemainPct(r as ZcodeQuotaDto);
     case "mimo":
       return mimoRemainPct(key, r as MimoQuotaDto, peaks);
+    case "longcat":
+      return longcatRemainPct(r as LongcatQuotaDto);
     case "trae":
       return traeRemainPct(r as TraeQuotaDto);
     case "custom":
       return customRemainPct(key, r as CustomQuotaDto, peaks);
   }
+}
+
+function longcatRemainPct(q: LongcatQuotaDto): number | null {
+  if (!q.ok || q.totalToken == null || q.totalToken <= 0) return null;
+  const available =
+    q.availableToken != null
+      ? q.availableToken
+      : q.usedToken != null
+        ? Math.max(0, q.totalToken - q.usedToken)
+        : null;
+  if (available == null) return null;
+  return clampPct((available / q.totalToken) * 100);
 }
 
 function cardStatus(key: string, r: QuotaResultBase | undefined, peaks: Record<string, number>): CardStatus {
@@ -634,6 +658,7 @@ function AccountQuotaPanel() {
   const [zcodeReplaceId, setZcodeReplaceId] = useState<number | null>(null);
   const [mimoFormOpen, setMimoFormOpen] = useState(false);
   const [mimoReplaceId, setMimoReplaceId] = useState<number | null>(null);
+  const [longcatFormOpen, setLongcatFormOpen] = useState(false);
   const [customFormOpen, setCustomFormOpen] = useState(false);
   const [customReplaceId, setCustomReplaceId] = useState<number | null>(null);
   const [traeReplaceId, setTraeReplaceId] = useState<number | null>(null);
@@ -660,6 +685,7 @@ function AccountQuotaPanel() {
   const claudeAccounts = authAccounts.filter((a) => a.provider === "claude");
   const zcodeAccounts = authAccounts.filter((a) => a.provider === "zcode");
   const mimoAccounts = authAccounts.filter((a) => a.provider === "mimo");
+  const longcatAccounts = authAccounts.filter((a) => a.provider === "longcat");
   const traeAccounts = authAccounts.filter((a) => a.provider === "trae");
   const customAccounts = authAccounts.filter((a) => a.provider === "custom");
 
@@ -980,6 +1006,7 @@ function AccountQuotaPanel() {
       else if (prefix === "claude") dto = await claudeQuotaFetch(id).catch((e) => failedDto(e, { id, windows: [] }));
       else if (prefix === "zcode") dto = await zcodeQuotaFetch(id).catch((e) => failedDto(e, { id, limits: [] }));
       else if (prefix === "mimo") dto = await mimoQuotaFetch(id).catch((e) => failedDto(e, { id, balances: [], windows: [] }));
+      else if (prefix === "longcat") dto = await longcatQuotaFetch(id).catch((e) => failedDto(e, { id }));
       else if (prefix === "trae") dto = await traeQuotaFetch(id).catch((e) => failedDto(e, { id, windows: [] }));
       else if (prefix === "custom") dto = await customQuotaFetch(id).catch((e) => failedDto(e, { id, balances: [] }));
       else dto = await deepseekBalanceFetch(id).catch((e) => failedDto(e, { id, balances: [] }));
@@ -1208,6 +1235,22 @@ function AccountQuotaPanel() {
     setMimoFormOpen(false);
   }, []);
 
+  const addLongcatSession = useCallback(async ({ account, quota }: LongcatLoginResult) => {
+    setResults((prev) => ({ ...prev, [`longcat:${account.id}`]: quota }));
+    setAuthAccounts(await quotaAccountsList());
+    setLongcatFormOpen(false);
+  }, []);
+
+  const addLongcatCookie = useCallback(
+    async (cookie: string) => {
+      const account = await longcatAddCookie(cookie);
+      setAuthAccounts(await quotaAccountsList());
+      setLongcatFormOpen(false);
+      void fetchKey(`longcat:${account.id}`);
+    },
+    [fetchKey],
+  );
+
   const replaceMimoKey = useCallback(
     async (old: QuotaAccount, apiKey: string) => {
       const account = await mimoAddKey(apiKey);
@@ -1346,6 +1389,7 @@ function AccountQuotaPanel() {
     claude: claudeAccounts.map((a) => `claude:${a.id}`),
     zcode: zcodeAccounts.map((a) => `zcode:${a.id}`),
     mimo: mimoAccounts.map((a) => `mimo:${a.id}`),
+    longcat: longcatAccounts.map((a) => `longcat:${a.id}`),
     trae: traeAccounts.map((a) => `trae:${a.id}`),
     custom: customAccounts.map((a) => `custom:${a.id}`),
   };
@@ -1366,12 +1410,14 @@ function AccountQuotaPanel() {
     ...keysOf("claude"),
     ...keysOf("zcode"),
     ...keysOf("mimo"),
+    ...keysOf("longcat"),
     ...keysOf("trae"),
     ...keysOf("custom"),
     ...(enabled.includes("deepseek") && dsFormOpen && dsAccounts.length > 0 ? ["deepseek:new"] : []),
     ...(enabled.includes("claude") && claudeFormOpen && claudeAccounts.length > 0 ? ["claude:new"] : []),
     ...(enabled.includes("zcode") && zcodeFormOpen && zcodeAccounts.length > 0 ? ["zcode:new"] : []),
     ...(enabled.includes("mimo") && mimoFormOpen && mimoAccounts.length > 0 ? ["mimo:new"] : []),
+    ...(enabled.includes("longcat") && longcatFormOpen && longcatAccounts.length > 0 ? ["longcat:new"] : []),
     ...(enabled.includes("custom") && customFormOpen && customAccounts.length > 0 ? ["custom:new"] : []),
   ];
   const visibleKeys = sortByOrder(
@@ -1432,6 +1478,11 @@ function AccountQuotaPanel() {
         focusCard(mimoAccounts.length > 0 ? "mimo:new" : "mimo:empty");
         return;
       }
+      if (card === "longcat") {
+        setLongcatFormOpen(true);
+        focusCard(longcatAccounts.length > 0 ? "longcat:new" : "longcat:empty");
+        return;
+      }
       if (card === "trae") {
         void startLogin("trae");
         if (traeAccounts.length === 0) focusCard("trae:empty");
@@ -1454,6 +1505,7 @@ function AccountQuotaPanel() {
       claudeAccounts.length,
       zcodeAccounts.length,
       mimoAccounts.length,
+      longcatAccounts.length,
       traeAccounts.length,
       customAccounts.length,
       codexAccounts.length,
@@ -1659,6 +1711,7 @@ function AccountQuotaPanel() {
     })),
     ...zcodeAccounts.map((a) => ({ key: `zcode:${a.id}`, card: "zcode" as const, name: a.label ?? `#${a.id}` })),
     ...mimoAccounts.map((a) => ({ key: `mimo:${a.id}`, card: "mimo" as const, name: a.label ?? `#${a.id}` })),
+    ...longcatAccounts.map((a) => ({ key: `longcat:${a.id}`, card: "longcat" as const, name: a.label ?? `#${a.id}` })),
     ...traeAccounts.map((a) => ({
       key: `trae:${a.id}`,
       card: "trae" as const,
@@ -2006,6 +2059,41 @@ function AccountQuotaPanel() {
       );
     }
 
+    if (prefix === "longcat") {
+      const account = longcatAccounts.find((a) => a.id === id);
+      if (!account) {
+        return (
+          <QuotaCardShell
+            key={key}
+            brand="longcat"
+            product="LongCat"
+            onHide={rawId === "new" ? () => setLongcatFormOpen(false) : hideProvider}
+            frame={frame}
+          >
+            <LongcatAddForm
+              onLoggedIn={addLongcatSession}
+              onPasteCookie={addLongcatCookie}
+              onCancel={rawId === "new" ? () => setLongcatFormOpen(false) : undefined}
+            />
+          </QuotaCardShell>
+        );
+      }
+      return (
+        <LongcatCard
+          key={key}
+          account={account}
+          quota={quota as LongcatQuotaDto | undefined}
+          loading={loading}
+          onRefresh={() => void fetchKey(key)}
+          onDelete={() => void removeAuthAccount(account)}
+          onAddAnother={longcatFormOpen ? undefined : () => setLongcatFormOpen(true)}
+          onQuota={(dto) => setResults((prev) => ({ ...prev, [key]: dto }))}
+          onSaveTag={(tag) => saveAuthTag(account.id, tag)}
+          frame={frame}
+        />
+      );
+    }
+
     if (prefix === "trae") {
       const account = traeAccounts.find((a) => a.id === id);
       if (!account) {
@@ -2307,7 +2395,19 @@ function QuotaCardShell({
   frame,
   children,
 }: {
-  brand: "wb" | "cursor" | "grok" | "codex" | "deepseek" | "qoder" | "claude" | "zcode" | "mimo" | "trae" | "custom";
+  brand:
+    | "wb"
+    | "cursor"
+    | "grok"
+    | "codex"
+    | "deepseek"
+    | "qoder"
+    | "claude"
+    | "zcode"
+    | "mimo"
+    | "longcat"
+    | "trae"
+    | "custom";
   product: string;
   tag?: ReactNode;
   /** 结果时间（unix 秒）；有值时卡片底部显示「N 分钟前」。 */
@@ -4760,6 +4860,353 @@ function TraeCard({
       {ok && quota?.credits != null && (
         <div className="aq-card-idle" title={t("traeCreditsHint")}>
           {t("traeCredits", { credits: formatCredits(quota.credits) })}
+        </div>
+      )}
+    </QuotaCardShell>
+  );
+}
+
+const LONGCAT_LOGIN_POLL_MS = 2000;
+
+function useLongcatLogin(accountId: number | undefined, onDone: (r: LongcatLoginResult) => void) {
+  const { t } = useTranslation("quota");
+  const [pending, setPending] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
+  const poll = useCallback(
+    async (manual: boolean) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      if (manual) setBusy(true);
+      try {
+        const result = await longcatPollLogin(accountId);
+        if (result) {
+          setPending(false);
+          setError(null);
+          onDoneRef.current(result);
+        } else if (manual) {
+          setError(t("longcatLoginNotReady"));
+        }
+      } catch (e) {
+        const msg = errorText(e);
+        if (msg.includes("已关闭")) setPending(false);
+        setError(msg);
+      } finally {
+        inFlight.current = false;
+        if (manual) setBusy(false);
+      }
+    },
+    [accountId, t],
+  );
+
+  useEffect(() => {
+    if (!pending) return;
+    const timer = window.setInterval(() => void poll(false), LONGCAT_LOGIN_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [pending, poll]);
+
+  const start = async () => {
+    setError(null);
+    setPending(true);
+    try {
+      await longcatOpenLoginWindow();
+    } catch (e) {
+      setError(errorText(e));
+      setPending(false);
+    }
+  };
+
+  const cancel = () => {
+    void longcatCloseLoginWindow().catch(() => undefined);
+    setPending(false);
+    setError(null);
+  };
+
+  return { pending, busy, error, start, cancel, finish: () => void poll(true) };
+}
+
+function LongcatLoginPending({
+  busy,
+  onCancel,
+  onFinish,
+}: {
+  busy: boolean;
+  onCancel: () => void;
+  onFinish: () => void;
+}) {
+  const { t } = useTranslation("quota");
+  return (
+    <div className="aq-login-pending">
+      <p className="aq-login-pending-text">
+        <RefreshCw size={12} className="spin" aria-hidden />
+        {t("longcatLoginPending")}
+      </p>
+      <div className="aq-login-pending-actions">
+        <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
+          {t("authCancel")}
+        </button>
+        <button type="button" className="btn btn-primary btn-small" onClick={onFinish} disabled={busy}>
+          {busy ? <RefreshCw size={13} className="spin" /> : <LogIn size={13} />}
+          {t("longcatLoginDone")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LongcatCookieForm({
+  onSubmit,
+  onCancel,
+  hint,
+  submitText,
+}: {
+  onSubmit: (cookie: string) => Promise<void>;
+  onCancel?: () => void;
+  hint?: string;
+  submitText?: string;
+}) {
+  const { t } = useTranslation("quota");
+  const [cookie, setCookie] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async () => {
+    if (!cookie.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(cookie.trim());
+      setCookie("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      className="aq-auth aq-key-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <p className="aq-auth-text">{hint ?? t("longcatCookieHint")}</p>
+      <textarea
+        className="input-field aq-mono"
+        rows={3}
+        spellCheck={false}
+        placeholder={t("longcatCookiePlaceholder")}
+        value={cookie}
+        onChange={(e) => setCookie(e.target.value)}
+        disabled={busy}
+        autoFocus
+      />
+      {error && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(error, t("networkFailed")) ?? error}
+        </div>
+      )}
+      <div className="aq-key-actions">
+        {onCancel && (
+          <button type="button" className="btn btn-secondary btn-small" onClick={onCancel} disabled={busy}>
+            {t("authCancel")}
+          </button>
+        )}
+        <button type="submit" className="btn btn-primary btn-small" disabled={busy || !cookie.trim()}>
+          {busy ? <RefreshCw size={13} className="spin" /> : <KeyRound size={13} />}
+          {submitText ?? t("longcatCookieSave")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** 新建 LongCat 卡：打开平台登录窗，或粘贴 Cookie。 */
+function LongcatAddForm({
+  onLoggedIn,
+  onPasteCookie,
+  onCancel,
+}: {
+  onLoggedIn: (r: LongcatLoginResult) => void;
+  onPasteCookie: (cookie: string) => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const { t } = useTranslation("quota");
+  const login = useLongcatLogin(undefined, onLoggedIn);
+  const [cookieOpen, setCookieOpen] = useState(false);
+
+  return (
+    <div className="aq-auth">
+      <p className="aq-auth-text">{t("authHint.longcat")}</p>
+      {login.error && !cookieOpen && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(login.error, t("networkFailed")) ?? login.error}
+        </div>
+      )}
+      {cookieOpen ? (
+        <LongcatCookieForm
+          onSubmit={onPasteCookie}
+          onCancel={() => setCookieOpen(false)}
+          hint={t("longcatCookieHint")}
+          submitText={t("longcatCookieSave")}
+        />
+      ) : login.pending ? (
+        <LongcatLoginPending busy={login.busy} onCancel={login.cancel} onFinish={login.finish} />
+      ) : (
+        <div className="aq-key-actions">
+          {onCancel && (
+            <button type="button" className="btn btn-secondary btn-small" onClick={onCancel}>
+              {t("authCancel")}
+            </button>
+          )}
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setCookieOpen(true)}>
+            {t("longcatPasteCookie")}
+          </button>
+          <button type="button" className="btn btn-primary btn-small" onClick={() => void login.start()}>
+            <LogIn size={13} />
+            {t("longcatOpenLogin")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LongcatCard({
+  account,
+  quota,
+  loading,
+  onRefresh,
+  onDelete,
+  onAddAnother,
+  onQuota,
+  onSaveTag,
+  frame,
+}: {
+  account: QuotaAccount;
+  quota: LongcatQuotaDto | undefined;
+  loading: boolean;
+  onRefresh: () => void;
+  onDelete: () => void;
+  onAddAnother?: () => void;
+  onQuota: (dto: LongcatQuotaDto) => void;
+  onSaveTag: (tag: string | null) => Promise<void>;
+  frame: CardFrame;
+}) {
+  const { t } = useTranslation("quota");
+  const now = useContext(NowContext);
+  const login = useLongcatLogin(account.id, (r) => onQuota(r.quota));
+  const [cookieOpen, setCookieOpen] = useState(false);
+  const sessionBusy = login.busy;
+  const ok = quota?.ok === true;
+  const total = ok ? quota.totalToken : null;
+  const used = ok ? quota.usedToken : null;
+  const available =
+    ok && quota.availableToken != null
+      ? quota.availableToken
+      : total != null && used != null
+        ? Math.max(0, total - used)
+        : null;
+  const remainPct =
+    total != null && total > 0 && available != null ? clampPct((available / total) * 100) : null;
+  const fuelTotal = ok ? quota.fuelTotal : null;
+  const fuelAvailable = ok ? quota.fuelAvailable : null;
+  const fuelExpire = ok ? quota.fuelExpireAt : null;
+  const fuelRemainPct =
+    fuelTotal != null && fuelTotal > 0 && fuelAvailable != null
+      ? clampPct((fuelAvailable / fuelTotal) * 100)
+      : null;
+  const needReauth = quota?.needsReauth === true || cookieOpen || login.pending;
+
+  const submitCookie = async (cookie: string) => {
+    const dto = await longcatSetCookie(account.id, cookie);
+    onQuota(dto);
+    setCookieOpen(false);
+  };
+
+  return (
+    <QuotaCardShell
+      brand="longcat"
+      product="LongCat"
+      at={quota?.at}
+      loading={loading || sessionBusy}
+      onRefresh={onRefresh}
+      onDelete={onDelete}
+      extraAction={<AddAnotherButton onClick={onAddAnother} />}
+      frame={frame}
+    >
+      <IdentityRow
+        name={quota?.accountName ?? quota?.label ?? account.label}
+        badge="Token"
+        tag={account.tag}
+        onSaveTag={onSaveTag}
+      />
+      <CardMessage
+        quota={quota}
+        idleText={t("neverRefreshed")}
+        onReauth={() => void login.start()}
+        reauthText={t("longcatOpenLogin")}
+      />
+      {needReauth && !cookieOpen && login.pending && (
+        <LongcatLoginPending busy={sessionBusy} onCancel={login.cancel} onFinish={login.finish} />
+      )}
+      {needReauth && !cookieOpen && !login.pending && (
+        <div className="aq-key-actions" style={{ marginTop: 8 }}>
+          <button type="button" className="btn btn-primary btn-small" onClick={() => void login.start()}>
+            <LogIn size={13} />
+            {t("longcatOpenLogin")}
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setCookieOpen(true)}>
+            {t("longcatPasteCookie")}
+          </button>
+        </div>
+      )}
+      {cookieOpen && (
+        <LongcatCookieForm
+          onSubmit={submitCookie}
+          onCancel={() => setCookieOpen(false)}
+          hint={t("longcatCookieHint")}
+          submitText={t("longcatCookieSave")}
+        />
+      )}
+      {login.error && !cookieOpen && (
+        <div className="aq-card-error" role="alert">
+          {friendlyQuotaMessage(login.error, t("networkFailed")) ?? login.error}
+        </div>
+      )}
+      {ok && remainPct == null && fuelRemainPct == null && (
+        <div className="aq-card-idle">{quota.message || t("longcatNoData")}</div>
+      )}
+      {ok && (remainPct != null || fuelRemainPct != null) && (
+        <div className="aq-card-body">
+          {remainPct != null && total != null && (
+            <MeterRow
+              label={t("longcatTokenQuota")}
+              value={`${remainPct}%`}
+              percent={remainPct}
+              hint={t("longcatUsage", {
+                used: formatCredits(used ?? Math.max(0, total - (available ?? 0))),
+                limit: formatCredits(total),
+                remaining: formatCredits(available ?? 0),
+              })}
+            />
+          )}
+          {fuelRemainPct != null && fuelTotal != null && (
+            <MeterRow
+              label={t("longcatFuelPack")}
+              countdown={compactCountdown(fuelExpire ?? null, now)}
+              value={`${fuelRemainPct}%`}
+              percent={fuelRemainPct}
+              hint={t("longcatFuelUsage", {
+                remaining: formatCredits(fuelAvailable ?? 0),
+                total: formatCredits(fuelTotal),
+              })}
+            />
+          )}
         </div>
       )}
     </QuotaCardShell>

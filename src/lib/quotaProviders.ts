@@ -15,6 +15,7 @@ export type QuotaCardId =
   | "zcode"
   | "mimo"
   | "trae"
+  | "longcat"
   /** 自定义中转站（new-api / one-api / sub2api…），Key + 接口地址按账号存。 */
   | "custom";
 
@@ -43,6 +44,7 @@ export const QUOTA_PROVIDERS: QuotaProvider[] = [
   { id: "claude-desktop", name: "Claude Desktop", domain: "claude.com", url: "https://claude.com/download", keywords: ["claude desktop"], card: "claude" },
   { id: "deepseek", name: "DeepSeek Harness", domain: "www.deepseek.com", url: "https://www.deepseek.com", keywords: ["deepseek"], card: "deepseek" },
   { id: "mimo", name: "小米 MiMo", domain: "platform.xiaomimimo.com", url: "https://platform.xiaomimimo.com", keywords: ["mimo", "xiaomi mimo"], card: "mimo" },
+  { id: "longcat", name: "LongCat", domain: "longcat.chat", url: "https://longcat.chat/platform/", keywords: [], card: "longcat" },
   { id: "trae", name: "Trae CN", domain: "trae.cn", url: "https://www.trae.cn", keywords: ["trae"], card: "trae" },
   // 纯自定义：地址由用户在卡片里填，这里不给 domain（没安装检测，也没有官网）
   { id: "custom", name: "自定义 / 中转站", domain: "", url: "", keywords: [], card: "custom" },
@@ -51,7 +53,20 @@ export const QUOTA_PROVIDERS: QuotaProvider[] = [
   { id: "grok-build", name: "Grok Build", domain: "x.ai", url: "https://x.ai", keywords: ["grok build"], card: null },
 ];
 
-const ALL_CARDS: QuotaCardId[] = ["workbuddy", "cursor", "grok-bot", "codex", "deepseek", "qoder", "claude", "zcode", "mimo", "trae", "custom"];
+const ALL_CARDS: QuotaCardId[] = [
+  "workbuddy",
+  "cursor",
+  "grok-bot",
+  "codex",
+  "deepseek",
+  "qoder",
+  "claude",
+  "zcode",
+  "mimo",
+  "longcat",
+  "trae",
+  "custom",
+];
 const CARDS_KEY = "aq-cards";
 
 export function loadEnabledCards(): QuotaCardId[] {

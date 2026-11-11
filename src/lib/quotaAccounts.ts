@@ -13,6 +13,7 @@ export type QuotaAccountProvider =
   | "zcode"
   | "mimo"
   | "trae"
+  | "longcat"
   /** 自定义中转站（new-api / one-api / sub2api 等）：API Key + 接口地址。 */
   | "custom";
 
@@ -289,3 +290,37 @@ export interface CustomQuotaDto {
 export const customAddKey = (apiKey: string, baseUrl: string, label?: string) =>
   invoke<QuotaAccount>("custom_add_key", { apiKey, baseUrl, label: label ?? null });
 export const customQuotaFetch = (id: number) => invoke<CustomQuotaDto>("custom_quota_fetch", { id });
+
+export interface LongcatQuotaDto {
+  id: number;
+  ok: boolean;
+  message: string | null;
+  label: string | null;
+  accountName: string | null;
+  totalToken: number | null;
+  usedToken: number | null;
+  availableToken: number | null;
+  fuelTotal: number | null;
+  fuelAvailable: number | null;
+  /** 最近燃料包过期时刻（epoch 毫秒）。 */
+  fuelExpireAt: number | null;
+  needsReauth: boolean;
+  at: number;
+}
+
+export interface LongcatLoginResult {
+  account: QuotaAccount;
+  quota: LongcatQuotaDto;
+}
+
+/** 粘贴 longcat.chat Cookie；先查 user-current / 用量，通过才入库。 */
+export const longcatAddCookie = (cookie: string) =>
+  invoke<QuotaAccount>("longcat_add_cookie", { cookie });
+export const longcatQuotaFetch = (id: number) => invoke<LongcatQuotaDto>("longcat_quota_fetch", { id });
+export const longcatSetCookie = (id: number, cookie: string) =>
+  invoke<LongcatQuotaDto>("longcat_set_cookie", { id, cookie });
+export const longcatOpenLoginWindow = () => invoke<string>("longcat_open_login_window");
+export const longcatCloseLoginWindow = () => invoke<void>("longcat_close_login_window");
+/** 轮询登录窗：登好了就入库、关窗并返回账号与额度；还没登好返回 null。 */
+export const longcatPollLogin = (id?: number) =>
+  invoke<LongcatLoginResult | null>("longcat_poll_login", { id: id ?? null });

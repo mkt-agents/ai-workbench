@@ -93,6 +93,8 @@ pub enum Provider {
     Mimo,
     /// Trae CN（trae.cn，refreshToken 查用量 + 每日签到）。
     Trae,
+    /// LongCat（longcat.chat 网页 Cookie，查 Token 包 / 燃料包）。
+    Longcat,
     /// 自定义中转站（new-api / one-api / sub2api 等）：API Key + 接口地址，见 `custom_quota.rs`。
     Custom,
 }
@@ -108,6 +110,7 @@ impl Provider {
             Provider::Zcode => "zcode",
             Provider::Mimo => "mimo",
             Provider::Trae => "trae",
+            Provider::Longcat => "longcat",
             Provider::Custom => "custom",
         }
     }
@@ -122,6 +125,7 @@ impl Provider {
             "zcode" => Ok(Provider::Zcode),
             "mimo" => Ok(Provider::Mimo),
             "trae" => Ok(Provider::Trae),
+            "longcat" => Ok(Provider::Longcat),
             "custom" => Ok(Provider::Custom),
             other => Err(format!("不支持的服务商: {other}")),
         }

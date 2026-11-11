@@ -15,6 +15,7 @@ import xai from "../assets/providers/xai.png";
 import trae from "../assets/providers/trae.png";
 import custom from "../assets/providers/custom.svg";
 import mimo from "../assets/ai-providers/mimo.png";
+import longcat from "../assets/ai-providers/longcat.png";
 
 /** `QUOTA_PROVIDERS[].id` → 资源 URL */
 const BY_PROVIDER: Record<string, string> = {
@@ -30,6 +31,7 @@ const BY_PROVIDER: Record<string, string> = {
   antigravity,
   zcode,
   mimo,
+  longcat,
   "grok-build": xai,
   trae,
   custom,
@@ -48,6 +50,7 @@ const BY_CARD_BRAND: Record<string, string> = {
   claude,
   zcode,
   mimo,
+  longcat,
   trae,
   custom,
 };
