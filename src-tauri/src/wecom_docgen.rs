@@ -1959,6 +1959,44 @@ async fn run_update_inner(
     Ok(report)
 }
 
+/// 把 Git stderr 收成中文白话，避免群通知透出 hint/fatal 英文墙。
+fn humanize_docgen_git_error(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("not possible to fast-forward")
+        || lower.contains("diverging branches")
+        || lower.contains("need to specify how to reconcile")
+        || lower.contains("cannot fast-forward")
+    {
+        return "本地与远程分支已分叉，无法自动快进。请到 Git 管理合并或整理后再跑逆向更新。"
+            .into();
+    }
+    if lower.contains("unable to access")
+        || lower.contains("failed to connect")
+        || lower.contains("connection timed out")
+        || lower.contains("could not resolve host")
+        || lower.contains("network unreachable")
+        || lower.contains("ssl_connect")
+        || raw.contains("超时")
+    {
+        return "连不上远程仓库（网络不通、超时或代理问题），请检查网络后再试。".into();
+    }
+    if lower.contains("could not read from remote")
+        || lower.contains("permission denied")
+        || lower.contains("authentication failed")
+        || lower.contains("403")
+        || lower.contains("401")
+        || lower.contains("user interactivity has been disabled")
+    {
+        return "远程认证失败，请检查仓库凭据或 SSH 密钥。".into();
+    }
+    if lower.contains("would be overwritten by merge")
+        || lower.contains("your local changes to the following files")
+    {
+        return "工作区有未提交改动，无法同步远程。请先提交或储藏后再跑。".into();
+    }
+    "Git 操作失败，请到逆向工程 → 运行记录查看详情。".into()
+}
+
 fn retry_publication(pending: &PendingPublication) -> Result<(), String> {
     use crate::git_commands::{git_output, git_stdout};
     let tip = git_stdout(&pending.workspace, &["rev-parse", &format!("refs/heads/{}", pending.branch)])?;
@@ -1967,7 +2005,10 @@ fn retry_publication(pending: &PendingPublication) -> Result<(), String> {
     }
     let out = git_output(&pending.workspace, &["push", "origin", &format!("{}:refs/heads/{}", pending.head, pending.branch)])?;
     if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        return Err(format!(
+            "推送失败：{}",
+            humanize_docgen_git_error(String::from_utf8_lossy(&out.stderr).trim())
+        ));
     }
     Ok(())
 }
@@ -1983,8 +2024,8 @@ fn commit_docs(
     let add = git_output(workspace, &["add", "--", dir])?;
     if !add.status.success() {
         return Err(format!(
-            "git add {dir} 失败：{}",
-            String::from_utf8_lossy(&add.stderr).trim()
+            "暂存文档目录失败：{}",
+            humanize_docgen_git_error(String::from_utf8_lossy(&add.stderr).trim())
         ));
     }
     let staged = git_output(workspace, &["diff", "--cached", "--name-only", "--", dir])?;
@@ -2003,8 +2044,8 @@ fn commit_docs(
     let commit = git_output(workspace, &["commit", "-m", &msg, "--", dir])?;
     if !commit.status.success() {
         return Err(format!(
-            "git commit 失败：{}",
-            String::from_utf8_lossy(&commit.stderr).trim()
+            "提交文档失败：{}",
+            humanize_docgen_git_error(String::from_utf8_lossy(&commit.stderr).trim())
         ));
     }
     Ok(format!("已提交 {} 篇文档（未推送）", changed_docs.len()))
@@ -2045,13 +2086,16 @@ fn sync_source_repos(workspace: &str, repos: &[String], branch: &str) -> Vec<Str
             Ok(o) if o.status.success() => {}
             Ok(o) => {
                 notes.push(format!(
-                    "{name}：fetch 失败（{}）",
-                    String::from_utf8_lossy(&o.stderr).trim()
+                    "{name}：拉取失败（{}）",
+                    humanize_docgen_git_error(String::from_utf8_lossy(&o.stderr).trim())
                 ));
                 continue;
             }
             Err(e) => {
-                notes.push(format!("{name}：fetch 失败（{e}）"));
+                notes.push(format!(
+                    "{name}：拉取失败（{}）",
+                    humanize_docgen_git_error(&e)
+                ));
                 continue;
             }
         }
@@ -2081,9 +2125,12 @@ fn sync_source_repos(workspace: &str, repos: &[String], branch: &str) -> Vec<Str
             }
             Ok(o) => notes.push(format!(
                 "{name}：快进失败（{}）",
-                String::from_utf8_lossy(&o.stderr).trim()
+                humanize_docgen_git_error(String::from_utf8_lossy(&o.stderr).trim())
             )),
-            Err(e) => notes.push(format!("{name}：快进失败（{e}）")),
+            Err(e) => notes.push(format!(
+                "{name}：快进失败（{}）",
+                humanize_docgen_git_error(&e)
+            )),
         }
     }
     notes
@@ -2150,11 +2197,16 @@ fn prepare_workspace_branch(repo: &str, branch: &str) -> Result<(), String> {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
             return Err(format!(
-                "fetch origin/{branch} 失败：{}",
-                String::from_utf8_lossy(&o.stderr).trim()
+                "拉取 origin/{branch} 失败：{}",
+                humanize_docgen_git_error(String::from_utf8_lossy(&o.stderr).trim())
             ));
         }
-        Err(e) => return Err(format!("fetch origin/{branch} 失败：{e}")),
+        Err(e) => {
+            return Err(format!(
+                "拉取 origin/{branch} 失败：{}",
+                humanize_docgen_git_error(&e)
+            ));
+        }
     }
     let track = format!("origin/{branch}");
     let remote = git_stdout(repo, &["rev-parse", "--verify", "-q", &track]).unwrap_or_default();
@@ -2165,9 +2217,12 @@ fn prepare_workspace_branch(repo: &str, branch: &str) -> Result<(), String> {
         Ok(o) if o.status.success() => Ok(()),
         Ok(o) => Err(format!(
             "无法快进到 {track}：{}",
-            String::from_utf8_lossy(&o.stderr).trim()
+            humanize_docgen_git_error(String::from_utf8_lossy(&o.stderr).trim())
         )),
-        Err(e) => Err(format!("无法快进到 {track}：{e}")),
+        Err(e) => Err(format!(
+            "无法快进到 {track}：{}",
+            humanize_docgen_git_error(&e)
+        )),
     }
 }
 
@@ -3891,6 +3946,50 @@ mod tests {
         let s = strip_code_reference_section("业务要点\n\n## 代码引用\n- a:b → doc/x.md");
         assert_eq!(s, "业务要点");
         assert_eq!(strip_code_reference_section("只有摘要"), "只有摘要");
+    }
+
+    #[test]
+    fn humanize_docgen_git_error_maps_diverged_ff() {
+        let raw = "\
+hint: Diverging branches can't be fast-forwarded, you need to either:\n\
+hint:\n\
+hint: \tgit merge --no-ff\n\
+hint:\n\
+hint: or:\n\
+hint:\n\
+hint: \tgit rebase\n\
+hint:\n\
+hint: Disable this message with \"git config set advice.diverging false\"\n\
+fatal: Not possible to fast-forward, aborting.";
+        let msg = humanize_docgen_git_error(raw);
+        assert!(msg.contains("分叉"));
+        assert!(msg.contains("Git 管理"));
+        assert!(!msg.to_ascii_lowercase().contains("hint:"));
+        assert!(!msg.to_ascii_lowercase().contains("fatal:"));
+        assert!(!msg.to_ascii_lowercase().contains("fast-forward"));
+        let wrapped = format!("无法快进到 origin/release：{msg}");
+        assert!(!wrapped.contains("Diverging"));
+    }
+
+    #[test]
+    fn humanize_docgen_git_error_fallback_hides_english() {
+        let msg = humanize_docgen_git_error(
+            "error: some obscure plumbing failure\nhint: try again\nfatal: boom",
+        );
+        assert!(msg.contains("运行记录"));
+        assert!(!msg.contains("hint:"));
+        assert!(!msg.contains("fatal:"));
+        assert!(!msg.contains("obscure"));
+    }
+
+    #[test]
+    fn humanize_docgen_git_error_network_and_auth() {
+        assert!(humanize_docgen_git_error("fatal: unable to access 'https://x/'").contains("网络"));
+        assert!(humanize_docgen_git_error("Authentication failed for 'https://x/'").contains("认证"));
+        assert!(
+            humanize_docgen_git_error("error: Your local changes to the following files would be overwritten by merge:\n  a.md")
+                .contains("未提交")
+        );
     }
 
     #[test]
