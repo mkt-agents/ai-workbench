@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import WecomSettingsCard from "./WecomSettingsCard";
 import WeixinSettingsCard from "./WeixinSettingsCard";
+// TDesign（MIT）品牌图标：?raw 内联渲染，fill="currentColor" 跟随页签文字色
+import wecomBrand from "../assets/im/wecom.svg?raw";
+import wechatBrand from "../assets/im/wechat.svg?raw";
 
 /**
  * 智能互联 → IM 机器人。
@@ -23,6 +26,11 @@ export default function ImBotPage() {
               className={`hub-tab${channel === "wecom" ? " is-active" : ""}`}
               onClick={() => setChannel("wecom")}
             >
+              <span
+                className="hub-tab-brand"
+                aria-hidden
+                dangerouslySetInnerHTML={{ __html: wecomBrand }}
+              />
               {t("imBot.channelWecom")}
             </button>
             <button
@@ -32,6 +40,11 @@ export default function ImBotPage() {
               className={`hub-tab${channel === "weixin" ? " is-active" : ""}`}
               onClick={() => setChannel("weixin")}
             >
+              <span
+                className="hub-tab-brand"
+                aria-hidden
+                dangerouslySetInnerHTML={{ __html: wechatBrand }}
+              />
               {t("imBot.channelWechat")}
             </button>
           </div>

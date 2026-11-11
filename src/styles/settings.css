@@ -461,10 +461,26 @@
   padding: 3px;
 }
 .settings-page .hub-tabs.is-channel > .hub-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   flex: 0 0 auto;
   padding: 5px 20px;
   font-size: 13px;
   font-weight: 600;
+}
+/* 通道页签的品牌图标：内联 SVG，fill=currentColor 跟随文字色（选中态随强调色） */
+.settings-page .hub-tabs.is-channel > .hub-tab .hub-tab-brand {
+  display: inline-flex;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  opacity: 0.9;
+}
+.settings-page .hub-tabs.is-channel > .hub-tab .hub-tab-brand svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .settings-page .hub-tabs.is-channel > .hub-tab.is-active {
   color: var(--accent);
