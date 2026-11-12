@@ -22,8 +22,9 @@ use crate::wecom_proto::{self, EventCallback, MsgCallback};
 use crate::wecom_session::{self, SessionKey};
 use crate::wecom_ws::WecomSocket;
 
-/// DSH 单回合上限：比天玑的 420s 看门狗宽，因为 ACP 侧可能连着跑很久的工具。
-const DSH_TURN_TIMEOUT: Duration = Duration::from_secs(600);
+/// DSH 单回合上限：比天玑的 420s 看门狗宽；复杂排障常超 10 分钟，放宽到 30 分钟。
+const DSH_TURN_TIMEOUT_SECS: u64 = 1_800;
+const DSH_TURN_TIMEOUT: Duration = Duration::from_secs(DSH_TURN_TIMEOUT_SECS);
 /// 回合里超过这么久没有任何事件，只写排障日志（终稿模式不往企微刷 stall 句）。
 const DSH_STALL_NOTE: Duration = Duration::from_secs(90);
 
@@ -1063,7 +1064,15 @@ impl Orchestrator {
                 if let Some(rt) = self.running.lock().await.get(&session.as_str()) { rt.cancel(); }
                 crate::wecom_progress::finish(&request, "timeout", "timeout");
                 crate::wecom_diagnostics::record(&request, "engine", "timeout", Some("turn_deadline"), None, serde_json::json!({}));
-                send_finish(&self.sock, &msg.req_id, stream_id, "本轮达到 600 秒期限，已停止；未完成项不视为查询无数据。").await;
+                send_finish(
+                    &self.sock,
+                    &msg.req_id,
+                    stream_id,
+                    &format!(
+                        "本轮达到 {DSH_TURN_TIMEOUT_SECS} 秒期限，已停止；未完成项不视为查询无数据。"
+                    ),
+                )
+                .await;
                 append_reply_history(session,user_text,stream_id,"");
                 Ok(())
             },
@@ -1823,7 +1832,11 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
                         turn.cancel(); break Err("cancelled: 已停止日志补查计划".into());
                     }
                     if tokio::time::Instant::now() >= deadline {
-                        turn.cancel(); break Err("timeout: 排障回合已达到600秒期限".into());
+                        turn.cancel();
+                        break Err(format!(
+                            "timeout: 排障回合已达到{DSH_TURN_TIMEOUT_SECS}秒期限"
+                        )
+                        .into());
                     }
                     continue;
                 }
