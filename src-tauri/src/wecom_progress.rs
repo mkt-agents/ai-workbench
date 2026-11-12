@@ -7,8 +7,68 @@ use std::time::{Duration, Instant};
 const CAPACITY: usize = 256;
 const TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const HEARTBEAT: Duration = Duration::from_secs(30);
+/// 工具/思考有进展时，允许提前刷新气泡的最短间隔（短于 HEARTBEAT）。
+const BUBBLE_NUDGE: Duration = Duration::from_secs(20);
+/// 超过此时长无新 activity：气泡标明未断线，避免被当成掉线。
+const BUBBLE_IDLE: Duration = Duration::from_secs(90);
 const MAX_KEY_BYTES: usize = 4096;
+const MAX_HINT_CHARS: usize = 40;
 const NO_TASK: &str = "当前会话暂无任务记录。";
+
+/// 企微早 ack 占位：只用于回答开始前的第一帧；后续轮换气泡不再携带它，
+/// 避免「收到，正在处理… 整理结论 · 已用时 4分17秒」这类过时且重复的拼接。
+pub const ACK_PLACEHOLDER: &str = "收到，正在处理…";
+
+/// 模型思考中的固定 hint：气泡把它当作活动状态本身，不再叠加轮换动词。
+const THINKING_HINT: &str = "正在思考";
+
+/// 轮换动词统一「动作短语」风格，不用「正在…」开头——中间段可能是
+/// 「正在思考」这类自带进行时的 hint，叠在一起会读成两个并列动作。
+const PULSE_VERBS: &[&str] = &[
+    "持续处理",
+    "深入分析",
+    "核对线索",
+    "关联排查",
+    "汇总要点",
+    "整理结论",
+    "补充细节",
+    "再核一遍",
+    "收尾确认",
+    "即将给出答复",
+];
+
+/// 上游工具 title 常是英文工具名（read / grep / bash…），企微受众统一映射为
+/// 静态中文术语；未识别的 title 原样保留（可能本就是描述性文本）。
+fn tool_label(head: &str) -> Option<&'static str> {
+    Some(match head {
+        "read" | "read_file" | "read_document_file" => "读文件",
+        "write" | "write_file" => "写文件",
+        "edit" | "edit_file" | "patch" => "改文件",
+        "grep" | "search" | "search_content" => "搜索内容",
+        "glob" | "find" | "ls" | "list" => "找文件",
+        "bash" | "shell" | "command" | "run_command" | "terminal" => "跑命令",
+        "web" | "web_fetch" | "fetch" | "browser" => "查网页",
+        "symbols" => "查符号",
+        "task" => "子任务",
+        "plan" | "update_plan" | "todo" | "todowrite" => "更新计划",
+        "mcp" => "外部工具",
+        _ => return None,
+    })
+}
+
+/// 把已清洗的 hint 翻成展示术语：整体命中或首词命中皆可，其余部分原样保留。
+fn display_hint(cleaned: &str) -> String {
+    if let Some(label) = tool_label(cleaned) {
+        return label.to_owned();
+    }
+    match cleaned.split_once(' ') {
+        Some((head, rest)) => match tool_label(head) {
+            Some(label) => format!("{label} {rest}"),
+            None => cleaned.to_owned(),
+        },
+        None => cleaned.to_owned(),
+    }
+}
 
 fn normalize_request(request: &str) -> String {
     match request.strip_prefix("wecom-preflight-") {
@@ -78,10 +138,54 @@ struct Task {
     last_visible: Duration,
     body_started: bool,
     phase: &'static str,
+    /// Short static activity hint for WeCom pulse (tool title / generic thought).
+    hint: String,
     collected: usize,
     /// True only after `collected()` ran (log acquisition path), even when count is 0.
     log_acquisition: bool,
     terminal: Option<Final>,
+}
+
+fn sanitize_hint(raw: &str) -> String {
+    let flat: String = raw
+        .chars()
+        .map(|c| if c.is_control() || c == '\n' || c == '\r' { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let trimmed = flat.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (i, ch) in trimmed.chars().enumerate() {
+        if i >= MAX_HINT_CHARS {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn format_elapsed(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}秒")
+    } else {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s == 0 {
+            format!("{m}分")
+        } else {
+            format!("{m}分{s}秒")
+        }
+    }
+}
+
+fn pulse_verb(elapsed_secs: u64) -> &'static str {
+    let idx = (elapsed_secs / HEARTBEAT.as_secs()) as usize % PULSE_VERBS.len();
+    PULSE_VERBS[idx]
 }
 
 impl Task {
@@ -89,6 +193,34 @@ impl Task {
         self.terminal
             .as_ref()
             .is_some_and(|end| now.saturating_sub(end.at) >= TTL)
+    }
+
+    /// 企微进行中气泡：单行（stream 换行易导致客户端不显示气泡）。
+    /// 以轮换动词开头（它本身就带进行感）；长时间无新 activity 时标明未断线。
+    /// 不再携带 ACK_PLACEHOLDER：那是开始前第一帧的职责，挂在这里会越久越怪。
+    fn bubble_line(&self, now: Duration) -> String {
+        let elapsed = now.saturating_sub(self.started).as_secs();
+        let idle = now.saturating_sub(self.last_activity).as_secs();
+        let verb = pulse_verb(elapsed);
+        let base = if self.hint.is_empty() {
+            self.phase
+        } else {
+            self.hint.as_str()
+        };
+        let middle = if idle >= BUBBLE_IDLE.as_secs() {
+            format!(
+                "{base}（已等待{}，未断线；可发停止）",
+                format_elapsed(idle)
+            )
+        } else {
+            base.to_string()
+        };
+        // 思考本身就是活动：不叠轮换动词，避免「正在梳理 · 正在思考」式并列。
+        if self.hint == THINKING_HINT {
+            return format!("{middle} · 已用时 {}…", format_elapsed(elapsed));
+        }
+        // 单行：动词 + 进度；勿插入 \n（企微未结束 stream 对换行不友好）。
+        format!("{verb} · {middle} · 已用时 {}…", format_elapsed(elapsed))
     }
 
     /// 聊天窗口里的进度气泡：分行排版，主行给状态，次行给耗时与采集量。
@@ -198,6 +330,7 @@ impl State {
             last_visible: now,
             body_started: false,
             phase: phase_label("queued"),
+            hint: String::new(),
             collected: 0,
             log_acquisition: false,
             terminal: None,
@@ -226,6 +359,18 @@ impl State {
     fn activity(&mut self, request: &str, now: Duration) {
         let now = self.time(now);
         if let Some(task) = self.active_mut(request) {
+            task.last_activity = now;
+        }
+    }
+
+    fn hint(&mut self, request: &str, text: &str, now: Duration) {
+        let now = self.time(now);
+        let cleaned = sanitize_hint(text);
+        if cleaned.is_empty() {
+            return;
+        }
+        if let Some(task) = self.active_mut(request) {
+            task.hint = display_hint(&cleaned);
             task.last_activity = now;
         }
     }
@@ -312,6 +457,28 @@ impl State {
         task.last_visible = now;
         Some(task.summary(now))
     }
+
+    /// 企微进行中短心跳：30s 节奏，正文开始后抑制。
+    fn bubble_pulse(&mut self, request: &str, now: Duration) -> Option<String> {
+        let now = self.time(now);
+        let task = self.active_mut(request)?;
+        if task.body_started || now.saturating_sub(task.last_visible) < HEARTBEAT {
+            return None;
+        }
+        task.last_visible = now;
+        Some(task.bubble_line(now))
+    }
+
+    /// 工具/思考有进展时提前刷气泡：≥20s 且尚未出正文。
+    fn bubble_nudge(&mut self, request: &str, now: Duration) -> Option<String> {
+        let now = self.time(now);
+        let task = self.active_mut(request)?;
+        if task.body_started || now.saturating_sub(task.last_visible) < BUBBLE_NUDGE {
+            return None;
+        }
+        task.last_visible = now;
+        Some(task.bubble_line(now))
+    }
 }
 
 struct Runtime {
@@ -351,6 +518,11 @@ pub fn phase(request: &str, phase: &str) {
 /// Record an event without retaining any tool/model payload or resetting heartbeat.
 pub fn activity(request: &str) {
     with_state(|state, now| state.activity(request, now));
+}
+
+/// Store a short static hint for WeCom pulse (tool title / generic thought). Truncated.
+pub fn hint(request: &str, text: &str) {
+    with_state(|state, now| state.hint(request, text, now));
 }
 
 /// Record a cumulative collected-item count; stale lower snapshots do not reduce it.
@@ -411,9 +583,19 @@ pub fn visible_output(request: &str) {
 
 /// Poll from an independent timer. Only active tasks without visible answer text emit,
 /// at most once every 30s. Tool activity and status inquiries never postpone this cadence.
-/// No IO is performed. Orchestrator 终稿模式会调用以推进内部状态，但不再把文案推到企微气泡。
+/// No IO is performed. Long multi-line copy for internal /「进度」查询；企微气泡用 `bubble_pulse`。
 pub fn heartbeat(request: &str) -> Option<String> {
     with_state(|state, now| state.heartbeat(request, now))
+}
+
+/// WeCom in-progress short line (verb rotation + phase/hint + elapsed). Same 30s gate as heartbeat.
+pub fn bubble_pulse(request: &str) -> Option<String> {
+    with_state(|state, now| state.bubble_pulse(request, now))
+}
+
+/// Early WeCom bubble refresh when tools/thoughts advance (≥20s since last visible).
+pub fn bubble_nudge(request: &str) -> Option<String> {
+    with_state(|state, now| state.bubble_nudge(request, now))
 }
 
 #[cfg(test)]
@@ -491,6 +673,79 @@ mod tests {
             assert!(state.heartbeat("r", at(seconds)).is_none());
         }
         assert_eq!(state.tasks[0].last_activity, at(120));
+    }
+
+    #[test]
+    fn bubble_pulse_rotates_verb_and_prefers_hint() {
+        let mut state = State::default();
+        state.begin("s", "wecom-preflight-9", at(0));
+        state.phase("wecom-9", "planning", at(1));
+        let first = state.bubble_pulse("wecom-9", at(30)).expect("pulse");
+        assert!(first.starts_with("深入分析"), "{first}");
+        assert!(!first.contains(ACK_PLACEHOLDER), "{first}");
+        assert!(first.contains("制定查询计划"), "{first}");
+        assert!(first.contains("已用时 30秒…"), "{first}");
+        assert!(state.bubble_pulse("wecom-9", at(40)).is_none());
+        state.hint(
+            "wecom-9",
+            "读日志\npath=/secret/foo",
+            at(45),
+        );
+        let nudged = state.bubble_nudge("wecom-9", at(55)).expect("nudge");
+        assert!(nudged.starts_with("深入分析"), "{nudged}");
+        assert!(!nudged.contains(ACK_PLACEHOLDER), "{nudged}");
+        assert!(!nudged.contains('\n'), "{nudged}");
+        assert!(nudged.contains("读日志"), "{nudged}");
+        assert!(!nudged.contains("制定查询计划"), "{nudged}");
+        assert!(nudged.ends_with('…'), "{nudged}");
+        let later = state.bubble_pulse("wecom-9", at(85)).expect("later pulse");
+        assert!(later.contains("核对线索"), "{later}");
+        assert!(later.contains("已用时 1分25秒…"), "{later}");
+        assert!(!later.contains("未断线"), "{later}");
+        state.visible_output("wecom-9", at(86));
+        assert!(state.bubble_pulse("wecom-9", at(200)).is_none());
+        assert!(state.bubble_nudge("wecom-9", at(220)).is_none());
+    }
+
+    #[test]
+    fn bubble_line_marks_alive_when_idle_over_ninety_seconds() {
+        let mut state = State::default();
+        state.begin("s", "wecom-preflight-g", at(0));
+        state.hint("wecom-g", "grep", at(10));
+        let early = state.bubble_pulse("wecom-g", at(30)).expect("early");
+        assert!(early.contains("搜索内容"), "{early}");
+        assert!(!early.contains("grep"), "{early}");
+        assert!(!early.contains("未断线"), "{early}");
+        let idle = state.bubble_pulse("wecom-g", at(120)).expect("idle");
+        assert!(idle.contains("未断线"), "{idle}");
+        assert!(idle.contains("停止"), "{idle}");
+        assert!(idle.contains("已等待"), "{idle}");
+        assert!(idle.contains("搜索内容"), "{idle}");
+    }
+
+    /// 术语优化：思考 hint 不叠轮换动词；英文工具名映射为中文术语。
+    #[test]
+    fn thinking_hint_skips_verb_and_tool_titles_translate() {
+        assert_eq!(display_hint("read"), "读文件");
+        assert_eq!(display_hint("grep src/lib.rs"), "搜索内容 src/lib.rs");
+        assert_eq!(display_hint("读日志 path=/secret"), "读日志 path=/secret");
+        let mut state = State::default();
+        state.begin("s", "wecom-preflight-t", at(0));
+        state.hint("wecom-t", THINKING_HINT, at(1));
+        let pulse = state.bubble_pulse("wecom-t", at(30)).expect("pulse");
+        assert!(pulse.starts_with(THINKING_HINT), "{pulse}");
+        assert!(!PULSE_VERBS.iter().any(|v| pulse.contains(v)), "{pulse}");
+        assert!(pulse.contains("已用时 30秒…"), "{pulse}");
+    }
+
+    #[test]
+    fn sanitize_hint_truncates_and_flattens() {
+        let long = "字".repeat(MAX_HINT_CHARS + 5);
+        let out = sanitize_hint(&format!("  a\tb\n{long}  "));
+        assert!(!out.contains('\n'));
+        assert!(out.ends_with('…'));
+        assert!(out.chars().count() <= MAX_HINT_CHARS + 1);
+        assert!(sanitize_hint("   \n\t  ").is_empty());
     }
 
     #[test]

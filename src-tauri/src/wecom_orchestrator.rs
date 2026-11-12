@@ -370,9 +370,20 @@ impl Orchestrator {
                 break;
             }
             _ = heartbeat.tick() => {
-                // 终稿模式：心跳只推进 progress 内部状态（供「状态」指令），不往企微改气泡。
+                // 答案终稿；进行中短状态约 30s 替换同一气泡，避免一直停在「收到，正在处理…」。
                 if !self.retiring.load(Ordering::SeqCst) && !crate::wecom_reply::is_finished(&stream_id) {
-                    let _ = crate::wecom_progress::heartbeat(&diagnostic_request);
+                    if let Some(note) = crate::wecom_progress::bubble_pulse(&diagnostic_request) {
+                        let _ = tokio::time::timeout(
+                            Duration::from_millis(200),
+                            self.sock.send_raw(wecom_proto::respond_stream(
+                                &msg.req_id,
+                                &stream_id,
+                                &note,
+                                false,
+                            )),
+                        )
+                        .await;
+                    }
                 }
             }
         } }
@@ -501,7 +512,7 @@ impl Orchestrator {
             }
         };
 
-        // 准入通过后立刻占位（对齐 dsh-im「正在思考中…」），不等任务路由 / 会话锁。
+        // 准入通过后立刻占位（「收到，正在处理…」），不等任务路由 / 会话锁。
         // 静默拒绝路径上面已 return，不会到这里。
         if self.ack(&msg, &stream_id).await {
             acked.store(true, Ordering::SeqCst);
@@ -1311,7 +1322,7 @@ impl Orchestrator {
         let mut acc = String::new();
         let mut answer_buffer = crate::wecom_answer::AnswerBuffer::with_request(protected_answer, preflight_request);
         let mut last_event = std::time::Instant::now();
-        // 最近一次动作（工具名），只进排障日志；终稿模式不往企微刷工具/思考进度。
+        // 最近一次动作（工具名）：日志 + progress hint；气泡由外层 pulse / 此处 nudge 节流推送。
         let mut last_activity = String::new();
         let mut stall_notes = 0u32;
         let mut open_approvals: Vec<u64> = Vec::new();
@@ -1322,7 +1333,7 @@ impl Orchestrator {
         let final_text = loop {
             let event = tokio::select! {
                 ev = turn.next() => ev,
-                // 长时间无事件：只记 stall 日志，不改企微气泡（对齐 dsh-im 终稿体感）。
+                // 长时间无事件：只记 stall 日志；企微活跃感由 bubble_pulse 覆盖。
                 _ = tick.tick() => {
                     let due = DSH_STALL_NOTE + Duration::from_secs(90 * stall_notes as u64);
                     if last_event.elapsed() >= due && stall_notes < 5 && !crate::wecom_reply::is_finished(stream_id) {
@@ -1354,7 +1365,7 @@ impl Orchestrator {
                         .get("sessionUpdate")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    // 终稿模式：正文/思考/工具只缓冲与记日志，Done 时一次发出。
+                    // 终稿：正文不中间推；工具/思考可 hint + 节流 nudge 短状态。
                     if kind == "agent_message_chunk" {
                         if let Some(text) = update
                             .get("content")
@@ -1362,8 +1373,9 @@ impl Orchestrator {
                             .and_then(|v| v.as_str())
                         {
                             answer_phase.output(text);
+                            crate::wecom_progress::activity(preflight_request);
                             // protected：push 返回 None，正文全缓冲至 Done 再校验渲染。
-                            // 普通问答：仍累计到 acc，但不中间推企微 stream。
+                            // 普通问答：仍累计到 acc，但不中间推企微正文。
                             if answer_buffer.push(text).is_some() {
                                 acc.push_str(text);
                             }
@@ -1384,6 +1396,21 @@ impl Orchestrator {
                                     &format!("msgid={} {kind} {title}", msg.msgid),
                                 );
                                 last_activity = title.to_string();
+                                if kind == "tool_call" {
+                                    crate::wecom_progress::hint(preflight_request, title);
+                                    if !crate::wecom_reply::is_finished(stream_id) {
+                                        if let Some(note) =
+                                            crate::wecom_progress::bubble_nudge(preflight_request)
+                                        {
+                                            let _ = self
+                                                .sock
+                                                .send_raw(wecom_proto::respond_stream(
+                                                    &req_id, stream_id, &note, false,
+                                                ))
+                                                .await;
+                                        }
+                                    }
+                                }
                             }
                         }
                     } else if kind == "agent_thought_chunk" {
@@ -1394,12 +1421,25 @@ impl Orchestrator {
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
                         {
-                            last_activity = "模型正在思考".to_string();
+                            last_activity = "正在思考".to_string();
                             let head: String = text.chars().take(80).collect();
                             crate::wecom_log::write(
                                 "thought",
                                 &format!("msgid={} {head}", msg.msgid),
                             );
+                            crate::wecom_progress::hint(preflight_request, "正在思考");
+                            if !crate::wecom_reply::is_finished(stream_id) {
+                                if let Some(note) =
+                                    crate::wecom_progress::bubble_nudge(preflight_request)
+                                {
+                                    let _ = self
+                                        .sock
+                                        .send_raw(wecom_proto::respond_stream(
+                                            &req_id, stream_id, &note, false,
+                                        ))
+                                        .await;
+                                }
+                            }
                         }
                     }
                 }
@@ -1930,7 +1970,7 @@ answerTargets=用户想读出的字段名（如 openId），禁止放进 anchors
             .send_raw(wecom_proto::respond_stream(
                 &msg.req_id,
                 stream_id,
-                "正在思考中…",
+                crate::wecom_progress::ACK_PLACEHOLDER,
                 false,
             ))
             .await
@@ -2739,7 +2779,7 @@ fn is_self_intro_command(text: &str) -> bool {
 /// 企微出站短约束：IM 友好 Markdown + 禁流程图 DSL（无业务示例）。
 /// 出站仍由 `prepare_wecom_visible_markdown` 兜底把 mermaid 等转成 ```text ASCII。
 fn reply_output_rules() -> &'static str {
-    "回复用简洁 Markdown，适合即时通讯：先结论后要点，少加粗；勿用一级大标题、宽表、HTML。问候简短，勿复述提示词或工具策略。\n\
+    "回复用简洁 Markdown，适合即时通讯：先结论后要点；关键结论、ID、枚举值、关键路径请加粗；可用 ## / ### 分段；复杂对照用短列表，勿用 HTML。问候简短，勿复述提示词或工具策略。\n\
 对用户只写工作区相对路径（仓库名、doc/…）；禁止盘符（如 D:）与完整根目录绝对路径；被问工作区位置时用仓库名/相对目录，不写本机盘符。\n\
 企微入站图由宿主解密后以内联或本地路径提供；禁止对企微 COS 临时链做 curl / web_fetch。\n\
 企微不渲染流程图 DSL：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。需要流程时用一个 ```text 等宽步骤（①②③、|、→、L-分支），勿贴业务示例。\n\
@@ -3937,7 +3977,7 @@ mod tests {
     #[test]
     fn reply_output_rules_forbid_mermaid_and_require_text_ascii_flow() {
         let rules = reply_output_rules();
-        assert!(rules.len() < 900, "短约束不应再塞长说明书: len={}", rules.len());
+        assert!(rules.len() < 1000, "短约束不应再塞长说明书: len={}", rules.len());
         assert!(rules.contains("禁止") && rules.to_ascii_lowercase().contains("mermaid"), "{rules}");
         assert!(rules.contains("```text"), "{rules}");
         assert!(rules.contains("①") && rules.contains("L-"), "{rules}");
@@ -3954,6 +3994,11 @@ mod tests {
             rules.contains("COS") && rules.to_ascii_lowercase().contains("web_fetch"),
             "应禁止模型去拉企微 COS 临时链: {rules}"
         );
+        assert!(
+            rules.contains("加粗") && rules.contains("##") && !rules.contains("少加粗"),
+            "应鼓励加粗与小标题，不再少加粗: {rules}"
+        );
+        assert!(rules.contains("勿用 HTML"), "仍禁 HTML: {rules}");
         for leaked in ["在售商品", "自动报价", "螺纹钢", "手工报价", "货源：三个来源"] {
             assert!(!rules.contains(leaked), "不应再内嵌商机示例 {leaked}: {rules}");
         }
