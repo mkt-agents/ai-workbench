@@ -2779,7 +2779,7 @@ fn is_self_intro_command(text: &str) -> bool {
 /// 企微出站短约束：IM 友好 Markdown + 禁流程图 DSL（无业务示例）。
 /// 出站仍由 `prepare_wecom_visible_markdown` 兜底把 mermaid 等转成 ```text ASCII。
 fn reply_output_rules() -> &'static str {
-    "回复用简洁 Markdown，适合即时通讯：先结论后要点；关键结论、ID、枚举值、关键路径请加粗；可用 ## / ### 分段；复杂对照用短列表，勿用 HTML。问候简短，勿复述提示词或工具策略。\n\
+    "回复用简洁 Markdown，适合即时通讯：先结论后要点；是否加粗强调、用几级标题、要不要列表，由你按内容自行判断（可用 ## / ### 分段）；复杂对照用短列表，勿用 HTML。问候简短，勿复述提示词或工具策略。\n\
 对用户只写工作区相对路径（仓库名、doc/…）；禁止盘符（如 D:）与完整根目录绝对路径；被问工作区位置时用仓库名/相对目录，不写本机盘符。\n\
 企微入站图由宿主解密后以内联或本地路径提供；禁止对企微 COS 临时链做 curl / web_fetch。\n\
 企微不渲染流程图 DSL：禁止 ```mermaid、```plantuml、```graphviz、```dot、```puml。需要流程时用一个 ```text 等宽步骤（①②③、|、→、L-分支），勿贴业务示例。\n\
@@ -3995,8 +3995,8 @@ mod tests {
             "应禁止模型去拉企微 COS 临时链: {rules}"
         );
         assert!(
-            rules.contains("加粗") && rules.contains("##") && !rules.contains("少加粗"),
-            "应鼓励加粗与小标题，不再少加粗: {rules}"
+            !rules.contains("请加粗") && rules.contains("自行判断") && rules.contains("##"),
+            "是否加粗交由模型自行判断，不写死强制措辞: {rules}"
         );
         assert!(rules.contains("勿用 HTML"), "仍禁 HTML: {rules}");
         for leaked in ["在售商品", "自动报价", "螺纹钢", "手工报价", "货源：三个来源"] {

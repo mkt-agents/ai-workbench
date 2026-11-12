@@ -10,7 +10,7 @@ IM 机器人支持同一进程内挂多个企微 bot：每个 bot 独立长连�
 
 ## 企微回复阅读排版（2026-11-03 短约束）
 
-官方 `stream.content` 仅「常见 Markdown」，**不渲染 Mermaid/PlantUML 等流程图 DSL**。每轮 `reply_output_rules()` 压成极短 IM 约束：**鼓励**关键结论/ID/枚举/路径加粗，可用 `##` / `###` 分段；禁 HTML、禁 DSL（漏网 mermaid 由 `prepare_wecom_visible_markdown` / `rewrite_diagram_fences` 转 ```text ASCII）；无业务示例。说话风格交给设置页「上下文增强」。客户端字体/字号仍由企微决定。排障报告侧：结论置顶、证据去重与短引文预算等既有渲染规则不变；自我介绍与耗时尾注不改写。
+官方 `stream.content` 仅「常见 Markdown」，**不渲染 Mermaid/PlantUML 等流程图 DSL**。每轮 `reply_output_rules()` 压成极短 IM 约束：是否加粗/强调、标题层级、列表由**模型按内容自行判断**（2026-11-12 起不再写死「关键结论/ID/枚举/路径请加粗」），可用 `##` / `###` 分段；禁 HTML、禁 DSL（漏网 mermaid 由 `prepare_wecom_visible_markdown` / `rewrite_diagram_fences` 转 ```text ASCII）；无业务示例。说话风格交给设置页「上下文增强」。客户端字体/字号仍由企微决定。排障报告侧：结论置顶、证据去重与短引文预算等既有渲染规则不变；自我介绍与耗时尾注不改写。
 
 ## 明确日期与相对日期查询（2026-10-29）
 
