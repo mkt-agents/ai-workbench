@@ -227,6 +227,13 @@ export type WecomBotRuntimeStatus = {
   engine?: string;
   connectedMs?: number | null;
   lastError?: string;
+  /** 这台机器人自己的 DSH 引擎状态（每台一个 ACP 进程） */
+  dsh?: WecomDshStatus | null;
+  /** 这台机器人自己的并发占用 / 排队 / 生效上限 / 共享任务数 */
+  activeJobs?: number;
+  waitingJobs?: number;
+  maxJobs?: number;
+  sharedTasks?: number;
 }; // 与后端 WecomBotRuntimeStatus camelCase 对齐
 
 export type WecomStatus = {
@@ -347,6 +354,8 @@ export type WecomPairing = {
   userid: string;
   code: string;
   createdMs: number;
+  /** 发起请求的机器人 bot_id；空串 = 未知（按全通道处理） */
+  botId?: string;
 };
 
 type ApplyArgs = {

@@ -626,7 +626,7 @@
   row-gap: 0;
 }
 
-/* IM 机器人 · 通道：绑定列表卡铺满剩余高度，底下不再空一大片。 */
+/* IM 机器人 · 主从布局：高度一路传给「左栏 + 右栏」，两列各自内部滚动，页面不整体滚。 */
 .settings-page.is-im-bot {
   grid-template-rows: minmax(min-content, 1fr);
 }
@@ -653,21 +653,30 @@
   display: flex;
   flex-direction: column;
 }
-.settings-page.is-im-bot .wecom-settings.is-channel > .net-panel:not([hidden]) {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.settings-page.is-im-bot .wecom-settings.is-channel > .net-panel:not([hidden]) > .wecom-rows {
-  display: flex;
-  flex-direction: column;
+/* 主从容器：左栏固定 232px，右栏自适应；两列同高、各自滚动 */
+.settings-page.is-im-bot .wecom-master-detail {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 12px;
   flex: 1 1 auto;
   min-height: 0;
 }
-.settings-page.is-im-bot .wecom-settings.is-channel .wecom-channel-shell {
-  flex: 1 1 auto;
+/* 右栏：身份头 / 页签固定，唯一可见的面板自己滚（不额外包一层 div，模板更薄） */
+.settings-page.is-im-bot .wecom-bot-detail {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
   min-height: 0;
+}
+.settings-page.is-im-bot .wecom-bot-detail > .net-panel:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  margin-top: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 
@@ -1443,9 +1452,10 @@
 }
 /* 企微侧参考系统设置式布局：单层面板、扁平表单，不再嵌套一组组小卡片。
    和「天玑助手」页一致：面板不画底色和边框，只有标题下的细线和条目分隔线，
-   否则一整页浮着一层灰底，看着比其它页发灰。 */
-.settings-page .wecom-settings > .net-panel {
-  /* 面板撑满卡片正文：宽度不再设上限，右侧不留空带 */
+   否则一整页浮着一层灰底，看着比其它页发灰。
+   主从布局后三块面板挂在右栏（.wecom-bot-detail）下，选择器跟着换。 */
+.settings-page.is-im-bot .wecom-bot-detail > .net-panel {
+  /* 面板撑满右栏：宽度不再设上限，右侧不留空带 */
   width: 100%;
   margin-top: 0;
   padding: 0;
@@ -1456,7 +1466,7 @@
 }
 /* 一次只显示一块，间距交给上面的小卡片 Tab 控制；这里再叠 margin 会变成
    「第一块 0、其余 18」的两套间距（隐藏的兄弟节点仍会命中 + 选择器） */
-.settings-page .wecom-settings > .net-panel + .net-panel {
+.settings-page.is-im-bot .wecom-bot-detail > .net-panel + .net-panel {
   margin-top: 0;
 }
 .settings-page .net-panel > .hub-group-title {
@@ -1563,17 +1573,19 @@
     border-top: 1px solid color-mix(in srgb, var(--border-subtle) 45%, transparent);
   }
 }
-/* —— 页内小卡片 Tab：一屏只看一组设置 —— */
+/* —— 页内小卡片 Tab：一屏只看一组设置 ——
+   前面挂一个作用域 chip，写明这三张卡都属于「当前机器人」，不留共用错觉 */
 .settings-page .wecom-sections {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  align-items: stretch;
   /* 与面板 / 卡片区一样铺满卡片正文，不设宽度上限 */
-  /* 与下面唯一可见的面板之间的固定间距 */
-  margin: 12px 0 14px;
+  margin: 0;
 }
 .settings-page .wecom-section {
   display: flex;
+  flex: 1 1 132px;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -1626,14 +1638,12 @@
   line-height: 1.45;
   font-size: 11px;
 }
-/* 顶部概览：状态 / 引擎 / 时长在左，重连与总开关在右，说明铺在下面一行。
-   同样不带底色，只用一条底线和下面的「通道」分开 */
+/* 微信 Tab 仍在用的概览条：状态 / 引擎 / 时长在左，操作在右，说明铺在下面一行 */
 .settings-page .wecom-hero {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  /* 概览条同样撑满，和下面的 tab 行、卡片右边缘对齐 */
   width: 100%;
   margin-top: 2px;
   padding: 8px 0 12px;
@@ -1644,7 +1654,6 @@
 }
 .settings-page .wecom-hero-main {
   display: flex;
-  /* 基准 340px：窗口窄到放不下胶囊 + 按钮时，按钮那组整排掉到下一行 */
   flex: 1 1 340px;
   flex-wrap: wrap;
   align-items: center;
@@ -1666,6 +1675,69 @@
   border-radius: var(--radius-full);
   background: var(--overlay-2);
   color: var(--text-2);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+/* 右栏身份头：这一台的连接身份 + 作用域声明。实线卡 = 单机信息（与全通道虚线卡区分）
+   顶对齐：名字行折行后（作用域标签掉到第二行）操作组仍跟名字齐平，不悬在两行中间 */
+.settings-page .wecom-bot-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+}
+.settings-page .wecom-bot-hero-main {
+  display: flex;
+  /* 基准 320px：窄到放不下胶囊 + 操作时，操作组整排掉到下一行 */
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-page .wecom-bot-hero-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-page .wecom-bot-hero-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.settings-page .wecom-bot-hero-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-page .wecom-bot-hero-switch-label {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.settings-page .wecom-bot-hero-hint {
+  flex: 1 0 100%;
+  margin: 0;
+}
+/* 作用域标签：明确「仅这台」，主色虚线框与全局信息区分 */
+.settings-page .wecom-scope-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px dashed var(--accent-border);
+  border-radius: var(--radius-full);
+  color: var(--accent);
   font-size: 10.5px;
   white-space: nowrap;
 }
@@ -1908,104 +1980,485 @@
   color: var(--text-1);
   white-space: nowrap;
 }
-.settings-page .wecom-channel-shell {
-  gap: 10px;
-}
-.settings-page .wecom-channel-shell > .wecom-block-head {
-  flex: 0 0 auto;
-}
-.settings-page .wecom-bot-actions {
+/* —— 左栏：机器人列表（主从布局里的「主」，选谁就在配谁） —— */
+.settings-page .wecom-bot-rail {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-}
-.settings-page .wecom-bot-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  flex: 1 1 auto;
-  align-content: start;
-  min-height: 160px;
-}
-.settings-page .wecom-bot-list-empty {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-@media (max-width: 720px) {
-  .settings-page .wecom-bot-list {
-    grid-template-columns: 1fr;
-  }
-}
-.settings-page .wecom-bot-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
+  min-height: 0;
+  padding: 9px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--overlay-1);
-  color: var(--text-1);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--transition-colors-fast), background var(--transition-colors-fast);
 }
-.settings-page .wecom-bot-card:hover {
+/* 头部块：标题行 + 接入按钮行贴在一起，整体与下方列表用一条发丝线分开 */
+.settings-page .wecom-rail-top {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+.settings-page .wecom-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* 扫码 / 手动接入等宽并排，主次靠颜色区分而不是靠宽度 */
+.settings-page .wecom-rail-add {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.settings-page .wecom-rail-add > .btn {
+  flex: 1 1 0;
+  justify-content: center;
+  min-width: 0;
+}
+.settings-page .wecom-rail-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-page .wecom-rail-empty {
+  margin: 0;
+  padding: 8px 2px;
+  line-height: 1.5;
+}
+.settings-page .wecom-rail-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  list-style: none;
+}
+.settings-page .wecom-rail-item {
+  position: relative;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--overlay-2) 55%, transparent);
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+}
+.settings-page .wecom-rail-item:hover {
+  border-color: var(--accent-border);
   background: var(--overlay-2);
 }
-.settings-page .wecom-bot-card.is-selected {
+.settings-page .wecom-rail-item.is-selected {
   border-color: var(--accent-border);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
-.settings-page .wecom-bot-card:focus-visible {
+/* 停用的机器人：只降透明度，仍可点进去编辑配置 */
+.settings-page .wecom-rail-item.is-off {
+  opacity: 0.62;
+}
+.settings-page .wecom-rail-item-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 9px;
+  border: none;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-page .wecom-rail-item-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-.settings-page .wecom-bot-card-main {
+.settings-page .wecom-rail-item-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
-  flex: 1 1 auto;
+  /* 给 hover 出现的编辑 / 删除让位，名称不会压在图标下面 */
+  padding-right: 44px;
 }
-.settings-page .wecom-bot-card-name {
-  font-weight: 600;
+.settings-page .wecom-rail-item-name {
+  overflow: hidden;
   font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.settings-page .wecom-bot-card-id {
-  font-size: 11px;
-  color: var(--text-3);
+.settings-page .wecom-rail-item-badge {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--yellow) 22%, transparent);
+  color: var(--yellow);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.settings-page .wecom-bot-card-actions {
-  flex: 0 0 auto;
-  display: inline-flex;
+.settings-page .wecom-rail-item-meta {
+  display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--text-3);
 }
-.settings-page .wecom-bot-card-edit,
-.settings-page .wecom-bot-card-del {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+.settings-page .wecom-rail-item-meta > span {
+  white-space: nowrap;
+}
+.settings-page .wecom-rail-item-meta > .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 条目里的连接态用颜色点一下，扫描列表时不用逐字读 */
+.settings-page .wecom-rail-item-meta > .is-connected {
+  color: var(--green);
+}
+.settings-page .wecom-rail-item-meta > .is-error {
+  color: var(--red);
+}
+.settings-page .wecom-rail-item-meta > .is-pending,
+.settings-page .wecom-rail-item-meta > .is-connecting,
+.settings-page .wecom-rail-item-meta > .is-reconnecting {
+  color: var(--yellow);
+}
+.settings-page .wecom-rail-item-stats {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-page .wecom-rail-item.is-selected .wecom-rail-item-stats {
+  color: var(--text-2);
+}
+/* 列表项上的编辑 / 删除：hover 或键盘聚焦时才露出，平时不挤占名称 */
+.settings-page .wecom-rail-item-tools {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  /* 透明时也要能穿透，否则误点右上角会删机器人 */
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+.settings-page .wecom-rail-item:hover .wecom-rail-item-tools,
+.settings-page .wecom-rail-item:focus-within .wecom-rail-item-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+.settings-page .wecom-rail-tool {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: var(--overlay-3);
   color: var(--text-3);
   cursor: pointer;
   transition: color var(--transition-colors-fast), background var(--transition-colors-fast);
 }
-.settings-page .wecom-bot-card-edit:hover {
+.settings-page .wecom-rail-tool:hover {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.settings-page .wecom-bot-card-del:hover {
+.settings-page .wecom-rail-tool.is-danger:hover {
   color: var(--red);
   background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+/* —— 左栏头部：通道汇总入口（看的是全部机器人，不是某一台）——
+   跟着接入按钮放头部块里，列表再长也永远在最上面，不用滚到栏底找 */
+.settings-page .wecom-rail-nav {
+  min-width: 0;
+}
+.settings-page .wecom-rail-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--overlay-2) 55%, transparent);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.settings-page .wecom-rail-nav-btn:hover {
+  border-color: var(--accent-border);
+  background: var(--overlay-2);
+  color: var(--text-1);
+}
+.settings-page .wecom-rail-nav-btn.is-selected {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-1);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.settings-page .wecom-rail-nav-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-page .wecom-rail-nav-tag {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-3);
+  font-size: 9.5px;
+  line-height: 16px;
+}
+.settings-page .wecom-rail-nav-arrow {
+  flex: none;
+  color: var(--text-3);
+}
+.settings-page .wecom-rail-nav-btn.is-selected .wecom-rail-nav-arrow {
+  color: var(--accent);
+}
+
+/* —— 右栏：通道汇总（全部机器人）独占一页，与单机的三页签互斥 —— */
+.settings-page.is-im-bot .wecom-channel-page {
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.settings-page .wecom-channel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-page .wecom-channel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.settings-page .wecom-channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+/* 第二行：tab 在左、一句话提示贴在右边，头部从三行压成两行 */
+.settings-page .wecom-channel-tabs-row {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 2px;
+}
+.settings-page .wecom-channel-sub {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+/* tab 面板：KPI 行与对照卡是同级 block，没有这块会直接贴在一起；
+   留白交给 gap，切换 tab 时两块面板间距一致 */
+.settings-page .wecom-channel-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* display:flex 会压过 UA 的 [hidden]，这里显式关掉 */
+.settings-page .wecom-channel-pane[hidden] {
+  display: none;
+}
+/* KPI 块：数字优先，标签在下；在线数用主色点出来 */
+.settings-page .wecom-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+.settings-page .wecom-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+}
+.settings-page .wecom-kpi-value {
+  color: var(--text-1);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.settings-page .wecom-kpi-label {
+  color: var(--text-3);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+.settings-page .wecom-kpi.is-accent {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.settings-page .wecom-kpi.is-accent .wecom-kpi-value {
+  color: var(--accent);
+}
+/* 机器人对照表：一行一台，点名字或箭头都切到那台的配置 */
+.settings-page .wecom-channel-card {
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--overlay-1);
+}
+.settings-page .wecom-channel-table-wrap {
+  overflow-x: auto;
+}
+.settings-page .wecom-channel-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+/* 列宽贴内容：所有列 nowrap，富余宽度由浏览器按内容占比分配——
+   名字列内容最多多吃一点，短列只分到零头，不再出现名字列右侧一大块空洞，
+   也不会退回七列平分的大片空白 */
+.settings-page .wecom-channel-table td {
+  white-space: nowrap;
+}
+.settings-page .wecom-channel-table-wrap {
+  margin-top: 10px;
+}
+.settings-page .wecom-channel-table th {
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.settings-page .wecom-channel-table td {
+  padding: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
+  color: var(--text-2);
+  vertical-align: middle;
+}
+/* 首尾列去掉单元格内边距，让表格文字与卡片标题 / 右缘对齐 */
+.settings-page .wecom-channel-table th:first-child,
+.settings-page .wecom-channel-table td:first-child {
+  padding-left: 2px;
+}
+.settings-page .wecom-channel-table th:last-child,
+.settings-page .wecom-channel-table td:last-child {
+  padding-right: 0;
+}
+.settings-page .wecom-channel-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.settings-page .wecom-channel-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--overlay-2) 60%, transparent);
+}
+.settings-page .wecom-channel-bot-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  max-width: 100%;
+}
+.settings-page .wecom-channel-bot-link:hover > span:first-child {
+  color: var(--accent);
+}
+/* 脱敏 botId 与名字同行、更淡更小：可查证但不抢行高 */
+.settings-page .wecom-channel-bot-link .mono {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.8;
+}
+/* 页内间距统一交给 flex gap，卡片自带的底边距会叠出双倍留白 */
+.settings-page .wecom-channel-page > .wecom-diag-block {
+  margin-bottom: 0;
+}
+
+/* —— 右栏空态：没有机器人时的唯一入口（独占右栏三行） —— */
+.settings-page .wecom-bot-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  grid-row: 1 / -1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 220px;
+  padding: 24px 16px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+  text-align: center;
+}
+.settings-page .wecom-bot-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.settings-page .wecom-bot-empty-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.settings-page .wecom-bot-empty > .setting-hint {
+  max-width: 420px;
+  margin: 0;
+  line-height: 1.55;
+}
+.settings-page .wecom-bot-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
 }
 .settings-page .wecom-bot-rebind {
   display: flex;
@@ -2191,6 +2644,12 @@
 /* 单行下拉铺满整张卡片太笨拙，给个上限；路径类输入框仍然铺满 */
 .settings-page .wecom-block-card .wecom-row-control > select.input-field {
   max-width: 380px;
+}
+/* 并排字段（wecom-pair / is-split 的列）里的下拉不受该上限：
+   和同列的路径输入框一样铺满整列，上下两行的框长才对得齐 */
+.settings-page .wecom-pair .wecom-row-control > select.input-field,
+.settings-page .wecom-block-card.is-split .wecom-row-control > select.input-field {
+  max-width: none;
 }
 /* 开着的一侧描边掺一点 accent：不读文字也能看出私聊 / 群聊谁启用了 */
 .settings-page .wecom-rows > .wecom-enhance-card.is-on {
@@ -2782,48 +3241,6 @@
   white-space: pre-line;
 }
 
-/* —— 运行诊断：默认收起的整块面板，里面两块日志各自滚动 —— */
-/* 面板自己不设内边距，上下留白交给 summary 与 .wecom-diag-grid（比
-   `.wecom-settings > .net-panel` 的 8px 内边距更具体才盖得住） */
-.settings-page .wecom-settings > .net-panel.wecom-diag-panel {
-  padding: 0;
-  overflow: hidden;
-}
-.settings-page .wecom-diag-panel > summary.wecom-panel-head {
-  padding: 9px 12px;
-  border-bottom: none;
-  list-style: none;
-  cursor: pointer;
-  transition: background-color var(--transition-fast);
-}
-.settings-page .wecom-diag-panel > summary.wecom-panel-head::-webkit-details-marker {
-  display: none;
-}
-.settings-page .wecom-diag-panel > summary.wecom-panel-head:hover {
-  background: var(--bg-hover);
-}
-.settings-page .wecom-diag-panel[open] > summary.wecom-panel-head {
-  border-bottom: 1px solid var(--border-subtle);
-}
-.settings-page .wecom-diag-panel > summary > .hub-group-title {
-  flex: 1 1 auto;
-  margin: 0;
-  padding: 0;
-  border: none;
-  font-size: 11.5px;
-  color: var(--text-1);
-}
-.settings-page .wecom-diag-panel > summary::after {
-  content: "⌄";
-  flex: none;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-3);
-  transition: transform 0.15s ease;
-}
-.settings-page .wecom-diag-panel[open] > summary::after {
-  transform: rotate(180deg);
-}
 /* 「最新在前」「连不上时看这里」这类附注收成小胶囊，和状态/版本胶囊同一视觉重量 */
 .settings-page .wecom-diag-hint {
   flex: none;
@@ -2846,29 +3263,19 @@
   letter-spacing: 0.04em;
   color: var(--text-3);
 }
-/* 两块日志并排：宽窗一屏同时看通道与会话，窄窗自动落成一列 */
-.settings-page .wecom-diag-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
-  gap: 10px;
-  padding: 0;
-}
-/* 两块日志卡等高：卡片拉成 flex 列，左侧日志框与右侧旁证卡固定同一高度，
-   内容超出在框内上下滚动，整页不再被日志撑长 */
-.settings-page .wecom-diag-grid {
-  align-items: stretch;
-}
-.settings-page .wecom-diag-grid > .wecom-diag-block {
+/* 两块日志合成一张长卡：tab 切换，日志框高度不变（超出在框内滚） */
+.settings-page .wecom-diag-logs {
   display: flex;
   flex-direction: column;
+  margin-bottom: 0;
 }
-.settings-page .wecom-diag-grid .wecom-diag-log {
+.settings-page .wecom-diag-logs .wecom-diag-log {
   flex: 0 0 auto;
   height: 400px;
   min-height: 0;
   max-height: 400px;
 }
-.settings-page .wecom-diag-grid .wecom-diag-result {
+.settings-page .wecom-diag-logs .wecom-diag-result {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
@@ -2877,11 +3284,48 @@
   max-height: 400px;
 }
 /* 旁证列表自己滚：胶囊与告警占掉的高度之后，剩下的都给列表 */
-.settings-page .wecom-diag-grid .wecom-diag-result > .wecom-diag-sessions {
+.settings-page .wecom-diag-logs .wecom-diag-result > .wecom-diag-sessions {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
   overflow-y: auto;
+}
+/* 汇总页的页内 tab 复用同一套分段控件，间距交给 tabs-row 的 gap */
+.settings-page .wecom-channel-tabs {
+  flex: none;
+}
+/* 日志 tab：分段控件样式，块内的次级切换，不与页面大页签混淆 */
+.settings-page .wecom-log-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--overlay-2);
+}
+.settings-page .wecom-log-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+.settings-page .wecom-log-tab:hover {
+  color: var(--text-1);
+}
+.settings-page .wecom-log-tab.is-active {
+  background: var(--overlay-1);
+  color: var(--text-1);
+}
+.settings-page .wecom-diag-logs .setting-hint {
+  font-size: 11px;
 }
 /* 诊断的四块统一成卡片壳，和其余 tab 的分组卡片同一套视觉 */
 .settings-page .wecom-diag-block {
@@ -2895,20 +3339,13 @@
 .settings-page .wecom-diag-block:last-child {
   margin-bottom: 0;
 }
-/* 日志卡之间的间距交给网格的 gap，别再叠一层外边距 */
-.settings-page .wecom-diag-grid > .wecom-diag-block {
-  margin-bottom: 0;
-}
-/* 日志块标题：去掉竖线、缩小一号，明确是分组里的次级小节 */
-.settings-page .wecom-diag-grid .wecom-diag-head {
+/* 日志块标题：去掉竖线，明确是分组里的次级小节 */
+.settings-page .wecom-diag-logs .wecom-diag-head {
   padding-left: 0;
   border-left-color: transparent;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
-}
-.settings-page .wecom-diag-grid .setting-hint {
-  font-size: 11px;
 }
 /* 块标题：图标 + 标题当视觉锚点（和其余 tab 的卡片头同一套），
    右侧放「最新在前」或刷新按钮。字号比下面的字段名大，层次才是正的 */
@@ -2977,6 +3414,14 @@
   gap: 6px;
   margin-top: 8px;
   min-width: 0;
+}
+/* 结果操作（重查 / 复制 / 导出）靠右收进结果卡头部，依赖结果才出现 */
+.settings-page .wecom-diag-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 /* 概览胶囊里的统计文案较长，窄窗允许折行，不撑破这一行 */
 .settings-page .wecom-diag-strip > .wecom-chip {
@@ -3074,7 +3519,7 @@
   font-size: 10.5px;
   color: var(--text-3);
 }
-/* 筛选表单和按钮合成一块：输入区在上、按钮行靠右，细线把两者分开 */
+/* 筛选表单和按钮合成一块：五个条件在上、操作条在下，一条细线把两者分开 */
 .settings-page .wecom-diag-form {
   margin-top: 8px;
   padding: 10px 12px;
@@ -3082,12 +3527,12 @@
   border-radius: var(--radius-md);
   background: var(--overlay-2);
 }
-/* 按钮行贴着最后一行筛选，只用一条细线分开，不再上下各留 9px。
-   左侧给快捷时间，按钮靠右，中间留白由 auto 边距吃掉 */
+/* 操作条是这张卡的收尾：左侧快捷时间（点了即查），右侧清空 + 查询事件，
+   细线把它和上面一直可见的条件区分开 */
 .settings-page .wecom-diag-actions {
   justify-content: space-between;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 8px;
   padding-top: 7px;
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
 }
@@ -3237,12 +3682,12 @@
     display: none;
   }
 }
-/* 请求事件诊断的筛选条：标签和控件同一行，三行压成三条细带，
+/* 请求事件诊断的筛选条：标签和控件同一行，标签不再单独占一行，
    比全站「标签在上」的表单矮四成，一屏能看到结果 */
 .settings-page .wecom-rows.is-diag-filter {
   padding-top: 0;
-  /* 固定三列：请求 ID / 阶段 / 状态 一行，起止时间第二行。
-     不用 auto-fill，否则大窗会冒出第四列，把「结束」挤到第三行 */
+  /* 固定三列，五个条件各占一格：请求 ID / 阶段 / 状态 一行，起始 / 结束 第二行，
+     五格的输入框因此等宽，右侧第三格留空。不用 auto-fill，否则大窗会冒出第四列 */
   grid-template-columns: repeat(3, minmax(0, 1fr));
   column-gap: 14px;
 }
@@ -4258,4 +4703,151 @@
   font-size: 11.5px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+/* —— IM 机器人 · 全通道汇总：虚线卡 + 「全部机器人」标签，与单机实线卡区分 —— */
+/* 块内竖向节奏：标题 / 事实行 / 说明折叠之间统一留一口气（原先零间距贴死，行高也是默认紧排） */
+.settings-page .wecom-global-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border-style: dashed;
+}
+.settings-page .wecom-global-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.settings-page .wecom-global-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+/* 汇总块里这些是块级流内容，不再靠概览条的整行 flex 布局 */
+.settings-page .wecom-global-summary .wecom-facts,
+.settings-page .wecom-global-summary .wecom-hero-hint,
+.settings-page .wecom-global-summary .wecom-hero-error {
+  flex: 0 0 auto;
+}
+/* 事实行之间松一档，标签与内容行高放宽到 1.6，11px 小字不再挤成一条缝 */
+.settings-page .wecom-global-summary .wecom-facts {
+  gap: 8px;
+}
+.settings-page .wecom-global-summary .wecom-fact {
+  gap: 6px 12px;
+  line-height: 1.6;
+}
+.settings-page .wecom-global-summary .wecom-fact-items {
+  line-height: 1.6;
+}
+/* 说明折叠行与上方内容的间距交给块的 gap，不再叠加自身的 6px */
+.settings-page .wecom-global-summary .wecom-hint.wecom-diag-notes {
+  margin: 0;
+}
+.settings-page .wecom-global-summary .wecom-hero-hint {
+  margin-top: 0;
+}
+/* 左栏条目的状态点：这里是独立小圆点，不套在状态胶囊里，配色按状态直接给 */
+.settings-page .wecom-rail-item .wecom-status-dot.is-connected {
+  background: var(--green);
+  animation: wecom-rail-pulse 2.4s ease-in-out infinite;
+}
+.settings-page .wecom-rail-item .wecom-status-dot.is-pending {
+  background: var(--yellow);
+}
+.settings-page .wecom-rail-item .wecom-status-dot.is-error {
+  background: var(--red);
+}
+@keyframes wecom-rail-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-page .wecom-rail-item .wecom-status-dot.is-connected {
+    animation: none;
+  }
+}
+/* 主从容器：窄窗口用容器查询收成「上选下配」（项目已有先例：plugin-tabs.css）。
+   只给企微这棵子树建容器，微信 Tab（.weixin-settings）不要跟着吃 contain。 */
+.settings-page.is-im-bot .wecom-settings:not(.weixin-settings) {
+  container-type: inline-size;
+}
+@container (max-width: 900px) {
+  .settings-page.is-im-bot .wecom-master-detail {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-page.is-im-bot .wecom-bot-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  /* 横向栏：标题在左吃掉富余宽度，接入按钮与汇总入口按自身宽度靠右排成一组 */
+  .settings-page.is-im-bot .wecom-rail-top {
+    flex: 1 1 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+  .settings-page.is-im-bot .wecom-rail-head {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* 横排里按钮收缩为自身宽度，不再横跨半栏 */
+  .settings-page.is-im-bot .wecom-rail-add {
+    flex: 0 0 auto;
+  }
+  .settings-page.is-im-bot .wecom-rail-add > .btn {
+    flex: 0 0 auto;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .settings-page.is-im-bot .wecom-rail-empty {
+    flex: 1 1 100%;
+    padding: 0;
+  }
+  .settings-page.is-im-bot .wecom-rail-list {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 2px;
+    /* 多台机器人时左右滑：吸附到条目开头，滚轮也被翻译成横移 */
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+  }
+  .settings-page.is-im-bot .wecom-rail-item {
+    flex: 0 0 232px;
+    scroll-snap-align: start;
+  }
+  /* 通道汇总入口跟在接入按钮后面排成一排，「全部机器人」标签放不下就收 */
+  .settings-page.is-im-bot .wecom-rail-nav {
+    flex: 0 0 auto;
+  }
+  .settings-page.is-im-bot .wecom-rail-nav-tag {
+    display: none;
+  }
+}
+@container (max-width: 680px) {
+  .settings-page.is-im-bot .wecom-sections {
+    flex-direction: column;
+  }
+  .settings-page.is-im-bot .wecom-section {
+    flex: 0 0 auto;
+  }
+  .settings-page.is-im-bot .wecom-bot-hero-actions {
+    width: 100%;
+  }
 }

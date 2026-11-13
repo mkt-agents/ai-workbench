@@ -512,6 +512,19 @@ pub struct WecomBotRuntimeStatus {
     pub engine: String,
     pub connected_ms: Option<u64>,
     pub last_error: String,
+    /// 这台机器人自己的 DSH 引擎状态（每台一个 ACP 进程，不能沿用顶层的主实例状态）。
+    #[serde(default)]
+    pub dsh: Option<crate::wecom_dsh::DshStatus>,
+    /// 这台机器人自己的并发占用 / 排队 / 生效上限 / 共享任务数。
+    /// 设置页左栏按机器人显示，总量仍放在 `WecomStatus` 顶层。
+    #[serde(default)]
+    pub active_jobs: usize,
+    #[serde(default)]
+    pub waiting_jobs: usize,
+    #[serde(default)]
+    pub max_jobs: usize,
+    #[serde(default)]
+    pub shared_tasks: usize,
 }
 
 /// 列 DSH 引擎可用模型（ACP `configOptions`）：设置页「DSH 模型」下拉用。
@@ -1112,6 +1125,10 @@ pub struct WecomPairingView {
     pub userid: String,
     pub code: String,
     pub created_ms: u64,
+    /// 发起该配对请求的机器人（按 bot_id）；空串 = 未能确定（旧数据 / 未启用实例）。
+    /// 设置页左栏与「访问策略」摘要按机器人统计待审批数量。
+    #[serde(default)]
+    pub bot_id: String,
 }
 
 #[tauri::command]
@@ -1171,9 +1188,14 @@ pub async fn wecom_channel_status(
     let mut max_jobs = 0usize;
     let mut bot_statuses: Vec<WecomBotRuntimeStatus> = Vec::new();
     for b in &bots {
-        active_jobs += b.orch.admission.active();
-        waiting_jobs += b.orch.admission.waiting();
-        max_jobs = max_jobs.max(b.orch.admission.limit());
+        // 单机值与聚合值同轮采集：设置页左栏显示每台机器人自己的占用，
+        // 顶层字段仍是全通道聚合（其它消费者与事件 payload 不受影响）。
+        let bot_active = b.orch.admission.active();
+        let bot_waiting = b.orch.admission.waiting();
+        let bot_limit = b.orch.admission.limit();
+        active_jobs += bot_active;
+        waiting_jobs += bot_waiting;
+        max_jobs = max_jobs.max(bot_limit);
         let enabled_bot = b.applied.lock().await.is_some();
         let bot_id = b
             .applied
@@ -1186,6 +1208,7 @@ pub async fn wecom_channel_status(
         let (err, cms) = b.sock.detail().await;
         let eng = b.orch.engine.lock().await.clone();
         let name = b.orch.bot_display_name.lock().await.clone();
+        let bot_dsh = b.dsh.status().await;
         bot_statuses.push(WecomBotRuntimeStatus {
             bot_id,
             display_name: name,
@@ -1195,20 +1218,33 @@ pub async fn wecom_channel_status(
             engine: eng,
             connected_ms: cms,
             last_error: err,
+            dsh: Some(bot_dsh),
+            active_jobs: bot_active,
+            waiting_jobs: bot_waiting,
+            max_jobs: bot_limit,
+            shared_tasks: 0,
         });
     }
+    // 共享任务（按 bot_id 落库）逐台统计后回填，总量同时保留在顶层。
     let db = app.state::<crate::DbState>().conn.clone();
-    let shared_tasks = tokio::task::spawn_blocking(move || {
+    let shared_by_bot = tokio::task::spawn_blocking(move || {
         let c = db.lock().map_err(|_| "task db lock".to_string())?;
         let ts = chrono::Utc::now().timestamp_millis();
-        let mut total = 0usize;
+        let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for id in &bot_ids {
-            total += crate::wecom_tasks::active_count(&c, id, ts)?;
+            let count = crate::wecom_tasks::active_count(&c, id, ts)?;
+            out.insert(id.clone(), count);
         }
-        Ok::<usize, String>(total)
+        Ok::<std::collections::HashMap<String, usize>, String>(out)
     })
     .await
     .map_err(|e| e.to_string())??;
+    let mut shared_tasks = 0usize;
+    for st in &mut bot_statuses {
+        let count = shared_by_bot.get(&st.bot_id).copied().unwrap_or(0);
+        st.shared_tasks = count;
+        shared_tasks += count;
+    }
     Ok(WecomStatus {
         state: s,
         detail,
@@ -1750,12 +1786,20 @@ pub async fn wecom_pairing_list(
 ) -> Result<Vec<WecomPairingView>, String> {
     let mut out = Vec::new();
     for b in state.bots_snapshot().await {
+        let bot_id = b
+            .applied
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.bot_id.clone())
+            .unwrap_or_default();
         let mut policy = b.orch.policy.lock().await;
         policy.prune_pending();
         out.extend(policy.pending.iter().map(|p| WecomPairingView {
             userid: p.userid.clone(),
             code: p.code.clone(),
             created_ms: p.created_ms,
+            bot_id: bot_id.clone(),
         }));
     }
     Ok(out)

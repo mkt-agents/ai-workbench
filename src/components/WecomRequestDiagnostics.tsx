@@ -220,6 +220,8 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
         <p className="setting-hint">{label("privacyHint")}</p>
       </details>
       <div className="wecom-diag-form">
+        {/* 五个条件常驻、不折叠：精确定位要用的输入框一直在这，点一下就能填，
+            起止时间同时是快捷档的落点，查询前后都能看清实际区间 */}
         <div className="wecom-rows is-diag-filter">
           {/* 五个条件共用一套网格：第一行三个精确匹配，第二行起止时间，
               标签列宽固定，跨行跨列的输入框左边界都落在同一条竖线上 */}
@@ -244,6 +246,7 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
             </label>
           ))}
         </div>
+        {/* 操作条压在条件下面：点快捷时间 = 设区间 + 立即查询，右侧清空 / 查询事件 */}
         <div className="wecom-inline wecom-diag-actions">
           <div className="wecom-diag-quick" role="group" aria-label={label("quickLabel")}>
             <span className="wecom-diag-quick-label">{label("quickLabel")}</span>
@@ -256,9 +259,6 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
           </div>
           <div className="wecom-diag-buttons">
             <button type="button" className="btn btn-secondary btn-small" disabled={!result && !selected && !draft.requestId && !draft.phase && !draft.status && !draft.from && !draft.to} onClick={resetAll}>{label("clear")}</button>
-            <button type="button" className="btn btn-secondary btn-small" disabled={!result || busy} onClick={() => result && void load(result.filter, null, !!selected)}>{t("wecom.diag.refresh")}</button>
-            <button type="button" className="btn btn-secondary btn-small" disabled={!result?.events.length || busy || actionBusy} onClick={() => void runAction("copy")}>{label("copy")}</button>
-            <button type="button" className="btn btn-secondary btn-small" disabled={!selected || !result || busy || actionBusy} onClick={() => void runAction("export")}>{label("export")}</button>
             <button type="button" className="btn btn-primary btn-small" disabled={busy} onClick={() => query()}>{label("query")}</button>
           </div>
         </div>
@@ -275,6 +275,12 @@ export default memo(function WecomRequestDiagnostics({ selection }: Props) {
             {result ? <span className="wecom-chip">{t("wecom.diag.requests.coverage", {
               count: result.events.length, pages: result.pages, bytes: result.scannedBytes.toLocaleString(),
             })}</span> : null}
+            {/* 结果操作收进结果卡头部：重查 / 复制 / 导出都依赖结果，没结果时不占筛选行的位 */}
+            <div className="wecom-diag-result-actions">
+              <button type="button" className="btn btn-secondary btn-small" disabled={!result || busy} onClick={() => result && void load(result.filter, null, !!selected)}>{label("requery")}</button>
+              <button type="button" className="btn btn-secondary btn-small" disabled={!result?.events.length || busy || actionBusy} onClick={() => void runAction("copy")}>{label("copy")}</button>
+              <button type="button" className="btn btn-secondary btn-small" disabled={!selected || !result || busy || actionBusy} onClick={() => void runAction("export")}>{label("export")}</button>
+            </div>
           </div>
           {result ? <>
             {result.partial ? <p className="wecom-diag-warn" role="status">{label("partial")}</p> : null}

@@ -15,20 +15,22 @@ import {
   UserCheck,
   Cpu,
   Sparkles,
-  Gauge,
-  Terminal,
-  MessagesSquare,
   Activity,
-  Pencil,
-  Trash2,
   Info,
 } from "lucide-react";
 import { useConfirm } from "./ConfirmModal";
 import GroupedSelect from "./GroupedSelect";
 import ModalTitleRow from "./ModalTitleRow";
-import WecomRequestDiagnostics from "./WecomRequestDiagnostics";
+import WecomBotRail from "./WecomBotRail";
+import WecomBotHero from "./WecomBotHero";
+import WecomChannelPage from "./WecomChannelPage";
 import { useGlobalStore } from "../core/store";
-import type { AppSettings, DshModelCatalog, WecomSkywalkingEnv } from "../core/types";
+import type {
+  AppSettings,
+  DshModelCatalog,
+  WecomBotProfile,
+  WecomSkywalkingEnv,
+} from "../core/types";
 import {
   applyWecomChannel,
   buildWecomSkywalkingPatch,
@@ -36,9 +38,7 @@ import {
   revealWecomSecret,
   approveWecomPairing,
   fetchDshModels,
-  fetchWecomLog,
   fetchWecomPairings,
-  fetchWecomSessionLogPage,
   fetchWecomStatus,
   normalizeWecomMaxJobs,
   resolveWecomSkywalking,
@@ -47,8 +47,8 @@ import {
   startWecomQr,
   pollWecomQr,
   syncDshProfile,
+  type WecomBotRuntimeStatus,
   type WecomPairing,
-  type WecomSessionLogPage,
   type WecomStatus,
 } from "../lib/wecomChannel";
 import {
@@ -59,6 +59,7 @@ import {
   clampWecomBotRemark,
   createEmptyWecomBot,
   foldWecomFlatPatch,
+  getActiveWecomBot,
   listBoundWecomBots,
   wecomBotLabel,
 } from "../lib/wecomBots";
@@ -88,18 +89,6 @@ function statusClass(state: string | undefined): string {
   return "";
 }
 
-/** 已连接时长（ms）→ 简短中文：如 2小时3分、5分12秒、38秒。 */
-function fmtDuration(ms: number | null | undefined): string {
-  if (ms == null || ms < 0) return "";
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}h${m}m`;
-  if (m > 0) return `${m}m${sec}s`;
-  return `${sec}s`;
-}
-
 /** 镜像时间 → 当天只显示时刻（20:11），跨天带日期（10-28 20:11）。 */
 function fmtStamp(ms: number): string {
   const d = new Date(ms);
@@ -112,23 +101,6 @@ function fmtStamp(ms: number): string {
     d.getDate() === now.getDate();
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return sameDay ? hm : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
-}
-
-/** 会话日志时间戳（带偏移的 ISO）→ 本机简写：10-28 11:31。 */
-function fmtTs(raw: string): string {
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return raw;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** 会话折叠态的一行摘要：取首条有效内容，去掉 markdown 标题井号。 */
-function peekLine(text: string): string {
-  const line = text
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .find(Boolean);
-  return (line ?? "").replace(/^#+\s*/, "").slice(0, 160);
 }
 
 /** DSH 子状态：ready / starting / error 复用同一套胶囊配色。 */
@@ -194,8 +166,12 @@ function Row({
   );
 }
 
-/** 页面内部的小卡片 Tab：点谁只看谁，一屏放得下。 */
-type WecomSection = "channel" | "answer" | "access" | "diag";
+/**
+ * 页面内部的小卡片 Tab：点谁只看谁，一屏放得下。
+ * 「通道」已并进右栏身份头，「运行诊断」是全通道数据、挂在通道汇总页；
+ * 这里只剩两组按机器人隔离的配置。
+ */
+type WecomSection = "answer" | "access";
 
 /**
  * 扁平分区标题：与参考图一致，不使用图标卡片；右侧可挂开关 / 计数。
@@ -239,16 +215,10 @@ export default function WecomSettingsCard() {
   const [catalog, setCatalog] = useState<DshModelCatalog | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogError, setCatalogError] = useState("");
-  // 排障折叠区：通道日志尾 + 最近会话
-  const [logText, setLogText] = useState("");
-  const [logBusy, setLogBusy] = useState(false);
-  const [sessionPage, setSessionPage] = useState<WecomSessionLogPage | null>(null);
-  const sessionLog = sessionPage?.entries ?? [];
-  const [sessionError, setSessionError] = useState(false);
-  const [sessionBusy, setSessionBusy] = useState(false);
-  const [diagnosticSelection, setDiagnosticSelection] = useState<{ requestId: string; revision: number } | null>(null);
   /** 小卡片 Tab：一页只显示一组设置，别把六七块叠成一条长滚动 */
-  const [section, setSection] = useState<WecomSection>("channel");
+  const [section, setSection] = useState<WecomSection>("answer");
+  /** 右栏看的对象：某台机器人（主从）还是通道汇总（全部机器人） */
+  const [pane, setPane] = useState<"bot" | "channel">("bot");
   const [qrBusy, setQrBusy] = useState(false);
   const [qrScode, setQrScode] = useState("");
   const [qrAuthUrl, setQrAuthUrl] = useState("");
@@ -268,19 +238,13 @@ export default function WecomSettingsCard() {
     corpSecret: "",
   });
   const qrPollRef = useRef<number | null>(null);
-  /** 诊断日志只在第一次切过去时拉一次（空日志也不会反复请求） */
-  const diagLoaded = useRef(false);
   const mounted = useRef(false);
   const refreshGeneration = useRef(0);
-  const logGeneration = useRef(0);
-  const sessionGeneration = useRef(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
       refreshGeneration.current += 1;
-      logGeneration.current += 1;
-      sessionGeneration.current += 1;
       if (qrPollRef.current != null) {
         window.clearInterval(qrPollRef.current);
         qrPollRef.current = null;
@@ -427,49 +391,41 @@ export default function WecomSettingsCard() {
     void push({ wecomDocDir: value || undefined });
   };
 
-  const stateKey = status?.state ?? "disconnected";
+  // —— 主从布局的作用域收敛 ——
+  // 顶层 status.state / engine / connectedMs / lastError 来自「第一个在线实例」，
+  // 只有一台机器人时才允许兜底；多机器人下一律取这台机器人自己的运行态。
+  const bots = listBoundWecomBots(settings);
+  const activeBot = getActiveWecomBot(settings);
+  const runtimeByBotId: Record<string, WecomBotRuntimeStatus | undefined> = {};
+  for (const item of status?.bots ?? []) {
+    if (item.botId) runtimeByBotId[item.botId] = item;
+  }
+  const singleBot = bots.length === 1;
+  const activeRuntime = activeBot?.botId ? runtimeByBotId[activeBot.botId] : undefined;
+  const activeDsh = activeRuntime?.dsh ?? (singleBot ? status?.dsh : undefined) ?? null;
+  const fallbackState = singleBot ? status?.state : undefined;
+  const stateKey =
+    (activeBot?.enabled ? (activeRuntime?.state ?? fallbackState) : undefined) ?? "disconnected";
   const stateLabel = t(`wecom.state.${stateKey}`, { defaultValue: stateKey });
-  const engine = settings.wecomEngine === "dsh" ? "dsh" : "tianji";
-  const dshState = status?.dsh?.state ?? "stopped";
+  const engine = (activeRuntime?.engine ?? settings.wecomEngine) === "dsh" ? "dsh" : "tianji";
+  const dshState = activeDsh?.state ?? "stopped";
   const dshLabel = t(`wecom.dsh.state.${dshState}`, { defaultValue: dshState });
   const dshReady = dshState === "ready";
+  // 待审批是逐机器人的（后端 wecom_pairing_list 带 bot_id）；没有 bot_id 的旧条目不计入任何一台
+  const pendingByBotId: Record<string, number> = {};
+  for (const pair of pairings) {
+    const key = (pair.botId ?? "").trim();
+    if (!key) continue;
+    pendingByBotId[key] = (pendingByBotId[key] ?? 0) + 1;
+  }
+  const activePending = activeBot?.botId ? (pendingByBotId[activeBot.botId] ?? 0) : 0;
+  // 待审批列表也只列这台机器人的：没有 bot_id 的旧条目仍展示，否则永远批不掉
+  const activePairings = pairings.filter(
+    (pair) => !pair.botId || pair.botId === activeBot?.botId,
+  );
 
-  const loadLog = useCallback(async () => {
-    const version = ++logGeneration.current;
-    setLogBusy(true);
-    try {
-      const text = await fetchWecomLog(200);
-      if (mounted.current && version === logGeneration.current) setLogText(text);
-    } catch (e) {
-      if (mounted.current && version === logGeneration.current) setLogText(String(e));
-    } finally {
-      if (mounted.current && version === logGeneration.current) setLogBusy(false);
-    }
-  }, []);
-
-  const loadSessionLog = useCallback(async () => {
-    const version = ++sessionGeneration.current;
-    setSessionBusy(true);
-    setSessionError(false);
-    try {
-      const page = await fetchWecomSessionLogPage(30);
-      if (mounted.current && version === sessionGeneration.current) setSessionPage(page);
-    } catch {
-      if (mounted.current && version === sessionGeneration.current) setSessionError(true);
-    } finally {
-      if (mounted.current && version === sessionGeneration.current) setSessionBusy(false);
-    }
-  }, []);
-
-  // 切到「运行诊断」那一刻才拉日志；拉过一次就不再自动请求（空日志也一样）
-  useEffect(() => {
-    if (section !== "diag" || diagLoaded.current) return;
-    diagLoaded.current = true;
-    void loadLog();
-    void loadSessionLog();
-  }, [section, loadLog, loadSessionLog]);
-
-  const mirror = status?.dsh?.mirror ?? null;
+  // DSH 镜像按机器人各存一份（每台一个 ACP profile），不能沿用顶层主实例的
+  const mirror = activeDsh?.mirror ?? null;
 
   const loadModels = useCallback(async (refresh: boolean, scope?: "channel" | "docgen") => {
     setCatalogBusy(true);
@@ -482,6 +438,21 @@ export default function WecomSettingsCard() {
       setCatalogBusy(false);
     }
   }, [settings.wecomBotId]);
+
+  // 换机器人就丢掉上一台的模型目录：DSH 模型是按 bot 的 profile 列的，
+  // 沿用会让人以为两台共用一份模型清单。
+  const activeBotKey = activeBot?.id ?? "";
+  useEffect(() => {
+    setCatalog(null);
+    setCatalogError("");
+  }, [activeBotKey]);
+
+  // 换机器人时把右栏面板滚回顶部：内容整块换人，停在上一台的半截位置最容易被误读
+  const detailRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const panel = detailRef.current?.querySelector<HTMLElement>(".net-panel:not([hidden])");
+    panel?.scrollTo({ top: 0 });
+  }, [activeBotKey]);
 
   // 引擎就绪后再拉模型目录；DSH 没起来时不主动去启进程
   // （进页面就去 spawn 一个 node 只会让人以为界面卡住）。
@@ -505,35 +476,6 @@ export default function WecomSettingsCard() {
       setBusy(false);
     }
   };
-
-  const performance = status?.lastPerformance;
-  // Never merge independently sampled requests or sum parent/child phase snapshots.
-  const performanceSummary = performance?.summary?.requestId === performance?.requestId
-    ? performance?.summary
-    : null;
-  const phaseLabel = (phase: string) => phase
-    ? t(`wecom.diag.phases.${phase}`, { defaultValue: phase })
-    : t("wecom.diag.notReported");
-  const investigation = status?.lastInvestigation;
-  const investigationState = investigation?.status ?? "";
-  const decisionGaps = Array.isArray(investigation?.decisionGaps)
-    && investigation.decisionGaps.every((gap) => typeof gap === "string")
-    ? investigation.decisionGaps
-    : null;
-  const reportedCount = (value: number | null | undefined) =>
-    typeof value === "number" && Number.isFinite(value) && value >= 0
-      ? String(value)
-      : t("wecom.diag.notReported");
-
-  const reportedMs = (value: number | null | undefined) =>
-    typeof value === "number" && Number.isFinite(value) && value >= 0
-      ? `${value} ms`
-      : t("wecom.diag.notReported");
-
-  // 后端把「本轮没下发 reasoning_effort」记成 default（走服务商默认档），
-  // 和真正解析不出值的情况区分开，面板上别都写成「未知」。
-  const reportedEffort = (value: string | null | undefined) =>
-    !value || value === "default" ? t("wecom.diag.effortDefault") : value;
 
   const maxJobs = normalizeWecomMaxJobs(settings.wecomMaxJobs);
   // 保留已保存的 3/6 或其它合法值，避免原生 select 无匹配项而显示错误档位。
@@ -588,6 +530,8 @@ export default function WecomSettingsCard() {
 
   const openCreateBot = (startQr: boolean) => {
     const bot = createEmptyWecomBot();
+    // 无论从左栏还是通道汇总页进来，接完这台就落到它的配置页
+    setPane("bot");
     setBotEditMode("create");
     setBotEditLocalId(bot.id);
     setBotEditForm({
@@ -605,6 +549,7 @@ export default function WecomSettingsCard() {
   };
 
   const openEditBot = (bot: { id: string; remark?: string; botDisplayName?: string; botId?: string; corpId?: string }) => {
+    setPane("bot");
     setSettings(buildSelectWecomBotPatch(settings, bot.id));
     setBotEditMode("edit");
     setBotEditLocalId(bot.id);
@@ -742,399 +687,157 @@ export default function WecomSettingsCard() {
     }
   };
 
+  /** 删除机器人：左栏与右栏身份头共用一份确认与切人逻辑。 */
+  const removeBot = async (bot: WecomBotProfile) => {
+    const name = wecomBotLabel(bot, t("wecom.botUntitled"));
+    const ok = await confirm({
+      title: t("wecom.botsRemove"),
+      message: t("wecom.botsRemoveConfirm", { name }),
+    });
+    if (!ok) return;
+    const patch = buildRemoveWecomBotPatch(settings, bot.id);
+    setSettings(patch);
+    if (settings.wecomActiveBotId === bot.id) setBotEditOpen(false);
+    void push(patch);
+  };
+
   return (
-    <div className={`wecom-settings${section === "channel" ? " is-channel" : ""}`}>
-      {/* 概览条：同类信息挤一行（连接 / 引擎 / 时长 / 最近排障 / 计数），长说明收进「说明」 */}
-      <div className="wecom-hero">
-        <div className="wecom-hero-main">
-          <span
-            className={`wecom-status-pill ${statusClass(status?.state)}`}
-            title={status?.detail || undefined}
-          >
-            <i className="wecom-status-dot" aria-hidden />
-            {stateLabel}
-          </span>
-          <span className="wecom-hero-tag">
-            {engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji")}
-          </span>
-          {status?.connectedMs != null ? (
-            <span className="wecom-chip">
-              {t("wecom.diag.connectedFor", { duration: fmtDuration(status.connectedMs) })}
-            </span>
-          ) : null}
-        </div>
-        <div className="wecom-hero-actions">
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            disabled={busy || !settings.wecomEnabled}
-            onClick={() => {
-              setBusy(true);
-              void restartWecomChannel()
-                .then((st) => {
-                  setStatus(st);
-                  setMsg(t("wecom.restarted"));
-                })
-                .catch((e) => setMsg(String(e)))
-                .finally(() => setBusy(false));
-            }}
-          >
-            {t("wecom.restart")}
-          </button>
-          <label className="toggle" title={t("wecom.enabled")}>
-            <input
-              type="checkbox"
-              checked={Boolean(settings.wecomEnabled)}
-              disabled={busy}
-              onChange={(e) => void push({ wecomEnabled: e.target.checked })}
+    <div className="wecom-settings">
+      {/* 主从：左栏选机器人，右栏只放这一台的连接身份与配置 */}
+      <div className="wecom-master-detail">
+        <WecomBotRail
+          bots={bots}
+          activeId={settings.wecomActiveBotId}
+          runtimeByBotId={runtimeByBotId}
+          pendingByBotId={pendingByBotId}
+          onlineCount={status?.botsOnline ?? (status?.state === "connected" ? 1 : 0)}
+          totalCount={status?.botsTotal ?? bots.filter((b) => b.enabled).length}
+          busy={busy || qrBusy}
+          channelSelected={pane === "channel"}
+          onSelectChannel={() => setPane("channel")}
+          onSelect={(id) => {
+            setPane("bot");
+            setSettings(buildSelectWecomBotPatch(settings, id));
+          }}
+          onEdit={openEditBot}
+          onRemove={(bot) => void removeBot(bot)}
+          onScanAdd={() => openCreateBot(true)}
+          onManualAdd={() => {
+            openCreateBot(false);
+            setMsg(t("wecom.botsManualHint"));
+          }}
+        />
+
+        <section className="wecom-bot-detail" ref={detailRef}>
+          {pane === "channel" ? (
+            <WecomChannelPage
+              bots={bots}
+              runtimeByBotId={runtimeByBotId}
+              status={status}
+              busy={busy}
+              onRestart={() => {
+                setBusy(true);
+                void restartWecomChannel()
+                  .then((st) => {
+                    setStatus(st);
+                    setMsg(t("wecom.restarted"));
+                  })
+                  .catch((e) => setMsg(String(e)))
+                  .finally(() => setBusy(false));
+              }}
+              onOpenBot={(id) => {
+                setPane("bot");
+                setSettings(buildSelectWecomBotPatch(settings, id));
+              }}
             />
-            <span className="toggle-slider" />
-          </label>
-        </div>
-        {/* 计数按用途归两行：通道运行态 / 最近一次排障的采样结果 */}
-        <div className="wecom-facts">
-          <div className="wecom-fact">
-            <span className="wecom-fact-label">{t("wecom.groupChannel")}</span>
-            <span className="wecom-fact-items">
-              <span className="wecom-chip">
-                {t("wecom.diag.activeJobs", { countText: reportedCount(status?.activeJobs) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.maxJobs", { countText: reportedCount(status?.maxJobs) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.waitingJobs", { countText: reportedCount(status?.waitingJobs) })}
-              </span>
-              <span className="wecom-chip">
-                {t("wecom.diag.sharedTasks", { countText: reportedCount(status?.sharedTasks) })}
-              </span>
-            </span>
-          </div>
-          <div className="wecom-fact">
-            <span className="wecom-fact-label">{t("wecom.diag.factTroubleshoot")}</span>
-            <span className="wecom-fact-items">
-              <span
-                className={`wecom-status-pill${
-                  ["source_error", "source_failed", "error"].includes(investigationState) ? " is-error" : ""
-                }`}
-              >
-                <i className="wecom-status-dot" aria-hidden />
-                {investigation
-                  ? t(`wecom.diag.investigationState.${investigationState}`, {
-                      defaultValue: investigationState,
-                    })
-                  : t("wecom.diag.noInvestigation")}
-              </span>
-              {investigation ? (
-                <>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.actualRequests", { countText: reportedCount(investigation.requestCount) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.evidenceCount", { countText: reportedCount(investigation.evidenceCount) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.shownCount", { countText: reportedCount(investigation.shownCount) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.warnCount", { countText: reportedCount(investigation.warnCount) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.truncatedCount", { countText: reportedCount(investigation.truncatedCount) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.incompletePages", { countText: reportedCount(investigation.incompletePages) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.source", {
-                      state:
-                        investigation.sourceReady === true
-                          ? t("wecom.diag.sourceReady")
-                          : investigation.sourceReady === false
-                            ? t("wecom.diag.sourceNotReady")
-                            : t("wecom.diag.notReported"),
-                    })}
-                  </span>
-                </>
-              ) : null}
-            </span>
-          </div>
-          <div className="wecom-fact">
-            <span className="wecom-fact-label">{t("wecom.diag.factCrossQuery")}</span>
-            <span className="wecom-fact-items">
-              {status?.lastCrossQuery ? (
-                <>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.crossDocs", { countText: reportedCount(status.lastCrossQuery.docHits) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.crossCode", { countText: reportedCount(status.lastCrossQuery.codeHits) })}
-                  </span>
-                  <span className="wecom-chip">
-                    {t("wecom.diag.crossLogs", { countText: reportedCount(status.lastCrossQuery.logHits) })}
-                  </span>
-                  <span className="wecom-chip" title={status.lastCrossQuery.summary}>
-                    {status.lastCrossQuery.engine}
-                  </span>
-                </>
-              ) : (
-                <span className="wecom-chip">{t("wecom.diag.noCrossQuery")}</span>
-              )}
-            </span>
-          </div>
-        </div>
-        {status?.lastError ? (
-          <p className="wecom-hero-error" title={status.lastError}>
-            {t("wecom.diag.lastError", { error: status.lastError })}
-          </p>
-        ) : null}
-        {/* 实例 / requestId / 计数口径这些长文案默认收起，概览条只留一行状态 */}
-        <details className="wecom-hint wecom-hero-hint">
-          <summary>
-            <span>{t("wecom.hintShort")}</span>
-            <span className="wecom-hint-more">{t("wecom.hintMore")}</span>
-          </summary>
-          <p className="setting-hint">{t("wecom.hint")}</p>
-          <p className="setting-hint">{t("wecom.diag.jobsHint")}</p>
-          {status?.detail ? <p className="setting-hint">{status.detail}</p> : null}
-          <p className="setting-hint" title={t("wecom.diag.instanceHint")}>
-            {t("wecom.diag.instance", {
-              pid: status?.processId ?? t("wecom.diag.notReported"),
-              build: status?.buildLabel || t("wecom.diag.notReported"),
-            })}
-          </p>
-          {investigation?.requestId ? (
-            <p className="setting-hint">
-              {t("wecom.diag.requestId")} <code>{investigation.requestId}</code>
-            </p>
-          ) : null}
-          {investigation?.detail ? <p className="setting-hint">{investigation.detail}</p> : null}
-          {investigation?.clarification ? (
-            <p className="setting-hint" role="alert">{investigation.clarification}</p>
-          ) : null}
-          {investigation ? (
+          ) : activeBot ? (
             <>
-              <p className="setting-hint">
-                {t("wecom.diag.decisionGaps", {
-                  countText: decisionGaps === null
-                    ? t("wecom.diag.notReported")
-                    : reportedCount(decisionGaps.length),
-                })}
-              </p>
-              {decisionGaps?.map((gap, index) => (
-                <p className="setting-hint" key={`${index}-${gap}`}>{gap}</p>
-              ))}
-            </>
-          ) : null}
-          <p className="setting-hint">{t("wecom.diag.countHint")}</p>
-        </details>
-      </div>
+              <WecomBotHero
+                bot={activeBot}
+                runtime={activeRuntime}
+                fallbackState={fallbackState}
+                busy={busy}
+                onToggleEnabled={(enabled) => void push({ wecomEnabled: enabled })}
+                onEdit={() => openEditBot(activeBot)}
+                onRemove={() => void removeBot(activeBot)}
+              />
 
-      {/* 小卡片 Tab：一屏只看一组设置，不再把六七块叠成一条长滚动 */}
-      <div className="wecom-sections" role="tablist" aria-label={t("wecom.title")}>
-        {/*
-          顺序 = 「接入 → 行为 → 准入 → 诊断」，且一个一级 Tab 只装一种性质的内容：
-          通道 = 连接（凭据 / 扫码 / 业务 API）；回答设置 = AI 行为（引擎、模型、工作区、
-          权限档位、回答模式、上下文增强、SkyWalking 证据源）；访问策略 = 准入（会话准入）；
-          运行诊断 = 排障（诊断查询 + 日志）。
-          2026-11-06 按性质归堆：并发上限、权限档位与「会话与共享任务」说明从访问策略迁入回答设置，
-          连通检查清单拆去运行诊断页顶——访问策略只剩会话准入，通道不再混 AI 行为。
-          更早的两次拆分：原「线上排障」并入「回答设置」第三个二级页签（本质是回答问题
-          所用的证据源）；原「文档自动更新与推送」独立成侧栏页「逆向工程」
-          （工程管理 → 逆向工程，`src/components/ReverseDocPage.tsx`），改文档配置不再重启长连接。
-          摘要行 = 每个 Tab 的关键状态一眼可读：通道看连接状态、回答设置看当前引擎、
-          访问策略看配对/待审批（有待审时 `is-pending` 高亮）、运行诊断提示日志入口。
-          面板本身仍按原来的顺序挂在下面——隐藏面板用的是 `hidden`，不进焦点与无障碍树，
-          所以调整顺序只动这张表即可。
-        */}
-        {(
-          [
-            {
-              id: "channel",
-              title: t("wecom.groupChannel"),
-              summary: settings.wecomEnabled ? stateLabel : t("wecom.sectionOff"),
-            },
-            {
-              id: "answer",
-              title: t("wecom.groupAnswer"),
-              summary: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
-            },
-            {
-              id: "access",
-              title: t("wecom.groupAccess"),
-              summary:
-                pairings.length > 0
-                  ? t("wecom.sectionPairedPending", {
-                      count: (settings.wecomPairedUsers ?? []).length,
-                      pending: pairings.length,
-                    })
-                  : t("wecom.sectionPaired", { count: (settings.wecomPairedUsers ?? []).length }),
-              attention: pairings.length > 0,
-            },
-            {
-              id: "diag",
-              title: t("wecom.groupDiag"),
-              summary: t("wecom.sectionLogs"),
-            },
-          ] as const
-        ).map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={section === item.id}
-            className={`wecom-section${section === item.id ? " is-active" : ""}`}
-            onClick={() => setSection(item.id)}
-          >
-            <span className="wecom-section-title">{item.title}</span>
-            <span
-              className={`wecom-section-summary${"attention" in item && item.attention ? " is-pending" : ""}`}
-            >
-              {item.summary}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* 1 · 通道：列表 + 编辑同一张卡（主从） */}
-      <div className="net-panel" hidden={section !== "channel"}>
-        <PanelHead title={t("wecom.groupChannel")} />
-        <div className="wecom-rows">
-          {(() => {
-            const bots = listBoundWecomBots(settings);
-            const untitled = t("wecom.botUntitled");
-            return (
-              <div className="wecom-block-card wecom-channel-shell">
-                <div className="wecom-block-head">
-                  <div className="wecom-block-head-main">
-                    <span className="wecom-block-icon" aria-hidden>
-                      <Bot size={14} />
-                    </span>
-                    <span className="wecom-block-title">{t("wecom.botsBound")}</span>
-                  </div>
-                  <div className="wecom-bot-actions">
-                    <span className="wecom-chip">
-                      {t("wecom.botsOnline", {
-                        online: status?.botsOnline ?? (status?.state === "connected" ? 1 : 0),
-                        total:
-                          status?.botsTotal ?? bots.filter((b) => b.enabled).length,
-                      })}
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-small"
-                      disabled={busy || qrBusy}
-                      onClick={() => openCreateBot(true)}
+              {/* 三页签：一屏只看一组设置；「通道」已并进上面的身份头，
+                  作用域由身份头那一行说明，这里不再重复贴机器人名 */}
+              <div className="wecom-sections" role="tablist" aria-label={t("wecom.title")}>
+                {(
+                  [
+                    {
+                      id: "answer",
+                      title: t("wecom.groupAnswer"),
+                      summary: engine === "dsh" ? t("wecom.engineDsh") : t("wecom.engineTianji"),
+                    },
+                    {
+                      id: "access",
+                      title: t("wecom.groupAccess"),
+                      summary:
+                        activePending > 0
+                          ? t("wecom.sectionPairedPending", {
+                              count: (settings.wecomPairedUsers ?? []).length,
+                              pending: activePending,
+                            })
+                          : t("wecom.sectionPaired", {
+                              count: (settings.wecomPairedUsers ?? []).length,
+                            }),
+                      attention: activePending > 0,
+                    },
+                  ] as const
+                ).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={section === item.id}
+                    className={`wecom-section${section === item.id ? " is-active" : ""}`}
+                    onClick={() => setSection(item.id)}
+                  >
+                    <span className="wecom-section-title">{item.title}</span>
+                    <span
+                      className={`wecom-section-summary${
+                        "attention" in item && item.attention ? " is-pending" : ""
+                      }`}
                     >
-                      <QrCode size={14} />
-                      {t("wecom.botsScanAdd")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-small"
-                      disabled={busy}
-                      onClick={() => {
-                        openCreateBot(false);
-                        setMsg(t("wecom.botsManualHint"));
-                      }}
-                    >
-                      {t("wecom.botsManualAdd")}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="wecom-bot-list">
-                  {bots.length === 0 ? (
-                    <p className="setting-hint wecom-bot-list-empty">{t("wecom.botsEmpty")}</p>
-                  ) : (
-                    bots.map((bot) => {
-                      const runtime = status?.bots?.find((b) => b.botId === bot.botId);
-                      const selected = settings.wecomActiveBotId === bot.id;
-                      const label = wecomBotLabel(bot, untitled);
-                      const masked =
-                        (bot.botId ?? "").length > 10
-                          ? `${(bot.botId ?? "").slice(0, 4)}****${(bot.botId ?? "").slice(-4)}`
-                          : bot.botId || "—";
-                      return (
-                        <div
-                          key={bot.id}
-                          role="button"
-                          tabIndex={0}
-                          className={`wecom-bot-card${selected ? " is-selected" : ""}`}
-                          onClick={() => {
-                            setSettings(buildSelectWecomBotPatch(settings, bot.id));
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              (e.currentTarget as HTMLElement).click();
-                            }
-                          }}
-                        >
-                          <span className="wecom-bot-card-main">
-                            <span className="wecom-bot-card-name">{label}</span>
-                            <span className="wecom-bot-card-id mono">{masked}</span>
-                          </span>
-                          <span
-                            className={`wecom-status-pill ${statusClass(
-                              runtime?.state ?? (bot.enabled ? status?.state : undefined),
-                            )}`}
-                          >
-                            <i className="wecom-status-dot" aria-hidden />
-                            {bot.enabled
-                              ? runtime?.state === "connected" ||
-                                (!runtime && status?.state === "connected" && selected)
-                                ? t("wecom.botRunning")
-                                : t("wecom.sectionOn")
-                              : t("wecom.sectionOff")}
-                          </span>
-                          <span className="wecom-bot-card-actions">
-                            <button
-                              type="button"
-                              className="wecom-bot-card-edit"
-                              title={t("wecom.botsEdit")}
-                              aria-label={t("wecom.botsEdit")}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openEditBot(bot);
-                              }}
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="wecom-bot-card-del"
-                              title={t("wecom.botsRemove")}
-                              aria-label={t("wecom.botsRemove")}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void (async () => {
-                                  const ok = await confirm({
-                                    title: t("wecom.botsRemove"),
-                                    message: t("wecom.botsRemoveConfirm", { name: label }),
-                                  });
-                                  if (!ok) return;
-                                  const patch = buildRemoveWecomBotPatch(settings, bot.id);
-                                  setSettings(patch);
-                                  if (settings.wecomActiveBotId === bot.id) setBotEditOpen(false);
-                                  void push(patch);
-                                })();
-                              }}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                      {item.summary}
+                    </span>
+                  </button>
+                ))}
               </div>
-            );
-          })()}
-        </div>
+            </>
+          ) : (
+            <div className="wecom-bot-empty">
+              <span className="wecom-bot-empty-icon" aria-hidden>
+                <Bot size={22} />
+              </span>
+              <p className="wecom-bot-empty-title">{t("wecom.botsEmptyTitle")}</p>
+              <p className="setting-hint">{t("wecom.botsEmptyHint")}</p>
+              <div className="wecom-bot-empty-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-small"
+                  disabled={busy || qrBusy}
+                  onClick={() => openCreateBot(true)}
+                >
+                  <QrCode size={14} />
+                  {t("wecom.botsScanAdd")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={busy}
+                  onClick={() => openCreateBot(false)}
+                >
+                  {t("wecom.botsManualAdd")}
+                </button>
+              </div>
+            </div>
+          )}
 
-        {botEditOpen
+          {botEditOpen
           ? createPortal(
               <div
                 className="modal-overlay"
@@ -1400,10 +1103,9 @@ export default function WecomSettingsCard() {
               document.body,
             )
           : null}
-      </div>
 
       {/* 2 · 回答设置：谁来回答、按什么口径回答、在哪个工作区回答 */}
-      <div className="net-panel" hidden={section !== "answer"}>
+      <div className="net-panel" hidden={pane === "channel" || !activeBot || section !== "answer"}>
         {/* 五张卡分三页：「谁来答 / 在哪答」（引擎、模型、工作区）、
             「怎么答 / 补什么料」（问答模式、自我介绍、上下文增强）、
             「拿什么当证据」（线上排障：SkyWalking OAP，回答时补查的日志与调用链源）。 */}
@@ -2124,7 +1826,7 @@ export default function WecomSettingsCard() {
       {/* 5 · 访问控制：会话准入（私聊 / 群聊 / 配对授权）。
           2026-11-06 权限档位也迁「回答设置 → 引擎与模型」后，本页只剩准入一页，
           不再需要 who/what 二级页签；配对是准入的落地动作，跟着白名单放。 */}
-      <div className="net-panel" hidden={section !== "access"}>
+      <div className="net-panel" hidden={pane === "channel" || !activeBot || section !== "access"}>
         <PanelHead title={t("wecom.groupAccess")} />
         <div className="wecom-rows">
           {/* 私聊：谁能私聊 + 私聊白名单 */}
@@ -2256,12 +1958,12 @@ export default function WecomSettingsCard() {
                 <span className="wecom-count-badge">
                   {(settings.wecomPairedUsers ?? []).length}
                 </span>
-              ) : pairings.length > 0 ? (
-                <span className="wecom-count-badge is-pending">{pairings.length}</span>
+              ) : activePairings.length > 0 ? (
+                <span className="wecom-count-badge is-pending">{activePairings.length}</span>
               ) : null}
             </div>
 
-            {pairings.length === 0 ? (
+            {activePairings.length === 0 ? (
               <div className="wecom-empty-state">
                 <span className="wecom-empty-state-icon" aria-hidden>
                   <UserCheck size={18} />
@@ -2272,7 +1974,7 @@ export default function WecomSettingsCard() {
               <>
                 <p className="setting-hint">{t("wecom.pairingRestartHint")}</p>
                 <ul className="wecom-pairing-list">
-                {pairings.map((p) => (
+                {activePairings.map((p) => (
                   <li key={p.code} className="wecom-pairing-row">
                     <code className="tabular-nums wecom-pair-code">{p.code}</code>
                     <span className="wecom-pair-user">{p.userid}</span>
@@ -2333,209 +2035,9 @@ export default function WecomSettingsCard() {
           </div>
         </div>
       </div>
-
-      {/* 6 · 运行诊断：连不上 / 答得不对时再看，两块日志各自滚动 */}
-      <div className="net-panel wecom-diag-panel" hidden={section !== "diag"}>
-        <PanelHead
-          title={t("wecom.groupDiag")}
-          aside={<span className="wecom-diag-hint">{t("wecom.groupDiagHint")}</span>}
-        />
-        {/* 连通检查清单：原在访问策略的会话规则卡里，2026-11-06 按性质拆到诊断页顶——
-            「连不上时按清单自查」正是本页的入口动作 */}
-        <div className="wecom-diag-block wecom-diag-checklist">
-          <Hint summary={t("wecom.connectChecklistShort")} details={t("wecom.connectChecklistHint")} />
-        </div>
-        <WecomRequestDiagnostics selection={diagnosticSelection} />
-        <section className="wecom-diag-block">
-          <div className="wecom-diag-head">
-            <div className="wecom-diag-head-main">
-              <span className="wecom-diag-icon" aria-hidden>
-                <Gauge size={13} />
-              </span>
-              <span>{t("wecom.diag.performance")}</span>
-            </div>
-          </div>
-          {/* 口径说明收起来，块头只留一行快照摘要 */}
-          <details className="wecom-hint wecom-diag-notes">
-            <summary>
-              <span>{t("wecom.diag.performanceHintShort")}</span>
-              <span className="wecom-hint-more">{t("wecom.hintMore")}</span>
-            </summary>
-            <p className="setting-hint">{t("wecom.diag.performanceHint")}</p>
-            <p className="setting-hint">{t("wecom.diag.cacheHitsHint")}</p>
-          </details>
-          {performance ? (
-            <>
-              <div className="wecom-diag-strip">
-                <span className="wecom-diag-pill">
-                  {t("wecom.diag.performanceRequestId")}<code>{performance.requestId}</code>
-                </span>
-                <span className="wecom-chip">
-                  {t("wecom.diag.lastPhase", { phase: phaseLabel(performance.phase) })}
-                </span>
-                <span className="wecom-chip">
-                  {t(performance.phase === "total" ? "wecom.diag.totalElapsed" : "wecom.diag.phaseElapsed", {
-                    duration: reportedMs(performance.elapsedMs),
-                  })}
-                </span>
-                <span className="wecom-chip">
-                  {t("wecom.diag.firstEvent", { duration: reportedMs(performance.firstEventMs) })}
-                </span>
-                <span className="wecom-chip">
-                  {t("wecom.diag.inputChars", { countText: reportedCount(performance.inputChars) })}
-                </span>
-                <span className="wecom-chip">
-                  {t("wecom.diag.outputChars", { countText: reportedCount(performance.outputChars) })}
-                </span>
-                <span className="wecom-chip">
-                  {t("wecom.diag.toolEvents", { countText: reportedCount(performance.toolEvents) })}
-                </span>
-              </div>
-              {performanceSummary ? (
-                <details className="wecom-hint wecom-diag-phases" key={performanceSummary.requestId}>
-                  <summary>{t("wecom.diag.phaseTable")}</summary>
-                  {/* 展开后的明细统一缩进一次，段与段之间 8px，表格不再和文字贴在一起 */}
-                  <div className="wecom-diag-detail">
-                    <p className="setting-hint">
-                      {t("wecom.diag.performanceRequestId")} <code>{performanceSummary.requestId}</code>
-                    </p>
-                    <p className="setting-hint">{t("wecom.diag.phaseTableHint")}</p>
-                    <div className="wecom-diag-strip">
-                      <span className="wecom-chip">{t("wecom.diag.totalElapsed", { duration: reportedMs(performanceSummary.totalMs) })}</span>
-                      <span className="wecom-chip">{t("wecom.diag.queueElapsed", { duration: reportedMs(performanceSummary.queueMs) })}</span>
-                      <span className="wecom-chip">{t("wecom.diag.elapsedWithQueue", { duration: reportedMs(performanceSummary.elapsedWithQueueMs) })}</span>
-                      <span className="wecom-chip">{t("wecom.diag.sessionAction", {
-                        action: performanceSummary.sessionAction
-                          ? t(`wecom.diag.sessionActions.${performanceSummary.sessionAction}`, { defaultValue: performanceSummary.sessionAction })
-                          : t("wecom.diag.notReported"),
-                      })}</span>
-                    </div>
-                    <p className="setting-hint">{t("wecom.diag.modelReported", { model: performanceSummary.model || t("wecom.diag.notReported"), effort: reportedEffort(performanceSummary.effort) })}</p>
-                    {Array.isArray(performanceSummary.phases) && performanceSummary.phases.length > 0 ? (
-                      <div className="wecom-diag-tablebox" tabIndex={0} role="region" aria-label={t("wecom.diag.phaseTable")}>
-                        <table className="wecom-diag-table">
-                          <thead><tr>
-                            {(["phase", "elapsed", "calls", "input", "output", "tools", "first"] as const).map((column) => (
-                              <th scope="col" key={column}>{t(`wecom.diag.columns.${column}`)}</th>
-                            ))}
-                          </tr></thead>
-                          <tbody>{performanceSummary.phases.map((row, index) => (
-                            <tr key={`${row.phase}-${index}`} className={row.phase === "total" ? "is-total" : undefined}>
-                              <th scope="row">{phaseLabel(row.phase)} <code>{row.phase}</code></th>
-                              <td>{reportedMs(row.elapsedMs)}</td>
-                              <td>{reportedCount(row.calls)}</td>
-                              <td>{reportedCount(row.inputChars)}</td>
-                              <td>{reportedCount(row.outputChars)}</td>
-                              <td>{reportedCount(row.toolEvents)}</td>
-                              <td>{reportedMs(row.firstEventMs)}</td>
-                            </tr>
-                          ))}</tbody>
-                        </table>
-                      </div>
-                    ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
-                    <p className="setting-hint">{t("wecom.diag.validationFailures", {
-                      countText: typeof performanceSummary.validationFailureCount === "number"
-                        && Number.isFinite(performanceSummary.validationFailureCount) && performanceSummary.validationFailureCount >= 0
-                        ? reportedCount(performanceSummary.validationFailureCount)
-                        : t("wecom.diag.validationNotReported"),
-                    })}</p>
-                    {performanceSummary.validationFailures?.map((failure, index) => (
-                      <p className="setting-hint" key={`${index}-${failure}`}>{failure}</p>
-                    ))}
-                  </div>
-                </details>
-              ) : null}
-            </>
-          ) : <p className="setting-hint">{t("wecom.diag.notReported")}</p>}
-          <p className="setting-hint wecom-diag-meta">
-            {t("wecom.diag.cacheHits", { countText: reportedCount(investigation?.cacheHits) })}
-            {investigation?.requestId ? <> · {t("wecom.diag.requestId")} <code>{investigation.requestId}</code></> : null}
-          </p>
         </section>
-        {/* 两块日志降一层：先给分组标题，块标题再弱化，免得和上面三次诊断挤在同一层次 */}
-        <div className="wecom-subhead wecom-diag-subhead">{t("wecom.diag.rawLogs")}</div>
-        <div className="wecom-diag-grid">
-          <section className="wecom-diag-block">
-            <div className="wecom-diag-head">
-              <div className="wecom-diag-head-main">
-                <span className="wecom-diag-icon" aria-hidden>
-                  <Terminal size={13} />
-                </span>
-                <span>{t("wecom.diag.channelLog")}</span>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                disabled={logBusy}
-                onClick={() => void loadLog()}
-              >
-                {t("wecom.diag.refresh")}
-              </button>
-            </div>
-            <p className="setting-hint">{t("wecom.diag.logHint")}</p>
-            <pre className="wecom-diag-log">{logText || (logBusy ? "…" : t("wecom.diag.empty"))}</pre>
-          </section>
-          <section className="wecom-diag-block">
-            <div className="wecom-diag-head">
-              <div className="wecom-diag-head-main">
-                <span className="wecom-diag-icon" aria-hidden>
-                  <MessagesSquare size={13} />
-                </span>
-                <span>{t("wecom.diag.sessionLog")}</span>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                disabled={sessionBusy}
-                onClick={() => void loadSessionLog()}
-              >
-                {t("wecom.diag.refresh")}
-              </button>
-            </div>
-            <p className="setting-hint">{t("wecom.diag.sessionHint")}</p>
-            {/* 会话旁证同样套一张结果卡：和请求事件、日志块的边框对齐，不再是一列浮在底色上的行 */}
-            <div className="wecom-diag-result">
-              {sessionError ? <p className="setting-hint" role="alert">{t("wecom.diag.sessionReadFailed")}</p> : null}
-              {sessionPage ? <>
-                <div className="wecom-diag-strip">
-                  <span className="wecom-chip">{t("wecom.diag.sessionCoverage", {
-                    count: sessionPage.entries.length, bytes: sessionPage.scannedBytes.toLocaleString(),
-                  })}</span>
-                </div>
-                {sessionPage.partial ? <p className="wecom-diag-warn" role="status">{t("wecom.diag.sessionPartial")}</p> : null}
-                {sessionPage.readErrors.length > 0 ? <details className="wecom-hint">
-                  <summary>{t("wecom.diag.sessionReadErrors", { count: sessionPage.readErrors.length })}</summary>
-                  {sessionPage.readErrors.map((code, index) => <p className="setting-hint" key={`${index}-${code}`}><code>{code}</code></p>)}
-                </details> : null}
-              </> : null}
-              {sessionLog.length === 0 ? (
-                !sessionError ? <p className="setting-hint">{sessionBusy ? "…" : t("wecom.diag.empty")}</p> : null
-              ) : (
-                <ul className="wecom-diag-sessions">
-                  {sessionLog.map((entry, i) => (
-                    <li key={`${entry.session}-${entry.ts}-${i}`}>
-                      <details className="wecom-session">
-                        <summary>
-                          <span className="wecom-diag-ts">{fmtTs(entry.ts)}</span>
-                          <span className="wecom-diag-u">{entry.user}</span>
-                          <span className="wecom-session-peek">{peekLine(entry.assistant)}</span>
-                        </summary>
-                        <p className="wecom-session-full">{entry.assistant}</p>
-                      </details>
-                      {entry.requestId ? (
-                        <button type="button" className="wecom-session-action"
-                          onClick={() => setDiagnosticSelection((previous) => ({ requestId: entry.requestId!, revision: (previous?.revision ?? 0) + 1 }))}>
-                          {t("wecom.diag.requests.select")} <code>{entry.requestId}</code>
-                        </button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
-        </div>
       </div>
+
 
       {msg ? <p className="setting-hint wecom-toast">{msg}</p> : null}
     </div>

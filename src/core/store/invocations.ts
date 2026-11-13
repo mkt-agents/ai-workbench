@@ -73,6 +73,19 @@ export type WecomChannelStatus = {
     engine?: string;
     connectedMs?: number | null;
     lastError?: string;
+    /** 每台机器人自己的 DSH 引擎状态 */
+    dsh?: {
+      state: string;
+      detail: string;
+      version: string | null;
+      cliVersion?: string | null;
+      mirror: DshMirrorReport | null;
+    } | null;
+    /** 每台机器人自己的并发占用 / 排队 / 生效上限 / 共享任务数 */
+    activeJobs?: number;
+    waitingJobs?: number;
+    maxJobs?: number;
+    sharedTasks?: number;
   }>;
 };
 
@@ -741,7 +754,7 @@ export const invocations: Invocations = {
     }),
   invokeWecomDshSync: () => tauriInvoke<DshMirrorReport>('wecom_dsh_sync'),
   invokeWecomPairingList: () =>
-    tauriInvoke<{ userid: string; code: string; createdMs: number }[]>('wecom_pairing_list'),
+    tauriInvoke<{ userid: string; code: string; createdMs: number; botId?: string }[]>('wecom_pairing_list'),
   invokeWecomPairingApprove: (code: string) => tauriInvoke<string>('wecom_pairing_approve', { code }),
   invokeWecomPairingRevoke: (userid: string) => tauriInvoke<void>('wecom_pairing_revoke', { userid }),
   invokeWecomPairedUsers: () => tauriInvoke<string[]>('wecom_paired_users'),
