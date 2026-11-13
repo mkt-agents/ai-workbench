@@ -1462,7 +1462,19 @@ async fn apply_one_bot(
             )
             .await;
         // MCP 服务随会话下发（ACP mcpServers）；总开关关掉时 dsh_mcp 为空。
-        runtime.dsh.set_mcp(dsh_mcp).await;
+        // 内置 SkyWalking MCP：OAP 已配置时把日志/调用链/metrics 查询作为工具下发给
+        // DSH（替代旧的 WECOM_LOG_QUERY 标记行回灌协议）；脚本/配置写入失败只记日志。
+        let mut specs = dsh_mcp;
+        match crate::wecom_dsh::ensure_skywalking_mcp_spec(
+            &req.skywalking_addr,
+            &req.skywalking_header,
+            req.skywalking_timezone_offset_minutes,
+        ) {
+            Ok(Some(spec)) => specs.push(spec),
+            Ok(None) => {}
+            Err(e) => crate::wecom_log::write("dsh", &format!("msgid=apply skywalking mcp 未下发：{e}")),
+        }
+        runtime.dsh.set_mcp(specs).await;
         // configure/set_mcp retire only tier/workspace/MCP changes; model/effort
         // clear selection caches for later turns without cancelling active work.
     } else {

@@ -175,7 +175,8 @@ fn node_dirs_on_path(path_value: &str) -> Vec<PathBuf> {
 }
 
 /// The `node.exe` that this PATH would resolve, or `None` when Node is not installed.
-fn node_exe(path_value: &str) -> Option<PathBuf> {
+/// ACP 的 `mcpServers[].command` 必须是绝对路径，MCP server 也用它。
+pub(crate) fn node_exe(path_value: &str) -> Option<PathBuf> {
     node_dirs_on_path(path_value)
         .into_iter()
         .map(|dir| dir.join("node.exe"))

@@ -1170,7 +1170,7 @@ impl Orchestrator {
         });
 
         let mut outcome = crate::wecom_investigation::skipped_investigation(preflight_request);
-        // Soft time window for model-initiated WECOM_LOG_QUERY supplemental only.
+        // 查询窗只留给受保护答案的报告封顶使用；日志查询由 DSH 经 MCP 工具自主发起。
         if oap_ready {
             if let Ok(q) = crate::wecom_investigation_query::parse_query(
                 user_text,
@@ -1257,9 +1257,9 @@ impl Orchestrator {
             },
         }
         drop(session_phase);
-        // 引擎优先：不做宿主抽词/预查/规划循环/核验报告短路；日志仅在模型主动 WECOM_LOG_QUERY 时执行。
+        // 引擎优先：不做宿主抽词/预查/规划循环/核验报告短路；日志查询由 DSH 进程内
+        // 的 MCP 客户端调用 skywalking_query 完成（查询逻辑与预算在 MCP server 里）。
         let mut log_evidence = String::new();
-        let mut log_query_round = 0usize;
         let budget = crate::wecom_skywalking::QueryBudget::new();
         outcome.budget = budget;
         outcome.source_ready = oap_ready;
@@ -1494,167 +1494,14 @@ impl Orchestrator {
                     crate::wecom_log::write(
                         "dsh",
                         &format!(
-                            "msgid={} done ok={} acc_len={} log_round={}",
+                            "msgid={} done ok={} acc_len={}",
                             msg.msgid,
                             result.is_ok(),
-                            acc.chars().count(),
-                            log_query_round
+                            acc.chars().count()
                         ),
                     );
-                    // 引擎主动要日志：先执行 OAP 再开下一轮自由作答（最多 2 轮），不提前 finish 进度。
-                    if status == "completed" {
-                        if let Some((queries, visible_so_far)) =
-                            crate::wecom_investigation_plan::extract_wecom_log_query(&acc)
-                        {
-                            if oap_ready && log_query_round < 2 {
-                                let original = outcome.query.clone().or_else(|| {
-                                    query_window_for_model_log_requests(&queries, zone)
-                                });
-                                if let Some(original) = original {
-                                    if outcome.query.is_none() {
-                                        outcome.query = Some(original.clone());
-                                    }
-                                    log_query_round += 1;
-                                    crate::wecom_log::write(
-                                        "dsh",
-                                        &format!(
-                                            "msgid={} supplemental log query round {}",
-                                            msg.msgid, log_query_round
-                                        ),
-                                    );
-                                    crate::wecom_progress::phase(preflight_request, "supplemental");
-                                    match crate::wecom_investigation::supplemental(
-                                        &addr,
-                                        &header,
-                                        &original,
-                                        &queries,
-                                        preflight_request,
-                                        &outcome.budget,
-                                        120_000u64.saturating_sub(outcome.collected_ms),
-                                    )
-                                    .await
-                                    {
-                                        Ok(extra) => {
-                                            merge_investigation_coverage(&mut outcome, &extra);
-                                            has_evidence |= extra.may_analyze;
-                                            let extra_context = extra.context.replace(
-                                                "[L",
-                                                &format!("[R{}L", log_query_round),
-                                            );
-                                            let inserted = store.insert(&format!(
-                                                "【引擎请求的日志查询·轮次{}】\n{}",
-                                                log_query_round, extra_context
-                                            ));
-                                            if !log_evidence.is_empty() {
-                                                log_evidence.push_str("\n\n");
-                                            }
-                                            log_evidence.push_str(&inserted);
-                                            if !visible_so_far.trim().is_empty() {
-                                                log_evidence.push_str("\n\n【模型上一轮可见分析】\n");
-                                                log_evidence.push_str(visible_so_far.trim());
-                                            }
-                                            let follow_bot = self.bot_id.lock().await.clone();
-                                            let follow_blocks = build_dsh_prompt(
-                                                app,
-                                                &follow_bot,
-                                                &msg.msgid,
-                                                user_text,
-                                                &[],
-                                                false,
-                                                &mode_rules,
-                                                &log_evidence,
-                                            )
-                                            .await;
-                                            match engine.prompt(&acp_session, follow_blocks).await {
-                                                Ok(next_turn) => {
-                                                    // 先结算上一轮挂起的审批，再换 turn，避免跨轮 permission id。
-                                                    if !open_approvals.is_empty() {
-                                                        let old = turn.responder();
-                                                        for rpc_id in open_approvals.drain(..) {
-                                                            old.answer_permission(rpc_id, None);
-                                                        }
-                                                    }
-                                                    turn = next_turn;
-                                                    {
-                                                        let mut map = self.running.lock().await;
-                                                        map.insert(
-                                                            session.as_str(),
-                                                            RunningTurn {
-                                                                req_id: req_id.clone(),
-                                                                stream_id: stream_id.to_string(),
-                                                                initiator: msg.userid.clone(),
-                                                                cancel: CancelHandle::Dsh {
-                                                                    responder: turn.responder(),
-                                                                },
-                                                            },
-                                                        );
-                                                    }
-                                                    acc.clear();
-                                                    answer_buffer =
-                                                        crate::wecom_answer::AnswerBuffer::with_request(
-                                                            false,
-                                                            preflight_request,
-                                                        );
-                                                    last_activity.clear();
-                                                    last_event = std::time::Instant::now();
-                                                    stall_notes = 0;
-                                                    continue;
-                                                }
-                                                Err(e) => {
-                                                    let tip = format!(
-                                                        "{}\n\n（日志已查回，但续写失败：{}）",
-                                                        visible_so_far.trim(),
-                                                        crate::wecom_dsh::friendly_turn_error(&e)
-                                                    );
-                                                    crate::wecom_progress::finish(
-                                                        preflight_request,
-                                                        "failed",
-                                                        "failed",
-                                                    );
-                                                    send_finish(
-                                                        &self.sock,
-                                                        &req_id,
-                                                        stream_id,
-                                                        &tip,
-                                                    )
-                                                    .await;
-                                                    break tip;
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let tip = format!(
-                                                "{}\n\n（日志查询失败：{e}）",
-                                                visible_so_far.trim()
-                                            );
-                                            crate::wecom_progress::finish(
-                                                preflight_request,
-                                                "failed",
-                                                "failed",
-                                            );
-                                            send_finish(&self.sock, &req_id, stream_id, &tip)
-                                                .await;
-                                            break tip;
-                                        }
-                                    }
-                                } else {
-                                    crate::wecom_log::write(
-                                        "dsh",
-                                        &format!(
-                                            "msgid={} WECOM_LOG_QUERY 无可用查询窗，跳过补查",
-                                            msg.msgid
-                                        ),
-                                    );
-                                    let tip = format!(
-                                        "{}\n\n（已识别日志补查请求，但缺少可用时间窗，未执行查询。请补充明确时间后再试。）",
-                                        visible_so_far.trim()
-                                    );
-                                    // 落到下方 Done 收尾：先把可见正文写回 acc，避免丢分析。
-                                    acc = tip;
-                                }
-                            }
-                        }
-                    }
+                    // 旧 WECOM_LOG_QUERY 标记行回灌协议已退役：日志查询由 DSH 进程内的
+                    // MCP 客户端（skywalking MCP server）自主完成，宿主不再代查补灌。
                     crate::wecom_progress::finish(
                         preflight_request,
                         status,
@@ -2565,7 +2412,7 @@ fn decode_ready(
 
 /// 引擎优先：只声明可用能力与模式偏好，不指挥「必须先查日志/不要先翻文档」工序。
 /// `engine`：`dsh` | `tianji`；`oap_ready`：SkyWalking 地址已配置。
-fn capability_card(engine: &str, mode: &str, doc_dir: &str, oap_ready: bool) -> String {
+fn capability_card(_engine: &str, mode: &str, doc_dir: &str, oap_ready: bool) -> String {
     let mode = mode.trim().to_ascii_lowercase();
     let preference = match mode.as_str() {
         "doc" => "模式偏好：文档优先；文档不足再读代码。",
@@ -2576,13 +2423,10 @@ fn capability_card(engine: &str, mode: &str, doc_dir: &str, oap_ready: bool) -> 
     };
     let logs = if !oap_ready {
         "日志：未配置 SkyWalking OAP，日志查询不可用；不要声称已查过日志。".to_string()
-    } else if engine == "dsh" {
-        format!(
-            "日志：已配置 SkyWalking。需要查日志时，在回复末尾单独一行输出 `{mark}{{\"queries\":[{{\"keywords\":[\"…\"],\"service\":\"可省略\",\"start\":\"可省略RFC3339\",\"end\":\"可省略\",\"reason\":\"必填\"}}],\"reason\":\"必填\"}}`（最多3条）；宿主执行后回灌结果。用户可见正文不要包含该标记行；禁止假装已经查过日志。",
-            mark = crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK
-        )
     } else {
-        "日志：用工具 `skywalking_query` 查日志/调用链/metrics（可按服务、关键词、时间窗、traceId）；以实际查询为准。".to_string()
+        // 天玑走内置 skywalking_query 工具；DSH 档由渠道把同一个能力以 MCP server
+        // （wecom_skywalking_mcp.mjs）随 ACP mcpServers 下发，两边提示词统一。
+        "日志：用 SkyWalking MCP 工具 `skywalking_query` 查日志/调用链/metrics（可按服务、关键词、时间窗、traceId）；以实际查询为准。".to_string()
     };
     format!(
         "【可用能力】\n\
@@ -2809,7 +2653,7 @@ async fn build_dsh_prompt(
             mode_rules.trim()
         )));
     }
-    // 排障预取的 SkyWalking 数据（dsh 档没有 skywalking_query 工具，这里以上下文形式给它）。
+    // 排障预取的 SkyWalking 数据（当前引擎优先路径下为空；DSH 档的主动查询已改走 MCP 工具）。
     if !sky_context.trim().is_empty() {
         blocks.push(crate::wecom_dsh::acp_text_block(sky_context.trim()));
     }
@@ -2967,6 +2811,8 @@ fn stream_visible_answer(snapshot: &str) -> String {
 }
 
 /// 宿主 `parse_query` 失败时，用模型补查请求里的时间/关键词拼一个可执行窗口。
+/// 生产路径已退役（DSH 改走 MCP 工具），仅测试仍在钉住其行为。
+#[cfg_attr(not(test), allow(dead_code))]
 fn query_window_for_model_log_requests(
     queries: &[serde_json::Value],
     zone: chrono::FixedOffset,
@@ -3184,6 +3030,8 @@ fn can_render_verified_answer(proposed: &str, allowed: &str, has_evidence: bool)
         && matches!(allowed, "result" | "direct_cause" | "trigger_verified")
 }
 
+/// 合并两轮日志采集的覆盖度（生产回灌路径已退役，仅测试使用）。
+#[cfg_attr(not(test), allow(dead_code))]
 fn merge_investigation_coverage(
     base: &mut crate::wecom_investigation::InvestigationOutcome,
     extra: &crate::wecom_investigation::InvestigationOutcome,
@@ -3613,10 +3461,13 @@ mod tests {
     fn capability_card_advertises_logs_by_engine() {
         let dsh = capability_card("dsh", "auto", "doc", true);
         assert!(
-            dsh.contains(crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK),
-            "{dsh}"
+            dsh.contains("skywalking_query"),
+            "DSH 档经 MCP 工具查日志：{dsh}"
         );
-        assert!(!dsh.contains("skywalking_query"), "DSH 用标记协议：{dsh}");
+        assert!(
+            !dsh.contains(crate::wecom_investigation_plan::WECOM_LOG_QUERY_MARK),
+            "标记行协议已退役：{dsh}"
+        );
         let tj = capability_card("tianji", "auto", "doc", true);
         assert!(tj.contains("skywalking_query"), "{tj}");
         assert!(!tj.contains("步骤：①"), "{tj}");

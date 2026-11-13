@@ -1508,11 +1508,83 @@ pub fn friendly_turn_error(raw: &str) -> String {
     raw.to_string()
 }
 
-fn engine_dir() -> Option<PathBuf> {
+pub(crate) fn engine_dir() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA").map(PathBuf::from)?;
     let dir = base.join("com.ai-workbench.app").join("wecom-dsh");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+/// 内置 SkyWalking MCP：OAP 已配置时返回随会话下发的 MCP server spec，未配置返回 None。
+///
+/// 脚本（`wecom_skywalking_mcp.mjs`，随二进制内嵌）与配置 JSON 写到应用数据目录
+/// `wecom-dsh\mcp\`。配置内容哈希进文件名：地址 / 鉴权 header / 时区任一变化都会
+/// 改变 spec 的 args，`set_mcp` 的比较随之触发退役，活动会话不会沿用旧配置。
+/// 写入失败只让本轮日志能力缺失，不阻断通道 apply。
+pub(crate) fn ensure_skywalking_mcp_spec(
+    addr: &str,
+    header: &str,
+    tz_offset_minutes: Option<i32>,
+) -> Result<Option<crate::mcp::McpServerSpec>, String> {
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return Ok(None);
+    }
+    // ACP 校验 `mcpServers[].command` 必须是绝对路径（裸 "node" 会被 session/new
+    // 以 -32602 拒绝），所以用 DSH 自己那份 PATH 解析出的 node.exe。
+    let node = crate::dsh_commands::node_exe(&crate::dsh_commands::dsh_path_value())
+        .ok_or("未找到 node.exe：DSH 依赖的 Node 运行时不可用")?;
+    let dir = engine_dir()
+        .ok_or("找不到应用数据目录")?
+        .join("mcp");
+    ensure_skywalking_mcp_spec_in(&dir, &node, addr, header, tz_offset_minutes)
+}
+
+fn ensure_skywalking_mcp_spec_in(
+    dir: &std::path::Path,
+    node_exe: &std::path::Path,
+    addr: &str,
+    header: &str,
+    tz_offset_minutes: Option<i32>,
+) -> Result<Option<crate::mcp::McpServerSpec>, String> {
+    use sha2::Digest;
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建 mcp 目录失败：{e}"))?;
+    let script = dir.join("skywalking-mcp.mjs");
+    std::fs::write(&script, include_str!("wecom_skywalking_mcp.mjs"))
+        .map_err(|e| format!("写入 SkyWalking MCP 脚本失败：{e}"))?;
+    let config = serde_json::json!({
+        "addr": addr,
+        "header": header.trim(),
+        "tzOffsetMinutes": tz_offset_minutes,
+    });
+    let body = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
+    let digest = sha2::Sha256::digest(&body);
+    let tag: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    let current = format!("skywalking-mcp-{tag}.json");
+    let config_path = dir.join(&current);
+    std::fs::write(&config_path, &body)
+        .map_err(|e| format!("写入 SkyWalking MCP 配置失败：{e}"))?;
+    // 清理旧配置（best-effort：被占用就留给下次；hash 文件名保证不会误删当前配置）。
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("skywalking-mcp-")
+                && name.ends_with(".json")
+                && name != current
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(Some(crate::mcp::McpServerSpec {
+        name: "skywalking".into(),
+        command: node_exe.to_string_lossy().to_string(),
+        args: format!("\"{}\" \"{}\"", script.display(), config_path.display()),
+    }))
 }
 
 /// 每次启动重写：`--patch` 是「追加覆盖」，但单个条目是整体赋值（config 不深合并），
@@ -2496,6 +2568,51 @@ mod tests {
             acp_mcp_servers(&[spec("node", "a.js")]),
             acp_mcp_servers(&[spec("other", "a.js")])
         );
+    }
+
+    #[test]
+    fn skywalking_mcp_spec_tracks_config_changes() {
+        let base = std::env::temp_dir().join(format!("wecom-sw-mcp-{}-{}", std::process::id(), line!()));
+        let dir = base.join("mcp");
+        let node = std::path::Path::new(r"C:\Program Files\nodejs\node.exe");
+        let spec = |addr: &str, header: &str, tz: Option<i32>| {
+            ensure_skywalking_mcp_spec_in(&dir, node, addr, header, tz)
+                .unwrap()
+                .unwrap()
+        };
+        let first = spec("http://oap.example/graphql", "Auth: x", Some(480));
+        assert_eq!(first.name, "skywalking");
+        // ACP 校验 command 必须是绝对路径（裸 "node" 会被 -32602 拒绝）。
+        assert_eq!(first.command, node.to_string_lossy());
+        assert!(std::path::Path::new(&first.command).is_absolute());
+        // 真正下发给 DSH 的线上格式：command 必须是绝对路径，args 是数组。
+        let wire = acp_mcp_servers(std::slice::from_ref(&first));
+        assert!(std::path::Path::new(wire[0]["command"].as_str().unwrap()).is_absolute());
+        assert!(wire[0]["args"].as_array().is_some_and(|a| a.len() == 2));
+        assert!(first.args.contains("skywalking-mcp.mjs"), "{}", first.args);
+        assert!(first.args.contains("\""), "args 里的路径要带引号：{}", first.args);
+        // 地址 / 鉴权 / 时区任一变化都要改变 args（set_mcp 靠它触发退役）。
+        let same = spec("  http://oap.example/graphql  ", "Auth: x", Some(480));
+        assert_eq!(first.args, same.args);
+        assert_ne!(first.args, spec("http://oap2.example", "Auth: x", Some(480)).args);
+        assert_ne!(first.args, spec("http://oap.example/graphql", "Auth: y", Some(480)).args);
+        assert_ne!(first.args, spec("http://oap.example/graphql", "Auth: x", Some(0)).args);
+        // 未配置地址 = 不下发（None）。
+        assert!(ensure_skywalking_mcp_spec_in(&dir, node, "   ", "", None).unwrap().is_none());
+        // 配置文件已按内容落盘；脚本可被 node 解析。
+        let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert!(entries.iter().any(|e| e.file_name().to_string_lossy().starts_with("skywalking-mcp-")));
+        let script_path = dir.join("skywalking-mcp.mjs");
+        let parsed = std::process::Command::new("node")
+            .arg("--check")
+            .arg(&script_path)
+            .output();
+        match parsed {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => panic!("node --check 失败：{}", String::from_utf8_lossy(&out.stderr)),
+            Err(_) => eprintln!("skip: node not found"),
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

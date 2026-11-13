@@ -896,6 +896,8 @@ fn format_empty_clarification(q: &InvestigationQuery) -> String {
 
 /// Validated model follow-ups share the initial HTTP budget and the caller's remaining wall time.
 /// This function performs only the requested reads, never recursively expands another investigation.
+/// 生产回灌路径已退役（DSH 改走 skywalking MCP 工具），仅测试仍在钉住其行为。
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn supplemental(
     addr: &str,
     header: &str,
