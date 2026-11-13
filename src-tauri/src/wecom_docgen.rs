@@ -275,11 +275,10 @@ pub fn default_docgen_system_prompt() -> &'static str {
 二、当日更新（`{updates_dir}/{date}.md`）：
 - 打开或新建，在文末追加一节（不要整文件覆盖）；节标题：`## HH:MM · {branch}`。
 - 正文用条目列出本批功能点（用人话，如「订单结算」「文档中心门户」），并注明各点更新了哪篇文档；只写本批出现的变更，禁止编造未出现的模块。
-第四步·收尾（必须输出）：
-1) 3–6 条**面向业务**的中文要点，每条一句话（改了什么能力、影响谁、更新了哪篇文档）；禁止行号、函数/符号名、JSON 字段、commit hash、工具过程，禁止背景铺垫和复述。
+第四步·收尾（必须输出；只写下面三个小节，不要写其它小节，也不要叙述工作过程）：
+1) 「## 功能点」：3–8 条，每条一行，格式 `- 功能名：做完了什么、影响谁`。只列本轮确实完成的功能（用人话概括能力，不写内部实现）；禁止行号、函数/符号名、JSON 字段、commit hash；禁止描述工作过程（规划、读文件、自查、落盘）；禁止写批次号、文件数量与代码路径。
 2) 「## 代码引用」每行一条且必须用箭头（**仅供系统映射落库，不要写进业务摘要正文**；群通知会自动省略该节）：`源码路径:符号` → `文档相对路径`
 3) 「## 覆盖」每行一条，覆盖清单里的每个业务文件：`源码路径` → `文档相对路径`，或 `源码路径` → `跳过：原因`
-4) 摘要只写业务要点：不要写批次号、文件数量、落盘/保存过程，也不要贴代码路径（群通知会原文展示这些文字）。
 
 硬规则：
 1. **只允许修改/新建 `{doc_dir}/` 目录内的文件**（含 `{updates_dir}/`）；绝对不要改任何业务代码、配置或其它目录（越界操作会被拒绝，产物不会发布）。
@@ -3480,6 +3479,115 @@ fn strip_code_reference_section(text: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// 识别功能点小节标题，返回标题之后同一行的剩余内容。
+///
+/// 模型偶尔把过程叙述和标题写在同一行（`…for both ranges.## 功能点`），
+/// 所以不能只认「行首」。
+fn business_heading_remainder(line: &str) -> Option<&str> {
+    const MARKERS: [&str; 8] = [
+        "## 功能点",
+        "## 功能清单",
+        "## 业务摘要",
+        "## 本次更新",
+        "**功能点**",
+        "**本次更新**",
+        "## business summary",
+        "## features",
+    ];
+    for marker in MARKERS {
+        // 中文标记直接找；ASCII 标记忽略大小写（二者字节长度一致，位置可复用）。
+        let pos = if marker.is_ascii() {
+            line.to_lowercase().find(&marker.to_lowercase())
+        } else {
+            line.find(marker)
+        };
+        if let Some(pos) = pos {
+            if let Some(rest) = line.get(pos + marker.len()..) {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
+/// 去掉列表前缀（`-` / `*` / `·` / `1.` / `1、` / `1）`），返回正文。
+fn strip_list_prefix(s: &str) -> &str {
+    let s = s.trim_start();
+    let s = s.trim_start_matches(['-', '*', '·', '•']).trim_start();
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return s;
+    }
+    let rest = &s[digits.len()..];
+    for sep in [". ", "、", "）", ") ", "．", ".", "：", ": "] {
+        if let Some(r) = rest.strip_prefix(sep) {
+            return r.trim_start();
+        }
+    }
+    s
+}
+
+/// 通知里的功能清单：统一成 `- ` 列表（企微 markdown 对有序列表支持不好），
+/// 一条一行，最多 12 条。
+fn normalize_feature_bullets(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let body = strip_list_prefix(line.trim());
+        if body.is_empty() {
+            continue;
+        }
+        out.push(format!("- {body}"));
+        if out.len() >= 12 {
+            break;
+        }
+    }
+    out.join("\n")
+}
+
+/// 只取模型收尾的「## 业务摘要」小节（到下一个标题为止）。
+///
+/// 模型经常在小节外写工作过程（「我先规划…」）或批次细节；约定小节后，
+/// 通知只展示这一节，节外内容一律不进群。
+fn extract_business_summary(text: &str) -> Option<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !inside {
+            // 标题可能出现在行内（模型会把叙述和 `## 功能点` 写在同一行）。
+            if let Some(rest) = business_heading_remainder(trimmed) {
+                inside = true;
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    out.push(rest.to_string());
+                }
+            }
+            continue;
+        }
+        if trimmed.starts_with("## ") || trimmed.starts_with("### ") {
+            break;
+        }
+        out.push(line.to_string());
+    }
+    let joined = out.join("\n").trim().to_string();
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
+/// 群通知正文上限：企微 markdown 硬上限 4096，留出抬头与提交/质检行。
+const NOTICE_SUMMARY_CAP: usize = 2_200;
+
+fn cap_notice_summary(text: &str) -> String {
+    if text.chars().count() <= NOTICE_SUMMARY_CAP {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(NOTICE_SUMMARY_CAP).collect();
+    format!("{head}\n…（摘要过长，已截断）")
+}
+
 /// 群通知只留「给人看」的部分：去掉代码引用、覆盖台账（sdk/service 源码路径）、
 /// 批次标题与落盘流水账，并压掉多余空行。
 ///
@@ -3507,9 +3615,18 @@ fn sanitize_notice_text(text: &str) -> String {
             continue;
         }
         // 模型自发的落盘流水账与路径映射行，业务读者不需要。
-        let noise = trimmed.contains("已归类落盘")
+        // 兜底（模型没按小节写时）：工作过程叙述、批次/落盘流水账、路径映射行。
+        let no_cjk = !trimmed.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let noise = (no_cjk && trimmed.chars().count() > 24)
+            || trimmed.contains("已归类落盘")
             || trimmed.contains("产物全部在")
-            || (trimmed.starts_with("本批 ") && trimmed.contains("个文件"))
+            || trimmed.contains("已落盘")
+            || trimmed.contains("全部落在")
+            || trimmed.contains("采集区间")
+            || trimmed.contains("git 元数据")
+            || trimmed.starts_with("我先")
+            || trimmed.contains("我先规划")
+            || trimmed.starts_with("本批")
             || (trimmed.starts_with("- ") && trimmed.contains(" → ") && trimmed.contains(".md"));
         if noise {
             continue;
@@ -3604,11 +3721,16 @@ fn compose_notice(
     failure: Option<&str>,
 ) -> String {
     let docs = {
-        let stripped = sanitize_notice_text(updated_docs);
-        if stripped.trim().is_empty() {
+        // 优先只取「## 业务摘要」小节；模型没按约定写时回落到整段清洗。
+        let source = extract_business_summary(updated_docs)
+            .unwrap_or_else(|| sanitize_notice_text(updated_docs));
+        let cleaned = sanitize_notice_text(&source);
+        if cleaned.trim().is_empty() {
             "（本轮尚未写入文档）".to_string()
         } else {
-            stripped.trim().to_string()
+            let bullets = normalize_feature_bullets(&cleaned);
+            let body = if bullets.is_empty() { cleaned } else { bullets };
+            cap_notice_summary(body.trim())
         }
     };
     let commit_line = if commit_note.trim().is_empty() {
@@ -3629,34 +3751,35 @@ fn compose_notice(
     } else {
         format!("\n\n**来源仓同步：**{}", sync_note.trim())
     };
-    let (title, section_title, failure_block, tech_note) = match failure {
-        Some(reason) => (
+    let (title, section_title, tech_note) = match failure {
+        Some(_) => (
             "## ⚠️ 逆向文档更新未完成",
             "**已完成部分**",
-            format!(
-                "\n**本轮未完成**：{reason}。已完成的文档改动保留在本地，下次运行会继续补齐。\n"
-            ),
             "\n\n_（批次与模型细节见「运行记录」）_",
         ),
         None if preview => (
             "## 👀 逆向文档预览（已写本地文档，未提交）",
-            "**本次更新**",
-            String::new(),
+            "**本轮完成的功能点**",
             "",
         ),
-        None => ("## 📘 逆向文档已更新", "**本次更新**", String::new(), ""),
+        None => ("## 📘 逆向文档已更新", "**本轮完成的功能点**", ""),
     };
-    format!(
-        "{title}\n\
-**分支**：`{branch}` · {date} · 变更文件 {} 个\n{failure_block}\n\
-{section_title}\n{}{}{}{}{}",
-        changed.len(),
-        docs,
-        commit_line,
-        quality_line,
-        sync_line,
-        tech_note
-    )
+    // 企微 markdown 单换行不产生段落：块之间统一留空行。
+    let mut out = format!(
+        "{title}\n**分支**：`{branch}` · {date} · 变更文件 {} 个\n",
+        changed.len()
+    );
+    if let Some(reason) = failure {
+        out.push_str(&format!(
+            "\n**本轮未完成**：{reason}。已完成的文档改动保留在本地，下次运行会继续补齐。\n"
+        ));
+    }
+    out.push_str(&format!("\n{section_title}\n{docs}"));
+    out.push_str(&commit_line);
+    out.push_str(&quality_line);
+    out.push_str(&sync_line);
+    out.push_str(tech_note);
+    out
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4446,7 +4569,8 @@ mod tests {
         );
         assert!(n.contains("`release`"));
         assert!(n.contains("2 个"));
-        assert!(n.contains("本次更新"));
+        assert!(n.contains("本轮完成的功能点"));
+        assert!(n.starts_with("## 📘"), "{n}");
         assert!(!n.contains("> a.rs"), "群通知不再罗列源码路径");
         assert!(!n.contains("本次代码变更"));
         assert!(n.contains("更新了 a 文档"));
@@ -4502,6 +4626,105 @@ mod tests {
         let refs = extract_summary_references(full, "demo", "abc", "doc");
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].symbol, "docs-data");
+    }
+
+    #[test]
+    fn notice_extracts_inline_heading_after_narration() {
+        // 真实事故：模型把英文过程句和标题写在同一行。
+        let full = "I'll start by inspecting the git history and diffs for both collection ranges.## 功能点\n\
+- 消息任务支持一键重发：运营可重发失败任务\n\
+- 报价单支持按供应商筛选：销售按供应商过滤\n";
+        let n = compose_notice(
+            "release",
+            "2026-11-13",
+            &["a.java".into()],
+            full,
+            "",
+            "",
+            false,
+            "",
+            None,
+        );
+        assert!(n.contains("- 消息任务支持一键重发"), "{n}");
+        assert!(!n.contains("I'll start"), "{n}");
+        assert!(!n.contains("## 功能点"), "{n}");
+        // 分支行与功能点标题之间要有空行（企微 markdown 单换行不成段）。
+        assert!(n.contains("变更文件 1 个\n\n**本轮完成的功能点**"), "{n}");
+    }
+
+    #[test]
+    fn notice_renders_feature_points_as_bullets() {
+        let full = "## 功能点\n\
+1. 消息任务支持一键重发：运营可在任务列表重发失败任务\n\
+2、图片消息按图文分离展示：客户看到文字与图片分别下发\n\
+* 报价单支持按供应商筛选：销售按供应商过滤报价\n\
+\n\
+## 覆盖\n\
+- a.sdk/x.java → doc/x.md\n";
+        let n = compose_notice(
+            "release",
+            "2026-11-13",
+            &["a.java".into()],
+            full,
+            "",
+            "",
+            false,
+            "",
+            None,
+        );
+        assert!(n.contains("- 消息任务支持一键重发"), "{n}");
+        assert!(n.contains("- 图片消息按图文分离展示"), "{n}");
+        assert!(n.contains("- 报价单支持按供应商筛选"), "{n}");
+        // 有序/星号前缀统一成无序列表，避免企微渲染不出列表。
+        assert!(!n.contains("1. 消息任务"), "{n}");
+        assert!(!n.contains("* 报价单"), "{n}");
+    }
+
+    #[test]
+    fn notice_prefers_business_summary_section() {
+        let full = "我先规划本批文件的归属文档，然后自查 diff、读源码。\n\
+本批（release · 13 文件，全部落在 txmsg.service）已落盘。\n\
+\n\
+## 业务摘要\n\
+1. 消息任务支持一键重发\n\
+2. 图片消息按图文分离展示\n\
+\n\
+## 覆盖\n\
+- a.sdk/x.java → doc/x.md\n";
+        let n = compose_notice(
+            "release",
+            "2026-11-13",
+            &["a.java".into()],
+            full,
+            "",
+            "",
+            false,
+            "",
+            None,
+        );
+        assert!(n.contains("消息任务支持一键重发"), "{n}");
+        assert!(n.contains("图片消息按图文分离展示"), "{n}");
+        assert!(!n.contains("我先规划"), "{n}");
+        assert!(!n.contains("txmsg.service"), "{n}");
+        assert!(!n.contains("a.sdk"), "{n}");
+    }
+
+    #[test]
+    fn notice_summary_is_capped() {
+        // 单条超长（列表条数上限单独生效，这里验证字符上限）。
+        let long = format!("## 功能点\n- {}", "很长的一条业务要点".repeat(400));
+        let n = compose_notice(
+            "release",
+            "2026-11-13",
+            &["a.rs".into()],
+            &long,
+            "",
+            "",
+            false,
+            "",
+            None,
+        );
+        assert!(n.contains("摘要过长，已截断"), "{}", &n[..n.len().min(120)]);
     }
 
     #[test]
@@ -4840,7 +5063,8 @@ fatal: Not possible to fast-forward, aborting.";
         let p = default_docgen_system_prompt();
         assert!(p.contains("→"), "code refs must use arrow for extract_summary_references");
         assert!(p.contains("`源码路径:符号` → `文档相对路径`") || p.contains("源码路径:符号"));
-        assert!(p.contains("面向业务"));
+        assert!(p.contains("## 功能点"));
+        assert!(p.contains("3–8 条"));
         assert!(p.contains("仅供系统映射落库"));
         assert!(p.contains("第二步·调查"));
         assert!(p.contains("无行为变更"));
